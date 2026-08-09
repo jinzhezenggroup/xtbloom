@@ -1,5 +1,5 @@
 #include "model/gfn2/es3.hpp"
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -10,7 +10,7 @@
 
 #include "data/parameters/gfn2.hpp"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 namespace {
 
 bool representable_as_size(std::int64_t value) {
@@ -50,14 +50,14 @@ bool is_aligned(const void* pointer, std::size_t alignment) {
   return pointer != nullptr && reinterpret_cast<std::uintptr_t>(pointer) % alignment == 0u;
 }
 
-gpuxtb_status_t validate_basis(const BasisPlan& basis, std::string& error) {
+xtbloom_status_t validate_basis(const BasisPlan& basis, std::string& error) {
   if (basis.batch_size <= 0 || basis.total_atoms <= 0 || basis.total_shells <= 0 ||
       !representable_as_size(basis.batch_size) || !representable_as_size(basis.total_atoms) ||
       !representable_as_size(basis.total_shells) ||
       static_cast<std::uint64_t>(basis.batch_size) >=
           static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
     error = "ES3 requires a positive, representable basis plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const std::size_t batch_count = static_cast<std::size_t>(basis.batch_size);
@@ -75,7 +75,7 @@ gpuxtb_status_t validate_basis(const BasisPlan& basis, std::string& error) {
       basis.atom_shell_offsets.front() != 0 ||
       basis.atom_shell_offsets.back() != basis.total_shells) {
     error = "ES3 basis plan is incomplete or internally inconsistent";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   for (std::size_t batch = 0; batch < batch_count; ++batch) {
@@ -88,7 +88,7 @@ gpuxtb_status_t validate_basis(const BasisPlan& basis, std::string& error) {
         shell_begin != basis.atom_shell_offsets[static_cast<std::size_t>(atom_begin)] ||
         shell_end != basis.atom_shell_offsets[static_cast<std::size_t>(atom_end)]) {
       error = "ES3 basis offsets are not valid ragged partitions";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
 
@@ -97,7 +97,7 @@ gpuxtb_status_t validate_basis(const BasisPlan& basis, std::string& error) {
     const std::int64_t shell_end = basis.atom_shell_offsets[atom + 1u];
     if (shell_begin < 0 || shell_begin >= shell_end || shell_end > basis.total_shells) {
       error = "ES3 atom-to-shell offsets are invalid";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
       const std::size_t shell_index = static_cast<std::size_t>(shell);
@@ -105,14 +105,14 @@ gpuxtb_status_t validate_basis(const BasisPlan& basis, std::string& error) {
           basis.angular_momenta[shell_index] > 2u || !(basis.slater_exponents[shell_index] > 0.0) ||
           !std::isfinite(basis.slater_exponents[shell_index])) {
         error = "ES3 shell metadata is invalid";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_view(ES3View view, std::string& error) {
+xtbloom_status_t validate_view(ES3View view, std::string& error) {
   std::size_t offset_bytes = 0;
   std::size_t shell_bytes = 0;
   if (view.batch_size <= 0 || view.total_shells <= 0 || !representable_as_size(view.batch_size) ||
@@ -124,32 +124,32 @@ gpuxtb_status_t validate_view(ES3View view, std::string& error) {
       !count_bytes(view.shell_gamma3_count, sizeof(double), shell_bytes) ||
       view.batch_shell_offsets == nullptr || view.shell_gamma3 == nullptr) {
     error = "ES3 view is incomplete or has unrepresentable dimensions";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (view.batch_shell_offsets[0] != 0 ||
       view.batch_shell_offsets[view.batch_size] != view.total_shells) {
     error = "ES3 view offsets do not span the stored shells";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t batch = 0; batch < view.batch_size; ++batch) {
     const std::int64_t begin = view.batch_shell_offsets[batch];
     const std::int64_t end = view.batch_shell_offsets[batch + 1];
     if (begin < 0 || begin > end || end > view.total_shells) {
       error = "ES3 view offsets are not a valid ragged partition";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   for (std::int64_t shell = 0; shell < view.total_shells; ++shell) {
     if (!std::isfinite(view.shell_gamma3[shell])) {
       error = "ES3 view contains a non-finite shell Gamma3";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_system_view(ES3View view, std::int64_t system, std::int64_t& shell_begin,
-                                     std::int64_t& shell_end, std::string& error) {
+xtbloom_status_t validate_system_view(ES3View view, std::int64_t system, std::int64_t& shell_begin,
+                                      std::int64_t& shell_end, std::string& error) {
   std::size_t offset_bytes = 0;
   std::size_t shell_bytes = 0;
   if (view.batch_size <= 0 || view.total_shells <= 0 || !representable_as_size(view.batch_size) ||
@@ -162,24 +162,24 @@ gpuxtb_status_t validate_system_view(ES3View view, std::int64_t system, std::int
       !is_aligned(view.batch_shell_offsets, alignof(std::int64_t)) ||
       !is_aligned(view.shell_gamma3, alignof(double))) {
     error = "ES3 view is incomplete, misaligned, or has unrepresentable dimensions";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (system < 0 || system >= view.batch_size) {
     error = "ES3 energy system index is out of range";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (view.batch_shell_offsets[0] != 0 ||
       view.batch_shell_offsets[view.batch_size] != view.total_shells) {
     error = "ES3 view offsets do not span the stored shells";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   shell_begin = view.batch_shell_offsets[system];
   shell_end = view.batch_shell_offsets[system + 1];
   if (shell_begin < 0 || shell_begin > shell_end || shell_end > view.total_shells) {
     error = "ES3 target-system offsets are not a valid packed slice";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 /*
@@ -232,31 +232,31 @@ bool shell_energy(double gamma3, double charge, double& result) {
   return std::isfinite(result);
 }
 
-gpuxtb_status_t validate_charges(ES3View view, const double* shell_charges, std::string& error) {
+xtbloom_status_t validate_charges(ES3View view, const double* shell_charges, std::string& error) {
   if (shell_charges == nullptr) {
     error = "ES3 shell charges must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t shell = 0; shell < view.total_shells; ++shell) {
     if (!std::isfinite(shell_charges[shell])) {
       error = "ES3 shell charges contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 }  // namespace
 
-gpuxtb_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
-                              ES3Plan& plan, std::string& error) {
-  gpuxtb_status_t status = validate_basis(basis, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
+                               ES3Plan& plan, std::string& error) {
+  xtbloom_status_t status = validate_basis(basis, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (atomic_numbers == nullptr) {
     error = "ES3 atomic numbers must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   try {
@@ -274,7 +274,7 @@ gpuxtb_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic
       if (element == nullptr || element->atomic_number != atomic_number ||
           !std::isfinite(element->gam3)) {
         error = "ES3 plan contains an unsupported element or invalid gam3 parameter";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
 
       const std::int64_t shell_begin = basis.atom_shell_offsets[atom_index];
@@ -283,7 +283,7 @@ gpuxtb_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic
           element->shell_offset > parameters::gfn2::kShells.size() ||
           element->shell_count > parameters::gfn2::kShells.size() - element->shell_offset) {
         error = "ES3 atomic numbers do not match the supplied basis shell layout";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
 
       for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
@@ -296,13 +296,13 @@ gpuxtb_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic
             angular_momentum != parameter.angular_momentum ||
             basis.slater_exponents[shell_index] != parameter.slater || angular_momentum > 2u) {
           error = "ES3 atomic numbers do not match the supplied basis shell metadata";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
         const double scale = parameters::gfn2::kGlobal.thirdorder_shell_scale[angular_momentum];
         const double gamma3 = element->gam3 * scale;
         if (!(scale > 0.0) || !std::isfinite(scale) || !std::isfinite(gamma3)) {
           error = "ES3 generated shell Gamma3 parameter is invalid";
-          return GPUXTB_STATUS_INTERNAL_ERROR;
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
         }
         created.shell_gamma3[shell_index] = gamma3;
       }
@@ -310,13 +310,13 @@ gpuxtb_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic
 
     plan = std::move(created);
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the GFN2 ES3 plan";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   } catch (const std::length_error&) {
     error = "GFN2 ES3 plan dimensions exceed host container limits";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
@@ -334,19 +334,19 @@ ES3View make_es3_view(const ES3Plan& plan) noexcept {
                  plan.shell_gamma3.data()};
 }
 
-gpuxtb_status_t evaluate_es3_potential_cpu(ES3View view, const double* shell_charges,
-                                           double* shell_potentials, std::string& error) {
-  gpuxtb_status_t status = validate_view(view, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t evaluate_es3_potential_cpu(ES3View view, const double* shell_charges,
+                                            double* shell_potentials, std::string& error) {
+  xtbloom_status_t status = validate_view(view, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_charges(view, shell_charges, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (shell_potentials == nullptr) {
     error = "ES3 shell potential output must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   std::size_t shell_bytes = 0;
   std::size_t offset_bytes = 0;
@@ -356,7 +356,7 @@ gpuxtb_status_t evaluate_es3_potential_cpu(ES3View view, const double* shell_cha
       ranges_overlap(shell_potentials, shell_bytes, view.shell_gamma3, shell_bytes) ||
       ranges_overlap(shell_potentials, shell_bytes, view.batch_shell_offsets, offset_bytes)) {
     error = "ES3 shell potential output must not overlap its inputs";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   /* Preflight every result before overwriting any caller-owned output. */
@@ -364,7 +364,7 @@ gpuxtb_status_t evaluate_es3_potential_cpu(ES3View view, const double* shell_cha
     double potential = 0.0;
     if (!shell_potential(view.shell_gamma3[shell], shell_charges[shell], potential)) {
       error = "ES3 shell potential arithmetic exceeded floating-point range";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   for (std::int64_t shell = 0; shell < view.total_shells; ++shell) {
@@ -374,22 +374,22 @@ gpuxtb_status_t evaluate_es3_potential_cpu(ES3View view, const double* shell_cha
   }
 
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t system,
-                                                  const double* shell_charges,
-                                                  double* shell_potentials, std::string& error) {
+xtbloom_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t system,
+                                                   const double* shell_charges,
+                                                   double* shell_potentials, std::string& error) {
   std::int64_t shell_begin = 0;
   std::int64_t shell_end = 0;
-  gpuxtb_status_t status = validate_system_view(view, system, shell_begin, shell_end, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_status_t status = validate_system_view(view, system, shell_begin, shell_end, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (!is_aligned(shell_charges, alignof(double)) ||
       !is_aligned(shell_potentials, alignof(double))) {
     error = "ES3 shell charges and potentials must not be NULL or misaligned";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   std::size_t shell_bytes = 0;
@@ -401,7 +401,7 @@ gpuxtb_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t sys
       ranges_overlap(shell_potentials, shell_bytes, view.batch_shell_offsets, offset_bytes) ||
       ranges_overlap(shell_potentials, shell_bytes, &error, sizeof(error))) {
     error = "ES3 one-system shell potential output must not overlap inputs or error storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
@@ -411,27 +411,27 @@ gpuxtb_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t sys
     if (!std::isfinite(gamma3) || !std::isfinite(charge) ||
         !shell_potential(gamma3, charge, potential)) {
       error = "ES3 target-system shell potential contains invalid data or overflowed";
-      return GPUXTB_STATUS_INTERNAL_ERROR;
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     shell_potentials[shell] = potential;
   }
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t add_es3_energy_cpu(ES3View view, const double* shell_charges, double* energies,
-                                   std::string& error) {
-  gpuxtb_status_t status = validate_view(view, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t add_es3_energy_cpu(ES3View view, const double* shell_charges, double* energies,
+                                    std::string& error) {
+  xtbloom_status_t status = validate_view(view, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_charges(view, shell_charges, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (energies == nullptr) {
     error = "ES3 energy output must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   std::size_t energy_bytes = 0;
   std::size_t shell_bytes = 0;
@@ -443,12 +443,12 @@ gpuxtb_status_t add_es3_energy_cpu(ES3View view, const double* shell_charges, do
       ranges_overlap(energies, energy_bytes, view.shell_gamma3, shell_bytes) ||
       ranges_overlap(energies, energy_bytes, view.batch_shell_offsets, offset_bytes)) {
     error = "ES3 energy output must not overlap its inputs";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t batch = 0; batch < view.batch_size; ++batch) {
     if (!std::isfinite(energies[batch])) {
       error = "ES3 input energies contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
 
@@ -460,12 +460,12 @@ gpuxtb_status_t add_es3_energy_cpu(ES3View view, const double* shell_charges, do
       double contribution = 0.0;
       if (!shell_energy(view.shell_gamma3[shell], shell_charges[shell], contribution)) {
         error = "ES3 shell energy arithmetic exceeded floating-point range";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       const double updated = energy + contribution;
       if (!std::isfinite(updated)) {
         error = "ES3 accumulated energy exceeded floating-point range";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       energy = updated;
     }
@@ -483,21 +483,21 @@ gpuxtb_status_t add_es3_energy_cpu(ES3View view, const double* shell_charges, do
   }
 
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t add_es3_energy_system_cpu(ES3View view, std::int64_t system,
-                                          const double* shell_charges, double& accumulated_energy,
-                                          std::string& error) {
+xtbloom_status_t add_es3_energy_system_cpu(ES3View view, std::int64_t system,
+                                           const double* shell_charges, double& accumulated_energy,
+                                           std::string& error) {
   std::int64_t shell_begin = 0;
   std::int64_t shell_end = 0;
-  gpuxtb_status_t status = validate_system_view(view, system, shell_begin, shell_end, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_status_t status = validate_system_view(view, system, shell_begin, shell_end, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (!is_aligned(shell_charges, alignof(double))) {
     error = "ES3 shell charges must not be NULL or misaligned";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   std::size_t shell_bytes = 0;
@@ -509,13 +509,13 @@ gpuxtb_status_t add_es3_energy_system_cpu(ES3View view, std::int64_t system,
       ranges_overlap(&accumulated_energy, sizeof(double), view.batch_shell_offsets, offset_bytes) ||
       ranges_overlap(&accumulated_energy, sizeof(double), &error, sizeof(error))) {
     error = "ES3 one-system energy output must not overlap inputs or error storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   double energy = accumulated_energy;
   if (!std::isfinite(energy)) {
     error = "ES3 target-system accumulated energy contains NaN or infinity";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
     const double gamma3 = view.shell_gamma3[shell];
@@ -524,13 +524,13 @@ gpuxtb_status_t add_es3_energy_system_cpu(ES3View view, std::int64_t system,
     if (!std::isfinite(gamma3) || !std::isfinite(charge) ||
         !shell_energy(gamma3, charge, contribution) || !std::isfinite(energy + contribution)) {
       error = "ES3 target-system energy contains invalid numerical data or overflowed";
-      return GPUXTB_STATUS_INTERNAL_ERROR;
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     energy += contribution;
   }
   accumulated_energy = energy;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2

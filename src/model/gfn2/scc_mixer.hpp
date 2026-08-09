@@ -1,7 +1,7 @@
-#ifndef GPUXTB_MODEL_GFN2_SCC_MIXER_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_SCC_MIXER_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_SCC_MIXER_HPP
+#define XTBLOOM_MODEL_GFN2_SCC_MIXER_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -9,10 +9,10 @@
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/wavefunction.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 inline constexpr std::size_t kSccMixerWorkspaceAlignment = 64u;
 
@@ -60,10 +60,10 @@ class SccMixerPlan {
   explicit SccMixerPlan(std::shared_ptr<const SccMixerPlanData> data) noexcept;
   std::shared_ptr<const SccMixerPlanData> data_;
 
-  friend gpuxtb_status_t make_scc_mixer_plan(const WavefunctionLayout& layout,
-                                             std::int64_t history_size, double damping,
-                                             double rms_tolerance, double maximum_tolerance,
-                                             SccMixerPlan& plan, std::string& error);
+  friend xtbloom_status_t make_scc_mixer_plan(const WavefunctionLayout& layout,
+                                              std::int64_t history_size, double damping,
+                                              double rms_tolerance, double maximum_tolerance,
+                                              SccMixerPlan& plan, std::string& error);
 };
 
 /*
@@ -89,7 +89,7 @@ struct SccMixerState {
   double* residual_maximum = nullptr;
   std::uint64_t* iterations = nullptr;
   std::uint64_t* restart_counts = nullptr;
-  gpuxtb_status_t* system_statuses = nullptr;
+  xtbloom_status_t* system_statuses = nullptr;
   std::uint8_t* initialized = nullptr;
   std::uint8_t* converged = nullptr;
 
@@ -122,36 +122,36 @@ struct SccMixerWorkspace {
  * history_size must be positive. Damping and both convergence tolerances must
  * be finite and positive; damping is restricted to (0, 1].
  */
-gpuxtb_status_t make_scc_mixer_plan(const WavefunctionLayout& layout, std::int64_t history_size,
-                                    double damping, double rms_tolerance, double maximum_tolerance,
-                                    SccMixerPlan& plan, std::string& error);
+xtbloom_status_t make_scc_mixer_plan(const WavefunctionLayout& layout, std::int64_t history_size,
+                                     double damping, double rms_tolerance, double maximum_tolerance,
+                                     SccMixerPlan& plan, std::string& error);
 
 /* Bind and clear persistent state. The state is not usable until initialized. */
-gpuxtb_status_t bind_scc_mixer_state(const SccMixerPlan& plan, void* workspace,
-                                     std::size_t workspace_size, SccMixerState& state,
-                                     std::string& error);
+xtbloom_status_t bind_scc_mixer_state(const SccMixerPlan& plan, void* workspace,
+                                      std::size_t workspace_size, SccMixerState& state,
+                                      std::string& error);
 
 /* Bind compact allocation-free scratch usable by batch or one-system calls. */
-gpuxtb_status_t bind_scc_mixer_workspace(const SccMixerPlan& plan, void* workspace,
-                                         std::size_t workspace_size, SccMixerWorkspace& view,
-                                         std::string& error);
+xtbloom_status_t bind_scc_mixer_workspace(const SccMixerPlan& plan, void* workspace,
+                                          std::size_t workspace_size, SccMixerWorkspace& view,
+                                          std::string& error);
 
 /*
  * Capture the initial input multipoles for all systems and clear every
  * history, iteration, convergence, restart, and failure record atomically.
  */
-gpuxtb_status_t initialize_scc_mixer_state_cpu(const SccMixerPlan& plan,
-                                               const WavefunctionView& wavefunction,
-                                               const SccMixerState& state, std::string& error);
+xtbloom_status_t initialize_scc_mixer_state_cpu(const SccMixerPlan& plan,
+                                                const WavefunctionView& wavefunction,
+                                                const SccMixerState& state, std::string& error);
 
 /*
  * Independently restart one system from the supplied wavefunction values.
  * Other systems and their history are untouched. restart_counts[system] is
  * incremented only after all new values have been validated.
  */
-gpuxtb_status_t restart_scc_mixer_system_cpu(const SccMixerPlan& plan, std::int64_t system,
-                                             const WavefunctionView& wavefunction,
-                                             const SccMixerState& state, std::string& error);
+xtbloom_status_t restart_scc_mixer_system_cpu(const SccMixerPlan& plan, std::int64_t system,
+                                              const WavefunctionView& wavefunction,
+                                              const SccMixerState& state, std::string& error);
 
 /*
  * Mix one raw SCC output in place.
@@ -160,16 +160,16 @@ gpuxtb_status_t restart_scc_mixer_system_cpu(const SccMixerPlan& plan, std::int6
  * On success, wavefunction receives the next mixed input and the corresponding
  * history/status is committed. A nonfinite residual or failed Broyden solve
  * leaves both the raw wavefunction values and all numerical history unchanged;
- * only system_statuses[system] records GPUXTB_STATUS_INTERNAL_ERROR.
+ * only system_statuses[system] records XTBLOOM_STATUS_INTERNAL_ERROR.
  *
  * Different systems may be processed concurrently with distinct workspaces
  * and distinct std::string objects. Calling workers concurrently for the same
  * system is unsupported.
  */
-gpuxtb_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan, std::int64_t system,
-                                           const WavefunctionView& wavefunction,
-                                           const SccMixerState& state,
-                                           const SccMixerWorkspace& workspace, std::string& error);
+xtbloom_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan, std::int64_t system,
+                                            const WavefunctionView& wavefunction,
+                                            const SccMixerState& state,
+                                            const SccMixerWorkspace& workspace, std::string& error);
 
 /*
  * Serial ragged-batch wrapper over the one-system primitive. Structural errors
@@ -177,10 +177,10 @@ gpuxtb_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan, std::int64_
  * other members are still advanced, and the call returns the first numerical
  * failure after every member has been attempted.
  */
-gpuxtb_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,
-                                          const WavefunctionView& wavefunction,
-                                          const SccMixerState& state,
-                                          const SccMixerWorkspace& workspace, std::string& error);
+xtbloom_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,
+                                           const WavefunctionView& wavefunction,
+                                           const SccMixerState& state,
+                                           const SccMixerWorkspace& workspace, std::string& error);
 
 /*
  * Stage exactly one system's mixer history and records into a separate
@@ -195,11 +195,11 @@ gpuxtb_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,
  * full batch history. Concurrent workers must never prepare the same system
  * into the same staged binding.
  */
-gpuxtb_status_t prepare_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
-                                                         std::int64_t system,
-                                                         const SccMixerState& source,
-                                                         const SccMixerState& staged,
-                                                         std::string& error);
+xtbloom_status_t prepare_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
+                                                          std::int64_t system,
+                                                          const SccMixerState& source,
+                                                          const SccMixerState& staged,
+                                                          std::string& error);
 
 /*
  * Publish one system's staged mixer history and records back to its public
@@ -208,12 +208,12 @@ gpuxtb_status_t prepare_scc_mixer_system_transaction_cpu(const SccMixerPlan& pla
  * prepared is allowed and copies whatever the staged binding currently holds.
  * Neither function allocates on its successful path.
  */
-gpuxtb_status_t commit_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
-                                                        std::int64_t system,
-                                                        const SccMixerState& staged,
-                                                        const SccMixerState& destination,
-                                                        std::string& error);
+xtbloom_status_t commit_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
+                                                         std::int64_t system,
+                                                         const SccMixerState& staged,
+                                                         const SccMixerState& destination,
+                                                         std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_SCC_MIXER_HPP
+#endif  // XTBLOOM_MODEL_GFN2_SCC_MIXER_HPP

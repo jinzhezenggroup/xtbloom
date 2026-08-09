@@ -1,4 +1,4 @@
-"""Helpers to load gpuxtb conformance cases for the Python test suite.
+"""Helpers to load xTBloom conformance cases for the Python test suite.
 
 Reads ``data/conformance/manifest.json`` and the committed golden files so the
 Python bindings are validated against the same trusted reference data as the C
@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 import numpy as np
-from gpuxtb import numbers_to_symbols  # noqa: F401 - re-exported test helper
+from xtbloom import numbers_to_symbols  # noqa: F401 - re-exported test helper
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"

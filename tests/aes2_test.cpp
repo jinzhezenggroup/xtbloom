@@ -22,12 +22,12 @@ std::atomic<bool> enabled{false};
 }  // namespace allocation_test
 
 #if defined(__GNUC__) || defined(__clang__)
-#define GPUXTB_TEST_NOINLINE __attribute__((noinline))
+#define XTBLOOM_TEST_NOINLINE __attribute__((noinline))
 #else
-#define GPUXTB_TEST_NOINLINE
+#define XTBLOOM_TEST_NOINLINE
 #endif
 
-GPUXTB_TEST_NOINLINE
+XTBLOOM_TEST_NOINLINE
 void* operator new(std::size_t size) {
   if (allocation_test::enabled.load(std::memory_order_relaxed)) {
     allocation_test::count.fetch_add(1u, std::memory_order_relaxed);
@@ -38,21 +38,21 @@ void* operator new(std::size_t size) {
   throw std::bad_alloc();
 }
 
-GPUXTB_TEST_NOINLINE void* operator new[](std::size_t size) { return ::operator new(size); }
+XTBLOOM_TEST_NOINLINE void* operator new[](std::size_t size) { return ::operator new(size); }
 
-GPUXTB_TEST_NOINLINE void operator delete(void* pointer) noexcept { std::free(pointer); }
+XTBLOOM_TEST_NOINLINE void operator delete(void* pointer) noexcept { std::free(pointer); }
 
-GPUXTB_TEST_NOINLINE void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
+XTBLOOM_TEST_NOINLINE void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
 
-GPUXTB_TEST_NOINLINE void operator delete(void* pointer, std::size_t) noexcept {
+XTBLOOM_TEST_NOINLINE void operator delete(void* pointer, std::size_t) noexcept {
   ::operator delete(pointer);
 }
 
-GPUXTB_TEST_NOINLINE void operator delete[](void* pointer, std::size_t) noexcept {
+XTBLOOM_TEST_NOINLINE void operator delete[](void* pointer, std::size_t) noexcept {
   ::operator delete[](pointer);
 }
 
-#undef GPUXTB_TEST_NOINLINE
+#undef XTBLOOM_TEST_NOINLINE
 
 #define CHECK(condition) \
   do {                   \
@@ -63,11 +63,11 @@ GPUXTB_TEST_NOINLINE void operator delete[](void* pointer, std::size_t) noexcept
 
 namespace {
 
-using gpuxtb::detail::gfn2::AES2GeometryCache;
-using gpuxtb::detail::gfn2::AES2Plan;
-using gpuxtb::detail::gfn2::AES2Workspace;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::CoordinationPlan;
+using xtbloom::detail::gfn2::AES2GeometryCache;
+using xtbloom::detail::gfn2::AES2Plan;
+using xtbloom::detail::gfn2::AES2Workspace;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::CoordinationPlan;
 
 static_assert(std::is_trivially_copyable_v<AES2GeometryCache>);
 static_assert(std::is_standard_layout_v<AES2GeometryCache>);
@@ -109,21 +109,21 @@ bool make_fixture(const std::vector<std::int64_t>& offsets,
                   const std::vector<double>& positions, Fixture& fixture, std::string& error) {
   const std::int64_t batch_size = static_cast<std::int64_t>(offsets.size() - 1u);
   const std::int64_t atom_count = static_cast<std::int64_t>(atomic_numbers.size());
-  if (gpuxtb::detail::gfn2::make_basis_plan(batch_size, atom_count, offsets.data(),
-                                            atomic_numbers.data(), fixture.basis,
-                                            error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_coordination_plan(batch_size, atom_count, offsets.data(),
-                                                   atomic_numbers.data(), fixture.coordination_plan,
-                                                   error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_aes2_plan(fixture.basis, atomic_numbers.data(), fixture.plan,
-                                           error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_basis_plan(batch_size, atom_count, offsets.data(),
+                                             atomic_numbers.data(), fixture.basis,
+                                             error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_coordination_plan(
+          batch_size, atom_count, offsets.data(), atomic_numbers.data(), fixture.coordination_plan,
+          error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_aes2_plan(fixture.basis, atomic_numbers.data(), fixture.plan,
+                                            error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
   fixture.coordination_numbers.resize(static_cast<std::size_t>(atom_count));
-  if (gpuxtb::detail::gfn2::evaluate_coordination_cpu(fixture.coordination_plan, positions.data(),
-                                                      fixture.coordination_numbers.data(),
-                                                      error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::evaluate_coordination_cpu(fixture.coordination_plan, positions.data(),
+                                                       fixture.coordination_numbers.data(),
+                                                       error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   fixture.pair_data.resize(static_cast<std::size_t>(fixture.plan.pair_data_elements()));
@@ -142,27 +142,27 @@ bool make_fixture(const std::vector<std::int64_t>& offsets,
       fixture.gradient_scratch.data(),     fixture.plan.gradient_scratch_elements(),
       fixture.coordination_scratch.data(), fixture.plan.coordination_scratch_elements(),
   };
-  return gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
+  return xtbloom::detail::gfn2::update_aes2_geometry_cache_cpu(
              fixture.plan, positions.data(), fixture.coordination_numbers.data(), kGeneration,
              fixture.pair_data.data(), fixture.pair_data.size(), fixture.workspace, fixture.cache,
-             error) == GPUXTB_STATUS_SUCCESS;
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool energy(const Fixture& fixture, const std::vector<double>& charges,
             const std::vector<double>& dipoles, const std::vector<double>& quadrupoles,
             std::vector<double>& energies, std::string& error) {
-  return gpuxtb::detail::gfn2::add_aes2_energy_cpu(
+  return xtbloom::detail::gfn2::add_aes2_energy_cpu(
              fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
-             energies.data(), fixture.workspace, error) == GPUXTB_STATUS_SUCCESS;
+             energies.data(), fixture.workspace, error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool update_geometry(Fixture& fixture, const std::vector<double>& positions,
                      const std::vector<double>& coordination_numbers,
                      std::uint64_t geometry_generation, std::string& error) {
-  return gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
+  return xtbloom::detail::gfn2::update_aes2_geometry_cache_cpu(
              fixture.plan, positions.data(), coordination_numbers.data(), geometry_generation,
              fixture.pair_data.data(), fixture.pair_data.size(), fixture.workspace, fixture.cache,
-             error) == GPUXTB_STATUS_SUCCESS;
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool vjp(const Fixture& fixture, const std::vector<double>& positions,
@@ -170,11 +170,11 @@ bool vjp(const Fixture& fixture, const std::vector<double>& positions,
          const std::vector<double>& charges, const std::vector<double>& dipoles,
          const std::vector<double>& quadrupoles, std::vector<double>& gradients,
          std::vector<double>& coordination_adjoints, std::string& error) {
-  return gpuxtb::detail::gfn2::add_aes2_vjp_cpu(fixture.plan, fixture.cache, positions.data(),
-                                                coordination_numbers.data(), geometry_generation,
-                                                charges.data(), dipoles.data(), quadrupoles.data(),
-                                                gradients.data(), coordination_adjoints.data(),
-                                                fixture.workspace, error) == GPUXTB_STATUS_SUCCESS;
+  return xtbloom::detail::gfn2::add_aes2_vjp_cpu(
+             fixture.plan, fixture.cache, positions.data(), coordination_numbers.data(),
+             geometry_generation, charges.data(), dipoles.data(), quadrupoles.data(),
+             gradients.data(), coordination_adjoints.data(), fixture.workspace,
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 int test_dxtb_oracles_and_isolated_components() {
@@ -201,7 +201,7 @@ int test_dxtb_oracles_and_isolated_components() {
    * The multipoles and fixed results below come from dxtb's Apache-2.0
    * test/test_coulomb/test_aes2.py. They in turn exercise the same tblite
    * get_mrad/get_multipole_matrix_0d/get_energy implementation pinned by
-   * gpuxtb's generated GFN2 parameter table.
+   * xtbloom's generated GFN2 parameter table.
    */
   const std::vector<double> charges{0.54699448343345114, -0.54699448343345114};
   const std::vector<double> dipoles{
@@ -249,10 +249,10 @@ int test_dxtb_oracles_and_isolated_components() {
   std::vector<double> charge_potential(2);
   std::vector<double> dipole_potential(6);
   std::vector<double> quadrupole_potential(12);
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             fixture.plan, fixture.cache, potential_charges.data(), potential_dipoles.data(),
             potential_quadrupoles.data(), charge_potential.data(), dipole_potential.data(),
-            quadrupole_potential.data(), fixture.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            quadrupole_potential.data(), fixture.workspace, error) == XTBLOOM_STATUS_SUCCESS);
   constexpr std::array<double, 2> expected_charge{
       -0.00041821215599096711,
       -0.010724251999060196,
@@ -420,23 +420,23 @@ int test_coordinate_and_cn_vjp_finite_differences() {
   std::vector<double> composed_cn(numbers.size(), 0.0);
   CHECK(vjp(composed, positions, composed.coordination_numbers, kGeneration, charges, dipoles,
             quadrupoles, composed_gradient, composed_cn, error));
-  CHECK(gpuxtb::detail::gfn2::add_coordination_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_coordination_gradient_cpu(
             composed.coordination_plan, positions.data(), composed_cn.data(),
-            composed_gradient.data(), error) == GPUXTB_STATUS_SUCCESS);
+            composed_gradient.data(), error) == XTBLOOM_STATUS_SUCCESS);
   for (std::size_t coordinate = 0; coordinate < positions.size(); ++coordinate) {
     positions[coordinate] += coordinate_step;
     std::vector<double> right_cn(numbers.size());
-    CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(composed.coordination_plan,
-                                                          positions.data(), right_cn.data(),
-                                                          error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(composed.coordination_plan,
+                                                           positions.data(), right_cn.data(),
+                                                           error) == XTBLOOM_STATUS_SUCCESS);
     CHECK(update_geometry(composed, positions, right_cn, 1400u, error));
     std::vector<double> right(1, 0.0);
     CHECK(energy(composed, charges, dipoles, quadrupoles, right, error));
     positions[coordinate] -= 2.0 * coordinate_step;
     std::vector<double> left_cn(numbers.size());
-    CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(composed.coordination_plan,
-                                                          positions.data(), left_cn.data(),
-                                                          error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(composed.coordination_plan,
+                                                           positions.data(), left_cn.data(),
+                                                           error) == XTBLOOM_STATUS_SUCCESS);
     CHECK(update_geometry(composed, positions, left_cn, 1401u, error));
     std::vector<double> left(1, 0.0);
     CHECK(energy(composed, charges, dipoles, quadrupoles, left, error));
@@ -478,10 +478,10 @@ int test_energy_potential_consistency() {
   std::vector<double> charge_potential(numbers.size());
   std::vector<double> dipole_potential(dipoles.size());
   std::vector<double> quadrupole_potential(quadrupoles.size());
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
             charge_potential.data(), dipole_potential.data(), quadrupole_potential.data(),
-            fixture.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            fixture.workspace, error) == XTBLOOM_STATUS_SUCCESS);
   std::vector<double> energies(1, 0.0);
   CHECK(energy(fixture, charges, dipoles, quadrupoles, energies, error));
   double contraction = 0.0;
@@ -575,11 +575,11 @@ int test_rotation_covariance_and_tracelessness() {
   std::vector<double> original_charge_potential(3);
   std::vector<double> original_dipole_potential(9);
   std::vector<double> original_quadrupole_potential(18);
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             original.plan, original.cache, charges.data(), dipoles.data(), quadrupoles.data(),
             original_charge_potential.data(), original_dipole_potential.data(),
             original_quadrupole_potential.data(), original.workspace,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   std::vector<double> original_energy(1, 0.0);
   CHECK(energy(original, charges, dipoles, quadrupoles, original_energy, error));
   std::vector<double> original_gradient(positions.size(), 0.0);
@@ -611,11 +611,11 @@ int test_rotation_covariance_and_tracelessness() {
   std::vector<double> rotated_charge_potential(3);
   std::vector<double> rotated_dipole_potential(9);
   std::vector<double> rotated_quadrupole_potential(18);
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             rotated.plan, rotated.cache, charges.data(), rotated_dipoles.data(),
             rotated_quadrupoles.data(), rotated_charge_potential.data(),
             rotated_dipole_potential.data(), rotated_quadrupole_potential.data(), rotated.workspace,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   std::vector<double> rotated_energy(1, 0.0);
   CHECK(energy(rotated, charges, rotated_dipoles, rotated_quadrupoles, rotated_energy, error));
   CHECK(near(rotated_energy[0], original_energy[0], 2.0e-16));
@@ -681,10 +681,10 @@ int test_ragged_matches_sequential() {
   std::vector<double> batch_energy(4, 0.0);
   std::vector<double> batch_gradient(positions.size(), 0.0);
   std::vector<double> batch_cn(numbers.size(), 0.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             batch.plan, batch.cache, charges.data(), dipoles.data(), quadrupoles.data(),
             batch_charge_potential.data(), batch_dipole_potential.data(),
-            batch_quadrupole_potential.data(), batch.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            batch_quadrupole_potential.data(), batch.workspace, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(energy(batch, charges, dipoles, quadrupoles, batch_energy, error));
   CHECK(vjp(batch, positions, batch.coordination_numbers, kGeneration, charges, dipoles,
             quadrupoles, batch_gradient, batch_cn, error));
@@ -694,9 +694,9 @@ int test_ragged_matches_sequential() {
    * ragged member, while preserving accumulation semantics. */
   for (std::int64_t system = 0; system < batch.plan.batch_size(); ++system) {
     double system_energy = 0.375;
-    CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+    CHECK(xtbloom::detail::gfn2::add_aes2_energy_system_cpu(
               batch.plan, batch.cache, system, charges.data(), dipoles.data(), quadrupoles.data(),
-              system_energy, batch.workspace, error) == GPUXTB_STATUS_SUCCESS);
+              system_energy, batch.workspace, error) == XTBLOOM_STATUS_SUCCESS);
     CHECK(system_energy == 0.375 + batch_energy[static_cast<std::size_t>(system)]);
   }
 
@@ -714,14 +714,14 @@ int test_ragged_matches_sequential() {
   quadrupoles[peer_atom * 6u] = std::numeric_limits<double>::quiet_NaN();
   batch.pair_data[peer_pair] = std::numeric_limits<double>::quiet_NaN();
   double isolated_energy = -0.25;
-  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_energy_system_cpu(
             batch.plan, batch.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
-            isolated_energy, batch.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            isolated_energy, batch.workspace, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(isolated_energy == -0.25 + batch_energy[0]);
   double failed_energy = 9.5;
-  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_energy_system_cpu(
             batch.plan, batch.cache, 2, charges.data(), dipoles.data(), quadrupoles.data(),
-            failed_energy, batch.workspace, error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            failed_energy, batch.workspace, error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(failed_energy == 9.5);
   charges[peer_atom] = saved_charge;
   dipoles[peer_atom * 3u] = saved_dipole;
@@ -751,12 +751,12 @@ int test_ragged_matches_sequential() {
     std::vector<double> sequential_energy(1, 0.0);
     std::vector<double> sequential_gradient(atom_count * 3u, 0.0);
     std::vector<double> sequential_cn(atom_count, 0.0);
-    CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
               sequential.plan, sequential.cache, sequential_charges.data(),
               sequential_dipoles.data(), sequential_quadrupoles.data(),
               sequential_charge_potential.data(), sequential_dipole_potential.data(),
               sequential_quadrupole_potential.data(), sequential.workspace,
-              error) == GPUXTB_STATUS_SUCCESS);
+              error) == XTBLOOM_STATUS_SUCCESS);
     CHECK(energy(sequential, sequential_charges, sequential_dipoles, sequential_quadrupoles,
                  sequential_energy, error));
     CHECK(vjp(sequential, sequential_positions, sequential.coordination_numbers, kGeneration,
@@ -820,10 +820,10 @@ int test_system_potential_matches_batch_and_failure_isolation() {
   std::vector<double> batch_charge(numbers.size());
   std::vector<double> batch_dipole(dipoles.size());
   std::vector<double> batch_quadrupole(quadrupoles.size());
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             batch.plan, batch.cache, charges.data(), dipoles.data(), quadrupoles.data(),
             batch_charge.data(), batch_dipole.data(), batch_quadrupole.data(), batch.workspace,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
 
   /* The one-system primitive reproduces the batch potential slices, including
    * an empty ragged member. */
@@ -831,10 +831,10 @@ int test_system_potential_matches_batch_and_failure_isolation() {
   std::vector<double> system_dipole(dipoles.size(), -7.0);
   std::vector<double> system_quadrupole(quadrupoles.size(), -7.0);
   for (std::int64_t system = 0; system < batch.plan.batch_size(); ++system) {
-    CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_system_cpu(
               batch.plan, batch.cache, system, charges.data(), dipoles.data(), quadrupoles.data(),
               system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace,
-              error) == GPUXTB_STATUS_SUCCESS);
+              error) == XTBLOOM_STATUS_SUCCESS);
     const std::int64_t atom_begin = offsets[system];
     const std::int64_t atom_end = offsets[system + 1u];
     for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
@@ -865,10 +865,10 @@ int test_system_potential_matches_batch_and_failure_isolation() {
   std::fill(system_charge.begin(), system_charge.end(), 0.0);
   std::fill(system_dipole.begin(), system_dipole.end(), 0.0);
   std::fill(system_quadrupole.begin(), system_quadrupole.end(), 0.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_system_cpu(
             batch.plan, batch.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
             system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   for (std::size_t atom = 0; atom < 2u; ++atom) {
     CHECK(system_charge[atom] == expected_charge[atom]);
     for (std::size_t component = 0; component < 3u; ++component) {
@@ -886,37 +886,37 @@ int test_system_potential_matches_batch_and_failure_isolation() {
   std::fill(system_charge.begin(), system_charge.end(), 1.5);
   const std::vector<double> untouched_charge(system_charge);
   charges[static_cast<std::size_t>(offsets[2])] = std::numeric_limits<double>::infinity();
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_system_cpu(
             batch.plan, batch.cache, 2, charges.data(), dipoles.data(), quadrupoles.data(),
             system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace,
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(system_charge == untouched_charge);
   charges[static_cast<std::size_t>(offsets[2])] = 0.08 * 3.0 - 0.27;
 
   /* Out-of-range system and foreign cache are structural failures. */
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_system_cpu(
             batch.plan, batch.cache, -1, charges.data(), dipoles.data(), quadrupoles.data(),
             system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_system_cpu(
             batch.plan, batch.cache, batch.plan.batch_size(), charges.data(), dipoles.data(),
             quadrupoles.data(), system_charge.data(), system_dipole.data(),
-            system_quadrupole.data(), batch.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            system_quadrupole.data(), batch.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   Fixture foreign;
   CHECK(make_fixture(offsets, numbers, positions, foreign, error));
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_system_cpu(
             batch.plan, foreign.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
             system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   /* No per-call allocation in steady state. */
   const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::evaluate_aes2_potential_system_cpu(
+  const xtbloom_status_t status = xtbloom::detail::gfn2::evaluate_aes2_potential_system_cpu(
       batch.plan, batch.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
       system_charge.data(), system_dipole.data(), system_quadrupole.data(), batch.workspace, error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
-  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(status == XTBLOOM_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == before);
   return 0;
 }
@@ -933,10 +933,10 @@ int test_failure_atomicity_and_plan_identity() {
   const std::vector<double> original_coordination_numbers = fixture.coordination_numbers;
 
   fixture.coordination_numbers.back() = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_aes2_geometry_cache_cpu(
             fixture.plan, positions.data(), fixture.coordination_numbers.data(), 99u,
             fixture.pair_data.data(), fixture.pair_data.size(), fixture.workspace, fixture.cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.pair_data == original_pairs);
   CHECK(same_cache(fixture.cache, original_cache));
   fixture.coordination_numbers.back() = original_coordination_numbers.back();
@@ -944,10 +944,10 @@ int test_failure_atomicity_and_plan_identity() {
   positions[9] = positions[6];
   positions[10] = positions[7];
   positions[11] = positions[8];
-  CHECK(gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_aes2_geometry_cache_cpu(
             fixture.plan, positions.data(), fixture.coordination_numbers.data(), 100u,
             fixture.pair_data.data(), fixture.pair_data.size(), fixture.workspace, fixture.cache,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.pair_data == original_pairs);
   CHECK(same_cache(fixture.cache, original_cache));
 
@@ -965,10 +965,10 @@ int test_failure_atomicity_and_plan_identity() {
   const std::vector<double> original_dipole_potential = dipole_potential;
   const std::vector<double> original_quadrupole_potential = quadrupole_potential;
   quadrupoles.back() = std::numeric_limits<double>::infinity();
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
             charge_potential.data(), dipole_potential.data(), quadrupole_potential.data(),
-            fixture.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            fixture.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(charge_potential == original_charge_potential);
   CHECK(dipole_potential == original_dipole_potential);
   CHECK(quadrupole_potential == original_quadrupole_potential);
@@ -978,29 +978,29 @@ int test_failure_atomicity_and_plan_identity() {
   const std::vector<double> original_energies = energies;
   const double saved_kernel = fixture.pair_data.back();
   fixture.pair_data.back() = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_energy_cpu(
             fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
-            energies.data(), fixture.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            energies.data(), fixture.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energies == original_energies);
   fixture.pair_data.back() = saved_kernel;
 
   double& aliased_energy = const_cast<double&>(charges[0]);
   const double aliased_energy_before = aliased_energy;
-  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_energy_system_cpu(
             fixture.plan, fixture.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
-            aliased_energy, fixture.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            aliased_energy, fixture.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(aliased_energy == aliased_energy_before);
   double system_energy = 3.0;
   AES2Workspace short_energy_workspace = fixture.workspace;
   --short_energy_workspace.batch_elements;
-  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_energy_system_cpu(
             fixture.plan, fixture.cache, 0, charges.data(), dipoles.data(), quadrupoles.data(),
-            system_energy, short_energy_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            system_energy, short_energy_workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(system_energy == 3.0);
-  CHECK(gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_energy_system_cpu(
             fixture.plan, fixture.cache, fixture.plan.batch_size(), charges.data(), dipoles.data(),
             quadrupoles.data(), system_energy, fixture.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(system_energy == 3.0);
 
   Fixture reverse;
@@ -1010,25 +1010,25 @@ int test_failure_atomicity_and_plan_identity() {
   CHECK(make_fixture(offsets, reverse_numbers, reverse_positions, reverse, error));
   AES2GeometryCache wrong_cache = fixture.cache;
   wrong_cache.plan_identity = reverse.plan.identity();
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             fixture.plan, wrong_cache, charges.data(), dipoles.data(), quadrupoles.data(),
             charge_potential.data(), dipole_potential.data(), quadrupole_potential.data(),
-            fixture.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            fixture.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(charge_potential == original_charge_potential);
 
   AES2Workspace short_workspace = fixture.workspace;
   short_workspace.potential_elements -= 1;
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
             charge_potential.data(), dipole_potential.data(), quadrupole_potential.data(),
-            short_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            short_workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(charge_potential == original_charge_potential);
 
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
             const_cast<double*>(charges.data()), dipole_potential.data(),
             quadrupole_potential.data(), fixture.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   positions = {0.0, 0.0, -1.3, 0.2, 0.1, 1.4, -0.8, 0.5, 0.2, 1.1, -0.7, 0.9};
   fixture.coordination_numbers = original_coordination_numbers;
@@ -1036,68 +1036,68 @@ int test_failure_atomicity_and_plan_identity() {
   std::vector<double> coordination_adjoints(numbers.size(), 12.0);
   const std::vector<double> original_gradients = gradients;
   const std::vector<double> original_coordination_adjoints = coordination_adjoints;
-  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_vjp_cpu(
             fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
             kGeneration + 1u, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
             coordination_adjoints.data(), fixture.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients == original_gradients);
   CHECK(coordination_adjoints == original_coordination_adjoints);
 
   positions[0] += 0.01;
-  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_vjp_cpu(
             fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
             kGeneration, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
             coordination_adjoints.data(), fixture.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients == original_gradients);
   CHECK(coordination_adjoints == original_coordination_adjoints);
   positions[0] -= 0.01;
 
   fixture.coordination_numbers[1] += 10.0;
-  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_vjp_cpu(
             fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
             kGeneration, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
             coordination_adjoints.data(), fixture.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients == original_gradients);
   CHECK(coordination_adjoints == original_coordination_adjoints);
   fixture.coordination_numbers[1] = original_coordination_numbers[1];
 
   quadrupoles.back() = std::numeric_limits<double>::infinity();
-  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_vjp_cpu(
             fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
             kGeneration, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
             coordination_adjoints.data(), fixture.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients == original_gradients);
   CHECK(coordination_adjoints == original_coordination_adjoints);
   quadrupoles.back() = 0.05;
 
   AES2Workspace short_vjp_workspace = fixture.workspace;
   short_vjp_workspace.coordination_elements -= 1;
-  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_vjp_cpu(
             fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
             kGeneration, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
             coordination_adjoints.data(), short_vjp_workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients == original_gradients);
   CHECK(coordination_adjoints == original_coordination_adjoints);
 
-  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_vjp_cpu(
             fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
             kGeneration, charges.data(), dipoles.data(), quadrupoles.data(),
             const_cast<double*>(dipoles.data()), coordination_adjoints.data(), fixture.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(coordination_adjoints == original_coordination_adjoints);
 
   AES2Workspace aliased_vjp_workspace = fixture.workspace;
   aliased_vjp_workspace.coordination_scratch = coordination_adjoints.data();
-  CHECK(gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+  CHECK(xtbloom::detail::gfn2::add_aes2_vjp_cpu(
             fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
             kGeneration, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
             coordination_adjoints.data(), aliased_vjp_workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients == original_gradients);
   CHECK(coordination_adjoints == original_coordination_adjoints);
   return 0;
@@ -1126,44 +1126,44 @@ int test_zero_steady_state_allocations() {
   std::vector<double> gradients(positions.size(), 0.0);
   std::vector<double> coordination_adjoints(numbers.size(), 0.0);
 
-  CHECK(gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_aes2_geometry_cache_cpu(
             fixture.plan, positions.data(), fixture.coordination_numbers.data(), kGeneration + 1u,
             fixture.pair_data.data(), fixture.pair_data.size(), fixture.workspace, fixture.cache,
-            error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
             fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
             charge_potential.data(), dipole_potential.data(), quadrupole_potential.data(),
-            fixture.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            fixture.workspace, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(energy(fixture, charges, dipoles, quadrupoles, energies, error));
   CHECK(vjp(fixture, positions, fixture.coordination_numbers, kGeneration + 1u, charges, dipoles,
             quadrupoles, gradients, coordination_adjoints, error));
 
   allocation_test::count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t update_status = gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
+  const xtbloom_status_t update_status = xtbloom::detail::gfn2::update_aes2_geometry_cache_cpu(
       fixture.plan, positions.data(), fixture.coordination_numbers.data(), kGeneration + 2u,
       fixture.pair_data.data(), fixture.pair_data.size(), fixture.workspace, fixture.cache, error);
-  const gpuxtb_status_t potential_status = gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+  const xtbloom_status_t potential_status = xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
       fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
       charge_potential.data(), dipole_potential.data(), quadrupole_potential.data(),
       fixture.workspace, error);
-  const gpuxtb_status_t energy_status = gpuxtb::detail::gfn2::add_aes2_energy_cpu(
+  const xtbloom_status_t energy_status = xtbloom::detail::gfn2::add_aes2_energy_cpu(
       fixture.plan, fixture.cache, charges.data(), dipoles.data(), quadrupoles.data(),
       energies.data(), fixture.workspace, error);
   double system_energy = 0.0;
-  const gpuxtb_status_t system_energy_status = gpuxtb::detail::gfn2::add_aes2_energy_system_cpu(
+  const xtbloom_status_t system_energy_status = xtbloom::detail::gfn2::add_aes2_energy_system_cpu(
       fixture.plan, fixture.cache, 1, charges.data(), dipoles.data(), quadrupoles.data(),
       system_energy, fixture.workspace, error);
-  const gpuxtb_status_t vjp_status = gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+  const xtbloom_status_t vjp_status = xtbloom::detail::gfn2::add_aes2_vjp_cpu(
       fixture.plan, fixture.cache, positions.data(), fixture.coordination_numbers.data(),
       kGeneration + 2u, charges.data(), dipoles.data(), quadrupoles.data(), gradients.data(),
       coordination_adjoints.data(), fixture.workspace, error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
-  CHECK(update_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(potential_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(energy_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(system_energy_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(vjp_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(update_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(potential_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(energy_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(system_energy_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(vjp_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
   return 0;
 }

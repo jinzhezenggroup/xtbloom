@@ -55,8 +55,8 @@ bool near(double actual, double expected, double tolerance) {
 }
 
 struct Evaluation {
-  gpuxtb::detail::gfn2::BasisPlan basis;
-  gpuxtb::detail::gfn2::IntegralPlan integrals;
+  xtbloom::detail::gfn2::BasisPlan basis;
+  xtbloom::detail::gfn2::IntegralPlan integrals;
   std::vector<double> workspace;
   std::vector<double> overlap;
   std::vector<double> dipole;
@@ -66,13 +66,13 @@ struct Evaluation {
 bool evaluate(std::int64_t batch_size, const std::vector<std::int64_t>& atom_offsets,
               const std::vector<std::int32_t>& atomic_numbers, const std::vector<double>& positions,
               Evaluation& evaluation, std::string& error) {
-  if (gpuxtb::detail::gfn2::make_basis_plan(
+  if (xtbloom::detail::gfn2::make_basis_plan(
           batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-          atomic_numbers.data(), evaluation.basis, error) != GPUXTB_STATUS_SUCCESS) {
+          atomic_numbers.data(), evaluation.basis, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
-  if (gpuxtb::detail::gfn2::make_integral_plan(evaluation.basis, evaluation.integrals, error) !=
-      GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_integral_plan(evaluation.basis, evaluation.integrals, error) !=
+      XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   evaluation.workspace.resize((evaluation.integrals.workspace_size_bytes + sizeof(double) - 1u) /
@@ -82,20 +82,20 @@ bool evaluate(std::int64_t batch_size, const std::vector<std::int64_t>& atom_off
   evaluation.overlap.resize(matrix_elements);
   evaluation.dipole.resize(kDipoleComponents * matrix_elements);
   evaluation.quadrupole.resize(kQuadrupoleComponents * matrix_elements);
-  if (gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  if (xtbloom::detail::gfn2::evaluate_overlap_cpu(
           evaluation.basis, evaluation.integrals, positions.data(), evaluation.overlap.data(),
           evaluation.workspace.data(), evaluation.workspace.size() * sizeof(double),
-          error) != GPUXTB_STATUS_SUCCESS) {
+          error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
-  return gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+  return xtbloom::detail::gfn2::evaluate_multipole_cpu(
              evaluation.basis, evaluation.integrals, positions.data(), evaluation.dipole.data(),
              evaluation.quadrupole.data(), evaluation.workspace.data(),
-             evaluation.workspace.size() * sizeof(double), error) == GPUXTB_STATUS_SUCCESS;
+             evaluation.workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS;
 }
 
-bool weighted_multipoles(const gpuxtb::detail::gfn2::BasisPlan& basis,
-                         const gpuxtb::detail::gfn2::IntegralPlan& integrals,
+bool weighted_multipoles(const xtbloom::detail::gfn2::BasisPlan& basis,
+                         const xtbloom::detail::gfn2::IntegralPlan& integrals,
                          std::vector<double>& workspace, const std::vector<double>& positions,
                          const std::vector<double>& dipole_adjoint,
                          const std::vector<double>& quadrupole_adjoint, double& value,
@@ -103,9 +103,9 @@ bool weighted_multipoles(const gpuxtb::detail::gfn2::BasisPlan& basis,
   const std::size_t matrix_elements = static_cast<std::size_t>(integrals.total_matrix_elements);
   std::vector<double> dipole(kDipoleComponents * matrix_elements);
   std::vector<double> quadrupole(kQuadrupoleComponents * matrix_elements);
-  if (gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+  if (xtbloom::detail::gfn2::evaluate_multipole_cpu(
           basis, integrals, positions.data(), dipole.data(), quadrupole.data(), workspace.data(),
-          workspace.size() * sizeof(double), error) != GPUXTB_STATUS_SUCCESS) {
+          workspace.size() * sizeof(double), error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   value = 0.0;
@@ -122,10 +122,10 @@ bool add_multipole_gradient(Evaluation& evaluation, const std::vector<double>& p
                             const std::vector<double>& dipole_adjoint,
                             const std::vector<double>& quadrupole_adjoint,
                             std::vector<double>& gradients, std::string& error) {
-  return gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+  return xtbloom::detail::gfn2::add_multipole_gradient_cpu(
              evaluation.basis, evaluation.integrals, positions.data(), dipole_adjoint.data(),
              quadrupole_adjoint.data(), gradients.data(), evaluation.workspace.data(),
-             evaluation.workspace.size() * sizeof(double), error) == GPUXTB_STATUS_SUCCESS;
+             evaluation.workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 struct ReferenceSample {
@@ -627,44 +627,45 @@ int test_ragged_batch_equals_sequential() {
 int test_validation_preserves_outputs() {
   constexpr std::array<std::int64_t, 2> offsets{0, 1};
   constexpr std::array<std::int32_t, 1> atomic_numbers{14};
-  gpuxtb::detail::gfn2::BasisPlan basis;
-  gpuxtb::detail::gfn2::IntegralPlan plan;
+  xtbloom::detail::gfn2::BasisPlan basis;
+  xtbloom::detail::gfn2::IntegralPlan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, 1, offsets.data(), atomic_numbers.data(), basis,
-                                              error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::make_integral_plan(basis, plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, 1, offsets.data(), atomic_numbers.data(), basis,
+                                               error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_integral_plan(basis, plan, error) == XTBLOOM_STATUS_SUCCESS);
   std::array<double, 3> positions{};
   const std::size_t matrix_elements = static_cast<std::size_t>(plan.total_matrix_elements);
   std::vector<double> dipole(kDipoleComponents * matrix_elements, 3.0);
   std::vector<double> quadrupole(kQuadrupoleComponents * matrix_elements, 4.0);
   std::vector<double> workspace((plan.workspace_size_bytes + sizeof(double) - 1u) / sizeof(double));
 
-  CHECK(gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_multipole_cpu(
             basis, plan, positions.data(), dipole.data(), quadrupole.data(), workspace.data(),
-            plan.workspace_size_bytes - 1u, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            plan.workspace_size_bytes - 1u, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(dipole.begin(), dipole.end(), [](double value) { return value == 3.0; }));
   CHECK(
       std::all_of(quadrupole.begin(), quadrupole.end(), [](double value) { return value == 4.0; }));
 
   positions[0] = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_multipole_cpu(
             basis, plan, positions.data(), dipole.data(), quadrupole.data(), workspace.data(),
-            workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   positions[0] = 0.0;
-  CHECK(gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_multipole_cpu(
             basis, plan, positions.data(), nullptr, quadrupole.data(), workspace.data(),
-            workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(
       std::all_of(quadrupole.begin(), quadrupole.end(), [](double value) { return value == 4.0; }));
 
   constexpr std::array<std::int64_t, 2> pair_offsets{0, 2};
   constexpr std::array<std::int32_t, 2> pair_atomic_numbers{1, 1};
-  gpuxtb::detail::gfn2::BasisPlan pair_basis;
-  gpuxtb::detail::gfn2::IntegralPlan pair_plan;
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, 2, pair_offsets.data(), pair_atomic_numbers.data(),
-                                              pair_basis, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::make_integral_plan(pair_basis, pair_plan, error) ==
-        GPUXTB_STATUS_SUCCESS);
+  xtbloom::detail::gfn2::BasisPlan pair_basis;
+  xtbloom::detail::gfn2::IntegralPlan pair_plan;
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, 2, pair_offsets.data(),
+                                               pair_atomic_numbers.data(), pair_basis,
+                                               error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_integral_plan(pair_basis, pair_plan, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   /* Individually finite coordinates whose pair displacement squared would overflow. */
   const double extreme = 0.6 * std::sqrt(std::numeric_limits<double>::max());
   const std::array<double, 6> extreme_positions{extreme, 0.0, 0.0, -extreme, 0.0, 0.0};
@@ -674,10 +675,10 @@ int test_validation_preserves_outputs() {
   std::vector<double> pair_quadrupole(kQuadrupoleComponents * pair_matrix_elements, 8.0);
   std::vector<double> pair_workspace((pair_plan.workspace_size_bytes + sizeof(double) - 1u) /
                                      sizeof(double));
-  CHECK(gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_multipole_cpu(
             pair_basis, pair_plan, extreme_positions.data(), pair_dipole.data(),
             pair_quadrupole.data(), pair_workspace.data(), pair_workspace.size() * sizeof(double),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(pair_dipole.begin(), pair_dipole.end(),
                     [](double value) { return value == 7.0; }));
   CHECK(std::all_of(pair_quadrupole.begin(), pair_quadrupole.end(),
@@ -694,45 +695,45 @@ int test_validation_preserves_outputs() {
 
   auto corrupt_plan = pair_plan;
   corrupt_plan.matrix_offsets.back() -= 1;
-  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_multipole_gradient_cpu(
             pair_basis, corrupt_plan, pair_positions.data(), dipole_adjoint.data(),
             quadrupole_adjoint.data(), gradients.data(), pair_workspace.data(),
-            pair_workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            pair_workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients_unchanged());
 
   quadrupole_adjoint.back() = std::numeric_limits<double>::infinity();
-  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_multipole_gradient_cpu(
             pair_basis, pair_plan, pair_positions.data(), dipole_adjoint.data(),
             quadrupole_adjoint.data(), gradients.data(), pair_workspace.data(),
-            pair_workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            pair_workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients_unchanged());
   quadrupole_adjoint.back() = -0.125;
 
   dipole_adjoint.back() = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_multipole_gradient_cpu(
             pair_basis, pair_plan, pair_positions.data(), dipole_adjoint.data(),
             quadrupole_adjoint.data(), gradients.data(), pair_workspace.data(),
-            pair_workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            pair_workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients_unchanged());
   dipole_adjoint.back() = 0.25;
 
   auto nonfinite_positions = pair_positions;
   nonfinite_positions[0] = std::numeric_limits<double>::infinity();
-  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_multipole_gradient_cpu(
             pair_basis, pair_plan, nonfinite_positions.data(), dipole_adjoint.data(),
             quadrupole_adjoint.data(), gradients.data(), pair_workspace.data(),
-            pair_workspace.size() * sizeof(double), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            pair_workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients_unchanged());
 
-  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_multipole_gradient_cpu(
             pair_basis, pair_plan, pair_positions.data(), dipole_adjoint.data(),
             quadrupole_adjoint.data(), gradients.data(), pair_workspace.data(),
-            pair_plan.workspace_size_bytes - 1u, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            pair_plan.workspace_size_bytes - 1u, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients_unchanged());
-  CHECK(gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_multipole_gradient_cpu(
             pair_basis, pair_plan, pair_positions.data(), nullptr, quadrupole_adjoint.data(),
             gradients.data(), pair_workspace.data(), pair_workspace.size() * sizeof(double),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(gradients_unchanged());
   return 0;
 }
@@ -753,13 +754,13 @@ int test_no_steady_state_vjp_allocations() {
                                error));
   const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+  const xtbloom_status_t status = xtbloom::detail::gfn2::add_multipole_gradient_cpu(
       evaluation.basis, evaluation.integrals, positions.data(), dipole_adjoint.data(),
       quadrupole_adjoint.data(), gradients.data(), evaluation.workspace.data(),
       evaluation.workspace.size() * sizeof(double), error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
   const std::size_t after = allocation_test::count.load(std::memory_order_relaxed);
-  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(status == XTBLOOM_STATUS_SUCCESS);
   CHECK(after == before);
   return 0;
 }

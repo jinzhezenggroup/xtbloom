@@ -1,13 +1,13 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_ENERGY_FORCE_EXECUTION_TEST_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_ENERGY_FORCE_EXECUTION_TEST_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_ENERGY_FORCE_EXECUTION_TEST_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_ENERGY_FORCE_EXECUTION_TEST_CUH
 
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* Test-only entry through the production CN sequence-promotion/parity
  * launcher. It lets sanitizer tests supply hostile device offsets after a
@@ -19,6 +19,6 @@ cudaError_t test_gate_gfn2_cn_vjp_parity_cuda(
     double* production_gradients, std::uint32_t* coordination_errors,
     std::uint32_t* execution_device_error, cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
 #endif

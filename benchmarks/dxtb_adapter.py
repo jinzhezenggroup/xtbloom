@@ -1,6 +1,6 @@
 """Persistent in-process adapter for the PyTorch dxtb GFN2 implementation.
 
-The adapter consumes the same ``PublicBatchStorage`` used by the gpuxtb
+The adapter consumes the same ``PublicBatchStorage`` used by the xtbloom
 benchmark.  Coordinates are already expressed in bohr and dxtb reports
 energies in Hartree, so no unit conversion is performed.  Reported forces are
 therefore in Hartree/bohr and already use the negative-gradient convention.
@@ -149,7 +149,7 @@ class DxtbAdapter:
     """
 
     external_point_charge_reason = (
-        "dxtb GFN2 benchmark adapter does not yet map gpuxtb's discrete "
+        "dxtb GFN2 benchmark adapter does not yet map xtbloom's discrete "
         "external point-charge SCC and point-charge-force contract"
     )
 
@@ -429,7 +429,7 @@ class DxtbAdapter:
             self._host_forces = self._forces.to(device="cpu").contiguous()
 
     def results(self) -> dict[str, Any]:
-        """Copy synchronized outputs to Python lists in public gpuxtb units."""
+        """Copy synchronized outputs to Python lists in public xtbloom units."""
         if self._host_energies is None:
             self.publish_to_host()
         energy_values = self._host_energies.reshape(-1).tolist()

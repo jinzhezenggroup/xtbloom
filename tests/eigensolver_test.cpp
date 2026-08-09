@@ -23,7 +23,7 @@
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/occupation_binary64_policy.hpp"
 
-#if defined(GPUXTB_TEST_SCIPY_PREFIXED_BLAS)
+#if defined(XTBLOOM_TEST_SCIPY_PREFIXED_BLAS)
 #define LAPACKE_dpotrf_work scipy_LAPACKE_dpotrf_work
 #define LAPACKE_dpocon_work scipy_LAPACKE_dpocon_work
 #define LAPACKE_dsyevd_work scipy_LAPACKE_dsyevd_work
@@ -60,14 +60,14 @@ std::atomic<bool> enabled{false};
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
-#define GPUXTB_EIGENSOLVER_TEST_ASAN 1
+#define XTBLOOM_EIGENSOLVER_TEST_ASAN 1
 #endif
 #endif
-#if defined(__SANITIZE_ADDRESS__) && !defined(GPUXTB_EIGENSOLVER_TEST_ASAN)
-#define GPUXTB_EIGENSOLVER_TEST_ASAN 1
+#if defined(__SANITIZE_ADDRESS__) && !defined(XTBLOOM_EIGENSOLVER_TEST_ASAN)
+#define XTBLOOM_EIGENSOLVER_TEST_ASAN 1
 #endif
 
-#if !defined(GPUXTB_EIGENSOLVER_TEST_ASAN) && defined(__GLIBC__)
+#if !defined(XTBLOOM_EIGENSOLVER_TEST_ASAN) && defined(__GLIBC__)
 extern "C" void* __libc_malloc(std::size_t size) noexcept;
 
 /* Count vendor-side malloc calls as well as C++ allocations on glibc builds. */
@@ -104,16 +104,16 @@ void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[
 
 namespace {
 
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::CpuLinearAlgebraBackend;
-using gpuxtb::detail::gfn2::EigensolverOverlapCache;
-using gpuxtb::detail::gfn2::EigensolverPlan;
-using gpuxtb::detail::gfn2::EigensolverThermodynamicsView;
-using gpuxtb::detail::gfn2::EigensolverWorkspace;
-using gpuxtb::detail::gfn2::LapackInt;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
-using gpuxtb::detail::gfn2::WavefunctionSystemView;
-using gpuxtb::detail::gfn2::WavefunctionView;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::CpuLinearAlgebraBackend;
+using xtbloom::detail::gfn2::EigensolverOverlapCache;
+using xtbloom::detail::gfn2::EigensolverPlan;
+using xtbloom::detail::gfn2::EigensolverThermodynamicsView;
+using xtbloom::detail::gfn2::EigensolverWorkspace;
+using xtbloom::detail::gfn2::LapackInt;
+using xtbloom::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::gfn2::WavefunctionSystemView;
+using xtbloom::detail::gfn2::WavefunctionView;
 
 constexpr double kTolerance = 2.0e-11;
 std::atomic<int> potrf_calls{0};
@@ -199,10 +199,10 @@ const CpuLinearAlgebraBackend& backend() {
   static const CpuLinearAlgebraBackend created = [] {
     CpuLinearAlgebraBackend candidate;
     std::string error;
-    const gpuxtb_status_t status = gpuxtb::detail::gfn2::make_internal_test_lp64_backend(
+    const xtbloom_status_t status = xtbloom::detail::gfn2::make_internal_test_lp64_backend(
         &counting_dpotrf, &counting_dpocon, &counting_dsyevd, &counting_dtrsm, &counting_dgemm,
         nullptr, candidate, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       std::abort();
     }
     return candidate;
@@ -234,7 +234,7 @@ struct AlignedBuffer {
   std::size_t size = 0u;
 
   explicit AlignedBuffer(std::size_t requested) : size(requested) {
-    data = std::aligned_alloc(gpuxtb::detail::gfn2::kEigensolverWorkspaceAlignment, requested);
+    data = std::aligned_alloc(xtbloom::detail::gfn2::kEigensolverWorkspaceAlignment, requested);
   }
 
   ~AlignedBuffer() { std::free(data); }
@@ -251,7 +251,7 @@ struct Evaluation {
   WavefunctionView wavefunction;
   EigensolverOverlapCache cache;
   EigensolverWorkspace scratch;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<double> chemical_potentials;
   std::vector<double> entropies;
   std::vector<double> band_energies;
@@ -278,15 +278,15 @@ bool initialize_evaluation(const std::vector<std::int64_t>& atom_offsets,
                            const std::vector<std::int32_t>& spins, Evaluation& evaluation,
                            std::string& error, double minimum_rcond = 1.0e-12) {
   BasisPlan basis;
-  if (gpuxtb::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
-                                            static_cast<std::int64_t>(atomic_numbers.size()),
-                                            atom_offsets.data(), atomic_numbers.data(), basis,
-                                            error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_wavefunction_layout(
+  if (xtbloom::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
+                                             static_cast<std::int64_t>(atomic_numbers.size()),
+                                             atom_offsets.data(), atomic_numbers.data(), basis,
+                                             error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_wavefunction_layout(
           basis, atomic_numbers.data(), charges.data(), unpaired.data(), spins.data(),
-          evaluation.layout, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_eigensolver_plan(evaluation.layout, evaluation.plan, error,
-                                                  minimum_rcond) != GPUXTB_STATUS_SUCCESS) {
+          evaluation.layout, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_eigensolver_plan(evaluation.layout, evaluation.plan, error,
+                                                   minimum_rcond) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -298,16 +298,16 @@ bool initialize_evaluation(const std::vector<std::int64_t>& atom_offsets,
       std::make_unique<AlignedBuffer>(evaluation.plan.workspace_size_bytes());
   if (evaluation.wavefunction_storage->data == nullptr ||
       evaluation.cache_storage->data == nullptr || evaluation.scratch_storage->data == nullptr ||
-      gpuxtb::detail::gfn2::bind_wavefunction_view(
+      xtbloom::detail::gfn2::bind_wavefunction_view(
           evaluation.layout, evaluation.wavefunction_storage->data,
           evaluation.wavefunction_storage->size, evaluation.wavefunction,
-          error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::bind_eigensolver_overlap_cache(
+          error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::bind_eigensolver_overlap_cache(
           evaluation.plan, evaluation.cache_storage->data, evaluation.cache_storage->size,
-          evaluation.cache, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::bind_eigensolver_workspace(
+          evaluation.cache, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::bind_eigensolver_workspace(
           evaluation.plan, evaluation.scratch_storage->data, evaluation.scratch_storage->size,
-          evaluation.scratch, error) != GPUXTB_STATUS_SUCCESS) {
+          evaluation.scratch, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   const std::size_t batch = static_cast<std::size_t>(evaluation.plan.batch_size());
@@ -332,7 +332,7 @@ void fill_outputs(Evaluation& evaluation, double sentinel) {
               static_cast<std::size_t>(evaluation.layout.energy_weighted_density.element_count),
               sentinel);
   std::fill(evaluation.statuses.begin(), evaluation.statuses.end(),
-            static_cast<gpuxtb_status_t>(99));
+            static_cast<xtbloom_status_t>(99));
   std::fill(evaluation.chemical_potentials.begin(), evaluation.chemical_potentials.end(), sentinel);
   std::fill(evaluation.entropies.begin(), evaluation.entropies.end(), sentinel);
   std::fill(evaluation.band_energies.begin(), evaluation.band_energies.end(), sentinel);
@@ -360,7 +360,7 @@ bool outputs_equal_sentinel(const Evaluation& evaluation, double sentinel) {
                          evaluation.layout.energy_weighted_density.element_count,
                      [sentinel](double value) { return value == sentinel; }) &&
          std::all_of(evaluation.statuses.begin(), evaluation.statuses.end(),
-                     [](gpuxtb_status_t value) { return value == 99; }) &&
+                     [](xtbloom_status_t value) { return value == 99; }) &&
          std::all_of(evaluation.chemical_potentials.begin(), evaluation.chemical_potentials.end(),
                      [sentinel](double value) { return value == sentinel; }) &&
          std::all_of(evaluation.entropies.begin(), evaluation.entropies.end(),
@@ -373,26 +373,26 @@ bool outputs_equal_sentinel(const Evaluation& evaluation, double sentinel) {
 
 bool factor(Evaluation& evaluation, const std::vector<double>& overlap, std::uint64_t generation,
             std::string& error) {
-  return gpuxtb::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), generation,
-                                                  backend(), evaluation.scratch, evaluation.cache,
-                                                  error) == GPUXTB_STATUS_SUCCESS;
+  return xtbloom::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), generation,
+                                                   backend(), evaluation.scratch, evaluation.cache,
+                                                   error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool solve(Evaluation& evaluation, const std::vector<double>& hamiltonian, double temperature,
            std::uint64_t generation, std::string& error,
            const CpuLinearAlgebraBackend& selected_backend = backend()) {
   EigensolverThermodynamicsView thermodynamics = evaluation.thermodynamics();
-  return gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+  return xtbloom::detail::gfn2::solve_eigensystems_cpu(
              evaluation.plan, evaluation.cache, generation, hamiltonian.data(), temperature,
              selected_backend, evaluation.scratch, evaluation.wavefunction, thermodynamics,
-             error) == GPUXTB_STATUS_SUCCESS;
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool system_view(Evaluation& evaluation, std::size_t system, WavefunctionSystemView& view,
                  std::string& error) {
-  return gpuxtb::detail::gfn2::make_wavefunction_system_view(
+  return xtbloom::detail::gfn2::make_wavefunction_system_view(
              evaluation.layout, evaluation.wavefunction, static_cast<std::int64_t>(system), view,
-             error) == GPUXTB_STATUS_SUCCESS;
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 double metric_trace(const double* density, const double* overlap, std::size_t n) {
@@ -442,17 +442,17 @@ int test_occupations_degeneracy_and_fractional_filling() {
   std::array<double, 3> occupations{{7.0, 7.0, 7.0}};
   double chemical_potential = 7.0;
   double entropy = 7.0;
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(3, levels.data(), 1.5, 0.0, occupations.data(),
-                                                   chemical_potential, entropy,
-                                                   error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(3, levels.data(), 1.5, 0.0, occupations.data(),
+                                                    chemical_potential, entropy,
+                                                    error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(occupations[0] == 1.0 && occupations[1] == 0.5 && occupations[2] == 0.0);
   CHECK(chemical_potential == 0.0 && entropy == 0.0);
 
   const std::array<double, 2> degenerate{{0.0, 0.0}};
   std::array<double, 2> thermal{{0.0, 0.0}};
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
-            2, degenerate.data(), 1.0, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, thermal.data(),
-            chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
+            2, degenerate.data(), 1.0, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, thermal.data(),
+            chemical_potential, entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(thermal[0], 0.5, 2.0e-14) && near(thermal[1], 0.5, 2.0e-14));
   CHECK(near(thermal[0] + thermal[1], 1.0, 2.0e-14));
   CHECK(near(chemical_potential, 0.0, 2.0e-14));
@@ -460,9 +460,9 @@ int test_occupations_degeneracy_and_fractional_filling() {
 
   const std::array<double, 3> triply_degenerate{{0.0, 0.0, 0.0}};
   std::array<double, 3> equal_fractional{{0.0, 0.0, 0.0}};
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
-            3, triply_degenerate.data(), 1.3, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
-            equal_fractional.data(), chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
+            3, triply_degenerate.data(), 1.3, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE,
+            equal_fractional.data(), chemical_potential, entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(equal_fractional[0] == equal_fractional[1] && equal_fractional[1] == equal_fractional[2]);
   CHECK(near(equal_fractional[0] + equal_fractional[1] + equal_fractional[2], 1.3, 2.0e-14));
   double entropy_from_published = 0.0;
@@ -473,52 +473,52 @@ int test_occupations_degeneracy_and_fractional_filling() {
   CHECK(near(entropy, entropy_from_published, 2.0e-15));
 
   std::array<double, 3> fractional_thermal{{0.0, 0.0, 0.0}};
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(3, levels.data(), 1.3, 0.02,
-                                                   fractional_thermal.data(), chemical_potential,
-                                                   entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(3, levels.data(), 1.3, 0.02,
+                                                    fractional_thermal.data(), chemical_potential,
+                                                    entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(fractional_thermal[0] + fractional_thermal[1] + fractional_thermal[2], 1.3, 2.0e-13));
   CHECK(entropy > 0.0 && std::isfinite(chemical_potential));
 
   const std::array<double, 2> reversed{{1.0, -1.0}};
   const auto saved = thermal;
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(2, reversed.data(), 1.0, 0.0, thermal.data(),
-                                                   chemical_potential, entropy,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(2, reversed.data(), 1.0, 0.0, thermal.data(),
+                                                    chemical_potential, entropy,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(thermal == saved);
 
   const std::array<double, 2> extreme{
       {std::numeric_limits<double>::max() / 2.0, std::numeric_limits<double>::max()}};
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
             2, extreme.data(), 1.0, std::numeric_limits<double>::max() / 256.0, thermal.data(),
-            chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+            chemical_potential, entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::isfinite(chemical_potential) && std::isfinite(entropy));
   CHECK(std::isfinite(thermal[0]) && std::isfinite(thermal[1]));
   CHECK(near(thermal[0] + thermal[1], 1.0, 8.0e-15));
 
   const std::array<double, 2> ordinary{{-3.0, 7.0}};
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(2, ordinary.data(), 0.0, 0.01, thermal.data(),
-                                                   chemical_potential, entropy,
-                                                   error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(2, ordinary.data(), 0.0, 0.01, thermal.data(),
+                                                    chemical_potential, entropy,
+                                                    error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(thermal[0] == 0.0 && thermal[1] == 0.0);
   CHECK(chemical_potential == 0.0 && entropy == 0.0);
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(2, ordinary.data(), 2.0, 0.01, thermal.data(),
-                                                   chemical_potential, entropy,
-                                                   error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(2, ordinary.data(), 2.0, 0.01, thermal.data(),
+                                                    chemical_potential, entropy,
+                                                    error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(thermal[0] == 1.0 && thermal[1] == 1.0);
   CHECK(std::isfinite(chemical_potential) && entropy == 0.0);
 
   std::array<double, 2> aliased_levels{{-1.0, 1.0}};
   const auto aliased_saved = aliased_levels;
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
             2, aliased_levels.data(), 1.0, 0.01, aliased_levels.data(), chemical_potential, entropy,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(aliased_levels == aliased_saved);
 
   const std::array<double, 2> small_target_levels{{-0.2, 0.3}};
   for (const double target : {1.0e-16, 1.0e-20, 1.0e-300}) {
-    CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(2, small_target_levels.data(), target, 0.01,
-                                                     thermal.data(), chemical_potential, entropy,
-                                                     error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(2, small_target_levels.data(), target, 0.01,
+                                                      thermal.data(), chemical_potential, entropy,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
     const double population = thermal[0] + thermal[1];
     CHECK(std::isfinite(population) && population > 0.0);
     CHECK(std::abs(population - target) <= 2.0e-13 * target);
@@ -532,12 +532,12 @@ int test_occupations_degeneracy_and_fractional_filling() {
     std::array<double, 2> translated_occupations{{0.0, 0.0}};
     double origin_mu = 0.0;
     double origin_entropy = 0.0;
-    CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+    CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
               2, origin_levels.data(), target, 1.0e-7, origin_occupations.data(), origin_mu,
-              origin_entropy, error) == GPUXTB_STATUS_SUCCESS);
-    CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+              origin_entropy, error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
               2, translated_levels.data(), target, 1.0e-7, translated_occupations.data(),
-              chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+              chemical_potential, entropy, error) == XTBLOOM_STATUS_SUCCESS);
     CHECK(origin_occupations == translated_occupations);
     CHECK(origin_entropy == entropy);
     CHECK(near(chemical_potential, origin_mu + 100.0, 2.0e-13));
@@ -550,13 +550,13 @@ int test_occupations_degeneracy_and_fractional_filling() {
   std::array<double, 2> translated_near_full{{0.0, 0.0}};
   double origin_near_full_mu = 0.0;
   double origin_near_full_entropy = 0.0;
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
             2, origin_levels.data(), translated_near_full_target, 1.0e-7, origin_near_full.data(),
-            origin_near_full_mu, origin_near_full_entropy, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(2, translated_levels.data(),
-                                                   translated_near_full_target, 1.0e-7,
-                                                   translated_near_full.data(), chemical_potential,
-                                                   entropy, error) == GPUXTB_STATUS_SUCCESS);
+            origin_near_full_mu, origin_near_full_entropy, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(2, translated_levels.data(),
+                                                    translated_near_full_target, 1.0e-7,
+                                                    translated_near_full.data(), chemical_potential,
+                                                    entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(origin_near_full == translated_near_full);
   CHECK(origin_near_full_entropy == entropy);
   CHECK(near(chemical_potential, origin_near_full_mu + 100.0, 2.0e-13));
@@ -565,9 +565,9 @@ int test_occupations_degeneracy_and_fractional_filling() {
         2.0e-13 * (2.0 - translated_near_full_target));
 
   const double near_full_target = std::nextafter(2.0, 0.0);
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(2, small_target_levels.data(), near_full_target,
-                                                   0.01, thermal.data(), chemical_potential,
-                                                   entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(2, small_target_levels.data(), near_full_target,
+                                                    0.01, thermal.data(), chemical_potential,
+                                                    entropy, error) == XTBLOOM_STATUS_SUCCESS);
   const double holes = (1.0 - thermal[0]) + (1.0 - thermal[1]);
   const double expected_holes = 2.0 - near_full_target;
   CHECK(holes > 0.0 && std::abs(holes - expected_holes) <= 2.0e-13 * expected_holes);
@@ -575,7 +575,7 @@ int test_occupations_degeneracy_and_fractional_filling() {
 }
 
 int test_binary64_frontier_retry_controls() {
-  namespace policy = gpuxtb::detail::gfn2::binary64_policy;
+  namespace policy = xtbloom::detail::gfn2::binary64_policy;
   constexpr double temperature = 1.0e-7;
 
   policy::DoubleDouble just_outside{};
@@ -653,7 +653,7 @@ int test_binary64_frontier_retry_controls() {
                                      hole_publication));
 
   policy::Root ordinary_root{};
-  CHECK(policy::solve_root(electron_levels.data(), 3, 1.5, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
+  CHECK(policy::solve_root(electron_levels.data(), 3, 1.5, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE,
                            false, ordinary_root));
   CHECK(!ordinary_root.retried_at_frontier);
   CHECK(policy::absolute(ordinary_root.quantity - 1.5) <= 64.0 * policy::kEpsilon * 1.5);
@@ -677,7 +677,7 @@ int test_binary64_frontier_retry_controls() {
   const std::array<double, 2> reference_frontier{{1.0, 1.0}};
   policy::Root already_reference{};
   CHECK(policy::solve_root(reference_frontier.data(), 2, 9.0 * denorm,
-                           GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, false, already_reference));
+                           XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, false, already_reference));
   CHECK(!already_reference.retried_at_frontier);
   CHECK(already_reference.frontier_begin == 0 && already_reference.frontier_end == 2);
   CHECK(already_reference.energy_reference == 1.0);
@@ -704,9 +704,9 @@ int test_occupation_representability_policy() {
    * count cannot be expressed as an equal triple of binary64 values. */
   const std::array<double, 3> near_capacity{{1.0, 1.0, 1.0}};
   const double near_capacity_nel = std::nextafter(3.0, 0.0);
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
-            3, near_capacity.data(), near_capacity_nel, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
-            occupations.data(), chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
+            3, near_capacity.data(), near_capacity_nel, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE,
+            occupations.data(), chemical_potential, entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(occupations[0] == occupations[1] && occupations[1] == occupations[2]);
   CHECK(occupations[0] > 0.0 && occupations[0] <= 1.0);
   const double one_hole_state = std::nextafter(1.0, 0.0);
@@ -736,9 +736,9 @@ int test_occupation_representability_policy() {
   const std::array<double, 2> tie_levels{{1.0, 1.0}};
   std::array<double, 2> tie_occupations{{-1.0, -1.0}};
   const double tie_target = 9.0 * denorm;
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
-            2, tie_levels.data(), tie_target, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
-            tie_occupations.data(), chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
+            2, tie_levels.data(), tie_target, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE,
+            tie_occupations.data(), chemical_potential, entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(tie_occupations[0] == 4.0 * denorm && tie_occupations[1] == 4.0 * denorm);
   const long double lower_error =
       std::abs(8.0L * static_cast<long double>(denorm) - static_cast<long double>(tie_target));
@@ -755,9 +755,9 @@ int test_occupation_representability_policy() {
    * block is also relaxed to the nearest symmetric (all-zero) state. */
   std::array<double, 3> poor{{-1.0, -1.0, -1.0}};
   const double electron_poor_nel = std::nextafter(0.0, 1.0);
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
-            3, near_capacity.data(), electron_poor_nel, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
-            poor.data(), chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
+            3, near_capacity.data(), electron_poor_nel, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE,
+            poor.data(), chemical_potential, entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(poor[0] == poor[1] && poor[1] == poor[2]);
   const double electron_poor_error = std::abs((poor[0] + poor[1] + poor[2]) - electron_poor_nel);
   CHECK(electron_poor_error <= 2.0 * eps * 3.0);
@@ -769,10 +769,10 @@ int test_occupation_representability_policy() {
    * survive that later strict rescue. */
   const std::array<double, 3> causal_frontier_rescue{{0.0, 0.0, 1.0}};
   std::array<double, 3> causal_frontier_occupations{{-1.0, -1.0, -1.0}};
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
             3, causal_frontier_rescue.data(), electron_poor_nel, 1.0e-7,
             causal_frontier_occupations.data(), chemical_potential, entropy,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(causal_frontier_occupations[0] == 0.0 && causal_frontier_occupations[1] == 0.0 &&
         causal_frontier_occupations[2] == electron_poor_nel);
   CHECK(entropy > 0.0 && std::isfinite(entropy) && std::isfinite(chemical_potential));
@@ -783,9 +783,9 @@ int test_occupation_representability_policy() {
   const double maximum = std::numeric_limits<double>::max();
   const std::array<double, 3> extreme_translated{{maximum, maximum, maximum}};
   std::array<double, 3> extreme_occupations{{-1.0, -1.0, -1.0}};
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
             3, extreme_translated.data(), electron_poor_nel, maximum, extreme_occupations.data(),
-            chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+            chemical_potential, entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(extreme_occupations[0] == 0.0 && extreme_occupations[1] == 0.0 &&
         extreme_occupations[2] == 0.0);
   CHECK(chemical_potential == -maximum);
@@ -796,9 +796,10 @@ int test_occupation_representability_policy() {
   const std::array<double, 2> exact_pair{{1.0, 1.0}};
   std::array<double, 2> exact_occupations{{-1.0, -1.0}};
   const double exact_nel = std::nextafter(2.0, 0.0);
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
-            2, exact_pair.data(), exact_nel, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
-            exact_occupations.data(), chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(2, exact_pair.data(), exact_nel,
+                                                    XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE,
+                                                    exact_occupations.data(), chemical_potential,
+                                                    entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(exact_occupations[0] == exact_occupations[1]);
   CHECK(std::abs((exact_occupations[0] + exact_occupations[1]) - exact_nel) == 0.0);
 
@@ -808,10 +809,10 @@ int test_occupation_representability_policy() {
   const std::array<double, 4> partial_strict{{0.0, 1.0, 1.0, 1.0}};
   std::array<double, 4> partial_strict_occupations{};
   const double partial_strict_nel = std::nextafter(4.0, 0.0);
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
-            4, partial_strict.data(), partial_strict_nel, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
+            4, partial_strict.data(), partial_strict_nel, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE,
             partial_strict_occupations.data(), chemical_potential, entropy,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::all_of(partial_strict_occupations.begin(), partial_strict_occupations.end(),
                     [one_hole_state](double occupation) { return occupation == one_hole_state; }));
   long double partial_strict_holes = 0.0L;
@@ -826,10 +827,10 @@ int test_occupation_representability_policy() {
   const std::array<double, 3> low_temperature_frontier{{0.0, 1.0, 1.0}};
   std::array<double, 3> low_temperature_occupations{};
   const double low_temperature_nel = std::nextafter(1.5, 0.0);
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
             3, low_temperature_frontier.data(), low_temperature_nel, 1.0e-7,
             low_temperature_occupations.data(), chemical_potential, entropy,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(low_temperature_occupations[1] == low_temperature_occupations[2]);
   long double low_temperature_sum = 0.0L;
   for (const double occupation : low_temperature_occupations) {
@@ -841,10 +842,10 @@ int test_occupation_representability_policy() {
   const std::array<double, 6> broad_low_temperature_frontier{{0.0, 1.0, 1.0, 1.0, 1.0, 1.0}};
   std::array<double, 6> broad_low_temperature_occupations{};
   const double broad_low_temperature_nel = std::nextafter(3.0, 0.0);
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
             6, broad_low_temperature_frontier.data(), broad_low_temperature_nel, 1.0e-7,
             broad_low_temperature_occupations.data(), chemical_potential, entropy,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::all_of(broad_low_temperature_occupations.begin() + 1,
                     broad_low_temperature_occupations.end(),
                     [frontier = broad_low_temperature_occupations[1]](double occupation) {
@@ -856,10 +857,10 @@ int test_occupation_representability_policy() {
    * same near-capacity target at the strict publication tolerance. */
   const std::array<double, 3> nondegenerate{{0.0, 1.0, 2.0}};
   std::array<double, 3> nondegenerate_occupations{{-1.0, -1.0, -1.0}};
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
-            3, nondegenerate.data(), near_capacity_nel, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
+            3, nondegenerate.data(), near_capacity_nel, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE,
             nondegenerate_occupations.data(), chemical_potential, entropy,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   const double nondegenerate_holes = (1.0 - nondegenerate_occupations[0]) +
                                      (1.0 - nondegenerate_occupations[1]) +
                                      (1.0 - nondegenerate_occupations[2]);
@@ -874,10 +875,10 @@ int test_occupation_representability_policy() {
   const std::array<double, 6> mixed_degenerate{{0.0, 0.0, 0.0, 1.0, 1.0, 1.0}};
   std::array<double, 6> mixed_degenerate_occupations{};
   const double mixed_degenerate_nel = std::nextafter(6.0, 0.0);
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
-            6, mixed_degenerate.data(), mixed_degenerate_nel, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
-            mixed_degenerate_occupations.data(), chemical_potential, entropy,
-            error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
+            6, mixed_degenerate.data(), mixed_degenerate_nel,
+            XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, mixed_degenerate_occupations.data(),
+            chemical_potential, entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::all_of(mixed_degenerate_occupations.begin(), mixed_degenerate_occupations.begin() + 3,
                     [](double occupation) { return occupation == 1.0; }));
   const double three_hole_state =
@@ -909,9 +910,9 @@ int test_occupation_representability_policy() {
    * occupations, so relabelling the block cannot change published values. */
   const std::array<double, 4> mixed{{0.0, 1.0, 1.0, 2.0}};
   std::array<double, 4> mixed_occupations{{-1.0, -1.0, -1.0, -1.0}};
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(
-            4, mixed.data(), 1.3, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, mixed_occupations.data(),
-            chemical_potential, entropy, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(
+            4, mixed.data(), 1.3, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, mixed_occupations.data(),
+            chemical_potential, entropy, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(mixed_occupations[1] == mixed_occupations[2]);
 
   /* The relaxation must not fabricate success for an impossible input: inputs
@@ -920,9 +921,9 @@ int test_occupation_representability_policy() {
   const auto saved = occupations;
   const double saved_chemical_potential = chemical_potential;
   const double saved_entropy = entropy;
-  CHECK(gpuxtb::detail::gfn2::fill_occupations_cpu(3, reversed.data(), 1.5, 0.0, occupations.data(),
-                                                   chemical_potential, entropy,
-                                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::fill_occupations_cpu(3, reversed.data(), 1.5, 0.0,
+                                                    occupations.data(), chemical_potential, entropy,
+                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(occupations == saved);
   CHECK(chemical_potential == saved_chemical_potential);
   CHECK(entropy == saved_entropy);
@@ -932,7 +933,8 @@ int test_occupation_representability_policy() {
 int test_production_lp64_factory() {
   CpuLinearAlgebraBackend production;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_mkl_rt_lp64_backend(production, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_mkl_rt_lp64_backend(production, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(production.ready());
   /* Any verified lazily-loaded LP64 backend (MKL or OpenBLAS) qualifies as
    * production; production_mkl() additionally distinguishes the MKL provider. */
@@ -944,13 +946,14 @@ int test_production_lp64_factory() {
 int run_mkl_ilp64_rejection_child() {
   CpuLinearAlgebraBackend production;
   std::string error;
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::make_mkl_rt_lp64_backend(production, error);
-  if (status == GPUXTB_STATUS_SUCCESS && production.ready() && !production.production_mkl()) {
+  const xtbloom_status_t status =
+      xtbloom::detail::gfn2::make_mkl_rt_lp64_backend(production, error);
+  if (status == XTBLOOM_STATUS_SUCCESS && production.ready() && !production.production_mkl()) {
     /* An OpenBLAS runtime has no MKL interface layer to force to ILP64, so
      * there is nothing to reject; accept the vacuous success. */
     return 0;
   }
-  if (status == GPUXTB_STATUS_SUCCESS && production.ready() &&
+  if (status == XTBLOOM_STATUS_SUCCESS && production.ready() &&
       production.production_mkl_isolated()) {
     /* The host-isolated MKL shim never reads MKL_INTERFACE_LAYER and never
      * switches the embedding process's MKL interface layer, so an explicit
@@ -958,7 +961,7 @@ int run_mkl_ilp64_rejection_child() {
      * the required coexistence outcome for issue #30, not a rejection. */
     return 0;
   }
-  return status == GPUXTB_STATUS_BACKEND_UNAVAILABLE && !production.ready() &&
+  return status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE && !production.ready() &&
                  error.find("ILP64") != std::string::npos
              ? 0
              : 1;
@@ -1030,7 +1033,7 @@ int test_tblite_300_kelvin_pinned_oracle() {
   const std::vector<double> hamiltonian{-0.0012, 0.0, 0.0, 0.0, 0.0007, 0.0, 0.0, 0.0, 0.0029};
   CHECK(factor(evaluation, overlap, 79u, error));
   fill_outputs(evaluation, 93.0);
-  CHECK(solve(evaluation, hamiltonian, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, 79u, error));
+  CHECK(solve(evaluation, hamiltonian, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, 79u, error));
   WavefunctionSystemView view;
   CHECK(system_view(evaluation, 0u, view, error));
 
@@ -1051,7 +1054,7 @@ int test_tblite_300_kelvin_pinned_oracle() {
 
 int test_restricted_closed_shell_and_warm_reuse() {
   std::string error;
-#if !defined(GPUXTB_EIGENSOLVER_TEST_ASAN) && defined(__GLIBC__)
+#if !defined(XTBLOOM_EIGENSOLVER_TEST_ASAN) && defined(__GLIBC__)
   allocation_test::malloc_count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
   void* const allocation_probe = std::malloc(17u);
@@ -1070,7 +1073,7 @@ int test_restricted_closed_shell_and_warm_reuse() {
   CHECK(dpocon_calls.load(std::memory_order_relaxed) == 1);
   fill_outputs(evaluation, 77.0);
   CHECK(solve(evaluation, hamiltonian, 0.0, 41u, error));
-  CHECK(evaluation.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(evaluation.statuses[0] == XTBLOOM_STATUS_SUCCESS);
   WavefunctionSystemView view;
   CHECK(system_view(evaluation, 0u, view, error));
   CHECK(generalized_eigensystem_is_valid(hamiltonian.data(), overlap.data(), view.coefficients,
@@ -1103,7 +1106,7 @@ int test_restricted_closed_shell_and_warm_reuse() {
   CHECK(second_factor);
   CHECK(second_solve);
   CHECK(allocation_test::new_count.load(std::memory_order_relaxed) == 0u);
-#if !defined(GPUXTB_EIGENSOLVER_TEST_ASAN) && defined(__GLIBC__)
+#if !defined(XTBLOOM_EIGENSOLVER_TEST_ASAN) && defined(__GLIBC__)
   CHECK(allocation_test::malloc_count.load(std::memory_order_relaxed) == 0u);
 #endif
   CHECK(non_column_major_calls.load(std::memory_order_relaxed) == 0);
@@ -1173,7 +1176,7 @@ int test_finite_temperature_free_energy() {
   const std::vector<double> hamiltonian{-0.001, 0.0, 0.0, 0.001};
   CHECK(factor(evaluation, overlap, 11u, error));
   fill_outputs(evaluation, 23.0);
-  CHECK(solve(evaluation, hamiltonian, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, 11u, error));
+  CHECK(solve(evaluation, hamiltonian, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, 11u, error));
   WavefunctionSystemView view;
   CHECK(system_view(evaluation, 0u, view, error));
   CHECK(near(view.occupations[0] + view.occupations[1], 1.0, 4.0e-14));
@@ -1181,10 +1184,10 @@ int test_finite_temperature_free_energy() {
   CHECK(near(evaluation.chemical_potentials[0], 0.0, 4.0e-14));
   CHECK(near(evaluation.chemical_potentials[1], 0.0, 4.0e-14));
   CHECK(evaluation.entropies[0] > 0.0);
-  CHECK(near(
-      evaluation.free_energies[0],
-      evaluation.band_energies[0] - GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE * evaluation.entropies[0],
-      2.0e-14));
+  CHECK(near(evaluation.free_energies[0],
+             evaluation.band_energies[0] -
+                 XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE * evaluation.entropies[0],
+             2.0e-14));
   CHECK(near(metric_trace(view.density, overlap.data(), 2u), 2.0, 8.0e-14));
   CHECK(near(metric_trace(view.energy_weighted_density, overlap.data(), 2u),
              evaluation.band_energies[0], 8.0e-14));
@@ -1204,12 +1207,12 @@ int test_ragged_failure_and_atomicity() {
               static_cast<std::size_t>(evaluation.plan.batch_size()), 101u);
   std::fill_n(evaluation.cache.system_statuses,
               static_cast<std::size_t>(evaluation.plan.batch_size()),
-              static_cast<gpuxtb_status_t>(77));
+              static_cast<xtbloom_status_t>(77));
   std::vector<double> invalid_overlap = overlap;
   invalid_overlap.back() = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::factor_overlap_cpu(evaluation.plan, invalid_overlap.data(), 17u,
-                                                 backend(), evaluation.scratch, evaluation.cache,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(evaluation.plan, invalid_overlap.data(), 17u,
+                                                  backend(), evaluation.scratch, evaluation.cache,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(evaluation.cache.cholesky_factors,
                     evaluation.cache.cholesky_factors + evaluation.plan.total_matrix_elements(),
                     [](double value) { return value == 31.0; }));
@@ -1217,8 +1220,8 @@ int test_ragged_failure_and_atomicity() {
         evaluation.cache.geometry_generations[1] == 101u);
   CHECK(evaluation.cache.system_statuses[0] == 77 && evaluation.cache.system_statuses[1] == 77);
   CHECK(factor(evaluation, overlap, 17u, error));
-  CHECK(evaluation.cache.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(evaluation.cache.system_statuses[1] == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  CHECK(evaluation.cache.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(evaluation.cache.system_statuses[1] == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   for (std::size_t element = 4u; element < 8u; ++element) {
     CHECK(evaluation.cache.cholesky_factors[element] == 31.0);
   }
@@ -1226,8 +1229,8 @@ int test_ragged_failure_and_atomicity() {
   const std::vector<double> hamiltonian{-0.5, 0.0, 0.0, 0.2, -0.4, 0.0, 0.0, 0.3};
   fill_outputs(evaluation, 43.0);
   CHECK(solve(evaluation, hamiltonian, 0.0, 17u, error));
-  CHECK(evaluation.statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(evaluation.statuses[1] == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  CHECK(evaluation.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(evaluation.statuses[1] == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   WavefunctionSystemView failed;
   CHECK(system_view(evaluation, 1u, failed, error));
   CHECK(std::all_of(failed.coefficients, failed.coefficients + 4,
@@ -1243,22 +1246,22 @@ int test_ragged_failure_and_atomicity() {
   const std::vector<double> saved_coefficients(
       evaluation.wavefunction.coefficients,
       evaluation.wavefunction.coefficients + evaluation.layout.coefficients.element_count);
-  CHECK(gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+  CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             evaluation.plan, evaluation.cache, 17u, hamiltonian.data(), 0.0, backend(),
             evaluation.scratch, evaluation.wavefunction, alias,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::equal(saved_coefficients.begin(), saved_coefficients.end(),
                    evaluation.wavefunction.coefficients));
   CHECK(std::all_of(evaluation.statuses.begin(), evaluation.statuses.end(),
-                    [](gpuxtb_status_t value) { return value == 99; }));
+                    [](xtbloom_status_t value) { return value == 99; }));
 
   AlignedBuffer oversized(evaluation.plan.workspace_size_bytes() +
-                          gpuxtb::detail::gfn2::kEigensolverWorkspaceAlignment);
+                          xtbloom::detail::gfn2::kEigensolverWorkspaceAlignment);
   EigensolverWorkspace rejected = evaluation.scratch;
-  CHECK(gpuxtb::detail::gfn2::bind_eigensolver_workspace(
+  CHECK(xtbloom::detail::gfn2::bind_eigensolver_workspace(
             evaluation.plan, static_cast<std::byte*>(oversized.data) + 1u,
             evaluation.plan.workspace_size_bytes(), rejected,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(rejected.workspace_base == evaluation.scratch.workspace_base &&
         rejected.coefficients == evaluation.scratch.coefficients &&
         rejected.lapack_work == evaluation.scratch.lapack_work);
@@ -1278,93 +1281,93 @@ int test_plan_identity_generation_and_alias_rejection() {
   CHECK(copied.identity() == evaluation.plan.identity());
   fill_outputs(evaluation, 101.0);
   EigensolverThermodynamicsView thermodynamics = evaluation.thermodynamics();
-  CHECK(gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+  CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             copied, evaluation.cache, 83u, hamiltonian.data(), 0.0, backend(), evaluation.scratch,
-            evaluation.wavefunction, thermodynamics, error) == GPUXTB_STATUS_SUCCESS);
+            evaluation.wavefunction, thermodynamics, error) == XTBLOOM_STATUS_SUCCESS);
 
   fill_outputs(evaluation, 103.0);
-  CHECK(gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+  CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             copied, evaluation.cache, 84u, hamiltonian.data(), 0.0, backend(), evaluation.scratch,
-            evaluation.wavefunction, thermodynamics, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(evaluation.statuses[0] == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+            evaluation.wavefunction, thermodynamics, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(evaluation.statuses[0] == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   CHECK(evaluation.band_energies[0] == 103.0);
 
   Evaluation cross;
   CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {1}, cross, error));
   CHECK(cross.plan.identity() != evaluation.plan.identity());
-  CHECK(gpuxtb::detail::gfn2::factor_overlap_cpu(cross.plan, overlap.data(), 83u, backend(),
-                                                 evaluation.scratch, evaluation.cache,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(cross.plan, overlap.data(), 83u, backend(),
+                                                  evaluation.scratch, evaluation.cache,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   EigensolverPlan source = evaluation.plan;
   EigensolverPlan moved = std::move(source);
   CHECK(!source.sealed());
   CHECK(moved.identity() == evaluation.plan.identity());
-  CHECK(gpuxtb::detail::gfn2::factor_overlap_cpu(source, overlap.data(), 83u, backend(),
-                                                 evaluation.scratch, evaluation.cache,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(source, overlap.data(), 83u, backend(),
+                                                  evaluation.scratch, evaluation.cache,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   EigensolverPlan empty;
-  CHECK(gpuxtb::detail::gfn2::factor_overlap_cpu(empty, overlap.data(), 83u, backend(),
-                                                 evaluation.scratch, evaluation.cache,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(empty, overlap.data(), 83u, backend(),
+                                                  evaluation.scratch, evaluation.cache,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
-  CHECK(gpuxtb::detail::gfn2::factor_overlap_cpu(
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(
             evaluation.plan, evaluation.cache.cholesky_factors + 1u, 83u, backend(),
-            evaluation.scratch, evaluation.cache, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::factor_overlap_cpu(
+            evaluation.scratch, evaluation.cache, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(
             evaluation.plan, reinterpret_cast<const double*>(&evaluation.cache), 83u, backend(),
-            evaluation.scratch, evaluation.cache, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            evaluation.scratch, evaluation.cache, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   AlignedBuffer shared_storage(
       std::max(evaluation.plan.overlap_cache_size_bytes(), evaluation.plan.workspace_size_bytes()));
   EigensolverOverlapCache shared_cache;
   EigensolverWorkspace shared_scratch;
-  CHECK(gpuxtb::detail::gfn2::bind_eigensolver_overlap_cache(evaluation.plan, shared_storage.data,
-                                                             shared_storage.size, shared_cache,
-                                                             error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::bind_eigensolver_workspace(evaluation.plan, shared_storage.data,
-                                                         shared_storage.size, shared_scratch,
-                                                         error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), 83u, backend(),
-                                                 shared_scratch, shared_cache,
-                                                 error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::bind_eigensolver_overlap_cache(evaluation.plan, shared_storage.data,
+                                                              shared_storage.size, shared_cache,
+                                                              error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_eigensolver_workspace(evaluation.plan, shared_storage.data,
+                                                          shared_storage.size, shared_scratch,
+                                                          error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), 83u, backend(),
+                                                  shared_scratch, shared_cache,
+                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   thermodynamics = evaluation.thermodynamics();
   thermodynamics.entropies = const_cast<double*>(evaluation.plan.alpha_electron_counts().data());
-  CHECK(gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+  CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             evaluation.plan, evaluation.cache, 83u, hamiltonian.data(), 0.0, backend(),
             evaluation.scratch, evaluation.wavefunction, thermodynamics,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(evaluation.plan.alpha_electron_counts()[0] == 1.0);
 
   thermodynamics = evaluation.thermodynamics();
   thermodynamics.system_statuses = evaluation.cache.system_statuses;
-  CHECK(gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+  CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             evaluation.plan, evaluation.cache, 83u, hamiltonian.data(), 0.0, backend(),
             evaluation.scratch, evaluation.wavefunction, thermodynamics,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   thermodynamics = evaluation.thermodynamics();
-  CHECK(gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+  CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             evaluation.plan, evaluation.cache, 83u,
             reinterpret_cast<const double*>(&evaluation.scratch), 0.0, backend(),
             evaluation.scratch, evaluation.wavefunction, thermodynamics,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   AlignedBuffer shared_wavefunction_storage(
       std::max(evaluation.layout.workspace_size_bytes, evaluation.plan.workspace_size_bytes()));
   WavefunctionView shared_wavefunction;
   EigensolverWorkspace wavefunction_scratch;
-  CHECK(gpuxtb::detail::gfn2::bind_wavefunction_view(
+  CHECK(xtbloom::detail::gfn2::bind_wavefunction_view(
             evaluation.layout, shared_wavefunction_storage.data, shared_wavefunction_storage.size,
-            shared_wavefunction, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::bind_eigensolver_workspace(
+            shared_wavefunction, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_eigensolver_workspace(
             evaluation.plan, shared_wavefunction_storage.data, shared_wavefunction_storage.size,
-            wavefunction_scratch, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+            wavefunction_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             evaluation.plan, evaluation.cache, 83u, hamiltonian.data(), 0.0, backend(),
             wavefunction_scratch, shared_wavefunction, evaluation.thermodynamics(),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   return 0;
 }
 
@@ -1378,10 +1381,10 @@ int test_negative_lapack_info_is_call_failure() {
   dsyevd_failure_call.store(1, std::memory_order_relaxed);
   dsyevd_failure_info.store(-4, std::memory_order_relaxed);
   EigensolverThermodynamicsView thermodynamics = evaluation.thermodynamics();
-  CHECK(gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+  CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             evaluation.plan, evaluation.cache, 89u,
             std::array<double, 4>{{-0.5, 0.0, 0.0, 0.2}}.data(), 0.0, backend(), evaluation.scratch,
-            evaluation.wavefunction, thermodynamics, error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            evaluation.wavefunction, thermodynamics, error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(evaluation.statuses[0] == 99);
   CHECK(evaluation.band_energies[0] == 107.0);
   reset_backend_spies();
@@ -1401,13 +1404,13 @@ int test_later_system_backend_failures_are_batch_atomic() {
               static_cast<std::size_t>(evaluation.plan.batch_size()), 110u);
   std::fill_n(evaluation.cache.system_statuses,
               static_cast<std::size_t>(evaluation.plan.batch_size()),
-              static_cast<gpuxtb_status_t>(111));
+              static_cast<xtbloom_status_t>(111));
   reset_backend_spies();
   dpotrf_failure_call.store(2, std::memory_order_relaxed);
   dpotrf_failure_info.store(-4, std::memory_order_relaxed);
-  CHECK(gpuxtb::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), 97u, backend(),
-                                                 evaluation.scratch, evaluation.cache,
-                                                 error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), 97u, backend(),
+                                                  evaluation.scratch, evaluation.cache,
+                                                  error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(potrf_calls.load(std::memory_order_relaxed) == 2);
   CHECK(dpocon_calls.load(std::memory_order_relaxed) == 1);
   CHECK(std::all_of(evaluation.cache.cholesky_factors,
@@ -1418,7 +1421,7 @@ int test_later_system_backend_failures_are_batch_atomic() {
                     [](std::uint64_t value) { return value == 110u; }));
   CHECK(std::all_of(evaluation.cache.system_statuses,
                     evaluation.cache.system_statuses + evaluation.plan.batch_size(),
-                    [](gpuxtb_status_t value) { return value == 111; }));
+                    [](xtbloom_status_t value) { return value == 111; }));
 
   std::fill_n(evaluation.cache.cholesky_factors,
               static_cast<std::size_t>(evaluation.plan.total_matrix_elements()), 113.0);
@@ -1426,13 +1429,13 @@ int test_later_system_backend_failures_are_batch_atomic() {
               static_cast<std::size_t>(evaluation.plan.batch_size()), 114u);
   std::fill_n(evaluation.cache.system_statuses,
               static_cast<std::size_t>(evaluation.plan.batch_size()),
-              static_cast<gpuxtb_status_t>(115));
+              static_cast<xtbloom_status_t>(115));
   reset_backend_spies();
   dpocon_failure_call.store(2, std::memory_order_relaxed);
   dpocon_failure_info.store(-6, std::memory_order_relaxed);
-  CHECK(gpuxtb::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), 97u, backend(),
-                                                 evaluation.scratch, evaluation.cache,
-                                                 error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), 97u, backend(),
+                                                  evaluation.scratch, evaluation.cache,
+                                                  error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(potrf_calls.load(std::memory_order_relaxed) == 2);
   CHECK(dpocon_calls.load(std::memory_order_relaxed) == 2);
   CHECK(std::all_of(evaluation.cache.cholesky_factors,
@@ -1443,7 +1446,7 @@ int test_later_system_backend_failures_are_batch_atomic() {
                     [](std::uint64_t value) { return value == 114u; }));
   CHECK(std::all_of(evaluation.cache.system_statuses,
                     evaluation.cache.system_statuses + evaluation.plan.batch_size(),
-                    [](gpuxtb_status_t value) { return value == 115; }));
+                    [](xtbloom_status_t value) { return value == 115; }));
 
   reset_backend_spies();
   CHECK(factor(evaluation, overlap, 97u, error));
@@ -1453,10 +1456,10 @@ int test_later_system_backend_failures_are_batch_atomic() {
   dsyevd_failure_info.store(-4, std::memory_order_relaxed);
   const std::vector<double> hamiltonian{-0.7, 0.03, 0.03, 0.2, -0.6, -0.04, -0.04, 0.3};
   EigensolverThermodynamicsView thermodynamics = evaluation.thermodynamics();
-  CHECK(gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+  CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             evaluation.plan, evaluation.cache, 97u, hamiltonian.data(), 0.0, backend(),
             evaluation.scratch, evaluation.wavefunction, thermodynamics,
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(dsyevd_calls.load(std::memory_order_relaxed) == 2);
   CHECK(outputs_equal_sentinel(evaluation, 117.0));
   reset_backend_spies();
@@ -1473,7 +1476,7 @@ int test_second_spin_failure_is_atomic() {
   dsyevd_failure_call.store(2, std::memory_order_relaxed);
   CHECK(solve(evaluation, {-0.5, -0.4}, 0.0, 29u, error));
   dsyevd_failure_call.store(0, std::memory_order_relaxed);
-  CHECK(evaluation.statuses[0] == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  CHECK(evaluation.statuses[0] == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   WavefunctionSystemView view;
   CHECK(system_view(evaluation, 0u, view, error));
   CHECK(view.coefficients[0] == 61.0 && view.coefficients[1] == 61.0);
@@ -1491,7 +1494,7 @@ int test_batch_matches_sequential() {
   const std::vector<double> batch_hamiltonian{-0.6, 0.04, 0.04, 0.2, -0.5, -0.4};
   CHECK(factor(batch, batch_overlap, 37u, error));
   fill_outputs(batch, 71.0);
-  CHECK(solve(batch, batch_hamiltonian, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, 37u, error));
+  CHECK(solve(batch, batch_hamiltonian, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, 37u, error));
 
   const std::vector<double> expected_coefficients(
       batch.wavefunction.coefficients,
@@ -1518,12 +1521,12 @@ int test_batch_matches_sequential() {
   AlignedBuffer second_worker_storage(batch.plan.worker_workspace_size_bytes());
   EigensolverWorkspace first_worker;
   EigensolverWorkspace second_worker;
-  CHECK(gpuxtb::detail::gfn2::bind_eigensolver_worker_workspace(
+  CHECK(xtbloom::detail::gfn2::bind_eigensolver_worker_workspace(
             batch.plan, first_worker_storage.data, first_worker_storage.size, first_worker,
-            error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::bind_eigensolver_worker_workspace(
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_eigensolver_worker_workspace(
             batch.plan, second_worker_storage.data, second_worker_storage.size, second_worker,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(first_worker.factor_staging == nullptr && first_worker.batch_coefficients == nullptr);
   CHECK(second_worker.factor_staging == nullptr && second_worker.batch_coefficients == nullptr);
 
@@ -1539,24 +1542,24 @@ int test_batch_matches_sequential() {
   EigensolverThermodynamicsView second_worker_thermodynamics = batch.thermodynamics();
   std::string first_worker_error;
   std::string second_worker_error;
-  gpuxtb_status_t first_thread_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  gpuxtb_status_t second_thread_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t first_thread_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t second_thread_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   std::thread first_thread([&] {
-    first_thread_status = gpuxtb::detail::gfn2::solve_eigensystem_cpu(
+    first_thread_status = xtbloom::detail::gfn2::solve_eigensystem_cpu(
         batch.plan, 0, batch.cache, 37u, batch_hamiltonian.data(),
-        GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, backend(), first_worker, batch.wavefunction,
+        XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, backend(), first_worker, batch.wavefunction,
         first_worker_thermodynamics, first_worker_error);
   });
   std::thread second_thread([&] {
-    second_thread_status = gpuxtb::detail::gfn2::solve_eigensystem_cpu(
+    second_thread_status = xtbloom::detail::gfn2::solve_eigensystem_cpu(
         batch.plan, 1, batch.cache, 37u, batch_hamiltonian.data() + 4u,
-        GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, backend(), second_worker, batch.wavefunction,
+        XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, backend(), second_worker, batch.wavefunction,
         second_worker_thermodynamics, second_worker_error);
   });
   first_thread.join();
   second_thread.join();
-  CHECK(first_thread_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(second_thread_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(first_thread_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(second_thread_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(first_worker_error.empty() && second_worker_error.empty());
   CHECK(std::equal(expected_coefficients.begin(), expected_coefficients.end(),
                    batch.wavefunction.coefficients));
@@ -1577,19 +1580,19 @@ int test_batch_matches_sequential() {
   allocation_test::new_count.store(0u, std::memory_order_relaxed);
   allocation_test::malloc_count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t first_worker_status = gpuxtb::detail::gfn2::solve_eigensystem_cpu(
+  const xtbloom_status_t first_worker_status = xtbloom::detail::gfn2::solve_eigensystem_cpu(
       batch.plan, 0, batch.cache, 37u, batch_hamiltonian.data(),
-      GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, backend(), first_worker, batch.wavefunction,
+      XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, backend(), first_worker, batch.wavefunction,
       first_worker_thermodynamics, first_worker_error);
-  const gpuxtb_status_t second_worker_status = gpuxtb::detail::gfn2::solve_eigensystem_cpu(
+  const xtbloom_status_t second_worker_status = xtbloom::detail::gfn2::solve_eigensystem_cpu(
       batch.plan, 1, batch.cache, 37u, batch_hamiltonian.data() + 4u,
-      GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, backend(), second_worker, batch.wavefunction,
+      XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, backend(), second_worker, batch.wavefunction,
       second_worker_thermodynamics, second_worker_error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
-  CHECK(first_worker_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(second_worker_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(first_worker_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(second_worker_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(allocation_test::new_count.load(std::memory_order_relaxed) == 0u);
-#if !defined(GPUXTB_EIGENSOLVER_TEST_ASAN) && defined(__GLIBC__)
+#if !defined(XTBLOOM_EIGENSOLVER_TEST_ASAN) && defined(__GLIBC__)
   CHECK(allocation_test::malloc_count.load(std::memory_order_relaxed) == 0u);
 #endif
   CHECK(std::equal(staging_snapshot.begin(), staging_snapshot.end(), staging_begin));
@@ -1611,8 +1614,8 @@ int test_batch_matches_sequential() {
   CHECK(factor(second, {1.0}, 37u, error));
   fill_outputs(first, 71.0);
   fill_outputs(second, 71.0);
-  CHECK(solve(first, {-0.6, 0.04, 0.04, 0.2}, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, 37u, error));
-  CHECK(solve(second, {-0.5, -0.4}, GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE, 37u, error));
+  CHECK(solve(first, {-0.6, 0.04, 0.04, 0.2}, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, 37u, error));
+  CHECK(solve(second, {-0.5, -0.4}, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, 37u, error));
 
   WavefunctionSystemView batch_first;
   WavefunctionSystemView batch_second;

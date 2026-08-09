@@ -18,7 +18,7 @@ MANIFEST = (
     / "tmacl-temperature-continuation"
     / "manifest.json"
 )
-SPEC = importlib.util.spec_from_file_location("gpuxtb_tmacl_evidence", TOOL_PATH)
+SPEC = importlib.util.spec_from_file_location("xtbloom_tmacl_evidence", TOOL_PATH)
 assert SPEC is not None and SPEC.loader is not None
 EVIDENCE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(EVIDENCE)

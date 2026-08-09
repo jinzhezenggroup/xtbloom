@@ -8,9 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
 
-GPUXTB_STATUS_SUCCESS = 0
-GPUXTB_STATUS_BACKEND_UNAVAILABLE = 2
-GPUXTB_BACKEND_CUDA = 2
+XTBLOOM_STATUS_SUCCESS = 0
+XTBLOOM_STATUS_BACKEND_UNAVAILABLE = 2
+XTBLOOM_BACKEND_CUDA = 2
 
 
 class ContextOptions(ctypes.Structure):
@@ -29,18 +29,18 @@ class ContextOptions(ctypes.Structure):
 
 def configure_api(library: ctypes.CDLL) -> None:
     """Declare the C signatures used by the loader runtime check."""
-    library.gpuxtb_context_options_init.argtypes = [
+    library.xtbloom_context_options_init.argtypes = [
         ctypes.POINTER(ContextOptions),
         ctypes.c_size_t,
     ]
-    library.gpuxtb_context_options_init.restype = ctypes.c_int32
-    library.gpuxtb_context_create.argtypes = [
+    library.xtbloom_context_options_init.restype = ctypes.c_int32
+    library.xtbloom_context_create.argtypes = [
         ctypes.POINTER(ContextOptions),
         ctypes.POINTER(ctypes.c_void_p),
     ]
-    library.gpuxtb_context_create.restype = ctypes.c_int32
-    library.gpuxtb_context_destroy.argtypes = [ctypes.c_void_p]
-    library.gpuxtb_context_destroy.restype = None
+    library.xtbloom_context_create.restype = ctypes.c_int32
+    library.xtbloom_context_destroy.argtypes = [ctypes.c_void_p]
+    library.xtbloom_context_destroy.restype = None
 
 
 def exercise_unavailable_contexts(
@@ -54,19 +54,22 @@ def exercise_unavailable_contexts(
         barrier.wait()
         for _ in range(calls_per_thread):
             options = ContextOptions()
-            status = library.gpuxtb_context_options_init(
+            status = library.xtbloom_context_options_init(
                 ctypes.byref(options), ctypes.sizeof(options)
             )
-            if status != GPUXTB_STATUS_SUCCESS:
+            if status != XTBLOOM_STATUS_SUCCESS:
                 raise RuntimeError(f"context-options init returned {status}")
-            options.backend = GPUXTB_BACKEND_CUDA
+            options.backend = XTBLOOM_BACKEND_CUDA
             context = ctypes.c_void_p()
-            status = library.gpuxtb_context_create(
+            status = library.xtbloom_context_create(
                 ctypes.byref(options), ctypes.byref(context)
             )
-            if status != GPUXTB_STATUS_BACKEND_UNAVAILABLE or context.value is not None:
+            if (
+                status != XTBLOOM_STATUS_BACKEND_UNAVAILABLE
+                or context.value is not None
+            ):
                 if context.value is not None:
-                    library.gpuxtb_context_destroy(context)
+                    library.xtbloom_context_destroy(context)
                 raise RuntimeError(
                     "forced no-runtime CUDA context creation returned "
                     f"status={status}, context={context.value!r}"

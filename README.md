@@ -1,21 +1,21 @@
-# gpuxtb
+# xTBloom
 
-<img src="docs/assets/gpuxtb-logo.svg" alt="gpuxtb logo" width="440">
+<img src="docs/assets/xtbloom-logo.svg" alt="xTBloom logo" width="440">
 
-gpuxtb is a native GFN2-xTB inference library for workloads made of many
+xTBloom is a native GFN2-xTB inference library for workloads made of many
 small and medium molecular systems. It combines a C++17 implementation, CPU
 and CUDA backends, one stable C ABI, and Python interfaces built on that same
 ABI.
 
 Try the experimental, fully client-side browser demo at
-<https://jinzhezeng.group/gpuxtb/>. It compiles the CPU backend to wasm32
+<https://jinzhezeng.group/xtbloom/>. It compiles the CPU backend to wasm32
 without requiring Memory64, targeting modern iOS Safari, Safari, Chrome, and
 Firefox with WebAssembly and module Worker support. It also adds a small
 Web-adapter L-BFGS optimizer and a first-class SMILES input. A pinned
 OpenChemLib 9.21.0 release loads from jsDelivr in the background, adds explicit
 hydrogens, generates a seeded 3D conformer, and performs an MMFF94
-pre-relaxation before gpuxtb calculation. Opening a URL such as
-`https://jinzhezeng.group/gpuxtb/?smiles=CCO` additionally runs the gpuxtb
+pre-relaxation before xTBloom calculation. Opening a URL such as
+`https://jinzhezeng.group/xtbloom/?smiles=CCO` additionally runs the xTBloom
 geometry optimizer automatically and writes the final angstrom coordinates
 back to the page. Charged SMILES must URL-encode `+` as `%2B`. These optimizer
 and SMILES facilities belong to the browser adapter, not the stable C ABI or
@@ -32,7 +32,7 @@ once per molecule.
 - **Native ragged batches.** Molecules share one call without padding every
   system to the largest atom or orbital count.
 - **Measured high-throughput advantage.** In the public energy-plus-force
-  benchmark at 62 atoms, gpuxtb CPU is 7.6x-8.6x faster than xTB/tblite for
+  benchmark at 62 atoms, xTBloom CPU is 7.6x-8.6x faster than xTB/tblite for
   128 systems and 8.9x-10.7x faster for 512 systems, with every dependent
   timed sample checked against the same output gate.
 - **CPU and CUDA parity.** Both backends implement restricted and unrestricted
@@ -63,14 +63,14 @@ not a general performance ranking.
 
 | Project | Best fit | Methods | Batch and accelerator model |
 | --- | --- | --- | --- |
-| **gpuxtb** | Native high-throughput inference embedded in C/C++ or Python applications | GFN2-xTB | Ragged C-ABI batches; CPU and CUDA; caller-owned host/device buffers |
+| **xTBloom** | Native high-throughput inference embedded in C/C++ or Python applications | GFN2-xTB | Ragged C-ABI batches; CPU and CUDA; caller-owned host/device buffers |
 | [xTB](https://github.com/grimme-lab/xtb) | Broad end-user computational chemistry workflows | GFN0/1/2-xTB, GFN-FF, and more | Mature CLI and per-system library APIs; OpenMP and optional NVIDIA build paths |
 | [tblite](https://github.com/tblite/tblite) | Lightweight, extensible single-point library | GFN1-xTB, GFN2-xTB, IPEA1-xTB | Fortran/C/Python per-structure APIs; CPU/OpenMP; molecular and periodic inputs |
 | [dxtb](https://github.com/grimme-lab/dxtb) | Differentiable xTB in PyTorch and ML workflows | GFN1-xTB, GFN2-xTB | Batched PyTorch tensors on CPU/CUDA; autodiff forces and response properties |
 
-### Where gpuxtb is deliberately stronger
+### Where xTBloom is deliberately stronger
 
-gpuxtb makes several production-inference guarantees first-class rather than
+xTBloom makes several production-inference guarantees first-class rather than
 leaving them to each calling application:
 
 - A failed SCC or eigensolve is isolated to one ragged-batch member. Successful
@@ -78,7 +78,7 @@ leaving them to each calling application:
   member is replaced with quiet NaNs and accompanied by per-system diagnostics.
 - Exactly degenerate finite-temperature occupations have a documented
   binary64 publication policy. In a reproduced three-hydrogen edge case,
-  gpuxtb returns a finite result where xTB, tblite, or dxtb fail on at least one
+  xTBloom returns a finite result where xTB, tblite, or dxtb fail on at least one
   integer-charge variant; the exact versions, inputs, and outcomes are
   [documented](docs/developer-guide/architecture.md#cross-engine-degenerate-occupation-evidence).
 - Explicit point-charge screening and caller-supplied periodic charge response
@@ -92,13 +92,13 @@ leaving them to each calling application:
   SCC work from 17-18 iterations to 2 and running 1.09x-1.54x faster than a
   persistent tblite calculation for the measured 32-122 atom alkane corpus.
 
-The [user-guide comparison](docs/user-guide/index.md#where-gpuxtb-is-stronger)
+The [user-guide comparison](docs/user-guide/index.md#where-xtbloom-is-stronger)
 links each claim to its upstream issue, local regression test, or archived raw
 benchmark evidence.
 
 ### Cross-engine scaling benchmark
 
-gpuxtb's target workload is many distinct systems in one ragged public-API
+xTBloom's target workload is many distinct systems in one ragged public-API
 call. The figure measures GFN2-xTB energy plus analytic-force latency for
 distinct conformers of one alkane family; batch 1 provides latency context,
 while batches 128 and 512 expose multi-system throughput.
@@ -107,29 +107,29 @@ while batches 128 and 512 expose multi-system throughput.
 
 On an AMD EPYC 7K62 with the same 16-thread budget for every CPU engine:
 
-- **128 systems at 62 atoms:** gpuxtb CPU completes the call in 182 ms,
+- **128 systems at 62 atoms:** xTBloom CPU completes the call in 182 ms,
   versus 1555 ms for xTB and 1384 ms for tblite: 8.6x and 7.6x faster.
-- **512 systems at 62 atoms:** gpuxtb CPU takes 1.28 s, versus 11.47 s for
+- **512 systems at 62 atoms:** xTBloom CPU takes 1.28 s, versus 11.47 s for
   xTB and 13.70 s for tblite: 8.9x and 10.7x faster.
-- **gpuxtb CUDA at batch 512:** 1.15 s at 62 atoms and 4.04 s at 122 atoms,
-  1.11x and 1.37x faster than gpuxtb CPU on the measured RTX 5090.
+- **xTBloom CUDA at batch 512:** 1.15 s at 62 atoms and 4.04 s at 122 atoms,
+  1.11x and 1.37x faster than xTBloom CPU on the measured RTX 5090.
 
-The CPU speedup is the public ragged-batch design in action: gpuxtb solves the
+The CPU speedup is the public ragged-batch design in action: xTBloom solves the
 whole batch across its worker pool, while the xTB/tblite adapters must loop
 over per-structure public calls. Batch-1 results are retained in the figure as
 latency context and are not used to claim a universal single-system win.
 
-Each library retains its native public convergence controls: gpuxtb uses
+Each library retains its native public convergence controls: xTBloom uses
 charge `1e-4` and energy `1e-6`; xTB and tblite use accuracy factor `1.0`;
 dxtb uses `x_atol=1e-4`, `x_atol_max=1e-5`, `f_atol=1e-4`, and
 `force_convergence=true`. The meanings are library-specific. `2e-3` is the
 uniform energy/force output gate applied to every timed dependent sample, not
-a tblite convergence default and not a replacement for gpuxtb's stricter
+a tblite convergence default and not a replacement for xTBloom's stricter
 scientific conformance.
 
 Batch 1 and 512 use cold electronic state. Batch 128 performs one untimed cold
-seed and times persistent continuation for gpuxtb, xTB, and tblite; dxtb
-resets every timed call. gpuxtb CUDA uses host descriptors, whereas dxtb CUDA
+seed and times persistent continuation for xTBloom, xTB, and tblite; dxtb
+resets every timed call. xTBloom CUDA uses host descriptors, whereas dxtb CUDA
 retains device tensors, so no direct cross-library CUDA speedup is claimed.
 
 The evidence is limited to this alkane-conformer corpus, energy plus forces,
@@ -141,7 +141,7 @@ See the [benchmark harness](benchmarks/README.md) for the protocol.
 Choose xTB for its broad CLI workflows, optimizers, dynamics, solvation, and
 method coverage. Choose tblite for a mature reusable single-point library with
 periodic structures and customizable components. Choose dxtb when PyTorch
-autodiff and differentiable response properties are central. Choose gpuxtb
+autodiff and differentiable response properties are central. Choose xTBloom
 when the application needs a native ragged batch, a stable deployment ABI,
 direct CUDA buffers, or peer-local failure handling.
 
@@ -150,25 +150,25 @@ protocols and raw results live under [`benchmarks/evidence`](benchmarks/evidence
 
 ## Python quickstart
 
-gpuxtb is being prepared for publication on PyPI. Once a release is published,
+xTBloom is being prepared for publication on PyPI. Once a release is published,
 install the CPU runtime with:
 
 ```console
-python -m pip install gpuxtb
+python -m pip install xtbloom
 ```
 
 Optional integrations and CUDA 12 host libraries are extras:
 
 ```console
-python -m pip install "gpuxtb[ase,dpdata]"
-python -m pip install "gpuxtb[cuda12]"
+python -m pip install "xtbloom[ase,dpdata]"
+python -m pip install "xtbloom[cuda12]"
 ```
 
 Until the first PyPI release, install a source checkout as a non-editable
-package. `GPUXTB_ENABLE_CUDA=OFF` makes the intended backend explicit:
+package. `XTBLOOM_ENABLE_CUDA=OFF` makes the intended backend explicit:
 
 ```console
-GPUXTB_ENABLE_CUDA=OFF python -m pip install .
+XTBLOOM_ENABLE_CUDA=OFF python -m pip install .
 ```
 
 Positions are in bohr. Energies and forces are returned in Hartree and
@@ -177,7 +177,7 @@ temperature in kelvin.
 
 ```python
 import numpy as np
-from gpuxtb import Calculator
+from xtbloom import Calculator
 
 numbers = np.array([8, 1, 1])
 positions = np.array(
@@ -207,22 +207,22 @@ point charges, ASE, and dpdata, or the concise
 
 ## C and C++ quickstart
 
-Native consumers need CMake 3.24 or newer, a C++17 compiler to build gpuxtb,
+Native consumers need CMake 3.24 or newer, a C++17 compiler to build xTBloom,
 and one dlopen-able monolithic LP64 LAPACKE+CBLAS runtime for CPU inference.
 An explicitly selected MKL runtime also requires its matching LP64,
 sequential, and core component libraries in the same provider directory.
-Shared installs place gpuxtb's private MKL shim beside `libgpuxtb`. Static
+Shared installs place xTBloom's private MKL shim beside `libxtbloom`. Static
 consumers that use MKL must stage that installed shim beside the final
 executable; CMake consumers can copy
-`$<TARGET_FILE:gpuxtb::mkl_lp64_shim>` when that optional imported target is
+`$<TARGET_FILE:xtbloom::mkl_lp64_shim>` when that optional imported target is
 present. Without the sibling artifact, CPU inference fails with
-`GPUXTB_STATUS_BACKEND_UNAVAILABLE` instead of using the host's `libmkl_rt`.
+`XTBLOOM_STATUS_BACKEND_UNAVAILABLE` instead of using the host's `libmkl_rt`.
 The public consumer API itself is C11-compatible and is wrapped in `extern "C"`
 for C++.
 
 ```console
 cmake -S . -B build/release -G Ninja \
-  -DGPUXTB_ENABLE_CUDA=OFF \
+  -DXTBLOOM_ENABLE_CUDA=OFF \
   -DBUILD_SHARED_LIBS=ON \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build/release --parallel
@@ -230,14 +230,14 @@ cmake --install build/release --prefix "$PWD/build/install"
 ```
 
 If auto-discovery cannot find the CPU numerical runtime, configure its absolute
-path with `-DGPUXTB_CPU_LINALG_LIBRARY=/path/to/libopenblas.so` or a compatible
+path with `-DXTBLOOM_CPU_LINALG_LIBRARY=/path/to/libopenblas.so` or a compatible
 LP64 `libmkl_rt`.
 
 Installed CMake consumers use the exported target:
 
 ```cmake
-find_package(gpuxtb CONFIG REQUIRED)
-target_link_libraries(my_program PRIVATE gpuxtb::gpuxtb)
+find_package(xtbloom CONFIG REQUIRED)
+target_link_libraries(my_program PRIVATE xtbloom::xtbloom)
 ```
 
 Every extensible descriptor must be initialized before its fields are set.
@@ -245,31 +245,31 @@ The complete request and all caller-owned output buffers are then submitted in
 one synchronous call:
 
 ```c
-#include <gpuxtb/gpuxtb.h>
+#include <xtbloom/xtbloom.h>
 
-gpuxtb_context_options_t context_options;
-gpuxtb_batch_t batch;
-gpuxtb_compute_options_t compute_options;
-gpuxtb_batch_result_t result;
+xtbloom_context_options_t context_options;
+xtbloom_batch_t batch;
+xtbloom_compute_options_t compute_options;
+xtbloom_batch_result_t result;
 
-gpuxtb_context_options_init(&context_options, sizeof(context_options));
-gpuxtb_batch_init(&batch, sizeof(batch));
-gpuxtb_compute_options_init(&compute_options, sizeof(compute_options));
-gpuxtb_batch_result_init(&result, sizeof(result));
+xtbloom_context_options_init(&context_options, sizeof(context_options));
+xtbloom_batch_init(&batch, sizeof(batch));
+xtbloom_compute_options_init(&compute_options, sizeof(compute_options));
+xtbloom_batch_result_init(&result, sizeof(result));
 
 /* Populate batch and result with caller-owned buffers. */
-compute_options.flags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES;
+compute_options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES;
 
-gpuxtb_context_t *context = NULL;
-gpuxtb_context_create(&context_options, &context);
-gpuxtb_status_t status = gpuxtb_compute(context, &batch, &compute_options, &result);
-gpuxtb_context_destroy(context);
+xtbloom_context_t *context = NULL;
+xtbloom_context_create(&context_options, &context);
+xtbloom_status_t status = xtbloom_compute(context, &batch, &compute_options, &result);
+xtbloom_context_destroy(context);
 ```
 
 The [C API guide](docs/user-guide/c-api.md) contains a complete runnable
 single-molecule example plus descriptor, units, CUDA-memory, and failure
 semantics. The installed header
-[`include/gpuxtb/gpuxtb.h`](include/gpuxtb/gpuxtb.h) is the normative API.
+[`include/xtbloom/xtbloom.h`](include/xtbloom/xtbloom.h) is the normative API.
 
 ## Documentation
 
@@ -281,8 +281,8 @@ semantics. The installed header
 
 ## Acknowledgements and provenance
 
-gpuxtb exists because the xTB and tblite communities made both the scientific
-method and high-quality reference implementations available. During gpuxtb's
+xTBloom exists because the xTB and tblite communities made both the scientific
+method and high-quality reference implementations available. During xTBloom's
 design and implementation, coding agents studied the xTB and tblite source
 code to understand equations, numerical conventions, edge cases, and public
 interface behavior. xTB also serves as an executable numerical oracle and the
@@ -297,7 +297,7 @@ and license terms are recorded in
 
 ## AI authorship
 
-gpuxtb is an AI-first software project. The core library architecture,
+xTBloom is an AI-first software project. The core library architecture,
 scientific implementation, CUDA backend, bindings, tests, and documentation
 were designed and written primarily by AI coding agents rather than as a
 conventional manually authored implementation. Humans provide project goals,
@@ -312,7 +312,7 @@ inspection.
 
 ## License
 
-gpuxtb is licensed under `GPL-3.0-or-later`, with the narrowly scoped
+xTBloom is licensed under `GPL-3.0-or-later`, with the narrowly scoped
 [CUDA and Intel MKL additional permission](CUDA_MKL_LINKING_EXCEPTION).
 Upstream material remains under the separate terms in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

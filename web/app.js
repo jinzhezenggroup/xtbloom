@@ -1,4 +1,4 @@
-/* gpuxtb web demo front end (bilingual zh/en).
+/* xTBloom web demo front end (bilingual zh/en).
  * Loads the wasm32 module through the Emscripten factory and wires the two
  * adapter entry points (single-point compute, L-BFGS geometry optimize) to
  * the input/output panels. All user-facing strings come from the I18N
@@ -58,7 +58,7 @@ const I18N = {
     smiles_generate_status: "正在生成显式氢三维构象并进行 MMFF94 预优化…",
     smiles_generated: "已生成 {{n}} 个原子的三维结构；形式电荷 {{q}}。",
     smiles_load_failed: "SMILES 结构生成资源加载失败：{{e}}",
-    smiles_url_optimizing: "已从地址读取 SMILES，正在自动执行 gpuxtb 几何优化…",
+    smiles_url_optimizing: "已从地址读取 SMILES，正在自动执行 xTBloom 几何优化…",
     smiles_url_done: "地址中的 SMILES 已生成并优化；最终坐标已写回输入框。",
     smiles_url_failed: "地址中的 SMILES 自动生成/优化失败：{{e}}",
     smiles_go: "去生成",
@@ -102,7 +102,7 @@ const I18N = {
     tag_done: "已支持",
     roadmap_opt_desc: "内置 L-BFGS 优化器，使用解析力收敛到稳定结构。在左侧“优化”区配置后点击“几何优化”。",
     opt_go: "去优化",
-    footer: "由 gpuxtb 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32；可选的 SMILES 三维结构由固定版本的 OpenChemLib 在浏览器中生成并以 MMFF94 预优化。BLAS/LAPACK 层为演示用最小实现。仅供演示，非科学计算生产环境。",
+    footer: "由 xTBloom 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32；可选的 SMILES 三维结构由固定版本的 OpenChemLib 在浏览器中生成并以 MMFF94 预优化。BLAS/LAPACK 层为演示用最小实现。仅供演示，非科学计算生产环境。",
     overlay_loading: "正在加载 WASM 引擎…",
     overlay_compute: "正在计算单点能…",
     overlay_opt: "正在几何优化（逐梯度迭代，可能需要几秒）…",
@@ -170,7 +170,7 @@ const I18N = {
     smiles_generate_status: "Generating an explicit-hydrogen 3D conformer and running MMFF94 pre-relaxation…",
     smiles_generated: "Generated a {{n}}-atom 3D structure with formal charge {{q}}.",
     smiles_load_failed: "Could not load the SMILES structure generator: {{e}}",
-    smiles_url_optimizing: "SMILES read from the URL; running automatic gpuxtb geometry optimization…",
+    smiles_url_optimizing: "SMILES read from the URL; running automatic xTBloom geometry optimization…",
     smiles_url_done: "The URL SMILES was generated and optimized; final coordinates were written to the input.",
     smiles_url_failed: "Automatic URL SMILES generation/optimization failed: {{e}}",
     smiles_go: "Generate",
@@ -214,7 +214,7 @@ const I18N = {
     tag_done: "supported",
     roadmap_opt_desc: "Built-in L-BFGS optimizer using analytic forces. Configure it in the left panel, then click “Optimize geometry”.",
     opt_go: "Try it",
-    footer: "Powered by gpuxtb — the same native C ABI library compiled to wasm32 without requiring Memory64. Optional SMILES 3D structures are generated in-browser by a pinned OpenChemLib release and pre-relaxed with MMFF94. The BLAS/LAPACK layer is a minimal demo implementation. Demo only, not a production scientific environment.",
+    footer: "Powered by xTBloom — the same native C ABI library compiled to wasm32 without requiring Memory64. Optional SMILES 3D structures are generated in-browser by a pinned OpenChemLib release and pre-relaxed with MMFF94. The BLAS/LAPACK layer is a minimal demo implementation. Demo only, not a production scientific environment.",
     overlay_loading: "Loading the WASM engine…",
     overlay_compute: "Computing single point…",
     overlay_opt: "Optimizing geometry (gradient steps, may take a few seconds)…",
@@ -271,7 +271,7 @@ const $ = (id) => document.getElementById(id);
 
 let lang = "zh";
 try {
-  lang = localStorage.getItem("gpuxtb-lang") ||
+  lang = localStorage.getItem("xtbloom-lang") ||
     (navigator.language && navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en");
 } catch { /* storage unavailable */ }
 
@@ -289,7 +289,7 @@ function tf(key, vars) { return t(key, vars); }
 
 function applyI18n() {
   document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
-  document.title = lang === "zh" ? "gpuxtb · GFN2-xTB 在线计算（WASM）" : "gpuxtb · GFN2-xTB in-browser (WASM)";
+  document.title = lang === "zh" ? "xTBloom · GFN2-xTB 在线计算（WASM）" : "xTBloom · GFN2-xTB in-browser (WASM)";
   document.querySelectorAll("[data-i18n]").forEach((el) => {
     if (el.id === "engine-badge") return; /* state-managed separately */
     el.textContent = t(el.dataset.i18n);
@@ -306,7 +306,7 @@ function applyI18n() {
 
 $("lang-toggle").addEventListener("click", () => {
   lang = lang === "zh" ? "en" : "zh";
-  try { localStorage.setItem("gpuxtb-lang", lang); } catch { /* ignore */ }
+  try { localStorage.setItem("xtbloom-lang", lang); } catch { /* ignore */ }
   applyI18n();
   // re-render dynamic labels on the results panel
   if (window.__lastMode === "compute" && window.__lastResult) renderCompute(window.__lastResult);
@@ -324,7 +324,7 @@ let msgSeq = 0;
 const pending = new Map();
 
 /* The optional OpenChemLib worker has an independent lifecycle: its CDN
- * download or conformer search must never gate ordinary XYZ/gpuxtb controls. */
+ * download or conformer search must never gate ordinary XYZ/xTBloom controls. */
 let smilesWorker = null;
 let smilesResourceState = "loading"; /* loading | ready | error */
 let smilesBusy = false;
@@ -764,7 +764,7 @@ let molUnavailable = false;
 
 function xyzTo3Dmol(xyz) {
   const lines = xyz.split(/\r?\n/).filter((l) => l.trim());
-  return lines.length + "\n" + "gpuxtb\n" + lines.join("\n") + "\n";
+  return lines.length + "\n" + "xTBloom\n" + lines.join("\n") + "\n";
 }
 
 function initMoleculeViewer() {
@@ -948,7 +948,7 @@ async function maybeRunUrlSmiles() {
       applyFinalGeometry: true,
       throwOnFailure: true,
     }));
-    if (!optimized) throw new Error("gpuxtb geometry optimization failed");
+    if (!optimized) throw new Error("xTBloom geometry optimization failed");
     setSmilesStatus("smiles_url_done", null, "ok");
   } catch (error) {
     const detail = smilesErrorText(error);
@@ -1171,7 +1171,7 @@ $("copy-json").addEventListener("click", async () => {
       // Download the main wasm on the UI thread with a real progress bar, then
       // wait for .data loading, module instantiation, and side-module readiness
       // inside the worker before considering the engine loaded.
-      const wasmUrl = new URL("gpuxtb_web.wasm", import.meta.url).href;
+      const wasmUrl = new URL("xtbloom_web.wasm", import.meta.url).href;
       const wasmBinary = await fetchProgress(wasmUrl, { signal: abortController.signal });
       updateLoader(100);
       $("overlay-text").textContent = "…";

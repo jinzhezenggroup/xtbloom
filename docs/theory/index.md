@@ -1,8 +1,8 @@
 # Theory guide
 
-This guide explains the physical and numerical meaning of gpuxtb's public
+This guide explains the physical and numerical meaning of xTBloom's public
 results. The implementation follows GFN2-xTB conventions and is validated
-against pinned independent xTB and tblite evidence; gpuxtb does not define a
+against pinned independent xTB and tblite evidence; xTBloom does not define a
 new parameterization or a new tight-binding method.
 
 - [GFN2-xTB, SCC, occupations, and forces](gfn2.md)

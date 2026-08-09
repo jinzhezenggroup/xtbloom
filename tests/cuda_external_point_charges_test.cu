@@ -25,12 +25,12 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2ExternalPointChargeDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2ExternalPointChargeDeviceError;
-using gpuxtb::detail::cuda::Gfn2ExternalPointChargeForceDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2ForceDeviceActivity;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::ExternalPointChargePlan;
+using xtbloom::detail::cuda::Gfn2ExternalPointChargeDeviceBatch;
+using xtbloom::detail::cuda::Gfn2ExternalPointChargeDeviceError;
+using xtbloom::detail::cuda::Gfn2ExternalPointChargeForceDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2ForceDeviceActivity;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::ExternalPointChargePlan;
 
 template <typename T>
 class DeviceBuffer {
@@ -169,16 +169,16 @@ bool make_plan(const std::vector<std::int64_t>& atom_offsets,
                const std::vector<std::int64_t>* point_offsets, BasisPlan& basis,
                ExternalPointChargePlan& plan, std::string& error) {
   const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
-  if (gpuxtb::detail::gfn2::make_basis_plan(
+  if (xtbloom::detail::gfn2::make_basis_plan(
           batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-          atomic_numbers.data(), basis, error) != GPUXTB_STATUS_SUCCESS) {
+          atomic_numbers.data(), basis, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   const std::int64_t point_count = point_offsets == nullptr ? 0 : point_offsets->back();
-  return gpuxtb::detail::gfn2::make_external_point_charge_plan(
+  return xtbloom::detail::gfn2::make_external_point_charge_plan(
              basis, atomic_numbers.data(), point_count,
              point_offsets == nullptr ? nullptr : point_offsets->data(), plan,
-             error) == GPUXTB_STATUS_SUCCESS;
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool evaluate_cpu_embedding_energy(const ExternalPointChargePlan& plan,
@@ -190,12 +190,12 @@ bool evaluate_cpu_embedding_energy(const ExternalPointChargePlan& plan,
                                    std::string& error) {
   std::vector<double> potentials(static_cast<std::size_t>(plan.total_shells));
   std::vector<double> energies(static_cast<std::size_t>(plan.batch_size));
-  if (gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  if (xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
           plan, qm_positions.data(), point_positions.data(), point_charges.data(),
-          point_hardnesses.data(), potentials.data(), error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(plan, shell_charges.data(),
-                                                                 potentials.data(), energies.data(),
-                                                                 error) != GPUXTB_STATUS_SUCCESS) {
+          point_hardnesses.data(), potentials.data(), error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
+          plan, shell_charges.data(), potentials.data(), energies.data(), error) !=
+          XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   energy = 0.0;
@@ -249,16 +249,16 @@ int test_ragged_water_golden_stream_and_graph() {
   const std::vector<double> initial_energies = expected_energies;
   const std::vector<double> initial_qm_forces = expected_qm_forces;
   const std::vector<double> initial_point_forces = expected_point_forces;
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
-            point_hardnesses.data(), expected_potentials.data(), error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_energy_cpu(
+            point_hardnesses.data(), expected_potentials.data(), error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_energy_cpu(
             plan, shell_charges.data(), expected_potentials.data(), expected_energies.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), expected_qm_forces.data(),
-            expected_point_forces.data(), error) == GPUXTB_STATUS_SUCCESS);
+            expected_point_forces.data(), error) == XTBLOOM_STATUS_SUCCESS);
 
   constexpr std::array<double, 4> water_potential{
       0.10798911399580015,
@@ -294,14 +294,14 @@ int test_ragged_water_golden_stream_and_graph() {
   CUDA_CHECK(device_error.allocate(1));
 
   const Gfn2ExternalPointChargeDeviceBatch batch = fixture.batch();
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
       batch, device_potentials.get(), device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
       batch, device_shell_charges.get(), device_potentials.get(), device_energies.get(),
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
       batch, device_shell_charges.get(), device_qm_forces.get(), device_point_forces.get(),
       device_error.get(), stream));
   std::uint32_t semantic_error = 99u;
@@ -341,19 +341,19 @@ int test_ragged_water_golden_stream_and_graph() {
   /* Both optional force-output modes must match independent CPU references. */
   std::vector<double> expected_qm_only(qm_positions.size());
   std::vector<double> expected_point_only(point_positions.size());
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), expected_qm_only.data(), nullptr,
-            error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), nullptr, expected_point_only.data(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   std::vector<double> actual_qm_only(qm_positions.size());
   CUDA_CHECK(device_qm_forces.copy_from(actual_qm_only.data(), actual_qm_only.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
       batch, device_shell_charges.get(), device_qm_forces.get(), nullptr, device_error.get(),
       stream));
   CUDA_CHECK(device_qm_forces.copy_to(actual_qm_only.data(), actual_qm_only.size(), stream));
@@ -367,9 +367,9 @@ int test_ragged_water_golden_stream_and_graph() {
   std::vector<double> actual_point_only(point_positions.size());
   CUDA_CHECK(
       device_point_forces.copy_from(actual_point_only.data(), actual_point_only.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
       batch, device_shell_charges.get(), nullptr, device_point_forces.get(), device_error.get(),
       stream));
   CUDA_CHECK(
@@ -385,14 +385,14 @@ int test_ragged_water_golden_stream_and_graph() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t graph_exec = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
       batch, device_potentials.get(), device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
       batch, device_shell_charges.get(), device_potentials.get(), device_energies.get(),
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
       batch, device_shell_charges.get(), device_qm_forces.get(), device_point_forces.get(),
       device_error.get(), stream));
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
@@ -445,10 +445,10 @@ int test_gated_transactional_force_reduction() {
   }
   std::vector<double> expected_qm = qm_seed;
   std::vector<double> expected_point = point_seed;
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), expected_qm.data(),
-            expected_point.data(), error) == GPUXTB_STATUS_SUCCESS);
+            expected_point.data(), error) == XTBLOOM_STATUS_SUCCESS);
 
   /* The shared CPU energy primitive independently gates both sides by FD. */
   constexpr double kStep = 1.0e-5;
@@ -495,7 +495,7 @@ int test_gated_transactional_force_reduction() {
   DeviceBuffer<double> device_qm_scratch;
   DeviceBuffer<double> device_point_scratch;
   DeviceBuffer<std::uint8_t> device_requested;
-  DeviceBuffer<gpuxtb_status_t> device_statuses;
+  DeviceBuffer<xtbloom_status_t> device_statuses;
   DeviceBuffer<std::uint32_t> device_system_errors;
   DeviceBuffer<std::uint32_t> device_error;
   DeviceBuffer<std::uint32_t> device_sequence;
@@ -507,11 +507,11 @@ int test_gated_transactional_force_reduction() {
   CUDA_CHECK(allocate_and_copy(device_qm_scratch, scratch_qm, stream));
   CUDA_CHECK(allocate_and_copy(device_point_scratch, scratch_point, stream));
   const std::vector<std::uint8_t> requested{1u, 0u, 1u, 1u};
-  const std::vector<gpuxtb_status_t> statuses{
-      GPUXTB_STATUS_SUCCESS,
-      static_cast<gpuxtb_status_t>(0x12345678),
-      GPUXTB_STATUS_EIGENSOLVER_FAILED,
-      GPUXTB_STATUS_SUCCESS,
+  const std::vector<xtbloom_status_t> statuses{
+      XTBLOOM_STATUS_SUCCESS,
+      static_cast<xtbloom_status_t>(0x12345678),
+      XTBLOOM_STATUS_EIGENSOLVER_FAILED,
+      XTBLOOM_STATUS_SUCCESS,
   };
   CUDA_CHECK(allocate_and_copy(device_requested, requested, stream));
   CUDA_CHECK(allocate_and_copy(device_statuses, statuses, stream));
@@ -555,9 +555,9 @@ int test_gated_transactional_force_reduction() {
       1,
       kPlanToken,
   };
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_force_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_force_errors_cuda(
       plan.batch_size, device_system_errors.get(), device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
       batch, activity, device_shell_charges.get(), device_qm_forces.get(),
       device_point_forces.get(), workspace, device_system_errors.get(), device_error.get(),
       stream));
@@ -620,7 +620,7 @@ int test_gated_transactional_force_reduction() {
       static_cast<std::uint32_t>(Gfn2ExternalPointChargeDeviceError::kCacheMismatch);
   CUDA_CHECK(device_system_errors.copy_from(clear_errors.data(), clear_errors.size(), stream));
   CUDA_CHECK(device_error.copy_from(&incoming_error, 1u, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
       batch, activity, device_shell_charges.get(), device_qm_forces.get(),
       device_point_forces.get(), workspace, device_system_errors.get(), device_error.get(),
       stream));
@@ -631,7 +631,7 @@ int test_gated_transactional_force_reduction() {
 
   /* Capture/replay the post-SCC gate with every terminal member successful. */
   const std::vector<std::uint8_t> all_requested(requested.size(), 1u);
-  const std::vector<gpuxtb_status_t> all_success(requested.size(), GPUXTB_STATUS_SUCCESS);
+  const std::vector<xtbloom_status_t> all_success(requested.size(), XTBLOOM_STATUS_SUCCESS);
   CUDA_CHECK(device_requested.copy_from(all_requested.data(), all_requested.size(), stream));
   CUDA_CHECK(device_statuses.copy_from(all_success.data(), all_success.size(), stream));
   CUDA_CHECK(fixture.qm_positions.copy_from(qm_positions.data(), qm_positions.size(), stream));
@@ -646,9 +646,9 @@ int test_gated_transactional_force_reduction() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t graph_exec = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_force_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_force_errors_cuda(
       plan.batch_size, device_system_errors.get(), device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
       batch, activity, device_shell_charges.get(), device_qm_forces.get(),
       device_point_forces.get(), workspace, device_system_errors.get(), device_error.get(),
       stream));
@@ -724,10 +724,10 @@ int run_gated_ragged_force_batch(std::int64_t batch_size, bool exercise_gate_and
   }
   std::vector<double> expected_qm = qm_seed;
   std::vector<double> expected_point = point_seed;
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), shell_charges.data(), expected_qm.data(),
-            expected_point.data(), error) == GPUXTB_STATUS_SUCCESS);
+            expected_point.data(), error) == XTBLOOM_STATUS_SUCCESS);
 
   cudaStream_t stream = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
@@ -742,7 +742,7 @@ int run_gated_ragged_force_batch(std::int64_t batch_size, bool exercise_gate_and
   DeviceBuffer<double> device_qm_scratch;
   DeviceBuffer<double> device_point_scratch;
   DeviceBuffer<std::uint8_t> device_requested;
-  DeviceBuffer<gpuxtb_status_t> device_statuses;
+  DeviceBuffer<xtbloom_status_t> device_statuses;
   DeviceBuffer<std::uint32_t> device_system_errors;
   DeviceBuffer<std::uint32_t> device_error;
   DeviceBuffer<std::uint32_t> device_sequence;
@@ -752,8 +752,8 @@ int run_gated_ragged_force_batch(std::int64_t batch_size, bool exercise_gate_and
   CUDA_CHECK(device_qm_scratch.allocate(qm_seed.size()));
   CUDA_CHECK(device_point_scratch.allocate(point_seed.size()));
   std::vector<std::uint8_t> requested(static_cast<std::size_t>(batch_size), 1u);
-  std::vector<gpuxtb_status_t> statuses(static_cast<std::size_t>(batch_size),
-                                        GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(static_cast<std::size_t>(batch_size),
+                                         XTBLOOM_STATUS_SUCCESS);
   CUDA_CHECK(allocate_and_copy(device_requested, requested, stream));
   CUDA_CHECK(allocate_and_copy(device_statuses, statuses, stream));
   CUDA_CHECK(device_system_errors.allocate(static_cast<std::size_t>(batch_size)));
@@ -770,9 +770,9 @@ int run_gated_ragged_force_batch(std::int64_t batch_size, bool exercise_gate_and
       1,
       plan_token,
   };
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_force_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_force_errors_cuda(
       batch_size, device_system_errors.get(), device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
       batch, activity, device_shell_charges.get(), device_qm_forces.get(),
       device_point_forces.get(), workspace, device_system_errors.get(), device_error.get(),
       stream));
@@ -814,14 +814,14 @@ int run_gated_ragged_force_batch(std::int64_t batch_size, bool exercise_gate_and
   if (exercise_gate_and_aliases) {
     /* An invalid request is peer-local and must not read its status or publish its slices. */
     requested[0] = 2u;
-    statuses[0] = static_cast<gpuxtb_status_t>(0x76543210);
+    statuses[0] = static_cast<xtbloom_status_t>(0x76543210);
     CUDA_CHECK(device_requested.copy_from(requested.data(), requested.size(), stream));
     CUDA_CHECK(device_statuses.copy_from(statuses.data(), statuses.size(), stream));
     CUDA_CHECK(device_qm_forces.copy_from(qm_seed.data(), qm_seed.size(), stream));
     CUDA_CHECK(device_point_forces.copy_from(point_seed.data(), point_seed.size(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_force_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_force_errors_cuda(
         batch_size, device_system_errors.get(), device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
         batch, activity, device_shell_charges.get(), device_qm_forces.get(),
         device_point_forces.get(), workspace, device_system_errors.get(), device_error.get(),
         stream));
@@ -856,30 +856,30 @@ int run_gated_ragged_force_batch(std::int64_t batch_size, bool exercise_gate_and
     /* Every public/scratch/control destination is disjoint from all numerical and gate reads. */
     Gfn2ExternalPointChargeForceDeviceWorkspace alias_workspace = workspace;
     alias_workspace.qm_scratch = device_qm_forces.get();
-    CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
               batch, activity, device_shell_charges.get(), device_qm_forces.get(),
               device_point_forces.get(), alias_workspace, device_system_errors.get(),
               device_error.get(), stream) == cudaErrorInvalidValue);
     alias_workspace = workspace;
     alias_workspace.point_scratch = device_point_forces.get();
-    CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
               batch, activity, device_shell_charges.get(), device_qm_forces.get(),
               device_point_forces.get(), alias_workspace, device_system_errors.get(),
               device_error.get(), stream) == cudaErrorInvalidValue);
     Gfn2ForceDeviceActivity alias_activity = activity;
     alias_activity.requested_mask = reinterpret_cast<const std::uint8_t*>(device_sequence.get());
-    CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
               batch, alias_activity, device_shell_charges.get(), device_qm_forces.get(),
               device_point_forces.get(), workspace, device_system_errors.get(), device_error.get(),
               stream) == cudaErrorInvalidValue);
     alias_activity = activity;
     alias_activity.system_statuses =
-        reinterpret_cast<const gpuxtb_status_t*>(device_system_errors.get());
-    CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
+        reinterpret_cast<const xtbloom_status_t*>(device_system_errors.get());
+    CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
               batch, alias_activity, device_shell_charges.get(), device_qm_forces.get(),
               device_point_forces.get(), workspace, device_system_errors.get(), device_error.get(),
               stream) == cudaErrorInvalidValue);
-    CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_gated_forces_cuda(
               batch, activity, device_shell_charges.get(), device_qm_forces.get(),
               device_point_forces.get(), workspace, device_system_errors.get(),
               device_system_errors.get(), stream) == cudaErrorInvalidValue);
@@ -933,14 +933,14 @@ int test_zero_total_points_with_null_device_inputs() {
   CUDA_CHECK(allocate_and_copy(device_energies, energies, stream));
   CUDA_CHECK(allocate_and_copy(device_qm_forces, qm_forces, stream));
   CUDA_CHECK(device_error.allocate(1));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
       batch, device_potentials.get(), device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
       batch, device_shell_charges.get(), device_potentials.get(), device_energies.get(),
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
       batch, device_shell_charges.get(), device_qm_forces.get(), nullptr, device_error.get(),
       stream));
   std::uint32_t semantic_error = 99u;
@@ -960,14 +960,14 @@ int test_zero_total_points_with_null_device_inputs() {
 }
 
 int test_host_and_device_errors_are_sticky() {
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(nullptr) ==
+  CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(nullptr) ==
         cudaErrorInvalidValue);
   Gfn2ExternalPointChargeDeviceBatch invalid{};
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
             invalid, nullptr, nullptr) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
             invalid, nullptr, nullptr, nullptr, nullptr) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
             invalid, nullptr, nullptr, nullptr, nullptr) == cudaErrorInvalidValue);
 
   const std::vector<std::int64_t> atom_offsets{0, 1};
@@ -1013,9 +1013,9 @@ int test_host_and_device_errors_are_sticky() {
   CUDA_CHECK(device_potential.copy_from(potential.data(), potential.size(), stream));
   CUDA_CHECK(device_shell_charge.copy_from(shell_charge.data(), shell_charge.size(), stream));
   CUDA_CHECK(device_energy.copy_from(energy.data(), energy.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
       batch, device_shell_charge.get(), device_potential.get(), device_energy.get(),
       device_error.get(), stream));
   std::uint32_t semantic_error = 0u;
@@ -1041,17 +1041,17 @@ int test_host_and_device_errors_are_sticky() {
   std::vector<double> overflow_shell_charge(static_cast<std::size_t>(plan.total_shells), 1.0);
   std::vector<double> cpu_overflow_qm_force{std::numeric_limits<double>::max(), 0.0, 0.0};
   std::vector<double> cpu_overflow_point_force{-std::numeric_limits<double>::max(), 0.0, 0.0};
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, overflow_qm_position.data(), overflow_point_position.data(),
             overflow_point_charge.data(), overflow_point_hardness.data(),
             overflow_shell_charge.data(), cpu_overflow_qm_force.data(), nullptr,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(cpu_overflow_qm_force[0] == std::numeric_limits<double>::max());
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, overflow_qm_position.data(), overflow_point_position.data(),
             overflow_point_charge.data(), overflow_point_hardness.data(),
             overflow_shell_charge.data(), nullptr, cpu_overflow_point_force.data(),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(cpu_overflow_point_force[0] == -std::numeric_limits<double>::max());
 
   CUDA_CHECK(fixture.qm_positions.copy_from(overflow_qm_position.data(),
@@ -1064,9 +1064,9 @@ int test_host_and_device_errors_are_sticky() {
                                            overflow_shell_charge.size(), stream));
   qm_force = {std::numeric_limits<double>::max(), 0.0, 0.0};
   CUDA_CHECK(device_qm_force.copy_from(qm_force.data(), qm_force.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
       batch, device_shell_charge.get(), device_qm_force.get(), nullptr, device_error.get(),
       stream));
   CUDA_CHECK(device_qm_force.copy_to(qm_force.data(), qm_force.size(), stream));
@@ -1078,9 +1078,9 @@ int test_host_and_device_errors_are_sticky() {
 
   point_force = {-std::numeric_limits<double>::max(), 0.0, 0.0};
   CUDA_CHECK(device_point_force.copy_from(point_force.data(), point_force.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
       batch, device_shell_charge.get(), nullptr, device_point_force.get(), device_error.get(),
       stream));
   CUDA_CHECK(device_point_force.copy_to(point_force.data(), point_force.size(), stream));
@@ -1104,11 +1104,11 @@ int test_host_and_device_errors_are_sticky() {
   const std::vector<std::int64_t> bad_point_offsets{0, 2};
   CUDA_CHECK(
       fixture.point_offsets.copy_from(bad_point_offsets.data(), bad_point_offsets.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
       batch, device_potential.get(), device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
       batch, device_shell_charge.get(), device_potential.get(), device_energy.get(),
       device_error.get(), stream));
   CUDA_CHECK(device_energy.copy_to(energy.data(), 1, stream));
@@ -1121,9 +1121,9 @@ int test_host_and_device_errors_are_sticky() {
   CUDA_CHECK(fixture.point_offsets.copy_from(point_offsets.data(), point_offsets.size(), stream));
   const std::vector<std::int64_t> bad_shell_to_atom{1};
   CUDA_CHECK(fixture.shell_to_atom.copy_from(bad_shell_to_atom.data(), 1, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
       batch, device_potential.get(), device_error.get(), stream));
   CUDA_CHECK(device_error.copy_to(&semantic_error, 1, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -1134,9 +1134,9 @@ int test_host_and_device_errors_are_sticky() {
   std::vector<double> bad_qm = qm_positions;
   bad_qm[1] = std::numeric_limits<double>::quiet_NaN();
   CUDA_CHECK(fixture.qm_positions.copy_from(bad_qm.data(), bad_qm.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
       batch, device_potential.get(), device_error.get(), stream));
   CUDA_CHECK(device_error.copy_to(&semantic_error, 1, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -1146,9 +1146,9 @@ int test_host_and_device_errors_are_sticky() {
   CUDA_CHECK(fixture.qm_positions.copy_from(qm_positions.data(), qm_positions.size(), stream));
   const std::vector<double> bad_hardness{0.0};
   CUDA_CHECK(fixture.point_hardnesses.copy_from(bad_hardness.data(), 1, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
       batch, device_potential.get(), device_error.get(), stream));
   CUDA_CHECK(device_error.copy_to(&semantic_error, 1, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -1162,12 +1162,12 @@ int test_host_and_device_errors_are_sticky() {
   bad_shell_charge[0] = std::numeric_limits<double>::infinity();
   CUDA_CHECK(
       device_shell_charge.copy_from(bad_shell_charge.data(), bad_shell_charge.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_energy_cuda(
       batch, device_shell_charge.get(), device_potential.get(), device_energy.get(),
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
       batch, device_shell_charge.get(), device_qm_force.get(), nullptr, device_error.get(),
       stream));
   CUDA_CHECK(device_qm_force.copy_to(qm_force.data(), qm_force.size(), stream));
@@ -1182,14 +1182,14 @@ int test_host_and_device_errors_are_sticky() {
   const std::vector<double> extreme_point{-std::numeric_limits<double>::max(), 0.0, 0.0};
   std::vector<double> cpu_potential(static_cast<std::size_t>(plan.total_shells), 17.0);
   std::vector<double> cpu_qm_force(3, 19.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, extreme_qm.data(), extreme_point.data(), point_charges.data(),
             point_hardnesses.data(), cpu_potential.data(),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::add_external_point_charge_forces_cpu(
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_external_point_charge_forces_cpu(
             plan, extreme_qm.data(), extreme_point.data(), point_charges.data(),
             point_hardnesses.data(), shell_charge.data(), cpu_qm_force.data(), nullptr,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(cpu_qm_force.begin(), cpu_qm_force.end(),
                     [](double value) { return value == 19.0; }));
   CUDA_CHECK(fixture.qm_positions.copy_from(extreme_qm.data(), extreme_qm.size(), stream));
@@ -1198,11 +1198,11 @@ int test_host_and_device_errors_are_sticky() {
   std::fill(qm_force.begin(), qm_force.end(), 5.0);
   CUDA_CHECK(device_qm_force.copy_from(qm_force.data(), qm_force.size(), stream));
   CUDA_CHECK(device_shell_charge.copy_from(shell_charge.data(), shell_charge.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
       batch, device_potential.get(), device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_external_point_charge_forces_cuda(
       batch, device_shell_charge.get(), device_qm_force.get(), nullptr, device_error.get(),
       stream));
   CUDA_CHECK(device_qm_force.copy_to(qm_force.data(), qm_force.size(), stream));
@@ -1217,18 +1217,18 @@ int test_host_and_device_errors_are_sticky() {
   const std::vector<double> coincident_point{0.0, 0.0, 0.0};
   const std::vector<double> extreme_charge{std::numeric_limits<double>::max()};
   const std::vector<double> extreme_hardness{std::numeric_limits<double>::max()};
-  CHECK(gpuxtb::detail::gfn2::evaluate_external_point_charge_potential_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_external_point_charge_potential_cpu(
             plan, coincident_qm.data(), coincident_point.data(), extreme_charge.data(),
             extreme_hardness.data(), cpu_potential.data(),
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CUDA_CHECK(fixture.qm_positions.copy_from(coincident_qm.data(), coincident_qm.size(), stream));
   CUDA_CHECK(
       fixture.point_positions.copy_from(coincident_point.data(), coincident_point.size(), stream));
   CUDA_CHECK(fixture.point_charges.copy_from(extreme_charge.data(), 1, stream));
   CUDA_CHECK(fixture.point_hardnesses.copy_from(extreme_hardness.data(), 1, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_external_point_charge_device_error_cuda(
       device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
       batch, device_potential.get(), device_error.get(), stream));
   CUDA_CHECK(device_error.copy_to(&semantic_error, 1, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -1237,11 +1237,11 @@ int test_host_and_device_errors_are_sticky() {
 
   invalid = batch;
   invalid.total_atoms = std::numeric_limits<std::int64_t>::max();
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
             invalid, device_potential.get(), device_error.get(), stream) == cudaErrorInvalidValue);
   invalid = batch;
   invalid.batch_size = static_cast<std::int64_t>(std::numeric_limits<int>::max()) + 1;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_potential_cuda(
             invalid, device_potential.get(), device_error.get(), stream) ==
         cudaErrorInvalidConfiguration);
   CUDA_CHECK(cudaStreamDestroy(stream));
@@ -1254,7 +1254,7 @@ int main() {
   int device_count = 0;
   const cudaError_t count_status = cudaGetDeviceCount(&device_count);
   if (count_status != cudaSuccess || device_count == 0) {
-    if (std::getenv("GPUXTB_TEST_REQUIRE_DEVICE") != nullptr) {
+    if (std::getenv("XTBLOOM_TEST_REQUIRE_DEVICE") != nullptr) {
       std::cerr << "CUDA external point-charge test requires a visible device: "
                 << (count_status == cudaSuccess ? "none found" : cudaGetErrorString(count_status))
                 << '\n';

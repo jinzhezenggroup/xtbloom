@@ -1,5 +1,5 @@
-! Standalone integration probe for the gpuxtb tblite SCC observer patch.
-module gpuxtb_tblite_observer_probe_type
+! Standalone integration probe for the xtbloom tblite SCC observer patch.
+module xtbloom_tblite_observer_probe_type
    use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
    use mctc_env, only : wp
    use tblite_scf, only : potential_type, scf_observer
@@ -141,10 +141,10 @@ subroutine capture_finished(self, iterations, status)
    self%finished_status = status
 end subroutine capture_finished
 
-end module gpuxtb_tblite_observer_probe_type
+end module xtbloom_tblite_observer_probe_type
 
 
-program gpuxtb_tblite_observer_probe
+program xtbloom_tblite_observer_probe
    use mctc_env, only : wp, error_type
    use mctc_io, only : structure_type, new
    use tblite_context_type, only : context_type
@@ -155,7 +155,7 @@ program gpuxtb_tblite_observer_probe
    use tblite_xtb_calculator, only : xtb_calculator
    use tblite_xtb_gfn2, only : new_gfn2_calculator
    use tblite_xtb_singlepoint, only : xtb_singlepoint
-   use gpuxtb_tblite_observer_probe_type, only : recording_observer
+   use xtbloom_tblite_observer_probe_type, only : recording_observer
    implicit none
 
    real(wp), parameter :: kt = 300.0_wp * 3.166808578545117e-6_wp
@@ -304,4 +304,4 @@ subroutine assert_observed_trace(observer, results)
       & error stop "pre-solve Hamiltonian was already overwritten"
 end subroutine assert_observed_trace
 
-end program gpuxtb_tblite_observer_probe
+end program xtbloom_tblite_observer_probe

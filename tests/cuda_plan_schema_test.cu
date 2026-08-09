@@ -21,19 +21,19 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2AtomPair;
-using gpuxtb::detail::Gfn2GenerationScope;
-using gpuxtb::detail::Gfn2GeometryCacheProvenanceView;
-using gpuxtb::detail::Gfn2PairMapKind;
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::Gfn2PlanSchemaDiagnostic;
-using gpuxtb::detail::Gfn2PlanSchemaError;
-using gpuxtb::detail::Gfn2PlanSchemaField;
-using gpuxtb::detail::Gfn2RaggedTopologyView;
-using gpuxtb::detail::cuda::bind_gfn2_geometry_provenance_cuda;
-using gpuxtb::detail::cuda::bind_gfn2_topology_cuda;
-using gpuxtb::detail::cuda::validate_gfn2_geometry_provenance_cuda_async;
-using gpuxtb::detail::cuda::validate_gfn2_topology_cuda_async;
+using xtbloom::detail::Gfn2AtomPair;
+using xtbloom::detail::Gfn2GenerationScope;
+using xtbloom::detail::Gfn2GeometryCacheProvenanceView;
+using xtbloom::detail::Gfn2PairMapKind;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::Gfn2PlanSchemaDiagnostic;
+using xtbloom::detail::Gfn2PlanSchemaError;
+using xtbloom::detail::Gfn2PlanSchemaField;
+using xtbloom::detail::Gfn2RaggedTopologyView;
+using xtbloom::detail::cuda::bind_gfn2_geometry_provenance_cuda;
+using xtbloom::detail::cuda::bind_gfn2_topology_cuda;
+using xtbloom::detail::cuda::validate_gfn2_geometry_provenance_cuda_async;
+using xtbloom::detail::cuda::validate_gfn2_topology_cuda_async;
 
 constexpr std::uint64_t kPlanToken = 0xbb67ae8584caa73bULL;
 constexpr std::uint64_t kGeneration = 79u;
@@ -354,7 +354,7 @@ int test_hostile_device_topology() {
   CUDA_CHECK(
       bind_gfn2_topology_cuda(candidate, binding, device.diagnostic.get(), diagnostic, stream));
   CHECK(diagnostic.error == Gfn2PlanSchemaError::kInvalidPairMap);
-  CHECK(diagnostic.field == gpuxtb::detail::Gfn2PlanSchemaField::kAtomPairs);
+  CHECK(diagnostic.field == xtbloom::detail::Gfn2PlanSchemaField::kAtomPairs);
   CUDA_CHECK(cudaMemcpyAsync(device.atom_pairs.get(), host.atom_pairs.data(),
                              host.atom_pairs.size() * sizeof(Gfn2AtomPair), cudaMemcpyHostToDevice,
                              stream));
@@ -396,7 +396,7 @@ int test_hostile_device_topology() {
   CUDA_CHECK(
       bind_gfn2_topology_cuda(candidate, binding, device.diagnostic.get(), diagnostic, stream));
   CHECK(diagnostic.error == Gfn2PlanSchemaError::kInvalidBucketMap);
-  CHECK(diagnostic.field == gpuxtb::detail::Gfn2PlanSchemaField::kBucketOrbitalCounts);
+  CHECK(diagnostic.field == xtbloom::detail::Gfn2PlanSchemaField::kBucketOrbitalCounts);
   CUDA_CHECK(cudaMemcpyAsync(device.bucket_orbital_counts.get(), host.bucket_orbital_counts.data(),
                              host.bucket_orbital_counts.size() * sizeof(std::int32_t),
                              cudaMemcpyHostToDevice, stream));
@@ -411,7 +411,7 @@ int test_hostile_device_topology() {
       reinterpret_cast<Gfn2PlanSchemaDiagnostic*>(device.atom_offsets.get());
   CUDA_CHECK(bind_gfn2_topology_cuda(candidate, binding, aliased_diagnostic, diagnostic, stream));
   CHECK(diagnostic.error == Gfn2PlanSchemaError::kAliasedRange);
-  CHECK(diagnostic.field == gpuxtb::detail::Gfn2PlanSchemaField::kAtomOffsets);
+  CHECK(diagnostic.field == xtbloom::detail::Gfn2PlanSchemaField::kAtomOffsets);
   CHECK(binding.plan_token == 0u);
   CHECK(validate_gfn2_topology_cuda_async(candidate, aliased_diagnostic, stream) ==
         cudaErrorInvalidValue);
@@ -424,7 +424,7 @@ int test_hostile_device_topology() {
   CUDA_CHECK(bind_gfn2_topology_cuda(candidate, binding, partially_aliased_diagnostic, diagnostic,
                                      stream));
   CHECK(diagnostic.error == Gfn2PlanSchemaError::kAliasedRange);
-  CHECK(diagnostic.field == gpuxtb::detail::Gfn2PlanSchemaField::kAtomOffsets);
+  CHECK(diagnostic.field == xtbloom::detail::Gfn2PlanSchemaField::kAtomOffsets);
   CUDA_CHECK(device.atom_offsets.copy_to(offsets_after, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(offsets_after == offsets_before);
@@ -524,7 +524,7 @@ int test_device_provenance() {
                                                 kBatchSize, binding, generation_diagnostic,
                                                 diagnostic, stream));
   CHECK(diagnostic.error == Gfn2PlanSchemaError::kAliasedRange);
-  CHECK(diagnostic.field == gpuxtb::detail::Gfn2PlanSchemaField::kSystemGeometryGenerations);
+  CHECK(diagnostic.field == xtbloom::detail::Gfn2PlanSchemaField::kSystemGeometryGenerations);
   CHECK(binding.plan_token == 0u);
   CHECK(validate_gfn2_geometry_provenance_cuda_async(topology, candidate, kGeneration, active.get(),
                                                      kBatchSize, generation_diagnostic,
@@ -552,7 +552,7 @@ int test_device_provenance() {
                                                 kBatchSize, binding, active_diagnostic, diagnostic,
                                                 stream));
   CHECK(diagnostic.error == Gfn2PlanSchemaError::kAliasedRange);
-  CHECK(diagnostic.field == gpuxtb::detail::Gfn2PlanSchemaField::kActiveMask);
+  CHECK(diagnostic.field == xtbloom::detail::Gfn2PlanSchemaField::kActiveMask);
   CHECK(validate_gfn2_geometry_provenance_cuda_async(topology, candidate, kGeneration, active.get(),
                                                      kBatchSize, active_diagnostic,
                                                      stream) == cudaErrorInvalidValue);
@@ -719,18 +719,18 @@ int test_device_provenance() {
 }
 
 int test_device_projections() {
-  static_assert(std::is_trivially_copyable_v<gpuxtb::detail::Gfn2AtomProjectionView>);
-  static_assert(std::is_standard_layout_v<gpuxtb::detail::Gfn2AtomProjectionView>);
-  static_assert(std::is_trivially_copyable_v<gpuxtb::detail::Gfn2ShellOwnershipProjectionView>);
-  static_assert(std::is_standard_layout_v<gpuxtb::detail::Gfn2ShellOwnershipProjectionView>);
-  static_assert(std::is_trivially_copyable_v<gpuxtb::detail::Gfn2AOMatrixProjectionView>);
-  static_assert(std::is_standard_layout_v<gpuxtb::detail::Gfn2AOMatrixProjectionView>);
-  static_assert(std::is_trivially_copyable_v<gpuxtb::detail::Gfn2PackedAllPairProjectionView>);
-  static_assert(std::is_standard_layout_v<gpuxtb::detail::Gfn2PackedAllPairProjectionView>);
-  static_assert(std::is_trivially_copyable_v<gpuxtb::detail::Gfn2AOBucketProjectionView>);
-  static_assert(std::is_standard_layout_v<gpuxtb::detail::Gfn2AOBucketProjectionView>);
-  static_assert(std::is_trivially_copyable_v<gpuxtb::detail::Gfn2ElementIdentityProjectionView>);
-  static_assert(std::is_standard_layout_v<gpuxtb::detail::Gfn2ElementIdentityProjectionView>);
+  static_assert(std::is_trivially_copyable_v<xtbloom::detail::Gfn2AtomProjectionView>);
+  static_assert(std::is_standard_layout_v<xtbloom::detail::Gfn2AtomProjectionView>);
+  static_assert(std::is_trivially_copyable_v<xtbloom::detail::Gfn2ShellOwnershipProjectionView>);
+  static_assert(std::is_standard_layout_v<xtbloom::detail::Gfn2ShellOwnershipProjectionView>);
+  static_assert(std::is_trivially_copyable_v<xtbloom::detail::Gfn2AOMatrixProjectionView>);
+  static_assert(std::is_standard_layout_v<xtbloom::detail::Gfn2AOMatrixProjectionView>);
+  static_assert(std::is_trivially_copyable_v<xtbloom::detail::Gfn2PackedAllPairProjectionView>);
+  static_assert(std::is_standard_layout_v<xtbloom::detail::Gfn2PackedAllPairProjectionView>);
+  static_assert(std::is_trivially_copyable_v<xtbloom::detail::Gfn2AOBucketProjectionView>);
+  static_assert(std::is_standard_layout_v<xtbloom::detail::Gfn2AOBucketProjectionView>);
+  static_assert(std::is_trivially_copyable_v<xtbloom::detail::Gfn2ElementIdentityProjectionView>);
+  static_assert(std::is_standard_layout_v<xtbloom::detail::Gfn2ElementIdentityProjectionView>);
 
   const HostCase host = make_case(8);
   cudaStream_t stream = nullptr;
@@ -745,26 +745,26 @@ int test_device_projections() {
       bind_gfn2_topology_cuda(candidate, binding, device.diagnostic.get(), diagnostic, stream));
   CHECK(diagnostic.error == Gfn2PlanSchemaError::kSuccess);
 
-  using gpuxtb::detail::cuda::bind_gfn2_ao_bucket_projection_cuda;
-  using gpuxtb::detail::cuda::bind_gfn2_ao_matrix_projection_cuda;
-  using gpuxtb::detail::cuda::bind_gfn2_atom_projection_cuda;
-  using gpuxtb::detail::cuda::bind_gfn2_element_identity_projection_cuda;
-  using gpuxtb::detail::cuda::bind_gfn2_packed_all_pair_projection_cuda;
-  using gpuxtb::detail::cuda::bind_gfn2_shell_ownership_projection_cuda;
+  using xtbloom::detail::cuda::bind_gfn2_ao_bucket_projection_cuda;
+  using xtbloom::detail::cuda::bind_gfn2_ao_matrix_projection_cuda;
+  using xtbloom::detail::cuda::bind_gfn2_atom_projection_cuda;
+  using xtbloom::detail::cuda::bind_gfn2_element_identity_projection_cuda;
+  using xtbloom::detail::cuda::bind_gfn2_packed_all_pair_projection_cuda;
+  using xtbloom::detail::cuda::bind_gfn2_shell_ownership_projection_cuda;
 
-  gpuxtb::detail::Gfn2AtomProjectionView atom{};
+  xtbloom::detail::Gfn2AtomProjectionView atom{};
   CUDA_CHECK(bind_gfn2_atom_projection_cuda(binding, atom));
   CHECK(atom.plan_token == kPlanToken);
   CHECK(atom.atom_offset_count == binding.atom_offset_count);
   CHECK(atom.atom_offsets == binding.atom_offsets);
 
-  gpuxtb::detail::Gfn2ShellOwnershipProjectionView shell{};
+  xtbloom::detail::Gfn2ShellOwnershipProjectionView shell{};
   CUDA_CHECK(bind_gfn2_shell_ownership_projection_cuda(binding, shell));
   CHECK(shell.batch_shell_offsets == binding.batch_shell_offsets);
   CHECK(shell.atom_shell_offsets == binding.atom_shell_offsets);
   CHECK(shell.shell_to_atom == binding.shell_to_atom);
 
-  gpuxtb::detail::Gfn2AOMatrixProjectionView ao{};
+  xtbloom::detail::Gfn2AOMatrixProjectionView ao{};
   CUDA_CHECK(bind_gfn2_ao_matrix_projection_cuda(binding, ao));
   CHECK(ao.batch_orbital_offsets == binding.batch_orbital_offsets);
   CHECK(ao.matrix_offsets == binding.matrix_offsets);
@@ -772,12 +772,12 @@ int test_device_projections() {
   CHECK(ao.orbital_to_shell == binding.orbital_to_shell);
   CHECK(ao.orbital_to_atom == binding.orbital_to_atom);
 
-  gpuxtb::detail::Gfn2PackedAllPairProjectionView pairs{};
+  xtbloom::detail::Gfn2PackedAllPairProjectionView pairs{};
   CUDA_CHECK(bind_gfn2_packed_all_pair_projection_cuda(binding, pairs));
   CHECK(pairs.pair_offsets == binding.pair_offsets);
   CHECK(pairs.total_pairs == binding.total_pairs);
 
-  gpuxtb::detail::Gfn2AOBucketProjectionView buckets{};
+  xtbloom::detail::Gfn2AOBucketProjectionView buckets{};
   CUDA_CHECK(bind_gfn2_ao_bucket_projection_cuda(binding, buckets));
   CHECK(buckets.bucket_offsets == binding.bucket_offsets);
   CHECK(buckets.bucket_systems == binding.bucket_systems);
@@ -785,28 +785,28 @@ int test_device_projections() {
 
   /* Element identity: host projector + uploaded device atomic numbers. */
   const std::vector<std::int32_t> atomic_numbers = {1, 6, 7, 8, 1, 6, 7, 8};
-  gpuxtb::detail::Gfn2ElementIdentityProjectionView host_element{};
-  CHECK(gpuxtb::detail::project_gfn2_element_identity_projection_host(
+  xtbloom::detail::Gfn2ElementIdentityProjectionView host_element{};
+  CHECK(xtbloom::detail::project_gfn2_element_identity_projection_host(
             atomic_numbers.data(), static_cast<std::int64_t>(atomic_numbers.size()), kPlanToken,
             host_element)
-            .error == gpuxtb::detail::Gfn2PlanSchemaError::kSuccess);
+            .error == xtbloom::detail::Gfn2PlanSchemaError::kSuccess);
   DeviceBuffer<std::int32_t> device_atomic_numbers;
   CUDA_CHECK(device_atomic_numbers.copy_from(atomic_numbers, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  gpuxtb::detail::Gfn2ElementIdentityProjectionView device_element{};
+  xtbloom::detail::Gfn2ElementIdentityProjectionView device_element{};
   CUDA_CHECK(bind_gfn2_element_identity_projection_cuda(host_element, device_atomic_numbers.get(),
                                                         device_element));
-  CHECK(device_element.memory_space == gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice);
+  CHECK(device_element.memory_space == xtbloom::detail::Gfn2PlanMemorySpace::kCudaDevice);
   CHECK(device_element.plan_token == kPlanToken);
   CHECK(device_element.element_fingerprint == host_element.element_fingerprint);
   CHECK(device_element.atomic_numbers == device_atomic_numbers.get());
 
   /* Host projection of a device master and cross-memory bindings fail closed. */
-  gpuxtb::detail::Gfn2AtomProjectionView host_atom{};
-  CHECK(gpuxtb::detail::project_gfn2_atom_projection_host(binding, host_atom).error !=
-        gpuxtb::detail::Gfn2PlanSchemaError::kSuccess);
+  xtbloom::detail::Gfn2AtomProjectionView host_atom{};
+  CHECK(xtbloom::detail::project_gfn2_atom_projection_host(binding, host_atom).error !=
+        xtbloom::detail::Gfn2PlanSchemaError::kSuccess);
   CHECK(host_atom.plan_token == 0u && host_atom.atom_offsets == nullptr);
-  gpuxtb::detail::Gfn2AtomProjectionView wrong_binding{};
+  xtbloom::detail::Gfn2AtomProjectionView wrong_binding{};
   CUDA_CHECK(bind_gfn2_atom_projection_cuda(binding, wrong_binding));
   CHECK(wrong_binding.plan_token == kPlanToken);
 

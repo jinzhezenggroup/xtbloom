@@ -36,7 +36,7 @@ function requireApi(OCL) {
 
 /* Convert one ordinary closed-shell SMILES into a fully explicit, MMFF94-
  * relaxed XYZ geometry in angstrom. Radical SMILES are rejected rather than
- * guessing gpuxtb's unpaired-electron input. */
+ * guessing xtbloom's unpaired-electron input. */
 export function smilesToGeometry(OCL, smiles, options = {}) {
   requireApi(OCL);
   const trimmed = String(smiles || "").trim();

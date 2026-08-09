@@ -1,15 +1,15 @@
-#ifndef GPUXTB_RUNTIME_GFN2_CPU_EXECUTION_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_RUNTIME_GFN2_CPU_EXECUTION_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_RUNTIME_GFN2_CPU_EXECUTION_HPP
+#define XTBLOOM_RUNTIME_GFN2_CPU_EXECUTION_HPP
 
 #include <cstdint>
 #include <memory>
 #include <string>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 /*
  * Context-owned cache for restricted host GFN2 execution.
@@ -39,15 +39,15 @@ class Gfn2CpuExecutionCache {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 
-  friend gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
-                                                     const gpuxtb_batch_t& batch,
-                                                     const gpuxtb_compute_options_t& options,
-                                                     gpuxtb_batch_result_t& result,
-                                                     std::string& error);
-  friend gpuxtb_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
-                                                     const gpuxtb_batch_t& batch,
-                                                     const gpuxtb_compute_options_t& options,
-                                                     bool& reused, std::string& error);
+  friend xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
+                                                      const xtbloom_batch_t& batch,
+                                                      const xtbloom_compute_options_t& options,
+                                                      xtbloom_batch_result_t& result,
+                                                      std::string& error);
+  friend xtbloom_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
+                                                      const xtbloom_batch_t& batch,
+                                                      const xtbloom_compute_options_t& options,
+                                                      bool& reused, std::string& error);
   friend std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(
       Gfn2CpuExecutionCache& cache) noexcept;
 };
@@ -60,23 +60,23 @@ class Gfn2CpuExecutionCache {
  * call. Requested outputs and result flags are committed only after every
  * batch member reaches either a successful or documented terminal state.
  */
-gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
-                                            const gpuxtb_batch_t& batch,
-                                            const gpuxtb_compute_options_t& options,
-                                            gpuxtb_batch_result_t& result, std::string& error);
+xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
+                                             const xtbloom_batch_t& batch,
+                                             const xtbloom_compute_options_t& options,
+                                             xtbloom_batch_result_t& result, std::string& error);
 
 /*
  * Allocation-permitted fixed-topology setup for a public plan.
  *
  * Stages and validates the request and builds (or reuses) the per-system
  * SystemExecution objects for the requested identity, leaving the cache warm
- * so the following gpuxtb_plan_compute runs allocation-free. `reused` is true
+ * so the following xtbloom_plan_compute runs allocation-free. `reused` is true
  * when the cache already held an identical identity and no system was rebuilt.
  */
-gpuxtb_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
-                                            const gpuxtb_batch_t& batch,
-                                            const gpuxtb_compute_options_t& options, bool& reused,
-                                            std::string& error);
+xtbloom_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
+                                             const xtbloom_batch_t& batch,
+                                             const xtbloom_compute_options_t& options, bool& reused,
+                                             std::string& error);
 
 /*
  * Topology- and spin-dependent persistent host reservation (per-system
@@ -87,6 +87,6 @@ gpuxtb_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
  */
 std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache) noexcept;
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail
 
-#endif  // GPUXTB_RUNTIME_GFN2_CPU_EXECUTION_HPP
+#endif  // XTBLOOM_RUNTIME_GFN2_CPU_EXECUTION_HPP

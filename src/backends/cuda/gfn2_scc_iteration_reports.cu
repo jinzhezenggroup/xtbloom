@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cstddef>
 #include <cstdint>
@@ -7,7 +7,7 @@
 
 #include "backends/cuda/gfn2_scc_iteration_reports.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 using BindingDiagnostic = Gfn2SccIterationBindingDiagnostic;
@@ -82,7 +82,7 @@ struct ReportSpec {
   Gfn2SccStageCodeFormat format = Gfn2SccStageCodeFormat::kUint32Error;
   Gfn2SccStageDeviceCodeRole role = Gfn2SccStageDeviceCodeRole::kMixedFirstError;
   std::uint64_t peer_mask = 0u;
-  gpuxtb_status_t peer_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t peer_status = XTBLOOM_STATUS_INTERNAL_ERROR;
 };
 
 bool report_spec(Gfn2SccStageId stage, ReportSpec& spec) noexcept {
@@ -126,15 +126,15 @@ bool report_spec(Gfn2SccStageId stage, ReportSpec& spec) noexcept {
       return true;
     case Gfn2SccStageId::kEigensolver:
       spec.peer_mask = 0x3e06u;
-      spec.peer_status = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+      spec.peer_status = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
       return true;
     case Gfn2SccStageId::kOccupations:
       spec.peer_mask = 0x3feu;
-      spec.peer_status = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+      spec.peer_status = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
       return true;
     case Gfn2SccStageId::kDensity:
       spec.peer_mask = 0x7feu;
-      spec.peer_status = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+      spec.peer_status = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
       return true;
     case Gfn2SccStageId::kMulliken:
       spec.peer_mask = 0x1feu;
@@ -173,7 +173,7 @@ bool report_spec(Gfn2SccStageId stage, ReportSpec& spec) noexcept {
       spec.peer_mask = 0x1ffeu;
       return true;
     case Gfn2SccStageId::kMixer:
-      spec.format = Gfn2SccStageCodeFormat::kGpuxtbStatus;
+      spec.format = Gfn2SccStageCodeFormat::kXTBloomStatus;
       spec.peer_mask = 0x40u;
       return true;
     case Gfn2SccStageId::kStatePublication:
@@ -648,7 +648,7 @@ Gfn2SccIterationBindingDiagnostic project_gfn2_scc_iteration_reports_cuda(
                          candidate.workspace);
 
     const bool mixer = report.stage == Gfn2SccStageId::kMixer;
-    const std::size_t system_alignment = mixer ? alignof(gpuxtb_status_t) : alignof(std::uint32_t);
+    const std::size_t system_alignment = mixer ? alignof(xtbloom_status_t) : alignof(std::uint32_t);
     if (report.system_codes == nullptr || (!mixer && report.device_error == nullptr) ||
         report.stage_sequence_active == nullptr) {
       return fail(BindingError::kNullPointer, BindingField::kStageReports, index);
@@ -680,4 +680,4 @@ Gfn2SccIterationBindingDiagnostic build_gfn2_scc_iteration_report_binding_cuda(
                                       projected.workspace, binding);
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

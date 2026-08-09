@@ -1,13 +1,13 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_PARAMETERS_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_PARAMETERS_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_PARAMETERS_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_PARAMETERS_CUH
 
 #include <cstddef>
 
 #include "data/parameters/gfn2.hpp"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::size_t kPairOverrideStorage =
     parameters::gfn2::kPairScaleOverrides.size() == 0u
@@ -23,6 +23,6 @@ extern __device__ __constant__
 extern __device__ __constant__
     parameters::gfn2::PairScaleOverride g_gfn2_pair_overrides[kPairOverrideStorage];
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_PARAMETERS_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_PARAMETERS_CUH

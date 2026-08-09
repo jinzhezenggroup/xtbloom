@@ -24,31 +24,31 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::evaluate_gfn2_aes2_scc_energy_cuda;
-using gpuxtb::detail::cuda::evaluate_gfn2_aes2_scc_potential_cuda;
-using gpuxtb::detail::cuda::evaluate_gfn2_es2_scc_energy_cuda;
-using gpuxtb::detail::cuda::evaluate_gfn2_es2_scc_potential_cuda;
-using gpuxtb::detail::cuda::evaluate_gfn2_es3_scc_energy_cuda;
-using gpuxtb::detail::cuda::evaluate_gfn2_es3_scc_potential_cuda;
-using gpuxtb::detail::cuda::evaluate_gfn2_external_point_charge_scc_energy_cuda;
-using gpuxtb::detail::cuda::Gfn2AES2DeviceBatch;
-using gpuxtb::detail::cuda::Gfn2AES2DeviceCache;
-using gpuxtb::detail::cuda::Gfn2AES2DeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2ES2DeviceBatch;
-using gpuxtb::detail::cuda::Gfn2ES2DeviceCache;
-using gpuxtb::detail::cuda::Gfn2ES2DeviceError;
-using gpuxtb::detail::cuda::Gfn2ES2DeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2ES3DeviceBatch;
-using gpuxtb::detail::cuda::Gfn2ES3DeviceError;
-using gpuxtb::detail::cuda::Gfn2ExternalPointChargeDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2ExternalPointChargeDeviceCache;
-using gpuxtb::detail::cuda::Gfn2ExternalPointChargeDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
-using gpuxtb::detail::cuda::reset_gfn2_aes2_device_errors_cuda;
-using gpuxtb::detail::cuda::reset_gfn2_es2_scc_errors_cuda;
-using gpuxtb::detail::cuda::reset_gfn2_es3_scc_errors_cuda;
-using gpuxtb::detail::cuda::reset_gfn2_external_point_charge_scc_errors_cuda;
-using gpuxtb::detail::cuda::update_gfn2_external_point_charge_scc_potential_cache_cuda;
+using xtbloom::detail::cuda::evaluate_gfn2_aes2_scc_energy_cuda;
+using xtbloom::detail::cuda::evaluate_gfn2_aes2_scc_potential_cuda;
+using xtbloom::detail::cuda::evaluate_gfn2_es2_scc_energy_cuda;
+using xtbloom::detail::cuda::evaluate_gfn2_es2_scc_potential_cuda;
+using xtbloom::detail::cuda::evaluate_gfn2_es3_scc_energy_cuda;
+using xtbloom::detail::cuda::evaluate_gfn2_es3_scc_potential_cuda;
+using xtbloom::detail::cuda::evaluate_gfn2_external_point_charge_scc_energy_cuda;
+using xtbloom::detail::cuda::Gfn2AES2DeviceBatch;
+using xtbloom::detail::cuda::Gfn2AES2DeviceCache;
+using xtbloom::detail::cuda::Gfn2AES2DeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2ES2DeviceBatch;
+using xtbloom::detail::cuda::Gfn2ES2DeviceCache;
+using xtbloom::detail::cuda::Gfn2ES2DeviceError;
+using xtbloom::detail::cuda::Gfn2ES2DeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2ES3DeviceBatch;
+using xtbloom::detail::cuda::Gfn2ES3DeviceError;
+using xtbloom::detail::cuda::Gfn2ExternalPointChargeDeviceBatch;
+using xtbloom::detail::cuda::Gfn2ExternalPointChargeDeviceCache;
+using xtbloom::detail::cuda::Gfn2ExternalPointChargeDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceActivity;
+using xtbloom::detail::cuda::reset_gfn2_aes2_device_errors_cuda;
+using xtbloom::detail::cuda::reset_gfn2_es2_scc_errors_cuda;
+using xtbloom::detail::cuda::reset_gfn2_es3_scc_errors_cuda;
+using xtbloom::detail::cuda::reset_gfn2_external_point_charge_scc_errors_cuda;
+using xtbloom::detail::cuda::update_gfn2_external_point_charge_scc_potential_cache_cuda;
 
 constexpr std::uint64_t kPlanToken = 0x92e520260803ULL;
 constexpr std::uint64_t kGeometryGeneration = 17u;
@@ -861,7 +861,7 @@ int test_aes2_batches_inactive_and_graph() {
       /* Rejected host metadata must not reach the total_atoms*10 element-count expression. */
       Gfn2AES2DeviceBatch overflowing_batch = batch;
       overflowing_batch.total_atoms = std::numeric_limits<std::int64_t>::max() /
-                                          gpuxtb::detail::cuda::kGfn2AES2PotentialElementsPerAtom +
+                                          xtbloom::detail::cuda::kGfn2AES2PotentialElementsPerAtom +
                                       1;
       overflowing_batch.dipole_kernel_count = overflowing_batch.total_atoms;
       overflowing_batch.quadrupole_kernel_count = overflowing_batch.total_atoms;
@@ -1305,7 +1305,7 @@ int test_point_charge_batches_inactive_and_graph() {
       CUDA_CHECK(cudaStreamSynchronize(stream));
       CHECK(plan[0] ==
             static_cast<std::uint32_t>(
-                gpuxtb::detail::cuda::Gfn2ExternalPointChargeDeviceError::kCacheMismatch));
+                xtbloom::detail::cuda::Gfn2ExternalPointChargeDeviceError::kCacheMismatch));
     }
     CUDA_CHECK(cudaStreamDestroy(stream));
   }

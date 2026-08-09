@@ -1,0 +1,6 @@
+XTBLOOM_0.1 {
+  global:
+    xtbloom_*;
+  local:
+    *;
+};

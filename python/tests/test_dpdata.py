@@ -1,4 +1,4 @@
-"""Tests for the dpdata driver plugin (``gpuxtb.dpdata``)."""
+"""Tests for the dpdata driver plugin (``xtbloom.dpdata``)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import _cases  # noqa: E402
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from gpuxtb.interface import Structure
+    from xtbloom.interface import Structure
 
 _BOHR = 0.529177210903
 _HARTREE_TO_EV = 27.211386245988
@@ -51,27 +51,27 @@ def _case_data_dict(
 
 
 def _ensure_driver_registered() -> type:
-    """Load and return the registered gpuxtb dpdata driver class."""
+    """Load and return the registered xTBloom dpdata driver class."""
     # The entry point is registered after a normal wheel install; for a source
     # checkout we register the module explicitly, mirroring dpdata's loader.
-    import gpuxtb.dpdata as _  # noqa: F401
+    import xtbloom.dpdata as _  # noqa: F401
     from dpdata.driver import Driver
 
-    assert "gpuxtb" in Driver.get_drivers()
-    return Driver.get_driver("gpuxtb")
+    assert "xtbloom" in Driver.get_drivers()
+    return Driver.get_driver("xtbloom")
 
 
 def test_driver_registered() -> None:
     """Expose the plugin through dpdata's driver registry."""
     driver_class = _ensure_driver_registered()
-    assert driver_class.__module__ == "gpuxtb.dpdata"
+    assert driver_class.__module__ == "xtbloom.dpdata"
 
 
 def test_label_energies_match_golden() -> None:
     """Match dpdata labels to golden energies and forces in dpdata units."""
     _ensure_driver_registered()
     system = dpdata.System(data=_case_data_dict("ketene"))
-    labeled = system.predict(driver="gpuxtb")
+    labeled = system.predict(driver="xtbloom")
     golden = _cases.golden(_cases.case_by_id("ketene"))
     tolerance = _cases.tolerances()
     assert labeled.data["energies"][0] == pytest.approx(
@@ -90,7 +90,7 @@ def test_label_distinct_frames() -> None:
     """Label every distinct frame in one dpdata system."""
     _ensure_driver_registered()
     system = dpdata.System(data=_case_data_dict("ketene", nframes=2, distort=True))
-    labeled = system.predict(driver="gpuxtb")
+    labeled = system.predict(driver="xtbloom")
     assert labeled.get_nframes() == 2
     assert labeled.data["energies"].shape == (2,)
     assert labeled.data["forces"].shape == (2, 5, 3)
@@ -101,7 +101,7 @@ def test_driver_charge() -> None:
     """Forward a fixed charged-system state through the dpdata driver."""
     _ensure_driver_registered()
     system = dpdata.System(data=_case_data_dict("h3_plus"))
-    labeled = system.predict(driver="gpuxtb", charge=1)
+    labeled = system.predict(driver="xtbloom", charge=1)
     golden = _cases.golden(_cases.case_by_id("h3_plus"))
     tolerance = _cases.tolerances()
     assert labeled.data["energies"][0] == pytest.approx(
@@ -114,7 +114,7 @@ def test_driver_multiplicity() -> None:
     """Forward spin multiplicity through the dpdata driver."""
     _ensure_driver_registered()
     system = dpdata.System(data=_case_data_dict("oh_radical"))
-    labeled = system.predict(driver="gpuxtb", multiplicity=2, spin_channels=1)
+    labeled = system.predict(driver="xtbloom", multiplicity=2, spin_channels=1)
     golden = _cases.golden(_cases.case_by_id("oh_radical"))
     tolerance = _cases.tolerances()
     assert labeled.data["energies"][0] == pytest.approx(
@@ -129,7 +129,7 @@ def test_driver_reads_per_frame_multiplicity_without_forcing_uhf_zero() -> None:
     data = _case_data_dict("oh_radical")
     data["multiplicity"] = np.array([2], dtype=np.int32)
     system = dpdata.System(data=data)
-    labeled = system.predict(driver="gpuxtb", spin_channels=1)
+    labeled = system.predict(driver="xtbloom", spin_channels=1)
     golden = _cases.golden(_cases.case_by_id("oh_radical"))
     tolerance = _cases.tolerances()
     assert labeled.data["energies"][0] == pytest.approx(
@@ -141,46 +141,46 @@ def test_driver_reads_per_frame_multiplicity_without_forcing_uhf_zero() -> None:
 def test_driver_raises_instead_of_publishing_failed_frame_nans() -> None:
     """Raise instead of publishing NaNs for a failed dpdata frame."""
     _ensure_driver_registered()
-    from gpuxtb.exceptions import GPUxtbRuntimeError
+    from xtbloom.exceptions import XTBloomRuntimeError
 
     system = dpdata.System(data=_case_data_dict("sif5_minus"))
-    with pytest.raises(GPUxtbRuntimeError, match="failed systems"):
-        system.predict(driver="gpuxtb", charge=-1, backend="cpu", max_scc_iterations=1)
+    with pytest.raises(XTBloomRuntimeError, match="failed systems"):
+        system.predict(driver="xtbloom", charge=-1, backend="cpu", max_scc_iterations=1)
 
 
 def test_driver_rejects_periodic() -> None:
     """Reject periodic dpdata systems unsupported by the molecular ABI."""
     _ensure_driver_registered()
-    from gpuxtb.exceptions import GPUxtbNotSupportedError
+    from xtbloom.exceptions import XTBloomNotSupportedError
 
     data = _case_data_dict("ketene")
     data["nopbc"] = False
     system = dpdata.System(data=data)
-    with pytest.raises(GPUxtbNotSupportedError):
-        system.predict(driver="gpuxtb")
+    with pytest.raises(XTBloomNotSupportedError):
+        system.predict(driver="xtbloom")
 
 
 @pytest.mark.parametrize("coords", [None, np.array(1.0)])
 def test_driver_rejects_malformed_scalar_coordinates(coords: object) -> None:
     """Report the public coordinate-shape error for scalar-like inputs."""
-    from gpuxtb.dpdata import GPUxtbDriver
-    from gpuxtb.exceptions import GPUxtbValueError
+    from xtbloom.dpdata import XTBloomDriver
+    from xtbloom.exceptions import XTBloomValueError
 
     data = _case_data_dict("ketene")
     data["coords"] = coords
     with pytest.raises(
-        GPUxtbValueError, match=r"coords must have shape \(nframes, natoms, 3\)"
+        XTBloomValueError, match=r"coords must have shape \(nframes, natoms, 3\)"
     ):
-        GPUxtbDriver().label(data)
+        XTBloomDriver().label(data)
 
 
 def _ensure_minimizer_registered() -> type:
-    """Load and return the registered gpuxtb dpdata minimizer class."""
-    import gpuxtb.dpdata as _  # noqa: F401
+    """Load and return the registered xTBloom dpdata minimizer class."""
+    import xtbloom.dpdata as _  # noqa: F401
     from dpdata.driver import Minimizer
 
-    assert "gpuxtb" in Minimizer.get_minimizers()
-    return Minimizer.get_minimizer("gpuxtb")
+    assert "xtbloom" in Minimizer.get_minimizers()
+    return Minimizer.get_minimizer("xtbloom")
 
 
 def _distorted_data(case_id: str, nframes: int = 1, displacement: float = 0.3) -> dict:
@@ -229,28 +229,28 @@ def _patch_minimizer_calculator(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("gpuxtb.dpdata.BatchCalculator", FakeBatchCalculator)
+    monkeypatch.setattr("xtbloom.dpdata.BatchCalculator", FakeBatchCalculator)
     return calls
 
 
 def test_minimizer_registered() -> None:
     """Expose the minimizer through dpdata's minimizer registry."""
     minimizer_class = _ensure_minimizer_registered()
-    assert minimizer_class.__module__ == "gpuxtb.dpdata"
+    assert minimizer_class.__module__ == "xtbloom.dpdata"
 
 
 def test_minimizer_applies_bounded_first_trial(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Evaluate the bounded initial move instead of repeating the input geometry."""
-    import gpuxtb.dpdata as dpdata_module
+    import xtbloom.dpdata as dpdata_module
 
     calls = _patch_minimizer_calculator(
         monkeypatch, lambda call, _positions: (1.0 - 0.5 * call, 1.0)
     )
     direction = Mock(wraps=dpdata_module.lbfgs_direction)
     monkeypatch.setattr(dpdata_module, "lbfgs_direction", direction)
-    labeled = dpdata_module.GPUxtbMinimizer(max_steps=1).minimize(
+    labeled = dpdata_module.XTBloomMinimizer(max_steps=1).minimize(
         _case_data_dict("oh_radical")
     )
 
@@ -265,7 +265,7 @@ def test_minimizer_reports_accepted_state_at_step_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Do not publish a rejected final trial, even if its force is converged."""
-    from gpuxtb.dpdata import GPUxtbMinimizer
+    from xtbloom.dpdata import XTBloomMinimizer
 
     data = _case_data_dict("oh_radical")
 
@@ -273,7 +273,7 @@ def test_minimizer_reports_accepted_state_at_step_limit(
         return (0.0, 1.0) if call == 0 else (1.0, 0.0)
 
     calls = _patch_minimizer_calculator(monkeypatch, reject_trial)
-    labeled = GPUxtbMinimizer(max_steps=1).minimize(data)
+    labeled = XTBloomMinimizer(max_steps=1).minimize(data)
 
     assert len(calls) == 2
     np.testing.assert_allclose(labeled["coords"], data["coords"])
@@ -287,8 +287,8 @@ def test_minimizer_stops_after_rejection_at_minimum_step(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Turn rejection at the alpha floor into an error instead of an infinite loop."""
-    from gpuxtb.dpdata import GPUxtbMinimizer
-    from gpuxtb.exceptions import GPUxtbRuntimeError
+    from xtbloom.dpdata import XTBloomMinimizer
+    from xtbloom.exceptions import XTBloomRuntimeError
 
     def reject_every_trial(call: int, _positions: np.ndarray) -> tuple[float, float]:
         if call >= 20:
@@ -296,22 +296,22 @@ def test_minimizer_stops_after_rejection_at_minimum_step(
         return (0.0 if call == 0 else 1.0, 1.0)
 
     calls = _patch_minimizer_calculator(monkeypatch, reject_every_trial)
-    with pytest.raises(GPUxtbRuntimeError, match="line search stalled"):
-        GPUxtbMinimizer().minimize(_case_data_dict("oh_radical"))
+    with pytest.raises(XTBloomRuntimeError, match="line search stalled"):
+        XTBloomMinimizer().minimize(_case_data_dict("oh_radical"))
 
     assert 2 < len(calls) < 20
 
 
 def test_system_minimize_converges_and_lowers_energy() -> None:
     """Relax a distorted frame below fmax while lowering the energy."""
-    from gpuxtb.dpdata import GPUxtbDriver
+    from xtbloom.dpdata import XTBloomDriver
 
     _ensure_minimizer_registered()
     system = dpdata.System(data=_distorted_data("ketene"))
-    initial = system.predict(driver="gpuxtb", backend="cpu")
+    initial = system.predict(driver="xtbloom", backend="cpu")
     labeled = system.minimize(
-        minimizer="gpuxtb",
-        driver=GPUxtbDriver(backend="cpu"),
+        minimizer="xtbloom",
+        driver=XTBloomDriver(backend="cpu"),
         fmax=5e-3,
         max_steps=200,
     )
@@ -327,13 +327,13 @@ def test_system_minimize_converges_and_lowers_energy() -> None:
 
 def test_minimize_relaxes_every_frame_in_one_batch() -> None:
     """All frames of a multi-frame system reach fmax in one batch run."""
-    from gpuxtb.dpdata import GPUxtbDriver
+    from xtbloom.dpdata import XTBloomDriver
 
     _ensure_minimizer_registered()
     system = dpdata.System(data=_distorted_data("ketene", nframes=3))
     labeled = system.minimize(
-        minimizer="gpuxtb",
-        driver=GPUxtbDriver(backend="cpu"),
+        minimizer="xtbloom",
+        driver=XTBloomDriver(backend="cpu"),
         fmax=5e-3,
         max_steps=300,
     )
@@ -351,27 +351,27 @@ def test_minimize_relaxes_every_frame_in_one_batch() -> None:
 
 def test_minimizer_raises_for_failed_frames() -> None:
     """A frame that fails SCC raises instead of publishing bogus labels."""
-    from gpuxtb.dpdata import GPUxtbDriver
-    from gpuxtb.exceptions import GPUxtbRuntimeError
+    from xtbloom.dpdata import XTBloomDriver
+    from xtbloom.exceptions import XTBloomRuntimeError
 
     _ensure_minimizer_registered()
     system = dpdata.System(data=_case_data_dict("sif5_minus"))
-    with pytest.raises(GPUxtbRuntimeError, match="failed systems"):
+    with pytest.raises(XTBloomRuntimeError, match="failed systems"):
         system.minimize(
-            minimizer="gpuxtb",
-            driver=GPUxtbDriver(backend="cpu", charge=-1, max_scc_iterations=1),
+            minimizer="xtbloom",
+            driver=XTBloomDriver(backend="cpu", charge=-1, max_scc_iterations=1),
             max_steps=1,
         )
 
 
 def test_minimizer_rejects_periodic() -> None:
     """Reject periodic dpdata systems unsupported by the molecular ABI."""
-    from gpuxtb.dpdata import GPUxtbDriver
-    from gpuxtb.exceptions import GPUxtbNotSupportedError
+    from xtbloom.dpdata import XTBloomDriver
+    from xtbloom.exceptions import XTBloomNotSupportedError
 
     _ensure_minimizer_registered()
     data = _distorted_data("ketene")
     data["nopbc"] = False
     system = dpdata.System(data=data)
-    with pytest.raises(GPUxtbNotSupportedError):
-        system.minimize(minimizer="gpuxtb", driver=GPUxtbDriver(backend="cpu"))
+    with pytest.raises(XTBloomNotSupportedError):
+        system.minimize(minimizer="xtbloom", driver=XTBloomDriver(backend="cpu"))

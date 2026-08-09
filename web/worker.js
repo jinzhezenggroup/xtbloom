@@ -1,6 +1,6 @@
-/* gpuxtb web demo worker.
+/* xtbloom web demo worker.
  *
- * The target-width module (gpuxtb + web adapter + preloaded LAPACK side module)
+ * The target-width module (xtbloom + web adapter + preloaded LAPACK side module)
  * runs here, so the long synchronous calls (single-point and, especially,
  * the multi-iteration geometry optimization) never block the UI thread.
  *
@@ -10,7 +10,7 @@
  *   main -> worker {type:"call", id, cmd: "compute"|"optimize", args: [...]}
  *   worker -> main {type:"result", id, ok, raw?: string, error?: string}
  */
-import createGpuxTbModule from "./gpuxtb_web.js";
+import createXTBloomModule from "./xtbloom_web.js";
 import { copyFloat64FromMemory } from "./app_helpers.js";
 
 let Module = null;
@@ -27,7 +27,7 @@ function ensureStepCallback() {
       const coords = copyFloat64FromMemory(mem, ptr, natoms * 3);
       if (onStep) onStep(iter, natoms, coords, energy, fmax);
     }, "viipdd");
-    Module.ccall("gpuxtb_web_set_optimize_step_cb", "void", ["pointer"], [stepFn]);
+    Module.ccall("xtbloom_web_set_optimize_step_cb", "void", ["pointer"], [stepFn]);
   } catch (err) {
     stepFn = null; /* animation is optional; core optimize still works */
   }
@@ -42,8 +42,8 @@ self.onmessage = async (event) => {
       // pass those bytes in so the glue does not fetch it again. The small
       // .data payload (preloaded LAPACK side module in the virtual FS) is
       // fetched by the glue itself.
-      Module = await createGpuxTbModule({ wasmBinary: msg.wasmBinary });
-      const version = Module.ccall("gpuxtb_web_version", "string", [], []);
+      Module = await createXTBloomModule({ wasmBinary: msg.wasmBinary });
+      const version = Module.ccall("xtbloom_web_version", "string", [], []);
       self.postMessage({ type: "ready", version });
     } catch (err) {
       self.postMessage({
@@ -68,7 +68,7 @@ self.onmessage = async (event) => {
       let raw;
       if (msg.cmd === "compute") {
         raw = Module.ccall(
-          "gpuxtb_web_compute", "string",
+          "xtbloom_web_compute", "string",
           ["string", "number", "number", "number", "number", "number", "number", "number"],
           msg.args,
         );
@@ -79,7 +79,7 @@ self.onmessage = async (event) => {
         ensureStepCallback();
         try {
           raw = Module.ccall(
-            "gpuxtb_web_optimize", "string",
+            "xtbloom_web_optimize", "string",
             ["string", "number", "number", "number", "number", "number", "number", "number", "number", "number"],
             msg.args,
           );

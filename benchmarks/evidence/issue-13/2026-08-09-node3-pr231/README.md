@@ -6,7 +6,7 @@ interface for distinct conformers of one alkane stoichiometry. The scope is a
 selected high-throughput workload, not a general ranking of xTB-family
 libraries.
 
-All measured JSON/CSV artifacts were produced from clean gpuxtb commit
+All measured JSON/CSV artifacts were produced from clean xTBloom commit
 `c9c0a432947f122d25cb91d0a4624af0a3e761ad` on 2026-08-09. JSON is
 authoritative and retains raw samples, complete final force vectors, per-sample
 output checks, convergence state, build/runtime identity, CPU affinity, and GPU
@@ -21,7 +21,7 @@ warmup and three timed samples. The SVG shows the observed min-max interval.
 
 ### Batch 1, cold electronic state
 
-| atoms | gpuxtb CPU | gpuxtb CUDA | xTB | tblite | dxtb CPU | dxtb CUDA |
+| atoms | xTBloom CPU | xTBloom CUDA | xTB | tblite | dxtb CPU | dxtb CUDA |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 14 | 2.747 | 14.528 | 3.400 | 4.286 | 147.156 | 331.464 |
 | 32 | 11.534 | 41.952 | 7.242 | 12.478 | 199.967 | 380.566 |
@@ -32,31 +32,31 @@ warmup and three timed samples. The SVG shows the observed min-max interval.
 
 ### Batch 128, warm after an untimed seed
 
-gpuxtb, xTB, and tblite continue from persistent electronic state. dxtb has no
+xTBloom, xTB, and tblite continue from persistent electronic state. dxtb has no
 equivalent continuation path in this adapter and resets inside every timed
 call.
 
-| atoms | gpuxtb CPU | gpuxtb CUDA | xTB | tblite | dxtb CPU | dxtb CUDA |
+| atoms | xTBloom CPU | xTBloom CUDA | xTB | tblite | dxtb CPU | dxtb CUDA |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 14 | 16.876 | 28.119 | 236.419 | 152.118 | 1355.310 | 1082.919 |
 | 32 | 52.282 | 60.693 | 527.083 | 476.014 | 3963.157 | 2316.508 |
 | 62 | 181.693 | 181.694 | 1554.560 | 1384.229 | 15003.518 | 7732.841 |
 | 122 | 682.283 | 637.054 | 6129.988 | 4972.355 | unavailable | OOM |
 
-At the common 62-atom coordinate, gpuxtb CPU is 8.56x faster than xTB and
+At the common 62-atom coordinate, xTBloom CPU is 8.56x faster than xTB and
 7.62x faster than tblite per public call.
 
 ### Batch 512, cold electronic state
 
-| atoms | gpuxtb CPU | gpuxtb CUDA | xTB | tblite | dxtb CPU | dxtb CUDA |
+| atoms | xTBloom CPU | xTBloom CUDA | xTB | tblite | dxtb CPU | dxtb CUDA |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 14 | 70.065 | 214.515 | 1415.640 | 1277.834 | 5096.588 | 3869.492 |
 | 32 | 350.098 | 307.800 | 3812.131 | 4648.710 | 25434.360 | 19504.037 |
 | 62 | 1282.293 | 1152.002 | 11474.464 | 13697.168 | 104793.390 | OOM |
 | 122 | 5528.880 | 4035.910 | 44094.246 | 50513.279 | unavailable | OOM |
 
-At 62 atoms, gpuxtb CPU is 8.95x faster than xTB and 10.68x faster than
-tblite. gpuxtb CUDA is 1.11x faster than gpuxtb CPU at that coordinate and
+At 62 atoms, xTBloom CPU is 8.95x faster than xTB and 10.68x faster than
+tblite. xTBloom CUDA is 1.11x faster than xTBloom CPU at that coordinate and
 1.37x faster at 122 atoms.
 
 ## Correctness qualification
@@ -78,8 +78,8 @@ panel-matched tblite references. The largest observed dependent deltas are:
 
 | engine | max energy delta (Eh) | max force-component delta (Eh/bohr) |
 | --- | ---: | ---: |
-| gpuxtb CPU | 4.5711e-7 | 2.9322e-5 |
-| gpuxtb CUDA | 4.5711e-7 | 2.9322e-5 |
+| xTBloom CPU | 4.5711e-7 | 2.9322e-5 |
+| xTBloom CUDA | 4.5711e-7 | 2.9322e-5 |
 | xTB | 1.3808e-4 | 1.0953e-5 |
 | dxtb CPU | 1.2719e-4 | 1.0758e-5 |
 | dxtb CUDA | 1.2719e-4 | 9.8941e-6 |
@@ -95,7 +95,7 @@ The native convergence controls retain each library's public meaning:
 
 | library | controls used |
 | --- | --- |
-| gpuxtb | charge `1e-4`; energy `1e-6`; maximum 500 iterations |
+| xTBloom | charge `1e-4`; energy `1e-6`; maximum 500 iterations |
 | xTB | public accuracy factor `1.0`; maximum 500 iterations |
 | tblite | public accuracy factor `1.0`; maximum 500 iterations |
 | dxtb | `x_atol=1e-4`; `x_atol_max=1e-5`; `f_atol=1e-4`; `force_convergence=true`; maximum 500 iterations |
@@ -108,13 +108,13 @@ accuracy factor. Therefore the earlier PR data produced with
 
 ## Timing boundaries
 
-| panel policy | gpuxtb | xTB/tblite | dxtb |
+| panel policy | xTBloom | xTB/tblite | dxtb |
 | --- | --- | --- | --- |
-| cold | `FRESH` initialization inside timed `gpuxtb_compute` | calculator rebuild outside timing; public single point and getters timed | reset, single point, synchronization, and host tensor publication timed |
+| cold | `FRESH` initialization inside timed `xtbloom_compute` | calculator rebuild outside timing; public single point and getters timed | reset, single point, synchronization, and host tensor publication timed |
 | auto-warm | untimed cold seed, then measured strict `WARM` calls | untimed cold seed, then measured persistent calls | remains cold/reset for every measured call |
 
 Every interval ends with host-visible energy and forces. Python-list
-normalization is outside timing. gpuxtb CUDA uses host descriptors staged by
+normalization is outside timing. xTBloom CUDA uses host descriptors staged by
 the public C ABI; dxtb CUDA retains device tensors. Their CUDA curves expose
 observed behavior but are not used for a direct cross-library CUDA speedup
 claim.
@@ -124,11 +124,11 @@ claim.
 - Host: `node3`, AMD EPYC 7K62, process affinity CPUs 0-15.
 - GPU: NVIDIA GeForce RTX 5090, 32607 MiB, UUID
   `GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8`, driver 580.95.05.
-- CPU budget: 16 gpuxtb workers / reference threads; OpenBLAS and MKL set to
+- CPU budget: 16 xTBloom workers / reference threads; OpenBLAS and MKL set to
   one internal thread to avoid nested oversubscription.
-- gpuxtb CPU library SHA-256:
+- xTBloom CPU library SHA-256:
   `eba5b40dd5cd9c156a3d4eb9a1fdb0da96e0d5beaa668bdeb51694ce67364ad2`.
-- gpuxtb CUDA library SHA-256:
+- xTBloom CUDA library SHA-256:
   `d995eca4a864db2d7f5fd284e9288f6f5cdd6a1436537fb1bd4fe600dfc0c524`;
   CUDA architecture 120, nvcc 12.9.86.
 - xTB 6.7.1 library SHA-256:
@@ -177,7 +177,7 @@ uv run --script ../../../plot_natoms_cross_engine.py "${artifacts[@]}" \
   memory-capacity, or profiler conclusion.
 - Batch sizes 1, 128, and 512; three timed samples per coordinate.
 - xTB/tblite adapters use their per-structure public APIs in a serial loop,
-  while gpuxtb accepts the complete ragged batch in one public call.
+  while xTBloom accepts the complete ragged batch in one public call.
 - The evidence supports the stated coordinates and hardware only; it is not a
   release-wide performance guarantee.
 

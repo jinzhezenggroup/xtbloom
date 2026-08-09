@@ -23,7 +23,7 @@ or an archive will receive.
 
 ```console
 cmake -S . -B build/cpu -G Ninja \
-  -DGPUXTB_ENABLE_CUDA=OFF \
+  -DXTBLOOM_ENABLE_CUDA=OFF \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cpu --parallel
 ctest --test-dir build/cpu -N
@@ -40,7 +40,7 @@ Python bindings must exercise the real bundled native package rather than an
 editable source import:
 
 ```console
-GPUXTB_ENABLE_CUDA=OFF uv sync --no-editable --extra test
+XTBLOOM_ENABLE_CUDA=OFF uv sync --no-editable --extra test
 uv run --no-sync pytest python/tests -q
 ```
 
@@ -65,7 +65,7 @@ Never regenerate a golden merely because implementation output changed.
 
 ## CUDA changes
 
-Configure with `GPUXTB_ENABLE_CUDA=ON`, select the actual compiler and
+Configure with `XTBLOOM_ENABLE_CUDA=ON`, select the actual compiler and
 architecture, and run affected tests on a real NVIDIA GPU. `AUTO`, a compile
 success, loader-stub wheel CI, or an exit-code-77 skip is not CUDA runtime
 evidence.

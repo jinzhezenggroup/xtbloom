@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_TERMINAL_CLASSICAL_ENERGY_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_TERMINAL_CLASSICAL_ENERGY_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_TERMINAL_CLASSICAL_ENERGY_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_TERMINAL_CLASSICAL_ENERGY_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -12,7 +12,7 @@
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_repulsion.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::uint32_t kGfn2TerminalClassicalEnergyAbiVersion = 1u;
 
@@ -139,6 +139,6 @@ cudaError_t evaluate_gfn2_terminal_classical_energy_cuda(
     const Gfn2TerminalClassicalEnergyDeviceDiagnostics& diagnostics,
     cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_TERMINAL_CLASSICAL_ENERGY_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_TERMINAL_CLASSICAL_ENERGY_CUH

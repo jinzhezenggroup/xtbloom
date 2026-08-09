@@ -35,19 +35,19 @@ void* operator new(std::size_t size) {
 
 void* operator new[](std::size_t size) { return ::operator new(size); }
 #if defined(__GNUC__) && !defined(__clang__)
-#define GPUXTB_TEST_NOINLINE __attribute__((noinline))
+#define XTBLOOM_TEST_NOINLINE __attribute__((noinline))
 #else
-#define GPUXTB_TEST_NOINLINE
+#define XTBLOOM_TEST_NOINLINE
 #endif
 
 /* GCC 11 diagnoses the intentional malloc/free implementation as a mismatched
  * pair only after inlining this test-only allocation counter shim. */
-GPUXTB_TEST_NOINLINE void operator delete(void* pointer) noexcept { std::free(pointer); }
+XTBLOOM_TEST_NOINLINE void operator delete(void* pointer) noexcept { std::free(pointer); }
 void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
 void operator delete(void* pointer, std::size_t) noexcept { ::operator delete(pointer); }
 void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[](pointer); }
 
-#undef GPUXTB_TEST_NOINLINE
+#undef XTBLOOM_TEST_NOINLINE
 
 #define CHECK(condition) \
   do {                   \
@@ -58,17 +58,17 @@ void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[
 
 namespace {
 
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::SccMixerPlan;
-using gpuxtb::detail::gfn2::SccMixerState;
-using gpuxtb::detail::gfn2::SccMixerWorkspace;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
-using gpuxtb::detail::gfn2::WavefunctionView;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::SccMixerPlan;
+using xtbloom::detail::gfn2::SccMixerState;
+using xtbloom::detail::gfn2::SccMixerWorkspace;
+using xtbloom::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::gfn2::WavefunctionView;
 
 class AlignedBuffer {
  public:
   explicit AlignedBuffer(std::size_t bytes) : bytes_(bytes) {
-    data_ = std::aligned_alloc(gpuxtb::detail::gfn2::kSccMixerWorkspaceAlignment, bytes_);
+    data_ = std::aligned_alloc(xtbloom::detail::gfn2::kSccMixerWorkspaceAlignment, bytes_);
     if (data_ != nullptr) {
       std::memset(data_, 0, bytes_);
     }
@@ -108,14 +108,14 @@ bool make_fixture(const std::vector<std::int64_t>& atom_offsets,
                   const std::vector<std::int32_t>& spin_channels, std::int64_t history_size,
                   Fixture& fixture, std::string& error) {
   const std::int64_t batch_size = static_cast<std::int64_t>(charges.size());
-  if (gpuxtb::detail::gfn2::make_basis_plan(
+  if (xtbloom::detail::gfn2::make_basis_plan(
           batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-          atomic_numbers.data(), fixture.basis, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_wavefunction_layout(
+          atomic_numbers.data(), fixture.basis, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_wavefunction_layout(
           fixture.basis, atomic_numbers.data(), charges.data(), unpaired.data(),
-          spin_channels.data(), fixture.layout, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_scc_mixer_plan(fixture.layout, history_size, 0.4, 1.0e-8, 2.0e-8,
-                                                fixture.plan, error) != GPUXTB_STATUS_SUCCESS) {
+          spin_channels.data(), fixture.layout, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_scc_mixer_plan(fixture.layout, history_size, 0.4, 1.0e-8, 2.0e-8,
+                                                 fixture.plan, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -128,24 +128,24 @@ bool make_fixture(const std::vector<std::int64_t>& atom_offsets,
     error = "test fixture allocation failed";
     return false;
   }
-  return gpuxtb::detail::gfn2::bind_wavefunction_view(
+  return xtbloom::detail::gfn2::bind_wavefunction_view(
              fixture.layout, fixture.wavefunction_storage->data(),
              fixture.wavefunction_storage->size(), fixture.wavefunction,
-             error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::bind_scc_mixer_state(fixture.plan, fixture.state_storage->data(),
-                                                    fixture.state_storage->size(), fixture.state,
-                                                    error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::bind_scc_mixer_workspace(
+             error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::bind_scc_mixer_state(fixture.plan, fixture.state_storage->data(),
+                                                     fixture.state_storage->size(), fixture.state,
+                                                     error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::bind_scc_mixer_workspace(
              fixture.plan, fixture.scratch_storage->data(), fixture.scratch_storage->size(),
-             fixture.scratch, error) == GPUXTB_STATUS_SUCCESS;
+             fixture.scratch, error) == XTBLOOM_STATUS_SUCCESS;
 }
 
-std::size_t field_begin(const gpuxtb::detail::gfn2::WavefunctionFieldLayout& field,
+std::size_t field_begin(const xtbloom::detail::gfn2::WavefunctionFieldLayout& field,
                         std::size_t system) {
   return static_cast<std::size_t>(field.system_offsets[system]);
 }
 
-std::size_t field_end(const gpuxtb::detail::gfn2::WavefunctionFieldLayout& field,
+std::size_t field_end(const xtbloom::detail::gfn2::WavefunctionFieldLayout& field,
                       std::size_t system) {
   return static_cast<std::size_t>(field.system_offsets[system + 1u]);
 }
@@ -157,7 +157,7 @@ std::vector<double> get_system_vector(const Fixture& fixture, std::size_t system
   result.reserve(dimension);
   const std::array<const double*, 3> fields{
       {fixture.wavefunction.qsh, fixture.wavefunction.dipole, fixture.wavefunction.quadrupole}};
-  const std::array<const gpuxtb::detail::gfn2::WavefunctionFieldLayout*, 3> layouts{
+  const std::array<const xtbloom::detail::gfn2::WavefunctionFieldLayout*, 3> layouts{
       {&fixture.layout.qsh, &fixture.layout.dipole, &fixture.layout.quadrupole}};
   for (std::size_t field = 0u; field < fields.size(); ++field) {
     result.insert(result.end(), fields[field] + field_begin(*layouts[field], system),
@@ -171,7 +171,7 @@ void set_system_vector(const Fixture& fixture, std::size_t system,
   std::size_t packed = 0u;
   const std::array<double*, 3> fields{
       {fixture.wavefunction.qsh, fixture.wavefunction.dipole, fixture.wavefunction.quadrupole}};
-  const std::array<const gpuxtb::detail::gfn2::WavefunctionFieldLayout*, 3> layouts{
+  const std::array<const xtbloom::detail::gfn2::WavefunctionFieldLayout*, 3> layouts{
       {&fixture.layout.qsh, &fixture.layout.dipole, &fixture.layout.quadrupole}};
   for (std::size_t field = 0u; field < fields.size(); ++field) {
     for (std::size_t destination = field_begin(*layouts[field], system);
@@ -262,8 +262,8 @@ int test_tblite_trace_and_ring_history() {
     initial[component] = 0.05 * static_cast<double>(component + 1u);
   }
   set_system_vector(fixture, 0u, initial);
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
-            fixture.plan, fixture.wavefunction, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
+            fixture.plan, fixture.wavefunction, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
 
   const std::array<std::array<double, 10>, 6> expected{{
       {{0.054000000000000006, 0.10800000000000001, 0.16200000000000003, 0.21600000000000003,
@@ -308,9 +308,9 @@ int test_tblite_trace_and_ring_history() {
       }
     }
     install_raw_output(fixture, 0u, residuals[iteration]);
-    CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
-                                                          fixture.state, fixture.scratch,
-                                                          error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
+                                                           fixture.state, fixture.scratch,
+                                                           error) == XTBLOOM_STATUS_SUCCESS);
     const std::vector<double> mixed = get_system_vector(fixture, 0u);
     for (std::size_t component = 0u; component < expected[iteration].size(); ++component) {
       CHECK(near(mixed[component], expected[iteration][component], 8.0e-13));
@@ -355,11 +355,11 @@ int test_batch_equals_sequential_and_parallel_workers() {
                      error));
   set_initial_vectors(batch);
   set_initial_vectors(sequential);
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
-            batch.plan, batch.wavefunction, batch.state, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
+            batch.plan, batch.wavefunction, batch.state, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
             sequential.plan, sequential.wavefunction, sequential.state, error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
 
   const std::size_t systems = static_cast<std::size_t>(batch.plan.batch_size());
   for (std::size_t iteration = 0u; iteration < 7u; ++iteration) {
@@ -370,13 +370,13 @@ int test_batch_equals_sequential_and_parallel_workers() {
       install_raw_output(batch, system, residual);
       install_raw_output(sequential, system, residual);
     }
-    CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(batch.plan, batch.wavefunction,
-                                                          batch.state, batch.scratch,
-                                                          error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(batch.plan, batch.wavefunction,
+                                                           batch.state, batch.scratch,
+                                                           error) == XTBLOOM_STATUS_SUCCESS);
     for (std::size_t system = 0u; system < systems; ++system) {
-      CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
+      CHECK(xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(
                 sequential.plan, static_cast<std::int64_t>(system), sequential.wavefunction,
-                sequential.state, sequential.scratch, error) == GPUXTB_STATUS_SUCCESS);
+                sequential.state, sequential.scratch, error) == XTBLOOM_STATUS_SUCCESS);
       CHECK(get_system_vector(batch, system) == get_system_vector(sequential, system));
     }
     CHECK(states_equal(batch, sequential));
@@ -390,11 +390,11 @@ int test_batch_equals_sequential_and_parallel_workers() {
                      serial_workers, error));
   set_initial_vectors(parallel);
   set_initial_vectors(serial_workers);
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
-            parallel.plan, parallel.wavefunction, parallel.state, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
+            parallel.plan, parallel.wavefunction, parallel.state, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
             serial_workers.plan, serial_workers.wavefunction, serial_workers.state, error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   for (std::size_t system = 0u; system < systems; ++system) {
     const std::size_t dimension = static_cast<std::size_t>(
         parallel.plan.vector_offsets()[system + 1u] - parallel.plan.vector_offsets()[system]);
@@ -405,12 +405,12 @@ int test_batch_equals_sequential_and_parallel_workers() {
   /* Warm up both fixtures so the concurrent calls below exercise the shared
    * Broyden-history path rather than only the first-step damping path. */
   for (std::size_t system = 0u; system < systems; ++system) {
-    CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
+    CHECK(xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(
               parallel.plan, static_cast<std::int64_t>(system), parallel.wavefunction,
-              parallel.state, parallel.scratch, error) == GPUXTB_STATUS_SUCCESS);
-    CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
+              parallel.state, parallel.scratch, error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(
               serial_workers.plan, static_cast<std::int64_t>(system), serial_workers.wavefunction,
-              serial_workers.state, serial_workers.scratch, error) == GPUXTB_STATUS_SUCCESS);
+              serial_workers.state, serial_workers.scratch, error) == XTBLOOM_STATUS_SUCCESS);
   }
   for (std::size_t system = 0u; system < systems; ++system) {
     const std::size_t dimension = static_cast<std::size_t>(
@@ -421,31 +421,31 @@ int test_batch_equals_sequential_and_parallel_workers() {
   }
   AlignedBuffer second_scratch_storage(parallel.plan.workspace_size_bytes());
   SccMixerWorkspace second_scratch;
-  CHECK(gpuxtb::detail::gfn2::bind_scc_mixer_workspace(
+  CHECK(xtbloom::detail::gfn2::bind_scc_mixer_workspace(
             parallel.plan, second_scratch_storage.data(), second_scratch_storage.size(),
-            second_scratch, error) == GPUXTB_STATUS_SUCCESS);
-  gpuxtb_status_t first_status = GPUXTB_STATUS_INTERNAL_ERROR;
-  gpuxtb_status_t second_status = GPUXTB_STATUS_INTERNAL_ERROR;
+            second_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  xtbloom_status_t first_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  xtbloom_status_t second_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   std::string first_error;
   std::string second_error;
   std::thread first_worker([&] {
-    first_status = gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
+    first_status = xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(
         parallel.plan, 0, parallel.wavefunction, parallel.state, parallel.scratch, first_error);
   });
   std::thread second_worker([&] {
-    second_status = gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
+    second_status = xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(
         parallel.plan, 1, parallel.wavefunction, parallel.state, second_scratch, second_error);
   });
   first_worker.join();
   second_worker.join();
-  CHECK(first_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(second_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
+  CHECK(first_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(second_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(
             serial_workers.plan, 0, serial_workers.wavefunction, serial_workers.state,
-            serial_workers.scratch, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(
+            serial_workers.scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(
             serial_workers.plan, 1, serial_workers.wavefunction, serial_workers.state,
-            serial_workers.scratch, error) == GPUXTB_STATUS_SUCCESS);
+            serial_workers.scratch, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(states_equal(parallel, serial_workers));
   CHECK(get_system_vector(parallel, 0u) == get_system_vector(serial_workers, 0u));
   CHECK(get_system_vector(parallel, 1u) == get_system_vector(serial_workers, 1u));
@@ -457,16 +457,16 @@ int test_nonfinite_isolation_failure_atomicity_and_restart() {
   std::string error;
   CHECK(make_fixture({0, 1, 3}, {1, 8, 1}, {1.0, 0.0}, {0, 1}, {1, 2}, 3, fixture, error));
   set_initial_vectors(fixture);
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
-            fixture.plan, fixture.wavefunction, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
+            fixture.plan, fixture.wavefunction, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
   for (std::size_t system = 0u; system < 2u; ++system) {
     const std::size_t dimension = static_cast<std::size_t>(
         fixture.plan.vector_offsets()[system + 1u] - fixture.plan.vector_offsets()[system]);
     install_raw_output(fixture, system, residual_for(system, 0u, dimension));
   }
-  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
-                                                        fixture.state, fixture.scratch,
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
+                                                         fixture.state, fixture.scratch,
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
 
   /* Establish a converged state before injecting a numerical failure. The
    * failure must not partially clear convergence or any other diagnostics. */
@@ -474,9 +474,9 @@ int test_nonfinite_isolation_failure_atomicity_and_restart() {
   const std::size_t second_dimension =
       static_cast<std::size_t>(fixture.plan.vector_offsets()[2] - fixture.plan.vector_offsets()[1]);
   install_raw_output(fixture, 1u, residual_for(1u, 1u, second_dimension));
-  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
-                                                        fixture.state, fixture.scratch,
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
+                                                         fixture.state, fixture.scratch,
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.state.converged[0] == 1u);
 
   const std::size_t first_offset = static_cast<std::size_t>(fixture.plan.vector_offsets()[0]);
@@ -512,9 +512,9 @@ int test_nonfinite_isolation_failure_atomicity_and_restart() {
   bad_raw[0] = std::numeric_limits<double>::quiet_NaN();
   set_system_vector(fixture, 0u, bad_raw);
   install_raw_output(fixture, 1u, residual_for(1u, 2u, second_dimension));
-  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
-                                                        fixture.state, fixture.scratch,
-                                                        error) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
+                                                         fixture.state, fixture.scratch,
+                                                         error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(std::isnan(get_system_vector(fixture, 0u)[0]));
   CHECK(std::equal(current_before.begin(), current_before.end(),
                    fixture.state.current_inputs + first_offset));
@@ -531,9 +531,9 @@ int test_nonfinite_isolation_failure_atomicity_and_restart() {
   CHECK(fixture.state.residual_maximum[0] == first_maximum_before);
   CHECK(fixture.state.initialized[0] == first_initialized_before);
   CHECK(fixture.state.converged[0] == first_converged_before);
-  CHECK(fixture.state.system_statuses[0] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.state.system_statuses[0] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.state.iterations[1] == second_iteration_before + 1u);
-  CHECK(fixture.state.system_statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.state.system_statuses[1] == XTBLOOM_STATUS_SUCCESS);
 
   const std::vector<double> second_current_before(
       fixture.state.current_inputs + fixture.plan.vector_offsets()[1],
@@ -544,11 +544,11 @@ int test_nonfinite_isolation_failure_atomicity_and_restart() {
     restart[component] = -0.02 * static_cast<double>(component + 1u);
   }
   set_system_vector(fixture, 0u, restart);
-  CHECK(gpuxtb::detail::gfn2::restart_scc_mixer_system_cpu(
-            fixture.plan, 0, fixture.wavefunction, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::restart_scc_mixer_system_cpu(
+            fixture.plan, 0, fixture.wavefunction, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.state.restart_counts[0] == 1u);
   CHECK(fixture.state.iterations[0] == 0u);
-  CHECK(fixture.state.system_statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::equal(restart.begin(), restart.end(), fixture.state.current_inputs));
   CHECK(std::all_of(fixture.state.df_history, fixture.state.df_history + first_history,
                     [](double value) { return value == 0.0; }));
@@ -566,9 +566,9 @@ int test_nonfinite_isolation_failure_atomicity_and_restart() {
           fixture.layout.workspace_size_bytes / sizeof(double));
   WavefunctionView malformed = fixture.wavefunction;
   malformed.qsh = malformed.dipole;
-  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, malformed, fixture.state,
-                                                        fixture.scratch,
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, malformed, fixture.state,
+                                                         fixture.scratch,
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::memcmp(state_snapshot.data(), fixture.state_storage->data(),
                     fixture.plan.state_size_bytes()) == 0);
   CHECK(std::equal(wavefunction_snapshot.begin(), wavefunction_snapshot.end(),
@@ -584,9 +584,9 @@ int test_initialization_atomicity_validation_and_zero_allocation() {
   std::vector<double> second = get_system_vector(fixture, 1u);
   second.back() = std::numeric_limits<double>::infinity();
   set_system_vector(fixture, 1u, second);
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(fixture.plan, fixture.wavefunction,
-                                                             fixture.state, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(fixture.plan, fixture.wavefunction,
+                                                              fixture.state, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.state.initialized[0] == 0u);
   CHECK(fixture.state.initialized[1] == 0u);
   CHECK(std::all_of(fixture.state.current_inputs,
@@ -594,25 +594,26 @@ int test_initialization_atomicity_validation_and_zero_allocation() {
                     [](double value) { return value == 0.0; }));
 
   set_initial_vectors(fixture);
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
-            fixture.plan, fixture.wavefunction, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
+            fixture.plan, fixture.wavefunction, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
   const auto* const identity = fixture.plan.identity();
   SccMixerPlan preserved = fixture.plan;
-  CHECK(gpuxtb::detail::gfn2::make_scc_mixer_plan(fixture.layout, 0, 0.4, 1.0e-8, 1.0e-8, preserved,
-                                                  error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_scc_mixer_plan(fixture.layout, 0, 0.4, 1.0e-8, 1.0e-8,
+                                                   preserved,
+                                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(preserved.identity() == identity);
 
   AlignedBuffer undersized_state(fixture.plan.state_size_bytes());
   SccMixerState rejected_state = fixture.state;
-  CHECK(gpuxtb::detail::gfn2::bind_scc_mixer_state(
+  CHECK(xtbloom::detail::gfn2::bind_scc_mixer_state(
             fixture.plan, undersized_state.data(), fixture.plan.state_size_bytes() - 1u,
-            rejected_state, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            rejected_state, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(rejected_state.workspace_base == fixture.state.workspace_base);
   SccMixerWorkspace rejected_workspace = fixture.scratch;
-  CHECK(gpuxtb::detail::gfn2::bind_scc_mixer_workspace(
+  CHECK(xtbloom::detail::gfn2::bind_scc_mixer_workspace(
             fixture.plan, static_cast<std::byte*>(fixture.scratch_storage->data()) + 1,
             fixture.scratch_storage->size() - 1u, rejected_workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(rejected_workspace.workspace_base == fixture.scratch.workspace_base);
 
   const std::size_t systems = static_cast<std::size_t>(fixture.plan.batch_size());
@@ -624,11 +625,11 @@ int test_initialization_atomicity_validation_and_zero_allocation() {
   error.reserve(256u);
   const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(
+  const xtbloom_status_t status = xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(
       fixture.plan, fixture.wavefunction, fixture.state, fixture.scratch, error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
   const std::size_t after = allocation_test::count.load(std::memory_order_relaxed);
-  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  CHECK(status == XTBLOOM_STATUS_SUCCESS);
   CHECK(after == before);
 
   for (std::size_t system = 0u; system < systems; ++system) {
@@ -636,9 +637,9 @@ int test_initialization_atomicity_validation_and_zero_allocation() {
         fixture.plan.vector_offsets()[system + 1u] - fixture.plan.vector_offsets()[system]);
     install_raw_output(fixture, system, std::vector<double>(dimension, 0.0));
   }
-  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
-                                                        fixture.state, fixture.scratch,
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
+                                                         fixture.state, fixture.scratch,
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.state.converged[0] == 1u);
   CHECK(fixture.state.converged[1] == 1u);
   CHECK(fixture.state.residual_rms[0] == 0.0);
@@ -651,8 +652,8 @@ int test_system_transaction_prepare_commit_and_peer_isolation() {
   std::string error;
   CHECK(make_fixture({0, 1, 3}, {1, 8, 1}, {1.0, 0.0}, {0, 1}, {1, 2}, 4, fixture, error));
   set_initial_vectors(fixture);
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
-            fixture.plan, fixture.wavefunction, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
+            fixture.plan, fixture.wavefunction, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
   const std::size_t systems = static_cast<std::size_t>(fixture.plan.batch_size());
   const std::size_t memory = static_cast<std::size_t>(fixture.plan.history_size());
   for (std::size_t iteration = 0u; iteration < 6u; ++iteration) {
@@ -661,9 +662,9 @@ int test_system_transaction_prepare_commit_and_peer_isolation() {
           fixture.plan.vector_offsets()[system + 1u] - fixture.plan.vector_offsets()[system]);
       install_raw_output(fixture, system, residual_for(system, iteration, dimension));
     }
-    CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
-                                                          fixture.state, fixture.scratch,
-                                                          error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::mix_scc_broyden_batch_cpu(fixture.plan, fixture.wavefunction,
+                                                           fixture.state, fixture.scratch,
+                                                           error) == XTBLOOM_STATUS_SUCCESS);
   }
   const std::vector<std::byte> public_before(
       static_cast<const std::byte*>(fixture.state_storage->data()),
@@ -672,9 +673,9 @@ int test_system_transaction_prepare_commit_and_peer_isolation() {
 
   AlignedBuffer staged_storage(fixture.plan.state_size_bytes());
   SccMixerState staged;
-  CHECK(gpuxtb::detail::gfn2::bind_scc_mixer_state(fixture.plan, staged_storage.data(),
-                                                   staged_storage.size(), staged,
-                                                   error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_scc_mixer_state(fixture.plan, staged_storage.data(),
+                                                    staged_storage.size(), staged,
+                                                    error) == XTBLOOM_STATUS_SUCCESS);
   std::memset(staged_storage.data(), 0x5a, staged_storage.size());
 
   /* Prepare only system 0: its records must appear in the staged binding
@@ -690,8 +691,8 @@ int test_system_transaction_prepare_commit_and_peer_isolation() {
   double sentinel_double = 0.0;
   std::memcpy(&sentinel_double, &sentinel_u64, sizeof(sentinel_double));
 
-  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
-            fixture.plan, 0, fixture.state, staged, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 0, fixture.state, staged, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(equal_double_arrays(staged.current_inputs, fixture.state.current_inputs, zero_dimension));
   CHECK(equal_double_arrays(staged.previous_inputs, fixture.state.previous_inputs, zero_dimension));
   CHECK(equal_double_arrays(staged.previous_residuals, fixture.state.previous_residuals,
@@ -720,8 +721,8 @@ int test_system_transaction_prepare_commit_and_peer_isolation() {
 
   /* Commit must be the exact inverse for the prepared system and a no-op for
    * every peer, so a prepare/commit round trip is byte-identical. */
-  CHECK(gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
-            fixture.plan, 0, staged, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+            fixture.plan, 0, staged, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::memcmp(public_before.data(), fixture.state_storage->data(),
                     fixture.plan.state_size_bytes()) == 0);
 
@@ -733,27 +734,27 @@ int test_system_transaction_prepare_commit_and_peer_isolation() {
                                          : 0.05 * static_cast<double>(component + 1u);
   }
   set_system_vector(fixture, 1u, bad_raw);
-  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
-            fixture.plan, 1, fixture.state, staged, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(fixture.plan, 1, fixture.wavefunction,
-                                                         staged, fixture.scratch,
-                                                         error) == GPUXTB_STATUS_INTERNAL_ERROR);
-  CHECK(staged.system_statuses[1] == GPUXTB_STATUS_INTERNAL_ERROR);
-  CHECK(fixture.state.system_statuses[1] == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 1, fixture.state, staged, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(fixture.plan, 1, fixture.wavefunction,
+                                                          staged, fixture.scratch,
+                                                          error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(staged.system_statuses[1] == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(fixture.state.system_statuses[1] == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::memcmp(public_before.data(), fixture.state_storage->data(),
                     fixture.plan.state_size_bytes()) == 0);
 
   /* The same staged transaction succeeds once the raw output is finite, and
    * committing it advances only system 1. */
   install_raw_output(fixture, 1u, residual_for(1u, 6u, one_dimension));
-  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
-            fixture.plan, 1, fixture.state, staged, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::mix_scc_broyden_system_cpu(fixture.plan, 1, fixture.wavefunction,
-                                                         staged, fixture.scratch,
-                                                         error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 1, fixture.state, staged, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::mix_scc_broyden_system_cpu(fixture.plan, 1, fixture.wavefunction,
+                                                          staged, fixture.scratch,
+                                                          error) == XTBLOOM_STATUS_SUCCESS);
   const std::uint64_t one_iteration_before = fixture.state.iterations[1];
-  CHECK(gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
-            fixture.plan, 1, staged, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+            fixture.plan, 1, staged, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.state.iterations[1] == one_iteration_before + 1u);
   CHECK(equal_double_arrays(fixture.state.current_inputs + one_vector_offset,
                             staged.current_inputs + one_vector_offset, one_dimension));
@@ -768,42 +769,42 @@ int test_system_transaction_validation() {
   std::string error;
   CHECK(make_fixture({0, 1, 3}, {1, 8, 1}, {1.0, 0.0}, {0, 1}, {1, 2}, 3, fixture, error));
   set_initial_vectors(fixture);
-  CHECK(gpuxtb::detail::gfn2::initialize_scc_mixer_state_cpu(
-            fixture.plan, fixture.wavefunction, fixture.state, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_scc_mixer_state_cpu(
+            fixture.plan, fixture.wavefunction, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
   AlignedBuffer staged_storage(fixture.plan.state_size_bytes());
   SccMixerState staged;
-  CHECK(gpuxtb::detail::gfn2::bind_scc_mixer_state(fixture.plan, staged_storage.data(),
-                                                   staged_storage.size(), staged,
-                                                   error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_scc_mixer_state(fixture.plan, staged_storage.data(),
+                                                    staged_storage.size(), staged,
+                                                    error) == XTBLOOM_STATUS_SUCCESS);
 
-  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
-            fixture.plan, 2, fixture.state, staged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
-            fixture.plan, -1, fixture.state, staged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
-            fixture.plan, 2, staged, fixture.state, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 2, fixture.state, staged, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, -1, fixture.state, staged, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+            fixture.plan, 2, staged, fixture.state, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   /* Source and staged must be disjoint bindings. */
-  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+  CHECK(xtbloom::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
             fixture.plan, 0, fixture.state, fixture.state, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::commit_scc_mixer_system_transaction_cpu(
             fixture.plan, 0, fixture.state, fixture.state, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   /* A freshly bound state is uninitialized, so no transaction may stage it. */
   AlignedBuffer fresh_storage(fixture.plan.state_size_bytes());
   SccMixerState fresh;
-  CHECK(gpuxtb::detail::gfn2::bind_scc_mixer_state(fixture.plan, fresh_storage.data(),
-                                                   fresh_storage.size(), fresh,
-                                                   error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
-            fixture.plan, 0, fresh, staged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::bind_scc_mixer_state(fixture.plan, fresh_storage.data(),
+                                                    fresh_storage.size(), fresh,
+                                                    error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 0, fresh, staged, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   /* Validation failure must publish nothing: a failed prepare leaves the
    * staged buffer exactly as the caller left it. */
   std::memset(staged_storage.data(), 0x3c, staged_storage.size());
-  CHECK(gpuxtb::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
-            fixture.plan, 0, fresh, staged, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::prepare_scc_mixer_system_transaction_cpu(
+            fixture.plan, 0, fresh, staged, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   const std::vector<std::byte> staged_after(
       static_cast<const std::byte*>(staged_storage.data()),
       static_cast<const std::byte*>(staged_storage.data()) + staged_storage.size());

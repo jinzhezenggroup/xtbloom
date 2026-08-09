@@ -38,13 +38,13 @@ Baseline command, run from the clean `main` worktree:
 CUDA_VISIBLE_DEVICES=0 \
 LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64 \
 python3 benchmarks/natoms_scaling.py \
-  --engine gpuxtb \
-  --library build/cuda-baseline/libgpuxtb.so.0.1.0 \
+  --engine xtbloom \
+  --library build/cuda-baseline/libxtbloom.so.0.1.0 \
   --backend cuda --device-id 0 --property energy \
   --natoms 62 --batch-sizes 128 \
   --warmups 5 --repetitions 50 --start-mode fresh \
-  --output-json /home/jzzeng/codes/gpuxtb4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.json \
-  --output-csv /home/jzzeng/codes/gpuxtb4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.csv
+  --output-json /home/jzzeng/codes/xtbloom4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.json \
+  --output-csv /home/jzzeng/codes/xtbloom4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.csv
 ```
 
 Final command, run from the clean issue branch:
@@ -53,8 +53,8 @@ Final command, run from the clean issue branch:
 CUDA_VISIBLE_DEVICES=0 \
 LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64 \
 python3 benchmarks/natoms_scaling.py \
-  --engine gpuxtb \
-  --library /home/jzzeng/codes/gpuxtb4/build/pr254-cuda-review2/libgpuxtb.so.0.1.0 \
+  --engine xtbloom \
+  --library /home/jzzeng/codes/xtbloom4/build/pr254-cuda-review2/libxtbloom.so.0.1.0 \
   --backend cuda --device-id 0 --property energy \
   --natoms 62 --batch-sizes 128 \
   --warmups 5 --repetitions 50 --start-mode fresh \

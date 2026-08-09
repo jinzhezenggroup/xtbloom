@@ -1,15 +1,15 @@
-#ifndef GPUXTB_MODEL_GFN2_BASIS_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_BASIS_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_BASIS_HPP
+#define XTBLOOM_MODEL_GFN2_BASIS_HPP
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 /*
  * Geometry-independent GFN2 basis metadata for a complete ragged batch.
@@ -61,11 +61,11 @@ struct BasisPlan {
  * tables. Repeated angular-momentum shells, if introduced by a future
  * parameter set, receive tblite's first-shell Gram-Schmidt treatment.
  */
-gpuxtb_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_atoms,
-                                const std::int64_t* atom_offsets,
-                                const std::int32_t* atomic_numbers, BasisPlan& plan,
-                                std::string& error);
+xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_atoms,
+                                 const std::int64_t* atom_offsets,
+                                 const std::int32_t* atomic_numbers, BasisPlan& plan,
+                                 std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_BASIS_HPP
+#endif  // XTBLOOM_MODEL_GFN2_BASIS_HPP

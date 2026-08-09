@@ -1,0 +1,4 @@
+interface:
+  display_name: "Record xtbloom Performance"
+  short_description: "Produce reproducible correctness-qualified evidence"
+  default_prompt: "Use $xtbloom-record-performance to benchmark this change and archive reproducible, correctness-qualified evidence."

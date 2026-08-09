@@ -1,11 +1,11 @@
-"""CUDA device-result producer tests for :class:`gpuxtb.ArrayBatch`.
+"""CUDA device-result producer tests for :class:`xtbloom.ArrayBatch`.
 
-These tests run ``result_memory="cuda"``, which allocates a gpuxtb-owned CUDA
+These tests run ``result_memory="cuda"``, which allocates an xTBloom-owned CUDA
 device arena, runs the real native compute into it, and hands the finished
 slices to importing frameworks through the DLPack producer protocol
 (``torch.from_dlpack`` / ``cupy.from_dlpack`` / ``jax.dlpack.from_dlpack``)
 without a host round trip.  The provider libraries are opt-in test
-dependencies and are never imported by gpuxtb runtime code; the whole file
+dependencies and are never imported by xTBloom runtime code; the whole file
 skips when no real CUDA device is available.
 """
 
@@ -14,13 +14,13 @@ from __future__ import annotations
 import gc
 import importlib
 
-import gpuxtb._dlpack as dlpack
 import numpy as np
 import pytest
+import xtbloom._dlpack as dlpack
 from _cases import case_by_id, structure_inputs
-from gpuxtb import library
-from gpuxtb.exceptions import GPUxtbNotSupportedError
-from gpuxtb.interface import ArrayBatch
+from xtbloom import library
+from xtbloom.exceptions import XTBloomNotSupportedError
+from xtbloom.interface import ArrayBatch
 
 _TORCH = importlib.util.find_spec("torch")
 _CUPY = importlib.util.find_spec("cupy")
@@ -28,19 +28,19 @@ _JAX = importlib.util.find_spec("jax")
 
 
 def _library_has_cuda() -> bool:
-    from gpuxtb.exceptions import GPUxtbRuntimeError
-    from gpuxtb.interface import Context
+    from xtbloom.exceptions import XTBloomRuntimeError
+    from xtbloom.interface import Context
 
     try:
         with Context("cuda"):
             pass
         return True
-    except GPUxtbRuntimeError:
+    except XTBloomRuntimeError:
         return False
 
 
 def _device_ready(*providers: str) -> str | None:
-    """Return a skip reason unless gpuxtb and every named provider use CUDA."""
+    """Return a skip reason unless xTBloom and every named provider use CUDA."""
     if not _library_has_cuda():
         return "CUDA backend is not available on this host"
     for provider in providers or ("torch",):
@@ -76,8 +76,8 @@ def _producer_base_pointer(producer: object) -> int:
 
     buffer = library.Buffer()
     library._check_init(
-        "gpuxtb_result_owner_buffer",
-        library.load_library().gpuxtb_result_owner_buffer(
+        "xtbloom_result_owner_buffer",
+        library.load_library().xtbloom_result_owner_buffer(
             producer.arena.handle, ctypes.byref(buffer)
         ),
     )
@@ -127,7 +127,7 @@ def test_device_producer_imports_with_torch(tmp_path: object) -> None:
     assert t_forces.shape == (len(_packed("h3_plus")["atomic_numbers"]), 3)
 
     # Values must match the host CPU result (parity).
-    from gpuxtb.interface import compute_arrays
+    from xtbloom.interface import compute_arrays
 
     host = compute_arrays(
         **{name: np.ascontiguousarray(value) for name, value in packed.items()},
@@ -173,7 +173,7 @@ def test_device_producer_imports_with_cupy(tmp_path: object) -> None:
     assert cp_forces.shape == (len(_packed("h3_plus")["atomic_numbers"]), 3)
 
     # Values must match the host CPU result (parity).
-    from gpuxtb.interface import compute_arrays
+    from xtbloom.interface import compute_arrays
 
     host = compute_arrays(
         **{name: np.ascontiguousarray(value) for name, value in packed.items()},
@@ -184,7 +184,7 @@ def test_device_producer_imports_with_cupy(tmp_path: object) -> None:
     np.testing.assert_allclose(cp_charges.get(), host.charges, atol=1e-9)
 
     # Zero-copy device import: the imported array aliases the arena bytes, so
-    # the CuPy data pointer equals the gpuxtb-owned slice pointer and no host
+    # the CuPy data pointer equals the xTBloom-owned slice pointer and no host
     # transfer happened.
     expected_pointer = _producer_base_pointer(energies)
     assert cp_energy.data.ptr == expected_pointer
@@ -249,7 +249,7 @@ def test_device_producer_imports_with_jax(tmp_path: object) -> None:
     assert jax_forces.shape == (len(_packed("ketene")["atomic_numbers"]), 3)
 
     # Values must match the host CPU result (parity), read back through JAX.
-    from gpuxtb.interface import compute_arrays
+    from xtbloom.interface import compute_arrays
 
     host = compute_arrays(
         **{name: np.ascontiguousarray(value) for name, value in packed.items()},
@@ -311,7 +311,7 @@ def test_device_producer_imports_after_custom_stream_compute(tmp_path: object) -
     if skip is not None:
         pytest.skip(skip)
     import torch
-    from gpuxtb.interface import compute_arrays
+    from xtbloom.interface import compute_arrays
 
     packed = {
         name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()
@@ -367,7 +367,7 @@ def test_device_producer_out_precedence_mixed(tmp_path: object) -> None:
 def test_device_producer_all_outputs_supplied_does_not_allocate_arena(
     tmp_path: object,
 ) -> None:
-    """An all-``out=`` CUDA call needs no empty gpuxtb-owned arena."""
+    """An all-``out=`` CUDA call needs no empty xTBloom-owned arena."""
     skip = _device_ready()
     if skip is not None:
         pytest.skip(skip)
@@ -440,7 +440,7 @@ def test_device_producer_failed_indices_mode_is_host_only(tmp_path: object) -> N
     }
     batch = ArrayBatch(**packed, backend="cuda", stream=1)
     result = batch.compute(result_memory="cuda")
-    with pytest.raises(GPUxtbNotSupportedError, match="host numpy status"):
+    with pytest.raises(XTBloomNotSupportedError, match="host numpy status"):
         _ = result.failed_indices
     batch.close()
 
@@ -450,7 +450,7 @@ def test_device_producer_preserves_nan_publication_on_failure(tmp_path: object) 
     """Per-system SCC failure fills the failed slice with NaNs on the device.
 
     The native NaN/status publication semantics must survive the
-    gpuxtb-owned device arena path.
+    xTBloom-owned device arena path.
     """
     skip = _device_ready()
     if skip is not None:
@@ -478,7 +478,7 @@ def test_device_producer_repeated_and_changed_geometry(tmp_path: object) -> None
     if skip is not None:
         pytest.skip(skip)
     import torch
-    from gpuxtb.interface import compute_arrays
+    from xtbloom.interface import compute_arrays
 
     base = {
         name: np.ascontiguousarray(value) for name, value in _packed("h3_plus").items()

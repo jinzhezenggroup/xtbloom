@@ -16,18 +16,18 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::evaluate_gfn2_spin_polarization_cuda;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2SpinDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2SpinDeviceError;
-using gpuxtb::detail::cuda::Gfn2SpinDeviceInput;
-using gpuxtb::detail::cuda::Gfn2SpinDeviceOutput;
-using gpuxtb::detail::cuda::Gfn2SpinDeviceWorkspace;
-using gpuxtb::detail::cuda::reset_gfn2_spin_device_errors_cuda;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::SpinPolarizationPlan;
-using gpuxtb::detail::gfn2::SpinPolarizationView;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::cuda::evaluate_gfn2_spin_polarization_cuda;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceActivity;
+using xtbloom::detail::cuda::Gfn2SpinDeviceBatch;
+using xtbloom::detail::cuda::Gfn2SpinDeviceError;
+using xtbloom::detail::cuda::Gfn2SpinDeviceInput;
+using xtbloom::detail::cuda::Gfn2SpinDeviceOutput;
+using xtbloom::detail::cuda::Gfn2SpinDeviceWorkspace;
+using xtbloom::detail::cuda::reset_gfn2_spin_device_errors_cuda;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::SpinPolarizationPlan;
+using xtbloom::detail::gfn2::SpinPolarizationView;
+using xtbloom::detail::gfn2::WavefunctionLayout;
 
 #define CHECK(condition)                                                                \
   do {                                                                                  \
@@ -167,10 +167,10 @@ struct HostCase {
     expected_energies.assign(static_cast<std::size_t>(batch_size()), 0.0);
     expected_potentials.assign(populations.size(), 0.0);
     std::string error;
-    const gpuxtb_status_t status = gpuxtb::detail::gfn2::evaluate_spin_polarization_cpu(
+    const xtbloom_status_t status = xtbloom::detail::gfn2::evaluate_spin_polarization_cpu(
         cpu_view(), populations.data(), expected_energies.data(), expected_potentials.data(),
         error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       std::fprintf(stderr, "CPU spin reference failed: status=%d error=%s\n", status,
                    error.c_str());
       return false;
@@ -537,13 +537,13 @@ int test_chromium_d_s_p_shell_order_literal() {
   WavefunctionLayout wavefunction;
   SpinPolarizationPlan spin;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, 1, atom_offsets.data(), atomic_numbers.data(),
-                                              basis, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, 1, atom_offsets.data(), atomic_numbers.data(),
+                                               basis, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
             basis, atomic_numbers.data(), charges.data(), unpaired.data(), spin_channels.data(),
-            wavefunction, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::make_spin_polarization_plan(basis, wavefunction, spin, error) ==
-        GPUXTB_STATUS_SUCCESS);
+            wavefunction, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_spin_polarization_plan(basis, wavefunction, spin, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(basis.angular_momenta == std::vector<std::uint8_t>({2u, 0u, 1u}));
 
   HostCase host = make_chromium_literal_case();

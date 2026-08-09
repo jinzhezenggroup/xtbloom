@@ -48,7 +48,7 @@ html, body {
   z-index: 10;
 }
 .brand { display: flex; gap: 14px; align-items: center; }
-.logo { font-size: 30px; }
+.logo { width: 42px; height: 42px; flex: none; }
 .brand h1 { margin: 0; font-size: 20px; letter-spacing: .3px; }
 .brand .accent { color: var(--accent); }
 .tagline { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }

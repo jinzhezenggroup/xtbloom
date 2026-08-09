@@ -30,16 +30,16 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2AtomPair;
-using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
-using gpuxtb::detail::cuda::Gfn2PairListDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2PairListDeviceCache;
-using gpuxtb::detail::cuda::Gfn2PairListDeviceError;
-using gpuxtb::detail::cuda::Gfn2PairListDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2PairListMode;
-using gpuxtb::detail::cuda::Gfn2PairListSystemMeta;
-using gpuxtb::detail::cuda::kGfn2GeometryPairDataElements;
-using gpuxtb::detail::gfn2::CoordinationPlan;
+using xtbloom::detail::Gfn2AtomPair;
+using xtbloom::detail::cuda::Gfn2GeometryEpochDevice;
+using xtbloom::detail::cuda::Gfn2PairListDeviceBatch;
+using xtbloom::detail::cuda::Gfn2PairListDeviceCache;
+using xtbloom::detail::cuda::Gfn2PairListDeviceError;
+using xtbloom::detail::cuda::Gfn2PairListDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2PairListMode;
+using xtbloom::detail::cuda::Gfn2PairListSystemMeta;
+using xtbloom::detail::cuda::kGfn2GeometryPairDataElements;
+using xtbloom::detail::gfn2::CoordinationPlan;
 
 constexpr std::uint64_t kPlanToken = 0x4a51a3e9f1d8c2b7ULL;
 constexpr std::uint64_t kGeneration = 101u;
@@ -186,15 +186,15 @@ bool make_case(std::size_t batch_size, bool dense_geometry, HostCase& host, std:
           (local % 2 == 0 ? -0.11 : 0.13) * static_cast<double>(local + 1);
     }
   }
-  if (gpuxtb::detail::gfn2::make_coordination_plan(
+  if (xtbloom::detail::gfn2::make_coordination_plan(
           static_cast<std::int64_t>(batch_size), atoms, host.atom_offsets.data(),
-          host.atomic_numbers.data(), host.plan, error) != GPUXTB_STATUS_SUCCESS) {
+          host.atomic_numbers.data(), host.plan, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   host.expected_coordination.resize(static_cast<std::size_t>(atoms));
-  if (gpuxtb::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
-                                                      host.expected_coordination.data(),
-                                                      error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
+                                                       host.expected_coordination.data(),
+                                                       error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   return true;
@@ -212,7 +212,7 @@ struct DeviceFixture {
   DeviceBuffer<std::int64_t> neighbor_counts;
   DeviceBuffer<std::int64_t> neighbors;
   DeviceBuffer<std::uint64_t> pair_generations;
-  DeviceBuffer<gpuxtb::detail::cuda::Gfn2PairListSystemMeta> system_meta;
+  DeviceBuffer<xtbloom::detail::cuda::Gfn2PairListSystemMeta> system_meta;
   DeviceBuffer<std::int64_t> atom_cells;
   DeviceBuffer<std::int64_t> cell_counts;
   DeviceBuffer<std::int64_t> cell_offsets;
@@ -240,7 +240,7 @@ struct DeviceFixture {
     std::int64_t ws_neighbor_cursor = 0;
     std::int64_t ws_neighbor_scratch = 0;
     std::int64_t ws_pair_cursor = 0;
-    if (!gpuxtb::detail::cuda::query_gfn2_pairlist_requirements_cuda(
+    if (!xtbloom::detail::cuda::query_gfn2_pairlist_requirements_cuda(
             static_cast<std::int64_t>(host.batch_size()),
             static_cast<std::int64_t>(host.total_atoms()), kMaxCells, kMaxNeighbors, kMaxPairs,
             &cache_pairs, &cache_neighbor_offsets, &cache_neighbors, &cache_pair_offsets,
@@ -546,14 +546,14 @@ int test_cpu_parity_and_pair_sets() {
       CHECK(make_case(batch_size, dense_geometry, host, error));
       DeviceFixture device;
       CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
-      CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+      CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
                 static_cast<std::int64_t>(batch_size), device.system_errors.get(),
                 device.device_error.get(), stream) == cudaSuccess);
-      CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
           device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
           device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
           stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
           device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
           kGeneration, device.cache(), device.coordination.get(), device.workspace(),
           device.system_errors.get(), device.device_error.get(), stream));
@@ -576,14 +576,14 @@ int test_dense_fallback_matches_full_triangle() {
     CHECK(make_case(batch_size, true, host, error));
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kDense, stream));
-    CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
               static_cast<std::int64_t>(batch_size), device.system_errors.get(),
               device.device_error.get(), stream) == cudaSuccess);
-    CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
         device.batch(host, Gfn2PairListMode::kDense), device.positions.get(), kGeneration,
         device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
         stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
         device.batch(host, Gfn2PairListMode::kDense), device.positions.get(), device.radii.get(),
         kGeneration, device.cache(), device.coordination.get(), device.workspace(),
         device.system_errors.get(), device.device_error.get(), stream));
@@ -621,13 +621,13 @@ int test_boundary_distances() {
     return first * second;
   }();
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(1, 2, host.atom_offsets.data(),
-                                                     host.atomic_numbers.data(), host.plan,
-                                                     error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(1, 2, host.atom_offsets.data(),
+                                                      host.atomic_numbers.data(), host.plan,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
   host.expected_coordination.resize(2u);
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
-                                                        host.expected_coordination.data(),
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
+                                                         host.expected_coordination.data(),
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(host.expected_coordination[0], expected_at_boundary, 1e-12));
   CHECK(near(host.expected_coordination[1], expected_at_boundary, 1e-12));
 
@@ -635,9 +635,9 @@ int test_boundary_distances() {
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             1, device.system_errors.get(), device.device_error.get(), stream) == cudaSuccess);
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
       device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
       stream));
@@ -657,25 +657,25 @@ int test_empty_and_single_atom() {
   host.atomic_numbers = {6, 7, 8};
   host.positions = {0.0, 0.0, 0.0, 1.5, 0.0, 0.0, 3.0, 0.0, 0.0};
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(3, 3, host.atom_offsets.data(),
-                                                     host.atomic_numbers.data(), host.plan,
-                                                     error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(3, 3, host.atom_offsets.data(),
+                                                      host.atomic_numbers.data(), host.plan,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
   host.expected_coordination.resize(3u);
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
-                                                        host.expected_coordination.data(),
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
+                                                         host.expected_coordination.data(),
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
 
   cudaStream_t stream = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             3, device.system_errors.get(), device.device_error.get(), stream) == cudaSuccess);
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
       device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
       stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
       kGeneration, device.cache(), device.coordination.get(), device.workspace(),
       device.system_errors.get(), device.device_error.get(), stream));
@@ -707,10 +707,10 @@ int test_pair_capacity_overflow_isolated() {
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
   Gfn2PairListDeviceBatch batch = device.batch(host, Gfn2PairListMode::kSparse);
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             8, device.system_errors.get(), device.device_error.get(), stream) == cudaSuccess);
   batch.max_pairs_per_system = 1;
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       batch, device.positions.get(), kGeneration, device.cache(), device.workspace(),
       device.system_errors.get(), device.device_error.get(), stream));
   Results results;
@@ -743,25 +743,25 @@ int test_cell_capacity_dense_fallback() {
   host.atom_offsets = {0, 3};
   host.atomic_numbers = {6, 6, 6};
   host.positions = {0.0, 0.0, 0.0, 1000.0, 0.0, 0.0, 2000.0, 0.0, 0.0};
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(1, 3, host.atom_offsets.data(),
-                                                     host.atomic_numbers.data(), host.plan,
-                                                     error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(1, 3, host.atom_offsets.data(),
+                                                      host.atomic_numbers.data(), host.plan,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
   host.expected_coordination.resize(3u);
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
-                                                        host.expected_coordination.data(),
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(host.plan, host.positions.data(),
+                                                         host.expected_coordination.data(),
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
 
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, nullptr));
   Gfn2PairListDeviceBatch batch = device.batch(host, Gfn2PairListMode::kSparse);
   batch.max_cells_per_system = 1;
-  batch.flags = gpuxtb::detail::cuda::kGfn2PairListAllowDenseFallback;
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  batch.flags = xtbloom::detail::cuda::kGfn2PairListAllowDenseFallback;
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
       1, device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       batch, device.positions.get(), kGeneration, device.cache(), device.workspace(),
       device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
       batch, device.positions.get(), device.radii.get(), kGeneration, device.cache(),
       device.coordination.get(), device.workspace(), device.system_errors.get(),
       device.device_error.get()));
@@ -780,9 +780,9 @@ int test_stale_generation_rejected() {
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             8, device.system_errors.get(), device.device_error.get(), stream) == cudaSuccess);
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
       device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
       stream));
@@ -792,9 +792,9 @@ int test_stale_generation_rejected() {
                              cudaMemcpyDeviceToDevice, stream));
   const std::vector<double> sentinel(host.total_atoms(), kPairSentinel);
   CUDA_CHECK(device.coordination.copy_from(sentinel.data(), sentinel.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get(), stream));
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
             device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(),
             device.radii.get(), kGeneration, device.cache(), device.coordination.get(),
             device.workspace(), device.system_errors.get(), device.device_error.get(),
@@ -832,14 +832,14 @@ int test_geometry_invalidation_rebuild() {
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
     for (const std::uint64_t generation : {kGeneration, kGeneration + 5u}) {
-      CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+      CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
                 static_cast<std::int64_t>(batch_size), device.system_errors.get(),
                 device.device_error.get(), stream) == cudaSuccess);
-      CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
           device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), generation,
           device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
           stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
           device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
           generation, device.cache(), device.coordination.get(), device.workspace(),
           device.system_errors.get(), device.device_error.get(), stream));
@@ -871,13 +871,13 @@ int test_cuda_graph_capture_and_replay() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             32, device.system_errors.get(), device.device_error.get(), stream) == cudaSuccess);
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
       device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
       stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
       kGeneration, device.cache(), device.coordination.get(), device.workspace(),
       device.system_errors.get(), device.device_error.get(), stream));
@@ -905,9 +905,9 @@ int test_peer_failure_isolation() {
   CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, nullptr));
   /* Seed a previously published generation so a failed peer cannot be hidden
    * by the fixture's zero-initialized generation array. */
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
       device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -918,14 +918,14 @@ int test_peer_failure_isolation() {
   const double nan = std::numeric_limits<double>::quiet_NaN();
   CUDA_CHECK(cudaMemcpy(device.positions.get() + failed_atom * 3u, &nan, sizeof(nan),
                         cudaMemcpyHostToDevice));
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration + 1u,
       device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get()));
   /* The builder's sticky diagnostic records the failed peer.  Coordination
    * must still consume the sequence snapshot and evaluate every healthy peer. */
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
       kGeneration + 1u, device.cache(), device.coordination.get(), device.workspace(),
       device.system_errors.get(), device.device_error.get()));
@@ -970,13 +970,13 @@ int test_host_validation_rejects_hostile_views() {
   Gfn2PairListDeviceWorkspace workspace = device.workspace();
 
   batch.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
   batch = device.batch(host, Gfn2PairListMode::kSparse);
 
   workspace.pair_cursor_elements = 0;
-  CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
   workspace = device.workspace();
@@ -984,20 +984,20 @@ int test_host_validation_rejects_hostile_views() {
   /* system_meta is initialized and rewritten by the builder, so aliasing it
    * with the read-only positions view must be rejected before launch. */
   workspace.system_meta = reinterpret_cast<Gfn2PairListSystemMeta*>(device.positions.get());
-  CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
   workspace = device.workspace();
 
   cache.pair_offsets = workspace.pair_cursor;
-  CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
   cache = device.cache();
 
   /* Alias cache neighbor storage with workspace scratch. */
   cache.neighbors = workspace.neighbor_scratch;
-  CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
 
@@ -1012,7 +1012,7 @@ int test_host_validation_rejects_hostile_views() {
   batch.system_modes = system_modes.get();
   batch.system_mode_elements = static_cast<std::int64_t>(modes.size());
   cache.pair_counts = reinterpret_cast<std::int64_t*>(system_modes.get());
-  CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
             batch, device.positions.get(), kGeneration, cache, workspace,
             device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
 
@@ -1026,7 +1026,7 @@ int test_host_validation_rejects_hostile_views() {
   batch = device.batch(host, Gfn2PairListMode::kSparse);
   cache = device.cache();
   workspace = device.workspace();
-  CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
             batch, device.positions.get(), device.radii.get(), kGeneration, cache, d_dE_dcn.get(),
             device.positions.get(), gradient_scratch.get(),
             static_cast<std::int64_t>(gradient_scratch.size()), workspace,
@@ -1040,9 +1040,9 @@ int test_invalid_radius_is_peer_local() {
   CHECK(make_case(8u, true, host, error));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, nullptr));
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
       device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get()));
   const std::size_t failed_system = 2u;
@@ -1052,9 +1052,9 @@ int test_invalid_radius_is_peer_local() {
       cudaMemcpy(device.radii.get() + failed_atom, &nan, sizeof(nan), cudaMemcpyHostToDevice));
   const std::vector<double> sentinel(host.total_atoms(), kPairSentinel);
   CUDA_CHECK(device.coordination.copy_from(sentinel.data(), sentinel.size()));
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
       kGeneration, device.cache(), device.coordination.get(), device.workspace(),
       device.system_errors.get(), device.device_error.get()));
@@ -1085,9 +1085,9 @@ int test_pair_level_preflight_is_peer_local() {
   CHECK(make_case(8u, true, host, error));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, nullptr));
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
             8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
       device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get()));
 
@@ -1097,9 +1097,9 @@ int test_pair_level_preflight_is_peer_local() {
   const std::vector<double> sentinel(host.total_atoms(), kPairSentinel);
   const auto evaluate_and_check = [&]() -> int {
     CUDA_CHECK(device.coordination.copy_from(sentinel.data(), sentinel.size()));
-    CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
               8, device.system_errors.get(), device.device_error.get()) == cudaSuccess);
-    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
         device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
         kGeneration, device.cache(), device.coordination.get(), device.workspace(),
         device.system_errors.get(), device.device_error.get()));
@@ -1159,13 +1159,13 @@ int test_pair_level_preflight_is_peer_local() {
 }
 
 int test_dispatch_policy() {
-  CHECK(!gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(1));
-  CHECK(!gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(16));
-  CHECK(!gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(32));
-  CHECK(!gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(40));
-  CHECK(gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(41));
-  CHECK(gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(64));
-  CHECK(gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(128));
+  CHECK(!xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(1));
+  CHECK(!xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(16));
+  CHECK(!xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(32));
+  CHECK(!xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(40));
+  CHECK(xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(41));
+  CHECK(xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(64));
+  CHECK(xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(128));
   return 0;
 }
 
@@ -1205,14 +1205,14 @@ int test_per_system_dispatch() {
   host.atomic_numbers = atomic_numbers;
   host.positions = positions;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(batch_size, atoms, host.atom_offsets.data(),
-                                                     host.atomic_numbers.data(), host.plan,
-                                                     error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(batch_size, atoms, host.atom_offsets.data(),
+                                                      host.atomic_numbers.data(), host.plan,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
 
   std::vector<std::int32_t> per_system_modes(static_cast<std::size_t>(batch_size));
   for (std::int64_t system = 0; system < batch_size; ++system) {
     per_system_modes[static_cast<std::size_t>(system)] = static_cast<std::int32_t>(
-        gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system])
+        xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system])
             ? Gfn2PairListMode::kSparse
             : Gfn2PairListMode::kDense);
   }
@@ -1234,7 +1234,7 @@ int test_per_system_dispatch() {
   CUDA_CHECK(system_modes.copy_from(per_system_modes.data(), per_system_modes.size(), stream));
 
   const auto run = [&](DeviceFixture& device, Gfn2PairListMode mode) -> int {
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(host.batch_size()), device.system_errors.get(),
         device.device_error.get(), stream));
     Gfn2PairListDeviceBatch batch = device.batch(host, mode);
@@ -1242,10 +1242,10 @@ int test_per_system_dispatch() {
       batch.system_modes = system_modes.get();
       batch.system_mode_elements = host.batch_size();
     }
-    CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
         batch, device.positions.get(), kGeneration, device.cache(), device.workspace(),
         device.system_errors.get(), device.device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
         batch, device.positions.get(), device.radii.get(), kGeneration, device.cache(),
         device.coordination.get(), device.workspace(), device.system_errors.get(),
         device.device_error.get(), stream));
@@ -1311,7 +1311,7 @@ int test_per_system_dispatch() {
     const std::int64_t mixed_begin = mixed_offsets[static_cast<std::size_t>(system)];
     const std::int64_t mixed_end = mixed_offsets[static_cast<std::size_t>(system + 1)];
     const bool use_sparse =
-        gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system]);
+        xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system]);
     const std::int64_t expected_begin = use_sparse
                                             ? sparse_offsets[static_cast<std::size_t>(system)]
                                             : dense_offsets[static_cast<std::size_t>(system)];
@@ -1351,7 +1351,7 @@ int test_per_system_dispatch() {
       ++system;
     }
     const bool use_sparse =
-        gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system]);
+        xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system]);
     CHECK(mixed_cn[static_cast<std::size_t>(atom)] ==
           (use_sparse ? sparse_cn[static_cast<std::size_t>(atom)]
                       : dense_cn[static_cast<std::size_t>(atom)]));
@@ -1359,7 +1359,7 @@ int test_per_system_dispatch() {
   /* Dense-elected peers carry all-pairs even in the mixed run; their neighbor
    * ranges must match the homogeneous dense run. */
   for (std::int64_t system = 0; system < batch_size; ++system) {
-    if (gpuxtb::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system])) {
+    if (xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(system_sizes[system])) {
       continue;
     }
     const std::int64_t atom_begin = host.atom_offsets[static_cast<std::size_t>(system)];
@@ -1391,7 +1391,7 @@ int test_per_system_dispatch() {
       }
     }
   }
-  CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
             [&] {
               Gfn2PairListDeviceBatch batch = mixed_device.batch(host, Gfn2PairListMode::kSparse);
               batch.system_modes = system_modes.get();
@@ -1406,12 +1406,12 @@ int test_per_system_dispatch() {
    * topology preflight rejects an unknown per-system mode without publication. */
   per_system_modes[2] = 99;
   CUDA_CHECK(system_modes.copy_from(per_system_modes.data(), per_system_modes.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
       batch_size, mixed_device.system_errors.get(), mixed_device.device_error.get(), stream));
   Gfn2PairListDeviceBatch invalid_mode_batch = mixed_device.batch(host, Gfn2PairListMode::kSparse);
   invalid_mode_batch.system_modes = system_modes.get();
   invalid_mode_batch.system_mode_elements = batch_size;
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
       invalid_mode_batch, mixed_device.positions.get(), kGeneration + 1u, mixed_device.cache(),
       mixed_device.workspace(), mixed_device.system_errors.get(), mixed_device.device_error.get(),
       stream));
@@ -1441,14 +1441,14 @@ int test_sparse_vjp_matches_dense() {
 
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
-    CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
               static_cast<std::int64_t>(batch_size), device.system_errors.get(),
               device.device_error.get(), stream) == cudaSuccess);
-    CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
         device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
         device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
         stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
         device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
         kGeneration, device.cache(), device.coordination.get(), device.workspace(),
         device.system_errors.get(), device.device_error.get(), stream));
@@ -1477,19 +1477,19 @@ int test_sparse_vjp_matches_dense() {
                                  std::vector<double>(gradient_seed.size(), 0.0), stream));
 
     /* Sparse VJP. */
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), device.system_errors.get(),
         device.device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
         device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
         kGeneration, device.cache(), d_dE_dcn.get(), sparse_gradients.get(),
         sparse_gradient_scratch.get(), static_cast<std::int64_t>(sparse_gradient_scratch.size()),
         device.workspace(), device.system_errors.get(), device.device_error.get(), stream));
 
     /* Dense reference VJP over the real geometry cache. */
-    gpuxtb::detail::cuda::Gfn2GeometryDeviceBatch geom_batch{};
-    gpuxtb::detail::cuda::Gfn2GeometryDeviceCache geom_cache{};
-    gpuxtb::detail::cuda::Gfn2GeometryDeviceWorkspace geom_workspace{};
+    xtbloom::detail::cuda::Gfn2GeometryDeviceBatch geom_batch{};
+    xtbloom::detail::cuda::Gfn2GeometryDeviceCache geom_cache{};
+    xtbloom::detail::cuda::Gfn2GeometryDeviceWorkspace geom_workspace{};
     DeviceBuffer<double> geom_pair_data;
     DeviceBuffer<double> geom_coordination;
     DeviceBuffer<double> geom_pair_scratch;
@@ -1522,7 +1522,7 @@ int test_sparse_vjp_matches_dense() {
       CUDA_CHECK(geom_sequence.allocate(1u));
       CUDA_CHECK(geom_system_errors.allocate(host.batch_size()));
       CUDA_CHECK(geom_device_error.allocate(1u));
-      geom_batch = gpuxtb::detail::cuda::Gfn2GeometryDeviceBatch{
+      geom_batch = xtbloom::detail::cuda::Gfn2GeometryDeviceBatch{
           static_cast<std::int64_t>(host.batch_size()),
           static_cast<std::int64_t>(host.total_atoms()),
           pair_offsets.back(),
@@ -1535,7 +1535,7 @@ int test_sparse_vjp_matches_dense() {
           d_pair_offsets.get(),
           d_radii.get(),
       };
-      geom_cache = gpuxtb::detail::cuda::Gfn2GeometryDeviceCache{
+      geom_cache = xtbloom::detail::cuda::Gfn2GeometryDeviceCache{
           geom_pair_data.get(),
           static_cast<std::int64_t>(geom_pair_data.size()),
           geom_coordination.get(),
@@ -1544,7 +1544,7 @@ int test_sparse_vjp_matches_dense() {
           static_cast<std::int64_t>(geom_generations.size()),
           kPlanToken,
       };
-      geom_workspace = gpuxtb::detail::cuda::Gfn2GeometryDeviceWorkspace{
+      geom_workspace = xtbloom::detail::cuda::Gfn2GeometryDeviceWorkspace{
           geom_pair_scratch.get(),
           static_cast<std::int64_t>(geom_pair_scratch.size()),
           geom_coordination_scratch.get(),
@@ -1555,13 +1555,13 @@ int test_sparse_vjp_matches_dense() {
           1,
           kPlanToken,
       };
-      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
           static_cast<std::int64_t>(host.batch_size()), geom_system_errors.get(),
           geom_device_error.get(), stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
           geom_batch, device.positions.get(), kGeneration, geom_cache, geom_workspace,
           geom_system_errors.get(), geom_device_error.get(), stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_coordination_vjp_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_coordination_vjp_cuda(
           geom_batch, geom_cache, kGeneration, d_dE_dcn.get(), dense_gradients.get(),
           geom_workspace, geom_system_errors.get(), geom_device_error.get(), stream));
       CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -1601,10 +1601,10 @@ int test_sparse_vjp_matches_dense() {
     CUDA_CHECK(allocate_and_copy(successful_second_gradients, sparse_result, stream));
     CUDA_CHECK(allocate_and_copy(successful_second_scratch,
                                  std::vector<double>(gradient_seed.size(), 0.0), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), device.system_errors.get(),
         device.device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
         device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
         kGeneration, device.cache(), d_dE_dcn.get(), successful_second_gradients.get(),
         successful_second_scratch.get(),
@@ -1631,10 +1631,10 @@ int test_sparse_vjp_matches_dense() {
       }
       DeviceBuffer<double> d_dE_failed;
       CUDA_CHECK(allocate_and_copy(d_dE_failed, poisoned_dE, stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
           static_cast<std::int64_t>(batch_size), device.system_errors.get(),
           device.device_error.get(), stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
           device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
           kGeneration, device.cache(), d_dE_failed.get(), sparse_gradients.get(),
           sparse_gradient_scratch.get(), static_cast<std::int64_t>(sparse_gradient_scratch.size()),
@@ -1683,14 +1683,14 @@ int test_bitwise_dense_sparse_parity() {
     /* Sparse: the bucketed pair list. */
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
-    CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
               static_cast<std::int64_t>(batch_size), device.system_errors.get(),
               device.device_error.get(), stream) == cudaSuccess);
-    CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
         device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
         device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
         stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
         device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
         kGeneration, device.cache(), device.coordination.get(), device.workspace(),
         device.system_errors.get(), device.device_error.get(), stream));
@@ -1698,9 +1698,9 @@ int test_bitwise_dense_sparse_parity() {
     CHECK(cudaGetLastError() == cudaSuccess);
 
     /* Dense reference: the real geometry cache path. */
-    gpuxtb::detail::cuda::Gfn2GeometryDeviceBatch geom_batch{};
-    gpuxtb::detail::cuda::Gfn2GeometryDeviceCache geom_cache{};
-    gpuxtb::detail::cuda::Gfn2GeometryDeviceWorkspace geom_workspace{};
+    xtbloom::detail::cuda::Gfn2GeometryDeviceBatch geom_batch{};
+    xtbloom::detail::cuda::Gfn2GeometryDeviceCache geom_cache{};
+    xtbloom::detail::cuda::Gfn2GeometryDeviceWorkspace geom_workspace{};
     DeviceBuffer<double> geom_pair_data;
     DeviceBuffer<double> geom_coordination;
     DeviceBuffer<double> geom_pair_scratch;
@@ -1733,7 +1733,7 @@ int test_bitwise_dense_sparse_parity() {
       CUDA_CHECK(geom_sequence.allocate(1u));
       CUDA_CHECK(geom_system_errors.allocate(host.batch_size()));
       CUDA_CHECK(geom_device_error.allocate(1u));
-      geom_batch = gpuxtb::detail::cuda::Gfn2GeometryDeviceBatch{
+      geom_batch = xtbloom::detail::cuda::Gfn2GeometryDeviceBatch{
           static_cast<std::int64_t>(host.batch_size()),
           static_cast<std::int64_t>(host.total_atoms()),
           pair_offsets.back(),
@@ -1746,7 +1746,7 @@ int test_bitwise_dense_sparse_parity() {
           d_pair_offsets.get(),
           d_radii.get(),
       };
-      geom_cache = gpuxtb::detail::cuda::Gfn2GeometryDeviceCache{
+      geom_cache = xtbloom::detail::cuda::Gfn2GeometryDeviceCache{
           geom_pair_data.get(),
           static_cast<std::int64_t>(geom_pair_data.size()),
           geom_coordination.get(),
@@ -1755,7 +1755,7 @@ int test_bitwise_dense_sparse_parity() {
           static_cast<std::int64_t>(geom_generations.size()),
           kPlanToken,
       };
-      geom_workspace = gpuxtb::detail::cuda::Gfn2GeometryDeviceWorkspace{
+      geom_workspace = xtbloom::detail::cuda::Gfn2GeometryDeviceWorkspace{
           geom_pair_scratch.get(),
           static_cast<std::int64_t>(geom_pair_scratch.size()),
           geom_coordination_scratch.get(),
@@ -1766,10 +1766,10 @@ int test_bitwise_dense_sparse_parity() {
           1,
           kPlanToken,
       };
-      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_geometry_device_errors_cuda(
           static_cast<std::int64_t>(host.batch_size()), geom_system_errors.get(),
           geom_device_error.get(), stream));
-      CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_geometry_cache_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_geometry_cache_cuda(
           geom_batch, device.positions.get(), kGeneration, geom_cache, geom_workspace,
           geom_system_errors.get(), geom_device_error.get(), stream));
       CUDA_CHECK(cudaDeviceSynchronize());
@@ -1850,7 +1850,7 @@ void write_samples_json(std::ostream& output, const std::vector<BenchmarkRow>& r
                         const std::string& build_identity_sha256) {
   output << std::setprecision(9);
   output << "{\n  \"schema_version\": 1,\n"
-         << "  \"benchmark\": \"gpuxtb_cuda_pairlist_benchmark\",\n"
+         << "  \"benchmark\": \"xtbloom_cuda_pairlist_benchmark\",\n"
          << "  \"warmups\": 3,\n  \"samples_per_cell\": 20,\n"
          << "  \"cuda_runtime_version\": " << runtime_version << ",\n"
          << "  \"device_id\": " << device_id << ",\n"
@@ -1959,9 +1959,9 @@ int benchmark_build_vs_reuse(int argc, char** argv) {
             kBenchSpacing * static_cast<double>(local / (side * side));
       }
       std::vector<std::int64_t> atom_offsets(host.atom_offsets.begin(), host.atom_offsets.end());
-      CHECK(gpuxtb::detail::gfn2::make_coordination_plan(
+      CHECK(xtbloom::detail::gfn2::make_coordination_plan(
                 static_cast<std::int64_t>(batch_size), total_atoms, atom_offsets.data(),
-                host.atomic_numbers.data(), host.plan, error) == GPUXTB_STATUS_SUCCESS);
+                host.atomic_numbers.data(), host.plan, error) == XTBLOOM_STATUS_SUCCESS);
       host.expected_coordination.resize(static_cast<std::size_t>(total_atoms), 0.0);
 
       cudaStream_t stream = nullptr;
@@ -1976,7 +1976,7 @@ int benchmark_build_vs_reuse(int argc, char** argv) {
       CUDA_CHECK(cudaEventCreate(&stop));
 
       const auto reset_errors = [&]() {
-        return gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+        return xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
                    static_cast<std::int64_t>(batch_size), device.system_errors.get(),
                    device.device_error.get(), stream) == cudaSuccess;
       };
@@ -1986,7 +1986,7 @@ int benchmark_build_vs_reuse(int argc, char** argv) {
         for (int sample = -kWarmup; sample < kSamples; ++sample) {
           CHECK(reset_errors());
           CUDA_CHECK(cudaEventRecord(start, stream));
-          CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+          CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
               device.batch(host, mode), device.positions.get(), kGeneration, device.cache(),
               device.workspace(), device.system_errors.get(), device.device_error.get(), stream));
           CUDA_CHECK(cudaEventRecord(stop, stream));
@@ -2009,7 +2009,7 @@ int benchmark_build_vs_reuse(int argc, char** argv) {
         for (int sample = -kWarmup; sample < kSamples; ++sample) {
           CHECK(reset_errors());
           CUDA_CHECK(cudaEventRecord(start, stream));
-          CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+          CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
               device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(),
               device.radii.get(), kGeneration, device.cache(), device.coordination.get(),
               device.workspace(), device.system_errors.get(), device.device_error.get(), stream));
@@ -2033,7 +2033,7 @@ int benchmark_build_vs_reuse(int argc, char** argv) {
       row.atoms_per_system = atoms_per_system;
       /* First build once in sparse so the coordination reuse path is valid. */
       CHECK(reset_errors());
-      CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
           device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
           device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
           stream));
@@ -2044,7 +2044,7 @@ int benchmark_build_vs_reuse(int argc, char** argv) {
        * outside the timed interval so reuse_ms measures the advertised sparse
        * list rather than an all-pairs cache. */
       CHECK(reset_errors());
-      CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
           device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
           device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
           stream));
@@ -2101,10 +2101,10 @@ int test_consumer_vjp_matches_candidate_vjp() {
 
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
-    CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
               static_cast<std::int64_t>(batch_size), device.system_errors.get(),
               device.device_error.get(), stream) == cudaSuccess);
-    CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_pairlist_cache_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
         device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
         device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
         stream));
@@ -2200,10 +2200,10 @@ int test_consumer_vjp_matches_candidate_vjp() {
                                cudaMemcpyHostToDevice, stream));
 
     /* Candidate-path sparse VJP. */
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), device.system_errors.get(),
         device.device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_coordination_vjp_cuda(
         device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
         kGeneration, device.cache(), d_dE_dcn.get(), candidate_gradients.get(),
         candidate_scratch.get(), static_cast<std::int64_t>(candidate_scratch.size()),
@@ -2214,11 +2214,11 @@ int test_consumer_vjp_matches_candidate_vjp() {
     CUDA_CHECK(eligible_mask.allocate(batch_size));
     const std::vector<std::uint8_t> eligible_seed(batch_size, 1u);
     CUDA_CHECK(allocate_and_copy(eligible_mask, eligible_seed, stream));
-    gpuxtb::detail::Gfn2PairListConsumerView committed{};
-    committed.memory_space = gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice;
-    committed.state = gpuxtb::detail::Gfn2PairListState::kCommitted;
-    committed.role = gpuxtb::detail::Gfn2PairListRole::kCoordination;
-    committed.pair_map_kind = gpuxtb::detail::Gfn2PairMapKind::kExplicit;
+    xtbloom::detail::Gfn2PairListConsumerView committed{};
+    committed.memory_space = xtbloom::detail::Gfn2PlanMemorySpace::kCudaDevice;
+    committed.state = xtbloom::detail::Gfn2PairListState::kCommitted;
+    committed.role = xtbloom::detail::Gfn2PairListRole::kCoordination;
+    committed.pair_map_kind = xtbloom::detail::Gfn2PairMapKind::kExplicit;
     committed.plan_token = kPlanToken;
     committed.cutoff_bohr = 25.0;
     committed.list_builder_cutoff_bohr = 25.0;
@@ -2250,36 +2250,36 @@ int test_consumer_vjp_matches_candidate_vjp() {
     const std::vector<std::uint8_t> active_seed(batch_size, 1u);
     CUDA_CHECK(allocate_and_copy(active_mask, active_seed, stream));
 
-    const gpuxtb::detail::cuda::Gfn2PairListDeviceBatch consumer_batch =
+    const xtbloom::detail::cuda::Gfn2PairListDeviceBatch consumer_batch =
         device.batch(host, Gfn2PairListMode::kSparse);
-    gpuxtb::detail::Gfn2PairListConsumerView misaligned = committed;
+    xtbloom::detail::Gfn2PairListConsumerView misaligned = committed;
     misaligned.neighbor_offsets = reinterpret_cast<const std::int64_t*>(
         reinterpret_cast<std::uintptr_t>(misaligned.neighbor_offsets) + 1u);
-    CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
               consumer_batch, misaligned, device.positions.get(), device.radii.get(), kGeneration,
               d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
               static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
               consumer_system_errors.get(), consumer_device_error.get(),
               stream) == cudaErrorInvalidValue);
-    gpuxtb::detail::Gfn2PairListConsumerView short_neighbors = committed;
+    xtbloom::detail::Gfn2PairListConsumerView short_neighbors = committed;
     short_neighbors.neighbor_count -= 1;
-    CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
               consumer_batch, short_neighbors, device.positions.get(), device.radii.get(),
               kGeneration, d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
               static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
               consumer_system_errors.get(), consumer_device_error.get(),
               stream) == cudaErrorInvalidValue);
-    gpuxtb::detail::Gfn2PairListConsumerView active_without_count = committed;
+    xtbloom::detail::Gfn2PairListConsumerView active_without_count = committed;
     active_without_count.active_mask = active_mask.get();
-    CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
               consumer_batch, active_without_count, device.positions.get(), device.radii.get(),
               kGeneration, d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
               static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
               consumer_system_errors.get(), consumer_device_error.get(),
               stream) == cudaErrorInvalidValue);
-    gpuxtb::detail::Gfn2PairListConsumerView count_without_active = committed;
+    xtbloom::detail::Gfn2PairListConsumerView count_without_active = committed;
     count_without_active.active_mask_count = static_cast<std::int64_t>(batch_size);
-    CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
               consumer_batch, count_without_active, device.positions.get(), device.radii.get(),
               kGeneration, d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
               static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
@@ -2287,10 +2287,10 @@ int test_consumer_vjp_matches_candidate_vjp() {
               stream) == cudaErrorInvalidValue);
     /* The active mask is a control view and may not alias committed topology
      * or cache reads, even though both are read-only in this leaf. */
-    gpuxtb::detail::Gfn2PairListConsumerView aliased_active = committed;
+    xtbloom::detail::Gfn2PairListConsumerView aliased_active = committed;
     aliased_active.active_mask_count = static_cast<std::int64_t>(batch_size);
     aliased_active.active_mask = reinterpret_cast<const std::uint8_t*>(consumer_batch.atom_offsets);
-    CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
               consumer_batch, aliased_active, device.positions.get(), device.radii.get(),
               kGeneration, d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
               static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
@@ -2298,9 +2298,9 @@ int test_consumer_vjp_matches_candidate_vjp() {
               stream) == cudaErrorInvalidValue);
     /* Every committed structural array has a distinct meaning even when its
      * element type and extent happen to match another array. */
-    gpuxtb::detail::Gfn2PairListConsumerView aliased_structural = committed;
+    xtbloom::detail::Gfn2PairListConsumerView aliased_structural = committed;
     aliased_structural.pair_counts = committed.pair_offsets;
-    CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
               consumer_batch, aliased_structural, device.positions.get(), device.radii.get(),
               kGeneration, d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
               static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
@@ -2308,18 +2308,18 @@ int test_consumer_vjp_matches_candidate_vjp() {
               stream) == cudaErrorInvalidValue);
     /* A committed array also cannot borrow the topology partition: the host
      * binding validator enforces the same zero-copy ownership boundary. */
-    gpuxtb::detail::Gfn2PairListConsumerView aliased_topology = committed;
+    xtbloom::detail::Gfn2PairListConsumerView aliased_topology = committed;
     aliased_topology.pair_offsets = consumer_batch.atom_offsets;
-    CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
               consumer_batch, aliased_topology, device.positions.get(), device.radii.get(),
               kGeneration, d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
               static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
               consumer_system_errors.get(), consumer_device_error.get(),
               stream) == cudaErrorInvalidValue);
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), consumer_system_errors.get(),
         consumer_device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
         consumer_batch, committed, device.positions.get(), device.radii.get(), kGeneration,
         d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
         static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
@@ -2362,13 +2362,13 @@ int test_consumer_vjp_matches_candidate_vjp() {
         consumer_scratch.copy_from(scratch_sentinel.data(), scratch_sentinel.size(), stream));
     CUDA_CHECK(cudaMemcpyAsync(consumer_sequence.get(), &armed, sizeof(armed),
                                cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), consumer_system_errors.get(),
         consumer_device_error.get(), stream));
-    gpuxtb::detail::Gfn2PairListConsumerView active_committed = committed;
+    xtbloom::detail::Gfn2PairListConsumerView active_committed = committed;
     active_committed.active_mask_count = static_cast<std::int64_t>(batch_size);
     active_committed.active_mask = active_mask.get();
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
         consumer_batch, active_committed, device.positions.get(), device.radii.get(), kGeneration,
         d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
         static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
@@ -2402,10 +2402,10 @@ int test_consumer_vjp_matches_candidate_vjp() {
     CUDA_CHECK(consumer_gradients.copy_from(gradient_seed.data(), gradient_seed.size(), stream));
     CUDA_CHECK(cudaMemcpyAsync(consumer_sequence.get(), &armed, sizeof(armed),
                                cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), consumer_system_errors.get(),
         consumer_device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
         consumer_batch, active_committed, device.positions.get(), device.radii.get(), kGeneration,
         d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
         static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
@@ -2430,10 +2430,10 @@ int test_consumer_vjp_matches_candidate_vjp() {
     CUDA_CHECK(cudaMemcpyAsync(consumer_sequence.get(), &armed, sizeof(armed),
                                cudaMemcpyHostToDevice, stream));
     const Gfn2GeometryEpochDevice epoch_source{epoch.get(), 1, kPlanToken};
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), consumer_system_errors.get(),
         consumer_device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
         consumer_batch, committed, device.positions.get(), device.radii.get(), epoch_source,
         d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
         static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
@@ -2452,10 +2452,10 @@ int test_consumer_vjp_matches_candidate_vjp() {
                                cudaMemcpyHostToDevice, stream));
     CUDA_CHECK(cudaMemcpyAsync(consumer_sequence.get(), &armed, sizeof(armed),
                                cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), consumer_system_errors.get(),
         consumer_device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
         consumer_batch, committed, device.positions.get(), device.radii.get(), kGeneration,
         d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
         static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
@@ -2479,14 +2479,14 @@ int test_consumer_vjp_matches_candidate_vjp() {
     CUDA_CHECK(consumer_gradients.copy_from(gradient_seed.data(), gradient_seed.size(), stream));
     CUDA_CHECK(cudaMemcpyAsync(consumer_sequence.get(), &armed, sizeof(armed),
                                cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), consumer_system_errors.get(),
         consumer_device_error.get(), stream));
     std::vector<std::int64_t> hostile_offsets = host.atom_offsets;
     hostile_offsets[0] = 1;
     CUDA_CHECK(
         device.atom_offsets.copy_from(hostile_offsets.data(), hostile_offsets.size(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_pairlist_consumer_coordination_vjp_cuda(
         consumer_batch, committed, device.positions.get(), device.radii.get(), kGeneration,
         d_dE_dcn.get(), consumer_gradients.get(), consumer_scratch.get(),
         static_cast<std::int64_t>(consumer_scratch.size()), consumer_sequence.get(),
@@ -2503,7 +2503,7 @@ int test_consumer_vjp_matches_candidate_vjp() {
 }
 }  // namespace
 
-#ifdef GPUXTB_PAIRLIST_BENCHMARK_ONLY
+#ifdef XTBLOOM_PAIRLIST_BENCHMARK_ONLY
 int main(int argc, char** argv) {
   int device_count = 0;
   if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
@@ -2592,4 +2592,4 @@ int main() {
   }
   return 0;
 }
-#endif  // GPUXTB_PAIRLIST_BENCHMARK_ONLY
+#endif  // XTBLOOM_PAIRLIST_BENCHMARK_ONLY

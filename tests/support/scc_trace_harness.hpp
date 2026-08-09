@@ -1,4 +1,4 @@
-// gpuxtb CPU SCC trace harness shared by the single-case capture, the ragged
+// xtbloom CPU SCC trace harness shared by the single-case capture, the ragged
 // batch capture, and the golden mixed-state replay executables (issues
 // #42/#49/#50).
 //
@@ -6,7 +6,7 @@
 // generate_scc_corpus.py), drives the production CPU GFN2 SCC driver for one
 // or more systems in one ragged batch, and streams captured per-iteration
 // state in exactly the same raw layout as the Fortran tblite recorder so that
-// generate_scc_corpus.canonicalize() can assemble gpuxtb-scc-trace-v1
+// generate_scc_corpus.canonicalize() can assemble xtbloom-scc-trace-v1
 // documents and the comparator can compare them against pinned goldens.
 //
 // The harness seeds the SCC perturbative q/d/Q state at exactly zero (matching
@@ -18,8 +18,8 @@
 //
 // This header is test-only tooling against internal GFN2 headers; it is not
 // part of the public C ABI.
-#ifndef GPUXTB_TESTS_SUPPORT_SCC_TRACE_HARNESS_HPP
-#define GPUXTB_TESTS_SUPPORT_SCC_TRACE_HARNESS_HPP
+#ifndef XTBLOOM_TESTS_SUPPORT_SCC_TRACE_HARNESS_HPP
+#define XTBLOOM_TESTS_SUPPORT_SCC_TRACE_HARNESS_HPP
 
 #include <algorithm>
 #include <cmath>
@@ -39,7 +39,6 @@
 #include <utility>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/coordination.hpp"
@@ -54,10 +53,11 @@
 #include "model/gfn2/scc_driver.hpp"
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/wavefunction.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb_trace_harness {
+namespace xtbloom_trace_harness {
 
-using namespace gpuxtb::detail::gfn2;
+using namespace xtbloom::detail::gfn2;
 
 inline constexpr double kKelvinToHartree = 3.166808578545117e-6;
 // Match tblite's singlepoint convergence policy exactly: with accuracy=1.0
@@ -206,7 +206,7 @@ class TraceBatch {
   std::int64_t system_count() const noexcept { return static_cast<std::int64_t>(specs_.size()); }
   const CaseSpec& spec(std::int64_t index) const { return specs_[static_cast<std::size_t>(index)]; }
 
-  gpuxtb_status_t system_status(std::int64_t index) const;
+  xtbloom_status_t system_status(std::int64_t index) const;
   std::uint64_t system_iterations(std::int64_t index) const;
   bool system_converged(std::int64_t index) const;
   // Live per-system multipole slice {qsh, qat, dipoles, quadrupoles}, for
@@ -222,9 +222,9 @@ class TraceBatch {
   // mixer memory/damping, and the maximum-iteration cap).  Emitting a lane
   // whose spec declares a different policy than the one the plan actually ran
   // would be dishonest trace evidence, so reject such batches at build time.
-  gpuxtb_status_t validate_policy_homogeneity(std::string& err) const;
+  xtbloom_status_t validate_policy_homogeneity(std::string& err) const;
 
-  gpuxtb_status_t build(std::string& err);
+  xtbloom_status_t build(std::string& err);
   // Write NaN into the H0 slice of one system so its next preparation phase
   // fails per-system without touching peers (controlled failure-isolation
   // member for issue #50).  Must be called after build() and before run().
@@ -237,8 +237,8 @@ class TraceBatch {
   // step() (single-iteration replay for issue #49).  The state file layout is
   // line-oriented: "qsh <n>" then n values, "qat <n>" then n values,
   // "dipoles <n>" then n values, "quadrupoles <n>" then n values.
-  gpuxtb_status_t inject_mixed_state(std::int64_t system, const std::string& state_path,
-                                     std::string& err);
+  xtbloom_status_t inject_mixed_state(std::int64_t system, const std::string& state_path,
+                                      std::string& err);
   // Choose the injected state's logical iteration number and previous internal
   // energy so a replay of golden iteration k computes the same energy_delta
   // and convergence flags as tblite.
@@ -246,30 +246,30 @@ class TraceBatch {
   // Re-capture one system's mixer current input from the injected wavefunction
   // state and clear its history, so a single-iteration replay's residual is
   // raw minus the injected golden mixed state (not the zero init).
-  gpuxtb_status_t restart_mixer_system(std::int64_t system, std::string& err);
+  xtbloom_status_t restart_mixer_system(std::int64_t system, std::string& err);
   // Overwrite one system's multipole state from flattened vectors in the
   // canonical residual order (qsh, then atom-major dipoles, then atom-major
   // quadrupoles).  Used by the independent golden-residual mixer replay.
-  gpuxtb_status_t write_multipoles(std::int64_t system, const std::vector<double>& qsh,
-                                   const std::vector<double>& dpat, const std::vector<double>& qpat,
-                                   std::string& err);
+  xtbloom_status_t write_multipoles(std::int64_t system, const std::vector<double>& qsh,
+                                    const std::vector<double>& dpat,
+                                    const std::vector<double>& qpat, std::string& err);
   // Run one production Broyden mixer transition for one system against its
   // current wavefunction raw multipoles and mixer current input.  After a
   // successful call the wavefunction multipoles hold the next mixed input.
-  gpuxtb_status_t mixer_mix(std::int64_t system, std::string& err);
+  xtbloom_status_t mixer_mix(std::int64_t system, std::string& err);
   // Return the wavefunction multipoles flattened in the residual order after
   // a mixer transition (the next mixed input).
   std::vector<double> next_mixed_flattened(std::int64_t system) const;
   // Advance every active system by exactly one driver iteration.  Successful
   // peers are committed even when another lane failed.
-  gpuxtb_status_t step(std::string& err);
+  xtbloom_status_t step(std::string& err);
   // One full harness iteration: capture pre-solve mixed state, advance every
   // active system by one driver iteration, and record the per-lane snapshots.
-  gpuxtb_status_t step_once(std::string& err);
+  xtbloom_status_t step_once(std::string& err);
   // Loop step() until every system is terminal or kMaximumHarnessIterations
   // passes.  A per-lane failure (for example the poisoned lane) does not
   // suppress the successful lanes.
-  gpuxtb_status_t run(std::string& err);
+  xtbloom_status_t run(std::string& err);
   // Append the complete raw stream of one system in the recorder layout.
   void emit(std::ostream& output, std::int64_t system) const;
 
@@ -277,8 +277,8 @@ class TraceBatch {
   struct Geometry;
   struct Stage;
 
-  gpuxtb_status_t build_geometry(std::string& err);
-  gpuxtb_status_t build_stage(const CaseSpec& reference, std::string& err);
+  xtbloom_status_t build_geometry(std::string& err);
+  xtbloom_status_t build_stage(const CaseSpec& reference, std::string& err);
   // Capture the pre-solve mixed q/d/Q of every active lane before a step.
   void capture_mixed_pre_step();
   // Append one CapturedIteration for every lane that advanced this call,
@@ -349,7 +349,7 @@ struct TraceBatch::Stage {
   SccDriverWorkspace drv_ws;
 };
 
-gpuxtb_status_t TraceBatch::system_status(std::int64_t index) const {
+xtbloom_status_t TraceBatch::system_status(std::int64_t index) const {
   return stage_->driver_state.system_statuses[index];
 }
 std::uint64_t TraceBatch::system_iterations(std::int64_t index) const {
@@ -376,13 +376,13 @@ std::vector<std::vector<double>> TraceBatch::live_state(std::int64_t system) con
   };
 }
 
-gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
+xtbloom_status_t TraceBatch::build_geometry(std::string& err) {
   auto geometry = std::make_shared<Geometry>();
   Geometry& g = *geometry;
   g.batch_size = static_cast<std::int64_t>(specs_.size());
   if (g.batch_size <= 0) {
     err = "trace harness needs at least one case";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   std::int64_t total_atoms = 0;
@@ -426,8 +426,8 @@ gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
                           spec.atomic_numbers.end());
   }
 
-  gpuxtb_status_t s = make_basis_plan(g.batch_size, total_atoms, g.atom_offsets.data(),
-                                      atomic_numbers.data(), g.basis, err);
+  xtbloom_status_t s = make_basis_plan(g.batch_size, total_atoms, g.atom_offsets.data(),
+                                       atomic_numbers.data(), g.basis, err);
   if (s) return s;
   s = make_integral_plan(g.basis, g.integrals, err);
   if (s) return s;
@@ -464,7 +464,7 @@ gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
   g.qint.assign(6 * matrix, 0.0);
   g.h0.assign(matrix, 0.0);
   g.cn.assign(static_cast<std::size_t>(total_atoms), 0.0);
-  if (g.iscratch.size < g.integrals.workspace_size_bytes) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (g.iscratch.size < g.integrals.workspace_size_bytes) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = evaluate_coordination_cpu(g.coordination_plan, g.positions.data(), g.cn.data(), err);
   if (s) return s;
   s = evaluate_overlap_cpu(g.basis, g.integrals, g.positions.data(), g.overlap.data(),
@@ -478,7 +478,7 @@ gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
   if (s) return s;
 
   const std::size_t e2n = static_cast<std::size_t>(g.es2_plan.total_matrix_elements());
-  if (g.e2s.size < e2n * sizeof(double)) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (g.e2s.size < e2n * sizeof(double)) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   g.es2_ws.matrix_scratch = static_cast<double*>(g.e2scratch.data);
   g.es2_ws.matrix_elements = g.es2_plan.total_matrix_elements();
   s = update_es2_geometry_cache_cpu(g.es2_plan, g.positions.data(), 1u,
@@ -487,7 +487,7 @@ gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
   if (s) return s;
 
   const std::size_t a2n = static_cast<std::size_t>(g.aes2_plan.pair_data_elements());
-  if (g.a2s.size < a2n * sizeof(double)) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (g.a2s.size < a2n * sizeof(double)) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   g.aes2_ws.pair_scratch = static_cast<double*>(g.a2scratch.data);
   g.aes2_ws.pair_elements = g.aes2_plan.pair_data_elements();
   s = update_aes2_geometry_cache_cpu(g.aes2_plan, g.positions.data(), g.cn.data(), 1u,
@@ -495,7 +495,7 @@ gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
                                      err);
   if (s) return s;
 
-  if (g.d4_buffer.size < g.d4_plan.workspace_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (g.d4_buffer.size < g.d4_plan.workspace_size_bytes()) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_d4_workspace(g.d4_plan, g.d4_buffer.data, g.d4_buffer.size, g.d4_ws, err);
   if (s) return s;
   g.d4_pairs.assign(static_cast<std::size_t>(g.d4_plan.total_pairs()) * kD4PairDataElements, 0.0);
@@ -529,7 +529,7 @@ gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
 
   s = make_mkl_rt_lp64_backend(g.backend, err);
   if (s) return s;
-  if (g.wfn_s.size < g.layout.workspace_size_bytes) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (g.wfn_s.size < g.layout.workspace_size_bytes) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_wavefunction_view(g.layout, g.wfn_s.data, g.wfn_s.size, g.wfn, err);
   if (s) return s;
   // Issue #49 closed-loop trajectories start from the same initial guess as
@@ -544,10 +544,10 @@ gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
   std::fill_n(g.wfn.dipole, static_cast<std::size_t>(g.layout.dipole.element_count), 0.0);
   std::fill_n(g.wfn.quadrupole, static_cast<std::size_t>(g.layout.quadrupole.element_count), 0.0);
 
-  if (g.oc_s.size < g.eig_plan.overlap_cache_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (g.oc_s.size < g.eig_plan.overlap_cache_size_bytes()) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_eigensolver_overlap_cache(g.eig_plan, g.oc_s.data, g.oc_s.size, g.ocache, err);
   if (s) return s;
-  if (g.eig_s.size < g.eig_plan.workspace_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (g.eig_s.size < g.eig_plan.workspace_size_bytes()) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_eigensolver_workspace(g.eig_plan, g.eig_s.data, g.eig_s.size, g.eig_ws, err);
   if (s) return s;
   s = factor_overlap_cpu(g.eig_plan, g.overlap.data(), 1u, g.backend, g.eig_ws, g.ocache, err);
@@ -555,13 +555,13 @@ gpuxtb_status_t TraceBatch::build_geometry(std::string& err) {
 
   geometry_ = std::move(geometry);
   err.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t TraceBatch::build_stage(const CaseSpec& reference, std::string& err) {
+xtbloom_status_t TraceBatch::build_stage(const CaseSpec& reference, std::string& err) {
   Geometry& g = *geometry_;
   auto stage = std::make_shared<Stage>();
-  gpuxtb_status_t s =
+  xtbloom_status_t s =
       make_scc_mixer_plan(g.layout, reference.mixer_memory, reference.mixer_damping,
                           kTbliteRmsTolerance, kTbliteRmsTolerance, stage->mixer_plan, err);
   if (s) return s;
@@ -575,19 +575,19 @@ gpuxtb_status_t TraceBatch::build_stage(const CaseSpec& reference, std::string& 
                            stage->driver_plan, err);
   if (s) return s;
   if (stage->mixer_s.size < stage->mixer_plan.state_size_bytes()) {
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
   s = bind_scc_mixer_state(stage->mixer_plan, stage->mixer_s.data, stage->mixer_s.size,
                            stage->mixer_state, err);
   if (s) return s;
   if (stage->drv_s.size < stage->driver_plan.state_size_bytes()) {
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
   s = bind_scc_driver_state(stage->driver_plan, stage->drv_s.data, stage->drv_s.size,
                             stage->driver_state, err);
   if (s) return s;
   if (stage->drvws_s.size < stage->driver_plan.workspace_size_bytes()) {
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
   s = bind_scc_driver_workspace(stage->driver_plan, stage->drvws_s.data, stage->drvws_s.size,
                                 stage->drv_ws, err);
@@ -599,12 +599,12 @@ gpuxtb_status_t TraceBatch::build_stage(const CaseSpec& reference, std::string& 
   iterations_.assign(static_cast<std::size_t>(g.batch_size), {});
   failed_attempts_.assign(static_cast<std::size_t>(g.batch_size), {});
   err.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t TraceBatch::build(std::string& err) {
-  gpuxtb_status_t s = validate_policy_homogeneity(err);
-  if (s != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t TraceBatch::build(std::string& err) {
+  xtbloom_status_t s = validate_policy_homogeneity(err);
+  if (s != XTBLOOM_STATUS_SUCCESS) {
     return s;
   }
   s = build_geometry(err);
@@ -612,10 +612,10 @@ gpuxtb_status_t TraceBatch::build(std::string& err) {
   return build_stage(specs_.front(), err);
 }
 
-gpuxtb_status_t TraceBatch::validate_policy_homogeneity(std::string& err) const {
+xtbloom_status_t TraceBatch::validate_policy_homogeneity(std::string& err) const {
   if (specs_.empty()) {
     err = "trace harness needs at least one case";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const CaseSpec& reference = specs_.front();
   for (std::size_t index = 1u; index < specs_.size(); ++index) {
@@ -629,11 +629,11 @@ gpuxtb_status_t TraceBatch::validate_policy_homogeneity(std::string& err) const 
           "ragged batch cases must share one numerical policy (temperature, "
           "mixer memory/damping, maximum iterations); lane " +
           std::to_string(index) + " differs";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   err.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 void TraceBatch::poison_h0(std::int64_t system) {
@@ -646,11 +646,11 @@ void TraceBatch::poison_h0(std::int64_t system) {
 }
 
 void TraceBatch::poison_eigensolver(std::int64_t system) {
-  geometry_->ocache.system_statuses[system] = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+  geometry_->ocache.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
 }
 
-gpuxtb_status_t TraceBatch::inject_mixed_state(std::int64_t system, const std::string& state_path,
-                                               std::string& err) {
+xtbloom_status_t TraceBatch::inject_mixed_state(std::int64_t system, const std::string& state_path,
+                                                std::string& err) {
   Geometry& g = *geometry_;
   const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
   const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
@@ -666,7 +666,7 @@ gpuxtb_status_t TraceBatch::inject_mixed_state(std::int64_t system, const std::s
   std::ifstream file(state_path);
   if (!file) {
     err = "cannot open state file " + state_path;
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   double value = 0.0;
   std::int64_t count = 0;
@@ -683,40 +683,40 @@ gpuxtb_status_t TraceBatch::inject_mixed_state(std::int64_t system, const std::s
     }
     return true;
   };
-  if (!read_section("qsh", shells)) return GPUXTB_STATUS_INVALID_ARGUMENT;
+  if (!read_section("qsh", shells)) return XTBLOOM_STATUS_INVALID_ARGUMENT;
   for (std::int64_t local = 0; local < shells; ++local) {
     if (!(file >> value) || !std::isfinite(value)) {
       err = "state file qsh value malformed";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     g.wfn.qsh[shell_begin + local] = value;
   }
-  if (!read_section("qat", atoms)) return GPUXTB_STATUS_INVALID_ARGUMENT;
+  if (!read_section("qat", atoms)) return XTBLOOM_STATUS_INVALID_ARGUMENT;
   for (std::int64_t local = 0; local < atoms; ++local) {
     if (!(file >> value) || !std::isfinite(value)) {
       err = "state file qat value malformed";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     g.wfn.qat[qat_begin + local] = value;
   }
-  if (!read_section("dipoles", 3 * atoms)) return GPUXTB_STATUS_INVALID_ARGUMENT;
+  if (!read_section("dipoles", 3 * atoms)) return XTBLOOM_STATUS_INVALID_ARGUMENT;
   for (std::int64_t local = 0; local < 3 * atoms; ++local) {
     if (!(file >> value) || !std::isfinite(value)) {
       err = "state file dipole value malformed";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     g.wfn.dipole[dip_base + local] = value;
   }
-  if (!read_section("quadrupoles", 6 * atoms)) return GPUXTB_STATUS_INVALID_ARGUMENT;
+  if (!read_section("quadrupoles", 6 * atoms)) return XTBLOOM_STATUS_INVALID_ARGUMENT;
   for (std::int64_t local = 0; local < 6 * atoms; ++local) {
     if (!(file >> value) || !std::isfinite(value)) {
       err = "state file quadrupole value malformed";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     g.wfn.quadrupole[quad_base + local] = value;
   }
   err.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 void TraceBatch::set_replay_context(std::int64_t system, std::uint64_t logical_index,
@@ -731,31 +731,31 @@ void TraceBatch::set_replay_context(std::int64_t system, std::uint64_t logical_i
   }
 }
 
-gpuxtb_status_t TraceBatch::step(std::string& err) {
+xtbloom_status_t TraceBatch::step(std::string& err) {
   return iterate_scc_driver_batch_cpu(stage_->driver_plan, geometry_->geom, geometry_->backend,
                                       geometry_->ocache, geometry_->wfn, stage_->mixer_state,
                                       stage_->driver_state, stage_->drv_ws, err);
 }
 
-gpuxtb_status_t TraceBatch::step_once(std::string& err) {
+xtbloom_status_t TraceBatch::step_once(std::string& err) {
   capture_mixed_pre_step();
-  const gpuxtb_status_t status = step(err);
-  if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
-      status != GPUXTB_STATUS_EIGENSOLVER_FAILED && status != GPUXTB_STATUS_INTERNAL_ERROR) {
+  const xtbloom_status_t status = step(err);
+  if (status != XTBLOOM_STATUS_SUCCESS && status != XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
+      status != XTBLOOM_STATUS_EIGENSOLVER_FAILED && status != XTBLOOM_STATUS_INTERNAL_ERROR) {
     return status;
   }
   record_iteration_snapshots();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t TraceBatch::restart_mixer_system(std::int64_t system, std::string& err) {
+xtbloom_status_t TraceBatch::restart_mixer_system(std::int64_t system, std::string& err) {
   return restart_scc_mixer_system_cpu(stage_->mixer_plan, system, geometry_->wfn,
                                       stage_->mixer_state, err);
 }
 
-gpuxtb_status_t TraceBatch::write_multipoles(std::int64_t system, const std::vector<double>& qsh,
-                                             const std::vector<double>& dpat,
-                                             const std::vector<double>& qpat, std::string& err) {
+xtbloom_status_t TraceBatch::write_multipoles(std::int64_t system, const std::vector<double>& qsh,
+                                              const std::vector<double>& dpat,
+                                              const std::vector<double>& qpat, std::string& err) {
   Geometry& g = *geometry_;
   const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
   const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
@@ -769,7 +769,7 @@ gpuxtb_status_t TraceBatch::write_multipoles(std::int64_t system, const std::vec
       static_cast<std::int64_t>(dpat.size()) != 3 * atoms ||
       static_cast<std::int64_t>(qpat.size()) != 6 * atoms) {
     err = "multipole write has wrong element counts";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t local = 0; local < shells; ++local) {
     g.wfn.qsh[shell_begin + local] = qsh[static_cast<std::size_t>(local)];
@@ -781,10 +781,10 @@ gpuxtb_status_t TraceBatch::write_multipoles(std::int64_t system, const std::vec
     g.wfn.quadrupole[quad_base + local] = qpat[static_cast<std::size_t>(local)];
   }
   err.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t TraceBatch::mixer_mix(std::int64_t system, std::string& err) {
+xtbloom_status_t TraceBatch::mixer_mix(std::int64_t system, std::string& err) {
   return mix_scc_broyden_system_cpu(stage_->mixer_plan, system, geometry_->wfn, stage_->mixer_state,
                                     stage_->drv_ws.mixer_workspace, err);
 }
@@ -806,13 +806,13 @@ std::vector<double> TraceBatch::next_mixed_flattened(std::int64_t system) const 
   return flattened;
 }
 
-gpuxtb_status_t TraceBatch::run(std::string& err) {
+xtbloom_status_t TraceBatch::run(std::string& err) {
   Geometry& g = *geometry_;
   const std::int64_t batch = g.batch_size;
   for (std::uint64_t total = 0u; total < kMaximumHarnessIterations; ++total) {
     bool any_active = false;
     for (std::int64_t system = 0; system < batch; ++system) {
-      const bool active = stage_->driver_state.system_statuses[system] == GPUXTB_STATUS_SUCCESS &&
+      const bool active = stage_->driver_state.system_statuses[system] == XTBLOOM_STATUS_SUCCESS &&
                           stage_->driver_state.converged[system] == 0u;
       any_active = any_active || active;
     }
@@ -820,17 +820,17 @@ gpuxtb_status_t TraceBatch::run(std::string& err) {
       break;
     }
     capture_mixed_pre_step();
-    const gpuxtb_status_t step_status = step(err);
-    if (step_status != GPUXTB_STATUS_SUCCESS && step_status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
-        step_status != GPUXTB_STATUS_EIGENSOLVER_FAILED &&
-        step_status != GPUXTB_STATUS_INTERNAL_ERROR) {
+    const xtbloom_status_t step_status = step(err);
+    if (step_status != XTBLOOM_STATUS_SUCCESS && step_status != XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
+        step_status != XTBLOOM_STATUS_EIGENSOLVER_FAILED &&
+        step_status != XTBLOOM_STATUS_INTERNAL_ERROR) {
       // Structural/binding failures are whole-call and abort the batch.
       return step_status;
     }
     record_iteration_snapshots();
   }
   err.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 void TraceBatch::capture_mixed_pre_step() {
@@ -838,7 +838,7 @@ void TraceBatch::capture_mixed_pre_step() {
   const std::int64_t batch = g.batch_size;
   pending_mixed_.assign(static_cast<std::size_t>(batch), std::vector<std::vector<double>>(4u));
   for (std::int64_t system = 0; system < batch; ++system) {
-    if (stage_->driver_state.system_statuses[system] != GPUXTB_STATUS_SUCCESS ||
+    if (stage_->driver_state.system_statuses[system] != XTBLOOM_STATUS_SUCCESS ||
         stage_->driver_state.converged[system] != 0u) {
       continue;
     }
@@ -878,8 +878,8 @@ void TraceBatch::record_iteration_snapshots() {
       continue;
     }
 
-    const gpuxtb_status_t lane_status = st.driver_state.system_statuses[system];
-    if (lane_status == GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+    const xtbloom_status_t lane_status = st.driver_state.system_statuses[system];
+    if (lane_status == XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
       const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
       const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
       const std::int64_t density_base = g.layout.density.system_offsets[system];
@@ -902,7 +902,7 @@ void TraceBatch::record_iteration_snapshots() {
           std::move(pending_mixed_[static_cast<std::size_t>(system)][3u]);
       continue;
     }
-    if (lane_status != GPUXTB_STATUS_SUCCESS && lane_status != GPUXTB_STATUS_SCC_NOT_CONVERGED) {
+    if (lane_status != XTBLOOM_STATUS_SUCCESS && lane_status != XTBLOOM_STATUS_SCC_NOT_CONVERGED) {
       continue;
     }
     CapturedIteration row;
@@ -1007,8 +1007,8 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   if (system_converged(system)) {
     terminal = 1;
   } else {
-    const gpuxtb_status_t lane_status = stage_->driver_state.system_statuses[system];
-    if (lane_status != GPUXTB_STATUS_SUCCESS && lane_status != GPUXTB_STATUS_SCC_NOT_CONVERGED) {
+    const xtbloom_status_t lane_status = stage_->driver_state.system_statuses[system];
+    if (lane_status != XTBLOOM_STATUS_SUCCESS && lane_status != XTBLOOM_STATUS_SCC_NOT_CONVERGED) {
       terminal = 3;
     }
   }
@@ -1123,6 +1123,6 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   }
 }
 
-}  // namespace gpuxtb_trace_harness
+}  // namespace xtbloom_trace_harness
 
-#endif  // GPUXTB_TESTS_SUPPORT_SCC_TRACE_HARNESS_HPP
+#endif  // XTBLOOM_TESTS_SUPPORT_SCC_TRACE_HARNESS_HPP

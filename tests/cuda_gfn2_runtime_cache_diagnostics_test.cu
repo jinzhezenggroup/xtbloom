@@ -12,19 +12,19 @@
 #include <vector>
 
 #include "backends/cuda/gfn2_geometry.cuh"
-#include "gpuxtb/gpuxtb.h"
 #include "runtime/gfn2_cuda_execution.hpp"
 #include "tests/support/gfn2_scc_test_case.hpp"
+#include "xtbloom/xtbloom.h"
 
 namespace {
 
-using gpuxtb::detail::Gfn2CudaExecutionCache;
-using gpuxtb::detail::Gfn2CudaExecutionIdentity;
-using gpuxtb::detail::Gfn2CudaNumericalInputView;
-using gpuxtb::detail::Gfn2CudaOpaqueBufferIdentity;
-using gpuxtb::test::gfn2::HostSccCase;
-using gpuxtb::test::gfn2::HostSccCaseOptions;
-using gpuxtb::test::gfn2::SmallSystemKind;
+using xtbloom::detail::Gfn2CudaExecutionCache;
+using xtbloom::detail::Gfn2CudaExecutionIdentity;
+using xtbloom::detail::Gfn2CudaNumericalInputView;
+using xtbloom::detail::Gfn2CudaOpaqueBufferIdentity;
+using xtbloom::test::gfn2::HostSccCase;
+using xtbloom::test::gfn2::HostSccCaseOptions;
+using xtbloom::test::gfn2::SmallSystemKind;
 
 constexpr std::array<std::int64_t, 4> kBatchSizes{1, 8, 32, 128};
 constexpr double kCacheTolerance = 1.0e-12;
@@ -51,8 +51,8 @@ const char* g_case = "uninitialized";
   } while (false)
 
 template <typename T>
-gpuxtb_const_buffer_t host_buffer(const std::vector<T>& values) noexcept {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), GPUXTB_MEMORY_HOST,
+xtbloom_const_buffer_t host_buffer(const std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
           0u};
 }
 
@@ -83,8 +83,8 @@ class DeviceBuffer {
                                              cudaMemcpyHostToDevice, stream);
   }
 
-  gpuxtb_const_buffer_t view() const noexcept {
-    return {data_, elements_ * sizeof(T), GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+  xtbloom_const_buffer_t view() const noexcept {
+    return {data_, elements_ * sizeof(T), XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
   }
 
  private:
@@ -105,7 +105,7 @@ struct PublicHostBatch {
   std::vector<double> periodic_shifts;
   std::vector<std::int64_t> response_offsets;
   std::vector<double> periodic_response;
-  gpuxtb_batch_t descriptor{};
+  xtbloom_batch_t descriptor{};
 
   static PublicHostBatch from_fixture(const HostSccCase& fixture, bool periodic) {
     PublicHostBatch batch;
@@ -128,7 +128,7 @@ struct PublicHostBatch {
   }
 
   void bind() noexcept {
-    (void)gpuxtb_batch_init(&descriptor, sizeof(descriptor));
+    (void)xtbloom_batch_init(&descriptor, sizeof(descriptor));
     descriptor.batch_size = static_cast<std::int64_t>(molecular_charges.size());
     descriptor.total_atoms = static_cast<std::int64_t>(atomic_numbers.size());
     descriptor.total_point_charges = static_cast<std::int64_t>(point_values.size());
@@ -424,7 +424,7 @@ int validate_element_counts(const Gfn2CudaExecutionIdentity& identity, const Hos
   const std::int64_t matrices = fixture.mulliken_plan().matrix_elements();
   CHECK(identity.committed_positions.elements == atoms * 3);
   CHECK(identity.committed_geometry_pairs.elements ==
-        fixture.aes2_plan().total_pairs() * gpuxtb::detail::cuda::kGfn2GeometryPairDataElements);
+        fixture.aes2_plan().total_pairs() * xtbloom::detail::cuda::kGfn2GeometryPairDataElements);
   CHECK(identity.committed_coordination_numbers.elements == atoms);
   CHECK(identity.committed_overlap.elements == matrices);
   CHECK(identity.committed_dipole_integrals.elements == matrices * 3);
@@ -762,11 +762,11 @@ int verify_every_multipole_component_changed(const CacheSnapshot& before,
   return 0;
 }
 
-gpuxtb_compute_options_t compute_options() noexcept {
-  gpuxtb_compute_options_t options{};
-  (void)gpuxtb_compute_options_init(&options, sizeof(options));
-  options.model = GPUXTB_MODEL_GFN2_XTB;
-  options.flags = GPUXTB_COMPUTE_ENERGY;
+xtbloom_compute_options_t compute_options() noexcept {
+  xtbloom_compute_options_t options{};
+  (void)xtbloom_compute_options_init(&options, sizeof(options));
+  options.model = XTBLOOM_MODEL_GFN2_XTB;
+  options.flags = XTBLOOM_COMPUTE_ENERGY;
   options.max_scc_iterations = 8;
   options.charge_tolerance = 1.0e-10;
   options.energy_tolerance = 1.0e-8;
@@ -797,21 +797,22 @@ int run_case(const Scenario& scenario, std::int64_t batch_size, cudaStream_t str
   fixture_options.mixer_history = 4;
   HostSccCase fixture;
   std::string error;
-  CHECK(HostSccCase::create(fixture_options, fixture, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(HostSccCase::create(fixture_options, fixture, error) == XTBLOOM_STATUS_SUCCESS);
   PublicHostBatch input = PublicHostBatch::from_fixture(fixture, scenario.periodic);
 
   Gfn2CudaExecutionCache host_cache(device_id, reinterpret_cast<void*>(stream));
   Gfn2CudaExecutionCache device_cache(device_id, reinterpret_cast<void*>(stream));
   Gfn2CudaExecutionCache reference_cache(device_id, reinterpret_cast<void*>(stream));
-  const gpuxtb_compute_options_t options = compute_options();
+  const xtbloom_compute_options_t options = compute_options();
   bool reused = true;
-  CHECK(host_cache.prepare_host(input.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(host_cache.prepare_host(input.descriptor, options, reused, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
   CHECK(device_cache.prepare_host(input.descriptor, options, reused, error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
   CHECK(reference_cache.prepare_host(input.descriptor, options, reused, error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
   const Gfn2CudaExecutionIdentity host_identity = host_cache.identity();
   const Gfn2CudaExecutionIdentity device_identity = device_cache.identity();
@@ -846,10 +847,10 @@ int run_case(const Scenario& scenario, std::int64_t batch_size, cudaStream_t str
   input.perturb(1);
   CUDA_CHECK(device_input.upload(input, requested, stream));
   CHECK(host_cache.refresh_numerical_async(host_view(input, requested), error) ==
-        GPUXTB_STATUS_SUCCESS);
-  CHECK(device_cache.refresh_numerical_async(device_input.view(), error) == GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(device_cache.refresh_numerical_async(device_input.view(), error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(reference_cache.refresh_numerical_async(host_view(input, all_requested), error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(stable_cache_identities(host_identity, host_cache.identity()));
   CHECK(stable_cache_identities(device_identity, device_cache.identity()));
   CHECK(stable_cache_identities(reference_identity, reference_cache.identity()));
@@ -883,10 +884,10 @@ int run_case(const Scenario& scenario, std::int64_t batch_size, cudaStream_t str
   requested[static_cast<std::size_t>(unrequested_system)] = 0u;
   CUDA_CHECK(device_input.upload(input, requested, stream));
   CHECK(host_cache.refresh_numerical_async(host_view(input, requested), error) ==
-        GPUXTB_STATUS_SUCCESS);
-  CHECK(device_cache.refresh_numerical_async(device_input.view(), error) == GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(device_cache.refresh_numerical_async(device_input.view(), error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(reference_cache.refresh_numerical_async(host_view(input, all_requested), error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(stable_cache_identities(host_identity, host_cache.identity()));
   CHECK(stable_cache_identities(device_identity, device_cache.identity()));
   CHECK(stable_cache_identities(reference_identity, reference_cache.identity()));
@@ -944,11 +945,11 @@ int run_case(const Scenario& scenario, std::int64_t batch_size, cudaStream_t str
     input.bind();
     CUDA_CHECK(device_input.upload(input, requested, stream));
     CHECK(reference_cache.refresh_numerical_async(host_view(finite_phase3, all_requested), error) ==
-          GPUXTB_STATUS_SUCCESS);
+          XTBLOOM_STATUS_SUCCESS);
     CHECK(host_cache.refresh_numerical_async(host_view(input, requested), error) ==
-          GPUXTB_STATUS_SUCCESS);
+          XTBLOOM_STATUS_SUCCESS);
     CHECK(device_cache.refresh_numerical_async(device_input.view(), error) ==
-          GPUXTB_STATUS_SUCCESS);
+          XTBLOOM_STATUS_SUCCESS);
     CHECK(stable_cache_identities(host_identity, host_cache.identity()));
     CHECK(stable_cache_identities(device_identity, device_cache.identity()));
     CHECK(stable_cache_identities(reference_identity, reference_cache.identity()));

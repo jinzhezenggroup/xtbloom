@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Natoms-scaling GFN2-xTB latency benchmark for gpuxtb vs tblite vs xtb.
+"""Natoms-scaling GFN2-xTB latency benchmark for xtbloom vs tblite vs xtb.
 
 Measures end-to-end single-call latency as a function of molecule size
 (natoms) for batch sizes 1 and 128, on the CPU and CUDA backends where each
-library exposes one.  gpuxtb provides both a CPU and a CUDA backend; tblite
+library exposes one.  xtbloom provides both a CPU and a CUDA backend; tblite
 and xtb are single-threaded CPU libraries and are measured through their
 public C APIs exactly as in ``run.py``.
 
-The gpuxtb runner calls only the public C ABI through ``ctypes``.  Contexts,
+The xtbloom runner calls only the public C ABI through ``ctypes``.  Contexts,
 ragged descriptors, and output buffers persist across measured calls.  CUDA
 timings end with an explicit ``cudaDeviceSynchronize``; device results are
 copied back only after timing.  All three engines run the same neutral,
@@ -35,7 +35,7 @@ BENCHMARKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(CONFORMANCE_TOOLS))
 sys.path.insert(0, str(BENCHMARKS))
 
-import gpuxtb_public_api as public_api
+import xtbloom_public_api as public_api
 from dxtb_adapter import DxtbAdapter
 from dxtb_adapter import timed_invoke as timed_dxtb_invoke
 from run import (
@@ -203,8 +203,8 @@ class Storage:
             self.slices.append(Slice(begin, len(self.atomic_numbers), 0, 0))
 
 
-class GpuxtbRunner:
-    """Persistent public-C-API runner for one gpuxtb cell (custom storage)."""
+class XTBloomRunner:
+    """Persistent public-C-API runner for one xtbloom cell (custom storage)."""
 
     def __init__(
         self,
@@ -215,7 +215,7 @@ class GpuxtbRunner:
         device_id: int,
         cpu_threads: int,
         property_name: str,
-        start_mode: int = public_api.GPUXTB_SCC_START_FRESH,
+        start_mode: int = public_api.XTBLOOM_SCC_START_FRESH,
     ) -> None:
         self.backend = backend
         self.memory_mode = memory_mode
@@ -241,16 +241,16 @@ class GpuxtbRunner:
         self.options = public_api.ComputeOptions()
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_compute_options_init(
+            self.library.xtbloom_compute_options_init(
                 ctypes.byref(self.options), ctypes.sizeof(self.options)
             ),
-            "gpuxtb_compute_options_init",
+            "xtbloom_compute_options_init",
         )
-        self.options.model = public_api.GPUXTB_MODEL_GFN2_XTB
-        self.options.flags = public_api.GPUXTB_COMPUTE_ENERGY
+        self.options.model = public_api.XTBLOOM_MODEL_GFN2_XTB
+        self.options.flags = public_api.XTBLOOM_COMPUTE_ENERGY
         if property_name == "force":
-            self.options.flags |= public_api.GPUXTB_COMPUTE_FORCES
-        if start_mode != public_api.GPUXTB_SCC_START_FRESH:
+            self.options.flags |= public_api.XTBLOOM_COMPUTE_FORCES
+        if start_mode != public_api.XTBLOOM_SCC_START_FRESH:
             self.options.scc_start_mode = start_mode
         self.systems = storage.batch_size
         self.atoms = len(storage.atomic_numbers)
@@ -266,10 +266,10 @@ class GpuxtbRunner:
         self.result = public_api.BatchResult()
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_batch_result_init(
+            self.library.xtbloom_batch_result_init(
                 ctypes.byref(self.result), ctypes.sizeof(self.result)
             ),
-            "gpuxtb_batch_result_init",
+            "xtbloom_batch_result_init",
         )
         self.result.energies = self.memory.output(self.energies, "energies")
         if self.forces is not None:
@@ -285,13 +285,13 @@ class GpuxtbRunner:
     def invoke(self) -> None:
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_compute(
+            self.library.xtbloom_compute(
                 self.context,
                 ctypes.byref(self.batch),
                 ctypes.byref(self.options),
                 ctypes.byref(self.result),
             ),
-            f"gpuxtb {self.backend}/{self.memory_mode} inference",
+            f"xtbloom {self.backend}/{self.memory_mode} inference",
         )
 
     def synchronize(self) -> None:
@@ -304,7 +304,7 @@ class GpuxtbRunner:
         failures = []
         for index in range(self.systems):
             if (
-                self.statuses[index] != public_api.GPUXTB_STATUS_SUCCESS
+                self.statuses[index] != public_api.XTBLOOM_STATUS_SUCCESS
                 or self.converged[index] != 1
             ):
                 failures.append(
@@ -326,10 +326,10 @@ class GpuxtbRunner:
                 if self.owns_cuda_control and self.cuda_control is not None:
                     self.cuda_control.close()
             finally:
-                self.library.gpuxtb_context_destroy(self.context)
+                self.library.xtbloom_context_destroy(self.context)
 
 
-def timed_gpuxtb_invoke(runner: GpuxtbRunner) -> float:
+def timed_xtbloom_invoke(runner: XTBloomRunner) -> float:
     start = time.perf_counter_ns()
     runner.invoke()
     runner.synchronize()
@@ -342,16 +342,16 @@ def timed_adapter_invoke(adapter: Any) -> float:
     return (time.perf_counter_ns() - start) * 1.0e-6
 
 
-def sample_latency_ms(runner: Any, gpuxtb: bool, warmups: int, repetitions: int) -> list[float]:
+def sample_latency_ms(runner: Any, xtbloom: bool, warmups: int, repetitions: int) -> list[float]:
     for _ in range(warmups):
-        if gpuxtb:
-            timed_gpuxtb_invoke(runner)
+        if xtbloom:
+            timed_xtbloom_invoke(runner)
         else:
             timed_adapter_invoke(runner)
     samples: list[float] = []
     for _ in range(repetitions):
-        if gpuxtb:
-            samples.append(timed_gpuxtb_invoke(runner))
+        if xtbloom:
+            samples.append(timed_xtbloom_invoke(runner))
         else:
             samples.append(timed_adapter_invoke(runner))
     return samples
@@ -394,15 +394,15 @@ def run_cell(
     storage = Storage(molecule, batch_size)
     runner = None
     adapter = None
-    gpuxtb = engine == "gpuxtb"
+    xtbloom = engine == "xtbloom"
     try:
-        if gpuxtb:
+        if xtbloom:
             start_mode_value = (
-                public_api.GPUXTB_SCC_START_WARM
+                public_api.XTBLOOM_SCC_START_WARM
                 if args.start_mode == "warm"
-                else public_api.GPUXTB_SCC_START_FRESH
+                else public_api.XTBLOOM_SCC_START_FRESH
             )
-            runner = GpuxtbRunner(
+            runner = XTBloomRunner(
                 library,
                 storage,
                 backend,
@@ -416,12 +416,12 @@ def run_cell(
                 # Strict WARM refuses a first call without a fully converged
                 # predecessor, so publish the checkpoint with one untimed FRESH
                 # call that is identical to the measured WARM requests.
-                runner.options.scc_start_mode = public_api.GPUXTB_SCC_START_FRESH
+                runner.options.scc_start_mode = public_api.XTBLOOM_SCC_START_FRESH
                 runner.invoke()
                 runner.synchronize()
-                runner.options.scc_start_mode = public_api.GPUXTB_SCC_START_WARM
+                runner.options.scc_start_mode = public_api.XTBLOOM_SCC_START_WARM
             samples = sample_latency_ms(
-                runner, gpuxtb=True, warmups=args.warmups, repetitions=args.repetitions
+                runner, xtbloom=True, warmups=args.warmups, repetitions=args.repetitions
             )
             output = runner.results()
         else:
@@ -430,7 +430,7 @@ def run_cell(
                     Path(args.tblite_library), storage, property_name
                 )
                 samples = sample_latency_ms(
-                    adapter, gpuxtb=False, warmups=args.warmups, repetitions=args.repetitions
+                    adapter, xtbloom=False, warmups=args.warmups, repetitions=args.repetitions
                 )
                 output = {"energies_hartree": adapter.results()["energies_hartree"]}
             elif engine == "xtb":
@@ -438,7 +438,7 @@ def run_cell(
                     Path(args.xtb_library), storage, property_name, None
                 )
                 samples = sample_latency_ms(
-                    adapter, gpuxtb=False, warmups=args.warmups, repetitions=args.repetitions
+                    adapter, xtbloom=False, warmups=args.warmups, repetitions=args.repetitions
                 )
                 output = {"energies_hartree": adapter.results()["energies_hartree"]}
             elif engine == "dxtb":
@@ -474,14 +474,14 @@ def run_cell(
             "natoms": molecule.natoms,
             "batch_size": batch_size,
             "property": property_name,
-            "converged": 1 if gpuxtb and not output["failures"] else None,
-            "status_failures": output["failures"] if gpuxtb else [],
+            "converged": 1 if xtbloom and not output["failures"] else None,
+            "status_failures": output["failures"] if xtbloom else [],
             "energy_min_hartree": min(energies) if energies else None,
             "energy_max_hartree": max(energies) if energies else None,
             "energy_std_hartree": statistics.pstdev(energies) if energies else None,
             "scc_iterations_median": None,
         }
-        if gpuxtb and output["scc_iterations"]:
+        if xtbloom and output["scc_iterations"]:
             row["scc_iterations_median"] = statistics.median(
                 output["scc_iterations"]
             )
@@ -506,7 +506,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="target natoms for the sweep (smallest is always H2O)",
     )
     parser.add_argument("--batch-sizes", type=lambda value: tuple(int(item) for item in value.split(",") if item), default=(1, 128))
-    parser.add_argument("--engines", type=lambda value: tuple(item.strip() for item in value.split(",") if item.strip()), default=("gpuxtb", "tblite", "xtb", "dxtb"))
+    parser.add_argument("--engines", type=lambda value: tuple(item.strip() for item in value.split(",") if item.strip()), default=("xtbloom", "tblite", "xtb", "dxtb"))
     parser.add_argument("--backends", type=lambda value: tuple(item.strip() for item in value.split(",") if item.strip()), default=("cpu", "cuda"))
     parser.add_argument("--properties", type=lambda value: tuple(item.strip() for item in value.split(",") if item.strip()), default=("force",))
     parser.add_argument("--warmups", type=int, default=2)
@@ -516,7 +516,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--start-mode",
         choices=("fresh", "warm"),
         default="fresh",
-        help="SCC start policy for gpuxtb rows: 'fresh' restarts from the SAD "
+        help="SCC start policy for xtbloom rows: 'fresh' restarts from the SAD "
         "guess every call; 'warm' consumes the previous fully converged "
         "electronic checkpoint (same topology/options identity).",
     )
@@ -533,9 +533,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not args.library.is_file():
-        raise SystemExit(f"gpuxtb library missing: {args.library}")
-    if args.start_mode == "warm" and args.engines != ("gpuxtb",):
-        raise SystemExit("--start-mode warm is only meaningful for the gpuxtb engine")
+        raise SystemExit(f"xtbloom library missing: {args.library}")
+    if args.start_mode == "warm" and args.engines != ("xtbloom",):
+        raise SystemExit("--start-mode warm is only meaningful for the xtbloom engine")
     if "tblite" in args.engines and (not args.tblite_library or not Path(args.tblite_library).is_file()):
         raise SystemExit("--tblite-library is required for the tblite engine")
     if "xtb" in args.engines and (not args.xtb_library or not Path(args.xtb_library).is_file()):
@@ -548,12 +548,12 @@ def main(argv: list[str] | None = None) -> int:
                 backends = args.backends
                 if engine == "dxtb":
                     backends = args.dxtb_backends
-                elif engine != "gpuxtb":
+                elif engine != "xtbloom":
                     backends = ("cpu",)
                 for backend in backends:
                     for property_name in args.properties:
                         memory_mode = "host"
-                        if engine == "gpuxtb" and backend == "cuda":
+                        if engine == "xtbloom" and backend == "cuda":
                             memory_mode = "host"
                         print(
                             f"RUN {molecule.name:12s} natoms={molecule.natoms:4d} "

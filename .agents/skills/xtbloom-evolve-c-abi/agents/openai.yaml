@@ -1,0 +1,4 @@
+interface:
+  display_name: "Evolve xtbloom C ABI"
+  short_description: "Preserve versioned ABI layouts across all bindings"
+  default_prompt: "Use $xtbloom-evolve-c-abi to implement and verify this public C ABI change without breaking older callers."

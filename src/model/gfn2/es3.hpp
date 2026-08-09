@@ -1,17 +1,17 @@
-#ifndef GPUXTB_MODEL_GFN2_ES3_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_ES3_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_ES3_HPP
+#define XTBLOOM_MODEL_GFN2_ES3_HPP
 
 #include <cstdint>
 #include <string>
 #include <type_traits>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 /*
  * Geometry-independent storage for the shell-resolved GFN2 onsite cubic
@@ -54,8 +54,8 @@ static_assert(std::is_standard_layout_v<ES3View>);
  * metadata is cross-checked so a same-size but mismatched element list is
  * rejected rather than silently selecting the wrong gam3 values.
  */
-gpuxtb_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
-                              ES3Plan& plan, std::string& error);
+xtbloom_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
+                               ES3Plan& plan, std::string& error);
 
 /* Return a lightweight view over a plan; the plan must outlive the view. */
 [[nodiscard]] ES3View make_es3_view(const ES3Plan& plan) noexcept;
@@ -69,8 +69,8 @@ gpuxtb_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic
  * before modifying shell_potentials. Thus every reported failure leaves the
  * output unchanged. Input and output arrays must not overlap.
  */
-gpuxtb_status_t evaluate_es3_potential_cpu(ES3View view, const double* shell_charges,
-                                           double* shell_potentials, std::string& error);
+xtbloom_status_t evaluate_es3_potential_cpu(ES3View view, const double* shell_charges,
+                                            double* shell_potentials, std::string& error);
 
 /*
  * Accumulate one Hartree energy per ragged batch member using
@@ -81,8 +81,8 @@ gpuxtb_status_t evaluate_es3_potential_cpu(ES3View view, const double* shell_cha
  * including accumulated-output range, so a failure leaves every energy
  * unchanged. Input and output arrays must not overlap.
  */
-gpuxtb_status_t add_es3_energy_cpu(ES3View view, const double* shell_charges, double* energies,
-                                   std::string& error);
+xtbloom_status_t add_es3_energy_cpu(ES3View view, const double* shell_charges, double* energies,
+                                    std::string& error);
 
 /*
  * Overwrite the ES3 shell potential of exactly one ragged batch member.
@@ -95,22 +95,22 @@ gpuxtb_status_t add_es3_energy_cpu(ES3View view, const double* shell_charges, do
  * must treat the whole target system as failed. The routine allocates no
  * memory and needs no scratch.
  */
-gpuxtb_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t system,
-                                                  const double* shell_charges,
-                                                  double* shell_potentials, std::string& error);
+xtbloom_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t system,
+                                                   const double* shell_charges,
+                                                   double* shell_potentials, std::string& error);
 
 /*
  * Accumulate E3 for exactly one ragged batch member. shell_charges addresses
  * the complete packed array, while numerical validation and arithmetic touch
  * only system's shell slice. Structural/binding errors return
- * GPUXTB_STATUS_INVALID_ARGUMENT; invalid target numerical data and range
- * failures return GPUXTB_STATUS_INTERNAL_ERROR. accumulated_energy is unchanged
+ * XTBLOOM_STATUS_INVALID_ARGUMENT; invalid target numerical data and range
+ * failures return XTBLOOM_STATUS_INTERNAL_ERROR. accumulated_energy is unchanged
  * on every failure. The routine allocates no memory and needs no scratch.
  */
-gpuxtb_status_t add_es3_energy_system_cpu(ES3View view, std::int64_t system,
-                                          const double* shell_charges, double& accumulated_energy,
-                                          std::string& error);
+xtbloom_status_t add_es3_energy_system_cpu(ES3View view, std::int64_t system,
+                                           const double* shell_charges, double& accumulated_energy,
+                                           std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_ES3_HPP
+#endif  // XTBLOOM_MODEL_GFN2_ES3_HPP

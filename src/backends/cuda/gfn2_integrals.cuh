@@ -1,14 +1,14 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_INTEGRALS_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_INTEGRALS_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_INTEGRALS_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_INTEGRALS_CUH
 
 #include <cuda_runtime_api.h>
 
 #include <cstdint>
 #include <type_traits>
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::int64_t kGfn2IntegralDipoleComponents = 3;
 inline constexpr std::int64_t kGfn2IntegralQuadrupoleComponents = 6;
@@ -161,6 +161,6 @@ cudaError_t evaluate_gfn2_h0_cuda(const Gfn2IntegralDeviceBatch& batch,
  * discovered by this call are sticky per system and preserve healthy peers.
  */
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_INTEGRALS_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_INTEGRALS_CUH

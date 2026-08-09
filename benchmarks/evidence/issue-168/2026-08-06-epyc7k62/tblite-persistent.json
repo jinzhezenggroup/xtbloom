@@ -5,7 +5,7 @@
     "force_atol_hartree_per_bohr": 5e-07,
     "force_tolerance_source": {
       "json_field": "tolerances.forces",
-      "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/data/conformance/manifest.json",
+      "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/data/conformance/manifest.json",
       "sha256": "b8b5fdbf189b2991278fa643f7f2ab951c76d56856a145b0c1526ddd1ca5a591"
     },
     "reference_cold_sample": "the first persistent public-C-API invocation is recorded separately",
@@ -251,7 +251,7 @@
           9.483047390587707e-17
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
@@ -262,9 +262,9 @@
             "max_abs_delta_hartree_per_bohr": 1.146090010005138e-11,
             "status": "pass"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": 30,
             "status": "pass"
@@ -272,7 +272,7 @@
           "status": "pass",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/data/conformance/manifest.json",
             "sha256": "b8b5fdbf189b2991278fa643f7f2ab951c76d56856a145b0c1526ddd1ca5a591"
           }
         },
@@ -3567,7 +3567,7 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/benchmarks/natoms_scaling.py",
           "--engine",
           "tblite",
           "--library",
@@ -3587,7 +3587,7 @@
           "--repetitions",
           "30",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
@@ -3603,7 +3603,7 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
         "generated_at_utc": "2026-08-05T18:29:38.099027+00:00",
@@ -3928,7 +3928,7 @@
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
+          "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169",
           "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
@@ -4420,7 +4420,7 @@
           -6.767403800435385e-16
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
@@ -4431,9 +4431,9 @@
             "max_abs_delta_hartree_per_bohr": 1.2915870040424316e-11,
             "status": "pass"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": 30,
             "status": "pass"
@@ -4441,7 +4441,7 @@
           "status": "pass",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/data/conformance/manifest.json",
             "sha256": "b8b5fdbf189b2991278fa643f7f2ab951c76d56856a145b0c1526ddd1ca5a591"
           }
         },
@@ -10436,7 +10436,7 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/benchmarks/natoms_scaling.py",
           "--engine",
           "tblite",
           "--library",
@@ -10456,7 +10456,7 @@
           "--repetitions",
           "30",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
@@ -10472,7 +10472,7 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
         "generated_at_utc": "2026-08-05T18:29:38.099027+00:00",
@@ -10797,7 +10797,7 @@
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
+          "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169",
           "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
@@ -11505,7 +11505,7 @@
           -1.685939226210792e-16
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
@@ -11516,9 +11516,9 @@
             "max_abs_delta_hartree_per_bohr": 1.105411598980319e-11,
             "status": "pass"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": 30,
             "status": "pass"
@@ -11526,7 +11526,7 @@
           "status": "pass",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/data/conformance/manifest.json",
             "sha256": "b8b5fdbf189b2991278fa643f7f2ab951c76d56856a145b0c1526ddd1ca5a591"
           }
         },
@@ -20761,7 +20761,7 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/benchmarks/natoms_scaling.py",
           "--engine",
           "tblite",
           "--library",
@@ -20781,7 +20781,7 @@
           "--repetitions",
           "30",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
@@ -20797,7 +20797,7 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
         "generated_at_utc": "2026-08-05T18:29:38.099027+00:00",
@@ -21122,7 +21122,7 @@
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
+          "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169",
           "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
@@ -21974,7 +21974,7 @@
           -7.27831997717244e-17
         ],
         "fresh_reference_comparison": {
-          "artifact": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "artifact": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "artifact_sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779",
           "energy": {
             "atol_hartree": 5e-07,
@@ -21985,9 +21985,9 @@
             "max_abs_delta_hartree_per_bohr": 1.0507119480029914e-11,
             "status": "pass"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": 30,
             "status": "pass"
@@ -21995,7 +21995,7 @@
           "status": "pass",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/data/conformance/manifest.json",
             "sha256": "b8b5fdbf189b2991278fa643f7f2ab951c76d56856a145b0c1526ddd1ca5a591"
           }
         },
@@ -33390,7 +33390,7 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/benchmarks/natoms_scaling.py",
           "--engine",
           "tblite",
           "--library",
@@ -33410,7 +33410,7 @@
           "--repetitions",
           "30",
           "--energy-reference-json",
-          "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "--cross-engine-energy-atol",
           "5e-7",
           "--cross-engine-force-atol",
@@ -33426,7 +33426,7 @@
           "status": "eligible"
         },
         "fresh_reference_artifact": {
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+          "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
           "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
         },
         "generated_at_utc": "2026-08-05T18:29:38.099027+00:00",
@@ -33751,7 +33751,7 @@
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
+          "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169",
           "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
         },
         "runner": {
@@ -33832,7 +33832,7 @@
   "run_identity": {
     "argv": [
       "/home/jzzeng/miniconda3/bin/python3",
-      "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/benchmarks/natoms_scaling.py",
+      "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/benchmarks/natoms_scaling.py",
       "--engine",
       "tblite",
       "--library",
@@ -33852,7 +33852,7 @@
       "--repetitions",
       "30",
       "--energy-reference-json",
-      "build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+      "build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
       "--cross-engine-energy-atol",
       "5e-7",
       "--cross-engine-force-atol",
@@ -33868,7 +33868,7 @@
       "status": "eligible"
     },
     "fresh_reference_artifact": {
-      "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json",
+      "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169/build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json",
       "sha256": "3a78bda4be76584089919fc8c3d87049b3cc7f99d9c2e7ac40d202a64330d779"
     },
     "generated_at_utc": "2026-08-05T18:29:38.099027+00:00",
@@ -34193,7 +34193,7 @@
     },
     "repository": {
       "dirty": false,
-      "path": "/home/jzzeng/codes/gpuxtb2-worktrees/pr-169",
+      "path": "/home/jzzeng/codes/xtbloom2-worktrees/pr-169",
       "revision": "6f7f1e29b393cc5c05b63088d41f965ccf7d9aea"
     },
     "runner": {

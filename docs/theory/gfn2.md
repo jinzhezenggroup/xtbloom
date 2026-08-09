@@ -1,6 +1,6 @@
 # GFN2-xTB model and SCC
 
-gpuxtb implements the published GFN2-xTB model rather than fitting a new
+xTBloom implements the published GFN2-xTB model rather than fitting a new
 variant. The CPU implementation is the readable equation reference inside the
 repository, while CUDA implements the same parameters, state, convergence, and
 publication semantics.
@@ -29,7 +29,7 @@ SCC occupations, and $S_{\mathrm{electronic}}$ is the corresponding
 dimensionless occupation entropy. At zero temperature, $F$ reduces to the
 internal energy.
 
-gpuxtb does not add solvation, a lattice Hamiltonian, classical MM-MM energy,
+xTBloom does not add solvation, a lattice Hamiltonian, classical MM-MM energy,
 or point-charge/point-charge energy.
 
 ## Self-consistent charge cycle
@@ -94,7 +94,7 @@ point-charge interaction. They are checked against central finite differences
 and independent conformance cases.
 
 Caller-supplied periodic fields $b$ and $A$ are held fixed. Their coordinate
-derivatives are excluded because gpuxtb does not know how the external
+derivatives are excluded because xTBloom does not know how the external
 electrostatics program constructed them. See the
 [QM/MM theory page](qmmm.md).
 
@@ -111,4 +111,4 @@ Correctness is established through more than total-energy agreement:
 
 Canonical goldens are generated only through the pinned workflows in
 [`tools/conformance/README.md`](../../tools/conformance/README.md). They are
-independent evidence and are never rewritten to match current gpuxtb output.
+independent evidence and are never rewritten to match current xTBloom output.

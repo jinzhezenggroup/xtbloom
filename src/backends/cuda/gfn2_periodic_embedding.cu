@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -8,7 +8,7 @@
 
 #include "backends/cuda/gfn2_periodic_embedding.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -190,7 +190,7 @@ __global__ void periodic_embedding_kernel(Gfn2PeriodicEmbeddingDeviceBatch batch
                                           const double* mixed_atomic_charges,
                                           const double* raw_atomic_charges,
                                           double* atomic_potentials, double* energies,
-                                          gpuxtb_status_t* system_statuses,
+                                          xtbloom_status_t* system_statuses,
                                           Gfn2PeriodicEmbeddingDeviceWorkspace workspace,
                                           std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
@@ -217,7 +217,7 @@ __global__ void periodic_embedding_kernel(Gfn2PeriodicEmbeddingDeviceBatch batch
   if (atom_count == 0) {
     if (threadIdx.x == 0) {
       energies[system] = 0.0;
-      system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+      system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
     }
     return;
   }
@@ -245,7 +245,7 @@ __global__ void periodic_embedding_kernel(Gfn2PeriodicEmbeddingDeviceBatch batch
   __syncthreads();
   if (valid == 0) {
     if (threadIdx.x == 0) {
-      system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+      system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     return;
   }
@@ -311,7 +311,7 @@ __global__ void periodic_embedding_kernel(Gfn2PeriodicEmbeddingDeviceBatch batch
   __syncthreads();
   if (valid == 0) {
     if (threadIdx.x == 0) {
-      system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+      system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     return;
   }
@@ -341,7 +341,7 @@ __global__ void periodic_embedding_kernel(Gfn2PeriodicEmbeddingDeviceBatch batch
   __syncthreads();
   if (valid == 0) {
     if (threadIdx.x == 0) {
-      system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+      system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     return;
   }
@@ -352,7 +352,7 @@ __global__ void periodic_embedding_kernel(Gfn2PeriodicEmbeddingDeviceBatch batch
   }
   if (threadIdx.x == 0) {
     energies[system] = system_energy;
-    system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+    system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
   }
 }
 
@@ -649,7 +649,7 @@ bool writable_ranges_are_disjoint(const std::array<AddressRange, ReadCount>& rea
 cudaError_t validate_launcher_arguments(const Gfn2PeriodicEmbeddingDeviceBatch& batch,
                                         const double* mixed_atomic_charges,
                                         const double* raw_atomic_charges, double* atomic_potentials,
-                                        double* energies, gpuxtb_status_t* system_statuses,
+                                        double* energies, xtbloom_status_t* system_statuses,
                                         const Gfn2PeriodicEmbeddingDeviceWorkspace& workspace,
                                         std::uint32_t* device_error) noexcept {
   if (batch.batch_size <= 0 || batch.total_atoms < 0 || batch.total_matrix_elements < 0 ||
@@ -670,7 +670,7 @@ cudaError_t validate_launcher_arguments(const Gfn2PeriodicEmbeddingDeviceBatch& 
       !required_pointer(workspace.potential_scratch, batch.total_atoms) ||
       !required_pointer(workspace.raw_response_scratch, batch.total_atoms) ||
       !is_aligned(energies, alignof(double)) ||
-      !is_aligned(system_statuses, alignof(gpuxtb_status_t)) ||
+      !is_aligned(system_statuses, alignof(xtbloom_status_t)) ||
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
       !is_aligned(device_error, alignof(std::uint32_t))) {
     return batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max())
@@ -787,7 +787,7 @@ cudaError_t reset_gfn2_periodic_embedding_device_error_cuda(std::uint32_t* devic
 cudaError_t evaluate_gfn2_periodic_embedding_cuda(
     const Gfn2PeriodicEmbeddingDeviceBatch& batch, const double* mixed_atomic_charges,
     const double* raw_atomic_charges, double* atomic_potentials, double* energies,
-    gpuxtb_status_t* system_statuses, const Gfn2PeriodicEmbeddingDeviceWorkspace& workspace,
+    xtbloom_status_t* system_statuses, const Gfn2PeriodicEmbeddingDeviceWorkspace& workspace,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
   const cudaError_t validation = validate_launcher_arguments(
       batch, mixed_atomic_charges, raw_atomic_charges, atomic_potentials, energies, system_statuses,
@@ -879,4 +879,4 @@ cudaError_t evaluate_gfn2_periodic_embedding_scc_energy_cuda(
   return check_launch();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

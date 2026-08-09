@@ -9,7 +9,7 @@ grimme-lab/xtb issue #678 (Angstrom coordinates, converted to bohr at
 The internal CPU GFN2 SCC driver (`iterate_scc_driver_batch_cpu`) produces
 these files against the same sealed basis, integrals, H0, ES2/ES3/AES2, D4,
 and eigensolver plans used by the public CPU execution path. The committed
-executable `gpuxtb_scc_temperature_continuation_test` serves two distinct
+executable `xtbloom_scc_temperature_continuation_test` serves two distinct
 purposes: normal CTest execution asserts the semantic matrix without writing
 the source tree, while the explicit `--write-evidence` mode regenerates every
 text artifact. `manifest.json` pins the fixture, generator source, generated
@@ -21,7 +21,7 @@ and wheels.
 Each row reports: iteration, internal SCC free energy (Eh), free-energy
 change, mixer residual RMS, mixer residual maximum, the summed `Me4N+`
 fragment charge, the `Cl-` fragment charge, mixer restart count, driver
-status (0 = success, 7 = `GPUXTB_STATUS_SCC_NOT_CONVERGED`), and converged
+status (0 = success, 7 = `XTBLOOM_STATUS_SCC_NOT_CONVERGED`), and converged
 flag. Default policy unless stated is Johnson modified-Broyden history 8,
 damping 0.4, charge tolerance 1e-6, energy tolerance 1e-8.
 
@@ -64,7 +64,7 @@ damping 0.4, charge tolerance 1e-6, energy tolerance 1e-8.
 Regenerate and then refresh the reviewed hashes with:
 
 ```bash
-build/cpu-t217/gpuxtb_scc_temperature_continuation_test \
+build/cpu-t217/xtbloom_scc_temperature_continuation_test \
   --write-evidence data/conformance/evidence/tmacl-temperature-continuation
 python3 tools/conformance/tmacl_evidence.py --update
 ```

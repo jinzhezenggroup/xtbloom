@@ -1,0 +1,4 @@
+interface:
+  display_name: "Select xtbloom Validation"
+  short_description: "Choose complete tests from the changed surface"
+  default_prompt: "Use $xtbloom-select-validation to build and run the right validation matrix for this xtbloom change."

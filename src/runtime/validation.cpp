@@ -1,5 +1,5 @@
 #include "runtime/validation.hpp"
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
 #include <array>
@@ -11,7 +11,7 @@
 #include <string>
 #include <utility>
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 namespace {
 
 struct BufferView {
@@ -65,21 +65,21 @@ struct RequiredOutput {
 };
 
 DescriptorValidationResult invalid(std::string error) {
-  return {GPUXTB_STATUS_INVALID_ARGUMENT, kNoOffsetValidationPending, std::move(error)};
+  return {XTBLOOM_STATUS_INVALID_ARGUMENT, kNoOffsetValidationPending, std::move(error)};
 }
 
 DescriptorValidationResult unsupported(std::string error) {
-  return {GPUXTB_STATUS_NOT_SUPPORTED, kNoOffsetValidationPending, std::move(error)};
+  return {XTBLOOM_STATUS_NOT_SUPPORTED, kNoOffsetValidationPending, std::move(error)};
 }
 
 DescriptorValidationResult internal_error(std::string error) {
-  return {GPUXTB_STATUS_INTERNAL_ERROR, kNoOffsetValidationPending, std::move(error)};
+  return {XTBLOOM_STATUS_INTERNAL_ERROR, kNoOffsetValidationPending, std::move(error)};
 }
 
 template <typename Structure>
 bool has_v1_header(const Structure* value, std::size_t minimum_size) {
   return value != nullptr && value->struct_size >= minimum_size &&
-         value->api_version == GPUXTB_API_VERSION;
+         value->api_version == XTBLOOM_API_VERSION;
 }
 
 template <typename Enum>
@@ -96,47 +96,47 @@ std::uint32_t raw_enum(const Enum& value) {
   return raw;
 }
 
-BufferView view(const gpuxtb_const_buffer_t& buffer) {
+BufferView view(const xtbloom_const_buffer_t& buffer) {
   return {buffer.data, buffer.size_bytes, raw_enum(buffer.memory_space), buffer.reserved};
 }
 
-BufferView view(const gpuxtb_buffer_t& buffer) {
+BufferView view(const xtbloom_buffer_t& buffer) {
   return {buffer.data, buffer.size_bytes, raw_enum(buffer.memory_space), buffer.reserved};
 }
 
 bool active(const BufferView& buffer) { return buffer.data != nullptr || buffer.size_bytes != 0; }
 
-bool has_spin_channel_suffix(const gpuxtb_batch_t& batch) {
-  return batch.struct_size >= GPUXTB_BATCH_V2_SIZE;
+bool has_spin_channel_suffix(const xtbloom_batch_t& batch) {
+  return batch.struct_size >= XTBLOOM_BATCH_V2_SIZE;
 }
 
-bool has_scc_start_mode_suffix(const gpuxtb_compute_options_t& options) {
-  return options.struct_size >= GPUXTB_COMPUTE_OPTIONS_V2_SIZE;
+bool has_scc_start_mode_suffix(const xtbloom_compute_options_t& options) {
+  return options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE;
 }
 
-BufferView spin_channel_view(const gpuxtb_batch_t& batch) {
+BufferView spin_channel_view(const xtbloom_batch_t& batch) {
   /* Do not read beyond an ABI-v1 caller's allocation. */
   return has_spin_channel_suffix(batch) ? view(batch.spin_channels)
-                                        : BufferView{nullptr, 0u, GPUXTB_MEMORY_HOST, 0u};
+                                        : BufferView{nullptr, 0u, XTBLOOM_MEMORY_HOST, 0u};
 }
 
-bool has_interaction_suffix(const gpuxtb_batch_t& batch) {
-  return batch.struct_size >= GPUXTB_BATCH_V3_SIZE;
+bool has_interaction_suffix(const xtbloom_batch_t& batch) {
+  return batch.struct_size >= XTBLOOM_BATCH_V3_SIZE;
 }
 
-bool has_result_v2_suffix(const gpuxtb_batch_result_t& result) {
-  return result.struct_size >= GPUXTB_BATCH_RESULT_V2_SIZE;
+bool has_result_v2_suffix(const xtbloom_batch_result_t& result) {
+  return result.struct_size >= XTBLOOM_BATCH_RESULT_V2_SIZE;
 }
 
 /* Do not read beyond an ABI-v2 caller's allocation. */
-BufferView interaction_descriptor_view(const gpuxtb_batch_t& batch) {
+BufferView interaction_descriptor_view(const xtbloom_batch_t& batch) {
   return has_interaction_suffix(batch) ? view(batch.interaction_descriptors)
-                                       : BufferView{nullptr, 0u, GPUXTB_MEMORY_HOST, 0u};
+                                       : BufferView{nullptr, 0u, XTBLOOM_MEMORY_HOST, 0u};
 }
 
-BufferView interaction_payload_view(const gpuxtb_batch_t& batch) {
+BufferView interaction_payload_view(const xtbloom_batch_t& batch) {
   return has_interaction_suffix(batch) ? view(batch.interaction_payload)
-                                       : BufferView{nullptr, 0u, GPUXTB_MEMORY_HOST, 0u};
+                                       : BufferView{nullptr, 0u, XTBLOOM_MEMORY_HOST, 0u};
 }
 
 bool checked_add(std::size_t lhs, std::size_t rhs, std::size_t& result) {
@@ -177,14 +177,14 @@ bool offset_bytes(std::int64_t batch_size, std::size_t& result) {
 }
 
 DescriptorValidationResult validate_buffer_descriptor(const char* name, const BufferView& buffer,
-                                                      gpuxtb_backend_t backend) {
+                                                      xtbloom_backend_t backend) {
   const std::uint32_t backend_value = raw_enum(backend);
   if (buffer.reserved != 0) {
     return invalid(std::string(name) + ".reserved must be zero");
   }
-  if (buffer.memory_space != GPUXTB_MEMORY_HOST &&
-      buffer.memory_space != GPUXTB_MEMORY_CUDA_DEVICE &&
-      buffer.memory_space != GPUXTB_MEMORY_ROCM_DEVICE) {
+  if (buffer.memory_space != XTBLOOM_MEMORY_HOST &&
+      buffer.memory_space != XTBLOOM_MEMORY_CUDA_DEVICE &&
+      buffer.memory_space != XTBLOOM_MEMORY_ROCM_DEVICE) {
     return invalid(std::string(name) + " has an unknown memory_space value");
   }
   if (buffer.data == nullptr && buffer.size_bytes != 0) {
@@ -195,14 +195,14 @@ DescriptorValidationResult validate_buffer_descriptor(const char* name, const Bu
   if (!active(buffer)) {
     return {};
   }
-  if (buffer.memory_space == GPUXTB_MEMORY_ROCM_DEVICE) {
+  if (buffer.memory_space == XTBLOOM_MEMORY_ROCM_DEVICE) {
     return unsupported(std::string(name) + " uses reserved ROCm device memory");
   }
-  if (backend_value == GPUXTB_BACKEND_CPU && buffer.memory_space != GPUXTB_MEMORY_HOST) {
+  if (backend_value == XTBLOOM_BACKEND_CPU && buffer.memory_space != XTBLOOM_MEMORY_HOST) {
     return invalid(std::string(name) + " is device memory but the context backend is CPU");
   }
-  if (backend_value == GPUXTB_BACKEND_CUDA && buffer.memory_space != GPUXTB_MEMORY_HOST &&
-      buffer.memory_space != GPUXTB_MEMORY_CUDA_DEVICE) {
+  if (backend_value == XTBLOOM_BACKEND_CUDA && buffer.memory_space != XTBLOOM_MEMORY_HOST &&
+      buffer.memory_space != XTBLOOM_MEMORY_CUDA_DEVICE) {
     return invalid(std::string(name) + " is incompatible with the CUDA backend");
   }
   return {};
@@ -232,7 +232,7 @@ std::int64_t load_offset(const BufferView& buffer, std::size_t index) {
 }
 
 /*
- * Byte-exact load of one gpuxtb_interaction_t entry.  The layout is fixed by
+ * Byte-exact load of one xtbloom_interaction_t entry.  The layout is fixed by
  * the public ABI and reproduced here field by field (rather than copying the
  * struct by value) so an under-aligned or otherwise hostile caller buffer
  * remains well-defined.
@@ -247,15 +247,15 @@ struct InteractionView {
 
 InteractionView load_interaction(const BufferView& descriptors, std::size_t index) {
   const unsigned char* base =
-      static_cast<const unsigned char*>(descriptors.data) + index * sizeof(gpuxtb_interaction_t);
+      static_cast<const unsigned char*>(descriptors.data) + index * sizeof(xtbloom_interaction_t);
   InteractionView out{};
-  std::memcpy(&out.type, base + offsetof(gpuxtb_interaction_t, type), sizeof(out.type));
-  std::memcpy(&out.flags, base + offsetof(gpuxtb_interaction_t, flags), sizeof(out.flags));
-  std::memcpy(&out.system_index, base + offsetof(gpuxtb_interaction_t, system_index),
+  std::memcpy(&out.type, base + offsetof(xtbloom_interaction_t, type), sizeof(out.type));
+  std::memcpy(&out.flags, base + offsetof(xtbloom_interaction_t, flags), sizeof(out.flags));
+  std::memcpy(&out.system_index, base + offsetof(xtbloom_interaction_t, system_index),
               sizeof(out.system_index));
-  std::memcpy(&out.payload_offset, base + offsetof(gpuxtb_interaction_t, payload_offset),
+  std::memcpy(&out.payload_offset, base + offsetof(xtbloom_interaction_t, payload_offset),
               sizeof(out.payload_offset));
-  std::memcpy(&out.payload_size, base + offsetof(gpuxtb_interaction_t, payload_size),
+  std::memcpy(&out.payload_size, base + offsetof(xtbloom_interaction_t, payload_size),
               sizeof(out.payload_size));
   return out;
 }
@@ -340,25 +340,26 @@ DescriptorValidationResult validate_aliases(const std::array<ActiveRange, N>& ra
 namespace {
 
 DescriptorValidationResult validate_compute_descriptor_prefix(
-    gpuxtb_backend_t backend, const gpuxtb_batch_t* batch, const gpuxtb_compute_options_t* options,
-    const gpuxtb_batch_result_t* result, DescriptorExtentState& extents) {
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result,
+    DescriptorExtentState& extents) {
   const std::uint32_t backend_value = raw_enum(backend);
-  if (backend_value == GPUXTB_BACKEND_AUTO) {
+  if (backend_value == XTBLOOM_BACKEND_AUTO) {
     return invalid("descriptor validation requires a resolved backend, not AUTO");
   }
-  if (backend_value == GPUXTB_BACKEND_ROCM) {
+  if (backend_value == XTBLOOM_BACKEND_ROCM) {
     return unsupported("the ROCm backend is reserved but not implemented");
   }
-  if (backend_value != GPUXTB_BACKEND_CPU && backend_value != GPUXTB_BACKEND_CUDA) {
+  if (backend_value != XTBLOOM_BACKEND_CPU && backend_value != XTBLOOM_BACKEND_CUDA) {
     return invalid("descriptor validation received an unknown backend value");
   }
-  if (!has_v1_header(batch, GPUXTB_BATCH_V1_SIZE)) {
+  if (!has_v1_header(batch, XTBLOOM_BATCH_V1_SIZE)) {
     return invalid("batch is NULL, too small, or uses an unsupported API version");
   }
-  if (!has_v1_header(options, GPUXTB_COMPUTE_OPTIONS_V1_SIZE)) {
+  if (!has_v1_header(options, XTBLOOM_COMPUTE_OPTIONS_V1_SIZE)) {
     return invalid("compute options are NULL, too small, or use an unsupported API version");
   }
-  if (result != nullptr && !has_v1_header(result, GPUXTB_BATCH_RESULT_V1_SIZE)) {
+  if (result != nullptr && !has_v1_header(result, XTBLOOM_BATCH_RESULT_V1_SIZE)) {
     return invalid("batch result is NULL, too small, or uses an unsupported API version");
   }
 
@@ -376,10 +377,10 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   }
 
   constexpr std::uint32_t kKnownComputeFlags =
-      GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES |
-      GPUXTB_COMPUTE_POINT_CHARGE_FORCES | GPUXTB_COMPUTE_DIPOLE_MOMENTS;
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+      XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
   const std::uint32_t model_value = raw_enum(options->model);
-  if (model_value != GPUXTB_MODEL_GFN1_XTB && model_value != GPUXTB_MODEL_GFN2_XTB) {
+  if (model_value != XTBLOOM_MODEL_GFN1_XTB && model_value != XTBLOOM_MODEL_GFN2_XTB) {
     return invalid("compute options contain an unknown model value");
   }
   if (options->flags == 0 || (options->flags & ~kKnownComputeFlags) != 0) {
@@ -402,8 +403,8 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   }
   if (has_scc_start_mode_suffix(*options)) {
     const std::uint32_t start_mode = raw_enum(options->scc_start_mode);
-    if (start_mode != GPUXTB_SCC_START_FRESH && start_mode != GPUXTB_SCC_START_WARM) {
-      return invalid("scc_start_mode must be GPUXTB_SCC_START_FRESH or GPUXTB_SCC_START_WARM");
+    if (start_mode != XTBLOOM_SCC_START_FRESH && start_mode != XTBLOOM_SCC_START_WARM) {
+      return invalid("scc_start_mode must be XTBLOOM_SCC_START_FRESH or XTBLOOM_SCC_START_WARM");
     }
     if (options->reserved_v2 != 0u) {
       return invalid("compute options reserved_v2 field must be zero");
@@ -417,7 +418,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
     const char* name;
     BufferView buffer;
   };
-  const gpuxtb_buffer_t empty_buffer{};
+  const xtbloom_buffer_t empty_buffer{};
   const bool result_v2 = result != nullptr && has_result_v2_suffix(*result);
   /* Keep the size condition outside each member expression. Passing a suffix
    * field to a helper by reference would evaluate the out-of-prefix lvalue
@@ -515,7 +516,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
     if (batch->total_interactions < 0) {
       return invalid("total_interactions must be nonnegative");
     }
-    if (!count_bytes(batch->total_interactions, 1, sizeof(gpuxtb_interaction_t),
+    if (!count_bytes(batch->total_interactions, 1, sizeof(xtbloom_interaction_t),
                      interaction_descriptor_bytes)) {
       return invalid("total_interactions overflows the addressable byte size");
     }
@@ -632,18 +633,18 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   if (result != nullptr) {
     const RequiredOutput outputs[] = {
         {"energies", view(result->energies), batch_f64_bytes,
-         (options->flags & GPUXTB_COMPUTE_ENERGY) != 0},
+         (options->flags & XTBLOOM_COMPUTE_ENERGY) != 0},
         {"forces", view(result->forces), position_bytes,
-         (options->flags & GPUXTB_COMPUTE_FORCES) != 0},
+         (options->flags & XTBLOOM_COMPUTE_FORCES) != 0},
         {"atomic_charges", view(result->atomic_charges), atom_f64_bytes,
-         (options->flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0},
+         (options->flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0},
         {"point_charge_forces", view(result->point_charge_forces), point_position_bytes,
-         (options->flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0},
+         (options->flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0},
         {"scc_iterations", view(result->scc_iterations), batch_i32_bytes, true},
         {"scc_converged", view(result->scc_converged), batch_u8_bytes, true},
         {"per_system_status", view(result->per_system_status), batch_i32_bytes, true},
         {"dipole_moments", dipole_output, dipole_f64_bytes,
-         (options->flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0},
+         (options->flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0},
     };
     for (const RequiredOutput& output : outputs) {
       if (!output.requested) {
@@ -674,8 +675,8 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
 }
 
 DescriptorValidationResult validate_compute_descriptor_aliases(
-    const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options,
-    const gpuxtb_batch_result_t* result, const DescriptorExtentState& extents) {
+    const xtbloom_batch_t& batch, const xtbloom_compute_options_t& options,
+    const xtbloom_batch_result_t* result, const DescriptorExtentState& extents) {
   /* One fixed entry per known buffer keeps successful validation allocation-free. */
   std::array<ActiveRange, 28> ranges{};
   std::size_t range_count = 0;
@@ -757,13 +758,13 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
   if (result != nullptr) {
     const RequiredOutput outputs[] = {
         {"energies", view(result->energies), extents.batch_f64_bytes,
-         (options.flags & GPUXTB_COMPUTE_ENERGY) != 0},
+         (options.flags & XTBLOOM_COMPUTE_ENERGY) != 0},
         {"forces", view(result->forces), extents.position_bytes,
-         (options.flags & GPUXTB_COMPUTE_FORCES) != 0},
+         (options.flags & XTBLOOM_COMPUTE_FORCES) != 0},
         {"atomic_charges", view(result->atomic_charges), extents.atom_f64_bytes,
-         (options.flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0},
+         (options.flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0},
         {"point_charge_forces", view(result->point_charge_forces), extents.point_position_bytes,
-         (options.flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0},
+         (options.flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0},
         {"scc_iterations", view(result->scc_iterations), extents.batch_i32_bytes, true},
         {"scc_converged", view(result->scc_converged), extents.batch_u8_bytes, true},
         {"per_system_status", view(result->per_system_status), extents.batch_i32_bytes, true},
@@ -778,7 +779,7 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
         return checked;
       }
     }
-    if (has_result_v2_suffix(*result) && (options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0) {
+    if (has_result_v2_suffix(*result) && (options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0) {
       DescriptorValidationResult checked =
           add_active_range(ranges, range_count, "dipole_moments", view(result->dipole_moments),
                            extents.dipole_f64_bytes, true);
@@ -797,18 +798,18 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
 
 bool is_known_interaction_type(std::int32_t type) {
   switch (type) {
-    case GPUXTB_INTERACTION_ELECTRIC_FIELD:
-    case GPUXTB_INTERACTION_ELECTRIC_FIELD_GRADIENT:
-    case GPUXTB_INTERACTION_POINT_CHARGES_MULTIPOLE:
-    case GPUXTB_INTERACTION_ATOMIC_POTENTIAL_GRID:
-    case GPUXTB_INTERACTION_ALPB_SOLVATION:
-    case GPUXTB_INTERACTION_GBSA_SOLVATION:
-    case GPUXTB_INTERACTION_GB_SOLVATION:
-    case GPUXTB_INTERACTION_GBE_SOLVATION:
-    case GPUXTB_INTERACTION_DDX_SOLVATION:
-    case GPUXTB_INTERACTION_D3_DISPERSION:
-    case GPUXTB_INTERACTION_D4_VARIANT_DISPERSION:
-    case GPUXTB_INTERACTION_HALOGEN_BOND:
+    case XTBLOOM_INTERACTION_ELECTRIC_FIELD:
+    case XTBLOOM_INTERACTION_ELECTRIC_FIELD_GRADIENT:
+    case XTBLOOM_INTERACTION_POINT_CHARGES_MULTIPOLE:
+    case XTBLOOM_INTERACTION_ATOMIC_POTENTIAL_GRID:
+    case XTBLOOM_INTERACTION_ALPB_SOLVATION:
+    case XTBLOOM_INTERACTION_GBSA_SOLVATION:
+    case XTBLOOM_INTERACTION_GB_SOLVATION:
+    case XTBLOOM_INTERACTION_GBE_SOLVATION:
+    case XTBLOOM_INTERACTION_DDX_SOLVATION:
+    case XTBLOOM_INTERACTION_D3_DISPERSION:
+    case XTBLOOM_INTERACTION_D4_VARIANT_DISPERSION:
+    case XTBLOOM_INTERACTION_HALOGEN_BOND:
       return true;
     default:
       return false;
@@ -830,17 +831,17 @@ bool is_known_interaction_type(std::int32_t type) {
  * interactions yet; this function exists so malformed attachments produce a
  * precise diagnostic before that refusal.
  */
-DescriptorValidationResult validate_host_interaction_semantics(const gpuxtb_batch_t& batch) {
+DescriptorValidationResult validate_host_interaction_semantics(const xtbloom_batch_t& batch) {
   if (!has_interaction_suffix(batch) || batch.total_interactions == 0) {
     return {};
   }
   const BufferView descriptors = interaction_descriptor_view(batch);
   const BufferView payload = interaction_payload_view(batch);
   DescriptorValidationResult validation;
-  if (payload.memory_space != GPUXTB_MEMORY_HOST) {
+  if (payload.memory_space != XTBLOOM_MEMORY_HOST) {
     validation.pending_offset_checks |= kInteractionPayloadNeedsStaging;
   }
-  if (descriptors.memory_space != GPUXTB_MEMORY_HOST) {
+  if (descriptors.memory_space != XTBLOOM_MEMORY_HOST) {
     validation.pending_offset_checks |= kInteractionDescriptorsNeedStaging;
     return validation;
   }
@@ -850,7 +851,7 @@ DescriptorValidationResult validate_host_interaction_semantics(const gpuxtb_batc
     if (interaction.flags != 0u) {
       return invalid("interaction descriptor flags must be zero");
     }
-    if (interaction.type == GPUXTB_INTERACTION_NONE ||
+    if (interaction.type == XTBLOOM_INTERACTION_NONE ||
         !is_known_interaction_type(interaction.type)) {
       return invalid("an interaction descriptor uses an unknown or NONE type tag");
     }
@@ -865,12 +866,12 @@ DescriptorValidationResult validate_host_interaction_semantics(const gpuxtb_batc
             static_cast<std::uint64_t>(payload.size_bytes) - interaction.payload_offset) {
       return invalid("an interaction payload block extends past interaction_payload");
     }
-    if (interaction.type != GPUXTB_INTERACTION_ELECTRIC_FIELD &&
+    if (interaction.type != XTBLOOM_INTERACTION_ELECTRIC_FIELD &&
         (interaction.payload_size < sizeof(std::int32_t) ||
          (interaction.payload_offset % alignof(std::int32_t)) != 0u)) {
       return invalid("an interaction payload block must contain an aligned block_version");
     }
-    if (interaction.type == GPUXTB_INTERACTION_ELECTRIC_FIELD) {
+    if (interaction.type == XTBLOOM_INTERACTION_ELECTRIC_FIELD) {
       /* Released block contract for block_version 1: 32 bytes (one int32_t
        * version, one int32_t reserved, three doubles) with 8-byte alignment. */
       if (interaction.payload_size < 32u || (interaction.payload_offset % 8u) != 0u) {
@@ -882,7 +883,7 @@ DescriptorValidationResult validate_host_interaction_semantics(const gpuxtb_batc
          * interpret yet. */
         return invalid("an electric-field interaction payload block exceeds the released contract");
       }
-      if (payload.memory_space == GPUXTB_MEMORY_HOST) {
+      if (payload.memory_space == XTBLOOM_MEMORY_HOST) {
         const unsigned char* block = static_cast<const unsigned char*>(payload.data) +
                                      static_cast<std::size_t>(interaction.payload_offset);
         std::int32_t block_version = 0;
@@ -920,12 +921,12 @@ DescriptorValidationResult validate_host_interaction_semantics(const gpuxtb_batc
 }
 
 DescriptorValidationResult validate_output_execution_availability(
-    const gpuxtb_compute_options_t& options, gpuxtb_backend_t backend) {
-  if ((options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u && backend == GPUXTB_BACKEND_CUDA) {
+    const xtbloom_compute_options_t& options, xtbloom_backend_t backend) {
+  if ((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u && backend == XTBLOOM_BACKEND_CUDA) {
     /* The CUDA backend has not released dipole-moment publication yet (see
      * #237 P3). This runs after output shape and alias validation so
      * malformed requests still receive precise errors. */
-    return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+    return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
             "dipole-moment output is implemented by the CPU backend but is not "
             "released on the CUDA backend yet"};
   }
@@ -947,29 +948,29 @@ DescriptorValidationResult validate_output_execution_availability(
  * staged content validation (see #237 P3), so only host-resident descriptors
  * are read to distinguish the released electric field from reserved tags.
  */
-DescriptorValidationResult validate_interaction_execution_availability(const gpuxtb_batch_t& batch,
-                                                                       gpuxtb_backend_t backend) {
+DescriptorValidationResult validate_interaction_execution_availability(const xtbloom_batch_t& batch,
+                                                                       xtbloom_backend_t backend) {
   if (!has_interaction_suffix(batch) || batch.total_interactions == 0) {
     return {};
   }
   const BufferView descriptors = interaction_descriptor_view(batch);
-  if (backend == GPUXTB_BACKEND_CUDA) {
-    return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+  if (backend == XTBLOOM_BACKEND_CUDA) {
+    return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
             "interaction execution is implemented by the CPU backend but is "
             "not released on the CUDA backend yet"};
   }
-  if (descriptors.memory_space != GPUXTB_MEMORY_HOST) {
+  if (descriptors.memory_space != XTBLOOM_MEMORY_HOST) {
     /* The CPU backend requires host-resident descriptors (validated earlier),
      * so this branch is defensive and unreachable; refuse without reading. */
-    return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+    return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
             "interaction execution requires host-resident descriptor storage"};
   }
   const std::size_t count = static_cast<std::size_t>(batch.total_interactions);
   for (std::size_t index = 0; index < count; ++index) {
     const InteractionView interaction =
         load_interaction(descriptors, static_cast<std::size_t>(index));
-    if (interaction.type != GPUXTB_INTERACTION_ELECTRIC_FIELD) {
-      return {GPUXTB_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+    if (interaction.type != XTBLOOM_INTERACTION_ELECTRIC_FIELD) {
+      return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
               "an interaction attachment uses a tag whose backend execution is "
               "reserved but not implemented yet"};
     }
@@ -980,8 +981,8 @@ DescriptorValidationResult validate_interaction_execution_availability(const gpu
 }  // namespace
 
 DescriptorValidationResult validate_compute_descriptor_structure(
-    gpuxtb_backend_t backend, const gpuxtb_batch_t* batch, const gpuxtb_compute_options_t* options,
-    const gpuxtb_batch_result_t* result) {
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result) {
   if (result == nullptr) {
     return invalid("batch result is NULL");
   }
@@ -1005,8 +1006,8 @@ DescriptorValidationResult validate_compute_descriptor_structure(
 }
 
 DescriptorValidationResult validate_plan_descriptor_structure(
-    gpuxtb_backend_t backend, const gpuxtb_batch_t* batch,
-    const gpuxtb_compute_options_t* options) {
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options) {
   /* Plan creation has no result descriptor yet; the batch plus the compute
    * policy that sizes the plan workspace are validated without requiring
    * caller-owned output buffers. Returned checks that must be deferred to a
@@ -1018,7 +1019,7 @@ DescriptorValidationResult validate_plan_descriptor_structure(
     return prefix;
   }
   DescriptorValidationResult semantics;
-  if (backend == GPUXTB_BACKEND_CPU) {
+  if (backend == XTBLOOM_BACKEND_CPU) {
     semantics = validate_host_topology_semantics(*batch);
     if (!semantics.ok()) {
       return semantics;
@@ -1042,10 +1043,10 @@ DescriptorValidationResult validate_plan_descriptor_structure(
   return validate_interaction_execution_availability(*batch, backend);
 }
 
-DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t& batch) {
+DescriptorValidationResult validate_host_topology_semantics(const xtbloom_batch_t& batch) {
   DescriptorValidationResult validation;
   const BufferView atom_offsets = view(batch.atom_offsets);
-  if (atom_offsets.memory_space == GPUXTB_MEMORY_HOST) {
+  if (atom_offsets.memory_space == XTBLOOM_MEMORY_HOST) {
     validation = validate_host_offsets("atom_offsets", atom_offsets, batch.batch_size,
                                        batch.total_atoms, true);
     if (!validation.ok()) {
@@ -1056,20 +1057,20 @@ DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t
   }
 
   const BufferView atomic_numbers = view(batch.atomic_numbers);
-  if (atomic_numbers.memory_space != GPUXTB_MEMORY_HOST) {
+  if (atomic_numbers.memory_space != XTBLOOM_MEMORY_HOST) {
     validation.pending_offset_checks |= kAtomicNumbersNeedStaging;
   }
   const BufferView molecular_charges = view(batch.molecular_charges);
-  if (molecular_charges.memory_space != GPUXTB_MEMORY_HOST) {
+  if (molecular_charges.memory_space != XTBLOOM_MEMORY_HOST) {
     validation.pending_offset_checks |= kMolecularChargesNeedStaging;
   }
   const BufferView unpaired_electrons = view(batch.unpaired_electrons);
-  if (unpaired_electrons.memory_space != GPUXTB_MEMORY_HOST) {
+  if (unpaired_electrons.memory_space != XTBLOOM_MEMORY_HOST) {
     validation.pending_offset_checks |= kUnpairedElectronsNeedStaging;
   }
   const BufferView spin_channels = spin_channel_view(batch);
   if (active(spin_channels)) {
-    if (spin_channels.memory_space != GPUXTB_MEMORY_HOST) {
+    if (spin_channels.memory_space != XTBLOOM_MEMORY_HOST) {
       validation.pending_offset_checks |= kSpinChannelsNeedStaging;
     } else {
       for (std::int64_t system = 0; system < batch.batch_size; ++system) {
@@ -1087,7 +1088,7 @@ DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t
 
   const BufferView point_offsets = view(batch.point_charge_offsets);
   if (batch.total_point_charges != 0 || active(point_offsets)) {
-    if (point_offsets.memory_space == GPUXTB_MEMORY_HOST) {
+    if (point_offsets.memory_space == XTBLOOM_MEMORY_HOST) {
       DescriptorValidationResult checked =
           validate_host_offsets("point_charge_offsets", point_offsets, batch.batch_size,
                                 batch.total_point_charges, false);
@@ -1104,7 +1105,7 @@ DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t
   const bool response_enabled = batch.total_charge_response_elements != 0 ||
                                 active(response_offsets) || active(response_matrix);
   if (response_enabled) {
-    if (response_offsets.memory_space == GPUXTB_MEMORY_HOST) {
+    if (response_offsets.memory_space == XTBLOOM_MEMORY_HOST) {
       DescriptorValidationResult checked =
           validate_host_offsets("charge_response_offsets", response_offsets, batch.batch_size,
                                 batch.total_charge_response_elements, false);
@@ -1115,8 +1116,8 @@ DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t
       validation.pending_offset_checks |= kChargeResponseOffsetsNeedStaging;
     }
 
-    const bool atom_offsets_on_host = atom_offsets.memory_space == GPUXTB_MEMORY_HOST;
-    const bool response_offsets_on_host = response_offsets.memory_space == GPUXTB_MEMORY_HOST;
+    const bool atom_offsets_on_host = atom_offsets.memory_space == XTBLOOM_MEMORY_HOST;
+    const bool response_offsets_on_host = response_offsets.memory_space == XTBLOOM_MEMORY_HOST;
     if (atom_offsets_on_host) {
       std::uint64_t expected_total = 0;
       for (std::int64_t system = 0; system < batch.batch_size; ++system) {
@@ -1157,10 +1158,10 @@ DescriptorValidationResult validate_host_topology_semantics(const gpuxtb_batch_t
   return validation;
 }
 
-DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend,
-                                                        const gpuxtb_batch_t* batch,
-                                                        const gpuxtb_compute_options_t* options,
-                                                        const gpuxtb_batch_result_t* result) {
+DescriptorValidationResult validate_compute_descriptors(xtbloom_backend_t backend,
+                                                        const xtbloom_batch_t* batch,
+                                                        const xtbloom_compute_options_t* options,
+                                                        const xtbloom_batch_result_t* result) {
   if (result == nullptr) {
     return invalid("batch result is NULL");
   }
@@ -1197,4 +1198,4 @@ DescriptorValidationResult validate_compute_descriptors(gpuxtb_backend_t backend
   return semantics;
 }
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail

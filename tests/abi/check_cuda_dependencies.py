@@ -1,6 +1,6 @@
-"""Verify that a CUDA-enabled shared gpuxtb library is loader-closed.
+"""Verify that a CUDA-enabled shared xtbloom library is loader-closed.
 
-libgpuxtb.so resolves NVIDIA APIs through hidden, pre-resolved trampolines. A
+libxtbloom.so resolves NVIDIA APIs through hidden, pre-resolved trampolines. A
 hard NVIDIA DT_NEEDED, an unresolved CUDA-facing symbol, or an exported loader
 implementation symbol would break the no-runtime load contract and ABI gate.
 The build also disables cudadevrt explicitly; retaining its link-input name in
@@ -34,7 +34,7 @@ FORBIDDEN_NEEDED_PREFIXES = (
 )
 CUDA_SYMBOL_RE = re.compile(r"^(?:__cuda|cuda|cublas|cusolver|cu[A-Z])")
 LOADER_SYMBOL_RE = re.compile(
-    r"^(?:gpuxtb_cuda_|gpu_xtb_cuda_|_lib(?:cuda|cudart|cublas|cusolver)_so_tramp_)"
+    r"^(?:xtbloom_cuda_|xtbloom_cuda_|_lib(?:cuda|cudart|cublas|cusolver)_so_tramp_)"
 )
 FORBIDDEN_BINARY_TOKENS = (b"cudadevrt",)
 
@@ -116,7 +116,7 @@ def main() -> int:
     failed = False
     if forbidden:
         print(  # noqa: T201 - CLI validation report
-            "CUDA-enabled libgpuxtb must not carry a DT_NEEDED entry on an NVIDIA "
+            "CUDA-enabled libxtbloom must not carry a DT_NEEDED entry on an NVIDIA "
             "library; found: " + ", ".join(forbidden)
         )
         failed = True

@@ -28,15 +28,15 @@ int test_diatom_batch() {
       0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0,
   };
 
-  gpuxtb::detail::gfn2::RepulsionPlan plan;
+  xtbloom::detail::gfn2::RepulsionPlan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_repulsion_plan(4, 7, offsets.data(), atomic_numbers.data(), plan,
-                                                  error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_repulsion_plan(4, 7, offsets.data(), atomic_numbers.data(),
+                                                   plan, error) == XTBLOOM_STATUS_SUCCESS);
 
   std::array<double, 4> energies{};
   std::array<double, 21> forces{};
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(plan, positions.data(), energies.data(),
-                                                forces.data(), error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(plan, positions.data(), energies.data(),
+                                                 forces.data(), error) == XTBLOOM_STATUS_SUCCESS);
 
   CHECK(near(energies[0], 0.039349058626104098, 2.0e-15));
   CHECK(near(energies[1], 0.051655090243274783, 2.0e-15));
@@ -56,12 +56,12 @@ int test_diatom_batch() {
   constexpr double step = 1.0e-5;
   positions[12] += step;
   std::array<double, 4> right{};
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(plan, positions.data(), right.data(), nullptr,
-                                                error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(plan, positions.data(), right.data(), nullptr,
+                                                 error) == XTBLOOM_STATUS_SUCCESS);
   positions[12] -= 2.0 * step;
   std::array<double, 4> left{};
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(plan, positions.data(), left.data(), nullptr,
-                                                error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(plan, positions.data(), left.data(), nullptr,
+                                                 error) == XTBLOOM_STATUS_SUCCESS);
   const double numerical_force = -(right[2] - left[2]) / (2.0 * step);
   CHECK(near(numerical_force, forces[12], 2.0e-10));
   return 0;
@@ -94,14 +94,14 @@ int test_xtb_cluster_golden() {
   };
   constexpr std::array<std::int64_t, 2> offsets{0, 24};
 
-  gpuxtb::detail::gfn2::RepulsionPlan plan;
+  xtbloom::detail::gfn2::RepulsionPlan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_repulsion_plan(1, 24, offsets.data(), atomic_numbers.data(),
-                                                  plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_repulsion_plan(1, 24, offsets.data(), atomic_numbers.data(),
+                                                   plan, error) == XTBLOOM_STATUS_SUCCESS);
   std::array<double, 1> energy{};
   std::array<double, 72> forces{};
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(plan, positions.data(), energy.data(),
-                                                forces.data(), error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(plan, positions.data(), energy.data(),
+                                                 forces.data(), error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(energy[0], 0.49222837261241, 1.0e-13));
 
   for (std::size_t axis = 0; axis < 3; ++axis) {
@@ -116,12 +116,12 @@ int test_xtb_cluster_golden() {
   for (std::size_t coordinate = 0; coordinate < positions.size(); ++coordinate) {
     positions[coordinate] += step;
     std::array<double, 1> right{};
-    CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(plan, positions.data(), right.data(), nullptr,
-                                                  error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(plan, positions.data(), right.data(), nullptr,
+                                                   error) == XTBLOOM_STATUS_SUCCESS);
     positions[coordinate] -= 2.0 * step;
     std::array<double, 1> left{};
-    CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(plan, positions.data(), left.data(), nullptr,
-                                                  error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(plan, positions.data(), left.data(), nullptr,
+                                                   error) == XTBLOOM_STATUS_SUCCESS);
     positions[coordinate] += step;
     const double numerical_force = -(right[0] - left[0]) / (2.0 * step);
     CHECK(near(numerical_force, forces[coordinate], 2.0e-9));
@@ -130,42 +130,42 @@ int test_xtb_cluster_golden() {
 }
 
 int test_validation() {
-  gpuxtb::detail::gfn2::RepulsionPlan plan;
+  xtbloom::detail::gfn2::RepulsionPlan plan;
   std::string error;
   constexpr std::array<std::int64_t, 2> offsets{0, 2};
   constexpr std::array<std::int64_t, 2> bad_offsets{1, 2};
   constexpr std::array<std::int32_t, 2> atoms{1, 1};
   constexpr std::array<std::int32_t, 2> bad_atoms{1, 87};
-  CHECK(gpuxtb::detail::gfn2::make_repulsion_plan(1, 2, bad_offsets.data(), atoms.data(), plan,
-                                                  error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_repulsion_plan(1, 2, offsets.data(), bad_atoms.data(), plan,
-                                                  error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_repulsion_plan(1, 2, offsets.data(), atoms.data(), plan,
-                                                  error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_repulsion_plan(1, 2, bad_offsets.data(), atoms.data(), plan,
+                                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_repulsion_plan(1, 2, offsets.data(), bad_atoms.data(), plan,
+                                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_repulsion_plan(1, 2, offsets.data(), atoms.data(), plan,
+                                                   error) == XTBLOOM_STATUS_SUCCESS);
 
-  gpuxtb::detail::gfn2::RepulsionPlan corrupt_plan = plan;
+  xtbloom::detail::gfn2::RepulsionPlan corrupt_plan = plan;
   corrupt_plan.atom_offsets[1] = 1;
   std::array<double, 6> valid_positions{0.0, 0.0, 0.0, 1.4, 0.0, 0.0};
   std::array<double, 1> corrupt_energy{};
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(corrupt_plan, valid_positions.data(),
-                                                corrupt_energy.data(), nullptr,
-                                                error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(corrupt_plan, valid_positions.data(),
+                                                 corrupt_energy.data(), nullptr,
+                                                 error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   std::array<double, 6> positions{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   std::array<double, 1> energy{};
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(plan, positions.data(), energy.data(), nullptr,
-                                                error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(plan, positions.data(), energy.data(), nullptr,
+                                                 error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   positions[3] = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(plan, positions.data(), energy.data(), nullptr,
-                                                error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(plan, positions.data(), energy.data(), nullptr,
+                                                 error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   std::vector<std::int64_t> all_offsets{0, 86};
   std::vector<std::int32_t> all_elements(86);
   for (std::int32_t atomic_number = 1; atomic_number <= 86; ++atomic_number) {
     all_elements[static_cast<std::size_t>(atomic_number - 1)] = atomic_number;
   }
-  CHECK(gpuxtb::detail::gfn2::make_repulsion_plan(1, 86, all_offsets.data(), all_elements.data(),
-                                                  plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_repulsion_plan(1, 86, all_offsets.data(), all_elements.data(),
+                                                   plan, error) == XTBLOOM_STATUS_SUCCESS);
   return 0;
 }
 

@@ -77,7 +77,7 @@ def load_metadata() -> dict[str, object]:
     except (OSError, json.JSONDecodeError) as error:
         raise ObserverPatchError(f"cannot read {METADATA_PATH}: {error}") from error
 
-    if metadata.get("schema") != "gpuxtb-tblite-scc-observer-patch-v1":
+    if metadata.get("schema") != "xtbloom-tblite-scc-observer-patch-v1":
         raise ObserverPatchError(
             "unsupported or missing observer patch metadata schema"
         )
@@ -308,7 +308,7 @@ def validate_applied_hooks(checkout: Path) -> None:
 def probe_meson_project(lapack: str) -> str:
     """Return the disposable outer Meson project used to build the probe."""
     return f"""project(
-  'gpuxtb-tblite-observer-probe',
+  'xtbloom-tblite-observer-probe',
   'fortran',
   default_options: ['buildtype=release', 'default_library=static'],
 )
@@ -329,11 +329,11 @@ tblite_project = subproject(
 tblite_dep = tblite_project.get_variable('tblite_dep')
 
 observer_probe = executable(
-  'gpuxtb-tblite-observer-probe',
+  'xtbloom-tblite-observer-probe',
   'observer_probe.f90',
   dependencies: tblite_dep,
 )
-test('gpuxtb-tblite-observer-probe', observer_probe)
+test('xtbloom-tblite-observer-probe', observer_probe)
 """
 
 
@@ -346,7 +346,7 @@ def build_and_run_probe(
 ) -> None:
     """Build the patched tblite subproject and run the standalone H3+ probe."""
     with tempfile.TemporaryDirectory(
-        prefix="gpuxtb-tblite-observer-probe-"
+        prefix="xtbloom-tblite-observer-probe-"
     ) as directory:
         outer = Path(directory) / "outer"
         subprojects = outer / "subprojects"
@@ -379,7 +379,7 @@ def build_and_run_probe(
                 "compile",
                 "-C",
                 str(build),
-                "gpuxtb-tblite-observer-probe",
+                "xtbloom-tblite-observer-probe",
             ],
             cwd=outer,
             env=environment,
@@ -390,7 +390,7 @@ def build_and_run_probe(
                 "test",
                 "-C",
                 str(build),
-                "gpuxtb-tblite-observer-probe",
+                "xtbloom-tblite-observer-probe",
                 "--print-errorlogs",
             ],
             cwd=outer,
@@ -472,7 +472,9 @@ def main() -> int:
         validate_checkout(checkout)
         retained = f"; patched checkout retained at {checkout}"
     else:
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-tblite-observer-") as directory:
+        with tempfile.TemporaryDirectory(
+            prefix="xtbloom-tblite-observer-"
+        ) as directory:
             validate_checkout(Path(directory) / "tblite")
         retained = ""
 

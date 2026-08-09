@@ -8,8 +8,8 @@
 
 namespace {
 
-using namespace gpuxtb::detail;
-using namespace gpuxtb::detail::cuda;
+using namespace xtbloom::detail;
+using namespace xtbloom::detail::cuda;
 
 #define CHECK(condition) \
   do {                   \
@@ -185,7 +185,7 @@ struct Fixture {
   void make_report_owners() noexcept {
     workspace.d4_workspace.system_errors = ptr<std::uint32_t>(kBatch);
     workspace.d4_workspace.system_error_elements = kBatch;
-    workspace.staged_mixer.system_statuses = ptr<gpuxtb_status_t>(kBatch);
+    workspace.staged_mixer.system_statuses = ptr<xtbloom_status_t>(kBatch);
     workspace.staged_mixer.batch_elements = kBatch;
 
     workspace.publication_workspace.system_errors = ptr<std::uint32_t>(kBatch);
@@ -235,7 +235,7 @@ struct Fixture {
     state.free_energy = free_energy();
     state.scc.current_inputs = multipoles();
     state.scc.iterations = ptr<std::uint64_t>(kBatch);
-    state.scc.system_statuses = ptr<gpuxtb_status_t>(kBatch);
+    state.scc.system_statuses = ptr<xtbloom_status_t>(kBatch);
     state.scc.converged = ptr<std::uint8_t>(kBatch);
     state.scc.batch_elements = kBatch;
 
@@ -451,14 +451,14 @@ int test_canonical_stage_factory_and_diagnostic_owners() {
   CHECK(d4_potential->system_codes == fixture.workspace.d4_workspace.system_errors);
   CHECK(d4_energy->system_codes == fixture.workspace.d4_workspace.system_errors);
   CHECK(periodic->stage_sequence_active == fixture.workspace.periodic_workspace.sequence_active);
-  CHECK(mixer->system_code_format == Gfn2SccStageCodeFormat::kGpuxtbStatus);
+  CHECK(mixer->system_code_format == Gfn2SccStageCodeFormat::kXTBloomStatus);
   CHECK(mixer->system_codes == fixture.workspace.staged_mixer.system_statuses);
   CHECK(mixer->device_error == nullptr && mixer->device_error_elements == 0);
   CHECK(publication->system_codes == fixture.workspace.publication_workspace.system_errors);
   CHECK(publication->device_error == fixture.workspace.publication_workspace.device_error);
   CHECK(publication->stage_sequence_active ==
         fixture.workspace.publication_workspace.sequence_active);
-  CHECK(eigensolver->peer_failure_status == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+  CHECK(eigensolver->peer_failure_status == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   CHECK(eigensolver->peer_error_mask == 0x3e06u);
   CHECK(spin_potential->peer_error_mask == kGfn2SpinDevicePeerErrorMask);
   CHECK(spin_energy->peer_error_mask == kGfn2SpinDevicePeerErrorMask);

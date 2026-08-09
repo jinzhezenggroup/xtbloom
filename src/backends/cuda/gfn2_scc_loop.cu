@@ -1,5 +1,5 @@
 #include <cuda_runtime.h>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cstddef>
 #include <cstdint>
@@ -9,7 +9,7 @@
 
 #include "backends/cuda/gfn2_scc_loop.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 struct alignas(16) Gfn2SccDeviceLoopControl {
@@ -1361,4 +1361,4 @@ std::size_t Gfn2SccLoopCudaGraphOwner::dispatch_chain_executable_count() const n
   return state_ == nullptr ? 0u : state_->executables.size();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

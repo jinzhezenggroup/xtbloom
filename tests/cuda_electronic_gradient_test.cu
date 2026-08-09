@@ -24,23 +24,23 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2ElectronicGradientDeviceDiagnostics;
-using gpuxtb::detail::cuda::Gfn2ElectronicGradientDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2ElectronicGradientRequest;
-using gpuxtb::detail::cuda::Gfn2ForceDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2H0DevicePlan;
-using gpuxtb::detail::cuda::Gfn2H0ForceDeviceInput;
-using gpuxtb::detail::cuda::Gfn2H0ForceDeviceOutput;
-using gpuxtb::detail::cuda::Gfn2H0ForceDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2HamiltonianForceDeviceInput;
-using gpuxtb::detail::cuda::Gfn2HamiltonianForceDeviceOutput;
-using gpuxtb::detail::cuda::Gfn2HamiltonianForceDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2IntegralDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2IntegralForceDeviceWorkspace;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::H0Plan;
-using gpuxtb::detail::gfn2::IntegralPlan;
+using xtbloom::detail::cuda::Gfn2ElectronicGradientDeviceDiagnostics;
+using xtbloom::detail::cuda::Gfn2ElectronicGradientDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2ElectronicGradientRequest;
+using xtbloom::detail::cuda::Gfn2ForceDeviceActivity;
+using xtbloom::detail::cuda::Gfn2H0DevicePlan;
+using xtbloom::detail::cuda::Gfn2H0ForceDeviceInput;
+using xtbloom::detail::cuda::Gfn2H0ForceDeviceOutput;
+using xtbloom::detail::cuda::Gfn2H0ForceDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2HamiltonianDeviceBatch;
+using xtbloom::detail::cuda::Gfn2HamiltonianForceDeviceInput;
+using xtbloom::detail::cuda::Gfn2HamiltonianForceDeviceOutput;
+using xtbloom::detail::cuda::Gfn2HamiltonianForceDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2IntegralDeviceBatch;
+using xtbloom::detail::cuda::Gfn2IntegralForceDeviceWorkspace;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::H0Plan;
+using xtbloom::detail::gfn2::IntegralPlan;
 
 constexpr std::uint64_t kPlanToken = 0x2786dcb5974f2013ULL;
 
@@ -172,11 +172,11 @@ void add_hamiltonian_adjoints(const HostCase& data, Expected& result) {
 bool update_expected(HostCase& data, std::string& error) {
   data.expected = Expected{data.overlap_seed, data.coordination_seed, data.dipole_seed,
                            data.quadrupole_seed, data.gradient_seed};
-  if (gpuxtb::detail::gfn2::add_h0_vjp_cpu(
+  if (xtbloom::detail::gfn2::add_h0_vjp_cpu(
           data.basis, data.integrals, data.h0, data.positions.data(), data.coordination.data(),
           data.overlap.data(), data.density.data(), data.expected.overlap.data(),
           data.expected.coordination.data(), data.expected.gradient.data(),
-          error) != GPUXTB_STATUS_SUCCESS) {
+          error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   for (std::size_t matrix = 0; matrix < data.expected.overlap.size(); ++matrix) {
@@ -186,14 +186,14 @@ bool update_expected(HostCase& data, std::string& error) {
 
   std::vector<double> workspace((data.integrals.workspace_size_bytes + sizeof(double) - 1u) /
                                 sizeof(double));
-  return gpuxtb::detail::gfn2::add_overlap_gradient_cpu(
+  return xtbloom::detail::gfn2::add_overlap_gradient_cpu(
              data.basis, data.integrals, data.positions.data(), data.expected.overlap.data(),
              data.expected.gradient.data(), workspace.data(), workspace.size() * sizeof(double),
-             error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+             error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::add_multipole_gradient_cpu(
              data.basis, data.integrals, data.positions.data(), data.expected.dipole.data(),
              data.expected.quadrupole.data(), data.expected.gradient.data(), workspace.data(),
-             workspace.size() * sizeof(double), error) == GPUXTB_STATUS_SUCCESS;
+             workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool make_case(HostCase& data, std::string& error) {
@@ -201,12 +201,12 @@ bool make_case(HostCase& data, std::string& error) {
   const std::vector<std::int32_t> atomic_numbers{1, 1, 8, 1, 1};
   data.positions = {0.00, 0.00, -0.71, 0.00,  0.00, 0.71, 4.10, -0.20,
                     0.13, 5.48, 0.37,  -0.22, 3.53, 1.19, 0.61};
-  if (gpuxtb::detail::gfn2::make_basis_plan(2, 5, atom_offsets.data(), atomic_numbers.data(),
-                                            data.basis, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_integral_plan(data.basis, data.integrals, error) !=
-          GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_h0_plan(data.basis, data.integrals, atomic_numbers.data(), data.h0,
-                                         error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_basis_plan(2, 5, atom_offsets.data(), atomic_numbers.data(),
+                                             data.basis, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_integral_plan(data.basis, data.integrals, error) !=
+          XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_h0_plan(data.basis, data.integrals, atomic_numbers.data(),
+                                          data.h0, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   for (std::int64_t system = 0; system < data.basis.batch_size; ++system) {
@@ -245,9 +245,9 @@ bool make_case(HostCase& data, std::string& error) {
 
   std::vector<double> workspace((data.integrals.workspace_size_bytes + sizeof(double) - 1u) /
                                 sizeof(double));
-  if (gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  if (xtbloom::detail::gfn2::evaluate_overlap_cpu(
           data.basis, data.integrals, data.positions.data(), data.overlap.data(), workspace.data(),
-          workspace.size() * sizeof(double), error) != GPUXTB_STATUS_SUCCESS) {
+          workspace.size() * sizeof(double), error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   for (std::size_t atom = 0; atom < atoms; ++atom) {
@@ -337,7 +337,7 @@ struct DeviceFixture {
   DeviceBuffer<double> hamiltonian_quadrupole_scratch;
   DeviceBuffer<double> integral_gradient_scratch;
   DeviceBuffer<std::uint8_t> requested;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<std::uint8_t> h0_success_mask;
   DeviceBuffer<std::uint8_t> hamiltonian_success_mask;
   DeviceBuffer<std::uint32_t> h0_sequence;
@@ -420,7 +420,7 @@ struct DeviceFixture {
       return status;
     }
     std::vector<std::uint8_t> all_requested(systems, 1u);
-    std::vector<gpuxtb_status_t> all_success(systems, GPUXTB_STATUS_SUCCESS);
+    std::vector<xtbloom_status_t> all_success(systems, XTBLOOM_STATUS_SUCCESS);
     status = requested.copy_from(all_requested.data(), systems, stream);
     if (status == cudaSuccess) {
       status = statuses.copy_from(all_success.data(), systems, stream);
@@ -624,7 +624,7 @@ struct DeviceFixture {
 };
 
 cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t stream) {
-  return gpuxtb::detail::cuda::compose_gfn2_electronic_gradient_cuda(
+  return xtbloom::detail::cuda::compose_gfn2_electronic_gradient_cuda(
       Gfn2ElectronicGradientRequest{1u, kPlanToken}, device.integral_batch(host),
       device.h0_plan(host), device.hamiltonian_batch(host), device.activity(host),
       device.h0_input(host), device.h0_output(host), device.h0_workspace(host),
@@ -701,10 +701,10 @@ int test_composition_and_changed_input_graph() {
   host.positions[4] -= 0.07;
   std::vector<double> cpu_workspace((host.integrals.workspace_size_bytes + sizeof(double) - 1u) /
                                     sizeof(double));
-  CHECK(gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_overlap_cpu(
             host.basis, host.integrals, host.positions.data(), host.overlap.data(),
             cpu_workspace.data(), cpu_workspace.size() * sizeof(double),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   for (std::size_t coordinate = 0; coordinate < host.gradient_seed.size(); ++coordinate) {
     host.gradient_seed[coordinate] = -0.003 * std::cos(0.17 * static_cast<double>(coordinate + 2u));
   }
@@ -823,7 +823,7 @@ int test_stage_failure_propagates_without_peer_contamination() {
 
 int test_energy_only_requires_no_force_binding_or_launch() {
   const auto invalid_stream = reinterpret_cast<cudaStream_t>(static_cast<std::uintptr_t>(1u));
-  CHECK(gpuxtb::detail::cuda::compose_gfn2_electronic_gradient_cuda(
+  CHECK(xtbloom::detail::cuda::compose_gfn2_electronic_gradient_cuda(
             Gfn2ElectronicGradientRequest{}, Gfn2IntegralDeviceBatch{}, Gfn2H0DevicePlan{},
             Gfn2HamiltonianDeviceBatch{}, Gfn2ForceDeviceActivity{}, Gfn2H0ForceDeviceInput{},
             Gfn2H0ForceDeviceOutput{}, Gfn2H0ForceDeviceWorkspace{},

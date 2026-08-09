@@ -6,7 +6,7 @@ Leaf: #220 branch `issue84-projection-migration`, derived from `main` @ e16bfa2.
 
 Command:
 ```
-cmake -S . -B build/cuda-sm120 [-DGPUXTB_ENABLE_CUDA=ON]
+cmake -S . -B build/cuda-sm120 [-DXTBLOOM_ENABLE_CUDA=ON]
 cmake --build build/cuda-sm120 --parallel
 unset CUDA_VISIBLE_DEVICES
 export LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64:/group/software/cuda-12.9.1/targets/x86_64-linux/lib

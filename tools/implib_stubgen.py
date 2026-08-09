@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Generate lazy-dlopen trampoline stubs without scanning a real library.
 
-gpuxtb dlopens the NVIDIA cuBLAS / cuSOLVER / CUDA-runtime / CUDA-driver
+xtbloom dlopens the NVIDIA cuBLAS / cuSOLVER / CUDA-runtime / CUDA-driver
 cohort at runtime through hand-rolled trampolines (see src/runtime/
 cuda_dlopen.c).  When a full CUDA toolkit is present, the build derives
 those trampolines from the real shared objects with the vendored
@@ -15,7 +15,7 @@ the library bytes themselves.
 This script reproduces implib-gen.py's non-vtable output byte-for-byte from
 the same vendored templates so the CUDA backend can be configured and built
 from nvcc's compiler-support files and the cudart headers, with provider
-shared libraries required only at run time.  It is original gpuxtb code;
+shared libraries required only at run time.  It is original xtbloom code;
 implib assumes no input library because it never inspects one.
 
 The build uses this stub path whenever the proprietary CUDA libraries are
@@ -126,7 +126,7 @@ def generate(
                 lib_suffix=lib_suffix,
                 load_name=load_name,
                 dlopen_callback="",
-                dlsym_callback="gpu_xtb_cuda_dlsym",
+                dlsym_callback="xtbloom_cuda_dlsym",
                 has_dlopen_callback=0,
                 has_dlsym_callback=1,
                 no_dlopen=1,

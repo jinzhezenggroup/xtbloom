@@ -26,22 +26,22 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::Gfn2WavefunctionLayoutView;
-using gpuxtb::detail::cuda::Gfn2MullikenDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2MullikenDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2MullikenDeviceError;
-using gpuxtb::detail::cuda::Gfn2MullikenDeviceInput;
-using gpuxtb::detail::cuda::Gfn2MullikenDevicePopulation;
-using gpuxtb::detail::cuda::Gfn2MullikenDeviceWorkspace;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::IntegralPlan;
-using gpuxtb::detail::gfn2::MullikenDensityView;
-using gpuxtb::detail::gfn2::MullikenIntegralView;
-using gpuxtb::detail::gfn2::MullikenPlan;
-using gpuxtb::detail::gfn2::MullikenPopulationView;
-using gpuxtb::detail::gfn2::MullikenWorkspace;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::Gfn2WavefunctionLayoutView;
+using xtbloom::detail::cuda::Gfn2MullikenDeviceActivity;
+using xtbloom::detail::cuda::Gfn2MullikenDeviceBatch;
+using xtbloom::detail::cuda::Gfn2MullikenDeviceError;
+using xtbloom::detail::cuda::Gfn2MullikenDeviceInput;
+using xtbloom::detail::cuda::Gfn2MullikenDevicePopulation;
+using xtbloom::detail::cuda::Gfn2MullikenDeviceWorkspace;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::IntegralPlan;
+using xtbloom::detail::gfn2::MullikenDensityView;
+using xtbloom::detail::gfn2::MullikenIntegralView;
+using xtbloom::detail::gfn2::MullikenPlan;
+using xtbloom::detail::gfn2::MullikenPopulationView;
+using xtbloom::detail::gfn2::MullikenWorkspace;
+using xtbloom::detail::gfn2::WavefunctionLayout;
 
 constexpr std::uint64_t kPlanToken = 0x71c32d5b9e4a608fULL;
 constexpr double kSentinel = -817.625;
@@ -236,16 +236,16 @@ bool make_spin_oracle_case(std::size_t batch_size, SpinOracleCase& result, std::
   BasisPlan basis;
   IntegralPlan integral_plan;
   WavefunctionLayout wavefunction;
-  if (gpuxtb::detail::gfn2::make_basis_plan(
+  if (xtbloom::detail::gfn2::make_basis_plan(
           static_cast<std::int64_t>(batch_size), static_cast<std::int64_t>(atomic_numbers.size()),
-          atom_offsets.data(), atomic_numbers.data(), basis, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_integral_plan(basis, integral_plan, error) !=
-          GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_wavefunction_layout(
+          atom_offsets.data(), atomic_numbers.data(), basis, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_integral_plan(basis, integral_plan, error) !=
+          XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_wavefunction_layout(
           basis, atomic_numbers.data(), charges.data(), unpaired.data(), spin_channels.data(),
-          wavefunction, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_mulliken_plan(basis, integral_plan, wavefunction, result.plan,
-                                               error) != GPUXTB_STATUS_SUCCESS) {
+          wavefunction, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_mulliken_plan(basis, integral_plan, wavefunction, result.plan,
+                                                error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -332,8 +332,8 @@ bool evaluate_cpu_oracle(SpinOracleCase& data, Population& result, std::string& 
       data.plan.identity()};
   const MullikenWorkspace workspace{data.scratch.data(),
                                     static_cast<std::int64_t>(data.scratch.size())};
-  return gpuxtb::detail::gfn2::evaluate_mulliken_population_cpu(
-             data.plan, integrals, density, population, workspace, error) == GPUXTB_STATUS_SUCCESS;
+  return xtbloom::detail::gfn2::evaluate_mulliken_population_cpu(
+             data.plan, integrals, density, population, workspace, error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 Population evaluate_cpu(const HostCase& data, const Population& initial) {
@@ -657,9 +657,9 @@ cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t str
   const Gfn2MullikenDeviceActivity activity = device.activity(host);
   Gfn2MullikenDevicePopulation population = device.population(host);
   Gfn2MullikenDeviceWorkspace workspace = device.workspace(host);
-  cudaError_t status = gpuxtb::detail::cuda::reset_gfn2_mulliken_device_errors_cuda(
+  cudaError_t status = xtbloom::detail::cuda::reset_gfn2_mulliken_device_errors_cuda(
       host.batch_size, device.system_errors.get(), device.device_error.get(), stream);
-  return status == cudaSuccess ? gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
+  return status == cudaSuccess ? xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
                                      batch, input, activity, population, workspace,
                                      device.system_errors.get(), device.device_error.get(), stream)
                                : status;
@@ -673,9 +673,9 @@ cudaError_t launch_spin(DeviceFixture& device, const HostCase& host,
   const Gfn2MullikenDeviceActivity activity = device.activity(host);
   Gfn2MullikenDevicePopulation population = device.spin_population(host);
   Gfn2MullikenDeviceWorkspace workspace = device.spin_workspace(host);
-  cudaError_t status = gpuxtb::detail::cuda::reset_gfn2_mulliken_device_errors_cuda(
+  cudaError_t status = xtbloom::detail::cuda::reset_gfn2_mulliken_device_errors_cuda(
       host.batch_size, device.system_errors.get(), device.device_error.get(), stream);
-  return status == cudaSuccess ? gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_spin_cuda(
+  return status == cudaSuccess ? xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_spin_cuda(
                                      batch, layout, input, activity, population, workspace,
                                      device.system_errors.get(), device.device_error.get(), stream)
                                : status;
@@ -1010,17 +1010,17 @@ int test_spin_layout_validation_and_offsets() {
 
   Gfn2WavefunctionLayoutView wrong_count = layout;
   --wrong_count.spin_matrix_offset_count;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_spin_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_spin_cuda(
             batch, wrong_count, input, activity, population, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   Gfn2WavefunctionLayoutView alias_layout = layout;
   alias_layout.spin_matrix_offsets = batch.matrix_offsets;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_spin_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_spin_cuda(
             batch, alias_layout, input, activity, population, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   Gfn2MullikenDevicePopulation alias_population = population;
   alias_population.qsh = workspace.qsh_scratch;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_spin_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_spin_cuda(
             batch, layout, input, activity, alias_population, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
 
@@ -1217,7 +1217,7 @@ int test_sticky_error_alias_and_provenance_rejection() {
   const Gfn2MullikenDeviceActivity activity = device.activity(host);
   Gfn2MullikenDevicePopulation population = device.population(host);
   Gfn2MullikenDeviceWorkspace workspace = device.workspace(host);
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
       batch, input, activity, population, workspace, device.system_errors.get(),
       device.device_error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -1231,43 +1231,43 @@ int test_sticky_error_alias_and_provenance_rejection() {
 
   Gfn2MullikenDeviceInput wrong_input = input;
   wrong_input.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
             batch, wrong_input, activity, population, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   Gfn2MullikenDeviceActivity wrong_activity = activity;
   wrong_activity.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
             batch, input, wrong_activity, population, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   Gfn2MullikenDevicePopulation wrong_population = population;
   wrong_population.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
             batch, input, activity, wrong_population, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   Gfn2MullikenDeviceWorkspace wrong_workspace = workspace;
   wrong_workspace.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
             batch, input, activity, population, wrong_workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   Gfn2MullikenDeviceBatch wrong_batch = batch;
   wrong_batch.plan_token = 0u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
             wrong_batch, input, activity, population, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   Gfn2MullikenDevicePopulation alias_population = population;
   alias_population.qsh = workspace.qsh_scratch;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
             batch, input, activity, alias_population, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   Gfn2MullikenDeviceWorkspace alias_workspace = workspace;
   alias_workspace.qat_scratch = population.qat;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
             batch, input, activity, population, alias_workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   Gfn2MullikenDeviceBatch misaligned_batch = batch;
   misaligned_batch.matrix_offsets = reinterpret_cast<const std::int64_t*>(
       reinterpret_cast<const char*>(batch.matrix_offsets) + 1);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_mulliken_population_cuda(
             misaligned_batch, input, activity, population, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   return 0;

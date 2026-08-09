@@ -11,7 +11,7 @@
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
-      <dc:title>gpuxtb plot_natoms_cross_engine.py</dc:title>
+      <dc:title>xtbloom plot_natoms_cross_engine.py</dc:title>
      </cc:Agent>
     </dc:creator>
    </cc:Work>
@@ -2498,7 +2498,7 @@ L 130.58775 8.87175
     </g>
    </g>
    <g id="text_34">
-    <text style="font-size: 7.2px; font-family: 'Liberation Sans', 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #30343b" x="133.61175" y="11.39175" transform="rotate(-0 133.61175 11.39175)">gpuxtb CPU</text>
+    <text style="font-size: 7.2px; font-family: 'Liberation Sans', 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #30343b" x="133.61175" y="11.39175" transform="rotate(-0 133.61175 11.39175)">xtbloom CPU</text>
    </g>
    <g id="LineCollection_20">
     <path d="M 186.109875 12.47175
@@ -2526,7 +2526,7 @@ L 193.309875 8.87175
     </g>
    </g>
    <g id="text_35">
-    <text style="font-size: 7.2px; font-family: 'Liberation Sans', 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #30343b" x="196.333875" y="11.39175" transform="rotate(-0 196.333875 11.39175)">gpuxtb CUDA</text>
+    <text style="font-size: 7.2px; font-family: 'Liberation Sans', 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #30343b" x="196.333875" y="11.39175" transform="rotate(-0 196.333875 11.39175)">xtbloom CUDA</text>
    </g>
    <g id="LineCollection_21">
     <path d="M 254.03175 12.47175

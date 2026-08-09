@@ -1,7 +1,7 @@
-#ifndef GPUXTB_MODEL_GFN2_D4_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_D4_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_D4_HPP
+#define XTBLOOM_MODEL_GFN2_D4_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 inline constexpr std::size_t kD4WorkspaceAlignment = 64u;
 inline constexpr std::size_t kD4MaximumReferences = 7u;
@@ -54,8 +54,8 @@ class D4Plan {
   explicit D4Plan(std::shared_ptr<const D4PlanData> data) noexcept;
   std::shared_ptr<const D4PlanData> data_;
 
-  friend gpuxtb_status_t make_d4_plan(std::int64_t, std::int64_t, const std::int64_t*,
-                                      const std::int32_t*, D4Plan&, std::string&);
+  friend xtbloom_status_t make_d4_plan(std::int64_t, std::int64_t, const std::int64_t*,
+                                       const std::int32_t*, D4Plan&, std::string&);
 };
 
 /*
@@ -104,12 +104,12 @@ struct D4Workspace {
   const D4PlanData* plan_identity = nullptr;
 };
 
-gpuxtb_status_t make_d4_plan(std::int64_t batch_size, std::int64_t total_atoms,
-                             const std::int64_t* atom_offsets, const std::int32_t* atomic_numbers,
-                             D4Plan& plan, std::string& error);
+xtbloom_status_t make_d4_plan(std::int64_t batch_size, std::int64_t total_atoms,
+                              const std::int64_t* atom_offsets, const std::int32_t* atomic_numbers,
+                              D4Plan& plan, std::string& error);
 
-gpuxtb_status_t bind_d4_workspace(const D4Plan& plan, void* workspace, std::size_t workspace_size,
-                                  D4Workspace& view, std::string& error);
+xtbloom_status_t bind_d4_workspace(const D4Plan& plan, void* workspace, std::size_t workspace_size,
+                                   D4Workspace& view, std::string& error);
 
 /*
  * Build D4 CN and pair damping data for atom-major positions in bohr.
@@ -119,7 +119,7 @@ gpuxtb_status_t bind_d4_workspace(const D4Plan& plan, void* workspace, std::size
  * storage, and control descriptors must be mutually disjoint. The same output
  * arrays may be reused to refresh an existing cache generation.
  */
-gpuxtb_status_t update_d4_geometry_cache_cpu(
+xtbloom_status_t update_d4_geometry_cache_cpu(
     const D4Plan& plan, const double* positions, std::uint64_t geometry_generation,
     double* pair_storage, std::size_t pair_storage_elements, double* coordination_storage,
     std::size_t coordination_storage_elements, const D4Workspace& workspace, D4GeometryCache& cache,
@@ -132,10 +132,10 @@ gpuxtb_status_t update_d4_geometry_cache_cpu(
  * Active inputs, outputs, workspace, plan storage, and descriptors must not
  * overlap.
  */
-gpuxtb_status_t evaluate_d4_two_body_cpu(const D4Plan& plan, const D4GeometryCache& cache,
-                                         const double* atomic_charges, double* energies,
-                                         double* atomic_potentials, const D4Workspace& workspace,
-                                         std::string& error);
+xtbloom_status_t evaluate_d4_two_body_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                          const double* atomic_charges, double* energies,
+                                          double* atomic_potentials, const D4Workspace& workspace,
+                                          std::string& error);
 
 /*
  * Evaluate one ragged batch member using full-layout atomic charges. Only the
@@ -150,10 +150,10 @@ gpuxtb_status_t evaluate_d4_two_body_cpu(const D4Plan& plan, const D4GeometryCac
  * optional target potential slice remain unchanged on every failure. The
  * operation uses canonical caller-owned scratch and allocates nothing.
  */
-gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4GeometryCache& cache,
-                                                std::int64_t system, const double* atomic_charges,
-                                                double& energy, double* atomic_potentials,
-                                                const D4Workspace& workspace, std::string& error);
+xtbloom_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                                 std::int64_t system, const double* atomic_charges,
+                                                 double& energy, double* atomic_potentials,
+                                                 const D4Workspace& workspace, std::string& error);
 
 /*
  * Accumulate the complete two-body coordinate derivative at fixed atomic
@@ -161,9 +161,9 @@ gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4Geom
  * dE/dR in Hartree/bohr, not forces. The gradient output must not overlap the
  * charges, geometry cache, workspace, plan storage, or descriptors.
  */
-gpuxtb_status_t add_d4_two_body_gradient_cpu(const D4Plan& plan, const D4GeometryCache& cache,
-                                             const double* atomic_charges, double* gradients,
-                                             const D4Workspace& workspace, std::string& error);
+xtbloom_status_t add_d4_two_body_gradient_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                              const double* atomic_charges, double* gradients,
+                                              const D4Workspace& workspace, std::string& error);
 
 /*
  * Overwrite the non-self-consistent q=0 reference-weighted ATM energy. The
@@ -171,19 +171,19 @@ gpuxtb_status_t add_d4_two_body_gradient_cpu(const D4Plan& plan, const D4Geometr
  * same 25-bohr sharp cutoff as pinned tblite. The output must be disjoint from
  * the geometry cache, workspace, plan storage, and descriptors.
  */
-gpuxtb_status_t evaluate_d4_atm_cpu(const D4Plan& plan, const D4GeometryCache& cache,
-                                    double* energies, const D4Workspace& workspace,
-                                    std::string& error);
+xtbloom_status_t evaluate_d4_atm_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                     double* energies, const D4Workspace& workspace,
+                                     std::string& error);
 
 /*
  * Accumulate the analytic ATM coordinate derivative, including the CN path.
  * The gradient output obeys the same non-aliasing contract as the two-body
  * gradient operation.
  */
-gpuxtb_status_t add_d4_atm_gradient_cpu(const D4Plan& plan, const D4GeometryCache& cache,
-                                        double* gradients, const D4Workspace& workspace,
-                                        std::string& error);
+xtbloom_status_t add_d4_atm_gradient_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                         double* gradients, const D4Workspace& workspace,
+                                         std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_D4_HPP
+#endif  // XTBLOOM_MODEL_GFN2_D4_HPP

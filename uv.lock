@@ -513,74 +513,6 @@ wheels = [
 ]
 
 [[package]]
-name = "gpuxtb"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "array-api-compat" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-]
-
-[package.optional-dependencies]
-ase = [
-    { name = "ase" },
-]
-cuda12 = [
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "nvidia-cusolver-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
-]
-dpdata = [
-    { name = "dpdata" },
-]
-test = [
-    { name = "ase" },
-    { name = "dpdata" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-]
-
-[package.dev-dependencies]
-torch-testing = [
-    { name = "torch" },
-]
-typechecking = [
-    { name = "ase" },
-    { name = "dpdata" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "array-api-compat", specifier = ">=1.15,<2" },
-    { name = "ase", marker = "extra == 'ase'" },
-    { name = "ase", marker = "extra == 'test'" },
-    { name = "dpdata", marker = "extra == 'dpdata'" },
-    { name = "dpdata", marker = "extra == 'test'" },
-    { name = "numpy", specifier = ">=1.20" },
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=12.9.1.4" },
-    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=12.9.79" },
-    { name = "nvidia-cusolver-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=11.7.5.82" },
-    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=12.5.10.65" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=12.9.86" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=7" },
-    { name = "pytest-cov", marker = "extra == 'test'" },
-    { name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==0.3.34.0.0" },
-]
-provides-extras = ["ase", "dpdata", "cuda12", "test"]
-
-[package.metadata.requires-dev]
-torch-testing = [{ name = "torch", specifier = "==2.13.0" }]
-typechecking = [
-    { name = "ase" },
-    { name = "dpdata" },
-]
-
-[[package]]
 name = "h5py"
 version = "3.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2179,4 +2111,72 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/16/25/1da725838132221e33568973da484ff43813662ccc06ebf7f6e3abddfcd5/wcmatch-11.0.tar.gz", hash = "sha256:55d95c2447789712774b198ceec72939e88b5618f1f8f0a9b605bf7740b63b96", size = 141360, upload-time = "2026-07-10T05:50:24.183Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/28/12/f38b6fee116274d7221743caab07d765032e1370bb54cad8714f87aeb0e8/wcmatch-11.0-py3-none-any.whl", hash = "sha256:3a5977ace27e075eef67eb03d539563f1a19018b62881949a42932cf66926934", size = 42914, upload-time = "2026-07-10T05:50:22.995Z" },
+]
+
+[[package]]
+name = "xtbloom"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "array-api-compat" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+]
+
+[package.optional-dependencies]
+ase = [
+    { name = "ase" },
+]
+cuda12 = [
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cusolver-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+]
+dpdata = [
+    { name = "dpdata" },
+]
+test = [
+    { name = "ase" },
+    { name = "dpdata" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+]
+
+[package.dev-dependencies]
+torch-testing = [
+    { name = "torch" },
+]
+typechecking = [
+    { name = "ase" },
+    { name = "dpdata" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "array-api-compat", specifier = ">=1.15,<2" },
+    { name = "ase", marker = "extra == 'ase'" },
+    { name = "ase", marker = "extra == 'test'" },
+    { name = "dpdata", marker = "extra == 'dpdata'" },
+    { name = "dpdata", marker = "extra == 'test'" },
+    { name = "numpy", specifier = ">=1.20" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=12.9.1.4" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=12.9.79" },
+    { name = "nvidia-cusolver-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=11.7.5.82" },
+    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=12.5.10.65" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=12.9.86" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=7" },
+    { name = "pytest-cov", marker = "extra == 'test'" },
+    { name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==0.3.34.0.0" },
+]
+provides-extras = ["ase", "dpdata", "cuda12", "test"]
+
+[package.metadata.requires-dev]
+torch-testing = [{ name = "torch", specifier = "==2.13.0" }]
+typechecking = [
+    { name = "ase" },
+    { name = "dpdata" },
 ]

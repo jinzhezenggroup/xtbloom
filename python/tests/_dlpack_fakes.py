@@ -1,6 +1,6 @@
 """Deterministic DLPack producer fakes for the Python test suite.
 
-The production DLPack consumer (:mod:`gpuxtb._dlpack`) is tested against real
+The production DLPack consumer (:mod:`xtbloom._dlpack`) is tested against real
 NumPy arrays for the happy path and against these handcrafted producers for
 the protocol edge cases (legacy capsules, read-only flags, producer
 exceptions, stream/copy keyword negotiation, and capsule-lifetime accounting)
@@ -20,10 +20,10 @@ from typing import TYPE_CHECKING, ClassVar
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-import gpuxtb._dlpack as dlpack
 import numpy as np
+import xtbloom._dlpack as dlpack
 
-# --- raw DLPack 1.0 struct mirrors (same layout as gpuxtb._dlpack) -------------
+# --- raw DLPack 1.0 struct mirrors (same layout as xtbloom._dlpack) -------------
 
 
 class _DLDataType(ctypes.Structure):

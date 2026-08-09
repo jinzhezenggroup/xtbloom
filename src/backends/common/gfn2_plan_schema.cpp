@@ -1,5 +1,5 @@
 #include "backends/common/gfn2_plan_schema.hpp"
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
 #include <array>
@@ -9,7 +9,7 @@
 #include <iterator>
 #include <limits>
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 namespace {
 
 struct AddressRange {
@@ -1604,4 +1604,4 @@ Gfn2PlanSchemaDiagnostic project_gfn2_element_identity_projection_host(
   return success();
 }
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail

@@ -1,6 +1,6 @@
 #include <algorithm>
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -10,7 +10,7 @@
 
 #include "backends/cuda/gfn2_preprocessing.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -1040,7 +1040,7 @@ __global__ void commit_pairlist_kernel(Gfn2PairListDeviceBatch pairlist,
   /* The committed consumer view is a const projection; the output arrays are
    * the mutable publication target owned by the caller, so publish through
    * mutable local aliases. */
-  auto* const committed_pairs = const_cast<gpuxtb::detail::Gfn2AtomPair*>(committed.pairs);
+  auto* const committed_pairs = const_cast<xtbloom::detail::Gfn2AtomPair*>(committed.pairs);
   auto* const committed_pair_counts = const_cast<std::int64_t*>(committed.pair_counts);
   auto* const committed_neighbor_counts = const_cast<std::int64_t*>(committed.neighbor_counts);
   auto* const committed_neighbors = const_cast<std::int64_t*>(committed.neighbors);
@@ -1482,4 +1482,4 @@ Gfn2PreprocessingLaunchDiagnostic gate_gfn2_sparse_coordination_cuda(
   return {binding_failure(BindingError::kSuccess, BindingField::kNone), check_launch()};
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

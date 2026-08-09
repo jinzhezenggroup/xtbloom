@@ -1,8 +1,8 @@
-! gpuxtb oracle trace recorder (issues #42, #45, #46, #48).
+! xtbloom oracle trace recorder (issues #42, #45, #46, #48).
 !
 ! Builds a pinned GFN2 calculator, optionally applies the oracle-only
 ! shell-monopole PCEM container, runs xtb_singlepoint with the observer sewn
-! into the pinned tblite patch, and streams every gpuxtb-scc-trace-v1 field in
+! into the pinned tblite patch, and streams every xtbloom-scc-trace-v1 field in
 ! a fixed line-oriented raw format on stdout.  generate_scc_corpus.py parses
 ! that stream and serializes the canonical versioned JSON document via the
 ! canonical writer so no field semantics live in Fortran.
@@ -15,7 +15,7 @@
 !
 ! The raw stream layout is documented in generate_scc_corpus.py and is covered
 ! by offline fixtures in tests/oracle/test_scc_corpus_io.py.
-module gpuxtb_tblite_scc_trace_recorder
+module xtbloom_tblite_scc_trace_recorder
    use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
    use mctc_env, only : wp, error_type
    use mctc_io, only : structure_type, new
@@ -460,7 +460,7 @@ subroutine collect_shell_hardness(calc, mol, hardness)
    type(param_record) :: param
    integer :: ish, at, izp, il, lsh, isp
    ! GFN2 shell hardness = element gam * shell Hubbard scale.  The per-shell
-   ! product is exactly what gpuxtb's generated parameter table exposes as
+   ! product is exactly what xtbloom's generated parameter table exposes as
    ! shell_hardness for the external point-charge plan.  mol%id is the same
    ! species map used to construct calc%bas%cgto; atomic numbers are not valid
    ! indices into that species-major array.
@@ -475,4 +475,4 @@ subroutine collect_shell_hardness(calc, mol, hardness)
    end do
 end subroutine collect_shell_hardness
 
-end module gpuxtb_tblite_scc_trace_recorder
+end module xtbloom_tblite_scc_trace_recorder

@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -8,7 +8,7 @@
 
 #include "backends/cuda/gfn2_pairlist.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -1973,4 +1973,4 @@ bool gfn2_pairlist_use_sparse_for(std::int64_t atoms_per_system) noexcept {
   return atoms_per_system > kSparseCrossoverAtoms;
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

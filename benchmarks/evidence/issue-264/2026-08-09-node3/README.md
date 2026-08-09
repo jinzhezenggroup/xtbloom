@@ -137,10 +137,10 @@ Configure and build:
 
 ```bash
 cmake -S . -B build/issue264-cuda-dev -G Ninja \
-  -DGPUXTB_ENABLE_CUDA=ON \
+  -DXTBLOOM_ENABLE_CUDA=ON \
   -DCMAKE_CUDA_COMPILER=/group/software/cuda-12.9.1/bin/nvcc \
   -DCMAKE_CUDA_ARCHITECTURES=120 \
-  -DGPUXTB_CPU_LINALG_LIBRARY=/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so \
+  -DXTBLOOM_CPU_LINALG_LIBRARY=/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so \
   -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build/issue264-cuda-dev --parallel
 ```
@@ -156,8 +156,8 @@ srun --partition=main --nodelist=node3 --gres=gpu:5090:1 \
   OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   OMP_DYNAMIC=FALSE MKL_DYNAMIC=FALSE \
   MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL \
-  python3 benchmarks/natoms_scaling.py --engine gpuxtb \
-  --library "$PWD/build/issue264-cuda-dev/libgpuxtb.so.0.1.0" \
+  python3 benchmarks/natoms_scaling.py --engine xtbloom \
+  --library "$PWD/build/issue264-cuda-dev/libxtbloom.so.0.1.0" \
   --backend cpu --cpu-threads 16 --property force \
   --natoms 242,257,272,287,302,362 --batch-sizes 1 \
   --warmups 1 --repetitions 3 --start-mode fresh \
@@ -170,7 +170,7 @@ Dispatch report:
 ```bash
 srun --partition=main --nodelist=node3 --gres=gpu:5090:1 --ntasks=1 \
   env LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib \
-  build/issue264-cuda-dev/gpuxtb_cuda_eigensolver_test --dispatch-policy
+  build/issue264-cuda-dev/xtbloom_cuda_eigensolver_test --dispatch-policy
 ```
 
 Sanitizer controls use the same `srun`/`LD_LIBRARY_PATH` boundary:
@@ -178,12 +178,12 @@ Sanitizer controls use the same `srun`/`LD_LIBRARY_PATH` boundary:
 ```bash
 compute-sanitizer --tool <memcheck|racecheck|initcheck|synccheck> \
   --error-exitcode=99 \
-  build/issue264-cuda-dev/gpuxtb_cuda_eigensolver_test \
+  build/issue264-cuda-dev/xtbloom_cuda_eigensolver_test \
   --tridiagonal-provider-sanitizer
 
 compute-sanitizer --tool <memcheck|racecheck|initcheck|synccheck> \
   --error-exitcode=99 \
-  build/issue264-cuda-dev/gpuxtb_cuda_scc_iteration_production_test \
+  build/issue264-cuda-dev/xtbloom_cuda_scc_iteration_production_test \
   --large-singleton-sanitizer
 ```
 

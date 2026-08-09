@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Audit-ready public-C-ABI FRESH/WARM latency sweep by atom count.
 
-The runner intentionally depends only on gpuxtb's committed ctypes conformance
+The runner intentionally depends only on xtbloom's committed ctypes conformance
 adapter and the Python standard library.  One context, batch descriptor, compute
 options image, and set of caller-owned result buffers remain alive for an
 entire cell.  A WARM cell performs exactly one untimed FRESH call to publish the
@@ -43,7 +43,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CONFORMANCE_TOOLS = REPOSITORY_ROOT / "tools" / "conformance"
 if str(CONFORMANCE_TOOLS) not in sys.path:
     sys.path.insert(0, str(CONFORMANCE_TOOLS))
-public_api = importlib.import_module("gpuxtb_public_api")
+public_api = importlib.import_module("xtbloom_public_api")
 
 SCHEMA_VERSION = 1
 ANGSTROM_TO_BOHR = 1.8897261254579021
@@ -97,10 +97,12 @@ PRIMARY_ENERGY_TOLERANCE_SOURCE = {
     **CROSS_ENGINE_TOLERANCE_SOURCE,
     "json_field": "tolerances.energy",
 }
-GPUXTB_CONFORMANCE_MAX_SCC_ITERATIONS = 500
-GPUXTB_CONFORMANCE_CHARGE_TOLERANCE = 1.0e-10
-GPUXTB_CONFORMANCE_ENERGY_TOLERANCE = 1.0e-12
-GPUXTB_CONFORMANCE_ELECTRONIC_TEMPERATURE = 300.0 * public_api.GPUXTB_KELVIN_TO_HARTREE
+XTBLOOM_CONFORMANCE_MAX_SCC_ITERATIONS = 500
+XTBLOOM_CONFORMANCE_CHARGE_TOLERANCE = 1.0e-10
+XTBLOOM_CONFORMANCE_ENERGY_TOLERANCE = 1.0e-12
+XTBLOOM_CONFORMANCE_ELECTRONIC_TEMPERATURE = (
+    300.0 * public_api.XTBLOOM_KELVIN_TO_HARTREE
+)
 
 
 class BenchmarkError(RuntimeError):
@@ -186,7 +188,7 @@ class ReferenceArtifact:
 
 @dataclass
 class BatchStorage:
-    """Duck-typed storage accepted by ``gpuxtb_public_api._make_batch``."""
+    """Duck-typed storage accepted by ``xtbloom_public_api._make_batch``."""
 
     atom_offsets: list[int]
     atomic_numbers: list[int]
@@ -211,15 +213,15 @@ class _ConformanceOptions(Protocol):
     energy_tolerance: float
 
 
-def configure_gpuxtb_conformance_scc(options: _ConformanceOptions) -> None:
+def configure_xtbloom_conformance_scc(options: _ConformanceOptions) -> None:
     """Pin the SCC convergence controls used by the conformance oracle.
 
-    ``gpuxtb_compute_options_init`` already supplies the public 300 K default,
+    ``xtbloom_compute_options_init`` already supplies the public 300 K default,
     which is deliberately retained rather than overwritten here.
     """
-    options.max_scc_iterations = GPUXTB_CONFORMANCE_MAX_SCC_ITERATIONS
-    options.charge_tolerance = GPUXTB_CONFORMANCE_CHARGE_TOLERANCE
-    options.energy_tolerance = GPUXTB_CONFORMANCE_ENERGY_TOLERANCE
+    options.max_scc_iterations = XTBLOOM_CONFORMANCE_MAX_SCC_ITERATIONS
+    options.charge_tolerance = XTBLOOM_CONFORMANCE_CHARGE_TOLERANCE
+    options.energy_tolerance = XTBLOOM_CONFORMANCE_ENERGY_TOLERANCE
 
 
 @dataclass(frozen=True)
@@ -346,17 +348,17 @@ def _cmake_build_metadata(library: Path, cache: Path) -> dict[str, Any]:
         "CMAKE_SHARED_LINKER_FLAGS",
         "CMAKE_GENERATOR",
         "CMAKE_HOME_DIRECTORY",
-        "GPUXTB_ENABLE_CUDA",
-        "GPUXTB_MKL_RT_LIBRARY",
+        "XTBLOOM_ENABLE_CUDA",
+        "XTBLOOM_CPU_LINALG_LIBRARY",
     )
     selected = {name: entries.get(name) for name in selected_names}
     source_path = Path(entries["CMAKE_HOME_DIRECTORY"]).resolve()
     compiler_text = entries.get("CMAKE_CXX_COMPILER")
     compiler_path = Path(compiler_text).resolve() if compiler_text else None
-    provider_text = entries.get("GPUXTB_MKL_RT_LIBRARY")
+    provider_text = entries.get("XTBLOOM_CPU_LINALG_LIBRARY")
     provider_path = Path(provider_text).resolve() if provider_text else None
     source_inputs = []
-    for relative in ("CMakeLists.txt", "cmake/gpuxtb.map"):
+    for relative in ("CMakeLists.txt", "cmake/xtbloom.map"):
         candidate = source_path / relative
         if candidate.is_file():
             source_inputs.append(_file_identity(candidate))
@@ -641,10 +643,10 @@ def _is_git_revision(value: object) -> bool:
     )
 
 
-def _gpuxtb_binary_source_identity(
+def _xtbloom_binary_source_identity(
     run_identity: dict[str, Any], context: str
 ) -> tuple[str, str]:
-    """Validate one clean in-tree gpuxtb binary and return binary/source hashes."""
+    """Validate one clean in-tree xtbloom binary and return binary/source hashes."""
     repository = run_identity.get("repository")
     library = run_identity.get("library")
     if not isinstance(repository, dict) or not isinstance(library, dict):
@@ -653,8 +655,8 @@ def _gpuxtb_binary_source_identity(
     if not _is_git_revision(revision) or repository.get("dirty") is not False:
         raise BenchmarkError(f"{context} repository must be a clean Git revision")
     library_sha = library.get("sha256")
-    if library.get("engine") != "gpuxtb" or not _is_sha256(library_sha):
-        raise BenchmarkError(f"{context} lacks a valid gpuxtb library SHA-256")
+    if library.get("engine") != "xtbloom" or not _is_sha256(library_sha):
+        raise BenchmarkError(f"{context} lacks a valid xtbloom library SHA-256")
     build = library.get("build")
     source_git = build.get("source", {}).get("git") if isinstance(build, dict) else None
     if (
@@ -663,7 +665,7 @@ def _gpuxtb_binary_source_identity(
         or source_git.get("revision") != revision
     ):
         raise BenchmarkError(
-            f"{context} gpuxtb binary source must be clean and match repository "
+            f"{context} xtbloom binary source must be clean and match repository "
             "revision"
         )
     return library_sha, revision
@@ -866,7 +868,7 @@ def make_storage(molecule: Molecule, batch_size: int) -> BatchStorage:
     )
 
 
-class GpuxtbRunner:
+class XTBloomRunner:
     """Own one persistent public-C-ABI context, descriptor, and result image."""
 
     def __init__(
@@ -891,16 +893,16 @@ class GpuxtbRunner:
         self.options = public_api.ComputeOptions()
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_compute_options_init(
+            self.library.xtbloom_compute_options_init(
                 ctypes.byref(self.options), ctypes.sizeof(self.options)
             ),
-            "gpuxtb_compute_options_init",
+            "xtbloom_compute_options_init",
         )
-        self.options.model = public_api.GPUXTB_MODEL_GFN2_XTB
-        self.options.flags = public_api.GPUXTB_COMPUTE_ENERGY
+        self.options.model = public_api.XTBLOOM_MODEL_GFN2_XTB
+        self.options.flags = public_api.XTBLOOM_COMPUTE_ENERGY
         if cell.property_name == "force":
-            self.options.flags |= public_api.GPUXTB_COMPUTE_FORCES
-        configure_gpuxtb_conformance_scc(self.options)
+            self.options.flags |= public_api.XTBLOOM_COMPUTE_FORCES
+        configure_xtbloom_conformance_scc(self.options)
 
         systems = cell.batch_size
         atoms = molecule_atoms = cell.molecule.natoms * systems
@@ -914,10 +916,10 @@ class GpuxtbRunner:
         self.result = public_api.BatchResult()
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_batch_result_init(
+            self.library.xtbloom_batch_result_init(
                 ctypes.byref(self.result), ctypes.sizeof(self.result)
             ),
-            "gpuxtb_batch_result_init",
+            "xtbloom_batch_result_init",
         )
         self.result.energies = self.memory.output(self.energies, "energies")
         if self.forces is not None:
@@ -930,7 +932,7 @@ class GpuxtbRunner:
             self.statuses, "per_system_status"
         )
         self.compute_options = {
-            "engine": "gpuxtb",
+            "engine": "xtbloom",
             "model": int(self.options.model),
             "flags": int(self.options.flags),
             "max_scc_iterations": int(self.options.max_scc_iterations),
@@ -948,16 +950,16 @@ class GpuxtbRunner:
     def set_start_mode(self, mode: str) -> None:
         """Select the strict public start policy without rebuilding descriptors."""
         self.options.scc_start_mode = (
-            public_api.GPUXTB_SCC_START_WARM
+            public_api.XTBLOOM_SCC_START_WARM
             if mode == "warm"
-            else public_api.GPUXTB_SCC_START_FRESH
+            else public_api.XTBLOOM_SCC_START_FRESH
         )
 
     def invoke(self) -> None:
         """Execute one synchronous public batch inference."""
         public_api._call_ok(
             self.library,
-            self.library.gpuxtb_compute(
+            self.library.xtbloom_compute(
                 self.context,
                 ctypes.byref(self.batch),
                 ctypes.byref(self.options),
@@ -987,14 +989,14 @@ class GpuxtbRunner:
             return
         self.closed = True
         self.memory.close()
-        self.library.gpuxtb_context_destroy(self.context)
+        self.library.xtbloom_context_destroy(self.context)
 
 
 class ReferenceRunner:
     """Own one persistent tblite or xTB public-C-API adapter.
 
     Imports are intentionally delayed until the selected reference engine is
-    constructed. A gpuxtb-only invocation therefore has no dxtb, tblite, xTB,
+    constructed. A xtbloom-only invocation therefore has no dxtb, tblite, xTB,
     PyTorch, or matplotlib import dependency.
     """
 
@@ -1066,10 +1068,10 @@ class ReferenceRunner:
         self.closed = False
 
     def set_start_mode(self, mode: str) -> None:
-        """Expose persistent state rather than gpuxtb start tags."""
+        """Expose persistent state rather than xtbloom start tags."""
         if mode != "persistent":
             raise BenchmarkError(
-                f"reference engine cannot select gpuxtb SCC start mode {mode}"
+                f"reference engine cannot select xtbloom SCC start mode {mode}"
             )
         self.mode = mode
 
@@ -1126,7 +1128,7 @@ def validate_snapshot(
     if not energies or not all(math.isfinite(value) for value in energies):
         raise BenchmarkError("public inference produced nonfinite energies")
     if any(
-        status != public_api.GPUXTB_STATUS_SUCCESS
+        status != public_api.XTBLOOM_STATUS_SUCCESS
         for status in snapshot["per_system_status"]
     ):
         raise BenchmarkError(
@@ -1381,7 +1383,7 @@ def execute_cell(
 ) -> dict[str, Any]:
     """Execute one cell and attach all row-level provenance."""
     factory = runner_factory or (
-        GpuxtbRunner if cell.engine == "gpuxtb" else ReferenceRunner
+        XTBloomRunner if cell.engine == "xtbloom" else ReferenceRunner
     )
     runner = factory(library, cell, cpu_threads, device_id)
     try:
@@ -1392,7 +1394,7 @@ def execute_cell(
         )
         measured = (
             measure_runner(runner, protocol, cell.batch_size, expected_force_count)
-            if cell.engine == "gpuxtb"
+            if cell.engine == "xtbloom"
             else measure_reference_runner(
                 runner, protocol, cell.batch_size, expected_force_count
             )
@@ -1468,7 +1470,7 @@ def collect_rows(
 def _validated_reference_options(
     options: object, property_name: str, natoms: int, batch_size: int
 ) -> dict[str, Any]:
-    """Validate and retain the complete gpuxtb option identity from one row."""
+    """Validate and retain the complete xtbloom option identity from one row."""
     required = {
         "engine",
         "model",
@@ -1483,15 +1485,15 @@ def _validated_reference_options(
     }
     if not isinstance(options, dict) or set(options) != required:
         raise BenchmarkError(
-            "reference row compute_options must contain the complete gpuxtb "
+            "reference row compute_options must contain the complete xtbloom "
             "option image"
         )
-    expected_flags = public_api.GPUXTB_COMPUTE_ENERGY
+    expected_flags = public_api.XTBLOOM_COMPUTE_ENERGY
     if property_name == "force":
-        expected_flags |= public_api.GPUXTB_COMPUTE_FORCES
+        expected_flags |= public_api.XTBLOOM_COMPUTE_FORCES
     if (
-        options["engine"] != "gpuxtb"
-        or options["model"] != public_api.GPUXTB_MODEL_GFN2_XTB
+        options["engine"] != "xtbloom"
+        or options["model"] != public_api.XTBLOOM_MODEL_GFN2_XTB
         or options["flags"] != expected_flags
         or options["total_atoms"] != natoms * batch_size
         or type(options["cpu_threads"]) is not int
@@ -1499,7 +1501,7 @@ def _validated_reference_options(
         or type(options["device_id"]) is not int
         or options["device_id"] < 0
     ):
-        raise BenchmarkError("reference row has inconsistent gpuxtb compute options")
+        raise BenchmarkError("reference row has inconsistent xtbloom compute options")
     numeric_fields = (
         "charge_tolerance",
         "energy_tolerance",
@@ -1509,18 +1511,18 @@ def _validated_reference_options(
         type(options[name]) in (int, float) and math.isfinite(options[name])
         for name in numeric_fields
     ):
-        raise BenchmarkError("reference row has nonfinite gpuxtb compute options")
+        raise BenchmarkError("reference row has nonfinite xtbloom compute options")
     if type(options["max_scc_iterations"]) is not int:
         raise BenchmarkError("reference row max_scc_iterations is not an integer")
     if (
-        options["max_scc_iterations"] != GPUXTB_CONFORMANCE_MAX_SCC_ITERATIONS
-        or options["charge_tolerance"] != GPUXTB_CONFORMANCE_CHARGE_TOLERANCE
-        or options["energy_tolerance"] != GPUXTB_CONFORMANCE_ENERGY_TOLERANCE
+        options["max_scc_iterations"] != XTBLOOM_CONFORMANCE_MAX_SCC_ITERATIONS
+        or options["charge_tolerance"] != XTBLOOM_CONFORMANCE_CHARGE_TOLERANCE
+        or options["energy_tolerance"] != XTBLOOM_CONFORMANCE_ENERGY_TOLERANCE
         or options["electronic_temperature_hartree"]
-        != GPUXTB_CONFORMANCE_ELECTRONIC_TEMPERATURE
+        != XTBLOOM_CONFORMANCE_ELECTRONIC_TEMPERATURE
     ):
         raise BenchmarkError(
-            "reference row does not use the pinned gpuxtb conformance SCC options"
+            "reference row does not use the pinned xtbloom conformance SCC options"
         )
     return dict(options)
 
@@ -1610,8 +1612,8 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
         raise BenchmarkError("reference artifact top level must be an object")
     if document.get("schema_version") != SCHEMA_VERSION:
         raise BenchmarkError(f"reference artifact schema must be {SCHEMA_VERSION}")
-    if document.get("engine") != "gpuxtb":
-        raise BenchmarkError("reference artifact engine must be gpuxtb")
+    if document.get("engine") != "xtbloom":
+        raise BenchmarkError("reference artifact engine must be xtbloom")
     protocol = document.get("protocol")
     if not isinstance(protocol, dict) or protocol.get("start_mode") != "fresh":
         raise BenchmarkError("reference artifact protocol must use FRESH start mode")
@@ -1637,7 +1639,7 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
     rows = document.get("rows")
     if not isinstance(run_identity, dict) or not isinstance(rows, list) or not rows:
         raise BenchmarkError("reference artifact requires run_identity and rows")
-    _gpuxtb_binary_source_identity(run_identity, "reference artifact")
+    _xtbloom_binary_source_identity(run_identity, "reference artifact")
 
     references: dict[str, ReferenceRow] = {}
     for index, row in enumerate(rows):
@@ -1647,7 +1649,7 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
         if not isinstance(correctness, dict):
             raise BenchmarkError(f"reference row {index} correctness is not an object")
         if (
-            row.get("engine") != "gpuxtb"
+            row.get("engine") != "xtbloom"
             or row.get("start_mode") != "fresh"
             or row.get("repetitions") != protocol_repetitions
             or row.get("availability") != "available"
@@ -1657,7 +1659,7 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
             or correctness.get("force_atol_hartree_per_bohr") != protocol_force_atol
         ):
             raise BenchmarkError(
-                f"reference row {index} is not a successful gpuxtb FRESH row"
+                f"reference row {index} is not a successful xtbloom FRESH row"
             )
         try:
             natoms = int(row["natoms"])
@@ -1676,7 +1678,7 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
             raise BenchmarkError(f"reference row {index} has unsupported workload tags")
         expected_identity = workload_identity(
             Cell(
-                "gpuxtb",
+                "xtbloom",
                 make_alkane(natoms),
                 batch_size,
                 backend,
@@ -1811,9 +1813,9 @@ def apply_cross_engine_correctness(
                 "status": "not_requested",
             },
             "measured_samples": {"status": "not_requested", "count": None},
-            "gpuxtb_option_identity": "not_comparable_cross_engine",
-            "gpuxtb_binary_identity": "not_comparable_cross_engine",
-            "gpuxtb_repository_revision": "not_comparable_cross_engine",
+            "xtbloom_option_identity": "not_comparable_cross_engine",
+            "xtbloom_binary_identity": "not_comparable_cross_engine",
+            "xtbloom_repository_revision": "not_comparable_cross_engine",
         }
         if reference_artifact is not None:
             expected = reference_artifact.rows.get(
@@ -1891,15 +1893,15 @@ def apply_cross_engine_correctness(
                 option_passed = True
                 binary_passed = True
                 revision_passed = True
-                if row["engine"] == "gpuxtb":
+                if row["engine"] == "xtbloom":
                     option_passed = row["compute_options"] == expected.compute_options
-                    comparison["gpuxtb_option_identity"] = (
+                    comparison["xtbloom_option_identity"] = (
                         "pass" if option_passed else "fail"
                     )
                     current_identity = row["run_identity"]
                     try:
-                        current_sha, current_revision = _gpuxtb_binary_source_identity(
-                            current_identity, "dependent gpuxtb row"
+                        current_sha, current_revision = _xtbloom_binary_source_identity(
+                            current_identity, "dependent xtbloom row"
                         )
                     except BenchmarkError:
                         binary_passed = False
@@ -1913,10 +1915,10 @@ def apply_cross_engine_correctness(
                         ]["revision"]
                         binary_passed = current_sha == reference_sha
                         revision_passed = current_revision == reference_revision
-                    comparison["gpuxtb_binary_identity"] = (
+                    comparison["xtbloom_binary_identity"] = (
                         "pass" if binary_passed else "fail"
                     )
-                    comparison["gpuxtb_repository_revision"] = (
+                    comparison["xtbloom_repository_revision"] = (
                         "pass" if revision_passed else "fail"
                     )
                 comparison["status"] = (
@@ -1956,11 +1958,12 @@ def build_document(
                 else {"kind": "explicit_stricter_gate"}
             ),
             "timing_scope": (
-                "one synchronous gpuxtb_compute public-C-ABI call; persistent context, "
+                "one synchronous xtbloom_compute public-C-ABI call; persistent "
+                "context, "
                 "descriptors, options, and caller-owned result buffers; result "
                 "inspection "
                 "is outside the measured interval"
-                if engine == "gpuxtb"
+                if engine == "xtbloom"
                 else "one persistent reference public-C-API logical batch; setup and "
                 "result inspection are outside the measured interval"
             ),
@@ -2211,13 +2214,13 @@ def write_artifacts(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Create the strict gpuxtb-only natoms CLI."""
+    """Create the strict xtbloom-only natoms CLI."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-csv", type=Path, required=True)
     parser.add_argument(
-        "--engine", choices=("gpuxtb", "tblite", "xtb"), default="gpuxtb"
+        "--engine", choices=("xtbloom", "tblite", "xtb"), default="xtbloom"
     )
     parser.add_argument("--start-mode", choices=("fresh", "warm"))
     parser.add_argument("--natoms", type=parse_csv_ints, default=DEFAULT_NATOMS)
@@ -2254,19 +2257,19 @@ def validate_arguments(args: argparse.Namespace) -> None:
     """Reject invalid protocol values before opening the library."""
     if not args.library.is_file():
         raise BenchmarkError(f"selected engine library is missing: {args.library}")
-    if args.engine == "gpuxtb" and args.start_mode is None:
-        raise BenchmarkError("gpuxtb runs require explicit --start-mode fresh or warm")
-    if args.engine != "gpuxtb" and args.start_mode is not None:
-        raise BenchmarkError("--start-mode applies only to the gpuxtb engine")
-    if args.engine != "gpuxtb" and args.backend != "cpu":
+    if args.engine == "xtbloom" and args.start_mode is None:
+        raise BenchmarkError("xtbloom runs require explicit --start-mode fresh or warm")
+    if args.engine != "xtbloom" and args.start_mode is not None:
+        raise BenchmarkError("--start-mode applies only to the xtbloom engine")
+    if args.engine != "xtbloom" and args.backend != "cpu":
         raise BenchmarkError(
             "tblite and xTB natoms references support only --backend cpu"
         )
     if (
-        args.engine != "gpuxtb" or args.start_mode == "warm"
+        args.engine != "xtbloom" or args.start_mode == "warm"
     ) and args.energy_reference_json is None:
         raise BenchmarkError(
-            "gpuxtb WARM and reference-engine runs require --energy-reference-json"
+            "xtbloom WARM and reference-engine runs require --energy-reference-json"
         )
     if args.cpu_threads <= 0:
         raise BenchmarkError("--cpu-threads must be positive")
@@ -2337,7 +2340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         apply_current_evidence_policy(identity, args.allow_dirty_evidence)
         protocol = Protocol(
-            args.start_mode if args.engine == "gpuxtb" else "persistent",
+            args.start_mode if args.engine == "xtbloom" else "persistent",
             args.warmups,
             args.repetitions,
             args.energy_atol,

@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -8,7 +8,7 @@
 
 #include "backends/cuda/gfn2_scc.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -112,8 +112,8 @@ __device__ void publish_field(const double* next_mixed, const double* raw, doubl
   }
 }
 
-__device__ bool known_system_status(gpuxtb_status_t status) {
-  return status >= GPUXTB_STATUS_SUCCESS && status <= GPUXTB_STATUS_EIGENSOLVER_FAILED;
+__device__ bool known_system_status(xtbloom_status_t status) {
+  return status >= XTBLOOM_STATUS_SUCCESS && status <= XTBLOOM_STATUS_EIGENSOLVER_FAILED;
 }
 
 __device__ double quiet_nan() {
@@ -128,7 +128,7 @@ __device__ void commit_numeric_failure(Gfn2SccDeviceState state, std::int64_t sy
   state.free_energy_changes[system] = nan;
   state.residual_rms[system] = nan;
   ++state.iterations[system];
-  state.system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+  state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
 }
 
 __global__ void update_state_kernel(Gfn2SccDeviceBatch batch, Gfn2SccDevicePolicy policy,
@@ -147,23 +147,23 @@ __global__ void update_state_kernel(Gfn2SccDeviceBatch batch, Gfn2SccDevicePolic
   __shared__ double system_residual_rms;
   __shared__ std::uint64_t new_iteration;
   __shared__ int system_converged;
-  __shared__ gpuxtb_status_t new_status;
+  __shared__ xtbloom_status_t new_status;
 
   if (threadIdx.x == 0) {
     active = 0;
     valid = 1;
     if (atomicAdd(workspace.sequence_active, 0u) == 1u) {
-      const gpuxtb_status_t status = state.system_statuses[system];
+      const xtbloom_status_t status = state.system_statuses[system];
       const std::uint8_t converged = state.converged[system];
       const std::uint64_t iteration = state.iterations[system];
       if (!known_system_status(status)) {
         record_error(device_error, Gfn2SccDeviceError::kInvalidState);
-        state.system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+        state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
         valid = 0;
-      } else if (status == GPUXTB_STATUS_SUCCESS) {
+      } else if (status == XTBLOOM_STATUS_SUCCESS) {
         if (converged > 1u) {
           record_error(device_error, Gfn2SccDeviceError::kInvalidState);
-          state.system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+          state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
           valid = 0;
         } else if (converged == 0u && iteration < policy.maximum_iterations) {
           active = 1;
@@ -247,8 +247,8 @@ __global__ void update_state_kernel(Gfn2SccDeviceBatch batch, Gfn2SccDevicePolic
                              ? 1
                              : 0;
       new_status = system_converged == 0 && new_iteration >= policy.maximum_iterations
-                       ? GPUXTB_STATUS_SCC_NOT_CONVERGED
-                       : GPUXTB_STATUS_SUCCESS;
+                       ? XTBLOOM_STATUS_SCC_NOT_CONVERGED
+                       : XTBLOOM_STATUS_SUCCESS;
     }
   }
   __syncthreads();
@@ -413,7 +413,7 @@ cudaError_t update_gfn2_scc_state_cuda(
       !is_aligned(state.free_energy_changes, alignof(double)) ||
       !is_aligned(state.residual_rms, alignof(double)) ||
       !is_aligned(state.iterations, alignof(std::uint64_t)) ||
-      !is_aligned(state.system_statuses, alignof(gpuxtb_status_t)) ||
+      !is_aligned(state.system_statuses, alignof(xtbloom_status_t)) ||
       !is_aligned(state.converged, alignof(std::uint8_t)) ||
       workspace.plan_token != batch.plan_token || workspace.elements != 1 ||
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
@@ -454,7 +454,7 @@ cudaError_t update_gfn2_scc_state_cuda(
                           &writes[8]) ||
       !make_address_range(state.residual_rms, batch.batch_size, sizeof(double), &writes[9]) ||
       !make_address_range(state.iterations, batch.batch_size, sizeof(std::uint64_t), &writes[10]) ||
-      !make_address_range(state.system_statuses, batch.batch_size, sizeof(gpuxtb_status_t),
+      !make_address_range(state.system_statuses, batch.batch_size, sizeof(xtbloom_status_t),
                           &writes[11]) ||
       !make_address_range(state.converged, batch.batch_size, sizeof(std::uint8_t), &writes[12]) ||
       !make_address_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &writes[13]) ||
@@ -489,4 +489,4 @@ cudaError_t update_gfn2_scc_state_cuda(
   return cudaPeekAtLastError();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

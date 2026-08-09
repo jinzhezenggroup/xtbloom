@@ -1,17 +1,17 @@
 {
-  "engine": "gpuxtb",
+  "engine": "xtbloom",
   "protocol": {
     "energy_atol_hartree": 5e-07,
     "force_atol_hartree_per_bohr": 5e-07,
     "force_tolerance_source": {
       "json_field": "tolerances.forces",
-      "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+      "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
       "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
     },
     "reference_cold_sample": null,
     "repetitions": 3,
     "start_mode": "fresh",
-    "timing_scope": "one synchronous gpuxtb_compute public-C-ABI call; persistent context, descriptors, options, and caller-owned result buffers; result inspection is outside the measured interval",
+    "timing_scope": "one synchronous xtbloom_compute public-C-ABI call; persistent context, descriptors, options, and caller-owned result buffers; result inspection is outside the measured interval",
     "warm_seed": null,
     "warmups": 1
   },
@@ -26,7 +26,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 3,
         "max_scc_iterations": 500,
         "model": 2,
@@ -39,7 +39,7 @@
         ],
         "energy_tolerance_source": {
           "json_field": "tolerances.energy",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
           "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
         },
         "force_atol_hartree_per_bohr": 5e-07,
@@ -783,9 +783,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -793,7 +793,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -806,7 +806,7 @@
         "max_hartree": -254.12194514715412,
         "min_hartree": -254.12194514715412
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 17,
         "median": 17,
@@ -3057,11 +3057,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "--backend",
           "cuda",
           "--cpu-threads",
@@ -3083,9 +3083,9 @@
           "--force-atol",
           "5e-7",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -3150,11 +3150,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
+            "build_directory": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
               "sha256": "f599a4a6671b128a2289428f35a6f22a80b8854c518e48347357103161c95b46"
             },
             "cache_entries": {
@@ -3165,10 +3165,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "ON",
-              "GPUXTB_MKL_RT_LIBRARY": ""
+              "XTBLOOM_ENABLE_CUDA": "ON",
+              "XTBLOOM_MKL_RT_LIBRARY": ""
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -3181,31 +3181,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+                "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
                 "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
                   "sha256": "f33ab13b7f7bd54d09d6270ffe73e709b7e61a88111ef42eb684b00fb8b0be42"
                 },
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/cmake/gpuxtb.map",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense"
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "sha256": "497ddc7269835bda86ebe997101810b504d442a0bb2721a6e313536777f0d9aa"
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
           "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
         },
         "runner": {
@@ -3265,7 +3265,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 3,
         "max_scc_iterations": 500,
         "model": 2,
@@ -3278,7 +3278,7 @@
         ],
         "energy_tolerance_source": {
           "json_field": "tolerances.energy",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
           "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
         },
         "force_atol_hartree_per_bohr": 5e-07,
@@ -4067,9 +4067,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -4077,7 +4077,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -4090,7 +4090,7 @@
         "max_hartree": -269.9466916552672,
         "min_hartree": -269.9466916552672
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 17,
         "median": 17,
@@ -6476,11 +6476,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "--backend",
           "cuda",
           "--cpu-threads",
@@ -6502,9 +6502,9 @@
           "--force-atol",
           "5e-7",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -6569,11 +6569,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
+            "build_directory": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
               "sha256": "f599a4a6671b128a2289428f35a6f22a80b8854c518e48347357103161c95b46"
             },
             "cache_entries": {
@@ -6584,10 +6584,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "ON",
-              "GPUXTB_MKL_RT_LIBRARY": ""
+              "XTBLOOM_ENABLE_CUDA": "ON",
+              "XTBLOOM_MKL_RT_LIBRARY": ""
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -6600,31 +6600,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+                "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
                 "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
                   "sha256": "f33ab13b7f7bd54d09d6270ffe73e709b7e61a88111ef42eb684b00fb8b0be42"
                 },
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/cmake/gpuxtb.map",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense"
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "sha256": "497ddc7269835bda86ebe997101810b504d442a0bb2721a6e313536777f0d9aa"
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
           "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
         },
         "runner": {
@@ -6684,7 +6684,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 3,
         "max_scc_iterations": 500,
         "model": 2,
@@ -6697,7 +6697,7 @@
         ],
         "energy_tolerance_source": {
           "json_field": "tolerances.energy",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
           "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
         },
         "force_atol_hartree_per_bohr": 5e-07,
@@ -7531,9 +7531,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -7541,7 +7541,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -7554,7 +7554,7 @@
         "max_hartree": -285.7623516893283,
         "min_hartree": -285.7623516893283
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 17,
         "median": 17,
@@ -10075,11 +10075,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "--backend",
           "cuda",
           "--cpu-threads",
@@ -10101,9 +10101,9 @@
           "--force-atol",
           "5e-7",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -10168,11 +10168,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
+            "build_directory": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
               "sha256": "f599a4a6671b128a2289428f35a6f22a80b8854c518e48347357103161c95b46"
             },
             "cache_entries": {
@@ -10183,10 +10183,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "ON",
-              "GPUXTB_MKL_RT_LIBRARY": ""
+              "XTBLOOM_ENABLE_CUDA": "ON",
+              "XTBLOOM_MKL_RT_LIBRARY": ""
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -10199,31 +10199,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+                "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
                 "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
                   "sha256": "f33ab13b7f7bd54d09d6270ffe73e709b7e61a88111ef42eb684b00fb8b0be42"
                 },
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/cmake/gpuxtb.map",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense"
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "sha256": "497ddc7269835bda86ebe997101810b504d442a0bb2721a6e313536777f0d9aa"
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
           "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
         },
         "runner": {
@@ -10283,7 +10283,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 3,
         "max_scc_iterations": 500,
         "model": 2,
@@ -10296,7 +10296,7 @@
         ],
         "energy_tolerance_source": {
           "json_field": "tolerances.energy",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
           "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
         },
         "force_atol_hartree_per_bohr": 5e-07,
@@ -11175,9 +11175,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -11185,7 +11185,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -11198,7 +11198,7 @@
         "max_hartree": -301.5870982028989,
         "min_hartree": -301.5870982028989
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 17,
         "median": 17,
@@ -13854,11 +13854,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "--backend",
           "cuda",
           "--cpu-threads",
@@ -13880,9 +13880,9 @@
           "--force-atol",
           "5e-7",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -13947,11 +13947,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
+            "build_directory": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
               "sha256": "f599a4a6671b128a2289428f35a6f22a80b8854c518e48347357103161c95b46"
             },
             "cache_entries": {
@@ -13962,10 +13962,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "ON",
-              "GPUXTB_MKL_RT_LIBRARY": ""
+              "XTBLOOM_ENABLE_CUDA": "ON",
+              "XTBLOOM_MKL_RT_LIBRARY": ""
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -13978,31 +13978,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+                "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
                 "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
                   "sha256": "f33ab13b7f7bd54d09d6270ffe73e709b7e61a88111ef42eb684b00fb8b0be42"
                 },
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/cmake/gpuxtb.map",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense"
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "sha256": "497ddc7269835bda86ebe997101810b504d442a0bb2721a6e313536777f0d9aa"
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
           "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
         },
         "runner": {
@@ -14062,7 +14062,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 3,
         "max_scc_iterations": 500,
         "model": 2,
@@ -14075,7 +14075,7 @@
         ],
         "energy_tolerance_source": {
           "json_field": "tolerances.energy",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
           "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
         },
         "force_atol_hartree_per_bohr": 5e-07,
@@ -14999,9 +14999,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -15009,7 +15009,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -15022,7 +15022,7 @@
         "max_hartree": -317.4027582417296,
         "min_hartree": -317.4027582417296
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 17,
         "median": 17,
@@ -17813,11 +17813,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "--backend",
           "cuda",
           "--cpu-threads",
@@ -17839,9 +17839,9 @@
           "--force-atol",
           "5e-7",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -17906,11 +17906,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
+            "build_directory": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
               "sha256": "f599a4a6671b128a2289428f35a6f22a80b8854c518e48347357103161c95b46"
             },
             "cache_entries": {
@@ -17921,10 +17921,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "ON",
-              "GPUXTB_MKL_RT_LIBRARY": ""
+              "XTBLOOM_ENABLE_CUDA": "ON",
+              "XTBLOOM_MKL_RT_LIBRARY": ""
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -17937,31 +17937,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+                "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
                 "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
                   "sha256": "f33ab13b7f7bd54d09d6270ffe73e709b7e61a88111ef42eb684b00fb8b0be42"
                 },
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/cmake/gpuxtb.map",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense"
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "sha256": "497ddc7269835bda86ebe997101810b504d442a0bb2721a6e313536777f0d9aa"
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
           "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
         },
         "runner": {
@@ -18021,7 +18021,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 3,
         "max_scc_iterations": 500,
         "model": 2,
@@ -18034,7 +18034,7 @@
         ],
         "energy_tolerance_source": {
           "json_field": "tolerances.energy",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
           "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
         },
         "force_atol_hartree_per_bohr": 5e-07,
@@ -19138,9 +19138,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -19148,7 +19148,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -19161,7 +19161,7 @@
         "max_hartree": -380.6835713672888,
         "min_hartree": -380.6835713672888
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 17,
         "median": 17,
@@ -22492,11 +22492,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "--backend",
           "cuda",
           "--cpu-threads",
@@ -22518,9 +22518,9 @@
           "--force-atol",
           "5e-7",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
+          "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -22585,11 +22585,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
+            "build_directory": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
               "sha256": "f599a4a6671b128a2289428f35a6f22a80b8854c518e48347357103161c95b46"
             },
             "cache_entries": {
@@ -22600,10 +22600,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "ON",
-              "GPUXTB_MKL_RT_LIBRARY": ""
+              "XTBLOOM_ENABLE_CUDA": "ON",
+              "XTBLOOM_MKL_RT_LIBRARY": ""
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -22616,31 +22616,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+                "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
                 "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
                   "sha256": "f33ab13b7f7bd54d09d6270ffe73e709b7e61a88111ef42eb684b00fb8b0be42"
                 },
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/cmake/gpuxtb.map",
+                  "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense"
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
           "sha256": "497ddc7269835bda86ebe997101810b504d442a0bb2721a6e313536777f0d9aa"
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
           "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
         },
         "runner": {
@@ -22694,11 +22694,11 @@
   "run_identity": {
     "argv": [
       "/home/jzzeng/miniconda3/bin/python3",
-      "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
+      "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/benchmarks/natoms_scaling.py",
       "--engine",
-      "gpuxtb",
+      "xtbloom",
       "--library",
-      "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+      "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
       "--backend",
       "cuda",
       "--cpu-threads",
@@ -22720,9 +22720,9 @@
       "--force-atol",
       "5e-7",
       "--output-json",
-      "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
+      "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.json",
       "--output-csv",
-      "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
+      "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-evidence-staging/cuda-fresh.csv"
     ],
     "evidence_eligibility": {
       "allow_dirty_evidence": false,
@@ -22787,11 +22787,11 @@
     },
     "library": {
       "build": {
-        "build_directory": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
+        "build_directory": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev",
         "build_system": "cmake",
         "cache": {
           "is_file": true,
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/CMakeCache.txt",
           "sha256": "f599a4a6671b128a2289428f35a6f22a80b8854c518e48347357103161c95b46"
         },
         "cache_entries": {
@@ -22802,10 +22802,10 @@
           "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
           "CMAKE_EXE_LINKER_FLAGS": "",
           "CMAKE_GENERATOR": "Ninja",
-          "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+          "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
           "CMAKE_SHARED_LINKER_FLAGS": "",
-          "GPUXTB_ENABLE_CUDA": "ON",
-          "GPUXTB_MKL_RT_LIBRARY": ""
+          "XTBLOOM_ENABLE_CUDA": "ON",
+          "XTBLOOM_MKL_RT_LIBRARY": ""
         },
         "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
         "compiler": {
@@ -22818,31 +22818,31 @@
         "source": {
           "git": {
             "dirty": false,
-            "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+            "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
             "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
           },
           "inputs": [
             {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/CMakeLists.txt",
               "sha256": "f33ab13b7f7bd54d09d6270ffe73e709b7e61a88111ef42eb684b00fb8b0be42"
             },
             {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/cmake/gpuxtb.map",
+              "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/cmake/xtbloom.map",
               "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
             }
           ],
-          "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense"
+          "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense"
         }
       },
-      "engine": "gpuxtb",
-      "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libgpuxtb.so.0.1.0",
+      "engine": "xtbloom",
+      "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense/build/issue264-cuda-dev/libxtbloom.so.0.1.0",
       "sha256": "497ddc7269835bda86ebe997101810b504d442a0bb2721a6e313536777f0d9aa"
     },
     "repository": {
       "dirty": false,
-      "path": "/home/jzzeng/codes/gpuxtb4-worktrees/issue-264-singleton-dense",
+      "path": "/home/jzzeng/codes/xtbloom4-worktrees/issue-264-singleton-dense",
       "revision": "ed0125de9d31d7b6a1f0f231cc17443b603e1579"
     },
     "runner": {

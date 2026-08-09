@@ -1,7 +1,7 @@
-#ifndef GPUXTB_RUNTIME_DLPACK_LAYOUT_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_RUNTIME_DLPACK_LAYOUT_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_RUNTIME_DLPACK_LAYOUT_HPP
+#define XTBLOOM_RUNTIME_DLPACK_LAYOUT_HPP
 
 /*
  * Byte-exact mirrors of the DLPack 1.0 C managed-tensor layouts, used only to
@@ -13,7 +13,7 @@
  * `include/dlpack/dlpack.h`, structs DLDataType, DLDevice, DLTensor,
  * DLManagedTensor, and DLManagedTensorVersioned.
  *
- * The gpuxtb consumer bridge in `python/gpuxtb/_dlpack.py` mirrors these same
+ * The xtbloom consumer bridge in `python/xtbloom/_dlpack.py` mirrors these same
  * layouts with the identical offsets, and the production Python test fakes
  * (`python/tests/_dlpack_fakes.py`) verify them byte-for-byte against the
  * "dltensor_versioned" capsules that NumPy produces.
@@ -26,7 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 /* DLPack DLDataTypeCode values used by the producer. */
 enum DlpackDtypeCode : std::uint8_t {
@@ -135,6 +135,6 @@ static_assert(offsetof(DlpackManagedTensorVersioned, dl_tensor) == 24u,
               "ILP32 versioned DLTensor must sit at byte 24");
 #endif
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail
 
-#endif /* GPUXTB_RUNTIME_DLPACK_LAYOUT_HPP */
+#endif /* XTBLOOM_RUNTIME_DLPACK_LAYOUT_HPP */

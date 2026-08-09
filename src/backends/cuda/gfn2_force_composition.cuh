@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_FORCE_COMPOSITION_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_FORCE_COMPOSITION_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_FORCE_COMPOSITION_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_FORCE_COMPOSITION_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -10,7 +10,7 @@
 
 #include "backends/cuda/gfn2_force_common.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* Stationary gradient/force fields accepted by the final force composer. */
 enum class Gfn2ForceCompositionComponent : std::uint32_t {
@@ -121,6 +121,6 @@ cudaError_t compose_gfn2_forces_cuda(const Gfn2ForceCompositionDeviceBatch& batc
                                      std::uint32_t* system_errors, std::uint32_t* plan_error,
                                      cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_FORCE_COMPOSITION_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_FORCE_COMPOSITION_CUH

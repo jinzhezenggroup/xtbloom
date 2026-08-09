@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -9,14 +9,14 @@
 #include "backends/cuda/gfn2_occupations.cuh"
 #include "model/gfn2/occupation_binary64_policy.hpp"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kPublishThreads = 128;
 constexpr int kOccupationsThreads = 128;
 /* Below this width, block-wide barriers cost more than the orbital work. */
 constexpr std::int64_t kSerialOccupationThreshold = 64;
-namespace occupation_policy = gpuxtb::detail::gfn2::binary64_policy;
+namespace occupation_policy = xtbloom::detail::gfn2::binary64_policy;
 
 __device__ bool system_is_valid(const std::uint32_t* system_errors, std::int64_t system) {
   return atomicAdd(const_cast<std::uint32_t*>(system_errors) + system, 0u) ==
@@ -892,4 +892,4 @@ cudaError_t evaluate_gfn2_occupations_cuda(
   return cudaGetLastError();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

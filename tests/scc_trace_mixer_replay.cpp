@@ -1,6 +1,6 @@
-// gpuxtb independent golden-residual Broyden mixer replay (issue #49).
+// xtbloom independent golden-residual Broyden mixer replay (issue #49).
 //
-// Drives gpuxtb's production Broyden mixer alone through the PINNED golden
+// Drives xtbloom's production Broyden mixer alone through the PINNED golden
 // residual sequence (raw minus mixed per iteration), bypassing the driver and
 // the eigensolver entirely, and checks that each state transition reproduces
 // the golden next mixed state.  This isolates the mixer (flattening order,
@@ -9,7 +9,7 @@
 // trajectory while a mixer-only replay of the golden residuals would not.
 //
 // Usage:
-//   gpuxtb_scc_trace_mixer <case.spec> <sequence-file>
+//   xtbloom_scc_trace_mixer <case.spec> <sequence-file>
 //
 // The sequence file is line-oriented:
 //   nat <nat> nsh <nsh> steps <K>
@@ -19,7 +19,7 @@
 // for each logical step.  On stdout the executable emits one line per
 // completed transition:
 //   predicted <k+1> <flattened next mixed state in residual order>
-// which gpuxtb_scc_cpu_trace.py compares to the pinned golden's mixed state
+// which xtbloom_scc_cpu_trace.py compares to the pinned golden's mixed state
 // for logical iteration k+1 with the cpu_replay_v1 tolerance profile.
 #include <cstdio>
 #include <cstdlib>
@@ -32,7 +32,7 @@
 
 namespace {
 
-using namespace gpuxtb_trace_harness;
+using namespace xtbloom_trace_harness;
 
 struct Sequence {
   std::int64_t nat = 0;
@@ -99,9 +99,9 @@ bool parse_sequence(const std::string& path, Sequence& sequence, std::string& er
 }  // namespace
 
 int main(int argc, char** argv) {
-  using namespace gpuxtb_trace_harness;
+  using namespace xtbloom_trace_harness;
   if (argc != 3) {
-    std::cerr << "usage: gpuxtb_scc_trace_mixer <case.spec> <sequence-file>\n";
+    std::cerr << "usage: xtbloom_scc_trace_mixer <case.spec> <sequence-file>\n";
     return 64;
   }
   Sequence sequence;
@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
     return 2;
   }
   batch.add_case(spec);
-  if (gpuxtb_status_t s = batch.build(err); s != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom_status_t s = batch.build(err); s != XTBLOOM_STATUS_SUCCESS) {
     std::cerr << "geometry build failed: " << err << "\n";
     return static_cast<int>(s);
   }
@@ -139,12 +139,12 @@ int main(int argc, char** argv) {
   // next mixed input, which must equal the golden mixed state of the next step.
   std::vector<double> qsh, dpat, qpat;
   split(sequence.mixed[0], qsh, dpat, qpat);
-  if (gpuxtb_status_t s = batch.write_multipoles(0, qsh, dpat, qpat, err);
-      s != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom_status_t s = batch.write_multipoles(0, qsh, dpat, qpat, err);
+      s != XTBLOOM_STATUS_SUCCESS) {
     std::cerr << "seed failed: " << err << "\n";
     return static_cast<int>(s);
   }
-  if (gpuxtb_status_t s = batch.restart_mixer_system(0, err); s != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom_status_t s = batch.restart_mixer_system(0, err); s != XTBLOOM_STATUS_SUCCESS) {
     std::cerr << "mixer restart failed: " << err << "\n";
     return static_cast<int>(s);
   }
@@ -153,12 +153,12 @@ int main(int argc, char** argv) {
             << sequence.steps << " dimension " << dimension << "\n";
   for (std::int64_t k = 1; k <= sequence.steps; ++k) {
     split(sequence.raw[static_cast<std::size_t>(k - 1)], qsh, dpat, qpat);
-    if (gpuxtb_status_t s = batch.write_multipoles(0, qsh, dpat, qpat, err);
-        s != GPUXTB_STATUS_SUCCESS) {
+    if (xtbloom_status_t s = batch.write_multipoles(0, qsh, dpat, qpat, err);
+        s != XTBLOOM_STATUS_SUCCESS) {
       std::cerr << "raw write failed at step " << k << ": " << err << "\n";
       return static_cast<int>(s);
     }
-    if (gpuxtb_status_t s = batch.mixer_mix(0, err); s != GPUXTB_STATUS_SUCCESS) {
+    if (xtbloom_status_t s = batch.mixer_mix(0, err); s != XTBLOOM_STATUS_SUCCESS) {
       std::cerr << "mixer transition failed at step " << k << ": " << err << "\n";
       return static_cast<int>(s);
     }

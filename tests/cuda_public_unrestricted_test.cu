@@ -9,13 +9,13 @@
 #include <utility>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
 #define CHECK(condition)                                                                         \
   do {                                                                                           \
     if (!(condition)) {                                                                          \
       std::fprintf(stderr, "public unrestricted CUDA check failed at %s:%d: %s; %s\n", __FILE__, \
-                   __LINE__, #condition, gpuxtb_get_last_error());                               \
+                   __LINE__, #condition, xtbloom_get_last_error());                              \
       return __LINE__;                                                                           \
     }                                                                                            \
   } while (false)
@@ -25,17 +25,17 @@
 namespace {
 
 constexpr std::uint32_t kAllProperties =
-    GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_ATOMIC_CHARGES;
+    XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
 
 template <typename T>
-gpuxtb_const_buffer_t host_input(const std::vector<T>& values) noexcept {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), GPUXTB_MEMORY_HOST,
+xtbloom_const_buffer_t host_input(const std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
           0u};
 }
 
 template <typename T>
-gpuxtb_buffer_t host_output(std::vector<T>& values) noexcept {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), GPUXTB_MEMORY_HOST,
+xtbloom_buffer_t host_output(std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
           0u};
 }
 
@@ -70,8 +70,8 @@ class DeviceBuffer {
 };
 
 struct ContextOwner {
-  gpuxtb_context_t* context = nullptr;
-  ~ContextOwner() { gpuxtb_context_destroy(context); }
+  xtbloom_context_t* context = nullptr;
+  ~ContextOwner() { xtbloom_context_destroy(context); }
 };
 
 struct BatchOwner {
@@ -81,10 +81,10 @@ struct BatchOwner {
   std::vector<double> molecular_charges;
   std::vector<std::int32_t> unpaired_electrons;
   std::vector<std::int32_t> spin_channels;
-  gpuxtb_batch_t batch{};
+  xtbloom_batch_t batch{};
 
   void bind_host(bool abi_v1 = false) noexcept {
-    (void)gpuxtb_batch_init(&batch, sizeof(batch));
+    (void)xtbloom_batch_init(&batch, sizeof(batch));
     batch.batch_size = static_cast<std::int64_t>(molecular_charges.size());
     batch.total_atoms = static_cast<std::int64_t>(atomic_numbers.size());
     batch.atom_offsets = host_input(atom_offsets);
@@ -93,13 +93,13 @@ struct BatchOwner {
     batch.molecular_charges = host_input(molecular_charges);
     batch.unpaired_electrons = host_input(unpaired_electrons);
     batch.spin_channels = host_input(spin_channels);
-    if (abi_v1) batch.struct_size = GPUXTB_BATCH_V1_SIZE;
+    if (abi_v1) batch.struct_size = XTBLOOM_BATCH_V1_SIZE;
   }
 
   void bind_device_spin(const DeviceBuffer<std::int32_t>& spin) noexcept {
     bind_host();
     batch.spin_channels = {spin.get(), spin.size() * sizeof(std::int32_t),
-                           GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+                           XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
   }
 };
 
@@ -110,21 +110,21 @@ struct ResultOwner {
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> statuses;
-  gpuxtb_batch_result_t result{};
+  xtbloom_batch_result_t result{};
 
   void bind(const BatchOwner& batch, std::uint32_t flags) {
     const std::size_t systems = batch.molecular_charges.size();
     const std::size_t atoms = batch.atomic_numbers.size();
-    energies.assign((flags & GPUXTB_COMPUTE_ENERGY) != 0u ? systems : 0u,
+    energies.assign((flags & XTBLOOM_COMPUTE_ENERGY) != 0u ? systems : 0u,
                     std::numeric_limits<double>::quiet_NaN());
-    forces.assign((flags & GPUXTB_COMPUTE_FORCES) != 0u ? atoms * 3u : 0u,
+    forces.assign((flags & XTBLOOM_COMPUTE_FORCES) != 0u ? atoms * 3u : 0u,
                   std::numeric_limits<double>::quiet_NaN());
-    charges.assign((flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0u ? atoms : 0u,
+    charges.assign((flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0u ? atoms : 0u,
                    std::numeric_limits<double>::quiet_NaN());
     iterations.assign(systems, -1);
     converged.assign(systems, 0u);
-    statuses.assign(systems, GPUXTB_STATUS_INTERNAL_ERROR);
-    (void)gpuxtb_batch_result_init(&result, sizeof(result));
+    statuses.assign(systems, XTBLOOM_STATUS_INTERNAL_ERROR);
+    (void)xtbloom_batch_result_init(&result, sizeof(result));
     result.energies = host_output(energies);
     result.forces = host_output(forces);
     result.atomic_charges = host_output(charges);
@@ -134,10 +134,10 @@ struct ResultOwner {
   }
 };
 
-gpuxtb_compute_options_t options(std::uint32_t flags) noexcept {
-  gpuxtb_compute_options_t value{};
-  (void)gpuxtb_compute_options_init(&value, sizeof(value));
-  value.model = GPUXTB_MODEL_GFN2_XTB;
+xtbloom_compute_options_t options(std::uint32_t flags) noexcept {
+  xtbloom_compute_options_t value{};
+  (void)xtbloom_compute_options_init(&value, sizeof(value));
+  value.model = XTBLOOM_MODEL_GFN2_XTB;
   value.flags = flags;
   value.max_scc_iterations = 64;
   value.charge_tolerance = 1.0e-8;
@@ -151,13 +151,13 @@ bool near(double actual, double expected, double tolerance = 2.0e-10) {
          tolerance * (1.0 + std::max(std::abs(actual), std::abs(expected)));
 }
 
-int compute(gpuxtb_context_t* context, BatchOwner& batch, std::uint32_t flags,
+int compute(xtbloom_context_t* context, BatchOwner& batch, std::uint32_t flags,
             ResultOwner& result) {
   result.bind(batch, flags);
-  const gpuxtb_compute_options_t request = options(flags);
-  CHECK(gpuxtb_compute(context, &batch.batch, &request, &result.result) == GPUXTB_STATUS_SUCCESS);
+  const xtbloom_compute_options_t request = options(flags);
+  CHECK(xtbloom_compute(context, &batch.batch, &request, &result.result) == XTBLOOM_STATUS_SUCCESS);
   for (std::size_t system = 0; system < result.statuses.size(); ++system) {
-    CHECK(result.statuses[system] == GPUXTB_STATUS_SUCCESS);
+    CHECK(result.statuses[system] == XTBLOOM_STATUS_SUCCESS);
     CHECK(result.converged[system] == 1u);
     CHECK(result.iterations[system] > 0);
     CHECK(result.iterations[system] <= request.max_scc_iterations);
@@ -225,7 +225,7 @@ int compare_system(const ResultOwner& batch, std::size_t system, const ResultOwn
   return 0;
 }
 
-int test_mixed_batch_sizes_and_device_spin_descriptor(gpuxtb_context_t* context,
+int test_mixed_batch_sizes_and_device_spin_descriptor(xtbloom_context_t* context,
                                                       cudaStream_t stream) {
   ResultOwner references[3];
   for (std::size_t kind = 0; kind < 3u; ++kind) {
@@ -256,7 +256,7 @@ int test_mixed_batch_sizes_and_device_spin_descriptor(gpuxtb_context_t* context,
   return 0;
 }
 
-int test_charge_publication_without_forces(gpuxtb_context_t* context) {
+int test_charge_publication_without_forces(xtbloom_context_t* context) {
   BatchOwner batch = make_batch(8u);
   ResultOwner reference;
   CHECK(compute(context, batch, kAllProperties, reference) == 0);
@@ -265,8 +265,8 @@ int test_charge_publication_without_forces(gpuxtb_context_t* context) {
    * rather than the stationary force buffers. Exercise both supported masks
    * so mixed restricted/unrestricted offsets stay covered on that path. */
   for (const std::uint32_t flags :
-       {static_cast<std::uint32_t>(GPUXTB_COMPUTE_ATOMIC_CHARGES),
-        static_cast<std::uint32_t>(GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_ATOMIC_CHARGES)}) {
+       {static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ATOMIC_CHARGES),
+        static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_ATOMIC_CHARGES)}) {
     ResultOwner actual;
     CHECK(compute(context, batch, flags, actual) == 0);
     CHECK(actual.forces.empty());
@@ -277,7 +277,7 @@ int test_charge_publication_without_forces(gpuxtb_context_t* context) {
     for (std::size_t index = 0; index < actual.charges.size(); ++index) {
       CHECK(near(actual.charges[index], reference.charges[index]));
     }
-    if ((flags & GPUXTB_COMPUTE_ENERGY) != 0u) {
+    if ((flags & XTBLOOM_COMPUTE_ENERGY) != 0u) {
       CHECK(actual.energies.size() == reference.energies.size());
       for (std::size_t system = 0; system < actual.energies.size(); ++system) {
         CHECK(near(actual.energies[system], reference.energies[system]));
@@ -289,7 +289,7 @@ int test_charge_publication_without_forces(gpuxtb_context_t* context) {
   return 0;
 }
 
-int test_oh_force_finite_difference(gpuxtb_context_t* context) {
+int test_oh_force_finite_difference(xtbloom_context_t* context) {
   BatchOwner radical = make_single(SystemKind::kOhRadical);
   ResultOwner analytic;
   CHECK(compute(context, radical, kAllProperties, analytic) == 0);
@@ -299,11 +299,11 @@ int test_oh_force_finite_difference(gpuxtb_context_t* context) {
   radical.positions[3] += step;
   radical.bind_host();
   ResultOwner plus;
-  CHECK(compute(context, radical, GPUXTB_COMPUTE_ENERGY, plus) == 0);
+  CHECK(compute(context, radical, XTBLOOM_COMPUTE_ENERGY, plus) == 0);
   radical.positions[3] -= 2.0 * step;
   radical.bind_host();
   ResultOwner minus;
-  CHECK(compute(context, radical, GPUXTB_COMPUTE_ENERGY, minus) == 0);
+  CHECK(compute(context, radical, XTBLOOM_COMPUTE_ENERGY, minus) == 0);
   const double finite_difference = -(plus.energies[0] - minus.energies[0]) / (2.0 * step);
   CHECK(near(analytic_force, finite_difference, 2.0e-5));
   for (std::size_t axis = 0; axis < 3u; ++axis) {
@@ -312,7 +312,7 @@ int test_oh_force_finite_difference(gpuxtb_context_t* context) {
   return 0;
 }
 
-int test_abi_v1_restricted_fallback(gpuxtb_context_t* context) {
+int test_abi_v1_restricted_fallback(xtbloom_context_t* context) {
   BatchOwner explicit_v2 = make_single(SystemKind::kH2Restricted);
   ResultOwner expected;
   CHECK(compute(context, explicit_v2, kAllProperties, expected) == 0);
@@ -321,7 +321,7 @@ int test_abi_v1_restricted_fallback(gpuxtb_context_t* context) {
   legacy.bind_host(true);
   /* The excluded suffix is deliberately invalid and must not be inspected. */
   legacy.batch.spin_channels = {reinterpret_cast<const void*>(std::uintptr_t{1}),
-                                std::numeric_limits<std::size_t>::max(), GPUXTB_MEMORY_ROCM_DEVICE,
+                                std::numeric_limits<std::size_t>::max(), XTBLOOM_MEMORY_ROCM_DEVICE,
                                 UINT32_MAX};
   ResultOwner actual;
   CHECK(compute(context, legacy, kAllProperties, actual) == 0);
@@ -348,14 +348,14 @@ int main() {
   cudaStream_t stream = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
 
-  gpuxtb_context_options_t context_options{};
-  CHECK(gpuxtb_context_options_init(&context_options, sizeof(context_options)) ==
-        GPUXTB_STATUS_SUCCESS);
-  context_options.backend = GPUXTB_BACKEND_CUDA;
+  xtbloom_context_options_t context_options{};
+  CHECK(xtbloom_context_options_init(&context_options, sizeof(context_options)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  context_options.backend = XTBLOOM_BACKEND_CUDA;
   context_options.device_id = device;
   context_options.stream = reinterpret_cast<void*>(stream);
   ContextOwner owner;
-  CHECK(gpuxtb_context_create(&context_options, &owner.context) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom_context_create(&context_options, &owner.context) == XTBLOOM_STATUS_SUCCESS);
 
   if (const int status = test_mixed_batch_sizes_and_device_spin_descriptor(owner.context, stream);
       status != 0) {

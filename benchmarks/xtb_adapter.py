@@ -507,7 +507,7 @@ class XtbAdapter:
                 self._check(state.environment, "xtb_getPCGradient")
 
     def results(self) -> dict[str, Any]:
-        """Normalize xTB gradients to gpuxtb's public force convention."""
+        """Normalize xTB gradients to xtbloom's public force convention."""
         output: dict[str, Any] = {
             "energies_hartree": [float(state.energy.value) for state in self.states]
         }

@@ -4,7 +4,7 @@ This directory archives development-only measurements for issue #70 from the
 committed source revision
 `d6de01433061e150a73a6efec16714de670b1105`. The data is
 correctness-qualified (the same binary also passes the full
-`gpuxtb.cuda.pairlist` test) but is not a release performance claim.
+`xtbloom.cuda.pairlist` test) but is not a release performance claim.
 
 ## Environment
 
@@ -23,7 +23,7 @@ correctness-qualified (the same binary also passes the full
 
 ## Protocol
 
-`gpuxtb_cuda_pairlist_benchmark` (benchmark-only build of
+`xtbloom_cuda_pairlist_benchmark` (benchmark-only build of
 `tests/cuda_pairlist_test.cu`) measures three entry points per
 (batch, atoms_per_system) cell:
 
@@ -50,15 +50,15 @@ The committed-source run was collected with:
 ```bash
 srun --gres=gpu:1 --wait=60 env \
   LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64:/home/jzzeng/miniconda3/lib \
-  build/cuda-pr202-make/gpuxtb_cuda_pairlist_benchmark \
+  build/cuda-pr202-make/xtbloom_cuda_pairlist_benchmark \
   --source-revision d6de01433061e150a73a6efec16714de670b1105 \
   --executable-sha256 ee3fd7a7c7d1d9f2fbdc6a923db15981a509e0710d54e6b579026d6e6d123956 \
   --build-identity-sha256 33b8aa52998a4eb22a73fffb1a7f8b181f55bfca7beb5edfff6d072133534082 \
-  --json benchmarks/evidence/issue-70/2026-08-06-node3/gpuxtb-cuda-pairlist-bench.json \
-  --csv benchmarks/evidence/issue-70/2026-08-06-node3/gpuxtb-cuda-pairlist-bench.csv
+  --json benchmarks/evidence/issue-70/2026-08-06-node3/xtbloom-cuda-pairlist-bench.json \
+  --csv benchmarks/evidence/issue-70/2026-08-06-node3/xtbloom-cuda-pairlist-bench.csv
 ```
 
-`gpuxtb-cuda-pairlist-bench.json` is the authoritative raw-sample artifact;
+`xtbloom-cuda-pairlist-bench.json` is the authoritative raw-sample artifact;
 the CSV is its median view from the same invocation.
 
 ## Results summary (median, ms)

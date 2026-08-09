@@ -1,13 +1,12 @@
-#ifndef GPUXTB_MODEL_GFN2_FORCE_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_FORCE_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_FORCE_HPP
+#define XTBLOOM_MODEL_GFN2_FORCE_HPP
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/coordination.hpp"
@@ -18,8 +17,9 @@
 #include "model/gfn2/integrals.hpp"
 #include "model/gfn2/mulliken.hpp"
 #include "model/gfn2/repulsion.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 /*
  * Converged stationary data used by the CPU force composer.
@@ -146,7 +146,7 @@ struct RestrictedGfn2ForceWorkspace {
  * total energies and forces are transactional on failure; optional component
  * diagnostics follow the progressive diagnostic contract described above.
  */
-gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
+xtbloom_status_t evaluate_restricted_gfn2_energy_forces_cpu(
     const BasisPlan& basis, const IntegralPlan& integrals, const CoordinationPlan& coordination,
     const RepulsionPlan& repulsion, const H0Plan& h0, const MullikenPlan& mulliken,
     const ES2Plan& es2, const ES2GeometryCache& es2_cache, const AES2Plan& aes2,
@@ -156,6 +156,6 @@ gpuxtb_status_t evaluate_restricted_gfn2_energy_forces_cpu(
     double* point_forces, const RestrictedGfn2ComponentGradients& components,
     const RestrictedGfn2ForceWorkspace& workspace, std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_FORCE_HPP
+#endif  // XTBLOOM_MODEL_GFN2_FORCE_HPP

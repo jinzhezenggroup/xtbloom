@@ -1,5 +1,5 @@
 #include <algorithm>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <array>
 #include <cmath>
@@ -15,7 +15,7 @@
 
 #include "backends/cuda/gfn2_scc_setup_inputs.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr std::size_t kDeviceAlignment = 256u;
@@ -25,7 +25,7 @@ struct Segment {
   std::int64_t elements = 0;
 };
 
-Gfn2SccSetupInputsDiagnostic failure(gpuxtb_status_t status, Gfn2SccSetupInputsError error,
+Gfn2SccSetupInputsDiagnostic failure(xtbloom_status_t status, Gfn2SccSetupInputsError error,
                                      Gfn2SccSetupInputsField field,
                                      std::int64_t index = -1) noexcept {
   Gfn2SccSetupInputsDiagnostic diagnostic{};
@@ -40,8 +40,8 @@ Gfn2SccSetupInputsDiagnostic arena_failure(Gfn2SccSetupInputsError error,
                                            std::size_t required_bytes,
                                            cudaError_t cuda_status = cudaSuccess) noexcept {
   Gfn2SccSetupInputsDiagnostic diagnostic =
-      failure(error == Gfn2SccSetupInputsError::kCudaError ? GPUXTB_STATUS_INTERNAL_ERROR
-                                                           : GPUXTB_STATUS_INVALID_ARGUMENT,
+      failure(error == Gfn2SccSetupInputsError::kCudaError ? XTBLOOM_STATUS_INTERNAL_ERROR
+                                                           : XTBLOOM_STATUS_INVALID_ARGUMENT,
               error, Gfn2SccSetupInputsField::kArena);
   diagnostic.required_bytes = required_bytes;
   diagnostic.cuda_status = cuda_status;
@@ -402,18 +402,18 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
   using Error = Gfn2SccSetupInputsError;
   using Field = Gfn2SccSetupInputsField;
   if (plan_token == 0u) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPlanToken);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPlanToken);
   }
   if (host_topology.memory_space != Gfn2PlanMemorySpace::kHost ||
       host_topology.plan_token != plan_token ||
       validate_gfn2_topology_host(host_topology).error != Gfn2PlanSchemaError::kSuccess) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kTopology);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kTopology);
   }
   if (sources.basis == nullptr || sources.integrals == nullptr || sources.h0_plan == nullptr ||
       sources.wavefunction == nullptr || sources.es2 == nullptr || sources.es3 == nullptr ||
       sources.aes2 == nullptr || sources.mulliken == nullptr || sources.mixer == nullptr ||
       sources.driver == nullptr) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
   }
 
   const auto& basis = *sources.basis;
@@ -435,7 +435,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
   std::int64_t quadrupole_integral_elements = 0;
   if (!checked_multiply(matrices, 3, dipole_integral_elements) ||
       !checked_multiply(matrices, 6, quadrupole_integral_elements)) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kHamiltonian);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kHamiltonian);
   }
 
   if (basis.batch_size != batch || basis.total_atoms != atoms || basis.total_shells != shells ||
@@ -453,7 +453,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
       mulliken.matrix_elements() != matrices || !mixer.sealed() ||
       !mixer.matches_wavefunction_layout(wavefunction) || !driver.sealed() ||
       driver.batch_size() != batch || driver.maximum_iterations() == 0u) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
   }
   if (!vector_matches(basis.atom_offsets, host_topology.atom_offsets, batch + 1) ||
       !vector_matches(basis.batch_shell_offsets, host_topology.batch_shell_offsets, batch + 1) ||
@@ -477,16 +477,16 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
       mulliken.matrix_offsets() != integrals.matrix_offsets ||
       mulliken.shell_orbital_offsets() != basis.shell_orbital_offsets ||
       mulliken.shell_to_atom() != basis.shell_to_atom) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
   }
   if (!exact_vector(aes2.pair_offsets(), batch + 1) || aes2.pair_offsets().front() != 0 ||
       aes2.total_pairs() < 0 || aes2.pair_offsets().back() != aes2.total_pairs()) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
   }
   if (!exact_vector(es2.matrix_offsets(), batch + 1) || es2.matrix_offsets().front() != 0 ||
       es2.total_matrix_elements() <= 0 ||
       es2.matrix_offsets().back() != es2.total_matrix_elements()) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kES2);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kES2);
   }
 
   std::int64_t atom_coordinates = 0;
@@ -496,7 +496,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
       !checked_multiply(aes2.total_pairs(), kGfn2GeometryPairDataElements,
                         geometry_pair_elements) ||
       !checked_multiply(aes2.total_pairs(), kGfn2AES2PairDataElements, aes2_pair_elements)) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kGeometry);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kGeometry);
   }
   if (sources.geometry_generation == 0u || !exact_array(sources.atomic_numbers, atoms) ||
       !exact_array(sources.positions, atom_coordinates) ||
@@ -508,22 +508,22 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
           sources.geometry_cache.system_generations.data,
           sources.geometry_cache.system_generations.data + batch,
           [&](std::uint64_t generation) { return generation == sources.geometry_generation; })) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
   }
   if (!exact_array(sources.h0, matrices) || !exact_array(sources.overlap, matrices) ||
       !exact_array(sources.dipole_integrals, dipole_integral_elements) ||
       !exact_array(sources.quadrupole_integrals, quadrupole_integral_elements)) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kHamiltonian);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kHamiltonian);
   }
   if (!exact_array(sources.es2_cache.coulomb_matrix, es2.total_matrix_elements()) ||
       !exact_array(sources.aes2_cache.pair_data, aes2_pair_elements)) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kES2);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kES2);
   }
   const bool warm = sources.warm_start_generation != 0u;
   if ((warm && !exact_array(sources.warm_start_generations, batch)) ||
       (!warm && (sources.warm_start_generations.data != nullptr ||
                  sources.warm_start_generations.elements != 0))) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
   }
   const bool valid_eigensolver_strategy =
       sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kAuto ||
@@ -535,7 +535,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
       !std::isfinite(sources.eigensolver_options.symmetry_tolerance) ||
       sources.eigensolver_options.symmetry_tolerance < 0.0 || !valid_eigensolver_strategy ||
       sources.eigensolver_options.jacobi != nullptr) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kEigensolver);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kEigensolver);
   }
 
   const bool d4_enabled = sources.d4.plan != nullptr;
@@ -543,7 +543,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
   const bool periodic_enabled = sources.periodic.plan != nullptr;
   if (driver.d4_enabled() != d4_enabled ||
       driver.periodic_embedding_enabled() != periodic_enabled) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan,
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan,
                    d4_enabled ? Field::kD4 : Field::kPeriodic);
   }
   if (d4_enabled) {
@@ -558,14 +558,14 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
         sources.d4.references.elements <= 0 ||
         !exact_array(sources.d4.elements, sources.d4.elements.elements) ||
         !exact_array(sources.d4.references, sources.d4.references.elements)) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
     }
     std::int64_t reference_square = 0;
     if (!checked_multiply(sources.d4.references.elements, sources.d4.references.elements,
                           reference_square) ||
         sources.d4.reference_c6.elements < reference_square ||
         sources.d4.reference_c6.data == nullptr) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
     }
   } else if (sources.d4.elements.data != nullptr || sources.d4.elements.elements != 0 ||
              sources.d4.references.data != nullptr || sources.d4.references.elements != 0 ||
@@ -573,7 +573,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
              sources.d4.pair_data.data != nullptr || sources.d4.pair_data.elements != 0 ||
              sources.d4.coordination_numbers.data != nullptr ||
              sources.d4.coordination_numbers.elements != 0) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
   }
 
   std::int64_t point_count = 0;
@@ -582,12 +582,12 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     point_count = point.total_point_charges;
     std::int64_t point_coordinates = 0;
     if (point.batch_size != batch || point.total_atoms != atoms || point.total_shells != shells) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPointCharges);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPointCharges);
     }
     if (point.atom_offsets != basis.atom_offsets ||
         point.batch_shell_offsets != basis.batch_shell_offsets ||
         point.shell_to_atom != basis.shell_to_atom) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPointCharges);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPointCharges);
     }
     if (point_count < 0 || !checked_multiply(point_count, 3, point_coordinates) ||
         !valid_offsets(point.point_charge_offsets, batch, point_count) ||
@@ -596,7 +596,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
         !exact_array(sources.point_charges.charges, point_count) ||
         !exact_array(sources.point_charges.hardnesses, point_count) ||
         !exact_array(sources.point_charges.shell_potential_cache, shells)) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPointCharges);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPointCharges);
     }
   } else if (sources.point_charges.positions.data != nullptr ||
              sources.point_charges.positions.elements != 0 ||
@@ -606,7 +606,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
              sources.point_charges.hardnesses.elements != 0 ||
              sources.point_charges.shell_potential_cache.data != nullptr ||
              sources.point_charges.shell_potential_cache.elements != 0) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPointCharges);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPointCharges);
   }
 
   std::int64_t periodic_matrices = 0;
@@ -614,16 +614,16 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     const auto& periodic = *sources.periodic.plan;
     periodic_matrices = periodic.total_matrix_elements();
     if (!periodic.sealed() || periodic.batch_size() != batch || periodic.total_atoms() != atoms) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
     }
     if (periodic.atom_offsets() != basis.atom_offsets) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
     }
     if (!exact_vector(periodic.atom_offsets(), batch + 1) ||
         !exact_vector(periodic.matrix_offsets(), batch + 1) ||
         !exact_array(sources.periodic.shifts, atoms) ||
         !exact_array(sources.periodic.response_matrices, periodic_matrices)) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPeriodic);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPeriodic);
     }
     for (std::int64_t system = 0; system < batch; ++system) {
       const std::int64_t system_atoms = basis.atom_offsets[static_cast<std::size_t>(system + 1)] -
@@ -633,13 +633,14 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
           periodic.matrix_offsets()[static_cast<std::size_t>(system + 1)] -
                   periodic.matrix_offsets()[static_cast<std::size_t>(system)] !=
               expected_matrix_elements) {
-        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic, system);
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic,
+                       system);
       }
     }
   } else if (sources.periodic.shifts.data != nullptr || sources.periodic.shifts.elements != 0 ||
              sources.periodic.response_matrices.data != nullptr ||
              sources.periodic.response_matrices.elements != 0) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPeriodic);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPeriodic);
   }
 
   try {
@@ -648,15 +649,15 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
      * second caller-provided topology authority. */
     gfn2::SpinPolarizationPlan spin;
     std::string spin_error;
-    const gpuxtb_status_t spin_status =
+    const xtbloom_status_t spin_status =
         gfn2::make_spin_polarization_plan(basis, wavefunction, spin, spin_error);
-    if (spin_status != GPUXTB_STATUS_SUCCESS) {
+    if (spin_status != XTBLOOM_STATUS_SUCCESS) {
       return failure(spin_status, Error::kInvalidSource, Field::kRequiredPlans);
     }
 
     std::unique_ptr<Impl> candidate(new (std::nothrow) Impl());
     if (candidate == nullptr) {
-      return failure(GPUXTB_STATUS_ALLOCATION_FAILED, Error::kAllocationFailed, Field::kArena);
+      return failure(XTBLOOM_STATUS_ALLOCATION_FAILED, Error::kAllocationFailed, Field::kArena);
     }
     candidate->plan_token = plan_token;
     candidate->geometry_generation = sources.geometry_generation;
@@ -701,8 +702,8 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
       if ((channels != 1 && channels != 2) ||
           spin_channel_offsets[static_cast<std::size_t>(system)] >
               std::numeric_limits<std::int64_t>::max() - channels) {
-        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans,
-                       system);
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource,
+                       Field::kRequiredPlans, system);
       }
       spin_channel_offsets[static_cast<std::size_t>(system + 1)] =
           spin_channel_offsets[static_cast<std::size_t>(system)] + channels;
@@ -717,14 +718,14 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     candidate->host_wavefunction.layout_fingerprint =
         gfn2_wavefunction_layout_fingerprint_host(fingerprint_view);
     if (candidate->host_wavefunction.layout_fingerprint == 0u) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
     }
     candidate->spin_coupling_matrix_count = spin.coupling_offsets.back();
     std::int64_t spin_atom_multipoles = 0;
     if (!checked_multiply(candidate->host_wavefunction.total_spin_atoms, 9, spin_atom_multipoles) ||
         candidate->host_wavefunction.total_spin_shells >
             std::numeric_limits<std::int64_t>::max() - spin_atom_multipoles) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kRequiredPlans);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kRequiredPlans);
     }
     candidate->mixer_vector_elements =
         candidate->host_wavefunction.total_spin_shells + spin_atom_multipoles;
@@ -751,15 +752,15 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
       candidate->layout.d4_pair_data.elements = sources.d4.pair_data.elements;
     }
     if (!candidate->make_layout()) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kArena);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kArena);
     }
 
     cudaError_t cuda_status =
         cudaMallocHost(&candidate->upload_image, candidate->layout.total_bytes);
     if (cuda_status != cudaSuccess) {
       Gfn2SccSetupInputsDiagnostic diagnostic = failure(
-          cuda_status == cudaErrorMemoryAllocation ? GPUXTB_STATUS_ALLOCATION_FAILED
-                                                   : GPUXTB_STATUS_INTERNAL_ERROR,
+          cuda_status == cudaErrorMemoryAllocation ? XTBLOOM_STATUS_ALLOCATION_FAILED
+                                                   : XTBLOOM_STATUS_INTERNAL_ERROR,
           cuda_status == cudaErrorMemoryAllocation ? Error::kAllocationFailed : Error::kCudaError,
           Field::kArena);
       diagnostic.required_bytes = candidate->layout.total_bytes;
@@ -777,7 +778,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
                             physical_dipole_offsets[static_cast<std::size_t>(system)]) ||
           !checked_multiply(basis.atom_offsets[static_cast<std::size_t>(system)], 6,
                             physical_quadrupole_offsets[static_cast<std::size_t>(system)])) {
-        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kHamiltonian);
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kHamiltonian);
       }
     }
     Gfn2SccSetupHostArray<std::int64_t> dipole_offsets{physical_dipole_offsets.data(), batch + 1};
@@ -813,7 +814,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
                                                       sources.atomic_numbers.elements, plan_token,
                                                       candidate->host_element_identity)
             .error != Gfn2PlanSchemaError::kSuccess) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
     }
     pack_array(image, candidate->layout.h0, sources.h0);
     pack_array(image, candidate->layout.overlap, sources.overlap);
@@ -876,9 +877,9 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     output = std::move(replacement);
     return {};
   } catch (const std::bad_alloc&) {
-    return failure(GPUXTB_STATUS_ALLOCATION_FAILED, Error::kAllocationFailed, Field::kArena);
+    return failure(XTBLOOM_STATUS_ALLOCATION_FAILED, Error::kAllocationFailed, Field::kArena);
   } catch (...) {
-    return failure(GPUXTB_STATUS_INTERNAL_ERROR, Error::kInvalidSource, Field::kRequiredPlans);
+    return failure(XTBLOOM_STATUS_INTERNAL_ERROR, Error::kInvalidSource, Field::kRequiredPlans);
   }
 }
 
@@ -905,13 +906,13 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
   using Error = Gfn2SccSetupInputsError;
   using Field = Gfn2SccSetupInputsField;
   if (impl_ == nullptr) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
   }
   if (device_topology.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
       validate_gfn2_topology_binding(device_topology, Gfn2PlanMemorySpace::kCudaDevice).error !=
           Gfn2PlanSchemaError::kSuccess ||
       !same_shape(impl_->host_topology, device_topology)) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kTopology);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kTopology);
   }
   if (validate_gfn2_wavefunction_layout_binding(device_topology, device_wavefunction,
                                                 Gfn2PlanMemorySpace::kCudaDevice)
@@ -919,7 +920,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
       !same_wavefunction_shape(impl_->host_wavefunction, device_wavefunction)) {
     /* Publication, mixer, and all spin-aware leaves must share the descriptor
      * transaction published by the topology owner. */
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
   }
   const std::size_t required = impl_->layout.total_bytes;
   if (device_arena == nullptr) {
@@ -995,7 +996,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
       (device_topology.pair_map_kind == Gfn2PairMapKind::kPackedLowerTriangle &&
        candidate.packed_all_pair_projection.plan_token != token) ||
       (device_topology.bucket_count != 0 && candidate.ao_bucket_projection.plan_token != token)) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kTopology);
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kTopology);
   }
   /* Element identity is setup-owned: reuse the host seal but name the uploaded
    * device atomic-number array for the CUDA descriptor. */
@@ -1009,7 +1010,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
         candidate.element_identity_projection));
     if (candidate.element_identity_projection.plan_token != token ||
         impl_->host_element_identity.element_fingerprint == 0u) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
     }
   }
   candidate.activity_policy = {batch, impl_->maximum_iterations, token};
@@ -1359,7 +1360,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
     batch_provenance(Gfn2SccStageId::kPeriodicPotential);
   }
   if (record_count != static_cast<std::size_t>(impl_->layout.provenance_bindings.elements)) {
-    return failure(GPUXTB_STATUS_INTERNAL_ERROR, Error::kInvalidSource, Field::kGeometry);
+    return failure(XTBLOOM_STATUS_INTERNAL_ERROR, Error::kInvalidSource, Field::kGeometry);
   }
   std::memcpy(
       static_cast<std::byte*>(impl_->upload_image) + impl_->layout.provenance_bindings.offset,
@@ -1393,4 +1394,4 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
   return {};
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

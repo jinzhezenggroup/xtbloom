@@ -1,9 +1,9 @@
 source_revision=847dc1db90db072aab255c6deef76f4b3e7ef7de
 source_status=clean
 benchmark=production-dispatch-chain-vs-monolithic
-benchmark_binary=/home/jzzeng/codes/gpuxtb4-fix227/build/fix227-cuda/gpuxtb_cuda_scc_loop_benchmark
+benchmark_binary=/home/jzzeng/codes/xtbloom4-fix227/build/fix227-cuda/xtbloom_cuda_scc_loop_benchmark
 benchmark_binary_sha256=5ccf7186058017134e80a6763a7dfc851b5ee176fca0932cbcbc550a7f5e8156
-shared_library=/home/jzzeng/codes/gpuxtb4-fix227/build/fix227-cuda/libgpuxtb.so.0.1.0
+shared_library=/home/jzzeng/codes/xtbloom4-fix227/build/fix227-cuda/libxtbloom.so.0.1.0
 shared_library_sha256=9cfbf77194204cd39bc8681329b4a2f9b1145484872f958a2fe43ad3df707be4
 toolchain_cuda=12.9.86
 cuda_compiler=/group/software/cuda-12.9.1/bin/nvcc

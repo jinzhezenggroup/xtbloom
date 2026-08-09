@@ -1,4 +1,4 @@
-# Issue #214 gpuxtb-owned DLPack device-result allocation evidence
+# Issue #214 xTBloom-owned DLPack device-result allocation evidence
 
 This directory archives issue #214's two remaining acceptance rows:
 real CuPy/JAX/PyTorch device-provider import evidence and a durable
@@ -10,7 +10,7 @@ The scientific claim is deliberately narrow and archived with raw samples so it
 can be re-derived, not restated from memory:
 
 - On the recorded RTX 5090 / CUDA 12.9 stack, `result_memory="cuda"`
-  (gpuxtb-owned device arena, no `out=`) passes the predefined mean-overhead
+  (xTBloom-owned device arena, no `out=`) passes the predefined mean-overhead
   gate of no more than 5% above the caller-owned `out=` path. Across 300
   counterbalanced pairs after 30 warmups per mode, arena mean latency is
   `7.530 ms` (`7.517..7.673` min..max) versus `7.834 ms`
@@ -49,13 +49,13 @@ can be re-derived, not restated from memory:
 - Driver: 580.95.05 (reported `cudaDriverGetVersion` = 13000, i.e. CUDA 13.0).
 - CUDA runtime: 12.9 (build `cuda_12.9.r12.9/compiler.36037853_0`; reported
   `cudaRuntimeGetVersion` = 12090). CuPy 14.1.1 (cuda13x) and torch 2.13.0
-  (+cu130) imported the gpuxtb-produced device bytes; gpuxtb itself is built
+  (+cu130) imported the xTBloom-produced device bytes; xTBloom itself is built
   against CUDA 12.9.
 - Python: 3.13.9. numpy 2.5.1, pytest 9.1.1, CuPy 14.1.1, JAX 0.11.0 (with
   `jax[cuda12]` compute 12.9 libs), PyTorch 2.13.0 (+cu130).
 - Source revision: `68ef635f1b00fab01373dad910c07164b9d0fd19` (PR #226 evidence
   branch). The measured native library is the explicit shared CMake build at
-  `build/pr226-cuda/libgpuxtb.so.0.1.0`; its SHA-256
+  `build/pr226-cuda/libxtbloom.so.0.1.0`; its SHA-256
   (`53ad262937f1612fceee97f9bc88e0abac2126523e54f226092de5fed12b32ce`)
   is embedded in `dlpack-result-memory.json` together with the exact adjacent
   CMake-cache hash and entries, clean matching source Git identity, configured
@@ -111,22 +111,22 @@ synchronization counts, per the repository performance-evidence policy.
 ```bash
 # Allocation/latency benchmark:
 srun --gres=gpu:1 --ntasks=1 env PYTHONPATH="$PWD/python" \
-  GPUXTB_LIBRARY="$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+  XTBLOOM_LIBRARY="$PWD/build/pr226-cuda/libxtbloom.so.0.1.0" \
   LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64 \
   /tmp/venv-providers/bin/python benchmarks/dlpack_result_memory.py \
-  --library build/pr226-cuda/libgpuxtb.so.0.1.0 \
+  --library build/pr226-cuda/libxtbloom.so.0.1.0 \
   --warmup 30 --repetitions 300 \
   --output /tmp/pr226-final-68ef635.P82Vxc/dlpack-result-memory.json
 
 # Profiler capture, executed once with <mode>=arena and once with <mode>=out:
 srun --gres=gpu:1 --ntasks=1 env PYTHONPATH="$PWD/python" \
-  GPUXTB_LIBRARY="$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+  XTBLOOM_LIBRARY="$PWD/build/pr226-cuda/libxtbloom.so.0.1.0" \
   LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64 \
   /group/software/cuda-12.9.1/bin/nsys profile \
   -o /tmp/pr226-final-68ef635.P82Vxc/<mode> \
   --force-overwrite=true --cuda-memory-usage=true --trace=cuda,nvtx,osrt \
   /tmp/venv-providers/bin/python benchmarks/dlpack_result_memory.py \
-  --library build/pr226-cuda/libgpuxtb.so.0.1.0 \
+  --library build/pr226-cuda/libxtbloom.so.0.1.0 \
   --warmup 3 --repetitions 10 --profile-mode <arena|out>
 
 # Derived reports (as committed):

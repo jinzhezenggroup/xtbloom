@@ -1,12 +1,12 @@
-#ifndef GPUXTB_BACKENDS_COMMON_GFN2_PLAN_SCHEMA_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_COMMON_GFN2_PLAN_SCHEMA_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_COMMON_GFN2_PLAN_SCHEMA_HPP
+#define XTBLOOM_BACKENDS_COMMON_GFN2_PLAN_SCHEMA_HPP
 
 #include <cstdint>
 #include <type_traits>
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 /*
  * The common schema deliberately contains no CUDA or HIP types.  A topology
@@ -606,6 +606,6 @@ static_assert(std::is_standard_layout_v<Gfn2ElementIdentityProjectionView>);
     const std::int32_t* atomic_numbers, std::int64_t atomic_number_count, std::uint64_t plan_token,
     Gfn2ElementIdentityProjectionView& projection) noexcept;
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail
 
-#endif  // GPUXTB_BACKENDS_COMMON_GFN2_PLAN_SCHEMA_HPP
+#endif  // XTBLOOM_BACKENDS_COMMON_GFN2_PLAN_SCHEMA_HPP

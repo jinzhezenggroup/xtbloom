@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit xtbloom Dependency"
+  short_description: "Check provenance, licenses, and package payloads"
+  default_prompt: "Use $xtbloom-audit-dependency to review this dependency or bundled artifact through source and package boundaries."

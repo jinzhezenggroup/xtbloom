@@ -1,5 +1,5 @@
 #include <cuda_runtime.h>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <array>
 #include <cstddef>
@@ -8,7 +8,7 @@
 
 #include "backends/cuda/gfn2_post_scc_potential.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 128;
@@ -99,7 +99,7 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
            make_range(pointer, elements, element_size, &protected_ranges[count++]);
   };
   if (!append(input.activity.requested_mask, batch_size, sizeof(std::uint8_t)) ||
-      !append(input.activity.system_statuses, batch_size, sizeof(gpuxtb_status_t)) ||
+      !append(input.activity.system_statuses, batch_size, sizeof(xtbloom_status_t)) ||
       !append(input.raw_shell_charges, input.shell_elements, sizeof(double)) ||
       !append(input.raw_atomic_charges, input.atom_elements, sizeof(double)) ||
       !append(input.raw_atomic_dipoles, input.dipole_elements, sizeof(double)) ||
@@ -464,7 +464,7 @@ __global__ void initialize_activity_kernel(Gfn2ForceDeviceActivity source,
     if (requested > 1u) {
       system_errors[system] = gfn2_post_scc_potential_error(Gfn2PostSccPotentialStage::kActivity,
                                                             kInvalidRequestedMask);
-    } else if (requested == 1u && source.system_statuses[system] == GPUXTB_STATUS_SUCCESS) {
+    } else if (requested == 1u && source.system_statuses[system] == XTBLOOM_STATUS_SUCCESS) {
       if (dynamic_epoch == 0) {
         active_mask[system] = 1u;
         continue;
@@ -793,4 +793,4 @@ cudaError_t refresh_gfn2_post_scc_potentials_cuda(
                                           diagnostics, &geometry, stream);
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_ENERGY_FORCE_EXECUTION_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_ENERGY_FORCE_EXECUTION_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_ENERGY_FORCE_EXECUTION_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_ENERGY_FORCE_EXECUTION_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -18,7 +18,7 @@
 #include "backends/cuda/gfn2_scc_potential.cuh"
 #include "backends/cuda/gfn2_total_energy.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* Stable execution-level mapping of failures from the composed device stages. */
 enum class Gfn2EnergyForceExecutionDeviceError : std::uint32_t {
@@ -231,6 +231,6 @@ cudaError_t execute_gfn2_energy_force_cuda(
     const Gfn2EnergyForceExecutionDeviceDiagnostics& diagnostics,
     const Gfn2GeometryEpochConsumerDevice& geometry, cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_ENERGY_FORCE_EXECUTION_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_ENERGY_FORCE_EXECUTION_CUH

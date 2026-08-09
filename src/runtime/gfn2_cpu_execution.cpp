@@ -1,5 +1,5 @@
 #include "runtime/gfn2_cpu_execution.hpp"
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
 #include <array>
@@ -48,10 +48,10 @@
 #include "model/gfn2/spin.hpp"
 #include "model/gfn2/wavefunction.hpp"
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 namespace {
 
-using namespace gpuxtb::detail::gfn2;
+using namespace xtbloom::detail::gfn2;
 
 constexpr std::size_t kHostAlignment = 64u;
 constexpr std::int64_t kMixerHistory = 8;
@@ -292,17 +292,17 @@ class AlignedBuffer {
   std::size_t size_ = 0u;
 };
 
-gpuxtb_status_t allocate(AlignedBuffer& buffer, std::size_t bytes, const char* purpose,
-                         std::string& error) {
+xtbloom_status_t allocate(AlignedBuffer& buffer, std::size_t bytes, const char* purpose,
+                          std::string& error) {
   if (buffer.allocate(bytes)) {
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   }
   error = std::string("failed to allocate CPU GFN2 ") + purpose;
-  return GPUXTB_STATUS_ALLOCATION_FAILED;
+  return XTBLOOM_STATUS_ALLOCATION_FAILED;
 }
 
 template <typename T>
-void copy_from_c_buffer(const gpuxtb_const_buffer_t& source, std::size_t count,
+void copy_from_c_buffer(const xtbloom_const_buffer_t& source, std::size_t count,
                         std::vector<T>& destination) {
   destination.resize(count);
   if (count != 0u) {
@@ -311,7 +311,7 @@ void copy_from_c_buffer(const gpuxtb_const_buffer_t& source, std::size_t count,
 }
 
 template <typename T>
-void publish_to_c_buffer(const std::vector<T>& source, gpuxtb_buffer_t& destination) {
+void publish_to_c_buffer(const std::vector<T>& source, xtbloom_buffer_t& destination) {
   if (!source.empty()) {
     std::memcpy(destination.data, source.data(), source.size() * sizeof(T));
   }
@@ -344,9 +344,9 @@ struct HostRequest {
   bool response_enabled = false;
 };
 
-void stage_electric_fields(const gpuxtb_batch_t& batch, HostRequest& request);
+void stage_electric_fields(const xtbloom_batch_t& batch, HostRequest& request);
 
-void stage_request(const gpuxtb_batch_t& batch, HostRequest& request) {
+void stage_request(const xtbloom_batch_t& batch, HostRequest& request) {
   request.batch_size = batch.batch_size;
   request.total_atoms = batch.total_atoms;
   request.total_point_charges = batch.total_point_charges;
@@ -361,7 +361,7 @@ void stage_request(const gpuxtb_batch_t& batch, HostRequest& request) {
   copy_from_c_buffer(batch.unpaired_electrons, static_cast<std::size_t>(batch.batch_size),
                      request.unpaired_electrons);
   const bool spin_channels_present =
-      batch.struct_size >= GPUXTB_BATCH_V2_SIZE && batch.spin_channels.data != nullptr;
+      batch.struct_size >= XTBLOOM_BATCH_V2_SIZE && batch.spin_channels.data != nullptr;
   if (spin_channels_present) {
     copy_from_c_buffer(batch.spin_channels, static_cast<std::size_t>(batch.batch_size),
                        request.spin_channels);
@@ -410,7 +410,7 @@ void stage_request(const gpuxtb_batch_t& batch, HostRequest& request) {
   request.field_by_system.assign(static_cast<std::size_t>(batch.batch_size),
                                  std::array<double, 3>{0.0, 0.0, 0.0});
   request.field_attached_by_system.assign(static_cast<std::size_t>(batch.batch_size), 0u);
-  if (batch.struct_size >= GPUXTB_BATCH_V3_SIZE && batch.total_interactions != 0) {
+  if (batch.struct_size >= XTBLOOM_BATCH_V3_SIZE && batch.total_interactions != 0) {
     stage_electric_fields(batch, request);
   }
 }
@@ -424,22 +424,22 @@ void stage_request(const gpuxtb_batch_t& batch, HostRequest& request) {
  * into the per-system field vector. Only the electric-field tag is released;
  * every other tag is refused before execution by the validation layer.
  */
-void stage_electric_fields(const gpuxtb_batch_t& batch, HostRequest& request) {
+void stage_electric_fields(const xtbloom_batch_t& batch, HostRequest& request) {
   const unsigned char* descriptors =
       static_cast<const unsigned char*>(batch.interaction_descriptors.data);
   const unsigned char* payload = static_cast<const unsigned char*>(batch.interaction_payload.data);
   for (std::int64_t index = 0; index < batch.total_interactions; ++index) {
     const unsigned char* descriptor =
-        descriptors + static_cast<std::size_t>(index) * sizeof(gpuxtb_interaction_t);
+        descriptors + static_cast<std::size_t>(index) * sizeof(xtbloom_interaction_t);
     std::int32_t type = 0;
     std::int64_t system_index = 0;
     std::uint64_t payload_offset = 0u;
-    std::memcpy(&type, descriptor + offsetof(gpuxtb_interaction_t, type), sizeof(type));
-    std::memcpy(&system_index, descriptor + offsetof(gpuxtb_interaction_t, system_index),
+    std::memcpy(&type, descriptor + offsetof(xtbloom_interaction_t, type), sizeof(type));
+    std::memcpy(&system_index, descriptor + offsetof(xtbloom_interaction_t, system_index),
                 sizeof(system_index));
-    std::memcpy(&payload_offset, descriptor + offsetof(gpuxtb_interaction_t, payload_offset),
+    std::memcpy(&payload_offset, descriptor + offsetof(xtbloom_interaction_t, payload_offset),
                 sizeof(payload_offset));
-    if (type != GPUXTB_INTERACTION_ELECTRIC_FIELD) {
+    if (type != XTBLOOM_INTERACTION_ELECTRIC_FIELD) {
       /* Validation refuses every other tag before execution; keep this branch
        * defensive and unreachable. */
       continue;
@@ -459,27 +459,27 @@ bool all_finite(const std::vector<double>& values) {
                      [](double value) { return std::isfinite(value); });
 }
 
-gpuxtb_status_t validate_host_numerics(const HostRequest& request, std::string& error) {
+xtbloom_status_t validate_host_numerics(const HostRequest& request, std::string& error) {
   if (!all_finite(request.positions)) {
     error = "positions contain NaN or infinity";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!all_finite(request.molecular_charges)) {
     error = "molecular_charges contain NaN or infinity";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!all_finite(request.point_positions) || !all_finite(request.point_charges)) {
     error = "external point-charge positions or values contain NaN or infinity";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!std::all_of(request.point_hardnesses.begin(), request.point_hardnesses.end(),
                    [](double value) { return std::isfinite(value) && value > 0.0; })) {
     error = "point_charge_gammas must be finite and positive";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!all_finite(request.periodic_shifts) || !all_finite(request.response_matrices)) {
     error = "periodic b/A inputs contain NaN or infinity";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (request.response_enabled) {
     for (std::int64_t system = 0; system < request.batch_size; ++system) {
@@ -494,13 +494,13 @@ gpuxtb_status_t validate_host_numerics(const HostRequest& request, std::string& 
               request.response_matrices[static_cast<std::size_t>(begin + column * atoms + row)];
           if (upper != lower) {
             error = "charge_response_matrix must be exactly symmetric per system";
-            return GPUXTB_STATUS_INVALID_ARGUMENT;
+            return XTBLOOM_STATUS_INVALID_ARGUMENT;
           }
         }
       }
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 struct SystemKey {
@@ -536,7 +536,7 @@ struct SystemKey {
   }
 };
 
-void make_system_keys(const HostRequest& request, const gpuxtb_compute_options_t& options,
+void make_system_keys(const HostRequest& request, const xtbloom_compute_options_t& options,
                       std::vector<SystemKey>& keys) {
   keys.resize(static_cast<std::size_t>(request.batch_size));
   const bool periodic_enabled = request.shifts_enabled || request.response_enabled;
@@ -580,7 +580,7 @@ bool same_prepared_layout(const SystemKey& lhs, const SystemKey& rhs) {
 }
 
 struct SystemOutput {
-  gpuxtb_status_t status = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+  xtbloom_status_t status = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
   std::int32_t iterations = 0;
   std::uint8_t converged = 0u;
   double energy = std::numeric_limits<double>::quiet_NaN();
@@ -588,11 +588,11 @@ struct SystemOutput {
   std::vector<double> atomic_charges;
   std::vector<double> point_forces;
   /* Per-system molecular dipole moment (three doubles, atomic units),
-   * published when GPUXTB_COMPUTE_DIPOLE_MOMENTS is requested. */
+   * published when XTBLOOM_COMPUTE_DIPOLE_MOMENTS is requested. */
   std::array<double, 3> dipole_moments{0.0, 0.0, 0.0};
 
   void reset() noexcept {
-    status = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+    status = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
     iterations = 0;
     converged = 0u;
     energy = std::numeric_limits<double>::quiet_NaN();
@@ -701,7 +701,7 @@ struct SystemExecution {
   std::vector<double> dipole_potential;
   std::vector<double> quadrupole_potential;
   std::vector<double> periodic_energy;
-  std::vector<gpuxtb_status_t> periodic_status;
+  std::vector<xtbloom_status_t> periodic_status;
 
   /* Uniform external electric field in atomic units. Presence is distinct from
    * the three values so an explicit zero block remains visible to WARM policy.
@@ -743,12 +743,12 @@ struct SystemExecution {
   AlignedBuffer warm_checkpoint_wavefunction_storage;
   bool warm_checkpoint_valid = false;
 
-  gpuxtb_status_t build(std::string& error);
-  gpuxtb_status_t infer(const CpuLinearAlgebraBackend& backend, const double* input_positions,
-                        const double* input_point_positions, const double* input_point_charges,
-                        const double* input_point_hardnesses, const double* input_shifts,
-                        const double* input_response, std::uint32_t compute_flags, bool warm_start,
-                        SystemOutput& output, std::string& error);
+  xtbloom_status_t build(std::string& error);
+  xtbloom_status_t infer(const CpuLinearAlgebraBackend& backend, const double* input_positions,
+                         const double* input_point_positions, const double* input_point_charges,
+                         const double* input_point_hardnesses, const double* input_shifts,
+                         const double* input_response, std::uint32_t compute_flags, bool warm_start,
+                         SystemOutput& output, std::string& error);
 
   /* Steady-state host reservation: every persistent buffer this system owns.
    * Capacities are reported because repeated inference reuses them; the value
@@ -767,18 +767,18 @@ struct SystemExecution {
   }
 
  private:
-  gpuxtb_status_t refresh_geometry(const CpuLinearAlgebraBackend& backend, bool warm_start,
-                                   std::string& error);
-  gpuxtb_status_t run_scc(const CpuLinearAlgebraBackend& backend, std::string& error);
-  gpuxtb_status_t restore_warm_checkpoint(std::string& error);
-  gpuxtb_status_t refresh_stationary_potentials(std::string& error);
+  xtbloom_status_t refresh_geometry(const CpuLinearAlgebraBackend& backend, bool warm_start,
+                                    std::string& error);
+  xtbloom_status_t run_scc(const CpuLinearAlgebraBackend& backend, std::string& error);
+  xtbloom_status_t restore_warm_checkpoint(std::string& error);
+  xtbloom_status_t refresh_stationary_potentials(std::string& error);
 };
 
-gpuxtb_status_t SystemExecution::build(std::string& error) {
+xtbloom_status_t SystemExecution::build(std::string& error) {
   const std::int64_t atoms = static_cast<std::int64_t>(key.atomic_numbers.size());
   if (atoms <= 0) {
     error = "restricted CPU GFN2 system has no atoms";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   atom_offsets[1] = atoms;
   /* A one-atom D4 plan has no physical pair or ATM contribution. Disabling
@@ -789,56 +789,56 @@ gpuxtb_status_t SystemExecution::build(std::string& error) {
   unpaired_electrons = {key.unpaired_electrons};
   spin_channels = {key.spin_channels};
 
-  gpuxtb_status_t status =
+  xtbloom_status_t status =
       make_basis_plan(1, atoms, atom_offsets.data(), key.atomic_numbers.data(), basis, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_integral_plan(basis, integrals, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_coordination_plan(1, atoms, atom_offsets.data(), key.atomic_numbers.data(),
                                   coordination, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_repulsion_plan(1, atoms, atom_offsets.data(), key.atomic_numbers.data(), repulsion,
                                error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_h0_plan(basis, integrals, key.atomic_numbers.data(), h0, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_wavefunction_layout(basis, key.atomic_numbers.data(), molecular_charges.data(),
                                     unpaired_electrons.data(), spin_channels.data(),
                                     wavefunction_layout, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_es2_plan(basis, key.atomic_numbers.data(), es2, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_es3_plan(basis, key.atomic_numbers.data(), es3, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_aes2_plan(basis, key.atomic_numbers.data(), aes2, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_mulliken_plan(basis, integrals, wavefunction_layout, mulliken, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_eigensolver_plan(wavefunction_layout, eigensolver, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_scc_mixer_plan(wavefunction_layout, kMixerHistory, kMixerDamping,
                                key.charge_tolerance, key.charge_tolerance, mixer, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_spin_polarization_plan(basis, wavefunction_layout, spin, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   if (d4_enabled) {
     status = make_d4_plan(1, atoms, atom_offsets.data(), key.atomic_numbers.data(), d4, error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
   status = make_external_point_charge_plan(basis, key.atomic_numbers.data(), key.point_count,
                                            key.point_count == 0 ? nullptr : point_offsets.data(),
                                            external, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   if (key.periodic_enabled) {
     status = make_periodic_embedding_plan(1, atoms, atom_offsets.data(), periodic, error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
   status =
       make_scc_driver_plan(wavefunction_layout, mulliken, es2, es3, aes2, eigensolver, mixer,
                            d4_enabled ? &d4 : nullptr, key.periodic_enabled ? &periodic : nullptr,
                            static_cast<std::uint64_t>(key.maximum_iterations),
                            key.electronic_temperature, key.energy_tolerance, driver, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   const std::size_t atom_count = static_cast<std::size_t>(atoms);
   const std::size_t point_count = static_cast<std::size_t>(key.point_count);
@@ -861,7 +861,7 @@ gpuxtb_status_t SystemExecution::build(std::string& error) {
   field_vdp.resize(3u * atom_count);
   status =
       allocate(integral_workspace, integrals.workspace_size_bytes, "integral workspace", error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   es2_matrix.resize(static_cast<std::size_t>(es2.total_matrix_elements()));
   es2_matrix_scratch.resize(es2_matrix.size());
@@ -887,10 +887,10 @@ gpuxtb_status_t SystemExecution::build(std::string& error) {
 
   if (d4_enabled) {
     status = allocate(d4_workspace_storage, d4.workspace_size_bytes(), "D4 workspace", error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = bind_d4_workspace(d4, d4_workspace_storage.data(), d4_workspace_storage.size(),
                                d4_workspace, error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
     d4_pairs.resize(static_cast<std::size_t>(d4.total_pairs()) * kD4PairDataElements);
     d4_coordination.resize(atom_count);
   }
@@ -898,43 +898,43 @@ gpuxtb_status_t SystemExecution::build(std::string& error) {
 
   status = allocate(wavefunction_storage, wavefunction_layout.workspace_size_bytes,
                     "wavefunction state", error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = allocate(warm_checkpoint_wavefunction_storage, wavefunction_layout.workspace_size_bytes,
                     "warm-start wavefunction checkpoint", error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = allocate(overlap_cache_storage, eigensolver.overlap_cache_size_bytes(), "overlap cache",
                     error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = allocate(eigensolver_workspace_storage, eigensolver.workspace_size_bytes(),
                     "eigensolver workspace", error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = allocate(mixer_state_storage, mixer.state_size_bytes(), "SCC mixer state", error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = allocate(driver_state_storage, driver.state_size_bytes(), "SCC driver state", error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = allocate(driver_workspace_storage, driver.workspace_size_bytes(), "SCC driver workspace",
                     error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   status = bind_wavefunction_view(wavefunction_layout, wavefunction_storage.data(),
                                   wavefunction_storage.size(), wavefunction, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = bind_eigensolver_overlap_cache(eigensolver, overlap_cache_storage.data(),
                                           overlap_cache_storage.size(), overlap_cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = bind_eigensolver_workspace(eigensolver, eigensolver_workspace_storage.data(),
                                       eigensolver_workspace_storage.size(), eigensolver_workspace,
                                       error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = bind_scc_mixer_state(mixer, mixer_state_storage.data(), mixer_state_storage.size(),
                                 mixer_state, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = bind_scc_driver_state(driver, driver_state_storage.data(), driver_state_storage.size(),
                                  driver_state, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = bind_scc_driver_workspace(driver, driver_workspace_storage.data(),
                                      driver_workspace_storage.size(), driver_workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   component_shell_potential.resize(shells);
   scalar_shell_potential.resize(shells);
@@ -989,7 +989,7 @@ gpuxtb_status_t SystemExecution::build(std::string& error) {
       d4_workspace,
   };
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 namespace {
@@ -1132,58 +1132,58 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
          planar_vectors + aligned_buffers;
 }
 
-gpuxtb_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend& backend,
-                                                  bool warm_start, std::string& error) {
+xtbloom_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend& backend,
+                                                   bool warm_start, std::string& error) {
   ++geometry_generation;
   if (geometry_generation == 0u) {
     geometry_generation = 1u;
   }
-  gpuxtb_status_t status =
+  xtbloom_status_t status =
       evaluate_coordination_cpu(coordination, positions.data(), coordination_numbers.data(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = evaluate_overlap_cpu(basis, integrals, positions.data(), overlap.data(),
                                 integral_workspace.data(), integral_workspace.size(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = evaluate_multipole_cpu(basis, integrals, positions.data(), dipole_integrals.data(),
                                   quadrupole_integrals.data(), integral_workspace.data(),
                                   integral_workspace.size(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = evaluate_h0_cpu(basis, integrals, h0, positions.data(), coordination_numbers.data(),
                            overlap.data(), core_hamiltonian.data(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status =
       update_es2_geometry_cache_cpu(es2, positions.data(), geometry_generation, es2_matrix.data(),
                                     es2_matrix.size(), es2_workspace, es2_cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = update_aes2_geometry_cache_cpu(aes2, positions.data(), coordination_numbers.data(),
                                           geometry_generation, aes2_pairs.data(), aes2_pairs.size(),
                                           aes2_workspace, aes2_cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   if (d4_enabled) {
     status = update_d4_geometry_cache_cpu(d4, positions.data(), geometry_generation,
                                           d4_pairs.data(), d4_pairs.size(), d4_coordination.data(),
                                           d4_coordination.size(), d4_workspace, d4_cache, error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
   status = evaluate_external_point_charge_potential_cpu(
       external, positions.data(), point_positions.empty() ? nullptr : point_positions.data(),
       point_charges.empty() ? nullptr : point_charges.data(),
       point_hardnesses.empty() ? nullptr : point_hardnesses.data(),
       explicit_point_shell_potential.data(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = factor_overlap_cpu(eigensolver, overlap.data(), geometry_generation, backend,
                               eigensolver_workspace, overlap_cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   if (warm_start) {
     status = restore_warm_checkpoint(error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   } else {
     status = initialize_sad_multipole_state(wavefunction_layout, wavefunction, error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
   status = initialize_scc_driver_state_cpu(driver, wavefunction, mixer_state, driver_state, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   geometry = {};
   geometry.h0 = core_hamiltonian.data();
@@ -1224,46 +1224,46 @@ gpuxtb_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend&
     geometry.field_dipole_potential = field_vdp.data();
     geometry.field_dipole_potential_elements = static_cast<std::int64_t>(field_vdp.size());
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t SystemExecution::restore_warm_checkpoint(std::string& error) {
+xtbloom_status_t SystemExecution::restore_warm_checkpoint(std::string& error) {
   /* The whole-batch identity gate in the execution cache runs before this
    * system is dispatched, so a missing checkpoint here is an internal
    * inconsistency rather than a caller policy error. Fail closed. */
   if (!warm_checkpoint_valid || warm_checkpoint_wavefunction_storage.data() == nullptr) {
     error = "CPU WARM SCC start found no compatible converged checkpoint in the retained system";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   std::memcpy(wavefunction_storage.data(), warm_checkpoint_wavefunction_storage.data(),
               wavefunction_storage.size());
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend,
-                                         std::string& error) {
+xtbloom_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend,
+                                          std::string& error) {
   while (driver_state.converged[0] == 0u &&
-         driver_state.system_statuses[0] == GPUXTB_STATUS_SUCCESS) {
-    const gpuxtb_status_t status = iterate_scc_driver_batch_cpu(
+         driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS) {
+    const xtbloom_status_t status = iterate_scc_driver_batch_cpu(
         driver, geometry, backend, overlap_cache, wavefunction, mixer_state, driver_state,
         driver_workspace, error,
         scc_parallel_enabled(parallel_executor) ? &parallel_executor : nullptr);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
   }
-  return driver_state.converged[0] != 0u ? GPUXTB_STATUS_SUCCESS : driver_state.system_statuses[0];
+  return driver_state.converged[0] != 0u ? XTBLOOM_STATUS_SUCCESS : driver_state.system_statuses[0];
 }
 
-gpuxtb_status_t SystemExecution::refresh_stationary_potentials(std::string& error) {
-  gpuxtb_status_t status = evaluate_es2_potential_cpu(
+xtbloom_status_t SystemExecution::refresh_stationary_potentials(std::string& error) {
+  xtbloom_status_t status = evaluate_es2_potential_cpu(
       es2, es2_cache, wavefunction.qsh, component_shell_potential.data(), es2_workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   scalar_shell_potential = component_shell_potential;
   status = evaluate_es3_potential_cpu(make_es3_view(es3), wavefunction.qsh,
                                       component_shell_potential.data(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   for (std::size_t shell = 0; shell < scalar_shell_potential.size(); ++shell) {
     scalar_shell_potential[shell] += component_shell_potential[shell];
     if (key.point_count != 0) {
@@ -1272,10 +1272,10 @@ gpuxtb_status_t SystemExecution::refresh_stationary_potentials(std::string& erro
   }
 
   if (key.spin_channels == 2) {
-    gpuxtb_status_t spin_status = evaluate_spin_polarization_cpu(
+    xtbloom_status_t spin_status = evaluate_spin_polarization_cpu(
         make_spin_polarization_view(spin), wavefunction.qsh, spin_energy_scratch.data(),
         packed_spin_shell_potential.data(), error);
-    if (spin_status != GPUXTB_STATUS_SUCCESS) return spin_status;
+    if (spin_status != XTBLOOM_STATUS_SUCCESS) return spin_status;
     const std::size_t shell_count = scalar_shell_potential.size();
     std::copy_n(packed_spin_shell_potential.data() + shell_count, shell_count,
                 stationary_spin_shell_potential.data());
@@ -1285,11 +1285,11 @@ gpuxtb_status_t SystemExecution::refresh_stationary_potentials(std::string& erro
                                        wavefunction.quadrupole, atomic_potential.data(),
                                        dipole_potential.data(), quadrupole_potential.data(),
                                        aes2_workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   if (d4_enabled) {
     status = evaluate_d4_two_body_cpu(d4, d4_cache, wavefunction.qat, energy_scratch.data(),
                                       d4_atomic_potential.data(), d4_workspace, error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   } else {
     std::fill(d4_atomic_potential.begin(), d4_atomic_potential.end(), 0.0);
   }
@@ -1312,7 +1312,7 @@ gpuxtb_status_t SystemExecution::refresh_stationary_potentials(std::string& erro
     };
     status = evaluate_periodic_embedding_batch_cpu(
         periodic, view, driver_workspace.periodic_embedding_workspace, error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   } else {
     std::fill(periodic_atomic_potential.begin(), periodic_atomic_potential.end(), 0.0);
   }
@@ -1338,10 +1338,10 @@ gpuxtb_status_t SystemExecution::refresh_stationary_potentials(std::string& erro
     const std::size_t atom = static_cast<std::size_t>(basis.shell_to_atom[shell]);
     scalar_shell_potential[shell] += atomic_potential[atom];
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t SystemExecution::infer(
+xtbloom_status_t SystemExecution::infer(
     const CpuLinearAlgebraBackend& backend, const double* input_positions,
     const double* input_point_positions, const double* input_point_charges,
     const double* input_point_hardnesses, const double* input_shifts, const double* input_response,
@@ -1365,13 +1365,13 @@ gpuxtb_status_t SystemExecution::infer(
     }
   }
 
-  gpuxtb_status_t status = refresh_geometry(backend, warm_start, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  xtbloom_status_t status = refresh_geometry(backend, warm_start, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = run_scc(backend, error);
   output.iterations = static_cast<std::int32_t>(std::min<std::uint64_t>(
       driver_state.iterations[0],
       static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())));
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     /* A failed or non-converged SCC run leaves the live wavefunction in a
      * partial mixed state; revoke any retained checkpoint so a later strict
      * WARM request cannot consume it. */
@@ -1387,12 +1387,12 @@ gpuxtb_status_t SystemExecution::infer(
               wavefunction_storage.size());
   warm_checkpoint_valid = true;
 
-  output.status = GPUXTB_STATUS_SUCCESS;
+  output.status = XTBLOOM_STATUS_SUCCESS;
   output.converged = 1u;
   output.atomic_charges.assign(wavefunction.qat,
                                wavefunction.qat + wavefunction_layout.total_atoms);
 
-  if ((compute_flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+  if ((compute_flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u) {
     /* Molecular dipole moment in the tblite molmom convention:
      * sum_i (r_i * q_i + d_i) over the charge-channel SCC multipoles. The
      * dipole population field stores [channel, atom, 3]; channel zero is the
@@ -1411,14 +1411,14 @@ gpuxtb_status_t SystemExecution::infer(
   }
 
   const bool need_energy_or_force =
-      (compute_flags &
-       (GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES | GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
+      (compute_flags & (XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
+                        XTBLOOM_COMPUTE_POINT_CHARGE_FORCES)) != 0u;
   if (!need_energy_or_force) {
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   }
 
   status = refresh_stationary_potentials(error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   const std::size_t matrix_elements = stationary_density.size();
   if (key.spin_channels == 1) {
@@ -1437,7 +1437,7 @@ gpuxtb_status_t SystemExecution::infer(
       if (!std::isfinite(total_density) || !std::isfinite(spin_density) ||
           !std::isfinite(total_weighted)) {
         error = "unrestricted stationary density reduction overflowed";
-        return GPUXTB_STATUS_INTERNAL_ERROR;
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
       }
       stationary_density[element] = total_density;
       stationary_spin_density[element] = spin_density;
@@ -1445,9 +1445,9 @@ gpuxtb_status_t SystemExecution::infer(
     }
   }
 
-  const bool need_qm_forces = (compute_flags & GPUXTB_COMPUTE_FORCES) != 0u;
+  const bool need_qm_forces = (compute_flags & XTBLOOM_COMPUTE_FORCES) != 0u;
   const bool need_point_forces =
-      (compute_flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0u && key.point_count != 0;
+      (compute_flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u && key.point_count != 0;
   const bool compose_qm_forces = need_qm_forces || need_point_forces;
   /* The stationary composer validates a QM-force sink whenever any force is
    * requested. Point-only public calls therefore use an unpublished QM sink. */
@@ -1485,7 +1485,7 @@ gpuxtb_status_t SystemExecution::infer(
       key.point_count == 0 ? nullptr : &external, input, &output.energy,
       compose_qm_forces ? output.forces.data() : nullptr,
       need_point_forces ? output.point_forces.data() : nullptr, {}, composer_workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   if (compose_qm_forces && field_attached) {
     /* The stationary composer already carries the response of the converged
      * density and atomic multipoles through the injected field potentials.
@@ -1498,7 +1498,7 @@ gpuxtb_status_t SystemExecution::infer(
       output.forces[3u * atom + 2u] = std::fma(charge, field[2], output.forces[3u * atom + 2u]);
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 }  // namespace
@@ -1525,7 +1525,7 @@ struct Gfn2CpuExecutionCache::Impl {
   std::vector<SystemKey> requested_keys;
   std::vector<SystemOutput> outputs;
   std::vector<std::string> system_errors;
-  std::vector<gpuxtb_status_t> inference_statuses;
+  std::vector<xtbloom_status_t> inference_statuses;
   std::vector<TaskFailure> task_failures;
   std::vector<double> energies;
   std::vector<double> forces;
@@ -1547,20 +1547,20 @@ struct Gfn2CpuExecutionCache::Impl {
     static_cast<CpuWorkerPool*>(pool_context)->parallel_for(chunk_count, body_context, body);
   }
 
-  gpuxtb_status_t ensure_backend(std::string& error) {
+  xtbloom_status_t ensure_backend(std::string& error) {
     if (backend_initialized) {
-      return GPUXTB_STATUS_SUCCESS;
+      return XTBLOOM_STATUS_SUCCESS;
     }
-    const gpuxtb_status_t status = make_mkl_rt_lp64_backend(backend, error);
-    if (status == GPUXTB_STATUS_SUCCESS) {
+    const xtbloom_status_t status = make_mkl_rt_lp64_backend(backend, error);
+    if (status == XTBLOOM_STATUS_SUCCESS) {
       backend_initialized = true;
     }
     return status;
   }
 
-  gpuxtb_status_t ensure_systems(const std::vector<SystemKey>& requested, std::string& error) {
+  xtbloom_status_t ensure_systems(const std::vector<SystemKey>& requested, std::string& error) {
     if (requested == keys) {
-      return GPUXTB_STATUS_SUCCESS;
+      return XTBLOOM_STATUS_SUCCESS;
     }
     const bool reusable_layout = requested.size() == keys.size() &&
                                  requested.size() == systems.size() &&
@@ -1576,7 +1576,7 @@ struct Gfn2CpuExecutionCache::Impl {
         keys[index].field_attached = requested[index].field_attached;
         keys[index].field = requested[index].field;
       }
-      return GPUXTB_STATUS_SUCCESS;
+      return XTBLOOM_STATUS_SUCCESS;
     }
     std::vector<std::unique_ptr<SystemExecution>> candidate;
     candidate.reserve(requested.size());
@@ -1595,15 +1595,15 @@ struct Gfn2CpuExecutionCache::Impl {
         system->parallel_executor.worker_count = workers.concurrency();
         system->parallel_executor.dispatch_chunks = &dispatch_scc_chunks;
       }
-      const gpuxtb_status_t status = system->build(error);
-      if (status != GPUXTB_STATUS_SUCCESS) {
+      const xtbloom_status_t status = system->build(error);
+      if (status != XTBLOOM_STATUS_SUCCESS) {
         return status;
       }
       candidate.push_back(std::move(system));
     }
     systems = std::move(candidate);
     keys = requested;
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   }
 
   void prepare_staging(std::uint32_t flags) {
@@ -1628,33 +1628,33 @@ struct Gfn2CpuExecutionCache::Impl {
       outputs[index].point_forces.reserve(3u * points);
     }
     system_errors.resize(batch_size);
-    inference_statuses.assign(batch_size, GPUXTB_STATUS_INTERNAL_ERROR);
+    inference_statuses.assign(batch_size, XTBLOOM_STATUS_INTERNAL_ERROR);
     task_failures.assign(batch_size, TaskFailure::kNone);
     iterations.assign(batch_size, 0);
     converged.assign(batch_size, 0u);
-    system_statuses.assign(batch_size, GPUXTB_STATUS_EIGENSOLVER_FAILED);
+    system_statuses.assign(batch_size, XTBLOOM_STATUS_EIGENSOLVER_FAILED);
 
-    if ((flags & GPUXTB_COMPUTE_ENERGY) != 0u) {
+    if ((flags & XTBLOOM_COMPUTE_ENERGY) != 0u) {
       energies.assign(batch_size, nan);
     } else {
       energies.clear();
     }
-    if ((flags & GPUXTB_COMPUTE_FORCES) != 0u) {
+    if ((flags & XTBLOOM_COMPUTE_FORCES) != 0u) {
       forces.assign(3u * atom_count, nan);
     } else {
       forces.clear();
     }
-    if ((flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0u) {
+    if ((flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0u) {
       atomic_charges.assign(atom_count, nan);
     } else {
       atomic_charges.clear();
     }
-    if ((flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0u) {
+    if ((flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u) {
       point_forces.assign(3u * point_count, nan);
     } else {
       point_forces.clear();
     }
-    if ((flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+    if ((flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u) {
       dipole_moments.assign(3u * batch_size, nan);
     } else {
       dipole_moments.clear();
@@ -1663,7 +1663,7 @@ struct Gfn2CpuExecutionCache::Impl {
 
   struct InferenceJob {
     Impl& owner;
-    const gpuxtb_compute_options_t& options;
+    const xtbloom_compute_options_t& options;
   };
 
   static void infer_system(void* opaque_job, std::size_t index) noexcept {
@@ -1686,8 +1686,8 @@ struct Gfn2CpuExecutionCache::Impl {
                                                       : nullptr;
 
     try {
-      const bool warm_start = job.options.struct_size >= GPUXTB_COMPUTE_OPTIONS_V2_SIZE &&
-                              job.options.scc_start_mode == GPUXTB_SCC_START_WARM;
+      const bool warm_start = job.options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
+                              job.options.scc_start_mode == XTBLOOM_SCC_START_WARM;
       owner.inference_statuses[index] = owner.systems[index]->infer(
           owner.backend, request.positions.data() + 3 * atom_begin,
           points == 0 ? nullptr : request.point_positions.data() + 3 * point_begin,
@@ -1695,11 +1695,11 @@ struct Gfn2CpuExecutionCache::Impl {
           points == 0 ? nullptr : request.point_hardnesses.data() + point_begin, shifts, response,
           job.options.flags, warm_start, output, system_error);
     } catch (const std::bad_alloc&) {
-      owner.inference_statuses[index] = GPUXTB_STATUS_ALLOCATION_FAILED;
+      owner.inference_statuses[index] = XTBLOOM_STATUS_ALLOCATION_FAILED;
       owner.task_failures[index] = TaskFailure::kAllocation;
       system_error.clear();
     } catch (const std::exception& exception) {
-      owner.inference_statuses[index] = GPUXTB_STATUS_INTERNAL_ERROR;
+      owner.inference_statuses[index] = XTBLOOM_STATUS_INTERNAL_ERROR;
       owner.task_failures[index] = TaskFailure::kException;
       try {
         system_error = exception.what();
@@ -1707,7 +1707,7 @@ struct Gfn2CpuExecutionCache::Impl {
         system_error.clear();
       }
     } catch (...) {
-      owner.inference_statuses[index] = GPUXTB_STATUS_INTERNAL_ERROR;
+      owner.inference_statuses[index] = XTBLOOM_STATUS_INTERNAL_ERROR;
       owner.task_failures[index] = TaskFailure::kUnknown;
       system_error.clear();
     }
@@ -1718,22 +1718,22 @@ Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads)
     : impl_(std::make_unique<Impl>(cpu_threads)) {}
 Gfn2CpuExecutionCache::~Gfn2CpuExecutionCache() = default;
 
-gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
-                                            const gpuxtb_batch_t& batch,
-                                            const gpuxtb_compute_options_t& options,
-                                            gpuxtb_batch_result_t& result, std::string& error) {
+xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
+                                             const xtbloom_batch_t& batch,
+                                             const xtbloom_compute_options_t& options,
+                                             xtbloom_batch_result_t& result, std::string& error) {
   try {
     std::lock_guard<std::mutex> lock(cache.impl_->mutex);
     Gfn2CpuExecutionCache::Impl& implementation = *cache.impl_;
     stage_request(batch, implementation.request);
-    gpuxtb_status_t status = validate_host_numerics(implementation.request, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    xtbloom_status_t status = validate_host_numerics(implementation.request, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     make_system_keys(implementation.request, options, implementation.requested_keys);
 
-    const bool warm_requested = options.struct_size >= GPUXTB_COMPUTE_OPTIONS_V2_SIZE &&
-                                options.scc_start_mode == GPUXTB_SCC_START_WARM;
+    const bool warm_requested = options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
+                                options.scc_start_mode == XTBLOOM_SCC_START_WARM;
     if (warm_requested) {
       /* Strict WARM: refuse without changing any caller output when this
        * context has no fully converged compatible identity to consume. The
@@ -1745,11 +1745,11 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
         error =
             "CPU WARM SCC start requires a previous fully converged call with identical "
             "topology and compute options";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
     status = implementation.ensure_backend(error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
 
@@ -1761,7 +1761,7 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
      * whole-batch readiness token intact for a later compatible WARM call. */
     implementation.prepare_staging(options.flags);
     status = implementation.ensure_systems(implementation.requested_keys, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
 
@@ -1784,9 +1784,9 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
       SystemOutput& output = implementation.outputs[index];
       status = implementation.inference_statuses[index];
       implementation.iterations[index] = output.iterations;
-      if (status != GPUXTB_STATUS_SUCCESS) {
-        if (status == GPUXTB_STATUS_SCC_NOT_CONVERGED ||
-            status == GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+      if (status != XTBLOOM_STATUS_SUCCESS) {
+        if (status == XTBLOOM_STATUS_SCC_NOT_CONVERGED ||
+            status == XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
           implementation.system_statuses[index] = status;
           all_converged = false;
           continue;
@@ -1805,42 +1805,42 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
         return status;
       }
 
-      implementation.system_statuses[index] = GPUXTB_STATUS_SUCCESS;
+      implementation.system_statuses[index] = XTBLOOM_STATUS_SUCCESS;
       implementation.converged[index] = 1u;
-      if ((options.flags & GPUXTB_COMPUTE_ENERGY) != 0u) {
+      if ((options.flags & XTBLOOM_COMPUTE_ENERGY) != 0u) {
         implementation.energies[index] = output.energy;
       }
-      if ((options.flags & GPUXTB_COMPUTE_FORCES) != 0u) {
+      if ((options.flags & XTBLOOM_COMPUTE_FORCES) != 0u) {
         std::copy(output.forces.begin(), output.forces.end(),
                   implementation.forces.begin() + 3 * atom_begin);
       }
-      if ((options.flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0u) {
+      if ((options.flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0u) {
         std::copy(output.atomic_charges.begin(), output.atomic_charges.end(),
                   implementation.atomic_charges.begin() + atom_begin);
       }
-      if ((options.flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0u && points != 0) {
+      if ((options.flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u && points != 0) {
         std::copy(output.point_forces.begin(), output.point_forces.end(),
                   implementation.point_forces.begin() + 3 * point_begin);
       }
-      if ((options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+      if ((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u) {
         std::copy_n(output.dipole_moments.begin(), 3,
                     implementation.dipole_moments.begin() + 3 * index);
       }
     }
 
-    if ((options.flags & GPUXTB_COMPUTE_ENERGY) != 0u) {
+    if ((options.flags & XTBLOOM_COMPUTE_ENERGY) != 0u) {
       publish_to_c_buffer(implementation.energies, result.energies);
     }
-    if ((options.flags & GPUXTB_COMPUTE_FORCES) != 0u) {
+    if ((options.flags & XTBLOOM_COMPUTE_FORCES) != 0u) {
       publish_to_c_buffer(implementation.forces, result.forces);
     }
-    if ((options.flags & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0u) {
+    if ((options.flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0u) {
       publish_to_c_buffer(implementation.atomic_charges, result.atomic_charges);
     }
-    if ((options.flags & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0u) {
+    if ((options.flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u) {
       publish_to_c_buffer(implementation.point_forces, result.point_charge_forces);
     }
-    if ((options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+    if ((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u) {
       publish_to_c_buffer(implementation.dipole_moments, result.dipole_moments);
     }
     publish_to_c_buffer(implementation.iterations, result.scc_iterations);
@@ -1848,56 +1848,56 @@ gpuxtb_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
     publish_to_c_buffer(implementation.system_statuses, result.per_system_status);
     result.flags =
         static_cast<std::uint32_t>((request.shifts_enabled || request.response_enabled)
-                                       ? GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES
+                                       ? XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES
                                        : 0u) |
-        static_cast<std::uint32_t>((options.flags & GPUXTB_COMPUTE_DIPOLE_MOMENTS) != 0u
-                                       ? GPUXTB_RESULT_DIPOLE_MOMENTS
+        static_cast<std::uint32_t>((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u
+                                       ? XTBLOOM_RESULT_DIPOLE_MOMENTS
                                        : 0u);
     implementation.systems_ready_for_warm = all_converged;
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate CPU GFN2 execution staging";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
-gpuxtb_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
-                                            const gpuxtb_batch_t& batch,
-                                            const gpuxtb_compute_options_t& options, bool& reused,
-                                            std::string& error) {
+xtbloom_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
+                                             const xtbloom_batch_t& batch,
+                                             const xtbloom_compute_options_t& options, bool& reused,
+                                             std::string& error) {
   reused = false;
   try {
     std::lock_guard<std::mutex> lock(cache.impl_->mutex);
     Gfn2CpuExecutionCache::Impl& implementation = *cache.impl_;
     stage_request(batch, implementation.request);
-    gpuxtb_status_t status = validate_host_numerics(implementation.request, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    xtbloom_status_t status = validate_host_numerics(implementation.request, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     make_system_keys(implementation.request, options, implementation.requested_keys);
     reused = implementation.requested_keys == implementation.keys;
     status = implementation.ensure_backend(error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     /* Plan setup is the allocation-permitted path: build every per-system
-     * execution object now so a subsequent gpuxtb_plan_compute performs no
+     * execution object now so a subsequent xtbloom_plan_compute performs no
      * steady-state allocation. Only a rebuild invalidates a retained warm
      * checkpoint; a reused identity keeps its checkpoint consumable. */
     if (!reused) {
       implementation.systems_ready_for_warm = false;
     }
     status = implementation.ensure_systems(implementation.requested_keys, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     implementation.prepare_staging(options.flags);
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate CPU GFN2 plan setup state";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
@@ -1958,4 +1958,4 @@ std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache
   return total;
 }
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail

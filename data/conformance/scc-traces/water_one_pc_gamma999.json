@@ -9,7 +9,7 @@
     "n_shells": 4,
     "nao": 6
   },
-  "format": "gpuxtb-scc-trace-v1",
+  "format": "xtbloom-scc-trace-v1",
   "input": {
     "atomic_numbers": [
       8,
@@ -2902,7 +2902,7 @@
   ],
   "provenance": {
     "oracle_command": "generate_scc_corpus.py --source-root /home/jzzeng/codes/tblite --corpus-dir '<corpus-dir>' --lapack mkl-rt --wrap-mode nodownload",
-    "oracle_patch_sha256": "d6a51afc4b3c56d6589a2b5b115ea8b4891600c1161c525939ca3cc16e2b4954",
+    "oracle_patch_sha256": "887294ffb24d24fc0fb27d6f05697e7ef498bc40f0268f34c7056ebe8dfb7928",
     "tblite_revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb"
   },
   "residual_layout": {

@@ -1,15 +1,15 @@
-#ifndef GPUXTB_MODEL_GFN2_COORDINATION_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_COORDINATION_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_COORDINATION_HPP
+#define XTBLOOM_MODEL_GFN2_COORDINATION_HPP
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 /*
  * Geometry-independent data for the GFN2 double-exponential coordination
@@ -24,18 +24,18 @@ struct CoordinationPlan {
 };
 
 /* Build a reusable ragged-batch plan from atomic numbers and molecule offsets. */
-gpuxtb_status_t make_coordination_plan(std::int64_t batch_size, std::int64_t total_atoms,
-                                       const std::int64_t* atom_offsets,
-                                       const std::int32_t* atomic_numbers, CoordinationPlan& plan,
-                                       std::string& error);
+xtbloom_status_t make_coordination_plan(std::int64_t batch_size, std::int64_t total_atoms,
+                                        const std::int64_t* atom_offsets,
+                                        const std::int32_t* atomic_numbers, CoordinationPlan& plan,
+                                        std::string& error);
 
 /*
  * Evaluate atom-wise GFN2 coordination numbers. Positions use atom-major xyz
  * layout in bohr. The output contains total_atoms values and is overwritten.
  * A successful steady-state call does not allocate.
  */
-gpuxtb_status_t evaluate_coordination_cpu(const CoordinationPlan& plan, const double* positions,
-                                          double* coordination_numbers, std::string& error);
+xtbloom_status_t evaluate_coordination_cpu(const CoordinationPlan& plan, const double* positions,
+                                           double* coordination_numbers, std::string& error);
 
 /*
  * Apply the analytic reverse-mode coordinate derivative
@@ -46,10 +46,10 @@ gpuxtb_status_t evaluate_coordination_cpu(const CoordinationPlan& plan, const do
  * an O(n_atom^2) Jacobian. Gradients are dE/dR (not forces), in atom-major xyz
  * layout, and are accumulated into the caller-owned buffer.
  */
-gpuxtb_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan, const double* positions,
-                                              const double* dE_dcn, double* gradients,
-                                              std::string& error);
+xtbloom_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan,
+                                               const double* positions, const double* dE_dcn,
+                                               double* gradients, std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_COORDINATION_HPP
+#endif  // XTBLOOM_MODEL_GFN2_COORDINATION_HPP

@@ -1,11 +1,11 @@
-#ifndef GPUXTB_MODEL_GFN2_PARALLEL_EXECUTOR_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_PARALLEL_EXECUTOR_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_PARALLEL_EXECUTOR_HPP
+#define XTBLOOM_MODEL_GFN2_PARALLEL_EXECUTOR_HPP
 
 #include <cstddef>
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 /*
  * Optional chunked executor used to parallelize intra-system phases when the
@@ -37,6 +37,6 @@ inline bool scc_parallel_enabled(const SccParallelExecutor& executor) noexcept {
   return executor.dispatch_chunks != nullptr;
 }
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_PARALLEL_EXECUTOR_HPP
+#endif  // XTBLOOM_MODEL_GFN2_PARALLEL_EXECUTOR_HPP

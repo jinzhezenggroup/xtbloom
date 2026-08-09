@@ -38,8 +38,8 @@ these effective settings:
 CMAKE_BUILD_TYPE=Release
 CMAKE_CUDA_COMPILER=/group/software/cuda-12.9.1/bin/nvcc
 CMAKE_CUDA_ARCHITECTURES=120
-GPUXTB_ENABLE_CUDA=ON
-GPUXTB_MKL_RT_LIBRARY=/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so
+XTBLOOM_ENABLE_CUDA=ON
+XTBLOOM_MKL_RT_LIBRARY=/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so
 ```
 
 The two measured paths use the same stream and synchronization boundary.
@@ -144,7 +144,7 @@ the same first 64 synthetic matrices and the same two provider batch counts of
 earlier control, which kept B=128 fixed and therefore submitted 64 identity-
 placeholder systems per bucket on the direct path.
 
-The clean direct control and lack of any gpuxtb kernel in the Graph report are
+The clean direct control and lack of any xTBloom kernel in the Graph report are
 differential evidence for a provider/Graph instrumentation boundary. They are
 not represented as a literal four-tool pass or an NVIDIA-confirmed defect.
 Issue #131 and parent #80 still require the recorded owner decision on whether
@@ -158,7 +158,7 @@ Benchmark matrix:
 srun --gres=gpu:1 --cpus-per-task=4 env \
   LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64:/group/software/deepmd-kit-3.1.1/lib \
   MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL \
-  build/cuda-sm120/gpuxtb_cuda_compaction_benchmark \
+  build/cuda-sm120/xtbloom_cuda_compaction_benchmark \
   > compaction-capacity-trace.jsonl
 ```
 
@@ -170,7 +170,7 @@ srun --gres=gpu:1 --cpus-per-task=4 env \
   /group/software/cuda-12.9.1/nsight-systems-2025.1.3/target-linux-x64/nsys profile \
   --trace=cuda --cuda-graph-trace=node --cuda-memory-usage=false \
   --output nsys-active0 \
-  build/cuda-sm120/gpuxtb_cuda_eigensolver_test \
+  build/cuda-sm120/xtbloom_cuda_eigensolver_test \
   --compaction-profile 32 1 0 5
 ```
 
@@ -182,7 +182,7 @@ srun --gres=gpu:1 --cpus-per-task=4 env \
   MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL \
   /group/software/cuda-12.9.1/bin/compute-sanitizer \
   --tool TOOL --error-exitcode=97 \
-  build/cuda-sm120/gpuxtb_cuda_eigensolver_test TARGET_ARGUMENTS
+  build/cuda-sm120/xtbloom_cuda_eigensolver_test TARGET_ARGUMENTS
 ```
 
 `TOOL`/`TARGET_ARGUMENTS` were `memcheck` or `initcheck` with no target

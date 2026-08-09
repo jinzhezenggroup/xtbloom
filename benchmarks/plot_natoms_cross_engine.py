@@ -5,7 +5,7 @@
 #   "matplotlib==3.10.9",
 # ]
 # ///
-"""Render the gpuxtb cross-engine scaling figure from benchmark artifacts.
+"""Render the xtbloom cross-engine scaling figure from benchmark artifacts.
 
 The script merges every ``--output-json`` artifact produced by
 ``natoms_cross_engine.py`` (CPU and CUDA runs, one file per engine set),
@@ -14,7 +14,7 @@ keeps only correctness-qualified ``available`` rows, and draws:
 1. ``batch=1``: cold GFN2-xTB energy+force public-call latency vs molecule
    size;
 2. ``batch=128``: requested auto-warm latency after an untimed cold seed for
-   128 *distinct* conformers (gpuxtb uses strict WARM, xTB/tblite persist, and
+   128 *distinct* conformers (xtbloom uses strict WARM, xTB/tblite persist, and
    dxtb resets every measured call);
 3. ``batch=512``: cold public-call latency for 512 *distinct* conformers.
 
@@ -44,8 +44,8 @@ class PlotError(RuntimeError):
 
 def _engine_label(engine: str) -> str:
     labels = {
-        "gpuxtb-cpu": "gpuxtb CPU",
-        "gpuxtb-cuda": "gpuxtb CUDA",
+        "xtbloom-cpu": "xtbloom CPU",
+        "xtbloom-cuda": "xtbloom CUDA",
         "xtb": "xTB",
         "tblite": "tblite",
         "dxtb-cpu": "dxtb CPU",
@@ -55,10 +55,10 @@ def _engine_label(engine: str) -> str:
 
 
 def _engine_color(engine: str) -> str:
-    """Return a colorblind-safe color that keeps gpuxtb visually prominent."""
+    """Return a colorblind-safe color that keeps xtbloom visually prominent."""
     colors = {
-        "gpuxtb-cpu": "#b2182b",
-        "gpuxtb-cuda": "#ef8a62",
+        "xtbloom-cpu": "#b2182b",
+        "xtbloom-cuda": "#ef8a62",
         "xtb": "#2166ac",
         "tblite": "#1b9e77",
         "dxtb-cpu": "#6a51a3",
@@ -70,8 +70,8 @@ def _engine_color(engine: str) -> str:
 def _engine_marker(engine: str) -> str:
     """Use redundant marker encoding so the figure survives grayscale output."""
     markers = {
-        "gpuxtb-cpu": "o",
-        "gpuxtb-cuda": "D",
+        "xtbloom-cpu": "o",
+        "xtbloom-cuda": "D",
         "xtb": "s",
         "tblite": "^",
         "dxtb-cpu": "P",
@@ -118,15 +118,15 @@ def _cuda_device_identity(metadata: dict[str, Any]) -> dict[str, Any]:
 def _engine_runtime_identity(metadata: dict[str, Any], engine: str) -> str:
     """Build one stable runtime fingerprint for cross-artifact consistency."""
     runner = metadata.get("runner") or {}
-    if engine.startswith("gpuxtb"):
-        build = runner.get("gpuxtb_build") or {}
+    if engine.startswith("xtbloom"):
+        build = runner.get("xtbloom_build") or {}
         source = build.get("source_state") or {}
         identity = {
-            "library_sha256": runner.get("gpuxtb_library_sha256"),
+            "library_sha256": runner.get("xtbloom_library_sha256"),
             "source_head": source.get("head"),
             "source_dirty": source.get("dirty"),
             "cmake_selected": build.get("selected"),
-            "native": _native_fingerprint(runner.get("gpuxtb_native_identity")),
+            "native": _native_fingerprint(runner.get("xtbloom_native_identity")),
         }
     elif engine in {"xtb", "tblite"}:
         source = runner.get(f"{engine}_source") or {}
@@ -528,7 +528,7 @@ def _scaling_panel(
         if not requested:
             continue
         x_ticks.update(int(row["natoms"]) for row in requested)
-        highlight = engine.startswith("gpuxtb")
+        highlight = engine.startswith("xtbloom")
         segments: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
         for row in requested:
@@ -679,12 +679,12 @@ def _speedup_range(
     batch_size: int,
     natoms: int,
 ) -> tuple[float, float, float, float, str] | None:
-    """Return gpuxtb CPU latency and qualified baseline ratio range."""
+    """Return xtbloom CPU latency and qualified baseline ratio range."""
     values: dict[str, float] = {}
     for row in rows:
         engine = row.get("engine")
         if (
-            engine in {"gpuxtb-cpu", "xtb", "tblite"}
+            engine in {"xtbloom-cpu", "xtb", "tblite"}
             and row.get("batch_size") == batch_size
             and row.get("natoms") == natoms
             and _is_eligible(row)
@@ -693,9 +693,9 @@ def _speedup_range(
             median = _median_ms(row)
             if median is not None:
                 values[str(engine)] = median
-    if "gpuxtb-cpu" not in values:
+    if "xtbloom-cpu" not in values:
         return None
-    target = values["gpuxtb-cpu"]
+    target = values["xtbloom-cpu"]
     reference_names = [name for name in ("xtb", "tblite") if name in values]
     if not reference_names:
         return None
@@ -751,7 +751,7 @@ def _annotate_speedup(
         va="bottom",
         fontsize=6.3,
         fontweight="bold",
-        color=_engine_color("gpuxtb-cpu"),
+        color=_engine_color("xtbloom-cpu"),
         zorder=8,
     )
 
@@ -798,8 +798,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--engines",
         nargs="*",
         default=[
-            "gpuxtb-cpu",
-            "gpuxtb-cuda",
+            "xtbloom-cpu",
+            "xtbloom-cuda",
             "xtb",
             "tblite",
             "dxtb-cpu",
@@ -848,7 +848,7 @@ def main(argv: list[str] | None = None) -> int:
             "axes.labelcolor": "#30343b",
             "text.color": "#30343b",
             "svg.fonttype": "none",
-            "svg.hashsalt": "gpuxtb-natoms-cross-engine-v2",
+            "svg.hashsalt": "xtbloom-natoms-cross-engine-v2",
         }
     )
     # Nature's two-column figure width is about 180 mm.  Keep the plot at that
@@ -967,7 +967,7 @@ def main(argv: list[str] | None = None) -> int:
             facecolor="white",
             metadata={
                 "Date": None,
-                "Creator": "gpuxtb plot_natoms_cross_engine.py",
+                "Creator": "xtbloom plot_natoms_cross_engine.py",
             },
         )
         _add_svg_accessibility(

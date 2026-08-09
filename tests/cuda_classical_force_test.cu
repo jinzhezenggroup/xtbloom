@@ -34,8 +34,8 @@
 
 namespace {
 
-using namespace gpuxtb::detail;
-using namespace gpuxtb::detail::cuda;
+using namespace xtbloom::detail;
+using namespace xtbloom::detail::cuda;
 
 constexpr std::uint64_t kPlanToken = 0x651165116511ULL;
 constexpr std::uint64_t kGeneration = 65u;
@@ -210,17 +210,17 @@ struct HostFixture {
 
   bool refresh_geometry(std::string& error) {
     return gfn2::evaluate_coordination_cpu(coordination_plan, positions.data(), coordination.data(),
-                                           error) == GPUXTB_STATUS_SUCCESS &&
+                                           error) == XTBLOOM_STATUS_SUCCESS &&
            gfn2::update_es2_geometry_cache_cpu(es2_plan, positions.data(), kGeneration,
                                                es2_matrix.data(), es2_matrix.size(), es2_workspace,
-                                               es2_cache, error) == GPUXTB_STATUS_SUCCESS &&
+                                               es2_cache, error) == XTBLOOM_STATUS_SUCCESS &&
            gfn2::update_aes2_geometry_cache_cpu(
                aes2_plan, positions.data(), coordination.data(), kGeneration, aes2_pairs.data(),
-               aes2_pairs.size(), aes2_workspace, aes2_cache, error) == GPUXTB_STATUS_SUCCESS &&
+               aes2_pairs.size(), aes2_workspace, aes2_cache, error) == XTBLOOM_STATUS_SUCCESS &&
            gfn2::update_d4_geometry_cache_cpu(
                d4_plan, positions.data(), kGeneration, d4_pairs.data(), d4_pairs.size(),
                d4_coordination.data(), d4_coordination.size(), d4_workspace, d4_cache,
-               error) == GPUXTB_STATUS_SUCCESS;
+               error) == XTBLOOM_STATUS_SUCCESS;
   }
 
   bool initialize(std::size_t requested_batch, std::string& error) {
@@ -257,19 +257,19 @@ struct HostFixture {
     const std::int64_t batch = static_cast<std::int64_t>(batch_size);
     const std::int64_t total_atoms = static_cast<std::int64_t>(atoms);
     if (gfn2::make_basis_plan(batch, total_atoms, atom_offsets.data(), atomic_numbers.data(), basis,
-                              error) != GPUXTB_STATUS_SUCCESS ||
+                              error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::make_coordination_plan(batch, total_atoms, atom_offsets.data(), atomic_numbers.data(),
-                                     coordination_plan, error) != GPUXTB_STATUS_SUCCESS ||
+                                     coordination_plan, error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::make_repulsion_plan(batch, total_atoms, atom_offsets.data(), atomic_numbers.data(),
-                                  repulsion_plan, error) != GPUXTB_STATUS_SUCCESS ||
+                                  repulsion_plan, error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::make_es2_plan(basis, atomic_numbers.data(), es2_plan, error) !=
-            GPUXTB_STATUS_SUCCESS ||
+            XTBLOOM_STATUS_SUCCESS ||
         gfn2::make_aes2_plan(basis, atomic_numbers.data(), aes2_plan, error) !=
-            GPUXTB_STATUS_SUCCESS ||
+            XTBLOOM_STATUS_SUCCESS ||
         gfn2::make_d4_plan(batch, total_atoms, atom_offsets.data(), atomic_numbers.data(), d4_plan,
-                           error) != GPUXTB_STATUS_SUCCESS ||
+                           error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::evaluate_coordination_cpu(coordination_plan, positions.data(), coordination.data(),
-                                        error) != GPUXTB_STATUS_SUCCESS) {
+                                        error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
 
@@ -289,7 +289,7 @@ struct HostFixture {
                      es2_gradient_scratch.data(), static_cast<std::int64_t>(atoms * 3u)};
     if (gfn2::update_es2_geometry_cache_cpu(es2_plan, positions.data(), kGeneration,
                                             es2_matrix.data(), es2_matrix.size(), es2_workspace,
-                                            es2_cache, error) != GPUXTB_STATUS_SUCCESS) {
+                                            es2_cache, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
 
@@ -306,7 +306,7 @@ struct HostFixture {
                       aes2_coordination_scratch.data(), static_cast<std::int64_t>(atoms)};
     if (gfn2::update_aes2_geometry_cache_cpu(
             aes2_plan, positions.data(), coordination.data(), kGeneration, aes2_pairs.data(),
-            aes2_pairs.size(), aes2_workspace, aes2_cache, error) != GPUXTB_STATUS_SUCCESS) {
+            aes2_pairs.size(), aes2_workspace, aes2_cache, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
 
@@ -316,7 +316,7 @@ struct HostFixture {
         (raw + gfn2::kD4WorkspaceAlignment - 1u) & ~(gfn2::kD4WorkspaceAlignment - 1u);
     if (gfn2::bind_d4_workspace(d4_plan, reinterpret_cast<void*>(aligned),
                                 d4_plan.workspace_size_bytes(), d4_workspace,
-                                error) != GPUXTB_STATUS_SUCCESS) {
+                                error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     d4_pairs.resize(static_cast<std::size_t>(d4_plan.total_pairs()) * gfn2::kD4PairDataElements);
@@ -324,7 +324,7 @@ struct HostFixture {
     return gfn2::update_d4_geometry_cache_cpu(
                d4_plan, positions.data(), kGeneration, d4_pairs.data(), d4_pairs.size(),
                d4_coordination.data(), d4_coordination.size(), d4_workspace, d4_cache,
-               error) == GPUXTB_STATUS_SUCCESS;
+               error) == XTBLOOM_STATUS_SUCCESS;
   }
 
   bool expected_forces(std::uint32_t mask, std::vector<double>& forces, std::string& error) {
@@ -334,7 +334,7 @@ struct HostFixture {
       std::vector<double> energies(batch_size, 0.0);
       std::vector<double> contribution(forces.size(), 0.0);
       if (gfn2::add_repulsion_cpu(repulsion_plan, positions.data(), energies.data(),
-                                  contribution.data(), error) != GPUXTB_STATUS_SUCCESS) {
+                                  contribution.data(), error) != XTBLOOM_STATUS_SUCCESS) {
         return false;
       }
       for (std::size_t index = 0; index < forces.size(); ++index) {
@@ -345,7 +345,7 @@ struct HostFixture {
       std::fill(gradient.begin(), gradient.end(), 0.0);
       if (gfn2::add_es2_gradient_cpu(es2_plan, es2_cache, positions.data(), kGeneration,
                                      shell_charges.data(), gradient.data(), es2_workspace,
-                                     error) != GPUXTB_STATUS_SUCCESS) {
+                                     error) != XTBLOOM_STATUS_SUCCESS) {
         return false;
       }
       for (std::size_t index = 0; index < forces.size(); ++index) {
@@ -358,9 +358,9 @@ struct HostFixture {
       if (gfn2::add_aes2_vjp_cpu(aes2_plan, aes2_cache, positions.data(), coordination.data(),
                                  kGeneration, atomic_charges.data(), dipoles.data(),
                                  quadrupoles.data(), gradient.data(), cn.data(), aes2_workspace,
-                                 error) != GPUXTB_STATUS_SUCCESS ||
+                                 error) != XTBLOOM_STATUS_SUCCESS ||
           gfn2::add_coordination_gradient_cpu(coordination_plan, positions.data(), cn.data(),
-                                              gradient.data(), error) != GPUXTB_STATUS_SUCCESS) {
+                                              gradient.data(), error) != XTBLOOM_STATUS_SUCCESS) {
         return false;
       }
       for (std::size_t index = 0; index < forces.size(); ++index) {
@@ -371,7 +371,7 @@ struct HostFixture {
       std::fill(gradient.begin(), gradient.end(), 0.0);
       if (gfn2::add_d4_two_body_gradient_cpu(d4_plan, d4_cache, atomic_charges.data(),
                                              gradient.data(), d4_workspace,
-                                             error) != GPUXTB_STATUS_SUCCESS) {
+                                             error) != XTBLOOM_STATUS_SUCCESS) {
         return false;
       }
       for (std::size_t index = 0; index < forces.size(); ++index) {
@@ -381,7 +381,7 @@ struct HostFixture {
     if (component_enabled(mask, Gfn2ClassicalForceComponent::kD4ATM)) {
       std::fill(gradient.begin(), gradient.end(), 0.0);
       if (gfn2::add_d4_atm_gradient_cpu(d4_plan, d4_cache, gradient.data(), d4_workspace, error) !=
-          GPUXTB_STATUS_SUCCESS) {
+          XTBLOOM_STATUS_SUCCESS) {
         return false;
       }
       for (std::size_t index = 0; index < forces.size(); ++index) {
@@ -400,18 +400,18 @@ struct HostFixture {
     std::vector<double> displaced_coordination(coordination.size());
     if (gfn2::evaluate_coordination_cpu(coordination_plan, displaced_positions.data(),
                                         displaced_coordination.data(),
-                                        error) != GPUXTB_STATUS_SUCCESS ||
+                                        error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::update_es2_geometry_cache_cpu(es2_plan, displaced_positions.data(), kGeneration,
                                             es2_matrix.data(), es2_matrix.size(), es2_workspace,
-                                            es2_cache, error) != GPUXTB_STATUS_SUCCESS ||
+                                            es2_cache, error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::update_aes2_geometry_cache_cpu(aes2_plan, displaced_positions.data(),
                                              displaced_coordination.data(), kGeneration,
                                              aes2_pairs.data(), aes2_pairs.size(), aes2_workspace,
-                                             aes2_cache, error) != GPUXTB_STATUS_SUCCESS ||
+                                             aes2_cache, error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::update_d4_geometry_cache_cpu(d4_plan, displaced_positions.data(), kGeneration,
                                            d4_pairs.data(), d4_pairs.size(), d4_coordination.data(),
                                            d4_coordination.size(), d4_workspace, d4_cache,
-                                           error) != GPUXTB_STATUS_SUCCESS) {
+                                           error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     double repulsion = 0.0;
@@ -421,17 +421,17 @@ struct HostFixture {
     double d4_atm = 0.0;
     std::vector<double> d4_potential(atomic_numbers.size());
     if (gfn2::add_repulsion_cpu(repulsion_plan, displaced_positions.data(), &repulsion, nullptr,
-                                error) != GPUXTB_STATUS_SUCCESS ||
+                                error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::add_es2_energy_cpu(es2_plan, es2_cache, shell_charges.data(), &es2, es2_workspace,
-                                 error) != GPUXTB_STATUS_SUCCESS ||
+                                 error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::add_aes2_energy_cpu(aes2_plan, aes2_cache, atomic_charges.data(), dipoles.data(),
                                   quadrupoles.data(), &aes2, aes2_workspace,
-                                  error) != GPUXTB_STATUS_SUCCESS ||
+                                  error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::evaluate_d4_two_body_cpu(d4_plan, d4_cache, atomic_charges.data(), &d4_two_body,
                                        d4_potential.data(), d4_workspace,
-                                       error) != GPUXTB_STATUS_SUCCESS ||
+                                       error) != XTBLOOM_STATUS_SUCCESS ||
         gfn2::evaluate_d4_atm_cpu(d4_plan, d4_cache, &d4_atm, d4_workspace, error) !=
-            GPUXTB_STATUS_SUCCESS) {
+            XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     energy = repulsion + es2 + aes2 + d4_two_body + d4_atm;
@@ -495,7 +495,7 @@ struct DeviceFixture {
   DeviceBuffer<double> force_scratch;
   DeviceBuffer<double> coordination_adjoints;
   DeviceBuffer<std::uint8_t> requested;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<std::uint8_t> selected;
   DeviceBuffer<std::uint32_t> primitive_system_errors;
   DeviceBuffer<std::uint32_t> primitive_device_error;
@@ -516,18 +516,18 @@ struct DeviceFixture {
     const std::size_t pairs = static_cast<std::size_t>(host.aes2_plan.total_pairs());
     const std::size_t coordinates = atoms * 3u;
     std::vector<Gfn2D4DeviceElementData> elements;
-    for (const auto& value : gpuxtb::parameters::d4::kElements) {
+    for (const auto& value : xtbloom::parameters::d4::kElements) {
       elements.push_back({value.reference_offset, value.reference_count, value.covalent_radius,
                           value.electronegativity, value.effective_charge, value.hardness,
                           value.r4r2});
     }
     std::vector<Gfn2D4DeviceReferenceData> references;
-    for (const auto& value : gpuxtb::parameters::d4::kReferences) {
+    for (const auto& value : xtbloom::parameters::d4::kReferences) {
       references.push_back({value.coordination_number, value.charge, value.gaussian_count});
     }
     std::vector<std::uint64_t> generations(batch, kGeneration);
     std::vector<std::uint8_t> requested_host(batch, 1u);
-    std::vector<gpuxtb_status_t> statuses_host(batch, GPUXTB_STATUS_SUCCESS);
+    std::vector<xtbloom_status_t> statuses_host(batch, XTBLOOM_STATUS_SUCCESS);
 
     if (!allocate_and_copy(atom_offsets, host.atom_offsets, stream) ||
         !allocate_and_copy(pair_offsets, host.aes2_plan.pair_offsets(), stream) ||
@@ -552,9 +552,9 @@ struct DeviceFixture {
         !allocate_and_copy(aes2_valence_cn, host.aes2_plan.multipole_valence_cn(), stream) ||
         !allocate_and_copy(d4_elements, elements, stream) ||
         !allocate_and_copy(d4_references, references, stream) ||
-        !d4_reference_c6.allocate(gpuxtb::parameters::d4::kReferenceC6.size()) ||
-        !d4_reference_c6.copy_from(gpuxtb::parameters::d4::kReferenceC6.data(),
-                                   gpuxtb::parameters::d4::kReferenceC6.size(), stream) ||
+        !d4_reference_c6.allocate(xtbloom::parameters::d4::kReferenceC6.size()) ||
+        !d4_reference_c6.copy_from(xtbloom::parameters::d4::kReferenceC6.data(),
+                                   xtbloom::parameters::d4::kReferenceC6.size(), stream) ||
         !allocate_and_copy(d4_pairs, host.d4_pairs, stream) ||
         !allocate_and_copy(d4_coordination, host.d4_coordination, stream) ||
         !allocate_and_copy(requested, requested_host, stream) ||
@@ -687,7 +687,7 @@ struct DeviceFixture {
         d4_references.get(),
         static_cast<std::int64_t>(references.size()),
         d4_reference_c6.get(),
-        static_cast<std::int64_t>(gpuxtb::parameters::d4::kReferenceC6.size())};
+        static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
     Gfn2D4DeviceCache d4_cache{d4_pairs.get(),        static_cast<std::int64_t>(d4_pairs.size()),
                                d4_coordination.get(), static_cast<std::int64_t>(atoms),
                                kGeneration,           kPlanToken};
@@ -759,7 +759,7 @@ struct DeviceFixture {
     int device_id = -1;
     std::string parameter_error;
     if (cudaGetDevice(&device_id) != cudaSuccess ||
-        !gpuxtb::detail::ensure_cuda_gfn2_parameters(device_id, parameter_error) ||
+        !xtbloom::detail::ensure_cuda_gfn2_parameters(device_id, parameter_error) ||
         reset_gfn2_es2_device_error_cuda(primitive_device_error.get(), stream) != cudaSuccess ||
         update_gfn2_es2_geometry_cache_cuda(es2_batch, positions.get(), es2_cache, es2_workspace,
                                             primitive_device_error.get(), stream) != cudaSuccess ||
@@ -847,9 +847,9 @@ int test_terminal_gate_and_peer_failure() {
   CHECK(host.expected_forces(kGfn2ClassicalForceAllComponents, expected, error));
 
   std::vector<std::uint8_t> requested(8u, 1u);
-  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   requested[1] = 0u;
-  statuses[2] = GPUXTB_STATUS_INTERNAL_ERROR;
+  statuses[2] = XTBLOOM_STATUS_INTERNAL_ERROR;
   CHECK(device.requested.copy_from(requested.data(), requested.size(), stream));
   CHECK(device.statuses.copy_from(statuses.data(), statuses.size(), stream));
   std::vector<double> poisoned_positions = host.positions;
@@ -881,7 +881,7 @@ int test_terminal_gate_and_peer_failure() {
   }
 
   /* A requested SUCCESS peer with poisoned q fails locally without rolling back peers. */
-  statuses.assign(8u, GPUXTB_STATUS_SUCCESS);
+  statuses.assign(8u, XTBLOOM_STATUS_SUCCESS);
   requested.assign(8u, 1u);
   poisoned_positions = host.positions;
   poisoned_shells = host.shell_charges;

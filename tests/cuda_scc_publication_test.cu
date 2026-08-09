@@ -15,7 +15,7 @@
 
 namespace {
 
-using namespace gpuxtb::detail::cuda;
+using namespace xtbloom::detail::cuda;
 
 #define CHECK(condition)                                                                   \
   do {                                                                                     \
@@ -143,7 +143,7 @@ struct Arena {
 struct PublicSnapshot {
   std::vector<double> doubles;
   std::vector<std::uint64_t> uint64s;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint8_t> bytes;
 };
 
@@ -240,20 +240,20 @@ struct Fixture {
 
   Arena<double> staged_d;
   Arena<std::uint64_t> staged_u64;
-  Arena<gpuxtb_status_t> staged_status;
+  Arena<xtbloom_status_t> staged_status;
   Arena<std::uint8_t> staged_u8;
   Arena<double> public_d;
   Arena<std::uint64_t> public_u64;
-  Arena<gpuxtb_status_t> public_status;
+  Arena<xtbloom_status_t> public_status;
   Arena<std::uint8_t> public_u8;
 
   DeviceBuffer<std::uint8_t> active_mask;
-  DeviceBuffer<gpuxtb_status_t> pending_statuses;
+  DeviceBuffer<xtbloom_status_t> pending_statuses;
   DeviceBuffer<std::uint64_t> failure_records;
   DeviceBuffer<std::uint64_t> plan_failure;
   DeviceBuffer<std::uint32_t> canonical_sequence;
   std::vector<std::uint8_t> active_host;
-  std::vector<gpuxtb_status_t> pending_host;
+  std::vector<xtbloom_status_t> pending_host;
   std::vector<std::uint64_t> failure_host;
   std::vector<std::uint64_t> plan_failure_host;
   std::vector<std::uint32_t> canonical_sequence_host;
@@ -262,7 +262,7 @@ struct Fixture {
   DeviceBuffer<double> old_energies;
   DeviceBuffer<double> energy_changes;
   DeviceBuffer<std::uint64_t> next_iterations;
-  DeviceBuffer<gpuxtb_status_t> next_statuses;
+  DeviceBuffer<xtbloom_status_t> next_statuses;
   DeviceBuffer<std::uint8_t> next_converged;
   DeviceBuffer<std::uint32_t> system_errors;
   DeviceBuffer<std::uint32_t> device_error;
@@ -357,8 +357,8 @@ struct Fixture {
     public_d.allocate(double_capacity, kPublicSentinel);
     staged_u64.allocate(256u + 16u * static_cast<std::size_t>(batch), 0u);
     public_u64.allocate(256u + 16u * static_cast<std::size_t>(batch), 19u);
-    staged_status.allocate(128u + 8u * static_cast<std::size_t>(batch), GPUXTB_STATUS_SUCCESS);
-    public_status.allocate(128u + 8u * static_cast<std::size_t>(batch), GPUXTB_STATUS_SUCCESS);
+    staged_status.allocate(128u + 8u * static_cast<std::size_t>(batch), XTBLOOM_STATUS_SUCCESS);
+    public_status.allocate(128u + 8u * static_cast<std::size_t>(batch), XTBLOOM_STATUS_SUCCESS);
     staged_u8.allocate(128u + 8u * static_cast<std::size_t>(batch), 1u);
     public_u8.allocate(128u + 8u * static_cast<std::size_t>(batch), 0u);
 
@@ -486,7 +486,7 @@ struct Fixture {
   }
 
   void bind_mixer(Gfn2SccMixerDeviceState& value, Arena<double>& doubles,
-                  Arena<std::uint64_t>& uint64s, Arena<gpuxtb_status_t>& statuses,
+                  Arena<std::uint64_t>& uint64s, Arena<xtbloom_status_t>& statuses,
                   Arena<std::uint8_t>& bytes) {
     value.current_inputs = doubles.take(static_cast<std::size_t>(vector_elements));
     value.previous_inputs = doubles.take(static_cast<std::size_t>(vector_elements));
@@ -536,7 +536,7 @@ struct Fixture {
     plan.orbital_offsets = orbital_offsets.get();
     plan.matrix_offsets = matrix_offsets.get();
     plan.shell_to_atom = shell_to_atom.get();
-    plan.wavefunction_layout.memory_space = gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice;
+    plan.wavefunction_layout.memory_space = xtbloom::detail::Gfn2PlanMemorySpace::kCudaDevice;
     plan.wavefunction_layout.plan_token = kPlanToken;
     plan.wavefunction_layout.layout_fingerprint = 0x51cc0deULL;
     plan.wavefunction_layout.batch_size = batch;
@@ -631,7 +631,7 @@ struct Fixture {
     report.stage_sequence_active = stage_sequence.get();
     report.stage_sequence_elements = 1;
     report.peer_error_mask = kGfn2SccPublicationPeerErrorMask;
-    report.peer_failure_status = GPUXTB_STATUS_INTERNAL_ERROR;
+    report.peer_failure_status = XTBLOOM_STATUS_INTERNAL_ERROR;
     report.plan_token = kPlanToken;
     report.device_code_role = Gfn2SccStageDeviceCodeRole::kPlanOnly;
   }
@@ -643,8 +643,8 @@ struct Fixture {
     std::fill(public_d.host.begin(), public_d.host.end(), kPublicSentinel);
     std::fill(staged_u64.host.begin(), staged_u64.host.end(), 7u);
     std::fill(public_u64.host.begin(), public_u64.host.end(), 19u);
-    std::fill(staged_status.host.begin(), staged_status.host.end(), GPUXTB_STATUS_SUCCESS);
-    std::fill(public_status.host.begin(), public_status.host.end(), GPUXTB_STATUS_SUCCESS);
+    std::fill(staged_status.host.begin(), staged_status.host.end(), XTBLOOM_STATUS_SUCCESS);
+    std::fill(public_status.host.begin(), public_status.host.end(), XTBLOOM_STATUS_SUCCESS);
     std::fill(staged_u8.host.begin(), staged_u8.host.end(), 1u);
     std::fill(public_u8.host.begin(), public_u8.host.end(), 0u);
 
@@ -672,14 +672,14 @@ struct Fixture {
     }
 
     active_host.assign(static_cast<std::size_t>(batch), 1u);
-    pending_host.assign(static_cast<std::size_t>(batch), GPUXTB_STATUS_SUCCESS);
+    pending_host.assign(static_cast<std::size_t>(batch), XTBLOOM_STATUS_SUCCESS);
     failure_host.assign(static_cast<std::size_t>(batch), 0u);
     plan_failure_host.assign(1u, 0u);
     canonical_sequence_host.assign(1u, 1u);
     for (std::int64_t system = 0; system < batch; ++system) {
       public_u64.at(public_state.scc.iterations, static_cast<std::size_t>(system)) = 0u;
       public_status.at(public_state.scc.system_statuses, static_cast<std::size_t>(system)) =
-          GPUXTB_STATUS_SUCCESS;
+          XTBLOOM_STATUS_SUCCESS;
       public_u8.at(public_state.scc.converged, static_cast<std::size_t>(system)) = 0u;
       public_d.at(public_state.scc.free_energies, static_cast<std::size_t>(system)) =
           0.5 + static_cast<double>(system);
@@ -687,7 +687,7 @@ struct Fixture {
           0.25 + 0.01 * static_cast<double>(system);
       staged_d.at(staged.mixer.residual_rms, static_cast<std::size_t>(system)) = 0.2;
       staged_status.at(staged.mixer.system_statuses, static_cast<std::size_t>(system)) =
-          GPUXTB_STATUS_SUCCESS;
+          XTBLOOM_STATUS_SUCCESS;
       staged_u8.at(staged.mixer.initialized, static_cast<std::size_t>(system)) = 1u;
     }
 
@@ -819,7 +819,7 @@ int test_ragged_transaction_and_peer_failure() {
   std::vector<std::uint32_t> device_error;
   std::vector<std::uint32_t> stage_sequence;
   std::vector<std::uint8_t> active;
-  std::vector<gpuxtb_status_t> pending;
+  std::vector<xtbloom_status_t> pending;
   std::vector<std::uint64_t> failures;
   CUDA_CHECK(fixture.system_errors.download(system_errors));
   CUDA_CHECK(fixture.device_error.download(device_error));
@@ -834,7 +834,7 @@ int test_ragged_transaction_and_peer_failure() {
   CHECK(system_errors[4] ==
         static_cast<std::uint32_t>(Gfn2SccPublicationDeviceError::kNonfiniteNextMixedMultipole));
   CHECK(active[4] == 0u);
-  CHECK(pending[4] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(pending[4] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(gfn2_scc_failure_stage(failures[4]) == Gfn2SccStageId::kStatePublication);
   CHECK(gfn2_scc_failure_code(failures[4]) == 4u);
 
@@ -931,13 +931,13 @@ int test_ragged_transaction_and_peer_failure() {
     return after.bytes[fixture.public_u8.offset(fixture.public_state.scc.converged) +
                        static_cast<std::size_t>(system)];
   };
-  CHECK(public_iteration(0) == 1u && public_system_status(0) == GPUXTB_STATUS_SUCCESS &&
+  CHECK(public_iteration(0) == 1u && public_system_status(0) == XTBLOOM_STATUS_SUCCESS &&
         public_converged(0) == 0u);
-  CHECK(public_iteration(1) == 3u && public_system_status(1) == GPUXTB_STATUS_SUCCESS &&
+  CHECK(public_iteration(1) == 3u && public_system_status(1) == XTBLOOM_STATUS_SUCCESS &&
         public_converged(1) == 1u);
-  CHECK(public_iteration(2) == 5u && public_system_status(2) == GPUXTB_STATUS_SCC_NOT_CONVERGED &&
+  CHECK(public_iteration(2) == 5u && public_system_status(2) == XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
         public_converged(2) == 0u);
-  CHECK(public_iteration(5) == 2u && public_system_status(5) == GPUXTB_STATUS_SUCCESS);
+  CHECK(public_iteration(5) == 2u && public_system_status(5) == XTBLOOM_STATUS_SUCCESS);
 
   const std::int64_t inactive_atom_begin = fixture.atom_offsets_host[3];
   const std::int64_t inactive_atom_end = fixture.atom_offsets_host[4];
@@ -974,7 +974,7 @@ int test_ragged_transaction_and_peer_failure() {
                                fixture.shell_offsets_host[4] + 9 * failed_atom_begin,
                                fixture.shell_offsets_host[5] + 9 * failed_atom_end));
   CHECK(public_iteration(4) == 2u);
-  CHECK(public_system_status(4) == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(public_system_status(4) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(public_converged(4) == 0u);
   const std::vector<double*> nan_fields{
       fixture.public_state.energy.free_energy.core,
@@ -1130,7 +1130,7 @@ int test_canonical_prior_failure_publication() {
   for (const Gfn2SccStageId stage : {Gfn2SccStageId::kPeriodicPotential, Gfn2SccStageId::kMixer}) {
     Fixture fixture(1);
     fixture.active_host[0] = 0u;
-    fixture.pending_host[0] = GPUXTB_STATUS_INTERNAL_ERROR;
+    fixture.pending_host[0] = XTBLOOM_STATUS_INTERNAL_ERROR;
     fixture.failure_host[0] = gfn2_scc_stage_failure_record(stage, 5u);
     CUDA_CHECK(fixture.upload());
     PublicSnapshot before;
@@ -1146,10 +1146,10 @@ int test_canonical_prior_failure_publication() {
         fixture.public_status.offset(fixture.public_state.scc.system_statuses);
     const std::size_t mixer_status =
         fixture.public_status.offset(fixture.public_state.mixer.system_statuses);
-    CHECK(after.statuses[scc_status] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(after.statuses[scc_status] == XTBLOOM_STATUS_INTERNAL_ERROR);
     CHECK(after.uint64s[iteration] == (stage == Gfn2SccStageId::kMixer ? 1u : 0u));
     CHECK(after.statuses[mixer_status] == (stage == Gfn2SccStageId::kMixer
-                                               ? GPUXTB_STATUS_INTERNAL_ERROR
+                                               ? XTBLOOM_STATUS_INTERNAL_ERROR
                                                : before.statuses[mixer_status]));
     CHECK(public_range_unchanged(fixture.public_d, before.doubles, after.doubles,
                                  fixture.public_state.mixer.current_inputs, 0,
@@ -1263,7 +1263,7 @@ int test_batch_sizes() {
                             static_cast<std::size_t>(system)] == 1u);
         CHECK(
             after.statuses[fixture.public_status.offset(fixture.public_state.scc.system_statuses) +
-                           static_cast<std::size_t>(system)] == GPUXTB_STATUS_SUCCESS);
+                           static_cast<std::size_t>(system)] == XTBLOOM_STATUS_SUCCESS);
       }
     }
   }
@@ -1290,7 +1290,7 @@ int test_custom_stream_graph_replay() {
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(first.uint64s[fixture.public_u64.offset(fixture.public_state.scc.iterations)] == 1u);
   CHECK(first.statuses[fixture.public_status.offset(fixture.public_state.scc.system_statuses)] ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
 
   const double healthy = fixture.staged_d.at(fixture.staged.next_mixed.shell_charges, 0u);
   fixture.staged_d.at(fixture.staged.next_mixed.shell_charges, 0u) =
@@ -1301,7 +1301,7 @@ int test_custom_stream_graph_replay() {
   CUDA_CHECK(fixture.snapshot(failed, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(failed.statuses[fixture.public_status.offset(fixture.public_state.scc.system_statuses)] ==
-        GPUXTB_STATUS_INTERNAL_ERROR);
+        XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(failed.uint64s[fixture.public_u64.offset(fixture.public_state.scc.iterations)] == 1u);
   CHECK(
       std::isnan(failed.doubles[fixture.public_d.offset(fixture.public_state.scc.free_energies)]));
@@ -1314,7 +1314,7 @@ int test_custom_stream_graph_replay() {
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(
       recovered.statuses[fixture.public_status.offset(fixture.public_state.scc.system_statuses)] ==
-      GPUXTB_STATUS_SUCCESS);
+      XTBLOOM_STATUS_SUCCESS);
   CHECK(recovered.uint64s[fixture.public_u64.offset(fixture.public_state.scc.iterations)] == 1u);
 
   CUDA_CHECK(cudaGraphExecDestroy(executable));

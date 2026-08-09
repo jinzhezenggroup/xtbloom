@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_MULLIKEN_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_MULLIKEN_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_MULLIKEN_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_MULLIKEN_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -10,7 +10,7 @@
 
 #include "backends/common/gfn2_plan_schema.hpp"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::int64_t kGfn2MullikenDipoleComponents = 3;
 inline constexpr std::int64_t kGfn2MullikenQuadrupoleComponents = 6;
@@ -174,6 +174,6 @@ cudaError_t evaluate_gfn2_mulliken_population_spin_cuda(
     std::uint32_t* system_errors, std::uint32_t* device_error,
     cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_MULLIKEN_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_MULLIKEN_CUH

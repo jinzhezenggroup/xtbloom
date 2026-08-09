@@ -1,5 +1,5 @@
 #include <cuda_runtime.h>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <array>
 #include <cmath>
@@ -9,7 +9,7 @@
 
 #include "backends/cuda/gfn2_inference_publication.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -17,16 +17,16 @@ constexpr int kThreadsPerBlock = 256;
 constexpr std::int32_t kInt32Maximum = 2147483647;
 static_assert(kInt32Maximum == std::numeric_limits<std::int32_t>::max());
 constexpr std::uint32_t kKnownProperties =
-    static_cast<std::uint32_t>(GPUXTB_COMPUTE_ENERGY) |
-    static_cast<std::uint32_t>(GPUXTB_COMPUTE_FORCES) |
-    static_cast<std::uint32_t>(GPUXTB_COMPUTE_ATOMIC_CHARGES) |
-    static_cast<std::uint32_t>(GPUXTB_COMPUTE_POINT_CHARGE_FORCES);
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ENERGY) |
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_FORCES) |
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ATOMIC_CHARGES) |
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES);
 
 using PlanError = Gfn2InferencePublicationPlanError;
 using SystemError = Gfn2InferencePublicationSystemError;
 
 bool property_requested(const Gfn2InferencePublicationDevicePlan& plan,
-                        gpuxtb_compute_flag_t property) noexcept {
+                        xtbloom_compute_flag_t property) noexcept {
   return (plan.requested_properties & static_cast<std::uint32_t>(property)) != 0u;
 }
 
@@ -116,10 +116,10 @@ bool valid_binding(const Gfn2InferencePublicationDevicePlan& plan,
       !checked_multiply(plan.total_point_charges, 3, point_coordinates)) {
     return false;
   }
-  const bool energy = property_requested(plan, GPUXTB_COMPUTE_ENERGY);
-  const bool forces = property_requested(plan, GPUXTB_COMPUTE_FORCES);
-  const bool charges = property_requested(plan, GPUXTB_COMPUTE_ATOMIC_CHARGES);
-  const bool point_forces = property_requested(plan, GPUXTB_COMPUTE_POINT_CHARGE_FORCES);
+  const bool energy = property_requested(plan, XTBLOOM_COMPUTE_ENERGY);
+  const bool forces = property_requested(plan, XTBLOOM_COMPUTE_FORCES);
+  const bool charges = property_requested(plan, XTBLOOM_COMPUTE_ATOMIC_CHARGES);
+  const bool point_forces = property_requested(plan, XTBLOOM_COMPUTE_POINT_CHARGE_FORCES);
   if (plan.abi_version != kGfn2InferencePublicationAbiVersion || plan.plan_token == 0u ||
       plan.requested_properties == 0u || (plan.requested_properties & ~kKnownProperties) != 0u ||
       plan.maximum_iterations == 0u ||
@@ -139,7 +139,7 @@ bool valid_binding(const Gfn2InferencePublicationDevicePlan& plan,
       !aligned(input.eligible_mask, alignof(std::uint8_t)) ||
       input.scc_elements != plan.batch_size || !aligned(input.iterations, alignof(std::uint64_t)) ||
       !aligned(input.converged, alignof(std::uint8_t)) ||
-      !aligned(input.system_statuses, alignof(gpuxtb_status_t)) ||
+      !aligned(input.system_statuses, alignof(xtbloom_status_t)) ||
       !canonical_pointer(input.energies, energy ? plan.batch_size : 0) ||
       input.energy_elements != (energy ? plan.batch_size : 0) ||
       !canonical_pointer(input.qm_forces, forces ? atom_coordinates : 0) ||
@@ -165,7 +165,7 @@ bool valid_binding(const Gfn2InferencePublicationDevicePlan& plan,
       results.point_force_elements != (point_forces ? point_coordinates : 0) ||
       !aligned(results.iterations, alignof(std::int32_t)) ||
       !aligned(results.converged, alignof(std::uint8_t)) ||
-      !aligned(results.system_statuses, alignof(gpuxtb_status_t)) ||
+      !aligned(results.system_statuses, alignof(xtbloom_status_t)) ||
       workspace.plan_token != plan.plan_token || workspace.epoch_snapshot_elements != 1 ||
       !aligned(workspace.epoch_snapshot, alignof(std::uint64_t)) ||
       diagnostics.plan_token != plan.plan_token ||
@@ -213,9 +213,9 @@ __device__ void record_plan_error(std::uint32_t* output, PlanError error) {
             static_cast<std::uint32_t>(error));
 }
 
-__device__ bool known_terminal_status(gpuxtb_status_t status) {
-  return status == GPUXTB_STATUS_SUCCESS || status == GPUXTB_STATUS_INTERNAL_ERROR ||
-         status == GPUXTB_STATUS_SCC_NOT_CONVERGED || status == GPUXTB_STATUS_EIGENSOLVER_FAILED;
+__device__ bool known_terminal_status(xtbloom_status_t status) {
+  return status == XTBLOOM_STATUS_SUCCESS || status == XTBLOOM_STATUS_INTERNAL_ERROR ||
+         status == XTBLOOM_STATUS_SCC_NOT_CONVERGED || status == XTBLOOM_STATUS_EIGENSOLVER_FAILED;
 }
 
 __device__ double quiet_nan() {
@@ -281,7 +281,7 @@ __global__ void publish_inference_results_kernel(
   if (system >= plan.batch_size || atomicAdd(diagnostics.plan_error, 0u) != 0u) return;
 
   __shared__ int finite_results;
-  __shared__ gpuxtb_status_t final_status;
+  __shared__ xtbloom_status_t final_status;
   __shared__ std::uint32_t final_error;
   __shared__ std::int32_t public_iterations;
   if (threadIdx.x == 0) {
@@ -297,41 +297,41 @@ __global__ void publish_inference_results_kernel(
     if (input.eligible_mask[system] != 1u) {
       /* The member never entered SCC for this inference generation. */
       public_iterations = 0;
-      final_status = GPUXTB_STATUS_INTERNAL_ERROR;
+      final_status = XTBLOOM_STATUS_INTERNAL_ERROR;
       final_error = static_cast<std::uint32_t>(SystemError::kIneligibleNumericalRefresh);
     } else if (plan.committed_generations[system] != epoch) {
       /* Do not leak a previous generation's terminal attempt count. */
       public_iterations = 0;
-      final_status = GPUXTB_STATUS_INTERNAL_ERROR;
+      final_status = XTBLOOM_STATUS_INTERNAL_ERROR;
       final_error = static_cast<std::uint32_t>(SystemError::kStaleGeneration);
     } else if (iterations > plan.maximum_iterations ||
                iterations > static_cast<std::uint64_t>(kInt32Maximum)) {
-      final_status = GPUXTB_STATUS_INTERNAL_ERROR;
+      final_status = XTBLOOM_STATUS_INTERNAL_ERROR;
       final_error = static_cast<std::uint32_t>(SystemError::kIterationOverflow);
     } else if (!known_terminal_status(final_status) || input.converged[system] > 1u ||
-               (input.converged[system] == 1u && final_status != GPUXTB_STATUS_SUCCESS) ||
-               (final_status == GPUXTB_STATUS_SUCCESS && input.converged[system] != 1u) ||
-               (final_status == GPUXTB_STATUS_SCC_NOT_CONVERGED &&
+               (input.converged[system] == 1u && final_status != XTBLOOM_STATUS_SUCCESS) ||
+               (final_status == XTBLOOM_STATUS_SUCCESS && input.converged[system] != 1u) ||
+               (final_status == XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
                 (input.converged[system] != 0u || iterations < plan.maximum_iterations))) {
-      final_status = GPUXTB_STATUS_INTERNAL_ERROR;
+      final_status = XTBLOOM_STATUS_INTERNAL_ERROR;
       final_error = static_cast<std::uint32_t>(SystemError::kInvalidSccState);
-    } else if (final_status == GPUXTB_STATUS_SUCCESS &&
+    } else if (final_status == XTBLOOM_STATUS_SUCCESS &&
                input.terminal_system_errors[system] != 0u) {
-      final_status = GPUXTB_STATUS_INTERNAL_ERROR;
+      final_status = XTBLOOM_STATUS_INTERNAL_ERROR;
       final_error = static_cast<std::uint32_t>(SystemError::kTerminalClassicalFailure);
-    } else if (final_status == GPUXTB_STATUS_SUCCESS &&
+    } else if (final_status == XTBLOOM_STATUS_SUCCESS &&
                input.execution_system_errors[system] != 0u) {
-      final_status = GPUXTB_STATUS_INTERNAL_ERROR;
+      final_status = XTBLOOM_STATUS_INTERNAL_ERROR;
       final_error = static_cast<std::uint32_t>(SystemError::kEnergyForceFailure);
     }
   }
   __syncthreads();
 
-  const bool success = final_status == GPUXTB_STATUS_SUCCESS;
-  const bool energy = (plan.requested_properties & GPUXTB_COMPUTE_ENERGY) != 0u;
-  const bool forces = (plan.requested_properties & GPUXTB_COMPUTE_FORCES) != 0u;
-  const bool charges = (plan.requested_properties & GPUXTB_COMPUTE_ATOMIC_CHARGES) != 0u;
-  const bool point_forces = (plan.requested_properties & GPUXTB_COMPUTE_POINT_CHARGE_FORCES) != 0u;
+  const bool success = final_status == XTBLOOM_STATUS_SUCCESS;
+  const bool energy = (plan.requested_properties & XTBLOOM_COMPUTE_ENERGY) != 0u;
+  const bool forces = (plan.requested_properties & XTBLOOM_COMPUTE_FORCES) != 0u;
+  const bool charges = (plan.requested_properties & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0u;
+  const bool point_forces = (plan.requested_properties & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u;
   const std::int64_t atom_begin = plan.atom_offsets[system];
   const std::int64_t atom_end = plan.atom_offsets[system + 1];
   const std::int64_t point_begin =
@@ -363,14 +363,14 @@ __global__ void publish_inference_results_kernel(
   }
   __syncthreads();
   if (threadIdx.x == 0) {
-    if (final_status == GPUXTB_STATUS_SUCCESS && finite_results == 0) {
-      final_status = GPUXTB_STATUS_INTERNAL_ERROR;
+    if (final_status == XTBLOOM_STATUS_SUCCESS && finite_results == 0) {
+      final_status = XTBLOOM_STATUS_INTERNAL_ERROR;
       final_error = static_cast<std::uint32_t>(SystemError::kNonfiniteResult);
     }
   }
   __syncthreads();
 
-  const bool publish_success = final_status == GPUXTB_STATUS_SUCCESS;
+  const bool publish_success = final_status == XTBLOOM_STATUS_SUCCESS;
   const double failed_value = quiet_nan();
   if (energy && threadIdx.x == 0) {
     results.energies[system] = publish_success ? input.energies[system] : failed_value;
@@ -430,4 +430,4 @@ cudaError_t publish_gfn2_inference_results_cuda(
   return check_launch();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

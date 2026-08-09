@@ -1,4 +1,4 @@
-"""Tests for the native ragged-batch interface (``gpuxtb.BatchCalculator``)."""
+"""Tests for the native ragged-batch interface (``xtbloom.BatchCalculator``)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,15 @@ from typing import TYPE_CHECKING
 import _cases
 import numpy as np
 import pytest
-from gpuxtb import BatchCalculator, Calculator, Context, PointCharge, Structure, library
-from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
+from xtbloom import (
+    BatchCalculator,
+    Calculator,
+    Context,
+    PointCharge,
+    Structure,
+    library,
+)
+from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -95,9 +102,9 @@ def test_batch_preserves_healthy_peer_when_another_fails() -> None:
     assert result.per_system_status[0] == 0
     assert np.isfinite(result.energies[0])
     assert np.isnan(result.energies[1])
-    with pytest.raises(GPUxtbRuntimeError):
+    with pytest.raises(XTBloomRuntimeError):
         result.raise_for_status()
-    with pytest.raises(GPUxtbRuntimeError):
+    with pytest.raises(XTBloomRuntimeError):
         calculator.compute(raise_on_failure=True)
 
 
@@ -165,9 +172,9 @@ def test_batch_point_charges() -> None:
 
 def test_batch_empty_rejected() -> None:
     """Reject a batch that contains no structures."""
-    from gpuxtb.exceptions import GPUxtbValueError
+    from xtbloom.exceptions import XTBloomValueError
 
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         BatchCalculator([])
 
 
@@ -203,8 +210,8 @@ def test_fixed_topology_plan_matches_compute_and_exposes_workspace() -> None:
     batch = library.Batch()
     context._create()
     library._check_init(
-        "gpuxtb_batch_init",
-        library.load_library().gpuxtb_batch_init(
+        "xtbloom_batch_init",
+        library.load_library().xtbloom_batch_init(
             ctypes.byref(batch), ctypes.sizeof(batch)
         ),
     )
@@ -222,8 +229,8 @@ def test_fixed_topology_plan_matches_compute_and_exposes_workspace() -> None:
     )
     options = library.ComputeOptions()
     library._check_init(
-        "gpuxtb_compute_options_init",
-        library.load_library().gpuxtb_compute_options_init(
+        "xtbloom_compute_options_init",
+        library.load_library().xtbloom_compute_options_init(
             ctypes.byref(options), ctypes.sizeof(options)
         ),
     )
@@ -238,8 +245,8 @@ def test_fixed_topology_plan_matches_compute_and_exposes_workspace() -> None:
 
     energy_options = library.ComputeOptions()
     library._check_init(
-        "gpuxtb_compute_options_init",
-        library.load_library().gpuxtb_compute_options_init(
+        "xtbloom_compute_options_init",
+        library.load_library().xtbloom_compute_options_init(
             ctypes.byref(energy_options), ctypes.sizeof(energy_options)
         ),
     )
@@ -249,8 +256,8 @@ def test_fixed_topology_plan_matches_compute_and_exposes_workspace() -> None:
     assert workspace.host_required_bytes >= energy_only.host_required_bytes
     result = library.BatchResult()
     library._check_init(
-        "gpuxtb_batch_result_init",
-        library.load_library().gpuxtb_batch_result_init(
+        "xtbloom_batch_result_init",
+        library.load_library().xtbloom_batch_result_init(
             ctypes.byref(result), ctypes.sizeof(result)
         ),
     )
@@ -303,10 +310,10 @@ def test_fixed_topology_plan_matches_compute_and_exposes_workspace() -> None:
     assert np.isfinite(energy2_owner[0])
 
     plan.destroy()
-    with pytest.raises(GPUxtbRuntimeError, match="plan is closed"):
+    with pytest.raises(XTBloomRuntimeError, match="plan is closed"):
         plan.query_workspace(full_flags)
     context.close()
-    with pytest.raises(GPUxtbRuntimeError, match="plan is closed"):
+    with pytest.raises(XTBloomRuntimeError, match="plan is closed"):
         energy_plan.query_workspace(library.COMPUTE_ENERGY)
 
 
@@ -355,7 +362,7 @@ def test_batch_warm_start_rejects_auto_slicing(
     structures = _make_structures(["ketene", "ketene"])
     batch = BatchCalculator(structures, warm_start=True)
 
-    with pytest.raises(GPUxtbValueError, match="cannot be combined"):
+    with pytest.raises(XTBloomValueError, match="cannot be combined"):
         batch.compute(auto_batch_size=1)
 
     assert calls == 0

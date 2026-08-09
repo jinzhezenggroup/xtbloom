@@ -1,17 +1,17 @@
 {
-  "engine": "gpuxtb",
+  "engine": "xtbloom",
   "protocol": {
     "energy_atol_hartree": 1e-08,
     "force_atol_hartree_per_bohr": 5e-07,
     "force_tolerance_source": {
       "json_field": "tolerances.forces",
-      "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/data/conformance/manifest.json",
+      "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/data/conformance/manifest.json",
       "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
     },
     "reference_cold_sample": null,
     "repetitions": 50,
     "start_mode": "fresh",
-    "timing_scope": "one synchronous gpuxtb_compute public-C-ABI call; persistent context, descriptors, options, and caller-owned result buffers; result inspection is outside the measured interval",
+    "timing_scope": "one synchronous xtbloom_compute public-C-ABI call; persistent context, descriptors, options, and caller-owned result buffers; result inspection is outside the measured interval",
     "warm_seed": null,
     "warmups": 5
   },
@@ -26,7 +26,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 1,
         "max_scc_iterations": 500,
         "model": 2,
@@ -181,9 +181,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -191,7 +191,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/data/conformance/manifest.json",
+            "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -204,7 +204,7 @@
         "max_hartree": -64.27950675607356,
         "min_hartree": -64.27950675607356
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 18,
         "median": 18.0,
@@ -26520,11 +26520,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/benchmarks/natoms_scaling.py",
+          "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/build/cuda-baseline/libgpuxtb.so.0.1.0",
+          "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/build/cuda-baseline/libxtbloom.so.0.1.0",
           "--backend",
           "cuda",
           "--device-id",
@@ -26542,9 +26542,9 @@
           "--start-mode",
           "fresh",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.json",
+          "/home/jzzeng/codes/xtbloom4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.csv"
+          "/home/jzzeng/codes/xtbloom4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -26609,11 +26609,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/build/cuda-baseline",
+            "build_directory": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/build/cuda-baseline",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/build/cuda-baseline/CMakeCache.txt",
+              "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/build/cuda-baseline/CMakeCache.txt",
               "sha256": "5d263d47e5e1336113be91ac79a9f6483b6e1a2c01231e158d98f56aba4bea75"
             },
             "cache_entries": {
@@ -26624,10 +26624,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline",
+              "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "ON",
-              "GPUXTB_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
+              "XTBLOOM_ENABLE_CUDA": "ON",
+              "XTBLOOM_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -26645,31 +26645,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline",
+                "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline",
                 "revision": "e23ec9cdd5e4247a9312a1ca5c851e20720e888c"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/CMakeLists.txt",
+                  "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/CMakeLists.txt",
                   "sha256": "93fb33f8bfc646a66452371a6c5816cf6a4ac277e5e905e7f2cc56d797d74dae"
                 },
                 {
                   "is_file": true,
-                  "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/cmake/gpuxtb.map",
+                  "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline"
+              "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/build/cuda-baseline/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/build/cuda-baseline/libxtbloom.so.0.1.0",
           "sha256": "de79cae54c7725bb00d58aa41799a0a3e4f07401ba456c77ee0bee772fbcfcc9"
         },
         "repository": {
           "dirty": false,
-          "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline",
+          "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline",
           "revision": "e23ec9cdd5e4247a9312a1ca5c851e20720e888c"
         },
         "runner": {
@@ -26770,11 +26770,11 @@
   "run_identity": {
     "argv": [
       "/home/jzzeng/miniconda3/bin/python3",
-      "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/benchmarks/natoms_scaling.py",
+      "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/benchmarks/natoms_scaling.py",
       "--engine",
-      "gpuxtb",
+      "xtbloom",
       "--library",
-      "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/build/cuda-baseline/libgpuxtb.so.0.1.0",
+      "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/build/cuda-baseline/libxtbloom.so.0.1.0",
       "--backend",
       "cuda",
       "--device-id",
@@ -26792,9 +26792,9 @@
       "--start-mode",
       "fresh",
       "--output-json",
-      "/home/jzzeng/codes/gpuxtb4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.json",
+      "/home/jzzeng/codes/xtbloom4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.json",
       "--output-csv",
-      "/home/jzzeng/codes/gpuxtb4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.csv"
+      "/home/jzzeng/codes/xtbloom4/benchmarks/evidence/issue-253/2026-08-08-node3/iter2-main-baseline.csv"
     ],
     "evidence_eligibility": {
       "allow_dirty_evidence": false,
@@ -26859,11 +26859,11 @@
     },
     "library": {
       "build": {
-        "build_directory": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/build/cuda-baseline",
+        "build_directory": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/build/cuda-baseline",
         "build_system": "cmake",
         "cache": {
           "is_file": true,
-          "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/build/cuda-baseline/CMakeCache.txt",
+          "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/build/cuda-baseline/CMakeCache.txt",
           "sha256": "5d263d47e5e1336113be91ac79a9f6483b6e1a2c01231e158d98f56aba4bea75"
         },
         "cache_entries": {
@@ -26874,10 +26874,10 @@
           "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
           "CMAKE_EXE_LINKER_FLAGS": "",
           "CMAKE_GENERATOR": "Ninja",
-          "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline",
+          "CMAKE_HOME_DIRECTORY": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline",
           "CMAKE_SHARED_LINKER_FLAGS": "",
-          "GPUXTB_ENABLE_CUDA": "ON",
-          "GPUXTB_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
+          "XTBLOOM_ENABLE_CUDA": "ON",
+          "XTBLOOM_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
         },
         "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
         "compiler": {
@@ -26895,31 +26895,31 @@
         "source": {
           "git": {
             "dirty": false,
-            "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline",
+            "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline",
             "revision": "e23ec9cdd5e4247a9312a1ca5c851e20720e888c"
           },
           "inputs": [
             {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/CMakeLists.txt",
+              "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/CMakeLists.txt",
               "sha256": "93fb33f8bfc646a66452371a6c5816cf6a4ac277e5e905e7f2cc56d797d74dae"
             },
             {
               "is_file": true,
-              "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/cmake/gpuxtb.map",
+              "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/cmake/xtbloom.map",
               "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
             }
           ],
-          "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline"
+          "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline"
         }
       },
-      "engine": "gpuxtb",
-      "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline/build/cuda-baseline/libgpuxtb.so.0.1.0",
+      "engine": "xtbloom",
+      "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline/build/cuda-baseline/libxtbloom.so.0.1.0",
       "sha256": "de79cae54c7725bb00d58aa41799a0a3e4f07401ba456c77ee0bee772fbcfcc9"
     },
     "repository": {
       "dirty": false,
-      "path": "/home/jzzeng/codes/gpuxtb4/build/worktrees/pr254-main-baseline",
+      "path": "/home/jzzeng/codes/xtbloom4/build/worktrees/pr254-main-baseline",
       "revision": "e23ec9cdd5e4247a9312a1ca5c851e20720e888c"
     },
     "runner": {

@@ -26,8 +26,8 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2RepulsionDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2RepulsionDeviceError;
+using xtbloom::detail::cuda::Gfn2RepulsionDeviceBatch;
+using xtbloom::detail::cuda::Gfn2RepulsionDeviceError;
 
 template <typename T>
 class DeviceBuffer {
@@ -105,19 +105,19 @@ int test_heterogeneous_ragged_batch_and_stream() {
       0.0, 0.0, 0.0, 1.4, 0.0, 0.0, 0.0, 0.0, 0.0, 1.8, 0.0, 0.0, 0.4, 1.5, 0.2, 3.0, -2.0, 0.5,
   };
 
-  gpuxtb::detail::gfn2::RepulsionPlan cpu_plan;
+  xtbloom::detail::gfn2::RepulsionPlan cpu_plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_repulsion_plan(4, 6, offsets.data(), atomic_numbers.data(),
-                                                  cpu_plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_repulsion_plan(4, 6, offsets.data(), atomic_numbers.data(),
+                                                   cpu_plan, error) == XTBLOOM_STATUS_SUCCESS);
 
   std::array<double, 4> expected_energies{0.25, -0.5, 1.5, 2.5};
   std::array<double, 18> expected_forces{};
   for (std::size_t index = 0; index < expected_forces.size(); ++index) {
     expected_forces[index] = 0.01 * static_cast<double>(index) - 0.08;
   }
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(cpu_plan, positions.data(),
-                                                expected_energies.data(), expected_forces.data(),
-                                                error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(cpu_plan, positions.data(),
+                                                 expected_energies.data(), expected_forces.data(),
+                                                 error) == XTBLOOM_STATUS_SUCCESS);
 
   cudaStream_t stream = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
@@ -147,7 +147,7 @@ int test_heterogeneous_ragged_batch_and_stream() {
 
   const Gfn2RepulsionDeviceBatch batch{4, 6, device_offsets.get(), device_atomic_numbers.get(),
                                        device_positions.get()};
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(
       batch, device_energies.get(), device_forces.get(), device_error.get(), stream));
   std::uint32_t semantic_error = 99u;
   CUDA_CHECK(device_energies.copy_to(actual_energies.data(), actual_energies.size(), stream));
@@ -165,12 +165,12 @@ int test_heterogeneous_ragged_batch_and_stream() {
   /* Exercise the optional-force path and prove energy accumulation again. */
   std::array<double, 4> energy_only{0.125, 0.25, 0.5, 1.0};
   std::array<double, 4> expected_energy_only = energy_only;
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(cpu_plan, positions.data(),
-                                                expected_energy_only.data(), nullptr,
-                                                error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(cpu_plan, positions.data(),
+                                                 expected_energy_only.data(), nullptr,
+                                                 error) == XTBLOOM_STATUS_SUCCESS);
   CUDA_CHECK(device_energies.copy_from(energy_only.data(), energy_only.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(batch, device_energies.get(), nullptr,
-                                                           device_error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(batch, device_energies.get(), nullptr,
+                                                            device_error.get(), stream));
   CUDA_CHECK(device_energies.copy_to(energy_only.data(), energy_only.size(), stream));
   CUDA_CHECK(device_error.copy_to(&semantic_error, 1, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -184,16 +184,16 @@ int test_heterogeneous_ragged_batch_and_stream() {
 
 int test_xtb_24_atom_golden() {
   constexpr std::array<std::int64_t, 2> offsets{0, 24};
-  gpuxtb::detail::gfn2::RepulsionPlan cpu_plan;
+  xtbloom::detail::gfn2::RepulsionPlan cpu_plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_repulsion_plan(1, 24, offsets.data(),
-                                                  kClusterAtomicNumbers.data(), cpu_plan,
-                                                  error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_repulsion_plan(1, 24, offsets.data(),
+                                                   kClusterAtomicNumbers.data(), cpu_plan,
+                                                   error) == XTBLOOM_STATUS_SUCCESS);
   std::array<double, 1> expected_energy{};
   std::array<double, 72> expected_forces{};
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(cpu_plan, kClusterPositions.data(),
-                                                expected_energy.data(), expected_forces.data(),
-                                                error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(cpu_plan, kClusterPositions.data(),
+                                                 expected_energy.data(), expected_forces.data(),
+                                                 error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(expected_energy[0], 0.49222837261241, 1.0e-13));
 
   DeviceBuffer<std::int64_t> device_offsets;
@@ -217,7 +217,7 @@ int test_xtb_24_atom_golden() {
 
   const Gfn2RepulsionDeviceBatch batch{1, 24, device_offsets.get(), device_atomic_numbers.get(),
                                        device_positions.get()};
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(
       batch, device_energy.get(), device_forces.get(), device_error.get()));
   std::array<double, 1> actual_energy{};
   std::array<double, 72> actual_forces{};
@@ -257,19 +257,19 @@ int test_large_all_element_ragged_batch() {
     positions[atom * 3 + 2] = 1.5 * static_cast<double>(local / 100);
   }
 
-  gpuxtb::detail::gfn2::RepulsionPlan cpu_plan;
+  xtbloom::detail::gfn2::RepulsionPlan cpu_plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_repulsion_plan(5, static_cast<std::int64_t>(atom_count),
-                                                  offsets.data(), atomic_numbers.data(), cpu_plan,
-                                                  error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_repulsion_plan(5, static_cast<std::int64_t>(atom_count),
+                                                   offsets.data(), atomic_numbers.data(), cpu_plan,
+                                                   error) == XTBLOOM_STATUS_SUCCESS);
   std::array<double, 5> expected_energies{0.0, 0.25, -0.5, 0.75, -1.0};
   std::vector<double> expected_forces(atom_count * 3);
   for (std::size_t coordinate = 0; coordinate < expected_forces.size(); ++coordinate) {
     expected_forces[coordinate] = 1.0e-4 * static_cast<double>(coordinate % 17) - 8.0e-4;
   }
-  CHECK(gpuxtb::detail::gfn2::add_repulsion_cpu(cpu_plan, positions.data(),
-                                                expected_energies.data(), expected_forces.data(),
-                                                error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_repulsion_cpu(cpu_plan, positions.data(),
+                                                 expected_energies.data(), expected_forces.data(),
+                                                 error) == XTBLOOM_STATUS_SUCCESS);
 
   DeviceBuffer<std::int64_t> device_offsets;
   DeviceBuffer<std::int32_t> device_atomic_numbers;
@@ -298,7 +298,7 @@ int test_large_all_element_ragged_batch() {
   const Gfn2RepulsionDeviceBatch batch{5, static_cast<std::int64_t>(atom_count),
                                        device_offsets.get(), device_atomic_numbers.get(),
                                        device_positions.get()};
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(
       batch, device_energies.get(), device_forces.get(), device_error.get()));
   std::uint32_t semantic_error = 99u;
   CUDA_CHECK(device_energies.copy_to(actual_energies.data(), actual_energies.size()));
@@ -345,8 +345,8 @@ int expect_device_error(const std::array<std::int64_t, 2>& offsets,
 
   const Gfn2RepulsionDeviceBatch batch{1, 2, device_offsets.get(), device_atomic_numbers.get(),
                                        device_positions.get()};
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(batch, device_energy.get(), nullptr,
-                                                           device_error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(batch, device_energy.get(), nullptr,
+                                                            device_error.get()));
   std::uint32_t actual = 0u;
   CUDA_CHECK(device_error.copy_to(&actual, 1));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -356,7 +356,7 @@ int expect_device_error(const std::array<std::int64_t, 2>& offsets,
 
 int test_input_and_launch_errors() {
   Gfn2RepulsionDeviceBatch invalid{};
-  CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(invalid, nullptr, nullptr, nullptr) ==
+  CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(invalid, nullptr, nullptr, nullptr) ==
         cudaErrorInvalidValue);
 
   /* Non-null sentinels are safe because validation returns before enqueue. */
@@ -365,11 +365,11 @@ int test_input_and_launch_errors() {
   invalid.atom_offsets = reinterpret_cast<const std::int64_t*>(1);
   invalid.atomic_numbers = reinterpret_cast<const std::int32_t*>(1);
   invalid.positions = reinterpret_cast<const double*>(1);
-  CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(invalid, nullptr, nullptr,
-                                                      reinterpret_cast<std::uint32_t*>(1)) ==
+  CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(invalid, nullptr, nullptr,
+                                                       reinterpret_cast<std::uint32_t*>(1)) ==
         cudaErrorInvalidValue);
   invalid.total_atoms = std::numeric_limits<std::int64_t>::max();
-  CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(
             invalid, reinterpret_cast<double*>(1), nullptr, reinterpret_cast<std::uint32_t*>(1)) ==
         cudaErrorInvalidValue);
 
@@ -406,8 +406,8 @@ int test_input_and_launch_errors() {
   invalid.atom_offsets = device_offsets.get();
   invalid.atomic_numbers = device_atom.get();
   invalid.positions = device_position.get();
-  CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(invalid, device_energy.get(), nullptr,
-                                                      device_error.get()) ==
+  CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(invalid, device_energy.get(), nullptr,
+                                                       device_error.get()) ==
         cudaErrorInvalidConfiguration);
   return 0;
 }
@@ -416,7 +416,7 @@ int record_initial_throughput() {
   constexpr std::int64_t batch_size = 512;
   constexpr int warmups = 3;
   int iterations = 20;
-  if (const char* configured = std::getenv("GPUXTB_BENCHMARK_ITERATIONS")) {
+  if (const char* configured = std::getenv("XTBLOOM_BENCHMARK_ITERATIONS")) {
     iterations = std::max(1, std::atoi(configured));
   }
   const std::size_t atom_count =
@@ -457,7 +457,7 @@ int record_initial_throughput() {
                                        device_offsets.get(), device_atomic_numbers.get(),
                                        device_positions.get()};
   for (int iteration = 0; iteration < warmups; ++iteration) {
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(
         batch, device_energies.get(), device_forces.get(), device_error.get()));
   }
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -468,7 +468,7 @@ int record_initial_throughput() {
   CUDA_CHECK(cudaEventCreate(&stop));
   CUDA_CHECK(cudaEventRecord(start));
   for (int iteration = 0; iteration < iterations; ++iteration) {
-    CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_repulsion_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_repulsion_cuda(
         batch, device_energies.get(), device_forces.get(), device_error.get()));
   }
   CUDA_CHECK(cudaEventRecord(stop));
@@ -505,7 +505,7 @@ int main() {
   int device = -1;
   CUDA_CHECK(cudaGetDevice(&device));
   std::string error;
-  CHECK(gpuxtb::detail::ensure_cuda_gfn2_parameters(device, error));
+  CHECK(xtbloom::detail::ensure_cuda_gfn2_parameters(device, error));
 
   if (const int status = test_heterogeneous_ragged_batch_and_stream(); status != 0) {
     return status;

@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -8,7 +8,7 @@
 
 #include "backends/cuda/gfn2_total_energy.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -81,7 +81,7 @@ bool validate_launch(const Gfn2TotalEnergyDeviceBatch& batch,
       !valid_input(input.repulsion, input.repulsion_elements, batch.batch_size, true) ||
       !valid_input(input.d4_atm, input.d4_atm_elements, batch.batch_size, d4_atm) ||
       scc_state.elements != batch.batch_size ||
-      !is_aligned(scc_state.system_statuses, alignof(gpuxtb_status_t)) ||
+      !is_aligned(scc_state.system_statuses, alignof(xtbloom_status_t)) ||
       !is_aligned(scc_state.converged, alignof(std::uint8_t)) ||
       results.elements != batch.batch_size || !is_aligned(results.total_energy, alignof(double)) ||
       workspace.elements != 1 || !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
@@ -96,7 +96,7 @@ bool validate_launch(const Gfn2TotalEnergyDeviceBatch& batch,
                   &reads[0]) ||
       !make_range(input.repulsion, input.repulsion_elements, sizeof(double), &reads[1]) ||
       !make_range(input.d4_atm, input.d4_atm_elements, sizeof(double), &reads[2]) ||
-      !make_range(scc_state.system_statuses, scc_state.elements, sizeof(gpuxtb_status_t),
+      !make_range(scc_state.system_statuses, scc_state.elements, sizeof(xtbloom_status_t),
                   &reads[3]) ||
       !make_range(scc_state.converged, scc_state.elements, sizeof(std::uint8_t), &reads[4]) ||
       !make_range(results.total_energy, results.elements, sizeof(double), &writes[0]) ||
@@ -174,7 +174,7 @@ __global__ void compose_total_energy_kernel(Gfn2TotalEnergyDeviceBatch batch,
                         Gfn2TotalEnergyDeviceError::kInvalidConvergenceFlag);
     return;
   }
-  if (scc_state.system_statuses[system] != GPUXTB_STATUS_SUCCESS) {
+  if (scc_state.system_statuses[system] != XTBLOOM_STATUS_SUCCESS) {
     record_system_error(system_errors, system, device_error,
                         Gfn2TotalEnergyDeviceError::kInconsistentSccStatus);
     return;
@@ -266,4 +266,4 @@ cudaError_t compose_gfn2_total_energy_cuda(
   return cudaGetLastError();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

@@ -5,13 +5,13 @@
   },
   "generator": {
     "path": "tools/parameters/generate_gfn2.py",
-    "sha256": "218dca6add7a30f94b1d05603efc080d8e16de858cf1b5fa68ea4e6338583fe9"
+    "sha256": "4d05555ef2772878ec5cc472d73656312e4b3d6491061f029c8563b0d1327a93"
   },
   "method": "gfn2-xtb",
   "outputs": {
     "gfn2.hpp": {
-      "bytes": 44505,
-      "sha256": "cf71e22b8a579c8c9dce134d15926dca1774d77b58834901795a573521ce2195"
+      "bytes": 44507,
+      "sha256": "38b1a8bb64b274211733cc19b15e4d6c8d55e7eadf2a99ae5352c8b4f1af30d1"
     },
     "gfn2.json": {
       "bytes": 117089,

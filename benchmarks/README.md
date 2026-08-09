@@ -1,6 +1,6 @@
 # Cross-library benchmark harness
 
-`run.py` measures end-to-end inference through gpuxtb's public C API. It keeps
+`run.py` measures end-to-end inference through xTBloom's public C API. It keeps
 the context, ragged batch descriptors, and result buffers alive between calls,
 separates setup, first-call (cold), and steady-state timings, and explicitly
 synchronizes CUDA after every measured call. Device result downloads used for
@@ -8,18 +8,18 @@ correctness checking happen after timing.
 For QM/MM force rows the measured public call requests both QM atomic forces
 and external-point-charge forces; both are compared with committed goldens.
 
-Run the complete requested gpuxtb matrix on one allocated GPU:
+Run the complete requested xTBloom matrix on one allocated GPU:
 
 ```bash
 srun --gres=gpu:1 env \
-  LD_LIBRARY_PATH=/tmp/gpuxtb-reference-env.E0KcEA/lib:/group/software/cuda-12.9.1/lib64:/group/software/deepmd-kit-3.1.1/lib \
+  LD_LIBRARY_PATH=/tmp/xtbloom-reference-env.E0KcEA/lib:/group/software/cuda-12.9.1/lib64:/group/software/deepmd-kit-3.1.1/lib \
   MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL \
   python3 benchmarks/run.py \
-    --library build-cuda-shared/libgpuxtb.so.0.1.0 \
+    --library build-cuda-shared/libxtbloom.so.0.1.0 \
     --tblite-library /path/to/validated/libtblite.so \
-    --xtb-library /tmp/gpuxtb-reference-env.E0KcEA/lib/libxtb.so.6.7.1 \
-    --xtb-executable /tmp/gpuxtb-reference-env.E0KcEA/bin/xtb \
-    --engines gpuxtb,tblite,xtb,dxtb \
+    --xtb-library /tmp/xtbloom-reference-env.E0KcEA/lib/libxtb.so.6.7.1 \
+    --xtb-executable /tmp/xtbloom-reference-env.E0KcEA/bin/xtb \
+    --engines xtbloom,tblite,xtb,dxtb \
     --batch-sizes 1,8,32,128 \
     --properties energy,force \
     --workloads gas,qmmm
@@ -32,8 +32,8 @@ srun --gres=gpu:1 env \
   LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64:/group/software/deepmd-kit-3.1.1/lib \
   MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL \
   python3 benchmarks/run.py \
-    --library build-cuda-shared/libgpuxtb.so.0.1.0 \
-    --engines gpuxtb --backends cuda --cuda-memory-modes host,device \
+    --library build-cuda-shared/libxtbloom.so.0.1.0 \
+    --engines xtbloom --backends cuda --cuda-memory-modes host,device \
     --workloads gas --properties energy,force --batch-sizes 1,8 \
     --warmups 1 --repetitions 2
 ```
@@ -51,7 +51,7 @@ and result object; measured batch execution is an in-process serial loop over
 startup and object construction are excluded from steady state and reported as
 setup. xTB 6.7.1 has no energy-only C API flag, so an `energy` row still pays
 for its native full single-point calculation; this is recorded in each row and
-must be considered when comparing it with gpuxtb energy-only inference.
+must be considered when comparing it with xTBloom energy-only inference.
 
 QM/MM xTB rows use `xtb_setExternalCharges` with the corpus' source atomic
 numbers, which exactly represents the selected element-hardness case. The
@@ -94,22 +94,22 @@ python3 -m unittest -v benchmarks.test_dxtb_adapter
 ## Cross-engine natoms scaling and README figure
 
 `natoms_cross_engine.py` measures GFN2-xTB energy plus analytic-force latency
-through the public interfaces of gpuxtb CPU/CUDA, xTB, tblite, and dxtb. Every
+through the public interfaces of xTBloom CPU/CUDA, xTB, tblite, and dxtb. Every
 multi-system batch contains distinct seeded conformers of one alkane
 stoichiometry, so a row cannot benefit from duplicating one geometry.
 
 The benchmark supports two explicit electronic-state policies:
 
-- `cold`: every measured sample starts independently. gpuxtb performs `FRESH`
+- `cold`: every measured sample starts independently. xTBloom performs `FRESH`
   initialization inside the timed public call; xTB/tblite rebuild the
   calculator outside timing and time the single point plus getters; dxtb times
   reset, calculation, synchronization, and host tensor publication.
-- `auto-warm`: an untimed cold seed precedes measured strict `WARM` gpuxtb
+- `auto-warm`: an untimed cold seed precedes measured strict `WARM` xTBloom
   calls and persistent xTB/tblite calls. dxtb has no equivalent continuation
   path in this adapter and remains reset/cold for every measured call.
 
 Every interval ends with host-visible energy and forces. Native convergence
-controls keep their library-specific meanings: gpuxtb uses charge `1e-4` and
+controls keep their library-specific meanings: xTBloom uses charge `1e-4` and
 energy `1e-6`; xTB/tblite use their documented public accuracy factor `1.0`;
 dxtb uses `x_atol=1e-4`, `x_atol_max=1e-5`, `f_atol=1e-4`, and
 `force_convergence=true`. For the public comparison, every timed dependent
@@ -122,13 +122,13 @@ max_i |Delta F_i| <= 2e-3 Eh/bohr
 ```
 
 This is benchmark eligibility, not a tblite default or a replacement for
-gpuxtb scientific conformance. `plot_natoms_cross_engine.py` rejects dirty or
+xTBloom scientific conformance. `plot_natoms_cross_engine.py` rejects dirty or
 protocol-incompatible artifacts, preserves failed/unavailable coordinates,
 and renders the three batch-size panels used in the README and user guide. It
 declares its Matplotlib dependency through PEP 723 inline metadata, with the
 complete isolated resolution pinned by the adjacent script lock. Run it with
 `uv run --script benchmarks/plot_natoms_cross_engine.py ...` without adding
-plotting packages to gpuxtb's project dependencies.
+plotting packages to xTBloom's project dependencies.
 JSON retains every raw sample, complete final force vectors, convergence and
 correctness state, source/build/runtime identities, and binary hashes; CSV is
 the compact tabular view.
@@ -140,7 +140,7 @@ python3 -m unittest -v benchmarks.test_natoms_cross_engine
 ```
 
 That command runs the protocol and artifact checks while leaving the optional
-Matplotlib render test skipped. Set `GPUXTB_RUN_PLOT_TEST=1` in an environment
+Matplotlib render test skipped. Set `XTBLOOM_RUN_PLOT_TEST=1` in an environment
 that already provides Matplotlib when developing the test itself; publication
 rendering should use the inline-metadata `uv run --script` command above.
 
@@ -149,7 +149,7 @@ See the archived evidence and reproduction commands in
 
 ## CPU FRESH/WARM natoms evidence
 
-`natoms_scaling.py` is a public-C-ABI latency sweep for strict gpuxtb SCC start
+`natoms_scaling.py` is a public-C-ABI latency sweep for strict xTBloom SCC start
 policy evidence, a persistent public-C-API natoms baseline for tblite, and
 explicit xTB diagnostics. A latency row is eligible for a performance claim
 only when both its within-engine correctness and explicit FRESH comparison
@@ -171,7 +171,7 @@ attempt to exceed the committed primary or live cross-engine tolerances. A
 supplied FRESH artifact is also rejected if its recorded protocol used wider
 energy or force gates.
 
-gpuxtb benchmark rows pin the same SCC convergence settings as the conformance
+xTBloom benchmark rows pin the same SCC convergence settings as the conformance
 oracle: 500 iterations, `1e-10` charge tolerance, and `1e-12` energy tolerance,
 while retaining the public 300 K electronic-temperature default. A FRESH
 artifact is accepted only when those options are present and every measured
@@ -206,8 +206,8 @@ Configure and build the exact final branch with an explicit LP64 provider:
 
 ```bash
 cmake -S . -B build/pr169-cpu-public -G Ninja \
-  -DGPUXTB_ENABLE_CUDA=OFF \
-  -DGPUXTB_MKL_RT_LIBRARY=/absolute/path/to/libmkl_rt.so \
+  -DXTBLOOM_ENABLE_CUDA=OFF \
+  -DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/libmkl_rt.so \
   -DBUILD_SHARED_LIBS=ON \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build/pr169-cpu-public --parallel
@@ -220,8 +220,8 @@ env \
   MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL \
 taskset -c 0 \
 python3 benchmarks/natoms_scaling.py \
-  --engine gpuxtb \
-  --library "$PWD/build/pr169-cpu-public/libgpuxtb.so.0.1.0" \
+  --engine xtbloom \
+  --library "$PWD/build/pr169-cpu-public/libxtbloom.so.0.1.0" \
   --backend cpu --cpu-threads 1 --property force \
   --natoms 32,62,98,122 --batch-sizes 1 \
   --warmups 10 --repetitions 30 --start-mode fresh \
@@ -234,8 +234,8 @@ env \
   MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL \
 taskset -c 0 \
 python3 benchmarks/natoms_scaling.py \
-  --engine gpuxtb \
-  --library "$PWD/build/pr169-cpu-public/libgpuxtb.so.0.1.0" \
+  --engine xtbloom \
+  --library "$PWD/build/pr169-cpu-public/libxtbloom.so.0.1.0" \
   --backend cpu --cpu-threads 1 --property force \
   --natoms 32,62,98,122 --batch-sizes 1 \
   --warmups 10 --repetitions 30 --start-mode warm \
@@ -245,10 +245,10 @@ python3 benchmarks/natoms_scaling.py \
   --output-csv build/benchmarks/pr169-warm.csv
 ```
 
-Every gpuxtb WARM, tblite, or xTB invocation requires an explicitly named
-gpuxtb FRESH reference; omitting it is an error rather than an unqualified
-successful timing. For gpuxtb WARM, the validated FRESH artifact must also use
-the same `libgpuxtb` SHA-256 and the same clean source revision. Options and
+Every xTBloom WARM, tblite, or xTB invocation requires an explicitly named
+xTBloom FRESH reference; omitting it is an error rather than an unqualified
+successful timing. For xTBloom WARM, the validated FRESH artifact must also use
+the same `libxtbloom` SHA-256 and the same clean source revision. Options and
 complete workload identity must match as before.
 
 Run tblite in its own clean process. The first invocation is retained as
@@ -258,7 +258,7 @@ the parsed bytes' SHA-256, path, strict schema/FRESH/row/option/workload checks,
 and unique row keys are retained in memory and embedded in every dependent
 artifact. tblite's unrelated atomic-charge getter is disabled in this timing
 protocol, so its force run times energy plus gradient publication, matching the
-requested gpuxtb observable set.
+requested xTBloom observable set.
 
 The default live cross-engine gates are read from
 `data/conformance/manifest.json`: 5e-7 Hartree for energy and 5e-6
@@ -324,11 +324,11 @@ python3 benchmarks/natoms_scaling.py \
   --output-csv "$diagnostic_dir/xtb-force-failure.csv"
 ```
 
-The mandatory explicit reference on the gpuxtb WARM command retains direct
-FRESH-versus-WARM energy and force deltas plus exact gpuxtb compute-option,
+The mandatory explicit reference on the xTBloom WARM command retains direct
+FRESH-versus-WARM energy and force deltas plus exact xTBloom compute-option,
 binary, and source-revision identity in that artifact.
 
-Archive the three successful JSON/CSV pairs (gpuxtb FRESH force, gpuxtb WARM
+Archive the three successful JSON/CSV pairs (xTBloom FRESH force, xTBloom WARM
 force, and tblite persistent force) without editing them. The JSON top level
 and each row record the canonical argv, repository revision and dirty bit,
 absolute library path and SHA-256, adjacent CMake cache/compiler evidence when
@@ -359,12 +359,12 @@ performance evidence. Run the self-check without a native library using:
 python3 -m unittest -v benchmarks.test_natoms_scaling
 ```
 
-## gpuxtb-owned DLPack device results: allocation-cost protocol
+## xTBloom-owned DLPack device results: allocation-cost protocol
 
 `dlpack_result_memory.py` is the narrow issue #214 allocation-cost protocol: it
-compares `result_memory="cuda"` (one packed gpuxtb-owned device arena per call,
+compares `result_memory="cuda"` (one packed xTBloom-owned device arena per call,
 returned as DLPackResultBuffer producers) with the caller-owned `out=` steady
-state on a real NVIDIA GPU through the public `gpuxtb.ArrayBatch` Python API.
+state on a real NVIDIA GPU through the public `xtbloom.ArrayBatch` Python API.
 The timed interval is a synchronous `perf_counter_ns` window around each public
 `compute()` with `torch.cuda.synchronize()` on both sides. Arena/out calls are
 counterbalanced AB/BA pairs to limit temporal order bias; the final evidence
@@ -378,9 +378,9 @@ Nsight-derived memcpy/sync/api/size evidence are archived under
 `benchmarks/evidence/issue-214/`.
 
 ```bash
-PYTHONPATH="$PWD/python" GPUXTB_LIBRARY="$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+PYTHONPATH="$PWD/python" XTBLOOM_LIBRARY="$PWD/build/pr226-cuda/libxtbloom.so.0.1.0" \
 python benchmarks/dlpack_result_memory.py \
-  --library "$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+  --library "$PWD/build/pr226-cuda/libxtbloom.so.0.1.0" \
   --warmup 30 --repetitions 300 \
   --output benchmarks/evidence/issue-214/<date>-<machine>/dlpack-result-memory.json
 ```
@@ -393,9 +393,9 @@ process so the two output paths remain directly comparable:
 nsys profile -o <mode> --force-overwrite true --cuda-memory-usage=true \
   --trace=cuda,nvtx,osrt \
   env PYTHONPATH="$PWD/python" \
-  GPUXTB_LIBRARY="$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+  XTBLOOM_LIBRARY="$PWD/build/pr226-cuda/libxtbloom.so.0.1.0" \
   python benchmarks/dlpack_result_memory.py \
-  --library "$PWD/build/pr226-cuda/libgpuxtb.so.0.1.0" \
+  --library "$PWD/build/pr226-cuda/libxtbloom.so.0.1.0" \
   --profile-mode <arena|out> --warmup 3 --repetitions 10
 nsys stats --report cuda_gpu_kern_sum --format csv --force-export=true <mode>.nsys-rep
 nsys stats --report cuda_gpu_mem_time_sum --format csv --force-export=true <mode>.nsys-rep
