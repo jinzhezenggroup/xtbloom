@@ -74,6 +74,10 @@ test = [
 # checking never installs the pytest test tooling.
 [dependency-groups]
 typechecking = ["ase", "dpdata"]
+# Nox is a locked development orchestrator, not a project extra or published
+# runtime dependency.  The noxfile keeps the exact CMake/CTest and uv commands
+# authoritative instead of resolving another copy of the project environment.
+nox = ["nox==2026.7.11"]
 # PyTorch is needed only to execute the public autograd integration tests in
 # required CI. Keep it out of project extras so wheels and normal test-extra
 # installations retain the package's optional, lazy-import contract.

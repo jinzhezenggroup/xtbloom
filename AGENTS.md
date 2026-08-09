@@ -238,8 +238,20 @@ skipped or unavailable backend passed.
 
 The native build requires CMake 3.24 or newer and C/C++17. Configuring tests
 requires a Python 3.11-or-newer interpreter even though the installed Python
-package supports Python 3.10 or newer. The repository has no CMake presets or
-wrapper task runner; the explicit CMake/CTest commands below are authoritative.
+package supports Python 3.10 or newer. The recommended fixed CPU validation
+entry point for humans and AI agents is:
+
+```bash
+UV_DEFAULT_INDEX=https://pypi.org/simple \
+  uv run --isolated --locked --only-group nox nox -s agent
+```
+
+Focused `fast`, `cpu`, `python`, `canonical`, `package`, `cuda`, and `full`
+sessions are defined in `noxfile.py`. Nox only orchestrates the explicit
+CMake/CTest and uv commands below. The runner uses a separate uv-isolated
+environment, while project Python commands use the locked non-editable project
+environment. The underlying commands remain authoritative for diagnosis and
+specialized validation. Do not run sessions in parallel within one worktree.
 Use separate build directories for CPU, shared, static, and CUDA configurations
 so an old `CMakeCache.txt` cannot hide which tests were enabled.
 
