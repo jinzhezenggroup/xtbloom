@@ -103,12 +103,13 @@ class _AutogradFunction(Protocol):
 
 
 class _FunctionCtx(Protocol):
-    """Structural type for the autograd context attributes saved by forward."""
+    """Structural type for the autograd context state used by this op."""
 
-    _forces: _Tensor
-    _atom_offsets: _Tensor
+    saved_tensors: tuple[_Tensor, ...]
 
     def set_materialize_grads(self, value: bool) -> None: ...
+
+    def save_for_backward(self, *tensors: _Tensor) -> None: ...
 
 
 def _torch() -> ModuleType:
@@ -344,10 +345,16 @@ def _native_forward(
 def _allocate_outputs(
     torch: ModuleType, device: object, nsystems: int, natoms: int
 ) -> tuple[_Tensor, _Tensor]:
-    """Allocate the caller-returned energies/forces tensors on ``device``."""
+    """Allocate failure-safe caller-returned tensors on ``device``.
+
+    CUDA execution may finish after the Python call returns. Initializing the
+    outputs to NaN ensures that a deferred call-level failure cannot expose
+    uninitialized allocator bytes or values left by an earlier allocation.
+    Successful native publication overwrites every requested element.
+    """
     return (
-        torch.empty((nsystems,), dtype=torch.float64, device=device),
-        torch.empty((natoms, 3), dtype=torch.float64, device=device),
+        torch.full((nsystems,), float("nan"), dtype=torch.float64, device=device),
+        torch.full((natoms, 3), float("nan"), dtype=torch.float64, device=device),
     )
 
 
@@ -490,8 +497,9 @@ def _function() -> _AutogradFunction:
             # Backward needs its own private snapshot of positions' gradient
             # source (-forces) so later in-place user edits of the returned
             # tensors cannot corrupt the gradient.
-            ctx._forces = forces.detach().clone()
-            ctx._atom_offsets = normalized_atom_offsets.detach().clone()
+            ctx.save_for_backward(
+                forces.detach().clone(), normalized_atom_offsets.detach().clone()
+            )
             # An energy-only loss has no gradient for the forces output.  Keep
             # that state as None so CUDA backward avoids materializing and
             # scanning a full zero tensor solely to distinguish an unused
@@ -506,9 +514,9 @@ def _function() -> _AutogradFunction:
             grad_forces: _Tensor | None,
         ) -> tuple[_Tensor | None, ...]:
             # create_graph=True enables grad mode while custom backward runs.
-            # Reject it immediately: ctx._forces is a detached native result,
-            # so allowing this path would silently omit dF/dR and report a
-            # partial or all-zero Hessian.
+            # Reject it immediately: the saved forces are a detached native
+            # result, so allowing this path would silently omit dF/dR and
+            # report a partial or all-zero Hessian.
             if torch.is_grad_enabled():
                 raise GPUxtbNotSupportedError(
                     "gpuxtb_torch does not support higher-order "
@@ -522,19 +530,22 @@ def _function() -> _AutogradFunction:
                 )
             if grad_energies is None:
                 return (None,) * 13
+            saved_forces, saved_atom_offsets = ctx.saved_tensors
             # dE/dR = -F, block-diagonal over the ragged batch: atom a of
             # system i receives -grad_energy[i] * F_a.
-            offsets = ctx._atom_offsets.to(device=ctx._forces.device, dtype=torch.int64)
+            offsets = saved_atom_offsets.to(
+                device=saved_forces.device, dtype=torch.int64
+            )
             counts = offsets[1:] - offsets[:-1]
             system_of_atom = torch.repeat_interleave(
                 torch.arange(offsets.shape[0] - 1, device=offsets.device), counts
             )
             per_atom = (
-                grad_energies.to(device=ctx._forces.device, dtype=ctx._forces.dtype)
+                grad_energies.to(device=saved_forces.device, dtype=saved_forces.dtype)
                 .index_select(0, system_of_atom)
                 .unsqueeze(1)
             )
-            grad_positions = -per_atom * ctx._forces
+            grad_positions = -per_atom * saved_forces
             return (
                 grad_positions,
                 None,

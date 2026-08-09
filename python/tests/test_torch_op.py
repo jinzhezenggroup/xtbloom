@@ -38,6 +38,34 @@ def test_torch_public_signature_hides_execution_details() -> None:
     assert not hasattr(torch_module, "_gpuxtb_torch_async")
 
 
+def test_output_allocation_is_failure_safe() -> None:
+    """Caller-visible outputs start as NaN until native publication succeeds."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+    from gpuxtb import torch as torch_module
+
+    energies, forces = torch_module._allocate_outputs(torch, "cpu", 2, 3)
+    assert torch.isnan(energies).all()
+    assert torch.isnan(forces).all()
+
+
+def test_compiled_schema_marks_outputs_mutable() -> None:
+    """The dispatcher must know that native execution writes both outputs."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    if sys.platform != "linux":
+        pytest.skip("the vendored stable-ABI extension is currently Linux-only")
+    from gpuxtb import torch as torch_module
+
+    schema = str(torch_module._gpuxtb_torch_op().default._schema)
+    assert "Tensor(a!) out_energies" in schema
+    assert "Tensor(b!) out_forces" in schema
+    assert "-> (Tensor(a!), Tensor(b!))" in schema
+
+
 class _DLPackOnly:
     """Expose a tensor through DLPack while forbidding NumPy conversion."""
 

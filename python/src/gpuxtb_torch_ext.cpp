@@ -464,9 +464,10 @@ STABLE_TORCH_LIBRARY(gpuxtb, m) {
   m.def(
       "gpuxtb_torch_forward(Tensor positions, Tensor atomic_numbers, Tensor atom_offsets, "
       "Tensor molecular_charges, Tensor unpaired_electrons, Tensor spin_channels, "
-      "Tensor out_energies, Tensor out_forces, int backend, int device_id, int cpu_threads, "
+      "Tensor(a!) out_energies, Tensor(b!) out_forces, int backend, int device_id, "
+      "int cpu_threads, "
       "int stream, int max_scc_iterations, float charge_tolerance, float energy_tolerance, "
-      "float electronic_temperature) -> (Tensor, Tensor)");
+      "float electronic_temperature) -> (Tensor(a!), Tensor(b!))");
 }
 STABLE_TORCH_LIBRARY_IMPL(gpuxtb, CompositeExplicitAutograd, m) {
   m.impl("gpuxtb_torch_forward", TORCH_BOX(&gpuxtb_torch_forward));
