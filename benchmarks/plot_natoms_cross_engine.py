@@ -361,24 +361,30 @@ def _is_eligible(row: dict[str, Any]) -> bool:
 
 
 def _scientific_notation(value: float) -> str:
-    """Format a positive tolerance with a compact Unicode power of ten."""
+    """Format a positive tolerance as portable matplotlib mathtext.
+
+    Unicode superscript and subscript characters are not available in every
+    sans-serif font used by documentation renderers.  Mathtext preserves the
+    scientific notation without producing missing-glyph boxes in the SVG.
+    """
     if value <= 0.0 or not math.isfinite(value):
         raise PlotError("plot protocol tolerance must be finite and positive")
     exponent = math.floor(math.log10(value))
     coefficient = value / (10.0**exponent)
-    superscripts = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
-    power = "10" + str(exponent).translate(superscripts)
     if math.isclose(coefficient, 1.0, abs_tol=1.0e-10):
-        return power
-    return f"{coefficient:g}\N{MULTIPLICATION SIGN}{power}"
+        body = f"10^{{{exponent}}}"
+    else:
+        body = rf"{coefficient:g}\times10^{{{exponent}}}"
+    return f"${body}$"
 
 
 def _protocol_note(metadata: dict[str, Any]) -> str:
-    """Derive two concise method lines from validated artifact metadata."""
+    """Derive concise native-control and output-gate lines from metadata."""
     protocol = metadata.get("protocol") or {}
     threads = metadata.get("threads") or {}
     repetitions = protocol.get("repetitions")
     cpu_threads = threads.get("cpu_threads")
+    max_iterations = protocol.get("scc_max_iterations")
     charge_tolerance = protocol.get("scc_charge_tolerance")
     energy_tolerance = protocol.get("scc_energy_tolerance")
     output_energy_atol = protocol.get("cross_engine_energy_atol_hartree")
@@ -387,6 +393,8 @@ def _protocol_note(metadata: dict[str, Any]) -> str:
         raise PlotError("plot artifacts have an invalid repetition count")
     if type(cpu_threads) is not int or cpu_threads <= 0:
         raise PlotError("plot artifacts have an invalid CPU thread count")
+    if type(max_iterations) is not int or max_iterations <= 0:
+        raise PlotError("plot artifacts have an invalid SCC iteration limit")
     if not isinstance(charge_tolerance, int | float) or not isinstance(
         energy_tolerance, int | float
     ):
@@ -395,13 +403,10 @@ def _protocol_note(metadata: dict[str, Any]) -> str:
         output_force_atol, int | float
     ):
         raise PlotError("plot artifacts have incomplete output compatibility gates")
-    if math.isclose(float(charge_tolerance), float(energy_tolerance)):
-        tolerance_text = _scientific_notation(float(charge_tolerance))
-    else:
-        tolerance_text = (
-            f"q {_scientific_notation(float(charge_tolerance))} / "
-            f"E {_scientific_notation(float(energy_tolerance))}"
-        )
+    gpuxtb_text = (
+        f"charge={_scientific_notation(float(charge_tolerance))}, "
+        f"energy={_scientific_notation(float(energy_tolerance))}"
+    )
     contract = protocol.get("convergence_contract") or {}
     xtb_accuracy = (contract.get("xtb") or {}).get("public_accuracy_factor")
     tblite_accuracy = (contract.get("tblite") or {}).get("public_accuracy_factor")
@@ -421,25 +426,31 @@ def _protocol_note(metadata: dict[str, Any]) -> str:
     ):
         raise PlotError("plot artifacts have an incomplete convergence contract")
     if math.isclose(float(xtb_accuracy), float(tblite_accuracy)):
-        reference_text = f"xTB/tblite accuracy {float(xtb_accuracy):g}"
+        reference_text = f"xTB/tblite accuracy factor {float(xtb_accuracy):g}"
     else:
         reference_text = (
-            f"xTB accuracy {float(xtb_accuracy):g} / "
-            f"tblite accuracy {float(tblite_accuracy):g}"
+            f"xTB accuracy factor {float(xtb_accuracy):g} / "
+            f"tblite accuracy factor {float(tblite_accuracy):g}"
         )
     dxtb_text = (
-        f"dxtb x {_scientific_notation(float(dxtb_contract['x_atol']))}/"
+        f"dxtb x_atol={_scientific_notation(float(dxtb_contract['x_atol']))}, "
+        "x_atol_max="
         f"{_scientific_notation(float(dxtb_contract['x_atol_max']))}, "
-        f"f {_scientific_notation(float(dxtb_contract['f_atol']))}"
+        f"f_atol={_scientific_notation(float(dxtb_contract['f_atol']))}, "
+        "force_convergence=true"
     )
+    energy_gate = _scientific_notation(float(output_energy_atol))[1:-1]
+    force_gate = _scientific_notation(float(output_force_atol))[1:-1]
     return (
-        "Native controls (not identical): "
-        f"gpuxtb {tolerance_text} · {reference_text} · {dxtb_text}\n"
-        f"CPU rows: {cpu_threads} threads · median n={repetitions}, "
-        f"min\N{EN DASH}max · eligibility |ΔE| ≤ "
-        f"{_scientific_notation(float(output_energy_atol))} Eh; "
-        f"maxᵢ|ΔFᵢ| ≤ {_scientific_notation(float(output_force_atol))} Eh bohr⁻¹ "
-        "(not conformance)"
+        "Native convergence controls (library-specific): "
+        f"gpuxtb {gpuxtb_text} · {reference_text}\n"
+        f"{dxtb_text} · maximum {max_iterations} iterations\n"
+        "Uniform output gate for every dependent timed sample (benchmark only): "
+        rf"$|\Delta E|\leq{energy_gate}$ Eh; "
+        rf"$\max_i|\Delta F_i|\leq{force_gate}$ Eh bohr$^{{-1}}$"
+        "\n"
+        f"CPU budget: {cpu_threads} threads · median n={repetitions}, "
+        "observed min\N{EN DASH}max"
     )
 
 
@@ -707,8 +718,32 @@ def _speedup_range(
     references = [values[name] for name in reference_names]
     ratios = [reference / target for reference in references]
     labels = {"xtb": "xTB", "tblite": "tblite"}
-    comparison = " / ".join(labels[name] for name in reference_names)
+    comparison = "/".join(labels[name] for name in reference_names)
     return target, max(references), min(ratios), max(ratios), comparison
+
+
+def _format_speedup(minimum: float, maximum: float) -> str:
+    """Format ratios without hiding meaningful sub-10x differences."""
+
+    def one(value: float) -> str:
+        return f"{value:.1f}" if value < 10.0 else f"{value:.0f}"
+
+    if math.isclose(minimum, maximum, rel_tol=0.02):
+        return f"{one((minimum + maximum) / 2.0)}\N{MULTIPLICATION SIGN}"
+    return f"{one(minimum)}\N{EN DASH}{one(maximum)}\N{MULTIPLICATION SIGN}"
+
+
+def _annotation_alignment(
+    natoms: float, x_limits: tuple[float, float]
+) -> tuple[int, str]:
+    """Place a label toward the panel interior on a logarithmic x-axis."""
+    lower, upper = x_limits
+    if lower <= 0.0 or upper <= lower or natoms <= 0.0:
+        return 8, "left"
+    fraction = (math.log(natoms) - math.log(lower)) / (
+        math.log(upper) - math.log(lower)
+    )
+    return (-8, "right") if fraction >= 0.55 else (8, "left")
 
 
 def _annotate_speedup(
@@ -735,22 +770,14 @@ def _annotate_speedup(
         },
         zorder=7,
     )
-    if math.isclose(minimum, maximum, rel_tol=0.02):
-        speedup = (
-            f"{minimum:.1f}\N{MULTIPLICATION SIGN}"
-            if minimum < 2.0
-            else f"{minimum:.0f}\N{MULTIPLICATION SIGN}"
-        )
-    elif maximum < 2.0:
-        speedup = f"{minimum:.1f}\N{EN DASH}{maximum:.1f}\N{MULTIPLICATION SIGN}"
-    else:
-        speedup = f"{minimum:.0f}\N{EN DASH}{maximum:.0f}\N{MULTIPLICATION SIGN}"
+    speedup = _format_speedup(minimum, maximum)
+    horizontal_offset, alignment = _annotation_alignment(natoms, axes.get_xlim())
     axes.annotate(
-        f"{speedup} lower latency\nvs {comparison}",
+        f"{comparison} \N{DIVISION SIGN} gpuxtb\n{speedup} ({natoms} atoms)",
         xy=(natoms, math.sqrt(target * farthest_reference)),
-        xytext=(8, 0),
+        xytext=(horizontal_offset, 0),
         textcoords="offset points",
-        ha="left",
+        ha=alignment,
         va="center",
         fontsize=6.7,
         fontweight="medium",
@@ -861,16 +888,16 @@ def main(argv: list[str] | None = None) -> int:
             "svg.hashsalt": "gpuxtb-natoms-cross-engine-v2",
         }
     )
-    fig, axes = plt.subplots(1, 3, figsize=(7.4, 3.9), squeeze=True, sharey=True)
-    fig.subplots_adjust(left=0.082, right=0.992, bottom=0.17, top=0.6, wspace=0.2)
+    fig, axes = plt.subplots(1, 3, figsize=(7.4, 4.15), squeeze=True, sharey=True)
+    fig.subplots_adjust(left=0.082, right=0.992, bottom=0.16, top=0.64, wspace=0.2)
     _scaling_panel(
         axes[0],
         rows,
         1,
         args.engines,
         "a",
-        "Single-system latency",
-        "batch 1 · FRESH public call",
+        "Batch 1",
+        "cold electronic state · gpuxtb FRESH",
     )
     _scaling_panel(
         axes[1],
@@ -878,8 +905,8 @@ def main(argv: list[str] | None = None) -> int:
         128,
         args.engines,
         "b",
-        "128-system batch",
-        "distinct conformers · WARM after untimed seed; dxtb cold",
+        "Batch 128",
+        "warm continuation after seed · dxtb reset",
     )
     _scaling_panel(
         axes[2],
@@ -887,20 +914,21 @@ def main(argv: list[str] | None = None) -> int:
         512,
         args.engines,
         "c",
-        "512-system batch",
-        "distinct conformers · FRESH public call",
+        "Batch 512",
+        "cold electronic state · gpuxtb FRESH",
     )
     axes[0].set_ylabel("Latency per call (ms)", labelpad=7)
     for axes_item, batch_size in zip(axes[1:], (128, 512), strict=True):
         _annotate_speedup(axes_item, rows, batch_size)
 
-    legend_items: dict[str, Any] = {}
+    engine_legend_items: dict[str, Any] = {}
     for axes_item in axes:
         handles, labels = axes_item.get_legend_handles_labels()
         for handle, label in zip(handles, labels, strict=True):
-            legend_items.setdefault(label, handle)
+            engine_legend_items.setdefault(label, handle)
     from matplotlib.lines import Line2D
 
+    status_legend_items: dict[str, Any] = {}
     panel_rows = [
         row
         for row in rows
@@ -913,7 +941,7 @@ def main(argv: list[str] | None = None) -> int:
         and not _is_eligible(row)
         for row in panel_rows
     ):
-        legend_items["Failed eligibility gate"] = Line2D(
+        status_legend_items["Hollow: failed output gate"] = Line2D(
             [],
             [],
             linestyle="none",
@@ -923,7 +951,7 @@ def main(argv: list[str] | None = None) -> int:
             markeredgecolor="#59616b",
         )
     if any(row.get("availability") != "available" for row in panel_rows):
-        legend_items["Unavailable / OOM"] = Line2D(
+        status_legend_items["x: unavailable / OOM"] = Line2D(
             [],
             [],
             linestyle="none",
@@ -931,20 +959,33 @@ def main(argv: list[str] | None = None) -> int:
             markersize=4.6,
             markeredgecolor="#59616b",
         )
-    if legend_items:
+    if engine_legend_items:
         fig.legend(
-            list(legend_items.values()),
-            list(legend_items),
+            list(engine_legend_items.values()),
+            list(engine_legend_items),
             loc="upper left",
-            ncol=4,
+            ncol=len(engine_legend_items),
             frameon=False,
-            bbox_to_anchor=(0.078, 0.8),
+            bbox_to_anchor=(0.078, 0.775),
             borderaxespad=0.0,
-            handlelength=2.3,
-            handletextpad=0.5,
-            columnspacing=1.25,
-            labelspacing=0.55,
-            fontsize=7.3,
+            handlelength=2.0,
+            handletextpad=0.42,
+            columnspacing=0.9,
+            fontsize=7.0,
+        )
+    if status_legend_items:
+        fig.legend(
+            list(status_legend_items.values()),
+            list(status_legend_items),
+            loc="upper right",
+            ncol=len(status_legend_items),
+            frameon=False,
+            bbox_to_anchor=(0.992, 0.775),
+            borderaxespad=0.0,
+            handlelength=1.5,
+            handletextpad=0.4,
+            columnspacing=0.9,
+            fontsize=6.6,
         )
     fig.text(
         0.08,
@@ -958,13 +999,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     fig.text(
         0.08,
-        0.915,
+        0.92,
         protocol_note,
         ha="left",
         va="top",
-        fontsize=7.1,
+        fontsize=6.7,
         color="#59616b",
-        linespacing=1.35,
+        linespacing=1.2,
     )
     fig.text(
         0.082,

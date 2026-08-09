@@ -420,6 +420,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
             self.assertIn("<title>", svg)
             self.assertIn("<desc>", svg)
             self.assertNotIn("<dc:date>", svg)
+            self.assertNotIn("Glyph", completed.stderr)
 
     def test_cold_panel_excludes_autowarm_trajectory_leak(self) -> None:
         """Batch=1 rows leaked by an auto-warm trajectory run must not enter.
@@ -807,10 +808,14 @@ class NatomsCrossEngineTest(unittest.TestCase):
     def test_figure_protocol_note_is_metadata_derived(self) -> None:
         """Figure header must not silently hard-code publication settings."""
         note = plotters._protocol_note(artifact_metadata())
-        self.assertIn("CPU rows: 4 threads", note)
+        self.assertIn("CPU budget: 4 threads", note)
         self.assertIn("median n=3", note)
-        self.assertIn("10⁻⁴", note)
-        self.assertIn("maxᵢ|ΔFᵢ|", note)
+        self.assertIn("accuracy factor 1", note)
+        self.assertIn("x_atol", note)
+        self.assertIn("Uniform output gate", note)
+        self.assertIn(r"2\times10^{-3}", note)
+        self.assertIn(r"\max_i|\Delta F_i|", note)
+        self.assertNotIn("⁻", note)
 
     def test_artifact_pair_refuses_overwrite(self) -> None:
         """Publication must not replace a stale JSON/CSV pair."""
@@ -958,8 +963,20 @@ class NatomsCrossEngineTest(unittest.TestCase):
         ]
         self.assertEqual(
             plotters._speedup_range(rows, 128, 62),
-            (100.0, 1200.0, 9.0, 12.0, "xTB / tblite"),
+            (100.0, 1200.0, 9.0, 12.0, "xTB/tblite"),
         )
+        self.assertEqual(
+            plotters._format_speedup(3.24, 4.66),
+            "3.2\N{EN DASH}4.7\N{MULTIPLICATION SIGN}",
+        )
+        self.assertEqual(
+            plotters._format_speedup(9.04, 12.2),
+            "9.0\N{EN DASH}12\N{MULTIPLICATION SIGN}",
+        )
+        self.assertEqual(
+            plotters._annotation_alignment(62, (12.0, 130.0)), (-8, "right")
+        )
+        self.assertEqual(plotters._annotation_alignment(14, (12.0, 130.0)), (8, "left"))
 
     def test_plotter_rejects_dirty_artifact(self) -> None:
         """Publication plots cannot silently combine dirty benchmark output."""

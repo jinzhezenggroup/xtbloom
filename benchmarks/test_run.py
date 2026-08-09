@@ -5,13 +5,14 @@ from __future__ import annotations
 import csv
 import ctypes
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from benchmarks import run
+from benchmarks import run, tblite_adapter, xtb_adapter
 from benchmarks.tblite_adapter import TbliteAdapter, TbliteError, TbliteState
 from benchmarks.xtb_adapter import XtbAdapter, XtbError, XtbState
 
@@ -25,6 +26,32 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(summary["samples_ms"], [3.0, 1.0, 2.0])
         self.assertEqual(summary["median_ms"], 2.0)
         self.assertEqual(summary["systems_per_second_at_median"], 4000.0)
+
+    def test_reference_thread_budget_keeps_blas_single_threaded(self) -> None:
+        """Do not multiply the declared CPU budget through nested BLAS workers."""
+        for module, loader_name in (
+            (xtb_adapter, "ctypes.CDLL"),
+            (tblite_adapter, "_load_first"),
+        ):
+            openmp = SimpleNamespace(
+                omp_set_dynamic=mock.Mock(), omp_set_num_threads=mock.Mock()
+            )
+            blas = SimpleNamespace(openblas_set_num_threads=mock.Mock())
+            with (
+                mock.patch.dict(os.environ, {}, clear=False),
+                mock.patch(
+                    f"benchmarks.{module.__name__.split('.')[-1]}.{loader_name}",
+                    side_effect=(openmp, blas),
+                ),
+            ):
+                controls = module._configure_runtime_threads(Path("/tmp"), 16)
+                openmp.omp_set_num_threads.assert_called_once_with(16)
+                blas.openblas_set_num_threads.assert_called_once_with(1)
+                self.assertEqual(os.environ["OMP_NUM_THREADS"], "16")
+                self.assertEqual(os.environ["OPENBLAS_NUM_THREADS"], "1")
+                self.assertEqual(os.environ["MKL_NUM_THREADS"], "1")
+                self.assertEqual(controls["openmp_threads"], 16)
+                self.assertEqual(controls["blas_threads"], 1)
 
     def test_gpuxtb_cell_matrix_contains_cpu_and_three_cuda_placements(self) -> None:
         """Cover CPU host and all supported CUDA descriptor placements."""

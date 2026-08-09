@@ -181,22 +181,25 @@ def _enforce_single_thread(library_directory: Path) -> dict[str, Any]:
 
 
 def _configure_runtime_threads(library_directory: Path, threads: int) -> dict[str, Any]:
-    """Expose the requested OpenMP/OpenBLAS thread count to the reference engine.
+    """Expose one bounded CPU worker budget to the reference engine.
 
     The cross-engine benchmark runs every engine with the same worker budget so
-    the three figures compare equal resources. ``threads=1`` reproduces the
-    original single-thread-pinned rows; ``threads>1`` lets OpenMP-enabled
-    reference builds use their worker threads exactly like gpuxtb's worker
-    pool and dxtb's Torch intra-op threads.
+    the three figures compare equal resources. tblite uses its requested OpenMP
+    workers while BLAS remains single-threaded; allowing both layers to create
+    ``threads`` workers causes nested oversubscription inside a fixed CPU
+    affinity mask and no longer represents that budget.
     """
     thread_text = str(int(threads))
+    blas_thread_text = "1"
     os.environ["OMP_NUM_THREADS"] = thread_text
-    os.environ["OPENBLAS_NUM_THREADS"] = thread_text
-    os.environ["MKL_NUM_THREADS"] = thread_text
+    os.environ["OPENBLAS_NUM_THREADS"] = blas_thread_text
+    os.environ["MKL_NUM_THREADS"] = blas_thread_text
     controls: dict[str, Any] = {
         "OMP_NUM_THREADS": thread_text,
-        "OPENBLAS_NUM_THREADS": thread_text,
-        "MKL_NUM_THREADS": thread_text,
+        "OPENBLAS_NUM_THREADS": blas_thread_text,
+        "MKL_NUM_THREADS": blas_thread_text,
+        "openmp_threads": threads,
+        "blas_threads": 1,
         "omp_set_num_threads": False,
         "openblas_set_num_threads": False,
     }
@@ -229,7 +232,7 @@ def _configure_runtime_threads(library_directory: Path, threads: int) -> dict[st
         try:
             blas.openblas_set_num_threads.argtypes = [ctypes.c_int]
             blas.openblas_set_num_threads.restype = None
-            blas.openblas_set_num_threads(threads)
+            blas.openblas_set_num_threads(1)
             controls["openblas_set_num_threads"] = True
         except AttributeError:
             pass
