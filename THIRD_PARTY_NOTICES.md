@@ -229,8 +229,8 @@ Build-time npm dependency (not vendored):
 - `web/package.json` pins `3dmol@2.5.5` (published 2026-05-22); the exact
   resolution and integrity is recorded in `web/package-lock.json`.
 - The prebuilt browser bundle `node_modules/3dmol/build/3Dmol-min.js` is
-  downloaded by `npm ci` during the Pages build and copied into the artifact
-  by `web/build.sh`. Its content hash is SHA-256
+  downloaded by `npm ci` during the CMake web build and copied into the
+  artifact by `web/CMakeLists.txt`. Its content hash is SHA-256
   `f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016`, with the
   upstream `/*! 3dmol v2.5.5 ... */` banner retained at the top of the file.
 

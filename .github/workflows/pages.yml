@@ -1,9 +1,12 @@
 # Builds the gpuxtb WASM web demo and publishes it to GitHub Pages.
 #
-# The artifact is a fully client-side GFN2-xTB single-point / geometry-optimize
-# page: wasm64 CPU module + a dlopen-able minimal LP64 LAPACK side module. No
-# COOP/COEP headers are needed because the build is single-threaded (no
-# SharedArrayBuffer), which GitHub Pages cannot configure anyway.
+# The artifact is a fully client-side GFN2-xTB single-point + geometry
+# optimization page: a single-threaded wasm64 module (so no COOP/COEP headers
+# are needed, which GitHub Pages cannot configure anyway) that dlopens a
+# preloaded minimal LP64 LAPACK side module. Everything — 3Dmol.js via npm,
+# the side module, the adapter, the main module, and the static assets — is
+# produced by the CMake web target (web/CMakeLists.txt, enabled here with
+# -DGPUXTB_BUILD_WEB_DEMO=ON).
 #
 # Deploys only on pushes to main; pull requests build + smoke-test without
 # publishing.
@@ -15,10 +18,12 @@ on:
     paths:
       - 'web/**'
       - '.github/workflows/pages.yml'
+      - 'CMakeLists.txt'
   pull_request:
     paths:
       - 'web/**'
       - '.github/workflows/pages.yml'
+      - 'CMakeLists.txt'
   workflow_dispatch:
 
 permissions:
@@ -39,18 +44,18 @@ jobs:
       # Emscripten toolchain (pinned review target: mymindstorm/setup-emsdk).
       - uses: mymindstorm/setup-emsdk@v14
 
-      - name: Configure wasm64 CPU library
+      - name: Configure wasm64 build (library + web demo site)
         run: |
           emcmake cmake -S . -B build/wasm-web -G Ninja \
             -DGPUXTB_ENABLE_CUDA=OFF \
             -DGPUXTB_BUILD_TESTS=OFF \
+            -DGPUXTB_BUILD_WEB_DEMO=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="-m64 -fPIC" \
             -DCMAKE_CXX_FLAGS="-m64 -fPIC"
-          cmake --build build/wasm-web --parallel 2
 
-      - name: Build web assets (main module + side module)
-        run: bash web/build.sh
+      - name: Build
+        run: cmake --build build/wasm-web --parallel 2
 
       - name: Smoke-test wasm in Node
         # Nodes before 22 have no WebAssembly memory64, which the wasm64
@@ -59,9 +64,7 @@ jobs:
         with:
           node-version: '22'
       - name: Run smoke test
-        working-directory: web/dist
-        env:
-          GPUXTB_WASM_LIB: ${{ github.workspace }}/build/wasm-web/libgpuxtb.a
+        working-directory: build/wasm-web/web/site
         run: |
           node --input-type=module -e '
             import m from "./gpuxtb_web.js";
@@ -85,7 +88,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: web/dist
+          path: build/wasm-web/web/site
 
       - name: Deploy to GitHub Pages
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

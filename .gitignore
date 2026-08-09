@@ -32,7 +32,5 @@ __pycache__/
 *.csv.db
 *.prof
 
-# WASM web demo build artifacts
-/web/dist/
-
+# WASM web demo build artifacts (site output lives under any /build*/ ; see web/CMakeLists.txt)
 /web/node_modules/

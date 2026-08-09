@@ -18,6 +18,9 @@ find_package(Threads REQUIRED)
 set(GPUXTB_ENABLE_CUDA "AUTO" CACHE STRING "Build the CUDA backend: AUTO, ON, or OFF")
 set_property(CACHE GPUXTB_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
 option(GPUXTB_BUILD_TESTS "Build gpuxtb tests" ${PROJECT_IS_TOP_LEVEL})
+option(GPUXTB_BUILD_WEB_DEMO
+  "Build the GitHub Pages wasm64 web demo assets (requires the Emscripten toolchain)"
+  OFF)
 option(GPUXTB_PYTHON_WHEEL
   "Install an unversioned single-copy shared library for a Python wheel" OFF)
 set(GPUXTB_CPU_LINALG_LIBRARY "" CACHE FILEPATH
@@ -2822,3 +2825,7 @@ install(FILES
 )
 
 message(STATUS "gpuxtb CUDA backend: ${GPUXTB_HAS_CUDA}")
+
+if(GPUXTB_BUILD_WEB_DEMO)
+  add_subdirectory(web)
+endif()
