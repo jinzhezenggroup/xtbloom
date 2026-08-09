@@ -7,6 +7,67 @@ export function angstromToBohr(value) {
   return value * BOHR_PER_ANGSTROM;
 }
 
+/* Fetch exposes decoded response bytes, while Content-Length may describe a
+ * compressed representation. Only compare streamed bytes with a declared
+ * length when the response is explicitly identity encoded. */
+export function comparableContentLength(headers) {
+  const encoding = String(headers?.get?.("content-encoding") || "")
+    .trim()
+    .toLowerCase();
+  if (encoding && encoding !== "identity") return 0;
+  const total = Number(headers?.get?.("content-length"));
+  return Number.isFinite(total) && total > 0 ? total : 0;
+}
+
+/* Keep every visible progress consumer on the same bounded value. This is a
+ * final defense against proxies with inconsistent response metadata. */
+export function clampProgressPercent(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.min(100, Math.max(0, numeric));
+}
+
+/* Reserve 100% for a completed read. This avoids claiming completion early
+ * when a server reports a slightly smaller identity length than the stream. */
+export function downloadProgressPercent(loaded, total, previous = 0, complete = false) {
+  if (complete) return 100;
+  const prior = Math.min(99, clampProgressPercent(previous));
+  if (!Number.isFinite(loaded) || loaded < 0 || !Number.isFinite(total) || total <= 0) {
+    return prior;
+  }
+  const current = Math.min(99, clampProgressPercent((loaded / total) * 100));
+  return Math.max(prior, current);
+}
+
+/* URLSearchParams performs the required percent decoding. Literal '+' in a
+ * charged SMILES must therefore be encoded as %2B, as required by URL syntax. */
+export function readSmilesQuery(url, maxLength = 2048) {
+  const value = new URL(url).searchParams.get("smiles");
+  if (value === null || value.trim() === "") return null;
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) {
+    const error = new RangeError(`SMILES exceeds ${maxLength} characters`);
+    error.code = "smiles_err_too_long";
+    throw error;
+  }
+  return trimmed;
+}
+
+/* The URL workflow is intentionally one-shot and begins only after both
+ * independent workers are idle and ready. Keeping the predicate pure makes
+ * the race-prevention contract executable without constructing the page DOM. */
+export function canStartUrlSmiles({
+  smiles,
+  started,
+  engineState,
+  smilesState,
+  engineBusy,
+  smilesBusy,
+}) {
+  return Boolean(smiles) && !started && engineState === "ready" &&
+    smilesState === "ready" && !engineBusy && !smilesBusy;
+}
+
 /* Keep UI callers from ever dereferencing a null or partially initialized
  * Worker. postMessage can itself throw (for example after termination), so the
  * caller still owns cleanup of any request bookkeeping around this helper. */

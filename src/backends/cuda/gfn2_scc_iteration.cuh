@@ -3,9 +3,7 @@
 
 #define GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_CUH
 
-#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -34,6 +32,7 @@
 #include "backends/cuda/gfn2_scc_potential.cuh"
 #include "backends/cuda/gfn2_scc_publication.cuh"
 #include "backends/cuda/gfn2_spin.cuh"
+#include "runtime/nvidia_host_api.h"
 
 namespace gpuxtb::detail::cuda {
 

@@ -3,9 +3,7 @@
 
 #define GPUXTB_BACKENDS_CUDA_GFN2_EIGENSOLVER_CUH
 
-#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +12,7 @@
 
 #include "backends/common/gfn2_plan_schema.hpp"
 #include "backends/cuda/gfn2_geometry.cuh"
+#include "runtime/nvidia_host_api.h"
 
 namespace gpuxtb::detail::cuda {
 

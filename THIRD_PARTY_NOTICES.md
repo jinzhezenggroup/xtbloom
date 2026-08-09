@@ -258,6 +258,7 @@ are distributed inside `vendor/3Dmol-min.js`, rather than as separate files:
   `sha512-zJq6RP/5q+TO2OpFV3FHzlPnFjmkb7Nc99a5SNjJE+uu/PkpChs+NIZSSzbBoD+6kjiISXjfYdwj1ZRQ81dz/w==`
   and
   `sha512-4hLB8Py4zZce5s4yd9XzopqwVv/yGNhV1Bl8NTmCq1763HeK2+EwVTv+leGeL13Dnh2wfbqowVPXCIO0z4taYw==`.
+
   Pako 2.2.0 records zlib 1.3.2 as its original implementation; the nested
   pako 1.0.11 records zlib 1.2.8.
 
@@ -266,6 +267,39 @@ are distributed inside `vendor/3Dmol-min.js`, rather than as separate files:
 is the reviewed resolution. Every Pages artifact carries the project GPL,
 this notice, the additional permission, the 3Dmol license, all transitive npm
 license texts above, and the parameter-data licenses and provenance manifests.
+
+## OpenChemLib JS
+
+Repository: <https://github.com/cheminfo/openchemlib-js>
+
+License: `BSD-3-Clause` (`LICENSES/openchemlib-BSD-3-Clause.txt`; Copyright
+(c) 2015-2017, cheminfo).
+
+The optional browser SMILES workflow fetches OpenChemLib 9.21.0 from exact
+jsDelivr URLs at runtime. The reviewed JavaScript release commit is
+`36aec7791ac38e7fdc23a37ba07e19514eb1e5c9`; its OpenChemLib Java submodule is
+revision `27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf`. The browser imports
+`https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js` (SHA-256
+`5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3`) and
+registers
+`https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json` (SHA-256
+`d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14`).
+Floating `latest` and jsDelivr `+esm` transformations are not used.
+
+OpenChemLib parses SMILES, adds explicit hydrogens during seeded 3D conformer
+generation, and applies an MMFF94 pre-relaxation before the coordinates enter
+the gpuxtb web adapter. The complete registered `resources.json` also contains
+COD bond-length and torsion statistics, MMFF94/MMFF94s parameter tables, and
+bundled drug-likeness and toxicity-predictor data. The predictor data is
+registered as part of the upstream resource payload but is not called by
+gpuxtb. Exact paths, sizes, digests, source revisions, license provenance, and
+the distribution boundary are recorded in `web/openchemlib_manifest.json`.
+
+The OpenChemLib module and resource bytes are supplied by jsDelivr directly to
+the user's browser; they are not vendored into the repository, linked into
+`gpuxtb_web.wasm`, copied into the Pages artifact, installed with the native
+library, or bundled in Python wheels. The deployed site does retain the license
+text and provenance manifest next to its other legal material.
 
 ## Distribution policy
 

@@ -10,9 +10,22 @@ The experimental browser build is available at
 client as wasm32 without requiring Memory64, targeting modern iOS Safari,
 Safari, Chrome, and Firefox with WebAssembly and module Worker support. It
 includes an adapter-local L-BFGS geometry optimizer for interactive
-demonstrations. That optimizer is not exported by the stable C ABI and is not
-a supported native-library capability. A separate wasm64 CI build verifies
-that pointer-width changes do not alter ABI-local behavior or numerical results.
+demonstrations. The page also loads the pinned OpenChemLib 9.21.0 module and
+resource registry from jsDelivr in the background. Its SMILES workflow adds
+explicit hydrogens, generates a seeded 3D conformer, applies an MMFF94
+pre-relaxation, and populates the existing XYZ and formal-charge inputs without
+blocking ordinary XYZ use if the optional CDN dependency is unavailable.
+
+The query parameter `?smiles=CCO` preloads the SMILES and, after both workers
+are ready, automatically runs the gpuxtb geometry optimizer and writes the
+final angstrom coordinates back to the XYZ editor. URL syntax requires a
+literal `+` in a charged SMILES to be encoded as `%2B`, for example
+`?smiles=%5BNH4%2B%5D`. The SMILES/conformer workflow and optimizer are browser
+adapter features; neither is exported by the stable C ABI or supported as a
+native-library capability. A separate wasm64 CI build verifies that
+pointer-width changes do not alter ABI-local behavior or numerical results.
+OpenChemLib provenance and exact CDN digests are recorded in
+[`web/openchemlib_manifest.json`](../web/openchemlib_manifest.json).
 
 ## User guide
 
@@ -61,7 +74,7 @@ Repository contributors and coding agents must also follow
 | Per-system molecular dipole moments | CPU; CUDA reserved |
 | ASE and dpdata | Supported Python integrations |
 | External interaction slot (solvation, field gradient, ...) | ABI-v3 slot reserved; not implemented |
-| Browser adapter single points and demo geometry optimization | Experimental wasm32 CPU site |
+| Browser adapter single points, SMILES-to-3D, and demo geometry optimization | Experimental wasm32 CPU site |
 | Native GFN1-xTB, ROCm, solvation, optimization, MD, Hessians | Not implemented |
 
 Documentation describes the current repository state. Reserved ABI values and

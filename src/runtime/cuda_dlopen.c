@@ -4,10 +4,7 @@
 #define _GNU_SOURCE
 #endif
 
-#include <cublas_v2.h>
-#include <cuda.h>
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stddef.h>
@@ -16,6 +13,7 @@
 #include <string.h>
 
 #include "cuda_dlopen_symbols.h"
+#include "nvidia_host_api.h"
 
 #if defined(_WIN32) || defined(__APPLE__)
 #error "the gpuxtb CUDA dlopen bootstrap requires ELF constructor ordering"

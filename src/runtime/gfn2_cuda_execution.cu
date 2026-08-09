@@ -1,8 +1,6 @@
-#include <cublas_v2.h>
 // gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 
 #include <algorithm>
 #include <array>
@@ -55,6 +53,7 @@
 #include "runtime/cuda_descriptor_validation.hpp"
 #include "runtime/gfn2_cuda_execution.hpp"
 #include "runtime/gfn2_cuda_topology_staging.hpp"
+#include "runtime/nvidia_host_api.h"
 
 namespace gpuxtb::detail {
 namespace {
