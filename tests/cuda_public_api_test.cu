@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
@@ -79,6 +80,57 @@ class StreamOwner {
 
  private:
   cudaStream_t stream_ = nullptr;
+};
+
+class EventOwner {
+ public:
+  EventOwner() noexcept = default;
+  ~EventOwner() {
+    if (event_ != nullptr) (void)cudaEventDestroy(event_);
+  }
+  EventOwner(const EventOwner&) = delete;
+  EventOwner& operator=(const EventOwner&) = delete;
+
+  cudaError_t create() noexcept {
+    return event_ == nullptr ? cudaEventCreateWithFlags(&event_, cudaEventDisableTiming)
+                             : cudaErrorInvalidResourceHandle;
+  }
+  [[nodiscard]] cudaEvent_t get() const noexcept { return event_; }
+
+ private:
+  cudaEvent_t event_ = nullptr;
+};
+
+void CUDART_CB hold_stream_until_released(void* user_data) {
+  auto* const released = static_cast<std::atomic<bool>*>(user_data);
+  while (!released->load(std::memory_order_acquire)) std::this_thread::yield();
+}
+
+class BlockingStreamGate {
+ public:
+  ~BlockingStreamGate() { release(); }
+  BlockingStreamGate(const BlockingStreamGate&) = delete;
+  BlockingStreamGate& operator=(const BlockingStreamGate&) = delete;
+  BlockingStreamGate() = default;
+
+  cudaError_t arm(cudaStream_t blocked_stream) {
+    cudaError_t status = gate_stream_.create();
+    if (status != cudaSuccess) return status;
+    status = gate_event_.create();
+    if (status != cudaSuccess) return status;
+    status = cudaLaunchHostFunc(gate_stream_.get(), hold_stream_until_released, &released_);
+    if (status != cudaSuccess) return status;
+    status = cudaEventRecord(gate_event_.get(), gate_stream_.get());
+    return status == cudaSuccess ? cudaStreamWaitEvent(blocked_stream, gate_event_.get(), 0u)
+                                 : status;
+  }
+
+  void release() noexcept { released_.store(true, std::memory_order_release); }
+
+ private:
+  std::atomic<bool> released_{false};
+  StreamOwner gate_stream_;
+  EventOwner gate_event_;
 };
 
 /* Restore the test thread even when a CHECK returns early. The public API has
@@ -1067,6 +1119,12 @@ struct PlanDeleter {
 
 using PlanHandle = std::unique_ptr<gpuxtb_plan_t, PlanDeleter>;
 
+struct RequestDeleter {
+  void operator()(gpuxtb_request_t* request) const noexcept { gpuxtb_request_destroy(request); }
+};
+
+using RequestHandle = std::unique_ptr<gpuxtb_request_t, RequestDeleter>;
+
 /* Fixed-topology CUDA plans reuse the prepared runtime, expose host/device
  * workspace queries that differ by requested properties, and reject topology
  * mismatches before output mutation (matching the CPU plan contract). */
@@ -1226,6 +1284,103 @@ int test_cuda_plan_api(std::int32_t device, gpuxtb_context_t* cpu_context,
   bool unchanged = false;
   CUDA_CHECK(other_result.unchanged(unchanged));
   CHECK(unchanged);
+
+  /* A fixed plan with host topology admits without fencing the owner stream.
+   * Numerical HOST leaves are snapshotted, the device-gated commit is queued
+   * before enqueue returns, and the request-owned cache survives plan destroy. */
+  PublicBatch async_batch;
+  CHECK(make_fixture_batch(2u, false, async_batch) == 0);
+  bind_inputs(async_batch, nullptr, InputLayout::kHost);
+  MaterializedResult async_reference;
+  CHECK(run_cpu_reference(cpu_context, async_batch, options, async_reference) == 0);
+  gpuxtb_plan_t* raw_async_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &async_batch.descriptor, &options, &raw_async_plan) ==
+        GPUXTB_STATUS_SUCCESS);
+  PlanHandle async_plan(raw_async_plan);
+
+  gpuxtb_request_t* raw_request = nullptr;
+  CHECK(gpuxtb_request_create(context.get(), &raw_request) == GPUXTB_STATUS_SUCCESS);
+  RequestHandle request(raw_request);
+  gpuxtb_request_t* raw_busy_request = nullptr;
+  CHECK(gpuxtb_request_create(context.get(), &raw_busy_request) == GPUXTB_STATUS_SUCCESS);
+  RequestHandle busy_request(raw_busy_request);
+
+  ResultOwner async_result;
+  CUDA_CHECK(async_result.bind(async_batch, ResultLayout::kDevice, options.flags));
+  gpuxtb_batch_result_t enqueue_result = async_result.descriptor;
+
+  /* WARM is rejected without changing the reusable request or result flags. */
+  gpuxtb_compute_options_t warm_options = options;
+  warm_options.scc_start_mode = GPUXTB_SCC_START_WARM;
+  CHECK(gpuxtb_plan_compute_enqueue(async_plan.get(), &async_batch.descriptor, &warm_options,
+                                    &enqueue_result, request.get()) == GPUXTB_STATUS_NOT_SUPPORTED);
+  gpuxtb_request_info_t info{};
+  CHECK(gpuxtb_request_info_init(&info, sizeof(info)) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_request_query(request.get(), &info) == GPUXTB_STATUS_SUCCESS);
+  CHECK(info.state == GPUXTB_REQUEST_IDLE);
+  CHECK(enqueue_result.flags == kResultFlagsCanary);
+
+  BlockingStreamGate gate;
+  CUDA_CHECK(gate.arm(stream.get()));
+
+  /* Exact ABI-v1 storage catches accidental reads of the optional v2
+   * suffixes after the public structural validator has accepted them. */
+  alignas(gpuxtb_compute_options_t) std::array<unsigned char, GPUXTB_COMPUTE_OPTIONS_V1_SIZE>
+      short_options_storage{};
+  std::memcpy(short_options_storage.data(), &options, short_options_storage.size());
+  auto* const short_options =
+      reinterpret_cast<gpuxtb_compute_options_t*>(short_options_storage.data());
+  short_options->struct_size = GPUXTB_COMPUTE_OPTIONS_V1_SIZE;
+  alignas(gpuxtb_batch_result_t) std::array<unsigned char, GPUXTB_BATCH_RESULT_V1_SIZE>
+      short_result_storage{};
+  std::memcpy(short_result_storage.data(), &enqueue_result, short_result_storage.size());
+  auto* const short_result = reinterpret_cast<gpuxtb_batch_result_t*>(short_result_storage.data());
+  short_result->struct_size = GPUXTB_BATCH_RESULT_V1_SIZE;
+  gpuxtb_batch_t enqueue_batch = async_batch.descriptor;
+  CHECK(gpuxtb_plan_compute_enqueue(async_plan.get(), &enqueue_batch, short_options, short_result,
+                                    request.get()) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_request_query(request.get(), &info) == GPUXTB_STATUS_SUCCESS);
+  CHECK(info.state == GPUXTB_REQUEST_PENDING);
+  CHECK(short_result->flags == kResultFlagsCanary);
+
+  /* Cache and request single-flight gates precede topology staging. Neither a
+   * second request nor the synchronous API may wait on the blocked stream. */
+  CHECK(gpuxtb_plan_compute_enqueue(async_plan.get(), &async_batch.descriptor, &options,
+                                    &enqueue_result,
+                                    busy_request.get()) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  gpuxtb_request_info_t busy_info{};
+  CHECK(gpuxtb_request_info_init(&busy_info, sizeof(busy_info)) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_request_query(busy_request.get(), &busy_info) == GPUXTB_STATUS_SUCCESS);
+  CHECK(busy_info.state == GPUXTB_REQUEST_IDLE);
+  ResultOwner busy_result;
+  CUDA_CHECK(busy_result.bind(async_batch, ResultLayout::kHost, options.flags));
+  CHECK(gpuxtb_plan_compute(async_plan.get(), &async_batch.descriptor, &options,
+                            &busy_result.descriptor) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  bool busy_unchanged = false;
+  CUDA_CHECK(busy_result.unchanged(busy_unchanged));
+  CHECK(busy_unchanged);
+
+  /* Descriptor structs may be reused immediately; host numerical bytes may
+   * also be released or changed because enqueue copied them before return. */
+  enqueue_batch = {};
+  short_options->flags = 0u;
+  short_result->energies.data = nullptr;
+  async_batch.perturb(0.125);
+  async_plan.reset();
+
+  gate.release();
+  CUDA_CHECK(cudaStreamSynchronize(stream.get()));
+  MaterializedResult async_actual;
+  CUDA_CHECK(async_result.materialize(async_actual));
+  CHECK(async_actual.flags == kResultFlagsCanary);
+  async_actual.flags = async_reference.flags;
+  CHECK(compare_result(async_result, async_actual, async_reference, options) == 0);
+  CHECK(gpuxtb_request_wait(request.get(), &info) == GPUXTB_STATUS_SUCCESS);
+  CHECK(info.state == GPUXTB_REQUEST_COMPLETE);
+  CHECK(info.completion_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(info.result_flags == 0u);
+  CHECK(std::string(gpuxtb_request_get_error(request.get())).empty());
+  CHECK(short_result->flags == kResultFlagsCanary);
 
   g_scenario = "plan-api";
   return 0;
@@ -1597,18 +1752,32 @@ int test_stream_capture_transactionality(std::int32_t device, PublicBatch& batch
   CHECK(context != nullptr);
   ResultOwner result;
   CUDA_CHECK(result.bind(batch, ResultLayout::kHost));
+  gpuxtb_plan_t* raw_plan = nullptr;
+  CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+        GPUXTB_STATUS_SUCCESS);
+  PlanHandle plan(raw_plan);
+  gpuxtb_request_t* raw_request = nullptr;
+  CHECK(gpuxtb_request_create(context.get(), &raw_request) == GPUXTB_STATUS_SUCCESS);
+  RequestHandle request(raw_request);
 
   CUDA_CHECK(cudaStreamBeginCapture(stream.get(), cudaStreamCaptureModeThreadLocal));
-  const gpuxtb_status_t status =
+  const gpuxtb_status_t compute_status =
       gpuxtb_compute(context.get(), &batch.descriptor, &options, &result.descriptor);
+  const gpuxtb_status_t enqueue_status = gpuxtb_plan_compute_enqueue(
+      plan.get(), &batch.descriptor, &options, &result.descriptor, request.get());
   cudaGraph_t graph = nullptr;
   const cudaError_t end_status = cudaStreamEndCapture(stream.get(), &graph);
   if (graph != nullptr) (void)cudaGraphDestroy(graph);
   CUDA_CHECK(end_status);
-  CHECK(status == GPUXTB_STATUS_NOT_SUPPORTED);
+  CHECK(compute_status == GPUXTB_STATUS_NOT_SUPPORTED);
+  CHECK(enqueue_status == GPUXTB_STATUS_NOT_SUPPORTED);
   bool unchanged = false;
   CUDA_CHECK(result.unchanged(unchanged));
   CHECK(unchanged);
+  gpuxtb_request_info_t info{};
+  CHECK(gpuxtb_request_info_init(&info, sizeof(info)) == GPUXTB_STATUS_SUCCESS);
+  CHECK(gpuxtb_request_query(request.get(), &info) == GPUXTB_STATUS_SUCCESS);
+  CHECK(info.state == GPUXTB_REQUEST_IDLE);
   return 0;
 }
 

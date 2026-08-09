@@ -9,6 +9,7 @@
 #include <string>
 
 #include "gpuxtb/gpuxtb.h"
+#include "runtime/request.hpp"
 
 namespace gpuxtb::detail {
 
@@ -76,6 +77,10 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t scc_loop_active_count = 0u;
   std::uintptr_t scc_loop_numerical_body_count = 0u;
   std::uintptr_t energy_force_descriptors = 0u;
+  /* Stable completion owner and accepted single-flight submission count. */
+  std::uintptr_t request_completion_owner = 0u;
+  std::uint64_t request_submissions = 0u;
+  std::uint8_t request_active = 0u;
 
   std::uintptr_t topology_arena = 0u;
   std::uintptr_t input_arena = 0u;
@@ -223,10 +228,10 @@ struct Gfn2CudaNumericalInputView {
  * only serially on the context owner stream. A future controlled launch API
  * can replace these caller-enforced lifetime and stream constraints.
  */
-class Gfn2CudaExecutionCache {
+class Gfn2CudaExecutionCache : public RequestCompletion {
  public:
   Gfn2CudaExecutionCache(std::int32_t device_id, void* stream);
-  ~Gfn2CudaExecutionCache();
+  ~Gfn2CudaExecutionCache() override;
 
   Gfn2CudaExecutionCache(const Gfn2CudaExecutionCache&) = delete;
   Gfn2CudaExecutionCache& operator=(const Gfn2CudaExecutionCache&) = delete;
@@ -262,6 +267,11 @@ class Gfn2CudaExecutionCache {
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
 
+  /* The single-flight cache is its own preallocated completion owner, so
+   * publishing it into a reusable request needs no per-enqueue allocation. */
+  [[nodiscard]] gpuxtb_status_t probe(bool wait, RequestCompletionResult& result) noexcept override;
+  void settle_noexcept() noexcept override;
+
  private:
   friend gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
                                                            const gpuxtb_batch_t& batch,
@@ -274,6 +284,10 @@ class Gfn2CudaExecutionCache {
                                                       const gpuxtb_compute_options_t& options,
                                                       gpuxtb_batch_result_t& result,
                                                       std::string& error);
+  friend gpuxtb_status_t enqueue_restricted_gfn2_cuda_plan(
+      const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const gpuxtb_batch_t& batch,
+      const gpuxtb_compute_options_t& options, const gpuxtb_batch_result_t& result,
+      RequestSubmission& submission, std::string& error);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;
@@ -305,6 +319,14 @@ class Gfn2CudaExecutionCache {
 [[nodiscard]] gpuxtb_status_t execute_restricted_gfn2_cuda_plan(
     Gfn2CudaExecutionCache& cache, const gpuxtb_batch_t& batch,
     const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result, std::string& error);
+
+/* Submit one fixed-topology CUDA plan transaction without waiting for
+ * inference or caller-output publication. Descriptor structs are copied and
+ * every host numerical leaf is snapshotted before this function returns. */
+[[nodiscard]] gpuxtb_status_t enqueue_restricted_gfn2_cuda_plan(
+    const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const gpuxtb_batch_t& batch,
+    const gpuxtb_compute_options_t& options, const gpuxtb_batch_result_t& result,
+    RequestSubmission& submission, std::string& error);
 
 }  // namespace gpuxtb::detail
 

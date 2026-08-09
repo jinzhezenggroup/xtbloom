@@ -125,6 +125,11 @@ static cudaError_t gpu_xtb_cuda_event_destroy(cudaEvent_t event) {
   return cudaErrorSharedObjectSymbolNotFound;
 }
 
+static cudaError_t gpu_xtb_cuda_event_query(cudaEvent_t event) {
+  (void)event;
+  return cudaErrorSharedObjectSymbolNotFound;
+}
+
 static cudaError_t gpu_xtb_cuda_event_record(cudaEvent_t event, cudaStream_t stream) {
   (void)event;
   (void)stream;
@@ -500,6 +505,11 @@ static cudaError_t gpu_xtb_cuda_stream_is_capturing(cudaStream_t stream,
   if (status != NULL) {
     *status = cudaStreamCaptureStatusNone;
   }
+  return cudaErrorSharedObjectSymbolNotFound;
+}
+
+static cudaError_t gpu_xtb_cuda_stream_query(cudaStream_t stream) {
+  (void)stream;
   return cudaErrorSharedObjectSymbolNotFound;
 }
 
@@ -1003,6 +1013,7 @@ GPU_XTB_CHECK_SIGNATURE(cudaEventCreate, gpu_xtb_cuda_event_create_default);
 GPU_XTB_CHECK_SIGNATURE(cudaEventCreateWithFlags, gpu_xtb_cuda_event_create);
 GPU_XTB_CHECK_SIGNATURE(cudaEventDestroy, gpu_xtb_cuda_event_destroy);
 GPU_XTB_CHECK_SIGNATURE(cudaEventElapsedTime, gpu_xtb_cuda_event_elapsed_time);
+GPU_XTB_CHECK_SIGNATURE(cudaEventQuery, gpu_xtb_cuda_event_query);
 GPU_XTB_CHECK_SIGNATURE(cudaEventRecord, gpu_xtb_cuda_event_record);
 GPU_XTB_CHECK_SIGNATURE(cudaEventSynchronize, gpu_xtb_cuda_event_synchronize);
 GPU_XTB_CHECK_SIGNATURE(cudaFree, gpu_xtb_cuda_free);
@@ -1052,6 +1063,7 @@ GPU_XTB_CHECK_SIGNATURE(cudaStreamEndCapture, gpu_xtb_cuda_stream_end_capture);
 GPU_XTB_CHECK_SIGNATURE(cudaStreamGetCaptureInfo_v2, gpu_xtb_cuda_stream_get_capture_info);
 GPU_XTB_CHECK_SIGNATURE(cudaStreamGetDevice, gpu_xtb_cuda_stream_get_device);
 GPU_XTB_CHECK_SIGNATURE(cudaStreamIsCapturing, gpu_xtb_cuda_stream_is_capturing);
+GPU_XTB_CHECK_SIGNATURE(cudaStreamQuery, gpu_xtb_cuda_stream_query);
 GPU_XTB_CHECK_SIGNATURE(cudaStreamSynchronize, gpu_xtb_cuda_stream_synchronize);
 GPU_XTB_CHECK_SIGNATURE(cudaStreamUpdateCaptureDependencies,
                         gpu_xtb_cuda_stream_update_capture_dependencies);
@@ -1149,6 +1161,7 @@ static void* gpu_xtb_fallback_for_symbol(const char* symbol) {
   GPU_XTB_SYMBOL("cudaEventCreate", gpu_xtb_cuda_event_create_default)
   GPU_XTB_SYMBOL("cudaEventDestroy", gpu_xtb_cuda_event_destroy)
   GPU_XTB_SYMBOL("cudaEventElapsedTime", gpu_xtb_cuda_event_elapsed_time)
+  GPU_XTB_SYMBOL("cudaEventQuery", gpu_xtb_cuda_event_query)
   GPU_XTB_SYMBOL("cudaEventRecord", gpu_xtb_cuda_event_record)
   GPU_XTB_SYMBOL("cudaEventSynchronize", gpu_xtb_cuda_event_synchronize)
   GPU_XTB_SYMBOL("cudaFree", gpu_xtb_cuda_free)
@@ -1199,6 +1212,7 @@ static void* gpu_xtb_fallback_for_symbol(const char* symbol) {
   GPU_XTB_SYMBOL("cudaStreamGetCaptureInfo_v2", gpu_xtb_cuda_stream_get_capture_info)
   GPU_XTB_SYMBOL("cudaStreamGetDevice", gpu_xtb_cuda_stream_get_device)
   GPU_XTB_SYMBOL("cudaStreamIsCapturing", gpu_xtb_cuda_stream_is_capturing)
+  GPU_XTB_SYMBOL("cudaStreamQuery", gpu_xtb_cuda_stream_query)
   GPU_XTB_SYMBOL("cudaStreamSynchronize", gpu_xtb_cuda_stream_synchronize)
   GPU_XTB_SYMBOL("cudaStreamUpdateCaptureDependencies",
                  gpu_xtb_cuda_stream_update_capture_dependencies)

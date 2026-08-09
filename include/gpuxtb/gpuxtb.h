@@ -81,7 +81,7 @@ enum gpuxtb_status_value {
 
 typedef int32_t gpuxtb_request_state_t;
 enum gpuxtb_request_state_value {
-  /* No submission has been accepted since creation or the latest reset. */
+  /* No submission has ever been accepted by this request. */
   GPUXTB_REQUEST_IDLE = 0,
   /* Native work has been accepted and may still access caller-owned buffers. */
   GPUXTB_REQUEST_PENDING = 1,
@@ -767,18 +767,24 @@ GPUXTB_API gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxt
                                           gpuxtb_batch_result_t* result);
 
 /*
- * Submit one CUDA computation on the context stream without host blocking.
+ * Submit one CUDA computation on the context stream without waiting for
+ * inference or result publication.
  * The request must be IDLE or COMPLETE and bound to context. An accepted
  * submission resets its previous completion status/error and becomes PENDING,
  * or COMPLETE when the backend must settle it inline. Reusing a PENDING
- * request is rejected. All input and output buffers remain caller-owned and
- * must stay valid until the request becomes COMPLETE.
+ * request is rejected. Descriptor structs and every HOST input are copied
+ * before a successful enqueue returns and may then be reused or released.
+ * Every CUDA_DEVICE input and every HOST or CUDA_DEVICE output remains a
+ * caller-owned borrowed buffer and must stay valid until COMPLETE.
  *
  * The result descriptor is copied during submission and is never retained or
  * modified. In particular, result->flags is not an asynchronous publication
  * channel; completed flags are returned in gpuxtb_request_info_t.result_flags.
  * CPU contexts return GPUXTB_STATUS_NOT_SUPPORTED before descriptor validation
- * and leave all result bytes and the request state unchanged.
+ * and leave all result bytes and the request state unchanged. The initial V1
+ * implementation reserves this context-convenience symbol but returns
+ * GPUXTB_STATUS_NOT_IMPLEMENTED for CUDA; use gpuxtb_plan_compute_enqueue for
+ * the connected fixed-topology CUDA path.
  */
 GPUXTB_API gpuxtb_status_t gpuxtb_compute_enqueue(gpuxtb_context_t* context,
                                                   const gpuxtb_batch_t* batch,
@@ -839,7 +845,14 @@ GPUXTB_API gpuxtb_status_t gpuxtb_plan_compute(gpuxtb_plan_t* plan, const gpuxtb
                                                gpuxtb_batch_result_t* result);
 
 /* Fixed-topology counterpart of gpuxtb_compute_enqueue with identical request,
- * result-descriptor, lifetime, and CPU NOT_SUPPORTED semantics. */
+ * result-descriptor, buffer-lifetime, and CPU NOT_SUPPORTED semantics. Device
+ * or mixed topology descriptors may require a bounded admission fence before
+ * enqueue is accepted; accepted inference and publication remain
+ * stream-asynchronous. The V1 CUDA path accepts FRESH only; strict WARM returns
+ * NOT_SUPPORTED without changing request or result state. Once enqueue is
+ * accepted, the request retains the plan's execution cache and the plan handle
+ * may be destroyed before completion (the creating context must still outlive
+ * the request). */
 GPUXTB_API gpuxtb_status_t gpuxtb_plan_compute_enqueue(gpuxtb_plan_t* plan,
                                                        const gpuxtb_batch_t* batch,
                                                        const gpuxtb_compute_options_t* options,

@@ -79,6 +79,23 @@ gpuxtb_status_t initialize_structure(T* value, std::size_t caller_size, std::siz
   return GPUXTB_STATUS_SUCCESS;
 }
 
+class CompletionSettlementGuard {
+ public:
+  explicit CompletionSettlementGuard(
+      std::shared_ptr<gpuxtb::detail::RequestCompletion> completion) noexcept
+      : completion_(std::move(completion)) {}
+  ~CompletionSettlementGuard() {
+    if (completion_ != nullptr) completion_->settle_noexcept();
+  }
+  CompletionSettlementGuard(const CompletionSettlementGuard&) = delete;
+  CompletionSettlementGuard& operator=(const CompletionSettlementGuard&) = delete;
+
+  void dismiss() noexcept { completion_.reset(); }
+
+ private:
+  std::shared_ptr<gpuxtb::detail::RequestCompletion> completion_;
+};
+
 }  // namespace
 
 extern "C" {
@@ -278,13 +295,23 @@ gpuxtb_status_t gpuxtb_request_query(gpuxtb_request_t* request, gpuxtb_request_i
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
-  std::string error;
-  const gpuxtb_status_t query_status = request->implementation->query(false, *info, error);
-  if (query_status != GPUXTB_STATUS_SUCCESS) {
-    return fail(query_status, std::move(error));
+  try {
+    std::string error;
+    const gpuxtb_status_t query_status = request->implementation->query(false, *info, error);
+    if (query_status != GPUXTB_STATUS_SUCCESS) {
+      return fail(query_status, std::move(error));
+    }
+    last_error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    return fail(GPUXTB_STATUS_ALLOCATION_FAILED,
+                "failed to allocate while querying a request completion");
+  } catch (const std::exception& exception) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR,
+                "unknown exception while querying a request completion");
   }
-  last_error.clear();
-  return GPUXTB_STATUS_SUCCESS;
 }
 
 gpuxtb_status_t gpuxtb_request_wait(gpuxtb_request_t* request, gpuxtb_request_info_t* info) {
@@ -295,13 +322,23 @@ gpuxtb_status_t gpuxtb_request_wait(gpuxtb_request_t* request, gpuxtb_request_in
   if (status != GPUXTB_STATUS_SUCCESS) {
     return status;
   }
-  std::string error;
-  const gpuxtb_status_t wait_status = request->implementation->query(true, *info, error);
-  if (wait_status != GPUXTB_STATUS_SUCCESS) {
-    return fail(wait_status, std::move(error));
+  try {
+    std::string error;
+    const gpuxtb_status_t wait_status = request->implementation->query(true, *info, error);
+    if (wait_status != GPUXTB_STATUS_SUCCESS) {
+      return fail(wait_status, std::move(error));
+    }
+    last_error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    return fail(GPUXTB_STATUS_ALLOCATION_FAILED,
+                "failed to allocate while waiting for a request completion");
+  } catch (const std::exception& exception) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR,
+                "unknown exception while waiting for a request completion");
   }
-  last_error.clear();
-  return GPUXTB_STATUS_SUCCESS;
 }
 
 const char* gpuxtb_request_get_error(const gpuxtb_request_t* request) {
@@ -571,11 +608,53 @@ gpuxtb_status_t gpuxtb_plan_compute_enqueue(gpuxtb_plan_t* plan, const gpuxtb_ba
     return fail(GPUXTB_STATUS_NOT_SUPPORTED,
                 "asynchronous plan enqueue is not supported by the CPU backend");
   }
-  (void)batch;
-  (void)options;
-  (void)result;
-  return fail(GPUXTB_STATUS_NOT_IMPLEMENTED,
-              "CUDA asynchronous plan enqueue is not connected in this build");
+  if (batch == nullptr || options == nullptr || result == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "batch, compute options, or batch result is NULL");
+  }
+
+  bool reserved = false;
+  try {
+    std::string error;
+    const gpuxtb_status_t reserve_status =
+        request->implementation->reserve_submission(*context, error);
+    if (reserve_status != GPUXTB_STATUS_SUCCESS) {
+      return fail(reserve_status, std::move(error));
+    }
+    reserved = true;
+    gpuxtb::detail::RequestSubmission submission;
+    const gpuxtb_status_t enqueue_status =
+        plan->implementation->enqueue(*batch, *options, *result, submission, error);
+    if (enqueue_status != GPUXTB_STATUS_SUCCESS) {
+      request->implementation->rollback_submission();
+      return fail(enqueue_status, std::move(error));
+    }
+    /* Keep an allocation-free guard until the request state owns completion.
+     * If mutex acquisition or an invariant check fails during publication,
+     * the accepted cache transaction must still be settled. */
+    CompletionSettlementGuard completion_guard(submission.pending);
+    const gpuxtb_status_t publish_status =
+        request->implementation->publish_submission(std::move(submission), error);
+    if (publish_status != GPUXTB_STATUS_SUCCESS) {
+      request->implementation->rollback_submission();
+      reserved = false;
+      return fail(publish_status, std::move(error));
+    }
+    completion_guard.dismiss();
+    reserved = false;
+    last_error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(GPUXTB_STATUS_ALLOCATION_FAILED,
+                "failed to allocate CUDA plan request submission state");
+  } catch (const std::exception& exception) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR,
+                "unknown exception while enqueueing a CUDA plan request");
+  }
 }
 
 namespace {

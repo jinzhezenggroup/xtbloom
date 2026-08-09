@@ -294,10 +294,12 @@ static int check_request_info_init(void) {
   }
 
   gpuxtb_request_info_t short_info;
+  gpuxtb_request_info_t short_before;
   memset(&short_info, 0xa5, sizeof(short_info));
+  memcpy(&short_before, &short_info, sizeof(short_info));
   if (gpuxtb_request_info_init(&short_info, GPUXTB_REQUEST_INFO_V1_SIZE - 1) !=
           GPUXTB_STATUS_INVALID_ARGUMENT ||
-      short_info.struct_size != 0xa5a5a5a5u ||
+      memcmp(&short_info, &short_before, sizeof(short_info)) != 0 ||
       gpuxtb_request_info_init(NULL, sizeof(short_info)) != GPUXTB_STATUS_INVALID_ARGUMENT) {
     return 0;
   }
@@ -315,6 +317,32 @@ static int check_cpu_request_shell(gpuxtb_context_t* context) {
       gpuxtb_request_query(request, &info) != GPUXTB_STATUS_SUCCESS ||
       info.state != GPUXTB_REQUEST_IDLE || info.completion_status != GPUXTB_STATUS_SUCCESS ||
       info.result_flags != 0u || strcmp(gpuxtb_request_get_error(request), "") != 0) {
+    gpuxtb_request_destroy(request);
+    return 0;
+  }
+
+  struct query_future_info {
+    gpuxtb_request_info_t info;
+    unsigned char future[16];
+  } future_info;
+  memset(&future_info, 0xa5, sizeof(future_info));
+  if (gpuxtb_request_info_init(&future_info.info, sizeof(future_info)) != GPUXTB_STATUS_SUCCESS ||
+      gpuxtb_request_query(request, &future_info.info) != GPUXTB_STATUS_SUCCESS) {
+    gpuxtb_request_destroy(request);
+    return 0;
+  }
+  for (size_t index = 0; index < sizeof(future_info.future); ++index) {
+    if (future_info.future[index] != 0xa5) {
+      gpuxtb_request_destroy(request);
+      return 0;
+    }
+  }
+
+  gpuxtb_request_info_t one_byte_short = info;
+  one_byte_short.struct_size = GPUXTB_REQUEST_INFO_V1_SIZE - 1u;
+  gpuxtb_request_info_t one_byte_short_before = one_byte_short;
+  if (gpuxtb_request_query(request, &one_byte_short) != GPUXTB_STATUS_INVALID_ARGUMENT ||
+      memcmp(&one_byte_short, &one_byte_short_before, sizeof(one_byte_short)) != 0) {
     gpuxtb_request_destroy(request);
     return 0;
   }

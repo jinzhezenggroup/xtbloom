@@ -39,7 +39,7 @@ class RequestCompletion {
 };
 
 struct RequestSubmission {
-  std::unique_ptr<RequestCompletion> pending;
+  std::shared_ptr<RequestCompletion> pending;
   bool completed_inline = false;
   gpuxtb_status_t completion_status = GPUXTB_STATUS_SUCCESS;
   std::uint32_t result_flags = 0u;
@@ -96,7 +96,7 @@ class Request {
   gpuxtb_status_t completion_status_ = GPUXTB_STATUS_SUCCESS;
   std::uint32_t result_flags_ = 0u;
   std::string error_;
-  std::unique_ptr<RequestCompletion> completion_;
+  std::shared_ptr<RequestCompletion> completion_;
 };
 
 }  // namespace gpuxtb::detail

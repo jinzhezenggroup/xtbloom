@@ -12,6 +12,7 @@
 
 #include "runtime/backend.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
+#include "runtime/request.hpp"
 #include "runtime/validation.hpp"
 #if defined(GPUXTB_HAS_CUDA)
 #include "runtime/gfn2_cuda_execution.hpp"
@@ -417,6 +418,62 @@ gpuxtb_status_t Gfn2Plan::compute(const gpuxtb_batch_t& batch,
     return GPUXTB_STATUS_INTERNAL_ERROR;
   }
   return execute_restricted_gfn2_cuda_plan(*impl_->cuda_cache, batch, options, result, error);
+#else
+  error = "the gpuxtb library was built without CUDA support";
+  return GPUXTB_STATUS_BACKEND_UNAVAILABLE;
+#endif
+}
+
+gpuxtb_status_t Gfn2Plan::enqueue(const gpuxtb_batch_t& batch,
+                                  const gpuxtb_compute_options_t& options,
+                                  const gpuxtb_batch_result_t& result,
+                                  RequestSubmission& submission, std::string& error) {
+  if (impl_->context == nullptr || impl_->backend == GPUXTB_BACKEND_AUTO) {
+    error = "plan is not created or has been destroyed";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (impl_->backend == GPUXTB_BACKEND_CPU) {
+    error = "asynchronous plan enqueue is not supported by the CPU backend";
+    return GPUXTB_STATUS_NOT_SUPPORTED;
+  }
+
+  try {
+    const DescriptorValidationResult validation =
+        validate_compute_descriptor_structure(impl_->backend, &batch, &options, &result);
+    if (!validation.ok()) {
+      error = validation.error;
+      return validation.status;
+    }
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate temporary storage while validating a plan enqueue request";
+    return GPUXTB_STATUS_ALLOCATION_FAILED;
+  } catch (const std::exception& exception) {
+    error = exception.what();
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  } catch (...) {
+    error = "unknown exception while validating a plan enqueue request";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  if (!plan_policy_matches(impl_->policy, options)) {
+    error = "the compute options do not match the fixed plan policy";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
+  if (options.struct_size >= GPUXTB_COMPUTE_OPTIONS_V2_SIZE &&
+      options.scc_start_mode == GPUXTB_SCC_START_WARM) {
+    /* WARM publication changes a persistent epoch. Keep V1 request semantics
+     * explicit until that epoch transition is stream ordered and reusable. */
+    error = "asynchronous CUDA plan enqueue does not support strict WARM SCC start yet";
+    return GPUXTB_STATUS_NOT_SUPPORTED;
+  }
+
+#if defined(GPUXTB_HAS_CUDA)
+  if (impl_->cuda_cache == nullptr) {
+    error = "plan does not own a CUDA GFN2 execution cache";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  return enqueue_restricted_gfn2_cuda_plan(impl_->cuda_cache, batch, options, result, submission,
+                                           error);
 #else
   error = "the gpuxtb library was built without CUDA support";
   return GPUXTB_STATUS_BACKEND_UNAVAILABLE;

@@ -631,6 +631,7 @@ if(GPUXTB_HAS_CUDA)
     cudaEventCreateWithFlags
     cudaEventDestroy
     cudaEventElapsedTime
+    cudaEventQuery
     cudaEventRecord
     cudaEventSynchronize
     cudaFree
@@ -679,6 +680,7 @@ if(GPUXTB_HAS_CUDA)
     cudaStreamGetCaptureInfo_v2
     cudaStreamGetDevice
     cudaStreamIsCapturing
+    cudaStreamQuery
     cudaStreamSynchronize
     cudaStreamUpdateCaptureDependencies
     cudaStreamWaitEvent

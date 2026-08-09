@@ -55,6 +55,7 @@
 #include "runtime/cuda_descriptor_validation.hpp"
 #include "runtime/gfn2_cuda_execution.hpp"
 #include "runtime/gfn2_cuda_topology_staging.hpp"
+#include "runtime/request.hpp"
 
 namespace gpuxtb::detail {
 namespace {
@@ -173,6 +174,18 @@ std::uint64_t double_bits(double value) noexcept {
   static_assert(sizeof(bits) == sizeof(value));
   std::memcpy(&bits, &value, sizeof(bits));
   return bits;
+}
+
+template <typename T>
+void hash_append_vector(std::uint64_t& hash, const std::vector<T>& values) noexcept {
+  hash_append(hash, values.size());
+  for (const T value : values) {
+    if constexpr (std::is_same_v<T, double>) {
+      hash_append(hash, double_bits(value));
+    } else {
+      hash_append(hash, static_cast<std::uint64_t>(value));
+    }
+  }
 }
 
 class DeviceArena {
@@ -939,24 +952,13 @@ struct TopologyKey {
 
   std::uint64_t fingerprint() const noexcept {
     std::uint64_t hash = 0x4750555854424b59ULL;
-    const auto append_vector = [&hash](const auto& values) {
-      hash_append(hash, values.size());
-      for (const auto value : values) {
-        using Value = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<Value, double>) {
-          hash_append(hash, double_bits(value));
-        } else {
-          hash_append(hash, static_cast<std::uint64_t>(value));
-        }
-      }
-    };
-    append_vector(atom_offsets);
-    append_vector(atomic_numbers);
-    append_vector(molecular_charges);
-    append_vector(unpaired_electrons);
-    append_vector(spin_channels);
-    append_vector(point_offsets);
-    append_vector(response_offsets);
+    hash_append_vector(hash, atom_offsets);
+    hash_append_vector(hash, atomic_numbers);
+    hash_append_vector(hash, molecular_charges);
+    hash_append_vector(hash, unpaired_electrons);
+    hash_append_vector(hash, spin_channels);
+    hash_append_vector(hash, point_offsets);
+    hash_append_vector(hash, response_offsets);
     hash_append(hash, flags);
     hash_append(hash, static_cast<std::uint32_t>(maximum_iterations));
     hash_append(hash, double_bits(charge_tolerance));
@@ -1130,6 +1132,105 @@ TopologyMatch match_existing_topology(const gpuxtb_batch_t& batch,
   }
   error.clear();
   return TopologyMatch::kMatch;
+}
+
+bool fixed_topology_is_host_resident(const gpuxtb_batch_t& batch) noexcept {
+  const auto host = [](const gpuxtb_const_buffer_t& buffer) {
+    return buffer.memory_space == GPUXTB_MEMORY_HOST;
+  };
+  const bool spin_present =
+      batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
+      (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
+  const bool point_present =
+      batch.point_charge_offsets.data != nullptr || batch.point_charge_offsets.size_bytes != 0u;
+  const bool response_present = batch.charge_response_offsets.data != nullptr ||
+                                batch.charge_response_offsets.size_bytes != 0u;
+  return host(batch.atom_offsets) && host(batch.atomic_numbers) && host(batch.molecular_charges) &&
+         host(batch.unpaired_electrons) && (!spin_present || host(batch.spin_channels)) &&
+         (!point_present || host(batch.point_charge_offsets)) &&
+         (!response_present || host(batch.charge_response_offsets));
+}
+
+/* The plan setup already canonicalized these bytes. Once CUDA pointer
+ * validation has proved that HOST means CPU-accessible storage, a direct
+ * comparison avoids placing topology admission behind unrelated work already
+ * queued on the owner stream. Numerical leaves are deliberately excluded. */
+bool matches_fixed_host_topology(const gpuxtb_batch_t& batch,
+                                 const gpuxtb_compute_options_t& options, const TopologyKey& key,
+                                 std::string& error) {
+  const std::int64_t expected_batch = static_cast<std::int64_t>(key.molecular_charges.size());
+  const std::int64_t expected_atoms = static_cast<std::int64_t>(key.atomic_numbers.size());
+  const std::int64_t expected_points = key.point_offsets.empty() ? 0 : key.point_offsets.back();
+  const std::int64_t expected_response =
+      key.response_offsets.empty() ? 0 : key.response_offsets.back();
+  const bool periodic_enabled =
+      batch.atomic_potential_shifts.data != nullptr || batch.total_charge_response_elements != 0 ||
+      batch.charge_response_offsets.data != nullptr || batch.charge_response_matrix.data != nullptr;
+  if (batch.batch_size != expected_batch) {
+    error = "batch_size does not match the fixed CUDA plan topology";
+    return false;
+  }
+  if (batch.total_atoms != expected_atoms) {
+    error = "total_atoms does not match the fixed CUDA plan topology";
+    return false;
+  }
+  if (batch.total_point_charges != expected_points) {
+    error = "total_point_charges does not match the fixed CUDA plan topology";
+    return false;
+  }
+  if (options.model != GPUXTB_MODEL_GFN2_XTB || options.flags != key.flags ||
+      options.max_scc_iterations != key.maximum_iterations ||
+      options.charge_tolerance != key.charge_tolerance ||
+      options.energy_tolerance != key.energy_tolerance ||
+      options.electronic_temperature != key.electronic_temperature) {
+    error = "the compute policy does not match the fixed CUDA plan topology";
+    return false;
+  }
+  if (periodic_enabled != key.periodic_enabled) {
+    error = "the periodic descriptor presence does not match the fixed CUDA plan topology";
+    return false;
+  }
+  if (!buffer_equals(batch.atom_offsets, key.atom_offsets)) {
+    error = "atom_offsets does not match the fixed CUDA plan topology";
+    return false;
+  }
+  if (!buffer_equals(batch.atomic_numbers, key.atomic_numbers)) {
+    error = "atomic_numbers does not match the fixed CUDA plan topology";
+    return false;
+  }
+  if (!double_buffer_equals(batch.molecular_charges, key.molecular_charges)) {
+    error = "molecular_charges does not match the fixed CUDA plan topology";
+    return false;
+  }
+  if (!buffer_equals(batch.unpaired_electrons, key.unpaired_electrons)) {
+    error = "unpaired_electrons does not match the fixed CUDA plan topology";
+    return false;
+  }
+  if (!spin_channel_buffer_equals(batch, key.spin_channels)) {
+    error = "spin_channels does not match the fixed CUDA plan topology";
+    return false;
+  }
+  if ((expected_points != 0 || batch.point_charge_offsets.data != nullptr) &&
+      !buffer_equals(batch.point_charge_offsets, key.point_offsets)) {
+    error = "point_charge_offsets does not match the fixed CUDA plan topology";
+    return false;
+  }
+  const bool response_enabled =
+      batch.total_charge_response_elements != 0 || batch.charge_response_offsets.data != nullptr ||
+      batch.charge_response_offsets.size_bytes != 0u ||
+      batch.charge_response_matrix.data != nullptr || batch.charge_response_matrix.size_bytes != 0u;
+  if (response_enabled) {
+    if (batch.total_charge_response_elements != expected_response) {
+      error = "total_charge_response_elements does not match the fixed CUDA plan topology";
+      return false;
+    }
+    if (!buffer_equals(batch.charge_response_offsets, key.response_offsets)) {
+      error = "charge_response_offsets does not match the fixed CUDA plan topology";
+      return false;
+    }
+  }
+  error.clear();
+  return true;
 }
 
 gpuxtb_status_t validate_offsets(const char* name, const std::vector<std::int64_t>& offsets,
@@ -1954,9 +2055,9 @@ enum class PublicResultTransactionPhase : std::uint32_t {
   kPublished = 8u,
 };
 
-/* Stack-owned descriptor image retained across one public result transaction.
- * All referenced storage is owned by Prepared or by the caller and remains
- * live until the synchronous call returns. */
+/* Descriptor image retained across one public result transaction. All
+ * referenced storage is owned by Prepared or borrowed from the caller until
+ * synchronous return / asynchronous request completion. */
 struct PublicResultTransaction {
   Gfn2PublicResultBridgeDevicePlan plan{};
   Gfn2PublicResultBridgeDeviceDestinations destinations{};
@@ -2045,6 +2146,19 @@ struct Gfn2CudaExecutionCache::Impl {
     bool energy_force_smoke_ready = false;
   };
 
+  struct ActiveRequest {
+    std::uint64_t id = 0u;
+    gpuxtb_compute_options_t options{};
+    gpuxtb_batch_result_t result{};
+    PublicResultTransaction transaction{};
+    bool completion_ready = false;
+    gpuxtb_status_t completion_status = GPUXTB_STATUS_SUCCESS;
+    std::uint32_t result_flags = 0u;
+    std::string completion_error;
+    gpuxtb_status_t deferred_status = GPUXTB_STATUS_SUCCESS;
+    std::string deferred_error;
+  };
+
   Impl(std::int32_t selected_device, void* selected_stream) noexcept
       : device_id(selected_device),
         stream(reinterpret_cast<cudaStream_t>(selected_stream)),
@@ -2071,6 +2185,48 @@ struct Gfn2CudaExecutionCache::Impl {
     if (solver_parameters != nullptr) (void)cusolverDnDestroyParams(solver_parameters);
     if (solver != nullptr) (void)cusolverDnDestroy(solver);
     if (restore_caller_device) (void)cudaSetDevice(caller_device);
+  }
+
+  /* Exception-only safety net for asynchronous admission while mutex is held.
+   * Normal status failures use the diagnostic-preserving settlement helpers;
+   * this no-throw path exists so an allocation or string exception can never
+   * strand queued work after the public Request rolls back its reservation. */
+  void settle_active_request_exception_noexcept_locked() noexcept {
+    if (active_request.id == 0u) return;
+
+    int caller_device = -1;
+    const bool caller_device_known = cudaGetDevice(&caller_device) == cudaSuccess;
+    const bool owner_selected = (caller_device_known && caller_device == device_id) ||
+                                cudaSetDevice(device_id) == cudaSuccess;
+    bool settled = false;
+    if (owner_selected && prepared != nullptr) {
+      auto& current = *prepared;
+      cudaError_t owner_status = cudaSuccess;
+      if (current.submitted) {
+        owner_status = cudaStreamSynchronize(stream);
+        if (owner_status == cudaSuccess) current.submitted = false;
+      }
+      cudaError_t host_status = cudaSuccess;
+      if (current.numerical_host_completion_stream.valid()) {
+        host_status = cudaStreamSynchronize(current.numerical_host_completion_stream.get());
+        if (host_status == cudaSuccess) {
+          current.numerical_host_upload_completion.pending.store(false, std::memory_order_release);
+        }
+      }
+      settled = owner_status == cudaSuccess && host_status == cudaSuccess;
+    } else if (owner_selected) {
+      settled = true;
+    }
+
+    if (caller_device_known && caller_device != device_id) {
+      (void)cudaSetDevice(caller_device);
+    }
+    if (settled) {
+      active_request = {};
+    } else {
+      request_poisoned = true;
+      if (prepared != nullptr) prepared->numerical.host_staging_poisoned = true;
+    }
   }
 
   gpuxtb_status_t ensure_handles(std::string& error) {
@@ -5138,6 +5294,14 @@ struct Gfn2CudaExecutionCache::Impl {
     status = validate_const("unpaired_electrons", batch.unpaired_electrons, batch.batch_size,
                             sizeof(std::int32_t), alignof(std::int32_t));
     if (status != GPUXTB_STATUS_SUCCESS) return status;
+    const bool spin_present =
+        batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
+        (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
+    const gpuxtb_const_buffer_t absent_spin{};
+    const gpuxtb_const_buffer_t& spin_buffer = spin_present ? batch.spin_channels : absent_spin;
+    status = validate_const("spin_channels", spin_buffer, spin_present ? batch.batch_size : 0,
+                            sizeof(std::int32_t), alignof(std::int32_t));
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
     status = validate_const("point_charge_offsets", batch.point_charge_offsets,
                             point_topology_active ? batch.batch_size + 1 : 0, sizeof(std::int64_t),
                             alignof(std::int64_t));
@@ -6036,10 +6200,41 @@ struct Gfn2CudaExecutionCache::Impl {
     return GPUXTB_STATUS_SUCCESS;
   }
 
+  /* The asynchronous path submits the device-gated commit before returning,
+   * so its host acceptance occurs only after that commit event completes. The
+   * device kernel itself reads the same aggregate control and is a no-op on a
+   * rejected prepare image. */
+  gpuxtb_status_t accept_public_result_after_commit_locked(Prepared& current,
+                                                           PublicResultTransaction& transaction,
+                                                           std::string& error) {
+    if (transaction.phase != PublicResultTransactionPhase::kCommitCompleted) {
+      error = "CUDA public result acceptance precedes asynchronous commit completion";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    const auto& public_state = current.public_result;
+    const auto aggregate =
+        static_cast<Gfn2PublicResultBridgeError>(public_state.host_control->aggregate_error);
+    if (aggregate != Gfn2PublicResultBridgeError::kSuccess) {
+      std::ostringstream message;
+      message << "CUDA public result bridge rejected inference: aggregate_error="
+              << static_cast<std::uint32_t>(aggregate) << " publication_plan_error="
+              << public_state.host_control->internal_publication_plan_error
+              << " publication_epoch=" << public_state.host_control->publication_epoch_snapshot
+              << " current_epoch=" << public_state.host_control->current_geometry_epoch;
+      error = message.str();
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
   gpuxtb_status_t enqueue_public_result_commit_locked(Prepared& current,
                                                       PublicResultTransaction& transaction,
+                                                      bool allow_device_gated_prepare,
                                                       std::string& error) {
-    if (transaction.phase != PublicResultTransactionPhase::kPrepareAccepted) {
+    if (transaction.phase != PublicResultTransactionPhase::kPrepareAccepted &&
+        !(allow_device_gated_prepare &&
+          transaction.phase == PublicResultTransactionPhase::kPrepareSubmitted)) {
       error = "CUDA public result commit has no accepted prepared image";
       return GPUXTB_STATUS_INTERNAL_ERROR;
     }
@@ -6059,11 +6254,10 @@ struct Gfn2CudaExecutionCache::Impl {
   }
 
   /* Host result publication is a separate, non-CUDA phase after commit wait. */
-  gpuxtb_status_t publish_public_results_locked(Prepared& current,
-                                                const gpuxtb_compute_options_t& options,
-                                                gpuxtb_batch_result_t& result,
-                                                PublicResultTransaction& transaction,
-                                                bool commit_host_outputs, std::string& error) {
+  gpuxtb_status_t publish_public_results_locked(
+      Prepared& current, const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result,
+      PublicResultTransaction& transaction, bool commit_host_outputs, bool publish_descriptor_flags,
+      std::uint32_t& completed_result_flags, std::string& error) {
     if (transaction.phase != PublicResultTransactionPhase::kCommitCompleted) {
       error = "CUDA public result host publication precedes commit completion";
       return GPUXTB_STATUS_INTERNAL_ERROR;
@@ -6107,7 +6301,8 @@ struct Gfn2CudaExecutionCache::Impl {
     commit_host(result.scc_converged, public_state.converged, batch_size, sizeof(std::uint8_t));
     commit_host(result.per_system_status, public_state.system_statuses, batch_size,
                 sizeof(gpuxtb_status_t));
-    result.flags = public_state.pending_result_flags;
+    completed_result_flags = public_state.pending_result_flags;
+    if (publish_descriptor_flags) result.flags = completed_result_flags;
     current.inference.warm_checkpoint_ready = *public_state.warm_checkpoint_ready != 0u;
     transaction.phase = PublicResultTransactionPhase::kPublished;
     error.clear();
@@ -6163,6 +6358,8 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.scc_loop_numerical_body_count =
         opaque_address(current.scc_loop.numerical_body_count_device());
     identity.energy_force_descriptors = opaque_address(&current.energy_force);
+    identity.request_submissions = request_submissions;
+    identity.request_active = active_request.id == 0u ? 0u : 1u;
     identity.topology_arena = opaque_address(current.topology_arena.get());
     identity.input_arena = opaque_address(current.input_arena.get());
     identity.iteration_arena = opaque_address(current.iteration_arena.get());
@@ -6297,6 +6494,10 @@ struct Gfn2CudaExecutionCache::Impl {
   cublasHandle_t blas = nullptr;
   bool handles_created = false;
   std::uint64_t next_plan_token = 1u;
+  std::uint64_t next_request_id = 1u;
+  std::uint64_t request_submissions = 0u;
+  bool request_poisoned = false;
+  ActiveRequest active_request;
   std::unique_ptr<Prepared> prepared;
   mutable std::mutex mutex;
 };
@@ -6318,6 +6519,14 @@ gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
   }
   auto& implementation = *cache.impl_;
   std::lock_guard<std::mutex> lock(implementation.mutex);
+  if (implementation.request_poisoned) {
+    error = "CUDA execution cache is poisoned by a failed request teardown";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  if (implementation.active_request.id != 0u) {
+    error = "CUDA execution cache already has an active asynchronous request";
+    return GPUXTB_STATUS_INVALID_ARGUMENT;
+  }
   ScopedCudaDevice device(implementation.device_id, error);
   if (!device.ok()) return device.status();
   const auto finish = [&](gpuxtb_status_t status) -> gpuxtb_status_t {
@@ -6481,7 +6690,7 @@ gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
     }
 
     status = implementation.enqueue_public_result_commit_locked(*working, public_result_transaction,
-                                                                error);
+                                                                false, error);
     if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
 
     /* A successful launch is the caller-device commit point. Ownership moves
@@ -6509,8 +6718,10 @@ gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
         PublicResultTransactionPhase::kCommitCompletionRecorded,
         PublicResultTransactionPhase::kCommitCompleted, kCommitCompletionFailure, error);
     if (status != GPUXTB_STATUS_SUCCESS) return status;
+    std::uint32_t completed_result_flags = 0u;
     status = implementation.publish_public_results_locked(
-        *working, options, result, public_result_transaction, ownership_published, error);
+        *working, options, result, public_result_transaction, ownership_published, true,
+        completed_result_flags, error);
     return status;
   }();
   return finish(transaction_status);
@@ -6529,6 +6740,409 @@ gpuxtb_status_t execute_restricted_gfn2_cuda_plan(Gfn2CudaExecutionCache& cache,
                                                   gpuxtb_batch_result_t& result,
                                                   std::string& error) {
   return execute_restricted_gfn2_cuda_impl(cache, batch, options, result, true, error);
+}
+
+gpuxtb_status_t enqueue_restricted_gfn2_cuda_plan(
+    const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const gpuxtb_batch_t& batch,
+    const gpuxtb_compute_options_t& options, const gpuxtb_batch_result_t& result,
+    RequestSubmission& submission, std::string& error) {
+  submission = {};
+  if (cache == nullptr || cache->impl_ == nullptr) {
+    error = "CUDA GFN2 execution cache has no implementation";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  auto& implementation = *cache->impl_;
+  gpuxtb_status_t final_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  {
+    std::lock_guard<std::mutex> lock(implementation.mutex);
+    if (implementation.request_poisoned) {
+      error = "CUDA execution cache is poisoned by a failed request teardown";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    if (implementation.active_request.id != 0u) {
+      error = "CUDA execution cache already has an active asynchronous request";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+
+    std::uint64_t request_id = implementation.next_request_id++;
+    if (request_id == 0u) request_id = implementation.next_request_id++;
+    implementation.active_request = {};
+    implementation.active_request.id = request_id;
+    struct ActiveRequestExceptionGuard {
+      Gfn2CudaExecutionCache::Impl& implementation;
+      bool armed = true;
+      ~ActiveRequestExceptionGuard() {
+        if (armed) implementation.settle_active_request_exception_noexcept_locked();
+      }
+      void dismiss() noexcept { armed = false; }
+    } exception_guard{implementation};
+    /* Valid short-prefix callers own no bytes beyond struct_size. Snapshot
+     * only the validated prefix so asynchronous host publication never reads
+     * optional suffix storage after enqueue returns. */
+    std::memcpy(&implementation.active_request.options, &options,
+                std::min<std::size_t>(options.struct_size, sizeof(gpuxtb_compute_options_t)));
+    std::memcpy(&implementation.active_request.result, &result,
+                std::min<std::size_t>(result.struct_size, sizeof(gpuxtb_batch_result_t)));
+    ScopedCudaDevice device(implementation.device_id, error);
+    if (!device.ok()) {
+      implementation.active_request = {};
+      return device.status();
+    }
+
+    const gpuxtb_status_t transaction_status = [&]() -> gpuxtb_status_t {
+      gpuxtb_status_t status =
+          validate_cuda_stream_owner(implementation.device_id, implementation.stream, true, error);
+      if (status != GPUXTB_STATUS_SUCCESS) return status;
+      status = implementation.validate_public_request_pointers(batch, options, &result, error);
+      if (status != GPUXTB_STATUS_SUCCESS) return status;
+      status = implementation.ensure_handles(error);
+      if (status != GPUXTB_STATUS_SUCCESS) return status;
+      if (implementation.prepared == nullptr) {
+        error = "CUDA plan request has no prepared fixed-topology runtime";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      auto& working = *implementation.prepared;
+
+      if (fixed_topology_is_host_resident(batch)) {
+        if (!matches_fixed_host_topology(batch, options, working.host.key, error)) {
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+      } else {
+        /* Device and mixed topology currently use the canonical staging
+         * admission fence. It runs only after the single-flight busy gate, and
+         * no candidate is ever published by a fixed-plan request. */
+        const Gfn2CudaTopologyStagingDiagnostic staged =
+            implementation.topology_staging.stage_and_validate(batch, error);
+        if (!staged.success()) return staged.status;
+        const bool candidate = staged.disposition == Gfn2CudaTopologyStageDisposition::kCandidate;
+        const Gfn2CudaTopologyHostSnapshot* topology =
+            candidate ? implementation.topology_staging.candidate_snapshot()
+                      : implementation.topology_staging.committed_snapshot();
+        const bool matches =
+            topology != nullptr && topology_snapshot_matches(*topology, options, working.host.key);
+        if (candidate) implementation.topology_staging.abort_candidate();
+        if (!matches) {
+          error = "the batch topology does not match the fixed CUDA plan topology";
+          return GPUXTB_STATUS_INVALID_ARGUMENT;
+        }
+      }
+
+      const auto fail_submitted = [&](gpuxtb_status_t failure) {
+        return implementation.settle_public_submissions_locked(working, failure, error);
+      };
+      Gfn2CudaNumericalInputView numerical{};
+      numerical.positions = batch.positions;
+      numerical.point_charge_positions = batch.point_charge_positions;
+      numerical.point_charge_values = batch.point_charge_values;
+      numerical.point_charge_gammas = batch.point_charge_gammas;
+      numerical.atomic_potential_shifts = batch.atomic_potential_shifts;
+      numerical.charge_response_matrix = batch.charge_response_matrix;
+      status = implementation.refresh_numerical_locked(working, numerical, error);
+      if (status != GPUXTB_STATUS_SUCCESS) return fail_submitted(status);
+      status =
+          implementation.execute_inference_locked(working, Gfn2CudaSccStartMode::kFresh, error);
+      if (status != GPUXTB_STATUS_SUCCESS) return fail_submitted(status);
+      working.inference.warm_checkpoint_ready = false;
+
+      auto& active = implementation.active_request;
+      status = implementation.enqueue_public_result_prepare_locked(
+          working, batch, options, active.result, active.transaction, error);
+      if (status != GPUXTB_STATUS_SUCCESS) return fail_submitted(status);
+      /* Commit is device-gated by the control record produced by prepare. It
+       * is submitted now so downstream work on the same CUDA stream observes
+       * real outputs without requiring a host query to advance execution. */
+      status = implementation.enqueue_public_result_commit_locked(working, active.transaction, true,
+                                                                  error);
+      if (status != GPUXTB_STATUS_SUCCESS) return fail_submitted(status);
+      ++implementation.request_submissions;
+      status = implementation.record_public_result_completion_locked(
+          working, active.transaction, PublicResultTransactionPhase::kCommitSubmitted,
+          PublicResultTransactionPhase::kCommitCompletionRecorded,
+          PublicResultTransactionPhase::kCommitCompleted, true,
+          "CUDA asynchronous caller-output completion", error);
+      if (status != GPUXTB_STATUS_SUCCESS) {
+        /* The commit was accepted, but neither event recording nor the
+         * helper's exact-stream fallback settled it. Keep the request PENDING:
+         * wait/destroy must synchronize the owner stream because the event
+         * object may still name an older completed phase. */
+        active.deferred_status = GPUXTB_STATUS_INTERNAL_ERROR;
+        active.deferred_error = error;
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      if (active.transaction.phase == PublicResultTransactionPhase::kCommitCompleted) {
+        const cudaError_t host_status =
+            working.numerical_host_completion_stream.valid()
+                ? cudaStreamSynchronize(working.numerical_host_completion_stream.get())
+                : cudaSuccess;
+        if (host_status != cudaSuccess) {
+          active.deferred_status = GPUXTB_STATUS_INTERNAL_ERROR;
+          active.deferred_error = cuda_error_message(
+              "CUDA numerical host snapshot settlement after event-record fallback", host_status);
+          return GPUXTB_STATUS_SUCCESS;
+        }
+        working.numerical_host_upload_completion.pending.store(false, std::memory_order_release);
+        status = implementation.accept_public_result_after_commit_locked(
+            working, active.transaction, active.completion_error);
+        if (status == GPUXTB_STATUS_SUCCESS) {
+          status = implementation.publish_public_results_locked(
+              working, active.options, active.result, active.transaction, true, false,
+              active.result_flags, active.completion_error);
+        }
+        active.completion_ready = true;
+        active.completion_status = status;
+        if (status != GPUXTB_STATUS_SUCCESS) active.result_flags = 0u;
+      }
+      return GPUXTB_STATUS_SUCCESS;
+    }();
+
+    std::string restore_error;
+    const gpuxtb_status_t restore_status = device.restore(restore_error);
+    final_status = transaction_status;
+    if (restore_status != GPUXTB_STATUS_SUCCESS) {
+      if (transaction_status == GPUXTB_STATUS_SUCCESS) {
+        auto& active = implementation.active_request;
+        active.deferred_status = GPUXTB_STATUS_INTERNAL_ERROR;
+        if (!active.deferred_error.empty()) active.deferred_error += "; additionally, ";
+        active.deferred_error += restore_error;
+        if (active.completion_ready) {
+          active.completion_status = GPUXTB_STATUS_INTERNAL_ERROR;
+          if (!active.completion_error.empty()) active.completion_error += "; additionally, ";
+          active.completion_error += active.deferred_error;
+        }
+        final_status = GPUXTB_STATUS_SUCCESS;
+      } else {
+        final_status = restore_status;
+        if (!error.empty() && error != restore_error) {
+          error += "; additionally, " + restore_error;
+        } else {
+          error = std::move(restore_error);
+        }
+      }
+    }
+    if (final_status != GPUXTB_STATUS_SUCCESS) {
+      implementation.active_request = {};
+    } else if (implementation.active_request.completion_ready) {
+      submission.completed_inline = true;
+      submission.completion_status = implementation.active_request.completion_status;
+      submission.result_flags = implementation.active_request.result_flags;
+      submission.completion_error = implementation.active_request.completion_error;
+      implementation.active_request = {};
+    }
+    exception_guard.dismiss();
+  }
+
+  if (final_status != GPUXTB_STATUS_SUCCESS) return final_status;
+  if (!submission.completed_inline) {
+    /* The plan already owns this shared_ptr/control block. Casting and copying
+     * it into the request is allocation-free in steady state. */
+    submission.pending = std::static_pointer_cast<RequestCompletion>(cache);
+  }
+  error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t Gfn2CudaExecutionCache::probe(bool wait, RequestCompletionResult& result) noexcept {
+  result = {};
+  if (impl_ == nullptr) {
+    result.completion_error = "CUDA GFN2 execution cache has no implementation";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+  try {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    auto& active = impl_->active_request;
+    if (active.id == 0u || impl_->prepared == nullptr) {
+      result.completion_error = "CUDA request completion does not own the active cache submission";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    if (active.completion_ready) {
+      result.complete = true;
+      result.completion_status = active.completion_status;
+      result.result_flags = active.result_flags;
+      result.completion_error = active.completion_error;
+      return GPUXTB_STATUS_SUCCESS;
+    }
+
+    std::string device_error;
+    ScopedCudaDevice device(impl_->device_id, device_error);
+    if (!device.ok()) {
+      result.completion_error = std::move(device_error);
+      return device.status();
+    }
+    auto& current = *impl_->prepared;
+    auto& transaction = active.transaction;
+
+    bool incomplete = false;
+    const auto observe_event = [&]() -> gpuxtb_status_t {
+      if (transaction.phase == PublicResultTransactionPhase::kCommitCompleted) {
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      if (transaction.phase == PublicResultTransactionPhase::kCommitSubmitted) {
+        const cudaError_t stream_status =
+            wait ? cudaStreamSynchronize(impl_->stream) : cudaStreamQuery(impl_->stream);
+        if (!wait && stream_status == cudaErrorNotReady) {
+          incomplete = true;
+          return GPUXTB_STATUS_SUCCESS;
+        }
+        if (stream_status != cudaSuccess) {
+          result.completion_error = cuda_error_message(
+              "CUDA asynchronous caller-output settlement after event-record failure",
+              stream_status);
+          return GPUXTB_STATUS_INTERNAL_ERROR;
+        }
+        current.submitted = false;
+        transaction.phase = PublicResultTransactionPhase::kCommitCompleted;
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      if (transaction.phase != PublicResultTransactionPhase::kCommitCompletionRecorded ||
+          current.public_result_completion_event.get() == nullptr) {
+        result.completion_error = "CUDA request has an invalid completion-event phase";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      const cudaError_t cuda_status =
+          wait ? cudaEventSynchronize(current.public_result_completion_event.get())
+               : cudaEventQuery(current.public_result_completion_event.get());
+      if (!wait && cuda_status == cudaErrorNotReady) {
+        incomplete = true;
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      if (cuda_status != cudaSuccess) {
+        result.completion_error =
+            cuda_error_message("CUDA asynchronous caller-output completion", cuda_status);
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      current.submitted = false;
+      transaction.phase = PublicResultTransactionPhase::kCommitCompleted;
+      return GPUXTB_STATUS_SUCCESS;
+    };
+
+    const auto observe_private_stream = [&]() -> gpuxtb_status_t {
+      if (!current.numerical_host_completion_stream.valid()) return GPUXTB_STATUS_SUCCESS;
+      const cudaError_t cuda_status =
+          wait ? cudaStreamSynchronize(current.numerical_host_completion_stream.get())
+               : cudaStreamQuery(current.numerical_host_completion_stream.get());
+      if (!wait && cuda_status == cudaErrorNotReady) {
+        incomplete = true;
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      if (cuda_status != cudaSuccess) {
+        result.completion_error =
+            cuda_error_message("CUDA numerical host snapshot completion", cuda_status);
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
+      current.numerical_host_upload_completion.pending.store(false, std::memory_order_release);
+      return GPUXTB_STATUS_SUCCESS;
+    };
+
+    gpuxtb_status_t status = observe_event();
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      std::string ignored;
+      (void)device.restore(ignored);
+      return status;
+    }
+    if (!incomplete) {
+      status = observe_private_stream();
+      if (status != GPUXTB_STATUS_SUCCESS) {
+        std::string ignored;
+        (void)device.restore(ignored);
+        return status;
+      }
+    }
+    if (!incomplete) {
+      status = impl_->accept_public_result_after_commit_locked(current, transaction,
+                                                               active.completion_error);
+      if (status == GPUXTB_STATUS_SUCCESS) {
+        status = impl_->publish_public_results_locked(current, active.options, active.result,
+                                                      transaction, true, false, active.result_flags,
+                                                      active.completion_error);
+      }
+      active.completion_ready = true;
+      active.completion_status = status;
+      if (status != GPUXTB_STATUS_SUCCESS) active.result_flags = 0u;
+      if (active.deferred_status != GPUXTB_STATUS_SUCCESS) {
+        active.completion_status = active.deferred_status;
+        if (!active.completion_error.empty()) active.completion_error += "; additionally, ";
+        active.completion_error += active.deferred_error;
+      }
+    }
+
+    std::string restore_error;
+    const gpuxtb_status_t restore_status = device.restore(restore_error);
+    if (restore_status != GPUXTB_STATUS_SUCCESS) {
+      /* Restoring the query thread's device is part of accessing the request,
+       * not the submitted computation. Preserve an already finalized compute
+       * snapshot so a later query can retrieve it, but report this call's
+       * access failure through the API return channel. */
+      result.completion_error = std::move(restore_error);
+      return restore_status;
+    }
+    if (active.completion_ready) {
+      result.complete = true;
+      result.completion_status = active.completion_status;
+      result.result_flags = active.result_flags;
+      result.completion_error = active.completion_error;
+    }
+    return GPUXTB_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    result.completion_error = "failed to allocate while probing CUDA request completion";
+    return GPUXTB_STATUS_ALLOCATION_FAILED;
+  } catch (const std::exception& exception) {
+    result.completion_error = exception.what();
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  } catch (...) {
+    result.completion_error = "unknown exception while probing CUDA request completion";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+}
+
+void Gfn2CudaExecutionCache::settle_noexcept() noexcept {
+  if (impl_ == nullptr) return;
+  try {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->active_request.id == 0u) return;
+    bool settled = false;
+    if (impl_->prepared != nullptr) {
+      auto& current = *impl_->prepared;
+      std::string ignored;
+      ScopedCudaDevice device(impl_->device_id, ignored);
+      if (device.ok()) {
+        cudaError_t owner_status = cudaSuccess;
+        if (current.submitted) {
+          owner_status = cudaErrorInvalidValue;
+          if (impl_->active_request.transaction.phase ==
+                  PublicResultTransactionPhase::kCommitCompletionRecorded &&
+              current.public_result_completion_event.get() != nullptr) {
+            owner_status = cudaEventSynchronize(current.public_result_completion_event.get());
+            if (owner_status != cudaSuccess) owner_status = cudaStreamSynchronize(impl_->stream);
+          } else {
+            /* A failed record leaves the reusable event pointing at an older
+             * phase; only the exact owner stream can settle this commit. */
+            owner_status = cudaStreamSynchronize(impl_->stream);
+          }
+          if (owner_status == cudaSuccess) current.submitted = false;
+        }
+        cudaError_t host_status = cudaSuccess;
+        if (current.numerical_host_completion_stream.valid()) {
+          host_status = cudaStreamSynchronize(current.numerical_host_completion_stream.get());
+          if (host_status == cudaSuccess) {
+            current.numerical_host_upload_completion.pending.store(false,
+                                                                   std::memory_order_release);
+          }
+        }
+        settled = owner_status == cudaSuccess && host_status == cudaSuccess;
+        (void)device.restore(ignored);
+      }
+    }
+    if (settled) {
+      impl_->active_request = {};
+    } else {
+      impl_->request_poisoned = true;
+      if (impl_->prepared != nullptr) impl_->prepared->numerical.host_staging_poisoned = true;
+    }
+  } catch (...) {
+    /* Request destruction cannot report. Prepared teardown retains a second
+     * exact-stream safety net if CUDA or allocation state is already broken. */
+  }
 }
 
 gpuxtb_status_t Gfn2CudaExecutionCache::prepare_host(const gpuxtb_batch_t& batch,
@@ -6746,7 +7360,9 @@ bool Gfn2CudaExecutionCache::valid() const noexcept {
 Gfn2CudaExecutionIdentity Gfn2CudaExecutionCache::identity() const noexcept {
   if (impl_ == nullptr) return {};
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  return impl_->snapshot();
+  Gfn2CudaExecutionIdentity identity = impl_->snapshot();
+  identity.request_completion_owner = opaque_address(this);
+  return identity;
 }
 
 }  // namespace gpuxtb::detail

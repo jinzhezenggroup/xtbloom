@@ -15,6 +15,7 @@ namespace gpuxtb::detail {
 
 class Gfn2CpuExecutionCache;
 class Gfn2CudaExecutionCache;
+struct RequestSubmission;
 struct Context;
 
 /*
@@ -49,6 +50,9 @@ class Gfn2Plan {
                                   std::string& error);
   gpuxtb_status_t compute(const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options,
                           gpuxtb_batch_result_t& result, std::string& error);
+  gpuxtb_status_t enqueue(const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options,
+                          const gpuxtb_batch_result_t& result, RequestSubmission& submission,
+                          std::string& error);
   void destroy() noexcept;
 
   [[nodiscard]] bool valid() const noexcept;

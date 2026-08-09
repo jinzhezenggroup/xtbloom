@@ -51,6 +51,28 @@ class FakeCompletion final : public gpuxtb::detail::RequestCompletion {
   std::shared_ptr<ProbeCounts> counts_;
 };
 
+class FailingWaitCompletion final : public gpuxtb::detail::RequestCompletion {
+ public:
+  explicit FailingWaitCompletion(std::shared_ptr<ProbeCounts> counts)
+      : counts_(std::move(counts)) {}
+
+  gpuxtb_status_t probe(bool wait,
+                        gpuxtb::detail::RequestCompletionResult& result) noexcept override {
+    if (!wait) {
+      ++counts_->nonblocking;
+      return GPUXTB_STATUS_SUCCESS;
+    }
+    ++counts_->blocking;
+    result.completion_error = "exact wait failed";
+    return GPUXTB_STATUS_INTERNAL_ERROR;
+  }
+
+  void settle_noexcept() noexcept override { ++counts_->settled; }
+
+ private:
+  std::shared_ptr<ProbeCounts> counts_;
+};
+
 gpuxtb_request_info_t initialized_info() {
   gpuxtb_request_info_t info{};
   info.struct_size = sizeof(info);
@@ -103,6 +125,9 @@ void test_request_reserve_complete_and_reuse() {
   request.rollback_submission();
   CHECK(request.query(false, info, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(info.state == GPUXTB_REQUEST_COMPLETE);
+  CHECK(info.completion_status == GPUXTB_STATUS_ALLOCATION_FAILED);
+  CHECK(info.result_flags == GPUXTB_RESULT_DIPOLE_MOMENTS);
+  CHECK(std::string(request.error()) == "inline test failure");
 }
 
 void test_request_probe_and_destroy() {
@@ -114,7 +139,7 @@ void test_request_probe_and_destroy() {
     std::string error;
     CHECK(request.reserve_submission(context, error) == GPUXTB_STATUS_SUCCESS);
     gpuxtb::detail::RequestSubmission submission;
-    submission.pending = std::make_unique<FakeCompletion>(counts);
+    submission.pending = std::make_shared<FakeCompletion>(counts);
     CHECK(request.publish_submission(std::move(submission), error) == GPUXTB_STATUS_SUCCESS);
 
     gpuxtb_request_info_t info = initialized_info();
@@ -136,11 +161,23 @@ void test_request_probe_and_destroy() {
     std::string error;
     CHECK(request.reserve_submission(context, error) == GPUXTB_STATUS_SUCCESS);
     gpuxtb::detail::RequestSubmission submission;
-    submission.pending = std::make_unique<FakeCompletion>(destroy_counts);
+    submission.pending = std::make_shared<FakeCompletion>(destroy_counts);
     CHECK(request.publish_submission(std::move(submission), error) == GPUXTB_STATUS_SUCCESS);
   }
   CHECK(destroy_counts->blocking == 1);
   CHECK(destroy_counts->settled == 1);
+
+  auto failed_wait_counts = std::make_shared<ProbeCounts>();
+  {
+    gpuxtb::detail::Request request(context);
+    std::string error;
+    CHECK(request.reserve_submission(context, error) == GPUXTB_STATUS_SUCCESS);
+    gpuxtb::detail::RequestSubmission submission;
+    submission.pending = std::make_shared<FailingWaitCompletion>(failed_wait_counts);
+    CHECK(request.publish_submission(std::move(submission), error) == GPUXTB_STATUS_SUCCESS);
+  }
+  CHECK(failed_wait_counts->blocking == 1);
+  CHECK(failed_wait_counts->settled == 1);
 }
 
 int main() {

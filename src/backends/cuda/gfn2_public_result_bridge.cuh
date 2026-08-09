@@ -183,10 +183,11 @@ static_assert(std::is_standard_layout_v<Gfn2PublicResultBridgeDeviceDiagnostics>
  * The preflight kernel seals the aggregate gate before copying every active
  * field into runtime-owned device staging. Requested host routes are then
  * downloaded into pinned staging, followed by the control record. This phase
- * never writes a caller CUDA destination. The owner must wait for completion,
- * accept the control record, and settle every other recoverable transaction
- * phase before calling commit_gfn2_public_results_cuda(). No allocation, host
- * polling, callback, or synchronization is performed here.
+ * never writes a caller CUDA destination. A synchronous owner waits and
+ * accepts the downloaded control before commit. A stream-asynchronous owner
+ * may queue commit immediately: the commit kernel reads the same device
+ * control and becomes a no-op unless prepare sealed aggregate success. No
+ * allocation, host polling, callback, or synchronization is performed here.
  */
 cudaError_t prepare_gfn2_public_results_cuda(
     const Gfn2PublicResultBridgeDevicePlan& plan, const Gfn2PublicResultBridgeDeviceInput& input,
