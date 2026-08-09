@@ -848,13 +848,12 @@ int test_device_refresh_and_peer_rollback(cudaStream_t stream, std::int32_t devi
 }
 
 /*
- * Production path with the sparse pair-list consistency gate active.  A single
+ * Production path with the sparse pair-list CN and force gates active.  A single
  * 62-atom C20H42 chain crosses the 40-atom dense-fallback crossover, so the
- * runtime provisioning enables the bucketed CN gate.  A fresh numerical
- * refresh and full inference must complete with no peer failure: the sparse
- * coordination numbers agree bitwise with the dense geometry cache, and any
- * leak of that record into the debug surface stays a precondition that is
- * asserted by the unit-level gate tests.
+ * runtime provisioning enables both the bucketed CN consistency gate and the
+ * sparse coordination VJP parity gate.  Force-mode setup must succeed before
+ * the first committed pair list exists, then a fresh numerical refresh and
+ * energy/force inference must complete with no peer failure.
  */
 int test_large_system_sparse_gate(cudaStream_t stream, std::int32_t device_id) {
   Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
@@ -867,13 +866,16 @@ int test_large_system_sparse_gate(cudaStream_t stream, std::int32_t device_id) {
   CHECK(HostSccCase::create(case_options, host, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(host.total_atoms() == 62u);
   PublicHostBatch batch = PublicHostBatch::from_host(host, false);
-  gpuxtb_compute_options_t options = compute_options(false);
+  gpuxtb_compute_options_t options = compute_options();
   options.max_scc_iterations = 200;
   options.electronic_temperature = 300.0 * 3.166811563e-06;
   bool reused = true;
   CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == GPUXTB_STATUS_SUCCESS);
   CHECK(!reused);
   const Gfn2CudaExecutionIdentity initial = cache.identity();
+  CHECK(initial.force_mode_ready == 1u);
+  CHECK(initial.energy_force_smoke_ready == 1u);
+  CHECK(initial.scc_conditional_graph_ready == 1u);
 
   PinnedHostBuffer<double> caller_positions;
   PinnedHostBuffer<std::uint8_t> caller_requested;
@@ -895,18 +897,41 @@ int test_large_system_sparse_gate(cudaStream_t stream, std::int32_t device_id) {
   CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
         GPUXTB_STATUS_SUCCESS);
   InferenceSnapshot result;
-  CHECK(download_inference_snapshot(cache.identity(), stream, false, result) == 0);
+  CHECK(download_inference_snapshot(cache.identity(), stream, true, result) == 0);
   CHECK(result.publication_epoch == 2u);
   CHECK(result.publication_plan_error ==
         static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
-  /* The sparse consistency gate is applied during the numerical-refresh
-   * transaction; a peer that disagreed with the dense geometry cache would
-   * already fail closed there.  The inference therefore must publish normally
-   * and report a finite energy; SCC convergence on this 62-atom chain within
-   * the fixture's bounded iteration budget is not the gate's concern. */
+  /* The CN gate is applied during numerical refresh, while the sparse VJP is
+   * parity-gated during terminal force execution.  Either disagreement fails
+   * the peer closed instead of publishing finite results. */
   CHECK(result.statuses[0] == GPUXTB_STATUS_SUCCESS);
-  CHECK(std::isnan(result.energies[0]) == false);
   CHECK(std::isfinite(result.energies[0]));
+  CHECK(result.qm_forces.size() == static_cast<std::size_t>(3 * host.total_atoms()));
+  CHECK(std::all_of(result.qm_forces.begin(), result.qm_forces.end(),
+                    [](double value) { return std::isfinite(value); }));
+
+  /* Reuse the fixed-topology runtime at a new geometry epoch.  This exercises
+   * the stable committed pair-list addresses and sparse force consumer on the
+   * replay path rather than proving only the first execution. */
+  caller_positions.data()[0] += 0.01;
+  CHECK(cache.refresh_numerical_async(numerical, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(same_identity(initial, cache.identity()));
+  RefreshSnapshot replay_refresh;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, replay_refresh) == 0);
+  CHECK(replay_refresh.epoch == 3u);
+  CHECK(replay_refresh.committed[0] == 3u);
+  CHECK(replay_refresh.eligible[0] == 1u);
+  CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kFresh, error) ==
+        GPUXTB_STATUS_SUCCESS);
+  InferenceSnapshot replay_result;
+  CHECK(download_inference_snapshot(cache.identity(), stream, true, replay_result) == 0);
+  CHECK(replay_result.publication_epoch == 3u);
+  CHECK(replay_result.publication_plan_error ==
+        static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
+  CHECK(replay_result.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(std::isfinite(replay_result.energies[0]));
+  CHECK(std::all_of(replay_result.qm_forces.begin(), replay_result.qm_forces.end(),
+                    [](double value) { return std::isfinite(value); }));
   return 0;
 }
 
