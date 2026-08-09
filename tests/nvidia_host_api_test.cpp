@@ -1,7 +1,7 @@
+#include "runtime/nvidia_host_api.h"
+
 #include <cstdint>
 #include <type_traits>
-
-#include "runtime/nvidia_host_api.h"
 
 static_assert(std::is_same_v<cublasStatus_t, std::uint32_t>);
 static_assert(std::is_same_v<cusolverStatus_t, std::uint32_t>);
