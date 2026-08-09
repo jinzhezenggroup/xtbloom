@@ -1373,6 +1373,219 @@ int test_current_device_restored(int device_count, std::int32_t context_device, 
   return 0;
 }
 
+/* Wrong-device determinism at the public ABI: a live CUDA allocation that
+ * belongs to a different physical device than the context must be rejected
+ * with GPUXTB_STATUS_INVALID_ARGUMENT before any caller output byte is
+ * touched, and the caller's thread-local current device must be restored.
+ * Runs only when at least two GPUs are visible; on a single-GPU host the
+ * mislabeled-space half of the contract (host-tagged device pointer and
+ * device-tagged host pointer) is exercised by test_public_mislabeled_rejection
+ * below, which shares this scenario code path through the same validator. */
+int test_public_wrong_device_rejection(int device_count, std::int32_t context_device,
+                                       PublicBatch& batch,
+                                       const gpuxtb_compute_options_t& options) {
+  if (device_count < 2) {
+    std::puts("cuda_public_api_test: SKIP wrong-device rejection (requires two devices)");
+    return 0;
+  }
+  g_scenario = "wrong-device-rejection";
+  CurrentDeviceRestore restore;
+  CUDA_CHECK(cudaSetDevice(context_device));
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle context =
+      make_context(GPUXTB_BACKEND_CUDA, context_device, stream.get(), context_status);
+  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+
+  const int foreign_device = context_device == 0 ? 1 : 0;
+  /* Allocate the positions buffer on the foreign device so
+   * cudaPointerGetAttributes reports a genuine cross-device ownership
+   * mismatch instead of an ordinary stale or mislabeled address. */
+  CUDA_CHECK(cudaSetDevice(foreign_device));
+  double* foreign_positions = nullptr;
+  CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&foreign_positions),
+                        batch.positions.size() * sizeof(double)));
+  CUDA_CHECK(cudaMemcpy(foreign_positions, batch.positions.data(),
+                        batch.positions.size() * sizeof(double), cudaMemcpyHostToDevice));
+
+  /* The caller's current device differs from both the context device and the
+   * foreign allocation device on one side, exercising isolation on the way in
+   * and out. */
+  CUDA_CHECK(cudaSetDevice(foreign_device));
+  g_scenario = "wrong-device-rejection/gpuxtb_compute";
+  {
+    PublicBatch wrong = batch;
+    wrong.bind();
+    wrong.descriptor.positions = {foreign_positions, wrong.positions.size() * sizeof(double),
+                                  GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+    ResultOwner result;
+    CUDA_CHECK(result.bind(wrong, ResultLayout::kHost));
+    CHECK(gpuxtb_compute(context.get(), &wrong.descriptor, &options, &result.descriptor) ==
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    bool unchanged = false;
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    bool guards = false;
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
+    int after = -1;
+    CUDA_CHECK(cudaGetDevice(&after));
+    CHECK(after == foreign_device);
+  }
+
+  g_scenario = "wrong-device-rejection/plan-create";
+  {
+    PublicBatch wrong = batch;
+    wrong.bind();
+    wrong.descriptor.positions = {foreign_positions, wrong.positions.size() * sizeof(double),
+                                  GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+    gpuxtb_plan_t* raw_plan = reinterpret_cast<gpuxtb_plan_t*>(UINTPTR_MAX);
+    CUDA_CHECK(cudaSetDevice(foreign_device));
+    CHECK(gpuxtb_plan_create(context.get(), &wrong.descriptor, &options, &raw_plan) ==
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(raw_plan == nullptr);
+    int after = -1;
+    CUDA_CHECK(cudaGetDevice(&after));
+    CHECK(after == foreign_device);
+  }
+
+  g_scenario = "wrong-device-rejection/plan-compute";
+  {
+    PublicBatch wrong = batch;
+    wrong.bind();
+    wrong.descriptor.positions = {foreign_positions, wrong.positions.size() * sizeof(double),
+                                  GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+    ResultOwner result;
+    CUDA_CHECK(result.bind(wrong, ResultLayout::kHost));
+    gpuxtb_plan_t* raw_plan = nullptr;
+    CUDA_CHECK(cudaSetDevice(foreign_device));
+    CHECK(gpuxtb_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+          GPUXTB_STATUS_SUCCESS);
+    CHECK(raw_plan != nullptr);
+    int after_create = -1;
+    CUDA_CHECK(cudaGetDevice(&after_create));
+    CHECK(after_create == foreign_device);
+    PlanHandle plan(raw_plan);
+    CUDA_CHECK(cudaSetDevice(foreign_device));
+    CHECK(gpuxtb_plan_compute(plan.get(), &wrong.descriptor, &options, &result.descriptor) ==
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    int after_compute = -1;
+    CUDA_CHECK(cudaGetDevice(&after_compute));
+    CHECK(after_compute == foreign_device);
+    bool unchanged = false;
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    bool guards = false;
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
+  }
+
+  /* Keep every input valid so validation reaches the writable-buffer path.
+   * A requested result slice owned by another GPU must still fail before any
+   * host or device output canary, including result.flags, is published. */
+  g_scenario = "wrong-device-rejection/foreign-output";
+  {
+    PublicBatch valid = batch;
+    valid.bind();
+    ResultOwner result;
+    CUDA_CHECK(cudaSetDevice(foreign_device));
+    CUDA_CHECK(result.bind(valid, ResultLayout::kDevice));
+
+    CUDA_CHECK(cudaSetDevice(foreign_device));
+    CHECK(gpuxtb_compute(context.get(), &valid.descriptor, &options, &result.descriptor) ==
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    int after = -1;
+    CUDA_CHECK(cudaGetDevice(&after));
+    CHECK(after == foreign_device);
+    bool unchanged = false;
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    CHECK(result.descriptor.flags == kResultFlagsCanary);
+    bool guards = false;
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
+  }
+
+  CUDA_CHECK(cudaFree(foreign_positions));
+  CUDA_CHECK(cudaSetDevice(context_device));
+  context.reset();
+  g_scenario = "wrong-device-rejection";
+  return 0;
+}
+
+/* Mislabeled public descriptors must fail deterministically without output
+ * mutation even on a single-GPU host: a device allocation tagged HOST and an
+ * ordinary host buffer tagged CUDA_DEVICE cannot reach the physics kernels or
+ * the caller-output commit. This directly exercises the same public
+ * validate_public_request_pointers path that rejects genuine cross-device
+ * pointers, so both halves of the wrong-device acceptance are covered on one
+ * visible GPU. */
+int test_public_mislabeled_rejection(std::int32_t device, PublicBatch& batch,
+                                     const gpuxtb_compute_options_t& options,
+                                     const MaterializedResult& reference) {
+  g_scenario = "mislabeled-rejection/host-tagged-device";
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  gpuxtb_status_t context_status = GPUXTB_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(GPUXTB_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+  CHECK(execute_cuda_and_compare(context.get(), batch, options, ResultLayout::kHost, reference) ==
+        0);
+
+  /* A real device allocation mislabeled as HOST: the public request validator
+   * rejects it before topology staging could dereference it as host memory,
+   * and every caller output byte plus the flags canary must stay intact. */
+  double* device_positions = nullptr;
+  CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&device_positions),
+                        batch.positions.size() * sizeof(double)));
+  {
+    PublicBatch mislabeled = batch;
+    mislabeled.bind();
+    mislabeled.descriptor.positions = {
+        device_positions, mislabeled.positions.size() * sizeof(double), GPUXTB_MEMORY_HOST, 0u};
+    ResultOwner result;
+    CUDA_CHECK(result.bind(mislabeled, ResultLayout::kDevice));
+    g_scenario = "mislabeled-rejection/device-as-host";
+    CHECK(gpuxtb_compute(context.get(), &mislabeled.descriptor, &options, &result.descriptor) ==
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    bool unchanged = false;
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    bool guards = false;
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
+  }
+
+  /* An ordinary host buffer mislabeled as CUDA_DEVICE must also fail closed
+   * without reaching cudaMemcpy on a bogus address. */
+  std::vector<double> host_positions(batch.positions.size(), 0.5);
+  {
+    PublicBatch mislabeled = batch;
+    mislabeled.bind();
+    mislabeled.descriptor.positions = {host_positions.data(),
+                                       host_positions.size() * sizeof(double),
+                                       GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+    ResultOwner result;
+    CUDA_CHECK(result.bind(mislabeled, ResultLayout::kHost));
+    g_scenario = "mislabeled-rejection/host-as-device";
+    CHECK(gpuxtb_compute(context.get(), &mislabeled.descriptor, &options, &result.descriptor) ==
+          GPUXTB_STATUS_INVALID_ARGUMENT);
+    bool unchanged = false;
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    bool guards = false;
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
+  }
+
+  CUDA_CHECK(cudaFree(device_positions));
+  g_scenario = "mislabeled-rejection";
+  return 0;
+}
+
 int test_stream_capture_transactionality(std::int32_t device, PublicBatch& batch,
                                          const gpuxtb_compute_options_t& options) {
   g_scenario = "stream-capture-transactionality";
@@ -1572,6 +1785,14 @@ int main() {
   }
   if (const int line =
           test_current_device_restored(device_count, device, batch, options, reference);
+      line != 0) {
+    return line;
+  }
+  if (const int line = test_public_wrong_device_rejection(device_count, device, batch, options);
+      line != 0) {
+    return line;
+  }
+  if (const int line = test_public_mislabeled_rejection(device, batch, options, reference);
       line != 0) {
     return line;
   }
