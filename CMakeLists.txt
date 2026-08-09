@@ -590,11 +590,18 @@ if(GPUXTB_HAS_CUDA)
   set(GPUXTB_CUSOLVER_SYMBOLS
     cusolverDnCreate
     cusolverDnCreateParams
+    cusolverDnCreateSyevjInfo
     cusolverDnDestroy
     cusolverDnDestroyParams
+    cusolverDnDestroySyevjInfo
     cusolverDnDpotrfBatched
+    cusolverDnDsyevjBatched
+    cusolverDnDsyevjBatched_bufferSize
     cusolverDnGetStream
     cusolverDnSetStream
+    cusolverDnXsyevjSetMaxSweeps
+    cusolverDnXsyevjSetSortEig
+    cusolverDnXsyevjSetTolerance
     cusolverDnXsyevBatched
     cusolverDnXsyevBatched_bufferSize
     cusolverGetProperty

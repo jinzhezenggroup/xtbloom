@@ -189,6 +189,14 @@ struct Gfn2EigensolverDeviceWorkspace {
   std::int64_t bucket_activity_elements = 0;
 };
 
+/* Internal-only provider selection. Production uses kAuto; focused tests may
+ * pin one provider to compare dispatch candidates on identical inputs. */
+enum class Gfn2EigensolverStrategy : std::uint32_t {
+  kAuto = 0u,
+  kBatchedDivideAndConquer = 1u,
+  kBatchedJacobi = 2u,
+};
+
 struct Gfn2EigensolverOptions {
   /* Exact eigenvalue ratio threshold for the symmetric positive overlap. */
   double minimum_overlap_rcond = 1.0e-12;
@@ -196,7 +204,28 @@ struct Gfn2EigensolverOptions {
   double symmetry_tolerance = 64.0 * 2.220446049250313080847263336181640625e-16;
   /* Requests pedantic cuBLAS math; cuSOLVER remains fixed-algorithm per toolkit. */
   bool deterministic_debug = false;
+  Gfn2EigensolverStrategy strategy = Gfn2EigensolverStrategy::kAuto;
+  /* Borrowed setup-owned Jacobi configuration. A null handle keeps legacy
+   * low-level callers on XsyevBatched even when they use kAuto. */
+  syevjInfo_t jacobi = nullptr;
 };
+
+/* The production crossover is intentionally narrow. On RTX 5090 / CUDA 12.9,
+ * Jacobi reduces Graph-replayed provider latency through 16 AOs, while public
+ * FRESH latency does not improve below 12 AOs and the provider loses by 24. */
+inline constexpr std::int32_t kGfn2JacobiMinimumOrbitals = 12;
+inline constexpr std::int32_t kGfn2JacobiMaximumOrbitals = 16;
+/* Tests and the dispatch benchmark may force the provider through its
+ * documented small-matrix limit to keep the rejected crossover measurable. */
+inline constexpr std::int32_t kGfn2JacobiProviderMaximumOrbitals = 32;
+
+[[nodiscard]] inline bool gfn2_eigensolver_uses_jacobi(const Gfn2EigensolverOptions& options,
+                                                       std::int32_t orbital_count) noexcept {
+  return options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi ||
+         (options.strategy == Gfn2EigensolverStrategy::kAuto && options.jacobi != nullptr &&
+          orbital_count >= kGfn2JacobiMinimumOrbitals &&
+          orbital_count <= kGfn2JacobiMaximumOrbitals);
+}
 
 /* Controls whether a failed factorization invalidates cache metadata. Initial
  * setup records the failure so an uninitialized cache cannot be consumed;
@@ -305,6 +334,14 @@ Gfn2EigensolverLaunchResult query_gfn2_spin_eigensolver_bucket_workspace_cuda(
     const double* device_matrix, const double* device_eigenvalues,
     Gfn2EigensolverWorkspaceRequirements& requirements) noexcept;
 
+/* Add the Jacobi workspace for every reachable exact-capacity body through
+ * the provider limit. Production calls this only for auto-selected buckets;
+ * focused tests may query the wider forced-provider range. */
+Gfn2EigensolverLaunchResult query_gfn2_jacobi_bucket_workspace_cuda(
+    cusolverDnHandle_t solver, syevjInfo_t jacobi, const Gfn2EigensolverBucket& bucket,
+    const double* device_matrix, const double* device_eigenvalues,
+    Gfn2EigensolverWorkspaceRequirements& requirements) noexcept;
+
 /*
  * Production exact-capacity dispatch primitives. The production device-tail
  * loop cannot nest the #131 conditional (SWITCH) compaction graph, because a
@@ -352,7 +389,7 @@ Gfn2EigensolverLaunchResult compact_gfn2_successful_eigenpair_counts_cuda(
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
 /*
- * Capture the exact-capacity eigensolver body (gather, TRSM x2, sym, syevd)
+ * Capture the exact-capacity eigensolver body (gather, TRSM x2, sym, provider)
  * into `body` for exactly `capacity` compacted systems of one bucket. The
  * caller owns `body` and must instantiate it. Provider handle streams are set
  * to capture_stream for the capture and left to the caller afterward.
@@ -363,7 +400,7 @@ Gfn2EigensolverLaunchResult capture_gfn2_eigensolver_capacity_cuda(
     std::int64_t bucket_index, const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians,
     cusolverDnHandle_t solver, cusolverDnParams_t parameters, cublasHandle_t blas,
     const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
-    std::uint32_t* device_error, bool deterministic_debug) noexcept;
+    std::uint32_t* device_error, const Gfn2EigensolverOptions& options) noexcept;
 
 /*
  * Enqueue the exact-capacity eigensolver body kernels into an active capture
@@ -377,7 +414,7 @@ Gfn2EigensolverLaunchResult enqueue_gfn2_eigensolver_capacity_cuda(
     const Gfn2EigensolverOverlapCache& cache, const double* hamiltonians, cusolverDnHandle_t solver,
     cusolverDnParams_t parameters, cublasHandle_t blas,
     const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
-    std::uint32_t* device_error, bool deterministic_debug) noexcept;
+    std::uint32_t* device_error, const Gfn2EigensolverOptions& options) noexcept;
 
 /*
  * Capture the exact-capacity backtransform body (mark, TRSM-T, scatter) into

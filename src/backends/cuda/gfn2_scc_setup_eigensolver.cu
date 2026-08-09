@@ -107,13 +107,19 @@ bool append_array(std::size_t elements, std::size_t& cursor, std::size_t& offset
 }
 
 bool valid_options(const Gfn2EigensolverOptions& options) noexcept {
+  const bool valid_strategy =
+      options.strategy == Gfn2EigensolverStrategy::kAuto ||
+      options.strategy == Gfn2EigensolverStrategy::kBatchedDivideAndConquer ||
+      options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi;
   return std::isfinite(options.minimum_overlap_rcond) && options.minimum_overlap_rcond > 0.0 &&
          options.minimum_overlap_rcond <= 1.0 && std::isfinite(options.symmetry_tolerance) &&
-         options.symmetry_tolerance >= 0.0;
+         options.symmetry_tolerance >= 0.0 && valid_strategy &&
+         (options.strategy != Gfn2EigensolverStrategy::kBatchedJacobi || options.jacobi != nullptr);
 }
 
-/* XsyevBatched, DpotrfBatched, and DtrsmBatched are all capture-capable in the
- * CUDA 12.9 provider stack used by the production sm_120 build. Keep the
+/* XsyevBatched, DsyevjBatched, DpotrfBatched, and DtrsmBatched are all
+ * capture-capable in the CUDA 12.9 provider stack used by the production
+ * sm_120 build. Keep the
  * decision conservative for older or mismatched runtime libraries: callers
  * can still execute through the explicit uncaptured-segment contract instead
  * of discovering an unsupported provider call halfway through capture. */
@@ -518,6 +524,23 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::create(
           candidate->requirements.provider);
       if (!query_result.success()) {
         break;
+      }
+      if (gfn2_eigensolver_uses_jacobi(candidate->options, bucket.orbital_count)) {
+        query_result = query_gfn2_jacobi_bucket_workspace_cuda(
+            solver, candidate->options.jacobi, bucket, query_matrix, query_eigenvalues,
+            candidate->requirements.provider);
+        if (!query_result.success()) {
+          break;
+        }
+        const Gfn2EigensolverBucket spin_submission{
+            bucket.orbital_count, bucket.solve_count, bucket.solve_index_offset,
+            bucket.spin_matrix_scratch_offset, bucket.spin_orbital_scratch_offset};
+        query_result = query_gfn2_jacobi_bucket_workspace_cuda(
+            solver, candidate->options.jacobi, spin_submission, query_matrix, query_eigenvalues,
+            candidate->requirements.provider);
+        if (!query_result.success()) {
+          break;
+        }
       }
     }
     const cudaError_t free_status = cudaFree(query_storage);
@@ -1095,6 +1118,8 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
       binding.options.minimum_overlap_rcond == impl_->options.minimum_overlap_rcond &&
       binding.options.symmetry_tolerance == impl_->options.symmetry_tolerance &&
       binding.options.deterministic_debug == impl_->options.deterministic_debug &&
+      binding.options.strategy == impl_->options.strategy &&
+      binding.options.jacobi == impl_->options.jacobi &&
       binding.overlap_input == expected_overlap &&
       binding.overlap_elements == impl_->total_matrices &&
       binding.setup_system_errors == expected_system_errors &&

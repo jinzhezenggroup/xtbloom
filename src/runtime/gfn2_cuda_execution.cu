@@ -2048,6 +2048,7 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     if (handles_created) (void)cudaStreamSynchronize(stream);
     if (blas != nullptr) (void)cublasDestroy(blas);
+    if (solver_jacobi != nullptr) (void)cusolverDnDestroySyevjInfo(solver_jacobi);
     if (solver_parameters != nullptr) (void)cusolverDnDestroyParams(solver_parameters);
     if (solver != nullptr) (void)cusolverDnDestroy(solver);
     if (restore_caller_device) (void)cudaSetDevice(caller_device);
@@ -2070,9 +2071,11 @@ struct Gfn2CudaExecutionCache::Impl {
      * This keeps retries leak-free after a partial provider failure. */
     cusolverDnHandle_t candidate_solver = nullptr;
     cusolverDnParams_t candidate_parameters = nullptr;
+    syevjInfo_t candidate_jacobi = nullptr;
     cublasHandle_t candidate_blas = nullptr;
     const auto destroy_candidate = [&]() noexcept {
       if (candidate_blas != nullptr) (void)cublasDestroy(candidate_blas);
+      if (candidate_jacobi != nullptr) (void)cusolverDnDestroySyevjInfo(candidate_jacobi);
       if (candidate_parameters != nullptr) (void)cusolverDnDestroyParams(candidate_parameters);
       if (candidate_solver != nullptr) (void)cusolverDnDestroy(candidate_solver);
     };
@@ -2086,6 +2089,22 @@ struct Gfn2CudaExecutionCache::Impl {
     if (solver_status != CUSOLVER_STATUS_SUCCESS) {
       destroy_candidate();
       error = "cusolverDnCreateParams failed";
+      return GPUXTB_STATUS_BACKEND_UNAVAILABLE;
+    }
+    solver_status = cusolverDnCreateSyevjInfo(&candidate_jacobi);
+    if (solver_status == CUSOLVER_STATUS_SUCCESS) {
+      solver_status =
+          cusolverDnXsyevjSetTolerance(candidate_jacobi, std::numeric_limits<double>::epsilon());
+    }
+    if (solver_status == CUSOLVER_STATUS_SUCCESS) {
+      solver_status = cusolverDnXsyevjSetMaxSweeps(candidate_jacobi, 100);
+    }
+    if (solver_status == CUSOLVER_STATUS_SUCCESS) {
+      solver_status = cusolverDnXsyevjSetSortEig(candidate_jacobi, 1);
+    }
+    if (solver_status != CUSOLVER_STATUS_SUCCESS) {
+      destroy_candidate();
+      error = "failed to configure the CUDA small-matrix Jacobi eigensolver";
       return GPUXTB_STATUS_BACKEND_UNAVAILABLE;
     }
     cublasStatus_t blas_status = cublasCreate(&candidate_blas);
@@ -2103,6 +2122,7 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     solver = candidate_solver;
     solver_parameters = candidate_parameters;
+    solver_jacobi = candidate_jacobi;
     blas = candidate_blas;
     handles_created = true;
     return GPUXTB_STATUS_SUCCESS;
@@ -4904,11 +4924,13 @@ struct Gfn2CudaExecutionCache::Impl {
       return input_diagnostic.status;
     }
 
+    Gfn2EigensolverOptions eigensolver_options = candidate->plan_seed.eigensolver_options;
+    eigensolver_options.jacobi = solver_jacobi;
     auto eigensolver_diagnostic = Gfn2SccSetupEigensolver::create(
         candidate->topology_owner, candidate->host.overlap.data(),
         static_cast<std::int64_t>(candidate->host.overlap.size()),
         candidate->host.geometry_generation, token, solver, solver_parameters, blas,
-        candidate->plan_seed.eigensolver_options, candidate->eigensolver_owner);
+        eigensolver_options, candidate->eigensolver_owner);
     if (!eigensolver_diagnostic.success()) {
       error = setup_error_message(
           "CUDA eigensolver owner construction", eigensolver_diagnostic.status,
@@ -6199,6 +6221,7 @@ struct Gfn2CudaExecutionCache::Impl {
   Gfn2CudaTopologyStaging topology_staging;
   cusolverDnHandle_t solver = nullptr;
   cusolverDnParams_t solver_parameters = nullptr;
+  syevjInfo_t solver_jacobi = nullptr;
   cublasHandle_t blas = nullptr;
   bool handles_created = false;
   std::uint64_t next_plan_token = 1u;
