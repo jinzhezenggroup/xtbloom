@@ -44,6 +44,10 @@ STATUS_INTERNAL_ERROR = 6
 STATUS_SCC_NOT_CONVERGED = 7
 STATUS_EIGENSOLVER_FAILED = 8
 
+REQUEST_IDLE = 0
+REQUEST_PENDING = 1
+REQUEST_COMPLETE = 2
+
 BACKEND_AUTO = 0
 BACKEND_CPU = 1
 BACKEND_CUDA = 2
@@ -240,6 +244,19 @@ class WorkspaceQuery(ctypes.Structure):
     ]
 
 
+class RequestInfo(ctypes.Structure):
+    """ctypes mirror of ``gpuxtb_request_info_t`` ABI version 1."""
+
+    _fields_: ClassVar[list[tuple[str, object]]] = [
+        ("struct_size", ctypes.c_uint32),
+        ("api_version", ctypes.c_uint32),
+        ("state", ctypes.c_int32),
+        ("completion_status", ctypes.c_int32),
+        ("result_flags", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
 class ResultOwnerOptions(ctypes.Structure):
     """ctypes mirror of ``gpuxtb_result_owner_options_t`` ABI version 1."""
 
@@ -370,6 +387,30 @@ def _configure_library(library: ctypes.CDLL) -> None:
         ctypes.c_size_t,
     ]
     library.gpuxtb_workspace_query_init.restype = ctypes.c_int32
+    library.gpuxtb_request_info_init.argtypes = [
+        ctypes.POINTER(RequestInfo),
+        ctypes.c_size_t,
+    ]
+    library.gpuxtb_request_info_init.restype = ctypes.c_int32
+    library.gpuxtb_request_create.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    library.gpuxtb_request_create.restype = ctypes.c_int32
+    library.gpuxtb_request_query.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(RequestInfo),
+    ]
+    library.gpuxtb_request_query.restype = ctypes.c_int32
+    library.gpuxtb_request_wait.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(RequestInfo),
+    ]
+    library.gpuxtb_request_wait.restype = ctypes.c_int32
+    library.gpuxtb_request_get_error.argtypes = [ctypes.c_void_p]
+    library.gpuxtb_request_get_error.restype = ctypes.c_char_p
+    library.gpuxtb_request_destroy.argtypes = [ctypes.c_void_p]
+    library.gpuxtb_request_destroy.restype = None
     library.gpuxtb_result_owner_options_init.argtypes = [
         ctypes.POINTER(ResultOwnerOptions),
         ctypes.c_size_t,
@@ -435,6 +476,22 @@ def _configure_library(library: ctypes.CDLL) -> None:
         ctypes.POINTER(BatchResult),
     ]
     library.gpuxtb_compute.restype = ctypes.c_int32
+    library.gpuxtb_compute_enqueue.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(Batch),
+        ctypes.POINTER(ComputeOptions),
+        ctypes.POINTER(BatchResult),
+        ctypes.c_void_p,
+    ]
+    library.gpuxtb_compute_enqueue.restype = ctypes.c_int32
+    library.gpuxtb_plan_compute_enqueue.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(Batch),
+        ctypes.POINTER(ComputeOptions),
+        ctypes.POINTER(BatchResult),
+        ctypes.c_void_p,
+    ]
+    library.gpuxtb_plan_compute_enqueue.restype = ctypes.c_int32
 
 
 _lib: ctypes.CDLL | None = None
@@ -943,6 +1000,9 @@ __all__ = [
     "MEMORY_ROCM_DEVICE",
     "MODEL_GFN1_XTB",
     "MODEL_GFN2_XTB",
+    "REQUEST_COMPLETE",
+    "REQUEST_IDLE",
+    "REQUEST_PENDING",
     "RESULT_DIPOLE_MOMENTS",
     "RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES",
     "SCC_START_FRESH",
@@ -965,6 +1025,7 @@ __all__ = [
     "DlpackView",
     "Interaction",
     "Plan",
+    "RequestInfo",
     "ResultOwnerOptions",
     "WorkspaceQuery",
     "compute_checked",

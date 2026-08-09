@@ -52,6 +52,7 @@ class Gfn2Plan {
   void destroy() noexcept;
 
   [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] Context* context() const noexcept;
 
  private:
   struct Impl;

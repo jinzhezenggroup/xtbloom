@@ -216,6 +216,8 @@ Gfn2Plan::~Gfn2Plan() = default;
 
 bool Gfn2Plan::valid() const noexcept { return impl_ != nullptr && impl_->context != nullptr; }
 
+Context* Gfn2Plan::context() const noexcept { return impl_ == nullptr ? nullptr : impl_->context; }
+
 void Gfn2Plan::destroy() noexcept {
   /* Prepared caches belong to the plan, while the context pointer remains a
    * borrowed lifetime binding. Callers must still destroy the plan first. */

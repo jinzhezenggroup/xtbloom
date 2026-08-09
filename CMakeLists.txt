@@ -536,6 +536,7 @@ add_library(gpuxtb
   src/runtime/backend.cpp
   src/runtime/gfn2_cpu_execution.cpp
   src/runtime/gfn2_plan.cpp
+  src/runtime/request.cpp
   src/runtime/result_owner.cpp
   src/runtime/validation.cpp
   $<TARGET_OBJECTS:gpuxtb_gfn2_cpu>
@@ -1009,6 +1010,19 @@ if(GPUXTB_BUILD_TESTS)
   target_link_libraries(gpuxtb_c_api_test PRIVATE gpuxtb::gpuxtb)
   set_target_properties(gpuxtb_c_api_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
   add_test(NAME gpuxtb.c_api COMMAND gpuxtb_c_api_test)
+
+  add_executable(gpuxtb_request_test
+    tests/request_test.cpp
+    src/runtime/request.cpp
+  )
+  target_include_directories(gpuxtb_request_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(gpuxtb_request_test PRIVATE Threads::Threads)
+  target_compile_features(gpuxtb_request_test PRIVATE cxx_std_17)
+  add_test(NAME gpuxtb.request COMMAND gpuxtb_request_test)
 
   # The browser adapter test supplies a fake public C ABI so failure
   # publication and optimizer math remain testable without a WASM toolchain or

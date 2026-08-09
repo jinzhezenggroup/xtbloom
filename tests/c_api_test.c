@@ -121,6 +121,17 @@ _Static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == EXPECTED_RES
                "batch-result spin outlet offset must remain stable");
 _Static_assert(GPUXTB_RESULT_DIPOLE_MOMENTS == (1 << 4),
                "dipole publication result flag must remain at bit 4");
+_Static_assert(sizeof(gpuxtb_request_state_t) == sizeof(int32_t),
+               "request state tag must remain 32-bit");
+_Static_assert(GPUXTB_REQUEST_INFO_V1_SIZE == 24, "request-info ABI-v1 image must remain 24 bytes");
+_Static_assert(sizeof(gpuxtb_request_info_t) == GPUXTB_REQUEST_INFO_V1_SIZE,
+               "request-info public layout must end at ABI v1");
+_Static_assert(offsetof(gpuxtb_request_info_t, state) == 8,
+               "request-info state offset must remain stable");
+_Static_assert(offsetof(gpuxtb_request_info_t, completion_status) == 12,
+               "request-info completion status offset must remain stable");
+_Static_assert(offsetof(gpuxtb_request_info_t, result_flags) == 16,
+               "request-info result flags offset must remain stable");
 
 static int check_short_compute_options_init(size_t caller_size) {
   enum { CANARY_BYTES = 16 };
@@ -260,6 +271,105 @@ static int check_batch_result_suffix_init(void) {
   return 1;
 }
 
+static int check_request_info_init(void) {
+  struct extended_request_info {
+    gpuxtb_request_info_t info;
+    unsigned char future[16];
+  } extended;
+  memset(&extended, 0xa5, sizeof(extended));
+  if (gpuxtb_request_info_init(&extended.info, sizeof(extended)) != GPUXTB_STATUS_SUCCESS) {
+    return 0;
+  }
+  if (extended.info.struct_size != sizeof(extended) ||
+      extended.info.api_version != GPUXTB_API_VERSION ||
+      extended.info.state != GPUXTB_REQUEST_IDLE ||
+      extended.info.completion_status != GPUXTB_STATUS_SUCCESS ||
+      extended.info.result_flags != 0u || extended.info.reserved != 0u) {
+    return 0;
+  }
+  for (size_t index = 0; index < sizeof(extended.future); ++index) {
+    if (extended.future[index] != 0xa5) {
+      return 0;
+    }
+  }
+
+  gpuxtb_request_info_t short_info;
+  memset(&short_info, 0xa5, sizeof(short_info));
+  if (gpuxtb_request_info_init(&short_info, GPUXTB_REQUEST_INFO_V1_SIZE - 1) !=
+          GPUXTB_STATUS_INVALID_ARGUMENT ||
+      short_info.struct_size != 0xa5a5a5a5u ||
+      gpuxtb_request_info_init(NULL, sizeof(short_info)) != GPUXTB_STATUS_INVALID_ARGUMENT) {
+    return 0;
+  }
+  return 1;
+}
+
+static int check_cpu_request_shell(gpuxtb_context_t* context) {
+  gpuxtb_request_t* request = NULL;
+  if (gpuxtb_request_create(context, &request) != GPUXTB_STATUS_SUCCESS || request == NULL) {
+    return 0;
+  }
+
+  gpuxtb_request_info_t info;
+  if (gpuxtb_request_info_init(&info, sizeof(info)) != GPUXTB_STATUS_SUCCESS ||
+      gpuxtb_request_query(request, &info) != GPUXTB_STATUS_SUCCESS ||
+      info.state != GPUXTB_REQUEST_IDLE || info.completion_status != GPUXTB_STATUS_SUCCESS ||
+      info.result_flags != 0u || strcmp(gpuxtb_request_get_error(request), "") != 0) {
+    gpuxtb_request_destroy(request);
+    return 0;
+  }
+
+  /* CPU capability probing happens before descriptor validation. Even hostile
+   * NULL descriptors therefore leave both caller outputs and request state
+   * untouched, allowing a synchronous fallback without state repair. */
+  gpuxtb_batch_result_t result;
+  memset(&result, 0, sizeof(result));
+  result.flags = 0x5a5a5a5au;
+  double energy = 123.5;
+  result.energies.data = &energy;
+  result.energies.size_bytes = sizeof(energy);
+  result.energies.memory_space = GPUXTB_MEMORY_HOST;
+  if (gpuxtb_compute_enqueue(context, NULL, NULL, &result, request) !=
+          GPUXTB_STATUS_NOT_SUPPORTED ||
+      result.flags != 0x5a5a5a5au || energy != 123.5) {
+    gpuxtb_request_destroy(request);
+    return 0;
+  }
+  /* Repeated unsupported probes exercise reuse without creating a hidden
+   * PENDING transition or retaining the first call's descriptors. */
+  if (gpuxtb_compute_enqueue(context, NULL, NULL, NULL, request) != GPUXTB_STATUS_NOT_SUPPORTED) {
+    gpuxtb_request_destroy(request);
+    return 0;
+  }
+  if (gpuxtb_request_wait(request, &info) != GPUXTB_STATUS_SUCCESS ||
+      info.state != GPUXTB_REQUEST_IDLE || info.completion_status != GPUXTB_STATUS_SUCCESS ||
+      info.result_flags != 0u || strcmp(gpuxtb_request_get_error(request), "") != 0) {
+    gpuxtb_request_destroy(request);
+    return 0;
+  }
+
+  gpuxtb_request_info_t invalid_info = info;
+  invalid_info.api_version = GPUXTB_API_VERSION + 1u;
+  invalid_info.state = (gpuxtb_request_state_t)77;
+  if (gpuxtb_request_query(request, &invalid_info) != GPUXTB_STATUS_INVALID_ARGUMENT ||
+      invalid_info.state != (gpuxtb_request_state_t)77) {
+    gpuxtb_request_destroy(request);
+    return 0;
+  }
+  invalid_info = info;
+  invalid_info.reserved = 1u;
+  invalid_info.result_flags = 0x11223344u;
+  if (gpuxtb_request_wait(request, &invalid_info) != GPUXTB_STATUS_INVALID_ARGUMENT ||
+      invalid_info.result_flags != 0x11223344u) {
+    gpuxtb_request_destroy(request);
+    return 0;
+  }
+
+  gpuxtb_request_destroy(request);
+  gpuxtb_request_destroy(NULL);
+  return 1;
+}
+
 int main(void) {
   if (sizeof(gpuxtb_status_t) != sizeof(int32_t) || sizeof(gpuxtb_backend_t) != sizeof(int32_t) ||
       sizeof(gpuxtb_memory_space_t) != sizeof(int32_t) ||
@@ -267,6 +377,7 @@ int main(void) {
       sizeof(gpuxtb_scc_start_mode_t) != sizeof(int32_t) ||
       sizeof(gpuxtb_compute_flag_t) != sizeof(int32_t) ||
       sizeof(gpuxtb_result_flag_t) != sizeof(int32_t) ||
+      sizeof(gpuxtb_request_state_t) != sizeof(int32_t) ||
       sizeof(gpuxtb_interaction_type_t) != sizeof(int32_t)) {
     fprintf(stderr, "public ABI tags and flags must all be 32-bit\n");
     return 1;
@@ -295,6 +406,10 @@ int main(void) {
     fprintf(stderr, "batch/result suffix initialization is incorrect\n");
     return 5;
   }
+  if (!check_request_info_init()) {
+    fprintf(stderr, "request-info descriptor initialization is incorrect\n");
+    return 6;
+  }
 
   gpuxtb_context_options_t options;
   if (gpuxtb_context_options_init(&options, sizeof(options)) != GPUXTB_STATUS_SUCCESS) {
@@ -321,6 +436,10 @@ int main(void) {
       strcmp(gpuxtb_status_string(GPUXTB_STATUS_EIGENSOLVER_FAILED), "eigensolver failed") != 0) {
     fprintf(stderr, "per-system failure status strings are not stable\n");
     return 8;
+  }
+  if (!check_cpu_request_shell(context)) {
+    fprintf(stderr, "CPU request ABI shell behavior is incorrect: %s\n", gpuxtb_get_last_error());
+    return 9;
   }
 
   gpuxtb_context_destroy(context);

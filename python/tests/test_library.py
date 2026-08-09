@@ -125,6 +125,20 @@ def test_abi_struct_sizes() -> None:
     assert query.host_required_alignment == 0
     assert query.device_required_bytes == 0
     assert query.device_required_alignment == 0
+    assert ctypes.sizeof(library.RequestInfo) == 24
+    assert library.RequestInfo.state.offset == 8
+    assert library.RequestInfo.completion_status.offset == 12
+    assert library.RequestInfo.result_flags.offset == 16
+    request_info = library.RequestInfo()
+    library.load_library().gpuxtb_request_info_init(
+        ctypes.byref(request_info), ctypes.sizeof(request_info)
+    )
+    assert request_info.struct_size == 24
+    assert request_info.api_version == library.API_VERSION
+    assert request_info.state == library.REQUEST_IDLE
+    assert request_info.completion_status == library.STATUS_SUCCESS
+    assert request_info.result_flags == 0
+    assert request_info.reserved == 0
 
 
 def test_unknown_method_rejected() -> None:

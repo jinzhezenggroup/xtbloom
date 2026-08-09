@@ -74,6 +74,46 @@ _Static_assert(offsetof(gpuxtb_batch_result_t, spin_populations) == 256,
                "installed reserved result outlet offsets must remain stable");
 _Static_assert(GPUXTB_RESULT_DIPOLE_MOMENTS == (1 << 4),
                "installed dipole publication result flag must remain at bit 4");
+_Static_assert(sizeof(gpuxtb_request_state_t) == sizeof(int32_t),
+               "installed request state tag must remain 32-bit");
+_Static_assert(GPUXTB_REQUEST_INFO_V1_SIZE == 24,
+               "installed request-info ABI-v1 image must remain 24 bytes");
+_Static_assert(sizeof(gpuxtb_request_info_t) == GPUXTB_REQUEST_INFO_V1_SIZE,
+               "installed request-info layout must end at ABI v1");
+_Static_assert(offsetof(gpuxtb_request_info_t, completion_status) == 12,
+               "installed request completion status offset must remain stable");
+
+/* Prove that an external C consumer can own and inspect the additive request
+ * ABI without any CUDA headers. CPU enqueue is an explicit capability probe:
+ * it returns NOT_SUPPORTED before touching descriptors or request state. */
+static int run_installed_request_shell(gpuxtb_context_t* context) {
+  gpuxtb_request_info_t info;
+  if (gpuxtb_request_info_init(&info, sizeof(info)) != GPUXTB_STATUS_SUCCESS) {
+    return 30;
+  }
+  gpuxtb_request_t* request = NULL;
+  if (gpuxtb_request_create(context, &request) != GPUXTB_STATUS_SUCCESS || request == NULL) {
+    return 31;
+  }
+  if (gpuxtb_request_query(request, &info) != GPUXTB_STATUS_SUCCESS ||
+      info.state != GPUXTB_REQUEST_IDLE || info.completion_status != GPUXTB_STATUS_SUCCESS ||
+      info.result_flags != 0u || strcmp(gpuxtb_request_get_error(request), "") != 0) {
+    gpuxtb_request_destroy(request);
+    return 32;
+  }
+  if (gpuxtb_context_get_backend(context) == GPUXTB_BACKEND_CPU &&
+      gpuxtb_compute_enqueue(context, NULL, NULL, NULL, request) != GPUXTB_STATUS_NOT_SUPPORTED) {
+    gpuxtb_request_destroy(request);
+    return 33;
+  }
+  if (gpuxtb_request_wait(request, &info) != GPUXTB_STATUS_SUCCESS ||
+      info.state != GPUXTB_REQUEST_IDLE) {
+    gpuxtb_request_destroy(request);
+    return 34;
+  }
+  gpuxtb_request_destroy(request);
+  return 0;
+}
 
 typedef enum consumer_mode {
   CONSUMER_MODE_SMOKE,
@@ -264,11 +304,25 @@ static int run_installed_inference(gpuxtb_context_t* context, const char* mode_n
   }
 
   /* Exercise the installed fixed-topology plan and workspace-query ABI. */
+  const gpuxtb_backend_t backend = gpuxtb_context_get_backend(context);
   gpuxtb_plan_t* plan = NULL;
   if (gpuxtb_plan_create(context, &batch, &options, &plan) != GPUXTB_STATUS_SUCCESS ||
       plan == NULL) {
     fprintf(stderr, "installed %s plan creation failed: %s\n", mode_name, gpuxtb_get_last_error());
     return 12;
+  }
+  if (backend == GPUXTB_BACKEND_CPU) {
+    gpuxtb_request_t* request = NULL;
+    if (gpuxtb_request_create(context, &request) != GPUXTB_STATUS_SUCCESS || request == NULL ||
+        gpuxtb_plan_compute_enqueue(plan, NULL, NULL, NULL, request) !=
+            GPUXTB_STATUS_NOT_SUPPORTED) {
+      fprintf(stderr, "installed %s plan request probe failed: %s\n", mode_name,
+              gpuxtb_get_last_error());
+      gpuxtb_request_destroy(request);
+      gpuxtb_plan_destroy(plan);
+      return 17;
+    }
+    gpuxtb_request_destroy(request);
   }
   gpuxtb_workspace_query_t workspace;
   if (gpuxtb_workspace_query_init(&workspace, sizeof(workspace)) != GPUXTB_STATUS_SUCCESS) {
@@ -284,7 +338,6 @@ static int run_installed_inference(gpuxtb_context_t* context, const char* mode_n
     gpuxtb_plan_destroy(plan);
     return 14;
   }
-  const gpuxtb_backend_t backend = gpuxtb_context_get_backend(context);
   const int device_workspace_invalid =
       backend == GPUXTB_BACKEND_CUDA
           ? workspace.device_required_bytes == 0u || workspace.device_required_alignment == 0u
@@ -359,6 +412,14 @@ int main(int argc, char** argv) {
     fprintf(stderr, "installed consumer selected an unexpected backend\n");
     gpuxtb_context_destroy(context);
     return 4;
+  }
+
+  const int request_status = run_installed_request_shell(context);
+  if (request_status != 0) {
+    fprintf(stderr, "installed request ABI shell failed (%d): %s\n", request_status,
+            gpuxtb_get_last_error());
+    gpuxtb_context_destroy(context);
+    return request_status;
   }
 
   int inference_status = 0;

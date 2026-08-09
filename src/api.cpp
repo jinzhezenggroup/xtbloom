@@ -17,6 +17,7 @@
 #if defined(GPUXTB_HAS_CUDA)
 #include "runtime/gfn2_cuda_execution.hpp"
 #endif
+#include "runtime/request.hpp"
 #include "runtime/result_owner.hpp"
 #include "runtime/validation.hpp"
 
@@ -26,6 +27,10 @@ struct gpuxtb_context {
 
 struct gpuxtb_plan {
   gpuxtb::detail::Gfn2Plan* implementation;
+};
+
+struct gpuxtb_request {
+  gpuxtb::detail::Request* implementation;
 };
 
 struct gpuxtb_result_owner {
@@ -148,6 +153,10 @@ gpuxtb_status_t gpuxtb_workspace_query_init(gpuxtb_workspace_query_t* query, siz
                               "workspace query");
 }
 
+gpuxtb_status_t gpuxtb_request_info_init(gpuxtb_request_info_t* info, size_t struct_size) {
+  return initialize_structure(info, struct_size, GPUXTB_REQUEST_INFO_V1_SIZE, "request info");
+}
+
 gpuxtb_status_t gpuxtb_context_create(const gpuxtb_context_options_t* options,
                                       gpuxtb_context_t** context) {
   if (context == nullptr) {
@@ -213,6 +222,130 @@ int32_t gpuxtb_context_get_device_id(const gpuxtb_context_t* context) {
   }
   last_error.clear();
   return context->implementation->device_id;
+}
+
+gpuxtb_status_t gpuxtb_request_create(gpuxtb_context_t* context, gpuxtb_request_t** request) {
+  if (request == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "request output pointer is NULL");
+  }
+  *request = nullptr;
+  if (context == nullptr || context->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "context is NULL");
+  }
+  try {
+    gpuxtb::detail::Request* implementation =
+        new (std::nothrow) gpuxtb::detail::Request(*context->implementation);
+    if (implementation == nullptr) {
+      return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a request implementation");
+    }
+    gpuxtb_request_t* wrapper = new (std::nothrow) gpuxtb_request_t{implementation};
+    if (wrapper == nullptr) {
+      delete implementation;
+      return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a request handle");
+    }
+    *request = wrapper;
+    last_error.clear();
+    return GPUXTB_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    return fail(GPUXTB_STATUS_ALLOCATION_FAILED, "failed to allocate a request");
+  } catch (const std::exception& exception) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(GPUXTB_STATUS_INTERNAL_ERROR, "unknown exception while creating a request");
+  }
+}
+
+namespace {
+
+gpuxtb_status_t validate_request_info(gpuxtb_request_info_t* info) {
+  if (!valid_header(info, GPUXTB_REQUEST_INFO_V1_SIZE)) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "request info is NULL, too small, or uses an unsupported API version");
+  }
+  if (info->reserved != 0u) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "request info reserved field must be zero");
+  }
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+}  // namespace
+
+gpuxtb_status_t gpuxtb_request_query(gpuxtb_request_t* request, gpuxtb_request_info_t* info) {
+  if (request == nullptr || request->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "request is NULL");
+  }
+  const gpuxtb_status_t status = validate_request_info(info);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  std::string error;
+  const gpuxtb_status_t query_status = request->implementation->query(false, *info, error);
+  if (query_status != GPUXTB_STATUS_SUCCESS) {
+    return fail(query_status, std::move(error));
+  }
+  last_error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+gpuxtb_status_t gpuxtb_request_wait(gpuxtb_request_t* request, gpuxtb_request_info_t* info) {
+  if (request == nullptr || request->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "request is NULL");
+  }
+  const gpuxtb_status_t status = validate_request_info(info);
+  if (status != GPUXTB_STATUS_SUCCESS) {
+    return status;
+  }
+  std::string error;
+  const gpuxtb_status_t wait_status = request->implementation->query(true, *info, error);
+  if (wait_status != GPUXTB_STATUS_SUCCESS) {
+    return fail(wait_status, std::move(error));
+  }
+  last_error.clear();
+  return GPUXTB_STATUS_SUCCESS;
+}
+
+const char* gpuxtb_request_get_error(const gpuxtb_request_t* request) {
+  if (request == nullptr || request->implementation == nullptr) {
+    last_error = "request is NULL";
+    return nullptr;
+  }
+  last_error.clear();
+  return request->implementation->error();
+}
+
+void gpuxtb_request_destroy(gpuxtb_request_t* request) {
+  if (request == nullptr) {
+    return;
+  }
+  delete request->implementation;
+  delete request;
+  last_error.clear();
+}
+
+gpuxtb_status_t gpuxtb_compute_enqueue(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
+                                       const gpuxtb_compute_options_t* options,
+                                       const gpuxtb_batch_result_t* result,
+                                       gpuxtb_request_t* request) {
+  if (context == nullptr || context->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "context is NULL");
+  }
+  if (request == nullptr || request->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "request is NULL");
+  }
+  if (request->implementation->context() != context->implementation) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "request was created by a different context");
+  }
+  if (context->implementation->backend == GPUXTB_BACKEND_CPU) {
+    /* Do not inspect descriptors or touch request/result state: callers may
+     * probe capability with sentinels and then fall back to gpuxtb_compute. */
+    return fail(GPUXTB_STATUS_NOT_SUPPORTED,
+                "asynchronous compute enqueue is not supported by the CPU backend");
+  }
+  (void)batch;
+  (void)options;
+  (void)result;
+  return fail(GPUXTB_STATUS_NOT_IMPLEMENTED,
+              "CUDA asynchronous compute enqueue is not connected in this build");
 }
 
 gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
@@ -412,6 +545,37 @@ gpuxtb_status_t gpuxtb_plan_compute(gpuxtb_plan_t* plan, const gpuxtb_batch_t* b
     return fail(GPUXTB_STATUS_INTERNAL_ERROR,
                 "unknown exception while executing a plan compute request");
   }
+}
+
+gpuxtb_status_t gpuxtb_plan_compute_enqueue(gpuxtb_plan_t* plan, const gpuxtb_batch_t* batch,
+                                            const gpuxtb_compute_options_t* options,
+                                            const gpuxtb_batch_result_t* result,
+                                            gpuxtb_request_t* request) {
+  if (plan == nullptr || plan->implementation == nullptr || !plan->implementation->valid()) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "plan is NULL");
+  }
+  if (request == nullptr || request->implementation == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "request is NULL");
+  }
+  gpuxtb::detail::Context* context = plan->implementation->context();
+  if (context == nullptr) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT, "plan has no creating context");
+  }
+  if (request->implementation->context() != context) {
+    return fail(GPUXTB_STATUS_INVALID_ARGUMENT,
+                "request and plan were created by different contexts");
+  }
+  if (context->backend == GPUXTB_BACKEND_CPU) {
+    /* Match the context enqueue capability probe: no descriptor validation,
+     * request transition, result flag update, or caller-buffer write. */
+    return fail(GPUXTB_STATUS_NOT_SUPPORTED,
+                "asynchronous plan enqueue is not supported by the CPU backend");
+  }
+  (void)batch;
+  (void)options;
+  (void)result;
+  return fail(GPUXTB_STATUS_NOT_IMPLEMENTED,
+              "CUDA asynchronous plan enqueue is not connected in this build");
 }
 
 namespace {

@@ -42,6 +42,13 @@ typedef struct gpuxtb_context gpuxtb_context_t;
 typedef struct gpuxtb_plan gpuxtb_plan_t;
 
 /*
+ * Opaque reusable owner of one native asynchronous submission. See
+ * gpuxtb_request_create. A request is bound to the context that created it
+ * and must be destroyed before that context.
+ */
+typedef struct gpuxtb_request gpuxtb_request_t;
+
+/*
  * Opaque owner of one gpuxtb-allocated result arena. See
  * gpuxtb_result_owner_create. A result owner is a ref-counted host or CUDA
  * device allocation that outlives the compute context used to fill it, so a
@@ -70,6 +77,16 @@ enum gpuxtb_status_value {
   GPUXTB_STATUS_SCC_NOT_CONVERGED = 7,
   /* Per-system generalized eigensolver failed or produced an unusable eigensystem. */
   GPUXTB_STATUS_EIGENSOLVER_FAILED = 8
+};
+
+typedef int32_t gpuxtb_request_state_t;
+enum gpuxtb_request_state_value {
+  /* No submission has been accepted since creation or the latest reset. */
+  GPUXTB_REQUEST_IDLE = 0,
+  /* Native work has been accepted and may still access caller-owned buffers. */
+  GPUXTB_REQUEST_PENDING = 1,
+  /* Native work and result publication have finished, successfully or not. */
+  GPUXTB_REQUEST_COMPLETE = 2
 };
 
 typedef int32_t gpuxtb_backend_t;
@@ -180,6 +197,8 @@ typedef struct gpuxtb_interaction {
  */
 #if defined(__cplusplus)
 static_assert(sizeof(gpuxtb_status_t) == sizeof(int32_t), "gpuxtb_status_t must be 32-bit");
+static_assert(sizeof(gpuxtb_request_state_t) == sizeof(int32_t),
+              "gpuxtb_request_state_t must be 32-bit");
 static_assert(sizeof(gpuxtb_backend_t) == sizeof(int32_t), "gpuxtb_backend_t must be 32-bit");
 static_assert(sizeof(gpuxtb_memory_space_t) == sizeof(int32_t),
               "gpuxtb_memory_space_t must be 32-bit");
@@ -194,6 +213,8 @@ static_assert(sizeof(gpuxtb_interaction_type_t) == sizeof(int32_t),
               "gpuxtb_interaction_type_t must be 32-bit");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(gpuxtb_status_t) == sizeof(int32_t), "gpuxtb_status_t must be 32-bit");
+_Static_assert(sizeof(gpuxtb_request_state_t) == sizeof(int32_t),
+               "gpuxtb_request_state_t must be 32-bit");
 _Static_assert(sizeof(gpuxtb_backend_t) == sizeof(int32_t), "gpuxtb_backend_t must be 32-bit");
 _Static_assert(sizeof(gpuxtb_memory_space_t) == sizeof(int32_t),
                "gpuxtb_memory_space_t must be 32-bit");
@@ -619,6 +640,53 @@ _Static_assert(sizeof(gpuxtb_workspace_query_t) == GPUXTB_WORKSPACE_QUERY_V1_SIZ
                "gpuxtb_workspace_query_t must not add trailing ABI padding");
 #endif
 
+/*
+ * Snapshot of one reusable asynchronous request.
+ *
+ * state is IDLE immediately after request creation, PENDING after a submission
+ * has been accepted, and COMPLETE after all native work and caller-output
+ * publication have finished. completion_status is meaningful in COMPLETE and
+ * reports the submitted computation's final status; query/wait themselves
+ * return a separate status describing whether the snapshot operation worked.
+ * result_flags is the asynchronous counterpart of gpuxtb_batch_result_t.flags:
+ * enqueue functions take a const result descriptor and never modify that
+ * descriptor object.
+ */
+typedef struct gpuxtb_request_info {
+  uint32_t struct_size;
+  uint32_t api_version;
+  gpuxtb_request_state_t state;
+  gpuxtb_status_t completion_status;
+  uint32_t result_flags;
+  uint32_t reserved;
+} gpuxtb_request_info_t;
+
+#define GPUXTB_REQUEST_INFO_V1_SIZE (offsetof(gpuxtb_request_info_t, reserved) + sizeof(uint32_t))
+
+#if defined(__cplusplus)
+static_assert(offsetof(gpuxtb_request_info_t, state) == 8u,
+              "gpuxtb_request_info_t state must start at byte 8");
+static_assert(offsetof(gpuxtb_request_info_t, completion_status) == 12u,
+              "gpuxtb_request_info_t completion status must start at byte 12");
+static_assert(offsetof(gpuxtb_request_info_t, result_flags) == 16u,
+              "gpuxtb_request_info_t result flags must start at byte 16");
+static_assert(GPUXTB_REQUEST_INFO_V1_SIZE == 24u,
+              "gpuxtb_request_info_t ABI-v1 image must remain 24 bytes");
+static_assert(sizeof(gpuxtb_request_info_t) == GPUXTB_REQUEST_INFO_V1_SIZE,
+              "gpuxtb_request_info_t must not add trailing ABI padding");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(offsetof(gpuxtb_request_info_t, state) == 8u,
+               "gpuxtb_request_info_t state must start at byte 8");
+_Static_assert(offsetof(gpuxtb_request_info_t, completion_status) == 12u,
+               "gpuxtb_request_info_t completion status must start at byte 12");
+_Static_assert(offsetof(gpuxtb_request_info_t, result_flags) == 16u,
+               "gpuxtb_request_info_t result flags must start at byte 16");
+_Static_assert(GPUXTB_REQUEST_INFO_V1_SIZE == 24u,
+               "gpuxtb_request_info_t ABI-v1 image must remain 24 bytes");
+_Static_assert(sizeof(gpuxtb_request_info_t) == GPUXTB_REQUEST_INFO_V1_SIZE,
+               "gpuxtb_request_info_t must not add trailing ABI padding");
+#endif
+
 GPUXTB_API const char* gpuxtb_version_string(void);
 GPUXTB_API const char* gpuxtb_status_string(gpuxtb_status_t status);
 
@@ -634,12 +702,49 @@ GPUXTB_API gpuxtb_status_t gpuxtb_batch_result_init(gpuxtb_batch_result_t* resul
                                                     size_t struct_size);
 GPUXTB_API gpuxtb_status_t gpuxtb_workspace_query_init(gpuxtb_workspace_query_t* query,
                                                        size_t struct_size);
+GPUXTB_API gpuxtb_status_t gpuxtb_request_info_init(gpuxtb_request_info_t* info,
+                                                    size_t struct_size);
 
 GPUXTB_API gpuxtb_status_t gpuxtb_context_create(const gpuxtb_context_options_t* options,
                                                  gpuxtb_context_t** context);
 GPUXTB_API void gpuxtb_context_destroy(gpuxtb_context_t* context);
 GPUXTB_API gpuxtb_backend_t gpuxtb_context_get_backend(const gpuxtb_context_t* context);
 GPUXTB_API int32_t gpuxtb_context_get_device_id(const gpuxtb_context_t* context);
+
+/*
+ * Create a backend-neutral reusable request bound to context. Creating a
+ * request is supported for CPU and CUDA contexts, but asynchronous enqueue is
+ * currently CUDA-only. The request must be destroyed before its context.
+ */
+GPUXTB_API gpuxtb_status_t gpuxtb_request_create(gpuxtb_context_t* context,
+                                                 gpuxtb_request_t** request);
+
+/*
+ * Query without blocking, or wait until the current submission finishes.
+ * Query takes a mutable request because observing a ready native event may
+ * finalize deferred host-output publication and transition it to COMPLETE.
+ * Both calls write info only after validating its complete ABI-v1 header and
+ * reserved field. An IDLE request returns immediately. The API return value
+ * describes the query/wait operation; inspect info.completion_status only
+ * when info.state is COMPLETE for the submitted compute status.
+ */
+GPUXTB_API gpuxtb_status_t gpuxtb_request_query(gpuxtb_request_t* request,
+                                                gpuxtb_request_info_t* info);
+GPUXTB_API gpuxtb_status_t gpuxtb_request_wait(gpuxtb_request_t* request,
+                                               gpuxtb_request_info_t* info);
+
+/*
+ * Return the request-owned diagnostic for its completed submission. The
+ * returned pointer remains valid until the next accepted enqueue or request
+ * destruction. It is empty for IDLE, PENDING, and successful completion;
+ * invalid handles return NULL and set gpuxtb_get_last_error().
+ * Do not concurrently reuse, query, wait on, or destroy the same request while
+ * retaining this pointer.
+ */
+GPUXTB_API const char* gpuxtb_request_get_error(const gpuxtb_request_t* request);
+
+/* A NULL request is a harmless no-op. Destroying PENDING waits for completion. */
+GPUXTB_API void gpuxtb_request_destroy(gpuxtb_request_t* request);
 
 /*
  * Performs a synchronous batched inference. Host buffers are accepted by both
@@ -660,6 +765,26 @@ GPUXTB_API int32_t gpuxtb_context_get_device_id(const gpuxtb_context_t* context)
 GPUXTB_API gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxtb_batch_t* batch,
                                           const gpuxtb_compute_options_t* options,
                                           gpuxtb_batch_result_t* result);
+
+/*
+ * Submit one CUDA computation on the context stream without host blocking.
+ * The request must be IDLE or COMPLETE and bound to context. An accepted
+ * submission resets its previous completion status/error and becomes PENDING,
+ * or COMPLETE when the backend must settle it inline. Reusing a PENDING
+ * request is rejected. All input and output buffers remain caller-owned and
+ * must stay valid until the request becomes COMPLETE.
+ *
+ * The result descriptor is copied during submission and is never retained or
+ * modified. In particular, result->flags is not an asynchronous publication
+ * channel; completed flags are returned in gpuxtb_request_info_t.result_flags.
+ * CPU contexts return GPUXTB_STATUS_NOT_SUPPORTED before descriptor validation
+ * and leave all result bytes and the request state unchanged.
+ */
+GPUXTB_API gpuxtb_status_t gpuxtb_compute_enqueue(gpuxtb_context_t* context,
+                                                  const gpuxtb_batch_t* batch,
+                                                  const gpuxtb_compute_options_t* options,
+                                                  const gpuxtb_batch_result_t* result,
+                                                  gpuxtb_request_t* request);
 
 /*
  * Create a fixed-topology plan from one already-validated-shaped batch
@@ -712,6 +837,14 @@ GPUXTB_API gpuxtb_status_t gpuxtb_plan_query_workspace(const gpuxtb_plan_t* plan
 GPUXTB_API gpuxtb_status_t gpuxtb_plan_compute(gpuxtb_plan_t* plan, const gpuxtb_batch_t* batch,
                                                const gpuxtb_compute_options_t* options,
                                                gpuxtb_batch_result_t* result);
+
+/* Fixed-topology counterpart of gpuxtb_compute_enqueue with identical request,
+ * result-descriptor, lifetime, and CPU NOT_SUPPORTED semantics. */
+GPUXTB_API gpuxtb_status_t gpuxtb_plan_compute_enqueue(gpuxtb_plan_t* plan,
+                                                       const gpuxtb_batch_t* batch,
+                                                       const gpuxtb_compute_options_t* options,
+                                                       const gpuxtb_batch_result_t* result,
+                                                       gpuxtb_request_t* request);
 
 /*
  * gpuxtb-owned result arenas and their DLPack export.
