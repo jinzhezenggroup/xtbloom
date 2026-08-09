@@ -117,7 +117,10 @@ The measured pattern is what ragged high-throughput inference is for:
   than xTB and tblite per call (62 atoms: 174 ms vs xTB 2113 ms / tblite 1635
   ms; 122: 651 ms vs 7395 / 5342), because gpuxtb solves the whole ragged
   batch in one call across its worker pool while the reference adapters loop
-  systems serially. dxtb CPU rows reset per call by design, so they stay cold.
+  systems serially. gpuxtb CPU extends the sweep to 302 atoms (3115 @242 ->
+  5424 ms @302); CUDA and the references stop earlier (the RTX 5090 cannot
+  hold 128 x 302 systems and the reference bindings were capped in the
+  archived matrix). dxtb CPU rows reset per call by design, so they stay cold.
 - **MD trajectory (WARM):** per-frame latency at 32-242 atoms. gpuxtb CPU is
   1.3-2.9x slower than xTB/tblite at the largest sizes here too (242: 1786 ms
   vs xTB 620 / tblite 684), again from per-iteration cost plus tighter SCC

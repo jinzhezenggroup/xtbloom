@@ -95,7 +95,7 @@ python3 benchmarks/natoms_cross_engine.py --library <lib> \
 
 # panel 2 (batch=128, auto-warm)
 python3 benchmarks/natoms_cross_engine.py --library <lib> \
-  --engines <engine> --natoms-large-batch 14,32,62,122 --batch-sizes 128 \
+  --engines <engine> --natoms-large-batch 14,32,62,122,242,302 --batch-sizes 128 \
   --warmups 1 --repetitions 3 --cpu-threads 16 --start-policy auto-warm \
   --output-json final-<engine>-b128.json --output-csv final-<engine>-b128.csv
 
@@ -116,8 +116,9 @@ srun -n 1 --gres=gpu:1 -c 16 -w node3 bash -c ' \
 ```
 
 Figure: `python3 benchmarks/plot_natoms_cross_engine.py --artifact ...-cold.json
---artifact ...-b128.json --artifact ...-traj.json --artifact final-gpuxtb-cuda-cold.json
---artifact final-gpuxtb-cuda-b128.json --artifact final-gpuxtb-cuda-traj.json
+--artifact ...-b128.json --artifact ...-traj.json --artifact final-gpuxtb-cpu-b128-302.json
+--artifact final-gpuxtb-cuda-cold.json --artifact final-gpuxtb-cuda-b128.json
+--artifact final-gpuxtb-cuda-traj.json
 --artifact final-dxtb-cuda-cold.json --artifact final-dxtb-cuda-b128.json
 --artifact final-dxtb-cuda-traj.json --commit <sha> --output natoms_cross_engine.svg`
 (also `docs/assets/natoms_cross_engine.svg`).
@@ -144,9 +145,17 @@ Panel 2 (batch=128, distinct conformers, first call cold then WARM, 16 threads):
 | 62 | 174.4 | 216.9 | 2113.5 | 1634.8 | 16578.6 | 6755.7 |
 | 122 | 651.3 | 735.6 | 7394.7 | 5342.5 | -- | -- |
 | 242 | 3115.2 | 2851.9 | -- | -- | -- | -- |
+| 302 | 5424.3 | -- | -- | -- | -- | -- |
 
 \* dxtb resets per call by design (Torch autograd prevents warm continuation
 of the measured public path), so its rows are cold-every-call.
+
+The 302-atom gpuxtb CPU row is archived separately in
+`final-gpuxtb-cpu-b128-302.json/.csv`; it re-extends the batch=128 panel to
+the 302-atom sweep of the earlier revision (the corrected 16-thread value,
+5424 ms, replaces the old harness's 28 109 ms). gpuxtb CUDA stops at 242 as
+before: 302 x 128 systems exceeds the 32 GiB card in the first revision and
+was recorded unavailable.
 
 Panel 3 (trajectory, WARM continuation, ms/frame, 16 threads):
 
@@ -181,6 +190,7 @@ Panel 3 (trajectory, WARM continuation, ms/frame, 16 threads):
 ## Files
 
 - `final-<engine>-{cold,b128,traj}.json/.csv` for gpuxtb-cpu, xtb, tblite, dxtb-cpu
+- `final-gpuxtb-cpu-b128-302.json/.csv` (302-atom batch=128 extension, 2026-08-09)
 - `final-{gpuxtb-cuda,dxtb-cuda}-{cold,b128,traj}.json/.csv` (re-measured 2026-08-09)
 - `natoms_cross_engine.svg` (rendered figure)
 - `README.md`, `SHA256SUMS`
