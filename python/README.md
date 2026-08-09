@@ -27,11 +27,12 @@ python -m pip install "xtbloom[dpdata]"
 python -m pip install "xtbloom[cuda12]"
 ```
 
-Python 3.10 or newer is required. Linux wheels use the separately installed
-`scipy-openblas32` package as the LP64 LAPACKE+CBLAS runtime for CPU inference.
-A CUDA-enabled wheel additionally needs an NVIDIA driver and compatible CUDA
-12 host libraries; the `cuda12` extra supplies the supported `nvidia-*`
-packages. CUDA libraries are not bundled inside the xTBloom wheel.
+Python 3.10 or newer is required. Linux wheels include a private LP64 OpenBLAS
+provider for CPU inference; `scipy-openblas32` is used only while building the
+wheel and is not installed as a runtime dependency. A CUDA-enabled wheel
+additionally needs an NVIDIA driver and compatible CUDA 12 host libraries; the
+`cuda12` extra supplies the supported `nvidia-*` packages. CUDA libraries are
+not bundled inside the xTBloom wheel.
 
 The planned PyPI artifacts are Linux x86_64 and aarch64 wheels. macOS and
 Windows wheels are not supported yet. Source-build instructions are kept in the

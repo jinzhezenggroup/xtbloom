@@ -7,7 +7,7 @@
 #include <dlfcn.h>
 #endif
 
-#if defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM)
+#if defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM) || defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS)
 #include <link.h>
 #endif
 
@@ -298,11 +298,11 @@ bool backend_self_test(const CpuLinearAlgebraBackend& backend) {
   return rhs[0] == 2.0 && product[0] == 4.0;
 }
 
-#if defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM)
+#if defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM) || defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS)
 void* open_host_isolated_sibling(const char* soname) {
   /* A LOCAL handle still resolves relocations against already-global objects.
-   * A new link-map namespace is required to keep a host's libmkl_rt ILP64
-   * dispatcher from interposing on the LP64 component cohort. */
+   * A new link-map namespace is required to keep a host BLAS implementation
+   * from interposing on xTBloom's private LP64 provider cohort. */
   static const unsigned char kModuleAnchor = 0u;
   Dl_info module{};
   if (dladdr(&kModuleAnchor, &module) == 0 || module.dli_fname == nullptr) {
@@ -1157,7 +1157,8 @@ bool CpuLinearAlgebraBackend::ready() const noexcept {
 }
 
 bool CpuLinearAlgebraBackend::production() const noexcept {
-  return origin_ == Origin::kMklShimLp64 || origin_ == Origin::kOpenBlasLp64;
+  return origin_ == Origin::kMklShimLp64 || origin_ == Origin::kOpenBlasIsolatedLp64 ||
+         origin_ == Origin::kOpenBlasLp64;
 }
 
 bool CpuLinearAlgebraBackend::production_mkl() const noexcept {
@@ -1166,6 +1167,10 @@ bool CpuLinearAlgebraBackend::production_mkl() const noexcept {
 
 bool CpuLinearAlgebraBackend::production_mkl_isolated() const noexcept {
   return origin_ == Origin::kMklShimLp64;
+}
+
+bool CpuLinearAlgebraBackend::production_openblas_isolated() const noexcept {
+  return origin_ == Origin::kOpenBlasIsolatedLp64;
 }
 
 xtbloom_status_t make_internal_test_lp64_backend(
@@ -1199,6 +1204,57 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
     state.message = "CPU linear-algebra runtime loading is not ported to Windows yet";
     return state;
 #else
+#ifdef XTBLOOM_CONFIGURED_WHEEL_OPENBLAS
+    /* Python wheels carry one hash-verified scipy-openblas32 provider cohort
+     * through a private sibling shim whose dependency closure auditwheel
+     * vendors and collision-renames. Load that shim by absolute path into a
+     * fresh glibc link-map: importing the upstream Python package or using the
+     * base namespace would let NumPy/host BLAS symbols interpose. A configured
+     * bundle is an all-or-nothing contract, so verification failure must not
+     * fall back to an unrelated system provider. */
+    {
+      dlerror();
+      void* handle = open_host_isolated_sibling("libxtbloom_openblas_lp64_shim.so");
+      if (handle != nullptr) {
+        LapackDpotrfWork dpotrf_work = nullptr;
+        LapackDpoconWork dpocon_work = nullptr;
+        LapackDsyevdWork dsyevd_work = nullptr;
+        CblasDtrsm dtrsm = nullptr;
+        CblasDgemm dgemm = nullptr;
+        BlasSetNumThreadsLocal set_threads = nullptr;
+        using OpenBlasGetConfig = const char* (*)();
+        OpenBlasGetConfig get_config = nullptr;
+        if (load_lapacke_cblas_symbols(handle, true, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
+                                       dgemm) &&
+            load_symbol(handle, "scipy_openblas_get_config", get_config)) {
+          const char* config = get_config();
+          if (config != nullptr && std::strstr(config, "OpenBLAS 0.3.34.0.0") == config &&
+              std::strstr(config, "USE64BITINT") == nullptr) {
+            if (!load_symbol(handle, "openblas_set_num_threads_local", set_threads)) {
+              static_cast<void>(
+                  load_symbol(handle, "scipy_openblas_set_num_threads_local", set_threads));
+            }
+            if (set_threads != nullptr) {
+              CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+                  CpuLinearAlgebraBackend::Origin::kOpenBlasIsolatedLp64, dpotrf_work, dpocon_work,
+                  dsyevd_work, dtrsm, dgemm, set_threads);
+              if (backend_self_test(created)) {
+                state.backend = created;
+                state.status = XTBLOOM_STATUS_SUCCESS;
+                return state;
+              }
+            }
+          }
+        }
+        static_cast<void>(dlclose(handle));
+      }
+      state.message =
+          "private wheel OpenBLAS provider is missing or failed verification "
+          "(libxtbloom_openblas_lp64_shim.so)";
+      return state;
+    }
+#endif
+
 #ifdef XTBLOOM_CONFIGURED_CPU_LINALG_SHIM
     /* Preferred isolated MKL provider: a private shim built at CMake time with
      * fixed DT_NEEDED dependencies on libmkl_intel_lp64, libmkl_sequential, and

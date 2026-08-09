@@ -335,8 +335,10 @@ labeled = system.minimize(
 ## Native-library discovery
 
 Published wheels place `libxtbloom` inside the Python package. On supported
-Linux platforms, the package discovers the separately installed OpenBLAS and
-optional `nvidia-*` CUDA providers without requiring `LD_LIBRARY_PATH`.
+Linux platforms, CPU inference uses the wheel's private, auditwheel-vendored
+OpenBLAS provider. The upstream `scipy-openblas32` package is not a runtime
+dependency and should not be installed for xTBloom. Optional `nvidia-*` CUDA
+providers are still discovered separately without requiring `LD_LIBRARY_PATH`.
 
 `XTBLOOM_LIBRARY` can override the bundled native library for development or a
 managed deployment. The override must be ABI-compatible with the Python

@@ -42,6 +42,22 @@ host shared libraries or the NVIDIA driver. The optional `cuda12` extra installs
 supported host providers separately from PyPI. CPU-only installations remain
 usable without the proprietary stack.
 
+Linux x86_64/aarch64 wheels do bundle one private LP64 OpenBLAS provider. The
+upstream `scipy-openblas32` distribution is deliberately build-only: an
+environment-gated scikit-build-core override installs the exact reviewed
+version only for cibuildwheel's audited Linux wheel builds, while a non-default
+uv dependency group retains its PyPI hashes in `uv.lock`. It must never appear
+in project dependencies, extras, editable builds, or wheel `METADATA`.
+
+CMake validates the installed distribution version, license, architecture, and
+complete ELF inventory through `python/ci/resolve-openblas-wheel.py` without
+importing the package. A private shim retains the only `DT_NEEDED` edge.
+`auditwheel repair` then vendors and collision-renames OpenBLAS and its
+architecture-specific GCC runtime closure. `python/ci/inspect-openblas-wheel.py`
+checks the final metadata, exact cohort names, ELF machine, symbols, SONAMEs,
+RPATHs, and dependency graph. `libxtbloom` itself must remain free of OpenBLAS,
+libgfortran, libquadmath, and shim `DT_NEEDED` entries.
+
 Wheel checks cover size, license payload, native symbol and dynamic-dependency
 policy, bundled-library discovery, and installed inference. Hosted wheel jobs
 without an NVIDIA driver do not count as real CUDA runtime validation.
