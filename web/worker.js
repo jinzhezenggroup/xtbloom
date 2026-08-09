@@ -1,6 +1,6 @@
 /* gpuxtb web demo worker.
  *
- * The wasm64 module (gpuxtb + web adapter + preloaded LAPACK side module)
+ * The target-width module (gpuxtb + web adapter + preloaded LAPACK side module)
  * runs here, so the long synchronous calls (single-point and, especially,
  * the multi-iteration geometry optimization) never block the UI thread.
  *
@@ -11,6 +11,7 @@
  *   worker -> main {type:"result", id, ok, raw?: string, error?: string}
  */
 import createGpuxTbModule from "./gpuxtb_web.js";
+import { copyFloat64FromMemory } from "./app_helpers.js";
 
 let Module = null;
 let stepFn = null;
@@ -20,23 +21,13 @@ function ensureStepCallback() {
   if (stepFn !== null || !Module || typeof Module.addFunction !== "function") return;
   try {
     stepFn = Module.addFunction((iter, natoms, ptr, energy, fmax) => {
-      // coords arrive as wasm64 pointers (BigInt); floats live in wasm memory.
-      // Build a fresh Float64Array over the shared buffer so it stays valid
-      // regardless of wasm memory growth.
+      // wasm32 passes a Number and wasm64 passes a BigInt for this pointer.
+      // Copy the frame immediately so it stays valid after memory growth.
       const mem = Module.wasmMemory || Module.memory;
-      const coords = new Array(natoms * 3);
-      if (mem && mem.buffer) {
-        const f64 = new Float64Array(mem.buffer);
-        const base = Number(ptr) / 8;
-        for (let i = 0; i < coords.length; i++) {
-          coords[i] = f64[base + i];
-        }
-      } else {
-        for (let i = 0; i < coords.length; i++) coords[i] = NaN;
-      }
+      const coords = copyFloat64FromMemory(mem, ptr, natoms * 3);
       if (onStep) onStep(iter, natoms, coords, energy, fmax);
     }, "viipdd");
-    Module.ccall("gpuxtb_web_set_optimize_step_cb", "void", ["number"], [stepFn]);
+    Module.ccall("gpuxtb_web_set_optimize_step_cb", "void", ["pointer"], [stepFn]);
   } catch (err) {
     stepFn = null; /* animation is optional; core optimize still works */
   }

@@ -3,7 +3,7 @@
 # Enabled with -DGPUXTB_BUILD_WEB_DEMO=ON under the Emscripten toolchain
 # (emcmake). The whole pipeline — npm-fetch the 3Dmol.js browser bundle,
 # build the dlopen-able LAPACKE side module, compile the web adapter, link the
-# wasm64 main module, and stage the static assets — is expressed as custom
+# target-width main module, and stage the static assets — is expressed as custom
 # commands so a single `cmake --build` produces the deployable site in
 #   <build>/web/site
 #
@@ -26,6 +26,22 @@ set(_gpuxtb_web_site "${CMAKE_CURRENT_BINARY_DIR}/site")
 set(_gpuxtb_web_obj "${CMAKE_CURRENT_BINARY_DIR}/gpuxtb_web.o")
 set(_gpuxtb_web_include "-I${CMAKE_SOURCE_DIR}/include")
 
+# The core library's data model is selected before this subdirectory is
+# processed, through the Emscripten compiler flags used at configure time.
+# Derive every custom command from CMake's detected pointer size so the core,
+# adapter, main module, and dlopen side module cannot accidentally mix widths.
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+  set(_gpuxtb_web_arch "wasm32")
+  set(_gpuxtb_web_arch_flag "-m32")
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
+  set(_gpuxtb_web_arch "wasm64")
+  set(_gpuxtb_web_arch_flag "-m64")
+else()
+  message(FATAL_ERROR
+    "The web demo supports only 32-bit or 64-bit WebAssembly pointers; "
+    "CMAKE_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}.")
+endif()
+
 # ---------------------------------------------------------------------------
 # 0) Fetch build-time npm dependencies (3Dmol.js). Re-runs only when
 #    package.json / package-lock.json are newer than the resolved bundle.
@@ -47,17 +63,16 @@ add_custom_command(
 #    "libscipy_openblas.so"; preloaded into the main module's virtual FS
 #    below, so browser main-thread dlopen never needs a synchronous fetch.
 # ---------------------------------------------------------------------------
-set(_gpuxtb_web_side "${_gpuxtb_web_site}/libscipy_openblas.so")
+set(_gpuxtb_web_side "${CMAKE_CURRENT_BINARY_DIR}/libscipy_openblas.so")
 add_custom_command(
   OUTPUT "${_gpuxtb_web_side}"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${_gpuxtb_web_site}"
   COMMAND ${CMAKE_C_COMPILER}
           "${_gpuxtb_web_src}/wasm/linalg.c"
           -o "${_gpuxtb_web_side}"
-          -sSIDE_MODULE=2 -m64 -O2
+          -sSIDE_MODULE=2 "${_gpuxtb_web_arch_flag}" -O2
           "-sEXPORTED_FUNCTIONS=[\"_openblas_get_config\",\"_openblas_set_num_threads_local\",\"_LAPACKE_dpotrf_work\",\"_LAPACKE_dpocon_work\",\"_LAPACKE_dsyevd_work\",\"_cblas_dgemm\",\"_cblas_dtrsm\"]"
   DEPENDS "${_gpuxtb_web_src}/wasm/linalg.c"
-  COMMENT "Building wasm64 LAPACKE side module"
+  COMMENT "Building ${_gpuxtb_web_arch} LAPACKE side module"
   VERBATIM)
 
 # ---------------------------------------------------------------------------
@@ -66,16 +81,17 @@ add_custom_command(
 add_custom_command(
   OUTPUT "${_gpuxtb_web_obj}"
   COMMAND ${CMAKE_C_COMPILER}
-          -m64 -fPIC -O2
+          "${_gpuxtb_web_arch_flag}" -fPIC -O2
           "${_gpuxtb_web_include}"
           -c "${_gpuxtb_web_src}/gpuxtb_web.c"
           -o "${_gpuxtb_web_obj}"
   DEPENDS "${_gpuxtb_web_src}/gpuxtb_web.c"
-  COMMENT "Compiling wasm64 web adapter"
+  COMMENT "Compiling ${_gpuxtb_web_arch} web adapter"
   VERBATIM)
 
 # ---------------------------------------------------------------------------
-# 3) wasm64 main module: gpuxtb static library + web adapter, single-threaded
+# 3) Target-width main module: gpuxtb static library + web adapter,
+#    single-threaded
 #    (no SharedArrayBuffer -> GitHub Pages works without COOP/COEP headers),
 #    dynamic-linking main module, ES6 MODULARIZE factory, side module
 #    preloaded into the virtual filesystem.
@@ -91,7 +107,7 @@ add_custom_command(
           $<TARGET_FILE:gpuxtb>
           "${_gpuxtb_web_include}"
           -o "${_gpuxtb_web_site}/gpuxtb_web.js"
-          -m64 -O2 -sMAIN_MODULE=2
+          "${_gpuxtb_web_arch_flag}" -O2 -sMAIN_MODULE=2
           -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createGpuxTbModule
           -sSTACK_SIZE=8MB -sALLOW_MEMORY_GROWTH
           -sFORCE_FILESYSTEM
@@ -102,7 +118,7 @@ add_custom_command(
     gpuxtb
     "${_gpuxtb_web_side}"
     "${_gpuxtb_web_obj}"
-  COMMENT "Linking wasm64 main module (gpuxtb_web.js)"
+  COMMENT "Linking ${_gpuxtb_web_arch} main module (gpuxtb_web.js)"
   VERBATIM)
 
 # ---------------------------------------------------------------------------
@@ -176,6 +192,10 @@ set(_gpuxtb_web_legal_outputs
     "${_gpuxtb_web_site}/CUDA_MKL_LINKING_EXCEPTION"
     "${_gpuxtb_web_site}/THIRD_PARTY_NOTICES.md"
     "${_gpuxtb_web_site}/LICENSES/3Dmol.js-BSD-3-Clause.txt"
+    "${_gpuxtb_web_site}/LICENSES/Apache-2.0.txt"
+    "${_gpuxtb_web_site}/LICENSES/LGPL-3.0-or-later.txt"
+    "${_gpuxtb_web_site}/LICENSES/MIT.txt"
+    "${_gpuxtb_web_site}/LICENSES/array-api-compat-MIT.txt"
     "${_gpuxtb_web_site}/LICENSES/pako-MIT.txt"
     "${_gpuxtb_web_site}/LICENSES/pako-Zlib.txt"
     "${_gpuxtb_web_site}/LICENSES/iobuffer-MIT.txt"
@@ -240,4 +260,4 @@ add_custom_target(
     "${_gpuxtb_web_site}/vendor/3Dmol-min.js"
     ${_gpuxtb_web_legal_outputs})
 
-message(STATUS "gpuxtb web demo output: ${_gpuxtb_web_site}")
+message(STATUS "gpuxtb ${_gpuxtb_web_arch} web demo output: ${_gpuxtb_web_site}")

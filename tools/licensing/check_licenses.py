@@ -186,6 +186,10 @@ WEB_SITE_SOURCE_MAP = {
     "LICENSE": "LICENSE",
     EXCEPTION_FILE: EXCEPTION_FILE,
     "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+    "LICENSES/Apache-2.0.txt": "LICENSES/Apache-2.0.txt",
+    "LICENSES/LGPL-3.0-or-later.txt": "LICENSES/LGPL-3.0-or-later.txt",
+    "LICENSES/MIT.txt": "LICENSES/MIT.txt",
+    "LICENSES/array-api-compat-MIT.txt": ARRAY_API_COMPAT_LICENSE,
     **{path: path for path in WEB_LICENSE_FILES},
     "LICENSES/parameters/d4.NOTICE": "data/parameters/d4.NOTICE",
     "LICENSES/parameters/dftd4-COPYING": ("data/parameters/licenses/dftd4-COPYING"),
@@ -203,6 +207,7 @@ WEB_SITE_SOURCE_MAP = {
 }
 WEB_SITE_RUNTIME_FILES = (
     "index.html",
+    "style.css",
     "app.js",
     "app_helpers.js",
     "worker.js",
@@ -655,6 +660,24 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
         WEB_SITE_RUNTIME_FILES + tuple(WEB_SITE_SOURCE_MAP),
         "web site",
     )
+    if (site / "libscipy_openblas.so").exists():
+        raise LicenseCheckError(
+            "web site contains the raw LAPACK side module; it must only be "
+            "conveyed inside gpuxtb_web.data"
+        )
+    # Pages uploads the complete site directory, so accepting arbitrary extra
+    # files would allow an obsolete JS/WASM variant or unreviewed payload to be
+    # redistributed even when every required file is present.
+    expected_files = set(WEB_SITE_RUNTIME_FILES) | set(WEB_SITE_SOURCE_MAP)
+    observed_files = {
+        path.relative_to(site).as_posix() for path in site.rglob("*") if path.is_file()
+    }
+    unexpected_files = sorted(observed_files - expected_files)
+    if unexpected_files:
+        raise LicenseCheckError(
+            "web site contains unexpected or orphaned files: "
+            + ", ".join(unexpected_files)
+        )
     index = (site / "index.html").read_text(encoding="utf-8")
     for token in (
         'href="LICENSE"',

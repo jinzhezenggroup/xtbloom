@@ -1,11 +1,11 @@
 # Builds the gpuxtb WASM web demo and publishes it to GitHub Pages.
 #
 # The artifact is a fully client-side GFN2-xTB single-point + geometry
-# optimization page: a single-threaded wasm64 module (so no COOP/COEP headers
+# optimization page: a single-threaded wasm32 module (so no COOP/COEP headers
 # are needed, which GitHub Pages cannot configure anyway) that dlopens a
-# preloaded minimal LP64 LAPACK side module. Everything — 3Dmol.js via npm,
-# the side module, the adapter, the main module, and the static assets — is
-# produced by the CMake web target (web/CMakeLists.txt, enabled here with
+# preloaded minimal LAPACK side module. A separate wasm64 build is retained as
+# an ABI/scientific parity gate but is not deployed. Everything is produced by
+# the CMake web target (web/CMakeLists.txt, enabled here with
 # -DGPUXTB_BUILD_WEB_DEMO=ON).
 #
 # Deploys only on pushes to main; pull requests build + smoke-test without
@@ -42,7 +42,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Node for npm and wasm64 smoke tests
+      - name: Set up Node for npm and dual-width smoke tests
         uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -66,18 +66,33 @@ jobs:
           restore-keys: |
             ccache-wasm-emscripten-6.0.6-
 
-      - name: Configure wasm64 build (library + web demo site)
+      - name: Configure wasm32 deployment build
         run: |
-          emcmake cmake -S . -B build/wasm-web -G Ninja \
+          emcmake cmake -S . -B build/wasm32-web -G Ninja \
             -DGPUXTB_ENABLE_CUDA=OFF \
             -DGPUXTB_BUILD_TESTS=OFF \
             -DGPUXTB_BUILD_WEB_DEMO=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-m32 -fPIC" \
+            -DCMAKE_CXX_FLAGS="-m32 -fPIC"
+
+      - name: Build wasm32 deployment site
+        run: cmake --build build/wasm32-web --parallel 2
+
+      - name: Configure wasm64 parity build
+        run: |
+          emcmake cmake -S . -B build/wasm64-web -G Ninja \
+            -DGPUXTB_ENABLE_CUDA=OFF \
+            -DGPUXTB_BUILD_TESTS=OFF \
+            -DGPUXTB_BUILD_WEB_DEMO=ON \
+            -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="-m64 -fPIC" \
             -DCMAKE_CXX_FLAGS="-m64 -fPIC"
 
-      - name: Build
-        run: cmake --build build/wasm-web --parallel 2
+      - name: Build wasm64 parity site
+        run: cmake --build build/wasm64-web --parallel 2
 
       - name: Show ccache statistics
         run: ccache -s
@@ -85,21 +100,47 @@ jobs:
       - name: Test browser helpers
         run: npm test --prefix web
 
+      - name: Run public C ABI layout and short-initializer checks
+        run: |
+          emcc -m32 -std=c11 -Iinclude -c tests/c_api_test.c \
+            -o build/wasm32-c-api-test.o
+          EMCC_FORCE_STDLIBS=1 em++ -m32 build/wasm32-c-api-test.o \
+            build/wasm32-web/libgpuxtb.a -o build/wasm32-c-api-test.js \
+            -sMAIN_MODULE=2 -sALLOW_MEMORY_GROWTH
+          node build/wasm32-c-api-test.js
+
+          emcc -m64 -std=c11 -Iinclude -c tests/c_api_test.c \
+            -o build/wasm64-c-api-test.o
+          EMCC_FORCE_STDLIBS=1 em++ -m64 build/wasm64-c-api-test.o \
+            build/wasm64-web/libgpuxtb.a -o build/wasm64-c-api-test.js \
+            -sMAIN_MODULE=2 -sALLOW_MEMORY_GROWTH
+          node build/wasm64-c-api-test.js
+
       - name: Check deployed legal payload
-        run: >-
-          python3 tools/licensing/check_licenses.py --source-root .
-          --web-site build/wasm-web/web/site
+        run: |
+          python3 tools/licensing/check_licenses.py --source-root . \
+            --web-site build/wasm32-web/web/site
+          python3 tools/licensing/check_licenses.py --source-root . \
+            --web-site build/wasm64-web/web/site
+
+      - name: Run wasm32 scientific smoke tests
+        run: node web/tests/wasm_smoke.mjs build/wasm32-web/web/site
 
       - name: Run wasm64 scientific smoke tests
         # memory64 first shipped in V8 13.3 (Chrome 133); Node 24 is the first
         # Node release line that enables it by default.
-        run: node web/tests/wasm_smoke.mjs build/wasm-web/web/site
+        run: node web/tests/wasm_smoke.mjs build/wasm64-web/web/site
+
+      - name: Compare wasm32 and wasm64 scientific results
+        run: >-
+          node web/tests/wasm_parity.mjs
+          build/wasm32-web/web/site build/wasm64-web/web/site
 
       - name: Upload trusted main site artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: build/wasm-web/web/site
+          path: build/wasm32-web/web/site
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
