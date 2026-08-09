@@ -217,23 +217,29 @@ def check(args: argparse.Namespace) -> int:
 
 
 def build_symbol_list(args: argparse.Namespace) -> int:
-    """Emit the exact torch stable symbols the extension references.
+    """Emit the union of stable symbols referenced by extension objects.
 
-    Extracts undefined symbols from the compiled extension object.  Used by
-    the maintainer to refresh `aoti_symbols.txt`.
+    Compiler and instrumentation choices can retain different inline stable
+    shim calls. Accept multiple objects so the build-time stub covers every
+    supported configuration instead of only the object used to refresh it.
     """
-    object_path = Path(args.extension_object)
-    if not object_path.is_file():
-        print(f"missing object file: {object_path}", file=sys.stderr)  # noqa: T201
+    object_paths = [Path(path) for path in args.extension_object]
+    missing = [path for path in object_paths if not path.is_file()]
+    if missing:
+        for path in missing:
+            print(f"missing object file: {path}", file=sys.stderr)  # noqa: T201
         return 1
     import subprocess
 
-    output = subprocess.run(
-        ["nm", "-u", str(object_path)],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
+    outputs = [
+        subprocess.run(
+            ["nm", "-u", str(object_path)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        for object_path in object_paths
+    ]
     # The stable C shim couples aoti_torch_* operators with a small legacy
     # torch_* surface (library.h/tensor.h inline helpers call torch_library_impl
     # and torch_get_mutable_data_ptr); both families are exported by the real
@@ -243,7 +249,7 @@ def build_symbol_list(args: argparse.Namespace) -> int:
             re.findall(
                 r"\b(aoti_torch_[A-Za-z0-9_]+|torch_get_mutable_data_ptr|"
                 r"torch_library_impl)\b",
-                output,
+                "\n".join(outputs),
             )
         )
     )
@@ -251,7 +257,8 @@ def build_symbol_list(args: argparse.Namespace) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(symbols) + "\n", encoding="utf-8")
     print(  # noqa: T201 - CLI progress output
-        f"wrote {len(symbols)} torch stable symbols to {out}"
+        f"wrote {len(symbols)} torch stable symbols from "
+        f"{len(object_paths)} object(s) to {out}"
     )
     return 0
 
@@ -272,7 +279,13 @@ def main(argv: list[str] | None = None) -> int:
     ck.set_defaults(func=check)
 
     syms = sub.add_parser("symbols", help="refresh the torch stable symbol list")
-    syms.add_argument("--extension-object", required=True, type=Path)
+    syms.add_argument(
+        "--extension-object",
+        required=True,
+        action="append",
+        type=Path,
+        help="compiled extension object; repeat for each supported build mode",
+    )
     syms.add_argument("--out", default=f"{VENDOR_RELPATH}/{SYMBOLS_NAME}", type=Path)
     syms.set_defaults(func=build_symbol_list)
 

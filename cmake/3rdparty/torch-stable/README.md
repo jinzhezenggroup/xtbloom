@@ -45,15 +45,18 @@ python3 tools/torch_stable_vendor.py check --out cmake/3rdparty/torch-stable
 ```
 
 followed by a regenerate from an installed torch, then rebuild the extension
-symbol list from the compiled object:
+symbol list from the supported compiled objects:
 
 ```bash
 python3 tools/torch_stable_vendor.py generate \
   --torch-include <torch/include> --torch-version <x.y.z> \
   --out cmake/3rdparty/torch-stable
-# compile python/gpuxtb/_torch_ext/gpuxtb_torch_ext.cpp standalone, then:
+# Compile python/gpuxtb/_torch_ext/gpuxtb_torch_ext.cpp in every supported
+# compiler/instrumentation mode, then pass each object to form their union:
 python3 tools/torch_stable_vendor.py symbols \
-  --extension-object <ext.o> --out cmake/3rdparty/torch-stable/aoti_symbols.txt
+  --extension-object <release-ext.o> \
+  --extension-object <coverage-ext.o> \
+  --out cmake/3rdparty/torch-stable/aoti_symbols.txt
 ```
 
 The extension link uses `-z defs`, so a header/version change that introduces

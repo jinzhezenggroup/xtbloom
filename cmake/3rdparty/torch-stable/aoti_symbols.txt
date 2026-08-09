@@ -35,6 +35,7 @@ aoti_torch_is_contiguous
 aoti_torch_is_defined
 aoti_torch_library_def
 aoti_torch_library_init_def
+aoti_torch_library_init_fragment
 aoti_torch_library_init_impl
 aoti_torch_new_tensor_handle
 torch_get_mutable_data_ptr
