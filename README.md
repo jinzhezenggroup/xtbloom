@@ -2,178 +2,62 @@
 
 <img src="docs/assets/xtbloom-logo.svg" alt="xTBloom logo" width="440">
 
-xTBloom is a native GFN2-xTB inference library for workloads made of many
-small and medium molecular systems. It combines a C++17 implementation, CPU
-and CUDA backends, one stable C ABI, and Python interfaces built on that same
-ABI.
+**Native, batched GFN2-xTB inference for C, C++, Python, and CUDA.**
 
-Try the experimental, fully client-side browser demo at
-<https://jinzhezeng.group/xtbloom/>. It compiles the CPU backend to wasm32
-without requiring Memory64, targeting modern iOS Safari, Safari, Chrome, and
-Firefox with WebAssembly and module Worker support. It also adds a small
-Web-adapter L-BFGS optimizer and a first-class SMILES input. A pinned
-OpenChemLib 9.21.0 release loads from jsDelivr in the background, adds explicit
-hydrogens, generates a seeded 3D conformer, and performs an MMFF94
-pre-relaxation before xTBloom calculation. Opening a URL such as
-`https://jinzhezeng.group/xtbloom/?smiles=CCO` additionally runs the xTBloom
-geometry optimizer automatically and writes the final angstrom coordinates
-back to the page. Charged SMILES must URL-encode `+` as `%2B`. These optimizer
-and SMILES facilities belong to the browser adapter, not the stable C ABI or
-native library API. A wasm64 build remains in CI as an ABI and numerical parity
-gate.
+[Try it in your browser](https://xtbloom.jinzhezeng.group) ·
+[Python guide](docs/user-guide/python.md) ·
+[C/C++ guide](docs/user-guide/c-api.md) ·
+[Documentation](docs/index.md)
 
-The current pre-release implements restricted and unrestricted GFN2-xTB
-energies, analytic forces, and atomic charges. It is designed for reusable
-contexts and ragged batches rather than wrapping a command-line calculation
-once per molecule.
+xTBloom is a pre-release C++17 library for applications that need energies,
+analytic forces, and atomic charges for many small and medium molecular
+systems. Its CPU and CUDA backends share one stable C ABI, with Python, ASE,
+and dpdata interfaces built on the same native execution path.
 
-## Features
+## Try xTBloom in your browser
 
-- **Native ragged batches.** Molecules share one call without padding every
-  system to the largest atom or orbital count.
-- **Measured high-throughput advantage.** In the public energy-plus-force
-  benchmark at 62 atoms, xTBloom CPU is 7.6x-8.6x faster than xTB/tblite for
-  128 systems and 8.9x-10.7x faster for 512 systems, with every dependent
-  timed sample checked against the same output gate.
-- **CPU and CUDA parity.** Both backends implement restricted and unrestricted
-  GFN2-xTB. The CUDA ABI accepts caller-owned host, device, or mixed buffers.
-- **Failure isolation.** SCC or eigensolver failure in one molecule publishes
-  NaNs and diagnostics for that molecule without discarding successful peers.
-- **Analytic derivatives.** Energies, QM forces, atomic charges, optional
-  point-charge forces, and per-system molecular dipole moments are available
-  through the public API.
-- **QM/MM inputs inside SCC.** Explicit point charges, caller-supplied
-  periodic charge-response operators, and a uniform external electric field
-  participate in every SCC iteration.
+[![xTBloom browser demo running an ethanol calculation](docs/assets/web-demo-ethanol.png)](https://xtbloom.jinzhezeng.group/?smiles=CCO)
+
+The [fully client-side demo](https://xtbloom.jinzhezeng.group) turns SMILES or
+XYZ coordinates into an interactive GFN2-xTB calculation without an install or
+server upload. The screenshot shows ethanol generated from `CCO`, optimized,
+and evaluated in the browser build prepared by this repository.
+
+The browser's SMILES-to-3D workflow and L-BFGS optimizer are demonstration
+adapter features. The native library API remains focused on reusable
+single-point inference. See the [browser demo guide](docs/user-guide/browser-demo.md)
+for usage and scope.
+
+## Why xTBloom
+
+- **Native ragged batches.** Differently sized molecules share one call without
+  padding every system to the largest atom or orbital count.
+- **CPU and CUDA parity.** Restricted and unrestricted GFN2-xTB run through the
+  same public API. The low-level CUDA path accepts caller-owned host, device, or
+  mixed buffers.
+- **Failure isolation.** SCC or eigensolver failure is local to one batch
+  member; successful peers remain valid and failed slices receive NaNs plus
+  per-system diagnostics.
+- **Analytic derivatives and embedding.** The API returns energies, QM forces,
+  charges, optional point-charge forces, and molecular dipoles, with explicit
+  point charges and caller-supplied charge-response operators included in SCC.
 - **Reusable execution state.** Contexts retain CPU workers, CUDA workspaces,
-  fixed-topology plans, and strict compatible electronic warm starts.
-- **One deployment boundary.** C, C++, Python, ASE, and dpdata all call the
-  same versioned, caller-buffer C ABI.
-
-GFN1-xTB and ROCm have reserved ABI values but are **not implemented**. The
-native library also does not currently provide geometry optimization,
-molecular dynamics, solvation, Hessians, or a lattice/PBC descriptor. The
-browser demo's adapter-local optimizer does not change that public capability
-boundary.
-
-## Choosing an xTB implementation
-
-The projects below serve different workflows. This is a capability comparison,
-not a general performance ranking.
-
-| Project | Best fit | Methods | Batch and accelerator model |
-| --- | --- | --- | --- |
-| **xTBloom** | Native high-throughput inference embedded in C/C++ or Python applications | GFN2-xTB | Ragged C-ABI batches; CPU and CUDA; caller-owned host/device buffers |
-| [xTB](https://github.com/grimme-lab/xtb) | Broad end-user computational chemistry workflows | GFN0/1/2-xTB, GFN-FF, and more | Mature CLI and per-system library APIs; OpenMP and optional NVIDIA build paths |
-| [tblite](https://github.com/tblite/tblite) | Lightweight, extensible single-point library | GFN1-xTB, GFN2-xTB, IPEA1-xTB | Fortran/C/Python per-structure APIs; CPU/OpenMP; molecular and periodic inputs |
-| [dxtb](https://github.com/grimme-lab/dxtb) | Differentiable xTB in PyTorch and ML workflows | GFN1-xTB, GFN2-xTB | Batched PyTorch tensors on CPU/CUDA; autodiff forces and response properties |
-
-### Where xTBloom is deliberately stronger
-
-xTBloom makes several production-inference guarantees first-class rather than
-leaving them to each calling application:
-
-- A failed SCC or eigensolve is isolated to one ragged-batch member. Successful
-  peers remain valid, while every requested floating-point slice for the failed
-  member is replaced with quiet NaNs and accompanied by per-system diagnostics.
-- Exactly degenerate finite-temperature occupations have a documented
-  binary64 publication policy. In a reproduced three-hydrogen edge case,
-  xTBloom returns a finite result where xTB, tblite, or dxtb fail on at least one
-  integer-charge variant; the exact versions, inputs, and outcomes are
-  [documented](docs/developer-guide/architecture.md#cross-engine-degenerate-occupation-evidence).
-- Explicit point-charge screening and caller-supplied periodic charge response
-  enter every SCC iteration. The same stable C ABI returns both QM and
-  point-charge forces. This covers embedding inputs that remain unavailable or
-  incomplete in the compared xTB/tblite C interfaces.
-- The high-level Python API accepts electronic temperature in kelvin, CPU work
-  partitioning is tested for bit-identical results, and strict `WARM` calls
-  never silently fall back to a fresh solve.
-- Archived, correctness-qualified CPU evidence shows strict `WARM` reducing
-  SCC work from 17-18 iterations to 2 and running 1.09x-1.54x faster than a
-  persistent tblite calculation for the measured 32-122 atom alkane corpus.
-
-The [user-guide comparison](docs/user-guide/index.md#where-xtbloom-is-stronger)
-links each claim to its upstream issue, local regression test, or archived raw
-benchmark evidence.
-
-### Cross-engine scaling benchmark
-
-xTBloom's target workload is many distinct systems in one ragged public-API
-call. The figure measures GFN2-xTB energy plus analytic-force latency for
-distinct conformers of one alkane family; batch 1 provides latency context,
-while batches 128 and 512 expose multi-system throughput.
-
-![Cross-engine GFN2-xTB scaling benchmark](docs/assets/natoms_cross_engine.svg)
-
-On an AMD EPYC 7K62 with the same 16-thread budget for every CPU engine:
-
-- **128 systems at 62 atoms:** xTBloom CPU completes the call in 182 ms,
-  versus 1555 ms for xTB and 1384 ms for tblite: 8.6x and 7.6x faster.
-- **512 systems at 62 atoms:** xTBloom CPU takes 1.28 s, versus 11.47 s for
-  xTB and 13.70 s for tblite: 8.9x and 10.7x faster.
-- **xTBloom CUDA at batch 512:** 1.15 s at 62 atoms and 4.04 s at 122 atoms,
-  1.11x and 1.37x faster than xTBloom CPU on the measured RTX 5090.
-
-The CPU speedup is the public ragged-batch design in action: xTBloom solves the
-whole batch across its worker pool, while the xTB/tblite adapters must loop
-over per-structure public calls. Batch-1 results are retained in the figure as
-latency context and are not used to claim a universal single-system win.
-
-Each library retains its native public convergence controls: xTBloom uses
-charge `1e-4` and energy `1e-6`; xTB and tblite use accuracy factor `1.0`;
-dxtb uses `x_atol=1e-4`, `x_atol_max=1e-5`, `f_atol=1e-4`, and
-`force_convergence=true`. The meanings are library-specific. `2e-3` is the
-uniform energy/force output gate applied to every timed dependent sample, not
-a tblite convergence default and not a replacement for xTBloom's stricter
-scientific conformance.
-
-Batch 1 and 512 use cold electronic state. Batch 128 performs one untimed cold
-seed and times persistent continuation for xTBloom, xTB, and tblite; dxtb
-resets every timed call. xTBloom CUDA uses host descriptors, whereas dxtb CUDA
-retains device tensors, so no direct cross-library CUDA speedup is claimed.
-
-The evidence is limited to this alkane-conformer corpus, energy plus forces,
-three samples per coordinate, and the stated hardware. Raw samples, exact
-commands, binary hashes, failures, and limitations are archived in the
-[`issue-13 evidence bundle`](benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md).
-See the [benchmark harness](benchmarks/README.md) for the protocol.
-
-Choose xTB for its broad CLI workflows, optimizers, dynamics, solvation, and
-method coverage. Choose tblite for a mature reusable single-point library with
-periodic structures and customizable components. Choose dxtb when PyTorch
-autodiff and differentiable response properties are central. Choose xTBloom
-when the application needs a native ragged batch, a stable deployment ABI,
-direct CUDA buffers, or peer-local failure handling.
-
-Published benchmark claims are deliberately workload-specific. Reproducible
-protocols and raw results live under [`benchmarks/evidence`](benchmarks/evidence/).
+  fixed-topology plans, and compatible electronic warm starts.
+- **One deployment boundary.** C, C++, Python, ASE, and dpdata all call the same
+  versioned, caller-buffer C ABI.
 
 ## Python quickstart
 
-xTBloom is being prepared for publication on PyPI. Once a release is published,
-install the CPU runtime with:
-
-```console
-python -m pip install xtbloom
-```
-
-Optional integrations and CUDA 12 host libraries are extras:
-
-```console
-python -m pip install "xtbloom[ase,dpdata]"
-python -m pip install "xtbloom[cuda12]"
-```
-
-Until the first PyPI release, install a source checkout as a non-editable
-package. `XTBLOOM_ENABLE_CUDA=OFF` makes the intended backend explicit:
+xTBloom is not yet published on PyPI. Install a source checkout explicitly for
+the CPU backend:
 
 ```console
 XTBLOOM_ENABLE_CUDA=OFF python -m pip install .
 ```
 
-Positions are in bohr. Energies and forces are returned in Hartree and
-Hartree/bohr; the high-level Python `electronic_temperature` argument is the
-temperature in kelvin.
+Positions use bohr; energies and forces are returned in Hartree and
+Hartree/bohr. The high-level Python `electronic_temperature` argument is in
+kelvin.
 
 ```python
 import numpy as np
@@ -196,123 +80,99 @@ print(result["forces"])
 print(result["charges"])
 ```
 
-`BatchCalculator` submits multiple `Structure` objects in one native call.
-The high-level Python API uses host NumPy arrays even when the selected backend
-is CUDA; direct CUDA-device descriptors are available through the low-level C
-ABI.
+`BatchCalculator` submits multiple `Structure` objects in one native ragged
+call. `ArrayBatch` additionally accepts packed NumPy, CuPy, JAX, or PyTorch
+arrays through Array API and DLPack protocols. See the
+[Python guide](docs/user-guide/python.md) for batching, spin, direct device
+buffers, point charges, ASE, dpdata, and the positions-gradient PyTorch op.
 
-See the [Python user guide](docs/user-guide/python.md) for batching, spin,
-point charges, ASE, and dpdata, or the concise
-[PyPI package page](python/README.md).
+Native consumers can install the CMake package and link
+`xtbloom::xtbloom`. The [C/C++ guide](docs/user-guide/c-api.md) contains a
+complete runnable example and the descriptor ownership rules.
 
-## C and C++ quickstart
+## Measured batch throughput
 
-Native consumers need CMake 3.24 or newer, a C++17 compiler to build xTBloom,
-and one dlopen-able monolithic LP64 LAPACKE+CBLAS runtime for CPU inference.
-An explicitly selected MKL runtime also requires its matching LP64,
-sequential, and core component libraries in the same provider directory.
-Shared installs place xTBloom's private MKL shim beside `libxtbloom`. Static
-consumers that use MKL must stage that installed shim beside the final
-executable; CMake consumers can copy
-`$<TARGET_FILE:xtbloom::mkl_lp64_shim>` when that optional imported target is
-present. Without the sibling artifact, CPU inference fails with
-`XTBLOOM_STATUS_BACKEND_UNAVAILABLE` instead of using the host's `libmkl_rt`.
-The public consumer API itself is C11-compatible and is wrapped in `extern "C"`
-for C++.
+![Cross-engine GFN2-xTB scaling benchmark](docs/assets/natoms_cross_engine.svg)
 
-```console
-cmake -S . -B build/release -G Ninja \
-  -DXTBLOOM_ENABLE_CUDA=OFF \
-  -DBUILD_SHARED_LIBS=ON \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build/release --parallel
-cmake --install build/release --prefix "$PWD/build/install"
-```
+On the recorded AMD EPYC 7K62 system with the same 16-thread CPU budget:
 
-If auto-discovery cannot find the CPU numerical runtime, configure its absolute
-path with `-DXTBLOOM_CPU_LINALG_LIBRARY=/path/to/libopenblas.so` or a compatible
-LP64 `libmkl_rt`.
+- for a warm-state batch of 128 distinct 62-atom alkane conformers, xTBloom CPU
+  completed the energy-plus-forces call 8.6x faster than the compared xTB
+  public-API loop and 7.6x faster than the tblite loop;
+- for a cold-state batch of 512 at 62 atoms, the measured speedups were 8.9x
+  and 10.7x.
 
-Installed CMake consumers use the exported target:
+These are correctness-qualified medians of three timed samples per coordinate
+for one workload, hardware setup, and timing protocol—not a general ranking of
+xTB implementations. Batch 1 is retained in the figure as latency context, and
+the panels use the start policies stated in the evidence. Read the
+[user-facing performance summary](docs/user-guide/performance.md), the
+[benchmark methodology](benchmarks/cross-engine.md), and the
+[raw evidence bundle](benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
+before reusing the numbers.
 
-```cmake
-find_package(xtbloom CONFIG REQUIRED)
-target_link_libraries(my_program PRIVATE xtbloom::xtbloom)
-```
+## Supported scope
 
-Every extensible descriptor must be initialized before its fields are set.
-The complete request and all caller-owned output buffers are then submitted in
-one synchronous call:
+| Capability | Status |
+| --- | --- |
+| Restricted and unrestricted GFN2-xTB energy, forces, and charges | CPU and CUDA |
+| Ragged batches and peer-local numerical failures | Supported |
+| Host input/output descriptors | CPU and CUDA |
+| CUDA-device and mixed descriptors | Low-level C ABI |
+| Explicit point charges in SCC and point-charge forces | Supported |
+| Caller-supplied periodic charge response | Supported; no lattice descriptor |
+| Uniform electric field and molecular dipoles | CPU; CUDA ABI slots reserved |
+| ASE and dpdata integrations | Supported |
+| Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side adapter |
+| Native GFN1-xTB, ROCm, solvation, optimization, MD, Hessians, lattice/PBC | Not implemented |
 
-```c
-#include <xtbloom/xtbloom.h>
+Reserved ABI values are not reported as supported features. At finite
+electronic temperature, the reported variational energy is the electronic
+Helmholtz free energy.
 
-xtbloom_context_options_t context_options;
-xtbloom_batch_t batch;
-xtbloom_compute_options_t compute_options;
-xtbloom_batch_result_t result;
+## When xTBloom is a good fit
 
-xtbloom_context_options_init(&context_options, sizeof(context_options));
-xtbloom_batch_init(&batch, sizeof(batch));
-xtbloom_compute_options_init(&compute_options, sizeof(compute_options));
-xtbloom_batch_result_init(&result, sizeof(result));
-
-/* Populate batch and result with caller-owned buffers. */
-compute_options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES;
-
-xtbloom_context_t *context = NULL;
-xtbloom_context_create(&context_options, &context);
-xtbloom_status_t status = xtbloom_compute(context, &batch, &compute_options, &result);
-xtbloom_context_destroy(context);
-```
-
-The [C API guide](docs/user-guide/c-api.md) contains a complete runnable
-single-molecule example plus descriptor, units, CUDA-memory, and failure
-semantics. The installed header
-[`include/xtbloom/xtbloom.h`](include/xtbloom/xtbloom.h) is the normative API.
+Choose xTBloom when an embedded application needs native ragged batches, a
+stable C deployment boundary, direct CUDA buffers, or peer-local failure
+handling. Choose [xTB](https://github.com/grimme-lab/xtb) for its broad CLI and
+workflow coverage, [tblite](https://github.com/tblite/tblite) for a mature
+extensible per-structure library including periodic inputs, and
+[dxtb](https://github.com/grimme-lab/dxtb) when PyTorch-native differentiation
+and response properties are central.
 
 ## Documentation
 
-- [Documentation index](docs/index.md)
+- [Documentation home](docs/index.md)
 - [User guide](docs/user-guide/index.md)
+- [Browser demo](docs/user-guide/browser-demo.md)
+- [Python API](docs/user-guide/python.md)
+- [C and C++ API](docs/user-guide/c-api.md)
+- [QM/MM usage](docs/user-guide/qmmm.md)
 - [Theory guide](docs/theory/index.md)
 - [Developer guide](docs/developer-guide/index.md)
-- [Python package documentation](python/README.md)
+- [Benchmark harnesses](benchmarks/README.md)
 
 ## Acknowledgements and provenance
 
-xTBloom exists because the xTB and tblite communities made both the scientific
-method and high-quality reference implementations available. During xTBloom's
-design and implementation, coding agents studied the xTB and tblite source
-code to understand equations, numerical conventions, edge cases, and public
-interface behavior. xTB also serves as an executable numerical oracle and the
-reference for explicit point-charge coupling. tblite supplies pinned GFN2
-parameter material and strongly influenced the familiar shape of the Python
-interface. We thank their authors and contributors.
-
-This acknowledgement is not a substitute for legal provenance. Redistributed
-or derived parameter data, oracle outputs, source material, revisions, hashes,
-and license terms are recorded in
+xTBloom builds on the scientific work and open implementations of the xTB and
+tblite communities. xTB provides independent numerical oracle evidence and the
+reference point-charge convention; tblite supplies pinned GFN2 parameter
+material and important implementation guidance. Exact revisions, hashes,
+derived artifacts, and license terms are recorded in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and the linked manifests.
 
 ## AI authorship
 
-xTBloom is an AI-first software project. The core library architecture,
-scientific implementation, CUDA backend, bindings, tests, and documentation
-were designed and written primarily by AI coding agents rather than as a
-conventional manually authored implementation. Humans provide project goals,
-scientific and release decisions, review, infrastructure, and legal ownership.
-Git commits, pull requests, and issue checkpoints record the exact coding
-agent, client version, model, and reasoning effort used for agent-authored work.
-
-This development model does not relax the correctness standard: conformance
-uses pinned independent xTB/tblite evidence, CPU/CUDA parity, analytic-force
-finite differences, ABI tests, sanitizers, install consumers, and package
-inspection.
+xTBloom is an AI-first software project. Coding agents wrote most of the
+library, CUDA backend, bindings, tests, and documentation under human-defined
+scientific, legal, and release goals. Git commits, pull requests, and issue
+checkpoints record the agent, client version, model, and reasoning effort.
+Independent conformance evidence, parity tests, finite differences, ABI tests,
+sanitizers, and package inspection remain required.
 
 ## License
 
 xTBloom is licensed under `GPL-3.0-or-later`, with the narrowly scoped
 [CUDA and Intel MKL additional permission](CUDA_MKL_LINKING_EXCEPTION).
-Upstream material remains under the separate terms in
+Third-party material remains under the separate terms in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

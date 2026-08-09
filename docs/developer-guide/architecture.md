@@ -78,7 +78,7 @@ See issue #31 for the original representability question.
 
 The representability policy above is observable through the public API, rather
 than only through an internal occupation helper. Issue
-[#205](https://github.com/njzjz/xtbloom/issues/205) records a cross-engine probe
+[#205](https://github.com/jinzhezenggroup/xtbloom/issues/205) records a cross-engine probe
 measured on 2026-08-07 with GFN2-xTB at 300 K. The common geometry is three
 hydrogen atoms on the x axis:
 

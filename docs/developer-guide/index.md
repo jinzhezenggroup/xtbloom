@@ -14,6 +14,8 @@ Read these pages before modifying the corresponding surface:
   and honest pass/skip reporting.
 - [Packaging and licensing](packaging.md): CMake installs, PyPI metadata,
   wheels, sdists, dynamic providers, dependency provenance, and notices.
+- [Benchmark methodology](../../benchmarks/README.md): protocol selection,
+  evidence qualification, raw samples, and profiler-data policy.
 - [Theory](../theory/index.md): scientific meaning that CPU and CUDA must share.
 
 The repository-wide [`AGENTS.md`](../../AGENTS.md) is authoritative for task

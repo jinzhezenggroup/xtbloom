@@ -796,7 +796,7 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
         'href="LICENSE"',
         'href="THIRD_PARTY_NOTICES.md"',
         f'href="{EXCEPTION_FILE}"',
-        "https://jinzhezeng.group/xtbloom/",
+        "https://xtbloom.jinzhezeng.group",
         "https://github.com/jinzhezenggroup/xtbloom",
         'href="LICENSES/openchemlib-BSD-3-Clause.txt"',
     ):
