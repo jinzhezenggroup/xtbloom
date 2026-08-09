@@ -230,6 +230,7 @@ WEB_SITE_RUNTIME_FILES = (
     "worker.js",
     "smiles_helpers.js",
     "smiles_worker.js",
+    "xtbloom-mark.svg",
     "xtbloom_web.js",
     "xtbloom_web.wasm",
     "xtbloom_web.data",
