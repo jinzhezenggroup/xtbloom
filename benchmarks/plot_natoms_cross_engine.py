@@ -130,6 +130,9 @@ def _engine_runtime_identity(metadata: dict[str, Any], engine: str) -> str:
                         (distributions.get(name) or {}).get("payload_verification")
                         or {}
                     ).get("status"),
+                    "direct_url_identity": (distributions.get(name) or {}).get(
+                        "direct_url_identity"
+                    ),
                 }
                 for name in ("dxtb", "torch", "tad-libcint")
             },

@@ -60,6 +60,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -202,8 +203,9 @@ def installed_distribution_identity(name: str) -> dict[str, Any] | None:
     Benchmark artifacts must remain reproducible when dxtb is consumed from
     an installed wheel rather than a Git checkout.  Verify every file listed
     by ``RECORD`` against its recorded hash/size, then hash a canonical
-    inventory of the actual installed payload.  Only the digest of a
-    potentially credential-bearing ``direct_url.json`` is retained.
+    inventory of the actual installed payload.  Only the digest and a
+    credential-free source identity from a potentially sensitive
+    ``direct_url.json`` are retained.
     """
     try:
         distribution = importlib.metadata.distribution(name)
@@ -211,6 +213,7 @@ def installed_distribution_identity(name: str) -> dict[str, Any] | None:
         return None
     record_text = distribution.read_text("RECORD")
     direct_url_text = distribution.read_text("direct_url.json")
+    direct_url_identity = sanitize_direct_url_identity(direct_url_text)
     errors: list[str] = []
     payload: list[dict[str, Any]] = []
     verified_hashes = 0
@@ -265,6 +268,7 @@ def installed_distribution_identity(name: str) -> dict[str, Any] | None:
             if direct_url_text is not None
             else None
         ),
+        "direct_url_identity": direct_url_identity,
         "payload_verification": {
             "status": "verified" if not errors else "failed",
             "record_entries": len(payload),
@@ -273,6 +277,34 @@ def installed_distribution_identity(name: str) -> dict[str, Any] | None:
             "errors": errors,
         },
     }
+
+
+def sanitize_direct_url_identity(text: str | None) -> dict[str, Any] | None:
+    """Return the source binding without retaining URL credentials.
+
+    PEP 610 ``direct_url.json`` is the only reliable link between an installed
+    editable dxtb payload and the clean source checkout supplied to the
+    publication harness.  Local file URLs retain only their resolved path and
+    editable flag; non-file URLs retain only the scheme.
+    """
+    if text is None:
+        return None
+    try:
+        direct_url = json.loads(text)
+        parsed_url = urllib.parse.urlparse(str(direct_url.get("url", "")))
+        if parsed_url.scheme == "file":
+            return {
+                "scheme": "file",
+                "local_source_path": str(
+                    Path(urllib.parse.unquote(parsed_url.path)).resolve()
+                ),
+                "editable": bool(
+                    (direct_url.get("dir_info") or {}).get("editable", False)
+                ),
+            }
+        return {"scheme": parsed_url.scheme or None}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {"scheme": None, "parse_status": "invalid"}
 
 
 def run_text(
@@ -2506,6 +2538,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"installed {distribution_name} payload failed RECORD "
                         "verification"
                     )
+            dxtb_identity = installed_distribution_identity("dxtb") or {}
+            direct_url = dxtb_identity.get("direct_url_identity") or {}
+            if (
+                args.dxtb_source is None
+                or direct_url.get("scheme") != "file"
+                or Path(str(direct_url.get("local_source_path", ""))).resolve()
+                != args.dxtb_source.resolve()
+            ):
+                raise BenchmarkError(
+                    "installed dxtb payload is not bound to --dxtb-source"
+                )
         reference = (
             load_reference_artifact(args.reference_json, args.allow_dirty_evidence)
             if args.reference_json is not None

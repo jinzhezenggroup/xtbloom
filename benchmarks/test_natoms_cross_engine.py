@@ -137,6 +137,35 @@ class NatomsCrossEngineTest(unittest.TestCase):
                     msg=f"slot {slot} finite",
                 )
 
+    def test_direct_url_identity_binds_local_source_without_leaking_url(self) -> None:
+        """Publication metadata retains a local binding but no URL secrets."""
+        identity = nce.sanitize_direct_url_identity(
+            json.dumps(
+                {
+                    "url": "file:///tmp/dxtb%20source",
+                    "dir_info": {"editable": True},
+                }
+            )
+        )
+        self.assertEqual(
+            identity,
+            {
+                "scheme": "file",
+                "local_source_path": str(Path("/tmp/dxtb source").resolve()),
+                "editable": True,
+            },
+        )
+        self.assertEqual(
+            nce.sanitize_direct_url_identity(
+                '{"url":"https://user:secret@example.invalid/dxtb.git"}'
+            ),
+            {"scheme": "https"},
+        )
+        self.assertEqual(
+            nce.sanitize_direct_url_identity("not-json"),
+            {"scheme": None, "parse_status": "invalid"},
+        )
+
     def test_trajectory_frames_are_close_but_distinct(self) -> None:
         """MD frames stay near one another while never being identical."""
         from benchmarks.natoms_scaling import make_alkane
