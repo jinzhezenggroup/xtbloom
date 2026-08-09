@@ -1,0 +1,108 @@
+{
+  "case_id": "water_efield",
+  "method": "GFN2-xTB",
+  "molecular_charge": 0,
+  "properties": {
+    "energy_hartree": -4.772344124360096,
+    "forces_hartree_per_bohr": [
+      0.002908945025103449,
+      -0.00481382916179114,
+      0.09951281990856943,
+      0.003040513847078862,
+      -0.05991143495260846,
+      -0.041857108572417936,
+      0.0030505410569194313,
+      0.05272526420893061,
+      -0.04265571145431526
+    ],
+    "gradient_hartree_per_bohr": [
+      -0.002908945025103449,
+      0.00481382916179114,
+      -0.09951281990856943,
+      -0.003040513847078862,
+      0.05991143495260846,
+      0.041857108572417936,
+      -0.0030505410569194313,
+      -0.05272526420893061,
+      0.04265571145431526
+    ],
+    "virial_hartree": [
+      0.0,
+      1.3519943195050754e-05,
+      -0.005153790240355897,
+      1.3519943195050754e-05,
+      0.30374187806077685,
+      0.00469563374649261,
+      -0.005153790240355897,
+      0.00469563374649261,
+      0.20536502255622413
+    ]
+  },
+  "provenance": {
+    "accuracy": 0.0001,
+    "command": [
+      "{executable}",
+      "{input}",
+      "--no-restart",
+      "--method",
+      "gfn2",
+      "--acc",
+      "0.0001",
+      "--grad",
+      "{gradient_output}",
+      "[--charge {signed_charge}]",
+      "[--spin {unpaired_electrons}]",
+      "[--efield {efield_vperangstrom}]",
+      "--json",
+      "{json_output}"
+    ],
+    "command_template": [
+      "{executable}",
+      "{input}",
+      "--no-restart",
+      "--method",
+      "gfn2",
+      "--acc",
+      "0.0001",
+      "--grad",
+      "{gradient_output}",
+      "[--charge {signed_charge}]",
+      "[--spin {unpaired_electrons}]",
+      "[--efield {efield_vperangstrom}]",
+      "--json",
+      "{json_output}"
+    ],
+    "engine": "tblite",
+    "environment": {
+      "inherited_environment_boundary": "Variables other than the fixed locale and thread controls are inherited; the loaded libtblite is independently hashed.",
+      "set": {
+        "LC_ALL": "C",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1"
+      }
+    },
+    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "executable_version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled",
+    "generation_mode": "live-cli",
+    "input": "data/conformance/inputs/water_efield.coord",
+    "runtime": {
+      "libtblite": {
+        "discovery": "ldd",
+        "filename": "libtblite.so.0.7.0",
+        "sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725",
+        "status": "resolved"
+      }
+    },
+    "source_output_sha256": "4044828a6e7742f614fcf1256d93480eb573a18ee5c396c48216328a91edf7de",
+    "source_revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb"
+  },
+  "schema_version": 1,
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  },
+  "unpaired_electrons": 0
+}

@@ -23,7 +23,7 @@ backend is only ever compared with itself at transformed geometries. The
 tolerances therefore measure numerical reproducibility of one backend rather
 than cross-engine physics differences; the measured margins recorded below were
 taken with the strict SCC solve (charge tolerance 1e-10) on the committed
-8-case corpus.
+field-free corpus; field cases additionally rely on the derivative gate below.
 """
 
 from __future__ import annotations
@@ -96,6 +96,7 @@ class Geometry:
     molecular_charge: int
     unpaired_electrons: int
     spin_channels: int
+    efield: list[float] | None = None  # uniform field, atomic units
     point_positions: list[float] = field(default_factory=list)  # flat, bohr
     point_values: list[float] = field(default_factory=list)  # elementary charge
     point_gammas: list[float] = field(default_factory=list)  # hartree
@@ -151,6 +152,7 @@ def load_geometries(
             "molecular_charge": int(case["molecular_charge"]),
             "unpaired_electrons": int(case["unpaired_electrons"]),
             "spin_channels": int(case.get("spin_channels", 1)),
+            "efield": None,
             "point_positions": [],
             "point_values": [],
             "point_gammas": [],
@@ -174,6 +176,21 @@ def load_geometries(
             gy["positions"] = [
                 float(value) for row in document["positions_bohr"] for value in row
             ]
+        efield = case.get("efield")
+        if efield is not None:
+            if (
+                not isinstance(efield, list)
+                or len(efield) != 3
+                or any(
+                    type(component) not in (int, float)
+                    or not math.isfinite(float(component))
+                    for component in efield
+                )
+            ):
+                raise conformance.ConformanceError(
+                    f"case {case['id']} efield must be a finite three-component list"
+                )
+            gy["efield"] = [float(component) for component in efield]
         geometries.append(Geometry(**gy))
     return geometries
 
@@ -249,7 +266,7 @@ def translated(geometry: Geometry, delta: Sequence[float]) -> Geometry:
 
 
 def rotated(geometry: Geometry, matrix: Sequence[Sequence[float]]) -> Geometry:
-    """Return a copy with every Cartesian coordinate (and point) rotated."""
+    """Return a copy with every Cartesian coordinate, point, and field rotated."""
     result = copy.deepcopy(geometry)
     result.positions = _apply_to_positions(
         geometry.positions,
@@ -261,6 +278,8 @@ def rotated(geometry: Geometry, matrix: Sequence[Sequence[float]]) -> Geometry:
         len(geometry.point_values),
         lambda vector: rotate_vector(matrix, vector),
     )
+    if geometry.efield is not None:
+        result.efield = rotate_vector(matrix, geometry.efield)
     return result
 
 
@@ -301,6 +320,7 @@ def geometry_storage(geometries: Sequence[Geometry]) -> public_api.PublicBatchSt
     point_charge_positions: list[float] = []
     point_charge_values: list[float] = []
     point_charge_gammas: list[float] = []
+    efields: list[list[float] | None] = []
     slices: list[public_api.CaseSlice] = []
     for geometry in geometries:
         atom_begin = len(atomic_numbers)
@@ -313,6 +333,7 @@ def geometry_storage(geometries: Sequence[Geometry]) -> public_api.PublicBatchSt
         point_charge_positions.extend(geometry.point_positions)
         point_charge_values.extend(geometry.point_values)
         point_charge_gammas.extend(geometry.point_gammas)
+        efields.append(None if geometry.efield is None else list(geometry.efield))
         atom_offsets.append(len(atomic_numbers))
         point_charge_offsets.append(len(point_charge_values))
         slices.append(
@@ -338,6 +359,7 @@ def geometry_storage(geometries: Sequence[Geometry]) -> public_api.PublicBatchSt
         point_charge_gammas=point_charge_gammas,
         slices=slices,
         keepalive=[],
+        efields=efields,
     )
 
 
@@ -847,18 +869,39 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "--backend cuda for device or mixed descriptors"
             )
         manifest = conformance.load_json(args.manifest)
-        cases = conformance.selected_cases(manifest, args.cases)
-        if not cases:
+        selected = public_api.supported_cases(manifest, args.cases)
+        backends = ("cpu", "cuda") if args.backend == "all" else (args.backend,)
+        cases_by_backend = {
+            backend: public_api.supported_cases(manifest, args.cases, backend)
+            for backend in backends
+        }
+        if not selected:
             print(  # noqa: T201 - CLI validation report
                 "no GFN2 conformance cases selected"
             )
             return 0
-        geometries = load_geometries(args.manifest, manifest, cases)
-        homogeneous_case_ids = select_homogeneous_case_ids(geometries)
+        if not any(cases_by_backend.values()):
+            for backend in backends:
+                for case in selected:
+                    print(  # noqa: T201 - CLI validation report
+                        f"SKIP {case['id']}: public backend {backend} is not "
+                        "released for this case"
+                    )
+            return 0
         library = public_api._configure_library(args.library)
-        backends = ("cpu", "cuda") if args.backend == "all" else (args.backend,)
         overall_failures: list[str] = []
         for backend in backends:
+            cases = cases_by_backend[backend]
+            unsupported = [case for case in selected if case not in cases]
+            for case in unsupported:
+                print(  # noqa: T201 - CLI validation report
+                    f"SKIP {case['id']}: public backend {backend} is not released "
+                    "for this case"
+                )
+            if not cases:
+                continue
+            geometries = load_geometries(args.manifest, manifest, cases)
+            homogeneous_case_ids = select_homogeneous_case_ids(geometries)
             solver = gpuxtb_solver(
                 library,
                 backend,

@@ -193,11 +193,28 @@ malformed host-resident attachments are `INVALID_ARGUMENT`. Device-resident
 descriptor content is marked with `kInteractionDescriptorsNeedStaging`, while
 device payload content is marked independently with
 `kInteractionPayloadNeedsStaging`. P3 must stage and validate every marked
-interaction byte before enabling CUDA execution; P1's availability gate
-refuses the request first because no backend can consume it yet. Host-resident
-electric-field blocks are byte-loaded and checked for version 1, a zero
-reserved field, and finite values before that gate. The ABI-v2 result suffix
-reserves the dipole-moment outlet and
+interaction byte before enabling CUDA execution; the availability gate refuses
+the request on CUDA first because that backend cannot consume it yet.
+Host-resident electric-field blocks are byte-loaded and checked for version 1,
+a zero reserved field, and finite values before that gate.
+
+The CPU backend executes the released uniform electric field
+(`GPUXTB_INTERACTION_ELECTRIC_FIELD`). Each SCC iteration injects the field's
+per-atom scalar potential `-E . r_i` into the charge-channel atom potential and
+its per-atom dipolar potential `-E` into the charge-channel dipole potential,
+mirroring tblite `field.f90`; the energy trace adds `-sum_i q_i (E . r_i)
+- sum_i E . d_i`, and the remaining explicit coordinate force on atom `i` is
+`+q_i E`. The stationary response of charges and atomic dipoles is already
+carried through the injected SCC potentials. The field is part of the strict
+warm-start identity, and the
+`dipole_moments` outlet is published on CPU as `sum_i (r_i * q_i + d_i)` with
+`GPUXTB_RESULT_DIPOLE_MOMENTS` set. CUDA field execution, CUDA dipole
+publication, and every other reserved tag remain `NOT_IMPLEMENTED` until their
+focused PRs land. The pinned tblite 0.7.0 analytic field gradient uses `+E`
+per atom and is retained only as diagnostic provenance because it is not the
+derivative of the reported partial-charge energy; gpuxtb field forces are
+gated against central differences of the reported energy. The ABI-v2 result
+suffix reserves the dipole-moment outlet and
 `GPUXTB_RESULT_DIPOLE_MOMENTS` publication flag alongside `quadrupole_moments`,
 `wiberg_orders`, and `spin_populations`; the latter three have no released
 shape contract, must remain NULL until published, and return `NOT_SUPPORTED`
@@ -212,7 +229,11 @@ binds the immutable topology (atom offsets, element numbers, molecular charges, 
 spin channels, and point-charge/response structure) plus the model, requested properties, SCC
 tolerances, iteration limit, and electronic temperature at creation time. `FRESH` versus `WARM`
 remains a per-call choice. Geometry is not part of the plan, so repeated `gpuxtb_plan_compute`
-calls can change positions, point-charge positions and values, and periodic `b/A` values freely.
+calls can change positions, point-charge positions and values, periodic `b/A`
+values, and CPU electric-field attachment values/presence freely on `FRESH`
+calls. Field storage is preallocated for every system, so those changes do not
+rebuild the fixed plan; `WARM` still requires exact attachment presence and
+values.
 
 Plan creation is the allocation-permitted setup path: it validates the request and pre-warms the
 plan-owned backend execution cache so the first and subsequent `gpuxtb_plan_compute` calls for the
