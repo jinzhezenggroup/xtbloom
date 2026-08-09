@@ -46,8 +46,10 @@ Repository contributors and coding agents must also follow
 | CUDA-device and mixed descriptors | Low-level C ABI |
 | Explicit point charges in SCC and point-charge forces | Supported |
 | Caller-supplied periodic `b + A q` response | Supported; no lattice descriptor |
+| Uniform external electric field (ABI-v3 interaction) | CPU; CUDA reserved |
+| Per-system molecular dipole moments | CPU; CUDA reserved |
 | ASE and dpdata | Supported Python integrations |
-| External interaction slot (electric field, solvation, field gradient, ...) | ABI-v3 slot reserved; not implemented |
+| External interaction slot (solvation, field gradient, ...) | ABI-v3 slot reserved; not implemented |
 | GFN1-xTB, ROCm, solvation, optimization, MD, Hessians | Not implemented |
 
 Documentation describes the current repository state. Reserved ABI values and

@@ -124,6 +124,24 @@ struct SccDriverGeometryView {
   std::int64_t periodic_response_elements = 0;
   std::uint64_t periodic_embedding_generation = 0u;
   const PeriodicEmbeddingPlanData* periodic_plan_identity = nullptr;
+
+  /* Uniform external electric field (pilot interaction, tag 0x0101).
+   *
+   * field_atomic_potential holds the per-atom scalar potential
+   * vat_i = -E . r_i (one double per atom across the whole batch) and
+   * field_dipole_potential holds the per-atom dipolar potential vdp = -E
+   * (three doubles per atom across the whole batch), in atomic units. Both
+   * arrays are caller-owned and geometry-dependent; they must either both be
+   * present (fields are then added to the charge-channel atomic and dipolar
+   * SCC potentials every iteration) or both be null, preserving the
+   * field-free path byte-for-byte. The energy term -sum_i q_i (E . r_i)
+   * - sum_i E . d_i is folded into the SCC energy trace, and the constant
+   * Hellmann-Feynman gradient contribution -E per atom is added at the
+   * stationary force boundary. */
+  const double* field_atomic_potential = nullptr;
+  std::int64_t field_atomic_potential_elements = 0;
+  const double* field_dipole_potential = nullptr;
+  std::int64_t field_dipole_potential_elements = 0;
 };
 
 /*

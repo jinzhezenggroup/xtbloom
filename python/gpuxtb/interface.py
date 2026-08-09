@@ -26,6 +26,7 @@ import contextlib
 import ctypes
 import math
 import operator
+import struct
 import typing
 import weakref
 from dataclasses import dataclass
@@ -259,6 +260,24 @@ class ChargeResponse:
 # --- structures --------------------------------------------------------------------
 
 
+def _normalize_efield(efield: np.ndarray | list[float] | None) -> np.ndarray | None:
+    """Validate and freeze a uniform external electric field vector.
+
+    The field is a length-three vector in Hartree per elementary charge per
+    bohr (atomic units). ``None`` leaves the structure field-free.
+    """
+    if efield is None:
+        return None
+    value = np.asarray(efield, dtype=float)
+    if value.ndim != 1 or value.shape[0] != 3:
+        raise GPUxtbValueError("efield must be a vector of length 3")
+    if not np.isfinite(value).all():
+        raise GPUxtbValueError("efield must be finite")
+    if np.any(value != 0.0):
+        return np.ascontiguousarray(value)
+    return None
+
+
 class Structure:
     """A molecular structure with an immutable atom count and atomic species.
 
@@ -277,6 +296,7 @@ class Structure:
         spin_channels: int | None = None,
         point_charges: PointCharge | None = None,
         charge_response: ChargeResponse | None = None,
+        efield: np.ndarray | list[float] | None = None,
     ) -> None:
         object_numbers = np.asarray(numbers, dtype=object)
         raw_numbers = np.asarray(numbers)
@@ -341,6 +361,7 @@ class Structure:
         self._spin_channels = resolved_spin
         self._point_charges = point_charges
         self._charge_response = charge_response
+        self._efield = _normalize_efield(efield)
 
     def __len__(self) -> int:
         """Return the fixed atom count."""
@@ -385,6 +406,15 @@ class Structure:
     def charge_response(self) -> ChargeResponse | None:
         """Periodic SCC shift ``b`` and response matrix ``A``, if any."""
         return self._charge_response
+
+    @property
+    def efield(self) -> np.ndarray | None:
+        """Uniform external electric field in atomic units, if any.
+
+        The field vector is a length-three float64 array (Hartree per
+        elementary charge per bohr). ``None`` means no field attachment.
+        """
+        return self._efield
 
     def update(
         self,
@@ -624,6 +654,7 @@ class _ComputedBatch:
     forces: np.ndarray
     charges: np.ndarray
     point_charge_forces: np.ndarray | None
+    dipole_moments: np.ndarray | None
     scc_iterations: np.ndarray
     scc_converged: np.ndarray
     per_system_status: np.ndarray
@@ -748,6 +779,11 @@ def _merge_computed(
         point_charge_forces=(
             np.concatenate(point_batches, axis=0) if point_batches else None
         ),
+        dipole_moments=(
+            np.concatenate([batch.dipole_moments for batch in computed_batches], axis=0)
+            if any(batch.dipole_moments is not None for batch in computed_batches)
+            else None
+        ),
         scc_iterations=np.concatenate(
             [batch.scc_iterations for batch in computed_batches]
         ),
@@ -855,6 +891,8 @@ def _compute_batch(
     point_gammas: list[float] = []
     packed_responses = _pack_charge_responses(structures)
     keepalive: list = []
+    field_payload: list[int] = []
+    field_descriptors: list[object] = []
 
     for structure in structures:
         atomic_numbers.extend(int(number) for number in structure.numbers)
@@ -867,6 +905,18 @@ def _compute_batch(
             point_positions.extend(float(value) for value in points.positions.ravel())
             point_values.extend(float(value) for value in points.charges)
             point_gammas.extend(float(value) for value in points.gammas)
+        if structure.efield is not None:
+            system_index = len(molecular_charges) - 1
+            descriptor = library.Interaction()
+            descriptor.type = library.INTERACTION_ELECTRIC_FIELD
+            descriptor.flags = 0
+            descriptor.system_index = system_index
+            descriptor.payload_offset = len(field_payload)
+            descriptor.payload_size = 32
+            field_descriptors.append(descriptor)
+            field_payload.extend(struct.pack("<i", 1))  # block_version
+            field_payload.extend(struct.pack("<i", 0))  # reserved
+            field_payload.extend(struct.pack("<3d", *structure.efield))
         atom_offsets.append(len(atomic_numbers))
         point_offsets.append(len(point_values))
 
@@ -928,6 +978,26 @@ def _compute_batch(
         bind("atomic_potential_shifts", response_shifts, np.float64)
         bind("charge_response_offsets", response_offsets, np.int64)
         bind("charge_response_matrix", response_matrix, np.float64)
+    if field_descriptors:
+        batch.total_interactions = len(field_descriptors)
+        descriptor_owner = (library.Interaction * len(field_descriptors))(
+            *field_descriptors
+        )
+        keepalive.append(descriptor_owner)
+        batch.interaction_descriptors = library.ConstBuffer(
+            ctypes.cast(descriptor_owner, ctypes.c_void_p),
+            ctypes.sizeof(descriptor_owner),
+            library.MEMORY_HOST,
+            0,
+        )
+        payload_owner = np.frombuffer(bytes(field_payload), dtype=np.uint8)
+        keepalive.append(payload_owner)
+        batch.interaction_payload = library.ConstBuffer(
+            ctypes.cast(payload_owner.ctypes.data, ctypes.c_void_p),
+            payload_owner.nbytes,
+            library.MEMORY_HOST,
+            0,
+        )
 
     # --- compute options -------------------------------------------------------
     options = library.ComputeOptions()
@@ -972,6 +1042,11 @@ def _compute_batch(
     point_charge_forces = (
         np.empty((total_points, 3), dtype=np.float64) if total_points else None
     )
+    dipole_moments = (
+        np.empty((nsystems, 3), dtype=np.float64)
+        if bool(flags & library.COMPUTE_DIPOLE_MOMENTS)
+        else None
+    )
     scc_iterations = np.empty(nsystems, dtype=np.int32)
     scc_converged = np.empty(nsystems, dtype=np.uint8)
     per_system_status = np.empty(nsystems, dtype=np.int32)
@@ -1003,6 +1078,11 @@ def _compute_batch(
         "point_charge_forces",
         point_charge_forces,
         bool(flags & library.COMPUTE_POINT_CHARGE_FORCES),
+    )
+    bind_output(
+        "dipole_moments",
+        dipole_moments,
+        bool(flags & library.COMPUTE_DIPOLE_MOMENTS),
     )
     bind_output("scc_iterations", scc_iterations, True)
     bind_output("scc_converged", scc_converged, True)
@@ -1037,6 +1117,7 @@ def _compute_batch(
         forces=forces,
         charges=charges,
         point_charge_forces=point_charge_forces,
+        dipole_moments=dipole_moments,
         scc_iterations=scc_iterations,
         scc_converged=scc_converged,
         per_system_status=per_system_status,
@@ -1086,6 +1167,7 @@ class Result:
         "gradient": lambda self: -self.forces,
         "charges": lambda self: self.charges,
         "point_charge_forces": lambda self: self.point_charge_forces,
+        "dipole_moments": lambda self: self.dipole_moments,
         "scc_iterations": lambda self: self.scc_iterations,
         "scc_converged": lambda self: self.scc_converged,
         "scc_status": lambda self: self.scc_status,
@@ -1109,6 +1191,11 @@ class Result:
             self.point_charge_forces = np.array(
                 computed.point_charge_forces[point_begin:point_end], copy=True
             )
+        self.dipole_moments = (
+            np.array(computed.dipole_moments[index], copy=True)
+            if computed.dipole_moments is not None
+            else None
+        )
         self.scc_iterations = int(computed.scc_iterations[index])
         self.scc_converged = bool(computed.scc_converged[index])
         self.scc_status = int(computed.per_system_status[index])
@@ -1122,7 +1209,8 @@ class Result:
         """Return a requested quantity by name.
 
         Available keys: ``energy``, ``energies``, ``forces``, ``gradient``
-        (the negative of forces), ``charges``, ``scc_iterations``,
+        (the negative of forces), ``charges``, ``point_charge_forces``,
+        ``dipole_moments``, ``scc_iterations``,
         ``scc_converged``, ``scc_status``, and ``natoms``.
         """
         if attribute not in self._getter:
@@ -1152,6 +1240,11 @@ class BatchResult:
         self.point_charge_forces = (
             np.array(computed.point_charge_forces, copy=True)
             if computed.point_charge_forces is not None
+            else None
+        )
+        self.dipole_moments = (
+            np.array(computed.dipole_moments, copy=True)
+            if computed.dipole_moments is not None
             else None
         )
         self.scc_iterations = np.array(computed.scc_iterations, copy=True)
@@ -1185,6 +1278,7 @@ class BatchResult:
                 forces=self.forces,
                 charges=self.charges,
                 point_charge_forces=self.point_charge_forces,
+                dipole_moments=self.dipole_moments,
                 scc_iterations=self.scc_iterations,
                 scc_converged=self.scc_converged,
                 per_system_status=self.per_system_status,
@@ -1349,6 +1443,7 @@ class Calculator(Structure):
         spin_channels: int | None = None,
         point_charges: PointCharge | None = None,
         charge_response: ChargeResponse | None = None,
+        efield: np.ndarray | list[float] | None = None,
         *,
         backend: str | int = "auto",
         device_id: int | None = None,
@@ -1369,6 +1464,7 @@ class Calculator(Structure):
             spin_channels=spin_channels,
             point_charges=point_charges,
             charge_response=charge_response,
+            efield=efield,
         )
         self._model = _resolve_method(method)
         self._settings = _ComputeSettings(
@@ -1427,6 +1523,8 @@ class Calculator(Structure):
         )
         if self.point_charges is not None:
             flags |= library.COMPUTE_POINT_CHARGE_FORCES
+        if self.efield is not None:
+            flags |= library.COMPUTE_DIPOLE_MOMENTS
         computed = _compute_batch(
             self._context,
             [self],

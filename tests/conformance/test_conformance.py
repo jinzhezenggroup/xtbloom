@@ -9,6 +9,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import math
+import struct
 import subprocess
 import sys
 import tempfile
@@ -73,7 +75,7 @@ class ConformanceToolTest(unittest.TestCase):
     def test_manifest_and_committed_corpus_are_internally_consistent(self) -> None:
         """Hashes, units, array shapes, and the force sign convention are checked."""
         completed = self.run_tool("check")
-        self.assertIn("8 cases", completed.stdout)
+        self.assertIn("9 cases", completed.stdout)
 
     def test_primary_oracles_pin_the_reviewed_accuracy(self) -> None:
         """Neither live reference command may regress to its loose CLI default."""
@@ -136,7 +138,17 @@ class ConformanceToolTest(unittest.TestCase):
         storage = PUBLIC_API.assemble_batch(MANIFEST, manifest, cases)
         self.assertEqual(storage.unpaired_electrons, [1])
         self.assertEqual(storage.spin_channels, [1])
-        self.assertEqual(PUBLIC_API.Batch._fields_[-1][0], "spin_channels")
+        # The public mirror keeps the ABI-v2 spin suffix and the ABI-v3
+        # interaction suffix, matching python/gpuxtb/library.py.
+        self.assertEqual(
+            [name for name, _ in PUBLIC_API.Batch._fields_[-4:]],
+            [
+                "spin_channels",
+                "total_interactions",
+                "interaction_descriptors",
+                "interaction_payload",
+            ],
+        )
 
         completed = subprocess.run(
             [
@@ -447,6 +459,73 @@ class ConformanceToolTest(unittest.TestCase):
                 str(output_dir),
                 "--case",
                 "h3_plus",
+            )
+
+    def test_electric_field_case_packs_payload_and_matches_golden(self) -> None:
+        """The uniform-field pilot drives --efield, an ABI-v3 payload, and a golden."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        cases = {case["id"]: case for case in manifest["cases"]}
+        case = cases["water_efield"]
+        self.assertEqual(case["efield"], [0.003, -0.004, 0.005])
+
+        command = CONFORMANCE.tblite_command(
+            Path("{executable}"), case, Path("{input}"), Path("{json_output}")
+        )
+        efield_index = command.index("--efield")
+        expected_vperangstrom = ",".join(
+            f"{component / 0.019446903964791384:.12g}"
+            for component in (0.003, -0.004, 0.005)
+        )
+        self.assertEqual(command[efield_index + 1], expected_vperangstrom)
+
+        storage = PUBLIC_API.assemble_batch(MANIFEST, manifest, [case])
+        self.assertEqual(storage.efields, [[0.003, -0.004, 0.005]])
+        descriptors, payload = PUBLIC_API.pack_efield_interactions(storage.efields)
+        self.assertEqual(len(descriptors), 1)
+        self.assertEqual(
+            descriptors[0].type, PUBLIC_API.GPUXTB_INTERACTION_ELECTRIC_FIELD
+        )
+        self.assertEqual(descriptors[0].flags, 0)
+        self.assertEqual(descriptors[0].system_index, 0)
+        self.assertEqual(descriptors[0].payload_offset, 0)
+        self.assertEqual(descriptors[0].payload_size, 32)
+        self.assertEqual(len(payload), 32)
+        self.assertEqual(struct.unpack("<2i", payload[:8]), (1, 0))
+        self.assertEqual(struct.unpack("<3d", payload[8:]), tuple(case["efield"]))
+
+        golden = json.loads(
+            (REPOSITORY_ROOT / case["golden"]).read_text(encoding="utf-8")
+        )
+        properties = golden["properties"]
+        self.assertTrue(
+            all(math.isfinite(value) for value in properties["forces_hartree_per_bohr"])
+        )
+        self.assertEqual(
+            properties["forces_hartree_per_bohr"],
+            [-value for value in properties["gradient_hartree_per_bohr"]],
+        )
+        # The pinned tblite 0.7.0 live run is the authoritative oracle for this
+        # pilot; the committed golden must reproduce those exact values.
+        self.assertAlmostEqual(
+            properties["energy_hartree"], -4.772344124360096, delta=5e-7
+        )
+        for axis, expected in enumerate(
+            (
+                -0.002908945025103449,
+                0.00481382916179114,
+                -0.09951281990856943,
+                -0.003040513847078862,
+                0.05991143495260846,
+                0.041857108572417936,
+                -0.0030505410569194313,
+                -0.05272526420893061,
+                0.04265571145431526,
+            )
+        ):
+            self.assertAlmostEqual(
+                properties["gradient_hartree_per_bohr"][axis],
+                expected,
+                delta=5e-7,
             )
 
     def test_generate_xtb_normalizes_gradient_and_scc_multipoles(self) -> None:

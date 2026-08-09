@@ -358,3 +358,34 @@ def test_batch_warm_start_rejects_auto_slicing(
         batch.compute(auto_batch_size=1)
 
     assert calls == 0
+
+
+def test_batch_per_system_efield_matches_serial() -> None:
+    """Each batch member attaches its own uniform electric field."""
+    angstrom_per_bohr = 1.8897261246257702
+    xyz = [
+        [0.0, 0.0, -0.2358784530],
+        [0.0, 1.4270063049, 1.0081495306],
+        [0.0, -1.4270063049, 1.0081495306],
+    ]
+    plain = Structure(
+        np.array([8, 1, 1]),
+        np.array([[c * angstrom_per_bohr for c in atom] for atom in xyz]),
+    )
+    fielded = Structure(
+        np.array([8, 1, 1]),
+        np.array([[c * angstrom_per_bohr for c in atom] for atom in xyz]),
+        efield=[0.001, 0.002, -0.0015],
+    )
+    batch = BatchCalculator([plain, fielded, plain])
+    result = batch.compute()
+
+    serial_field = Calculator(
+        "GFN2-xTB",
+        np.array([8, 1, 1]),
+        np.array([[c * angstrom_per_bohr for c in atom] for atom in xyz]),
+        efield=[0.001, 0.002, -0.0015],
+    ).singlepoint()
+    assert result[1].energy == pytest.approx(serial_field.energy, abs=1e-10)
+    assert result[1].forces == pytest.approx(serial_field.forces, abs=1e-10)
+    assert result[0].energy == pytest.approx(result[2].energy, abs=1e-12)

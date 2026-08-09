@@ -848,18 +848,19 @@ bool test_interaction_abi_v3() {
   interaction.payload_offset = 0;
   interaction.payload_size = 32;
 
-  /* A well-formed attachment passes structural validation, then is refused
-   * because no backend executes interactions yet (P1 of #237). */
+  /* A well-formed electric-field attachment passes CPU structural validation
+   * (P2 of #237 implements the electric field on the CPU backend). */
   {
     Fixture field;
     field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
     checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &field.batch, &field.options,
                                            &field.result);
-    CHECK(checked.status == GPUXTB_STATUS_NOT_IMPLEMENTED);
-    CHECK(checked.error.find("reserved by the ABI") != std::string::npos);
+    CHECK(checked.ok());
+    CHECK(!checked.requires_backend_staging_validation());
   }
 
-  /* The same contract holds through the structure-only CUDA entry point. */
+  /* The CUDA structure-only entry point still refuses field execution because
+   * the CUDA backend has not released interactions yet (#237 P3). */
   {
     Fixture field;
     field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
@@ -1060,7 +1061,9 @@ bool test_interaction_abi_v3() {
     CHECK(checked.status == GPUXTB_STATUS_NOT_IMPLEMENTED);
   }
 
-  /* The reserved dipole-moment output is refused, not silently omitted. */
+  /* The reserved dipole-moment output is released on the CPU backend (P2 of
+   * #237); requesting it with a correctly sized outlet is accepted. The CUDA
+   * backend still refuses execution until its publication lands (#237 P3). */
   {
     Fixture dipole;
     dipole.options.flags |= GPUXTB_COMPUTE_DIPOLE_MOMENTS;
@@ -1069,8 +1072,16 @@ bool test_interaction_abi_v3() {
     dipole.result.dipole_moments = output_buffer(dipole_output);
     checked = validate_compute_descriptors(GPUXTB_BACKEND_CPU, &dipole.batch, &dipole.options,
                                            &dipole.result);
+    CHECK(checked.ok());
+
+    Fixture cuda_dipole;
+    cuda_dipole.options.flags |= GPUXTB_COMPUTE_DIPOLE_MOMENTS;
+    std::vector<double> cuda_output(6, 0.0);
+    cuda_dipole.result.struct_size = sizeof(cuda_dipole.result);
+    cuda_dipole.result.dipole_moments = output_buffer(cuda_output);
+    checked = validate_compute_descriptor_structure(GPUXTB_BACKEND_CUDA, &cuda_dipole.batch,
+                                                    &cuda_dipole.options, &cuda_dipole.result);
     CHECK(checked.status == GPUXTB_STATUS_NOT_IMPLEMENTED);
-    CHECK(checked.error.find("dipole-moment output") != std::string::npos);
   }
 
   /* Validate the released outlet shape before reporting that publication is

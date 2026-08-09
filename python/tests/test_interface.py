@@ -280,3 +280,75 @@ def test_calculator_warm_start_default_stays_fresh(
         calc.update(positions=np.asarray(positions) + displacement)
         calc.singlepoint()
     assert modes == [_library.SCC_START_FRESH] * 2
+
+
+def _water_calculator(**kwargs: object) -> Calculator:
+    """Water in the tblite 0.7.0 h2o.xyz orientation (angstrom -> bohr)."""
+    angstrom_per_bohr = 1.8897261246257702
+    xyz = [
+        [0.0, 0.0, -0.2358784530],
+        [0.0, 1.4270063049, 1.0081495306],
+        [0.0, -1.4270063049, 1.0081495306],
+    ]
+    return Calculator(
+        "GFN2-xTB",
+        np.array([8, 1, 1]),
+        np.array([[c * angstrom_per_bohr for c in atom] for atom in xyz]),
+        **kwargs,
+    )
+
+
+def test_efield_matches_tblite_golden() -> None:
+    """Uniform electric field matches the pinned tblite 0.7.0 golden.
+
+    The oracle ran with ``--efield 0.0514221,0.1028442,-0.0771332`` (V/A),
+    which is (0.001, 0.002, -0.0015) atomic units.
+    """
+    calc = _water_calculator(efield=[0.001, 0.002, -0.0015])
+    result = calc.singlepoint()
+    assert result.energy == pytest.approx(-4.7652477392228, abs=1e-7)
+    # tblite golden gradient (dE/dR) -> public forces (F = -dE/dR).
+    assert result.forces[0, 0] == pytest.approx(9.790244663631768e-4, abs=1e-7)
+    assert result.forces[0, 1] == pytest.approx(2.4302543510081234e-3, abs=1e-7)
+    assert result.forces[0, 2] == pytest.approx(0.0922494, abs=1e-7)
+    assert result.forces[1, 1] == pytest.approx(-0.0542307, abs=1e-7)
+    dipole = result.get("dipole_moments")
+    assert dipole is not None
+    assert np.isfinite(dipole).all()
+    assert dipole.shape == (3,)
+
+
+def test_efield_changes_energy_forces_charges() -> None:
+    """The field self-consistently polarizes water versus the field-free run."""
+    plain = _water_calculator().singlepoint()
+    field = _water_calculator(efield=[0.001, 0.002, -0.0015]).singlepoint()
+    assert field.energy != pytest.approx(plain.energy, abs=1e-8)
+    assert np.linalg.norm(field.forces - plain.forces) > 1e-4
+    # Mulliken charges conserve the molecular charge under the field.
+    assert field.charges.sum() == pytest.approx(0.0, abs=1e-12)
+    assert field.charges[0] != pytest.approx(plain.charges[0], abs=1e-6)
+
+
+def test_efield_dipole_publication_flag() -> None:
+    """Dipole moments are published only when a field is present (or requested)."""
+    # A field enables the dipole publication flag through the low-level compute.
+
+    calc = _water_calculator(efield=[0.001, 0.0, 0.0])
+    result = calc.singlepoint()
+    assert result.get("dipole_moments") is not None
+
+
+def test_efield_invalid_input_is_rejected() -> None:
+    """A malformed electric field is rejected eagerly by the high-level API."""
+    with pytest.raises(GPUxtbValueError):
+        _water_calculator(efield=[0.001, 0.002])
+    with pytest.raises(GPUxtbValueError):
+        _water_calculator(efield=[0.001, 0.002, float("nan")])
+
+
+def test_efield_zero_equivalent_to_none() -> None:
+    """A zero field normalizes to no attachment and preserves results."""
+    zero = _water_calculator(efield=[0.0, 0.0, 0.0]).singlepoint()
+    plain = _water_calculator().singlepoint()
+    assert zero.energy == pytest.approx(plain.energy, abs=0.0)
+    assert zero.get("dipole_moments") is None

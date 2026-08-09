@@ -121,6 +121,26 @@
       "reference_output_sha256": "41a38e31d0b288fbf585a3e41e8b5c3b18e8b4eb9983a9fd401f17f80e9c7f93",
       "scientific_source": "xTB test/unit/test_gfn2.f90 test_gfn2_pcem_api gamma=999 branch.",
       "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 3,
+      "description": "One water molecule in the uniform electric field (0.003, -0.004, 0.005) Hartree per elementary charge per bohr is the ABI-v3 electric-field interaction pilot; the field is stored in atomic units and converted to V/angstrom for the pinned tblite oracle.",
+      "efield": [
+        0.003,
+        -0.004,
+        0.005
+      ],
+      "golden": "data/conformance/golden/water_efield.json",
+      "golden_sha256": "d63a1dfc900190c9aeb7508c9a3cf9ab1be9e071578cc7df54abc314a58c7035",
+      "id": "water_efield",
+      "input": "data/conformance/inputs/water_efield.coord",
+      "input_sha256": "32311c947d9d7aa1bd1df786b3710bf103ec5e2f20eebded2cc01d21221073cd",
+      "molecular_charge": 0,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "4044828a6e7742f614fcf1256d93480eb573a18ee5c396c48216328a91edf7de",
+      "unpaired_electrons": 0,
+      "upstream_input_sha256": "32311c947d9d7aa1bd1df786b3710bf103ec5e2f20eebded2cc01d21221073cd",
+      "upstream_validation_case": "gpuxtb efield pilot"
     }
   ],
   "golden_schema_version": 1,
@@ -153,6 +173,7 @@
         "{gradient_output}",
         "[--charge {signed_charge}]",
         "[--spin {unpaired_electrons}]",
+        "[--efield {efield_vperangstrom}]",
         "--json",
         "{json_output}"
       ],

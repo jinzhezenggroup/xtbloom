@@ -193,11 +193,22 @@ malformed host-resident attachments are `INVALID_ARGUMENT`. Device-resident
 descriptor content is marked with `kInteractionDescriptorsNeedStaging`, while
 device payload content is marked independently with
 `kInteractionPayloadNeedsStaging`. P3 must stage and validate every marked
-interaction byte before enabling CUDA execution; P1's availability gate
-refuses the request first because no backend can consume it yet. Host-resident
-electric-field blocks are byte-loaded and checked for version 1, a zero
-reserved field, and finite values before that gate. The ABI-v2 result suffix
-reserves the dipole-moment outlet and
+interaction byte before enabling CUDA execution; the availability gate refuses
+the request on CUDA first because that backend cannot consume it yet.
+Host-resident electric-field blocks are byte-loaded and checked for version 1,
+a zero reserved field, and finite values before that gate.
+
+The CPU backend executes the released uniform electric field
+(`GPUXTB_INTERACTION_ELECTRIC_FIELD`). Each SCC iteration injects the field's
+per-atom scalar potential `-E . r_i` into the charge-channel atom potential and
+its per-atom dipolar potential `-E` into the charge-channel dipole potential,
+mirroring tblite `field.f90`; the energy trace adds `-sum_i q_i (E . r_i)
+- sum_i E . d_i`, and the public force gains the constant Hellmann-Feynman term
+`+E` per atom. The field is part of the strict warm-start identity, and the
+`dipole_moments` outlet is published on CPU as `sum_i (r_i * q_i + d_i)` with
+`GPUXTB_RESULT_DIPOLE_MOMENTS` set. CUDA field execution, CUDA dipole
+publication, and every other reserved tag remain `NOT_IMPLEMENTED` until their
+focused PRs land. The ABI-v2 result suffix reserves the dipole-moment outlet and
 `GPUXTB_RESULT_DIPOLE_MOMENTS` publication flag alongside `quadrupole_moments`,
 `wiberg_orders`, and `spin_populations`; the latter three have no released
 shape contract, must remain NULL until published, and return `NOT_SUPPORTED`

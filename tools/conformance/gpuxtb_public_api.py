@@ -15,8 +15,10 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.util
+import math
+import struct
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +42,8 @@ GPUXTB_COMPUTE_FORCES = 1 << 1
 GPUXTB_COMPUTE_ATOMIC_CHARGES = 1 << 2
 GPUXTB_COMPUTE_POINT_CHARGE_FORCES = 1 << 3
 GPUXTB_KELVIN_TO_HARTREE = 3.166808578545117e-6
+
+GPUXTB_INTERACTION_ELECTRIC_FIELD = 0x0101
 
 CUDA_SUCCESS = 0
 CUDA_MEMCPY_HOST_TO_DEVICE = 1
@@ -105,6 +109,21 @@ class Batch(ctypes.Structure):
         ("charge_response_offsets", ConstBuffer),
         ("charge_response_matrix", ConstBuffer),
         ("spin_channels", ConstBuffer),
+        ("total_interactions", ctypes.c_int64),
+        ("interaction_descriptors", ConstBuffer),
+        ("interaction_payload", ConstBuffer),
+    ]
+
+
+class Interaction(ctypes.Structure):
+    """ctypes mirror of ``gpuxtb_interaction_t`` (one attachment entry)."""
+
+    _fields_ = [
+        ("type", ctypes.c_int32),
+        ("flags", ctypes.c_uint32),
+        ("system_index", ctypes.c_int64),
+        ("payload_offset", ctypes.c_uint64),
+        ("payload_size", ctypes.c_uint64),
     ]
 
 
@@ -336,6 +355,9 @@ class PublicBatchStorage:
     point_charge_gammas: list[float]
     slices: list[CaseSlice]
     keepalive: list[Any]
+    # Per-system electric field in atomic units aligned with ``slices``
+    # (index i belongs to slice i); ``None`` marks a system without a field.
+    efields: list[list[float] | None] = field(default_factory=list)
 
 
 MIXED_DEVICE_ROLES = {
@@ -379,6 +401,30 @@ class DescriptorMemory:
         if not values:
             return ConstBuffer(None, 0, GPUXTB_MEMORY_HOST, 0)
         owner = (scalar * len(values))(*values)
+        storage.keepalive.append(owner)
+        if self._is_device(role):
+            assert self.cuda is not None
+            pointer = self.cuda.upload(owner)
+            return ConstBuffer(
+                pointer,
+                ctypes.sizeof(owner),
+                GPUXTB_MEMORY_CUDA_DEVICE,
+                0,
+            )
+        return ConstBuffer(
+            ctypes.cast(owner, ctypes.c_void_p),
+            ctypes.sizeof(owner),
+            GPUXTB_MEMORY_HOST,
+            0,
+        )
+
+    def input_owner(
+        self,
+        storage: PublicBatchStorage,
+        owner: object,
+        role: str,
+    ) -> ConstBuffer:
+        """Create one host or CUDA input descriptor for an existing owner."""
         storage.keepalive.append(owner)
         if self._is_device(role):
             assert self.cuda is not None
@@ -521,6 +567,41 @@ def _flatten(matrix: Sequence[Sequence[float]]) -> list[float]:
     return [float(component) for row in matrix for component in row]
 
 
+def pack_efield_interactions(
+    efields: Sequence[list[float] | None],
+) -> tuple[list[Interaction], bytes]:
+    """Build electric-field interaction descriptors and one byte payload.
+
+    Each finite three-component field (atomic units) becomes one 32-byte
+    block_version-1 payload (int32 1, int32 0, three little-endian doubles)
+    attached to the batch system whose slice index equals the descriptor's
+    index. ``None`` systems produce no descriptor.
+    """
+    descriptors: list[Interaction] = []
+    payload = bytearray()
+    for index, components in enumerate(efields):
+        if components is None:
+            continue
+        values = [float(value) for value in components]
+        if len(values) != 3 or any(not math.isfinite(value) for value in values):
+            raise conformance.ConformanceError(
+                f"system {index} efield must be a finite three-component list"
+            )
+        descriptors.append(
+            Interaction(
+                GPUXTB_INTERACTION_ELECTRIC_FIELD,
+                0,
+                index,
+                len(payload),
+                32,
+            )
+        )
+        payload.extend(struct.pack("<i", 1))  # block_version
+        payload.extend(struct.pack("<i", 0))  # reserved
+        payload.extend(struct.pack("<3d", *values))
+    return descriptors, bytes(payload)
+
+
 def assemble_batch(
     manifest_path: Path,
     manifest: dict[str, Any],
@@ -538,12 +619,23 @@ def assemble_batch(
     point_charge_values: list[float] = []
     point_charge_gammas: list[float] = []
     slices: list[CaseSlice] = []
+    efields: list[list[float] | None] = []
     hardness = manifest["reference_engines"]["xtb"]["point_charge_hardness_hartree"]
 
     for case in cases:
         input_path = conformance.resolve_manifest_path(manifest_path, case["input"])
         atom_begin = len(atomic_numbers)
         point_begin = len(point_charge_values)
+        efield = case.get("efield")
+        if efield is None:
+            efields.append(None)
+        else:
+            if not isinstance(efield, list) or len(efield) != 3:
+                raise conformance.ConformanceError(
+                    f"case {case['id']} efield must be a three-component list "
+                    "in atomic units"
+                )
+            efields.append([float(component) for component in efield])
         if case.get("input_schema") == "qmmm-v1":
             document = conformance.load_qmmm_input(input_path, case, hardness)
             qm = document["qm"]
@@ -598,6 +690,7 @@ def assemble_batch(
         point_charge_gammas=point_charge_gammas,
         slices=slices,
         keepalive=[],
+        efields=efields,
     )
 
 
@@ -611,7 +704,9 @@ def _make_batch(
 
     ABI-v2 calls explicitly bind the spin suffix on both backends, including
     channel value one for restricted systems. ``include_spin_channels=False``
-    remains available only for explicit ABI-v1 compatibility checks.
+    remains available only for explicit ABI-v1 compatibility checks. When any
+    system carries a uniform electric field, the ABI-v3 ``total_interactions``
+    and its descriptor/payload buffers are bound as well.
     """
     batch = Batch()
     _call_ok(
@@ -641,6 +736,17 @@ def _make_batch(
     if include_spin_channels:
         batch.spin_channels = memory.input(
             storage, storage.spin_channels, ctypes.c_int32, "spin_channels"
+        )
+    if storage.efields:
+        descriptors, payload = pack_efield_interactions(storage.efields)
+        batch.total_interactions = len(descriptors)
+        descriptor_owner = (Interaction * len(descriptors))(*descriptors)
+        batch.interaction_descriptors = memory.input_owner(
+            storage, descriptor_owner, "interaction_descriptors"
+        )
+        payload_owner = (ctypes.c_uint8 * len(payload)).from_buffer_copy(payload)
+        batch.interaction_payload = memory.input_owner(
+            storage, payload_owner, "interaction_payload"
         )
     if storage.point_charge_values:
         batch.point_charge_offsets = memory.input(
