@@ -853,8 +853,13 @@ void TraceBatch::record_iteration_snapshots() {
     row.occupations_alpha.assign(
         st.drv_ws.staged_wavefunction.occupations + occ_begin,
         st.drv_ws.staged_wavefunction.occupations + occ_begin + system_nao);
-    // Restricted: both channels share the same orbital occupations.
-    row.occupations_beta = row.occupations_alpha;
+    // The layout stores both alpha and beta occupation channels per system
+    // even for restricted shared orbitals; restricted open-shell systems
+    // (unpaired electrons > 0) publish distinct alpha and beta vectors, so
+    // both slices are captured from the staged wavefunction.
+    row.occupations_beta.assign(
+        st.drv_ws.staged_wavefunction.occupations + occ_begin + system_nao,
+        st.drv_ws.staged_wavefunction.occupations + occ_begin + 2 * system_nao);
 
     row.raw_qsh.assign(st.drv_ws.raw_qsh + shell_begin, st.drv_ws.raw_qsh + shell_end);
     row.raw_qat.assign(st.drv_ws.raw_qat + qat_begin, st.drv_ws.raw_qat + qat_end);

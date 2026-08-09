@@ -78,8 +78,9 @@ bool parse_sequence(const std::string& path, Sequence& sequence, std::string& er
         err = std::string("sequence file missing ") + section + " at step " + std::to_string(k);
         return false;
       }
-      std::vector<double>& values = section[0] == 'm' ? sequence.mixed[static_cast<std::size_t>(k - 1)]
-                                                      : sequence.raw[static_cast<std::size_t>(k - 1)];
+      std::vector<double>& values = section[0] == 'm'
+                                        ? sequence.mixed[static_cast<std::size_t>(k - 1)]
+                                        : sequence.raw[static_cast<std::size_t>(k - 1)];
       values.reserve(dimension);
       double value = 0.0;
       while (values.size() < dimension && (file >> value)) {
@@ -148,8 +149,8 @@ int main(int argc, char** argv) {
     return static_cast<int>(s);
   }
 
-  std::cout << "mixer_replay case nat " << sequence.nat << " nsh " << sequence.nsh
-            << " steps " << sequence.steps << " dimension " << dimension << "\n";
+  std::cout << "mixer_replay case nat " << sequence.nat << " nsh " << sequence.nsh << " steps "
+            << sequence.steps << " dimension " << dimension << "\n";
   for (std::int64_t k = 1; k <= sequence.steps; ++k) {
     split(sequence.raw[static_cast<std::size_t>(k - 1)], qsh, dpat, qpat);
     if (gpuxtb_status_t s = batch.write_multipoles(0, qsh, dpat, qpat, err);

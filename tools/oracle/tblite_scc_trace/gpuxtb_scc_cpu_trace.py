@@ -29,7 +29,9 @@ not a tolerance change.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -54,6 +56,35 @@ def canonicalize_capture(raw: str, case_id: str) -> dict:
     """Convert one captured CPU raw stream into a canonical trace document."""
     spec = generator.CASES[case_id]
     return generator.canonicalize(raw, spec, "gpuxtb_scc_cpu_trace.py (capture)")
+
+
+def sha256_file(path: Path) -> str:
+    """Return the lowercase SHA-256 digest of one file's bytes."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def load_pinned_golden(golden_path: Path, golden_entry: dict) -> dict:
+    """Load, pin, and canonically validate a golden before evidence use.
+
+    Every mode that derives expected values directly from a golden (replay and
+    mixer) must first prove the file matches its manifest SHA-256 and that the
+    bytes are canonical version-1 JSON, so a drifted or unpinned golden cannot
+    silently report PASS against itself.
+    """
+    content = golden_path.read_bytes()
+    if sha256_file(golden_path) != golden_entry["sha256"]:
+        raise generator.CorpusError(
+            f"golden {golden_path} SHA-256 does not match the manifest"
+        )
+    document = json.loads(content.decode("utf-8"))
+    writer.validate(document)
+    if writer.dumps(document).encode("utf-8") != content:
+        raise generator.CorpusError(f"golden {golden_path} is not canonical")
+    return document
 
 
 def compare_with_comparator(
@@ -345,7 +376,14 @@ def run_replay(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
         golden_entry = goldens[case_id]
         golden_path = corpus_dir / golden_entry["path"]
         spec_path = corpus_dir / "specs" / f"{case_id}.spec"
-        golden = json.loads(golden_path.read_text(encoding="utf-8"))
+        try:
+            golden = load_pinned_golden(golden_path, golden_entry)
+        except (generator.CorpusError, writer.TraceError, ValueError) as error:
+            failures += 1
+            print(  # noqa: T201
+                f"{case_id}: FAIL golden not pinned/canonical: {error}"
+            )
+            continue
         nat = golden["basis"]["n_atoms"]
         nsh = golden["basis"]["n_shells"]
         iterations = golden["iterations"]
@@ -452,7 +490,14 @@ def run_mixer(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
         golden_entry = goldens[case_id]
         golden_path = corpus_dir / golden_entry["path"]
         spec_path = corpus_dir / "specs" / f"{case_id}.spec"
-        golden = json.loads(golden_path.read_text(encoding="utf-8"))
+        try:
+            golden = load_pinned_golden(golden_path, golden_entry)
+        except (generator.CorpusError, writer.TraceError, ValueError) as error:
+            failures += 1
+            print(  # noqa: T201
+                f"{case_id}: FAIL golden not pinned/canonical: {error}"
+            )
+            continue
         iterations = golden["iterations"]
         if not iterations:
             continue
@@ -510,7 +555,16 @@ def run_mixer(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
                     f"FAIL predicted length {len(actual)} != {dimension}"
                 )
                 continue
-            worst_absolute = 0.0
+            if any(not math.isfinite(value) for value in actual) or any(
+                not math.isfinite(value) for value in expected
+            ):
+                failures += 1
+                print(  # noqa: T201
+                    f"{case_id} transition {logical_index - 1}->{logical_index}: "
+                    "FAIL predicted or golden mixed state is not finite"
+                )
+                continue
+            worst_absolute = -1.0
             worst_path = ""
             for component, (predicted_value, golden_value) in enumerate(
                 zip(actual, expected, strict=True)
@@ -521,7 +575,7 @@ def run_mixer(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
                 if absolute > tolerance and absolute > worst_absolute:
                     worst_absolute = absolute
                     worst_path = f"mixed[{component}]"
-            if worst_absolute == 0.0:
+            if worst_absolute < 0.0:
                 print(  # noqa: T201
                     f"{case_id} transition {logical_index - 1}->{logical_index}: "
                     "PASS (cpu_replay_v1)"

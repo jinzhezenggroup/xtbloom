@@ -552,6 +552,52 @@ class RestrictedCorpusTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--mixer requires --mixer-cases", result.stdout)
 
+    def test_load_pinned_golden_accepts_manifest_matching_canonical_bytes(self) -> None:
+        """Evidence goldens must match the manifest hash and canonical bytes."""
+        manifest = json.loads(
+            (CORPUS_DIR / "manifest.json").read_text(encoding="utf-8")
+        )
+        entry = manifest["cases"]["h3_plus"]
+        golden_path = CORPUS_DIR / entry["path"]
+        document = CPU_TRACE.load_pinned_golden(golden_path, entry)
+        self.assertEqual(document["format"], "gpuxtb-scc-trace-v1")
+
+    def test_load_pinned_golden_rejects_drifted_bytes(self) -> None:
+        """A drifted golden must be rejected before replay evidence is built."""
+        manifest = json.loads(
+            (CORPUS_DIR / "manifest.json").read_text(encoding="utf-8")
+        )
+        entry = dict(manifest["cases"]["h3_plus"])
+        original = CORPUS_DIR / entry["path"]
+        with tempfile.TemporaryDirectory() as directory:
+            drifted = Path(directory) / "h3_plus.json"
+            document = json.loads(original.read_text(encoding="utf-8"))
+            document["iterations"][-1]["energy"] += 1.0e-3
+            drifted.write_text(TRACE.dumps(document), encoding="utf-8")
+            with self.assertRaises(CPU_TRACE.generator.CorpusError):
+                CPU_TRACE.load_pinned_golden(drifted, entry)
+
+    def test_load_pinned_golden_rejects_noncanonical_bytes(self) -> None:
+        """Noncanonical serialization must be rejected for evidence goldens."""
+        manifest = json.loads(
+            (CORPUS_DIR / "manifest.json").read_text(encoding="utf-8")
+        )
+        entry = dict(manifest["cases"]["h3_plus"])
+        with tempfile.TemporaryDirectory() as directory:
+            noncanonical = Path(directory) / "h3_plus.json"
+            document = json.loads(
+                (CORPUS_DIR / entry["path"]).read_text(encoding="utf-8")
+            )
+            compressed = json.dumps(document, indent=2, sort_keys=True)
+            noncanonical.write_text(compressed + "  \n", encoding="utf-8")
+            # Align the manifest pin with the changed bytes so only the
+            # canonical-serialization check can reject this file.
+            entry["sha256"] = CPU_TRACE.sha256_file(noncanonical)
+            with self.assertRaisesRegex(
+                CPU_TRACE.generator.CorpusError, "not canonical"
+            ):
+                CPU_TRACE.load_pinned_golden(noncanonical, entry)
+
     def test_wrapper_requires_exactly_one_mode(self) -> None:
         """Reject wrappers that select zero or multiple capture modes."""
         wrapper = TOOL_DIR / "gpuxtb_scc_cpu_trace.py"
