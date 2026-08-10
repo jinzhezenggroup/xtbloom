@@ -117,6 +117,10 @@ cmake.args = [
   "-DXTBLOOM_BUILD_TESTS=OFF",
   "-DXTBLOOM_PYTHON_WHEEL=ON",
   "-DBUILD_SHARED_LIBS=ON",
+  # Wheel payload paths are part of the Python package contract. Do not let
+  # GNUInstallDirs select architecture-specific directories such as lib64 on
+  # aarch64; native libraries live in xtbloom/lib on every wheel platform.
+  "-DCMAKE_INSTALL_LIBDIR=lib",
 ]
 wheel.packages = ["python/xtbloom"]
 wheel.install-dir = "xtbloom"
