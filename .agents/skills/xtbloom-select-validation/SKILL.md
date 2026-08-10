@@ -33,8 +33,10 @@ Build a validation ledger that distinguishes a real pass from an absent, skipped
 Use separate build directories so an old cache cannot change which tests exist.
 
 ```bash
-uvx prek@0.3.1 run --show-diff-on-failure --color=always --all-files
-uv lock --check
+UV_DEFAULT_INDEX=https://pypi.org/simple \
+  uv tool run --from prek==0.3.1 prek run \
+  --show-diff-on-failure --color=always --all-files
+UV_DEFAULT_INDEX=https://pypi.org/simple uv lock --check
 git diff --check
 
 cmake -S . -B build/cpu -G Ninja \

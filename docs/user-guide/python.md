@@ -1,13 +1,31 @@
 # Python API
 
+[![PyPI version](https://img.shields.io/pypi/v/xtbloom.svg)](https://pypi.org/project/xtbloom/)
+
 The Python package wraps the public xTBloom C ABI with `ctypes`. There is no
 separate CPython extension API, and every high-level calculation owns or shares
 a native xTBloom context.
 
-For Python and native toolchain versions, BLAS/CUDA requirements, and the
-source-build versus wheel boundary, start with the
-[installation prerequisites](index.md#prerequisites). The concise package page
-and install commands are in [`python/README.md`](../../python/README.md).
+## Installation
+
+Install the published package from PyPI:
+
+```console
+pip install xtbloom
+```
+
+For supported Linux CUDA 12 environments or optional adapters, install the
+matching extras:
+
+```console
+pip install "xtbloom[cuda12]"
+pip install "xtbloom[ase,dpdata]"
+```
+
+Python 3.10 or newer is required. For platform details, native toolchain and
+CUDA requirements, and the secondary source-build path, see the
+[installation guide](index.md#installation). The concise PyPI-facing package
+page is [`python/README.md`](../../python/README.md).
 
 ## Single systems and context reuse
 
@@ -340,7 +358,8 @@ The caller owns coordinate derivatives of `b` and `A`. See the
 
 ## ASE and dpdata
 
-Install the corresponding extra and use `xtbloom.ase.XTBloom` as an ASE
+Install `xtbloom[ase]`, `xtbloom[dpdata]`, or both with
+`pip install "xtbloom[ase,dpdata]"`, then use `xtbloom.ase.XTBloom` as an ASE
 calculator or `driver="xtbloom"` with dpdata. These integrations convert native
 atomic units to eV and Angstrom conventions. dpdata periodic systems are
 rejected because the native ABI has no lattice descriptor. The ASE calculator

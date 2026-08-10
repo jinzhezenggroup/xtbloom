@@ -9,7 +9,7 @@
 [C/C++ guide](docs/user-guide/c-api.md) ·
 [Documentation](docs/index.md)
 
-xTBloom is a pre-release C++17 library for applications that need energies,
+xTBloom is a C++17 library for applications that need energies,
 analytic forces, and atomic charges for many small and medium molecular
 systems. Its CPU and CUDA backends share one stable C ABI, with Python, ASE,
 and dpdata interfaces built on the same native execution path.
@@ -48,23 +48,28 @@ for usage and scope.
 
 ## Python quickstart
 
-xTBloom is not yet published on PyPI. Sync a source checkout into uv's locked,
-non-editable project environment:
+[![PyPI version](https://img.shields.io/pypi/v/xtbloom.svg)](https://pypi.org/project/xtbloom/)
 
-Python 3.10 or newer is required. See the
-[prerequisites matrix](docs/user-guide/index.md#prerequisites) for native and
-CUDA build requirements.
+Install the published package from PyPI. Python 3.10 or newer is required:
 
 ```console
-uv sync --locked --no-editable --no-default-groups --reinstall-package xtbloom
+pip install xtbloom
 ```
 
-Run commands from that environment with `uv run --no-sync` or activate
-`.venv` directly. Ordinary source builds auto-discover a compatible system
-LP64 LAPACKE+CBLAS runtime; when none is discoverable, set
-`CMAKE_ARGS="-DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/provider.so"` on the
-sync command. Official Linux wheels instead contain their reviewed private
-OpenBLAS provider.
+On supported 64-bit Linux systems, install the CUDA 12 host-library cohort when
+it is not already supplied by the environment:
+
+```console
+pip install "xtbloom[cuda12]"
+```
+
+Published desktop wheels contain a reviewed private LP64 OpenBLAS provider.
+Linux x86_64 and aarch64 wheels also contain the CUDA backend; the `cuda12`
+extra supplies its user-space CUDA libraries but cannot install an NVIDIA
+driver or GPU. See the [Python guide](docs/user-guide/python.md) for optional
+ASE/dpdata extras and the
+[installation guide](docs/user-guide/index.md#installation) for platform and
+source-build details.
 
 Positions use bohr; energies and forces are returned in Hartree and
 Hartree/bohr. The high-level Python `electronic_temperature` argument is in

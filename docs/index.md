@@ -4,7 +4,7 @@ xTBloom provides native, batched GFN2-xTB energies, analytic forces, and
 charges through one stable C ABI and Python interfaces built on that ABI.
 
 [Try the browser demo](https://xtbloom.jinzhezeng.group) ·
-[Install from source](user-guide/index.md#installation) ·
+[Install xTBloom](user-guide/index.md#installation) ·
 [Python API](user-guide/python.md) ·
 [C/C++ API](user-guide/c-api.md)
 

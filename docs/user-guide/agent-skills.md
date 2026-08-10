@@ -7,7 +7,7 @@ remain separate under [`.agents/skills/`](../../.agents/skills).
 
 | Skill | Use it for |
 | --- | --- |
-| `xtbloom-install-and-diagnose` | Install from a source checkout, select CPU or CUDA deliberately, inspect native-library discovery, and prove which backend actually executes. |
+| `xtbloom-install-and-diagnose` | Use the PyPI package by default or a source checkout when required, select CPU or CUDA deliberately, inspect native-library discovery, and prove which backend actually executes. |
 | `xtbloom-run-python-inference` | Write single-system or native ragged-batch Python calculations with correct units, spin, warm-start, and per-system failure handling. |
 | `xtbloom-integrate-ase-dpdata` | Attach xTBloom to ASE or dpdata for energies, forces, dataset labeling, or adapter-level relaxation. |
 | `xtbloom-use-zero-copy-ml` | Connect NumPy, CuPy, JAX, or PyTorch arrays through Array API and DLPack, including caller-owned outputs and the positions-only PyTorch gradient. |

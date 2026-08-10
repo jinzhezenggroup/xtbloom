@@ -1,16 +1,40 @@
 # xTBloom Installation Reference
 
-Use this reference for user installations. These instructions describe the current pre-release source and wheel boundaries; verify newer release documentation if the installed version differs.
+Use this reference for user installations. These instructions describe the current published and source-build boundaries; verify newer release documentation if the installed version differs.
 
 ## Choose the Artifact
 
-xTBloom is not yet published on PyPI. Supported user paths are:
+xTBloom is published on PyPI. Choose among:
 
-- build the Python package from a source checkout;
-- install a wheel supplied by the project or user; or
+- install the reviewed PyPI wheel for ordinary Python use;
+- build the Python package from source for development or an unsupported target;
 - consume a native CMake install.
 
 Do not substitute an unreviewed package with a similar name.
+
+## PyPI Python Installation
+
+For an agent-owned one-off program, avoid mutating the current environment or
+requiring xTBloom to be preinstalled. Resolve directly from PyPI:
+
+```bash
+UV_DEFAULT_INDEX=https://pypi.org/simple \
+  uv run --no-project --with xtbloom python your_program.py
+```
+
+If the user explicitly wants a persistent environment, install the base package
+or selected extras there:
+
+```bash
+pip install xtbloom
+pip install 'xtbloom[cuda12]'
+pip install 'xtbloom[cuda12,ase,dpdata]'
+```
+
+Published Linux, macOS, and Windows wheels include a reviewed private LP64
+OpenBLAS provider. Linux x86_64 and aarch64 wheels also include the CUDA backend.
+The `cuda12` extra supplies supported CUDA 12 user-space libraries; it cannot
+install a GPU or NVIDIA driver.
 
 ## Source-Checkout Python Installation
 
@@ -57,7 +81,7 @@ XTBLOOM_ENABLE_CUDA=OFF \
   --reinstall-package xtbloom
 ```
 
-Official Linux wheels contain their reviewed private LP64 OpenBLAS provider. Do not install `scipy-openblas32` as an xTBloom runtime dependency; it is a build-only input to those wheels.
+Published desktop wheels contain their reviewed private LP64 OpenBLAS provider. Do not install `scipy-openblas32` as an xTBloom runtime dependency; it is a build-only input to those wheels.
 
 ## Native-Library Resolution
 
@@ -83,5 +107,6 @@ xTBloom implements GFN2-xTB on CPU and CUDA. GFN1-xTB and ROCm values are reserv
 
 Authoritative online sources:
 
+- <https://pypi.org/project/xtbloom/>
 - <https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/index.md>
 - <https://github.com/jinzhezenggroup/xtbloom/blob/main/python/README.md>
