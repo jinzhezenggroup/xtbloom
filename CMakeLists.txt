@@ -654,6 +654,12 @@ if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
     string(JSON xtbloom_openblas_file_path GET
       "${xtbloom_openblas_resolve_output}" files
       ${xtbloom_openblas_file_index} path)
+    # JSON preserves Windows native backslashes, but install(FILES) writes its
+    # arguments into a generated CMake script where sequences such as ``\U``
+    # would be parsed as escapes. Normalize every resolved payload path before
+    # it enters build or install rules.
+    cmake_path(CONVERT "${xtbloom_openblas_file_path}"
+      TO_CMAKE_PATH_LIST xtbloom_openblas_file_path NORMALIZE)
     string(JSON xtbloom_openblas_file_role GET
       "${xtbloom_openblas_resolve_output}" files
       ${xtbloom_openblas_file_index} role)
