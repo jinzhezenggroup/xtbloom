@@ -10,19 +10,23 @@ response, CPU and CUDA backends, ASE, dpdata, and eager Array API/DLPack arrays.
 
 ## Installation
 
-xTBloom is not yet published on PyPI. From a source checkout, build and install
-the CPU package with:
+xTBloom is not yet published on PyPI. From a source checkout, sync the locked,
+non-editable CPU package into uv's project environment with:
 
 ```console
-XTBLOOM_ENABLE_CUDA=OFF python -m pip install .
+XTBLOOM_ENABLE_CUDA=OFF uv sync --locked --no-editable --no-default-groups
 ```
 
 Install optional integrations from the checkout:
 
 ```console
-XTBLOOM_ENABLE_CUDA=OFF python -m pip install ".[ase,dpdata]"
-XTBLOOM_ENABLE_CUDA=ON python -m pip install ".[cuda12]"
+XTBLOOM_ENABLE_CUDA=OFF uv sync --locked --no-editable --no-default-groups \
+  --extra ase --extra dpdata
+XTBLOOM_ENABLE_CUDA=ON uv sync --locked --no-editable --no-default-groups \
+  --extra cuda12
 ```
+
+Run commands with `uv run --no-sync` or activate `.venv` directly.
 
 Python 3.10 or newer is required. Linux wheels include a private LP64 OpenBLAS
 provider for CPU inference; `scipy-openblas32` is used only while building the

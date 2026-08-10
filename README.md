@@ -48,12 +48,15 @@ for usage and scope.
 
 ## Python quickstart
 
-xTBloom is not yet published on PyPI. Install a source checkout explicitly for
-the CPU backend:
+xTBloom is not yet published on PyPI. Sync a source checkout into uv's locked,
+non-editable project environment for the CPU backend:
 
 ```console
-XTBLOOM_ENABLE_CUDA=OFF python -m pip install .
+XTBLOOM_ENABLE_CUDA=OFF uv sync --locked --no-editable --no-default-groups
 ```
+
+Run commands from that environment with `uv run --no-sync` or activate
+`.venv` directly.
 
 Positions use bohr; energies and forces are returned in Hartree and
 Hartree/bohr. The high-level Python `electronic_temperature` argument is in
