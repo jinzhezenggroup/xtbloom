@@ -24,6 +24,36 @@ def test_stable_symbol_parser_accepts_macho_leading_underscore() -> None:
     ) == {"aoti_torch_get_data_ptr", "torch_library_impl"}
 
 
+def test_macho_checker_removes_verified_self_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Treat LC_ID_DYLIB as identity, not as a provider dependency."""
+    library = tmp_path / "libxtbloom_torch_ext.dylib"
+    outputs = iter(
+        [
+            f"{library}:\n@rpath/{library.name}\n",
+            (
+                f"{library}:\n"
+                f"\t@rpath/{library.name} (compatibility version 0.0.0, "
+                "current version 0.0.0)\n"
+                "\t@rpath/libtorch_cpu.dylib (compatibility version 1.0.0, "
+                "current version 1.0.0)\n"
+                "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, "
+                "current version 1.0.0)\n"
+            ),
+            "Load command 0\n      cmd LC_SEGMENT_64\n",
+            "_aoti_torch_get_data_ptr\n",
+        ]
+    )
+    monkeypatch.setattr(_CHECKER, "_run", lambda command: next(outputs))
+    _CHECKER._check_macho(
+        library,
+        {"aoti_torch_get_data_ptr"},
+        otool="otool",
+        nm="nm",
+    )
+
+
 def _minimal_pe_imports(
     dll: str,
     symbols: list[str],

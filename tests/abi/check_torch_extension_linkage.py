@@ -137,12 +137,26 @@ def _check_macho(
     if otool_command is None or nm_command is None:
         raise SystemExit("macOS Torch linkage inspection requires otool and nm")
 
+    identity_output = _run([otool_command, "-D", str(library)])
+    identities = {
+        line.strip() for line in identity_output.splitlines()[1:] if line.strip()
+    }
+    expected_identity = f"@rpath/{library.name}"
+    if identities != {expected_identity}:
+        raise SystemExit(
+            f"extension must have LC_ID_DYLIB {expected_identity}; found "
+            + ", ".join(sorted(identities))
+        )
+
     linked = _run([otool_command, "-L", str(library)])
     dependencies = {
         line.strip().split(" (compatibility", 1)[0]
         for line in linked.splitlines()[1:]
         if line.strip()
     }
+    # otool -L includes a dylib's own LC_ID_DYLIB before its true dependency
+    # load commands, so remove the separately verified self-identity.
+    dependencies.discard(expected_identity)
     if "@rpath/libtorch_cpu.dylib" not in dependencies:
         raise SystemExit(
             "extension must load @rpath/libtorch_cpu.dylib; found "
