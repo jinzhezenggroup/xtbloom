@@ -83,10 +83,11 @@ nox = ["nox==2026.7.11"]
 # installations retain the package's optional, lazy-import contract.
 torch-testing = ["torch==2.13.0"]
 # Lock the reviewed wheel-build input without publishing it as Requires-Dist.
-# auditwheel vendors only its verified LP64 provider cohort into xTBloom;
-# users must not install or import scipy-openblas32 at runtime.
+# xTBloom vendors only its verified LP64 provider cohort into native wheels;
+# users must not install or import scipy-openblas32 at runtime. Platform
+# markers keep uv.lock authoritative for every redistributed desktop artifact.
 wheel-build = [
-  "scipy-openblas32==0.3.34.0.0; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+  "scipy-openblas32==0.3.34.0.0; (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or (sys_platform == 'darwin' and (platform_machine == 'x86_64' or platform_machine == 'arm64')) or (sys_platform == 'win32' and (platform_machine == 'AMD64' or platform_machine == 'ARM64'))",
 ]
 
 # Install the typechecking group by default so `uv check` (the ty-pre-commit
@@ -157,9 +158,11 @@ cmake.args = [
 ]
 wheel.packages = ["python/xtbloom"]
 wheel.install-dir = "xtbloom"
-# ctypes does not link against a CPython ABI.  Emit one platform wheel that is
-# usable by every supported Python version instead of duplicate cp311/cp314
-# archives containing identical native code.
+# Neither the ctypes-loaded libxtbloom nor the torch.ops-loaded LibTorch Stable
+# ABI extension is a CPython extension module. Emit one platform wheel that is
+# usable by every supported Python version instead of duplicate cp311/cp314 or
+# cp313t/cp314t archives containing identical native code. Free-threaded Python
+# is therefore a runtime-validation target for this wheel, not another artifact.
 wheel.py-api = "py3"
 
 # scipy-openblas32 explicitly warns against use as an end-user dependency. It
@@ -167,8 +170,8 @@ wheel.py-api = "py3"
 # in runtime metadata, editable builds, or an sdist build environment.
 [[tool.scikit-build.overrides]]
 if.state = "^wheel$"
-if.platform-system = "^linux$"
-if.platform-machine = "^(x86_64|aarch64)$"
+if.platform-system = "(?i)^(linux|darwin|macos|windows|win32)$"
+if.platform-machine = "(?i)^(x86_64|aarch64|arm64|amd64)$"
 if.env.XTBLOOM_BUNDLE_WHEEL_OPENBLAS = "^ON$"
 build.requires = ["scipy-openblas32==0.3.34.0.0"]
 
@@ -194,9 +197,11 @@ CMAKE_CUDA_COMPILER_LAUNCHER = { env = "XTBLOOM_CUDA_COMPILER_LAUNCHER", default
 # cibuildwheel: build wheels across platforms. The .github/workflows/wheels.yml
 # matrix drives exactly which build each runner produces via CIBW_BUILD and
 # whether XTBLOOM_ENABLE_CUDA is ON (Linux x86_64, CUDA manylinux image) or OFF
-# everywhere else. Linux x86_64 runs the full Python suite; native aarch64 runs
-# an installed-wheel CPU and Torch inference smoke; other platforms retain the
-# default import smoke test.
+# everywhere else. Linux x86_64 runs the full Python suite; native aarch64
+# runs installed-wheel CPU and Torch inference smoke; Windows and macOS run a
+# real installed-wheel CPU inference through their private provider, while
+# Pyodide runs only its native import/version smoke until a production WASM
+# eigensolver provider exists.
 [tool.cibuildwheel]
 build = ["cp311-*"]
 # Use uv for the isolated build environment (via `build --installer=uv`) and

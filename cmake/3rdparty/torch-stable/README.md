@@ -65,11 +65,13 @@ a broken extension.
 
 ## Platform scope
 
-The build-time stub currently supports **Linux ELF only** (x86_64 and aarch64),
-which matches the wheel release scope in `.github/workflows/wheels.yml`
-(macOS/Windows artifacts are intentionally not published). On other platforms
-`XTBLOOM_ENABLE_TORCH_EXT` is skipped with a status message rather than failing
-the configure. Porting would mean a matching SONAME stub for macOS
+The build-time stub currently supports **Linux ELF only** (x86_64 and aarch64).
+Those Linux wheels contain and test the extension. The published Windows and
+macOS CPU wheels, and the CI-only Pyodide wheel, do not claim to contain it;
+the Python integration reports the missing optional native extension instead
+of silently copying tensors. On those platforms `XTBLOOM_ENABLE_TORCH_EXT` is
+skipped with a status message rather than failing the configure. Porting would
+mean a matching SONAME stub for macOS
 (`libtorch_cpu.dylib` with the same `@rpath` install name) and, on Windows, a
 fake `torch_cpu.lib` import library (the vendored `implib-gen` tooling used for
 the CUDA backend can generate one from the same `aoti_symbols.txt`); each

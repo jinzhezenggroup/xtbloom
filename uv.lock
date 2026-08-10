@@ -2036,10 +2036,14 @@ name = "scipy-openblas32"
 version = "0.3.34.0.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/ad/b0330d85dd2ab60968bff39b1b9454db3306b965c71b98db201093ba1898/scipy_openblas32-0.3.34.0.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:b6589278b79442ea79567c8e530643be751a1354196d27396f3c7b2369f10c1e", size = 10425671, upload-time = "2026-07-19T20:13:39.452Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/6f/ad1ae888597867ded86175d294658eb84b2881577651b370336ccc7df72a/scipy_openblas32-0.3.34.0.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:64619387b7a90a5b062856fdbf8c8788bb0cd2d7da1c866cf568e90c6e93756b", size = 6845528, upload-time = "2026-07-19T20:13:41.694Z" },
     { url = "https://files.pythonhosted.org/packages/4b/b5/6e296b54ac83a0a59d678d295b1695224b2cf1cd67533e0a286d7e216655/scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b534496a7c5fd69abf7938cbcc3f4fbb8108d9ed99ac9f93db229abd99281b06", size = 9329914, upload-time = "2026-07-19T20:13:43.652Z" },
     { url = "https://files.pythonhosted.org/packages/89/d1/e201ef4ff4cb22a30bbba58a6917a1ee097c685b8d8ac0165f66149731bf/scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5b5df658f32271b3115d845ea91b19bed190591b55d27d9b5399b83071c68ea1", size = 8836393, upload-time = "2026-07-19T20:13:49.629Z" },
     { url = "https://files.pythonhosted.org/packages/d0/f5/02eb78221e61c8d2e470f1a3610525e4569e5263a6a674ee16b01cdc2006/scipy_openblas32-0.3.34.0.0-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:f8cb72bac195384ac04372d55e98bcfe156e0c494b07802b5a2ad7ccf61e3715", size = 9608131, upload-time = "2026-07-19T20:13:55.418Z" },
     { url = "https://files.pythonhosted.org/packages/d1/28/3a5b098a737e47761f5ed297449b12f0c493f021c6aa6aea15fc0b051f36/scipy_openblas32-0.3.34.0.0-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:367ffdbc0e7b51c6851a629a04dd751af20ceffc2123223412bbccbc48a23356", size = 9461494, upload-time = "2026-07-19T20:13:57.643Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/42/b9fcec55d931cb928295043872f7e65b7052e65722f55e9a613e6b307cbc/scipy_openblas32-0.3.34.0.0-py3-none-win_amd64.whl", hash = "sha256:e80cd667c9604f85aee2f0aa2ca547c5fc0f63d97b7b81b4b45401b1f912ff03", size = 7127068, upload-time = "2026-07-19T20:14:01.786Z" },
+    { url = "https://files.pythonhosted.org/packages/39/7b/5f946bfb49e1dadcdbaf30d317fa84b20e53ec0991dd2a349058966dd2fd/scipy_openblas32-0.3.34.0.0-py3-none-win_arm64.whl", hash = "sha256:3003d1d72b95cd919bf6fccacd29f05f3bb007aba74e411c94388049fc9d153e", size = 5129104, upload-time = "2026-07-19T20:14:03.575Z" },
 ]
 
 [[package]]
@@ -2273,7 +2277,7 @@ typechecking = [
     { name = "dpdata" },
 ]
 wheel-build = [
-    { name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "scipy-openblas32", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'ARM64' and sys_platform == 'win32')" },
 ]
 
 [package.metadata]
@@ -2301,4 +2305,4 @@ typechecking = [
     { name = "ase" },
     { name = "dpdata" },
 ]
-wheel-build = [{ name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==0.3.34.0.0" }]
+wheel-build = [{ name = "scipy-openblas32", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (platform_machine == 'ARM64' and sys_platform == 'win32')", specifier = "==0.3.34.0.0" }]

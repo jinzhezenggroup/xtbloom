@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -85,6 +86,13 @@ def _sync_python_environment(session: nox.Session, *, tests: bool) -> None:
         "sync",
         "--locked",
         "--no-editable",
+        # CPU validation resolves the reviewed LP64 runtime from this
+        # build-only group, but the project wheel itself is still built with
+        # provider bundling disabled. This keeps scipy-openblas32 out of the
+        # published runtime metadata while making the documented Nox entry
+        # points self-contained.
+        "--group",
+        "wheel-build",
     ]
     if tests:
         command.extend(["--extra", "test", "--group", "torch-testing"])
@@ -240,9 +248,24 @@ def _installed_library(session: nox.Session) -> Path:
 def _run_python_tests(session: nox.Session) -> None:
     """Test the source Python API against the native library bundled in the wheel."""
     library = _installed_library(session)
+    runtime = _resolve_cpu_linalg(session)
+    if os.name == "nt":
+        loader_path_name = "PATH"
+    elif sys.platform == "darwin":
+        loader_path_name = "DYLD_LIBRARY_PATH"
+    else:
+        loader_path_name = "LD_LIBRARY_PATH"
+    loader_path = str(runtime.parent)
+    inherited_loader_path = os.environ.get(loader_path_name)
+    if inherited_loader_path:
+        loader_path = loader_path + os.pathsep + inherited_loader_path
     test_environment = {
         "PYTHONPATH": str(ROOT / "python"),
         "XTBLOOM_LIBRARY": str(library),
+        # The local validation wheel deliberately does not bundle its
+        # build-only provider. Give its lazy loader the reviewed runtime path
+        # explicitly, matching the native CTest environment.
+        loader_path_name: loader_path,
     }
     _run(
         session,

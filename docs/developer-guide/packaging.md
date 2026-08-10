@@ -70,29 +70,68 @@ become accidental `DT_NEEDED` dependencies merely to simplify discovery.
 ## Python wheels
 
 scikit-build-core builds `libxtbloom` through CMake and installs it under the
-Python package. The ctypes binding is independent of the CPython extension ABI,
-so one platform wheel can serve supported Python 3 versions.
+Python package. The ctypes binding and LibTorch Stable ABI integration are not
+CPython extension modules, so one `py3-none-<platform>` wheel serves supported
+Python 3 versions. Free-threaded `cp313t`/`cp314t` interpreters therefore need
+runtime validation of that same wheel, not separately published wheel bytes.
 
 Linux CUDA wheels contain compiled xTBloom device code but do not bundle CUDA
 host shared libraries or the NVIDIA driver. The optional `cuda12` extra installs
 supported host providers separately from PyPI. CPU-only installations remain
 usable without the proprietary stack.
 
-Linux x86_64/aarch64 wheels do bundle one private LP64 OpenBLAS provider. The
-upstream `scipy-openblas32` distribution is deliberately build-only: an
-environment-gated scikit-build-core override installs the exact reviewed
-version only for cibuildwheel's audited Linux wheel builds, while a non-default
-uv dependency group retains its PyPI hashes in `uv.lock`. It must never appear
-in project dependencies, extras, editable builds, or wheel `METADATA`.
+Linux x86_64/aarch64, macOS x86_64/arm64, and Windows AMD64/ARM64 wheels bundle
+one private LP64 OpenBLAS provider. The upstream `scipy-openblas32`
+distribution is deliberately build-only: an environment-gated
+scikit-build-core override installs the exact reviewed version only for
+cibuildwheel's audited native wheel builds, while a non-default uv dependency
+group retains every platform artifact hash in `uv.lock`. It must never appear
+in project dependencies, extras, editable builds, test environments, or wheel
+`METADATA`.
 
-CMake validates the installed distribution version, license, architecture, and
-complete ELF inventory through `python/ci/resolve-openblas-wheel.py` without
-importing the package. A private shim retains the only `DT_NEEDED` edge.
-`auditwheel repair` then vendors and collision-renames OpenBLAS and its
-architecture-specific GCC runtime closure. `python/ci/inspect-openblas-wheel.py`
-checks the final metadata, exact cohort names, ELF machine, symbols, SONAMEs,
-RPATHs, and dependency graph. `libxtbloom` itself must remain free of OpenBLAS,
-libgfortran, libquadmath, and shim `DT_NEEDED` entries.
+CMake validates the installed distribution version, target, exact packaged
+license, and complete native-library inventory through
+`python/ci/resolve-openblas-wheel.py` without importing the package. The source
+manifest pins every upstream wheel and native payload hash plus exact local
+copies of each platform-specific packaged-license variant.
+
+On Linux, a private shim retains the only `DT_NEEDED` edge. `auditwheel repair`
+then vendors and collision-renames OpenBLAS and its architecture-specific GCC
+runtime closure, and `libxtbloom` loads the shim in a new glibc link-map
+namespace. On macOS, every OpenBLAS/libgfortran/libquadmath/libgcc image gets a
+content-hash-qualified private filename and LC_ID; all intra-cohort load
+commands are rewritten before every derived image is ad-hoc signed. On
+Windows, the self-contained provider DLL gets a content-hash-qualified private
+filename. macOS loads by canonical absolute sibling path and verifies the
+dispatch image path; Windows loads by absolute sibling path and verifies every
+dispatch symbol against the returned module handle. Desktop providers expose
+only global thread control, so their already-private image is fixed to one
+thread once during thread-safe initialization. System providers still require
+worker-local thread control.
+
+`python/ci/inspect-openblas-wheel.py` checks final metadata, exact cohort names,
+machine architecture, required symbols/exports, private IDs and dependency
+paths, signatures, and native dependency closure. `libxtbloom` itself must
+remain free of hard OpenBLAS, libgfortran, libquadmath, and shim dependencies.
+
+The compiled Torch extension is currently included only in Linux wheels. Its
+vendored-header/build-stub mechanism relies on ELF `libtorch_cpu.so` SONAME and
+load behavior. macOS needs a matching dylib install-name stub and runtime
+validation; Windows needs a `torch_cpu.lib` import stub plus DLL loading and
+real PyTorch validation. Pyodide has no LibTorch runtime.
+
+The Pyodide `cp314-pyodide_wasm32` wheel targets Pyodide 314.x and its stable
+`pyemscripten_2026_0_wasm32` ABI, then is smoke-tested as a CI-only artifact.
+PyPI accepts this platform tag, but xTBloom excludes the wheel from the PyPI
+artifact prefix until the Python wheel has a production WebAssembly eigensolver
+path; the existing Web demo uses its separate preloaded LAPACK design.
+Windows/macOS wheels must pass installed GFN2 inference, missing-provider,
+concurrency, and host numerical-coexistence tests before being release-eligible.
+
+Final GitHub Releases publish the validated sdist and release-eligible native
+wheels through PyPI Trusted Publishing. The upload job runs only for a
+non-prerelease published release, uses the protected `pypi` environment, and
+receives job-local `id-token: write`; build jobs retain read-only permissions.
 
 Wheel checks cover size, license payload, native symbol and dynamic-dependency
 policy, bundled-library discovery, and installed inference. Hosted wheel jobs

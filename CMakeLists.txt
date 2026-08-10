@@ -289,55 +289,90 @@ function(xtbloom_validate_cpu_linalg_runtime candidate result symbol_prefix_resu
   endif()
 endfunction()
 
-# Linux wheels carry a reviewed private OpenBLAS cohort rather than requiring
+# Native wheels carry a reviewed private OpenBLAS cohort rather than requiring
 # end users to install scipy-openblas32. The provider package exists only in
 # the isolated PEP 517 build environment; this configure-time step verifies
-# every byte without importing its side-effectful Python module. A private shim
-# gives auditwheel a DT_NEEDED edge from which it vendors and collision-renames
-# the complete provider dependency closure.
+# every redistributed byte without importing its side-effectful Python module.
+# Linux uses a private shim so auditwheel follows and collision-renames the ELF
+# dependency closure. macOS and Windows copy the already self-contained native
+# cohort under xTBloom-private names and load it only by absolute sibling path.
 set(XTBLOOM_WHEEL_OPENBLAS OFF)
+set(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM OFF)
+set(XTBLOOM_WHEEL_OPENBLAS_DESKTOP OFF)
 if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS AND NOT XTBLOOM_PYTHON_WHEEL)
   message(FATAL_ERROR
     "XTBLOOM_BUNDLE_WHEEL_OPENBLAS requires XTBLOOM_PYTHON_WHEEL=ON")
 endif()
-if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" xtbloom_wheel_processor)
-  if(xtbloom_wheel_processor MATCHES "^(x86_64|amd64)$")
-    set(XTBLOOM_WHEEL_OPENBLAS_ARCH x86_64)
-  elseif(xtbloom_wheel_processor MATCHES "^(aarch64|arm64)$")
-    set(XTBLOOM_WHEEL_OPENBLAS_ARCH aarch64)
-  else()
-    message(FATAL_ERROR
-      "Python wheels support private OpenBLAS only on Linux x86_64/aarch64, not "
-      "'${CMAKE_SYSTEM_PROCESSOR}'")
-  endif()
+if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS)
   if(XTBLOOM_CPU_LINALG_LIBRARY)
     message(FATAL_ERROR
       "XTBLOOM_CPU_LINALG_LIBRARY cannot override the reviewed private provider "
       "in XTBLOOM_PYTHON_WHEEL builds")
   endif()
 
-  # dlmopen is part of the wheel's host-isolation contract, not an optional
-  # optimization. Prove both namespace creation and dlinfo inspection before
-  # accepting the build input.
-  cmake_push_check_state(RESET)
-  set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
-  check_cxx_source_compiles([=[
-    #ifndef _GNU_SOURCE
-    #define _GNU_SOURCE 1
-    #endif
-    #include <dlfcn.h>
-    #include <link.h>
-    int main() {
-      void* handle = dlmopen(LM_ID_NEWLM, nullptr, RTLD_NOW | RTLD_LOCAL);
-      Lmid_t namespace_id = LM_ID_BASE;
-      return handle == nullptr ? 0 : dlinfo(handle, RTLD_DI_LMID, &namespace_id);
-    }
-  ]=] XTBLOOM_HAS_DLMOPEN_NAMESPACE)
-  cmake_pop_check_state()
-  if(NOT XTBLOOM_HAS_DLMOPEN_NAMESPACE)
+  string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" xtbloom_wheel_processor)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(XTBLOOM_WHEEL_OPENBLAS_PLATFORM linux)
+    if(xtbloom_wheel_processor MATCHES "^(x86_64|amd64)$")
+      set(XTBLOOM_WHEEL_OPENBLAS_ARCH x86_64)
+    elseif(xtbloom_wheel_processor MATCHES "^(aarch64|arm64)$")
+      set(XTBLOOM_WHEEL_OPENBLAS_ARCH aarch64)
+    else()
+      message(FATAL_ERROR
+        "Python wheels support private OpenBLAS on Linux x86_64/aarch64, not "
+        "'${CMAKE_SYSTEM_PROCESSOR}'")
+    endif()
+  elseif(APPLE)
+    set(XTBLOOM_WHEEL_OPENBLAS_PLATFORM macos)
+    if(xtbloom_wheel_processor MATCHES "^(x86_64|amd64)$")
+      set(XTBLOOM_WHEEL_OPENBLAS_ARCH x86_64)
+    elseif(xtbloom_wheel_processor MATCHES "^(aarch64|arm64)$")
+      set(XTBLOOM_WHEEL_OPENBLAS_ARCH arm64)
+    else()
+      message(FATAL_ERROR
+        "Python wheels support private OpenBLAS on macOS x86_64/arm64, not "
+        "'${CMAKE_SYSTEM_PROCESSOR}'")
+    endif()
+  elseif(WIN32)
+    set(XTBLOOM_WHEEL_OPENBLAS_PLATFORM windows)
+    if(xtbloom_wheel_processor MATCHES "^(x86_64|amd64)$")
+      set(XTBLOOM_WHEEL_OPENBLAS_ARCH amd64)
+    elseif(xtbloom_wheel_processor MATCHES "^(aarch64|arm64)$")
+      set(XTBLOOM_WHEEL_OPENBLAS_ARCH arm64)
+    else()
+      message(FATAL_ERROR
+        "Python wheels support private OpenBLAS on Windows AMD64/ARM64, not "
+        "'${CMAKE_SYSTEM_PROCESSOR}'")
+    endif()
+  else()
     message(FATAL_ERROR
-      "XTBLOOM_PYTHON_WHEEL requires glibc dlmopen/dlinfo namespace isolation")
+      "Python wheels do not have a reviewed private OpenBLAS provider for "
+      "${CMAKE_SYSTEM_NAME}")
+  endif()
+
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # dlmopen is part of the Linux wheel's host-isolation contract, not an
+    # optional optimization. Prove namespace creation and inspection before
+    # accepting the build input.
+    cmake_push_check_state(RESET)
+    set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
+    check_cxx_source_compiles([=[
+      #ifndef _GNU_SOURCE
+      #define _GNU_SOURCE 1
+      #endif
+      #include <dlfcn.h>
+      #include <link.h>
+      int main() {
+        void* handle = dlmopen(LM_ID_NEWLM, nullptr, RTLD_NOW | RTLD_LOCAL);
+        Lmid_t namespace_id = LM_ID_BASE;
+        return handle == nullptr ? 0 : dlinfo(handle, RTLD_DI_LMID, &namespace_id);
+      }
+    ]=] XTBLOOM_HAS_DLMOPEN_NAMESPACE)
+    cmake_pop_check_state()
+    if(NOT XTBLOOM_HAS_DLMOPEN_NAMESPACE)
+      message(FATAL_ERROR
+        "XTBLOOM_PYTHON_WHEEL requires glibc dlmopen/dlinfo namespace isolation")
+    endif()
   endif()
 
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
@@ -347,6 +382,7 @@ if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/python/ci/resolve-openblas-wheel.py"
       --manifest "${XTBLOOM_OPENBLAS_PROVENANCE}"
+      --platform "${XTBLOOM_WHEEL_OPENBLAS_PLATFORM}"
       --architecture "${XTBLOOM_WHEEL_OPENBLAS_ARCH}"
     RESULT_VARIABLE xtbloom_openblas_resolve_status
     OUTPUT_VARIABLE xtbloom_openblas_resolve_output
@@ -360,11 +396,21 @@ if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   endif()
   string(JSON XTBLOOM_WHEEL_OPENBLAS_LIBRARY GET
     "${xtbloom_openblas_resolve_output}" provider_path)
+  string(JSON XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX GET
+    "${xtbloom_openblas_resolve_output}" expected_config_prefix)
+  string(JSON XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME GET
+    "${xtbloom_openblas_resolve_output}" provider_install_name)
   get_filename_component(XTBLOOM_WHEEL_OPENBLAS_DIRECTORY
     "${XTBLOOM_WHEEL_OPENBLAS_LIBRARY}" DIRECTORY)
   set(XTBLOOM_WHEEL_OPENBLAS ON)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM ON)
+  else()
+    set(XTBLOOM_WHEEL_OPENBLAS_DESKTOP ON)
+  endif()
   message(STATUS
-    "xtbloom wheel OpenBLAS build input: ${XTBLOOM_WHEEL_OPENBLAS_LIBRARY}")
+    "xtbloom wheel OpenBLAS build input (${XTBLOOM_WHEEL_OPENBLAS_PLATFORM}-"
+    "${XTBLOOM_WHEEL_OPENBLAS_ARCH}): ${XTBLOOM_WHEEL_OPENBLAS_LIBRARY}")
 endif()
 
 # Bake a verified absolute path into the library so a non-system LP64 runtime
@@ -568,7 +614,7 @@ if(XTBLOOM_CPU_LINALG_RUNTIME)
   endif()
 endif()
 
-if(XTBLOOM_WHEEL_OPENBLAS)
+if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
   add_library(xtbloom_openblas_lp64_shim SHARED
     src/runtime/openblas_lp64_shim.c
   )
@@ -591,6 +637,117 @@ if(XTBLOOM_WHEEL_OPENBLAS)
   install(TARGETS xtbloom_openblas_lp64_shim
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   )
+endif()
+
+if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
+  string(JSON xtbloom_openblas_file_count LENGTH
+    "${xtbloom_openblas_resolve_output}" files)
+  math(EXPR xtbloom_openblas_file_last "${xtbloom_openblas_file_count} - 1")
+
+  if(APPLE)
+    find_program(XTBLOOM_INSTALL_NAME_TOOL install_name_tool REQUIRED)
+    find_program(XTBLOOM_CODESIGN codesign REQUIRED)
+    set(XTBLOOM_WHEEL_OPENBLAS_MACOS_OUTPUTS "")
+  endif()
+
+  foreach(xtbloom_openblas_file_index RANGE 0 ${xtbloom_openblas_file_last})
+    string(JSON xtbloom_openblas_file_path GET
+      "${xtbloom_openblas_resolve_output}" files
+      ${xtbloom_openblas_file_index} path)
+    # JSON preserves Windows native backslashes, but install(FILES) writes its
+    # arguments into a generated CMake script where sequences such as ``\U``
+    # would be parsed as escapes. Normalize every resolved payload path before
+    # it enters build or install rules.
+    cmake_path(CONVERT "${xtbloom_openblas_file_path}"
+      TO_CMAKE_PATH_LIST xtbloom_openblas_file_path NORMALIZE)
+    string(JSON xtbloom_openblas_file_role GET
+      "${xtbloom_openblas_resolve_output}" files
+      ${xtbloom_openblas_file_index} role)
+    string(JSON xtbloom_openblas_install_destination GET
+      "${xtbloom_openblas_resolve_output}" files
+      ${xtbloom_openblas_file_index} install_destination)
+    string(JSON xtbloom_openblas_install_name GET
+      "${xtbloom_openblas_resolve_output}" files
+      ${xtbloom_openblas_file_index} install_name)
+
+    if(APPLE)
+      string(JSON xtbloom_openblas_install_id GET
+        "${xtbloom_openblas_resolve_output}" files
+        ${xtbloom_openblas_file_index} install_id)
+      set(xtbloom_openblas_output
+        "${CMAKE_CURRENT_BINARY_DIR}/private-openblas/${xtbloom_openblas_install_name}")
+
+      # Every Mach-O image gets a content-derived xTBloom-private ID and every
+      # intra-cohort load command is rewritten to the matching private name.
+      # Privateizing only the OpenBLAS image is insufficient: dyld may reuse a
+      # previously loaded libgfortran/libquadmath image with the same LC_ID.
+      add_custom_command(
+        OUTPUT "${xtbloom_openblas_output}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory
+          "${CMAKE_CURRENT_BINARY_DIR}/private-openblas"
+        COMMAND "${CMAKE_COMMAND}" -E copy
+          "${xtbloom_openblas_file_path}"
+          "${xtbloom_openblas_output}"
+        COMMAND "${XTBLOOM_INSTALL_NAME_TOOL}" -id
+          "${xtbloom_openblas_install_id}"
+          "${xtbloom_openblas_output}"
+        DEPENDS "${xtbloom_openblas_file_path}"
+        VERBATIM
+        COMMENT "Preparing private scipy-openblas32 image ${xtbloom_openblas_install_name}"
+      )
+
+      string(JSON xtbloom_openblas_rewrite_count LENGTH
+        "${xtbloom_openblas_resolve_output}" files
+        ${xtbloom_openblas_file_index} load_rewrites)
+      if(xtbloom_openblas_rewrite_count GREATER 0)
+        math(EXPR xtbloom_openblas_rewrite_last
+          "${xtbloom_openblas_rewrite_count} - 1")
+        foreach(xtbloom_openblas_rewrite_index RANGE 0
+            ${xtbloom_openblas_rewrite_last})
+          string(JSON xtbloom_openblas_rewrite_from GET
+            "${xtbloom_openblas_resolve_output}" files
+            ${xtbloom_openblas_file_index} load_rewrites
+            ${xtbloom_openblas_rewrite_index} from)
+          string(JSON xtbloom_openblas_rewrite_to GET
+            "${xtbloom_openblas_resolve_output}" files
+            ${xtbloom_openblas_file_index} load_rewrites
+            ${xtbloom_openblas_rewrite_index} to)
+          add_custom_command(
+            OUTPUT "${xtbloom_openblas_output}"
+            APPEND
+            COMMAND "${XTBLOOM_INSTALL_NAME_TOOL}" -change
+              "${xtbloom_openblas_rewrite_from}"
+              "${xtbloom_openblas_rewrite_to}"
+              "${xtbloom_openblas_output}"
+          )
+        endforeach()
+      endif()
+      add_custom_command(
+        OUTPUT "${xtbloom_openblas_output}"
+        APPEND
+        COMMAND "${XTBLOOM_CODESIGN}" --force --sign -
+          "${xtbloom_openblas_output}"
+      )
+      list(APPEND XTBLOOM_WHEEL_OPENBLAS_MACOS_OUTPUTS
+        "${xtbloom_openblas_output}")
+      install(FILES "${xtbloom_openblas_output}"
+        DESTINATION "${xtbloom_openblas_install_destination}"
+        RENAME "${xtbloom_openblas_install_name}"
+      )
+    else()
+      # Windows provider DLLs have no ELF/Mach-O install name and can be safely
+      # content-renamed while copying.
+      install(FILES "${xtbloom_openblas_file_path}"
+        DESTINATION "${xtbloom_openblas_install_destination}"
+        RENAME "${xtbloom_openblas_install_name}"
+      )
+    endif()
+  endforeach()
+  if(APPLE)
+    add_custom_target(xtbloom_wheel_openblas_provider ALL
+      DEPENDS ${XTBLOOM_WHEEL_OPENBLAS_MACOS_OUTPUTS}
+    )
+  endif()
 endif()
 
 add_library(xtbloom_gfn2_cpu OBJECT
@@ -647,8 +804,18 @@ endif()
 if(XTBLOOM_WHEEL_OPENBLAS)
   target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
     XTBLOOM_CONFIGURED_WHEEL_OPENBLAS=1
+    "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
   )
-  add_dependencies(xtbloom_gfn2_cpu xtbloom_openblas_lp64_shim)
+  if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
+    target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
+      "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME=\"${XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME}\""
+    )
+  endif()
+  if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
+    add_dependencies(xtbloom_gfn2_cpu xtbloom_openblas_lp64_shim)
+  elseif(APPLE)
+    add_dependencies(xtbloom_gfn2_cpu xtbloom_wheel_openblas_provider)
+  endif()
 endif()
 
 add_library(xtbloom
@@ -693,7 +860,7 @@ if(NOT XTBLOOM_PYTHON_WHEEL)
     SOVERSION ${XTBLOOM_ABI_SOVERSION}
   )
 endif()
-if(UNIX AND NOT APPLE)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(xtbloom PRIVATE
     "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/xtbloom.map"
   )
@@ -2946,7 +3113,7 @@ if(XTBLOOM_BUILD_TESTS)
     )
   endif()
 
-  if(XTBLOOM_WHEEL_OPENBLAS)
+  if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
     # Prove the wheel provider is loaded through the sibling shim in a fresh
     # link-map namespace. The process-global decoy deliberately has the
     # provider's original SONAME but none of its symbols; successful inference

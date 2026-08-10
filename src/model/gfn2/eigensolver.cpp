@@ -3,11 +3,20 @@
 
 #include "model/gfn2/occupation_binary64_policy.hpp"
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <dlfcn.h>
 #endif
 
-#if defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM) || defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS)
+#if (defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM) || defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS)) && \
+    defined(__linux__)
 #include <link.h>
 #endif
 
@@ -235,12 +244,20 @@ xtbloom_status_t validate_backend(const CpuLinearAlgebraBackend& backend, std::s
 
 template <typename Function>
 bool load_symbol(void* handle, const char* name, Function& function) {
+#if defined(_WIN32)
+  static_assert(sizeof(Function) == sizeof(FARPROC));
+  const FARPROC symbol = GetProcAddress(static_cast<HMODULE>(handle), name);
+  if (symbol == nullptr) {
+    return false;
+  }
+#else
   static_assert(sizeof(Function) == sizeof(void*));
   dlerror();
   void* symbol = dlsym(handle, name);
   if (symbol == nullptr || dlerror() != nullptr) {
     return false;
   }
+#endif
   std::memcpy(&function, &symbol, sizeof(function));
   return true;
 }
@@ -298,7 +315,84 @@ bool backend_self_test(const CpuLinearAlgebraBackend& backend) {
   return rhs[0] == 2.0 && product[0] == 4.0;
 }
 
-#if defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM) || defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS)
+#if defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS) && defined(_WIN32)
+void* open_private_bundled_sibling(const char* filename) {
+  /* Resolve relative to xtbloom.dll itself, never the process working
+   * directory or PATH. LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR keeps any provider
+   * dependencies in the same private wheel directory, while the default
+   * directories retain Windows system-runtime resolution. */
+  static const unsigned char kModuleAnchor = 0u;
+  HMODULE module = nullptr;
+  const DWORD flags =
+      GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+  if (GetModuleHandleExW(flags, reinterpret_cast<LPCWSTR>(&kModuleAnchor), &module) == 0) {
+    return nullptr;
+  }
+
+  std::array<wchar_t, 32768> module_path{};
+  const DWORD length =
+      GetModuleFileNameW(module, module_path.data(), static_cast<DWORD>(module_path.size()));
+  if (length == 0u || length >= module_path.size()) {
+    return nullptr;
+  }
+  std::wstring path(module_path.data(), length);
+  const std::size_t separator = path.find_last_of(L"\\/");
+  if (separator == std::wstring::npos) {
+    return nullptr;
+  }
+  path.resize(separator + 1u);
+  for (const char* character = filename; *character != '\0'; ++character) {
+    path.push_back(static_cast<wchar_t>(static_cast<unsigned char>(*character)));
+  }
+  return static_cast<void*>(LoadLibraryExW(
+      path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS));
+}
+
+void close_dynamic_library(void* handle) {
+  if (handle != nullptr) {
+    static_cast<void>(FreeLibrary(static_cast<HMODULE>(handle)));
+  }
+}
+#elif defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS) && defined(__APPLE__)
+std::string canonical_path(const char* path) {
+  char* resolved = realpath(path, nullptr);
+  if (resolved == nullptr) {
+    return {};
+  }
+  std::string result(resolved);
+  std::free(resolved);
+  return result;
+}
+
+void* open_private_bundled_sibling(const char* filename, std::string& expected_path) {
+  /* The provider has an xTBloom-private LC_ID and is opened by the absolute
+   * path beside libxtbloom. This prevents name-based discovery and host SciPy
+   * reuse without claiming Linux dlmopen-style namespace isolation. */
+  static const unsigned char kModuleAnchor = 0u;
+  Dl_info module{};
+  if (dladdr(&kModuleAnchor, &module) == 0 || module.dli_fname == nullptr) {
+    return nullptr;
+  }
+  std::string path(module.dli_fname);
+  const std::size_t separator = path.find_last_of('/');
+  if (separator == std::string::npos) {
+    return nullptr;
+  }
+  path.resize(separator + 1u);
+  path += filename;
+  expected_path = canonical_path(path.c_str());
+  if (expected_path.empty()) {
+    return nullptr;
+  }
+  return dlopen(expected_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+}
+
+void close_dynamic_library(void* handle) {
+  if (handle != nullptr) {
+    static_cast<void>(dlclose(handle));
+  }
+}
+#elif defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM) || defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS)
 void* open_host_isolated_sibling(const char* soname) {
   /* A LOCAL handle still resolves relocations against already-global objects.
    * A new link-map namespace is required to keep a host BLAS implementation
@@ -326,6 +420,57 @@ void* open_host_isolated_sibling(const char* soname) {
     return nullptr;
   }
   return handle;
+}
+#endif
+
+#if defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS) && defined(_WIN32)
+template <typename Function>
+HMODULE dynamic_symbol_module(Function function) {
+  static_assert(sizeof(Function) == sizeof(void*));
+  void* address = nullptr;
+  std::memcpy(&address, &function, sizeof(address));
+  HMODULE module = nullptr;
+  const DWORD flags =
+      GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+  if (GetModuleHandleExW(flags, static_cast<LPCWSTR>(address), &module) == 0) {
+    return nullptr;
+  }
+  return module;
+}
+
+template <typename First, typename... Rest>
+bool symbols_belong_to_private_provider(void* opened_handle, First first, Rest... rest) {
+  const HMODULE module = static_cast<HMODULE>(opened_handle);
+  if (module == nullptr || dynamic_symbol_module(first) != module ||
+      ((dynamic_symbol_module(rest) != module) || ...)) {
+    return false;
+  }
+  return true;
+}
+#elif defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS) && defined(__APPLE__)
+template <typename Function>
+bool dynamic_symbol_info(Function function, Dl_info& info) {
+  static_assert(sizeof(Function) == sizeof(void*));
+  void* address = nullptr;
+  std::memcpy(&address, &function, sizeof(address));
+  return dladdr(address, &info) != 0 && info.dli_fbase != nullptr && info.dli_fname != nullptr;
+}
+
+template <typename First, typename... Rest>
+bool symbols_belong_to_private_provider(const std::string& expected_path, First first,
+                                        Rest... rest) {
+  Dl_info first_info{};
+  if (!dynamic_symbol_info(first, first_info)) {
+    return false;
+  }
+  bool same_image = true;
+  const auto check = [&](auto function) {
+    Dl_info info{};
+    same_image =
+        same_image && dynamic_symbol_info(function, info) && info.dli_fbase == first_info.dli_fbase;
+  };
+  (check(rest), ...);
+  return same_image && canonical_path(first_info.dli_fname) == expected_path;
 }
 #endif
 
@@ -1158,7 +1303,7 @@ bool CpuLinearAlgebraBackend::ready() const noexcept {
 
 bool CpuLinearAlgebraBackend::production() const noexcept {
   return origin_ == Origin::kMklShimLp64 || origin_ == Origin::kOpenBlasIsolatedLp64 ||
-         origin_ == Origin::kOpenBlasLp64;
+         origin_ == Origin::kBundledOpenBlasLp64 || origin_ == Origin::kOpenBlasLp64;
 }
 
 bool CpuLinearAlgebraBackend::production_mkl() const noexcept {
@@ -1197,24 +1342,31 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
   };
   static const LinalgRuntimeState runtime = [] {
     LinalgRuntimeState state;
-#if defined(_WIN32)
-    /* The CPU eigensolver currently loads BLAS runtimes through POSIX dlopen;
-     * the Windows port (LoadLibrary/GetProcAddress of mkl_rt.dll) is tracked
-     * as a follow-up. */
-    state.message = "CPU linear-algebra runtime loading is not ported to Windows yet";
-    return state;
-#else
 #ifdef XTBLOOM_CONFIGURED_WHEEL_OPENBLAS
     /* Python wheels carry one hash-verified scipy-openblas32 provider cohort
-     * through a private sibling shim whose dependency closure auditwheel
-     * vendors and collision-renames. Load that shim by absolute path into a
-     * fresh glibc link-map: importing the upstream Python package or using the
-     * base namespace would let NumPy/host BLAS symbols interpose. A configured
-     * bundle is an all-or-nothing contract, so verification failure must not
-     * fall back to an unrelated system provider. */
+     * as a private sibling. Linux loads an auditwheel-repaired shim in a fresh
+     * glibc link-map namespace. macOS/Windows load a renamed provider image by
+     * absolute path and verify that every dispatch symbol comes from that
+     * image. A configured bundle is an all-or-nothing contract, so a failure
+     * never falls back to an unrelated system provider. */
     {
+#if defined(_WIN32)
+      void* handle = open_private_bundled_sibling(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME);
+      constexpr CpuLinearAlgebraBackend::Origin kOrigin =
+          CpuLinearAlgebraBackend::Origin::kBundledOpenBlasLp64;
+#elif defined(__APPLE__)
+      dlerror();
+      std::string provider_path;
+      void* handle =
+          open_private_bundled_sibling(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME, provider_path);
+      constexpr CpuLinearAlgebraBackend::Origin kOrigin =
+          CpuLinearAlgebraBackend::Origin::kBundledOpenBlasLp64;
+#else
       dlerror();
       void* handle = open_host_isolated_sibling("libxtbloom_openblas_lp64_shim.so");
+      constexpr CpuLinearAlgebraBackend::Origin kOrigin =
+          CpuLinearAlgebraBackend::Origin::kOpenBlasIsolatedLp64;
+#endif
       if (handle != nullptr) {
         LapackDpotrfWork dpotrf_work = nullptr;
         LapackDpoconWork dpocon_work = nullptr;
@@ -1228,32 +1380,85 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
                                        dgemm) &&
             load_symbol(handle, "scipy_openblas_get_config", get_config)) {
           const char* config = get_config();
-          if (config != nullptr && std::strstr(config, "OpenBLAS 0.3.34.0.0") == config &&
+          constexpr const char* kExpectedConfigPrefix =
+              XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_CONFIG_PREFIX;
+          if (config != nullptr &&
+              std::strncmp(config, kExpectedConfigPrefix, std::strlen(kExpectedConfigPrefix)) ==
+                  0 &&
               std::strstr(config, "USE64BITINT") == nullptr) {
+#if defined(_WIN32) || defined(__APPLE__)
+            using OpenBlasSetNumThreadsGlobal = void (*)(int);
+            using OpenBlasGetNumThreads = int (*)();
+            OpenBlasSetNumThreadsGlobal set_threads_global = nullptr;
+            OpenBlasGetNumThreads get_threads = nullptr;
+            if (load_symbol(handle, "scipy_openblas_set_num_threads", set_threads_global) &&
+                load_symbol(handle, "scipy_openblas_get_num_threads", get_threads)
+#if defined(_WIN32)
+                && symbols_belong_to_private_provider(handle, dpotrf_work, dpocon_work, dsyevd_work,
+                                                      dtrsm, dgemm, get_config, set_threads_global,
+                                                      get_threads)
+#else
+                && symbols_belong_to_private_provider(provider_path, dpotrf_work, dpocon_work,
+                                                      dsyevd_work, dtrsm, dgemm, get_config,
+                                                      set_threads_global, get_threads)
+#endif
+            ) {
+              /* Desktop providers do not export local thread control. This
+               * renamed private image is initialized exactly once by the
+               * thread-safe function-static factory, so fixing its global
+               * setting cannot alter an unrelated host OpenBLAS instance. */
+              set_threads_global(1);
+              if (get_threads() == 1) {
+                CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+                    kOrigin, dpotrf_work, dpocon_work, dsyevd_work, dtrsm, dgemm, nullptr);
+                if (backend_self_test(created)) {
+                  state.backend = created;
+                  state.status = XTBLOOM_STATUS_SUCCESS;
+                  return state;
+                }
+              }
+            }
+#else
             if (!load_symbol(handle, "openblas_set_num_threads_local", set_threads)) {
               static_cast<void>(
                   load_symbol(handle, "scipy_openblas_set_num_threads_local", set_threads));
             }
             if (set_threads != nullptr) {
               CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
-                  CpuLinearAlgebraBackend::Origin::kOpenBlasIsolatedLp64, dpotrf_work, dpocon_work,
-                  dsyevd_work, dtrsm, dgemm, set_threads);
+                  kOrigin, dpotrf_work, dpocon_work, dsyevd_work, dtrsm, dgemm, set_threads);
               if (backend_self_test(created)) {
                 state.backend = created;
                 state.status = XTBLOOM_STATUS_SUCCESS;
                 return state;
               }
             }
+#endif
           }
         }
+#if defined(_WIN32) || defined(__APPLE__)
+        close_dynamic_library(handle);
+#else
         static_cast<void>(dlclose(handle));
+#endif
       }
-      state.message =
-          "private wheel OpenBLAS provider is missing or failed verification "
-          "(libxtbloom_openblas_lp64_shim.so)";
+#if defined(_WIN32) || defined(__APPLE__)
+      constexpr const char* kPrivateProviderName = XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME;
+#else
+      constexpr const char* kPrivateProviderName = "libxtbloom_openblas_lp64_shim.so";
+#endif
+      state.message = std::string("private wheel OpenBLAS provider is missing or failed ") +
+                      "verification (" + kPrivateProviderName + ")";
       return state;
     }
 #endif
+
+#if defined(_WIN32)
+    /* Native system-provider discovery remains POSIX-only. Windows wheels use
+     * the private provider above; a non-wheel Windows build must configure a
+     * future explicit LoadLibrary provider path instead of searching PATH. */
+    state.message = "CPU linear-algebra runtime is unavailable in this Windows build";
+    return state;
+#else
 
 #ifdef XTBLOOM_CONFIGURED_CPU_LINALG_SHIM
     /* Preferred isolated MKL provider: a private shim built at CMake time with

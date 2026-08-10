@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Resolve and verify the scipy-openblas32 input used by Linux wheel builds.
+"""Resolve and verify the scipy-openblas32 input used by native wheel builds.
 
 The upstream distribution is a build input, not a runtime dependency. This
-tool deliberately uses importlib.metadata instead of importing
+tool deliberately uses importlib metadata instead of importing
 ``scipy_openblas32`` because that module loads OpenBLAS into the process-global
-namespace as an import side effect. CMake links a private shim to the verified
-provider; auditwheel then vendors and collision-renames its complete ELF
-dependency closure.
+namespace as an import side effect. Linux builds expose the verified provider
+to auditwheel through a private shim; macOS and Windows copy only the reviewed
+dynamic-library cohort into the xTBloom wheel under private names.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from typing import Any
 
 
 class ResolveError(RuntimeError):
-    """Report a build input that differs from the reviewed provider cohort."""
+    """Report a build input that differs from reviewed provenance."""
 
 
 def _sha256(path: Path) -> str:
@@ -33,42 +33,73 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _normalize_architecture(value: str) -> str:
-    aliases = {"amd64": "x86_64", "arm64": "aarch64"}
-    normalized = aliases.get(value.lower(), value.lower())
-    if normalized not in {"x86_64", "aarch64"}:
-        raise ResolveError(f"unsupported scipy-openblas32 wheel architecture: {value}")
+def _normalize_platform(value: str) -> str:
+    aliases = {
+        "darwin": "macos",
+        "linux": "linux",
+        "macos": "macos",
+        "win32": "windows",
+        "windows": "windows",
+    }
+    normalized = aliases.get(value.lower())
+    if normalized is None:
+        raise ResolveError(f"unsupported scipy-openblas32 wheel platform: {value}")
     return normalized
+
+
+def _normalize_architecture(platform_name: str, value: str) -> str:
+    architecture = value.lower()
+    if architecture in {"x86_64", "amd64"}:
+        return "amd64" if platform_name == "windows" else "x86_64"
+    if architecture in {"aarch64", "arm64"}:
+        return "aarch64" if platform_name == "linux" else "arm64"
+    raise ResolveError(f"unsupported scipy-openblas32 wheel architecture: {value}")
+
+
+def target_name(platform_name: str, architecture: str) -> str:
+    """Return the manifest key for one normalized native wheel target."""
+    normalized_platform = _normalize_platform(platform_name)
+    normalized_architecture = _normalize_architecture(normalized_platform, architecture)
+    return f"{normalized_platform}-{normalized_architecture}"
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
     """Load the reviewed provenance record and reject unknown schemas."""
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    if manifest.get("schema_version") != 1:
+    if manifest.get("schema_version") != 2:
         raise ResolveError("unsupported scipy-openblas32 manifest schema")
     return manifest
 
 
-def _distribution_elf_files(distribution: importlib.metadata.Distribution) -> set[str]:
+def _distribution_binary_files(
+    distribution: importlib.metadata.Distribution,
+) -> set[str]:
     files = distribution.files
     if files is None:
         raise ResolveError(
             "scipy-openblas32 distribution has no installed file inventory"
         )
-    return {
-        PurePosixPath(str(entry)).as_posix()
-        for entry in files
-        if PurePosixPath(str(entry)).parent.as_posix() == "scipy_openblas32/lib"
-        and ".so" in PurePosixPath(str(entry)).name
-    }
+
+    binaries: set[str] = set()
+    for entry in files:
+        path = PurePosixPath(str(entry))
+        parent = path.parent.as_posix()
+        name = path.name.lower()
+        if (
+            parent == "scipy_openblas32/lib"
+            and (".so" in name or name.endswith((".dylib", ".dll")))
+        ) or (parent == "scipy_openblas32/.dylibs" and name.endswith(".dylib")):
+            binaries.add(path.as_posix())
+    return binaries
 
 
 def resolve_provider(
     manifest: dict[str, Any],
+    platform_name: str,
     architecture: str,
     distribution: importlib.metadata.Distribution,
 ) -> dict[str, Any]:
-    """Verify one installed architecture and return its absolute provider path."""
+    """Verify one installed target and return its private provider payload."""
     dependency = manifest["dependency"]
     if distribution.version != dependency["version"]:
         raise ResolveError(
@@ -76,11 +107,19 @@ def resolve_provider(
             f"expected {dependency['version']}, found {distribution.version}"
         )
 
-    architecture = _normalize_architecture(architecture)
-    arch_manifest = manifest["architectures"][architecture]
-    records = arch_manifest["files"]
+    normalized_platform = _normalize_platform(platform_name)
+    normalized_architecture = _normalize_architecture(normalized_platform, architecture)
+    target = f"{normalized_platform}-{normalized_architecture}"
+    try:
+        target_manifest = manifest["targets"][target]
+    except KeyError as error:
+        raise ResolveError(
+            f"unsupported scipy-openblas32 wheel target: {target}"
+        ) from error
+
+    records = target_manifest["files"]
     expected_sources = {record["source"] for record in records}
-    observed_sources = _distribution_elf_files(distribution)
+    observed_sources = _distribution_binary_files(distribution)
     if observed_sources != expected_sources:
         missing = sorted(expected_sources - observed_sources)
         unexpected = sorted(observed_sources - expected_sources)
@@ -90,12 +129,12 @@ def resolve_provider(
         if unexpected:
             details.append("unexpected " + ", ".join(unexpected))
         raise ResolveError(
-            "scipy-openblas32 ELF inventory differs: " + "; ".join(details)
+            "scipy-openblas32 dynamic-library inventory differs: " + "; ".join(details)
         )
 
-    source = manifest["source"]
-    license_path = Path(distribution.locate_file(source["license_source"]))
-    if _sha256(license_path) != source["license_sha256"]:
+    license_record = target_manifest["license"]
+    license_path = Path(distribution.locate_file(license_record["source"]))
+    if _sha256(license_path) != license_record["sha256"]:
         raise ResolveError(
             "scipy-openblas32 license differs from reviewed upstream bytes"
         )
@@ -112,25 +151,28 @@ def resolve_provider(
                 "scipy-openblas32 payload differs from reviewed bytes: "
                 f"{record['source']}"
             )
-        resolved_files.append(
-            {
-                "source": record["source"],
-                "path": str(path),
-                "sha256": record["sha256"],
-            }
-        )
+        resolved = dict(record)
+        resolved["path"] = str(path)
+        resolved_files.append(resolved)
 
+    provider_source = target_manifest["provider_source"]
     provider = next(
-        item
-        for item in resolved_files
-        if item["source"].endswith("/libscipy_openblas.so")
+        (item for item in resolved_files if item["source"] == provider_source), None
     )
+    if provider is None or provider.get("role") != "provider":
+        raise ResolveError("scipy-openblas32 manifest does not identify one provider")
+
     return {
-        "schema_version": 1,
-        "architecture": architecture,
+        "schema_version": 2,
+        "target": target,
+        "platform": normalized_platform,
+        "architecture": normalized_architecture,
+        "bundle_strategy": target_manifest["bundle_strategy"],
+        "expected_config_prefix": target_manifest["expected_config_prefix"],
         "source_distribution": dependency["name"],
         "source_version": dependency["version"],
         "provider_path": provider["path"],
+        "provider_install_name": provider.get("install_name", ""),
         "files": resolved_files,
     }
 
@@ -139,13 +181,16 @@ def main() -> int:
     """Resolve the reviewed provider from the current build environment."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("--platform", default=platform.system())
     parser.add_argument("--architecture", default=platform.machine())
     args = parser.parse_args()
 
     try:
         manifest = load_manifest(args.manifest)
         distribution = importlib.metadata.distribution(manifest["dependency"]["name"])
-        resolved = resolve_provider(manifest, args.architecture, distribution)
+        resolved = resolve_provider(
+            manifest, args.platform, args.architecture, distribution
+        )
     except (
         ResolveError,
         importlib.metadata.PackageNotFoundError,

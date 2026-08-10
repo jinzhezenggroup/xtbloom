@@ -264,28 +264,63 @@ Repository: <https://github.com/MacPython/openblas-libs>
 
 The `scipy-openblas32` project states that it is a build artifact and must not
 be used as an end-user dependency. xTBloom therefore never publishes it in
-`Requires-Dist` and never imports its Python module. Version 0.3.34.0.0 is an
-exact Linux x86_64/aarch64 wheel-build input: it is the reviewed LP64
-LAPACKE+CBLAS ABI with the local-thread-control symbol required by xTBloom,
-while later provider releases may change that optional symbol.
+`Requires-Dist` and never imports its Python module. Version 0.3.34.0.0 is the
+exact reviewed LP64 LAPACKE+CBLAS wheel-build input for Linux x86_64/aarch64,
+macOS x86_64/arm64, and Windows AMD64/ARM64. Linux exports the local thread
+control required by xTBloom's worker-scoped guard. The desktop binaries expose
+only global thread control, so xTBloom loads a renamed private provider by
+absolute sibling path, fixes that private image to one thread once during
+initialization, and never relaxes the local-thread requirement for a system
+provider.
 
 The source manifest pins MacPython release commit
 `7e5538356afac3934e872b8b572799b875900657`, OpenBLAS commit
-`e0166008be8e466242aa76b2ff75ce3f0fbf574a`, both upstream wheel hashes, and
-every architecture-specific ELF input. CMake verifies those bytes without
-importing the package and links a wheel-only private shim to the provider.
-`auditwheel repair` follows that shim's `DT_NEEDED` closure, collision-renames
-and redistributes OpenBLAS plus the required `libgfortran`/`libquadmath`
-components, rewrites the vendored dependency closure for private relative
-resolution, and gives the shim a relative RPATH into that private directory.
-`libxtbloom` itself has no hard OpenBLAS dependency and lazily loads the shim in
-a new glibc link-map namespace. Source archives and native installs contain the
-provenance and license records but no OpenBLAS or GCC runtime binaries.
+`e0166008be8e466242aa76b2ff75ce3f0fbf574a`, all six upstream wheel hashes,
+their platform-specific packaged-license hashes, exact local copies of the
+Linux, macOS, Windows AMD64, and Windows ARM64 license variants, and every
+redistributed native binary. CMake verifies those bytes without importing the
+package.
+Linux links a wheel-only private shim to the provider; `auditwheel repair`
+follows that shim's `DT_NEEDED` closure, collision-renames and redistributes
+OpenBLAS plus the required `libgfortran`/`libquadmath` components, rewrites the
+vendored dependency closure for private relative resolution, and gives the
+shim a relative RPATH into that private directory. `libxtbloom` lazily loads
+the shim in a new glibc link-map namespace.
+
+macOS copies the provider plus `libgfortran`, `libquadmath`, and `libgcc_s`,
+gives every image a content-hash-qualified xTBloom-private install ID, rewrites
+all intra-cohort load commands to those private names, and ad-hoc signs every
+derived image. The provider is loaded by a canonical absolute sibling path,
+and its dispatch symbols must resolve back to that exact image. Windows copies
+only the self-contained provider DLL under a content-hash-qualified xTBloom
+filename, loads it by absolute sibling path, and requires all dispatch symbols
+to belong to the returned module handle; the AMD64 artifact depends only on
+Windows/UCRT system DLLs, while ARM64 also uses the system `VCRUNTIME140.dll`.
+These desktop mechanisms avoid name/PATH discovery but are not described as
+equivalent to Linux link-map isolation.
+`libxtbloom` itself has no hard OpenBLAS dependency on any platform. Source
+archives and ordinary native installs contain the provenance and license
+records but no OpenBLAS or compiler-runtime binaries.
 
 The retained upstream license records the MacPython wrapper under
-BSD-2-Clause, OpenBLAS and LAPACK under BSD-3-Clause terms, redistributed
-`libgfortran` under GPL-3.0 with the GCC Runtime Library Exception, and the
-x86_64-only `libquadmath` component under LGPL-2.1-or-later.
+BSD-2-Clause, OpenBLAS and LAPACK under BSD-3-Clause terms, redistributed GCC
+runtimes under GPL-3.0 with the GCC Runtime Library Exception, and
+`libquadmath` under LGPL-2.1-or-later. The upstream Windows ARM64 wheel's
+packaged `LICENSE.txt` contains only the 1,344-byte MacPython BSD-2 text because
+that build path did not append `tools/LICENSE_win32.txt`. xTBloom therefore
+also retains that exact file from the pinned release commit as
+`LICENSES/scipy-openblas32-tools-LICENSE_win32.txt` (SHA-256
+`1ce4c83d89bc30a0a97d4bc18d72ccaa9d3cb7c90ba1408c6b3e29ebf0c5a71c`)
+so the complete OpenBLAS/LAPACK and applicable GCC runtime terms accompany
+both Windows wheels.
+
+The exact packaged-license variants are retained as
+`LICENSES/scipy-openblas32-0.3.34.0.0.txt` (Linux),
+`LICENSES/scipy-openblas32-0.3.34.0.0-macos.txt`,
+`LICENSES/scipy-openblas32-0.3.34.0.0-windows-amd64.txt`, and
+`LICENSES/scipy-openblas32-0.3.34.0.0-windows-arm64.txt`. Their hashes are
+recorded per target in the source manifest; mixed CRLF/LF bytes in the upstream
+Windows records are preserved verbatim.
 
 ## CUDA and Intel MKL provider components
 

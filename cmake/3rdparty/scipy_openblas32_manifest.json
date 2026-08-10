@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "dependency": {
     "name": "scipy-openblas32",
     "version": "0.3.34.0.0",
@@ -13,55 +13,309 @@
     "openblas_repository": "https://github.com/OpenMathLib/OpenBLAS",
     "openblas_tag": "v0.3.34",
     "openblas_commit": "e0166008be8e466242aa76b2ff75ce3f0fbf574a",
-    "license_source": "scipy_openblas32-0.3.34.0.0.dist-info/licenses/LICENSE.txt",
-    "license_sha256": "51b0d449fdce3b1fabfead1af1cc6eff1df46a70b378c27dc0f5663afc6cc66a",
-    "local_license": "LICENSES/scipy-openblas32-0.3.34.0.0.txt"
+    "local_license": "LICENSES/scipy-openblas32-0.3.34.0.0.txt",
+    "local_license_sha256": "51b0d449fdce3b1fabfead1af1cc6eff1df46a70b378c27dc0f5663afc6cc66a",
+    "windows_license_source": "tools/LICENSE_win32.txt",
+    "windows_license_url": "https://github.com/MacPython/openblas-libs/blob/7e5538356afac3934e872b8b572799b875900657/tools/LICENSE_win32.txt",
+    "windows_license_sha256": "1ce4c83d89bc30a0a97d4bc18d72ccaa9d3cb7c90ba1408c6b3e29ebf0c5a71c",
+    "local_windows_license": "LICENSES/scipy-openblas32-tools-LICENSE_win32.txt"
   },
-  "architectures": {
-    "x86_64": {
+  "targets": {
+    "linux-x86_64": {
+      "platform": "linux",
+      "architecture": "x86_64",
+      "bundle_strategy": "auditwheel-shim",
+      "thread_control": "local",
+      "expected_config_prefix": "OpenBLAS 0.3.34.0.0",
       "wheel": {
         "filename": "scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
         "url": "https://files.pythonhosted.org/packages/89/d1/e201ef4ff4cb22a30bbba58a6917a1ee097c685b8d8ac0165f66149731bf/scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
         "sha256": "5b5df658f32271b3115d845ea91b19bed190591b55d27d9b5399b83071c68ea1",
         "size": 8836393
       },
+      "license": {
+        "source": "scipy_openblas32-0.3.34.0.0.dist-info/licenses/LICENSE.txt",
+        "sha256": "51b0d449fdce3b1fabfead1af1cc6eff1df46a70b378c27dc0f5663afc6cc66a",
+        "local": "LICENSES/scipy-openblas32-0.3.34.0.0.txt"
+      },
       "elf_machine": "Advanced Micro Devices X86-64",
+      "provider_source": "scipy_openblas32/lib/libscipy_openblas.so",
       "files": [
         {
           "source": "scipy_openblas32/lib/libscipy_openblas.so",
+          "role": "provider",
           "size": 24306817,
           "sha256": "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98"
         },
         {
           "source": "scipy_openblas32/lib/libgfortran-83c28eba.so.5.0.0",
+          "role": "support",
           "size": 2751569,
           "sha256": "468e71e59e1d784821a76702e5ecd1e0dbcfc024499f74a552d1bea4b26f27ad"
         },
         {
           "source": "scipy_openblas32/lib/libquadmath-2284e583.so.0.0.0",
+          "role": "support",
           "size": 272193,
           "sha256": "a9307bbaa353623fa014e8b682d50c4629f5e5c7d61daa9a8652f7d165cd421a"
         }
       ]
     },
-    "aarch64": {
+    "linux-aarch64": {
+      "platform": "linux",
+      "architecture": "aarch64",
+      "bundle_strategy": "auditwheel-shim",
+      "thread_control": "local",
+      "expected_config_prefix": "OpenBLAS 0.3.34.0.0",
       "wheel": {
         "filename": "scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
         "url": "https://files.pythonhosted.org/packages/4b/b5/6e296b54ac83a0a59d678d295b1695224b2cf1cd67533e0a286d7e216655/scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
         "sha256": "b534496a7c5fd69abf7938cbcc3f4fbb8108d9ed99ac9f93db229abd99281b06",
         "size": 9329914
       },
+      "license": {
+        "source": "scipy_openblas32-0.3.34.0.0.dist-info/licenses/LICENSE.txt",
+        "sha256": "51b0d449fdce3b1fabfead1af1cc6eff1df46a70b378c27dc0f5663afc6cc66a",
+        "local": "LICENSES/scipy-openblas32-0.3.34.0.0.txt"
+      },
       "elf_machine": "AArch64",
+      "provider_source": "scipy_openblas32/lib/libscipy_openblas.so",
       "files": [
         {
           "source": "scipy_openblas32/lib/libscipy_openblas.so",
+          "role": "provider",
           "size": 26122881,
           "sha256": "2361f5caadd43626514106cc72b848b90b652bf87c084acc46bc57be6a65c21b"
         },
         {
           "source": "scipy_openblas32/lib/libgfortran-e1b7dfc8.so.5.0.0",
+          "role": "support",
           "size": 1540409,
           "sha256": "d8198c0142688f3455b9b09ab53427c38585dfd74857b6d895da2a47425b1cdf"
+        }
+      ]
+    },
+    "macos-x86_64": {
+      "platform": "macos",
+      "architecture": "x86_64",
+      "bundle_strategy": "renamed-direct-provider",
+      "thread_control": "private-global",
+      "expected_config_prefix": "OpenBLAS 0.3.34.0.0",
+      "wheel": {
+        "filename": "scipy_openblas32-0.3.34.0.0-py3-none-macosx_10_9_x86_64.whl",
+        "url": "https://files.pythonhosted.org/packages/59/ad/b0330d85dd2ab60968bff39b1b9454db3306b965c71b98db201093ba1898/scipy_openblas32-0.3.34.0.0-py3-none-macosx_10_9_x86_64.whl",
+        "sha256": "b6589278b79442ea79567c8e530643be751a1354196d27396f3c7b2369f10c1e",
+        "size": 10425671
+      },
+      "license": {
+        "source": "scipy_openblas32-0.3.34.0.0.dist-info/licenses/LICENSE.txt",
+        "sha256": "376755b404c422c322e1f3d826182a1661c3ad65c1a4bd1b3f36c089cae2dcf0",
+        "local": "LICENSES/scipy-openblas32-0.3.34.0.0-macos.txt"
+      },
+      "provider_source": "scipy_openblas32/lib/libscipy_openblas.dylib",
+      "installed_provider": "lib/libxtbloom_blas-29f2e9e6.dylib",
+      "installed_provider_id": "@rpath/libxtbloom_blas-29f2e9e6.dylib",
+      "files": [
+        {
+          "source": "scipy_openblas32/lib/libscipy_openblas.dylib",
+          "role": "provider",
+          "install_destination": "lib",
+          "install_name": "libxtbloom_blas-29f2e9e6.dylib",
+          "install_id": "@rpath/libxtbloom_blas-29f2e9e6.dylib",
+          "load_rewrites": [
+            {
+              "from": "@loader_path/../.dylibs/libgfortran.5.dylib",
+              "to": "@loader_path/../.dylibs/libxbgf-9a93c02b.dylib"
+            },
+            {
+              "from": "@loader_path/../.dylibs/libquadmath.0.dylib",
+              "to": "@loader_path/../.dylibs/libxbqm-672b77df.dylib"
+            },
+            {
+              "from": "@loader_path/../.dylibs/libgcc_s.1.1.dylib",
+              "to": "@loader_path/../.dylibs/libxbgcc-e1bd538d.dylib"
+            }
+          ],
+          "size": 25080672,
+          "sha256": "29f2e9e686f4ee8b6afcef005b471ea8d4aba07f1dd366a4c692820312eab6d7"
+        },
+        {
+          "source": "scipy_openblas32/.dylibs/libgfortran.5.dylib",
+          "role": "support",
+          "install_destination": ".dylibs",
+          "install_name": "libxbgf-9a93c02b.dylib",
+          "install_id": "@rpath/libxbgf-9a93c02b.dylib",
+          "load_rewrites": [
+            {
+              "from": "@loader_path/libquadmath.0.dylib",
+              "to": "@loader_path/libxbqm-672b77df.dylib"
+            },
+            {
+              "from": "@loader_path/libgcc_s.1.1.dylib",
+              "to": "@loader_path/libxbgcc-e1bd538d.dylib"
+            }
+          ],
+          "size": 6786304,
+          "sha256": "9a93c02b3d17836fe9c4a7a43e42ed7020e82ecc66e7536075f71139b6d137b9"
+        },
+        {
+          "source": "scipy_openblas32/.dylibs/libquadmath.0.dylib",
+          "role": "support",
+          "install_destination": ".dylibs",
+          "install_name": "libxbqm-672b77df.dylib",
+          "install_id": "@rpath/libxbqm-672b77df.dylib",
+          "load_rewrites": [],
+          "size": 352704,
+          "sha256": "672b77df698016fbda6f3d64b480471cc8229b3b33044927c7a628fc33afdd26"
+        },
+        {
+          "source": "scipy_openblas32/.dylibs/libgcc_s.1.1.dylib",
+          "role": "support",
+          "install_destination": ".dylibs",
+          "install_name": "libxbgcc-e1bd538d.dylib",
+          "install_id": "@rpath/libxbgcc-e1bd538d.dylib",
+          "load_rewrites": [],
+          "size": 138704,
+          "sha256": "e1bd538da33ac4a86b0deb1faa1644c73700c5d934e713324ee9ff7c4dbc7167"
+        }
+      ]
+    },
+    "macos-arm64": {
+      "platform": "macos",
+      "architecture": "arm64",
+      "bundle_strategy": "renamed-direct-provider",
+      "thread_control": "private-global",
+      "expected_config_prefix": "OpenBLAS 0.3.34.0.0",
+      "wheel": {
+        "filename": "scipy_openblas32-0.3.34.0.0-py3-none-macosx_11_0_arm64.whl",
+        "url": "https://files.pythonhosted.org/packages/ae/6f/ad1ae888597867ded86175d294658eb84b2881577651b370336ccc7df72a/scipy_openblas32-0.3.34.0.0-py3-none-macosx_11_0_arm64.whl",
+        "sha256": "64619387b7a90a5b062856fdbf8c8788bb0cd2d7da1c866cf568e90c6e93756b",
+        "size": 6845528
+      },
+      "license": {
+        "source": "scipy_openblas32-0.3.34.0.0.dist-info/licenses/LICENSE.txt",
+        "sha256": "376755b404c422c322e1f3d826182a1661c3ad65c1a4bd1b3f36c089cae2dcf0",
+        "local": "LICENSES/scipy-openblas32-0.3.34.0.0-macos.txt"
+      },
+      "provider_source": "scipy_openblas32/lib/libscipy_openblas.dylib",
+      "installed_provider": "lib/libxtbloom_blas-7bab5e1d.dylib",
+      "installed_provider_id": "@rpath/libxtbloom_blas-7bab5e1d.dylib",
+      "files": [
+        {
+          "source": "scipy_openblas32/lib/libscipy_openblas.dylib",
+          "role": "provider",
+          "install_destination": "lib",
+          "install_name": "libxtbloom_blas-7bab5e1d.dylib",
+          "install_id": "@rpath/libxtbloom_blas-7bab5e1d.dylib",
+          "load_rewrites": [
+            {
+              "from": "@loader_path/../.dylibs/libgfortran.5.dylib",
+              "to": "@loader_path/../.dylibs/libxbgf-869a91fd.dylib"
+            }
+          ],
+          "size": 13823840,
+          "sha256": "7bab5e1d142046e61dcec3d0dcc69f2a362b1d2c0537e206bb1e62b1617edf7d"
+        },
+        {
+          "source": "scipy_openblas32/.dylibs/libgfortran.5.dylib",
+          "role": "support",
+          "install_destination": ".dylibs",
+          "install_name": "libxbgf-869a91fd.dylib",
+          "install_id": "@rpath/libxbgf-869a91fd.dylib",
+          "load_rewrites": [
+            {
+              "from": "@loader_path/libquadmath.0.dylib",
+              "to": "@loader_path/libxbqm-7ed1e751.dylib"
+            },
+            {
+              "from": "@loader_path/libgcc_s.1.1.dylib",
+              "to": "@loader_path/libxbgcc-56df4dec.dylib"
+            }
+          ],
+          "size": 3700784,
+          "sha256": "869a91fd1ff63f05ccafe0baad0e77dd6db8174e40e35a9c99388f182917828c"
+        },
+        {
+          "source": "scipy_openblas32/.dylibs/libquadmath.0.dylib",
+          "role": "support",
+          "install_destination": ".dylibs",
+          "install_name": "libxbqm-7ed1e751.dylib",
+          "install_id": "@rpath/libxbqm-7ed1e751.dylib",
+          "load_rewrites": [],
+          "size": 371440,
+          "sha256": "7ed1e751e680777cd5299e60bf1930078904d3f2d8b1834f655cce28a5657028"
+        },
+        {
+          "source": "scipy_openblas32/.dylibs/libgcc_s.1.1.dylib",
+          "role": "support",
+          "install_destination": ".dylibs",
+          "install_name": "libxbgcc-56df4dec.dylib",
+          "install_id": "@rpath/libxbgcc-56df4dec.dylib",
+          "load_rewrites": [],
+          "size": 158976,
+          "sha256": "56df4dec211f639c2ea3ced41f7567b23311559c002aff7c1692801520161680"
+        }
+      ]
+    },
+    "windows-amd64": {
+      "platform": "windows",
+      "architecture": "amd64",
+      "bundle_strategy": "renamed-direct-provider",
+      "thread_control": "private-global",
+      "expected_config_prefix": "OpenBLAS 0.3.34.0.0",
+      "supplemental_license": "tools/LICENSE_win32.txt",
+      "wheel": {
+        "filename": "scipy_openblas32-0.3.34.0.0-py3-none-win_amd64.whl",
+        "url": "https://files.pythonhosted.org/packages/ca/42/b9fcec55d931cb928295043872f7e65b7052e65722f55e9a613e6b307cbc/scipy_openblas32-0.3.34.0.0-py3-none-win_amd64.whl",
+        "sha256": "e80cd667c9604f85aee2f0aa2ca547c5fc0f63d97b7b81b4b45401b1f912ff03",
+        "size": 7127068
+      },
+      "license": {
+        "source": "scipy_openblas32-0.3.34.0.0.dist-info/licenses/LICENSE.txt",
+        "sha256": "7317b3a9eb806cc83a0cc6b1c7c2fbe6018eed556daa9996e6e3a727a2a5bfbe",
+        "local": "LICENSES/scipy-openblas32-0.3.34.0.0-windows-amd64.txt"
+      },
+      "provider_source": "scipy_openblas32/lib/libscipy_openblas.dll",
+      "installed_provider": "bin/xtbloom_openblas-1106ba5d.dll",
+      "files": [
+        {
+          "source": "scipy_openblas32/lib/libscipy_openblas.dll",
+          "role": "provider",
+          "install_destination": "bin",
+          "install_name": "xtbloom_openblas-1106ba5d.dll",
+          "size": 20352000,
+          "sha256": "1106ba5de68bb589a619379876e982c1a9f8bbd36392a213bb7d2721de2cd127"
+        }
+      ]
+    },
+    "windows-arm64": {
+      "platform": "windows",
+      "architecture": "arm64",
+      "bundle_strategy": "renamed-direct-provider",
+      "thread_control": "private-global",
+      "expected_config_prefix": "OpenBLAS 0.3.34",
+      "supplemental_license": "tools/LICENSE_win32.txt",
+      "wheel": {
+        "filename": "scipy_openblas32-0.3.34.0.0-py3-none-win_arm64.whl",
+        "url": "https://files.pythonhosted.org/packages/39/7b/5f946bfb49e1dadcdbaf30d317fa84b20e53ec0991dd2a349058966dd2fd/scipy_openblas32-0.3.34.0.0-py3-none-win_arm64.whl",
+        "sha256": "3003d1d72b95cd919bf6fccacd29f05f3bb007aba74e411c94388049fc9d153e",
+        "size": 5129104
+      },
+      "license": {
+        "source": "scipy_openblas32-0.3.34.0.0.dist-info/licenses/LICENSE.txt",
+        "sha256": "f91d56c46132504271b8d63395c92ce7f40b6b9a9947fae859ca06aa3793adae",
+        "local": "LICENSES/scipy-openblas32-0.3.34.0.0-windows-arm64.txt"
+      },
+      "provider_source": "scipy_openblas32/lib/scipy_openblas.dll",
+      "installed_provider": "bin/xtbloom_openblas-1abbecbd.dll",
+      "files": [
+        {
+          "source": "scipy_openblas32/lib/scipy_openblas.dll",
+          "role": "provider",
+          "install_destination": "bin",
+          "install_name": "xtbloom_openblas-1abbecbd.dll",
+          "size": 10153472,
+          "sha256": "1abbecbd73e80db95bde5a4b3111a5c678836445a4d9369a84ecff4ed2c7c733"
         }
       ]
     }
