@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# Keep only the newest validation for a pull request. Main pushes use their
+# unique run ID, so one merge never cancels another merge's release evidence.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   cpu:
     strategy:
@@ -104,7 +110,11 @@ jobs:
           # `version` and regenerate the lock together.
           version: "0.10.7"
           python-version: "3.11"
-          enable-cache: true
+          # The torch-testing environment currently fills a roughly 2.6 GiB uv
+          # cache. Recent Actions samples spend longer restoring and saving it
+          # than a locked PyPI install takes, while also evicting useful ccache
+          # entries from the repository cache quota.
+          enable-cache: false
       # --locked fails if uv.lock is stale, so an out-of-date lock shows up as
       # a CI failure instead of drifting silently. --no-editable installs the
       # real wheel (not an editable hook), so xtbloom.library can discover the
