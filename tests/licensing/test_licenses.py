@@ -37,15 +37,34 @@ VERSION_SPEC.loader.exec_module(VERSION_INSPECTOR)
 class LicenseArchiveTests(unittest.TestCase):
     """Verify legal payload requirements for built distribution archives."""
 
-    def _write_wheel(self, path: Path, names: set[str]) -> None:
+    def _write_wheel(
+        self, path: Path, names: set[str], overrides: dict[str, bytes] | None = None
+    ) -> None:
+        overrides = overrides or {}
         with zipfile.ZipFile(path, "w") as archive:
             for name in sorted(names):
-                if name.endswith("/provenance/implib_manifest.json"):
+                if name in overrides:
+                    payload = overrides[name]
+                elif name.endswith("/provenance/implib_manifest.json"):
                     payload = (REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH).read_bytes()
                 elif name.endswith("/provenance/scipy_openblas32_manifest.json"):
                     payload = (REPOSITORY / CHECKER.OPENBLAS_MANIFEST_PATH).read_bytes()
                 elif name.endswith("scipy-openblas32-0.3.34.0.0.txt"):
                     payload = (REPOSITORY / CHECKER.OPENBLAS_LICENSE).read_bytes()
+                elif name.endswith("scipy-openblas32-tools-LICENSE_win32.txt"):
+                    payload = (
+                        REPOSITORY / CHECKER.OPENBLAS_WINDOWS_LICENSE
+                    ).read_bytes()
+                elif any(
+                    name.endswith(Path(relative).name)
+                    for relative in CHECKER.OPENBLAS_EXACT_PACKAGED_LICENSES
+                ):
+                    relative = next(
+                        relative
+                        for relative in CHECKER.OPENBLAS_EXACT_PACKAGED_LICENSES
+                        if name.endswith(Path(relative).name)
+                    )
+                    payload = (REPOSITORY / relative).read_bytes()
                 else:
                     payload = b"test\n"
                 archive.writestr(name, payload)
@@ -59,7 +78,7 @@ class LicenseArchiveTests(unittest.TestCase):
             (REPOSITORY / CHECKER.OPENBLAS_MANIFEST_PATH).read_text(encoding="utf-8")
         )
         names.add("xtbloom/lib/libxtbloom_openblas_lp64_shim.so")
-        for record in manifest["architectures"]["x86_64"]["files"]:
+        for record in manifest["targets"]["linux-x86_64"]["files"]:
             source_name = Path(record["source"]).name
             names.add(
                 "xtbloom.libs/"
@@ -73,7 +92,7 @@ class LicenseArchiveTests(unittest.TestCase):
         names.remove(f"{WHEEL_DIST_INFO}/licenses/LICENSE")
         names.add("xtbloom/share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "LICENSE"):
                 CHECKER.check_archive(wheel)
@@ -84,7 +103,7 @@ class LicenseArchiveTests(unittest.TestCase):
         missing = "xtbloom/share/licenses/xtbloom/provenance/mctc_manifest.json"
         names.remove(missing)
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "mctc_manifest"):
                 CHECKER.check_archive(wheel)
@@ -95,7 +114,7 @@ class LicenseArchiveTests(unittest.TestCase):
         missing = "xtbloom/share/licenses/xtbloom/provenance/implib_manifest.json"
         names.remove(missing)
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "implib_manifest"):
                 CHECKER.check_archive(wheel)
@@ -106,7 +125,7 @@ class LicenseArchiveTests(unittest.TestCase):
         missing = "xtbloom/share/licenses/xtbloom/provenance/torch_stable_manifest.json"
         names.remove(missing)
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test.whl"
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "torch_stable"):
                 CHECKER.check_archive(wheel)
@@ -118,7 +137,7 @@ class LicenseArchiveTests(unittest.TestCase):
         names.remove(missing)
         names.remove("xtbloom/share/licenses/xtbloom/CUDA_MKL_LINKING_EXCEPTION")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(
                 CHECKER.LicenseCheckError, "CUDA_MKL_LINKING_EXCEPTION"
@@ -134,7 +153,7 @@ class LicenseArchiveTests(unittest.TestCase):
             "xtbloom/share/licenses/xtbloom/third-party/array-api-compat-MIT.txt"
         )
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(
                 CHECKER.LicenseCheckError, "array-api-compat-MIT"
@@ -146,7 +165,7 @@ class LicenseArchiveTests(unittest.TestCase):
         names = self._valid_wheel_names()
         names.add("xtbloom/lib/libcudart.so.12")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "libcudart"):
                 CHECKER.check_archive(wheel)
@@ -157,7 +176,7 @@ class LicenseArchiveTests(unittest.TestCase):
         missing = next(name for name in names if "libquadmath" in name)
         names.remove(missing)
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "cohort differs"):
                 CHECKER.check_archive(wheel)
@@ -167,9 +186,23 @@ class LicenseArchiveTests(unittest.TestCase):
         names = self._valid_wheel_names()
         names.add("xtbloom.libs/libgfortran-unreviewed.so.5")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "cohort differs"):
+                CHECKER.check_archive(wheel)
+
+    def test_wheel_rejects_changed_target_specific_openblas_license(self) -> None:
+        """Require exact upstream packaged-license bytes for every target."""
+        names = self._valid_wheel_names()
+        suffix = Path(CHECKER.OPENBLAS_EXACT_PACKAGED_LICENSES[0]).name
+        member = "xtbloom/share/licenses/xtbloom/third-party/" + suffix
+        self.assertIn(member, names)
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+            self._write_wheel(wheel, names, {member: b"changed license\n"})
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "exact packaged license differs"
+            ):
                 CHECKER.check_archive(wheel)
 
 
@@ -183,7 +216,7 @@ class OpenBlasProvenanceTests(unittest.TestCase):
         )
 
     def test_current_openblas_manifest_is_accepted(self) -> None:
-        """Accept the exact reviewed repositories, wheels, and ELF cohort."""
+        """Accept the exact reviewed repositories, wheels, and native cohorts."""
         CHECKER._check_openblas_manifest(self.manifest)
 
     def test_openblas_manifest_rejects_changed_repository(self) -> None:
@@ -194,11 +227,59 @@ class OpenBlasProvenanceTests(unittest.TestCase):
 
     def test_openblas_manifest_rejects_changed_wheel_url(self) -> None:
         """Keep the immutable PyPI artifact locator tied to reviewed bytes."""
-        self.manifest["architectures"]["x86_64"]["wheel"]["url"] = (
+        self.manifest["targets"]["linux-x86_64"]["wheel"]["url"] = (
             "https://example.invalid/scipy-openblas32.whl"
         )
-        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "x86_64 wheel"):
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "wheel differs"):
             CHECKER._check_openblas_manifest(self.manifest)
+
+    def test_openblas_manifest_rejects_macos_dependency_outside_cohort(self) -> None:
+        """Keep every rewritten Mach-O dependency on a declared private image."""
+        provider = self.manifest["targets"]["macos-arm64"]["files"][0]
+        provider["load_rewrites"][0]["to"] = "@loader_path/libhost-gfortran.dylib"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "escapes cohort"):
+            CHECKER._check_openblas_manifest(self.manifest)
+
+    def test_openblas_manifest_rejects_generic_windows_provider_name(self) -> None:
+        """Prevent Windows loader reuse through a non-private provider basename."""
+        target = self.manifest["targets"]["windows-amd64"]
+        target["files"][0]["install_name"] = "libscipy_openblas.dll"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "PE private mapping"):
+            CHECKER._check_openblas_manifest(self.manifest)
+
+
+class InstallPayloadTests(unittest.TestCase):
+    """Keep wheel-only provider binaries out of native CMake installs."""
+
+    def test_install_rejects_unrenamed_desktop_openblas_cohort(self) -> None:
+        """Recognize upstream macOS/Windows provider and support filenames."""
+        candidates = (
+            "lib/libscipy_openblas.dylib",
+            "lib/libgfortran.5.dylib",
+            "lib/libquadmath.0.dylib",
+            "lib/libgcc_s.1.1.dylib",
+            "bin/libscipy_openblas.dll",
+            "bin/scipy_openblas.dll",
+        )
+        for candidate in candidates:
+            with (
+                self.subTest(candidate=candidate),
+                tempfile.TemporaryDirectory(
+                    prefix="xtbloom-install-license-test-"
+                ) as directory,
+            ):
+                root = Path(directory)
+                for relative in CHECKER.INSTALL_FILES:
+                    destination = root / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(b"test\n")
+                bundled = root / candidate
+                bundled.parent.mkdir(parents=True, exist_ok=True)
+                bundled.write_bytes(b"native provider")
+                with self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError, "wheel-only OpenBLAS"
+                ):
+                    CHECKER.check_install(root)
 
 
 class WebSiteLicenseTests(unittest.TestCase):
@@ -711,6 +792,25 @@ class CudaWheelInspectionTests(unittest.TestCase):
 class WheelVersionInspectionTests(unittest.TestCase):
     """Keep native version checks aligned with every desktop wheel filename."""
 
+    def _write_version_wheel(self, path: Path, version: str = "1.2.3") -> None:
+        """Create the minimal archive needed for metadata-only version checks."""
+        major, minor, patch = version.split(".")
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(
+                "xtbloom-test.dist-info/METADATA",
+                f"Metadata-Version: 2.4\nName: xtbloom\nVersion: {version}\n",
+            )
+            archive.writestr(
+                "xtbloom/include/xtbloom/version.h",
+                (
+                    f'#define XTBLOOM_VERSION_STRING "{version}"\n'
+                    f"#define XTBLOOM_VERSION_MAJOR {major}\n"
+                    f"#define XTBLOOM_VERSION_MINOR {minor}\n"
+                    f"#define XTBLOOM_VERSION_PATCH {patch}\n"
+                ),
+            )
+            archive.writestr("xtbloom/lib/libxtbloom.so", b"target-native-bytes")
+
     def test_native_library_names_cover_linux_macos_and_windows(self) -> None:
         """Recognize the platform-specific library names installed by CMake."""
         for name in (
@@ -731,6 +831,7 @@ class WheelVersionInspectionTests(unittest.TestCase):
         for name in (
             "xtbloom.lib",
             "libxtbloom.a",
+            "libxtbloom.so.backup",
             "libxtbloom.dylib.backup",
             "other_xtbloom.dll",
         ):
@@ -739,6 +840,35 @@ class WheelVersionInspectionTests(unittest.TestCase):
                     VERSION_INSPECTOR._is_native_library(
                         VERSION_INSPECTOR.PurePosixPath("xtbloom/lib") / name
                     )
+                )
+
+    def test_metadata_only_version_check_accepts_release(self) -> None:
+        """Validate cross-compiled wheels without loading their target DSO."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            wheel = root / "xtbloom-test.whl"
+            self._write_version_wheel(wheel)
+            VERSION_INSPECTOR.inspect_wheel(
+                wheel,
+                root / "extracted",
+                metadata_only=True,
+                expected_version="1.2.3",
+            )
+
+    def test_metadata_only_version_check_rejects_wrong_release(self) -> None:
+        """Prevent a release event from publishing a differently versioned wheel."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            wheel = root / "xtbloom-test.whl"
+            self._write_version_wheel(wheel)
+            with self.assertRaisesRegex(
+                RuntimeError, "does not match expected release"
+            ):
+                VERSION_INSPECTOR.inspect_wheel(
+                    wheel,
+                    root / "extracted",
+                    metadata_only=True,
+                    expected_version="1.2.4",
                 )
 
 

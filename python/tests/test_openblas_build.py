@@ -51,26 +51,33 @@ def _fixture(root: Path) -> tuple[dict, FakeDistribution]:
         destination.write_bytes(payload)
     files = list(payloads)
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "dependency": {"name": "scipy-openblas32", "version": "1.2.3"},
-        "source": {
-            "license_source": "scipy_openblas32-1.2.3.dist-info/licenses/LICENSE.txt",
-            "license_sha256": _sha256(license_bytes),
-        },
-        "architectures": {
-            "x86_64": {
+        "targets": {
+            "linux-x86_64": {
+                "platform": "linux",
+                "architecture": "x86_64",
+                "bundle_strategy": "auditwheel-shim",
+                "expected_config_prefix": "OpenBLAS 1.2.3",
+                "provider_source": "scipy_openblas32/lib/libscipy_openblas.so",
+                "license": {
+                    "source": "scipy_openblas32-1.2.3.dist-info/licenses/LICENSE.txt",
+                    "sha256": _sha256(license_bytes),
+                },
                 "files": [
                     {
                         "source": "scipy_openblas32/lib/libscipy_openblas.so",
+                        "role": "provider",
                         "size": len(provider_bytes),
                         "sha256": _sha256(provider_bytes),
                     },
                     {
                         "source": "scipy_openblas32/lib/libgfortran-test.so.5",
+                        "role": "support",
                         "size": len(support_bytes),
                         "sha256": _sha256(support_bytes),
                     },
-                ]
+                ],
             }
         },
     }
@@ -82,8 +89,9 @@ def test_resolver_accepts_exact_payload_without_importing_package() -> None:
     with tempfile.TemporaryDirectory(prefix="xtbloom-openblas-resolver-") as directory:
         root = Path(directory)
         manifest, distribution = _fixture(root)
-        result = RESOLVER.resolve_provider(manifest, "amd64", distribution)
+        result = RESOLVER.resolve_provider(manifest, "linux", "amd64", distribution)
         assert result["architecture"] == "x86_64"
+        assert result["target"] == "linux-x86_64"
         assert result["provider_path"] == str(
             (root / "scipy_openblas32/lib/libscipy_openblas.so").resolve()
         )
@@ -98,7 +106,7 @@ def test_resolver_rejects_an_unreviewed_extra_elf() -> None:
         (root / extra).write_bytes(b"\x7fELFextra")
         distribution.files.append(extra)
         with pytest.raises(RESOLVER.ResolveError, match="unexpected"):
-            RESOLVER.resolve_provider(manifest, "x86_64", distribution)
+            RESOLVER.resolve_provider(manifest, "linux", "x86_64", distribution)
 
 
 def test_resolver_rejects_a_changed_version() -> None:
@@ -108,4 +116,20 @@ def test_resolver_rejects_a_changed_version() -> None:
         manifest, distribution = _fixture(root)
         distribution.version = "1.2.4"
         with pytest.raises(RESOLVER.ResolveError, match="version differs"):
-            RESOLVER.resolve_provider(manifest, "x86_64", distribution)
+            RESOLVER.resolve_provider(manifest, "linux", "x86_64", distribution)
+
+
+@pytest.mark.parametrize(
+    ("platform_name", "architecture", "expected"),
+    [
+        ("Linux", "AMD64", "linux-x86_64"),
+        ("Darwin", "arm64", "macos-arm64"),
+        ("Windows", "AMD64", "windows-amd64"),
+        ("win32", "aarch64", "windows-arm64"),
+    ],
+)
+def test_target_name_normalizes_native_platform_aliases(
+    platform_name: str, architecture: str, expected: str
+) -> None:
+    """Select the same manifest target spellings CMake uses on hosted runners."""
+    assert RESOLVER.target_name(platform_name, architecture) == expected

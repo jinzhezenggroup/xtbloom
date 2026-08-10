@@ -41,10 +41,12 @@ using BlasSetNumThreadsLocal = int (*)(int threads);
  * Verified LP64 linear-algebra dispatch.
  *
  * Production code obtains this handle from make_mkl_rt_lp64_backend. The
- * factory dlopens and verifies all required symbols from a private bundled
- * OpenBLAS provider in Linux wheels, the configured native LP64 runtime, or
- * common system SONAMEs. A production provider must expose local thread
- * control so xtbloom's outer batch workers can keep BLAS sequential.
+ * factory loads and verifies all required symbols from a private bundled
+ * OpenBLAS provider in native wheels, the configured native LP64 runtime, or
+ * common system SONAMEs. System providers must expose local thread control so
+ * xtbloom's outer batch workers can keep BLAS sequential. The macOS/Windows
+ * wheel provider is a renamed private image instead: initialization fixes that
+ * image globally to one thread once, without mutating an unrelated host BLAS.
  *
  * The MKL path is host-isolated. CMake builds a private shim with fixed
  * DT_NEEDED dependencies on
@@ -58,7 +60,9 @@ using BlasSetNumThreadsLocal = int (*)(int threads);
  * deterministically; MKL never falls back to the base namespace. Plain LP64
  * Linux wheels apply the same namespace isolation to a hash-verified private
  * shim loaded by absolute sibling path. auditwheel vendors and collision-
- * renames the shim's scipy-openblas32 dependency closure; the upstream Python
+ * renames the shim's scipy-openblas32 dependency closure. macOS and Windows
+ * instead load a renamed provider by absolute sibling path; that is a private
+ * payload boundary but not Linux-style link-map isolation. The upstream Python
  * distribution is a build input only and is never imported or required at
  * runtime. Native system OpenBLAS remains a separate production provider. The
  * testing factory is kept in this internal namespace so tests can install
@@ -78,7 +82,8 @@ class CpuLinearAlgebraBackend {
    * embedding process's MKL interface/threading state. */
   [[nodiscard]] bool production_mkl_isolated() const noexcept;
   /* True only for the private OpenBLAS cohort bundled in Linux wheels and
-   * loaded in its own glibc link-map namespace. */
+   * loaded in its own glibc link-map namespace. Desktop private providers do
+   * not claim this stronger isolation property. */
   [[nodiscard]] bool production_openblas_isolated() const noexcept;
 
  private:
@@ -86,6 +91,7 @@ class CpuLinearAlgebraBackend {
     kNone,
     kMklShimLp64,
     kOpenBlasIsolatedLp64,
+    kBundledOpenBlasLp64,
     kOpenBlasLp64,
     kInternalTestLp64,
   };

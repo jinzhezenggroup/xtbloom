@@ -12,9 +12,14 @@ name: Python wheels
 # - Linux aarch64 builds CUDA-enabled on the native ARM runner (no QEMU) and
 #   runs a real CPU inference through the wheel's private OpenBLAS provider.
 # - Windows x64/ARM64 and macOS Intel/Apple Silicon build native CPU-only
-#   platform wheels on their matching hosted runners.
+#   platform wheels on their matching hosted runners. Each bundles a reviewed
+#   scipy-openblas32 provider cohort and runs installed-wheel GFN2 inference,
+#   missing-provider, concurrency, and host-BLAS coexistence checks.
 # - Pyodide builds the current CPython 3.13 pyemscripten wheel on Linux; the
 #   explicit platform field is required because its host runner is also Ubuntu.
+#   It remains CI-only until the Python wheel has a production WebAssembly
+#   eigensolver path. Trusted Publishing receives the inference-tested native
+#   wheels plus the sdist.
 
 on:
   # Pull requests already build and test wheels. Limit push runs to main so a
@@ -70,7 +75,7 @@ jobs:
           python tools/licensing/check_licenses.py --source-root . "${archives[0]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: xtbloom-sdist
+          name: xtbloom-pypi-sdist
           path: source-dist/*.tar.gz
           if-no-files-found: error
 
@@ -90,7 +95,11 @@ jobs:
             variant: cuda
             tests: full
             compiler_cache: true
-            inspect_linux_wheel: true
+            bundle_openblas: true
+            inspect_openblas_wheel: true
+            inspect_cuda_wheel: true
+            verify_torch_payload: true
+            publish: true
           # linux-aarch64 (CUDA-enabled wheels, native ARM runner)
           - os: ubuntu-24.04-arm
             platform_id: manylinux_aarch64
@@ -100,7 +109,11 @@ jobs:
             variant: cuda
             tests: cpu
             compiler_cache: true
-            inspect_linux_wheel: true
+            bundle_openblas: true
+            inspect_openblas_wheel: true
+            inspect_cuda_wheel: true
+            verify_torch_payload: true
+            publish: true
           # Windows x86_64 (CPU-only, native hosted runner)
           - os: windows-latest
             platform_id: win_amd64
@@ -108,9 +121,13 @@ jobs:
             platform: auto
             archs: auto
             variant: cpu
-            tests: smoke
+            tests: desktop
             compiler_cache: false
-            inspect_linux_wheel: false
+            bundle_openblas: true
+            inspect_openblas_wheel: true
+            inspect_cuda_wheel: false
+            verify_torch_payload: false
+            publish: true
           # Windows ARM64 (CPU-only, native hosted runner; upstream support is experimental)
           - os: windows-11-arm
             platform_id: win_arm64
@@ -118,9 +135,13 @@ jobs:
             platform: auto
             archs: auto
             variant: cpu
-            tests: smoke
+            tests: desktop
             compiler_cache: false
-            inspect_linux_wheel: false
+            bundle_openblas: true
+            inspect_openblas_wheel: true
+            inspect_cuda_wheel: false
+            verify_torch_payload: false
+            publish: true
           # macOS x86_64 (CPU-only, last Intel hosted runner)
           - os: macos-15-intel
             platform_id: macosx_x86_64
@@ -128,9 +149,13 @@ jobs:
             platform: auto
             archs: auto
             variant: cpu
-            tests: smoke
+            tests: desktop
             compiler_cache: false
-            inspect_linux_wheel: false
+            bundle_openblas: true
+            inspect_openblas_wheel: true
+            inspect_cuda_wheel: false
+            verify_torch_payload: false
+            publish: true
           # macOS ARM64 (CPU-only, native Apple Silicon hosted runner)
           - os: macos-14
             platform_id: macosx_arm64
@@ -138,9 +163,13 @@ jobs:
             platform: auto
             archs: auto
             variant: cpu
-            tests: smoke
+            tests: desktop
             compiler_cache: false
-            inspect_linux_wheel: false
+            bundle_openblas: true
+            inspect_openblas_wheel: true
+            inspect_cuda_wheel: false
+            verify_torch_payload: false
+            publish: true
           # Pyodide/WebAssembly (CPython 3.13 uses the PyPI-supported pyemscripten tag)
           - os: ubuntu-24.04
             platform_id: pyodide_wasm32
@@ -150,7 +179,11 @@ jobs:
             variant: cpu
             tests: smoke
             compiler_cache: false
-            inspect_linux_wheel: false
+            bundle_openblas: false
+            inspect_openblas_wheel: false
+            inspect_cuda_wheel: false
+            verify_torch_payload: false
+            publish: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -210,13 +243,13 @@ jobs:
           # where actions/cache can save it after the job. The XTBLOOM_*_LAUNCHER
           # variables map to CMAKE_*_COMPILER_LAUNCHER defines in pyproject.toml
           # and enable caching for the C, C++, and nvcc compilations.
-          CIBW_ENVIRONMENT: ${{ matrix.compiler_cache && format('XTBLOOM_ENABLE_CUDA={0} XTBLOOM_BUNDLE_WHEEL_OPENBLAS=ON XTBLOOM_C_COMPILER_LAUNCHER=ccache XTBLOOM_CXX_COMPILER_LAUNCHER=ccache XTBLOOM_CUDA_COMPILER_LAUNCHER=ccache CCACHE_DIR=/host{1}/ccache CCACHE_MAXSIZE=1G', matrix.variant == 'cuda' && 'ON' || 'OFF', runner.temp) || 'XTBLOOM_ENABLE_CUDA=OFF XTBLOOM_BUNDLE_WHEEL_OPENBLAS=OFF' }}
+          CIBW_ENVIRONMENT: ${{ matrix.compiler_cache && format('XTBLOOM_ENABLE_CUDA={0} XTBLOOM_BUNDLE_WHEEL_OPENBLAS=ON XTBLOOM_C_COMPILER_LAUNCHER=ccache XTBLOOM_CXX_COMPILER_LAUNCHER=ccache XTBLOOM_CUDA_COMPILER_LAUNCHER=ccache CCACHE_DIR=/host{1}/ccache CCACHE_MAXSIZE=1G', matrix.variant == 'cuda' && 'ON' || 'OFF', runner.temp) || format('XTBLOOM_ENABLE_CUDA=OFF XTBLOOM_BUNDLE_WHEEL_OPENBLAS={0}', matrix.bundle_openblas && 'ON' || 'OFF') }}
           # Hosted wheel builders have no NVIDIA kernel driver.  Expose the
           # toolkit stub only inside the isolated wheel test so the dynamic
           # driver resolver can exercise its no-device fallback; production
           # code never searches or preloads stubs. A real-GPU forced-CUDA test
           # is run separately on the project GPU before merge/release.
-          CIBW_TEST_COMMAND: ${{ matrix.tests == 'smoke' && 'python -c "import xtbloom; print(xtbloom.library.get_version())"' || format('bash {{package}}/python/ci/run-wheel-test.sh {0} {{package}}', matrix.tests) }}
+          CIBW_TEST_COMMAND: ${{ matrix.tests == 'smoke' && 'python -c "import xtbloom; print(xtbloom.library.get_version())"' || matrix.tests == 'desktop' && 'python {package}/python/ci/run-desktop-wheel-test.py' || format('bash {{package}}/python/ci/run-wheel-test.sh {0} {{package}}', matrix.tests) }}
           CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test,cuda12' || '' }}
         with:
           package-dir: .
@@ -227,23 +260,37 @@ jobs:
       - name: Enforce PyPI wheel size limit
         run: python python/ci/check-wheel-size.py wheelhouse
       - name: Verify Torch wheel payload
+        if: matrix.verify_torch_payload
         run: python python/ci/check-torch-distribution.py --wheel wheelhouse/*.whl
       - name: Verify wheel product-version parity
-        if: matrix.platform != 'pyodide'
         shell: bash
-        run: python python/ci/check-wheel-version.py wheelhouse/*.whl
+        # A Pyodide side module cannot be loaded by the native host Python.
+        # Its installed wheel test loads the module inside Pyodide; this
+        # archive-level pass still compares METADATA with the public header.
+        run: >-
+          python python/ci/check-wheel-version.py
+          ${{ matrix.platform == 'pyodide' && '--metadata-only' || '' }}
+          wheelhouse/*.whl
+      - name: Require wheel version to match the release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: >-
+          python python/ci/check-wheel-version.py --metadata-only
+          --expected-version "${GITHUB_REF_NAME#v}" wheelhouse/*.whl
       - name: Verify wheel licenses
         shell: bash
         run: python tools/licensing/check_licenses.py --source-root . wheelhouse/*.whl
       - name: Inspect private OpenBLAS provider
-        if: matrix.inspect_linux_wheel
+        if: matrix.inspect_openblas_wheel
+        shell: bash
         run: >-
           python python/ci/inspect-openblas-wheel.py
           --manifest cmake/3rdparty/scipy_openblas32_manifest.json
           --readelf readelf
           wheelhouse/*.whl
       - name: Inspect CUDA host-library dependencies
-        if: matrix.inspect_linux_wheel
+        if: matrix.inspect_cuda_wheel
+        shell: bash
         run: >-
           python python/ci/inspect-cuda-wheel.py
           --checker tests/abi/check_cuda_dependencies.py
@@ -251,7 +298,10 @@ jobs:
           wheelhouse/*.whl
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: xtbloom-wheels-${{ matrix.platform_id }}
+          # Only artifacts carrying the pypi marker are visible to the trusted
+          # publishing job. The inference-incomplete Pyodide wheel remains
+          # downloadable for diagnosis without becoming release-eligible.
+          name: ${{ matrix.publish && format('xtbloom-pypi-wheel-{0}', matrix.platform_id) || format('xtbloom-ci-wheel-{0}', matrix.platform_id) }}
           path: ./wheelhouse/*.whl
           if-no-files-found: error
 
@@ -269,7 +319,10 @@ jobs:
   upload_pypi:
     name: Publish release artifacts to PyPI
     needs: [build_sdist, build_wheels, pass]
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: >-
+      github.event_name == 'release' &&
+      github.event.action == 'published' &&
+      github.event.release.prerelease == false
     runs-on: ubuntu-24.04
     environment: pypi
     permissions:
@@ -280,8 +333,12 @@ jobs:
       - name: Download release distributions
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: xtbloom-*
+          # The CI-only Pyodide wheel intentionally uses a different artifact
+          # prefix and cannot enter this directory.
+          pattern: xtbloom-pypi-*
           path: dist
           merge-multiple: true
       - name: Publish distributions with PyPI Trusted Publishing
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1, v1.14.2
+        with:
+          packages-dir: dist
