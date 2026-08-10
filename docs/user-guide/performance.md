@@ -50,6 +50,34 @@ correctness thresholds. Do not mix its numbers or gates with that figure.
 - [FRESH/WARM methodology](../../benchmarks/fresh-warm.md)
 - [Archived evidence](../../benchmarks/evidence/issue-168/2026-08-06-epyc7k62/README.md)
 
+## Experimental adaptive CPU precision
+
+CPU contexts can opt into an experimental mixed-precision SCC policy without
+changing the public C ABI:
+
+```console
+XTBLOOM_CPU_PRECISION=adaptive your-program
+```
+
+The variable is read once when a CPU context is created. It accepts exactly
+`fp64` or `adaptive`; an unset variable means `fp64`, and an invalid value
+rejects creation of a CPU context with a diagnostic. Changing the environment
+later does not alter an existing context. CUDA contexts ignore this CPU-only
+variable.
+
+Eligible FRESH CPU systems begin with a bounded FP32 eigensolver/density
+prefix, then switch one-way to FP64 using SCC residual, convergence-trend, and
+frontier-gap guards. The switch clears only that system's Broyden history and
+requires multiple FP64 cleanup iterations before convergence can be
+published. A caller iteration limit too small to hold an FP32 prefix plus the
+mandatory cleanup keeps that system entirely in FP64. Overlap conditioning,
+occupations, energies, forces, caller buffers, and all published values remain
+binary64. WARM calculations always use FP64 throughout.
+
+This policy is opt-in while its workload-wide latency evidence is being
+qualified. Applications should retain their own correctness and timing gates;
+unset the variable or select `fp64` for the established path.
+
 ## Reading performance claims
 
 A result is eligible for publication only when the requested backend actually

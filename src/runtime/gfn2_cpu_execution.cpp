@@ -47,6 +47,7 @@
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/spin.hpp"
 #include "model/gfn2/wavefunction.hpp"
+#include "runtime/backend.hpp"
 
 namespace xtbloom::detail {
 namespace {
@@ -57,6 +58,12 @@ constexpr std::size_t kHostAlignment = 64u;
 constexpr std::int64_t kMixerHistory = 8;
 constexpr double kMixerDamping = 0.4;
 constexpr std::size_t kMaximumAutomaticCpuThreads = 64u;
+constexpr std::uint64_t kMaximumAdaptiveFloat32Iterations = 4u;
+constexpr std::uint64_t kMinimumAdaptiveFloat64Iterations = 4u;
+constexpr std::uint64_t kMinimumAdaptiveIterationBudget =
+    kMaximumAdaptiveFloat32Iterations + kMinimumAdaptiveFloat64Iterations;
+constexpr double kAdaptiveResidualFloor = 1.0e-5;
+constexpr double kAdaptiveFrontierGapThreshold = 1.0e-4;
 
 /* ``std::aligned_alloc`` is not provided by MSVC; wrap the platform primitive
  * so AlignedBuffer can allocate and free without per-platform guards. */
@@ -605,9 +612,11 @@ struct SystemOutput {
 };
 
 struct SystemExecution {
-  explicit SystemExecution(SystemKey value) : key(std::move(value)) {}
+  SystemExecution(SystemKey value, CpuPrecisionPolicy selected_precision)
+      : key(std::move(value)), precision_policy(selected_precision) {}
 
   SystemKey key;
+  const CpuPrecisionPolicy precision_policy;
   std::vector<std::int64_t> atom_offsets{0, 0};
   std::vector<std::int64_t> point_offsets{0, 0};
   std::vector<double> molecular_charges;
@@ -693,6 +702,15 @@ struct SystemExecution {
   SccDriverWorkspace driver_workspace;
   SccDriverGeometryView geometry;
 
+  /* An adaptive FP32 iteration is speculative until every SCC stage commits.
+   * These context-owned buffers allow a post-eigensolver numerical failure to
+   * restore the complete lane transaction and retry from the same state in
+   * FP64 without a steady-state allocation. Default FP64 systems allocate no
+   * retry storage. */
+  AlignedBuffer adaptive_retry_wavefunction_storage;
+  AlignedBuffer adaptive_retry_mixer_state_storage;
+  AlignedBuffer adaptive_retry_driver_state_storage;
+
   std::vector<double> component_shell_potential;
   std::vector<double> scalar_shell_potential;
   std::vector<double> atomic_potential;
@@ -769,7 +787,8 @@ struct SystemExecution {
  private:
   xtbloom_status_t refresh_geometry(const CpuLinearAlgebraBackend& backend, bool warm_start,
                                     std::string& error);
-  xtbloom_status_t run_scc(const CpuLinearAlgebraBackend& backend, std::string& error);
+  xtbloom_status_t run_scc(const CpuLinearAlgebraBackend& backend, bool warm_start,
+                           std::string& error);
   xtbloom_status_t restore_warm_checkpoint(std::string& error);
   xtbloom_status_t refresh_stationary_potentials(std::string& error);
 };
@@ -915,6 +934,17 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   status = allocate(driver_workspace_storage, driver.workspace_size_bytes(), "SCC driver workspace",
                     error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (precision_policy == CpuPrecisionPolicy::kAdaptive) {
+    status = allocate(adaptive_retry_wavefunction_storage, wavefunction_layout.workspace_size_bytes,
+                      "adaptive retry wavefunction checkpoint", error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = allocate(adaptive_retry_mixer_state_storage, mixer.state_size_bytes(),
+                      "adaptive retry mixer checkpoint", error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = allocate(adaptive_retry_driver_state_storage, driver.state_size_bytes(),
+                      "adaptive retry driver checkpoint", error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  }
 
   status = bind_wavefunction_view(wavefunction_layout, wavefunction_storage.data(),
                                   wavefunction_storage.size(), wavefunction, error);
@@ -1127,7 +1157,9 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       integral_workspace.size() + d4_workspace_storage.size() + wavefunction_storage.size() +
       warm_checkpoint_wavefunction_storage.size() + overlap_cache_storage.size() +
       eigensolver_workspace_storage.size() + mixer_state_storage.size() +
-      driver_state_storage.size() + driver_workspace_storage.size();
+      driver_state_storage.size() + driver_workspace_storage.size() +
+      adaptive_retry_wavefunction_storage.size() + adaptive_retry_mixer_state_storage.size() +
+      adaptive_retry_driver_state_storage.size();
   return small_vectors + direct_plan_vectors + wavefunction_plan_vectors + opaque_plan_storage +
          planar_vectors + aligned_buffers;
 }
@@ -1241,16 +1273,127 @@ xtbloom_status_t SystemExecution::restore_warm_checkpoint(std::string& error) {
   return XTBLOOM_STATUS_SUCCESS;
 }
 
-xtbloom_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend,
+bool small_frontier_gap(const WavefunctionLayout& layout,
+                        const WavefunctionView& wavefunction) noexcept {
+  const std::size_t orbitals = static_cast<std::size_t>(layout.total_orbitals);
+  if (layout.batch_size != 1 || orbitals < 2u) {
+    return false;
+  }
+  const std::int32_t spin_channels = layout.spin_channels[0];
+  const double electron_counts[2]{layout.alpha_electron_counts[0], layout.beta_electron_counts[0]};
+  for (std::int32_t spin = 0; spin < 2; ++spin) {
+    const double electrons = electron_counts[spin];
+    if (!(electrons > 0.0) || !(electrons < static_cast<double>(orbitals))) {
+      continue;
+    }
+    const std::size_t upper = std::min(
+        orbitals - 1u, std::max<std::size_t>(1u, static_cast<std::size_t>(std::ceil(electrons))));
+    const std::size_t eigenvalue_spin = spin_channels == 1 ? 0u : static_cast<std::size_t>(spin);
+    const double* eigenvalues = wavefunction.eigenvalues + eigenvalue_spin * orbitals;
+    const double gap = eigenvalues[upper] - eigenvalues[upper - 1u];
+    if (!std::isfinite(gap) || gap <= kAdaptiveFrontierGapThreshold) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool retryable_adaptive_iteration_failure(xtbloom_status_t status) noexcept {
+  return status == XTBLOOM_STATUS_EIGENSOLVER_FAILED || status == XTBLOOM_STATUS_INTERNAL_ERROR;
+}
+
+xtbloom_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend, bool warm_start,
                                           std::string& error) {
+  /* Reserve enough budget for the longest allowed FP32 prefix and the full
+   * mandatory FP64 cleanup. A smaller user limit stays entirely FP64 instead
+   * of consuming a variable prefix that can leave too few cleanup iterations
+   * and turn an otherwise converged lane into forced nonconvergence. */
+  bool use_float32 =
+      precision_policy == CpuPrecisionPolicy::kAdaptive && !warm_start &&
+      static_cast<std::uint64_t>(key.maximum_iterations) >= kMinimumAdaptiveIterationBudget;
+  std::uint64_t float32_iterations = 0u;
+  std::uint64_t float64_iterations = use_float32 ? 0u : kMinimumAdaptiveFloat64Iterations;
+  double previous_residual = std::numeric_limits<double>::infinity();
+  std::uint32_t stalled_reductions = 0u;
+  const double switch_residual = std::max(kAdaptiveResidualFloor, 10.0 * key.charge_tolerance);
+
   while (driver_state.converged[0] == 0u &&
          driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS) {
+    if (use_float32) {
+      std::memcpy(adaptive_retry_wavefunction_storage.data(), wavefunction_storage.data(),
+                  wavefunction_storage.size());
+      std::memcpy(adaptive_retry_mixer_state_storage.data(), mixer_state_storage.data(),
+                  mixer_state_storage.size());
+      std::memcpy(adaptive_retry_driver_state_storage.data(), driver_state_storage.data(),
+                  driver_state_storage.size());
+    }
+    bool used_float64_fallback = false;
+    SccCpuIterationOptions iteration_options;
+    iteration_options.eigensolver_precision =
+        use_float32 ? CpuEigensolverPrecision::kFloat32 : CpuEigensolverPrecision::kFloat64;
+    iteration_options.allow_convergence =
+        !use_float32 && float64_iterations + 1u >= kMinimumAdaptiveFloat64Iterations;
+    iteration_options.used_float64_fallback = &used_float64_fallback;
     const xtbloom_status_t status = iterate_scc_driver_batch_cpu(
         driver, geometry, backend, overlap_cache, wavefunction, mixer_state, driver_state,
         driver_workspace, error,
-        scc_parallel_enabled(parallel_executor) ? &parallel_executor : nullptr);
+        scc_parallel_enabled(parallel_executor) ? &parallel_executor : nullptr, &iteration_options);
     if (status != XTBLOOM_STATUS_SUCCESS) {
+      if (use_float32 && retryable_adaptive_iteration_failure(status)) {
+        /* Later FP32-derived stages can fail even when the eigensolver itself
+         * returned finite values. Roll back the whole unpublished lane, clear
+         * its FP32-contaminated Broyden history, and retry from the same state
+         * in FP64. */
+        std::memcpy(wavefunction_storage.data(), adaptive_retry_wavefunction_storage.data(),
+                    wavefunction_storage.size());
+        std::memcpy(mixer_state_storage.data(), adaptive_retry_mixer_state_storage.data(),
+                    mixer_state_storage.size());
+        std::memcpy(driver_state_storage.data(), adaptive_retry_driver_state_storage.data(),
+                    driver_state_storage.size());
+        const xtbloom_status_t restart_status =
+            restart_scc_mixer_system_cpu(mixer, 0, wavefunction, mixer_state, error);
+        if (restart_status != XTBLOOM_STATUS_SUCCESS) {
+          return restart_status;
+        }
+        use_float32 = false;
+        float64_iterations = 0u;
+        error.clear();
+        continue;
+      }
       return status;
+    }
+    if (!use_float32) {
+      ++float64_iterations;
+      continue;
+    }
+
+    ++float32_iterations;
+    const double residual = mixer_state.residual_rms[0];
+    const bool residual_rose =
+        std::isfinite(previous_residual) && residual > 1.1 * previous_residual;
+    if (std::isfinite(previous_residual) && residual >= 0.9 * previous_residual) {
+      ++stalled_reductions;
+    } else {
+      stalled_reductions = 0u;
+    }
+    const bool switch_to_float64 = used_float64_fallback || !std::isfinite(residual) ||
+                                   residual <= switch_residual || residual_rose ||
+                                   stalled_reductions >= 2u ||
+                                   float32_iterations >= kMaximumAdaptiveFloat32Iterations ||
+                                   small_frontier_gap(wavefunction_layout, wavefunction);
+    previous_residual = residual;
+    if (switch_to_float64) {
+      /* Modified-Broyden history contains FP32 residual noise even though the
+       * public wavefunction is binary64. Restart only this system from its
+       * current raw multipoles, retain the driver's total iteration/energy
+       * trace, and never return to FP32 during this inference. */
+      const xtbloom_status_t restart_status =
+          restart_scc_mixer_system_cpu(mixer, 0, wavefunction, mixer_state, error);
+      if (restart_status != XTBLOOM_STATUS_SUCCESS) {
+        return restart_status;
+      }
+      use_float32 = false;
+      float64_iterations = 0u;
     }
   }
   return driver_state.converged[0] != 0u ? XTBLOOM_STATUS_SUCCESS : driver_state.system_statuses[0];
@@ -1367,7 +1510,7 @@ xtbloom_status_t SystemExecution::infer(
 
   xtbloom_status_t status = refresh_geometry(backend, warm_start, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = run_scc(backend, error);
+  status = run_scc(backend, warm_start, error);
   output.iterations = static_cast<std::int32_t>(std::min<std::uint64_t>(
       driver_state.iterations[0],
       static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())));
@@ -1506,12 +1649,15 @@ xtbloom_status_t SystemExecution::infer(
 struct Gfn2CpuExecutionCache::Impl {
   enum class TaskFailure : std::uint8_t { kNone, kAllocation, kException, kUnknown };
 
-  explicit Impl(std::int32_t requested_threads)
-      : cpu_threads(resolve_cpu_threads(requested_threads)), workers(cpu_threads) {}
+  Impl(std::int32_t requested_threads, CpuPrecisionPolicy selected_precision)
+      : precision_policy(selected_precision),
+        cpu_threads(resolve_cpu_threads(requested_threads)),
+        workers(cpu_threads) {}
 
   std::mutex mutex;
   CpuLinearAlgebraBackend backend;
   bool backend_initialized = false;
+  const CpuPrecisionPolicy precision_policy;
   std::vector<SystemKey> keys;
   std::vector<std::unique_ptr<SystemExecution>> systems;
   /* True only when the most recent executed batch had every member converge.
@@ -1552,10 +1698,17 @@ struct Gfn2CpuExecutionCache::Impl {
       return XTBLOOM_STATUS_SUCCESS;
     }
     const xtbloom_status_t status = make_mkl_rt_lp64_backend(backend, error);
-    if (status == XTBLOOM_STATUS_SUCCESS) {
-      backend_initialized = true;
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
     }
-    return status;
+    if (precision_policy == CpuPrecisionPolicy::kAdaptive && !backend.single_precision_ready()) {
+      error =
+          "XTBLOOM_CPU_PRECISION=adaptive requires LAPACKE_ssyevd_work, cblas_strsm, and "
+          "cblas_sgemm from the verified LP64 CPU provider";
+      return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
+    }
+    backend_initialized = true;
+    return XTBLOOM_STATUS_SUCCESS;
   }
 
   xtbloom_status_t ensure_systems(const std::vector<SystemKey>& requested, std::string& error) {
@@ -1589,7 +1742,7 @@ struct Gfn2CpuExecutionCache::Impl {
      * thread creation) gets no executor, preserving the exact serial path. */
     const bool intra_system_parallel = requested.size() == 1u && workers.concurrency() > 1u;
     for (const SystemKey& key : requested) {
-      auto system = std::make_unique<SystemExecution>(key);
+      auto system = std::make_unique<SystemExecution>(key, precision_policy);
       if (intra_system_parallel) {
         system->parallel_executor.pool_context = &workers;
         system->parallel_executor.worker_count = workers.concurrency();
@@ -1714,8 +1867,9 @@ struct Gfn2CpuExecutionCache::Impl {
   }
 };
 
-Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads)
-    : impl_(std::make_unique<Impl>(cpu_threads)) {}
+Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads,
+                                             CpuPrecisionPolicy precision_policy)
+    : impl_(std::make_unique<Impl>(cpu_threads, precision_policy)) {}
 Gfn2CpuExecutionCache::~Gfn2CpuExecutionCache() = default;
 
 xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,

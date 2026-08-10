@@ -278,7 +278,8 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     impl_->topology.capture(batch);
-    impl_->cpu_cache = std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads);
+    impl_->cpu_cache =
+        std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads, context.cpu_precision);
     bool reused = false;
     xtbloom_status_t status =
         prepare_restricted_gfn2_cpu(*impl_->cpu_cache, batch, impl_->policy, reused, error);

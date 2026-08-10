@@ -1,6 +1,8 @@
 #include "runtime/backend.hpp"
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <new>
 #include <utility>
@@ -23,6 +25,20 @@ bool resolve_cuda(std::int32_t requested_device, std::int32_t& resolved_device,
   error = "the xtbloom library was built without CUDA support";
   return false;
 #endif
+}
+
+xtbloom_status_t read_cpu_precision_policy(CpuPrecisionPolicy& policy, std::string& error) {
+  const char* value = std::getenv("XTBLOOM_CPU_PRECISION");
+  if (value == nullptr || std::strcmp(value, "fp64") == 0) {
+    policy = CpuPrecisionPolicy::kFloat64;
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  if (std::strcmp(value, "adaptive") == 0) {
+    policy = CpuPrecisionPolicy::kAdaptive;
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  error = "XTBLOOM_CPU_PRECISION must be unset or exactly 'fp64' or 'adaptive' for a CPU context";
+  return XTBLOOM_STATUS_INVALID_ARGUMENT;
 }
 
 }  // namespace
@@ -76,6 +92,14 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
+  CpuPrecisionPolicy cpu_precision = CpuPrecisionPolicy::kFloat64;
+  if (selected == XTBLOOM_BACKEND_CPU) {
+    const xtbloom_status_t status = read_cpu_precision_policy(cpu_precision, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
+  }
+
   Context* created = new (std::nothrow) Context{};
   if (created == nullptr) {
     error = "failed to allocate a xtbloom context";
@@ -85,12 +109,13 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
   created->backend = selected;
   created->device_id = resolved_device;
   created->cpu_threads = options.cpu_threads;
+  created->cpu_precision = cpu_precision;
   created->stream = options.stream;
   if (selected == XTBLOOM_BACKEND_CPU) {
     try {
       /* Eager construction removes the first-compute shared_ptr data race. */
       created->gfn2_cpu_execution_cache =
-          std::make_shared<Gfn2CpuExecutionCache>(options.cpu_threads);
+          std::make_shared<Gfn2CpuExecutionCache>(options.cpu_threads, cpu_precision);
     } catch (const std::bad_alloc&) {
       delete created;
       error = "failed to allocate CPU GFN2 execution cache";

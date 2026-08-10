@@ -239,6 +239,20 @@ struct SccDriverWorkspace {
   const SccDriverPlanData* plan_identity = nullptr;
 };
 
+enum class CpuEigensolverPrecision : std::uint8_t { kFloat64, kFloat32 };
+
+/*
+ * Per-iteration internal policy used by the environment-gated adaptive CPU
+ * prototype. The public default remains FP64 with the historical convergence
+ * gate. A non-null fallback flag is cleared on entry and set only when an FP32
+ * numerical failure was recovered by retrying the same lane in FP64.
+ */
+struct SccCpuIterationOptions {
+  CpuEigensolverPrecision eigensolver_precision = CpuEigensolverPrecision::kFloat64;
+  bool allow_convergence = true;
+  bool* used_float64_fallback = nullptr;
+};
+
 /*
  * Seal exact component compatibility and precompute all state/scratch offsets.
  * Restricted and unrestricted systems may coexist in one ragged batch; the
@@ -335,7 +349,8 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
     const CpuLinearAlgebraBackend& backend, const EigensolverOverlapCache& overlap_cache,
     const WavefunctionView& wavefunction, const SccMixerState& mixer_state,
     const SccDriverState& state, const SccDriverWorkspace& workspace, std::string& error,
-    const SccParallelExecutor* parallel = nullptr);
+    const SccParallelExecutor* parallel = nullptr,
+    const SccCpuIterationOptions* iteration_options = nullptr);
 
 }  // namespace xtbloom::detail::gfn2
 

@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -71,6 +72,51 @@ struct ContextDeleter {
 };
 
 using ContextHandle = std::unique_ptr<xtbloom_context_t, ContextDeleter>;
+
+bool set_precision_environment(const char* value) {
+#if defined(_WIN32)
+  return _putenv_s("XTBLOOM_CPU_PRECISION", value) == 0;
+#else
+  return setenv("XTBLOOM_CPU_PRECISION", value, 1) == 0;
+#endif
+}
+
+bool unset_precision_environment() {
+#if defined(_WIN32)
+  return _putenv_s("XTBLOOM_CPU_PRECISION", "") == 0;
+#else
+  return unsetenv("XTBLOOM_CPU_PRECISION") == 0;
+#endif
+}
+
+class PrecisionEnvironmentGuard {
+ public:
+  PrecisionEnvironmentGuard() {
+    if (const char* value = std::getenv("XTBLOOM_CPU_PRECISION"); value != nullptr) {
+      had_value_ = true;
+      value_ = value;
+    }
+  }
+
+  ~PrecisionEnvironmentGuard() {
+    if (had_value_) {
+      (void)set_precision_environment(value_.c_str());
+    } else {
+#if defined(_WIN32)
+      (void)_putenv_s("XTBLOOM_CPU_PRECISION", "");
+#else
+      (void)unsetenv("XTBLOOM_CPU_PRECISION");
+#endif
+    }
+  }
+
+  PrecisionEnvironmentGuard(const PrecisionEnvironmentGuard&) = delete;
+  PrecisionEnvironmentGuard& operator=(const PrecisionEnvironmentGuard&) = delete;
+
+ private:
+  bool had_value_ = false;
+  std::string value_;
+};
 
 struct PublicBatch {
   std::vector<std::int64_t> atom_offsets;
@@ -2056,6 +2102,95 @@ int test_plan_multi_threaded_reuse() {
   return 0;
 }
 
+int test_adaptive_precision_matches_fp64_and_keeps_warm_fp64() {
+  PrecisionEnvironmentGuard environment_guard;
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+
+  CHECK(unset_precision_environment());
+  ContextHandle default_context = make_cpu_context(2);
+  CHECK(default_context != nullptr);
+  PublicBatch default_precision = make_h2_he_batch();
+  default_precision.bind(flags);
+  CHECK(xtbloom_compute(default_context.get(), &default_precision.batch, &default_precision.options,
+                        &default_precision.result) == XTBLOOM_STATUS_SUCCESS);
+
+  CHECK(set_precision_environment("fp64"));
+  ContextHandle fp64_context = make_cpu_context(2);
+  CHECK(fp64_context != nullptr);
+  PublicBatch reference = make_h2_he_batch();
+  reference.bind(flags);
+  CHECK(xtbloom_compute(fp64_context.get(), &reference.batch, &reference.options,
+                        &reference.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(default_precision.energies == reference.energies);
+  CHECK(default_precision.forces == reference.forces);
+  CHECK(default_precision.atomic_charges == reference.atomic_charges);
+  CHECK(default_precision.iterations == reference.iterations);
+  CHECK(default_precision.statuses == reference.statuses);
+
+  CHECK(set_precision_environment("adaptive"));
+  ContextHandle adaptive_context = make_cpu_context(2);
+  CHECK(adaptive_context != nullptr);
+
+  /* Limits that cannot hold the complete four-iteration FP32 allowance plus
+   * four FP64 cleanup iterations conservatively retain the exact FP64 path.
+   * This protects caller-selected low iteration budgets and peer-failure
+   * semantics from an adaptive prefix that could consume the cleanup budget. */
+  for (const std::int32_t maximum_iterations : std::array<std::int32_t, 3>{5, 6, 7}) {
+    PublicBatch limited_reference = make_h2_he_batch();
+    limited_reference.bind(flags);
+    limited_reference.options.max_scc_iterations = maximum_iterations;
+    CHECK(xtbloom_compute(fp64_context.get(), &limited_reference.batch, &limited_reference.options,
+                          &limited_reference.result) == XTBLOOM_STATUS_SUCCESS);
+    const PublicOutputImage reference_image(limited_reference);
+
+    PublicBatch limited_adaptive = make_h2_he_batch();
+    limited_adaptive.bind(flags);
+    limited_adaptive.options.max_scc_iterations = maximum_iterations;
+    CHECK(xtbloom_compute(adaptive_context.get(), &limited_adaptive.batch,
+                          &limited_adaptive.options,
+                          &limited_adaptive.result) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(reference_image.matches(limited_adaptive));
+  }
+
+  PublicBatch adaptive = make_h2_he_batch();
+  adaptive.bind(flags);
+  CHECK(xtbloom_compute(adaptive_context.get(), &adaptive.batch, &adaptive.options,
+                        &adaptive.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(adaptive.statuses ==
+        std::vector<std::int32_t>(adaptive.statuses.size(), XTBLOOM_STATUS_SUCCESS));
+  for (std::size_t system = 0u; system < adaptive.energies.size(); ++system) {
+    CHECK(near(adaptive.energies[system], reference.energies[system], 2.0e-10));
+    /* The adaptive controller suppresses convergence until the FP64 cleanup
+     * budget is complete. This public-path guard prevents publishing the
+     * representative eligible workload with fewer than four cleanup rounds;
+     * focused eigensolver/isolation tests cover actual FP32 provider calls. */
+    CHECK(adaptive.iterations[system] >= 5);
+  }
+  for (std::size_t component = 0u; component < adaptive.forces.size(); ++component) {
+    CHECK(near(adaptive.forces[component], reference.forces[component], 2.0e-9));
+  }
+  for (std::size_t atom = 0u; atom < adaptive.atomic_charges.size(); ++atom) {
+    CHECK(near(adaptive.atomic_charges[atom], reference.atomic_charges[atom], 2.0e-9));
+  }
+
+  const std::vector<double> adaptive_fresh_energies = adaptive.energies;
+  const std::vector<double> adaptive_fresh_forces = adaptive.forces;
+  const std::vector<std::int32_t> adaptive_fresh_iterations = adaptive.iterations;
+  adaptive.bind(flags);
+  adaptive.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute(adaptive_context.get(), &adaptive.batch, &adaptive.options,
+                        &adaptive.result) == XTBLOOM_STATUS_SUCCESS);
+  for (std::size_t system = 0u; system < adaptive.energies.size(); ++system) {
+    CHECK(near(adaptive.energies[system], adaptive_fresh_energies[system], 2.0e-10));
+    CHECK(adaptive.iterations[system] < adaptive_fresh_iterations[system]);
+  }
+  for (std::size_t component = 0u; component < adaptive.forces.size(); ++component) {
+    CHECK(near(adaptive.forces[component], adaptive_fresh_forces[component], 2.0e-9));
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -2138,6 +2273,9 @@ int main() {
     return line;
   }
   if (const int line = test_electric_field_translation_invariance(); line != 0) {
+    return line;
+  }
+  if (const int line = test_adaptive_precision_matches_fp64_and_keeps_warm_fp64(); line != 0) {
     return line;
   }
   return 0;

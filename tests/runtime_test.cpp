@@ -1,7 +1,9 @@
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <string>
 
 #include "xtbloom/xtbloom.h"
 
@@ -20,6 +22,51 @@ struct ContextDeleter {
 
 using ContextHandle = std::unique_ptr<xtbloom_context_t, ContextDeleter>;
 
+bool set_environment_variable(const char* name, const char* value) {
+#if defined(_WIN32)
+  return _putenv_s(name, value) == 0;
+#else
+  return setenv(name, value, 1) == 0;
+#endif
+}
+
+bool unset_environment_variable(const char* name) {
+#if defined(_WIN32)
+  return _putenv_s(name, "") == 0;
+#else
+  return unsetenv(name) == 0;
+#endif
+}
+
+class EnvironmentVariableGuard {
+ public:
+  explicit EnvironmentVariableGuard(const char* name) : name_(name) {
+    if (const char* value = std::getenv(name_); value != nullptr) {
+      had_value_ = true;
+      value_ = value;
+    }
+  }
+
+  ~EnvironmentVariableGuard() {
+    if (had_value_) {
+      (void)set_environment_variable(name_, value_.c_str());
+    } else {
+      (void)unset_environment_variable(name_);
+    }
+  }
+
+  EnvironmentVariableGuard(const EnvironmentVariableGuard&) = delete;
+  EnvironmentVariableGuard& operator=(const EnvironmentVariableGuard&) = delete;
+
+  bool set(const char* value) const { return set_environment_variable(name_, value); }
+  bool unset() const { return unset_environment_variable(name_); }
+
+ private:
+  const char* name_;
+  bool had_value_ = false;
+  std::string value_;
+};
+
 ContextHandle create_context(const xtbloom_context_options_t& options, xtbloom_status_t& status) {
   xtbloom_context_t* raw_context = nullptr;
   status = xtbloom_context_create(&options, &raw_context);
@@ -29,6 +76,9 @@ ContextHandle create_context(const xtbloom_context_options_t& options, xtbloom_s
 }  // namespace
 
 int main() {
+  EnvironmentVariableGuard cpu_precision_environment("XTBLOOM_CPU_PRECISION");
+  CHECK(cpu_precision_environment.unset());
+
   CHECK(std::strcmp(xtbloom_status_string(XTBLOOM_STATUS_SCC_NOT_CONVERGED), "SCC not converged") ==
         0);
   CHECK(std::strcmp(xtbloom_status_string(XTBLOOM_STATUS_EIGENSOLVER_FAILED),
@@ -42,6 +92,39 @@ int main() {
   ContextHandle context = create_context(options, context_status);
   CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(xtbloom_context_get_device_id(context.get()) == -1);
+
+  /* The CPU precision policy is parsed once while creating a context. A
+   * later environment change must not alter that context or preempt normal
+   * descriptor validation, while a newly created CPU context sees the new
+   * invalid value. */
+  CHECK(cpu_precision_environment.set("adaptive"));
+  xtbloom_status_t adaptive_context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle adaptive_context = create_context(options, adaptive_context_status);
+  CHECK(adaptive_context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(adaptive_context != nullptr);
+
+  CHECK(cpu_precision_environment.set("not-a-precision-policy"));
+  xtbloom_batch_t immutable_batch;
+  xtbloom_compute_options_t immutable_options;
+  xtbloom_batch_result_t immutable_result;
+  CHECK(xtbloom_batch_init(&immutable_batch, sizeof(immutable_batch)) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_compute_options_init(&immutable_options, sizeof(immutable_options)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_batch_result_init(&immutable_result, sizeof(immutable_result)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(adaptive_context.get(), &immutable_batch, &immutable_options,
+                        &immutable_result) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(std::strstr(xtbloom_get_last_error(), "batch_size") != nullptr);
+
+  xtbloom_status_t invalid_precision_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle invalid_precision_context = create_context(options, invalid_precision_status);
+  CHECK(invalid_precision_status == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(invalid_precision_context == nullptr);
+  CHECK(std::strstr(xtbloom_get_last_error(), "XTBLOOM_CPU_PRECISION") != nullptr);
+  CHECK(std::strstr(xtbloom_get_last_error(), "fp64") != nullptr);
+  CHECK(std::strstr(xtbloom_get_last_error(), "adaptive") != nullptr);
+  adaptive_context.reset();
+  CHECK(cpu_precision_environment.unset());
 
   xtbloom_batch_t batch;
   xtbloom_compute_options_t compute_options;
@@ -216,8 +299,10 @@ int main() {
 #if defined(XTBLOOM_TEST_HAS_CUDA)
   CHECK(xtbloom_context_options_init(&options, sizeof(options)) == XTBLOOM_STATUS_SUCCESS);
   options.backend = XTBLOOM_BACKEND_CUDA;
+  CHECK(cpu_precision_environment.set("not-a-precision-policy"));
   xtbloom_status_t cuda_status = XTBLOOM_STATUS_INTERNAL_ERROR;
   ContextHandle cuda_context = create_context(options, cuda_status);
+  CHECK(cpu_precision_environment.unset());
   if (cuda_status == XTBLOOM_STATUS_SUCCESS) {
     CHECK(xtbloom_context_get_backend(cuda_context.get()) == XTBLOOM_BACKEND_CUDA);
     CHECK(xtbloom_context_get_device_id(cuda_context.get()) >= 0);
