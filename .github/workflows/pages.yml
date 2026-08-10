@@ -67,7 +67,7 @@ jobs:
           node-version: '24'
 
       # Pin both the reviewed setup action and the release compiler version.
-      - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021
+      - uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984
         with:
           version: '6.0.6'
           # Cache the pinned SDK itself. The previous ccache covered compiled
