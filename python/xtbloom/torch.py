@@ -206,6 +206,7 @@ def _torch_extension_path() -> Path | None:
         for pattern in (
             "libxtbloom_torch_ext*.so*",
             "libxtbloom_torch_ext*.dylib*",
+            "xtbloom_torch_ext*.dll",
             "libxtbloom_torch_ext*.dll",
         ):
             matches = sorted(runtime_dir.glob(pattern))

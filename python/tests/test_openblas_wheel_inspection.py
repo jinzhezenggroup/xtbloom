@@ -222,6 +222,7 @@ def test_macos_inspector_enforces_private_ids_and_complete_rewrites(
     archive, names, target = _macos_fixture()
     records = target["files"]
     ids = {record["install_name"]: record["install_id"] for record in records}
+    ids["libxtbloom.dylib"] = "@rpath/libxtbloom.dylib"
     dependencies = {
         records[0]["install_name"]: [
             records[0]["install_id"],
@@ -232,7 +233,11 @@ def test_macos_inspector_enforces_private_ids_and_complete_rewrites(
             records[1]["install_id"],
             "/usr/lib/libSystem.B.dylib",
         ],
-        "libxtbloom.dylib": ["/usr/lib/libSystem.B.dylib"],
+        "libxtbloom.dylib": [
+            "@rpath/libxtbloom.dylib",
+            "/usr/lib/libSystem.B.dylib",
+            "/usr/lib/libc++.1.dylib",
+        ],
     }
 
     def fake_run(command: list[str], description: str) -> str:
@@ -257,4 +262,21 @@ def test_macos_inspector_enforces_private_ids_and_complete_rewrites(
 
     dependencies[records[0]["install_name"]].append("@rpath/libgfortran.5.dylib")
     with pytest.raises(INSPECTOR.InspectionError, match="dependency closure differs"):
+        INSPECTOR._inspect_macos(archive, names, target, "otool", "nm", "codesign")
+
+    dependencies[records[0]["install_name"]].pop()
+    dependencies[records[0]["install_name"]].append("/usr/lib/libevil.dylib")
+    with pytest.raises(INSPECTOR.InspectionError, match="dependency closure differs"):
+        INSPECTOR._inspect_macos(archive, names, target, "otool", "nm", "codesign")
+
+    dependencies[records[0]["install_name"]].pop()
+    dependencies["libxtbloom.dylib"].append("@rpath/libevil.dylib")
+    with pytest.raises(
+        INSPECTOR.InspectionError, match="libxtbloom dependency closure differs"
+    ):
+        INSPECTOR._inspect_macos(archive, names, target, "otool", "nm", "codesign")
+
+    dependencies["libxtbloom.dylib"].pop()
+    ids["libxtbloom.dylib"] = "@rpath/libevil.dylib"
+    with pytest.raises(INSPECTOR.InspectionError, match="libxtbloom LC_ID differs"):
         INSPECTOR._inspect_macos(archive, names, target, "otool", "nm", "codesign")

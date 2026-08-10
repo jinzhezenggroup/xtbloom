@@ -14,8 +14,11 @@ name: Python wheels
 # - Windows x64/ARM64 and macOS Intel/Apple Silicon build native CPU-only
 #   platform wheels on their matching hosted runners. Each bundles a reviewed
 #   scipy-openblas32 provider cohort and runs installed-wheel GFN2 inference,
-#   missing-provider, concurrency, and host-BLAS coexistence checks.
-# - Pyodide builds the current CPython 3.13 pyemscripten wheel on Linux; the
+#   missing-provider, concurrency, and host-BLAS coexistence checks. Windows
+#   AMD64 and macOS arm64 additionally ship and run the compiled Torch stable-
+#   ABI op; upstream PyTorch publishes no supported Windows ARM64 or macOS
+#   x86_64 runtime wheel, so those artifacts explicitly contain no Torch op.
+# - Pyodide builds the current CPython 3.14 pyemscripten wheel on Linux; the
 #   explicit platform field is required because its host runner is also Ubuntu.
 #   It remains CI-only until the Python wheel has a production WebAssembly
 #   eigensolver path. Trusted Publishing receives the inference-tested native
@@ -98,7 +101,9 @@ jobs:
             bundle_openblas: true
             inspect_openblas_wheel: true
             inspect_cuda_wheel: true
-            verify_torch_payload: true
+            torch_extension: present
+            test_groups: torch-testing
+            desktop_test_args: ""
             publish: true
           # linux-aarch64 (CUDA-enabled wheels, native ARM runner)
           - os: ubuntu-24.04-arm
@@ -112,7 +117,9 @@ jobs:
             bundle_openblas: true
             inspect_openblas_wheel: true
             inspect_cuda_wheel: true
-            verify_torch_payload: true
+            torch_extension: present
+            test_groups: torch-testing
+            desktop_test_args: ""
             publish: true
           # Windows x86_64 (CPU-only, native hosted runner)
           - os: windows-latest
@@ -126,7 +133,9 @@ jobs:
             bundle_openblas: true
             inspect_openblas_wheel: true
             inspect_cuda_wheel: false
-            verify_torch_payload: false
+            torch_extension: present
+            test_groups: torch-testing
+            desktop_test_args: --torch
             publish: true
           # Windows ARM64 (CPU-only, native hosted runner; upstream support is experimental)
           - os: windows-11-arm
@@ -140,7 +149,9 @@ jobs:
             bundle_openblas: true
             inspect_openblas_wheel: true
             inspect_cuda_wheel: false
-            verify_torch_payload: false
+            torch_extension: absent
+            test_groups: ""
+            desktop_test_args: ""
             publish: true
           # macOS x86_64 (CPU-only, last Intel hosted runner)
           - os: macos-15-intel
@@ -157,7 +168,14 @@ jobs:
             bundle_openblas: true
             inspect_openblas_wheel: true
             inspect_cuda_wheel: false
-            verify_torch_payload: false
+            torch_extension: absent
+            test_groups: ""
+            desktop_test_args: ""
+            # No Torch edge exists in this cohort, so every missing dependency
+            # remains a hard delocate failure.
+            macos_repair_command: >-
+              delocate-wheel --require-archs {delocate_archs}
+              -w {dest_dir} -v {wheel}
             publish: true
           # macOS ARM64 (CPU-only, native Apple Silicon hosted runner)
           - os: macos-14
@@ -171,7 +189,16 @@ jobs:
             bundle_openblas: true
             inspect_openblas_wheel: true
             inspect_cuda_wheel: false
-            verify_torch_payload: false
+            torch_extension: present
+            test_groups: torch-testing
+            desktop_test_args: --torch
+            # Torch is intentionally absent from the isolated build. The
+            # linkage and OpenBLAS inspectors below prove that its one stable
+            # runtime edge is the only unresolved Mach-O dependency allowed.
+            macos_repair_command: >-
+              delocate-wheel --exclude libtorch_cpu.dylib
+              --ignore-missing-dependencies --require-archs {delocate_archs}
+              -w {dest_dir} -v {wheel}
             publish: true
           # Pyodide/WebAssembly (Pyodide 314.x uses the stable PyEmscripten
           # 2026 ABI accepted by PyPI for CPython 3.14 wheels).
@@ -186,7 +213,9 @@ jobs:
             bundle_openblas: false
             inspect_openblas_wheel: false
             inspect_cuda_wheel: false
-            verify_torch_payload: false
+            torch_extension: absent
+            test_groups: ""
+            desktop_test_args: ""
             publish: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -241,7 +270,9 @@ jobs:
           CIBW_PLATFORM: ${{ matrix.platform }}
           CIBW_ARCHS: ${{ matrix.archs }}
           CIBW_BUILD: ${{ matrix.build }}
+          CIBW_TEST_GROUPS: ${{ matrix.test_groups }}
           CIBW_CACHE_PATH: ${{ runner.temp }}/cibw-cache
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: ${{ matrix.macos_repair_command }}
           # Inside the manylinux container the host filesystem is mounted at
           # /host, so CCACHE_DIR=/host/... persists the ccache on the host
           # where actions/cache can save it after the job. The XTBLOOM_*_LAUNCHER
@@ -253,7 +284,7 @@ jobs:
           # driver resolver can exercise its no-device fallback; production
           # code never searches or preloads stubs. A real-GPU forced-CUDA test
           # is run separately on the project GPU before merge/release.
-          CIBW_TEST_COMMAND: ${{ matrix.tests == 'smoke' && 'python -c "import xtbloom; print(xtbloom.library.get_version())"' || matrix.tests == 'desktop' && 'python {package}/python/ci/run-desktop-wheel-test.py' || format('bash {{package}}/python/ci/run-wheel-test.sh {0} {{package}}', matrix.tests) }}
+          CIBW_TEST_COMMAND: ${{ matrix.tests == 'smoke' && 'python -c "import xtbloom; print(xtbloom.library.get_version())"' || matrix.tests == 'desktop' && format('python {{package}}/python/ci/run-desktop-wheel-test.py {0}', matrix.desktop_test_args) || format('bash {{package}}/python/ci/run-wheel-test.sh {0} {{package}}', matrix.tests) }}
           CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test,cuda12' || '' }}
         with:
           package-dir: .
@@ -264,8 +295,18 @@ jobs:
       - name: Enforce PyPI wheel size limit
         run: python python/ci/check-wheel-size.py wheelhouse
       - name: Verify Torch wheel payload
-        if: matrix.verify_torch_payload
-        run: python python/ci/check-torch-distribution.py --wheel wheelhouse/*.whl
+        shell: bash
+        run: >-
+          python python/ci/check-torch-distribution.py
+          --expect ${{ matrix.torch_extension }}
+          --wheel wheelhouse/*.whl
+      - name: Inspect Torch extension linkage
+        if: matrix.torch_extension == 'present'
+        shell: bash
+        run: >-
+          python tests/abi/check_torch_extension_linkage.py
+          --symbol-list cmake/3rdparty/torch-stable/aoti_symbols.txt
+          --wheel wheelhouse/*.whl
       - name: Verify wheel product-version parity
         shell: bash
         # A Pyodide side module cannot be loaded by the native host Python.

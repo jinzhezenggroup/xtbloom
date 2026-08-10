@@ -15,12 +15,14 @@ a megabyte) removes that download entirely. The extension still needs torch at
 runtime — that is inherent to being a torch extension — but the build never
 touches torch.
 
-The extension also links a *build-time-only* stub `libtorch_cpu.so` instead of
-the real one. The stub has the same `DT_NEEDED` name (`libtorch_cpu.so`), so
-the shipped `libxtbloom_torch_ext.so` behaves exactly like one built against
-real torch: when `torch.ops.load_library` loads it, the dependency resolves to
-the torch the end user already imported. The stub is generated from
-`aoti_symbols.txt` at configure time and is never installed or shipped.
+The extension also links a *build-time-only* platform stub instead of the real
+Torch CPU library. The stub uses the official runtime identity:
+`libtorch_cpu.so` on ELF, `@rpath/libtorch_cpu.dylib` on Mach-O, and
+`torch_cpu.dll` plus a generated import library on PE. The shipped plugin
+therefore behaves exactly like one linked against real torch: when
+`torch.ops.load_library` loads it, the dependency resolves to the torch the end
+user already imported. The stub is generated from `aoti_symbols.txt` at
+configure time and is never installed or shipped.
 
 ## Provenance
 
@@ -59,20 +61,23 @@ python3 tools/torch_stable_vendor.py symbols \
   --out cmake/3rdparty/torch-stable/aoti_symbols.txt
 ```
 
-The extension link uses `-z defs`, so a header/version change that introduces
-an unstubbed torch symbol fails the build loudly instead of silently producing
-a broken extension.
+The extension link uses each platform's strict undefined-symbol policy
+(`-z defs` on ELF, `-undefined error` on Mach-O, and the ordinary MSVC import
+link on PE), so a header/version change that introduces an unstubbed Torch
+symbol fails the build loudly instead of producing a broken extension.
 
 ## Platform scope
 
-The build-time stub currently supports **Linux ELF only** (x86_64 and aarch64).
-Those Linux wheels contain and test the extension. The published Windows and
-macOS CPU wheels, and the CI-only Pyodide wheel, do not claim to contain it;
-the Python integration reports the missing optional native extension instead
-of silently copying tensors. On those platforms `XTBLOOM_ENABLE_TORCH_EXT` is
-skipped with a status message rather than failing the configure. Porting would
-mean a matching SONAME stub for macOS
-(`libtorch_cpu.dylib` with the same `@rpath` install name) and, on Windows, a
-fake `torch_cpu.lib` import library (the vendored `implib-gen` tooling used for
-the CUDA backend can generate one from the same `aoti_symbols.txt`); each
-needs to be validated on its platform before being enabled.
+The build-time stub supports Linux ELF (x86_64/aarch64), macOS arm64, and
+Windows AMD64. Linux uses the real `libtorch_cpu.so` SONAME. macOS uses the
+official `@rpath/libtorch_cpu.dylib` install name without adding an LC_RPATH to
+the extension. Windows compiles the generated C stubs as a private
+`torch_cpu.dll`; CMake produces the architecture-correct `torch_cpu.lib` that
+the extension consumes. None of those build artifacts is installed.
+
+The corresponding wheels contain and test the extension against a separately
+installed Torch 2.13 runtime. PyTorch 2.10+ publishes no supported PyPI runtime
+wheel for macOS x86_64 or Windows ARM64, so those xTBloom wheels deliberately
+omit the extension rather than shipping an unvalidated plugin. Pyodide also
+omits it because no LibTorch runtime exists there. The Python integration
+reports the missing optional extension instead of silently copying tensors.

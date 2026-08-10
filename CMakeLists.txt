@@ -45,22 +45,37 @@ option(XTBLOOM_ENABLE_TORCH_EXT
 # src/bindings/torch/xtbloom_torch_ext.cpp binds torch tensors directly to
 # the public xtbloom C ABI.  It is compiled against the vendored stable-ABI
 # headers (cmake/3rdparty/torch-stable, see its README) and linked against a
-# build-time-only stub libtorch_cpu.so, so building the extension never
-# downloads or depends on a torch install.
+# build-time-only platform stub, so building the extension never downloads or
+# depends on a torch install.
 #
-# The stub has the real library's SONAME (libtorch_cpu.so) and defines exactly
-# the aoti_torch_* / torch_library_impl / torch_get_mutable_data_ptr symbols
-# the extension references.  The shipped binary therefore carries a plain
-# DT_NEEDED libtorch_cpu.so, which torch.ops.load_library resolves against the
-# torch the end user already imported; the stub is never installed.  Linking
-# with -z defs turns any header/version drift that introduces an unstubbed
-# torch symbol into a hard build error (the same discipline the CUDA implib
-# uses).
+# The stub has the real runtime identity (ELF SONAME, Mach-O install name, or
+# PE DLL/import-library name) and defines exactly the stable symbols the
+# extension references.  The shipped binary therefore binds to the Torch
+# runtime the Python layer imports first; the stub is never installed.  Each
+# platform retains strict undefined-symbol linking so header/version drift
+# that introduces an unstubbed symbol fails the build.
 set(XTBLOOM_HAS_TORCH_EXT OFF)
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" XTBLOOM_SYSTEM_PROCESSOR_LOWER)
+set(XTBLOOM_TORCH_PLATFORM_SUPPORTED OFF)
+set(XTBLOOM_TORCH_RUNTIME_NAME "")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(XTBLOOM_TORCH_PLATFORM_SUPPORTED ON)
+  set(XTBLOOM_TORCH_RUNTIME_NAME "libtorch_cpu.so")
+elseif(APPLE AND XTBLOOM_SYSTEM_PROCESSOR_LOWER MATCHES "^(arm64|aarch64)$")
+  # PyTorch 2.10+ publishes supported macOS wheels only for Apple Silicon.
+  set(XTBLOOM_TORCH_PLATFORM_SUPPORTED ON)
+  set(XTBLOOM_TORCH_RUNTIME_NAME "@rpath/libtorch_cpu.dylib")
+elseif(WIN32 AND XTBLOOM_SYSTEM_PROCESSOR_LOWER MATCHES "^(amd64|x86_64|x64)$")
+  # PyTorch 2.10+ publishes supported Windows wheels only for AMD64.
+  set(XTBLOOM_TORCH_PLATFORM_SUPPORTED ON)
+  set(XTBLOOM_TORCH_RUNTIME_NAME "torch_cpu.dll")
+endif()
+
 if(XTBLOOM_ENABLE_TORCH_EXT)
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(NOT XTBLOOM_TORCH_PLATFORM_SUPPORTED)
     message(STATUS
-      "xtbloom PyTorch extension disabled: build-time stub supports Linux ELF only")
+      "xtbloom PyTorch extension disabled: no supported Torch >=2.10 runtime "
+      "is published for ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}")
   else()
     set(XTBLOOM_TORCH_STABLE_DIR
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/torch-stable")
@@ -81,13 +96,13 @@ if(XTBLOOM_ENABLE_TORCH_EXT)
     # actual ABI at runtime.
     set(XTBLOOM_TORCH_STUB_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/torch_stub")
     file(MAKE_DIRECTORY "${XTBLOOM_TORCH_STUB_DIR}")
-    set(XTBLOOM_TORCH_STUB_C "${XTBLOOM_TORCH_STUB_DIR}/libtorch_cpu_stub.c")
+    set(XTBLOOM_TORCH_STUB_C "${XTBLOOM_TORCH_STUB_DIR}/torch_cpu_stub.c")
     file(WRITE "${XTBLOOM_TORCH_STUB_C}"
       "/* Build-time-only stub for the LibTorch Stable ABI.\n"
       " * Provides the exact aoti_torch_* / torch_* stable symbols the\n"
       " * extension references so xtbloom_torch_ext can link without a torch\n"
-      " * install. Never installed; the shipped DT_NEEDED libtorch_cpu.so\n"
-      " * binds to the real torch at runtime. Generated from\n"
+      " * install. Never installed; the shipped extension binds to the real\n"
+      " * ${XTBLOOM_TORCH_RUNTIME_NAME} at runtime. Generated from\n"
       " * cmake/3rdparty/torch-stable/aoti_symbols.txt.\n"
       " */\n"
       "#include <stdlib.h>\n"
@@ -106,11 +121,34 @@ if(XTBLOOM_ENABLE_TORCH_EXT)
     add_library(xtbloom_torch_stub SHARED "${XTBLOOM_TORCH_STUB_C}")
     set_target_properties(xtbloom_torch_stub PROPERTIES
       OUTPUT_NAME torch_cpu
-      # Same SONAME as the real torch library so the extension's DT_NEEDED is
-      # indistinguishable from one built against torch itself.
-      LINK_FLAGS "-Wl,-soname,libtorch_cpu.so"
       C_STANDARD 11
+      ARCHIVE_OUTPUT_DIRECTORY "${XTBLOOM_TORCH_STUB_DIR}"
+      LIBRARY_OUTPUT_DIRECTORY "${XTBLOOM_TORCH_STUB_DIR}"
+      RUNTIME_OUTPUT_DIRECTORY "${XTBLOOM_TORCH_STUB_DIR}"
     )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      set_target_properties(xtbloom_torch_stub PROPERTIES
+        # Same SONAME as the real Torch library.
+        LINK_FLAGS "-Wl,-soname,libtorch_cpu.so"
+      )
+    elseif(APPLE)
+      set_target_properties(xtbloom_torch_stub PROPERTIES
+        # Match the official wheel's LC_ID_DYLIB exactly.  The extension has
+        # no LC_RPATH of its own and reuses Torch's already-loaded image.
+        INSTALL_NAME_DIR "@rpath"
+        BUILD_WITH_INSTALL_NAME_DIR TRUE
+        MACOSX_RPATH TRUE
+      )
+    elseif(WIN32)
+      # Generate torch_cpu.dll plus its architecture-correct torch_cpu.lib.
+      # Only the import library participates in the extension link; neither
+      # artifact is installed or copied into a distribution.
+      set_target_properties(xtbloom_torch_stub PROPERTIES
+        PREFIX ""
+        WINDOWS_EXPORT_ALL_SYMBOLS TRUE
+      )
+    endif()
+
     add_library(xtbloom_torch_ext SHARED
       "${CMAKE_CURRENT_SOURCE_DIR}/src/bindings/torch/xtbloom_torch_ext.cpp"
     )
@@ -123,6 +161,15 @@ if(XTBLOOM_ENABLE_TORCH_EXT)
       SKIP_BUILD_RPATH TRUE
       INSTALL_RPATH ""
     )
+    if(WIN32)
+      # A Windows SHARED target needs one exported symbol; the existing anchor
+      # is the only external definition and is also used to find the DLL's own
+      # directory at runtime.
+      set_target_properties(xtbloom_torch_ext PROPERTIES
+        PREFIX ""
+        WINDOWS_EXPORT_ALL_SYMBOLS TRUE
+      )
+    endif()
     target_include_directories(xtbloom_torch_ext PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}/include"
       "${XTBLOOM_TORCH_STABLE_INCLUDE}"
@@ -133,12 +180,20 @@ if(XTBLOOM_ENABLE_TORCH_EXT)
       Threads::Threads
     )
     target_compile_features(xtbloom_torch_ext PRIVATE cxx_std_17)
-    target_link_options(xtbloom_torch_ext PRIVATE "-Wl,-z,defs")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+      target_link_options(xtbloom_torch_ext PRIVATE "-Wl,-z,defs")
+    elseif(APPLE)
+      target_link_options(xtbloom_torch_ext PRIVATE "-Wl,-undefined,error")
+    endif()
     install(TARGETS xtbloom_torch_ext
       LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+      RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
     set(XTBLOOM_HAS_TORCH_EXT ON)
-    message(STATUS "xtbloom PyTorch stable-ABI extension: enabled (vendored headers + stub)")
+    message(STATUS
+      "xtbloom PyTorch stable-ABI extension: enabled for "
+      "${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR} "
+      "(vendored headers + build-only ${XTBLOOM_TORCH_RUNTIME_NAME} stub)")
   endif()
 else()
   message(STATUS "xtbloom PyTorch extension disabled: XTBLOOM_ENABLE_TORCH_EXT=OFF")
@@ -1511,15 +1566,22 @@ if(XTBLOOM_BUILD_TESTS)
       )
     endif()
     if(XTBLOOM_HAS_TORCH_EXT)
-      find_program(XTBLOOM_READELF NAMES readelf REQUIRED)
+      set(XTBLOOM_TORCH_LINKAGE_ARGS
+        --symbol-list
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/torch-stable/aoti_symbols.txt
+        --library $<TARGET_FILE:xtbloom_torch_ext>
+      )
+      if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_program(XTBLOOM_READELF NAMES readelf REQUIRED)
+        list(APPEND XTBLOOM_TORCH_LINKAGE_ARGS
+          --readelf ${XTBLOOM_READELF} --nm ${CMAKE_NM}
+        )
+      endif()
       add_test(
         NAME xtbloom.abi_torch_extension_linkage
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/check_torch_extension_linkage.py
-                --readelf ${XTBLOOM_READELF} --nm ${CMAKE_NM}
-                --symbol-list
-                ${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/torch-stable/aoti_symbols.txt
-                --library $<TARGET_FILE:xtbloom_torch_ext>
+                ${XTBLOOM_TORCH_LINKAGE_ARGS}
       )
       set_tests_properties(xtbloom.abi_torch_extension_linkage PROPERTIES
         LABELS "abi;torch"

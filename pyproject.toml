@@ -197,11 +197,13 @@ CMAKE_CUDA_COMPILER_LAUNCHER = { env = "XTBLOOM_CUDA_COMPILER_LAUNCHER", default
 # cibuildwheel: build wheels across platforms. The .github/workflows/wheels.yml
 # matrix drives exactly which build each runner produces via CIBW_BUILD and
 # whether XTBLOOM_ENABLE_CUDA is ON (Linux x86_64, CUDA manylinux image) or OFF
-# everywhere else. Linux x86_64 runs the full Python suite; native aarch64
-# runs installed-wheel CPU and Torch inference smoke; Windows and macOS run a
-# real installed-wheel CPU inference through their private provider, while
-# Pyodide runs only its native import/version smoke until a production WASM
-# eigensolver provider exists.
+# everywhere else. Linux x86_64 runs the full Python suite; native aarch64 runs
+# installed-wheel CPU and Torch inference smoke. Windows AMD64 and macOS arm64
+# also run the compiled Torch op against the separately installed official
+# runtime; Windows ARM64 and macOS x86_64 retain CPU-only tests because PyTorch
+# 2.10+ publishes no supported runtime wheels for those architectures. Pyodide
+# runs only its native import/version smoke until a production WASM eigensolver
+# provider exists.
 [tool.cibuildwheel]
 build = ["cp311-*"]
 # Use uv for the isolated build environment (via `build --installer=uv`) and
@@ -214,11 +216,11 @@ skip = ["*-win32", "*-manylinux_i686", "*-musllinux*"]
 # xTBloom self-declares the host C API surface (src/runtime/nvidia_host_api.h)
 # and generates lazy-dlopen trampolines from the curated symbol lists with
 # pinned SONAMEs. The dlopen'd libraries are supplied at run time by the system
-# or the PyPI-distributed nvidia-* packages. Quay deletes the previous manifest
-# when these weekly images rotate, so a digest pin would expire; the repository
-# names still fix the manylinux policy, architecture, and CUDA 12.9 line.
-manylinux-x86_64-image = "quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda12_9:latest"
-manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_9:latest"
+# or the PyPI-distributed nvidia-* packages. Quay deletes an untagged previous
+# manifest when latest rotates, so retain the reviewed dated tag and also pin
+# its immutable digest instead of following latest.
+manylinux-x86_64-image = "quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda12_9:2026.06.30-1@sha256:c436610a82597bfff72a6e8aa0de0eaa5a717a00d93354a422fde02beddd15d3"
+manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_9:2026.06.30-1@sha256:c994f30615152ae4ec6287d67a15ab79d7bbda14debd5b38bc4d4d96b8d267fb"
 # Default test is an import smoke test (importing xTBloom needs no runtime); the
 # x86_64 Linux CI entry overrides it with the full conformance suite.
 test-command = "python -c 'import xtbloom; print(xtbloom.library.get_version())'"

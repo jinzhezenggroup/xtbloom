@@ -23,13 +23,14 @@
 // Why the LibTorch Stable ABI instead of the libtorch C++ API: the extension
 // uses only the ABI-stable pieces (stable C shims, torch/csrc/stable,
 // torch/headeronly), registers one boxed operator with STABLE_TORCH_LIBRARY,
-// and links nothing but libtorch_cpu.so for its aoti_torch_* symbols.  A
-// single binary therefore works across torch 2.10+ releases without the
-// per-minor-version rebuilds that a torch/extension.h C++ extension would
+// and links only the platform Torch CPU runtime for its aoti_torch_* symbols.
+// A single platform binary therefore works across torch 2.10+ releases without
+// the per-minor-version rebuilds that a torch/extension.h C++ extension would
 // require. The build uses a manifest-pinned vendored header closure and a
-// generated libtorch_cpu.so SONAME stub, so it does not need a Torch install;
-// the shipped extension resolves the real stable symbols from the Torch
-// runtime that the Python layer loads first (see pytorch
+// generated build-only stub with the real runtime identity (ELF SONAME,
+// Mach-O install name, or PE DLL/import-library name), so it does not need a
+// Torch install; the shipped extension resolves the real stable symbols from
+// the Torch runtime that the Python layer loads first (see pytorch
 // notes/libtorch_stable_abi).
 //
 // Failure semantics remain those of the public C ABI: validation before
@@ -65,6 +66,9 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -124,6 +128,33 @@ struct XTBloomApi {
 extern "C" void xtbloom_torch_ext_anchor() {}
 
 #if defined(_WIN32)
+std::string wide_to_utf8(const std::wstring& value) {
+  if (value.empty()) return {};
+  int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+                                  static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+  if (bytes <= 0) return {};
+  std::string result(static_cast<size_t>(bytes), '\0');
+  if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+                          static_cast<int>(value.size()), result.data(), bytes, nullptr,
+                          nullptr) != bytes) {
+    return {};
+  }
+  return result;
+}
+
+std::wstring utf8_to_wide(const std::string& value) {
+  if (value.empty()) return {};
+  int units = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                                  static_cast<int>(value.size()), nullptr, 0);
+  if (units <= 0) return {};
+  std::wstring result(static_cast<size_t>(units), L'\0');
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                          static_cast<int>(value.size()), result.data(), units) != units) {
+    return {};
+  }
+  return result;
+}
+
 std::string own_directory() {
   HMODULE module = nullptr;
   if (!GetModuleHandleExA(
@@ -131,18 +162,25 @@ std::string own_directory() {
           reinterpret_cast<const char*>(&xtbloom_torch_ext_anchor), &module)) {
     return {};
   }
-  char buffer[MAX_PATH] = {0};
-  DWORD length = GetModuleFileNameA(module, buffer, MAX_PATH);
-  if (length == 0) {
-    return {};
+  std::vector<wchar_t> buffer(512);
+  for (;;) {
+    SetLastError(ERROR_SUCCESS);
+    DWORD length = GetModuleFileNameW(module, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0) return {};
+    if (length < buffer.size()) {
+      std::wstring path(buffer.data(), length);
+      size_t separator = path.find_last_of(L"\\/");
+      return separator == std::wstring::npos ? std::string()
+                                             : wide_to_utf8(path.substr(0, separator));
+    }
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || buffer.size() >= 32768) return {};
+    buffer.resize(buffer.size() * 2);
   }
-  std::string path(buffer, length);
-  size_t separator = path.find_last_of("\\/");
-  return separator == std::string::npos ? std::string() : path.substr(0, separator);
 }
 
 void* load_shared(const std::string& path) {
-  return static_cast<void*>(LoadLibraryA(path.c_str()));
+  std::wstring wide = utf8_to_wide(path);
+  return wide.empty() ? nullptr : static_cast<void*>(LoadLibraryW(wide.c_str()));
 }
 void* resolve_symbol(void* handle, const char* symbol) {
   return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle), symbol));
@@ -196,11 +234,20 @@ const XTBloomApi& xtbloom_api() {
   // table after the once-flag needs no further synchronization.
   static const XTBloomApi* table = []() -> const XTBloomApi* {
     void* handle = nullptr;
+#if defined(_WIN32)
+    const wchar_t* override_path = _wgetenv(L"XTBLOOM_LIBRARY");
+    const bool has_override = override_path != nullptr && override_path[0] != L'\0';
+    if (has_override) {
+      handle = static_cast<void*>(LoadLibraryW(override_path));
+    }
+#else
     const char* override_path = std::getenv("XTBLOOM_LIBRARY");
     const bool has_override = override_path != nullptr && override_path[0] != '\0';
     if (has_override) {
       handle = load_shared(override_path);
-    } else {
+    }
+#endif
+    if (!has_override) {
       std::string directory = own_directory();
       for (const char* name :
            {"libxtbloom.so", "libxtbloom.so.0", "libxtbloom.dylib", "xtbloom.dll"}) {

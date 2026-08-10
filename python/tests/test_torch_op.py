@@ -109,8 +109,6 @@ def test_compiled_schema_marks_outputs_mutable() -> None:
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
-    if sys.platform != "linux":
-        pytest.skip("the vendored stable-ABI extension is currently Linux-only")
     import torch
     from xtbloom import torch as torch_module
 
@@ -437,17 +435,19 @@ def test_native_loader_honors_xtbloom_library_override() -> None:
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
-    if sys.platform != "linux":
-        pytest.skip("the vendored stable-ABI extension is currently Linux-only")
 
     import torch
     from xtbloom import torch as torch_module
 
     extension = torch_module._torch_extension_path()
     assert extension is not None, "compiled Torch extension is missing"
-    torch_cpu = Path(torch.__file__).resolve().parent / "lib" / "libtorch_cpu.so"
+    torch_cpu_name = {
+        "darwin": "libtorch_cpu.dylib",
+        "win32": "torch_cpu.dll",
+    }.get(sys.platform, "libtorch_cpu.so")
+    torch_cpu = Path(torch.__file__).resolve().parent / "lib" / torch_cpu_name
     if not torch_cpu.is_file():
-        pytest.skip("installed torch does not expose libtorch_cpu.so")
+        pytest.skip(f"installed torch does not expose {torch_cpu_name}")
 
     # Load the extension directly in a fresh process so both its once-only API
     # table and torch's operator registry start clean. libtorch_cpu is a valid
