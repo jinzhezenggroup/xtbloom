@@ -58,6 +58,13 @@ def test_wheel_rejects_packaged_cpp(tmp_path: Path) -> None:
         "xtbloom/lib/libtorch_cpu.so.2.13",
         "xtbloom/lib/librenamed_torch_runtime.so.2",
         "xtbloom/bin/c10_custom.dll",
+        "xtbloom/lib/libc10.so",
+        "xtbloom/lib/libc10.dylib",
+        "xtbloom/lib/libc10_cuda.a",
+        "xtbloom/bin/libc10.dll",
+        "xtbloom/lib/libtorch_cpu.o",
+        "xtbloom/bin/torch_cpu.obj",
+        "xtbloom/bin/torch_cpu.ilk",
     ],
 )
 def test_wheel_rejects_torch_runtime_or_build_stub(
@@ -142,6 +149,33 @@ def test_sdist_rejects_generated_torch_stub(tmp_path: Path, stub_path: str) -> N
         stub_info = tarfile.TarInfo(stub_path)
         stub_info.size = len(stub)
         archive.addfile(stub_info, io.BytesIO(stub))
+    with pytest.raises(RuntimeError, match="generated PyTorch runtime/stub"):
+        _CHECKER.check_sdist(sdist)
+
+
+@pytest.mark.parametrize(
+    "artifact_path",
+    [
+        "xtbloom-0.1.0/generated/libc10.so",
+        "xtbloom-0.1.0/generated/torch_cpu.obj",
+    ],
+)
+def test_sdist_rejects_native_torch_build_artifact(
+    tmp_path: Path, artifact_path: str
+) -> None:
+    """Source archives must not retain compiled Torch or c10 build outputs."""
+    sdist = tmp_path / "xtbloom.tar.gz"
+    with tarfile.open(sdist, "w:gz") as archive:
+        source = b"// source"
+        source_info = tarfile.TarInfo(
+            "xtbloom-0.1.0/src/bindings/torch/xtbloom_torch_ext.cpp"
+        )
+        source_info.size = len(source)
+        archive.addfile(source_info, io.BytesIO(source))
+        artifact = b"native"
+        artifact_info = tarfile.TarInfo(artifact_path)
+        artifact_info.size = len(artifact)
+        archive.addfile(artifact_info, io.BytesIO(artifact))
     with pytest.raises(RuntimeError, match="generated PyTorch runtime/stub"):
         _CHECKER.check_sdist(sdist)
 

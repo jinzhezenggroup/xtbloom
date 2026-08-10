@@ -265,8 +265,18 @@ def test_macos_inspector_enforces_private_ids_and_complete_rewrites(
         INSPECTOR._inspect_macos(archive, names, target, "otool", "nm", "codesign")
 
     dependencies[records[0]["install_name"]].pop()
+    dependencies[records[0]["install_name"]].append("/usr/lib/libevil.dylib")
+    with pytest.raises(INSPECTOR.InspectionError, match="dependency closure differs"):
+        INSPECTOR._inspect_macos(archive, names, target, "otool", "nm", "codesign")
+
+    dependencies[records[0]["install_name"]].pop()
     dependencies["libxtbloom.dylib"].append("@rpath/libevil.dylib")
     with pytest.raises(
         INSPECTOR.InspectionError, match="libxtbloom dependency closure differs"
     ):
+        INSPECTOR._inspect_macos(archive, names, target, "otool", "nm", "codesign")
+
+    dependencies["libxtbloom.dylib"].pop()
+    ids["libxtbloom.dylib"] = "@rpath/libevil.dylib"
+    with pytest.raises(INSPECTOR.InspectionError, match="libxtbloom LC_ID differs"):
         INSPECTOR._inspect_macos(archive, names, target, "otool", "nm", "codesign")

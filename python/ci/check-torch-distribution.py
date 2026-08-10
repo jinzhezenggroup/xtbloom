@@ -18,7 +18,7 @@ WHEEL_EXTENSION_PATHS = {
 }
 NATIVE_BUILD_SUFFIX = re.compile(
     r"(?:\.so(?:\.[^.]+)*|\.dylib(?:\.[^.]+)*|\.dll(?:\.[^.]+)*|"
-    r"\.lib|\.exp|\.pdb|\.def|\.a)$"
+    r"\.lib|\.exp|\.pdb|\.def|\.a|\.o|\.obj|\.ilk)$"
 )
 
 
@@ -77,7 +77,7 @@ def _torch_native_artifacts(
     artifacts = []
     for name in names:
         basename = PurePosixPath(name).name.lower()
-        torch_related = "torch" in basename or basename.startswith("c10")
+        torch_related = "torch" in basename or basename.startswith(("c10", "libc10"))
         if (
             name != allowed_extension
             and torch_related

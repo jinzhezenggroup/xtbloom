@@ -25,6 +25,7 @@ MACHO_LIBXTBLOOM_DEPENDENCIES = {
     "/usr/lib/libSystem.B.dylib",
     "/usr/lib/libc++.1.dylib",
 }
+MACHO_OPENBLAS_SYSTEM_DEPENDENCIES = {"/usr/lib/libSystem.B.dylib"}
 
 
 def _sha256(data: bytes) -> str:
@@ -372,18 +373,16 @@ def _inspect_macos(
                 [codesign, "--verify", "--strict", str(binary)],
                 f"codesign verification for {record['install_name']}",
             )
-            observed_private = {
-                dependency
-                for dependency in _macho_dependencies(otool, binary)
-                if not dependency.startswith(("/usr/lib/", "/System/Library/"))
-                and dependency != record["install_id"]
+            observed_dependencies = set(_macho_dependencies(otool, binary))
+            observed_dependencies.discard(record["install_id"])
+            expected_dependencies = MACHO_OPENBLAS_SYSTEM_DEPENDENCIES | {
+                rewrite["to"] for rewrite in record["load_rewrites"]
             }
-            expected_private = {rewrite["to"] for rewrite in record["load_rewrites"]}
-            if observed_private != expected_private:
+            if observed_dependencies != expected_dependencies:
                 raise InspectionError(
-                    f"{record['install_name']} private dependency closure differs: "
-                    f"expected {sorted(expected_private)}, "
-                    f"found {sorted(observed_private)}"
+                    f"{record['install_name']} dependency closure differs: "
+                    f"expected {sorted(expected_dependencies)}, "
+                    f"found {sorted(observed_dependencies)}"
                 )
         libxtbloom = extracted[libxtbloom_name]
         expected_id = "@rpath/libxtbloom.dylib"
