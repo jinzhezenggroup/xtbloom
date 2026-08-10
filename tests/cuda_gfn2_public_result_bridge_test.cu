@@ -187,6 +187,7 @@ struct Fixture {
   DeviceBuffer<std::uint8_t> internal_converged;
   DeviceBuffer<gpuxtb_status_t> internal_statuses;
   DeviceBuffer<std::uint32_t> publication_plan_error;
+  DeviceBuffer<std::uint32_t> request_topology_error;
   DeviceBuffer<std::uint64_t> publication_epoch;
   DeviceBuffer<std::uint64_t> current_epoch;
 
@@ -296,38 +297,38 @@ struct Fixture {
 
     const std::size_t atom_coordinates = static_cast<std::size_t>(3 * total_atoms);
     const std::size_t point_coordinates = static_cast<std::size_t>(3 * total_points);
-    const bool allocated = internal_energies.allocate(host_energies.size()) &&
-                           internal_forces.allocate(host_forces.size()) &&
-                           internal_charges.allocate(host_charges.size()) &&
-                           internal_point_forces.allocate(host_point_forces.size()) &&
-                           internal_iterations.allocate(host_iterations.size()) &&
-                           internal_converged.allocate(host_converged.size()) &&
-                           internal_statuses.allocate(host_statuses.size()) &&
-                           publication_plan_error.allocate(1) && publication_epoch.allocate(1) &&
-                           current_epoch.allocate(1) &&
-                           shadow_energies.allocate(host_energies.size()) &&
-                           shadow_forces.allocate(host_forces.size()) &&
-                           shadow_charges.allocate(host_charges.size()) &&
-                           shadow_point_forces.allocate(host_point_forces.size()) &&
-                           shadow_iterations.allocate(host_iterations.size()) &&
-                           shadow_converged.allocate(host_converged.size()) &&
-                           shadow_statuses.allocate(host_statuses.size()) &&
-                           output_energies.allocate(static_cast<std::size_t>(batch_size)) &&
-                           output_forces.allocate(atom_coordinates) &&
-                           output_charges.allocate(static_cast<std::size_t>(total_atoms)) &&
-                           output_point_forces.allocate(point_coordinates) &&
-                           output_iterations.allocate(static_cast<std::size_t>(batch_size)) &&
-                           output_converged.allocate(static_cast<std::size_t>(batch_size)) &&
-                           output_statuses.allocate(static_cast<std::size_t>(batch_size)) &&
-                           device_control.allocate(1) &&
-                           staging_energies.allocate(static_cast<std::size_t>(batch_size)) &&
-                           staging_forces.allocate(atom_coordinates) &&
-                           staging_charges.allocate(static_cast<std::size_t>(total_atoms)) &&
-                           staging_point_forces.allocate(point_coordinates) &&
-                           staging_iterations.allocate(static_cast<std::size_t>(batch_size)) &&
-                           staging_converged.allocate(static_cast<std::size_t>(batch_size)) &&
-                           staging_statuses.allocate(static_cast<std::size_t>(batch_size)) &&
-                           host_control.allocate(1) && pending_flags.allocate(1);
+    const bool allocated =
+        internal_energies.allocate(host_energies.size()) &&
+        internal_forces.allocate(host_forces.size()) &&
+        internal_charges.allocate(host_charges.size()) &&
+        internal_point_forces.allocate(host_point_forces.size()) &&
+        internal_iterations.allocate(host_iterations.size()) &&
+        internal_converged.allocate(host_converged.size()) &&
+        internal_statuses.allocate(host_statuses.size()) && publication_plan_error.allocate(1) &&
+        request_topology_error.allocate(1) && publication_epoch.allocate(1) &&
+        current_epoch.allocate(1) && shadow_energies.allocate(host_energies.size()) &&
+        shadow_forces.allocate(host_forces.size()) &&
+        shadow_charges.allocate(host_charges.size()) &&
+        shadow_point_forces.allocate(host_point_forces.size()) &&
+        shadow_iterations.allocate(host_iterations.size()) &&
+        shadow_converged.allocate(host_converged.size()) &&
+        shadow_statuses.allocate(host_statuses.size()) &&
+        output_energies.allocate(static_cast<std::size_t>(batch_size)) &&
+        output_forces.allocate(atom_coordinates) &&
+        output_charges.allocate(static_cast<std::size_t>(total_atoms)) &&
+        output_point_forces.allocate(point_coordinates) &&
+        output_iterations.allocate(static_cast<std::size_t>(batch_size)) &&
+        output_converged.allocate(static_cast<std::size_t>(batch_size)) &&
+        output_statuses.allocate(static_cast<std::size_t>(batch_size)) &&
+        device_control.allocate(1) &&
+        staging_energies.allocate(static_cast<std::size_t>(batch_size)) &&
+        staging_forces.allocate(atom_coordinates) &&
+        staging_charges.allocate(static_cast<std::size_t>(total_atoms)) &&
+        staging_point_forces.allocate(point_coordinates) &&
+        staging_iterations.allocate(static_cast<std::size_t>(batch_size)) &&
+        staging_converged.allocate(static_cast<std::size_t>(batch_size)) &&
+        staging_statuses.allocate(static_cast<std::size_t>(batch_size)) &&
+        host_control.allocate(1) && pending_flags.allocate(1);
     if (!allocated) return false;
 
     if (!internal_energies.upload(host_energies) || !internal_forces.upload(host_forces) ||
@@ -335,6 +336,7 @@ struct Fixture {
         !internal_point_forces.upload(host_point_forces) ||
         !internal_iterations.upload(host_iterations) ||
         !internal_converged.upload(host_converged) || !internal_statuses.upload(host_statuses) ||
+        !request_topology_error.upload(std::vector<std::uint32_t>{0u}) ||
         !set_control_values(0u, 37u, 37u) || !reset_outputs()) {
       return false;
     }
@@ -359,6 +361,7 @@ struct Fixture {
     input.system_statuses = internal_statuses.get();
     input.batch_elements = batch_size;
     input.publication_plan_error = publication_plan_error.get();
+    input.request_topology_error = request_topology_error.get();
     input.publication_epoch_snapshot = publication_epoch.get();
     input.current_geometry_epoch = current_epoch.get();
     input.plan_token = kPlanToken;
@@ -643,6 +646,11 @@ bool test_aggregate_gate(cudaStream_t stream) {
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) { return fixture.set_control_values(73u, 37u, 37u); },
       Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        return fixture.request_topology_error.upload(std::vector<std::uint32_t>{1u});
+      },
+      Gfn2PublicResultBridgeError::kRequestTopologyMismatch, stream));
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
         fixture.host_statuses[0] = GPUXTB_STATUS_INTERNAL_ERROR;

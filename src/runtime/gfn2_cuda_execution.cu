@@ -969,6 +969,97 @@ struct TopologyKey {
   }
 };
 
+/*
+ * One stream-ordered comparison of the immutable fixed-plan descriptors.
+ * HOST fields are compared by the submitting thread before launch; only
+ * CUDA_DEVICE fields are populated here. The canonical device arrays are
+ * plan-owned copies, so the kernel never waits for or dereferences host
+ * storage and naturally follows preceding Torch work on the owner stream.
+ */
+struct FixedTopologyComparisonDeviceBinding {
+  const std::int64_t* atom_offsets = nullptr;
+  const std::int32_t* atomic_numbers = nullptr;
+  const double* molecular_charges = nullptr;
+  const std::int32_t* unpaired_electrons = nullptr;
+  const std::int32_t* spin_channels = nullptr;
+  const std::int64_t* point_offsets = nullptr;
+  const std::int64_t* response_offsets = nullptr;
+
+  const std::int64_t* expected_atom_offsets = nullptr;
+  const std::int32_t* expected_atomic_numbers = nullptr;
+  const double* expected_molecular_charges = nullptr;
+  const std::int32_t* expected_unpaired_electrons = nullptr;
+  const std::int32_t* expected_spin_channels = nullptr;
+  const std::int64_t* expected_point_offsets = nullptr;
+  const std::int64_t* expected_response_offsets = nullptr;
+
+  std::int64_t atom_offset_elements = 0;
+  std::int64_t atomic_number_elements = 0;
+  std::int64_t batch_elements = 0;
+  std::int64_t point_offset_elements = 0;
+  std::int64_t response_offset_elements = 0;
+  std::uint32_t* request_error = nullptr;
+};
+
+template <typename T>
+__device__ bool fixed_topology_value_differs(const T* actual, const T* expected, std::int64_t index,
+                                             std::int64_t elements) noexcept {
+  return actual != nullptr && index < elements && actual[index] != expected[index];
+}
+
+__global__ void compare_fixed_topology_kernel(FixedTopologyComparisonDeviceBinding binding) {
+  const std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::int64_t stride = static_cast<std::int64_t>(gridDim.x) * blockDim.x;
+  std::int64_t maximum = binding.atom_offset_elements;
+  if (binding.atomic_number_elements > maximum) maximum = binding.atomic_number_elements;
+  if (binding.batch_elements > maximum) maximum = binding.batch_elements;
+  if (binding.point_offset_elements > maximum) maximum = binding.point_offset_elements;
+  if (binding.response_offset_elements > maximum) maximum = binding.response_offset_elements;
+  for (std::int64_t element = index; element < maximum; element += stride) {
+    const bool mismatch =
+        fixed_topology_value_differs(binding.atom_offsets, binding.expected_atom_offsets, element,
+                                     binding.atom_offset_elements) ||
+        fixed_topology_value_differs(binding.atomic_numbers, binding.expected_atomic_numbers,
+                                     element, binding.atomic_number_elements) ||
+        fixed_topology_value_differs(binding.molecular_charges, binding.expected_molecular_charges,
+                                     element, binding.batch_elements) ||
+        fixed_topology_value_differs(binding.unpaired_electrons,
+                                     binding.expected_unpaired_electrons, element,
+                                     binding.batch_elements) ||
+        fixed_topology_value_differs(binding.spin_channels, binding.expected_spin_channels, element,
+                                     binding.batch_elements) ||
+        fixed_topology_value_differs(binding.point_offsets, binding.expected_point_offsets, element,
+                                     binding.point_offset_elements) ||
+        fixed_topology_value_differs(binding.response_offsets, binding.expected_response_offsets,
+                                     element, binding.response_offset_elements);
+    if (mismatch) atomicExch(binding.request_error, 1u);
+  }
+}
+
+cudaError_t compare_fixed_topology_async(const FixedTopologyComparisonDeviceBinding& binding,
+                                         cudaStream_t stream) noexcept {
+  if (binding.request_error == nullptr || binding.atom_offset_elements <= 0 ||
+      binding.atomic_number_elements <= 0 || binding.batch_elements <= 0 ||
+      binding.point_offset_elements < 0 || binding.response_offset_elements < 0 ||
+      binding.expected_atom_offsets == nullptr || binding.expected_atomic_numbers == nullptr ||
+      binding.expected_molecular_charges == nullptr ||
+      binding.expected_unpaired_electrons == nullptr || binding.expected_spin_channels == nullptr ||
+      (binding.point_offset_elements != 0 && binding.expected_point_offsets == nullptr) ||
+      (binding.response_offset_elements != 0 && binding.expected_response_offsets == nullptr)) {
+    return cudaErrorInvalidValue;
+  }
+  std::int64_t maximum = binding.atom_offset_elements;
+  maximum = std::max(maximum, binding.atomic_number_elements);
+  maximum = std::max(maximum, binding.batch_elements);
+  maximum = std::max(maximum, binding.point_offset_elements);
+  maximum = std::max(maximum, binding.response_offset_elements);
+  constexpr int kThreads = 256;
+  const std::int64_t required_blocks = (maximum + kThreads - 1) / kThreads;
+  const int blocks = static_cast<int>(std::min<std::int64_t>(required_blocks, 256));
+  compare_fixed_topology_kernel<<<blocks, kThreads, 0, stream>>>(binding);
+  return cudaPeekAtLastError();
+}
+
 enum class TopologyMatch { kMatch, kMismatch, kInvalid };
 
 bool valid_host_extent(const gpuxtb_const_buffer_t& buffer, std::size_t required,
@@ -995,6 +1086,38 @@ bool double_buffer_equals(const gpuxtb_const_buffer_t& buffer,
     std::memcpy(&value, source + index * sizeof(double), sizeof(double));
     if (value != expected[index]) return false;
   }
+  return true;
+}
+
+template <typename T>
+bool host_topology_buffer_equals(const gpuxtb_const_buffer_t& buffer,
+                                 const std::vector<T>& expected) noexcept {
+  return buffer_equals(buffer, expected);
+}
+
+bool host_topology_buffer_equals(const gpuxtb_const_buffer_t& buffer,
+                                 const std::vector<double>& expected) noexcept {
+  return double_buffer_equals(buffer, expected);
+}
+
+template <typename T>
+bool validate_or_bind_fixed_topology_field(const char* name, const gpuxtb_const_buffer_t& buffer,
+                                           const std::vector<T>& expected, const T* expected_device,
+                                           const T*& device_source, std::string& error) {
+  device_source = nullptr;
+  if (buffer.memory_space == GPUXTB_MEMORY_HOST) {
+    if (!host_topology_buffer_equals(buffer, expected)) {
+      error = std::string(name) + " does not match the fixed CUDA plan topology";
+      return false;
+    }
+    return true;
+  }
+  if (buffer.memory_space != GPUXTB_MEMORY_CUDA_DEVICE ||
+      (!expected.empty() && (buffer.data == nullptr || expected_device == nullptr))) {
+    error = std::string(name) + " has no valid fixed CUDA plan comparison binding";
+    return false;
+  }
+  device_source = static_cast<const T*>(buffer.data);
   return true;
 }
 
@@ -1132,105 +1255,6 @@ TopologyMatch match_existing_topology(const gpuxtb_batch_t& batch,
   }
   error.clear();
   return TopologyMatch::kMatch;
-}
-
-bool fixed_topology_is_host_resident(const gpuxtb_batch_t& batch) noexcept {
-  const auto host = [](const gpuxtb_const_buffer_t& buffer) {
-    return buffer.memory_space == GPUXTB_MEMORY_HOST;
-  };
-  const bool spin_present =
-      batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
-      (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
-  const bool point_present =
-      batch.point_charge_offsets.data != nullptr || batch.point_charge_offsets.size_bytes != 0u;
-  const bool response_present = batch.charge_response_offsets.data != nullptr ||
-                                batch.charge_response_offsets.size_bytes != 0u;
-  return host(batch.atom_offsets) && host(batch.atomic_numbers) && host(batch.molecular_charges) &&
-         host(batch.unpaired_electrons) && (!spin_present || host(batch.spin_channels)) &&
-         (!point_present || host(batch.point_charge_offsets)) &&
-         (!response_present || host(batch.charge_response_offsets));
-}
-
-/* The plan setup already canonicalized these bytes. Once CUDA pointer
- * validation has proved that HOST means CPU-accessible storage, a direct
- * comparison avoids placing topology admission behind unrelated work already
- * queued on the owner stream. Numerical leaves are deliberately excluded. */
-bool matches_fixed_host_topology(const gpuxtb_batch_t& batch,
-                                 const gpuxtb_compute_options_t& options, const TopologyKey& key,
-                                 std::string& error) {
-  const std::int64_t expected_batch = static_cast<std::int64_t>(key.molecular_charges.size());
-  const std::int64_t expected_atoms = static_cast<std::int64_t>(key.atomic_numbers.size());
-  const std::int64_t expected_points = key.point_offsets.empty() ? 0 : key.point_offsets.back();
-  const std::int64_t expected_response =
-      key.response_offsets.empty() ? 0 : key.response_offsets.back();
-  const bool periodic_enabled =
-      batch.atomic_potential_shifts.data != nullptr || batch.total_charge_response_elements != 0 ||
-      batch.charge_response_offsets.data != nullptr || batch.charge_response_matrix.data != nullptr;
-  if (batch.batch_size != expected_batch) {
-    error = "batch_size does not match the fixed CUDA plan topology";
-    return false;
-  }
-  if (batch.total_atoms != expected_atoms) {
-    error = "total_atoms does not match the fixed CUDA plan topology";
-    return false;
-  }
-  if (batch.total_point_charges != expected_points) {
-    error = "total_point_charges does not match the fixed CUDA plan topology";
-    return false;
-  }
-  if (options.model != GPUXTB_MODEL_GFN2_XTB || options.flags != key.flags ||
-      options.max_scc_iterations != key.maximum_iterations ||
-      options.charge_tolerance != key.charge_tolerance ||
-      options.energy_tolerance != key.energy_tolerance ||
-      options.electronic_temperature != key.electronic_temperature) {
-    error = "the compute policy does not match the fixed CUDA plan topology";
-    return false;
-  }
-  if (periodic_enabled != key.periodic_enabled) {
-    error = "the periodic descriptor presence does not match the fixed CUDA plan topology";
-    return false;
-  }
-  if (!buffer_equals(batch.atom_offsets, key.atom_offsets)) {
-    error = "atom_offsets does not match the fixed CUDA plan topology";
-    return false;
-  }
-  if (!buffer_equals(batch.atomic_numbers, key.atomic_numbers)) {
-    error = "atomic_numbers does not match the fixed CUDA plan topology";
-    return false;
-  }
-  if (!double_buffer_equals(batch.molecular_charges, key.molecular_charges)) {
-    error = "molecular_charges does not match the fixed CUDA plan topology";
-    return false;
-  }
-  if (!buffer_equals(batch.unpaired_electrons, key.unpaired_electrons)) {
-    error = "unpaired_electrons does not match the fixed CUDA plan topology";
-    return false;
-  }
-  if (!spin_channel_buffer_equals(batch, key.spin_channels)) {
-    error = "spin_channels does not match the fixed CUDA plan topology";
-    return false;
-  }
-  if ((expected_points != 0 || batch.point_charge_offsets.data != nullptr) &&
-      !buffer_equals(batch.point_charge_offsets, key.point_offsets)) {
-    error = "point_charge_offsets does not match the fixed CUDA plan topology";
-    return false;
-  }
-  const bool response_enabled =
-      batch.total_charge_response_elements != 0 || batch.charge_response_offsets.data != nullptr ||
-      batch.charge_response_offsets.size_bytes != 0u ||
-      batch.charge_response_matrix.data != nullptr || batch.charge_response_matrix.size_bytes != 0u;
-  if (response_enabled) {
-    if (batch.total_charge_response_elements != expected_response) {
-      error = "total_charge_response_elements does not match the fixed CUDA plan topology";
-      return false;
-    }
-    if (!buffer_equals(batch.charge_response_offsets, key.response_offsets)) {
-      error = "charge_response_offsets does not match the fixed CUDA plan topology";
-      return false;
-    }
-  }
-  error.clear();
-  return true;
 }
 
 gpuxtb_status_t validate_offsets(const char* name, const std::vector<std::int64_t>& offsets,
@@ -2030,6 +2054,17 @@ struct PublicResultState {
   Gfn2PublicResultBridgeControl* host_control = nullptr;
   /* Pinned mirror copied under the existing public completion event. */
   std::uint32_t* warm_checkpoint_ready = nullptr;
+  /* The request flag and canonical topology arrays share the plan-owned
+   * result arena. They are reset/compared on the owner stream before
+   * inference, then consumed by the public-result preflight gate. */
+  std::uint32_t* request_topology_error = nullptr;
+  const std::int64_t* expected_atom_offsets = nullptr;
+  const std::int32_t* expected_atomic_numbers = nullptr;
+  const double* expected_molecular_charges = nullptr;
+  const std::int32_t* expected_unpaired_electrons = nullptr;
+  const std::int32_t* expected_spin_channels = nullptr;
+  const std::int64_t* expected_point_offsets = nullptr;
+  const std::int64_t* expected_response_offsets = nullptr;
   Gfn2PublicResultBridgeDeviceStaging device_staging{};
   Gfn2PublicResultBridgeDeviceDiagnostics diagnostics{};
   std::uint32_t pending_result_flags = 0u;
@@ -4776,6 +4811,14 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t converged = 0u;
       std::size_t system_statuses = 0u;
       std::size_t control = 0u;
+      std::size_t request_topology_error = 0u;
+      std::size_t expected_atom_offsets = 0u;
+      std::size_t expected_atomic_numbers = 0u;
+      std::size_t expected_molecular_charges = 0u;
+      std::size_t expected_unpaired_electrons = 0u;
+      std::size_t expected_spin_channels = 0u;
+      std::size_t expected_point_offsets = 0u;
+      std::size_t expected_response_offsets = 0u;
     } device_offset;
     ArenaLayout host_layout;
     host_offset.energies = host_layout.append<double>(energy_requested ? batch : 0);
@@ -4799,6 +4842,14 @@ struct Gfn2CudaExecutionCache::Impl {
     device_offset.converged = device_layout.append<std::uint8_t>(batch);
     device_offset.system_statuses = device_layout.append<gpuxtb_status_t>(batch);
     device_offset.control = device_layout.append<Gfn2PublicResultBridgeControl>(1);
+    device_offset.request_topology_error = device_layout.append<std::uint32_t>(1);
+    device_offset.expected_atom_offsets = device_layout.append<std::int64_t>(batch + 1);
+    device_offset.expected_atomic_numbers = device_layout.append<std::int32_t>(atoms);
+    device_offset.expected_molecular_charges = device_layout.append<double>(batch);
+    device_offset.expected_unpaired_electrons = device_layout.append<std::int32_t>(batch);
+    device_offset.expected_spin_channels = device_layout.append<std::int32_t>(batch);
+    device_offset.expected_point_offsets = device_layout.append<std::int64_t>(batch + 1);
+    device_offset.expected_response_offsets = device_layout.append<std::int64_t>(batch + 1);
     if (!host_layout.valid() || !device_layout.valid()) {
       error = "public CUDA result staging layout overflows size_t";
       return GPUXTB_STATUS_ALLOCATION_FAILED;
@@ -4842,6 +4893,22 @@ struct Gfn2CudaExecutionCache::Impl {
     state.warm_checkpoint_ready =
         arena_pointer<std::uint32_t>(host_arena, host_offset.warm_checkpoint_ready);
     void* const device_arena = candidate.public_result_device_arena.get();
+    state.request_topology_error =
+        arena_pointer<std::uint32_t>(device_arena, device_offset.request_topology_error);
+    state.expected_atom_offsets =
+        arena_pointer<std::int64_t>(device_arena, device_offset.expected_atom_offsets);
+    state.expected_atomic_numbers =
+        arena_pointer<std::int32_t>(device_arena, device_offset.expected_atomic_numbers);
+    state.expected_molecular_charges =
+        arena_pointer<double>(device_arena, device_offset.expected_molecular_charges);
+    state.expected_unpaired_electrons =
+        arena_pointer<std::int32_t>(device_arena, device_offset.expected_unpaired_electrons);
+    state.expected_spin_channels =
+        arena_pointer<std::int32_t>(device_arena, device_offset.expected_spin_channels);
+    state.expected_point_offsets =
+        arena_pointer<std::int64_t>(device_arena, device_offset.expected_point_offsets);
+    state.expected_response_offsets =
+        arena_pointer<std::int64_t>(device_arena, device_offset.expected_response_offsets);
     state.device_staging = {
         arena_pointer_if<double>(device_arena, device_offset.energies,
                                  energy_requested ? batch : 0),
@@ -4866,6 +4933,23 @@ struct Gfn2CudaExecutionCache::Impl {
         1,
         candidate.host.plan_token,
     };
+    const auto upload = [&](std::size_t offset, const auto& values) {
+      if (cuda_status != cudaSuccess || values.empty()) return;
+      cuda_status =
+          cudaMemcpyAsync(static_cast<std::byte*>(device_arena) + offset, values.data(),
+                          values.size() * sizeof(values[0]), cudaMemcpyHostToDevice, stream);
+    };
+    upload(device_offset.expected_atom_offsets, candidate.host.key.atom_offsets);
+    upload(device_offset.expected_atomic_numbers, candidate.host.key.atomic_numbers);
+    upload(device_offset.expected_molecular_charges, candidate.host.key.molecular_charges);
+    upload(device_offset.expected_unpaired_electrons, candidate.host.key.unpaired_electrons);
+    upload(device_offset.expected_spin_channels, candidate.host.key.spin_channels);
+    upload(device_offset.expected_point_offsets, candidate.host.key.point_offsets);
+    upload(device_offset.expected_response_offsets, candidate.host.key.response_offsets);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA fixed-topology comparison upload", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
     state.ready = true;
     return GPUXTB_STATUS_SUCCESS;
   }
@@ -5358,6 +5442,133 @@ struct Gfn2CudaExecutionCache::Impl {
     if (status != GPUXTB_STATUS_SUCCESS) return status;
     return validate_output("per_system_status", result->per_system_status, batch.batch_size,
                            sizeof(gpuxtb_status_t), alignof(gpuxtb_status_t));
+  }
+
+  gpuxtb_status_t reset_request_topology_error_locked(Prepared& current, std::string& error) {
+    if (!current.public_result.ready || current.public_result.request_topology_error == nullptr) {
+      error = "CUDA fixed-topology request gate is not initialized";
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    const cudaError_t cuda_status = cudaMemsetAsync(current.public_result.request_topology_error, 0,
+                                                    sizeof(std::uint32_t), stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA fixed-topology request gate reset", cuda_status);
+      return GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    current.submitted = true;
+    return GPUXTB_STATUS_SUCCESS;
+  }
+
+  gpuxtb_status_t enqueue_fixed_topology_validation_locked(Prepared& current,
+                                                           const gpuxtb_batch_t& batch,
+                                                           const gpuxtb_compute_options_t& options,
+                                                           std::string& error) {
+    const TopologyKey& key = current.host.key;
+    const std::int64_t expected_batch = static_cast<std::int64_t>(key.molecular_charges.size());
+    const std::int64_t expected_atoms = static_cast<std::int64_t>(key.atomic_numbers.size());
+    const std::int64_t expected_points = key.point_offsets.empty() ? 0 : key.point_offsets.back();
+    const std::int64_t expected_response =
+        key.response_offsets.empty() ? 0 : key.response_offsets.back();
+    const bool periodic_enabled = batch.atomic_potential_shifts.data != nullptr ||
+                                  batch.atomic_potential_shifts.size_bytes != 0u ||
+                                  batch.total_charge_response_elements != 0 ||
+                                  batch.charge_response_offsets.data != nullptr ||
+                                  batch.charge_response_offsets.size_bytes != 0u ||
+                                  batch.charge_response_matrix.data != nullptr ||
+                                  batch.charge_response_matrix.size_bytes != 0u;
+    if (batch.batch_size != expected_batch || batch.total_atoms != expected_atoms ||
+        batch.total_point_charges != expected_points || options.model != GPUXTB_MODEL_GFN2_XTB ||
+        options.flags != key.flags || options.max_scc_iterations != key.maximum_iterations ||
+        options.charge_tolerance != key.charge_tolerance ||
+        options.energy_tolerance != key.energy_tolerance ||
+        options.electronic_temperature != key.electronic_temperature ||
+        periodic_enabled != key.periodic_enabled) {
+      error = "the batch or compute policy does not match the fixed CUDA plan topology";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+
+    const bool point_offsets_active = expected_points != 0 ||
+                                      batch.point_charge_offsets.data != nullptr ||
+                                      batch.point_charge_offsets.size_bytes != 0u;
+    const bool response_active = batch.total_charge_response_elements != 0 ||
+                                 batch.charge_response_offsets.data != nullptr ||
+                                 batch.charge_response_offsets.size_bytes != 0u ||
+                                 batch.charge_response_matrix.data != nullptr ||
+                                 batch.charge_response_matrix.size_bytes != 0u;
+    if (response_active && batch.total_charge_response_elements != expected_response) {
+      error = "total_charge_response_elements does not match the fixed CUDA plan topology";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+
+    const auto& state = current.public_result;
+    FixedTopologyComparisonDeviceBinding binding{};
+    binding.expected_atom_offsets = state.expected_atom_offsets;
+    binding.expected_atomic_numbers = state.expected_atomic_numbers;
+    binding.expected_molecular_charges = state.expected_molecular_charges;
+    binding.expected_unpaired_electrons = state.expected_unpaired_electrons;
+    binding.expected_spin_channels = state.expected_spin_channels;
+    binding.expected_point_offsets = state.expected_point_offsets;
+    binding.expected_response_offsets = state.expected_response_offsets;
+    binding.atom_offset_elements = expected_batch + 1;
+    binding.atomic_number_elements = expected_atoms;
+    binding.batch_elements = expected_batch;
+    binding.point_offset_elements = point_offsets_active ? expected_batch + 1 : 0;
+    binding.response_offset_elements = response_active ? expected_batch + 1 : 0;
+    binding.request_error = state.request_topology_error;
+
+    if (!validate_or_bind_fixed_topology_field("atom_offsets", batch.atom_offsets, key.atom_offsets,
+                                               state.expected_atom_offsets, binding.atom_offsets,
+                                               error) ||
+        !validate_or_bind_fixed_topology_field("atomic_numbers", batch.atomic_numbers,
+                                               key.atomic_numbers, state.expected_atomic_numbers,
+                                               binding.atomic_numbers, error) ||
+        !validate_or_bind_fixed_topology_field(
+            "molecular_charges", batch.molecular_charges, key.molecular_charges,
+            state.expected_molecular_charges, binding.molecular_charges, error) ||
+        !validate_or_bind_fixed_topology_field(
+            "unpaired_electrons", batch.unpaired_electrons, key.unpaired_electrons,
+            state.expected_unpaired_electrons, binding.unpaired_electrons, error)) {
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+
+    const bool spin_supplied =
+        batch.struct_size >= GPUXTB_BATCH_V2_SIZE &&
+        (batch.spin_channels.data != nullptr || batch.spin_channels.size_bytes != 0u);
+    if (spin_supplied) {
+      if (!validate_or_bind_fixed_topology_field("spin_channels", batch.spin_channels,
+                                                 key.spin_channels, state.expected_spin_channels,
+                                                 binding.spin_channels, error)) {
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
+    } else if (!std::all_of(key.spin_channels.begin(), key.spin_channels.end(),
+                            [](std::int32_t channels) { return channels == 1; })) {
+      error = "spin_channels does not match the fixed CUDA plan topology";
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    if (point_offsets_active &&
+        !validate_or_bind_fixed_topology_field("point_charge_offsets", batch.point_charge_offsets,
+                                               key.point_offsets, state.expected_point_offsets,
+                                               binding.point_offsets, error)) {
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+    if (response_active &&
+        !validate_or_bind_fixed_topology_field(
+            "charge_response_offsets", batch.charge_response_offsets, key.response_offsets,
+            state.expected_response_offsets, binding.response_offsets, error)) {
+      return GPUXTB_STATUS_INVALID_ARGUMENT;
+    }
+
+    gpuxtb_status_t status = reset_request_topology_error_locked(current, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    const cudaError_t cuda_status = compare_fixed_topology_async(binding, stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA fixed-topology comparison submission", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? GPUXTB_STATUS_INVALID_ARGUMENT
+                                                  : GPUXTB_STATUS_INTERNAL_ERROR;
+    }
+    current.submitted = true;
+    error.clear();
+    return GPUXTB_STATUS_SUCCESS;
   }
 
   gpuxtb_status_t refresh_numerical_locked(Prepared& current,
@@ -6041,6 +6252,7 @@ struct Gfn2CudaExecutionCache::Impl {
         inference.publication_results.system_statuses,
         inference.publication_results.batch_elements,
         inference.publication_diagnostics.plan_error,
+        current.public_result.request_topology_error,
         inference.publication_workspace.epoch_snapshot,
         current.numerical.preprocessing.geometry_epoch.value,
         token,
@@ -6185,6 +6397,10 @@ struct Gfn2CudaExecutionCache::Impl {
     const auto aggregate =
         static_cast<Gfn2PublicResultBridgeError>(public_state.host_control->aggregate_error);
     if (aggregate != Gfn2PublicResultBridgeError::kSuccess) {
+      if (aggregate == Gfn2PublicResultBridgeError::kRequestTopologyMismatch) {
+        error = "the batch topology does not match the fixed CUDA plan topology";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
       std::ostringstream message;
       message << "CUDA public result bridge rejected inference: aggregate_error="
               << static_cast<std::uint32_t>(aggregate) << " publication_plan_error="
@@ -6215,6 +6431,10 @@ struct Gfn2CudaExecutionCache::Impl {
     const auto aggregate =
         static_cast<Gfn2PublicResultBridgeError>(public_state.host_control->aggregate_error);
     if (aggregate != Gfn2PublicResultBridgeError::kSuccess) {
+      if (aggregate == Gfn2PublicResultBridgeError::kRequestTopologyMismatch) {
+        error = "the batch topology does not match the fixed CUDA plan topology";
+        return GPUXTB_STATUS_INVALID_ARGUMENT;
+      }
       std::ostringstream message;
       message << "CUDA public result bridge rejected inference: aggregate_error="
               << static_cast<std::uint32_t>(aggregate) << " publication_plan_error="
@@ -6638,6 +6858,9 @@ gpuxtb_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache,
       return settled;
     };
 
+    status = implementation.reset_request_topology_error_locked(*working, error);
+    if (status != GPUXTB_STATUS_SUCCESS) return fail_working_transaction(status);
+
     Gfn2CudaNumericalInputView numerical{};
     numerical.positions = batch.positions;
     numerical.point_charge_positions = batch.point_charge_positions;
@@ -6804,33 +7027,12 @@ gpuxtb_status_t enqueue_restricted_gfn2_cuda_plan(
       }
       auto& working = *implementation.prepared;
 
-      if (fixed_topology_is_host_resident(batch)) {
-        if (!matches_fixed_host_topology(batch, options, working.host.key, error)) {
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
-        }
-      } else {
-        /* Device and mixed topology currently use the canonical staging
-         * admission fence. It runs only after the single-flight busy gate, and
-         * no candidate is ever published by a fixed-plan request. */
-        const Gfn2CudaTopologyStagingDiagnostic staged =
-            implementation.topology_staging.stage_and_validate(batch, error);
-        if (!staged.success()) return staged.status;
-        const bool candidate = staged.disposition == Gfn2CudaTopologyStageDisposition::kCandidate;
-        const Gfn2CudaTopologyHostSnapshot* topology =
-            candidate ? implementation.topology_staging.candidate_snapshot()
-                      : implementation.topology_staging.committed_snapshot();
-        const bool matches =
-            topology != nullptr && topology_snapshot_matches(*topology, options, working.host.key);
-        if (candidate) implementation.topology_staging.abort_candidate();
-        if (!matches) {
-          error = "the batch topology does not match the fixed CUDA plan topology";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
-        }
-      }
-
       const auto fail_submitted = [&](gpuxtb_status_t failure) {
         return implementation.settle_public_submissions_locked(working, failure, error);
       };
+      status =
+          implementation.enqueue_fixed_topology_validation_locked(working, batch, options, error);
+      if (status != GPUXTB_STATUS_SUCCESS) return fail_submitted(status);
       Gfn2CudaNumericalInputView numerical{};
       numerical.positions = batch.positions;
       numerical.point_charge_positions = batch.point_charge_positions;

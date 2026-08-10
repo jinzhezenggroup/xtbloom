@@ -13,9 +13,12 @@
 // to marshal every tensor through ctypes + DLPack from Python.  This target
 // instead keeps the same zero-copy data plane native: it takes torch tensors
 // directly, binds their data pointers to the public gpuxtb C ABI descriptors,
-// runs one synchronous gpuxtb_compute call, and writes the results into
-// caller-owned output tensors. The Python layer only keeps the thin autograd
-// Function and the torch.compile graph-break shim.
+// and writes the results into caller-owned output tensors. CPU and host-output
+// calls retain the synchronous gpuxtb_compute path. CUDA device outputs use the
+// additive request ABI and a bounded persistent context/plan/request pool, so
+// the operator returns stream-ordered tensors without exposing requests,
+// futures, or raw stream parameters to Python users. The Python layer only
+// keeps the thin autograd Function and the torch.compile graph-break shim.
 //
 // Why the LibTorch Stable ABI instead of the libtorch C++ API: the extension
 // uses only the ABI-stable pieces (stable C shims, torch/csrc/stable,
@@ -29,11 +32,10 @@
 // runtime that the Python layer loads first (see pytorch
 // notes/libtorch_stable_abi).
 //
-// The public gpuxtb C ABI is host-synchronous; this op is a direct wrapper
-// around gpuxtb_compute, so failure semantics are inherited unchanged (per
-// descriptor docs): validation before publication, per-system SCC failures as
-// data-level per_system_status results with quiet-NaN floating slices, and
-// call-level errors surfaced as exceptions with gpuxtb_get_last_error text.
+// Failure semantics remain those of the public C ABI: validation before
+// publication, per-system SCC failures as data-level per_system_status results
+// with quiet-NaN floating slices, and call-level errors surfaced immediately
+// on synchronous paths or at the first internal CUDA settlement point.
 
 #include <gpuxtb/gpuxtb.h>
 #include <torch/csrc/stable/library.h>
@@ -42,11 +44,24 @@
 #include <torch/headeronly/macros/Macros.h>
 #include <torch/headeronly/util/Exception.h>
 
+#include <algorithm>
+#include <array>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32)
@@ -55,6 +70,7 @@
 #include <dlfcn.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -82,8 +98,25 @@ struct GpuxtbApi {
   int32_t (*context_get_device_id)(const gpuxtb_context_t*);
   int32_t (*compute)(gpuxtb_context_t*, const gpuxtb_batch_t*, const gpuxtb_compute_options_t*,
                      gpuxtb_batch_result_t*);
+  int32_t (*plan_create)(gpuxtb_context_t*, const gpuxtb_batch_t*, const gpuxtb_compute_options_t*,
+                         gpuxtb_plan_t**);
+  void (*plan_destroy)(gpuxtb_plan_t*);
+  int32_t (*request_info_init)(gpuxtb_request_info_t*, size_t);
+  int32_t (*request_create)(gpuxtb_context_t*, gpuxtb_request_t**);
+  int32_t (*compute_enqueue)(gpuxtb_context_t*, const gpuxtb_batch_t*,
+                             const gpuxtb_compute_options_t*, const gpuxtb_batch_result_t*,
+                             gpuxtb_request_t*);
+  int32_t (*plan_compute_enqueue)(gpuxtb_plan_t*, const gpuxtb_batch_t*,
+                                  const gpuxtb_compute_options_t*, const gpuxtb_batch_result_t*,
+                                  gpuxtb_request_t*);
+  int32_t (*request_query)(gpuxtb_request_t*, gpuxtb_request_info_t*);
+  int32_t (*request_wait)(gpuxtb_request_t*, gpuxtb_request_info_t*);
+  const char* (*request_get_error)(const gpuxtb_request_t*);
+  void (*request_destroy)(gpuxtb_request_t*);
   const char* (*get_last_error)(void);
   const char* (*status_string)(int32_t);
+  bool request_api_available = false;
+  bool request_api_incomplete = false;
 };
 
 // dladdr anchor: must keep default visibility so dladdr() can resolve this
@@ -205,10 +238,58 @@ const GpuxtbApi& gpuxtb_api() {
         reinterpret_cast<int32_t (*)(gpuxtb_context_t*, const gpuxtb_batch_t*,
                                      const gpuxtb_compute_options_t*, gpuxtb_batch_result_t*)>(
             resolve_symbol(handle, "gpuxtb_compute"));
+    api->plan_create =
+        reinterpret_cast<int32_t (*)(gpuxtb_context_t*, const gpuxtb_batch_t*,
+                                     const gpuxtb_compute_options_t*, gpuxtb_plan_t**)>(
+            resolve_symbol(handle, "gpuxtb_plan_create"));
+    api->plan_destroy =
+        reinterpret_cast<void (*)(gpuxtb_plan_t*)>(resolve_symbol(handle, "gpuxtb_plan_destroy"));
+    api->request_info_init = reinterpret_cast<int32_t (*)(gpuxtb_request_info_t*, size_t)>(
+        resolve_symbol(handle, "gpuxtb_request_info_init"));
+    api->request_create = reinterpret_cast<int32_t (*)(gpuxtb_context_t*, gpuxtb_request_t**)>(
+        resolve_symbol(handle, "gpuxtb_request_create"));
+    api->compute_enqueue = reinterpret_cast<int32_t (*)(
+        gpuxtb_context_t*, const gpuxtb_batch_t*, const gpuxtb_compute_options_t*,
+        const gpuxtb_batch_result_t*, gpuxtb_request_t*)>(
+        resolve_symbol(handle, "gpuxtb_compute_enqueue"));
+    api->plan_compute_enqueue = reinterpret_cast<int32_t (*)(
+        gpuxtb_plan_t*, const gpuxtb_batch_t*, const gpuxtb_compute_options_t*,
+        const gpuxtb_batch_result_t*, gpuxtb_request_t*)>(
+        resolve_symbol(handle, "gpuxtb_plan_compute_enqueue"));
+    api->request_query = reinterpret_cast<int32_t (*)(gpuxtb_request_t*, gpuxtb_request_info_t*)>(
+        resolve_symbol(handle, "gpuxtb_request_query"));
+    api->request_wait = reinterpret_cast<int32_t (*)(gpuxtb_request_t*, gpuxtb_request_info_t*)>(
+        resolve_symbol(handle, "gpuxtb_request_wait"));
+    api->request_get_error = reinterpret_cast<const char* (*)(const gpuxtb_request_t*)>(
+        resolve_symbol(handle, "gpuxtb_request_get_error"));
+    api->request_destroy = reinterpret_cast<void (*)(gpuxtb_request_t*)>(
+        resolve_symbol(handle, "gpuxtb_request_destroy"));
     api->get_last_error =
         reinterpret_cast<const char* (*)(void)>(resolve_symbol(handle, "gpuxtb_get_last_error"));
     api->status_string =
         reinterpret_cast<const char* (*)(int32_t)>(resolve_symbol(handle, "gpuxtb_status_string"));
+    const std::array request_symbols = {
+        reinterpret_cast<void*>(api->request_info_init),
+        reinterpret_cast<void*>(api->request_create),
+        reinterpret_cast<void*>(api->compute_enqueue),
+        reinterpret_cast<void*>(api->plan_compute_enqueue),
+        reinterpret_cast<void*>(api->request_query),
+        reinterpret_cast<void*>(api->request_wait),
+        reinterpret_cast<void*>(api->request_get_error),
+        reinterpret_cast<void*>(api->request_destroy),
+    };
+    size_t request_symbol_count = 0;
+    for (void* symbol : request_symbols) {
+      if (symbol != nullptr) ++request_symbol_count;
+    }
+    api->request_api_available = request_symbol_count == request_symbols.size();
+    api->request_api_incomplete = request_symbol_count != 0 && !api->request_api_available;
+    if (api->request_api_available &&
+        (api->plan_create == nullptr || api->plan_destroy == nullptr)) {
+      api->request_api_available = false;
+      api->request_api_incomplete = true;
+    }
+
     if (api->context_options_init == nullptr || api->batch_init == nullptr ||
         api->compute_options_init == nullptr || api->batch_result_init == nullptr ||
         api->context_create == nullptr || api->context_destroy == nullptr ||
@@ -225,6 +306,10 @@ const GpuxtbApi& gpuxtb_api() {
                     "install gpuxtb with its native library bundled against the "
                     "torch extension");
   }
+  STD_TORCH_CHECK(!table->request_api_incomplete,
+                  "gpuxtb_torch: the loaded libgpuxtb exports only part of the "
+                  "additive request ABI; install a coherent library build or "
+                  "select a fully synchronous older library");
   return *table;
 }
 
@@ -277,6 +362,1058 @@ void check_status(int32_t status, const char* what) {
                   detail != nullptr ? detail : "");
 }
 
+std::string status_diagnostic(const GpuxtbApi& api, int32_t status, const char* what,
+                              const char* detail) {
+  const char* label = api.status_string(status);
+  std::string message = what;
+  message += " failed with ";
+  message += label != nullptr ? label : "unknown status";
+  message += " (" + std::to_string(status) + ")";
+  if (detail != nullptr && detail[0] != '\0') {
+    message += ": ";
+    message += detail;
+  }
+  return message;
+}
+
+std::uint64_t double_bits(double value) noexcept {
+  std::uint64_t bits = 0;
+  static_assert(sizeof(bits) == sizeof(value));
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+std::uint64_t hash_host_bytes(const void* data, size_t bytes) noexcept {
+  constexpr std::uint64_t kOffset = 1469598103934665603ULL;
+  constexpr std::uint64_t kPrime = 1099511628211ULL;
+  std::uint64_t hash = kOffset;
+  const auto* cursor = static_cast<const unsigned char*>(data);
+  for (size_t index = 0; index < bytes; ++index) {
+    hash ^= cursor[index];
+    hash *= kPrime;
+  }
+  return hash;
+}
+
+struct BufferIdentity {
+  std::uintptr_t device_pointer = 0;
+  std::uint64_t host_hash = 0;
+  std::int64_t tensor_version = 0;
+  size_t bytes = 0;
+  gpuxtb_memory_space_t memory_space = GPUXTB_MEMORY_HOST;
+
+  bool operator==(const BufferIdentity& other) const noexcept {
+    return device_pointer == other.device_pointer && host_hash == other.host_hash &&
+           tensor_version == other.tensor_version && bytes == other.bytes &&
+           memory_space == other.memory_space;
+  }
+};
+
+BufferIdentity topology_identity(const Tensor& tensor, std::int64_t tensor_version) {
+  BufferIdentity identity;
+  identity.tensor_version = tensor_version;
+  identity.bytes = static_cast<size_t>(tensor.numel()) * tensor.element_size();
+  identity.memory_space = memory_space_of(tensor);
+  if (tensor.is_cuda()) {
+    identity.device_pointer = reinterpret_cast<std::uintptr_t>(tensor.data_ptr());
+  } else if (identity.bytes != 0u) {
+    identity.host_hash = hash_host_bytes(tensor.data_ptr(), identity.bytes);
+  }
+  return identity;
+}
+
+struct ContextKey {
+  int64_t backend = GPUXTB_BACKEND_AUTO;
+  int64_t device = -1;
+  int64_t cpu_threads = 1;
+  int64_t stream = 0;
+
+  bool operator==(const ContextKey& other) const noexcept {
+    return backend == other.backend && device == other.device && cpu_threads == other.cpu_threads &&
+           stream == other.stream;
+  }
+};
+
+struct StreamKey {
+  int64_t device = -1;
+  int64_t stream = 0;
+
+  bool operator==(const StreamKey& other) const noexcept {
+    return device == other.device && stream == other.stream;
+  }
+};
+
+StreamKey stream_key_of(const ContextKey& key) noexcept { return {key.device, key.stream}; }
+
+struct PlanKey {
+  int64_t nsystems = 0;
+  int64_t natoms = 0;
+  std::array<BufferIdentity, 5> topology{};
+  int64_t max_scc_iterations = 0;
+  std::uint64_t charge_tolerance = 0;
+  std::uint64_t energy_tolerance = 0;
+  std::uint64_t electronic_temperature = 0;
+
+  bool operator==(const PlanKey& other) const noexcept {
+    return nsystems == other.nsystems && natoms == other.natoms && topology == other.topology &&
+           max_scc_iterations == other.max_scc_iterations &&
+           charge_tolerance == other.charge_tolerance &&
+           energy_tolerance == other.energy_tolerance &&
+           electronic_temperature == other.electronic_temperature;
+  }
+};
+
+enum class SlotState : std::uint8_t { kIdle, kReserved, kPending, kBroken };
+
+struct PlanGroup;
+
+using RetainedTensors = std::array<std::optional<Tensor>, 8>;
+
+std::uint64_t current_process_id() noexcept {
+#if defined(_WIN32)
+  return static_cast<std::uint64_t>(GetCurrentProcessId());
+#else
+  return static_cast<std::uint64_t>(getpid());
+#endif
+}
+
+struct DeferredError {
+  StreamKey stream{};
+  std::uint64_t submission_id = 0;
+  std::string message;
+  /* Stream-level reporting and forward-token settlement are independent.
+   * A later call may report this failure, but backward must still find the
+   * originating submission and refuse to consume its invalid force tensor. */
+  bool stream_reported = false;
+};
+
+struct ContextState {
+  const GpuxtbApi* api = nullptr;
+  ContextKey key{};
+  gpuxtb_context_t* context = nullptr;
+  bool stopping = false;
+  size_t exact_waiters = 0;
+  std::uint64_t last_used = 0;
+  std::vector<std::shared_ptr<PlanGroup>> groups;
+  /* Native enqueue order is CUDA stream order. Serialize the short admission
+   * boundary so monotonically assigned submission ids describe that same
+   * order even when Python threads call one stream concurrently. */
+  std::mutex admission_mutex;
+  std::thread reaper;
+
+  ~ContextState() {
+    groups.clear();
+    if (context != nullptr) api->context_destroy(context);
+  }
+};
+
+struct PlanSlot {
+  const GpuxtbApi* api = nullptr;
+  ContextState* context = nullptr;
+  PlanGroup* group = nullptr;
+  gpuxtb_plan_t* plan = nullptr;
+  gpuxtb_request_t* request = nullptr;
+  SlotState state = SlotState::kIdle;
+  bool completion_in_progress = false;
+  std::uint64_t submission_id = 0;
+  RetainedTensors retained;
+  std::vector<double> atomic_charges;
+  std::vector<int32_t> scc_iterations;
+  std::vector<std::uint8_t> scc_converged;
+  std::vector<int32_t> per_system_status;
+
+  PlanSlot(const GpuxtbApi& selected_api, ContextState& selected_context, PlanGroup& selected_group,
+           int64_t nsystems, int64_t natoms)
+      : api(&selected_api),
+        context(&selected_context),
+        group(&selected_group),
+        atomic_charges(static_cast<size_t>(natoms)),
+        scc_iterations(static_cast<size_t>(nsystems)),
+        scc_converged(static_cast<size_t>(nsystems)),
+        per_system_status(static_cast<size_t>(nsystems)) {}
+
+  ~PlanSlot() {
+    if (request != nullptr) api->request_destroy(request);
+    if (plan != nullptr) api->plan_destroy(plan);
+  }
+
+  void move_retained_to(RetainedTensors& destination) noexcept { destination.swap(retained); }
+};
+
+struct PlanGroup {
+  ContextState* context = nullptr;
+  PlanKey key{};
+  size_t creating = 0;
+  bool retired = false;
+  std::uint64_t last_used = 0;
+  std::vector<std::shared_ptr<PlanSlot>> slots;
+};
+
+struct CompletionOutcome {
+  bool reusable = true;
+  bool retire_group = false;
+  std::string error;
+};
+
+class TorchRequestPool {
+ public:
+  explicit TorchRequestPool(const GpuxtbApi& api)
+      : api_(api), owner_process_id_(current_process_id()) {
+    contexts_.reserve(kMaximumContexts);
+    deferred_errors_.reserve(kMaximumDeferredErrors);
+  }
+
+  ~TorchRequestPool() { shutdown(); }
+
+  void shutdown() noexcept {
+    std::vector<std::shared_ptr<ContextState>> contexts;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (stopping_) return;
+      stopping_ = true;
+      for (const auto& context : contexts_) context->stopping = true;
+      contexts.swap(contexts_);
+    }
+    changed_.notify_all();
+    for (const auto& context : contexts) {
+      if (context->reaper.joinable()) context->reaper.join();
+      std::unique_lock<std::mutex> lock(mutex_);
+      changed_.wait(lock, [&] { return context->exact_waiters == 0u; });
+    }
+    report_deferred_errors("process shutdown");
+    contexts.clear();
+  }
+
+  TorchRequestPool(const TorchRequestPool&) = delete;
+  TorchRequestPool& operator=(const TorchRequestPool&) = delete;
+
+  std::int64_t submit(const ContextKey& context_key, const PlanKey& plan_key,
+                      const gpuxtb_batch_t& batch, const gpuxtb_compute_options_t& options,
+                      const std::array<Tensor, 8>& tensors) {
+    check_process();
+    const StreamKey stream_key = stream_key_of(context_key);
+    if (auto deferred = take_deferred_error(stream_key)) {
+      STD_TORCH_CHECK(
+          false, "gpuxtb_torch: a preceding CUDA submission failed on this stream: ", *deferred);
+    }
+    std::shared_ptr<ContextState> context = context_for(context_key);
+    std::unique_lock<std::mutex> admission(context->admission_mutex);
+
+    for (int attempt = 0; attempt != 2; ++attempt) {
+      std::shared_ptr<PlanGroup> group = group_for(*context, plan_key);
+      std::shared_ptr<PlanSlot> slot = acquire_slot(group, batch, options);
+      ReservationGuard reservation(*this, slot);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (size_t index = 0; index < tensors.size(); ++index) {
+          slot->retained[index].emplace(tensors[index]);
+        }
+      }
+
+      gpuxtb_batch_result_t result;
+      int32_t status = api_.batch_result_init(&result, sizeof(result));
+      check_status(status, "gpuxtb_batch_result_init");
+      auto bind_output = [](gpuxtb_buffer_t* buffer, void* data, size_t bytes,
+                            gpuxtb_memory_space_t space) {
+        buffer->data = data;
+        buffer->size_bytes = bytes;
+        buffer->memory_space = space;
+        buffer->reserved = 0;
+      };
+      const Tensor& out_energies = tensors[6];
+      const Tensor& out_forces = tensors[7];
+      bind_output(&result.energies, out_energies.mutable_data_ptr(),
+                  static_cast<size_t>(plan_key.nsystems) * sizeof(double),
+                  GPUXTB_MEMORY_CUDA_DEVICE);
+      bind_output(&result.forces, out_forces.mutable_data_ptr(),
+                  static_cast<size_t>(plan_key.natoms * 3) * sizeof(double),
+                  GPUXTB_MEMORY_CUDA_DEVICE);
+      bind_output(&result.atomic_charges, slot->atomic_charges.data(),
+                  slot->atomic_charges.size() * sizeof(double), GPUXTB_MEMORY_HOST);
+      bind_output(&result.scc_iterations, slot->scc_iterations.data(),
+                  slot->scc_iterations.size() * sizeof(int32_t), GPUXTB_MEMORY_HOST);
+      bind_output(&result.scc_converged, slot->scc_converged.data(),
+                  slot->scc_converged.size() * sizeof(std::uint8_t), GPUXTB_MEMORY_HOST);
+      bind_output(&result.per_system_status, slot->per_system_status.data(),
+                  slot->per_system_status.size() * sizeof(int32_t), GPUXTB_MEMORY_HOST);
+
+      const std::uint64_t submission_id = reserve_submission_id(slot);
+      status = api_.plan_compute_enqueue(slot->plan, &batch, &options, &result, slot->request);
+      if (status != GPUXTB_STATUS_SUCCESS) {
+        const char* detail = api_.get_last_error();
+        const std::string detail_copy = detail != nullptr ? detail : "";
+        const std::string message =
+            status_diagnostic(api_, status, "gpuxtb_plan_compute_enqueue", detail_copy.c_str());
+        const bool topology_mismatch =
+            attempt == 0 && is_fixed_topology_mismatch(status, detail_copy);
+        if (topology_mismatch) {
+          retire_group(group);
+          continue;
+        }
+        STD_TORCH_CHECK(false, "gpuxtb_torch: ", message);
+      }
+
+      // The native request is now accepted and owns the borrowed descriptors.
+      // From this point an exception must settle the accepted request before
+      // releasing tensors. The guard switches from rollback to settlement
+      // until PENDING publication is complete.
+      reservation.mark_accepted(submission_id);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        slot->state = SlotState::kPending;
+        slot->completion_in_progress = false;
+        group->last_used = next_use_locked();
+        context->last_used = group->last_used;
+      }
+      reservation.disarm();
+      changed_.notify_all();
+      return static_cast<std::int64_t>(submission_id);
+    }
+
+    STD_TORCH_CHECK(false,
+                    "gpuxtb_torch: fixed CUDA plan topology changed again while rebuilding it");
+  }
+
+  void wait_for_submission(std::int64_t signed_submission_id) {
+    if (signed_submission_id == 0) return;
+    check_process();
+    STD_TORCH_CHECK(signed_submission_id > 0,
+                    "gpuxtb_torch: internal CUDA submission token is invalid");
+    const auto submission_id = static_cast<std::uint64_t>(signed_submission_id);
+
+    for (;;) {
+      std::shared_ptr<PlanSlot> slot;
+      ContextState* waiter_context = nullptr;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (auto error = take_submission_error_locked(submission_id)) {
+          lock.unlock();
+          STD_TORCH_CHECK(false, "gpuxtb_torch: CUDA submission failed: ", *error);
+        }
+        slot = find_pending_submission_locked(submission_id);
+        if (slot == nullptr) {
+          STD_TORCH_CHECK(submission_id > completion_history_floor_,
+                          "gpuxtb_torch: this CUDA submission is older than the bounded completion "
+                          "history retained for backward; its force tensor is not safe to consume");
+          return;
+        }
+        if (slot->completion_in_progress) {
+          changed_.wait(lock);
+          continue;
+        }
+        slot->completion_in_progress = true;
+        waiter_context = slot->context;
+        ++waiter_context->exact_waiters;
+      }
+
+      CompletionOutcome outcome = wait_native(*slot);
+      finalize_completion(slot, submission_id, outcome, true);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        --waiter_context->exact_waiters;
+      }
+      changed_.notify_all();
+      if (!outcome.error.empty()) {
+        STD_TORCH_CHECK(false, "gpuxtb_torch: CUDA submission failed: ", outcome.error);
+      }
+      return;
+    }
+  }
+
+ private:
+  static constexpr size_t kMaximumContexts = 4;
+  static constexpr size_t kMaximumPlanGroupsPerContext = 2;
+  static constexpr size_t kMaximumSlotsPerPlan = 2;
+  static constexpr size_t kMaximumDeferredErrors = 1024;
+
+  class ReservationGuard {
+   public:
+    ReservationGuard(TorchRequestPool& pool, std::shared_ptr<PlanSlot> slot)
+        : pool_(&pool), slot_(std::move(slot)) {}
+    ~ReservationGuard() {
+      if (!armed_) return;
+      if (accepted_) {
+        pool_->settle_accepted_reservation(slot_, submission_id_);
+      } else {
+        pool_->release_reserved(slot_);
+      }
+    }
+    ReservationGuard(const ReservationGuard&) = delete;
+    ReservationGuard& operator=(const ReservationGuard&) = delete;
+
+    void mark_accepted(std::uint64_t submission_id) noexcept {
+      accepted_ = true;
+      submission_id_ = submission_id;
+    }
+    void disarm() noexcept { armed_ = false; }
+
+   private:
+    TorchRequestPool* pool_ = nullptr;
+    std::shared_ptr<PlanSlot> slot_;
+    bool armed_ = true;
+    bool accepted_ = false;
+    std::uint64_t submission_id_ = 0;
+  };
+
+  void check_process() const {
+    STD_TORCH_CHECK(
+        current_process_id() == owner_process_id_,
+        "gpuxtb_torch: CUDA use after fork is unsupported because the child inherited native "
+        "contexts, mutexes, and worker threads; create the child process before its first "
+        "gpuxtb CUDA call or use a spawn-based multiprocessing start method");
+  }
+
+  std::uint64_t next_use_locked() noexcept { return ++use_clock_; }
+
+  std::uint64_t reserve_submission_id(const std::shared_ptr<PlanSlot>& slot) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::uint64_t submission_id = next_submission_id_++;
+    if (submission_id == 0u ||
+        submission_id > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+      /* More than 2^63 submissions in one process is not practically
+       * reachable. Preserve zero as the synchronous-path sentinel. */
+      submission_id = 1u;
+      next_submission_id_ = 2u;
+    }
+    slot->submission_id = submission_id;
+    return submission_id;
+  }
+
+  static bool is_fixed_topology_mismatch(int32_t status, std::string_view detail) noexcept {
+    return status == GPUXTB_STATUS_INVALID_ARGUMENT &&
+           detail.find("does not match the fixed CUDA plan topology") != std::string_view::npos;
+  }
+
+  std::optional<std::string> take_deferred_error_locked(StreamKey stream) {
+    for (size_t index = 0; index < lost_deferred_stream_count_; ++index) {
+      if (!(lost_deferred_streams_[index] == stream)) continue;
+      lost_deferred_streams_[index] = lost_deferred_streams_[--lost_deferred_stream_count_];
+      return std::string(
+          "the bounded deferred-error history lost an exact stream diagnostic; a prior CUDA "
+          "submission failed and its outputs must not be consumed");
+    }
+    if (lost_deferred_stream_overflow_pending_) {
+      /* More unique unsurfaced failing streams than the complete error-history
+       * bound is pathological. Preserve safety with one conservative global
+       * report only after the stream-keyed fixed storage itself is exhausted. */
+      lost_deferred_stream_overflow_pending_ = false;
+      return std::string(
+          "the bounded deferred-error history exhausted its stream-keyed loss records; a prior "
+          "CUDA submission failed and its outputs must not be consumed");
+    }
+    auto selected = deferred_errors_.end();
+    for (auto iterator = deferred_errors_.begin(); iterator != deferred_errors_.end(); ++iterator) {
+      if (iterator->stream_reported || !(iterator->stream == stream)) continue;
+      if (selected == deferred_errors_.end() || iterator->submission_id < selected->submission_id) {
+        selected = iterator;
+      }
+    }
+    if (selected == deferred_errors_.end()) return std::nullopt;
+    std::string message = selected->message;
+    selected->stream_reported = true;
+    return message;
+  }
+
+  void remember_lost_deferred_stream_locked(StreamKey stream) noexcept {
+    for (size_t index = 0; index < lost_deferred_stream_count_; ++index) {
+      if (lost_deferred_streams_[index] == stream) return;
+    }
+    if (lost_deferred_stream_count_ < lost_deferred_streams_.size()) {
+      lost_deferred_streams_[lost_deferred_stream_count_++] = stream;
+    } else {
+      lost_deferred_stream_overflow_pending_ = true;
+    }
+  }
+
+  std::optional<std::string> take_deferred_error(StreamKey stream) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return take_deferred_error_locked(stream);
+  }
+
+  std::optional<std::string> take_submission_error_locked(std::uint64_t submission_id) {
+    for (auto iterator = deferred_errors_.begin(); iterator != deferred_errors_.end(); ++iterator) {
+      if (iterator->submission_id != submission_id) continue;
+      std::string message = iterator->message;
+      iterator->stream_reported = true;
+      return message;
+    }
+    return std::nullopt;
+  }
+
+  std::shared_ptr<ContextState> create_context(const ContextKey& key) {
+    auto candidate = std::make_shared<ContextState>();
+    candidate->api = &api_;
+    candidate->key = key;
+    candidate->groups.reserve(kMaximumPlanGroupsPerContext);
+
+    gpuxtb_context_options_t context_options;
+    check_status(api_.context_options_init(&context_options, sizeof(context_options)),
+                 "gpuxtb_context_options_init");
+    context_options.backend = static_cast<gpuxtb_backend_t>(key.backend);
+    context_options.device_id = static_cast<int32_t>(key.device);
+    context_options.cpu_threads = static_cast<int32_t>(key.cpu_threads);
+    context_options.stream =
+        key.stream != 0 ? reinterpret_cast<void*>(static_cast<uintptr_t>(key.stream)) : nullptr;
+
+    check_status(api_.context_create(&context_options, &candidate->context),
+                 "gpuxtb_context_create");
+    const int32_t resolved_backend = api_.context_get_backend(candidate->context);
+    const int32_t resolved_device = api_.context_get_device_id(candidate->context);
+    STD_TORCH_CHECK(resolved_backend == GPUXTB_BACKEND_CUDA && resolved_device == key.device,
+                    "gpuxtb_torch: persistent CUDA context resolved to backend ", resolved_backend,
+                    " device ", resolved_device, " instead of CUDA device ", key.device);
+    return candidate;
+  }
+
+  bool group_idle_locked(const PlanGroup& group) const noexcept {
+    if (group.creating != 0u) return false;
+    for (const auto& slot : group.slots) {
+      /* A waiter or recovery guard may retain a slot without retaining its raw
+       * ContextState pointer. Keep the context alive until that external slot
+       * owner has destroyed its request and plan in the required order. */
+      if (slot.use_count() != 1u) return false;
+      if (slot->state == SlotState::kReserved || slot->state == SlotState::kPending ||
+          slot->completion_in_progress) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool context_idle_locked(const std::shared_ptr<ContextState>& context) const noexcept {
+    if (context.use_count() != 1u || context->exact_waiters != 0u) return false;
+    for (const auto& group : context->groups) {
+      if (group.use_count() != 1u || !group_idle_locked(*group)) return false;
+    }
+    return true;
+  }
+
+  void report_deferred_errors(const char* reason) const noexcept {
+    for (const DeferredError& deferred : deferred_errors_) {
+      if (deferred.stream_reported) continue;
+      std::fprintf(stderr, "gpuxtb_torch: deferred CUDA error was never surfaced before %s: %s\n",
+                   reason, deferred.message.c_str());
+    }
+    for (size_t index = 0; index < lost_deferred_stream_count_; ++index) {
+      std::fprintf(stderr,
+                   "gpuxtb_torch: a lost deferred CUDA error for device %lld stream %lld was "
+                   "never surfaced before %s\n",
+                   static_cast<long long>(lost_deferred_streams_[index].device),
+                   static_cast<long long>(lost_deferred_streams_[index].stream), reason);
+    }
+    if (lost_deferred_stream_overflow_pending_) {
+      std::fprintf(stderr,
+                   "gpuxtb_torch: deferred CUDA error stream-loss records overflowed before %s\n",
+                   reason);
+    }
+  }
+
+  void shutdown_context(const std::shared_ptr<ContextState>& context) noexcept {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      context->stopping = true;
+    }
+    changed_.notify_all();
+    if (context->reaper.joinable()) context->reaper.join();
+  }
+
+  std::shared_ptr<ContextState> context_for(const ContextKey& key) {
+    for (;;) {
+      std::shared_ptr<ContextState> victim;
+      bool create = false;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        STD_TORCH_CHECK(!stopping_, "gpuxtb_torch: CUDA request pool is shutting down");
+        for (const auto& context : contexts_) {
+          if (!context->stopping && context->key == key) {
+            context->last_used = next_use_locked();
+            return context;
+          }
+        }
+        if (contexts_.size() + creating_contexts_ < kMaximumContexts) {
+          ++creating_contexts_;
+          create = true;
+        } else {
+          auto selected = contexts_.end();
+          for (auto iterator = contexts_.begin(); iterator != contexts_.end(); ++iterator) {
+            if (!context_idle_locked(*iterator)) continue;
+            if (selected == contexts_.end() || (*iterator)->last_used < (*selected)->last_used) {
+              selected = iterator;
+            }
+          }
+          if (selected == contexts_.end()) {
+            changed_.wait(lock);
+            continue;
+          }
+          victim = *selected;
+          victim->stopping = true;
+          contexts_.erase(selected);
+        }
+      }
+
+      if (victim != nullptr) {
+        shutdown_context(victim);
+        victim.reset();
+        changed_.notify_all();
+        continue;
+      }
+
+      if (create) {
+        std::shared_ptr<ContextState> candidate;
+        try {
+          candidate = create_context(key);
+          candidate->reaper = std::thread([this, state = candidate.get()] { reap(*state); });
+        } catch (...) {
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            --creating_contexts_;
+          }
+          changed_.notify_all();
+          throw;
+        }
+
+        std::shared_ptr<ContextState> selected;
+        bool keep_candidate = false;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          --creating_contexts_;
+          for (const auto& context : contexts_) {
+            if (!context->stopping && context->key == key) {
+              selected = context;
+              break;
+            }
+          }
+          if (selected == nullptr && !stopping_) {
+            candidate->last_used = next_use_locked();
+            contexts_.push_back(candidate);
+            selected = candidate;
+            keep_candidate = true;
+          } else {
+            candidate->stopping = true;
+          }
+        }
+        changed_.notify_all();
+        if (!keep_candidate) {
+          shutdown_context(candidate);
+          candidate.reset();
+        }
+        STD_TORCH_CHECK(selected != nullptr,
+                        "gpuxtb_torch: CUDA request pool stopped during context creation");
+        return selected;
+      }
+    }
+  }
+
+  std::shared_ptr<PlanGroup> group_for(ContextState& context, const PlanKey& key) {
+    for (;;) {
+      std::shared_ptr<PlanGroup> victim;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        STD_TORCH_CHECK(!context.stopping, "gpuxtb_torch: CUDA stream context is shutting down");
+        for (const auto& group : context.groups) {
+          if (!group->retired && group->key == key) {
+            group->last_used = next_use_locked();
+            context.last_used = group->last_used;
+            return group;
+          }
+        }
+        if (context.groups.size() < kMaximumPlanGroupsPerContext) {
+          auto group = std::make_shared<PlanGroup>();
+          group->context = &context;
+          group->key = key;
+          group->last_used = next_use_locked();
+          group->slots.reserve(kMaximumSlotsPerPlan);
+          context.last_used = group->last_used;
+          context.groups.push_back(group);
+          return group;
+        }
+
+        auto selected = context.groups.end();
+        for (auto iterator = context.groups.begin(); iterator != context.groups.end(); ++iterator) {
+          if (iterator->use_count() != 1u || !group_idle_locked(**iterator)) continue;
+          if (selected == context.groups.end() || ((*iterator)->retired && !(*selected)->retired) ||
+              ((*iterator)->retired == (*selected)->retired &&
+               (*iterator)->last_used < (*selected)->last_used)) {
+            selected = iterator;
+          }
+        }
+        if (selected == context.groups.end()) {
+          changed_.wait(lock);
+          continue;
+        }
+        victim = *selected;
+        context.groups.erase(selected);
+      }
+      victim.reset();
+      changed_.notify_all();
+    }
+  }
+
+  void retire_group(const std::shared_ptr<PlanGroup>& group) noexcept {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      group->retired = true;
+      group->last_used = next_use_locked();
+    }
+    changed_.notify_all();
+  }
+
+  std::shared_ptr<PlanSlot> make_slot(PlanGroup& group, const gpuxtb_batch_t& batch,
+                                      const gpuxtb_compute_options_t& options) {
+    auto slot = std::make_shared<PlanSlot>(api_, *group.context, group, group.key.nsystems,
+                                           group.key.natoms);
+    int32_t status = api_.plan_create(group.context->context, &batch, &options, &slot->plan);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      const char* detail = api_.get_last_error();
+      throw std::runtime_error(status_diagnostic(api_, status, "gpuxtb_plan_create", detail));
+    }
+    status = api_.request_create(group.context->context, &slot->request);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      const char* detail = api_.get_last_error();
+      throw std::runtime_error(status_diagnostic(api_, status, "gpuxtb_request_create", detail));
+    }
+    return slot;
+  }
+
+  std::shared_ptr<PlanSlot> acquire_slot(const std::shared_ptr<PlanGroup>& group,
+                                         const gpuxtb_batch_t& batch,
+                                         const gpuxtb_compute_options_t& options) {
+    for (;;) {
+      std::shared_ptr<PlanSlot> wait_slot;
+      std::uint64_t wait_id = 0;
+      bool create = false;
+      std::optional<std::string> deferred;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        deferred = take_deferred_error_locked(stream_key_of(group->context->key));
+        if (!deferred) {
+          /* Healthy slots remain persistent after a burst. Recreating the
+           * second plan/request on every later two-deep burst would reintroduce
+           * steady-state allocation. Only broken slots are pruned here; the
+           * bounded group/context LRU owns normal idle reclamation. */
+          for (auto iterator = group->slots.begin(); iterator != group->slots.end();) {
+            if ((*iterator)->state == SlotState::kBroken && iterator->use_count() == 1u) {
+              iterator = group->slots.erase(iterator);
+            } else {
+              ++iterator;
+            }
+          }
+        }
+        if (!deferred) {
+          for (const auto& slot : group->slots) {
+            if (slot->state == SlotState::kIdle) {
+              slot->state = SlotState::kReserved;
+              group->last_used = next_use_locked();
+              return slot;
+            }
+          }
+          if (group->slots.size() + group->creating < kMaximumSlotsPerPlan) {
+            ++group->creating;
+            create = true;
+          } else {
+            /* Backpressure settles the oldest submission on the whole CUDA
+             * stream context, not merely this topology group. This preserves
+             * FIFO error observation when several cached plans share a
+             * stream. */
+            wait_slot = next_pending_locked(*group->context, wait_id);
+            if (wait_slot == nullptr) {
+              changed_.wait(lock);
+              continue;
+            }
+          }
+        }
+      }
+
+      if (deferred) {
+        STD_TORCH_CHECK(
+            false, "gpuxtb_torch: a preceding CUDA submission failed on this stream: ", *deferred);
+      }
+      if (create) {
+        try {
+          std::shared_ptr<PlanSlot> slot = make_slot(*group, batch, options);
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            --group->creating;
+            slot->state = SlotState::kReserved;
+            group->slots.push_back(slot);
+          }
+          changed_.notify_all();
+          return slot;
+        } catch (...) {
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            --group->creating;
+          }
+          changed_.notify_all();
+          throw;
+        }
+      }
+
+      CompletionOutcome outcome = wait_native(*wait_slot);
+      finalize_completion(wait_slot, wait_id, outcome, true);
+      if (!outcome.error.empty()) {
+        STD_TORCH_CHECK(false, "gpuxtb_torch: a preceding CUDA submission failed: ", outcome.error);
+      }
+    }
+  }
+
+  void erase_broken_slot_locked(const std::shared_ptr<PlanSlot>& slot) noexcept {
+    auto& slots = slot->group->slots;
+    /* The group must remain the sole owner until destruction. Otherwise a
+     * detached waiter would retain only raw context/group pointers. */
+    if (slot->state != SlotState::kBroken || slot.use_count() != 1u) return;
+    const auto iterator = std::find(slots.begin(), slots.end(), slot);
+    if (iterator != slots.end()) slots.erase(iterator);
+  }
+
+  void release_reserved(const std::shared_ptr<PlanSlot>& slot) noexcept {
+    RetainedTensors released;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      slot->move_retained_to(released);
+      slot->state = SlotState::kIdle;
+      slot->submission_id = 0u;
+      slot->completion_in_progress = false;
+      erase_broken_slot_locked(slot);
+    }
+    released = {};
+    changed_.notify_all();
+  }
+
+  void recreate_request(PlanSlot& slot, CompletionOutcome& outcome) noexcept {
+    if (slot.request != nullptr) api_.request_destroy(slot.request);
+    slot.request = nullptr;
+    const int32_t status = api_.request_create(slot.context->context, &slot.request);
+    if (status != GPUXTB_STATUS_SUCCESS) {
+      outcome.reusable = false;
+      try {
+        const char* detail = api_.get_last_error();
+        if (!outcome.error.empty()) outcome.error += "; ";
+        outcome.error += status_diagnostic(api_, status, "gpuxtb_request_create", detail);
+      } catch (...) {
+        /* Preserve the original access failure if formatting the secondary
+         * request-recreation diagnostic itself cannot allocate. */
+      }
+    }
+  }
+
+  CompletionOutcome wait_native(PlanSlot& slot) noexcept {
+    CompletionOutcome outcome;
+    try {
+      gpuxtb_request_info_t info{};
+      int32_t status = api_.request_info_init(&info, sizeof(info));
+      if (status == GPUXTB_STATUS_SUCCESS) status = api_.request_wait(slot.request, &info);
+      if (status != GPUXTB_STATUS_SUCCESS) {
+        const char* detail = api_.get_last_error();
+        outcome.error = status_diagnostic(api_, status, "gpuxtb_request_wait", detail);
+        recreate_request(slot, outcome);
+        return outcome;
+      }
+      if (info.state != GPUXTB_REQUEST_COMPLETE) {
+        outcome.error = "blocking request wait returned without a COMPLETE state";
+        recreate_request(slot, outcome);
+        return outcome;
+      }
+      if (info.completion_status != GPUXTB_STATUS_SUCCESS) {
+        const char* detail = api_.request_get_error(slot.request);
+        outcome.retire_group = is_fixed_topology_mismatch(
+            info.completion_status,
+            detail != nullptr ? std::string_view(detail) : std::string_view());
+        outcome.error =
+            status_diagnostic(api_, info.completion_status, "asynchronous gpuxtb compute", detail);
+      }
+      return outcome;
+    } catch (const std::exception& exception) {
+      outcome.error = exception.what();
+      recreate_request(slot, outcome);
+      return outcome;
+    } catch (...) {
+      outcome.error = "unknown exception while settling a CUDA request";
+      recreate_request(slot, outcome);
+      return outcome;
+    }
+  }
+
+  void settle_accepted_reservation(const std::shared_ptr<PlanSlot>& slot,
+                                   std::uint64_t submission_id) noexcept {
+    CompletionOutcome outcome = wait_native(*slot);
+    RetainedTensors released;
+    try {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (slot->submission_id == submission_id && slot->state == SlotState::kReserved) {
+        slot->move_retained_to(released);
+        slot->completion_in_progress = false;
+        slot->state = SlotState::kBroken;
+        slot->submission_id = 0u;
+        if (outcome.retire_group) slot->group->retired = true;
+        erase_broken_slot_locked(slot);
+      }
+    } catch (...) {
+      std::fprintf(stderr,
+                   "gpuxtb_torch: failed to release an accepted request after publication "
+                   "bookkeeping failed\n");
+    }
+    released = {};
+    if (!outcome.error.empty()) {
+      std::fprintf(stderr,
+                   "gpuxtb_torch: accepted CUDA request also failed while recovering from "
+                   "publication bookkeeping: %s\n",
+                   outcome.error.c_str());
+    }
+    changed_.notify_all();
+  }
+
+  void finalize_completion(const std::shared_ptr<PlanSlot>& slot, std::uint64_t submission_id,
+                           CompletionOutcome& outcome, bool surface_now) noexcept {
+    RetainedTensors released;
+    bool lost_deferred_error = false;
+    try {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (slot->submission_id != submission_id || slot->state != SlotState::kPending) return;
+      slot->move_retained_to(released);
+      slot->completion_in_progress = false;
+      slot->state = outcome.reusable ? SlotState::kIdle : SlotState::kBroken;
+      slot->submission_id = 0u;
+      if (outcome.retire_group) {
+        slot->group->retired = true;
+        slot->group->last_used = next_use_locked();
+      }
+      if (!outcome.error.empty()) {
+        if (deferred_errors_.size() >= kMaximumDeferredErrors) {
+          auto oldest = std::min_element(deferred_errors_.begin(), deferred_errors_.end(),
+                                         [](const DeferredError& left, const DeferredError& right) {
+                                           return left.submission_id < right.submission_id;
+                                         });
+          if (oldest != deferred_errors_.end()) {
+            completion_history_floor_ = std::max(completion_history_floor_, oldest->submission_id);
+            if (!oldest->stream_reported) remember_lost_deferred_stream_locked(oldest->stream);
+            deferred_errors_.erase(oldest);
+          }
+        }
+        try {
+          deferred_errors_.push_back(DeferredError{stream_key_of(slot->context->key), submission_id,
+                                                   outcome.error, surface_now});
+        } catch (...) {
+          completion_history_floor_ = std::max(completion_history_floor_, submission_id);
+          remember_lost_deferred_stream_locked(stream_key_of(slot->context->key));
+          lost_deferred_error = true;
+        }
+      }
+      erase_broken_slot_locked(slot);
+    } catch (...) {
+      lost_deferred_error = !outcome.error.empty();
+    }
+    released = {};
+    if (lost_deferred_error) {
+      std::fprintf(stderr, "gpuxtb_torch: could not retain deferred CUDA error: %s\n",
+                   outcome.error.c_str());
+    }
+    changed_.notify_all();
+  }
+
+  std::shared_ptr<PlanSlot> find_pending_submission_locked(
+      std::uint64_t submission_id) const noexcept {
+    for (const auto& context : contexts_) {
+      for (const auto& group : context->groups) {
+        for (const auto& slot : group->slots) {
+          if (slot->state == SlotState::kPending && slot->submission_id == submission_id)
+            return slot;
+        }
+      }
+    }
+    return nullptr;
+  }
+
+  std::shared_ptr<PlanSlot> next_pending_locked(ContextState& context,
+                                                std::uint64_t& submission_id) {
+    std::shared_ptr<PlanSlot> selected;
+    for (const auto& group : context.groups) {
+      for (const auto& slot : group->slots) {
+        if (slot->state != SlotState::kPending) continue;
+        if (selected == nullptr || slot->submission_id < selected->submission_id) selected = slot;
+      }
+    }
+    if (selected != nullptr) {
+      if (selected->completion_in_progress) return nullptr;
+      selected->completion_in_progress = true;
+      submission_id = selected->submission_id;
+    }
+    return selected;
+  }
+
+  bool has_pending_locked(const ContextState& context) const noexcept {
+    for (const auto& group : context.groups) {
+      for (const auto& slot : group->slots) {
+        if (slot->state == SlotState::kPending) return true;
+      }
+    }
+    return false;
+  }
+
+  void reap(ContextState& context) noexcept {
+    for (;;) {
+      std::shared_ptr<PlanSlot> slot;
+      std::uint64_t submission_id = 0;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        changed_.wait(lock, [&] { return context.stopping || has_pending_locked(context); });
+        slot = next_pending_locked(context, submission_id);
+        if (slot == nullptr) {
+          if (context.stopping && !has_pending_locked(context)) return;
+          changed_.wait(lock);
+          continue;
+        }
+      }
+      CompletionOutcome outcome = wait_native(*slot);
+      finalize_completion(slot, submission_id, outcome, false);
+    }
+  }
+
+  const GpuxtbApi& api_;
+  const std::uint64_t owner_process_id_;
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  bool stopping_ = false;
+  size_t creating_contexts_ = 0;
+  std::uint64_t use_clock_ = 0;
+  std::uint64_t next_submission_id_ = 1u;
+  std::vector<std::shared_ptr<ContextState>> contexts_;
+  std::vector<DeferredError> deferred_errors_;
+  /* Tokens at or below the floor no longer have exact retained history. They
+   * fail conservatively, while newer unrelated successful tokens remain
+   * usable instead of inheriting a permanent global poison bit. */
+  std::uint64_t completion_history_floor_ = 0u;
+  /* Loss markers are fixed-capacity and keyed by the originating stream. A
+   * later successful call on an unrelated stream must not report someone
+   * else's dropped diagnostic merely because exact backward history is
+   * bounded. */
+  std::array<StreamKey, kMaximumDeferredErrors> lost_deferred_streams_{};
+  size_t lost_deferred_stream_count_ = 0u;
+  bool lost_deferred_stream_overflow_pending_ = false;
+};
+
+class TorchRequestPoolHolder {
+ public:
+  explicit TorchRequestPoolHolder(const GpuxtbApi& api)
+      : owner_process_id_(current_process_id()), pool_(new TorchRequestPool(api)) {}
+  ~TorchRequestPoolHolder() {
+    /* A forked child cannot safely destroy inherited mutex/thread/CUDA state.
+     * Intentionally leak that copied state; process teardown will reclaim it. */
+    if (current_process_id() == owner_process_id_) delete pool_;
+  }
+
+  TorchRequestPool& get() const noexcept { return *pool_; }
+
+ private:
+  std::uint64_t owner_process_id_ = 0;
+  TorchRequestPool* pool_ = nullptr;
+};
+
+TorchRequestPool& torch_request_pool(const GpuxtbApi& api) {
+  static TorchRequestPoolHolder holder(api);
+  return holder.get();
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -291,15 +1428,19 @@ void check_status(int32_t status, const char* what) {
 //  - host and CUDA descriptors may be mixed exactly as the public ABI permits;
 //    every CUDA-resident tensor must use the context's resolved device;
 //  - out_energies (nsystems,) float64 and out_forces (natoms, 3) float64 are
-//    written in place and returned by the op.
+//    written in place and returned by the op. A third private integer lets the
+//    Python autograd implementation settle exactly its own forward failure;
+//    gpuxtb_torch still exposes only the ordinary (energies, forces) pair.
 //  - electronic_temperature is in kelvin, exactly like gpuxtb.gpuxtb_torch;
 //    it is converted to the native k_B*T Hartree scale inside the op.
 // ---------------------------------------------------------------------------
 
-std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
+std::tuple<Tensor, Tensor, std::int64_t> gpuxtb_torch_forward(
     Tensor positions, Tensor atomic_numbers, Tensor atom_offsets, Tensor molecular_charges,
-    Tensor unpaired_electrons, Tensor spin_channels, Tensor out_energies, Tensor out_forces,
-    int64_t backend, int64_t device_id, int64_t cpu_threads, int64_t stream,
+    Tensor unpaired_electrons, Tensor spin_channels, int64_t atomic_numbers_version,
+    int64_t atom_offsets_version, int64_t molecular_charges_version,
+    int64_t unpaired_electrons_version, int64_t spin_channels_version, Tensor out_energies,
+    Tensor out_forces, int64_t backend, int64_t device_id, int64_t cpu_threads, int64_t stream,
     int64_t max_scc_iterations, double charge_tolerance, double energy_tolerance,
     double electronic_temperature) {
   const GpuxtbApi& api = gpuxtb_api();
@@ -351,8 +1492,77 @@ std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
     STD_TORCH_CHECK(tensor_device == cuda_device_index,
                     "gpuxtb_torch: all CUDA tensors must be on device ", cuda_device_index);
   }
+  const bool use_request_path = api.request_api_available && backend != GPUXTB_BACKEND_CPU &&
+                                out_energies.is_cuda() && out_forces.is_cuda();
 
-  // --- context ---------------------------------------------------------------
+  // --- batch -----------------------------------------------------------------
+  gpuxtb_batch_t batch;
+  check_status(api.batch_init(&batch, sizeof(batch)), "gpuxtb_batch_init");
+  batch.batch_size = nsystems;
+  batch.total_atoms = natoms;
+  batch.total_point_charges = 0;
+  batch.total_charge_response_elements = 0;
+
+  auto bind_input = [&](gpuxtb_const_buffer_t* buffer, const Tensor& tensor) {
+    buffer->data = tensor.data_ptr();
+    buffer->size_bytes = static_cast<size_t>(tensor.numel()) * tensor.element_size();
+    buffer->memory_space = memory_space_of(tensor);
+    buffer->reserved = 0;
+  };
+  bind_input(&batch.atom_offsets, atom_offsets);
+  bind_input(&batch.atomic_numbers, atomic_numbers);
+  bind_input(&batch.positions, positions);
+  bind_input(&batch.molecular_charges, molecular_charges);
+  bind_input(&batch.unpaired_electrons, unpaired_electrons);
+  bind_input(&batch.spin_channels, spin_channels);
+
+  // --- compute options ---------------------------------------------------------
+  gpuxtb_compute_options_t options;
+  check_status(api.compute_options_init(&options, sizeof(options)), "gpuxtb_compute_options_init");
+  options.model = GPUXTB_MODEL_GFN2_XTB;
+  options.flags = static_cast<uint32_t>(GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES |
+                                        GPUXTB_COMPUTE_ATOMIC_CHARGES);
+  options.max_scc_iterations = static_cast<int32_t>(max_scc_iterations);
+  options.charge_tolerance = charge_tolerance;
+  options.energy_tolerance = energy_tolerance;
+  options.electronic_temperature = electronic_temperature * GPUXTB_KELVIN_TO_HARTREE;
+
+  if (use_request_path) {
+    STD_TORCH_CHECK(any_cuda && cuda_device_index >= 0,
+                    "gpuxtb_torch: CUDA request execution requires a CUDA tensor device");
+    STD_TORCH_CHECK(device_id < 0 || device_id == cuda_device_index,
+                    "gpuxtb_torch: CUDA tensor on device ", cuda_device_index,
+                    " does not match requested context device ", device_id);
+    // AUTO with CUDA outputs and explicit CUDA resolve to the same native CUDA
+    // execution semantics. Canonicalizing the otherwise irrelevant backend and
+    // CPU thread fields gives each (device, stream) exactly one completion
+    // owner, so deferred failures cannot disappear across configuration-only
+    // changes on that stream.
+    const ContextKey context_key{GPUXTB_BACKEND_CUDA, cuda_device_index, 1, stream};
+    const PlanKey plan_key{
+        nsystems,
+        natoms,
+        {topology_identity(atom_offsets, atom_offsets_version),
+         topology_identity(atomic_numbers, atomic_numbers_version),
+         topology_identity(molecular_charges, molecular_charges_version),
+         topology_identity(unpaired_electrons, unpaired_electrons_version),
+         topology_identity(spin_channels, spin_channels_version)},
+        max_scc_iterations,
+        double_bits(charge_tolerance),
+        double_bits(energy_tolerance),
+        double_bits(options.electronic_temperature),
+    };
+    const std::array<Tensor, 8> retained = {positions,         atomic_numbers,     atom_offsets,
+                                            molecular_charges, unpaired_electrons, spin_channels,
+                                            out_energies,      out_forces};
+    const std::int64_t submission_id =
+        torch_request_pool(api).submit(context_key, plan_key, batch, options, retained);
+    return {out_energies, out_forces, submission_id};
+  }
+
+  // --- synchronous context ---------------------------------------------------
+  // CPU, host-output CUDA, and native libraries predating the additive request
+  // ABI retain the established immediate-error path.
   gpuxtb_context_options_t context_options;
   check_status(api.context_options_init(&context_options, sizeof(context_options)),
                "gpuxtb_context_options_init");
@@ -391,38 +1601,6 @@ std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
                     cuda_device_index, " does not match the context device ", resolved_device);
   }
 
-  // --- batch -----------------------------------------------------------------
-  gpuxtb_batch_t batch;
-  check_status(api.batch_init(&batch, sizeof(batch)), "gpuxtb_batch_init");
-  batch.batch_size = nsystems;
-  batch.total_atoms = natoms;
-  batch.total_point_charges = 0;
-  batch.total_charge_response_elements = 0;
-
-  auto bind_input = [&](gpuxtb_const_buffer_t* buffer, const Tensor& tensor) {
-    buffer->data = tensor.data_ptr();
-    buffer->size_bytes = static_cast<size_t>(tensor.numel()) * tensor.element_size();
-    buffer->memory_space = memory_space_of(tensor);
-    buffer->reserved = 0;
-  };
-  bind_input(&batch.atom_offsets, atom_offsets);
-  bind_input(&batch.atomic_numbers, atomic_numbers);
-  bind_input(&batch.positions, positions);
-  bind_input(&batch.molecular_charges, molecular_charges);
-  bind_input(&batch.unpaired_electrons, unpaired_electrons);
-  bind_input(&batch.spin_channels, spin_channels);
-
-  // --- compute options ---------------------------------------------------------
-  gpuxtb_compute_options_t options;
-  check_status(api.compute_options_init(&options, sizeof(options)), "gpuxtb_compute_options_init");
-  options.model = GPUXTB_MODEL_GFN2_XTB;
-  options.flags = static_cast<uint32_t>(GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES |
-                                        GPUXTB_COMPUTE_ATOMIC_CHARGES);
-  options.max_scc_iterations = static_cast<int32_t>(max_scc_iterations);
-  options.charge_tolerance = charge_tolerance;
-  options.energy_tolerance = energy_tolerance;
-  options.electronic_temperature = electronic_temperature * GPUXTB_KELVIN_TO_HARTREE;
-
   // --- result ------------------------------------------------------------------
   // energies/forces go straight into the caller's out tensors (zero copy).
   // Diagnostics and the (unreported) atomic charges use small host buffers
@@ -458,18 +1636,27 @@ std::tuple<Tensor, Tensor> gpuxtb_torch_forward(
 
   check_status(api.compute(context, &batch, &options, &result), "gpuxtb_compute");
 
-  return {out_energies, out_forces};
+  return {out_energies, out_forces, 0};
+}
+
+void gpuxtb_torch_wait(std::int64_t submission_id) {
+  if (submission_id == 0) return;
+  torch_request_pool(gpuxtb_api()).wait_for_submission(submission_id);
 }
 
 STABLE_TORCH_LIBRARY(gpuxtb, m) {
   m.def(
-      "gpuxtb_torch_forward(Tensor positions, Tensor atomic_numbers, Tensor atom_offsets, "
+      "_gpuxtb_torch_forward(Tensor positions, Tensor atomic_numbers, Tensor atom_offsets, "
       "Tensor molecular_charges, Tensor unpaired_electrons, Tensor spin_channels, "
+      "int atomic_numbers_version, int atom_offsets_version, int molecular_charges_version, "
+      "int unpaired_electrons_version, int spin_channels_version, "
       "Tensor(a!) out_energies, Tensor(b!) out_forces, int backend, int device_id, "
       "int cpu_threads, "
       "int stream, int max_scc_iterations, float charge_tolerance, float energy_tolerance, "
-      "float electronic_temperature) -> (Tensor(a!), Tensor(b!))");
+      "float electronic_temperature) -> (Tensor(a!), Tensor(b!), int)");
+  m.def("_gpuxtb_torch_wait(int submission_id) -> ()");
 }
 STABLE_TORCH_LIBRARY_IMPL(gpuxtb, CompositeExplicitAutograd, m) {
-  m.impl("gpuxtb_torch_forward", TORCH_BOX(&gpuxtb_torch_forward));
+  m.impl("_gpuxtb_torch_forward", TORCH_BOX(&gpuxtb_torch_forward));
+  m.impl("_gpuxtb_torch_wait", TORCH_BOX(&gpuxtb_torch_wait));
 }

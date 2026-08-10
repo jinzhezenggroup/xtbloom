@@ -142,6 +142,10 @@ void test_request_probe_and_destroy() {
     submission.pending = std::make_shared<FakeCompletion>(counts);
     CHECK(request.publish_submission(std::move(submission), error) == GPUXTB_STATUS_SUCCESS);
 
+    const char* pending_error = request.error();
+    CHECK(pending_error != nullptr);
+    CHECK(std::string(pending_error).empty());
+
     gpuxtb_request_info_t info = initialized_info();
     CHECK(request.query(false, info, error) == GPUXTB_STATUS_SUCCESS);
     CHECK(info.state == GPUXTB_REQUEST_PENDING);
@@ -151,6 +155,9 @@ void test_request_probe_and_destroy() {
     CHECK(info.completion_status == GPUXTB_STATUS_INTERNAL_ERROR);
     CHECK(info.result_flags == GPUXTB_RESULT_DIPOLE_MOMENTS);
     CHECK(std::string(request.error()) == "deferred test failure");
+    /* The public pointer lifetime extends through query/wait. Completing with
+     * a longer diagnostic must not invalidate the earlier PENDING empty view. */
+    CHECK(std::string(pending_error).empty());
     CHECK(counts->blocking == 1);
     CHECK(counts->settled == 1);
   }

@@ -283,7 +283,10 @@ Keep a context alive across calls to retain worker pools, topology plans, and
 backend workspaces. ABI-v2 `GPUXTB_SCC_START_WARM` additionally consumes the
 checkpoint from the most recent fully converged compatible batch. It is strict:
 a first call, topology/policy change, or missing compatible checkpoint is an
-invalid argument and never falls back to `FRESH`.
+invalid argument and never falls back to `FRESH`. An accepted `FRESH` attempt
+consumes the preceding compatible checkpoint before execution. If that attempt
+later fails—including a stream-ordered CUDA error discovered after enqueue—the
+older checkpoint is not reused, and the next strict `WARM` call rejects.
 
 Geometry may change while topology and compute policy remain identical. CPU
 restarts its mixing window from the converged electronic state; CUDA preserves

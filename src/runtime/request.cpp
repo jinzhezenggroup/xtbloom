@@ -7,6 +7,12 @@
 
 namespace gpuxtb::detail {
 
+namespace {
+
+constexpr char kEmptyRequestError[] = "";
+
+}  // namespace
+
 Request::Request(Context& context) noexcept : context_(&context) {}
 
 Request::~Request() {
@@ -135,9 +141,11 @@ gpuxtb_status_t Request::query(bool wait, gpuxtb_request_info_t& info, std::stri
 const char* Request::error() const noexcept {
   /* The public contract keeps this pointer valid until reuse or destruction.
    * Concurrent reuse with error inspection is therefore outside the contract,
-   * just like retaining the pointer past the next enqueue. */
+   * just like retaining the pointer past the next enqueue. IDLE/PENDING and
+   * successful completion return process-lifetime storage so installing a
+   * later deferred diagnostic cannot invalidate an earlier empty pointer. */
   std::lock_guard<std::mutex> lock(mutex_);
-  return error_.c_str();
+  return error_.empty() ? kEmptyRequestError : error_.c_str();
 }
 
 }  // namespace gpuxtb::detail

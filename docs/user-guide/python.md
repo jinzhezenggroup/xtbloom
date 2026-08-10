@@ -248,14 +248,22 @@ loss.backward()      # positions.grad == -forces
 
 The op itself is a compiled extension, `libgpuxtb_torch_ext`, written against
 the LibTorch Stable ABI (torch >= 2.10). It binds tensor data pointers directly
-to the public gpuxtb C ABI and runs one synchronous `gpuxtb_compute` per call,
-so energies, forces, and failure semantics match the rest of the package
-exactly. Because only ABI-stable symbols are used, a single binary works across
-torch releases without per-version rebuilds.  The extension is optional: when
-the wheels were built without it (or Torch < 2.10 is installed), calling
+to the public gpuxtb C ABI. CPU calls complete synchronously; CUDA calls return
+ordinary stream-ordered tensors and complete on `torch.cuda.current_stream()`.
+There is no separate async mode, future, request object, pending state, or raw
+stream argument. Structural errors are raised by the originating call; a CUDA
+execution failure that becomes visible only after submission is raised by the
+next `gpuxtb_torch` call on that stream that observes it (or reported during
+process cleanup when there is no later call). Autograd backward settles its
+corresponding forward first, so a call-level CUDA failure is raised instead of
+silently turning into a NaN gradient.
+
+Because only ABI-stable symbols are used, a single binary works across torch
+releases without per-version rebuilds. The extension is optional: when the
+wheels were built without it (or Torch < 2.10 is installed), calling
 `gpuxtb_torch` raises a clear error instead of silently degrading. Building the
-extension never downloads or requires torch: its stable headers are vendored in
-`cmake/3rdparty/torch-stable` and it links a build-time-only stub
+extension never downloads or requires torch: its stable headers are vendored
+in `cmake/3rdparty/torch-stable` and it links a build-time-only stub
 `libtorch_cpu.so`, so the shipped binary simply carries `DT_NEEDED
 libtorch_cpu.so` and binds to the torch the end user already imported. Torch is
 still required at *runtime* to call `gpuxtb_torch`; the rest of gpuxtb builds

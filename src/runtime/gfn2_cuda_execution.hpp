@@ -321,8 +321,10 @@ class Gfn2CudaExecutionCache : public RequestCompletion {
     const gpuxtb_compute_options_t& options, gpuxtb_batch_result_t& result, std::string& error);
 
 /* Submit one fixed-topology CUDA plan transaction without waiting for
- * inference or caller-output publication. Descriptor structs are copied and
- * every host numerical leaf is snapshotted before this function returns. */
+ * inference or caller-output publication. Descriptor structs are copied,
+ * every host numerical leaf is snapshotted, host topology is compared before
+ * return, and device topology is compared in owner-stream order before the
+ * transactional result gate can commit any caller output. */
 [[nodiscard]] gpuxtb_status_t enqueue_restricted_gfn2_cuda_plan(
     const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const gpuxtb_batch_t& batch,
     const gpuxtb_compute_options_t& options, const gpuxtb_batch_result_t& result,

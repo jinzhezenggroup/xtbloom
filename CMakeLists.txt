@@ -110,6 +110,7 @@ if(GPUXTB_ENABLE_TORCH_EXT)
     target_link_libraries(gpuxtb_torch_ext PRIVATE
       gpuxtb_torch_stub
       ${CMAKE_DL_LIBS}
+      Threads::Threads
     )
     target_compile_features(gpuxtb_torch_ext PRIVATE cxx_std_17)
     target_link_options(gpuxtb_torch_ext PRIVATE "-Wl,-z,defs")

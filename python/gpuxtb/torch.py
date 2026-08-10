@@ -10,11 +10,13 @@ The native data plane lives in a compiled torch extension,
 ``src/bindings/torch/gpuxtb_torch_ext.cpp``), which is
 written against the **LibTorch Stable ABI** (torch >= 2.10): it binds torch
 tensor data pointers directly to the public gpuxtb C ABI descriptors and runs
-one synchronous ``gpuxtb_compute`` per call, so the results (and gpuxtb's
-failure semantics) are identical to the rest of the package.  One binary works
-across torch releases and is loaded lazily through ``torch.ops.load_library``;
-the Python module below only supplies the thin autograd ``Function`` and the
-``torch.compile`` graph-break shim.
+CPU and host-output calls synchronously. CUDA device outputs transparently
+follow ``torch.cuda.current_stream()`` through a bounded persistent native
+request pool, so callers receive ordinary stream-ordered tensors without an
+``async`` option, future object, pending state, or user-provided stream handle.
+One binary works across torch releases and is loaded lazily through
+``torch.ops.load_library``; the Python module below only supplies the thin
+autograd ``Function`` and the ``torch.compile`` graph-break shim.
 
 The autograd contract is intentionally narrow.
 
@@ -42,6 +44,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -55,6 +58,7 @@ if TYPE_CHECKING:
     from types import ModuleType
 
 _FUNCTION_CLASS: object | None = None
+_CUDA_PROCESS_ID: int | None = None
 
 
 class _Tensor(Protocol):
@@ -69,6 +73,7 @@ class _Tensor(Protocol):
     shape: tuple[int, ...]
     device: object
     is_cuda: bool
+    _version: int
 
     def is_floating_point(self) -> bool: ...
 
@@ -107,6 +112,7 @@ class _FunctionCtx(Protocol):
     """Structural type for the autograd context state used by this op."""
 
     saved_tensors: tuple[_Tensor, ...]
+    _gpuxtb_submission_id: int
 
     def set_materialize_grads(self, value: bool) -> None: ...
 
@@ -195,8 +201,8 @@ def _torch_extension_path() -> Path | None:
     return None
 
 
-def _gpuxtb_torch_op() -> Callable[..., tuple[object, object]]:
-    """Return (and load on first use) the compiled ``gpuxtb_torch_forward`` op."""
+def _gpuxtb_torch_op() -> Callable[..., tuple[object, object, int]]:
+    """Return (and load on first use) the private compiled forward operator."""
     global _TORCH_EXT_LOADED
     torch = _torch()
     if not _TORCH_EXT_LOADED:
@@ -223,7 +229,8 @@ def _gpuxtb_torch_op() -> Callable[..., tuple[object, object]]:
             ) from exc
         _TORCH_EXT_LOADED = True
     return cast(
-        "Callable[..., tuple[object, object]]", torch.ops.gpuxtb.gpuxtb_torch_forward
+        "Callable[..., tuple[object, object, int]]",
+        torch.ops.gpuxtb._gpuxtb_torch_forward,
     )
 
 
@@ -263,6 +270,16 @@ def _resolve_context_scalars(
     return resolved_device, resolved_threads
 
 
+def _check_cuda_process() -> None:
+    """Reject inherited CUDA/pool state before touching any input producer."""
+    if _CUDA_PROCESS_ID is not None and os.getpid() != _CUDA_PROCESS_ID:
+        raise GPUxtbNotSupportedError(
+            "gpuxtb_torch does not support use after CUDA state was inherited by "
+            "fork; create workers before the first CUDA call or use a spawn-based "
+            "multiprocessing start method"
+        )
+
+
 def _current_cuda_stream(
     torch: ModuleType,
     tensors: tuple[_Tensor, ...],
@@ -277,9 +294,12 @@ def _current_cuda_stream(
     native work must remain on that stream. The raw handle is an implementation
     detail and is never accepted from the Python caller.
     """
+    global _CUDA_PROCESS_ID
+    _check_cuda_process()
     cuda_tensors = [tensor for tensor in tensors if bool(tensor.is_cuda)]
     if backend == library.BACKEND_CPU:
         return 0
+    process_id = os.getpid()
     if cuda_tensors:
         device = cuda_tensors[0].device
         if any(tensor.device != device for tensor in cuda_tensors[1:]):
@@ -294,6 +314,7 @@ def _current_cuda_stream(
         device = device_id if device_id >= 0 else torch.cuda.current_device()
 
     current_stream = torch.cuda.current_stream(device)
+    _CUDA_PROCESS_ID = process_id
     current_handle = int(current_stream.cuda_stream)
     return current_handle if current_handle > 0 else 0
 
@@ -306,6 +327,11 @@ def _native_forward(
     molecular_charges: object,
     unpaired_electrons: object,
     spin_channels: object,
+    atomic_numbers_version: int,
+    atom_offsets_version: int,
+    molecular_charges_version: int,
+    unpaired_electrons_version: int,
+    spin_channels_version: int,
     out_energies: object,
     out_forces: object,
     backend: int,
@@ -316,8 +342,8 @@ def _native_forward(
     charge_tolerance: float,
     energy_tolerance: float,
     electronic_temperature: float,
-) -> tuple[object, object]:
-    """Run the compiled stable-ABI op: tensor data plane + one gpuxtb_compute.
+) -> tuple[object, object, int]:
+    """Run the compiled stable-ABI op on Torch's selected execution stream.
 
     This is the only native call site of the module, so tests can substitute it
     to inject failures. ``electronic_temperature`` is in kelvin; the op
@@ -330,6 +356,11 @@ def _native_forward(
         molecular_charges,
         unpaired_electrons,
         spin_channels,
+        atomic_numbers_version,
+        atom_offsets_version,
+        molecular_charges_version,
+        unpaired_electrons_version,
+        spin_channels_version,
         out_energies,
         out_forces,
         backend,
@@ -340,6 +371,16 @@ def _native_forward(
         float(charge_tolerance),
         float(energy_tolerance),
         float(electronic_temperature),
+    )
+
+
+def _native_wait(submission_id: int) -> None:
+    """Settle one private CUDA submission before autograd consumes its result."""
+    if submission_id == 0:
+        return
+    torch = _torch()
+    cast("Callable[[int], None]", torch.ops.gpuxtb._gpuxtb_torch_wait)(
+        int(submission_id)
     )
 
 
@@ -418,6 +459,7 @@ def _function() -> _AutogradFunction:
             # The C ABI and the DLPack bridge are deliberately strict about
             # dtype/layout, so validate the couple of autograd-relevant facts
             # here and let the native path reject everything else.
+            _check_cuda_process()
             _preflight_positions(torch, positions)
             _reject_nonposition_grads(
                 torch,
@@ -483,6 +525,11 @@ def _function() -> _AutogradFunction:
                 molecular_charges=normalized_molecular_charges,
                 unpaired_electrons=normalized_unpaired_electrons,
                 spin_channels=normalized_spin_channels,
+                atomic_numbers_version=int(normalized_atomic_numbers._version),
+                atom_offsets_version=int(normalized_atom_offsets._version),
+                molecular_charges_version=int(normalized_molecular_charges._version),
+                unpaired_electrons_version=int(normalized_unpaired_electrons._version),
+                spin_channels_version=int(normalized_spin_channels._version),
                 out_energies=out_energies,
                 out_forces=out_forces,
                 backend=resolved_backend,
@@ -494,7 +541,10 @@ def _function() -> _AutogradFunction:
                 energy_tolerance=energy_tolerance,
                 electronic_temperature=electronic_temperature,
             )
-            energies, forces = cast("tuple[_Tensor, _Tensor]", _native_result)
+            energies, forces, submission_id = cast(
+                "tuple[_Tensor, _Tensor, int]", _native_result
+            )
+            ctx._gpuxtb_submission_id = int(submission_id)
             # Backward needs its own private snapshot of positions' gradient
             # source (-forces) so later in-place user edits of the returned
             # tensors cannot corrupt the gradient.
@@ -531,6 +581,7 @@ def _function() -> _AutogradFunction:
                 )
             if grad_energies is None:
                 return (None,) * 13
+            _native_wait(ctx._gpuxtb_submission_id)
             saved_forces, saved_atom_offsets = ctx.saved_tensors
             # dE/dR = -F, block-diagonal over the ragged batch: atom a of
             # system i receives -grad_energy[i] * F_a.
@@ -653,10 +704,11 @@ def gpuxtb_torch(
     not part of the Python API.
 
     ``gpuxtb_torch`` is eager-only by design: it dispatches a compiled custom
-    operator that calls the native library synchronously, which is kept opaque
-    to Dynamo. Calling it inside ``torch.compile`` therefore inserts a graph
-    break and executes it eagerly (correct results, no compilation speedup for
-    the gpuxtb call itself), instead of failing at trace time.
+    operator that is kept opaque to Dynamo. Calling it inside ``torch.compile``
+    therefore inserts a graph break and executes the call eagerly (correct
+    results, no compilation speedup for the gpuxtb call itself), instead of
+    failing at trace time. CUDA work remains stream-ordered after that eager
+    dispatch and does not force a host synchronization.
 
     Parameters
     ----------

@@ -442,6 +442,11 @@ typedef struct gpuxtb_batch {
  * compatible fully converged predecessor (first call, changed topology or
  * policy, or a preceding non-converged batch) is rejected with
  * GPUXTB_STATUS_INVALID_ARGUMENT before any caller output is modified.
+ *
+ * An accepted FRESH attempt consumes the preceding compatible checkpoint
+ * before execution starts. If that attempt later fails, including a CUDA
+ * failure discovered in stream order after enqueue, no stale checkpoint from
+ * an older call survives; a subsequent strict WARM request is rejected.
  */
 typedef struct gpuxtb_compute_options {
   uint32_t struct_size;
@@ -772,8 +777,9 @@ GPUXTB_API gpuxtb_status_t gpuxtb_compute(gpuxtb_context_t* context, const gpuxt
  * The request must be IDLE or COMPLETE and bound to context. An accepted
  * submission resets its previous completion status/error and becomes PENDING,
  * or COMPLETE when the backend must settle it inline. Reusing a PENDING
- * request is rejected. Descriptor structs and every HOST input are copied
- * before a successful enqueue returns and may then be reused or released.
+ * request is rejected. Descriptor structs are copied, and every HOST input is
+ * copied or fully consumed before a successful enqueue returns; those host
+ * descriptors and bytes may then be reused or released.
  * Every CUDA_DEVICE input and every HOST or CUDA_DEVICE output remains a
  * caller-owned borrowed buffer and must stay valid until COMPLETE.
  *
@@ -845,14 +851,16 @@ GPUXTB_API gpuxtb_status_t gpuxtb_plan_compute(gpuxtb_plan_t* plan, const gpuxtb
                                                gpuxtb_batch_result_t* result);
 
 /* Fixed-topology counterpart of gpuxtb_compute_enqueue with identical request,
- * result-descriptor, buffer-lifetime, and CPU NOT_SUPPORTED semantics. Device
- * or mixed topology descriptors may require a bounded admission fence before
- * enqueue is accepted; accepted inference and publication remain
+ * result-descriptor, buffer-lifetime, and CPU NOT_SUPPORTED semantics. Host
+ * topology is compared before return; CUDA-device topology is compared in
+ * stream order, and a mismatch completes with INVALID_ARGUMENT without
+ * modifying caller outputs. Accepted inference and publication remain
  * stream-asynchronous. The V1 CUDA path accepts FRESH only; strict WARM returns
  * NOT_SUPPORTED without changing request or result state. Once enqueue is
- * accepted, the request retains the plan's execution cache and the plan handle
- * may be destroyed before completion (the creating context must still outlive
- * the request). */
+ * accepted, FRESH consumes any preceding plan checkpoint even if completion
+ * later reports a deferred topology or execution failure. The request retains
+ * the plan's execution cache and the plan handle may be destroyed before
+ * completion (the creating context must still outlive the request). */
 GPUXTB_API gpuxtb_status_t gpuxtb_plan_compute_enqueue(gpuxtb_plan_t* plan,
                                                        const gpuxtb_batch_t* batch,
                                                        const gpuxtb_compute_options_t* options,
