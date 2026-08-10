@@ -64,8 +64,13 @@ using BlasSetNumThreadsLocal = int (*)(int threads);
  * instead load a renamed provider by absolute sibling path; that is a private
  * payload boundary but not Linux-style link-map isolation. The upstream Python
  * distribution is a build input only and is never imported or required at
- * runtime. Native system OpenBLAS remains a separate production provider. The
- * testing factory is kept in this internal namespace so tests can install
+ * runtime. Pyodide wheels use the official content-pinned WebAssembly
+ * OpenBLAS artifact and a narrow LAPACKE adapter. Because Emscripten has no
+ * isolated namespace or deep binding, the Python loader supplies exact
+ * installed paths and the adapter resolves raw functions only from that
+ * provider handle, never through global SciPy/NumPy symbols. Native system
+ * OpenBLAS remains a separate production provider. The testing factory is
+ * kept in this internal namespace so tests can install
  * spies and deterministic LAPACK failures without making ABI claims on behalf
  * of an external provider.
  */

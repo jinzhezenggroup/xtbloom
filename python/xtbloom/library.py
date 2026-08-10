@@ -358,6 +358,38 @@ def library_path() -> str | Path:
     )
 
 
+def _configure_pyodide_openblas_paths(path: str | Path) -> None:
+    """Publish exact private WebAssembly provider paths to the native loader.
+
+    Emscripten has neither ``dladdr``-based sibling discovery nor isolated
+    dynamic-linker namespaces. The repaired wheel layout is authoritative: one
+    adapter lives beside ``libxtbloom`` and one content-qualified provider
+    lives in auditwheel's top-level ``xtbloom.libs`` directory. These internal
+    environment values are overwritten from installed paths on every first
+    load, so user-supplied generic OpenBLAS names cannot become a fallback.
+    """
+    if sys.platform != "emscripten":
+        return
+    library = Path(path)
+    if not library.is_absolute() or not library.is_file():
+        raise XTBloomRuntimeError(
+            "Pyodide requires the bundled xTBloom library at an absolute path"
+        )
+    adapter = library.parent / "libxtbloom_pyodide_lapacke.so"
+    provider_dir = Path(__file__).resolve().parent.parent / "xtbloom.libs"
+    providers = sorted(provider_dir.glob("libxtbloom_openblas-*.so"))
+    if not adapter.is_file():
+        raise XTBloomRuntimeError(
+            f"private Pyodide LAPACKE adapter is missing: {adapter}"
+        )
+    if len(providers) != 1 or not providers[0].is_file():
+        raise XTBloomRuntimeError(
+            f"private Pyodide OpenBLAS provider is missing or ambiguous: {providers}"
+        )
+    os.environ["XTBLOOM_PYODIDE_LAPACKE_SHIM"] = str(adapter.resolve())
+    os.environ["XTBLOOM_PYODIDE_OPENBLAS"] = str(providers[0].resolve())
+
+
 def _configure_library(library: ctypes.CDLL) -> None:
     """Declare every C symbol signature the Python package calls."""
     library.xtbloom_get_last_error.argtypes = []
@@ -673,6 +705,7 @@ def load_library() -> ctypes.CDLL:
     global _lib
     if _lib is None:
         path = library_path()
+        _configure_pyodide_openblas_paths(path)
         _preload_runtime_libraries()
         try:
             library = ctypes.CDLL(str(path))
