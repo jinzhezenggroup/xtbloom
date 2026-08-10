@@ -54,7 +54,6 @@ jobs:
             echo "release tag must match vMAJOR.MINOR.PATCH" >&2
             exit 1
           fi
-          test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
           test "$(git describe --tags --exact-match HEAD)" = "$GITHUB_REF_NAME"
           test -z "$(git status --porcelain)"
       - name: Install uv and Python 3.11
@@ -235,7 +234,6 @@ jobs:
             echo "release tag must match vMAJOR.MINOR.PATCH" >&2
             exit 1
           fi
-          test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
           test "$(git describe --tags --exact-match HEAD)" = "$GITHUB_REF_NAME"
           test -z "$(git status --porcelain)"
       - name: Restore ccache
