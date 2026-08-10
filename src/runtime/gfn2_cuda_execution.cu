@@ -2149,6 +2149,7 @@ struct Gfn2CudaExecutionCache::Impl {
     PinnedArena numerical_host_staging_arena;
     CudaStream numerical_host_completion_stream;
     CudaEvent numerical_host_upload_complete;
+    CudaEvent numerical_host_release_complete;
     NumericalHostUploadCompletion numerical_host_upload_completion;
     DeviceArena force_immutable_arena;
     DeviceArena force_execution_arena;
@@ -2192,6 +2193,7 @@ struct Gfn2CudaExecutionCache::Impl {
     std::string completion_error;
     gpuxtb_status_t deferred_status = GPUXTB_STATUS_SUCCESS;
     std::string deferred_error;
+    bool host_upload_release_ordered = false;
   };
 
   Impl(std::int32_t selected_device, void* selected_stream) noexcept
@@ -2735,6 +2737,11 @@ struct Gfn2CudaExecutionCache::Impl {
     cuda_status = candidate.numerical_host_upload_complete.create(cudaEventDisableTiming);
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA numerical host-upload event creation", cuda_status);
+      return GPUXTB_STATUS_ALLOCATION_FAILED;
+    }
+    cuda_status = candidate.numerical_host_release_complete.create(cudaEventDisableTiming);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA numerical host-release event creation", cuda_status);
       return GPUXTB_STATUS_ALLOCATION_FAILED;
     }
     void* const arena = candidate.numerical_refresh_arena.get();
@@ -5772,6 +5779,13 @@ struct Gfn2CudaExecutionCache::Impl {
                                                release_numerical_host_upload, &completion);
       }
       if (completion_status == cudaSuccess) {
+        /* Request completion can wait on this event so the public event also
+         * proves that the private callback no longer retains Prepared-owned
+         * state. Ordinary query/wait then needs no second host stream fence. */
+        completion_status = cudaEventRecord(current.numerical_host_release_complete.get(),
+                                            current.numerical_host_completion_stream.get());
+      }
+      if (completion_status == cudaSuccess) {
         current.submitted = true;
       } else {
         /* Earlier H2Ds may already reference the pinned image.  Leave pending
@@ -7058,6 +7072,19 @@ gpuxtb_status_t enqueue_restricted_gfn2_cuda_plan(
                                                                   error);
       if (status != GPUXTB_STATUS_SUCCESS) return fail_submitted(status);
       ++implementation.request_submissions;
+      if (working.numerical_host_upload_completion.pending.load(std::memory_order_acquire)) {
+        const cudaError_t release_status = cudaStreamWaitEvent(
+            implementation.stream, working.numerical_host_release_complete.get(), 0u);
+        if (release_status != cudaSuccess) {
+          /* The commit is already accepted. Preserve a PENDING request and
+           * let its exceptional settlement fence the two exact streams. */
+          active.deferred_status = GPUXTB_STATUS_INTERNAL_ERROR;
+          active.deferred_error = cuda_error_message(
+              "CUDA numerical host-release ordering for request completion", release_status);
+          return GPUXTB_STATUS_SUCCESS;
+        }
+        active.host_upload_release_ordered = true;
+      }
       status = implementation.record_public_result_completion_locked(
           working, active.transaction, PublicResultTransactionPhase::kCommitSubmitted,
           PublicResultTransactionPhase::kCommitCompletionRecorded,
@@ -7073,10 +7100,19 @@ gpuxtb_status_t enqueue_restricted_gfn2_cuda_plan(
         return GPUXTB_STATUS_SUCCESS;
       }
       if (active.transaction.phase == PublicResultTransactionPhase::kCommitCompleted) {
-        const cudaError_t host_status =
-            working.numerical_host_completion_stream.valid()
-                ? cudaStreamSynchronize(working.numerical_host_completion_stream.get())
-                : cudaSuccess;
+        const bool host_release_pending =
+            working.numerical_host_upload_completion.pending.load(std::memory_order_acquire);
+        if (host_release_pending && active.host_upload_release_ordered) {
+          active.deferred_status = GPUXTB_STATUS_INTERNAL_ERROR;
+          active.deferred_error =
+              "CUDA numerical host release remained pending after "
+              "owner-stream completion fallback";
+          return GPUXTB_STATUS_SUCCESS;
+        }
+        cudaError_t host_status = cudaSuccess;
+        if (host_release_pending) {
+          host_status = cudaStreamSynchronize(working.numerical_host_completion_stream.get());
+        }
         if (host_status != cudaSuccess) {
           active.deferred_status = GPUXTB_STATUS_INTERNAL_ERROR;
           active.deferred_error = cuda_error_message(
@@ -7220,6 +7256,14 @@ gpuxtb_status_t Gfn2CudaExecutionCache::probe(bool wait, RequestCompletionResult
 
     const auto observe_private_stream = [&]() -> gpuxtb_status_t {
       if (!current.numerical_host_completion_stream.valid()) return GPUXTB_STATUS_SUCCESS;
+      if (!current.numerical_host_upload_completion.pending.load(std::memory_order_acquire)) {
+        return GPUXTB_STATUS_SUCCESS;
+      }
+      if (active.host_upload_release_ordered) {
+        result.completion_error =
+            "CUDA numerical host release remained pending after request completion";
+        return GPUXTB_STATUS_INTERNAL_ERROR;
+      }
       const cudaError_t cuda_status =
           wait ? cudaStreamSynchronize(current.numerical_host_completion_stream.get())
                : cudaStreamQuery(current.numerical_host_completion_stream.get());
@@ -7324,7 +7368,8 @@ void Gfn2CudaExecutionCache::settle_noexcept() noexcept {
           if (owner_status == cudaSuccess) current.submitted = false;
         }
         cudaError_t host_status = cudaSuccess;
-        if (current.numerical_host_completion_stream.valid()) {
+        if (current.numerical_host_completion_stream.valid() &&
+            current.numerical_host_upload_completion.pending.load(std::memory_order_acquire)) {
           host_status = cudaStreamSynchronize(current.numerical_host_completion_stream.get());
           if (host_status == cudaSuccess) {
             current.numerical_host_upload_completion.pending.store(false,
