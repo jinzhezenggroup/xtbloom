@@ -404,7 +404,11 @@ def inspect(wheel: Path, manifest_path: Path) -> None:
         main_needed, main_rpath = _dylink(main)
         adapter_needed, adapter_rpath = _dylink(adapter)
         provider_needed, provider_rpath = _dylink(provider)
-        if main_needed or main_rpath:
+        # auditwheel-emscripten applies the vendored-library search path to
+        # every repaired side module, including libxtbloom even though its
+        # NEEDED list is intentionally empty. Pin that exact repair output so
+        # an additional or more permissive runtime path remains a failure.
+        if main_needed or main_rpath != ["$ORIGIN/../../xtbloom.libs"]:
             raise InspectionError(
                 "libxtbloom linkage differs: "
                 f"needed={main_needed}, runtime_paths={main_rpath}"

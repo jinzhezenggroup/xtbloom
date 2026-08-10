@@ -223,7 +223,11 @@ def _inspection_fixture(
     ]
     main = _module(
         needed=main_needed or [],
-        runtime_paths=main_runtime_paths or [],
+        runtime_paths=(
+            ["$ORIGIN/../../xtbloom.libs"]
+            if main_runtime_paths is None
+            else main_runtime_paths
+        ),
         exports=["xtbloom_version_string"],
     )
     adapter = _module(
@@ -321,9 +325,15 @@ def test_full_wheel_inspection_rejects_main_provider_dependency(
         INSPECTOR.inspect(wheel, manifest)
 
 
-def test_full_wheel_inspection_rejects_main_runtime_path(tmp_path: Path) -> None:
-    """Keep libxtbloom free of repair-added provider search paths."""
-    wheel, manifest = _inspection_fixture(tmp_path, main_runtime_paths=["$ORIGIN"])
+@pytest.mark.parametrize(
+    "runtime_paths",
+    [[], ["$ORIGIN"], ["$ORIGIN/../../xtbloom.libs", "$ORIGIN"]],
+)
+def test_full_wheel_inspection_rejects_main_runtime_path(
+    tmp_path: Path, runtime_paths: list[str]
+) -> None:
+    """Require auditwheel's exact private-cohort path on libxtbloom."""
+    wheel, manifest = _inspection_fixture(tmp_path, main_runtime_paths=runtime_paths)
     with pytest.raises(INSPECTOR.InspectionError, match="libxtbloom linkage differs"):
         INSPECTOR.inspect(wheel, manifest)
 
