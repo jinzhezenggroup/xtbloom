@@ -67,6 +67,51 @@ compute-sanitizer --tool synccheck --error-exitcode=99 <test-binary>
 
 Choose binaries that traverse the changed production path and failure path; a sanitizer-clean leaf kernel alone is insufficient. Preserve exact tool versions, commands, exit codes, and error/hazard counts.
 
+### Apply Owner-Approved External-Tool Dispositions
+
+Never suppress sanitizer output globally or rewrite a tool failure as a clean
+run. Reuse an owner-approved disposition only when every recorded environment,
+signature, control, and scope condition matches durable issue, PR, or
+checked-in evidence.
+
+Compute Sanitizer 2025.2.1 cannot express this waiver as a native suppression:
+its `--suppressions` support excludes `synccheck` barrier reports.
+`--kernel-name-exclude` skips complete kernels and does not safely preserve
+coverage for this device-launched child-Graph case. Do not use a broad filter
+such as `regex=.*` merely to obtain exit code zero.
+
+The xTBloom Blackwell device-Graph `synccheck` disposition applies only to:
+
+- NVIDIA GeForce RTX 5090 (`sm_120`), driver 580.95.05;
+- CUDA 12.9.86 and Compute Sanitizer 2025.2.1.0 build 35969825;
+- device-launched Graph execution using Fire-and-Forget or Tail Launch;
+- reports containing only `Barrier error detected. Divergent thread(s) in warp`
+  at `reduce_spin_atomic_charges_kernel+0x2b0`;
+- an unchanged matching kernel and device-launch path relative to the archived
+  issue #279 evidence;
+- a clean uninstrumented production run, clean direct and host-Graph controls
+  recorded by the issue #279 disposition, and zero memcheck, racecheck, and
+  initcheck findings.
+
+When every condition matches, preserve the literal `synccheck` exit code and
+error count, classify the acceptance row as
+`PASS (OWNER-DISPOSITIONED UPSTREAM TOOL DEFECT)`, and state explicitly that
+the tool did not return a clean pass. Do not repeat the root-cause investigation
+or refactor correct CUDA code solely to silence this signature. Cite issue #279
+and its evidence bundle in the ledger.
+
+When the affected kernel, Graph launch control, GPU, driver, toolkit, and tool
+version are unchanged, do not rerun the known-failing device-Graph coordinate
+solely to reproduce the archived result. Reuse the disposition and run the
+clean direct/host-Graph control plus the other applicable sanitizer gates.
+
+Run `synccheck` again when the affected kernel, Graph launch control, GPU,
+driver, CUDA toolkit, Compute Sanitizer version, or requested path changes. Any
+different kernel, program counter, report class, environment, additional
+finding, failed clean control, or nonzero result from another sanitizer is not
+covered and remains a blocker. Never use the disposition to claim that
+`synccheck` itself returned a clean pass.
+
 For ABI, packaging, host-runtime, or publication changes, also:
 
 - Install the shared CUDA build into an isolated prefix.
