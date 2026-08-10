@@ -137,6 +137,7 @@ finite-difference, failure-isolation, and NumPy/SciPy coexistence tests. The
 wheel is release-eligible and enters the same PyPI artifact prefix as the
 validated native wheels; the existing Web demo continues to use its separate
 preloaded Eigen LAPACKE/CBLAS side-module design.
+
 Eigen is acquired only by Web-enabled CMake configurations from the fixed
 official archive (or `XTBLOOM_WEB_EIGEN_ARCHIVE` for offline builds). The
 repository and sdist retain the provenance manifest and exact legal records,
@@ -156,6 +157,34 @@ without an NVIDIA driver do not count as real CUDA runtime validation.
 
 ## Source distributions
 
+The PyPI sdist is an installation artifact, not a repository snapshot. It
+contains the native and Python sources needed for a PEP 517 wheel build, the
+generated parameter sources plus their deterministic generators, vendored
+build inputs, manifests, licenses, notices, and frozen version metadata.
+
+Repository-only validation and publication surfaces stay in Git: native and
+Python tests, benchmark harnesses and evidence, conformance/oracle corpora,
+maintainer documentation, the Web demo, CI and coding-agent configuration, and
+the development dependency lock. The downloaded Eigen archive and header tree
+likewise remain Web-build inputs rather than sdist payload; the compact Eigen
+provenance and legal records stay distributed. Excluding repository-only files
+does not claim that the corresponding validation passed inside the sdist;
+release evidence remains in the repository and its issue/CI records.
+
+The sdist supports ordinary PEP 517 CPU or CUDA source builds. It retains the
+Pyodide OpenBLAS provenance manifest, exact 13-file recipe source closure, and
+five corresponding legal texts as auditable source material. The Pyodide
+resolver, downloaded ZIP and provider binary, repair scripts, and installed-
+wheel test orchestration remain release-tag checkout or wheel-only; ordinary
+sdist builds do not enable Pyodide provider bundling. Official cibuildwheel
+jobs therefore build from the exact release tag rather than using the sdist as
+their input. The one `python/ci` helper kept in the archive is the desktop/Linux
+OpenBLAS manifest resolver that CMake invokes directly when a source build
+explicitly requests that reviewed provider input. Repository tests and the Web
+demo are likewise checkout-only. A native CMake consumer unpacking the sdist
+must configure with
+`-DXTBLOOM_BUILD_TESTS=OFF`; ordinary PEP 517 builds set that option already.
+
 Build and inspect a source archive with:
 
 ```console
@@ -165,9 +194,12 @@ python3 tools/licensing/check_licenses.py --source-root . \
 ```
 
 The archive must retain the license, CUDA/MKL additional permission,
-third-party notices, required license texts, parameter and source provenance,
-the pinned implib generator source, both README roles, and maintained
-documentation.
+third-party notices, required license texts, parameter generators and source
+provenance, the pinned implib generator source, vendored LibTorch Stable ABI
+headers, both README roles, and every native/Python input used by ordinary PEP
+517 source builds. CI unpacks the archive and builds a CPU wheel from that
+extracted tree so a missing hidden checkout dependency cannot be masked by the
+repository.
 
 ## External material
 

@@ -141,11 +141,38 @@ sdist.include = [
   "tools/eigen_dependency.py",
   "data/parameters/*_manifest.json",
   "data/parameters/manifest.json",
+  # CMake invokes this resolver when a source build explicitly requests the
+  # reviewed private OpenBLAS wheel input. Other python/ci scripts belong to
+  # the repository's checkout-based release-wheel orchestration.
+  "python/ci/resolve-openblas-wheel.py",
 ]
 sdist.exclude = [
-  # Raw performance evidence is repository-only and hash-pinned in place; it
-  # is not a runtime, build, or source-consumer input.
-  "benchmarks/evidence/**",
+  # PyPI source distributions are installation inputs, not repository
+  # snapshots. Keep build sources, generated parameters and their generators,
+  # vendored build inputs, provenance, and legal material; exclude validation,
+  # publication, Web, CI, and coding-agent surfaces that are not read while
+  # building a wheel from the unpacked archive.
+  ".agents/**",
+  ".github/**",
+  "benchmarks/**",
+  "data/conformance/**",
+  "docs/**",
+  "python/ci/**",
+  "python/tests/**",
+  "skills/**",
+  "tests/**",
+  "tools/conformance/**",
+  "tools/licensing/**",
+  "tools/oracle/**",
+  "web/**",
+  ".clang-format",
+  ".gitattributes",
+  ".gitignore",
+  ".pre-commit-config.yaml",
+  "AGENTS.md",
+  "noxfile.py",
+  "src/backends/cuda/gfn2_energy_force_execution_test.cuh",
+  "uv.lock",
   "build*/**",
   ".cache/**",
   ".claude/**",
