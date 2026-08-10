@@ -116,6 +116,7 @@ def test_compiled_schema_marks_outputs_mutable() -> None:
 
     schema = str(torch_module._xtbloom_torch_op().default._schema)
     assert schema.startswith("xtbloom::_xtbloom_torch_forward(")
+    assert "Tensor atomic_numbers_owner" in schema
     assert "Tensor(a!) out_energies" in schema
     assert "Tensor(b!) out_forces" in schema
     assert "-> (Tensor(a!), Tensor(b!), int)" in schema
@@ -143,6 +144,19 @@ class _DLPackOnly:
         """Reject the implicit host conversion used by the original bug."""
         del dtype, copy
         raise AssertionError("DLPack-only input must not be converted by NumPy")
+
+
+def _interleaved_strided_view(tensor: object, torch: object) -> object:
+    """Copy a 1-D tensor into a non-contiguous view with the same values."""
+    storage = torch.empty(
+        tensor.numel() * 2,
+        dtype=tensor.dtype,
+        device=tensor.device,
+    )
+    view = storage[::2]
+    view.copy_(tensor)
+    assert not view.is_contiguous()
+    return view
 
 
 def _skip_reason() -> str | None:
@@ -387,23 +401,30 @@ def test_numpy_auxiliary_arrays_dispatch_as_tensors() -> None:
 
 
 def test_dlpack_only_auxiliaries_survive_backward() -> None:
-    """Every non-Torch DLPack auxiliary stays native through dispatch."""
+    """Strided non-Torch DLPack auxiliaries are packed before dispatch."""
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
     import torch
 
-    positions = torch.tensor(
-        WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
+    arrays = _packed(
+        [WATER_NUMBERS, WATER_NUMBERS],
+        [WATER_POSITIONS, WATER_POSITIONS],
+        torch,
     )
-    arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    positions = arrays["positions"].requires_grad_(True)
+    auxiliary = {
+        name: _interleaved_strided_view(value, torch)
+        for name, value in arrays.items()
+        if name != "positions"
+    }
     energies, forces = xtbloom_torch(
         positions,
-        _DLPackOnly(arrays["atomic_numbers"]),
-        _DLPackOnly(arrays["atom_offsets"]),
-        _DLPackOnly(arrays["molecular_charges"]),
-        _DLPackOnly(arrays["unpaired_electrons"]),
-        _DLPackOnly(arrays["spin_channels"]),
+        _DLPackOnly(auxiliary["atomic_numbers"]),
+        _DLPackOnly(auxiliary["atom_offsets"]),
+        _DLPackOnly(auxiliary["molecular_charges"]),
+        _DLPackOnly(auxiliary["unpaired_electrons"]),
+        _DLPackOnly(auxiliary["spin_channels"]),
         backend="cpu",
     )
     energies.sum().backward()
@@ -438,14 +459,24 @@ import torch
 
 torch.ops.load_library(sys.argv[1])
 positions = torch.zeros((1, 3), dtype=torch.float64)
+atomic_numbers = torch.ones(1, dtype=torch.int32)
+atom_offsets = torch.tensor([0, 1], dtype=torch.int64)
+molecular_charges = torch.zeros(1, dtype=torch.float64)
+unpaired_electrons = torch.zeros(1, dtype=torch.int32)
+spin_channels = torch.ones(1, dtype=torch.int32)
 try:
     torch.ops.xtbloom._xtbloom_torch_forward(
         positions,
-        torch.ones(1, dtype=torch.int32),
-        torch.tensor([0, 1], dtype=torch.int64),
-        torch.zeros(1, dtype=torch.float64),
-        torch.zeros(1, dtype=torch.int32),
-        torch.ones(1, dtype=torch.int32),
+        atomic_numbers,
+        atom_offsets,
+        molecular_charges,
+        unpaired_electrons,
+        spin_channels,
+        atomic_numbers,
+        atom_offsets,
+        molecular_charges,
+        unpaired_electrons,
+        spin_channels,
         0, 0, 0, 0, 0,
         torch.empty(1, dtype=torch.float64),
         torch.empty((1, 3), dtype=torch.float64),
@@ -1276,6 +1307,9 @@ def test_torch_cuda_retains_dlpack_inputs_until_completion() -> None:
         name: tensor.to("cuda")
         for name, tensor in _packed([WATER_NUMBERS], [WATER_POSITIONS], torch).items()
     }
+    owners["atomic_numbers"] = _interleaved_strided_view(
+        owners["atomic_numbers"], torch
+    )
     wrappers = {name: _DLPackOnly(tensor) for name, tensor in owners.items()}
     stream = torch.cuda.Stream()
 

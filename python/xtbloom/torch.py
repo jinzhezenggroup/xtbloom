@@ -133,11 +133,11 @@ def _torch() -> ModuleType:
 def _normalize_layout(value: object) -> object:
     """Return a detached, compact C-contiguous array of the same dtype.
 
-    The DLPack bridge only ever exports borrowed views (torch's ``copy=True``
-    does not actually pack strided views into a contiguous copy), so this
-    normalization step produces the compact copy before native descriptors are
-    bound. Contiguous inputs pass through without a copy; scalar types are
-    never coerced.
+    This helper handles inputs whose concrete array type is already known.
+    Arbitrary DLPack producers must first be imported as tensors by
+    :func:`_to_compact_tensor`, because their layout cannot be inspected here.
+    Contiguous inputs pass through without a copy; scalar types are never
+    coerced.
     """
     torch = _torch()
     if torch.is_tensor(value):
@@ -155,6 +155,19 @@ def _to_tensor(value: object) -> _Tensor:
     if isinstance(value, np.ndarray):
         return torch.from_numpy(np.ascontiguousarray(value))
     return torch.from_dlpack(value)
+
+
+def _to_compact_tensor(value: object) -> tuple[_Tensor, _Tensor]:
+    """Import one auxiliary and return its compact view plus lifetime owner.
+
+    A non-Torch DLPack producer may export a strided tensor, so layout
+    normalization has to happen *after* ``torch.from_dlpack``.  Keep the
+    imported tensor separately: CUDA ``contiguous()`` may enqueue a copy, and
+    the native request pool must retain the borrowed DLPack allocation until
+    that copy and the dependent inference have completed.
+    """
+    imported = _to_tensor(value).detach()
+    return imported.contiguous(), imported
 
 
 # --- compiled torch extension -------------------------------------------------
@@ -327,6 +340,11 @@ def _native_forward(
     molecular_charges: object,
     unpaired_electrons: object,
     spin_channels: object,
+    atomic_numbers_owner: object,
+    atom_offsets_owner: object,
+    molecular_charges_owner: object,
+    unpaired_electrons_owner: object,
+    spin_channels_owner: object,
     atomic_numbers_version: int,
     atom_offsets_version: int,
     molecular_charges_version: int,
@@ -356,6 +374,11 @@ def _native_forward(
         molecular_charges,
         unpaired_electrons,
         spin_channels,
+        atomic_numbers_owner,
+        atom_offsets_owner,
+        molecular_charges_owner,
+        unpaired_electrons_owner,
+        spin_channels_owner,
         atomic_numbers_version,
         atom_offsets_version,
         molecular_charges_version,
@@ -478,21 +501,27 @@ def _function() -> _AutogradFunction:
             # offsets through DLPack once and pass the resulting Torch tensor
             # to both native inference and backward.  In particular, CUDA
             # producers such as CuPy intentionally reject np.asarray.
-            normalized_atomic_numbers = _to_tensor(_normalize_layout(atomic_numbers))
-            normalized_atom_offsets = _to_tensor(_normalize_layout(atom_offsets))
-            normalized_positions = cast("_Tensor", _normalize_layout(positions))
-            normalized_molecular_charges = _to_tensor(
-                _normalize_layout(molecular_charges)
+            normalized_atomic_numbers, atomic_numbers_owner = _to_compact_tensor(
+                atomic_numbers
             )
-            normalized_unpaired_electrons = _to_tensor(
-                _normalize_layout(unpaired_electrons)
+            normalized_atom_offsets, atom_offsets_owner = _to_compact_tensor(
+                atom_offsets
+            )
+            normalized_positions = cast("_Tensor", _normalize_layout(positions))
+            normalized_molecular_charges, molecular_charges_owner = _to_compact_tensor(
+                molecular_charges
+            )
+            normalized_unpaired_electrons, unpaired_electrons_owner = (
+                _to_compact_tensor(unpaired_electrons)
             )
             nsystems = int(normalized_atom_offsets.shape[0]) - 1
             if spin_channels is None:
                 spin_channels = torch.ones(
                     nsystems, dtype=torch.int32, device=positions.device
                 )
-            normalized_spin_channels = _to_tensor(_normalize_layout(spin_channels))
+            normalized_spin_channels, spin_channels_owner = _to_compact_tensor(
+                spin_channels
+            )
             resolved_backend = _resolve_backend(backend)
             resolved_device, resolved_threads = _resolve_context_scalars(
                 device_id, cpu_threads
@@ -525,6 +554,11 @@ def _function() -> _AutogradFunction:
                 molecular_charges=normalized_molecular_charges,
                 unpaired_electrons=normalized_unpaired_electrons,
                 spin_channels=normalized_spin_channels,
+                atomic_numbers_owner=atomic_numbers_owner,
+                atom_offsets_owner=atom_offsets_owner,
+                molecular_charges_owner=molecular_charges_owner,
+                unpaired_electrons_owner=unpaired_electrons_owner,
+                spin_channels_owner=spin_channels_owner,
                 atomic_numbers_version=int(normalized_atomic_numbers._version),
                 atom_offsets_version=int(normalized_atom_offsets._version),
                 molecular_charges_version=int(normalized_molecular_charges._version),

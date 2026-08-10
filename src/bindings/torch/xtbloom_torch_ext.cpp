@@ -468,7 +468,10 @@ enum class SlotState : std::uint8_t { kIdle, kReserved, kPending, kBroken };
 
 struct PlanGroup;
 
-using RetainedTensors = std::array<std::optional<Tensor>, 8>;
+// The first eight tensors directly back public descriptors/results. The final
+// five own auxiliary DLPack imports whose strided data may have been copied
+// into those compact descriptor tensors on the caller's CUDA stream.
+using RetainedTensors = std::array<std::optional<Tensor>, 13>;
 
 std::uint64_t current_process_id() noexcept {
 #if defined(_WIN32)
@@ -590,7 +593,7 @@ class TorchRequestPool {
 
   std::int64_t submit(const ContextKey& context_key, const PlanKey& plan_key,
                       const xtbloom_batch_t& batch, const xtbloom_compute_options_t& options,
-                      const std::array<Tensor, 8>& tensors) {
+                      const std::array<Tensor, 13>& tensors) {
     check_process();
     const StreamKey stream_key = stream_key_of(context_key);
     if (auto deferred = take_deferred_error(stream_key)) {
@@ -1440,12 +1443,13 @@ TorchRequestPool& torch_request_pool(const XTBloomApi& api) {
 
 std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
     Tensor positions, Tensor atomic_numbers, Tensor atom_offsets, Tensor molecular_charges,
-    Tensor unpaired_electrons, Tensor spin_channels, int64_t atomic_numbers_version,
-    int64_t atom_offsets_version, int64_t molecular_charges_version,
-    int64_t unpaired_electrons_version, int64_t spin_channels_version, Tensor out_energies,
-    Tensor out_forces, int64_t backend, int64_t device_id, int64_t cpu_threads, int64_t stream,
-    int64_t max_scc_iterations, double charge_tolerance, double energy_tolerance,
-    double electronic_temperature) {
+    Tensor unpaired_electrons, Tensor spin_channels, Tensor atomic_numbers_owner,
+    Tensor atom_offsets_owner, Tensor molecular_charges_owner, Tensor unpaired_electrons_owner,
+    Tensor spin_channels_owner, int64_t atomic_numbers_version, int64_t atom_offsets_version,
+    int64_t molecular_charges_version, int64_t unpaired_electrons_version,
+    int64_t spin_channels_version, Tensor out_energies, Tensor out_forces, int64_t backend,
+    int64_t device_id, int64_t cpu_threads, int64_t stream, int64_t max_scc_iterations,
+    double charge_tolerance, double energy_tolerance, double electronic_temperature) {
   const XTBloomApi& api = xtbloom_api();
   // Fail fast when the torch extension was built against an incompatible
   // ABI level, before any tensor contract is assumed.
@@ -1555,9 +1559,21 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
         double_bits(energy_tolerance),
         double_bits(options.electronic_temperature),
     };
-    const std::array<Tensor, 8> retained = {positions,         atomic_numbers,     atom_offsets,
-                                            molecular_charges, unpaired_electrons, spin_channels,
-                                            out_energies,      out_forces};
+    const std::array<Tensor, 13> retained = {
+        positions,
+        atomic_numbers,
+        atom_offsets,
+        molecular_charges,
+        unpaired_electrons,
+        spin_channels,
+        out_energies,
+        out_forces,
+        atomic_numbers_owner,
+        atom_offsets_owner,
+        molecular_charges_owner,
+        unpaired_electrons_owner,
+        spin_channels_owner,
+    };
     const std::int64_t submission_id =
         torch_request_pool(api).submit(context_key, plan_key, batch, options, retained);
     return {out_energies, out_forces, submission_id};
@@ -1651,6 +1667,8 @@ STABLE_TORCH_LIBRARY(xtbloom, m) {
   m.def(
       "_xtbloom_torch_forward(Tensor positions, Tensor atomic_numbers, Tensor atom_offsets, "
       "Tensor molecular_charges, Tensor unpaired_electrons, Tensor spin_channels, "
+      "Tensor atomic_numbers_owner, Tensor atom_offsets_owner, Tensor molecular_charges_owner, "
+      "Tensor unpaired_electrons_owner, Tensor spin_channels_owner, "
       "int atomic_numbers_version, int atom_offsets_version, int molecular_charges_version, "
       "int unpaired_electrons_version, int spin_channels_version, "
       "Tensor(a!) out_energies, Tensor(b!) out_forces, int backend, int device_id, "
