@@ -4,8 +4,10 @@ The Python package wraps the public xTBloom C ABI with `ctypes`. There is no
 separate CPython extension API, and every high-level calculation owns or shares
 a native xTBloom context.
 
-For the concise package page and install commands, see
-[`python/README.md`](../../python/README.md).
+For Python and native toolchain versions, BLAS/CUDA requirements, and the
+source-build versus wheel boundary, start with the
+[installation prerequisites](index.md#prerequisites). The concise package page
+and install commands are in [`python/README.md`](../../python/README.md).
 
 ## Single systems and context reuse
 
@@ -86,7 +88,7 @@ systems = [
     ),
 ]
 
-with BatchCalculator(systems, backend="auto") as calc:
+with BatchCalculator(systems, backend="cuda") as calc:  # Use "cpu" for CPU-only builds.
     result = calc.compute()
 
 print(result.energies)
