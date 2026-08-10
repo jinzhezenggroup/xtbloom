@@ -9,8 +9,8 @@ Use independent evidence to distinguish a correct implementation from two implem
 
 ## Route to the Authoritative Contract
 
-- Read `docs/architecture.md` for public energy, force, finite-temperature, failure, and WARM semantics.
-- Read `docs/qmmm.md` for point charges and caller-owned periodic `b + A*q` operators.
+- Read `docs/developer-guide/architecture.md` for public energy, force, finite-temperature, failure, and WARM semantics.
+- Read `docs/user-guide/qmmm.md` and `docs/theory/qmmm.md` for point charges and caller-owned periodic `b + A*q` operators.
 - Read `tools/conformance/README.md` before touching the conformance corpus or public runners.
 - Read `tools/parameters/README.md` before changing parameter generators or tables.
 - Read `tools/oracle/tblite_scc_trace/README.md` before changing SCC observer, trace, or replay work.

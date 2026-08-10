@@ -1,0 +1,4 @@
+interface:
+  display_name: "Couple xTBloom to QM/MM"
+  short_description: "Add point charges and charge-response operators"
+  default_prompt: "Use $xtbloom-couple-qmmm to connect this MM electrostatic model to xTBloom and account for every force term."

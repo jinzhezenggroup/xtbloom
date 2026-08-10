@@ -1,0 +1,4 @@
+interface:
+  display_name: "Integrate the xTBloom C API"
+  short_description: "Build safe C and C++ consumers of xTBloom"
+  default_prompt: "Use $xtbloom-integrate-c-api to add a correct installed xTBloom C or C++ consumer to this project."
