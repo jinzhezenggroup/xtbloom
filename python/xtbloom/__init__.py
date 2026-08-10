@@ -36,9 +36,10 @@ from .interface import (
 )
 from .torch import xtbloom_torch
 
-# The installed distribution metadata is resolved from Git tags by the build
-# backend. Reading it here avoids a second generated or hand-maintained Python
-# version source.
+# The build backend records exact release tags or revision-aware development
+# versions in the installed distribution metadata. Reading it here avoids a
+# second generated or hand-maintained Python version source; the embedded
+# native library deliberately keeps the nearest release-tag version instead.
 __version__ = _distribution_version("xtbloom")
 del _distribution_version
 

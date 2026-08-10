@@ -1,10 +1,10 @@
 # Resolve xTBloom's product version from one tag-derived source.
 #
-# Python builds receive the tag value from scikit-build-core and setuptools-scm.
-# Native builds resolve the same strict vMAJOR.MINOR.PATCH tag from Git, or
-# consume the value frozen into an sdist/Git archive. Commit distance, object
-# IDs, and worktree dirtiness never become part of the product version. The C
-# ABI generation and ELF SONAME remain separate manual decisions.
+# Python distributions use revision-aware setuptools-scm versions, while the
+# embedded native product keeps the nearest strict vMAJOR.MINOR.PATCH tag.
+# Commit distance, object IDs, and worktree dirtiness identify Python artifacts
+# only; they never enter the native CMake/header/C API version. The C ABI
+# generation and ELF SONAME remain separate manual decisions.
 
 function(_xtbloom_validate_resolved_version release_version full_version source_name)
   if(NOT release_version MATCHES
@@ -41,29 +41,49 @@ endfunction()
 
 function(_xtbloom_versions_from_metadata full_version source_name out_release out_full)
   string(STRIP "${full_version}" full_version)
-  if(NOT full_version MATCHES
-      "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+  set(release_pattern
+    "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+  )
+  string(CONCAT development_pattern
+    "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)"
+    "\\.post1\\.dev(0|[1-9][0-9]*)"
+    "\\+g[0-9a-f]+"
+    "(\\.d[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9])?$"
+  )
+  if(full_version MATCHES "${release_pattern}")
+    set(release_version "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+  elseif(full_version MATCHES "${development_pattern}")
+    # no-guess-dev adds post1.devN without changing Version.release. Keeping
+    # that tuple unchanged lets the wheel identify its source commit without
+    # changing the native product tag embedded in the same artifact.
+    set(release_version "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+  else()
     message(FATAL_ERROR
-      "${source_name} version '${full_version}' has no three-part numeric release tuple"
+      "${source_name} version '${full_version}' is neither a strict release "
+      "nor a supported setuptools-scm development version"
     )
   endif()
-  set(release_version "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
   _xtbloom_validate_resolved_version(
-    "${release_version}" "${full_version}" "${source_name}"
+    "${release_version}" "${release_version}" "${source_name} native version"
   )
   set(${out_release} "${release_version}" PARENT_SCOPE)
-  set(${out_full} "${full_version}" PARENT_SCOPE)
+  set(${out_full} "${release_version}" PARENT_SCOPE)
 endfunction()
 
 function(xtbloom_resolve_version out_release out_full)
   if(DEFINED SKBUILD_PROJECT_VERSION AND DEFINED SKBUILD_PROJECT_VERSION_FULL)
-    _xtbloom_validate_resolved_version(
-      "${SKBUILD_PROJECT_VERSION}"
-      "${SKBUILD_PROJECT_VERSION_FULL}"
-      "scikit-build-core"
+    _xtbloom_versions_from_metadata(
+      "${SKBUILD_PROJECT_VERSION_FULL}" "scikit-build-core"
+      native_release native_full
     )
-    set(${out_release} "${SKBUILD_PROJECT_VERSION}" PARENT_SCOPE)
-    set(${out_full} "${SKBUILD_PROJECT_VERSION_FULL}" PARENT_SCOPE)
+    if(NOT SKBUILD_PROJECT_VERSION STREQUAL native_release)
+      message(FATAL_ERROR
+        "scikit-build-core release tuple '${SKBUILD_PROJECT_VERSION}' does not "
+        "match full Python version '${SKBUILD_PROJECT_VERSION_FULL}'"
+      )
+    endif()
+    set(${out_release} "${native_release}" PARENT_SCOPE)
+    set(${out_full} "${native_full}" PARENT_SCOPE)
     return()
   endif()
 
@@ -149,8 +169,13 @@ function(xtbloom_resolve_version out_release out_full)
       archival_describe "${archival_describe_line}"
     )
     if(archival_describe AND NOT archival_describe MATCHES "\\$Format:")
+      # The full describe value feeds setuptools-scm's Python identity. Strip
+      # its distance and node suffix to recover the unchanged native tag.
+      string(REGEX REPLACE "-[0-9]+-g[0-9a-f]+$" ""
+        archival_tag "${archival_describe}"
+      )
       _xtbloom_versions_from_tag(
-        "${archival_describe}" release_version full_version
+        "${archival_tag}" release_version full_version
       )
       set(${out_release} "${release_version}" PARENT_SCOPE)
       set(${out_full} "${full_version}" PARENT_SCOPE)

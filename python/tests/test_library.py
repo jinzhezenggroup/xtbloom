@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import site
+from importlib.metadata import version as distribution_version
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -61,9 +63,32 @@ def _fake_request_library(*, omit: str | None = None) -> _FakeLibrary:
     return fake
 
 
+def _expected_native_version(python_version: str) -> str:
+    """Map a release or setuptools-scm development version to its base tag."""
+    public = python_version.partition("+")[0]
+    release = re.fullmatch(
+        r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
+        public,
+    )
+    if release is not None:
+        return public
+    development = re.fullmatch(
+        r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\."
+        r"(0|[1-9][0-9]*)\.post1\.dev(0|[1-9][0-9]*)",
+        public,
+    )
+    if development is None:
+        raise AssertionError(
+            f"unexpected Python distribution version: {python_version}"
+        )
+    major, minor, patch, _distance = development.groups()
+    return f"{major}.{minor}.{patch}"
+
+
 def test_version_string() -> None:
-    """Keep Python distribution metadata and the native C API in lockstep."""
-    assert library.get_version() == __version__
+    """Expose SCM identity in Python without changing the native product tag."""
+    assert __version__ == distribution_version("xtbloom")
+    assert library.get_version() == _expected_native_version(__version__)
 
 
 def test_request_api_is_optional_as_a_complete_symbol_group() -> None:
