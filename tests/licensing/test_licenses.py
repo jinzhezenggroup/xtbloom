@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 WHEEL_DIST_INFO = "xtbloom-test.dist-info"
@@ -872,6 +873,25 @@ class WheelVersionInspectionTests(unittest.TestCase):
                 metadata_only=True,
                 expected_version="1.2.3",
             )
+
+    def test_native_version_check_releases_loaded_library(self) -> None:
+        """Unload extracted Windows DLLs before temporary-tree cleanup."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            wheel = root / "xtbloom-test.whl"
+            self._write_version_wheel(wheel)
+            version_function = mock.Mock(return_value=b"1.2.3")
+            library = mock.Mock(xtbloom_version_string=version_function)
+            with (
+                mock.patch.object(
+                    VERSION_INSPECTOR.ctypes, "CDLL", return_value=library
+                ),
+                mock.patch.object(
+                    VERSION_INSPECTOR, "_release_native_library"
+                ) as release,
+            ):
+                VERSION_INSPECTOR.inspect_wheel(wheel, root / "extracted")
+            release.assert_called_once_with(library)
 
     def test_metadata_only_version_check_rejects_wrong_release(self) -> None:
         """Prevent a release event from publishing a differently versioned wheel."""

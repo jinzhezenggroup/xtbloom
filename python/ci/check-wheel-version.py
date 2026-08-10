@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import email.policy
+import os
 import re
 import tempfile
 import zipfile
@@ -50,6 +51,19 @@ def _single_member(
             f"wheel must contain exactly one {label}; found {len(candidates)}"
         )
     return candidates[0]
+
+
+def _release_native_library(library: ctypes.CDLL) -> None:
+    """Release a loaded DLL before deleting its temporary extraction tree."""
+    if os.name != "nt":
+        return
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    free_library = kernel32.FreeLibrary
+    free_library.argtypes = [ctypes.c_void_p]
+    free_library.restype = ctypes.c_int
+    handle = ctypes.c_void_p(library._handle)
+    if free_library(handle) == 0:
+        raise RuntimeError("failed to release the extracted native wheel DLL")
 
 
 def inspect_wheel(
@@ -127,17 +141,22 @@ def inspect_wheel(
         extracted.write_bytes(archive.read(library_name))
 
     library = ctypes.CDLL(str(extracted))
-    library.xtbloom_version_string.argtypes = []
-    library.xtbloom_version_string.restype = ctypes.c_char_p
-    native_value = library.xtbloom_version_string()
-    if native_value is None:
-        raise RuntimeError(f"{wheel} native version function returned NULL")
-    native_version = native_value.decode("utf-8")
-    if native_version != metadata_version:
-        raise RuntimeError(
-            f"{wheel} version mismatch: metadata/header={metadata_version}, "
-            f"native={native_version}"
-        )
+    try:
+        library.xtbloom_version_string.argtypes = []
+        library.xtbloom_version_string.restype = ctypes.c_char_p
+        native_value = library.xtbloom_version_string()
+        if native_value is None:
+            raise RuntimeError(f"{wheel} native version function returned NULL")
+        native_version = native_value.decode("utf-8")
+        if native_version != metadata_version:
+            raise RuntimeError(
+                f"{wheel} version mismatch: metadata/header={metadata_version}, "
+                f"native={native_version}"
+            )
+    finally:
+        # Windows denies unlinking a loaded DLL, so balance LoadLibrary before
+        # TemporaryDirectory attempts to remove the extracted wheel payload.
+        _release_native_library(library)
     print(  # noqa: T201 - CI validation report
         f"{wheel.name}: metadata/header/native={metadata_version}; "
         f"release={'.'.join(release)}"
