@@ -792,7 +792,9 @@ class CudaWheelInspectionTests(unittest.TestCase):
 class WheelVersionInspectionTests(unittest.TestCase):
     """Keep native version checks aligned with every desktop wheel filename."""
 
-    def _write_version_wheel(self, path: Path, version: str = "1.2.3") -> None:
+    def _write_version_wheel(
+        self, path: Path, version: str = "1.2.3", header_newline: str = "\n"
+    ) -> None:
         """Create the minimal archive needed for metadata-only version checks."""
         major, minor, patch = version.split(".")
         with zipfile.ZipFile(path, "w") as archive:
@@ -802,11 +804,14 @@ class WheelVersionInspectionTests(unittest.TestCase):
             )
             archive.writestr(
                 "xtbloom/include/xtbloom/version.h",
-                (
-                    f'#define XTBLOOM_VERSION_STRING "{version}"\n'
-                    f"#define XTBLOOM_VERSION_MAJOR {major}\n"
-                    f"#define XTBLOOM_VERSION_MINOR {minor}\n"
-                    f"#define XTBLOOM_VERSION_PATCH {patch}\n"
+                header_newline.join(
+                    (
+                        f'#define XTBLOOM_VERSION_STRING "{version}"',
+                        f"#define XTBLOOM_VERSION_MAJOR {major}",
+                        f"#define XTBLOOM_VERSION_MINOR {minor}",
+                        f"#define XTBLOOM_VERSION_PATCH {patch}",
+                        "",
+                    )
                 ),
             )
             archive.writestr("xtbloom/lib/libxtbloom.so", b"target-native-bytes")
@@ -848,6 +853,19 @@ class WheelVersionInspectionTests(unittest.TestCase):
             root = Path(directory)
             wheel = root / "xtbloom-test.whl"
             self._write_version_wheel(wheel)
+            VERSION_INSPECTOR.inspect_wheel(
+                wheel,
+                root / "extracted",
+                metadata_only=True,
+                expected_version="1.2.3",
+            )
+
+    def test_metadata_only_version_check_accepts_windows_crlf_header(self) -> None:
+        """Treat CMake's Windows newlines as the same generated version ABI."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            wheel = root / "xtbloom-test.whl"
+            self._write_version_wheel(wheel, header_newline="\r\n")
             VERSION_INSPECTOR.inspect_wheel(
                 wheel,
                 root / "extracted",

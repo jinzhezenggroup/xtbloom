@@ -83,7 +83,10 @@ def inspect_wheel(
             archive.read(metadata_name)
         )
         metadata_version = str(metadata["Version"])
-        header = archive.read(header_name).decode("utf-8")
+        # CMake emits generated headers with the host platform's newline
+        # convention. Normalize Windows CRLF before applying line-anchored
+        # release-macro checks so equivalent wheel metadata is portable.
+        header = archive.read(header_name).decode("utf-8").replace("\r\n", "\n")
         string_match = VERSION_STRING_RE.search(header)
         components = dict(VERSION_COMPONENT_RE.findall(header))
         release_match = RELEASE_RE.match(metadata_version)
