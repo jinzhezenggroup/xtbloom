@@ -37,8 +37,8 @@ TORCH_STABLE_VENDOR_PATH = "cmake/3rdparty/torch-stable"
 TORCH_STABLE_INCLUDE_SUBDIR = "include"
 TORCH_STABLE_REVISION = "2.12.1"
 TORCH_STABLE_TREE = "e2df0197562bc2b0f55ee910d9899ecaac465e78"
-EIGEN_MANIFEST_PATH = "cmake/3rdparty/eigen/manifest.json"
-EIGEN_VENDOR_PATH = "cmake/3rdparty/eigen"
+EIGEN_MANIFEST_PATH = "cmake/3rdparty/eigen_manifest.json"
+EIGEN_LEGAL_ROOT = "LICENSES/eigen"
 EIGEN_VERSION = "5.0.1"
 EIGEN_REVISION = "bc3b39870ecb690a623a3f49149a358b95c5781d"
 EIGEN_ARCHIVE_URL = (
@@ -47,42 +47,92 @@ EIGEN_ARCHIVE_URL = (
 EIGEN_ARCHIVE_SHA256 = (
     "e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec"
 )
+EIGEN_ARCHIVE_SIZE = 2_967_272
+EIGEN_ACQUISITION = {
+    "method": "CMake FetchContent for WebAssembly builds only",
+    "offline_archive_cache_variable": "XTBLOOM_WEB_EIGEN_ARCHIVE",
+    "policy": (
+        "The exact official archive is SHA-256 verified before extraction. "
+        "Native builds, installs, sdists, and wheels do not fetch or bundle Eigen."
+    ),
+}
 EIGEN_DISTRIBUTION = (
-    "Header-only WebAssembly build input. The source tree is retained in Git "
-    "checkouts for Pages builds and is excluded from installation-focused "
-    "PyPI source distributions, native CMake installs, and Python wheels. "
-    "The Pages artifact contains only compiled code plus the applicable "
-    "license/provenance files and identifies the pinned source revision."
+    "Eigen is a downloaded WebAssembly build input. The repository and sdist "
+    "retain provenance and exact legal records but not the header tree or archive. "
+    "Pages carry compiled code, the legal records, provenance, and an exact source "
+    "URL/hash. Native installs and Python wheels exclude all Eigen material."
 )
 EIGEN_LICENSE_RECORDS = (
-    ("COPYING.MPL2", "MPL-2.0", "Primary license for the Eigen source tree."),
+    (
+        "COPYING.MPL2",
+        f"{EIGEN_LEGAL_ROOT}/COPYING.MPL2",
+        "MPL-2.0",
+        "Primary license for the Eigen source tree.",
+        16727,
+        "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172",
+    ),
     (
         "COPYING.BSD",
+        f"{EIGEN_LEGAL_ROOT}/COPYING.BSD",
         "BSD-3-Clause",
         "BSD and other permissive files identified by upstream.",
+        1517,
+        "51928dce36213c5333ba3172e847d735d4c6e9b7ff2722a326c49067155b82eb",
     ),
     (
         "COPYING.APACHE",
+        f"{EIGEN_LEGAL_ROOT}/COPYING.APACHE",
         "Apache-2.0",
         "Apache-licensed files identified by upstream.",
+        11362,
+        "03379001a7b12a2ec997a25554247d985270b353c10d5bafee9ac8d6519820b7",
     ),
     (
         "COPYING.MINPACK",
+        f"{EIGEN_LEGAL_ROOT}/COPYING.MINPACK",
         "Minpack",
-        "Retained upstream legal record; unsupported/ and its MINPACK sources "
-        "are excluded from this vendor tree.",
+        "Retained upstream legal record; unsupported/ contains the "
+        "MINPACK-derived sources and is not compiled by xTBloom.",
+        2193,
+        "c87b7f8ee88f6195e91743820c00354833583aef091b72e2d4a49c8e28e798a0",
     ),
     (
         "COPYING.README",
+        f"{EIGEN_LEGAL_ROOT}/COPYING.README",
         "NOASSERTION",
         "Upstream explanation of the accompanying license records.",
+        264,
+        "db640ff2bd90c6abd6a4d3fbb351e0ee4d555417cf840492054d1cbb2ea85644",
     ),
 )
-EIGEN_EMBEDDED_NOTICE_PATHS = (
-    "Eigen/src/Core/arch/Default/Half.h",
-    "Eigen/src/Core/arch/Default/BFloat16.h",
-    "Eigen/src/Geometry/AlignedBox.h",
-    "Eigen/src/LU/arch/InverseSize4.h",
+EIGEN_EMBEDDED_NOTICE_RECORDS = (
+    (
+        "Eigen/src/Core/arch/Default/Half.h",
+        f"{EIGEN_LEGAL_ROOT}/notices/Half.h",
+        47293,
+        "6aef8811305cb4ed25860e3e403f885a11b340b6b73b150db59cb0502b7283f6",
+    ),
+    (
+        "Eigen/src/Core/arch/Default/BFloat16.h",
+        f"{EIGEN_LEGAL_ROOT}/notices/BFloat16.h",
+        36700,
+        "6e1983203d85f4874cb11431b5b41357236ea806fd188cca80135043a9718ebc",
+    ),
+    (
+        "Eigen/src/Geometry/AlignedBox.h",
+        f"{EIGEN_LEGAL_ROOT}/notices/AlignedBox.h",
+        19095,
+        "1249e7e037e5c849eb1a4197c1f051e02dc09be8ce8377db2b5471a16c5e2036",
+    ),
+    (
+        "Eigen/src/LU/arch/InverseSize4.h",
+        f"{EIGEN_LEGAL_ROOT}/notices/InverseSize4.h",
+        13886,
+        "619dfeab1fb47d95a647d54f2e187d3aa92cc06f97b1e6a475f72f5f1987e68c",
+    ),
+)
+EIGEN_RETAINED_FILES = tuple(
+    record[1] for record in (*EIGEN_LICENSE_RECORDS, *EIGEN_EMBEDDED_NOTICE_RECORDS)
 )
 ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
 OPENBLAS_LICENSE = "LICENSES/scipy-openblas32-0.3.34.0.0.txt"
@@ -149,7 +199,8 @@ SOURCE_FILES = (
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
     EIGEN_MANIFEST_PATH,
-    "tools/eigen_vendor.py",
+    *EIGEN_RETAINED_FILES,
+    "tools/eigen_dependency.py",
     OPENBLAS_MANIFEST_PATH,
 )
 COMMON_ARCHIVE_SUFFIXES = (
@@ -179,6 +230,9 @@ SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
+    EIGEN_MANIFEST_PATH,
+    *EIGEN_RETAINED_FILES,
+    "tools/eigen_dependency.py",
     OPENBLAS_MANIFEST_PATH,
 )
 WHEEL_ARCHIVE_SUFFIXES = (
@@ -217,6 +271,7 @@ SDIST_INSTALLATION_FILES = (
     "pyproject.toml",
     "python/README.md",
     "python/ci/resolve-openblas-wheel.py",
+    "tools/eigen_dependency.py",
     "tools/implib_stubgen.py",
     "tools/torch_stable_vendor.py",
 )
@@ -234,13 +289,8 @@ SDIST_INSTALLATION_EXCLUDED_FILES = (
     # unit; the similarly named SCC helper remains because production CUDA
     # compilation includes its macro-gated declarations.
     "src/backends/cuda/gfn2_energy_force_execution_test.cuh",
-    "tools/eigen_vendor.py",
 )
-SDIST_INSTALLATION_EXCLUDED_PREFIXES = (
-    # Eigen is used only by the checkout-based Web/Pages build. Ordinary PEP
-    # 517 CPU/CUDA builds do not configure XTBLOOM_BUILD_WEB_DEMO.
-    f"{EIGEN_VENDOR_PATH}/",
-)
+SDIST_INSTALLATION_EXCLUDED_PREFIXES: tuple[str, ...] = ()
 INSTALL_FILES = (
     "share/licenses/xtbloom/LICENSE",
     f"share/licenses/xtbloom/{EXCEPTION_FILE}",
@@ -310,7 +360,7 @@ NOTICE_TOKENS = (
     "Eigen 5.0.1",
     EIGEN_REVISION,
     EIGEN_ARCHIVE_SHA256,
-    "cmake/3rdparty/eigen/manifest.json",
+    EIGEN_MANIFEST_PATH,
     "unsupported/",
     EXCEPTION_FILE,
 )
@@ -377,17 +427,7 @@ WEB_SITE_SOURCE_MAP = {
     "provenance/parameters/d4_manifest.json": "data/parameters/d4_manifest.json",
     "provenance/parameters/mctc_manifest.json": "data/parameters/mctc_manifest.json",
     "provenance/openchemlib_manifest.json": OPEN_CHEMLIB_MANIFEST,
-    "LICENSES/eigen/COPYING.MPL2": f"{EIGEN_VENDOR_PATH}/COPYING.MPL2",
-    "LICENSES/eigen/COPYING.BSD": f"{EIGEN_VENDOR_PATH}/COPYING.BSD",
-    "LICENSES/eigen/COPYING.APACHE": f"{EIGEN_VENDOR_PATH}/COPYING.APACHE",
-    "LICENSES/eigen/COPYING.MINPACK": f"{EIGEN_VENDOR_PATH}/COPYING.MINPACK",
-    "LICENSES/eigen/COPYING.README": f"{EIGEN_VENDOR_PATH}/COPYING.README",
-    **{
-        f"LICENSES/eigen/notices/{Path(relative).name}": (
-            f"{EIGEN_VENDOR_PATH}/{relative}"
-        )
-        for relative in EIGEN_EMBEDDED_NOTICE_PATHS
-    },
+    **{path: path for path in EIGEN_RETAINED_FILES},
     "provenance/eigen_manifest.json": EIGEN_MANIFEST_PATH,
 }
 WEB_SITE_RUNTIME_FILES = (
@@ -948,117 +988,152 @@ def _check_torch_stable_provenance(root: Path) -> None:
 
 
 def _check_eigen_manifest(manifest: object) -> dict[str, tuple[int, str]]:
-    """Validate Eigen release metadata and return its exact file mapping."""
+    """Validate Eigen release metadata and return retained legal-file hashes."""
     if not isinstance(manifest, dict):
         raise LicenseCheckError("Eigen manifest root must be an object")
     if (
-        manifest.get("schema_version") != 1
+        manifest.get("schema_version") != 2
         or manifest.get("dependency") != "Eigen"
         or manifest.get("version") != EIGEN_VERSION
         or manifest.get("revision") != EIGEN_REVISION
         or manifest.get("upstream_repository") != "https://gitlab.com/libeigen/eigen"
         or manifest.get("release_archive")
-        != {"url": EIGEN_ARCHIVE_URL, "sha256": EIGEN_ARCHIVE_SHA256}
+        != {
+            "url": EIGEN_ARCHIVE_URL,
+            "size_bytes": EIGEN_ARCHIVE_SIZE,
+            "sha256": EIGEN_ARCHIVE_SHA256,
+        }
+        or manifest.get("acquisition") != EIGEN_ACQUISITION
     ):
         raise LicenseCheckError("Eigen manifest has incorrect pinned provenance")
 
     expected_records = [
-        {"path": path, "spdx": spdx, "scope": scope}
-        for path, spdx, scope in EIGEN_LICENSE_RECORDS
+        {
+            "upstream_path": upstream_path,
+            "local_path": local_path,
+            "spdx": spdx,
+            "scope": scope,
+            "size_bytes": size,
+            "sha256": sha256,
+        }
+        for upstream_path, local_path, spdx, scope, size, sha256 in (
+            EIGEN_LICENSE_RECORDS
+        )
+    ]
+    expected_notices = [
+        {
+            "upstream_path": upstream_path,
+            "local_path": local_path,
+            "size_bytes": size,
+            "sha256": sha256,
+        }
+        for upstream_path, local_path, size, sha256 in EIGEN_EMBEDDED_NOTICE_RECORDS
     ]
     if manifest.get("license") != {
         "primary_spdx": "MPL-2.0",
         "records": expected_records,
+        "embedded_notices": expected_notices,
     }:
         raise LicenseCheckError("Eigen manifest has incorrect license records")
     if manifest.get("distribution") != EIGEN_DISTRIBUTION:
         raise LicenseCheckError("Eigen manifest has incorrect distribution policy")
 
-    files = manifest.get("files")
-    if not isinstance(files, list) or len(files) != 413:
-        raise LicenseCheckError("Eigen manifest must describe exactly 413 files")
     declared: dict[str, tuple[int, str]] = {}
-    for entry in files:
-        if not isinstance(entry, dict):
-            raise LicenseCheckError("Eigen manifest has a non-object file entry")
-        path = entry.get("path")
-        size = entry.get("size_bytes")
-        sha256 = entry.get("sha256")
-        if (
-            not isinstance(path, str)
-            or not path
-            or Path(path).is_absolute()
-            or ".." in Path(path).parts
-            or "unsupported" in Path(path).parts
-            or path == "manifest.json"
-            or not isinstance(size, int)
-            or size < 0
-            or not isinstance(sha256, str)
-            or not re.fullmatch(r"[0-9a-f]{64}", sha256)
-        ):
-            raise LicenseCheckError("Eigen manifest contains an invalid file entry")
-        if path in declared:
-            raise LicenseCheckError(f"Eigen manifest duplicates {path}")
-        declared[path] = (size, sha256)
-
-    expected_licenses = {path for path, _spdx, _scope in EIGEN_LICENSE_RECORDS}
-    if not expected_licenses.issubset(declared) or "Eigen/Core" not in declared:
-        raise LicenseCheckError("Eigen manifest has incomplete source/license coverage")
+    for entry in (*expected_records, *expected_notices):
+        local_path = entry["local_path"]
+        if local_path in declared:
+            raise LicenseCheckError(f"Eigen manifest duplicates {local_path}")
+        declared[local_path] = (entry["size_bytes"], entry["sha256"])
+    if set(declared) != set(EIGEN_RETAINED_FILES):
+        raise LicenseCheckError("Eigen manifest has incomplete legal-file coverage")
     return declared
 
 
 def _check_eigen_provenance(root: Path) -> None:
-    """Verify every vendored Eigen byte and its distribution boundary."""
+    """Verify retained Eigen legal bytes and reject a repository-side source tree."""
     manifest = json.loads((root / EIGEN_MANIFEST_PATH).read_text(encoding="utf-8"))
     declared = _check_eigen_manifest(manifest)
-    vendor_root = root / EIGEN_VENDOR_PATH
-    observed = {
-        path.relative_to(vendor_root).as_posix()
-        for path in vendor_root.rglob("*")
-        if path.is_file() and path.name != "manifest.json"
-    }
-    if observed != set(declared):
-        missing = sorted(set(declared) - observed)
-        unexpected = sorted(observed - set(declared))
-        details = []
-        if missing:
-            details.append("missing " + ", ".join(missing))
-        if unexpected:
-            details.append("unexpected " + ", ".join(unexpected))
-        raise LicenseCheckError(
-            "Eigen vendored file set differs: " + "; ".join(details)
-        )
     for relative, (expected_size, expected_sha256) in declared.items():
-        path = vendor_root / relative
+        path = root / relative
+        if not path.is_file():
+            raise LicenseCheckError(f"retained Eigen legal file is missing: {relative}")
         if path.is_symlink():
-            raise LicenseCheckError(f"Eigen vendored file is a symlink: {relative}")
+            raise LicenseCheckError(
+                f"retained Eigen legal file is a symlink: {relative}"
+            )
         data = path.read_bytes()
         if (
             len(data) != expected_size
             or hashlib.sha256(data).hexdigest() != expected_sha256
         ):
             raise LicenseCheckError(
-                f"Eigen vendored file differs from pinned bytes: {relative}"
+                f"retained Eigen legal file differs from pinned bytes: {relative}"
             )
 
+    allowed_payloads = {EIGEN_MANIFEST_PATH, *declared}
+    unexpected_payloads = sorted(
+        relative
+        for path in root.rglob("*")
+        if path.is_file()
+        and (relative := path.relative_to(root).as_posix()) not in allowed_payloads
+        and not _is_ignored_source_artifact(relative)
+        and _is_eigen_payload_name(relative)
+    )
+    if unexpected_payloads:
+        raise LicenseCheckError(
+            "repository must not vendor Eigen source or archives: "
+            + unexpected_payloads[0]
+        )
+
     attributes = (root / ".gitattributes").read_text(encoding="utf-8")
-    if "cmake/3rdparty/eigen/** -text" not in attributes:
-        raise LicenseCheckError(".gitattributes does not preserve Eigen bytes")
+    if "LICENSES/eigen/** -text" not in attributes:
+        raise LicenseCheckError(
+            ".gitattributes does not preserve retained Eigen legal bytes"
+        )
     metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    sdist = metadata.get("tool", {}).get("scikit-build", {}).get("sdist", {})
-    sdist_include = set(sdist.get("include", []))
-    sdist_exclude = set(sdist.get("exclude", []))
-    for web_only in ("cmake/3rdparty/eigen/**", "tools/eigen_vendor.py"):
-        if web_only in sdist_include:
-            raise LicenseCheckError(f"sdist.include retains Web-only {web_only}")
-        if web_only not in sdist_exclude:
-            raise LicenseCheckError(f"sdist.exclude omits Web-only {web_only}")
+    sdist_include = (
+        metadata.get("tool", {})
+        .get("scikit-build", {})
+        .get("sdist", {})
+        .get("include", [])
+    )
+    for required in (
+        EIGEN_MANIFEST_PATH,
+        "LICENSES/eigen/**",
+        "tools/eigen_dependency.py",
+    ):
+        if required not in sdist_include:
+            raise LicenseCheckError(f"sdist.include omits {required}")
+    for forbidden in ("cmake/3rdparty/eigen/**", "tools/eigen_vendor.py"):
+        if forbidden in sdist_include:
+            raise LicenseCheckError(f"sdist.include retains obsolete {forbidden}")
+
+
+def _is_ignored_source_artifact(name: str) -> bool:
+    """Ignore local build/cache products when auditing repository dependencies."""
+    parts = tuple(part.lower() for part in PurePath(name).parts)
+    if not parts:
+        return False
+    return (
+        parts[0].startswith("build")
+        or parts[0] in {".cache", ".git", ".ruff_cache", ".venv", "dist"}
+        or "node_modules" in parts
+    )
 
 
 def _is_eigen_payload_name(name: str) -> bool:
-    """Recognize Web-only Eigen source even after install-path relocation."""
-    parts = {part.lower() for part in PurePath(name).parts}
-    return "eigen_manifest.json" in parts or bool(parts & {"eigen", "eigen3"})
+    """Recognize Eigen material even after source/install-path relocation."""
+    path = PurePath(name)
+    parts = {part.lower() for part in path.parts}
+    archive = re.fullmatch(
+        r"eigen(?:-[0-9a-z.+_-]+)?\.(?:tar(?:\.(?:gz|bz2|xz|zst))?|tgz|zip)",
+        path.name.lower(),
+    )
+    return (
+        "eigen_manifest.json" in parts
+        or bool(parts & {"eigen", "eigen3"})
+        or archive is not None
+    )
 
 
 def _check_openblas_manifest(manifest: object) -> dict[str, dict[str, object]]:
@@ -1613,7 +1688,7 @@ def check_install(prefix: Path) -> None:
     )
     if eigen_payloads:
         raise LicenseCheckError(
-            "native install bundles Web-only Eigen source: " + eigen_payloads[0]
+            "native install bundles Web-only Eigen material: " + eigen_payloads[0]
         )
 
 
@@ -1817,6 +1892,48 @@ def _check_archived_torch_stable(path: Path, names: set[str]) -> None:
                 "sdist torch-stable vendored file differs from pinned bytes: "
                 f"{relative}"
             )
+
+
+def _check_archived_eigen(path: Path, names: set[str]) -> None:
+    """Validate sdist provenance/legal bytes and reject Eigen source or archives."""
+    manifest_name = _find_archive_name(names, EIGEN_MANIFEST_PATH)
+    manifest_bytes = _read_archive_members(path, {manifest_name})[manifest_name]
+    declared = _check_eigen_manifest(json.loads(manifest_bytes.decode("utf-8")))
+
+    archive_root = manifest_name[: -len(EIGEN_MANIFEST_PATH)]
+    archived_legal = {
+        relative: archive_root + relative
+        for relative in declared
+        if archive_root + relative in names
+    }
+    missing = sorted(set(declared) - set(archived_legal))
+    if missing:
+        raise LicenseCheckError(
+            "sdist is missing retained Eigen legal files: " + ", ".join(missing)
+        )
+    payloads = _read_archive_members(path, set(archived_legal.values()))
+    for relative, (expected_size, expected_sha256) in declared.items():
+        data = payloads[archived_legal[relative]]
+        if (
+            len(data) != expected_size
+            or hashlib.sha256(data).hexdigest() != expected_sha256
+        ):
+            raise LicenseCheckError(
+                f"sdist retained Eigen legal file differs from pinned bytes: {relative}"
+            )
+
+    allowed_payloads = {EIGEN_MANIFEST_PATH, *declared}
+    unexpected = sorted(
+        relative
+        for name in names
+        if name.startswith(archive_root)
+        and (relative := name.removeprefix(archive_root)) not in allowed_payloads
+        and _is_eigen_payload_name(relative)
+    )
+    if unexpected:
+        raise LicenseCheckError(
+            "sdist must not bundle Eigen source or archives: " + unexpected[0]
+        )
 
 
 def _auditwheel_name(source_name: str, sha256: str) -> str:
@@ -2154,8 +2271,9 @@ def check_archive(path: Path, source_root: Path | None = None) -> None:
             )
         _check_sdist_archive_payload(path, source_root)
         _check_archived_torch_stable(path, names)
+        _check_archived_eigen(path, names)
     elif any(_is_eigen_payload_name(name) for name in names):
-        raise LicenseCheckError("wheel must not bundle the Web-only Eigen source tree")
+        raise LicenseCheckError("wheel must not bundle Web-only Eigen material")
     _check_archived_openblas(path, names, wheel=path.suffix == ".whl")
     leaked = sorted(
         name

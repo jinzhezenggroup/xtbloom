@@ -1,0 +1,89 @@
+{
+  "schema_version": 2,
+  "dependency": "Eigen",
+  "version": "5.0.1",
+  "revision": "bc3b39870ecb690a623a3f49149a358b95c5781d",
+  "upstream_repository": "https://gitlab.com/libeigen/eigen",
+  "release_archive": {
+    "url": "https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz",
+    "size_bytes": 2967272,
+    "sha256": "e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec"
+  },
+  "acquisition": {
+    "method": "CMake FetchContent for WebAssembly builds only",
+    "offline_archive_cache_variable": "XTBLOOM_WEB_EIGEN_ARCHIVE",
+    "policy": "The exact official archive is SHA-256 verified before extraction. Native builds, installs, sdists, and wheels do not fetch or bundle Eigen."
+  },
+  "license": {
+    "primary_spdx": "MPL-2.0",
+    "records": [
+      {
+        "upstream_path": "COPYING.MPL2",
+        "local_path": "LICENSES/eigen/COPYING.MPL2",
+        "spdx": "MPL-2.0",
+        "scope": "Primary license for the Eigen source tree.",
+        "size_bytes": 16727,
+        "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172"
+      },
+      {
+        "upstream_path": "COPYING.BSD",
+        "local_path": "LICENSES/eigen/COPYING.BSD",
+        "spdx": "BSD-3-Clause",
+        "scope": "BSD and other permissive files identified by upstream.",
+        "size_bytes": 1517,
+        "sha256": "51928dce36213c5333ba3172e847d735d4c6e9b7ff2722a326c49067155b82eb"
+      },
+      {
+        "upstream_path": "COPYING.APACHE",
+        "local_path": "LICENSES/eigen/COPYING.APACHE",
+        "spdx": "Apache-2.0",
+        "scope": "Apache-licensed files identified by upstream.",
+        "size_bytes": 11362,
+        "sha256": "03379001a7b12a2ec997a25554247d985270b353c10d5bafee9ac8d6519820b7"
+      },
+      {
+        "upstream_path": "COPYING.MINPACK",
+        "local_path": "LICENSES/eigen/COPYING.MINPACK",
+        "spdx": "Minpack",
+        "scope": "Retained upstream legal record; unsupported/ contains the MINPACK-derived sources and is not compiled by xTBloom.",
+        "size_bytes": 2193,
+        "sha256": "c87b7f8ee88f6195e91743820c00354833583aef091b72e2d4a49c8e28e798a0"
+      },
+      {
+        "upstream_path": "COPYING.README",
+        "local_path": "LICENSES/eigen/COPYING.README",
+        "spdx": "NOASSERTION",
+        "scope": "Upstream explanation of the accompanying license records.",
+        "size_bytes": 264,
+        "sha256": "db640ff2bd90c6abd6a4d3fbb351e0ee4d555417cf840492054d1cbb2ea85644"
+      }
+    ],
+    "embedded_notices": [
+      {
+        "upstream_path": "Eigen/src/Core/arch/Default/Half.h",
+        "local_path": "LICENSES/eigen/notices/Half.h",
+        "size_bytes": 47293,
+        "sha256": "6aef8811305cb4ed25860e3e403f885a11b340b6b73b150db59cb0502b7283f6"
+      },
+      {
+        "upstream_path": "Eigen/src/Core/arch/Default/BFloat16.h",
+        "local_path": "LICENSES/eigen/notices/BFloat16.h",
+        "size_bytes": 36700,
+        "sha256": "6e1983203d85f4874cb11431b5b41357236ea806fd188cca80135043a9718ebc"
+      },
+      {
+        "upstream_path": "Eigen/src/Geometry/AlignedBox.h",
+        "local_path": "LICENSES/eigen/notices/AlignedBox.h",
+        "size_bytes": 19095,
+        "sha256": "1249e7e037e5c849eb1a4197c1f051e02dc09be8ce8377db2b5471a16c5e2036"
+      },
+      {
+        "upstream_path": "Eigen/src/LU/arch/InverseSize4.h",
+        "local_path": "LICENSES/eigen/notices/InverseSize4.h",
+        "size_bytes": 13886,
+        "sha256": "619dfeab1fb47d95a647d54f2e187d3aa92cc06f97b1e6a475f72f5f1987e68c"
+      }
+    ]
+  },
+  "distribution": "Eigen is a downloaded WebAssembly build input. The repository and sdist retain provenance and exact legal records but not the header tree or archive. Pages carry compiled code, the legal records, provenance, and an exact source URL/hash. Native installs and Python wheels exclude all Eigen material."
+}

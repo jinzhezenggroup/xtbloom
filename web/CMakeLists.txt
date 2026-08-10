@@ -26,9 +26,46 @@ endif()
 set(_xtbloom_web_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_xtbloom_web_site "${CMAKE_CURRENT_BINARY_DIR}/site")
 set(_xtbloom_web_obj "${CMAKE_CURRENT_BINARY_DIR}/xtbloom_web.o")
-set(_xtbloom_web_eigen_root "${CMAKE_SOURCE_DIR}/cmake/3rdparty/eigen")
+
+# Eigen is needed only when the browser target is enabled. Keep its 7.6 MB
+# header tree out of the repository and source distribution: FetchContent
+# verifies the exact official release archive before extraction. Air-gapped or
+# repeatable local builds can supply that same archive without network access.
+set(XTBLOOM_WEB_EIGEN_ARCHIVE "" CACHE FILEPATH
+    "Optional local Eigen 5.0.1 archive for an offline WebAssembly build")
+set(_xtbloom_web_eigen_url
+    "https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz")
+if(XTBLOOM_WEB_EIGEN_ARCHIVE)
+  get_filename_component(
+    _xtbloom_web_eigen_archive
+    "${XTBLOOM_WEB_EIGEN_ARCHIVE}"
+    ABSOLUTE
+    BASE_DIR "${CMAKE_SOURCE_DIR}")
+  if(NOT EXISTS "${_xtbloom_web_eigen_archive}")
+    message(FATAL_ERROR
+      "XTBLOOM_WEB_EIGEN_ARCHIVE does not exist: "
+      "${_xtbloom_web_eigen_archive}")
+  endif()
+  set(_xtbloom_web_eigen_url "${_xtbloom_web_eigen_archive}")
+endif()
+
+include(FetchContent)
+FetchContent_Declare(
+  xtbloom_web_eigen
+  URL "${_xtbloom_web_eigen_url}"
+  URL_HASH
+    "SHA256=e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec"
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  # Eigen is header-only here. Pointing at a deliberately absent subdirectory
+  # asks FetchContent to populate the source without configuring Eigen's own
+  # project, targets, tests, or install rules.
+  SOURCE_SUBDIR xtbloom-do-not-configure)
+FetchContent_MakeAvailable(xtbloom_web_eigen)
+set(_xtbloom_web_eigen_root "${xtbloom_web_eigen_SOURCE_DIR}")
+if(NOT EXISTS "${_xtbloom_web_eigen_root}/Eigen/Core")
+  message(FATAL_ERROR "The verified Eigen archive has no Eigen/Core header")
+endif()
 file(GLOB_RECURSE _xtbloom_web_eigen_headers
-  CONFIGURE_DEPENDS
   "${_xtbloom_web_eigen_root}/Eigen/*")
 # The adapter is compiled by a custom emcc command rather than a CMake target,
 # so propagate both halves of the public-header build interface explicitly.
@@ -86,7 +123,7 @@ add_custom_command(
           "-sEXPORTED_FUNCTIONS=[\"_openblas_get_config\",\"_openblas_set_num_threads_local\",\"_LAPACKE_dpotrf_work\",\"_LAPACKE_dpocon_work\",\"_LAPACKE_dsyevd_work\",\"_cblas_dgemm\",\"_cblas_dtrsm\"]"
   DEPENDS
     "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
-    "${_xtbloom_web_eigen_root}/manifest.json"
+    "${CMAKE_SOURCE_DIR}/cmake/3rdparty/eigen_manifest.json"
     ${_xtbloom_web_eigen_headers}
   COMMENT "Building ${_xtbloom_web_arch} Eigen LAPACKE side module"
   VERBATIM)
@@ -114,7 +151,7 @@ add_custom_command(
   DEPENDS
     "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
     "${_xtbloom_web_src}/tests/linalg_eigen_test.cpp"
-    "${_xtbloom_web_eigen_root}/manifest.json"
+    "${CMAKE_SOURCE_DIR}/cmake/3rdparty/eigen_manifest.json"
     ${_xtbloom_web_eigen_headers}
   COMMENT "Building ${_xtbloom_web_arch} Eigen LAPACKE/CBLAS tests"
   VERBATIM)
@@ -283,17 +320,17 @@ set(_xtbloom_web_license_sources
     "${CMAKE_SOURCE_DIR}/LICENSES/upng-js-MIT.txt")
 
 set(_xtbloom_web_eigen_license_sources
-    "${_xtbloom_web_eigen_root}/COPYING.MPL2"
-    "${_xtbloom_web_eigen_root}/COPYING.BSD"
-    "${_xtbloom_web_eigen_root}/COPYING.APACHE"
-    "${_xtbloom_web_eigen_root}/COPYING.MINPACK"
-    "${_xtbloom_web_eigen_root}/COPYING.README")
+    "${CMAKE_SOURCE_DIR}/LICENSES/eigen/COPYING.MPL2"
+    "${CMAKE_SOURCE_DIR}/LICENSES/eigen/COPYING.BSD"
+    "${CMAKE_SOURCE_DIR}/LICENSES/eigen/COPYING.APACHE"
+    "${CMAKE_SOURCE_DIR}/LICENSES/eigen/COPYING.MINPACK"
+    "${CMAKE_SOURCE_DIR}/LICENSES/eigen/COPYING.README")
 
 set(_xtbloom_web_eigen_notice_sources
-    "${_xtbloom_web_eigen_root}/Eigen/src/Core/arch/Default/Half.h"
-    "${_xtbloom_web_eigen_root}/Eigen/src/Core/arch/Default/BFloat16.h"
-    "${_xtbloom_web_eigen_root}/Eigen/src/Geometry/AlignedBox.h"
-    "${_xtbloom_web_eigen_root}/Eigen/src/LU/arch/InverseSize4.h")
+    "${CMAKE_SOURCE_DIR}/LICENSES/eigen/notices/Half.h"
+    "${CMAKE_SOURCE_DIR}/LICENSES/eigen/notices/BFloat16.h"
+    "${CMAKE_SOURCE_DIR}/LICENSES/eigen/notices/AlignedBox.h"
+    "${CMAKE_SOURCE_DIR}/LICENSES/eigen/notices/InverseSize4.h")
 
 set(_xtbloom_web_legal_sources
     "${CMAKE_SOURCE_DIR}/LICENSE"
@@ -302,7 +339,7 @@ set(_xtbloom_web_legal_sources
     ${_xtbloom_web_license_sources}
     ${_xtbloom_web_eigen_license_sources}
     ${_xtbloom_web_eigen_notice_sources}
-    "${_xtbloom_web_eigen_root}/manifest.json"
+    "${CMAKE_SOURCE_DIR}/cmake/3rdparty/eigen_manifest.json"
     "${CMAKE_SOURCE_DIR}/data/parameters/d4.NOTICE"
     "${CMAKE_SOURCE_DIR}/data/parameters/licenses/dftd4-COPYING"
     "${CMAKE_SOURCE_DIR}/data/parameters/licenses/dftd4-COPYING.LESSER"
@@ -392,7 +429,7 @@ add_custom_command(
           "${CMAKE_SOURCE_DIR}/data/parameters/mctc_manifest.json"
           "${_xtbloom_web_site}/provenance/parameters"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          "${_xtbloom_web_eigen_root}/manifest.json"
+          "${CMAKE_SOURCE_DIR}/cmake/3rdparty/eigen_manifest.json"
           "${_xtbloom_web_site}/provenance/eigen_manifest.json"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_xtbloom_web_src}/openchemlib_manifest.json"

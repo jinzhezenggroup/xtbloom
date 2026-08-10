@@ -133,7 +133,10 @@ sdist.include = [
   "cmake/3rdparty/implib/**",
   "cmake/3rdparty/implib_manifest.json",
   "cmake/3rdparty/torch-stable/**",
+  "cmake/3rdparty/eigen_manifest.json",
   "cmake/3rdparty/scipy_openblas32_manifest.json",
+  "LICENSES/eigen/**",
+  "tools/eigen_dependency.py",
   "data/parameters/*_manifest.json",
   "data/parameters/manifest.json",
   # CMake invokes this resolver when a source build explicitly requests the
@@ -150,9 +153,6 @@ sdist.exclude = [
   ".agents/**",
   ".github/**",
   "benchmarks/**",
-  # Eigen and its generator are inputs only to the checkout-based Web/Pages
-  # build, not to ordinary native or Python package installation.
-  "cmake/3rdparty/eigen/**",
   "data/conformance/**",
   "docs/**",
   "python/ci/**",
@@ -160,7 +160,6 @@ sdist.exclude = [
   "skills/**",
   "tests/**",
   "tools/conformance/**",
-  "tools/eigen_vendor.py",
   "tools/licensing/**",
   "tools/oracle/**",
   "web/**",

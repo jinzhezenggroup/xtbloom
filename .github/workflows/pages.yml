@@ -3,8 +3,8 @@
 # The artifact is a fully client-side GFN2-xTB single-point + geometry
 # optimization page: a single-threaded wasm32 module (so no COOP/COEP headers
 # are needed, which GitHub Pages cannot configure anyway) that dlopens a
-# preloaded Eigen LAPACKE/CBLAS side module. A separate wasm64 build is retained as
-# an ABI/scientific parity gate but is not deployed. The widths build on
+# preloaded Eigen LAPACKE/CBLAS side module. A separate wasm64 build is retained
+# as an ABI/scientific parity gate but is not deployed. The widths build on
 # independent runners, then a read-only validation job compares their outputs
 # before the trusted main artifact can be published. Everything is produced by
 # the CMake web target (web/CMakeLists.txt, enabled here with
@@ -100,6 +100,9 @@ jobs:
 
       - name: Install web build dependencies
         run: npm ci --prefix web --ignore-scripts --no-audit --no-fund
+
+      - name: Check pinned Eigen dependency metadata
+        run: python3 tools/eigen_dependency.py check
 
       - name: Configure ${{ matrix.architecture }} build
         run: |

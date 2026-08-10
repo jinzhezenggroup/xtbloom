@@ -134,6 +134,11 @@ PyPI accepts this platform tag, but xTBloom excludes the wheel from the PyPI
 artifact prefix until the Python wheel has a production WebAssembly eigensolver
 path; the existing Web demo uses its separate preloaded Eigen LAPACKE/CBLAS
 side-module design.
+Eigen is acquired only by Web-enabled CMake configurations from the fixed
+official archive (or `XTBLOOM_WEB_EIGEN_ARCHIVE` for offline builds). The
+repository and sdist retain the provenance manifest and exact legal records,
+but the Eigen archive/header tree is excluded from sdists, native installs, and
+Python wheels.
 Windows/macOS wheels must pass installed GFN2 inference, missing-provider,
 concurrency, and host numerical-coexistence tests before being release-eligible.
 
@@ -156,10 +161,11 @@ build inputs, manifests, licenses, notices, and frozen version metadata.
 Repository-only validation and publication surfaces stay in Git: native and
 Python tests, benchmark harnesses and evidence, conformance/oracle corpora,
 maintainer documentation, the Web demo, CI and coding-agent configuration, and
-the development dependency lock. This includes the vendored Eigen provider and
-generator used only by the checkout-based Web/Pages build. Excluding those
-files does not claim that the corresponding validation passed inside the
-sdist; release evidence remains in the repository and its issue/CI records.
+the development dependency lock. The downloaded Eigen archive and header tree
+likewise remain Web-build inputs rather than sdist payload; the compact Eigen
+provenance and legal records stay distributed. Excluding repository-only files
+does not claim that the corresponding validation passed inside the sdist;
+release evidence remains in the repository and its issue/CI records.
 
 The sdist supports ordinary PEP 517 CPU or CUDA source builds. The project's
 release-wheel orchestration, repair scripts, and locked private-provider setup

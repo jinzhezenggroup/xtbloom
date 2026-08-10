@@ -46,9 +46,9 @@ generation.
 
 The CPU eigensolver still discovers the same LP64 LAPACKE/CBLAS symbols from a
 preloaded side module named `libscipy_openblas.so`. For the Web build those
-symbols are implemented by the pinned Eigen 5.0.1 source in
-`cmake/3rdparty/eigen/`; the filename and loader contract remain unchanged, and
-the compatibility filename does not mean the browser module contains
+symbols are implemented using pinned Eigen 5.0.1 from the SHA-256-verified
+official release archive; the filename and loader contract remain unchanged,
+and the compatibility filename does not mean the browser module contains
 OpenBLAS. Eigen does not become a native xTBloom dependency.
 
 The deployed build is wasm32 so it works without browser Memory64 support. CI
@@ -72,6 +72,23 @@ cmake --build build/wasm32-web --parallel
 cmake --build build/wasm32-web --target xtbloom_web_linalg_test --parallel
 ```
 
+CMake downloads the official Eigen 5.0.1 archive only for this Web-enabled
+configuration and verifies its fixed SHA-256. For an offline build, download
+that exact archive ahead of time, verify it, and pass its path explicitly:
+
+```console
+python3 tools/eigen_dependency.py verify-archive /path/eigen-5.0.1.tar.gz
+emcmake cmake -S . -B build/wasm32-web -G Ninja \
+  -DXTBLOOM_ENABLE_CUDA=OFF \
+  -DXTBLOOM_BUILD_TESTS=OFF \
+  -DXTBLOOM_BUILD_WEB_DEMO=ON \
+  -DXTBLOOM_WEB_EIGEN_ARCHIVE=/path/eigen-5.0.1.tar.gz \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_FLAGS="-m32 -fPIC" \
+  -DCMAKE_CXX_FLAGS="-m32 -fPIC"
+```
+
 The staged site is `build/wasm32-web/web/site`. Serve that directory over HTTP
 rather than opening `index.html` directly, because module Workers and
 WebAssembly loading require an origin.
@@ -79,7 +96,7 @@ WebAssembly loading require an origin.
 ## Validation
 
 ```console
-python3 tools/eigen_vendor.py check
+python3 tools/eigen_dependency.py check
 bun install --frozen-lockfile --cwd web
 bun test --cwd web
 bun web/tests/openchemlib_smoke.mjs
@@ -103,18 +120,16 @@ audits the exact deployed legal payload.
 `web/package.json` pins 3Dmol.js for the built site. The optional SMILES worker
 loads exact OpenChemLib 9.21.0 CDN URLs whose revisions, file sizes, and
 SHA-256 digests are recorded in `web/openchemlib_manifest.json`. Eigen 5.0.1 is
-vendored from tag revision
-`bc3b39870ecb690a623a3f49149a358b95c5781d`; the official release archive has
-SHA-256
+obtained from tag revision `bc3b39870ecb690a623a3f49149a358b95c5781d`;
+the official release archive has SHA-256
 `e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec`.
-Its complete retained include tree is byte-pinned in
-`cmake/3rdparty/eigen/manifest.json`. The pinned Git checkout carries that
-corresponding source; installation-focused PyPI source distributions, native
-CMake installs, and Python wheels exclude the Web-only Eigen tree. The
-deployed Pages site carries the compiled provider, upstream license records,
-and provenance manifest identifying the exact Git/release source. The site also
-carries the project license, third-party notices, applicable dependency license
-texts, and parameter provenance.
+`cmake/3rdparty/eigen_manifest.json` pins that archive and the nine exact legal
+records retained under `LICENSES/eigen/`. Source checkouts and source
+distributions do not carry the Eigen archive or header tree. The deployed Pages
+site carries the compiled provider, upstream license records, and provenance
+manifest, while native CMake installs and Python wheels exclude all Eigen
+material. The site also carries the project license, third-party notices,
+applicable dependency license texts, and parameter provenance.
 
 Do not replace pinned URLs with floating versions or add a Web dependency
 without updating the provenance, license payload, lockfile, and deployment

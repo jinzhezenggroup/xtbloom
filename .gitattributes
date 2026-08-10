@@ -13,9 +13,9 @@ LICENSES/scipy-openblas32-tools-LICENSE_win32.txt -text
 # against provenance manifests. Disable checkout newline conversion so a
 # Windows worktree retains the same Git object bytes as Linux and macOS.
 LICENSES/openchemlib-BSD-3-Clause.txt -text
+LICENSES/eigen/** -text
+LICENSES/eigen/** -whitespace
 cmake/3rdparty/implib/** -text
 cmake/3rdparty/torch-stable/include/** -text
-cmake/3rdparty/eigen/** -text
-cmake/3rdparty/eigen/** -whitespace
 
 .git_archival.txt export-subst

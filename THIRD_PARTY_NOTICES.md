@@ -356,36 +356,38 @@ Repository: <https://gitlab.com/libeigen/eigen>
 Version: Eigen 5.0.1, tag revision
 `bc3b39870ecb690a623a3f49149a358b95c5781d`.
 
-Primary license: `MPL-2.0`. The retained upstream source tree also contains
+Primary license: `MPL-2.0`. The official upstream source tree also contains
 BSD-3-Clause, Apache-2.0, and other embedded permissive notices. Exact upstream
-records are preserved in `cmake/3rdparty/eigen/COPYING.MPL2`,
-`COPYING.BSD`, `COPYING.APACHE`, `COPYING.MINPACK`, and `COPYING.README`.
-The Pages artifact also carries exact copies of the notice-bearing
+records are preserved under `LICENSES/eigen/` as `COPYING.MPL2`, `COPYING.BSD`,
+`COPYING.APACHE`, `COPYING.MINPACK`, and `COPYING.README`. The Pages artifact
+also carries exact copies of the notice-bearing
 `Half.h`, `BFloat16.h`, `AlignedBox.h`, and `InverseSize4.h` headers under
 `LICENSES/eigen/notices/`, covering the embedded Fabian Giesen, TensorFlow,
 Willow Garage/OSRF, and Intel grants reached by the compiled include graph.
 
-The complete upstream `Eigen/` public include tree is vendored byte-for-byte
-under `cmake/3rdparty/eigen/` as the header-only numerical provider for
-`web/wasm/linalg_eigen.cpp`. The sibling upstream `unsupported/` tree is not
-vendored; it is where Eigen's MINPACK-derived implementations live.
-`COPYING.MINPACK` is retained as part of Eigen's complete legal record set but
-xTBloom does not redistribute those MINPACK sources. The wrapper uses Eigen's
+Eigen is a WebAssembly build input, not a vendored repository dependency.
+`web/CMakeLists.txt` obtains the official release archive only when the Web demo
+is enabled, verifies the fixed SHA-256 before extraction, and may instead use
+the same local archive supplied through `XTBLOOM_WEB_EIGEN_ARCHIVE` for an
+offline build. Native builds do not fetch Eigen. The wrapper uses Eigen's
 `SelfAdjointEigenSolver`, `LLT`, matrix multiplication, and triangular solves
 behind the LP64 LAPACKE/CBLAS symbols required by xTBloom's unchanged runtime
-loader.
+loader. The upstream `unsupported/` tree contains MINPACK-derived
+implementations and is not included by the wrapper; `COPYING.MINPACK` is
+retained as part of Eigen's complete legal record set.
 
 The official release archive is
 <https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz>,
 SHA-256
 `e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec`.
-`cmake/3rdparty/eigen/manifest.json` records every retained file's exact size
-and SHA-256 digest. The pinned Git checkout provides the corresponding source;
-installation-focused PyPI source distributions, native CMake installs, and
-Python wheels do not carry the Web-only header tree. The Pages artifact carries
-the compiled side module inside `xtbloom_web.data`, the five exact upstream
-license records, the four notice-bearing headers above, and the provenance
-manifest so browser recipients can identify the exact Git/release source.
+`cmake/3rdparty/eigen_manifest.json` records the archive URL, size, SHA-256,
+acquisition policy, and every retained legal file's exact size and digest. The
+repository and source distribution retain that compact provenance/legal
+payload but not the archive or header tree. Native CMake installs and Python
+wheels exclude all Eigen material. The Pages artifact carries the compiled
+side module inside `xtbloom_web.data`, the five exact upstream license records,
+the four notice-bearing headers above, and the provenance manifest so browser
+recipients can identify and obtain the corresponding source.
 
 ## 3Dmol.js
 
