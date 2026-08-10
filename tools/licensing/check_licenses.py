@@ -49,6 +49,18 @@ OPENBLAS_MANIFEST_PATH = "cmake/3rdparty/scipy_openblas32_manifest.json"
 OPENBLAS_MANIFEST_CANONICAL_SHA256 = (
     "738b14d01a73ae38bce1cc36b47b7034e1932bc35a9a508e86c8dfc8deb02d1b"
 )
+PYODIDE_OPENBLAS_MANIFEST_PATH = "cmake/3rdparty/pyodide_openblas_manifest.json"
+PYODIDE_OPENBLAS_RECIPE_PATH = "cmake/3rdparty/pyodide-openblas/recipe"
+PYODIDE_OPENBLAS_MANIFEST_CANONICAL_SHA256 = (
+    "b0418710cc44b9d59a1dc90ddc489c46036e4f12c4594356e9878861706dbe69"
+)
+PYODIDE_OPENBLAS_LICENSES = (
+    "LICENSES/pyodide-MPL-2.0.txt",
+    "LICENSES/OpenBLAS-0.3.28-BSD-3-Clause.txt",
+    "LICENSES/LAPACK-OpenBLAS-0.3.28-BSD-3-Clause.txt",
+    "LICENSES/CLAPACK-3.2.1-BSD-3-Clause.txt",
+    "LICENSES/libf2c-AT&T-Lucent-Bellcore.txt",
+)
 OPEN_CHEMLIB_LICENSE = "LICENSES/openchemlib-BSD-3-Clause.txt"
 OPEN_CHEMLIB_MANIFEST = "web/openchemlib_manifest.json"
 OPEN_CHEMLIB_VERSION = "9.21.0"
@@ -85,6 +97,7 @@ SOURCE_FILES = (
     OPENBLAS_LICENSE,
     OPENBLAS_WINDOWS_LICENSE,
     *OPENBLAS_EXACT_PACKAGED_LICENSES,
+    *PYODIDE_OPENBLAS_LICENSES,
     *WEB_SOURCE_FILES,
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
@@ -100,6 +113,7 @@ SOURCE_FILES = (
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
     OPENBLAS_MANIFEST_PATH,
+    PYODIDE_OPENBLAS_MANIFEST_PATH,
 )
 COMMON_ARCHIVE_SUFFIXES = (
     "LICENSE",
@@ -113,6 +127,7 @@ COMMON_ARCHIVE_SUFFIXES = (
     OPENBLAS_LICENSE,
     OPENBLAS_WINDOWS_LICENSE,
     *OPENBLAS_EXACT_PACKAGED_LICENSES,
+    *PYODIDE_OPENBLAS_LICENSES,
 )
 SDIST_ARCHIVE_SUFFIXES = (
     *WEB_SOURCE_FILES,
@@ -130,6 +145,7 @@ SDIST_ARCHIVE_SUFFIXES = (
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
     OPENBLAS_MANIFEST_PATH,
+    PYODIDE_OPENBLAS_MANIFEST_PATH,
 )
 WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/THIRD_PARTY_NOTICES.md",
@@ -142,6 +158,7 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
     "share/licenses/xtbloom/provenance/scipy_openblas32_manifest.json",
+    "share/licenses/xtbloom/provenance/pyodide_openblas_manifest.json",
     "share/licenses/xtbloom/third-party/MIT.txt",
     "share/licenses/xtbloom/third-party/BSD-3-Clause.txt",
     "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
@@ -150,6 +167,10 @@ WHEEL_ARCHIVE_SUFFIXES = (
     *(
         "share/licenses/xtbloom/third-party/" + PurePath(path).name
         for path in OPENBLAS_EXACT_PACKAGED_LICENSES
+    ),
+    *(
+        "share/licenses/xtbloom/third-party/" + PurePath(path).name
+        for path in PYODIDE_OPENBLAS_LICENSES
     ),
     "share/licenses/xtbloom/third-party/d4/d4.NOTICE",
     "share/licenses/xtbloom/third-party/d4/dftd4-COPYING",
@@ -172,6 +193,10 @@ INSTALL_FILES = (
         "share/licenses/xtbloom/third-party/" + PurePath(path).name
         for path in OPENBLAS_EXACT_PACKAGED_LICENSES
     ),
+    *(
+        "share/licenses/xtbloom/third-party/" + PurePath(path).name
+        for path in PYODIDE_OPENBLAS_LICENSES
+    ),
     "share/licenses/xtbloom/provenance/manifest.json",
     "share/licenses/xtbloom/provenance/sto_manifest.json",
     "share/licenses/xtbloom/provenance/spin_manifest.json",
@@ -180,6 +205,7 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
     "share/licenses/xtbloom/provenance/scipy_openblas32_manifest.json",
+    "share/licenses/xtbloom/provenance/pyodide_openblas_manifest.json",
     "share/licenses/xtbloom/third-party/d4/d4.NOTICE",
     "share/licenses/xtbloom/third-party/d4/dftd4-COPYING",
     "share/licenses/xtbloom/third-party/d4/dftd4-COPYING.LESSER",
@@ -207,6 +233,9 @@ NOTICE_TOKENS = (
     "scipy-openblas32",
     "scipy-openblas32-tools-LICENSE_win32.txt",
     "1ce4c83d89bc30a0a97d4bc18d72ccaa9d3cb7c90ba1408c6b3e29ebf0c5a71c",
+    "da436a90d68f9fe986eb97563d49f527e072da2c",
+    "libxtbloom_openblas-6a78812c.so",
+    "libf2c-AT&T-Lucent-Bellcore.txt",
     "array-api-compat",
     "scikit-build-core >=1.0.3",
     "setuptools-scm >=10.2.1",
@@ -264,6 +293,11 @@ OPENBLAS_BINARY_RE = re.compile(
     r"libxtbloom_blas-[0-9a-f]{8}\.dylib|libxb(?:gf|qm|gcc)-[0-9a-f]{8}\.dylib|"
     r"xtbloom_openblas-[0-9a-f]{8}\.dll)$"
 )
+PYODIDE_OPENBLAS_BINARY_RE = re.compile(
+    r"(?:^|/)(?:libxtbloom_pyodide_lapacke\.so|"
+    r"libxtbloom_openblas-[0-9a-f]{8}\.so)$"
+)
+WASM_V1_MAGIC = b"\0asm\x01\0\0\0"
 WEB_SITE_SOURCE_MAP = {
     "LICENSE": "LICENSE",
     EXCEPTION_FILE: EXCEPTION_FILE,
@@ -1087,6 +1121,123 @@ def _check_openblas_provenance(root: Path) -> None:
             )
 
 
+def _check_pyodide_openblas_manifest(manifest: object) -> dict[str, object]:
+    """Validate the complete reviewed Pyodide/OpenBLAS/libf2c provenance."""
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise LicenseCheckError("Pyodide OpenBLAS manifest has an unsupported schema")
+    dependency = manifest.get("dependency")
+    toolchain = manifest.get("toolchain")
+    artifact = manifest.get("artifact")
+    policy = manifest.get("build_policy")
+    if dependency != {
+        "name": "Pyodide libopenblas",
+        "version": "0.3.28",
+        "classification": (
+            "Pyodide wheel build input and redistributed private WebAssembly provider"
+        ),
+        "runtime_dependency": False,
+    }:
+        raise LicenseCheckError("Pyodide OpenBLAS dependency metadata differs")
+    if not isinstance(toolchain, dict) or (
+        toolchain.get("pyodide_version") != "314.0.4"
+        or toolchain.get("pyodide_commit") != "da436a90d68f9fe986eb97563d49f527e072da2c"
+        or toolchain.get("xbuildenv_url")
+        != "https://github.com/pyodide/pyodide/releases/download/314.0.4/xbuildenv-314.0.4.tar.gz"
+        or toolchain.get("emscripten_version") != "5.0.3"
+        or toolchain.get("pyodide_build_version") != "0.39.0"
+        or toolchain.get("auditwheel_emscripten_version") != "0.2.5"
+    ):
+        raise LicenseCheckError("Pyodide OpenBLAS toolchain metadata differs")
+    if not isinstance(artifact, dict) or (
+        artifact.get("sha256")
+        != "5489d82d8b00ddd3ba283055ba14e2a03d870f1b7e9c07873d6064a8c306ea4c"
+        or artifact.get("member_sha256")
+        != "6a78812caf8279cf1aa9d8cffd092bb9c568af999bb4af8f3e233df2d639363e"
+        or artifact.get("member_size") != 6456061
+        or artifact.get("private_install_name") != "libxtbloom_openblas-6a78812c.so"
+        or artifact.get("adapter_install_name") != "libxtbloom_pyodide_lapacke.so"
+    ):
+        raise LicenseCheckError("Pyodide OpenBLAS artifact metadata differs")
+    if policy != {
+        "binary_bits": 32,
+        "no_fortran": True,
+        "no_lapacke": True,
+        "use_threads": False,
+        "simd128": True,
+        "target": "RISCV64_GENERIC",
+        "linkage": "libf2c.a and libopenblas.a linked into one Emscripten side module",
+    }:
+        raise LicenseCheckError("Pyodide OpenBLAS build policy differs")
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    if (
+        hashlib.sha256(canonical).hexdigest()
+        != PYODIDE_OPENBLAS_MANIFEST_CANONICAL_SHA256
+    ):
+        raise LicenseCheckError(
+            "Pyodide OpenBLAS manifest differs from reviewed provenance"
+        )
+    return manifest
+
+
+def _check_pyodide_openblas_provenance(root: Path) -> None:
+    """Require exact retained MPL recipe source and all provider notices."""
+    manifest = _check_pyodide_openblas_manifest(
+        json.loads((root / PYODIDE_OPENBLAS_MANIFEST_PATH).read_text(encoding="utf-8"))
+    )
+    expected_recipe_files: set[str] = set()
+    for group in ("recipe_files", "licenses"):
+        records = manifest.get(group)
+        if not isinstance(records, list) or not records:
+            raise LicenseCheckError(f"Pyodide OpenBLAS manifest {group} differs")
+        for record in records:
+            if not isinstance(record, dict):
+                raise LicenseCheckError(f"Pyodide OpenBLAS {group} entry is invalid")
+            relative = record.get("local")
+            expected = record.get("sha256")
+            if not isinstance(relative, str) or not isinstance(expected, str):
+                raise LicenseCheckError(f"Pyodide OpenBLAS {group} entry is incomplete")
+            path = root / relative
+            if path.is_symlink() or not path.is_file():
+                raise LicenseCheckError(
+                    f"Pyodide OpenBLAS retained entry is not a regular file: {relative}"
+                )
+            if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                raise LicenseCheckError(
+                    f"Pyodide OpenBLAS retained bytes differ: {relative}"
+                )
+            if group == "recipe_files":
+                expected_recipe_files.add(Path(relative).as_posix())
+
+    recipe_root = root / PYODIDE_OPENBLAS_RECIPE_PATH
+    if recipe_root.is_symlink() or not recipe_root.is_dir():
+        raise LicenseCheckError("Pyodide OpenBLAS recipe root is not a directory")
+    observed_recipe_files: set[str] = set()
+    for path in recipe_root.rglob("*"):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            raise LicenseCheckError(
+                f"Pyodide OpenBLAS recipe entry is a symlink: {relative}"
+            )
+        if path.is_dir():
+            continue
+        if not path.is_file():
+            raise LicenseCheckError(
+                f"Pyodide OpenBLAS recipe entry is not a regular file: {relative}"
+            )
+        observed_recipe_files.add(relative)
+    if observed_recipe_files != expected_recipe_files:
+        missing = sorted(expected_recipe_files - observed_recipe_files)
+        unexpected = sorted(observed_recipe_files - expected_recipe_files)
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise LicenseCheckError(
+            "Pyodide OpenBLAS recipe file set differs: " + "; ".join(details)
+        )
+
+
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
     _require_files(root, SOURCE_FILES, "source tree")
@@ -1290,6 +1441,7 @@ def check_source(root: Path) -> None:
     _check_implib_provenance(root)
     _check_torch_stable_provenance(root)
     _check_openblas_provenance(root)
+    _check_pyodide_openblas_provenance(root)
 
     gfn2 = json.loads(
         (root / "data/parameters/manifest.json").read_text(encoding="utf-8")
@@ -1362,6 +1514,12 @@ def check_source(root: Path) -> None:
             raise LicenseCheckError(f"{relative} omits SPDX identifier {identifier}")
 
 
+def _file_starts_with(path: Path, prefix: bytes) -> bool:
+    """Inspect a binary signature without reading a potentially large DSO."""
+    with path.open("rb") as stream:
+        return stream.read(len(prefix)) == prefix
+
+
 def check_install(prefix: Path) -> None:
     """Validate the legal payload installed by CMake."""
     _require_files(prefix, INSTALL_FILES, "install tree")
@@ -1386,6 +1544,29 @@ def check_install(prefix: Path) -> None:
         raise LicenseCheckError(
             "native install bundles a wheel-only OpenBLAS binary: "
             + openblas_binaries[0]
+        )
+    pyodide_openblas_binaries = sorted(
+        path.relative_to(prefix).as_posix()
+        for path in prefix.rglob("*")
+        if path.is_file()
+        and PYODIDE_OPENBLAS_BINARY_RE.search(path.relative_to(prefix).as_posix())
+    )
+    if pyodide_openblas_binaries:
+        raise LicenseCheckError(
+            "native install bundles a wheel-only Pyodide OpenBLAS binary: "
+            + pyodide_openblas_binaries[0]
+        )
+    wasm_shared_modules = sorted(
+        path.relative_to(prefix).as_posix()
+        for path in prefix.rglob("*")
+        if path.is_file()
+        and path.name.endswith(".so")
+        and _file_starts_with(path, WASM_V1_MAGIC)
+    )
+    if wasm_shared_modules:
+        raise LicenseCheckError(
+            "native install bundles a WebAssembly shared module: "
+            + wasm_shared_modules[0]
         )
 
 
@@ -1490,6 +1671,61 @@ def _read_archive_members(path: Path, names: set[str]) -> dict[str, bytes]:
                     raise LicenseCheckError(f"cannot read archived file: {name}")
                 payloads[name] = extracted.read()
             return payloads
+    raise LicenseCheckError(f"unsupported distribution archive: {path}")
+
+
+def _archive_member_prefixes(
+    path: Path, names: set[str], size: int
+) -> dict[str, bytes]:
+    """Read fixed-size binary signatures without loading complete shared objects."""
+    if path.suffix == ".whl" or zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            prefixes: dict[str, bytes] = {}
+            for name in names:
+                with archive.open(name) as stream:
+                    prefixes[name] = stream.read(size)
+            return prefixes
+    if tarfile.is_tarfile(path):
+        with tarfile.open(path, "r:*") as archive:
+            prefixes: dict[str, bytes] = {}
+            for name in names:
+                extracted = archive.extractfile(archive.getmember(name))
+                if extracted is None:
+                    raise LicenseCheckError(f"cannot read archived file: {name}")
+                prefixes[name] = extracted.read(size)
+            return prefixes
+    raise LicenseCheckError(f"unsupported distribution archive: {path}")
+
+
+def _regular_archive_files_under(path: Path, prefix: str) -> set[str]:
+    """Return regular files below one prefix and reject links or special entries."""
+    if path.suffix == ".whl" or zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            files: set[str] = set()
+            for info in archive.infolist():
+                if not info.filename.startswith(prefix) or info.is_dir():
+                    continue
+                mode = (info.external_attr >> 16) & 0o170000
+                if mode and not stat.S_ISREG(mode):
+                    raise LicenseCheckError(
+                        "archive Pyodide recipe entry is not a regular file: "
+                        + info.filename
+                    )
+                files.add(info.filename)
+            return files
+    if tarfile.is_tarfile(path):
+        with tarfile.open(path, "r:*") as archive:
+            files = set()
+            for info in archive.getmembers():
+                if not info.name.startswith(prefix) or info.isdir():
+                    continue
+                if not info.isfile():
+                    raise LicenseCheckError(
+                        "archive Pyodide recipe entry is not a regular file: "
+                        + info.name
+                    )
+                files.add(info.name)
+            return files
     raise LicenseCheckError(f"unsupported distribution archive: {path}")
 
 
@@ -1736,6 +1972,146 @@ def _check_archived_openblas(path: Path, names: set[str], wheel: bool) -> None:
                 )
 
 
+def _check_archived_pyodide_openblas(path: Path, names: set[str], wheel: bool) -> None:
+    """Validate Pyodide recipe/source records and the wheel-only WASM cohort."""
+    manifest_suffix = (
+        "share/licenses/xtbloom/provenance/pyodide_openblas_manifest.json"
+        if wheel
+        else PYODIDE_OPENBLAS_MANIFEST_PATH
+    )
+    manifest_name = _find_archive_name(names, manifest_suffix)
+    manifest = _check_pyodide_openblas_manifest(
+        json.loads(_read_archive_members(path, {manifest_name})[manifest_name])
+    )
+    license_members = {
+        record["local"]: _find_archive_name(
+            names,
+            (
+                "share/licenses/xtbloom/third-party/" + PurePath(record["local"]).name
+                if wheel
+                else record["local"]
+            ),
+        )
+        for record in manifest["licenses"]
+    }
+    payloads = _read_archive_members(path, set(license_members.values()))
+    for record in manifest["licenses"]:
+        if (
+            hashlib.sha256(payloads[license_members[record["local"]]]).hexdigest()
+            != record["sha256"]
+        ):
+            raise LicenseCheckError(
+                f"archived Pyodide OpenBLAS license differs: {record['local']}"
+            )
+
+    recipe_members = {
+        name
+        for record in manifest["recipe_files"]
+        for name in names
+        if name == record["local"] or name.endswith(f"/{record['local']}")
+    }
+    artifact_filename = manifest["artifact"]["filename"]
+    if any(PurePath(name).name == artifact_filename for name in names):
+        raise LicenseCheckError("archive contains the Pyodide provider source ZIP")
+    binaries = sorted(name for name in names if PYODIDE_OPENBLAS_BINARY_RE.search(name))
+    shared_modules = {
+        name for name in names if re.search(r"\.so(?:\.[0-9]+)*$", name, re.IGNORECASE)
+    }
+    # Native wheels must contain no WebAssembly payload under any extension or
+    # basename. For sdists, limit the scan to shared-module-shaped files so
+    # ordinary source and documentation payloads remain cheap to inspect.
+    wasm_candidates = names if wheel else shared_modules
+    wasm_prefixes = _archive_member_prefixes(path, wasm_candidates, len(WASM_V1_MAGIC))
+    wasm_modules = {
+        name for name, prefix in wasm_prefixes.items() if prefix == WASM_V1_MAGIC
+    }
+    if not wheel:
+        archive_root = manifest_name[: -len(PYODIDE_OPENBLAS_MANIFEST_PATH)]
+        recipe_prefix = archive_root + PYODIDE_OPENBLAS_RECIPE_PATH + "/"
+        archived_recipe_files = _regular_archive_files_under(path, recipe_prefix)
+        observed_recipe_files = {
+            name.removeprefix(archive_root) for name in archived_recipe_files
+        }
+        expected_recipe_files = {record["local"] for record in manifest["recipe_files"]}
+        if observed_recipe_files != expected_recipe_files:
+            missing = sorted(expected_recipe_files - observed_recipe_files)
+            unexpected = sorted(observed_recipe_files - expected_recipe_files)
+            details = []
+            if missing:
+                details.append("missing " + ", ".join(missing))
+            if unexpected:
+                details.append("unexpected " + ", ".join(unexpected))
+            raise LicenseCheckError(
+                "sdist Pyodide recipe file set differs: " + "; ".join(details)
+            )
+        recipe_payloads = _read_archive_members(path, archived_recipe_files)
+        by_relative = {
+            name.removeprefix(archive_root): name for name in archived_recipe_files
+        }
+        for record in manifest["recipe_files"]:
+            if (
+                hashlib.sha256(
+                    recipe_payloads[by_relative[record["local"]]]
+                ).hexdigest()
+                != record["sha256"]
+            ):
+                raise LicenseCheckError(
+                    f"sdist Pyodide recipe differs: {record['local']}"
+                )
+        if binaries:
+            raise LicenseCheckError(
+                f"sdist contains wheel-only Pyodide OpenBLAS binary: {binaries[0]}"
+            )
+        if wasm_modules:
+            raise LicenseCheckError(
+                "sdist contains a wheel-only WebAssembly shared module: "
+                + sorted(wasm_modules)[0]
+            )
+        return
+
+    if recipe_members:
+        raise LicenseCheckError("Pyodide recipe source must remain source/sdist-only")
+    pyodide_wheel = (
+        "pyodide" in path.name.lower() or "pyemscripten" in path.name.lower()
+    )
+    observed_binaries = set(binaries)
+    expected_binaries = (
+        {
+            "xtbloom/lib/" + manifest["artifact"]["adapter_install_name"],
+            "xtbloom.libs/" + manifest["artifact"]["private_install_name"],
+        }
+        if pyodide_wheel
+        else set()
+    )
+    if observed_binaries != expected_binaries:
+        raise LicenseCheckError(
+            "wheel Pyodide OpenBLAS cohort differs: expected "
+            f"{sorted(expected_binaries)}, found {sorted(observed_binaries)}"
+        )
+    if not pyodide_wheel:
+        if wasm_modules:
+            raise LicenseCheckError(
+                "native wheel contains a WebAssembly module: " + sorted(wasm_modules)[0]
+            )
+        return
+
+    expected_wasm_modules = {
+        "xtbloom/lib/libxtbloom.so",
+        "xtbloom/lib/" + manifest["artifact"]["adapter_install_name"],
+        "xtbloom.libs/" + manifest["artifact"]["private_install_name"],
+    }
+    if shared_modules != expected_wasm_modules:
+        raise LicenseCheckError(
+            "Pyodide wheel shared-module cohort differs: expected "
+            f"{sorted(expected_wasm_modules)}, found {sorted(shared_modules)}"
+        )
+    if wasm_modules != expected_wasm_modules:
+        raise LicenseCheckError(
+            "Pyodide wheel WebAssembly module cohort differs: expected "
+            f"{sorted(expected_wasm_modules)}, found {sorted(wasm_modules)}"
+        )
+
+
 def check_archive(path: Path) -> None:
     """Require every distribution archive to retain the common legal set."""
     names = _archive_names(path)
@@ -1760,6 +2136,7 @@ def check_archive(path: Path) -> None:
     if path.suffix != ".whl":
         _check_archived_torch_stable(path, names)
     _check_archived_openblas(path, names, wheel=path.suffix == ".whl")
+    _check_archived_pyodide_openblas(path, names, wheel=path.suffix == ".whl")
     leaked = sorted(
         name
         for name in names

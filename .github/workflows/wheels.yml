@@ -20,9 +20,10 @@ name: Python wheels
 #   x86_64 runtime wheel, so those artifacts explicitly contain no Torch op.
 # - Pyodide builds the current CPython 3.14 pyemscripten wheel on Linux; the
 #   explicit platform field is required because its host runner is also Ubuntu.
-#   It remains CI-only until the Python wheel has a production WebAssembly
-#   eigensolver path. Trusted Publishing receives the inference-tested native
-#   wheels plus the sdist.
+#   It vendors the official Pyodide 314.0.4 OpenBLAS side module behind a thin
+#   exact-handle LAPACKE adapter and runs primary conformance, finite-difference,
+#   failure-isolation, and NumPy/SciPy load-order tests. Trusted Publishing
+#   receives only inference-tested wheels plus the sdist.
 
 on:
   # Pull requests already build and test wheels. Limit push runs to main so a
@@ -208,15 +209,19 @@ jobs:
             platform: pyodide
             archs: wasm32
             variant: cpu
-            tests: smoke
+            tests: pyodide
             compiler_cache: false
-            bundle_openblas: false
+            bundle_openblas: true
             inspect_openblas_wheel: false
+            inspect_pyodide_openblas_wheel: true
             inspect_cuda_wheel: false
             torch_extension: absent
             test_groups: ""
             desktop_test_args: ""
-            publish: false
+            # emsdk otherwise uses Python urllib; curl has more reliable retry
+            # and TLS behavior for the large pinned toolchain archives.
+            build_environment: "EMSDK_USE_CURL=1"
+            publish: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -284,7 +289,7 @@ jobs:
           # driver resolver can exercise its no-device fallback; production
           # code never searches or preloads stubs. A real-GPU forced-CUDA test
           # is run separately on the project GPU before merge/release.
-          CIBW_TEST_COMMAND: ${{ matrix.tests == 'smoke' && 'python -c "import xtbloom; print(xtbloom.library.get_version())"' || matrix.tests == 'desktop' && format('python {{package}}/python/ci/run-desktop-wheel-test.py {0}', matrix.desktop_test_args) || format('bash {{package}}/python/ci/run-wheel-test.sh {0} {{package}}', matrix.tests) }}
+          CIBW_TEST_COMMAND: ${{ matrix.tests == 'smoke' && 'python -c "import xtbloom; print(xtbloom.library.get_version())"' || matrix.tests == 'desktop' && format('python {{package}}/python/ci/run-desktop-wheel-test.py {0}', matrix.desktop_test_args) || matrix.tests == 'pyodide' && 'bash {{package}}/python/ci/run-pyodide-wheel-test.sh {{package}}' || format('bash {{package}}/python/ci/run-wheel-test.sh {0} {{package}}', matrix.tests) }}
           CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test,cuda12' || '' }}
         with:
           package-dir: .
@@ -333,6 +338,13 @@ jobs:
           --manifest cmake/3rdparty/scipy_openblas32_manifest.json
           --readelf readelf
           wheelhouse/*.whl
+      - name: Inspect private Pyodide OpenBLAS provider
+        if: matrix.inspect_pyodide_openblas_wheel
+        shell: bash
+        run: >-
+          python python/ci/inspect-pyodide-openblas-wheel.py
+          --manifest cmake/3rdparty/pyodide_openblas_manifest.json
+          wheelhouse/*.whl
       - name: Inspect CUDA host-library dependencies
         if: matrix.inspect_cuda_wheel
         shell: bash
@@ -344,8 +356,8 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           # Only artifacts carrying the pypi marker are visible to the trusted
-          # publishing job. The inference-incomplete Pyodide wheel remains
-          # downloadable for diagnosis without becoming release-eligible.
+          # publishing job. A matrix entry becomes release-eligible only after
+          # its installed-wheel inference and payload gates are enabled.
           name: ${{ matrix.publish && format('xtbloom-pypi-wheel-{0}', matrix.platform_id) || format('xtbloom-ci-wheel-{0}', matrix.platform_id) }}
           path: ./wheelhouse/*.whl
           if-no-files-found: error
@@ -378,8 +390,8 @@ jobs:
       - name: Download release distributions
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          # The CI-only Pyodide wheel intentionally uses a different artifact
-          # prefix and cannot enter this directory.
+          # Every matching artifact has already passed its installed-wheel,
+          # payload, version, size, and licensing gates in build_wheels.
           pattern: xtbloom-pypi-*
           path: dist
           merge-multiple: true

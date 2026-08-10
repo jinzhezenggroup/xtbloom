@@ -13,7 +13,13 @@ LICENSES/scipy-openblas32-tools-LICENSE_win32.txt -text
 # against provenance manifests. Disable checkout newline conversion so a
 # Windows worktree retains the same Git object bytes as Linux and macOS.
 LICENSES/openchemlib-BSD-3-Clause.txt -text
+LICENSES/pyodide-MPL-2.0.txt -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+LICENSES/OpenBLAS-0.3.28-BSD-3-Clause.txt -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+LICENSES/LAPACK-OpenBLAS-0.3.28-BSD-3-Clause.txt -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+LICENSES/CLAPACK-3.2.1-BSD-3-Clause.txt -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+LICENSES/libf2c-AT&T-Lucent-Bellcore.txt -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
 cmake/3rdparty/implib/** -text
 cmake/3rdparty/torch-stable/include/** -text
+cmake/3rdparty/pyodide-openblas/** -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
 
 .git_archival.txt export-subst

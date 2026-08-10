@@ -8,9 +8,9 @@ repos:
         # These exact generated or hash-pinned artifacts have canonical bytes.
         # In particular, unified-diff blank context lines retain one leading
         # space. Read-only syntax/integrity tests still cover the files.
-        exclude: ^(?:data/parameters/(?:gfn2\.(?:toml|json|hpp)|manifest\.json|d4\.hpp|d4_manifest\.json)|tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer\.patch|LICENSES/scipy-openblas32-(?:0\.3\.34\.0\.0-(?:macos|windows-amd64|windows-arm64)|tools-LICENSE_win32)\.txt)$
+        exclude: ^(?:data/parameters/(?:gfn2\.(?:toml|json|hpp)|manifest\.json|d4\.hpp|d4_manifest\.json)|tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer\.patch|LICENSES/(?:scipy-openblas32-(?:0\.3\.34\.0\.0-(?:macos|windows-amd64|windows-arm64)|tools-LICENSE_win32)|pyodide-MPL-2\.0|OpenBLAS-0\.3\.28-BSD-3-Clause|LAPACK-OpenBLAS-0\.3\.28-BSD-3-Clause|CLAPACK-3\.2\.1-BSD-3-Clause|libf2c-AT&T-Lucent-Bellcore)\.txt|cmake/3rdparty/pyodide-openblas/recipe/.*)$
       - id: end-of-file-fixer
-        exclude: ^(?:data/parameters/(?:gfn2\.(?:toml|json|hpp)|manifest\.json|d4\.hpp|d4_manifest\.json)|tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer\.patch|LICENSES/scipy-openblas32-(?:0\.3\.34\.0\.0-(?:macos|windows-amd64|windows-arm64)|tools-LICENSE_win32)\.txt)$
+        exclude: ^(?:data/parameters/(?:gfn2\.(?:toml|json|hpp)|manifest\.json|d4\.hpp|d4_manifest\.json)|tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer\.patch|LICENSES/(?:scipy-openblas32-(?:0\.3\.34\.0\.0-(?:macos|windows-amd64|windows-arm64)|tools-LICENSE_win32)|pyodide-MPL-2\.0|OpenBLAS-0\.3\.28-BSD-3-Clause|LAPACK-OpenBLAS-0\.3\.28-BSD-3-Clause|CLAPACK-3\.2\.1-BSD-3-Clause|libf2c-AT&T-Lucent-Bellcore)\.txt|cmake/3rdparty/pyodide-openblas/recipe/.*)$
       - id: check-yaml
       - id: check-json
       - id: check-added-large-files

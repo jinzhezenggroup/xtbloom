@@ -4,6 +4,22 @@ set -euo pipefail
 destination=${1:?usage: repair-wheel.sh <destination> <wheel>}
 wheel=${2:?usage: repair-wheel.sh <destination> <wheel>}
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+
+if [[ ${CIBUILDWHEEL_BUILD_IDENTIFIER:-} == *-pyodide_wasm32 ]]; then
+  provider_path=$(
+    python "$project_dir/python/ci/resolve-pyodide-openblas.py" \
+      --manifest "$project_dir/cmake/3rdparty/pyodide_openblas_manifest.json" \
+      --cache-dir "$project_dir/build/pyodide-openblas-provider" \
+      --require-existing | \
+      python -c 'import json, sys; print(json.load(sys.stdin)["provider_path"])'
+  )
+  test -f "$provider_path"
+  exec pyodide auditwheel repair \
+    --libdir "$(dirname -- "$provider_path")" \
+    --output-dir "$destination" \
+    "$wheel"
+fi
+
 provider_python="$project_dir/build/wheel-openblas-provider/bin/python"
 
 # Resolve by distribution metadata only. Importing scipy_openblas32 would load

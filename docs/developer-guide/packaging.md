@@ -129,10 +129,14 @@ two wheel cohorts; their payload checks require its absence. Pyodide likewise
 has no LibTorch runtime and contains no Torch extension.
 
 The Pyodide `cp314-pyodide_wasm32` wheel targets Pyodide 314.x and its stable
-`pyemscripten_2026_0_wasm32` ABI, then is smoke-tested as a CI-only artifact.
-PyPI accepts this platform tag, but xTBloom excludes the wheel from the PyPI
-artifact prefix until the Python wheel has a production WebAssembly eigensolver
-path; the existing Web demo uses its separate preloaded LAPACK design.
+`pyemscripten_2026_0_wasm32` ABI. It carries the reviewed official Pyodide
+OpenBLAS side module under a content-qualified private name plus xTBloom's
+narrow LAPACKE adapter. Release builds repair that dependency with Pyodide's
+supported auditwheel path, then run installed-wheel conformance, invariance,
+finite-difference, failure-isolation, and NumPy/SciPy coexistence tests. The
+wheel is release-eligible and enters the same PyPI artifact prefix as the
+validated native wheels; the existing Web demo continues to use its separate
+preloaded Eigen provider.
 Windows/macOS wheels must pass installed GFN2 inference, missing-provider,
 concurrency, and host numerical-coexistence tests before being release-eligible.
 

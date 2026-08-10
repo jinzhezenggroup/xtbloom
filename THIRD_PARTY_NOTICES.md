@@ -328,6 +328,47 @@ The exact packaged-license variants are retained as
 recorded per target in the source manifest; mixed CRLF/LF bytes in the upstream
 Windows records are preserved verbatim.
 
+## Pyodide OpenBLAS wheel provider
+
+Repository: <https://github.com/pyodide/pyodide>
+
+The CPython 3.14 Pyodide wheel redistributes the official Pyodide 314.0.4
+`libopenblas` 0.3.28 WebAssembly side module under the content-qualified name
+`libxtbloom_openblas-6a78812c.so`. It is a wheel build input, not a Python
+runtime dependency: xTBloom does not declare SciPy, Pyodide `libopenblas`, or a
+separate OpenBLAS package in `Requires-Dist`. A narrow xTBloom adapter provides
+only the column-major LP64 LAPACKE work routines needed by GFN2 inference.
+
+`cmake/3rdparty/pyodide_openblas_manifest.json` pins Pyodide tag 314.0.4 and
+commit `da436a90d68f9fe986eb97563d49f527e072da2c`, the release lock, xbuildenv,
+Emscripten and auditwheel versions, OpenBLAS source commit and archive, the CDN
+ZIP and inner WebAssembly hashes, and the complete retained Pyodide recipe
+closure. The corresponding OpenBLAS and `libf2c` recipe files and patches are
+available in source distributions under
+`cmake/3rdparty/pyodide-openblas/recipe/`; the manifest also records immutable
+upstream paths and hashes. Wheel payloads retain the manifest and all legal
+texts but not the source ZIP, static archives, or recipe source.
+
+Pyodide builds this provider with `BINARY=32`, `NOFORTRAN=1`, `NO_LAPACKE=1`,
+and `USE_THREAD=0`, then statically combines CLAPACK 3.2.1 `libf2c.a` with
+OpenBLAS. Consequently this WebAssembly cohort contains no `libgfortran`,
+`libquadmath`, or GCC runtime and does not rely on the GCC Runtime Library
+Exception. Pyodide's recipe and patches remain under MPL-2.0; OpenBLAS and its
+bundled LAPACK use BSD-3-Clause terms; CLAPACK and the AT&T/Lucent/Bellcore
+`libf2c` notice are retained verbatim in:
+
+- `LICENSES/pyodide-MPL-2.0.txt`
+- `LICENSES/OpenBLAS-0.3.28-BSD-3-Clause.txt`
+- `LICENSES/LAPACK-OpenBLAS-0.3.28-BSD-3-Clause.txt`
+- `LICENSES/CLAPACK-3.2.1-BSD-3-Clause.txt`
+- `LICENSES/libf2c-AT&T-Lucent-Bellcore.txt`
+
+Emscripten has no glibc-style isolated namespace or deep binding. The Python
+wheel loader therefore supplies exact installed adapter/provider paths, and
+the adapter resolves every computational symbol from that provider handle.
+The hash-qualified dylink dependency lets `pyodide auditwheel repair` vendor
+the exact module while avoiding SciPy's generic provider name.
+
 ## CUDA and Intel MKL provider components
 
 CUDA host libraries, the NVIDIA driver, and Intel MKL are not part of xTBloom

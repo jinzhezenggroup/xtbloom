@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import site
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,31 @@ from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def test_pyodide_private_provider_paths_are_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolve one repaired provider and overwrite untrusted environment paths."""
+    package = tmp_path / "site-packages" / "xtbloom"
+    native_dir = package / "lib"
+    provider_dir = tmp_path / "site-packages" / "xtbloom.libs"
+    native_dir.mkdir(parents=True)
+    provider_dir.mkdir()
+    native = native_dir / "libxtbloom.so"
+    adapter = native_dir / "libxtbloom_pyodide_lapacke.so"
+    provider = provider_dir / "libxtbloom_openblas-deadbeef.so"
+    for path in (native, adapter, provider):
+        path.write_bytes(b"wasm")
+
+    monkeypatch.setattr(library.sys, "platform", "emscripten")
+    monkeypatch.setattr(library, "__file__", str(package / "library.py"))
+    monkeypatch.setenv("XTBLOOM_PYODIDE_LAPACKE_SHIM", "/untrusted/adapter.so")
+    monkeypatch.setenv("XTBLOOM_PYODIDE_OPENBLAS", "/untrusted/provider.so")
+    library._configure_pyodide_openblas_paths(native)
+
+    assert os.environ["XTBLOOM_PYODIDE_LAPACKE_SHIM"] == str(adapter.resolve())
+    assert os.environ["XTBLOOM_PYODIDE_OPENBLAS"] == str(provider.resolve())
 
 
 class _FakeSymbol:
