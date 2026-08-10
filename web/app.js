@@ -8,8 +8,11 @@ const appModuleUrl = new URL(import.meta.url);
 const appContentVersion = appModuleUrl.searchParams.get("xtbloom_version");
 const appBootstrapToken = appModuleUrl.searchParams.get("xtbloom_bootstrap");
 const appHelpersUrl = new URL("./app_helpers.js", import.meta.url);
+const c60CaseUrl = new URL("./c60_case.js", import.meta.url);
 if (appContentVersion) appHelpersUrl.searchParams.set("xtbloom_version", appContentVersion);
+if (appContentVersion) c60CaseUrl.searchParams.set("xtbloom_version", appContentVersion);
 if (appBootstrapToken) appHelpersUrl.searchParams.set("xtbloom_bootstrap", appBootstrapToken);
+if (appBootstrapToken) c60CaseUrl.searchParams.set("xtbloom_bootstrap", appBootstrapToken);
 
 function currentAppImportOrAbort() {
   if (
@@ -20,6 +23,8 @@ function currentAppImportOrAbort() {
   }
 }
 
+currentAppImportOrAbort();
+const { C60_XYZ } = await import(c60CaseUrl.href);
 currentAppImportOrAbort();
 const {
   angstromToBohr,
@@ -56,6 +61,7 @@ const PRESETS = {
   oh: { xyz: "O  0.00000000  0.00000000  0.00000000\nH  0.00000000  0.00000000  0.97051100", charge: 0, unpaired: 1 },
   benzene: { xyz: "C 1.39000000 0.00000000 0.00000000\nC 0.69500000 1.20377531 0.00000000\nC -0.69500000 1.20377531 0.00000000\nC -1.39000000 0.00000000 0.00000000\nC -0.69500000 -1.20377531 0.00000000\nC 0.69500000 -1.20377531 0.00000000\nH 2.48000000 0.00000000 0.00000000\nH 1.24000000 2.14774300 0.00000000\nH -1.24000000 2.14774300 0.00000000\nH -2.48000000 0.00000000 0.00000000\nH -1.24000000 -2.14774300 0.00000000\nH 1.24000000 -2.14774300 0.00000000", charge: 0, unpaired: 0 },
   ethanol: { xyz: "C -0.05410000  0.37050000  0.00000000\nC  1.27860000 -0.37750000  0.00000000\nO  2.38310000  0.51100000 -0.01750000\nH -0.04270000  1.45560000  0.00000000\nH -0.54830000  0.00000000 -0.89740000\nH -0.54830000  0.00000000  0.89740000\nH  1.36610000 -1.01150000  0.88490000\nH  1.36610000 -1.01150000 -0.88490000\nH  3.19200000  0.03930000 -0.03490000", charge: 0, unpaired: 0 },
+  c60: { xyz: C60_XYZ, charge: 0, unpaired: 0 },
 };
 
 const I18N = {
@@ -67,6 +73,7 @@ const I18N = {
     preset_ketene: "乙烯酮",
     preset_ethanol: "乙醇",
     preset_benzene: "苯",
+    preset_c60: "C₆₀ 富勒烯",
     smiles_label: "SMILES → 三维结构",
     smiles_placeholder: "例如：CCO 或 c1ccccc1",
     smiles_download_button: "正在下载…",
@@ -123,7 +130,7 @@ const I18N = {
     tag_done: "已支持",
     roadmap_opt_desc: "内置 L-BFGS 优化器，使用解析力收敛到稳定结构。在左侧“优化”区配置后点击“几何优化”。",
     opt_go: "去优化",
-    footer: "由 xTBloom 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32；可选的 SMILES 三维结构由固定版本的 OpenChemLib 在浏览器中生成并以 MMFF94 预优化。BLAS/LAPACK 层为演示用最小实现。仅供演示，非科学计算生产环境。",
+    footer: "由 xTBloom 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32；可选的 SMILES 三维结构由固定版本的 OpenChemLib 在浏览器中生成并以 MMFF94 预优化。WebAssembly LP64 LAPACKE/CBLAS 兼容层由固定版本的 Eigen 5.0.1 支撑。仅供演示，非科学计算生产环境。",
     overlay_loading: "正在加载 WASM 引擎…",
     overlay_compute: "正在计算单点能…",
     overlay_opt: "正在几何优化（逐梯度迭代，可能需要几秒）…",
@@ -184,6 +191,7 @@ const I18N = {
     preset_ketene: "Ketene",
     preset_ethanol: "Ethanol",
     preset_benzene: "Benzene",
+    preset_c60: "C₆₀ fullerene",
     smiles_label: "SMILES → 3D structure",
     smiles_placeholder: "e.g. CCO or c1ccccc1",
     smiles_download_button: "Downloading…",
@@ -240,7 +248,7 @@ const I18N = {
     tag_done: "supported",
     roadmap_opt_desc: "Built-in L-BFGS optimizer using analytic forces. Configure it in the left panel, then click “Optimize geometry”.",
     opt_go: "Try it",
-    footer: "Powered by xTBloom — the same native C ABI library compiled to wasm32 without requiring Memory64. Optional SMILES 3D structures are generated in-browser by a pinned OpenChemLib release and pre-relaxed with MMFF94. The BLAS/LAPACK layer is a minimal demo implementation. Demo only, not a production scientific environment.",
+    footer: "Powered by xTBloom — the same native C ABI library compiled to wasm32 without requiring Memory64. Optional SMILES 3D structures are generated in-browser by a pinned OpenChemLib release and pre-relaxed with MMFF94. The WebAssembly LP64 LAPACKE/CBLAS compatibility layer is backed by pinned Eigen 5.0.1. Demo only, not a production scientific environment.",
     overlay_loading: "Loading the WASM engine…",
     overlay_compute: "Computing single point…",
     overlay_opt: "Optimizing geometry (gradient steps, may take a few seconds)…",

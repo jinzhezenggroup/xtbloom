@@ -170,10 +170,12 @@ test("engine manifests provide safe versioned paths and exact decoded sizes", ()
 
 test("bootstrap prefetches and verifies one coherent versioned module graph", async () => {
   const app = new TextEncoder().encode("export const app = true;\n");
+  const c60 = new TextEncoder().encode("export const C60_XYZ = 'C 0 0 0';\n");
   const helpers = new TextEncoder().encode("export const helper = true;\n");
   const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const assets = [
     { id: "app", path: "app.js", bytes: app.byteLength, sha256: digest(app) },
+    { id: "c60", path: "c60_case.js", bytes: c60.byteLength, sha256: digest(c60) },
     {
       id: "helpers",
       path: "app_helpers.js",
@@ -200,6 +202,7 @@ test("bootstrap prefetches and verifies one coherent versioned module graph", as
       if (href.endsWith("engine-manifest.json")) {
         return new Response(JSON.stringify(manifest), { status: 200 });
       }
+      if (href.includes("c60_case.js")) return new Response(c60, { status: 200 });
       if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
       if (href.includes("app.js")) return new Response(app, { status: 200 });
       return new Response(null, { status: 404 });
@@ -208,8 +211,13 @@ test("bootstrap prefetches and verifies one coherent versioned module graph", as
   assert.deepEqual(result.manifest, manifest);
   assert.equal(result.appUrl.searchParams.get("xtbloom_version"), "c".repeat(64));
   assert.equal(result.appUrl.searchParams.get("xtbloom_bootstrap"), "manual-2");
+  assert.equal(result.c60Url.searchParams.get("xtbloom_version"), "c".repeat(64));
+  assert.equal(result.c60Url.searchParams.get("xtbloom_bootstrap"), "manual-2");
   assert.equal(result.helpersUrl.searchParams.get("xtbloom_version"), "c".repeat(64));
-  assert.deepEqual(requests.map((request) => request.cache), ["no-cache", "default", "default"]);
+  assert.deepEqual(
+    requests.map((request) => request.cache),
+    ["no-cache", "default", "default", "default"],
+  );
 });
 
 test("bootstrap manifest validation rejects unsafe partial metadata", () => {
@@ -219,6 +227,7 @@ test("bootstrap manifest validation rejects unsafe partial metadata", () => {
     version: "b".repeat(64),
     assets: [
       { id: "app", path: "app.js", bytes: 10, sha256: digest },
+      { id: "c60", path: "c60_case.js", bytes: 15, sha256: digest },
       { id: "helpers", path: "app_helpers.js", bytes: 20, sha256: digest },
     ],
   };
@@ -229,6 +238,7 @@ test("bootstrap manifest validation rejects unsafe partial metadata", () => {
     assets: [
       { ...valid.assets[0], path: "../app.js" },
       valid.assets[1],
+      valid.assets[2],
     ],
   }), /unsafe path/);
   assert.throws(() => validateBootstrapManifest({
@@ -236,6 +246,7 @@ test("bootstrap manifest validation rejects unsafe partial metadata", () => {
     assets: [
       { ...valid.assets[0], bytes: 0 },
       valid.assets[1],
+      valid.assets[2],
     ],
   }), /invalid size/);
   assert.throws(() => validateBootstrapManifest({
@@ -243,11 +254,12 @@ test("bootstrap manifest validation rejects unsafe partial metadata", () => {
     assets: [
       { ...valid.assets[0], sha256: "unverified" },
       valid.assets[1],
+      valid.assets[2],
     ],
   }), /invalid digest/);
   assert.throws(() => validateBootstrapManifest({
     ...valid,
-    assets: [valid.assets[0]],
+    assets: [valid.assets[0], valid.assets[1]],
   }), /missing helpers/);
 });
 
@@ -300,6 +312,7 @@ test("bootstrap manual retry stays in-page and uses a forced reload", async () =
 
 test("application import timeout retries with a distinct guarded module URL", async () => {
   const app = new TextEncoder().encode("export const app = true;\n");
+  const c60 = new TextEncoder().encode("export const C60_XYZ = 'C 0 0 0';\n");
   const helpers = new TextEncoder().encode("export const helper = true;\n");
   const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const manifest = {
@@ -307,6 +320,7 @@ test("application import timeout retries with a distinct guarded module URL", as
     version: "d".repeat(64),
     assets: [
       { id: "app", path: "app.js", bytes: app.byteLength, sha256: digest(app) },
+      { id: "c60", path: "c60_case.js", bytes: c60.byteLength, sha256: digest(c60) },
       {
         id: "helpers",
         path: "app_helpers.js",
@@ -331,6 +345,7 @@ test("application import timeout retries with a distinct guarded module URL", as
       if (href.endsWith("engine-manifest.json")) {
         return new Response(JSON.stringify(manifest), { status: 200 });
       }
+      if (href.includes("c60_case.js")) return new Response(c60, { status: 200 });
       if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
       if (href.includes("app.js")) return new Response(app, { status: 200 });
       return new Response(null, { status: 404 });
@@ -353,6 +368,7 @@ test("application import timeout retries with a distinct guarded module URL", as
 
 test("aborting a hanging application import invalidates its execution token", async () => {
   const app = new TextEncoder().encode("export const app = true;\n");
+  const c60 = new TextEncoder().encode("export const C60_XYZ = 'C 0 0 0';\n");
   const helpers = new TextEncoder().encode("export const helper = true;\n");
   const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const manifest = {
@@ -360,6 +376,7 @@ test("aborting a hanging application import invalidates its execution token", as
     version: "e".repeat(64),
     assets: [
       { id: "app", path: "app.js", bytes: app.byteLength, sha256: digest(app) },
+      { id: "c60", path: "c60_case.js", bytes: c60.byteLength, sha256: digest(c60) },
       {
         id: "helpers",
         path: "app_helpers.js",
@@ -384,6 +401,7 @@ test("aborting a hanging application import invalidates its execution token", as
       if (href.endsWith("engine-manifest.json")) {
         return new Response(JSON.stringify(manifest), { status: 200 });
       }
+      if (href.includes("c60_case.js")) return new Response(c60, { status: 200 });
       if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
       if (href.includes("app.js")) return new Response(app, { status: 200 });
       return new Response(null, { status: 404 });
@@ -706,7 +724,7 @@ test("page bootstraps pinned SMILES loading and applies URL-optimized geometry",
   assert.doesNotMatch(indexSource, /id="smiles-alert"/);
 });
 
-test("engine bootstrap retries a versioned five-file generation without reloading the page", async () => {
+test("engine bootstrap retries a coherent versioned generation without reloading the page", async () => {
   const [appSource, bootstrapSource, helperSource, workerSource, manifestSource, indexSource] = await Promise.all([
     readFile(new URL("../app.js", import.meta.url), "utf8"),
     readFile(new URL("../bootstrap.js", import.meta.url), "utf8"),
@@ -717,6 +735,7 @@ test("engine bootstrap retries a versioned five-file generation without reloadin
   ]);
   for (const asset of [
     "app.js",
+    "c60_case.js",
     "worker.js",
     "app_helpers.js",
     "xtbloom_web.js",
@@ -729,6 +748,7 @@ test("engine bootstrap retries a versioned five-file generation without reloadin
   assert.match(appSource, /engineLoadGeneration/);
   assert.match(appSource, /engine-manifest\.json/);
   assert.match(appSource, /xtbloom_version/);
+  assert.match(appSource, /c60CaseUrl\.searchParams\.set\("xtbloom_bootstrap"/);
   assert.match(appSource, /manifest\.version !== appContentVersion/);
   assert.match(appSource, /Invalid engine manifest response/);
   assert.match(appSource, /currentLoadOrAbort\(generation, masterSignal, attemptController\.signal\)/);

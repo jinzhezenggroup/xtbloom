@@ -15,5 +15,7 @@ LICENSES/scipy-openblas32-tools-LICENSE_win32.txt -text
 LICENSES/openchemlib-BSD-3-Clause.txt -text
 cmake/3rdparty/implib/** -text
 cmake/3rdparty/torch-stable/include/** -text
+cmake/3rdparty/eigen/** -text
+cmake/3rdparty/eigen/** -whitespace
 
 .git_archival.txt export-subst

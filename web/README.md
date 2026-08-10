@@ -20,6 +20,8 @@ The deployment runs entirely in the browser:
 - `app.js` downloads the five engine resources under one file/byte progress
   ledger, retries transient startup failures with generation-safe cleanup, and
   passes the wasm and Emscripten data bytes into the Worker;
+- `c60_case.js` supplies the visible C60 preset and the independent native-CPU
+  checkpoints used by the browser scientific regression;
 - `smiles_worker.js` independently loads the pinned OpenChemLib release,
   generates explicit-hydrogen 3D conformers, and applies MMFF94
   pre-relaxation;
@@ -31,15 +33,23 @@ The optional SMILES worker never gates ordinary XYZ calculations. The
 optimizer repeatedly calls the same single-point adapter and is not part of the
 stable C ABI.
 
-The build hashes `app.js` and the five engine files into
+The build hashes the application module graph and the five engine files into
 `engine-manifest.json`. The browser revalidates only that small manifest on
-refresh, then addresses every application/engine asset with the shared content
+refresh, verifies `app.js`, `app_helpers.js`, and `c60_case.js` before linking
+them, then addresses every application/engine asset with the shared content
 version. An unchanged version stays cacheable; a transient failure reloads the
-complete resource set under that same content
-version, replacing rather than abandoning the reusable cache entries. Digest
-verification prevents the Worker glue, wasm, and preloaded data from being
-mixed across attempts. Late messages from a failed Worker are ignored by a
-monotonically increasing loader generation.
+complete resource set under that same content version, replacing rather than
+abandoning the reusable cache entries. Digest verification prevents the UI,
+Worker glue, wasm, and preloaded data from being mixed across attempts. Late
+messages from a failed Worker are ignored by a monotonically increasing loader
+generation.
+
+The CPU eigensolver still discovers the same LP64 LAPACKE/CBLAS symbols from a
+preloaded side module named `libscipy_openblas.so`. For the Web build those
+symbols are implemented by the pinned Eigen 5.0.1 source in
+`cmake/3rdparty/eigen/`; the filename and loader contract remain unchanged, and
+the compatibility filename does not mean the browser module contains
+OpenBLAS. Eigen does not become a native xTBloom dependency.
 
 The deployed build is wasm32 so it works without browser Memory64 support. CI
 also builds wasm64 and compares its public results with wasm32 as a
@@ -59,6 +69,7 @@ emcmake cmake -S . -B build/wasm32-web -G Ninja \
   -DCMAKE_C_FLAGS="-m32 -fPIC" \
   -DCMAKE_CXX_FLAGS="-m32 -fPIC"
 cmake --build build/wasm32-web --parallel
+cmake --build build/wasm32-web --target xtbloom_web_linalg_test --parallel
 ```
 
 The staged site is `build/wasm32-web/web/site`. Serve that directory over HTTP
@@ -68,23 +79,41 @@ WebAssembly loading require an origin.
 ## Validation
 
 ```console
+python3 tools/eigen_vendor.py check
 bun install --frozen-lockfile --cwd web
 bun test --cwd web
 bun web/tests/openchemlib_smoke.mjs
 node web/tests/wasm_smoke.mjs build/wasm32-web/web/site
 ```
 
-CI additionally compiles wasm64, checks C ABI layout for both pointer widths,
-compares wasm32/wasm64 scientific results, and audits the exact deployed legal
-payload.
+The provider target independently checks LAPACKE workspace and failure
+behavior, Cholesky factorization and condition estimation, eigensolve, all
+accepted GEMM transpose combinations, and the TRSM side/triangle/transpose/
+diagonal matrix. The Web smoke suite includes the visible neutral-singlet C60
+preset (60 atoms, 240 orbitals) and compares energy, charges, forces, SCC
+status, iterations, total charge, and total force with native public-C-ABI
+checkpoints.
+
+CI additionally compiles wasm64, runs the same provider and C60 gates, checks C
+ABI layout for both pointer widths, compares wasm32/wasm64 public results, and
+audits the exact deployed legal payload.
 
 ## Dependencies and provenance
 
 `web/package.json` pins 3Dmol.js for the built site. The optional SMILES worker
 loads exact OpenChemLib 9.21.0 CDN URLs whose revisions, file sizes, and
-SHA-256 digests are recorded in `web/openchemlib_manifest.json`. The deployed
-site carries the project license, third-party notices, applicable license
-texts, and parameter provenance.
+SHA-256 digests are recorded in `web/openchemlib_manifest.json`. Eigen 5.0.1 is
+vendored from tag revision
+`bc3b39870ecb690a623a3f49149a358b95c5781d`; the official release archive has
+SHA-256
+`e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec`.
+Its complete retained include tree is byte-pinned in
+`cmake/3rdparty/eigen/manifest.json`. Source checkouts and source distributions
+carry that corresponding source. The deployed Pages site carries the compiled
+provider, upstream license records, and provenance manifest, while native
+CMake installs and Python wheels exclude the Web-only Eigen tree. The site
+also carries the project license, third-party notices, applicable dependency
+license texts, and parameter provenance.
 
 Do not replace pinned URLs with floating versions or add a Web dependency
 without updating the provenance, license payload, lockfile, and deployment

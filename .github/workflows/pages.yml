@@ -3,7 +3,7 @@
 # The artifact is a fully client-side GFN2-xTB single-point + geometry
 # optimization page: a single-threaded wasm32 module (so no COOP/COEP headers
 # are needed, which GitHub Pages cannot configure anyway) that dlopens a
-# preloaded minimal LAPACK side module. A separate wasm64 build is retained as
+# preloaded Eigen LAPACKE/CBLAS side module. A separate wasm64 build is retained as
 # an ABI/scientific parity gate but is not deployed. The widths build on
 # independent runners, then a read-only validation job compares their outputs
 # before the trusted main artifact can be published. Everything is produced by
@@ -114,6 +114,11 @@ jobs:
 
       - name: Build ${{ matrix.architecture }} site
         run: cmake --build "${BUILD_DIR}" --parallel 2
+
+      - name: Test ${{ matrix.architecture }} Eigen LAPACKE/CBLAS provider
+        run: >-
+          cmake --build "${BUILD_DIR}"
+          --target xtbloom_web_linalg_test --parallel 2
 
       - name: Show ccache statistics
         run: ccache -s
