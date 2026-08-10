@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Require wheel metadata, public headers, and the native C API to agree."""
+"""Verify Python SCM metadata and the embedded native release contract."""
 
 from __future__ import annotations
 
@@ -24,6 +24,24 @@ VERSION_COMPONENT_RE = re.compile(
 )
 _NUMBER = r"(?:0|[1-9][0-9]*)"
 RELEASE_RE = re.compile(rf"^({_NUMBER})\.({_NUMBER})\.({_NUMBER})$")
+DEVELOPMENT_RE = re.compile(
+    rf"^({_NUMBER})\.({_NUMBER})\.({_NUMBER})\.post1\.dev({_NUMBER})"
+    r"\+g[0-9a-f]+(?:\.d[0-9]{8})?$"
+)
+
+
+def _native_version_from_distribution(distribution_version: str) -> str:
+    """Return the native release tag represented by Python SCM metadata."""
+    release = RELEASE_RE.fullmatch(distribution_version)
+    if release is not None:
+        return distribution_version
+    development = DEVELOPMENT_RE.fullmatch(distribution_version)
+    if development is None:
+        raise RuntimeError(
+            f"unsupported Python distribution version {distribution_version}"
+        )
+    major, minor, patch, _distance = development.groups()
+    return f"{major}.{minor}.{patch}"
 
 
 def _is_native_library(path: PurePosixPath) -> bool:
@@ -73,7 +91,7 @@ def inspect_wheel(
     metadata_only: bool = False,
     expected_version: str | None = None,
 ) -> None:
-    """Compare installed product versions, optionally without loading the DSO."""
+    """Compare Python SCM metadata with the embedded native release."""
     with zipfile.ZipFile(wheel) as archive:
         metadata_name = _single_member(
             archive,
@@ -97,18 +115,19 @@ def inspect_wheel(
             archive.read(metadata_name)
         )
         metadata_version = str(metadata["Version"])
+        expected_native_version = _native_version_from_distribution(metadata_version)
         # CMake emits generated headers with the host platform's newline
         # convention. Normalize Windows CRLF before applying line-anchored
         # release-macro checks so equivalent wheel metadata is portable.
         header = archive.read(header_name).decode("utf-8").replace("\r\n", "\n")
         string_match = VERSION_STRING_RE.search(header)
         components = dict(VERSION_COMPONENT_RE.findall(header))
-        release_match = RELEASE_RE.match(metadata_version)
-        if string_match is None or release_match is None or len(components) != 3:
+        native_release_match = RELEASE_RE.fullmatch(expected_native_version)
+        if string_match is None or native_release_match is None or len(components) != 3:
             raise RuntimeError(f"{wheel} contains malformed version metadata")
 
         header_version = string_match.group(1)
-        release = release_match.groups()
+        native_release = native_release_match.groups()
         header_release = (
             components["MAJOR"],
             components["MINOR"],
@@ -117,22 +136,22 @@ def inspect_wheel(
         if expected_version is not None and metadata_version != expected_version:
             raise RuntimeError(
                 f"{wheel} version {metadata_version} does not match expected "
-                f"release {expected_version}"
+                f"Python distribution version {expected_version}"
             )
-        if metadata_version != header_version:
+        if expected_native_version != header_version:
             raise RuntimeError(
-                f"{wheel} version mismatch: metadata={metadata_version}, "
-                f"header={header_version}"
+                f"{wheel} native release mismatch: Python metadata={metadata_version}, "
+                f"expected native={expected_native_version}, header={header_version}"
             )
-        if release != header_release:
+        if native_release != header_release:
             raise RuntimeError(
-                f"{wheel} numeric version mismatch: metadata={release}, "
+                f"{wheel} numeric native version mismatch: expected={native_release}, "
                 f"header={header_release}"
             )
         if metadata_only:
             print(  # noqa: T201 - CI validation report
-                f"{wheel.name}: metadata/header={metadata_version}; "
-                f"release={'.'.join(release)}"
+                f"{wheel.name}: python={metadata_version}; "
+                f"native/header={expected_native_version}"
             )
             return
 
@@ -148,18 +167,18 @@ def inspect_wheel(
         if native_value is None:
             raise RuntimeError(f"{wheel} native version function returned NULL")
         native_version = native_value.decode("utf-8")
-        if native_version != metadata_version:
+        if native_version != expected_native_version:
             raise RuntimeError(
-                f"{wheel} version mismatch: metadata/header={metadata_version}, "
-                f"native={native_version}"
+                f"{wheel} native release mismatch: Python metadata={metadata_version}, "
+                f"header={expected_native_version}, native={native_version}"
             )
     finally:
         # Windows denies unlinking a loaded DLL, so balance LoadLibrary before
         # TemporaryDirectory attempts to remove the extracted wheel payload.
         _release_native_library(library)
     print(  # noqa: T201 - CI validation report
-        f"{wheel.name}: metadata/header/native={metadata_version}; "
-        f"release={'.'.join(release)}"
+        f"{wheel.name}: python={metadata_version}; "
+        f"native/header/C-API={expected_native_version}"
     )
 
 
@@ -173,7 +192,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--expected-version",
-        help="require the wheel metadata version to match this release version",
+        help="require wheel metadata to match this Python distribution version",
     )
     parser.add_argument("wheels", nargs="+", type=Path)
     args = parser.parse_args()

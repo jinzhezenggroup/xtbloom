@@ -832,7 +832,7 @@ class BuildDependencyPolicyTests(unittest.TestCase):
 
 
 class VersionMetadataPolicyTests(unittest.TestCase):
-    """Keep every product version dependent on strict Git-tag metadata."""
+    """Keep Python SCM metadata and native release tags strictly configured."""
 
     def setUp(self) -> None:
         """Load the complete project metadata used by each policy mutation."""
@@ -843,6 +843,54 @@ class VersionMetadataPolicyTests(unittest.TestCase):
     def test_current_version_metadata_policy_is_accepted(self) -> None:
         """Accept the reviewed dynamic provider and strict tag grammar."""
         CHECKER._require_version_metadata_policy(self.metadata)
+
+    def test_current_git_archival_policy_is_accepted(self) -> None:
+        """Retain revision metadata from which native CMake recovers the tag."""
+        CHECKER._require_git_archival_policy(REPOSITORY)
+
+    def test_git_archival_cannot_drop_commit_distance(self) -> None:
+        """Reject archives that collapse every post-tag Python build to the tag."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-archive-test-") as directory:
+            root = Path(directory)
+            archival = (REPOSITORY / ".git_archival.txt").read_text(encoding="utf-8")
+            (root / ".git_archival.txt").write_text(
+                archival.replace(
+                    "describe-name: $Format:%(describe:tags=true,abbrev=40,match=v*)$",
+                    "describe-name: $Format:%(describe:tags=true,abbrev=0,match=v*)$",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "revision-aware Python metadata"
+            ):
+                CHECKER._require_git_archival_policy(root)
+
+    def test_expanded_git_archival_policy_is_accepted(self) -> None:
+        """Accept the same reviewed fields after ``git archive`` expands them."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-archive-test-") as directory:
+            root = Path(directory)
+            (root / ".git_archival.txt").write_text(
+                "node: 0123456789abcdef0123456789abcdef01234567\n"
+                "node-date: 2026-08-10T22:14:05+08:00\n"
+                "describe-name: v1.2.3-7-g0123456789abcdef0123456789abcdef01234567\n",
+                encoding="utf-8",
+            )
+            CHECKER._require_git_archival_policy(root)
+
+    def test_expanded_git_archival_requires_matching_node(self) -> None:
+        """Reject describe metadata whose object ID is unrelated to the node."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-archive-test-") as directory:
+            root = Path(directory)
+            (root / ".git_archival.txt").write_text(
+                "node: 0123456789abcdef0123456789abcdef01234567\n"
+                "node-date: 2026-08-10T22:14:05+08:00\n"
+                "describe-name: v1.2.3-7-gabcdef0123456789abcdef0123456789abcdef01\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "revision-aware Python metadata"
+            ):
+                CHECKER._require_git_archival_policy(root)
 
     def test_static_project_version_is_rejected(self) -> None:
         """Reject reintroduction of a hand-maintained project version."""
@@ -855,6 +903,20 @@ class VersionMetadataPolicyTests(unittest.TestCase):
         """Reject silent version synthesis when Git/archive metadata is absent."""
         metadata = copy.deepcopy(self.metadata)
         metadata["tool"]["setuptools_scm"]["fallback_version"] = "0.0.0"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "strict Git-tag"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+    def test_revision_distance_cannot_be_disabled(self) -> None:
+        """Keep branch wheels distinguishable after the nearest release tag."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["tool"]["setuptools_scm"]["version_scheme"] = "only-version"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "strict Git-tag"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+    def test_local_git_identity_cannot_be_disabled(self) -> None:
+        """Retain the source commit identity on non-release Python artifacts."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["tool"]["setuptools_scm"]["local_scheme"] = "no-local-version"
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "strict Git-tag"):
             CHECKER._require_version_metadata_policy(metadata)
 
@@ -1317,23 +1379,29 @@ class CudaWheelInspectionTests(unittest.TestCase):
 
 
 class WheelVersionInspectionTests(unittest.TestCase):
-    """Keep native version checks aligned with every desktop wheel filename."""
+    """Keep Python SCM versions compatible with the embedded native release."""
 
     def _write_version_wheel(
-        self, path: Path, version: str = "1.2.3", header_newline: str = "\n"
+        self,
+        path: Path,
+        distribution_version: str = "1.2.3",
+        native_version: str | None = None,
+        header_newline: str = "\n",
     ) -> None:
         """Create the minimal archive needed for metadata-only version checks."""
-        major, minor, patch = version.split(".")
+        resolved_native = native_version or distribution_version
+        major, minor, patch = resolved_native.split(".")
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr(
                 "xtbloom-test.dist-info/METADATA",
-                f"Metadata-Version: 2.4\nName: xtbloom\nVersion: {version}\n",
+                "Metadata-Version: 2.4\nName: xtbloom\n"
+                f"Version: {distribution_version}\n",
             )
             archive.writestr(
                 "xtbloom/include/xtbloom/version.h",
                 header_newline.join(
                     (
-                        f'#define XTBLOOM_VERSION_STRING "{version}"',
+                        f'#define XTBLOOM_VERSION_STRING "{resolved_native}"',
                         f"#define XTBLOOM_VERSION_MAJOR {major}",
                         f"#define XTBLOOM_VERSION_MINOR {minor}",
                         f"#define XTBLOOM_VERSION_PATCH {patch}",
@@ -1387,6 +1455,39 @@ class WheelVersionInspectionTests(unittest.TestCase):
                 expected_version="1.2.3",
             )
 
+    def test_metadata_only_version_check_accepts_post_tag_development(self) -> None:
+        """Allow Python artifacts to identify commits after a native release."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            wheel = root / "xtbloom-test.whl"
+            self._write_version_wheel(
+                wheel,
+                distribution_version="1.2.3.post1.dev7+g0123456789",
+                native_version="1.2.3",
+            )
+            VERSION_INSPECTOR.inspect_wheel(
+                wheel,
+                root / "extracted",
+                metadata_only=True,
+                expected_version="1.2.3.post1.dev7+g0123456789",
+            )
+
+    def test_metadata_only_version_check_accepts_dirty_development(self) -> None:
+        """Accept setuptools-scm's dirty-date suffix for local source builds."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            wheel = root / "xtbloom-test.whl"
+            self._write_version_wheel(
+                wheel,
+                distribution_version="1.2.3.post1.dev0+g0123456789.d20260810",
+                native_version="1.2.3",
+            )
+            VERSION_INSPECTOR.inspect_wheel(
+                wheel,
+                root / "extracted",
+                metadata_only=True,
+            )
+
     def test_metadata_only_version_check_accepts_windows_crlf_header(self) -> None:
         """Treat CMake's Windows newlines as the same generated version ABI."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
@@ -1419,6 +1520,40 @@ class WheelVersionInspectionTests(unittest.TestCase):
                 VERSION_INSPECTOR.inspect_wheel(wheel, root / "extracted")
             release.assert_called_once_with(library)
 
+    def test_metadata_only_version_check_rejects_wrong_native_release(self) -> None:
+        """Reject a wheel whose native library does not match the SCM base tag."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            wheel = root / "xtbloom-test.whl"
+            self._write_version_wheel(
+                wheel,
+                distribution_version="1.2.3.post1.dev7+g0123456789",
+                native_version="1.2.2",
+            )
+            with self.assertRaisesRegex(RuntimeError, "native release"):
+                VERSION_INSPECTOR.inspect_wheel(
+                    wheel,
+                    root / "extracted",
+                    metadata_only=True,
+                )
+
+    def test_metadata_only_version_check_rejects_development_without_node(self) -> None:
+        """Require every non-release Python artifact to identify its Git node."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
+            root = Path(directory)
+            wheel = root / "xtbloom-test.whl"
+            self._write_version_wheel(
+                wheel,
+                distribution_version="1.2.3.post1.dev7",
+                native_version="1.2.3",
+            )
+            with self.assertRaisesRegex(RuntimeError, "unsupported Python"):
+                VERSION_INSPECTOR.inspect_wheel(
+                    wheel,
+                    root / "extracted",
+                    metadata_only=True,
+                )
+
     def test_metadata_only_version_check_rejects_wrong_release(self) -> None:
         """Prevent a release event from publishing a differently versioned wheel."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-version-test-") as directory:
@@ -1426,7 +1561,7 @@ class WheelVersionInspectionTests(unittest.TestCase):
             wheel = root / "xtbloom-test.whl"
             self._write_version_wheel(wheel)
             with self.assertRaisesRegex(
-                RuntimeError, "does not match expected release"
+                RuntimeError, "does not match expected Python distribution"
             ):
                 VERSION_INSPECTOR.inspect_wheel(
                     wheel,

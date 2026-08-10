@@ -1,9 +1,9 @@
 name: Python wheels
 
-# Builds wheels directly from complete Git checkouts so every platform resolves
-# the product version from the reachable release tag. The independent sdist job
-# verifies that unpacked source archives retain the same frozen version through
-# PKG-INFO when Git metadata is no longer present.
+# Builds wheels directly from complete Git checkouts so Python metadata records
+# the exact source revision while the embedded native product keeps the nearest
+# release tag. The independent sdist job verifies that unpacked source archives
+# retain both versions through frozen PKG-INFO when Git metadata is absent.
 #
 # - Linux x86_64 builds a CUDA-enabled wheel in the PyPA CUDA manylinux image
 #   ([tool.cibuildwheel] in pyproject.toml) and runs the full conformance suite
@@ -307,7 +307,7 @@ jobs:
           python tests/abi/check_torch_extension_linkage.py
           --symbol-list cmake/3rdparty/torch-stable/aoti_symbols.txt
           --wheel wheelhouse/*.whl
-      - name: Verify wheel product-version parity
+      - name: Verify Python/native wheel version contract
         shell: bash
         # A Pyodide side module cannot be loaded by the native host Python.
         # Its installed wheel test loads the module inside Pyodide; this

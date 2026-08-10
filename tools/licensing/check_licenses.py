@@ -580,8 +580,8 @@ def _require_version_metadata_policy(metadata: object) -> None:
     ]:
         raise LicenseCheckError("project uses an unreviewed dynamic version provider")
     expected_setuptools_scm = {
-        "version_scheme": "only-version",
-        "local_scheme": "no-local-version",
+        "version_scheme": "no-guess-dev",
+        "local_scheme": "node-and-date",
         "tag": {
             "regex": (
                 r"^v(?P<version>(?:0|[1-9][0-9]*)\."
@@ -608,6 +608,42 @@ def _require_version_metadata_policy(metadata: object) -> None:
         raise LicenseCheckError(
             "setuptools-scm must use the reviewed strict Git-tag policy"
         )
+
+
+def _require_git_archival_policy(root: Path) -> None:
+    """Retain Python revision data and a separate exact native tag in archives."""
+    expected = (
+        "node: $Format:%H$\n"
+        "node-date: $Format:%cI$\n"
+        "describe-name: $Format:%(describe:tags=true,abbrev=40,match=v*)$\n"
+    )
+    observed = (root / ".git_archival.txt").read_text(encoding="utf-8")
+    if observed == expected:
+        return
+
+    # A real ``git archive`` expands the placeholders before downstream source
+    # checks run. Accept only a self-consistent expansion of the reviewed four
+    # fields; arbitrary edited content must not bypass the repository policy.
+    number = r"(?:0|[1-9][0-9]*)"
+    tag = rf"v{number}\.{number}\.{number}"
+    expanded = re.fullmatch(
+        rf"node: (?P<node>[0-9a-f]{{40}})\n"
+        rf"node-date: [0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}T"
+        rf"[0-9]{{2}}:[0-9]{{2}}:[0-9]{{2}}[+-][0-9]{{2}}:[0-9]{{2}}\n"
+        rf"describe-name: (?P<describe>{tag})"
+        rf"(?:-(?P<distance>{number})-g(?P<abbrev>[0-9a-f]{{40}}))?\n",
+        observed,
+    )
+    if expanded is not None:
+        abbreviation = expanded.group("abbrev")
+        node = expanded.group("node")
+        if abbreviation is None or node == abbreviation:
+            return
+
+    raise LicenseCheckError(
+        ".git_archival.txt must preserve revision-aware Python metadata "
+        "and the exact nearest native tag"
+    )
 
 
 def _require_openblas_build_policy(metadata: object) -> None:
@@ -1404,6 +1440,7 @@ def check_source(root: Path) -> None:
     _require_dependency_policy(project)
     _require_build_dependency_policy(metadata.get("build-system"))
     _require_version_metadata_policy(metadata)
+    _require_git_archival_policy(root)
     _require_openblas_build_policy(metadata)
     _require_exception_policy(root)
 
