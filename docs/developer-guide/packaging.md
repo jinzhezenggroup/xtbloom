@@ -120,12 +120,13 @@ load behavior. macOS needs a matching dylib install-name stub and runtime
 validation; Windows needs a `torch_cpu.lib` import stub plus DLL loading and
 real PyTorch validation. Pyodide has no LibTorch runtime.
 
-The Pyodide `cp313-pyodide_wasm32` wheel is built and smoke-tested as a CI-only
-artifact. It is excluded from the PyPI artifact prefix until the Python wheel
-has a production WebAssembly eigensolver path; the existing Web demo uses its
-separate preloaded LAPACK design. Windows/macOS wheels must pass installed GFN2
-inference, missing-provider, concurrency, and host numerical-coexistence tests
-before being release-eligible.
+The Pyodide `cp314-pyodide_wasm32` wheel targets Pyodide 314.x and its stable
+`pyemscripten_2026_0_wasm32` ABI, then is smoke-tested as a CI-only artifact.
+PyPI accepts this platform tag, but xTBloom excludes the wheel from the PyPI
+artifact prefix until the Python wheel has a production WebAssembly eigensolver
+path; the existing Web demo uses its separate preloaded LAPACK design.
+Windows/macOS wheels must pass installed GFN2 inference, missing-provider,
+concurrency, and host numerical-coexistence tests before being release-eligible.
 
 Final GitHub Releases publish the validated sdist and release-eligible native
 wheels through PyPI Trusted Publishing. The upload job runs only for a

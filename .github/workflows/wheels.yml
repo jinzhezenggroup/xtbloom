@@ -173,10 +173,11 @@ jobs:
             inspect_cuda_wheel: false
             verify_torch_payload: false
             publish: true
-          # Pyodide/WebAssembly (CPython 3.13 uses the PyPI-supported pyemscripten tag)
+          # Pyodide/WebAssembly (Pyodide 314.x uses the stable PyEmscripten
+          # 2026 ABI accepted by PyPI for CPython 3.14 wheels).
           - os: ubuntu-24.04
             platform_id: pyodide_wasm32
-            build: "cp313-pyodide_wasm32"
+            build: "cp314-pyodide_wasm32"
             platform: pyodide
             archs: wasm32
             variant: cpu
