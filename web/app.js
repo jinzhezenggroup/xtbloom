@@ -4,17 +4,37 @@
  * the input/output panels. All user-facing strings come from the I18N
  * dictionary below; errors arrive from wasm as stable ASCII codes. */
 
-import {
+const appModuleUrl = new URL(import.meta.url);
+const appContentVersion = appModuleUrl.searchParams.get("xtbloom_version");
+const appBootstrapToken = appModuleUrl.searchParams.get("xtbloom_bootstrap");
+const appHelpersUrl = new URL("./app_helpers.js", import.meta.url);
+if (appContentVersion) appHelpersUrl.searchParams.set("xtbloom_version", appContentVersion);
+if (appBootstrapToken) appHelpersUrl.searchParams.set("xtbloom_bootstrap", appBootstrapToken);
+
+function currentAppImportOrAbort() {
+  if (
+    appBootstrapToken &&
+    globalThis.__XTBLOOM_APP_BOOT_TOKEN !== appBootstrapToken
+  ) {
+    throw new DOMException("Application import superseded", "AbortError");
+  }
+}
+
+currentAppImportOrAbort();
+const {
   angstromToBohr,
   canStartUrlSmiles,
   clampProgressPercent,
-  comparableContentLength,
-  downloadProgressPercent,
+  fetchResourceBatch,
   initializeWorker,
+  isRetryableLoadError,
   postToReadyWorker,
   readSmilesQuery,
+  runWithRetries,
+  validateEngineManifest,
   withTimeout,
-} from "./app_helpers.js";
+} = await import(appHelpersUrl.href);
+currentAppImportOrAbort();
 
 const EH2EV = 27.211386245988;
 const EH2KCAL = 627.509474063;
@@ -117,10 +137,14 @@ const I18N = {
     engine_ok: "引擎就绪",
     engine_fail: "引擎加载失败",
     load_fail: "无法加载 wasm32 引擎。请使用支持 WebAssembly 和模块化 Web Worker 的现代浏览器。\n详情：",
-    load_timeout: "加载超时——网络可能较慢，请重试。若持续失败请检查是否能正常访问本页面资源。",
+    load_timeout: "多次加载超时——网络可能较慢，请重试。若持续失败请检查是否能正常访问本页面资源。",
     load_retry: "重试",
-    load_downloading: "正在下载 WASM 引擎：{{pct}}%",
-    load_downloading_unknown: "正在下载 WASM 引擎…",
+    load_checking: "正在检查引擎资源版本…",
+    load_downloading: "正在读取引擎资源（缓存或网络，第 {{attempt}}/{{max}} 次）…",
+    load_progress_known: "{{done}}/{{total}} 个文件 · {{loaded}} / {{size}} · {{pct}}%",
+    load_progress_unknown: "{{done}}/{{total}} 个文件 · 已接收 {{loaded}}",
+    load_initializing: "{{done}}/{{total}} 个文件已就绪，正在初始化引擎…",
+    load_retrying: "网络暂时不可用，{{wait}} 秒后自动重试（{{attempt}}/{{max}}）…",
     traj_title: "能量迭代轨迹（Eh）",
     engine_call_fail: "引擎调用失败：",
     err_xyz_parse: "无法解析坐标：每行请提供「元素符号 x y z」，单位 Å",
@@ -230,10 +254,14 @@ const I18N = {
     engine_ok: "engine ready",
     engine_fail: "engine failed to load",
     load_fail: "Could not load the wasm32 engine. Use a modern browser with WebAssembly and module Worker support.\nDetails: ",
-    load_timeout: "Load timed out — network may be slow. Please retry. If it keeps failing, check that the page and its assets can be reached.",
+    load_timeout: "Repeated loading attempts timed out. Please retry; if it persists, check that the page assets are reachable.",
     load_retry: "Retry",
-    load_downloading: "Downloading WASM engine: {{pct}}%",
-    load_downloading_unknown: "Downloading the WASM engine…",
+    load_checking: "Checking the engine resource version…",
+    load_downloading: "Loading engine resources from cache or network (attempt {{attempt}}/{{max}})…",
+    load_progress_known: "{{done}}/{{total}} files · {{loaded}} / {{size}} · {{pct}}%",
+    load_progress_unknown: "{{done}}/{{total}} files · {{loaded}} received",
+    load_initializing: "{{done}}/{{total}} files ready; initializing the engine…",
+    load_retrying: "Network loading failed temporarily; retrying in {{wait}} s ({{attempt}}/{{max}})…",
     traj_title: "Energy trajectory (Eh)",
     engine_call_fail: "Engine call failed: ",
     err_xyz_parse: "Cannot parse coordinates: each line must be “Symbol x y z” in A",
@@ -324,6 +352,8 @@ let worker = null;
 let engineBusy = false;
 let msgSeq = 0;
 const pending = new Map();
+let engineLoadGeneration = 0;
+let engineLoadController = null;
 
 /* The optional OpenChemLib worker has an independent lifecycle: its CDN
  * download or conformer search must never gate ordinary XYZ/xTBloom controls. */
@@ -508,10 +538,23 @@ function rejectPendingCalls(error) {
   pending.clear();
 }
 
-function handleWorkerMessage(m) {
+function engineMessageError(message, fallback = "worker error") {
+  const detail = message && typeof message.error === "object"
+    ? message.error
+    : { message: message?.error };
+  const error = new Error(String(detail?.message || fallback));
+  if (detail?.name) error.name = String(detail.name);
+  if (detail?.phase) error.phase = String(detail.phase);
+  return error;
+}
+
+function handleWorkerMessage(sourceWorker, generation, m) {
+  // A failed attempt may deliver a late ready/error/result after its successor
+  // started. Only the currently published Worker may affect UI or promises.
+  if (generation !== engineLoadGeneration || sourceWorker !== worker) return;
   if (m.type === "error") {
-    const error = new Error(String(m.error || "worker error"));
-    if (worker) worker.terminate();
+    const error = engineMessageError(m);
+    sourceWorker.terminate();
     worker = null;
     engineState = "error";
     rejectPendingCalls(error);
@@ -529,9 +572,30 @@ function handleWorkerMessage(m) {
   }
 }
 
-async function initWorker(wasmBinary) {
-  worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
-  const ready = await initializeWorker(worker, wasmBinary, handleWorkerMessage);
+async function createEngineWorker(
+  generation,
+  { workerUrl, moduleUrl, helpersUrl, wasmBinary, dataBinary },
+  onCreate = () => {},
+) {
+  const candidate = new Worker(workerUrl, { type: "module" });
+  onCreate(candidate);
+  try {
+    const ready = await initializeWorker(candidate, {
+      wasmBinary,
+      dataBinary,
+      moduleUrl,
+      helpersUrl,
+    }, (message) => handleWorkerMessage(candidate, generation, message));
+    return { candidate, ready };
+  } catch (error) {
+    candidate.terminate();
+    throw error;
+  }
+}
+
+function publishReadyEngine(candidate, ready) {
+  if (worker && worker !== candidate) worker.terminate();
+  worker = candidate;
   engineState = "ready";
   refreshBadge();
   $("ver-badge").textContent = "v" + ready.version;
@@ -580,7 +644,7 @@ const overlayText = $("overlay-text");
 const overlay = $("overlay");
 function showOverlay(key) { overlayText.textContent = t(key); overlay.hidden = false; }
 function hideOverlay() { overlay.hidden = true; }
-$("retry").addEventListener("click", () => { window.location.reload(); });
+$("retry").addEventListener("click", () => { void startEngineLoad({ forceReload: true }); });
 
 function fmt(x, digits = 6) {
   if (x === null || x === undefined || Number.isNaN(x)) return "NaN";
@@ -596,45 +660,127 @@ function countAtoms(xyz) {
 }
 
 let __loadingPct = 0;
-function updateLoader(pct, reset = false) {
-  const bounded = clampProgressPercent(pct);
+const ENGINE_LOAD_MAX_ATTEMPTS = 3;
+const ENGINE_ATTEMPT_TIMEOUT_MS = 60000;
+const ENGINE_ASSET_IDS = ["worker", "helpers", "module", "wasm", "data"];
+
+function formatByteCount(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  const units = ["B", "KB", "MB", "GB"];
+  let scaled = bytes;
+  let unit = 0;
+  while (scaled >= 1000 && unit < units.length - 1) {
+    scaled /= 1000;
+    unit++;
+  }
+  const digits = unit === 0 || scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+  return `${scaled.toFixed(digits)} ${units[unit]}`;
+}
+
+async function loadEngineManifest(attempt, forceReload, signal) {
+  $("overlay-text").textContent = t("load_checking");
+  if (attempt === 1 && !forceReload && globalThis.__XTBLOOM_BOOTSTRAP_MANIFEST) {
+    const bootstrapped = globalThis.__XTBLOOM_BOOTSTRAP_MANIFEST;
+    delete globalThis.__XTBLOOM_BOOTSTRAP_MANIFEST;
+    return validateManifestForLoadedApp(bootstrapped);
+  }
+  const url = new URL("engine-manifest.json", import.meta.url);
+  const bustCache = forceReload || attempt > 1;
+  let response;
+  try {
+    response = await fetch(url, {
+      signal,
+      cache: bustCache ? "reload" : "no-cache",
+    });
+  } catch (cause) {
+    const error = new Error("Network error while checking the engine manifest", { cause });
+    error.retryable = true;
+    throw error;
+  }
+  if (!response.ok) {
+    const error = new Error(`HTTP ${response.status} while checking the engine manifest`);
+    error.status = response.status;
+    throw error;
+  }
+  let rawManifest;
+  try {
+    rawManifest = await response.json();
+  } catch (cause) {
+    const error = new Error("Invalid engine manifest response", { cause });
+    error.retryable = true;
+    throw error;
+  }
+  return validateManifestForLoadedApp(rawManifest);
+}
+
+function validateManifestForLoadedApp(rawManifest) {
+  const manifest = validateEngineManifest(rawManifest, ["app", ...ENGINE_ASSET_IDS]);
+  // A deployment may finish between retry attempts. Never combine an already
+  // evaluated app/helper graph with a newer Worker/WASM/data generation.
+  if (appContentVersion && manifest.version !== appContentVersion) {
+    const error = new TypeError("An engine update was detected; refresh the page to load it coherently");
+    error.retryable = false;
+    throw error;
+  }
+  return manifest;
+}
+
+function engineAssets(manifest) {
+  const engineIds = new Set(ENGINE_ASSET_IDS);
+  return manifest.assets.filter((asset) => engineIds.has(asset.id)).map((asset) => {
+    const url = new URL(asset.path, import.meta.url);
+    url.searchParams.set("xtbloom_version", manifest.version);
+    return { ...asset, url: url.href };
+  });
+}
+
+function updateLoader(progress, attempt, reset = false) {
+  const bounded = clampProgressPercent(progress.barPercent);
   __loadingPct = reset ? bounded : Math.max(__loadingPct, bounded);
   $("load-bar-wrap").classList.remove("indeterminate");
   $("load-bar-wrap").hidden = false;
   $("load-bar-fill").style.width = __loadingPct + "%";
-  $("load-bar-text").textContent = Math.round(__loadingPct) + "%";
-  $("overlay-text").textContent = tf("load_downloading", { pct: Math.round(__loadingPct) });
+  const vars = {
+    done: progress.completedFiles,
+    total: progress.totalFiles,
+    loaded: formatByteCount(progress.loadedBytes),
+    size: progress.totalBytes === null ? "" : formatByteCount(progress.totalBytes),
+    pct: progress.percent === null ? "" : Math.round(progress.percent),
+  };
+  $("load-bar-text").textContent = tf(
+    progress.totalBytes === null ? "load_progress_unknown" : "load_progress_known",
+    vars,
+  );
+  $("overlay-text").textContent = tf("load_downloading", {
+    attempt,
+    max: ENGINE_LOAD_MAX_ATTEMPTS,
+  });
 }
 
-function setLoaderIndeterminate() {
-  $("load-bar-wrap").hidden = false;
-  $("load-bar-wrap").classList.add("indeterminate");
-  $("load-bar-text").textContent = "…";
-  $("overlay-text").textContent = t("load_downloading_unknown");
+function setLoaderInitializing(progress) {
+  $("load-bar-fill").style.width = "100%";
+  $("load-bar-text").textContent = tf(
+    progress.totalBytes === null ? "load_progress_unknown" : "load_progress_known",
+    {
+      done: progress.completedFiles,
+      total: progress.totalFiles,
+      loaded: formatByteCount(progress.loadedBytes),
+      size: progress.totalBytes === null ? "" : formatByteCount(progress.totalBytes),
+      pct: 100,
+    },
+  );
+  $("overlay-text").textContent = tf("load_initializing", {
+    done: progress.completedFiles,
+    total: progress.totalFiles,
+  });
 }
-async function fetchProgress(url, options = {}) {
-  const resp = await fetch(url, options);
-  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
-  const total = comparableContentLength(resp.headers);
-  if (!total) setLoaderIndeterminate();
-  const reader = resp.body.getReader();
-  const chunks = [];
-  let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    got += value.length;
-    if (total) {
-      const pct = downloadProgressPercent(got, total, __loadingPct);
-      if (pct >= 10) updateLoader(pct);
-    }
-  }
-  const n = chunks.reduce((a, c) => a + c.length, 0);
-  const out = new Uint8Array(n);
-  let o = 0;
-  for (const c of chunks) { out.set(c, o); o += c.length; }
-  return out;
+
+function setLoaderRetrying({ nextAttempt, maxAttempts, waitMs }) {
+  $("overlay-text").textContent = tf("load_retrying", {
+    wait: Math.max(1, Math.ceil(waitMs / 1000)),
+    attempt: nextAttempt,
+    max: maxAttempts,
+  });
 }
 
 function updateXyzHint() {
@@ -1148,6 +1294,138 @@ $("copy-json").addEventListener("click", async () => {
   }
 });
 
+function currentLoadOrAbort(generation, ...signals) {
+  if (generation !== engineLoadGeneration || signals.some((signal) => signal.aborted)) {
+    throw new DOMException("Engine load superseded", "AbortError");
+  }
+}
+
+async function loadEngineAttempt(generation, attempt, forceReload, masterSignal) {
+  const attemptController = new AbortController();
+  const abortAttempt = () => attemptController.abort();
+  masterSignal.addEventListener("abort", abortAttempt, { once: true });
+  if (masterSignal.aborted) abortAttempt();
+
+  let candidate = null;
+  let keepCandidate = false;
+  try {
+    const initialize = (async () => {
+      const manifest = await loadEngineManifest(
+        attempt,
+        forceReload,
+        attemptController.signal,
+      );
+      currentLoadOrAbort(generation, masterSignal, attemptController.signal);
+      const resources = engineAssets(manifest);
+      const urls = new Map(resources.map((resource) => [resource.id, resource.url]));
+      let resetProgress = true;
+      let lastProgress = {
+        totalFiles: resources.length,
+        completedFiles: 0,
+        loadedBytes: 0,
+        totalBytes: null,
+        percent: null,
+        barPercent: 0,
+        complete: false,
+      };
+
+      const payloads = await fetchResourceBatch(resources, {
+        signal: attemptController.signal,
+        cache: forceReload || attempt > 1 ? "reload" : "default",
+        onProgress: (progress) => {
+          if (generation !== engineLoadGeneration || attemptController.signal.aborted) return;
+          lastProgress = progress;
+          updateLoader(progress, attempt, resetProgress);
+          resetProgress = false;
+        },
+      });
+      currentLoadOrAbort(generation, masterSignal, attemptController.signal);
+      setLoaderInitializing(lastProgress);
+      const created = await createEngineWorker(generation, {
+        workerUrl: urls.get("worker"),
+        moduleUrl: urls.get("module"),
+        helpersUrl: urls.get("helpers"),
+        wasmBinary: payloads.get("wasm"),
+        dataBinary: payloads.get("data"),
+      }, (createdWorker) => { candidate = createdWorker; });
+      currentLoadOrAbort(generation, masterSignal, attemptController.signal);
+      return created;
+    })();
+
+    const result = await withTimeout(initialize, ENGINE_ATTEMPT_TIMEOUT_MS, () => {
+      abortAttempt();
+      if (candidate) candidate.terminate();
+    });
+    currentLoadOrAbort(generation, masterSignal, attemptController.signal);
+    keepCandidate = true;
+    return result;
+  } finally {
+    masterSignal.removeEventListener("abort", abortAttempt);
+    abortAttempt();
+    if (candidate && !keepCandidate) candidate.terminate();
+  }
+}
+
+async function startEngineLoad({ forceReload = false } = {}) {
+  const generation = ++engineLoadGeneration;
+  if (engineLoadController) engineLoadController.abort();
+  const controller = new AbortController();
+  engineLoadController = controller;
+  if (worker) worker.terminate();
+  worker = null;
+  engineState = "loading";
+  engineBusy = false;
+  rejectPendingCalls(new Error("engine reloading"));
+  refreshBadge();
+  $("retry").hidden = true;
+  setError("");
+  showOverlay("overlay_loading");
+  __loadingPct = 0;
+  $("load-bar-wrap").hidden = true;
+  $("load-bar-fill").style.width = "0%";
+  let loaded = null;
+
+  try {
+    loaded = await runWithRetries(
+      (attempt) => loadEngineAttempt(
+        generation,
+        attempt,
+        forceReload,
+        controller.signal,
+      ),
+      {
+        maxAttempts: ENGINE_LOAD_MAX_ATTEMPTS,
+        shouldRetry: isRetryableLoadError,
+        signal: controller.signal,
+        onRetry: (retry) => {
+          if (generation === engineLoadGeneration && !controller.signal.aborted) {
+            setLoaderRetrying(retry);
+          }
+        },
+      },
+    );
+    currentLoadOrAbort(generation, controller.signal);
+    publishReadyEngine(loaded.candidate, loaded.ready);
+    hideOverlay();
+  } catch (error) {
+    if (loaded?.candidate && worker !== loaded.candidate) loaded.candidate.terminate();
+    if (generation !== engineLoadGeneration || controller.signal.aborted) return;
+    if (worker) worker.terminate();
+    worker = null;
+    engineState = "error";
+    rejectPendingCalls(error instanceof Error ? error : new Error(String(error)));
+    refreshBadge();
+    hideOverlay();
+    const message = String(error?.message || error);
+    setError(message.includes("TIME_OUT") ? t("load_timeout") : t("load_fail") + message);
+    $("retry").hidden = false;
+  } finally {
+    if (generation === engineLoadGeneration && engineLoadController === controller) {
+      engineLoadController = null;
+    }
+  }
+}
+
 /* ---- bootstrap ---- */
 (async () => {
   applyI18n();
@@ -1166,40 +1444,5 @@ $("copy-json").addEventListener("click", async () => {
     setSmilesStatus("smiles_url_failed", { e: detail }, "err");
     setError(t("smiles_url_failed", { e: detail }));
   }
-  engineState = "loading";
-  refreshBadge();
-  const LOAD_TIMEOUT_MS = 60000;
-  const abortController = new AbortController();
-  try {
-    showOverlay("overlay_loading");
-    updateLoader(0, true);
-    const initialize = (async () => {
-      // Download the main wasm on the UI thread with a real progress bar, then
-      // wait for .data loading, module instantiation, and side-module readiness
-      // inside the worker before considering the engine loaded.
-      const wasmUrl = new URL("xtbloom_web.wasm", import.meta.url).href;
-      const wasmBinary = await fetchProgress(wasmUrl, { signal: abortController.signal });
-      updateLoader(100);
-      $("overlay-text").textContent = "…";
-      $("load-bar-wrap").hidden = true;
-      await initWorker(wasmBinary);
-    })();
-    await withTimeout(initialize, LOAD_TIMEOUT_MS, () => {
-      abortController.abort();
-      if (worker) worker.terminate();
-    });
-    hideOverlay();
-  } catch (e) {
-    abortController.abort();
-    if (worker) {
-      worker.terminate();
-      worker = null;
-    }
-    engineState = "error";
-    rejectPendingCalls(e instanceof Error ? e : new Error(String(e)));
-    refreshBadge();
-    hideOverlay();
-    setError(String(e && e.message).includes("TIME_OUT") ? t("load_timeout") : t("load_fail") + String(e && e.message));
-    $("retry").hidden = false;
-  }
+  await startEngineLoad();
 })();

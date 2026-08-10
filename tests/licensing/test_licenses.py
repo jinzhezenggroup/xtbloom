@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
+import json
 import shutil
 import tarfile
 import tempfile
@@ -311,6 +313,31 @@ class WebSiteLicenseTests(unittest.TestCase):
             destination = root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(b"test\n")
+        entries = []
+        version_material = ""
+        for asset_id, relative in CHECKER.WEB_VERSIONED_ASSETS:
+            payload = (root / relative).read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
+            entries.append(
+                {
+                    "id": asset_id,
+                    "path": relative,
+                    "bytes": len(payload),
+                    "sha256": digest,
+                }
+            )
+            version_material += f"{asset_id}:{relative}:{len(payload)}:{digest}\n"
+        (root / "engine-manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "version": hashlib.sha256(version_material.encode()).hexdigest(),
+                    "assets": entries,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         (root / "index.html").write_text(
             '<a href="LICENSE">license</a>\n'
             '<a href="THIRD_PARTY_NOTICES.md">notices</a>\n'
@@ -392,6 +419,17 @@ class WebSiteLicenseTests(unittest.TestCase):
             (root / "xtbloom_web-old.wasm").write_bytes(b"stale engine")
             with self.assertRaisesRegex(
                 CHECKER.LicenseCheckError, "unexpected or orphaned files"
+            ):
+                CHECKER.check_web_site(root, REPOSITORY)
+
+    def test_web_site_rejects_stale_engine_manifest(self) -> None:
+        """Do not let cached URLs describe different JS/WASM/data bytes."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "xtbloom_web.wasm").write_bytes(b"changed engine")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "manifest does not match"
             ):
                 CHECKER.check_web_site(root, REPOSITORY)
 

@@ -20,6 +20,17 @@ SMILES and xTBloom workers, generates ethanol, runs the demo optimizer, and
 writes the final coordinates back to the editor. Encode a literal `+` in a
 charged SMILES as `%2B`.
 
+The engine loader reports completed files and received bytes across the full
+Worker, JavaScript, WebAssembly, and data resource set. A dependency-free
+bootstrap first verifies the versioned app/helper module graph, while the page
+itself retries a transient failure loading that bootstrap. A small version
+manifest is revalidated on refresh; unchanged versioned resources stay in the
+browser cache, while a changed manifest pulls the new generation. The manifest
+also provides exact decoded sizes for byte progress. Transient startup network
+failures are retried automatically as one coherent resource generation; the
+manual retry keeps the current molecule and settings instead of reloading the
+page.
+
 ## Results
 
 The page reports energy, atomic charges, optional analytic forces, convergence

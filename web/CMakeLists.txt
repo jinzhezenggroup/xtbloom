@@ -11,7 +11,7 @@
 #   package.json / package-lock.json   (3dmol.js 2.5.5, BSD-3-Clause)
 #   wasm/linalg.c                      (minimal LP64 LAPACKE/CBLAS side module)
 #   xtbloom_web.c                       (XYZ/JSON C adapter + L-BFGS optimizer)
-#   index.html / style.css / app.js / app_helpers.js / worker.js
+#   index.html / style.css / bootstrap.js / app.js / app_helpers.js / worker.js
 #   smiles_helpers.js / smiles_worker.js
 # See THIRD_PARTY_NOTICES.md for provenance. Outputs under <build> are build
 # artifacts and never committed.
@@ -133,6 +133,7 @@ add_custom_command(
 set(_xtbloom_web_copy_deps
     "${_xtbloom_web_src}/index.html"
     "${_xtbloom_web_src}/style.css"
+    "${_xtbloom_web_src}/bootstrap.js"
     "${_xtbloom_web_src}/app.js"
     "${_xtbloom_web_src}/app_helpers.js"
     "${_xtbloom_web_src}/worker.js"
@@ -145,6 +146,7 @@ add_custom_command(
   OUTPUT
     "${_xtbloom_web_site}/index.html"
     "${_xtbloom_web_site}/style.css"
+    "${_xtbloom_web_site}/bootstrap.js"
     "${_xtbloom_web_site}/app.js"
     "${_xtbloom_web_site}/app_helpers.js"
     "${_xtbloom_web_site}/worker.js"
@@ -157,6 +159,8 @@ add_custom_command(
           "${_xtbloom_web_src}/index.html" "${_xtbloom_web_site}/index.html"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_xtbloom_web_src}/style.css" "${_xtbloom_web_site}/style.css"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_xtbloom_web_src}/bootstrap.js" "${_xtbloom_web_site}/bootstrap.js"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_xtbloom_web_src}/app.js" "${_xtbloom_web_site}/app.js"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -177,6 +181,29 @@ add_custom_command(
           "${_xtbloom_web_3dmol}" "${_xtbloom_web_site}/vendor/3Dmol-min.js"
   DEPENDS ${_xtbloom_web_copy_deps}
   COMMENT "Staging web static assets"
+  VERBATIM)
+
+# The browser revalidates this small manifest on each page load. An unchanged
+# content version keeps the app plus all five engine resources cacheable across
+# refreshes; a changed version gives the complete JS/wasm/data generation new
+# URLs before the app/helper module graph is linked.
+set(_xtbloom_web_engine_manifest
+    "${_xtbloom_web_site}/engine-manifest.json")
+add_custom_command(
+  OUTPUT "${_xtbloom_web_engine_manifest}"
+  COMMAND ${CMAKE_COMMAND}
+          "-DASSET_DIR=${_xtbloom_web_site}"
+          "-DOUTPUT=${_xtbloom_web_engine_manifest}"
+          -P "${_xtbloom_web_src}/write_engine_manifest.cmake"
+  DEPENDS
+    "${_xtbloom_web_site}/app.js"
+    "${_xtbloom_web_site}/worker.js"
+    "${_xtbloom_web_site}/app_helpers.js"
+    "${_xtbloom_web_site}/xtbloom_web.js"
+    "${_xtbloom_web_site}/xtbloom_web.wasm"
+    "${_xtbloom_web_site}/xtbloom_web.data"
+    "${_xtbloom_web_src}/write_engine_manifest.cmake"
+  COMMENT "Generating versioned web-engine asset manifest"
   VERBATIM)
 
 # ---------------------------------------------------------------------------
@@ -289,8 +316,10 @@ add_custom_target(
     "${_xtbloom_web_site}/xtbloom_web.js"
     "${_xtbloom_web_site}/xtbloom_web.wasm"
     "${_xtbloom_web_site}/xtbloom_web.data"
+    "${_xtbloom_web_engine_manifest}"
     "${_xtbloom_web_site}/index.html"
     "${_xtbloom_web_site}/style.css"
+    "${_xtbloom_web_site}/bootstrap.js"
     "${_xtbloom_web_site}/app.js"
     "${_xtbloom_web_site}/app_helpers.js"
     "${_xtbloom_web_site}/worker.js"
