@@ -1,8 +1,9 @@
 /* xtbloom web demo worker.
  *
- * The target-width module (xtbloom + web adapter + preloaded LAPACK side module)
- * runs here, so the long synchronous calls (single-point and, especially,
- * the multi-iteration geometry optimization) never block the UI thread.
+ * The target-width module (xtbloom + web adapter + preloaded Eigen LAPACKE
+ * side module) runs here, so the long synchronous calls (single-point and,
+ * especially, the multi-iteration geometry optimization) never block the UI
+ * thread.
  *
  * Protocol (all messages JSON-ish, transfer lists for binary payloads):
  *   main -> worker {type:"init", wasmBinary, dataBinary, moduleUrl, helpersUrl}
@@ -89,7 +90,8 @@ self.onmessage = async (event) => {
 
       // Both binary payloads were counted by the UI loader. Supplying the data
       // package here prevents Emscripten from issuing an invisible second fetch
-      // before it can load the LAPACK side module from the virtual filesystem.
+      // before it can load the Eigen LAPACKE side module from the virtual
+      // filesystem.
       Module = await initializeDownloadedEngineModule(
         createXTBloomModule,
         msg.wasmBinary,

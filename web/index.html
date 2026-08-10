@@ -36,6 +36,7 @@
         <button class="chip" data-preset="oh">OH·</button>
         <button class="chip" data-preset="benzene" data-i18n="preset_benzene">苯</button>
         <button class="chip" data-preset="ethanol" data-i18n="preset_ethanol">乙醇</button>
+        <button class="chip" data-preset="c60" data-i18n="preset_c60">C₆₀ 富勒烯</button>
       </div>
     </div>
 
@@ -229,13 +230,15 @@
 <footer class="footer">
   <p data-i18n="footer">
     由 xTBloom 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32，面向支持 WebAssembly 与模块 Worker 的现代浏览器。
-    可选的 SMILES 三维结构由固定版本的 OpenChemLib 生成并以 MMFF94 预优化。BLAS/LAPACK 层为演示用最小实现。仅供演示，非科学计算生产环境。
+    可选的 SMILES 三维结构由固定版本的 OpenChemLib 生成并以 MMFF94 预优化。WebAssembly LP64 LAPACKE/CBLAS 兼容层由固定版本的 Eigen 5.0.1 支撑。仅供演示，非科学计算生产环境。
   </p>
   <p class="legal-links">
     <a href="https://xtbloom.jinzhezeng.group">Web demo</a> ·
     <a href="LICENSE">GPL-3.0-or-later</a> ·
     <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a> ·
     <a href="LICENSES/openchemlib-BSD-3-Clause.txt">OpenChemLib license</a> ·
+    <a href="LICENSES/eigen/COPYING.MPL2">Eigen MPL-2.0</a> ·
+    <a href="provenance/eigen_manifest.json">Eigen source provenance</a> ·
     <a href="CUDA_MKL_LINKING_EXCEPTION">Additional permission</a> ·
     <a href="https://github.com/jinzhezenggroup/xtbloom">Source</a>
   </p>

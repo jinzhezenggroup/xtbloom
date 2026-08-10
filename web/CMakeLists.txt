@@ -2,16 +2,17 @@
 #
 # Enabled with -DXTBLOOM_BUILD_WEB_DEMO=ON under the Emscripten toolchain
 # (emcmake). The whole pipeline — npm-fetch the 3Dmol.js browser bundle,
-# build the dlopen-able LAPACKE side module, compile the web adapter, link the
-# target-width main module, and stage the static assets — is expressed as custom
-# commands so a single `cmake --build` produces the deployable site in
+# build the dlopen-able Eigen LAPACKE side module, compile the web adapter, link
+# the target-width main module, and stage the static assets — is expressed as
+# custom commands so a single `cmake --build` produces the deployable site in
 #   <build>/web/site
 #
 # The deterministic, version-pinned build inputs live in this directory:
 #   package.json / package-lock.json   (3dmol.js 2.5.5, BSD-3-Clause)
-#   wasm/linalg.c                      (minimal LP64 LAPACKE/CBLAS side module)
+#   wasm/linalg_eigen.cpp              (Eigen LP64 LAPACKE/CBLAS side module)
 #   xtbloom_web.c                       (XYZ/JSON C adapter + L-BFGS optimizer)
-#   index.html / style.css / bootstrap.js / app.js / app_helpers.js / worker.js
+#   index.html / style.css / bootstrap.js / app.js / c60_case.js /
+#   app_helpers.js / worker.js
 #   smiles_helpers.js / smiles_worker.js
 # See THIRD_PARTY_NOTICES.md for provenance. Outputs under <build> are build
 # artifacts and never committed.
@@ -25,6 +26,10 @@ endif()
 set(_xtbloom_web_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_xtbloom_web_site "${CMAKE_CURRENT_BINARY_DIR}/site")
 set(_xtbloom_web_obj "${CMAKE_CURRENT_BINARY_DIR}/xtbloom_web.o")
+set(_xtbloom_web_eigen_root "${CMAKE_SOURCE_DIR}/cmake/3rdparty/eigen")
+file(GLOB_RECURSE _xtbloom_web_eigen_headers
+  CONFIGURE_DEPENDS
+  "${_xtbloom_web_eigen_root}/Eigen/*")
 # The adapter is compiled by a custom emcc command rather than a CMake target,
 # so propagate both halves of the public-header build interface explicitly.
 set(_xtbloom_web_source_include "-I${CMAKE_SOURCE_DIR}/include")
@@ -70,13 +75,56 @@ add_custom_command(
 set(_xtbloom_web_side "${CMAKE_CURRENT_BINARY_DIR}/libscipy_openblas.so")
 add_custom_command(
   OUTPUT "${_xtbloom_web_side}"
-  COMMAND ${CMAKE_C_COMPILER}
-          "${_xtbloom_web_src}/wasm/linalg.c"
+  COMMAND ${CMAKE_CXX_COMPILER}
+          "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
           -o "${_xtbloom_web_side}"
+          -std=c++17 -fPIC
+          -fvisibility=hidden -fvisibility-inlines-hidden
+          -fno-exceptions -fno-rtti
+          "-I${_xtbloom_web_eigen_root}"
           -sSIDE_MODULE=2 "${_xtbloom_web_arch_flag}" -O2
           "-sEXPORTED_FUNCTIONS=[\"_openblas_get_config\",\"_openblas_set_num_threads_local\",\"_LAPACKE_dpotrf_work\",\"_LAPACKE_dpocon_work\",\"_LAPACKE_dsyevd_work\",\"_cblas_dgemm\",\"_cblas_dtrsm\"]"
-  DEPENDS "${_xtbloom_web_src}/wasm/linalg.c"
-  COMMENT "Building ${_xtbloom_web_arch} LAPACKE side module"
+  DEPENDS
+    "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
+    "${_xtbloom_web_eigen_root}/manifest.json"
+    ${_xtbloom_web_eigen_headers}
+  COMMENT "Building ${_xtbloom_web_arch} Eigen LAPACKE side module"
+  VERBATIM)
+
+# Compile and execute the compatibility layer independently of xTBloom's main
+# module. This covers LAPACKE workspace/failure behavior plus the CBLAS layout,
+# transpose, side, triangle, and unit-diagonal matrix before scientific smoke
+# tests exercise the provider through dlopen.
+find_program(_xtbloom_web_node NAMES node REQUIRED)
+set(_xtbloom_web_linalg_test_js
+    "${CMAKE_CURRENT_BINARY_DIR}/linalg_eigen_test.js")
+set(_xtbloom_web_linalg_test_wasm
+    "${CMAKE_CURRENT_BINARY_DIR}/linalg_eigen_test.wasm")
+add_custom_command(
+  OUTPUT
+    "${_xtbloom_web_linalg_test_js}"
+    "${_xtbloom_web_linalg_test_wasm}"
+  COMMAND ${CMAKE_CXX_COMPILER}
+          "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
+          "${_xtbloom_web_src}/tests/linalg_eigen_test.cpp"
+          -o "${_xtbloom_web_linalg_test_js}"
+          -std=c++17
+          "-I${_xtbloom_web_eigen_root}"
+          "${_xtbloom_web_arch_flag}" -O2
+  DEPENDS
+    "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
+    "${_xtbloom_web_src}/tests/linalg_eigen_test.cpp"
+    "${_xtbloom_web_eigen_root}/manifest.json"
+    ${_xtbloom_web_eigen_headers}
+  COMMENT "Building ${_xtbloom_web_arch} Eigen LAPACKE/CBLAS tests"
+  VERBATIM)
+add_custom_target(
+  xtbloom_web_linalg_test
+  COMMAND "${_xtbloom_web_node}" "${_xtbloom_web_linalg_test_js}"
+  DEPENDS
+    "${_xtbloom_web_linalg_test_js}"
+    "${_xtbloom_web_linalg_test_wasm}"
+  COMMENT "Running ${_xtbloom_web_arch} Eigen LAPACKE/CBLAS tests"
   VERBATIM)
 
 # ---------------------------------------------------------------------------
@@ -118,7 +166,11 @@ add_custom_command(
           -sSTACK_SIZE=8MB -sALLOW_MEMORY_GROWTH
           -sFORCE_FILESYSTEM
           "--preload-file=${_xtbloom_web_side}@/libscipy_openblas.so"
-          "-sEXPORTED_FUNCTIONS=_xtbloom_web_compute,_xtbloom_web_optimize,_xtbloom_web_set_optimize_step_cb,_xtbloom_web_version,_malloc,_free"
+          # Eigen allocates its dynamic matrices through C++ operator new. A
+          # MAIN_MODULE=2 link retains only declared exports, so keep the raw
+          # wasm ``_Znwm`` symbol (spelled ``__Znwm`` to emcc) available to the
+          # side module along with malloc/free.
+          "-sEXPORTED_FUNCTIONS=_xtbloom_web_compute,_xtbloom_web_optimize,_xtbloom_web_set_optimize_step_cb,_xtbloom_web_version,_malloc,_free,__Znwm"
           "-sEXPORTED_RUNTIME_METHODS=UTF8ToString,stringToUTF8OnStack,ccall,cwrap,addFunction,wasmMemory"
   DEPENDS
     xtbloom
@@ -135,6 +187,7 @@ set(_xtbloom_web_copy_deps
     "${_xtbloom_web_src}/style.css"
     "${_xtbloom_web_src}/bootstrap.js"
     "${_xtbloom_web_src}/app.js"
+    "${_xtbloom_web_src}/c60_case.js"
     "${_xtbloom_web_src}/app_helpers.js"
     "${_xtbloom_web_src}/worker.js"
     "${_xtbloom_web_src}/smiles_helpers.js"
@@ -148,6 +201,7 @@ add_custom_command(
     "${_xtbloom_web_site}/style.css"
     "${_xtbloom_web_site}/bootstrap.js"
     "${_xtbloom_web_site}/app.js"
+    "${_xtbloom_web_site}/c60_case.js"
     "${_xtbloom_web_site}/app_helpers.js"
     "${_xtbloom_web_site}/worker.js"
     "${_xtbloom_web_site}/smiles_helpers.js"
@@ -163,6 +217,8 @@ add_custom_command(
           "${_xtbloom_web_src}/bootstrap.js" "${_xtbloom_web_site}/bootstrap.js"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_xtbloom_web_src}/app.js" "${_xtbloom_web_site}/app.js"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_xtbloom_web_src}/c60_case.js" "${_xtbloom_web_site}/c60_case.js"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_xtbloom_web_src}/app_helpers.js" "${_xtbloom_web_site}/app_helpers.js"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -184,9 +240,9 @@ add_custom_command(
   VERBATIM)
 
 # The browser revalidates this small manifest on each page load. An unchanged
-# content version keeps the app plus all five engine resources cacheable across
-# refreshes; a changed version gives the complete JS/wasm/data generation new
-# URLs before the app/helper module graph is linked.
+# content version keeps the application graph and engine resources cacheable
+# across refreshes; a changed version gives the complete JS/wasm/data generation
+# new URLs before the app/helper/preset module graph is linked.
 set(_xtbloom_web_engine_manifest
     "${_xtbloom_web_site}/engine-manifest.json")
 add_custom_command(
@@ -197,6 +253,7 @@ add_custom_command(
           -P "${_xtbloom_web_src}/write_engine_manifest.cmake"
   DEPENDS
     "${_xtbloom_web_site}/app.js"
+    "${_xtbloom_web_site}/c60_case.js"
     "${_xtbloom_web_site}/worker.js"
     "${_xtbloom_web_site}/app_helpers.js"
     "${_xtbloom_web_site}/xtbloom_web.js"
@@ -225,11 +282,27 @@ set(_xtbloom_web_license_sources
     "${CMAKE_SOURCE_DIR}/LICENSES/pako-Zlib.txt"
     "${CMAKE_SOURCE_DIR}/LICENSES/upng-js-MIT.txt")
 
+set(_xtbloom_web_eigen_license_sources
+    "${_xtbloom_web_eigen_root}/COPYING.MPL2"
+    "${_xtbloom_web_eigen_root}/COPYING.BSD"
+    "${_xtbloom_web_eigen_root}/COPYING.APACHE"
+    "${_xtbloom_web_eigen_root}/COPYING.MINPACK"
+    "${_xtbloom_web_eigen_root}/COPYING.README")
+
+set(_xtbloom_web_eigen_notice_sources
+    "${_xtbloom_web_eigen_root}/Eigen/src/Core/arch/Default/Half.h"
+    "${_xtbloom_web_eigen_root}/Eigen/src/Core/arch/Default/BFloat16.h"
+    "${_xtbloom_web_eigen_root}/Eigen/src/Geometry/AlignedBox.h"
+    "${_xtbloom_web_eigen_root}/Eigen/src/LU/arch/InverseSize4.h")
+
 set(_xtbloom_web_legal_sources
     "${CMAKE_SOURCE_DIR}/LICENSE"
     "${CMAKE_SOURCE_DIR}/CUDA_MKL_LINKING_EXCEPTION"
     "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
     ${_xtbloom_web_license_sources}
+    ${_xtbloom_web_eigen_license_sources}
+    ${_xtbloom_web_eigen_notice_sources}
+    "${_xtbloom_web_eigen_root}/manifest.json"
     "${CMAKE_SOURCE_DIR}/data/parameters/d4.NOTICE"
     "${CMAKE_SOURCE_DIR}/data/parameters/licenses/dftd4-COPYING"
     "${CMAKE_SOURCE_DIR}/data/parameters/licenses/dftd4-COPYING.LESSER"
@@ -257,6 +330,15 @@ set(_xtbloom_web_legal_outputs
     "${_xtbloom_web_site}/LICENSES/iobuffer-MIT.txt"
     "${_xtbloom_web_site}/LICENSES/netcdfjs-MIT.txt"
     "${_xtbloom_web_site}/LICENSES/upng-js-MIT.txt"
+    "${_xtbloom_web_site}/LICENSES/eigen/COPYING.MPL2"
+    "${_xtbloom_web_site}/LICENSES/eigen/COPYING.BSD"
+    "${_xtbloom_web_site}/LICENSES/eigen/COPYING.APACHE"
+    "${_xtbloom_web_site}/LICENSES/eigen/COPYING.MINPACK"
+    "${_xtbloom_web_site}/LICENSES/eigen/COPYING.README"
+    "${_xtbloom_web_site}/LICENSES/eigen/notices/Half.h"
+    "${_xtbloom_web_site}/LICENSES/eigen/notices/BFloat16.h"
+    "${_xtbloom_web_site}/LICENSES/eigen/notices/AlignedBox.h"
+    "${_xtbloom_web_site}/LICENSES/eigen/notices/InverseSize4.h"
     "${_xtbloom_web_site}/LICENSES/parameters/d4.NOTICE"
     "${_xtbloom_web_site}/LICENSES/parameters/dftd4-COPYING"
     "${_xtbloom_web_site}/LICENSES/parameters/dftd4-COPYING.LESSER"
@@ -266,6 +348,7 @@ set(_xtbloom_web_legal_outputs
     "${_xtbloom_web_site}/provenance/parameters/spin_manifest.json"
     "${_xtbloom_web_site}/provenance/parameters/d4_manifest.json"
     "${_xtbloom_web_site}/provenance/parameters/mctc_manifest.json"
+    "${_xtbloom_web_site}/provenance/eigen_manifest.json"
     "${_xtbloom_web_site}/provenance/openchemlib_manifest.json")
 
 add_custom_command(
@@ -273,6 +356,8 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E remove_directory
           "${_xtbloom_web_site}/LICENSES"
   COMMAND ${CMAKE_COMMAND} -E make_directory
+          "${_xtbloom_web_site}/LICENSES/eigen"
+          "${_xtbloom_web_site}/LICENSES/eigen/notices"
           "${_xtbloom_web_site}/LICENSES/parameters"
           "${_xtbloom_web_site}/provenance/parameters"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -287,6 +372,12 @@ add_custom_command(
   # directory: wheel-only or native-only licenses are orphaned Pages payloads.
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${_xtbloom_web_license_sources} "${_xtbloom_web_site}/LICENSES"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${_xtbloom_web_eigen_license_sources}
+          "${_xtbloom_web_site}/LICENSES/eigen"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${_xtbloom_web_eigen_notice_sources}
+          "${_xtbloom_web_site}/LICENSES/eigen/notices"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_SOURCE_DIR}/data/parameters/licenses"
           "${_xtbloom_web_site}/LICENSES/parameters"
@@ -300,6 +391,9 @@ add_custom_command(
           "${CMAKE_SOURCE_DIR}/data/parameters/d4_manifest.json"
           "${CMAKE_SOURCE_DIR}/data/parameters/mctc_manifest.json"
           "${_xtbloom_web_site}/provenance/parameters"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_xtbloom_web_eigen_root}/manifest.json"
+          "${_xtbloom_web_site}/provenance/eigen_manifest.json"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${_xtbloom_web_src}/openchemlib_manifest.json"
           "${_xtbloom_web_site}/provenance/openchemlib_manifest.json"
@@ -321,6 +415,7 @@ add_custom_target(
     "${_xtbloom_web_site}/style.css"
     "${_xtbloom_web_site}/bootstrap.js"
     "${_xtbloom_web_site}/app.js"
+    "${_xtbloom_web_site}/c60_case.js"
     "${_xtbloom_web_site}/app_helpers.js"
     "${_xtbloom_web_site}/worker.js"
     "${_xtbloom_web_site}/smiles_helpers.js"

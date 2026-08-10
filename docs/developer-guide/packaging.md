@@ -132,7 +132,8 @@ The Pyodide `cp314-pyodide_wasm32` wheel targets Pyodide 314.x and its stable
 `pyemscripten_2026_0_wasm32` ABI, then is smoke-tested as a CI-only artifact.
 PyPI accepts this platform tag, but xTBloom excludes the wheel from the PyPI
 artifact prefix until the Python wheel has a production WebAssembly eigensolver
-path; the existing Web demo uses its separate preloaded LAPACK design.
+path; the existing Web demo uses its separate preloaded Eigen LAPACKE/CBLAS
+side-module design.
 Windows/macOS wheels must pass installed GFN2 inference, missing-provider,
 concurrency, and host numerical-coexistence tests before being release-eligible.
 

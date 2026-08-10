@@ -7,6 +7,7 @@ endif()
 
 set(_asset_specs
     "app|app.js"
+    "c60|c60_case.js"
     "worker|worker.js"
     "helpers|app_helpers.js"
     "module|xtbloom_web.js"
