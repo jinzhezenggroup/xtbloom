@@ -286,11 +286,13 @@ def _function_export_signatures(
 
 
 def _repair_stable_sha256(data: bytes) -> str:
-    """Hash every module byte except repair-owned NEEDED/RUNTIME_PATH lists.
+    """Hash every module byte except exact repair-owned dylink rewrites.
 
-    ``auditwheel-emscripten`` is allowed to rewrite dylink subsections 2 and 5.
-    Memory/table metadata and all other custom or core sections are ABI-relevant
-    and remain part of this canonical digest.
+    ``auditwheel-emscripten`` rewrites NEEDED and RUNTIME_PATH, and its dylink
+    encoder materializes absent EXPORT_INFO and IMPORT_INFO subsections as
+    canonical empty lists.  Only those exact changes are ignored.  Non-empty
+    symbol metadata, memory/table metadata, and every other custom or core
+    section remain part of this digest.
     """
     canonical = bytearray(data[:8])
     for section_id, name, payload, raw in _sections(data):
@@ -299,14 +301,27 @@ def _repair_stable_sha256(data: bytes) -> str:
             continue
         _, offset = _read_name(payload, 0)
         stable_payload = bytearray(_encode_name(name))
+        seen_subsections: set[int] = set()
         while offset < len(payload):
             subsection, offset = _read_u32(payload, offset)
+            if subsection in seen_subsections:
+                raise InspectionError(
+                    f"duplicate WebAssembly dylink subsection {subsection}"
+                )
+            seen_subsections.add(subsection)
             size, body_offset = _read_u32(payload, offset)
             end = body_offset + size
             if end > len(payload):
                 raise InspectionError("truncated WebAssembly dylink subsection")
+            body = payload[body_offset:end]
             if subsection not in {2, 5}:
-                body = payload[body_offset:end]
+                # auditwheel-emscripten 0.2.5 always emits these two lists,
+                # even when the input dylink section omitted them.  Treat only
+                # the canonical zero-count encoding as repair-owned so a real
+                # symbol-policy change cannot hide behind normalization.
+                if subsection in {3, 4} and body == b"\0":
+                    offset = end
+                    continue
                 stable_payload.extend(_encode_u32(subsection))
                 stable_payload.extend(_encode_u32(len(body)))
                 stable_payload.extend(body)
@@ -427,7 +442,7 @@ def inspect(wheel: Path, manifest_path: Path) -> None:
             )
         if _repair_stable_sha256(provider) != artifact["member_repair_stable_sha256"]:
             raise InspectionError(
-                "repaired provider differs outside repair-owned dylink lists"
+                "repaired provider differs outside exact repair-owned dylink rewrites"
             )
 
         provider_exports = _exports(provider)

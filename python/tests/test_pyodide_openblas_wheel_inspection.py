@@ -46,7 +46,10 @@ def _module(
     exports: list[str],
     export_signatures: dict[str, tuple[list[str], list[str]]] | None = None,
     memory_info: bytes = b"\xe8\xa5\x04\x04\x18\x00",
+    dylink_export_info: bytes | None = None,
+    dylink_import_info: bytes | None = None,
     duplicate_needed: bool = False,
+    extra_dylink_subsections: list[tuple[int, bytes]] | None = None,
 ) -> bytes:
     value_types = {"i32": b"\x7f", "i64": b"\x7e", "f32": b"\x7d", "f64": b"\x7c"}
 
@@ -65,12 +68,22 @@ def _module(
 
     dylink = _name("dylink.0")
     dylink += _u32(1) + _u32(len(memory_info)) + memory_info
-    for subsection, values in ((2, needed), (5, runtime_paths)):
-        body = string_list(values)
+    body = string_list(needed)
+    dylink += _u32(2) + _u32(len(body)) + body
+    for subsection, body in (
+        (3, dylink_export_info),
+        (4, dylink_import_info),
+    ):
+        if body is None:
+            continue
         dylink += _u32(subsection) + _u32(len(body)) + body
+    body = string_list(runtime_paths)
+    dylink += _u32(5) + _u32(len(body)) + body
     if duplicate_needed:
         body = string_list(["libopenblas-shadow.so"])
         dylink += _u32(2) + _u32(len(body)) + body
+    for subsection, body in extra_dylink_subsections or []:
+        dylink += _u32(subsection) + _u32(len(body)) + body
     export_section = _u32(len(exports)) + b"".join(
         _name(name) + b"\x00" + _u32(index) for index, name in enumerate(exports)
     )
@@ -107,10 +120,36 @@ def test_wasm_inspector_reads_dylink_and_exports() -> None:
     }
 
     changed_paths = _module(
-        needed=[], runtime_paths=["$ORIGIN"], exports=["dpotrf_", "cblas_dgemm"]
+        needed=[],
+        runtime_paths=["$ORIGIN"],
+        exports=["dpotrf_", "cblas_dgemm"],
+        # auditwheel-emscripten 0.2.5 materializes these absent lists while
+        # rebuilding dylink.0, in addition to changing NEEDED/RUNTIME_PATH.
+        dylink_export_info=b"\0",
+        dylink_import_info=b"\0",
     )
     assert INSPECTOR._repair_stable_sha256(module) == INSPECTOR._repair_stable_sha256(
         changed_paths
+    )
+    changed_export_info = _module(
+        needed=[],
+        runtime_paths=["$ORIGIN"],
+        exports=["dpotrf_", "cblas_dgemm"],
+        dylink_export_info=b"\x01" + _name("shadow") + b"\0",
+        dylink_import_info=b"\0",
+    )
+    assert INSPECTOR._repair_stable_sha256(module) != INSPECTOR._repair_stable_sha256(
+        changed_export_info
+    )
+    changed_import_info = _module(
+        needed=[],
+        runtime_paths=["$ORIGIN"],
+        exports=["dpotrf_", "cblas_dgemm"],
+        dylink_export_info=b"\0",
+        dylink_import_info=b"\x01" + _name("env") + _name("shadow") + b"\0",
+    )
+    assert INSPECTOR._repair_stable_sha256(module) != INSPECTOR._repair_stable_sha256(
+        changed_import_info
     )
     changed_memory = _module(
         needed=["libxtbloom_openblas-deadbeef.so"],
@@ -140,6 +179,16 @@ def test_wasm_inspector_rejects_duplicate_dylink_lists() -> None:
     with pytest.raises(INSPECTOR.InspectionError, match=r"duplicate.*subsection 2"):
         INSPECTOR._dylink(module)
 
+    duplicate_empty_metadata = _module(
+        needed=[],
+        runtime_paths=["$ORIGIN"],
+        exports=["dpotrf_"],
+        dylink_export_info=b"\0",
+        extra_dylink_subsections=[(3, b"\0")],
+    )
+    with pytest.raises(INSPECTOR.InspectionError, match=r"duplicate.*subsection 3"):
+        INSPECTOR._repair_stable_sha256(duplicate_empty_metadata)
+
 
 def _inspection_fixture(
     tmp_path: Path,
@@ -148,6 +197,8 @@ def _inspection_fixture(
     main_needed: list[str] | None = None,
     main_runtime_paths: list[str] | None = None,
     cblas_result: str = "i32",
+    provider_export_info: bytes = b"\0",
+    provider_import_info: bytes = b"\0",
 ) -> tuple[Path, Path]:
     """Build one compact repaired-wheel fixture with real legal filenames."""
     root = tmp_path / "source"
@@ -235,18 +286,28 @@ def _inspection_fixture(
         runtime_paths=["$ORIGIN/../../xtbloom.libs"],
         exports=adapter_exports,
     )
+    provider_source = _module(
+        needed=[],
+        runtime_paths=[],
+        exports=provider_exports,
+        export_signatures=provider_signatures,
+    )
     provider = _module(
         needed=[],
         runtime_paths=["$ORIGIN"],
         exports=provider_exports,
         export_signatures=provider_signatures,
+        dylink_export_info=provider_export_info,
+        dylink_import_info=provider_import_info,
     )
     manifest = {
         "artifact": {
             "filename": "libopenblas-0.3.28.zip",
             "private_install_name": provider_name,
             "adapter_install_name": adapter_name,
-            "member_repair_stable_sha256": INSPECTOR._repair_stable_sha256(provider),
+            "member_repair_stable_sha256": INSPECTOR._repair_stable_sha256(
+                provider_source
+            ),
             "required_exports": provider_exports,
             "required_export_signatures": {
                 name: {
@@ -343,5 +404,27 @@ def test_full_wheel_inspection_rejects_provider_function_type(tmp_path: Path) ->
     wheel, manifest = _inspection_fixture(tmp_path, cblas_result="")
     with pytest.raises(
         INSPECTOR.InspectionError, match="provider function signatures differ"
+    ):
+        INSPECTOR.inspect(wheel, manifest)
+
+
+@pytest.mark.parametrize(
+    ("field", "body"),
+    [
+        ("provider_export_info", b"\x01" + _name("shadow") + b"\0"),
+        (
+            "provider_import_info",
+            b"\x01" + _name("env") + _name("shadow") + b"\0",
+        ),
+    ],
+)
+def test_full_wheel_inspection_rejects_nonempty_repair_metadata(
+    tmp_path: Path, field: str, body: bytes
+) -> None:
+    """Permit repair-added empty lists without ignoring symbol metadata."""
+    wheel, manifest = _inspection_fixture(tmp_path, **{field: body})
+    with pytest.raises(
+        INSPECTOR.InspectionError,
+        match="repaired provider differs outside exact repair-owned dylink rewrites",
     ):
         INSPECTOR.inspect(wheel, manifest)
