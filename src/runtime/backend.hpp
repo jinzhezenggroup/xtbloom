@@ -14,11 +14,19 @@ namespace xtbloom::detail {
 class Gfn2CpuExecutionCache;
 class Gfn2CudaExecutionCache;
 
+/*
+ * Internal CPU numerical policy selected once when a context is created.
+ * This deliberately remains outside the stable public ABI: the environment
+ * experiment can evolve without appending fields to xtbloom_context_options_t.
+ */
+enum class CpuPrecisionPolicy : std::uint8_t { kFloat64, kAdaptive };
+
 /* Runtime state is opaque at the ABI boundary so backend internals can evolve. */
 struct Context {
   xtbloom_backend_t backend = XTBLOOM_BACKEND_CPU;
   std::int32_t device_id = -1;
   std::int32_t cpu_threads = 0;
+  CpuPrecisionPolicy cpu_precision = CpuPrecisionPolicy::kFloat64;
   void* stream = nullptr;
 
   /*

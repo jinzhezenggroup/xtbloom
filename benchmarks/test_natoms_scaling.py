@@ -180,6 +180,34 @@ def set_measured_observables(
 class NatomsScalingTest(unittest.TestCase):
     """Exercise parser, protocol ordering, provenance, and serialization."""
 
+    def test_run_identity_records_cpu_precision_policy(self) -> None:
+        """Distinguish FP64 and adaptive CPU evidence in the environment record."""
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / "libxtbloom.so"
+            library.write_bytes(b"xtbloom")
+            with (
+                mock.patch.dict(
+                    os.environ, {"XTBLOOM_CPU_PRECISION": "adaptive"}, clear=False
+                ),
+                mock.patch.object(
+                    natoms_scaling,
+                    "git_state",
+                    return_value={"revision": "a" * 40, "dirty": False},
+                ),
+                mock.patch.object(
+                    natoms_scaling,
+                    "build_metadata",
+                    return_value={"build_system": "test"},
+                ),
+            ):
+                identity = natoms_scaling.collect_run_identity(
+                    "xtbloom", library, ["--start-mode", "fresh"], None
+                )
+
+        self.assertEqual(
+            identity["thread_environment"]["XTBLOOM_CPU_PRECISION"], "adaptive"
+        )
+
     def test_storage_records_absent_uniform_electric_fields(self) -> None:
         """Keep benchmark storage compatible with the public batch builder."""
         molecule = natoms_scaling.make_alkane(14)

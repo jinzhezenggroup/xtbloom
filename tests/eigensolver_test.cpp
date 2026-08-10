@@ -121,6 +121,9 @@ std::atomic<int> dpocon_calls{0};
 std::atomic<int> dsyevd_calls{0};
 std::atomic<int> dtrsm_calls{0};
 std::atomic<int> dgemm_calls{0};
+std::atomic<int> ssyevd_calls{0};
+std::atomic<int> strsm_calls{0};
+std::atomic<int> sgemm_calls{0};
 std::atomic<int> non_column_major_calls{0};
 std::atomic<int> dpotrf_failure_call{0};
 std::atomic<std::int32_t> dpotrf_failure_info{1};
@@ -195,6 +198,121 @@ void counting_dgemm(int layout, int transpose_left, int transpose_right, std::in
               leading_left, right, leading_right, beta, result, leading_result);
 }
 
+std::int32_t counting_ssyevd(std::int32_t matrix_layout, char job_vectors, char uplo,
+                             std::int32_t n, float* matrix, std::int32_t leading_dimension,
+                             float* eigenvalues, float* work, std::int32_t work_count,
+                             std::int32_t* integer_work, std::int32_t integer_work_count) {
+  ssyevd_calls.fetch_add(1, std::memory_order_relaxed);
+  if (matrix_layout != 102) {
+    non_column_major_calls.fetch_add(1, std::memory_order_relaxed);
+  }
+  static_cast<void>(work);
+  static_cast<void>(work_count);
+  static_cast<void>(integer_work);
+  static_cast<void>(integer_work_count);
+  if (matrix_layout != 102 || n <= 0 || leading_dimension < n) {
+    return -1;
+  }
+  const std::size_t dimension = static_cast<std::size_t>(n);
+  std::vector<double> double_matrix(static_cast<std::size_t>(leading_dimension) * dimension);
+  std::vector<double> double_eigenvalues(dimension);
+  for (std::size_t column = 0u; column < dimension; ++column) {
+    for (std::size_t row = 0u; row < dimension; ++row) {
+      double_matrix[row + column * static_cast<std::size_t>(leading_dimension)] =
+          matrix[row + column * static_cast<std::size_t>(leading_dimension)];
+    }
+  }
+  double work_query = 0.0;
+  std::int32_t integer_query = 0;
+  std::int32_t info = LAPACKE_dsyevd_work(matrix_layout, job_vectors, uplo, n, double_matrix.data(),
+                                          leading_dimension, double_eigenvalues.data(), &work_query,
+                                          -1, &integer_query, -1);
+  if (info != 0 || !std::isfinite(work_query) || work_query < 1.0 || integer_query < 1) {
+    return info == 0 ? -8 : info;
+  }
+  std::vector<double> double_work(static_cast<std::size_t>(work_query));
+  std::vector<std::int32_t> double_integer_work(static_cast<std::size_t>(integer_query));
+  info = LAPACKE_dsyevd_work(
+      matrix_layout, job_vectors, uplo, n, double_matrix.data(), leading_dimension,
+      double_eigenvalues.data(), double_work.data(), static_cast<std::int32_t>(double_work.size()),
+      double_integer_work.data(), static_cast<std::int32_t>(double_integer_work.size()));
+  if (info != 0) {
+    return info;
+  }
+  for (std::size_t column = 0u; column < dimension; ++column) {
+    eigenvalues[column] = static_cast<float>(double_eigenvalues[column]);
+    for (std::size_t row = 0u; row < dimension; ++row) {
+      matrix[row + column * static_cast<std::size_t>(leading_dimension)] = static_cast<float>(
+          double_matrix[row + column * static_cast<std::size_t>(leading_dimension)]);
+    }
+  }
+  return 0;
+}
+
+void counting_strsm(int layout, int side, int triangle, int transpose, int diagonal,
+                    std::int32_t rows, std::int32_t columns, float alpha,
+                    const float* triangular_matrix, std::int32_t leading_triangular,
+                    float* right_hand_side, std::int32_t leading_rhs) {
+  strsm_calls.fetch_add(1, std::memory_order_relaxed);
+  if (layout != 102) {
+    non_column_major_calls.fetch_add(1, std::memory_order_relaxed);
+  }
+  if (layout != 102 || rows <= 0 || columns <= 0) {
+    return;
+  }
+  const std::int32_t triangular_dimension = side == 141 ? rows : columns;
+  std::vector<double> double_triangular(static_cast<std::size_t>(leading_triangular) *
+                                        static_cast<std::size_t>(triangular_dimension));
+  std::vector<double> double_rhs(static_cast<std::size_t>(leading_rhs) *
+                                 static_cast<std::size_t>(columns));
+  std::transform(triangular_matrix, triangular_matrix + double_triangular.size(),
+                 double_triangular.begin(), [](float value) { return static_cast<double>(value); });
+  std::transform(right_hand_side, right_hand_side + double_rhs.size(), double_rhs.begin(),
+                 [](float value) { return static_cast<double>(value); });
+  cblas_dtrsm(layout, side, triangle, transpose, diagonal, rows, columns,
+              static_cast<double>(alpha), double_triangular.data(), leading_triangular,
+              double_rhs.data(), leading_rhs);
+  std::transform(double_rhs.begin(), double_rhs.end(), right_hand_side,
+                 [](double value) { return static_cast<float>(value); });
+}
+
+void counting_sgemm(int layout, int transpose_left, int transpose_right, std::int32_t rows,
+                    std::int32_t columns, std::int32_t inner, float alpha, const float* left,
+                    std::int32_t leading_left, const float* right, std::int32_t leading_right,
+                    float beta, float* result, std::int32_t leading_result) {
+  sgemm_calls.fetch_add(1, std::memory_order_relaxed);
+  if (layout != 102) {
+    non_column_major_calls.fetch_add(1, std::memory_order_relaxed);
+  }
+  if (layout != 102 || rows <= 0 || columns <= 0 || inner <= 0) {
+    return;
+  }
+  const std::int32_t left_columns = transpose_left == 111 ? inner : rows;
+  const std::int32_t right_columns = transpose_right == 111 ? columns : inner;
+  std::vector<double> double_left(static_cast<std::size_t>(leading_left) *
+                                  static_cast<std::size_t>(left_columns));
+  std::vector<double> double_right(static_cast<std::size_t>(leading_right) *
+                                   static_cast<std::size_t>(right_columns));
+  std::vector<double> double_result(static_cast<std::size_t>(leading_result) *
+                                    static_cast<std::size_t>(columns));
+  std::transform(left, left + double_left.size(), double_left.begin(),
+                 [](float value) { return static_cast<double>(value); });
+  std::transform(right, right + double_right.size(), double_right.begin(),
+                 [](float value) { return static_cast<double>(value); });
+  std::transform(result, result + double_result.size(), double_result.begin(),
+                 [](float value) { return static_cast<double>(value); });
+  cblas_dgemm(layout, transpose_left, transpose_right, rows, columns, inner,
+              static_cast<double>(alpha), double_left.data(), leading_left, double_right.data(),
+              leading_right, static_cast<double>(beta), double_result.data(), leading_result);
+  std::transform(double_result.begin(), double_result.end(), result,
+                 [](double value) { return static_cast<float>(value); });
+}
+
+std::int32_t failing_optional_ssyevd(std::int32_t, char, char, std::int32_t, float*, std::int32_t,
+                                     float*, float*, std::int32_t, std::int32_t*, std::int32_t) {
+  return 1;
+}
+
 const CpuLinearAlgebraBackend& backend() {
   static const CpuLinearAlgebraBackend created = [] {
     CpuLinearAlgebraBackend candidate;
@@ -202,6 +320,22 @@ const CpuLinearAlgebraBackend& backend() {
     const xtbloom_status_t status = xtbloom::detail::gfn2::make_internal_test_lp64_backend(
         &counting_dpotrf, &counting_dpocon, &counting_dsyevd, &counting_dtrsm, &counting_dgemm,
         nullptr, candidate, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      std::abort();
+    }
+    return candidate;
+  }();
+  return created;
+}
+
+const CpuLinearAlgebraBackend& mixed_backend() {
+  static const CpuLinearAlgebraBackend created = [] {
+    CpuLinearAlgebraBackend candidate;
+    std::string error;
+    const xtbloom_status_t status =
+        xtbloom::detail::gfn2::make_internal_test_mixed_precision_backend(
+            &counting_dpotrf, &counting_dpocon, &counting_dsyevd, &counting_dtrsm, &counting_dgemm,
+            &counting_ssyevd, &counting_strsm, &counting_sgemm, nullptr, candidate, error);
     if (status != XTBLOOM_STATUS_SUCCESS) {
       std::abort();
     }
@@ -220,6 +354,9 @@ void reset_backend_spies() {
   dsyevd_calls.store(0, std::memory_order_relaxed);
   dtrsm_calls.store(0, std::memory_order_relaxed);
   dgemm_calls.store(0, std::memory_order_relaxed);
+  ssyevd_calls.store(0, std::memory_order_relaxed);
+  strsm_calls.store(0, std::memory_order_relaxed);
+  sgemm_calls.store(0, std::memory_order_relaxed);
   non_column_major_calls.store(0, std::memory_order_relaxed);
   dpotrf_failure_call.store(0, std::memory_order_relaxed);
   dpotrf_failure_info.store(1, std::memory_order_relaxed);
@@ -943,6 +1080,62 @@ int test_production_lp64_factory() {
   return 0;
 }
 
+int test_broken_optional_fp32_cohort_preserves_fp64_backend() {
+  CpuLinearAlgebraBackend candidate;
+  std::string error;
+  CHECK(xtbloom::detail::gfn2::make_internal_test_optional_mixed_precision_backend(
+            &counting_dpotrf, &counting_dpocon, &counting_dsyevd, &counting_dtrsm, &counting_dgemm,
+            &failing_optional_ssyevd, &counting_strsm, &counting_sgemm, nullptr, candidate,
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(candidate.ready());
+  CHECK(!candidate.single_precision_ready());
+  CHECK(error.empty());
+  return 0;
+}
+
+int test_single_precision_pipeline_publishes_binary64_results() {
+  std::string error;
+  Evaluation reference;
+  Evaluation candidate;
+  CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {1}, reference, error));
+  CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {1}, candidate, error));
+  const std::vector<double> overlap{1.0, 0.12, 0.12, 1.0};
+  const std::vector<double> hamiltonian{-0.72, -0.08, -0.08, 0.31};
+  CHECK(factor(reference, overlap, 91u, error));
+  CHECK(factor(candidate, overlap, 91u, error));
+  fill_outputs(reference, 17.0);
+  fill_outputs(candidate, 19.0);
+  CHECK(solve(reference, hamiltonian, XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, 91u, error));
+
+  reset_backend_spies();
+  EigensolverThermodynamicsView thermodynamics = candidate.thermodynamics();
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_cpu_single_precision(
+            candidate.plan, 0, candidate.cache, 91u, hamiltonian.data(),
+            XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE, mixed_backend(), candidate.scratch,
+            candidate.wavefunction, thermodynamics, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(candidate.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(mixed_backend().single_precision_ready());
+  CHECK(ssyevd_calls.load(std::memory_order_relaxed) == 1);
+  CHECK(strsm_calls.load(std::memory_order_relaxed) == 3);
+  CHECK(sgemm_calls.load(std::memory_order_relaxed) == 2);
+  CHECK(non_column_major_calls.load(std::memory_order_relaxed) == 0);
+
+  for (std::int64_t index = 0; index < candidate.layout.eigenvalues.element_count; ++index) {
+    CHECK(near(candidate.wavefunction.eigenvalues[index], reference.wavefunction.eigenvalues[index],
+               2.0e-6));
+  }
+  for (std::int64_t index = 0; index < candidate.layout.density.element_count; ++index) {
+    CHECK(
+        near(candidate.wavefunction.density[index], reference.wavefunction.density[index], 3.0e-6));
+    CHECK(near(candidate.wavefunction.energy_weighted_density[index],
+               reference.wavefunction.energy_weighted_density[index], 3.0e-6));
+  }
+  CHECK(near(candidate.band_energies[0], reference.band_energies[0], 3.0e-6));
+  CHECK(near(candidate.free_energies[0], reference.free_energies[0], 3.0e-6));
+  CHECK(near(metric_trace(candidate.wavefunction.density, overlap.data(), 2u), 2.0, 3.0e-6));
+  return 0;
+}
+
 int run_mkl_ilp64_rejection_child() {
   CpuLinearAlgebraBackend production;
   std::string error;
@@ -1650,6 +1843,7 @@ int main(int argc, char** argv) {
   }
   /* Complete the injected backend's numerical preflight before call-count tests. */
   static_cast<void>(backend());
+  static_cast<void>(mixed_backend());
   if (const int status = test_occupations_degeneracy_and_fractional_filling(); status != 0) {
     return status;
   }
@@ -1663,6 +1857,12 @@ int main(int argc, char** argv) {
     return status;
   }
   if (const int status = test_production_lp64_factory(); status != 0) {
+    return status;
+  }
+  if (const int status = test_broken_optional_fp32_cohort_preserves_fp64_backend(); status != 0) {
+    return status;
+  }
+  if (const int status = test_single_precision_pipeline_publishes_binary64_results(); status != 0) {
     return status;
   }
   if (const int status = test_unrestricted_literal_generalized_eigenproblem(); status != 0) {

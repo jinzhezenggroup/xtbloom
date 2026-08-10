@@ -11,6 +11,8 @@
 
 namespace xtbloom::detail {
 
+enum class CpuPrecisionPolicy : std::uint8_t;
+
 /*
  * Context-owned cache for restricted host GFN2 execution.
  *
@@ -29,7 +31,7 @@ class Gfn2CpuExecutionCache {
    * execution path serial. The implementation owns persistent workers so a
    * steady-state compute call never creates or destroys threads.
    */
-  explicit Gfn2CpuExecutionCache(std::int32_t cpu_threads);
+  Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuPrecisionPolicy precision_policy);
   ~Gfn2CpuExecutionCache();
 
   Gfn2CpuExecutionCache(const Gfn2CpuExecutionCache&) = delete;

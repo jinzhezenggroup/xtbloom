@@ -182,6 +182,37 @@ int run_literal_generalized_eigenproblem(const CpuLinearAlgebraBackend& backend,
   return 0;
 }
 
+/* Exercise the optional FP32 cohort through the same production provider
+ * handle. This is intentionally separate from the binary64 correctness probe:
+ * it proves that adaptive-only symbols resolve and execute inside the private
+ * provider namespace without changing the default eigensolver contract. */
+int run_literal_single_precision_generalized_eigenproblem(const CpuLinearAlgebraBackend& backend,
+                                                          std::string& error) {
+  Evaluation evaluation;
+  CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {2}, evaluation, error));
+  const std::vector<double> overlap{1.2, 0.15, 0.15, 0.9};
+  const std::vector<double> hamiltonian{-0.8, 0.13, 0.13, 0.25, -0.55, -0.08, -0.08, 0.42};
+  CHECK(backend.single_precision_ready());
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), 74u, backend,
+                                                  evaluation.scratch, evaluation.cache,
+                                                  error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_cpu_single_precision(
+            evaluation.plan, 0, evaluation.cache, 74u, hamiltonian.data(), 0.0, backend,
+            evaluation.scratch, evaluation.wavefunction, evaluation.thermodynamics(),
+            error) == XTBLOOM_STATUS_SUCCESS);
+
+  CHECK(evaluation.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  WavefunctionSystemView view;
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_system_view(
+            evaluation.layout, evaluation.wavefunction, 0, view, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(near(view.eigenvalues[0], -0.7192210550444913, 2.0e-6));
+  CHECK(near(view.eigenvalues[1], 0.28517850185300192, 2.0e-6));
+  CHECK(near(view.eigenvalues[2], -0.45845957914509017, 2.0e-6));
+  CHECK(near(view.eigenvalues[3], 0.48966525290395535, 2.0e-6));
+  CHECK(near(evaluation.band_energies[0], -1.1776806341895814, 3.0e-6));
+  return 0;
+}
+
 using SetInterfaceLayer = int (*)(int layer);
 using DpotrfWork64 = std::int32_t (*)(std::int32_t, char, std::int64_t, double*, std::int64_t);
 
@@ -230,6 +261,9 @@ int run_correctness_with_backend() {
 #endif
   const int solve_status = run_literal_generalized_eigenproblem(backend, error);
   CHECK(solve_status == 0);
+  const int single_solve_status =
+      run_literal_single_precision_generalized_eigenproblem(backend, error);
+  CHECK(single_solve_status == 0);
   return 0;
 }
 
@@ -328,9 +362,21 @@ int run_no_global_scope_exposure() {
   void* mkl_global = dlsym(RTLD_DEFAULT, "MKL_Set_Interface_Layer");
   void* lapacke_global = dlsym(RTLD_DEFAULT, "LAPACKE_dpotrf_work");
   void* scipy_lapacke_global = dlsym(RTLD_DEFAULT, "scipy_LAPACKE_dpotrf_work");
+  void* single_lapacke_global = dlsym(RTLD_DEFAULT, "LAPACKE_ssyevd_work");
+  void* scipy_single_lapacke_global = dlsym(RTLD_DEFAULT, "scipy_LAPACKE_ssyevd_work");
+  void* single_triangular_blas_global = dlsym(RTLD_DEFAULT, "cblas_strsm");
+  void* scipy_single_triangular_blas_global = dlsym(RTLD_DEFAULT, "scipy_cblas_strsm");
+  void* single_blas_global = dlsym(RTLD_DEFAULT, "cblas_sgemm");
+  void* scipy_single_blas_global = dlsym(RTLD_DEFAULT, "scipy_cblas_sgemm");
   CHECK(mkl_global == nullptr);
   CHECK(lapacke_global == nullptr);
   CHECK(scipy_lapacke_global == nullptr);
+  CHECK(single_lapacke_global == nullptr);
+  CHECK(scipy_single_lapacke_global == nullptr);
+  CHECK(single_triangular_blas_global == nullptr);
+  CHECK(scipy_single_triangular_blas_global == nullptr);
+  CHECK(single_blas_global == nullptr);
+  CHECK(scipy_single_blas_global == nullptr);
 #endif
   const int correct = run_correctness_with_backend();
   CHECK(correct == 0);
@@ -338,9 +384,21 @@ int run_no_global_scope_exposure() {
   mkl_global = dlsym(RTLD_DEFAULT, "MKL_Set_Interface_Layer");
   lapacke_global = dlsym(RTLD_DEFAULT, "LAPACKE_dpotrf_work");
   scipy_lapacke_global = dlsym(RTLD_DEFAULT, "scipy_LAPACKE_dpotrf_work");
+  single_lapacke_global = dlsym(RTLD_DEFAULT, "LAPACKE_ssyevd_work");
+  scipy_single_lapacke_global = dlsym(RTLD_DEFAULT, "scipy_LAPACKE_ssyevd_work");
+  single_triangular_blas_global = dlsym(RTLD_DEFAULT, "cblas_strsm");
+  scipy_single_triangular_blas_global = dlsym(RTLD_DEFAULT, "scipy_cblas_strsm");
+  single_blas_global = dlsym(RTLD_DEFAULT, "cblas_sgemm");
+  scipy_single_blas_global = dlsym(RTLD_DEFAULT, "scipy_cblas_sgemm");
   CHECK(mkl_global == nullptr);
   CHECK(lapacke_global == nullptr);
   CHECK(scipy_lapacke_global == nullptr);
+  CHECK(single_lapacke_global == nullptr);
+  CHECK(scipy_single_lapacke_global == nullptr);
+  CHECK(single_triangular_blas_global == nullptr);
+  CHECK(scipy_single_triangular_blas_global == nullptr);
+  CHECK(single_blas_global == nullptr);
+  CHECK(scipy_single_blas_global == nullptr);
 #endif
   return 0;
 }
