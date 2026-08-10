@@ -1,18 +1,30 @@
 import assert from "node:assert/strict";
+import { createHash, webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  prepareVersionedApplication,
+  validateBootstrapManifest,
+} from "../bootstrap.js";
+
+import {
   BOHR_PER_ANGSTROM,
+  aggregateResourceProgress,
   angstromToBohr,
   canStartUrlSmiles,
   clampProgressPercent,
   comparableContentLength,
   copyFloat64FromMemory,
+  fetchResourceBatch,
   downloadProgressPercent,
+  initializeDownloadedEngineModule,
   initializeWorker,
+  isRetryableLoadError,
   postToReadyWorker,
   readSmilesQuery,
+  runWithRetries,
+  validateEngineManifest,
   withTimeout,
 } from "../app_helpers.js";
 
@@ -25,7 +37,7 @@ class FakeWorker {
   }
 
   postMessage(message, transfer) {
-    this.messages.push({ message, transfer });
+    this.messages.push({ message: structuredClone(message, { transfer }) });
   }
 
   emit(message) {
@@ -63,6 +75,367 @@ test("download progress is monotonic, bounded, and completes explicitly", () => 
   assert.equal(clampProgressPercent(Number.NaN), 0);
 });
 
+test("aggregate progress reports exact files and bytes when all lengths are comparable", () => {
+  assert.deepEqual(aggregateResourceProgress([
+    { loaded: 3, total: 3, complete: true },
+    { loaded: 2, total: 4, complete: false },
+  ]), {
+    totalFiles: 2,
+    completedFiles: 1,
+    loadedBytes: 5,
+    totalBytes: 7,
+    percent: 5 / 7 * 100,
+    barPercent: 5 / 7 * 100,
+    complete: false,
+  });
+  assert.deepEqual(aggregateResourceProgress([
+    { loaded: 3, total: 3, complete: true },
+    { loaded: 4, total: 4, complete: true },
+  ]), {
+    totalFiles: 2,
+    completedFiles: 2,
+    loadedBytes: 7,
+    totalBytes: 7,
+    percent: 100,
+    barPercent: 100,
+    complete: true,
+  });
+});
+
+test("aggregate progress does not invent a byte total for encoded assets", () => {
+  assert.deepEqual(aggregateResourceProgress([
+    { loaded: 30, total: 0, complete: false },
+    { loaded: 10, total: 10, complete: true },
+  ]), {
+    totalFiles: 2,
+    completedFiles: 1,
+    loadedBytes: 40,
+    totalBytes: null,
+    percent: null,
+    barPercent: 50,
+    complete: false,
+  });
+});
+
+test("engine manifests provide safe versioned paths and exact decoded sizes", () => {
+  const digest = "a".repeat(64);
+  assert.deepEqual(validateEngineManifest({
+    schema_version: 1,
+    version: "b".repeat(64),
+    assets: [
+      { id: "worker", path: "worker.js", bytes: 123, sha256: digest },
+      { id: "wasm", path: "engine.wasm", bytes: 456, sha256: digest },
+    ],
+  }, ["worker", "wasm"]), {
+    schemaVersion: 1,
+    version: "b".repeat(64),
+    assets: [
+      { id: "worker", path: "worker.js", bytes: 123, sha256: digest },
+      { id: "wasm", path: "engine.wasm", bytes: 456, sha256: digest },
+    ],
+  });
+  assert.throws(() => validateEngineManifest({
+    schema_version: 1,
+    version: "b".repeat(64),
+    assets: [{ id: "worker", path: "../worker.js", bytes: 1, sha256: digest }],
+  }), /unsafe path/);
+  assert.throws(() => validateEngineManifest({
+    schema_version: 1,
+    version: "b".repeat(64),
+    assets: [{ id: "worker", path: "worker.js", bytes: 1, sha256: digest }],
+  }, ["worker", "data"]), /missing data/);
+});
+
+test("bootstrap prefetches and verifies one coherent versioned module graph", async () => {
+  const app = new TextEncoder().encode("export const app = true;\n");
+  const helpers = new TextEncoder().encode("export const helper = true;\n");
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const assets = [
+    { id: "app", path: "app.js", bytes: app.byteLength, sha256: digest(app) },
+    {
+      id: "helpers",
+      path: "app_helpers.js",
+      bytes: helpers.byteLength,
+      sha256: digest(helpers),
+    },
+  ];
+  const manifest = {
+    schema_version: 1,
+    version: "c".repeat(64),
+    assets,
+  };
+  assert.equal(validateBootstrapManifest(manifest).version, "c".repeat(64));
+
+  const requests = [];
+  const result = await prepareVersionedApplication({
+    baseUrl: "https://example.test/bootstrap.js",
+    bootstrapToken: "manual-2",
+    maxAttempts: 1,
+    cryptoImpl: webcrypto,
+    fetchImpl: async (url, options) => {
+      const href = String(url);
+      requests.push({ href, cache: options.cache });
+      if (href.endsWith("engine-manifest.json")) {
+        return new Response(JSON.stringify(manifest), { status: 200 });
+      }
+      if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
+      if (href.includes("app.js")) return new Response(app, { status: 200 });
+      return new Response(null, { status: 404 });
+    },
+  });
+  assert.deepEqual(result.manifest, manifest);
+  assert.equal(result.appUrl.searchParams.get("xtbloom_version"), "c".repeat(64));
+  assert.equal(result.appUrl.searchParams.get("xtbloom_bootstrap"), "manual-2");
+  assert.equal(result.helpersUrl.searchParams.get("xtbloom_version"), "c".repeat(64));
+  assert.deepEqual(requests.map((request) => request.cache), ["no-cache", "default", "default"]);
+});
+
+test("application import timeout retries with a distinct guarded module URL", async () => {
+  const app = new TextEncoder().encode("export const app = true;\n");
+  const helpers = new TextEncoder().encode("export const helper = true;\n");
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const manifest = {
+    schema_version: 1,
+    version: "d".repeat(64),
+    assets: [
+      { id: "app", path: "app.js", bytes: app.byteLength, sha256: digest(app) },
+      {
+        id: "helpers",
+        path: "app_helpers.js",
+        bytes: helpers.byteLength,
+        sha256: digest(helpers),
+      },
+    ],
+  };
+  const imports = [];
+  const result = await prepareVersionedApplication({
+    baseUrl: "https://example.test/bootstrap.js",
+    maxAttempts: 2,
+    // Leave ample time for response decoding and WebCrypto on loaded CI
+    // runners; only the deliberately unresolved import should time out.
+    timeoutMs: 100,
+    delay: async () => {},
+    loadApplication: true,
+    applicationTokenPrefix: "generation",
+    cryptoImpl: webcrypto,
+    fetchImpl: async (url) => {
+      const href = String(url);
+      if (href.endsWith("engine-manifest.json")) {
+        return new Response(JSON.stringify(manifest), { status: 200 });
+      }
+      if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
+      if (href.includes("app.js")) return new Response(app, { status: 200 });
+      return new Response(null, { status: 404 });
+    },
+    importImpl: async (url) => {
+      imports.push(url);
+      if (imports.length === 1) return new Promise(() => {});
+      return {};
+    },
+  });
+  assert.equal(result.appUrl.searchParams.get("xtbloom_bootstrap"), "generation-2");
+  assert.deepEqual(
+    imports.map((url) => new URL(url).searchParams.get("xtbloom_bootstrap")),
+    ["generation-1", "generation-2"],
+  );
+  assert.equal(globalThis.__XTBLOOM_APP_BOOT_TOKEN, "generation-2");
+  delete globalThis.__XTBLOOM_APP_BOOT_TOKEN;
+  delete globalThis.__XTBLOOM_BOOTSTRAP_MANIFEST;
+});
+
+test("aborting a hanging application import invalidates its execution token", async () => {
+  const app = new TextEncoder().encode("export const app = true;\n");
+  const helpers = new TextEncoder().encode("export const helper = true;\n");
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const manifest = {
+    schema_version: 1,
+    version: "e".repeat(64),
+    assets: [
+      { id: "app", path: "app.js", bytes: app.byteLength, sha256: digest(app) },
+      {
+        id: "helpers",
+        path: "app_helpers.js",
+        bytes: helpers.byteLength,
+        sha256: digest(helpers),
+      },
+    ],
+  };
+  const controller = new AbortController();
+  let markImportStarted;
+  const importStarted = new Promise((resolve) => { markImportStarted = resolve; });
+  const loading = prepareVersionedApplication({
+    baseUrl: "https://example.test/bootstrap.js",
+    maxAttempts: 1,
+    timeoutMs: 1000,
+    signal: controller.signal,
+    loadApplication: true,
+    applicationTokenPrefix: "aborted",
+    cryptoImpl: webcrypto,
+    fetchImpl: async (url) => {
+      const href = String(url);
+      if (href.endsWith("engine-manifest.json")) {
+        return new Response(JSON.stringify(manifest), { status: 200 });
+      }
+      if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
+      if (href.includes("app.js")) return new Response(app, { status: 200 });
+      return new Response(null, { status: 404 });
+    },
+    importImpl: async () => {
+      markImportStarted();
+      return new Promise(() => {});
+    },
+  });
+  await importStarted;
+  assert.equal(globalThis.__XTBLOOM_APP_BOOT_TOKEN, "aborted-1");
+  controller.abort();
+  await assert.rejects(loading, (error) => error.name === "AbortError");
+  assert.equal(globalThis.__XTBLOOM_APP_BOOT_TOKEN, "expired:aborted-1");
+  delete globalThis.__XTBLOOM_APP_BOOT_TOKEN;
+  delete globalThis.__XTBLOOM_BOOTSTRAP_MANIFEST;
+});
+
+test("downloaded engine initialization supplies wasm and data without file lookup", async () => {
+  const emptyWasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  const data = new Uint8Array([3, 4, 5]);
+  const initialized = await initializeDownloadedEngineModule(
+    async (options) => {
+      let received = false;
+      const exports = options.instantiateWasm({}, (instance, module) => {
+        assert.ok(instance instanceof WebAssembly.Instance);
+        assert.ok(module instanceof WebAssembly.Module);
+        received = true;
+      });
+      assert.equal(received, true);
+      assert.deepEqual(Object.keys(exports), []);
+      return Array.from(new Uint8Array(options.getPreloadedPackage("engine.data", 3)));
+    },
+    emptyWasm,
+    data,
+  );
+  assert.deepEqual(initialized, [3, 4, 5]);
+});
+
+test("resource batches stream all files under one exact progress ledger", async () => {
+  const progress = [];
+  const bodies = new Map([
+    ["https://example.test/worker.js", new Uint8Array([1, 2, 3])],
+    ["https://example.test/engine.wasm", new Uint8Array([4, 5, 6, 7])],
+  ]);
+  const results = await fetchResourceBatch([
+    { id: "worker", url: "https://example.test/worker.js" },
+    { id: "wasm", url: "https://example.test/engine.wasm" },
+  ], {
+    fetchImpl: async (url) => {
+      const body = bodies.get(url);
+      return new Response(body, {
+        status: 200,
+        headers: { "content-encoding": "identity", "content-length": String(body.byteLength) },
+      });
+    },
+    onProgress: (state) => progress.push(state),
+  });
+
+  assert.deepEqual(Array.from(results.get("worker")), [1, 2, 3]);
+  assert.deepEqual(Array.from(results.get("wasm")), [4, 5, 6, 7]);
+  assert.deepEqual(progress.at(-1), {
+    totalFiles: 2,
+    completedFiles: 2,
+    loadedBytes: 7,
+    totalBytes: 7,
+    percent: 100,
+    barPercent: 100,
+    complete: true,
+  });
+});
+
+test("resource batches fall back to arrayBuffer when streaming is unavailable", async () => {
+  const payload = new Uint8Array([8, 9]);
+  const results = await fetchResourceBatch([{ id: "data", url: "data.test" }], {
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: null,
+      arrayBuffer: async () => payload.buffer,
+    }),
+  });
+  assert.deepEqual(Array.from(results.get("data")), [8, 9]);
+});
+
+test("manifest sizes keep decoded progress exact for compressed responses", async () => {
+  const progress = [];
+  const results = await fetchResourceBatch([
+    { id: "module", url: "module.js", bytes: 3 },
+  ], {
+    fetchImpl: async () => new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: { "content-encoding": "gzip", "content-length": "2" },
+    }),
+    onProgress: (state) => progress.push(state),
+  });
+  assert.deepEqual(Array.from(results.get("module")), [1, 2, 3]);
+  assert.equal(progress.at(-1).totalBytes, 3);
+  assert.equal(progress.at(-1).percent, 100);
+});
+
+test("resource batches reject a manifest digest mismatch as retryable", async () => {
+  await assert.rejects(fetchResourceBatch([
+    { id: "wasm", url: "engine.wasm", bytes: 3, sha256: "0".repeat(64) },
+  ], {
+    fetchImpl: async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
+  }), (error) => {
+    assert.equal(error.retryable, true);
+    assert.match(error.message, /Digest mismatch/);
+    return true;
+  });
+});
+
+test("retry policy separates transient transport errors from deterministic failures", async () => {
+  assert.equal(isRetryableLoadError(Object.assign(new Error("busy"), { status: 503 })), true);
+  assert.equal(isRetryableLoadError(Object.assign(new Error("missing"), { status: 404 })), false);
+  assert.equal(isRetryableLoadError(new TypeError("Load failed")), true);
+  assert.equal(isRetryableLoadError(Object.assign(new Error("bad wasm"), { name: "CompileError" })), false);
+  assert.equal(isRetryableLoadError(Object.assign(new Error("script error"), { phase: "worker-bootstrap" })), true);
+
+  const attempts = [];
+  const retries = [];
+  const result = await runWithRetries(async (attempt) => {
+    attempts.push(attempt);
+    if (attempt < 3) throw new TypeError("Load failed");
+    return "ready";
+  }, {
+    delay: async (ms) => retries.push(ms),
+  });
+  assert.equal(result, "ready");
+  assert.deepEqual(attempts, [1, 2, 3]);
+  assert.deepEqual(retries, [500, 1000]);
+});
+
+test("deterministic loader failures are not retried", async () => {
+  let attempts = 0;
+  await assert.rejects(runWithRetries(async () => {
+    attempts++;
+    throw Object.assign(new Error("invalid module"), { name: "CompileError" });
+  }, { delay: async () => {} }), /invalid module/);
+  assert.equal(attempts, 1);
+});
+
+test("a transient 503 retries the complete resource batch", async () => {
+  let fetches = 0;
+  const result = await runWithRetries(() => fetchResourceBatch([
+    { id: "wasm", url: "engine.wasm", bytes: 3 },
+  ], {
+    fetchImpl: async () => {
+      fetches++;
+      return fetches === 1
+        ? new Response(null, { status: 503 })
+        : new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    },
+  }), { delay: async () => {} });
+  assert.equal(fetches, 2);
+  assert.deepEqual(Array.from(result.get("wasm")), [1, 2, 3]);
+});
+
 test("SMILES query parsing is percent-decoded and length bounded", () => {
   assert.equal(readSmilesQuery("https://example.test/?smiles=CCO"), "CCO");
   assert.equal(readSmilesQuery("https://example.test/?smiles=%5BNH4%2B%5D"), "[NH4+]");
@@ -98,8 +471,14 @@ test("URL SMILES starts once only when both workers are ready and idle", () => {
 test("worker initialization remains pending until ready", async () => {
   const worker = new FakeWorker();
   const wasmBinary = new Uint8Array([0, 1, 2]);
+  const dataBinary = new Uint8Array([3, 4]);
   let settled = false;
-  const initialized = initializeWorker(worker, wasmBinary).then((message) => {
+  const initialized = initializeWorker(worker, {
+    wasmBinary,
+    dataBinary,
+    moduleUrl: "https://example.test/xtbloom_web.js",
+    helpersUrl: "https://example.test/app_helpers.js",
+  }).then((message) => {
     settled = true;
     return message;
   });
@@ -107,7 +486,11 @@ test("worker initialization remains pending until ready", async () => {
   await Promise.resolve();
   assert.equal(settled, false);
   assert.equal(worker.messages[0].message.type, "init");
-  assert.equal(worker.messages[0].transfer[0], wasmBinary.buffer);
+  assert.deepEqual(Array.from(worker.messages[0].message.wasmBinary), [0, 1, 2]);
+  assert.deepEqual(Array.from(worker.messages[0].message.dataBinary), [3, 4]);
+  assert.equal(worker.messages[0].message.moduleUrl, "https://example.test/xtbloom_web.js");
+  assert.equal(wasmBinary.byteLength, 3);
+  assert.equal(dataBinary.byteLength, 2);
 
   worker.emit({ type: "ready", version: "test" });
   assert.deepEqual(await initialized, { type: "ready", version: "test" });
@@ -115,9 +498,37 @@ test("worker initialization remains pending until ready", async () => {
 
 test("worker initialization errors reject", async () => {
   const worker = new FakeWorker();
-  const initialized = initializeWorker(worker, new Uint8Array([0]));
-  worker.emit({ type: "error", error: "side module failed" });
-  await assert.rejects(initialized, /side module failed/);
+  const initialized = initializeWorker(worker, {
+    wasmBinary: new Uint8Array([0]),
+    dataBinary: new Uint8Array([1]),
+    moduleUrl: "module.js",
+    helpersUrl: "helpers.js",
+  });
+  worker.emit({
+    type: "error",
+    error: { name: "TypeError", message: "Load failed", phase: "module-import" },
+  });
+  await assert.rejects(initialized, (error) => {
+    assert.equal(error.name, "TypeError");
+    assert.equal(error.phase, "module-import");
+    assert.match(error.message, /Load failed/);
+    return true;
+  });
+});
+
+test("worker postMessage failure leaves caller payloads reusable", async () => {
+  const worker = new FakeWorker();
+  worker.postMessage = () => { throw new DOMException("clone failed", "DataCloneError"); };
+  const wasmBinary = new Uint8Array([1, 2, 3]);
+  const dataBinary = new Uint8Array([4, 5]);
+  await assert.rejects(initializeWorker(worker, {
+    wasmBinary,
+    dataBinary,
+    moduleUrl: "module.js",
+    helpersUrl: "helpers.js",
+  }), /clone failed/);
+  assert.deepEqual(Array.from(wasmBinary), [1, 2, 3]);
+  assert.deepEqual(Array.from(dataBinary), [4, 5]);
 });
 
 test("calls require a live ready worker", () => {
@@ -168,6 +579,58 @@ test("page bootstraps pinned SMILES loading and applies URL-optimized geometry",
   assert.doesNotMatch(indexSource, /id="smiles-alert"/);
 });
 
+test("engine bootstrap retries a versioned five-file generation without reloading the page", async () => {
+  const [appSource, bootstrapSource, helperSource, workerSource, manifestSource, indexSource] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../bootstrap.js", import.meta.url), "utf8"),
+    readFile(new URL("../app_helpers.js", import.meta.url), "utf8"),
+    readFile(new URL("../worker.js", import.meta.url), "utf8"),
+    readFile(new URL("../write_engine_manifest.cmake", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+  ]);
+  for (const asset of [
+    "app.js",
+    "worker.js",
+    "app_helpers.js",
+    "xtbloom_web.js",
+    "xtbloom_web.wasm",
+    "xtbloom_web.data",
+  ]) {
+    assert.match(manifestSource, new RegExp(asset.replaceAll(".", "\\.")));
+  }
+  assert.match(appSource, /runWithRetries\(/);
+  assert.match(appSource, /engineLoadGeneration/);
+  assert.match(appSource, /engine-manifest\.json/);
+  assert.match(appSource, /xtbloom_version/);
+  assert.match(appSource, /manifest\.version !== appContentVersion/);
+  assert.match(appSource, /Invalid engine manifest response/);
+  assert.match(appSource, /currentLoadOrAbort\(generation, masterSignal, attemptController\.signal\)/);
+  assert.match(appSource, /filter\(\(asset\) => engineIds\.has\(asset\.id\)\)/);
+  assert.doesNotMatch(appSource, /window\.location\.reload\(/);
+  assert.match(bootstrapSource, /fetchVerifiedAsset/);
+  assert.match(bootstrapSource, /await importImpl\(prepared\.appUrl\.href\)/);
+  assert.match(helperSource, /getPreloadedPackage/);
+  assert.match(helperSource, /WebAssembly\.compile\(wasmBinary\)/);
+  assert.match(helperSource, /instantiateWasm/);
+  assert.match(workerSource, /msg\.dataBinary/);
+  assert.match(workerSource, /await import\(msg\.moduleUrl\)/);
+  assert.match(workerSource, /initializeDownloadedEngineModule/);
+  assert.doesNotMatch(workerSource, /from "\.\/xtbloom_web\.js"/);
+  assert.match(indexSource, /<script type="module">/);
+  assert.match(indexSource, /prefetchBootstrap/);
+  assert.match(indexSource, /await import\(url\.href\)/);
+  assert.doesNotMatch(indexSource, /src="bootstrap\.js"/);
+  assert.doesNotMatch(indexSource, /type="module" src="app\.js"/);
+  const inlineModule = indexSource.match(/<script type="module">([\s\S]*?)<\/script>/);
+  assert.ok(inlineModule);
+  assert.doesNotThrow(() => new Function(inlineModule[1]));
+
+  const attemptStart = appSource.indexOf("const initialize = (async () => {");
+  const manifestFetch = appSource.indexOf("const manifest = await loadEngineManifest", attemptStart);
+  const timeoutWrap = appSource.indexOf("withTimeout(initialize", manifestFetch);
+  assert.ok(attemptStart >= 0 && manifestFetch > attemptStart && timeoutWrap > manifestFetch);
+});
+
 test("result statistics distinguish SCC iterations from optimizer steps", async () => {
   const [appSource, indexSource] = await Promise.all([
     readFile(new URL("../app.js", import.meta.url), "utf8"),
@@ -194,7 +657,12 @@ test("every literal app DOM lookup exists in the deployed HTML", async () => {
 
 test("timeout covers a worker that never becomes ready", async () => {
   const worker = new FakeWorker();
-  const initialized = initializeWorker(worker, new Uint8Array([0]));
+  const initialized = initializeWorker(worker, {
+    wasmBinary: new Uint8Array([0]),
+    dataBinary: new Uint8Array([1]),
+    moduleUrl: "module.js",
+    helpersUrl: "helpers.js",
+  });
   await assert.rejects(
     withTimeout(initialized, 5, () => worker.terminate()),
     /TIME_OUT/,

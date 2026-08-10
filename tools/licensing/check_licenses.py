@@ -292,16 +292,26 @@ WEB_SITE_SOURCE_MAP = {
 WEB_SITE_RUNTIME_FILES = (
     "index.html",
     "style.css",
+    "bootstrap.js",
     "app.js",
     "app_helpers.js",
     "worker.js",
     "smiles_helpers.js",
     "smiles_worker.js",
     "xtbloom-mark.svg",
+    "engine-manifest.json",
     "xtbloom_web.js",
     "xtbloom_web.wasm",
     "xtbloom_web.data",
     "vendor/3Dmol-min.js",
+)
+WEB_VERSIONED_ASSETS = (
+    ("app", "app.js"),
+    ("worker", "worker.js"),
+    ("helpers", "app_helpers.js"),
+    ("module", "xtbloom_web.js"),
+    ("wasm", "xtbloom_web.wasm"),
+    ("data", "xtbloom_web.data"),
 )
 
 
@@ -1379,6 +1389,34 @@ def check_install(prefix: Path) -> None:
         )
 
 
+def _check_web_engine_manifest(site: Path) -> None:
+    """Require the browser cache version to describe exact deployed bytes."""
+    manifest_path = site / "engine-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != 1:
+        raise LicenseCheckError("web engine manifest has an unsupported schema")
+    assets = manifest.get("assets")
+    if not isinstance(assets, list) or len(assets) != len(WEB_VERSIONED_ASSETS):
+        raise LicenseCheckError("web engine manifest has incomplete asset coverage")
+
+    expected_entries: list[dict[str, object]] = []
+    version_material = ""
+    for asset_id, relative in WEB_VERSIONED_ASSETS:
+        path = site / relative
+        payload = path.read_bytes()
+        digest = hashlib.sha256(payload).hexdigest()
+        size = len(payload)
+        expected_entries.append(
+            {"id": asset_id, "path": relative, "bytes": size, "sha256": digest}
+        )
+        version_material += f"{asset_id}:{relative}:{size}:{digest}\n"
+    if assets != expected_entries:
+        raise LicenseCheckError("web engine manifest does not match deployed assets")
+    expected_version = hashlib.sha256(version_material.encode()).hexdigest()
+    if manifest.get("version") != expected_version:
+        raise LicenseCheckError("web engine manifest has an invalid content version")
+
+
 def check_web_site(site: Path, source_root: Path | None = None) -> None:
     """Validate the legal payload conveyed beside the browser binaries."""
     _require_files(
@@ -1404,6 +1442,7 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
             "web site contains unexpected or orphaned files: "
             + ", ".join(unexpected_files)
         )
+    _check_web_engine_manifest(site)
     index = (site / "index.html").read_text(encoding="utf-8")
     for token in (
         'href="LICENSE"',
