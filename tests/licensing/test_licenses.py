@@ -25,6 +25,13 @@ WHEEL_SPEC = importlib.util.spec_from_file_location(
 assert WHEEL_SPEC is not None and WHEEL_SPEC.loader is not None
 WHEEL_INSPECTOR = importlib.util.module_from_spec(WHEEL_SPEC)
 WHEEL_SPEC.loader.exec_module(WHEEL_INSPECTOR)
+VERSION_INSPECTOR_PATH = REPOSITORY / "python" / "ci" / "check-wheel-version.py"
+VERSION_SPEC = importlib.util.spec_from_file_location(
+    "xtbloom_check_wheel_version", VERSION_INSPECTOR_PATH
+)
+assert VERSION_SPEC is not None and VERSION_SPEC.loader is not None
+VERSION_INSPECTOR = importlib.util.module_from_spec(VERSION_SPEC)
+VERSION_SPEC.loader.exec_module(VERSION_INSPECTOR)
 
 
 class LicenseArchiveTests(unittest.TestCase):
@@ -698,6 +705,40 @@ class CudaWheelInspectionTests(unittest.TestCase):
                     checker=CHECKER_PATH,
                     readelf="readelf",
                     temporary_root=root / "extracted",
+                )
+
+
+class WheelVersionInspectionTests(unittest.TestCase):
+    """Keep native version checks aligned with every desktop wheel filename."""
+
+    def test_native_library_names_cover_linux_macos_and_windows(self) -> None:
+        """Recognize the platform-specific library names installed by CMake."""
+        for name in (
+            "libxtbloom.so",
+            "libxtbloom.so.0",
+            "libxtbloom.dylib",
+            "xtbloom.dll",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(
+                    VERSION_INSPECTOR._is_native_library(
+                        VERSION_INSPECTOR.PurePosixPath("xtbloom/lib") / name
+                    )
+                )
+
+    def test_similar_library_names_are_rejected(self) -> None:
+        """Do not accept import libraries or unrelated prefixed DLL names."""
+        for name in (
+            "xtbloom.lib",
+            "libxtbloom.a",
+            "libxtbloom.dylib.backup",
+            "other_xtbloom.dll",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(
+                    VERSION_INSPECTOR._is_native_library(
+                        VERSION_INSPECTOR.PurePosixPath("xtbloom/lib") / name
+                    )
                 )
 
 

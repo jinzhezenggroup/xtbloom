@@ -25,6 +25,15 @@ _NUMBER = r"(?:0|[1-9][0-9]*)"
 RELEASE_RE = re.compile(rf"^({_NUMBER})\.({_NUMBER})\.({_NUMBER})$")
 
 
+def _is_native_library(path: PurePosixPath) -> bool:
+    """Accept exactly the installed xTBloom library names on native platforms."""
+    return (
+        path.name.startswith("libxtbloom.so")
+        or path.name == "libxtbloom.dylib"
+        or path.name == "xtbloom.dll"
+    )
+
+
 def _single_member(
     archive: zipfile.ZipFile,
     predicate: Callable[[PurePosixPath], bool],
@@ -60,7 +69,7 @@ def inspect_wheel(wheel: Path, temporary_root: Path) -> None:
         )
         library_name = _single_member(
             archive,
-            lambda path: path.name.startswith("libxtbloom.so"),
+            _is_native_library,
             "native libxtbloom",
         )
 

@@ -693,7 +693,7 @@ if(NOT XTBLOOM_PYTHON_WHEEL)
     SOVERSION ${XTBLOOM_ABI_SOVERSION}
   )
 endif()
-if(UNIX AND NOT APPLE)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(xtbloom PRIVATE
     "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/xtbloom.map"
   )

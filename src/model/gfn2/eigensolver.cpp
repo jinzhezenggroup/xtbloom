@@ -3,7 +3,12 @@
 
 #include "model/gfn2/occupation_binary64_policy.hpp"
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <dlfcn.h>
 #endif
 
@@ -235,12 +240,20 @@ xtbloom_status_t validate_backend(const CpuLinearAlgebraBackend& backend, std::s
 
 template <typename Function>
 bool load_symbol(void* handle, const char* name, Function& function) {
+#if defined(_WIN32)
+  static_assert(sizeof(Function) == sizeof(FARPROC));
+  const FARPROC symbol = GetProcAddress(static_cast<HMODULE>(handle), name);
+  if (symbol == nullptr) {
+    return false;
+  }
+#else
   static_assert(sizeof(Function) == sizeof(void*));
   dlerror();
   void* symbol = dlsym(handle, name);
   if (symbol == nullptr || dlerror() != nullptr) {
     return false;
   }
+#endif
   std::memcpy(&function, &symbol, sizeof(function));
   return true;
 }
