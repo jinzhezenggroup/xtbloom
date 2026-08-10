@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "dependency": {
+    "name": "Pyodide libopenblas",
+    "version": "0.3.28",
+    "classification": "Pyodide wheel build input and redistributed private WebAssembly provider",
+    "runtime_dependency": false
+  },
+  "toolchain": {
+    "pyodide_version": "314.0.4",
+    "pyodide_tag": "314.0.4",
+    "pyodide_commit": "da436a90d68f9fe986eb97563d49f527e072da2c",
+    "pyodide_tree": "86d2acace51b46b2281977a637e1936d1836a77f",
+    "xbuildenv_url": "https://github.com/pyodide/pyodide/releases/download/314.0.4/xbuildenv-314.0.4.tar.gz",
+    "xbuildenv_sha256": "257ceae085eaa1423c2ab49794d7a72bf36ddad475d126fa929791b9a8ab7289",
+    "emscripten_version": "5.0.3",
+    "pyodide_build_version": "0.39.0",
+    "auditwheel_emscripten_version": "0.2.5"
+  },
+  "lock": {
+    "url": "https://cdn.jsdelivr.net/pyodide/v314.0.4/full/pyodide-lock.json",
+    "sha256": "c963d22858f6bcb8f41586a2142f03905ab370c88ea22a86a2736e95fac2a8f3"
+  },
+  "artifact": {
+    "filename": "libopenblas-0.3.28.zip",
+    "url": "https://cdn.jsdelivr.net/pyodide/v314.0.4/full/libopenblas-0.3.28.zip",
+    "sha256": "5489d82d8b00ddd3ba283055ba14e2a03d870f1b7e9c07873d6064a8c306ea4c",
+    "member": "libopenblas.so",
+    "member_size": 6456061,
+    "member_sha256": "6a78812caf8279cf1aa9d8cffd092bb9c568af999bb4af8f3e233df2d639363e",
+    "member_repair_stable_sha256": "6a78812caf8279cf1aa9d8cffd092bb9c568af999bb4af8f3e233df2d639363e",
+    "private_install_name": "libxtbloom_openblas-6a78812c.so",
+    "adapter_install_name": "libxtbloom_pyodide_lapacke.so",
+    "expected_config_prefix": "OpenBLAS 0.3.28",
+    "required_exports": [
+      "dpotrf_",
+      "dpocon_",
+      "dsyevd_",
+      "cblas_dgemm",
+      "cblas_dtrsm",
+      "openblas_get_config",
+      "openblas_set_num_threads_local"
+    ],
+    "required_export_signatures": {
+      "dpotrf_": {"parameters": ["i32", "i32", "i32", "i32", "i32"], "results": ["i32"]},
+      "dpocon_": {"parameters": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"], "results": ["i32"]},
+      "dsyevd_": {"parameters": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"], "results": ["i32"]},
+      "cblas_dgemm": {"parameters": ["i32", "i32", "i32", "i32", "i32", "i32", "f64", "i32", "i32", "i32", "i32", "f64", "i32", "i32"], "results": ["i32"]},
+      "cblas_dtrsm": {"parameters": ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "f64", "i32", "i32", "i32", "i32"], "results": ["i32"]},
+      "openblas_get_config": {"parameters": [], "results": ["i32"]},
+      "openblas_set_num_threads_local": {"parameters": ["i32"], "results": ["i32"]}
+    }
+  },
+  "openblas_source": {
+    "repository": "https://github.com/OpenMathLib/OpenBLAS",
+    "tag": "v0.3.28",
+    "commit": "5ef8b1964658f9cb6a6324a06f6a1a022609b0c5",
+    "url": "https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.28/OpenBLAS-0.3.28.tar.gz",
+    "sha256": "f1003466ad074e9b0c8d421a204121100b0751c96fc6fcf3d1456bd12f8a00a1"
+  },
+  "libf2c_source": {
+    "name": "CLAPACK libf2c",
+    "version": "3.2.1",
+    "url": "https://web.archive.org/web/20260509221335/https://www.netlib.org/clapack/clapack.tgz",
+    "sha256": "6dc4c382164beec8aaed8fd2acc36ad24232c406eda6db462bd4c41d5e455fac"
+  },
+  "build_policy": {
+    "binary_bits": 32,
+    "no_fortran": true,
+    "no_lapacke": true,
+    "use_threads": false,
+    "simd128": true,
+    "target": "RISCV64_GENERIC",
+    "linkage": "libf2c.a and libopenblas.a linked into one Emscripten side module"
+  },
+  "recipe_files": [
+    {"upstream": "packages/libopenblas/meta.yaml", "local": "cmake/3rdparty/pyodide-openblas/recipe/libopenblas/meta.yaml", "sha256": "13b2c2edcea491c6781f86dd971262ed73462b607d544f22d8b3f188f98bde50"},
+    {"upstream": "packages/libopenblas/patches/0001-Add-Wno-return-type-flag.patch", "local": "cmake/3rdparty/pyodide-openblas/recipe/libopenblas/patches/0001-Add-Wno-return-type-flag.patch", "sha256": "3fa437c1b0b6771e2a2d5ae7426d11bc008df840d501a8fba15326dad255e1cb"},
+    {"upstream": "packages/libopenblas/patches/0002-Align-xerbla_array-signature-with-scipy-expectation.patch", "local": "cmake/3rdparty/pyodide-openblas/recipe/libopenblas/patches/0002-Align-xerbla_array-signature-with-scipy-expectation.patch", "sha256": "ad4465414cb3c94426be61d33a7dcbea02c6ec755baac63d5bbe1c85e737fa13"},
+    {"upstream": "packages/libopenblas/patches/0003-Skip-linktest.patch", "local": "cmake/3rdparty/pyodide-openblas/recipe/libopenblas/patches/0003-Skip-linktest.patch", "sha256": "92c629b824d487c1a37de7c55918ba1674a54954ea7ed81aef4472262bbf98a6"},
+    {"upstream": "packages/libf2c/meta.yaml", "local": "cmake/3rdparty/pyodide-openblas/recipe/libf2c/meta.yaml", "sha256": "67e1070fab02ed9112db3cc368ba9f10f7ef2b1937fed2046c93f74d64d533c0"},
+    {"upstream": "packages/libf2c/extras/make.inc", "local": "cmake/3rdparty/pyodide-openblas/recipe/libf2c/extras/make.inc", "sha256": "3b00ad6b72f54485cafe45dd3122c3218395d3a06c585a061fefcdbf16917b84"},
+    {"upstream": "packages/libf2c/patches/0001-fix-arith.h.patch", "local": "cmake/3rdparty/pyodide-openblas/recipe/libf2c/patches/0001-fix-arith.h.patch", "sha256": "00bc810ed40d452ba6ab5d38d911709f8f48e58839d51790dada241d171a928f"},
+    {"upstream": "packages/libf2c/patches/0002-fix-f2clibs-build.patch", "local": "cmake/3rdparty/pyodide-openblas/recipe/libf2c/patches/0002-fix-f2clibs-build.patch", "sha256": "3ea35a2f368d9fe821823a86bfdb593d9bcb4a4e8ecde8d62aa868be5d6d3337"},
+    {"upstream": "packages/libf2c/patches/0003-remove-redundant-symbols.patch", "local": "cmake/3rdparty/pyodide-openblas/recipe/libf2c/patches/0003-remove-redundant-symbols.patch", "sha256": "fb9ade89cfacccc200192ab3fd4db88085035508a6e7a85c7471fbb5950409e0"},
+    {"upstream": "packages/libf2c/patches/0004-correct-return-types.patch", "local": "cmake/3rdparty/pyodide-openblas/recipe/libf2c/patches/0004-correct-return-types.patch", "sha256": "b7aa2053ca6f1759bc2e9a5d4bbeebd837bf6ac12e9c9f6108a9bd7f966073be"},
+    {"upstream": "packages/libf2c/patches/0005-Remove-symbols-defined-in-OpenBLAS.patch", "local": "cmake/3rdparty/pyodide-openblas/recipe/libf2c/patches/0005-Remove-symbols-defined-in-OpenBLAS.patch", "sha256": "763d7f9982f28e5845aa8bcdd2972abc8d1dd236820b3afdef62f25e4e0581e4"},
+    {"upstream": "packages/libf2c/patches/0006-adjust-ld-ar-ranlib.patch", "local": "cmake/3rdparty/pyodide-openblas/recipe/libf2c/patches/0006-adjust-ld-ar-ranlib.patch", "sha256": "afc9e39f640b5dfac4871a66749f47e2f1736ab6b1a7600cb4193d9846d862b3"},
+    {"upstream": "packages/libf2c/patches/0007-add-singlecomplex.patch", "local": "cmake/3rdparty/pyodide-openblas/recipe/libf2c/patches/0007-add-singlecomplex.patch", "sha256": "a7e5eb900f84c4acb76deb06a284677865ed1bcba9a61e1c46599ea826b09efb"}
+  ],
+  "licenses": [
+    {"name": "Pyodide MPL-2.0", "upstream": "https://raw.githubusercontent.com/pyodide/pyodide/da436a90d68f9fe986eb97563d49f527e072da2c/LICENSE", "local": "LICENSES/pyodide-MPL-2.0.txt", "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"},
+    {"name": "OpenBLAS BSD-3-Clause", "upstream": "https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/5ef8b1964658f9cb6a6324a06f6a1a022609b0c5/LICENSE", "local": "LICENSES/OpenBLAS-0.3.28-BSD-3-Clause.txt", "sha256": "190b5a9c8d9723fe958ad33916bd7346d96fab3c5ea90832bb02d854f620fcff"},
+    {"name": "LAPACK BSD-3-Clause", "upstream": "https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/5ef8b1964658f9cb6a6324a06f6a1a022609b0c5/lapack-netlib/LICENSE", "local": "LICENSES/LAPACK-OpenBLAS-0.3.28-BSD-3-Clause.txt", "sha256": "978539245c405775bf347b1256c36df4daf8b69a64b099e94b1d53742201621e"},
+    {"name": "CLAPACK BSD-3-Clause", "upstream": "https://web.archive.org/web/20260509221335/https://www.netlib.org/clapack/clapack.tgz#CLAPACK-3.2.1/COPYING", "local": "LICENSES/CLAPACK-3.2.1-BSD-3-Clause.txt", "sha256": "23014869214a231525b38c39fdb5f82364fa24154ac80fdcab2a79671460fd09"},
+    {"name": "libf2c AT&T/Lucent/Bellcore notice", "upstream": "https://web.archive.org/web/20260509221335/https://www.netlib.org/clapack/clapack.tgz#CLAPACK-3.2.1/F2CLIBS/libf2c/Notice", "local": "LICENSES/libf2c-AT&T-Lucent-Bellcore.txt", "sha256": "44561c447e91203ddc747beeca5cc2794d95ee982c17c578670e4f0408bc3904"}
+  ]
+}

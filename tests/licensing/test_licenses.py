@@ -126,8 +126,11 @@ class SourceDistributionBoundaryTests(unittest.TestCase):
             "cmake/xtbloom_cuda_toolkit.cmake",
             "cmake/3rdparty/torch-stable/aoti_symbols.txt",
             "cmake/3rdparty/eigen_manifest.json",
+            "cmake/3rdparty/pyodide_openblas_manifest.json",
+            "cmake/3rdparty/pyodide-openblas/recipe/libopenblas/meta.yaml",
             "data/parameters/d4.hpp",
             "data/parameters/gfn2.hpp",
+            "LICENSES/pyodide-MPL-2.0.txt",
             "src/backends/cuda/gfn2_scc_loop.cu",
             "tools/eigen_dependency.py",
         ):
@@ -136,6 +139,9 @@ class SourceDistributionBoundaryTests(unittest.TestCase):
         for excluded in (
             "cmake/3rdparty/eigen/Eigen/Core",
             "cmake/3rdparty/eigen/manifest.json",
+            "python/ci/repair-wheel.sh",
+            "python/ci/resolve-pyodide-openblas.py",
+            "python/ci/run-pyodide-wheel-test.py",
             "tests/runtime_test.cpp",
             "tools/eigen_vendor.py",
             "uv.lock",
@@ -251,15 +257,28 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
     def test_hash_pinned_text_disables_checkout_conversion(self) -> None:
         """Prevent Windows autocrlf from invalidating provenance digests."""
         attributes = (REPOSITORY / ".gitattributes").read_text(encoding="utf-8")
-        for pathspec in (
-            "LICENSES/scipy-openblas32-0.3.34.0.0.txt",
-            "LICENSES/openchemlib-BSD-3-Clause.txt",
-            "LICENSES/eigen/**",
-            "cmake/3rdparty/implib/**",
-            "cmake/3rdparty/torch-stable/include/**",
+        for expected in (
+            "LICENSES/scipy-openblas32-0.3.34.0.0.txt -text",
+            "LICENSES/openchemlib-BSD-3-Clause.txt -text",
+            "LICENSES/pyodide-MPL-2.0.txt -text "
+            "whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab",
+            "LICENSES/OpenBLAS-0.3.28-BSD-3-Clause.txt -text "
+            "whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab",
+            "LICENSES/LAPACK-OpenBLAS-0.3.28-BSD-3-Clause.txt -text "
+            "whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab",
+            "LICENSES/CLAPACK-3.2.1-BSD-3-Clause.txt -text "
+            "whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab",
+            "LICENSES/libf2c-AT&T-Lucent-Bellcore.txt -text "
+            "whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab",
+            "cmake/3rdparty/implib/** -text",
+            "cmake/3rdparty/torch-stable/include/** -text",
+            "cmake/3rdparty/pyodide-openblas/** -text "
+            "whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab",
+            "LICENSES/eigen/** -text",
+            "LICENSES/eigen/** -whitespace",
         ):
-            with self.subTest(pathspec=pathspec):
-                self.assertIn(f"{pathspec} -text", attributes.splitlines())
+            with self.subTest(expected=expected):
+                self.assertIn(expected, attributes.splitlines())
 
 
 class LicenseArchiveTests(unittest.TestCase):
@@ -277,6 +296,10 @@ class LicenseArchiveTests(unittest.TestCase):
                     payload = (REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH).read_bytes()
                 elif name.endswith("/provenance/scipy_openblas32_manifest.json"):
                     payload = (REPOSITORY / CHECKER.OPENBLAS_MANIFEST_PATH).read_bytes()
+                elif name.endswith("/provenance/pyodide_openblas_manifest.json"):
+                    payload = (
+                        REPOSITORY / CHECKER.PYODIDE_OPENBLAS_MANIFEST_PATH
+                    ).read_bytes()
                 elif name.endswith("scipy-openblas32-0.3.34.0.0.txt"):
                     payload = (REPOSITORY / CHECKER.OPENBLAS_LICENSE).read_bytes()
                 elif name.endswith("scipy-openblas32-tools-LICENSE_win32.txt"):
@@ -291,6 +314,16 @@ class LicenseArchiveTests(unittest.TestCase):
                         relative
                         for relative in CHECKER.OPENBLAS_EXACT_PACKAGED_LICENSES
                         if name.endswith(Path(relative).name)
+                    )
+                    payload = (REPOSITORY / relative).read_bytes()
+                elif any(
+                    Path(name).name == Path(relative).name
+                    for relative in CHECKER.PYODIDE_OPENBLAS_LICENSES
+                ):
+                    relative = next(
+                        relative
+                        for relative in CHECKER.PYODIDE_OPENBLAS_LICENSES
+                        if Path(name).name == Path(relative).name
                     )
                     payload = (REPOSITORY / relative).read_bytes()
                 else:
@@ -312,6 +345,26 @@ class LicenseArchiveTests(unittest.TestCase):
                 "xtbloom.libs/"
                 + CHECKER._auditwheel_name(source_name, record["sha256"])
             )
+        return names
+
+    def _valid_pyodide_wheel_names(self) -> set[str]:
+        """Return the exact legal and three-module Pyodide wheel payload."""
+        names = {
+            f"{WHEEL_DIST_INFO}/licenses/{suffix}"
+            for suffix in CHECKER.COMMON_ARCHIVE_SUFFIXES
+        } | {f"xtbloom/{suffix}" for suffix in CHECKER.WHEEL_ARCHIVE_SUFFIXES}
+        manifest = CHECKER.json.loads(
+            (REPOSITORY / CHECKER.PYODIDE_OPENBLAS_MANIFEST_PATH).read_text(
+                encoding="utf-8"
+            )
+        )
+        names.update(
+            {
+                "xtbloom/lib/libxtbloom.so",
+                "xtbloom/lib/" + manifest["artifact"]["adapter_install_name"],
+                "xtbloom.libs/" + manifest["artifact"]["private_install_name"],
+            }
+        )
         return names
 
     def test_project_license_cannot_be_satisfied_by_third_party_filename(self) -> None:
@@ -429,6 +482,63 @@ class LicenseArchiveTests(unittest.TestCase):
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "cohort differs"):
                 CHECKER.check_archive(wheel)
 
+    def test_native_wheel_rejects_renamed_wasm_shared_module(self) -> None:
+        """Detect WebAssembly by magic instead of trusting provider basenames."""
+        names = self._valid_wheel_names()
+        renamed = "xtbloom.libs/libinnocent_math.so"
+        names.add(renamed)
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+            self._write_wheel(
+                wheel,
+                names,
+                {renamed: CHECKER.WASM_V1_MAGIC + b"renamed provider"},
+            )
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "native wheel.*WebAssembly"
+            ):
+                CHECKER.check_archive(wheel)
+
+    def test_native_wheel_rejects_wasm_with_non_shared_extension(self) -> None:
+        """Detect WebAssembly payloads even when they use a plain .wasm suffix."""
+        names = self._valid_wheel_names()
+        renamed = "xtbloom.libs/innocent-math.wasm"
+        names.add(renamed)
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+            self._write_wheel(
+                wheel,
+                names,
+                {renamed: CHECKER.WASM_V1_MAGIC + b"renamed provider"},
+            )
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "native wheel.*WebAssembly"
+            ):
+                CHECKER.check_archive(wheel)
+
+    def test_pyodide_wheel_rejects_shadowed_provider_basename(self) -> None:
+        """Require exact module paths, not only a set of matching basenames."""
+        names = self._valid_pyodide_wheel_names()
+        provider = next(name for name in names if name.startswith("xtbloom.libs/"))
+        shadow = "shadow/" + Path(provider).name
+        names.add(shadow)
+        wasm = {
+            name: CHECKER.WASM_V1_MAGIC + b"module"
+            for name in names
+            if name
+            in {
+                "xtbloom/lib/libxtbloom.so",
+                provider,
+                shadow,
+            }
+            or name.endswith("libxtbloom_pyodide_lapacke.so")
+        }
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test-pyodide_2026_0_wasm32.whl"
+            self._write_wheel(wheel, names, wasm)
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "cohort differs"):
+                CHECKER.check_archive(wheel)
+
     def test_wheel_rejects_changed_target_specific_openblas_license(self) -> None:
         """Require exact upstream packaged-license bytes for every target."""
         names = self._valid_wheel_names()
@@ -486,6 +596,104 @@ class OpenBlasProvenanceTests(unittest.TestCase):
             CHECKER._check_openblas_manifest(self.manifest)
 
 
+class PyodideOpenBlasProvenanceTests(unittest.TestCase):
+    """Require an exact retained Pyodide recipe and legal payload."""
+
+    def _copy_payload(self, root: Path) -> None:
+        manifest = root / CHECKER.PYODIDE_OPENBLAS_MANIFEST_PATH
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPOSITORY / CHECKER.PYODIDE_OPENBLAS_MANIFEST_PATH, manifest)
+        shutil.copytree(
+            REPOSITORY / CHECKER.PYODIDE_OPENBLAS_RECIPE_PATH,
+            root / CHECKER.PYODIDE_OPENBLAS_RECIPE_PATH,
+        )
+        for relative in CHECKER.PYODIDE_OPENBLAS_LICENSES:
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPOSITORY / relative, destination)
+
+    def _write_sdist(
+        self,
+        archive_path: Path,
+        *,
+        extra_recipe: bool = False,
+        recipe_symlink: bool = False,
+    ) -> None:
+        root = "xtbloom-0.1.0"
+        manifest = json.loads(
+            (REPOSITORY / CHECKER.PYODIDE_OPENBLAS_MANIFEST_PATH).read_text(
+                encoding="utf-8"
+            )
+        )
+        with tarfile.open(archive_path, "w:gz") as archive:
+            archive.add(
+                REPOSITORY / CHECKER.PYODIDE_OPENBLAS_MANIFEST_PATH,
+                arcname=f"{root}/{CHECKER.PYODIDE_OPENBLAS_MANIFEST_PATH}",
+            )
+            for record in (*manifest["recipe_files"], *manifest["licenses"]):
+                archive.add(
+                    REPOSITORY / record["local"],
+                    arcname=f"{root}/{record['local']}",
+                )
+            if extra_recipe:
+                payload = b"unexpected\n"
+                info = tarfile.TarInfo(
+                    f"{root}/{CHECKER.PYODIDE_OPENBLAS_RECIPE_PATH}/unexpected.patch"
+                )
+                info.size = len(payload)
+                archive.addfile(info, io.BytesIO(payload))
+            if recipe_symlink:
+                info = tarfile.TarInfo(
+                    f"{root}/{CHECKER.PYODIDE_OPENBLAS_RECIPE_PATH}/shadow.patch"
+                )
+                info.type = tarfile.SYMTYPE
+                info.linkname = "unexpected.patch"
+                archive.addfile(info)
+
+    def test_current_pyodide_openblas_payload_is_accepted(self) -> None:
+        """Accept the exact manifest, recipes, and license bytes in the source tree."""
+        CHECKER._check_pyodide_openblas_provenance(REPOSITORY)
+
+    def test_source_rejects_unreviewed_recipe_file(self) -> None:
+        """Do not let the broad sdist include wildcard expand the audited tree."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-pyodide-test-") as directory:
+            root = Path(directory)
+            self._copy_payload(root)
+            unexpected = (
+                root
+                / CHECKER.PYODIDE_OPENBLAS_RECIPE_PATH
+                / "libopenblas"
+                / "unexpected.patch"
+            )
+            unexpected.write_text("unexpected\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "unexpected.*unexpected.patch"
+            ):
+                CHECKER._check_pyodide_openblas_provenance(root)
+
+    def test_sdist_rejects_unreviewed_recipe_file(self) -> None:
+        """Require the archived recipe file set to equal the source manifest."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-pyodide-test-") as directory:
+            archive = Path(directory) / "xtbloom-0.1.0.tar.gz"
+            self._write_sdist(archive, extra_recipe=True)
+            names = CHECKER._archive_names(archive)
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "recipe file set differs.*unexpected"
+            ):
+                CHECKER._check_archived_pyodide_openblas(archive, names, wheel=False)
+
+    def test_sdist_rejects_recipe_symlink(self) -> None:
+        """Do not accept archive links in the provenance-pinned recipe tree."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-pyodide-test-") as directory:
+            archive = Path(directory) / "xtbloom-0.1.0.tar.gz"
+            self._write_sdist(archive, recipe_symlink=True)
+            names = CHECKER._archive_names(archive)
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "not a regular file.*shadow.patch"
+            ):
+                CHECKER._check_archived_pyodide_openblas(archive, names, wheel=False)
+
+
 class InstallPayloadTests(unittest.TestCase):
     """Keep wheel-only provider binaries out of native CMake installs."""
 
@@ -518,6 +726,24 @@ class InstallPayloadTests(unittest.TestCase):
                     CHECKER.LicenseCheckError, "wheel-only OpenBLAS"
                 ):
                     CHECKER.check_install(root)
+
+    def test_native_install_rejects_renamed_wasm_shared_module(self) -> None:
+        """Reject WebAssembly side modules regardless of their basename."""
+        with tempfile.TemporaryDirectory(
+            prefix="xtbloom-install-license-test-"
+        ) as directory:
+            root = Path(directory)
+            for relative in CHECKER.INSTALL_FILES:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"test\n")
+            renamed = root / "lib" / "libinnocent_math.so"
+            renamed.parent.mkdir(parents=True, exist_ok=True)
+            renamed.write_bytes(CHECKER.WASM_V1_MAGIC + b"renamed provider")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "WebAssembly shared module"
+            ):
+                CHECKER.check_install(root)
 
     def test_install_rejects_relocated_eigen_source(self) -> None:
         """Keep the browser-only headers and manifest out of native installs."""

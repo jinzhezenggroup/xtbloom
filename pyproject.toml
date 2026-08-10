@@ -135,6 +135,8 @@ sdist.include = [
   "cmake/3rdparty/torch-stable/**",
   "cmake/3rdparty/eigen_manifest.json",
   "cmake/3rdparty/scipy_openblas32_manifest.json",
+  "cmake/3rdparty/pyodide_openblas_manifest.json",
+  "cmake/3rdparty/pyodide-openblas/**",
   "LICENSES/eigen/**",
   "tools/eigen_dependency.py",
   "data/parameters/*_manifest.json",
@@ -232,8 +234,8 @@ CMAKE_CUDA_COMPILER_LAUNCHER = { env = "XTBLOOM_CUDA_COMPILER_LAUNCHER", default
 # also run the compiled Torch op against the separately installed official
 # runtime; Windows ARM64 and macOS x86_64 retain CPU-only tests because PyTorch
 # 2.10+ publishes no supported runtime wheels for those architectures. Pyodide
-# runs only its native import/version smoke until a production WASM eigensolver
-# provider exists.
+# 314.x repairs the reviewed official OpenBLAS side module into the wheel and
+# runs installed-wheel GFN2 conformance plus NumPy/SciPy coexistence.
 [tool.cibuildwheel]
 build = ["cp311-*"]
 # Use uv for the isolated build environment (via `build --installer=uv`) and
@@ -281,6 +283,16 @@ before-build = "bash {package}/python/ci/prepare-wheel-build.sh"
 # it defensively while also resolving and vendoring the reviewed private
 # OpenBLAS cohort.
 repair-wheel-command = "bash {package}/python/ci/repair-wheel.sh {dest_dir} {wheel}"
+
+[tool.cibuildwheel.pyodide]
+# The hook prepares the hash-pinned Pyodide 314.0.4 provider after cibuildwheel
+# installs its xbuildenv. auditwheel-emscripten then follows the adapter's
+# content-qualified NEEDED edge and writes relocation-safe runtime paths.
+before-build = "bash {package}/python/ci/prepare-wheel-build.sh"
+repair-wheel-command = "bash {package}/python/ci/repair-wheel.sh {dest_dir} {wheel}"
+# SciPy is a coexistence oracle only. It remains absent from project metadata
+# and proves both load orders against Pyodide's separately installed package.
+test-requires = ["scipy==1.18.0"]
 
 [tool.ruff]
 # Ruff owns both formatting and import ordering so those policies cannot drift.

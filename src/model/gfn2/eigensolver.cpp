@@ -286,6 +286,27 @@ bool load_lapacke_cblas_symbols(void* handle, bool scipy_prefix, LapackDpotrfWor
          load_symbol(handle, "cblas_dtrsm", dtrsm) && load_symbol(handle, "cblas_dgemm", dgemm);
 }
 
+#ifdef XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS
+bool load_pyodide_lapacke_cblas_symbols(void* handle, LapackDpotrfWork& dpotrf_work,
+                                        LapackDpoconWork& dpocon_work,
+                                        LapackDsyevdWork& dsyevd_work, CblasDtrsm& dtrsm,
+                                        CblasDgemm& dgemm) {
+  /* These wrapper names are private to xTBloom. The adapter itself resolves
+   * every raw OpenBLAS entry point from the exact absolute provider handle, so
+   * a SciPy-first load cannot interpose on computation through global names. */
+  dpotrf_work = nullptr;
+  dpocon_work = nullptr;
+  dsyevd_work = nullptr;
+  dtrsm = nullptr;
+  dgemm = nullptr;
+  return load_symbol(handle, "xtbloom_pyodide_LAPACKE_dpotrf_work", dpotrf_work) &&
+         load_symbol(handle, "xtbloom_pyodide_LAPACKE_dpocon_work", dpocon_work) &&
+         load_symbol(handle, "xtbloom_pyodide_LAPACKE_dsyevd_work", dsyevd_work) &&
+         load_symbol(handle, "xtbloom_pyodide_cblas_dtrsm", dtrsm) &&
+         load_symbol(handle, "xtbloom_pyodide_cblas_dgemm", dgemm);
+}
+#endif
+
 bool backend_self_test(const CpuLinearAlgebraBackend& backend) {
   double factor[1]{1.0};
   double reciprocal_condition = 0.0;
@@ -315,7 +336,23 @@ bool backend_self_test(const CpuLinearAlgebraBackend& backend) {
   return rhs[0] == 2.0 && product[0] == 4.0;
 }
 
-#if defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS) && defined(_WIN32)
+#if defined(XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS)
+void* open_pyodide_private_adapter() {
+  /* Emscripten 5's dladdr is a stub and it has no link-map namespaces. The
+   * Python wheel loader therefore supplies the installed absolute path. Accept
+   * only the compile-time-reviewed basename and never search by generic name. */
+  const char* path = std::getenv("XTBLOOM_PYODIDE_LAPACKE_SHIM");
+  if (path == nullptr || path[0] != '/') {
+    return nullptr;
+  }
+  const char* separator = std::strrchr(path, '/');
+  const char* basename = separator == nullptr ? path : separator + 1;
+  if (std::strcmp(basename, XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_ADAPTER) != 0) {
+    return nullptr;
+  }
+  return dlopen(path, RTLD_NOW | RTLD_LOCAL);
+}
+#elif defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS) && defined(_WIN32)
 void* open_private_bundled_sibling(const char* filename) {
   /* Resolve relative to xtbloom.dll itself, never the process working
    * directory or PATH. LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR keeps any provider
@@ -1342,6 +1379,53 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
   };
   static const LinalgRuntimeState runtime = [] {
     LinalgRuntimeState state;
+#ifdef XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS
+    /* Pyodide wheels carry a content-qualified OpenBLAS side module plus a
+     * narrow xTBloom adapter. Emscripten cannot isolate dynamic-linker
+     * namespaces, so Python supplies exact installed paths and the adapter
+     * dlsyms every provider function from that absolute private handle. */
+    {
+      dlerror();
+      void* handle = open_pyodide_private_adapter();
+      if (handle != nullptr) {
+        LapackDpotrfWork dpotrf_work = nullptr;
+        LapackDpoconWork dpocon_work = nullptr;
+        LapackDsyevdWork dsyevd_work = nullptr;
+        CblasDtrsm dtrsm = nullptr;
+        CblasDgemm dgemm = nullptr;
+        BlasSetNumThreadsLocal set_threads = nullptr;
+        using OpenBlasGetConfig = const char* (*)();
+        OpenBlasGetConfig get_config = nullptr;
+        if (load_pyodide_lapacke_cblas_symbols(handle, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
+                                               dgemm) &&
+            load_symbol(handle, "xtbloom_pyodide_openblas_get_config", get_config) &&
+            load_symbol(handle, "xtbloom_pyodide_openblas_set_num_threads_local", set_threads)) {
+          const char* config = get_config();
+          constexpr const char* kExpectedConfigPrefix =
+              XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_CONFIG_PREFIX;
+          if (config != nullptr &&
+              std::strncmp(config, kExpectedConfigPrefix, std::strlen(kExpectedConfigPrefix)) ==
+                  0 &&
+              std::strstr(config, "USE64BITINT") == nullptr) {
+            CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+                CpuLinearAlgebraBackend::Origin::kBundledOpenBlasLp64, dpotrf_work, dpocon_work,
+                dsyevd_work, dtrsm, dgemm, set_threads);
+            if (backend_self_test(created)) {
+              /* Retain the adapter and exact provider handles for process life. */
+              state.backend = created;
+              state.status = XTBLOOM_STATUS_SUCCESS;
+              return state;
+            }
+          }
+        }
+        static_cast<void>(dlclose(handle));
+      }
+      state.message =
+          "private Pyodide OpenBLAS provider or LAPACKE adapter is missing or failed "
+          "verification";
+      return state;
+    }
+#endif
 #ifdef XTBLOOM_CONFIGURED_WHEEL_OPENBLAS
     /* Python wheels carry one hash-verified scipy-openblas32 provider cohort
      * as a private sibling. Linux loads an auditwheel-repaired shim in a fresh

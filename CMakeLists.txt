@@ -344,16 +344,17 @@ function(xtbloom_validate_cpu_linalg_runtime candidate result symbol_prefix_resu
   endif()
 endfunction()
 
-# Native wheels carry a reviewed private OpenBLAS cohort rather than requiring
-# end users to install scipy-openblas32. The provider package exists only in
-# the isolated PEP 517 build environment; this configure-time step verifies
-# every redistributed byte without importing its side-effectful Python module.
-# Linux uses a private shim so auditwheel follows and collision-renames the ELF
-# dependency closure. macOS and Windows copy the already self-contained native
-# cohort under xTBloom-private names and load it only by absolute sibling path.
+# Wheels carry a reviewed private OpenBLAS cohort rather than requiring an end
+# user provider. Native builds use scipy-openblas32 from the isolated PEP 517
+# environment. Pyodide uses the exact official 314.0.4 WebAssembly artifact and
+# a narrow LAPACKE adapter; its retained recipe and libf2c source closure are
+# verified before CMake accepts the binary. Linux uses a private shim so
+# auditwheel follows and collision-renames the ELF dependency closure. macOS
+# and Windows copy the already self-contained native cohort under private names.
 set(XTBLOOM_WHEEL_OPENBLAS OFF)
 set(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM OFF)
 set(XTBLOOM_WHEEL_OPENBLAS_DESKTOP OFF)
+set(XTBLOOM_WHEEL_OPENBLAS_PYODIDE OFF)
 if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS AND NOT XTBLOOM_PYTHON_WHEEL)
   message(FATAL_ERROR
     "XTBLOOM_BUNDLE_WHEEL_OPENBLAS requires XTBLOOM_PYTHON_WHEEL=ON")
@@ -366,7 +367,10 @@ if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS)
   endif()
 
   string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" xtbloom_wheel_processor)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(XTBLOOM_WHEEL_OPENBLAS_PLATFORM pyodide)
+    set(XTBLOOM_WHEEL_OPENBLAS_ARCH wasm32)
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(XTBLOOM_WHEEL_OPENBLAS_PLATFORM linux)
     if(xtbloom_wheel_processor MATCHES "^(x86_64|amd64)$")
       set(XTBLOOM_WHEEL_OPENBLAS_ARCH x86_64)
@@ -431,22 +435,38 @@ if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS)
   endif()
 
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
-  set(XTBLOOM_OPENBLAS_PROVENANCE
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/scipy_openblas32_manifest.json")
-  execute_process(
-    COMMAND "${Python3_EXECUTABLE}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/python/ci/resolve-openblas-wheel.py"
-      --manifest "${XTBLOOM_OPENBLAS_PROVENANCE}"
-      --platform "${XTBLOOM_WHEEL_OPENBLAS_PLATFORM}"
-      --architecture "${XTBLOOM_WHEEL_OPENBLAS_ARCH}"
-    RESULT_VARIABLE xtbloom_openblas_resolve_status
-    OUTPUT_VARIABLE xtbloom_openblas_resolve_output
-    ERROR_VARIABLE xtbloom_openblas_resolve_error
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(XTBLOOM_OPENBLAS_PROVENANCE
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/pyodide_openblas_manifest.json")
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/python/ci/resolve-pyodide-openblas.py"
+        --manifest "${XTBLOOM_OPENBLAS_PROVENANCE}"
+        --cache-dir "${CMAKE_CURRENT_SOURCE_DIR}/build/pyodide-openblas-provider"
+        --require-existing
+      RESULT_VARIABLE xtbloom_openblas_resolve_status
+      OUTPUT_VARIABLE xtbloom_openblas_resolve_output
+      ERROR_VARIABLE xtbloom_openblas_resolve_error
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+  else()
+    set(XTBLOOM_OPENBLAS_PROVENANCE
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/scipy_openblas32_manifest.json")
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/python/ci/resolve-openblas-wheel.py"
+        --manifest "${XTBLOOM_OPENBLAS_PROVENANCE}"
+        --platform "${XTBLOOM_WHEEL_OPENBLAS_PLATFORM}"
+        --architecture "${XTBLOOM_WHEEL_OPENBLAS_ARCH}"
+      RESULT_VARIABLE xtbloom_openblas_resolve_status
+      OUTPUT_VARIABLE xtbloom_openblas_resolve_output
+      ERROR_VARIABLE xtbloom_openblas_resolve_error
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+  endif()
   if(NOT xtbloom_openblas_resolve_status EQUAL 0)
     message(FATAL_ERROR
-      "failed to resolve the reviewed scipy-openblas32 build input:\n"
+      "failed to resolve the reviewed wheel OpenBLAS build input:\n"
       "${xtbloom_openblas_resolve_error}")
   endif()
   string(JSON XTBLOOM_WHEEL_OPENBLAS_LIBRARY GET
@@ -455,10 +475,16 @@ if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS)
     "${xtbloom_openblas_resolve_output}" expected_config_prefix)
   string(JSON XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME GET
     "${xtbloom_openblas_resolve_output}" provider_install_name)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    string(JSON XTBLOOM_WHEEL_OPENBLAS_ADAPTER_NAME GET
+      "${xtbloom_openblas_resolve_output}" adapter_install_name)
+  endif()
   get_filename_component(XTBLOOM_WHEEL_OPENBLAS_DIRECTORY
     "${XTBLOOM_WHEEL_OPENBLAS_LIBRARY}" DIRECTORY)
   set(XTBLOOM_WHEEL_OPENBLAS ON)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(XTBLOOM_WHEEL_OPENBLAS_PYODIDE ON)
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM ON)
   else()
     set(XTBLOOM_WHEEL_OPENBLAS_DESKTOP ON)
@@ -669,6 +695,33 @@ if(XTBLOOM_CPU_LINALG_RUNTIME)
   endif()
 endif()
 
+if(XTBLOOM_WHEEL_OPENBLAS_PYODIDE)
+  if(NOT XTBLOOM_WHEEL_OPENBLAS_ADAPTER_NAME STREQUAL
+      "libxtbloom_pyodide_lapacke.so")
+    message(FATAL_ERROR "reviewed Pyodide LAPACKE adapter name differs")
+  endif()
+  add_library(xtbloom_pyodide_lapacke SHARED
+    src/runtime/pyodide_lapacke_lp64_shim.c
+  )
+  target_compile_definitions(xtbloom_pyodide_lapacke PRIVATE
+    "XTBLOOM_PYODIDE_OPENBLAS_FILENAME=\"${XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME}\""
+  )
+  # The exported dependency anchor preserves a unique dylink NEEDED edge so
+  # pyodide auditwheel can vendor the reviewed provider. Actual dispatch uses
+  # dlsym on the exact absolute provider path supplied by the wheel loader.
+  target_link_libraries(xtbloom_pyodide_lapacke PRIVATE
+    "${XTBLOOM_WHEEL_OPENBLAS_LIBRARY}"
+  )
+  set_target_properties(xtbloom_pyodide_lapacke PROPERTIES
+    OUTPUT_NAME xtbloom_pyodide_lapacke
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    INSTALL_RPATH ""
+  )
+  install(TARGETS xtbloom_pyodide_lapacke
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+endif()
+
 if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
   add_library(xtbloom_openblas_lp64_shim SHARED
     src/runtime/openblas_lp64_shim.c
@@ -857,19 +910,28 @@ if(XTBLOOM_CPU_LINALG_SHIM)
   add_dependencies(xtbloom_gfn2_cpu xtbloom_mkl_lp64_shim)
 endif()
 if(XTBLOOM_WHEEL_OPENBLAS)
-  target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
-    XTBLOOM_CONFIGURED_WHEEL_OPENBLAS=1
-    "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
-  )
-  if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
+  if(XTBLOOM_WHEEL_OPENBLAS_PYODIDE)
     target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
-      "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME=\"${XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME}\""
+      XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS=1
+      "XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
+      "XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_ADAPTER=\"${XTBLOOM_WHEEL_OPENBLAS_ADAPTER_NAME}\""
     )
-  endif()
-  if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
-    add_dependencies(xtbloom_gfn2_cpu xtbloom_openblas_lp64_shim)
-  elseif(APPLE)
-    add_dependencies(xtbloom_gfn2_cpu xtbloom_wheel_openblas_provider)
+    add_dependencies(xtbloom_gfn2_cpu xtbloom_pyodide_lapacke)
+  else()
+    target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
+      XTBLOOM_CONFIGURED_WHEEL_OPENBLAS=1
+      "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
+    )
+    if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
+      target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
+        "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME=\"${XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME}\""
+      )
+    endif()
+    if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
+      add_dependencies(xtbloom_gfn2_cpu xtbloom_openblas_lp64_shim)
+    elseif(APPLE)
+      add_dependencies(xtbloom_gfn2_cpu xtbloom_wheel_openblas_provider)
+    endif()
   endif()
 endif()
 
@@ -1418,6 +1480,46 @@ if(XTBLOOM_BUILD_TESTS)
     COMMAND ${CMAKE_COMMAND} -P
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/version_resolution_test.cmake
   )
+
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The production adapter is platform-neutral C. A tiny fake provider gives
+    # native CI deterministic coverage of LAPACKE argument translation and the
+    # exact-handle CBLAS path without committing any upstream WebAssembly bytes.
+    add_library(xtbloom_pyodide_openblas_fake SHARED
+      tests/pyodide_openblas_fake_provider.c
+    )
+    set_target_properties(xtbloom_pyodide_openblas_fake PROPERTIES
+      OUTPUT_NAME xtbloom_pyodide_openblas_fake
+    )
+    add_executable(xtbloom_pyodide_lapacke_lp64_shim_test
+      src/runtime/pyodide_lapacke_lp64_shim.c
+      tests/pyodide_lapacke_lp64_shim_test.c
+    )
+    target_compile_definitions(xtbloom_pyodide_lapacke_lp64_shim_test PRIVATE
+      XTBLOOM_PYODIDE_OPENBLAS_FILENAME="libxtbloom_pyodide_openblas_fake.so"
+    )
+    target_link_libraries(xtbloom_pyodide_lapacke_lp64_shim_test PRIVATE
+      xtbloom_pyodide_openblas_fake
+      ${CMAKE_DL_LIBS}
+    )
+    add_test(
+      NAME xtbloom.cpu.pyodide_lapacke_lp64_shim
+      COMMAND xtbloom_pyodide_lapacke_lp64_shim_test
+    )
+    set_tests_properties(xtbloom.cpu.pyodide_lapacke_lp64_shim PROPERTIES
+      ENVIRONMENT
+        "XTBLOOM_PYODIDE_OPENBLAS=$<TARGET_FILE:xtbloom_pyodide_openblas_fake>"
+    )
+    add_test(
+      NAME xtbloom.cpu.pyodide_lapacke_lp64_shim_rejects_relative_provider
+      COMMAND xtbloom_pyodide_lapacke_lp64_shim_test
+    )
+    set_tests_properties(
+      xtbloom.cpu.pyodide_lapacke_lp64_shim_rejects_relative_provider
+      PROPERTIES ENVIRONMENT
+        "XTBLOOM_PYODIDE_OPENBLAS=libxtbloom_pyodide_openblas_fake.so;XTBLOOM_EXPECT_PYODIDE_PROVIDER_UNAVAILABLE=1"
+    )
+  endif()
 
   if(XTBLOOM_CPU_LINALG_RUNTIME)
     get_filename_component(XTBLOOM_CPU_LINALG_DIRECTORY
@@ -3562,6 +3664,7 @@ install(FILES
   data/parameters/mctc_manifest.json
   cmake/3rdparty/implib_manifest.json
   cmake/3rdparty/scipy_openblas32_manifest.json
+  cmake/3rdparty/pyodide_openblas_manifest.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/xtbloom/provenance
 )
 install(FILES cmake/3rdparty/torch-stable/manifest.json

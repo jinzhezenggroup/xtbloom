@@ -129,11 +129,15 @@ two wheel cohorts; their payload checks require its absence. Pyodide likewise
 has no LibTorch runtime and contains no Torch extension.
 
 The Pyodide `cp314-pyodide_wasm32` wheel targets Pyodide 314.x and its stable
-`pyemscripten_2026_0_wasm32` ABI, then is smoke-tested as a CI-only artifact.
-PyPI accepts this platform tag, but xTBloom excludes the wheel from the PyPI
-artifact prefix until the Python wheel has a production WebAssembly eigensolver
-path; the existing Web demo uses its separate preloaded Eigen LAPACKE/CBLAS
-side-module design.
+`pyemscripten_2026_0_wasm32` ABI. It carries the reviewed official Pyodide
+OpenBLAS side module under a content-qualified private name plus xTBloom's
+narrow LAPACKE adapter. Release builds repair that dependency with Pyodide's
+supported auditwheel path, then run installed-wheel conformance, invariance,
+finite-difference, failure-isolation, and NumPy/SciPy coexistence tests. The
+wheel is release-eligible and enters the same PyPI artifact prefix as the
+validated native wheels; the existing Web demo continues to use its separate
+preloaded Eigen LAPACKE/CBLAS side-module design.
+
 Eigen is acquired only by Web-enabled CMake configurations from the fixed
 official archive (or `XTBLOOM_WEB_EIGEN_ARCHIVE` for offline builds). The
 repository and sdist retain the provenance manifest and exact legal records,
@@ -167,14 +171,18 @@ provenance and legal records stay distributed. Excluding repository-only files
 does not claim that the corresponding validation passed inside the sdist;
 release evidence remains in the repository and its issue/CI records.
 
-The sdist supports ordinary PEP 517 CPU or CUDA source builds. The project's
-release-wheel orchestration, repair scripts, and locked private-provider setup
-remain checkout-only; official cibuildwheel jobs build from the exact release
-tag rather than using the sdist as their input. The one `python/ci` helper kept
-in the archive is the OpenBLAS manifest resolver that CMake invokes directly
-when a source build explicitly requests that reviewed provider input.
-Repository tests and the Web demo are likewise checkout-only. A native CMake
-consumer unpacking the sdist must configure with
+The sdist supports ordinary PEP 517 CPU or CUDA source builds. It retains the
+Pyodide OpenBLAS provenance manifest, exact 13-file recipe source closure, and
+five corresponding legal texts as auditable source material. The Pyodide
+resolver, downloaded ZIP and provider binary, repair scripts, and installed-
+wheel test orchestration remain release-tag checkout or wheel-only; ordinary
+sdist builds do not enable Pyodide provider bundling. Official cibuildwheel
+jobs therefore build from the exact release tag rather than using the sdist as
+their input. The one `python/ci` helper kept in the archive is the desktop/Linux
+OpenBLAS manifest resolver that CMake invokes directly when a source build
+explicitly requests that reviewed provider input. Repository tests and the Web
+demo are likewise checkout-only. A native CMake consumer unpacking the sdist
+must configure with
 `-DXTBLOOM_BUILD_TESTS=OFF`; ordinary PEP 517 builds set that option already.
 
 Build and inspect a source archive with:
