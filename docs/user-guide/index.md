@@ -9,15 +9,21 @@ handling through one stable C ABI.
 
 ### Python
 
-xTBloom is not yet published on PyPI. Install a source checkout as a
-non-editable package:
+xTBloom is not yet published on PyPI. Sync a source checkout as a locked,
+non-editable uv project environment:
 
 ```console
-XTBLOOM_ENABLE_CUDA=OFF python -m pip install .
+XTBLOOM_ENABLE_CUDA=OFF uv sync --locked --no-editable --no-default-groups \
+  --reinstall-package xtbloom
 ```
 
 Set `XTBLOOM_ENABLE_CUDA=ON` for a CUDA build with an available toolkit.
-Python 3.10 or newer is supported. See the
+Use `uv run --no-sync` for commands in the synced environment, or activate
+`.venv` directly. Ordinary source builds auto-discover a compatible system
+LP64 LAPACKE+CBLAS runtime; otherwise set
+`CMAKE_ARGS="-DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/provider.so"` on the
+sync command. Official Linux wheels contain their reviewed private OpenBLAS
+provider. Python 3.10 or newer is supported. See the
 [Python guide](python.md) for package extras, native-library discovery, and the
 complete API.
 

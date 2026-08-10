@@ -24,6 +24,8 @@ option(XTBLOOM_BUILD_WEB_DEMO
   OFF)
 option(XTBLOOM_PYTHON_WHEEL
   "Install an unversioned single-copy shared library for a Python wheel" OFF)
+option(XTBLOOM_BUNDLE_WHEEL_OPENBLAS
+  "Build the private OpenBLAS shim whose dependencies auditwheel vendors" OFF)
 set(XTBLOOM_CPU_LINALG_LIBRARY "" CACHE FILEPATH
   "Optional monolithic shared LP64 LAPACKE+CBLAS runtime with local thread control for the CPU eigensolver (e.g. libscipy_openblas.so or libmkl_rt.so). When unset, compatible runtimes are auto-discovered with find_package(BLAS/LAPACK)."
 )
@@ -162,6 +164,84 @@ function(xtbloom_validate_cpu_linalg_runtime candidate result symbol_prefix_resu
   endif()
 endfunction()
 
+# Linux wheels carry a reviewed private OpenBLAS cohort rather than requiring
+# end users to install scipy-openblas32. The provider package exists only in
+# the isolated PEP 517 build environment; this configure-time step verifies
+# every byte without importing its side-effectful Python module. A private shim
+# gives auditwheel a DT_NEEDED edge from which it vendors and collision-renames
+# the complete provider dependency closure.
+set(XTBLOOM_WHEEL_OPENBLAS OFF)
+if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS AND NOT XTBLOOM_PYTHON_WHEEL)
+  message(FATAL_ERROR
+    "XTBLOOM_BUNDLE_WHEEL_OPENBLAS requires XTBLOOM_PYTHON_WHEEL=ON")
+endif()
+if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" xtbloom_wheel_processor)
+  if(xtbloom_wheel_processor MATCHES "^(x86_64|amd64)$")
+    set(XTBLOOM_WHEEL_OPENBLAS_ARCH x86_64)
+  elseif(xtbloom_wheel_processor MATCHES "^(aarch64|arm64)$")
+    set(XTBLOOM_WHEEL_OPENBLAS_ARCH aarch64)
+  else()
+    message(FATAL_ERROR
+      "Python wheels support private OpenBLAS only on Linux x86_64/aarch64, not "
+      "'${CMAKE_SYSTEM_PROCESSOR}'")
+  endif()
+  if(XTBLOOM_CPU_LINALG_LIBRARY)
+    message(FATAL_ERROR
+      "XTBLOOM_CPU_LINALG_LIBRARY cannot override the reviewed private provider "
+      "in XTBLOOM_PYTHON_WHEEL builds")
+  endif()
+
+  # dlmopen is part of the wheel's host-isolation contract, not an optional
+  # optimization. Prove both namespace creation and dlinfo inspection before
+  # accepting the build input.
+  cmake_push_check_state(RESET)
+  set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
+  check_cxx_source_compiles([=[
+    #ifndef _GNU_SOURCE
+    #define _GNU_SOURCE 1
+    #endif
+    #include <dlfcn.h>
+    #include <link.h>
+    int main() {
+      void* handle = dlmopen(LM_ID_NEWLM, nullptr, RTLD_NOW | RTLD_LOCAL);
+      Lmid_t namespace_id = LM_ID_BASE;
+      return handle == nullptr ? 0 : dlinfo(handle, RTLD_DI_LMID, &namespace_id);
+    }
+  ]=] XTBLOOM_HAS_DLMOPEN_NAMESPACE)
+  cmake_pop_check_state()
+  if(NOT XTBLOOM_HAS_DLMOPEN_NAMESPACE)
+    message(FATAL_ERROR
+      "XTBLOOM_PYTHON_WHEEL requires glibc dlmopen/dlinfo namespace isolation")
+  endif()
+
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  set(XTBLOOM_OPENBLAS_PROVENANCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/scipy_openblas32_manifest.json")
+  execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/python/ci/resolve-openblas-wheel.py"
+      --manifest "${XTBLOOM_OPENBLAS_PROVENANCE}"
+      --architecture "${XTBLOOM_WHEEL_OPENBLAS_ARCH}"
+    RESULT_VARIABLE xtbloom_openblas_resolve_status
+    OUTPUT_VARIABLE xtbloom_openblas_resolve_output
+    ERROR_VARIABLE xtbloom_openblas_resolve_error
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  if(NOT xtbloom_openblas_resolve_status EQUAL 0)
+    message(FATAL_ERROR
+      "failed to resolve the reviewed scipy-openblas32 build input:\n"
+      "${xtbloom_openblas_resolve_error}")
+  endif()
+  string(JSON XTBLOOM_WHEEL_OPENBLAS_LIBRARY GET
+    "${xtbloom_openblas_resolve_output}" provider_path)
+  get_filename_component(XTBLOOM_WHEEL_OPENBLAS_DIRECTORY
+    "${XTBLOOM_WHEEL_OPENBLAS_LIBRARY}" DIRECTORY)
+  set(XTBLOOM_WHEEL_OPENBLAS ON)
+  message(STATUS
+    "xtbloom wheel OpenBLAS build input: ${XTBLOOM_WHEEL_OPENBLAS_LIBRARY}")
+endif()
+
 # Bake a verified absolute path into the library so a non-system LP64 runtime
 # can be found without LD_LIBRARY_PATH. This remains a lazy dlopen: libxtbloom
 # never gains a hard DT_NEEDED dependency that would make the CUDA backend
@@ -188,7 +268,7 @@ if(XTBLOOM_CONFIGURED_CPU_LINALG_LIBRARY)
   endif()
   set(XTBLOOM_CPU_LINALG_RUNTIME "${XTBLOOM_CONFIGURED_CPU_LINALG_LIBRARY}")
   set(XTBLOOM_CPU_LINALG_SYMBOL_PREFIX "${configured_runtime_symbol_prefix}")
-else()
+elseif(NOT XTBLOOM_WHEEL_OPENBLAS)
   if(DEFINED BLA_SIZEOF_INTEGER)
     set(XTBLOOM_SAVED_BLA_SIZEOF_INTEGER "${BLA_SIZEOF_INTEGER}")
     set(XTBLOOM_HAD_BLA_SIZEOF_INTEGER ON)
@@ -363,6 +443,31 @@ if(XTBLOOM_CPU_LINALG_RUNTIME)
   endif()
 endif()
 
+if(XTBLOOM_WHEEL_OPENBLAS)
+  add_library(xtbloom_openblas_lp64_shim SHARED
+    src/runtime/openblas_lp64_shim.c
+  )
+  target_link_libraries(xtbloom_openblas_lp64_shim PRIVATE
+    "${XTBLOOM_WHEEL_OPENBLAS_LIBRARY}"
+  )
+  target_link_options(xtbloom_openblas_lp64_shim PRIVATE
+    "LINKER:--no-as-needed"
+  )
+  set_target_properties(xtbloom_openblas_lp64_shim PROPERTIES
+    OUTPUT_NAME xtbloom_openblas_lp64_shim
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    BUILD_RPATH "${XTBLOOM_WHEEL_OPENBLAS_DIRECTORY}"
+    # repair-wheel.sh supplies the reviewed directory through LD_LIBRARY_PATH;
+    # never record a temporary build-environment path in the unrepaired wheel.
+    INSTALL_RPATH ""
+  )
+  install(TARGETS xtbloom_openblas_lp64_shim
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+endif()
+
 add_library(xtbloom_gfn2_cpu OBJECT
   src/backends/common/gfn2_plan_schema.cpp
   src/model/gfn2/aes2.cpp
@@ -413,6 +518,12 @@ if(XTBLOOM_CPU_LINALG_SHIM)
     XTBLOOM_CONFIGURED_CPU_LINALG_SHIM=1
   )
   add_dependencies(xtbloom_gfn2_cpu xtbloom_mkl_lp64_shim)
+endif()
+if(XTBLOOM_WHEEL_OPENBLAS)
+  target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
+    XTBLOOM_CONFIGURED_WHEEL_OPENBLAS=1
+  )
+  add_dependencies(xtbloom_gfn2_cpu xtbloom_openblas_lp64_shim)
 endif()
 
 add_library(xtbloom
@@ -2667,9 +2778,50 @@ if(XTBLOOM_BUILD_TESTS)
           "MKL_THREADING_LAYER=SEQUENTIAL;LD_LIBRARY_PATH=${CMAKE_CURRENT_BINARY_DIR}/mkl-decoy:${XTBLOOM_CPU_LINALG_DIRECTORY}"
       )
     endif()
-  else()
+  elseif(NOT XTBLOOM_WHEEL_OPENBLAS)
     message(STATUS
       "xtbloom eigensolver test: disabled (set XTBLOOM_CPU_LINALG_LIBRARY or provide a system BLAS to enable)"
+    )
+  endif()
+
+  if(XTBLOOM_WHEEL_OPENBLAS)
+    # Prove the wheel provider is loaded through the sibling shim in a fresh
+    # link-map namespace. The process-global decoy deliberately has the
+    # provider's original SONAME but none of its symbols; successful inference
+    # therefore proves base-namespace interposition cannot satisfy the shim.
+    add_library(xtbloom_openblas_decoy SHARED
+      src/runtime/openblas_lp64_shim.c
+    )
+    set_target_properties(xtbloom_openblas_decoy PROPERTIES
+      OUTPUT_NAME scipy_openblas
+      LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/openblas-decoy"
+    )
+    add_executable(xtbloom_wheel_openblas_isolation_test
+      tests/cpu_linalg_isolation_test.cpp
+    )
+    target_link_libraries(xtbloom_wheel_openblas_isolation_test PRIVATE
+      xtbloom_gfn2_cpu
+      ${CMAKE_DL_LIBS}
+    )
+    target_compile_features(
+      xtbloom_wheel_openblas_isolation_test PRIVATE cxx_std_17
+    )
+    target_compile_definitions(
+      xtbloom_wheel_openblas_isolation_test
+      PRIVATE XTBLOOM_TEST_HAS_WHEEL_OPENBLAS=1
+    )
+    add_dependencies(
+      xtbloom_wheel_openblas_isolation_test
+      xtbloom_openblas_lp64_shim
+      xtbloom_openblas_decoy
+    )
+    add_test(
+      NAME xtbloom.cpu.wheel_openblas_isolation
+      COMMAND xtbloom_wheel_openblas_isolation_test
+    )
+    set_tests_properties(xtbloom.cpu.wheel_openblas_isolation PROPERTIES
+      ENVIRONMENT
+        "XTBLOOM_TEST_OPENBLAS_DECOY=$<TARGET_FILE:xtbloom_openblas_decoy>"
     )
   endif()
 
@@ -3011,6 +3163,7 @@ install(FILES
   data/parameters/d4_manifest.json
   data/parameters/mctc_manifest.json
   cmake/3rdparty/implib_manifest.json
+  cmake/3rdparty/scipy_openblas32_manifest.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/xtbloom/provenance
 )
 install(FILES data/parameters/d4.NOTICE

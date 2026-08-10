@@ -222,8 +222,12 @@ int run_correctness_with_backend() {
   const xtbloom_status_t status = xtbloom::detail::gfn2::make_mkl_rt_lp64_backend(backend, error);
   CHECK(status == XTBLOOM_STATUS_SUCCESS);
   CHECK(backend.ready());
+#if defined(XTBLOOM_TEST_HAS_WHEEL_OPENBLAS)
+  CHECK(backend.production_openblas_isolated());
+#else
   /* This test is registered only when the configure-time MKL shim exists. */
   CHECK(backend.production_mkl_isolated());
+#endif
   const int solve_status = run_literal_generalized_eigenproblem(backend, error);
   CHECK(solve_status == 0);
   return 0;
@@ -315,18 +319,28 @@ int run_coexistence_host_ilp64_after_xtbloom() {
  * namespace, and the xtbloom path never loads libmkl_rt at all. */
 int run_no_global_scope_exposure() {
 #if !defined(_WIN32)
+#if defined(XTBLOOM_TEST_HAS_WHEEL_OPENBLAS)
+  const char* decoy_path = std::getenv("XTBLOOM_TEST_OPENBLAS_DECOY");
+  CHECK(decoy_path != nullptr);
+  void* decoy = dlopen(decoy_path, RTLD_NOW | RTLD_GLOBAL);
+  CHECK(decoy != nullptr);
+#endif
   void* mkl_global = dlsym(RTLD_DEFAULT, "MKL_Set_Interface_Layer");
   void* lapacke_global = dlsym(RTLD_DEFAULT, "LAPACKE_dpotrf_work");
+  void* scipy_lapacke_global = dlsym(RTLD_DEFAULT, "scipy_LAPACKE_dpotrf_work");
   CHECK(mkl_global == nullptr);
   CHECK(lapacke_global == nullptr);
+  CHECK(scipy_lapacke_global == nullptr);
 #endif
   const int correct = run_correctness_with_backend();
   CHECK(correct == 0);
 #if !defined(_WIN32)
   mkl_global = dlsym(RTLD_DEFAULT, "MKL_Set_Interface_Layer");
   lapacke_global = dlsym(RTLD_DEFAULT, "LAPACKE_dpotrf_work");
+  scipy_lapacke_global = dlsym(RTLD_DEFAULT, "scipy_LAPACKE_dpotrf_work");
   CHECK(mkl_global == nullptr);
   CHECK(lapacke_global == nullptr);
+  CHECK(scipy_lapacke_global == nullptr);
 #endif
   return 0;
 }
@@ -349,7 +363,11 @@ int run_expect_missing_shim() {
   const xtbloom_status_t status = xtbloom::detail::gfn2::make_mkl_rt_lp64_backend(backend, error);
   CHECK(status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE);
   CHECK(!backend.ready());
+#if defined(XTBLOOM_TEST_HAS_WHEEL_OPENBLAS)
+  CHECK(error.find("private wheel OpenBLAS provider") != std::string::npos);
+#else
   CHECK(error.find("host-isolated MKL provider shim") != std::string::npos);
+#endif
   return 0;
 }
 

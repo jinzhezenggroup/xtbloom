@@ -33,15 +33,30 @@ class LicenseArchiveTests(unittest.TestCase):
             for name in sorted(names):
                 if name.endswith("/provenance/implib_manifest.json"):
                     payload = (REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH).read_bytes()
+                elif name.endswith("/provenance/scipy_openblas32_manifest.json"):
+                    payload = (REPOSITORY / CHECKER.OPENBLAS_MANIFEST_PATH).read_bytes()
+                elif name.endswith("scipy-openblas32-0.3.34.0.0.txt"):
+                    payload = (REPOSITORY / CHECKER.OPENBLAS_LICENSE).read_bytes()
                 else:
                     payload = b"test\n"
                 archive.writestr(name, payload)
 
     def _valid_wheel_names(self) -> set[str]:
-        return {
+        names = {
             f"xtbloom-0.0.0.dist-info/licenses/{suffix}"
             for suffix in CHECKER.COMMON_ARCHIVE_SUFFIXES
         } | {f"xtbloom/{suffix}" for suffix in CHECKER.WHEEL_ARCHIVE_SUFFIXES}
+        manifest = CHECKER.json.loads(
+            (REPOSITORY / CHECKER.OPENBLAS_MANIFEST_PATH).read_text(encoding="utf-8")
+        )
+        names.add("xtbloom/lib/libxtbloom_openblas_lp64_shim.so")
+        for record in manifest["architectures"]["x86_64"]["files"]:
+            source_name = Path(record["source"]).name
+            names.add(
+                "xtbloom.libs/"
+                + CHECKER._auditwheel_name(source_name, record["sha256"])
+            )
+        return names
 
     def test_project_license_cannot_be_satisfied_by_third_party_filename(self) -> None:
         """Require the project license at its exact archive location."""
@@ -49,7 +64,7 @@ class LicenseArchiveTests(unittest.TestCase):
         names.remove("xtbloom-0.0.0.dist-info/licenses/LICENSE")
         names.add("xtbloom/share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test.whl"
+            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "LICENSE"):
                 CHECKER.check_archive(wheel)
@@ -60,7 +75,7 @@ class LicenseArchiveTests(unittest.TestCase):
         missing = "xtbloom/share/licenses/xtbloom/provenance/mctc_manifest.json"
         names.remove(missing)
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test.whl"
+            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "mctc_manifest"):
                 CHECKER.check_archive(wheel)
@@ -71,7 +86,7 @@ class LicenseArchiveTests(unittest.TestCase):
         missing = "xtbloom/share/licenses/xtbloom/provenance/implib_manifest.json"
         names.remove(missing)
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test.whl"
+            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "implib_manifest"):
                 CHECKER.check_archive(wheel)
@@ -83,7 +98,7 @@ class LicenseArchiveTests(unittest.TestCase):
         names.remove(missing)
         names.remove("xtbloom/share/licenses/xtbloom/CUDA_MKL_LINKING_EXCEPTION")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test.whl"
+            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(
                 CHECKER.LicenseCheckError, "CUDA_MKL_LINKING_EXCEPTION"
@@ -99,7 +114,7 @@ class LicenseArchiveTests(unittest.TestCase):
             "xtbloom/share/licenses/xtbloom/third-party/array-api-compat-MIT.txt"
         )
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test.whl"
+            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(
                 CHECKER.LicenseCheckError, "array-api-compat-MIT"
@@ -111,10 +126,59 @@ class LicenseArchiveTests(unittest.TestCase):
         names = self._valid_wheel_names()
         names.add("xtbloom/lib/libcudart.so.12")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test.whl"
+            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "libcudart"):
                 CHECKER.check_archive(wheel)
+
+    def test_wheel_requires_complete_private_openblas_cohort(self) -> None:
+        """Reject a wheel that loses one auditwheel-vendored support DSO."""
+        names = self._valid_wheel_names()
+        missing = next(name for name in names if "libquadmath" in name)
+        names.remove(missing)
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
+            self._write_wheel(wheel, names)
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "cohort differs"):
+                CHECKER.check_archive(wheel)
+
+    def test_wheel_rejects_unreviewed_openblas_binary(self) -> None:
+        """Require dependency re-audit before the vendored ELF set expands."""
+        names = self._valid_wheel_names()
+        names.add("xtbloom.libs/libgfortran-unreviewed.so.5")
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test_x86_64.whl"
+            self._write_wheel(wheel, names)
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "cohort differs"):
+                CHECKER.check_archive(wheel)
+
+
+class OpenBlasProvenanceTests(unittest.TestCase):
+    """Pin every provenance locator for the redistributed wheel inputs."""
+
+    def setUp(self) -> None:
+        """Load a fresh manifest for each negative mutation."""
+        self.manifest = CHECKER.json.loads(
+            (REPOSITORY / CHECKER.OPENBLAS_MANIFEST_PATH).read_text(encoding="utf-8")
+        )
+
+    def test_current_openblas_manifest_is_accepted(self) -> None:
+        """Accept the exact reviewed repositories, wheels, and ELF cohort."""
+        CHECKER._check_openblas_manifest(self.manifest)
+
+    def test_openblas_manifest_rejects_changed_repository(self) -> None:
+        """Do not let a provenance URL drift while payload checks stay green."""
+        self.manifest["source"]["repository"] = "https://example.invalid/openblas"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "repository"):
+            CHECKER._check_openblas_manifest(self.manifest)
+
+    def test_openblas_manifest_rejects_changed_wheel_url(self) -> None:
+        """Keep the immutable PyPI artifact locator tied to reviewed bytes."""
+        self.manifest["architectures"]["x86_64"]["wheel"]["url"] = (
+            "https://example.invalid/scipy-openblas32.whl"
+        )
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "x86_64 wheel"):
+            CHECKER._check_openblas_manifest(self.manifest)
 
 
 class WebSiteLicenseTests(unittest.TestCase):
@@ -213,11 +277,13 @@ class DependencyPolicyTests(unittest.TestCase):
         metadata = CHECKER.tomllib.loads(
             (REPOSITORY / "pyproject.toml").read_text(encoding="utf-8")
         )
+        self.metadata = metadata
         self.project = metadata["project"]
 
     def test_current_dependency_policy_is_accepted(self) -> None:
         """Accept the repository's reviewed dependency policy."""
         CHECKER._require_dependency_policy(self.project)
+        CHECKER._require_openblas_build_policy(self.metadata)
 
     def test_array_api_compat_must_use_reviewed_range(self) -> None:
         """Require the provenance-reviewed runtime dependency range."""
@@ -245,29 +311,31 @@ class DependencyPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "confined to"):
             CHECKER._require_dependency_policy(project)
 
-    def test_openblas_must_cover_both_linux_architectures(self) -> None:
-        """Require the reviewed OpenBLAS wheel architecture selectors."""
+    def test_openblas_cannot_be_a_runtime_dependency(self) -> None:
+        """Reject the upstream build artifact from published requirements."""
         project = copy.deepcopy(self.project)
-        project["dependencies"] = [
-            requirement.replace(" or platform_machine == 'aarch64'", "")
-            if requirement.startswith("scipy-openblas32")
-            else requirement
-            for requirement in project["dependencies"]
-        ]
-        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "x86_64 and aarch64"):
+        project["dependencies"].append(
+            "scipy-openblas32==0.3.34.0.0; sys_platform == 'linux'"
+        )
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "must not be a runtime"):
             CHECKER._require_dependency_policy(project)
 
-    def test_openblas_must_use_reviewed_exact_version(self) -> None:
-        """Require the exact scipy-openblas32 ABI reviewed for runtime loading."""
-        project = copy.deepcopy(self.project)
-        project["dependencies"] = [
-            requirement.replace("==0.3.34.0.0", ">=0.3.34.0.0")
-            if requirement.startswith("scipy-openblas32")
-            else requirement
-            for requirement in project["dependencies"]
-        ]
-        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed exact"):
-            CHECKER._require_dependency_policy(project)
+    def test_openblas_build_input_must_use_reviewed_exact_version(self) -> None:
+        """Require the exact provider ABI in both build-only declarations."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["dependency-groups"]["wheel-build"][0] = metadata["dependency-groups"][
+            "wheel-build"
+        ][0].replace("==0.3.34.0.0", ">=0.3.34.0.0")
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed"):
+            CHECKER._require_openblas_build_policy(metadata)
+
+    def test_openblas_build_input_must_be_wheel_only(self) -> None:
+        """Reject a build override that would also install the provider for sdists."""
+        metadata = copy.deepcopy(self.metadata)
+        override = metadata["tool"]["scikit-build"]["overrides"][0]
+        override["if"]["state"] = ".*"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "confined"):
+            CHECKER._require_openblas_build_policy(metadata)
 
     def test_cuda_extra_must_be_complete(self) -> None:
         """Require the complete reviewed CUDA provider set."""

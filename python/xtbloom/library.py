@@ -446,10 +446,12 @@ def _runtime_search_dirs() -> list[Path]:
 
     The CUDA host-API shims and CPU eigensolver resolve their providers by
     SONAME. Those providers live in optional ``mkl``/``nvidia-*`` packages, an
-    installed CUDA toolkit, or the ``scipy-openblas*`` PyPI wheels (xTBloom's
-    Linux dependency is the LP64 ``scipy-openblas32`` build). Collecting them lets
-    the package register those SONAMEs before libxtbloom is loaded without
-    forcing users to set ``LD_LIBRARY_PATH`` (or ``PATH`` on Windows).
+    installed CUDA toolkit. Linux wheels carry their CPU OpenBLAS provider in a
+    private auditwheel-managed dependency closure, while native installs let
+    the C++ runtime discover a compatible system OpenBLAS directly. Collecting
+    the remaining provider locations lets the package register their SONAMEs
+    before libxtbloom is loaded without forcing users to set ``LD_LIBRARY_PATH``
+    (or ``PATH`` on Windows).
     """
     dirs: list[Path] = []
 
@@ -490,12 +492,6 @@ def _runtime_search_dirs() -> list[Path]:
             for prefix_lib in (base.parent.parent, base.parent.parent.parent)
             if prefix_lib.name == "lib" and prefix_lib.is_dir()
         )
-        # scipy-openblas32 (LP64) / scipy-openblas64 (ILP64) install their
-        # prefixed runtime under <site-packages>/scipy_openblas{32,64}/lib.
-        for openblas_style in ("scipy_openblas32", "scipy_openblas64"):
-            openblas_lib = base / openblas_style / "lib"
-            if openblas_lib.is_dir():
-                dirs.append(openblas_lib)
         nvidia_root = base / "nvidia"
         if nvidia_root.is_dir():
             dirs.extend(
@@ -530,17 +526,6 @@ _RUNTIME_LIBRARY_GROUPS = (
     ("libcusolver.so.11",),
     # MKL changes its SONAME between releases; load exactly one runtime.
     ("libmkl_rt.so.4", "libmkl_rt.so.3", "libmkl_rt.so.2", "libmkl_rt.so"),
-    # OpenBLAS is xTBloom's default LP64 BLAS on supported Linux platforms
-    # (the scipy-openblas32 wheel ships libscipy_openblas.so with scipy_-prefixed
-    # symbols). Preload at most one instance by SONAME so the eigensolver's
-    # by-name dlopen reuses it instead of loading a second, conflicting BLAS.
-    (
-        "libscipy_openblas.so",
-        "libscipy_openblas32_.so",
-        "libopenblas.so.0",
-        "libopenblas.so",
-        "libopenblas.so.3",
-    ),
 )
 
 

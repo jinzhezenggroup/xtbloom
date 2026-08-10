@@ -2239,7 +2239,6 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 
 [package.optional-dependencies]
@@ -2274,6 +2273,9 @@ typechecking = [
     { name = "ase" },
     { name = "dpdata" },
 ]
+wheel-build = [
+    { name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -2290,7 +2292,6 @@ requires-dist = [
     { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux' and extra == 'cuda12') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda12')", specifier = ">=12.9.86" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7" },
     { name = "pytest-cov", marker = "extra == 'test'" },
-    { name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==0.3.34.0.0" },
 ]
 provides-extras = ["ase", "dpdata", "cuda12", "test"]
 
@@ -2301,3 +2302,4 @@ typechecking = [
     { name = "ase" },
     { name = "dpdata" },
 ]
+wheel-build = [{ name = "scipy-openblas32", marker = "(platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')", specifier = "==0.3.34.0.0" }]
