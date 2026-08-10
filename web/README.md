@@ -55,6 +55,39 @@ The deployed build is wasm32 so it works without browser Memory64 support. CI
 also builds wasm64 and compares its public results with wasm32 as a
 pointer-width and numerical parity gate; wasm64 is not deployed.
 
+## Production deployments
+
+The `wasm-web-pages` workflow deploys the same validated wasm32 artifact to
+both GitHub Pages and Cloudflare Pages after a push to `main`. Pull requests
+build the wasm32/wasm64 sites and run the complete parity, scientific, and
+legal checks, but neither production deployment job runs on a pull request.
+
+Cloudflare uses a pre-existing **Direct Upload** Pages project. Create the
+GitHub `cloudflare-pages` environment, restrict its deployment branches to
+`main`, and configure:
+
+- environment secret `CLOUDFLARE_API_TOKEN`: a custom Cloudflare token limited
+  to `Account / Cloudflare Pages / Edit` for the target account;
+- environment variable `CLOUDFLARE_ACCOUNT_ID`: the target account ID; and
+- environment variable `CLOUDFLARE_PROJECT_NAME`: the exact Direct Upload
+  project name.
+
+Set the Cloudflare project's production branch to `main` when creating it. The
+deployment action requires that the project and GitHub environment already
+exist; it does not create them. The built-in `GITHUB_TOKEN` needs no manual
+secret and receives only `contents: read` plus `deployments: write`, which the
+action uses to attach the Cloudflare URL to a GitHub Deployment. No pull-request
+permission is granted because Cloudflare deployment runs only on `main`.
+
+The requested Marketplace action is a maintained third-party project rather
+than an official Cloudflare action. The workflow pins its signed v3.5.0 commit
+and an exact Wrangler v3 release. Re-audit both pins before upgrading them.
+
+Attaching a custom domain is a separate Cloudflare Pages configuration step.
+Add the hostname through the project's **Custom domains** screen before
+changing DNS; pointing a CNAME at Pages without first associating the hostname
+can leave the site unavailable.
+
 ## Local build
 
 Use the Emscripten version pinned in [`.github/workflows/pages.yml`](../.github/workflows/pages.yml):

@@ -1,4 +1,5 @@
-# Builds the xtbloom WASM web demo and publishes it to GitHub Pages.
+# Builds the xtbloom WASM web demo and publishes it to GitHub Pages and
+# Cloudflare Pages.
 #
 # The artifact is a fully client-side GFN2-xTB single-point + geometry
 # optimization page: a single-threaded wasm32 module (so no COOP/COEP headers
@@ -282,3 +283,38 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  deploy-cloudflare:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    environment:
+      name: cloudflare-pages
+      url: ${{ steps.deployment.outputs.url }}
+    steps:
+      # Keep repository code outside the credential-bearing job. This restores
+      # the immutable wasm32 artifact whose matching copy passed the validate
+      # job's dual-width scientific parity gate.
+      - name: Restore validated wasm32 site
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: xtbloom-web-wasm32
+          path: build/wasm32-web/web/site
+
+      - name: Deploy to Cloudflare Pages
+        id: deployment
+        # Pin both the requested Marketplace action and the exact Wrangler it
+        # downloads instead of trusting a mutable tag or default version.
+        uses: andykenward/github-actions-cloudflare-pages@46d86e1caa6b86365a41d335db65a6936a1beb39 # v3.5.0
+        with:
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          cloudflare-project-name: ${{ vars.CLOUDFLARE_PROJECT_NAME }}
+          directory: build/wasm32-web/web/site
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-environment: cloudflare-pages
+          branch: main
+          wrangler-version: '3.114.17'
