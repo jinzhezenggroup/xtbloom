@@ -1,14 +1,7 @@
 [build-system]
 requires = [
-  "scikit-build-core==1.0.3",
-  "setuptools-scm==10.2.1",
-  "vcs-versioning==2.2.4",
-  "packaging==26.3",
-  "pathspec==1.1.1",
-  "setuptools==84.0.0",
-  "exceptiongroup==1.3.1; python_version < '3.11'",
-  "tomli==2.4.1; python_version < '3.11'",
-  "typing-extensions==4.16.0; python_version < '3.11'",
+  "scikit-build-core>=1.0.3",
+  "setuptools-scm>=10.2.1",
 ]
 build-backend = "scikit_build_core.build"
 
@@ -105,7 +98,7 @@ cache-keys = [
 default-groups = ["typechecking"]
 
 [[tool.dynamic-metadata]]
-provider = { path = "python/ci", module = "xtbloom_version_provider" }
+provider = "scikit_build_core.metadata.setuptools_scm"
 
 [tool.setuptools_scm]
 version_scheme = "only-version"
@@ -137,7 +130,6 @@ sdist.include = [
   "cmake/3rdparty/implib_manifest.json",
   "data/parameters/*_manifest.json",
   "data/parameters/manifest.json",
-  "python/ci/xtbloom_version_provider.py",
 ]
 sdist.exclude = [
   # Raw performance evidence is repository-only and hash-pinned in place; it
