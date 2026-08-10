@@ -3651,6 +3651,10 @@ install(FILES LICENSE CUDA_MKL_LINKING_EXCEPTION THIRD_PARTY_NOTICES.md
 )
 install(DIRECTORY LICENSES/
   DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/xtbloom/third-party
+  # Eigen is acquired and compiled only by the browser target. Its retained
+  # legal records belong to the source/sdist and Pages boundaries, not native
+  # SDK installs or Python wheels.
+  PATTERN "eigen" EXCLUDE
 )
 install(FILES
   data/parameters/manifest.json

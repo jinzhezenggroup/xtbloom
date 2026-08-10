@@ -18,10 +18,10 @@ LICENSES/OpenBLAS-0.3.28-BSD-3-Clause.txt -text whitespace=-blank-at-eol,-blank-
 LICENSES/LAPACK-OpenBLAS-0.3.28-BSD-3-Clause.txt -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
 LICENSES/CLAPACK-3.2.1-BSD-3-Clause.txt -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
 LICENSES/libf2c-AT&T-Lucent-Bellcore.txt -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+LICENSES/eigen/** -text
+LICENSES/eigen/** -whitespace
 cmake/3rdparty/implib/** -text
 cmake/3rdparty/torch-stable/include/** -text
 cmake/3rdparty/pyodide-openblas/** -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
-cmake/3rdparty/eigen/** -text
-cmake/3rdparty/eigen/** -whitespace
 
 .git_archival.txt export-subst

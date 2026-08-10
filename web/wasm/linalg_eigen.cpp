@@ -7,9 +7,9 @@
  * ``libscipy_openblas.so``. Eigen supplies the numerical algorithms; these C
  * wrappers preserve only the small ABI surface xTBloom loads.
  *
- * Eigen 5.0.1 is vendored and hash-pinned under cmake/3rdparty/eigen. Its
- * upstream MPL-2.0, BSD, Apache-2.0, and embedded permissive notices are
- * retained with the source tree and the deployed browser artifact.
+ * Web builds obtain the official Eigen 5.0.1 archive through CMake with a
+ * fixed SHA-256. The repository and deployed browser artifact retain the
+ * upstream MPL-2.0, BSD, Apache-2.0, and embedded permissive notices.
  */
 
 #define EIGEN_NO_DEBUG

@@ -137,6 +137,11 @@ finite-difference, failure-isolation, and NumPy/SciPy coexistence tests. The
 wheel is release-eligible and enters the same PyPI artifact prefix as the
 validated native wheels; the existing Web demo continues to use its separate
 preloaded Eigen LAPACKE/CBLAS side-module design.
+Eigen is acquired only by Web-enabled CMake configurations from the fixed
+official archive (or `XTBLOOM_WEB_EIGEN_ARCHIVE` for offline builds). The
+repository and sdist retain the provenance manifest and exact legal records,
+but the Eigen archive/header tree is excluded from sdists, native installs, and
+Python wheels.
 Windows/macOS wheels must pass installed GFN2 inference, missing-provider,
 concurrency, and host numerical-coexistence tests before being release-eligible.
 
