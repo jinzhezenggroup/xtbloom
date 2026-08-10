@@ -197,11 +197,13 @@ CMAKE_CUDA_COMPILER_LAUNCHER = { env = "XTBLOOM_CUDA_COMPILER_LAUNCHER", default
 # cibuildwheel: build wheels across platforms. The .github/workflows/wheels.yml
 # matrix drives exactly which build each runner produces via CIBW_BUILD and
 # whether XTBLOOM_ENABLE_CUDA is ON (Linux x86_64, CUDA manylinux image) or OFF
-# everywhere else. Linux x86_64 runs the full Python suite; native aarch64
-# runs installed-wheel CPU and Torch inference smoke; Windows and macOS run a
-# real installed-wheel CPU inference through their private provider, while
-# Pyodide runs only its native import/version smoke until a production WASM
-# eigensolver provider exists.
+# everywhere else. Linux x86_64 runs the full Python suite; native aarch64 runs
+# installed-wheel CPU and Torch inference smoke. Windows AMD64 and macOS arm64
+# also run the compiled Torch op against the separately installed official
+# runtime; Windows ARM64 and macOS x86_64 retain CPU-only tests because PyTorch
+# 2.10+ publishes no supported runtime wheels for those architectures. Pyodide
+# runs only its native import/version smoke until a production WASM eigensolver
+# provider exists.
 [tool.cibuildwheel]
 build = ["cp311-*"]
 # Use uv for the isolated build environment (via `build --installer=uv`) and
@@ -247,6 +249,13 @@ before-build = "bash {package}/python/ci/prepare-wheel-build.sh"
 # it defensively while also resolving and vendoring the reviewed private
 # OpenBLAS cohort.
 repair-wheel-command = "bash {package}/python/ci/repair-wheel.sh {dest_dir} {wheel}"
+
+[tool.cibuildwheel.macos]
+# The build-only stub gives the extension the official
+# @rpath/libtorch_cpu.dylib load command. Torch is intentionally absent from
+# the isolated build, so delocate must preserve that external runtime edge
+# rather than trying to vendor it into xTBloom's wheel.
+repair-wheel-command = "delocate-wheel --exclude libtorch_cpu.dylib --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
 
 [tool.ruff]
 # Ruff owns both formatting and import ordering so those policies cannot drift.

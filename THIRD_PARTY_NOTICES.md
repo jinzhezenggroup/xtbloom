@@ -209,15 +209,18 @@ Repository: <https://github.com/pytorch/pytorch>
 
 License: `BSD-3-Clause` (retained by the separately installed distribution).
 
-The required Python CI job installs PyTorch 2.13.0 from PyPI solely to execute
-the public `xtbloom_torch` CPU/autograd tests. The canonical resolution and
-artifact hashes, including PyTorch's separately installed transitive
-dependencies, are recorded in `uv.lock`. PyTorch is imported lazily by the
-optional integration and is not an xTBloom runtime dependency, project extra,
-source-distribution payload, native install artifact, or bundled wheel file.
-The locked Linux resolution also installs NVIDIA CUDA provider packages under
-their vendor terms; those test-environment packages are likewise not
-redistributed in xTBloom artifacts.
+The required Python and wheel CI jobs install PyTorch 2.13.0 from PyPI solely
+to execute the public `xtbloom_torch` CPU/autograd tests on Linux, macOS arm64,
+and Windows AMD64. The canonical resolution and artifact hashes, including
+PyTorch's separately installed transitive dependencies, are recorded in
+`uv.lock`. PyTorch 2.13 publishes no canonical-PyPI runtime wheel for macOS
+x86_64 or Windows ARM64, so those xTBloom wheel jobs require the optional
+extension to be absent instead of accepting an untested binary. PyTorch is
+imported lazily by the optional integration and is not an xTBloom runtime
+dependency, project extra, source-distribution payload, native install
+artifact, or bundled wheel file. The locked Linux resolution also installs
+NVIDIA CUDA provider packages under their vendor terms; those test-environment
+packages are likewise not redistributed in xTBloom artifacts.
 
 ## LibTorch Stable ABI headers (vendored build input)
 
@@ -233,14 +236,17 @@ PyPI `torch 2.12.1` wheel so the extension compiles without downloading torch.
 Every file is pinned by Git blob and SHA-256 in
 `cmake/3rdparty/torch-stable/manifest.json` (tree `e2df0197562bc2b0f55ee910d9899ecaac465e78`), which is
 regenerated only through `tools/torch_stable_vendor.py --check`. The extension
-links a build-time-only stub `libtorch_cpu.so` that carries the real library's
-SONAME and defines exactly the `aoti_torch_*` / `torch_library_impl` /
-`torch_get_mutable_data_ptr` symbols the extension references; the shipped
-binary therefore has a plain `DT_NEEDED libtorch_cpu.so` that binds to the
-torch the end user already imported. The vendored headers and the stub are
-build-time inputs only: they are never copied into native installs or wheels
-(the sdist retains the pinned header tree so offline wheel builds remain
-possible). The extension itself loads on any torch >= 2.10 because
+links a build-time-only platform stub that defines exactly the
+`aoti_torch_*` / `torch_library_impl` / `torch_get_mutable_data_ptr` symbols it
+references. Linux gives the stub the real `libtorch_cpu.so` SONAME; macOS uses
+the official `@rpath/libtorch_cpu.dylib` install name; Windows builds a private
+`torch_cpu.dll` solely so CMake emits the matching architecture-specific
+`torch_cpu.lib`. The shipped extension binds to the Torch runtime the Python
+layer imports first. The vendored headers, generated stub source, stub shared
+library, and Windows import library are build-time inputs only: they are never
+copied into native installs or wheels (the sdist retains only the pinned header
+tree and extension source so offline wheel builds remain possible). The
+extension itself loads on any compatible Torch >= 2.10 because
 `TORCH_TARGET_VERSION` floors the emitted symbol set at 2.10.
 
 ## Matplotlib publication tool

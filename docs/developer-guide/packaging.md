@@ -114,11 +114,19 @@ machine architecture, required symbols/exports, private IDs and dependency
 paths, signatures, and native dependency closure. `libxtbloom` itself must
 remain free of hard OpenBLAS, libgfortran, libquadmath, and shim dependencies.
 
-The compiled Torch extension is currently included only in Linux wheels. Its
-vendored-header/build-stub mechanism relies on ELF `libtorch_cpu.so` SONAME and
-load behavior. macOS needs a matching dylib install-name stub and runtime
-validation; Windows needs a `torch_cpu.lib` import stub plus DLL loading and
-real PyTorch validation. Pyodide has no LibTorch runtime.
+The compiled Torch extension is included in Linux wheels, macOS arm64 wheels,
+and Windows AMD64 wheels. The isolated build uses a non-installed platform stub
+with the real runtime identity: `libtorch_cpu.so`,
+`@rpath/libtorch_cpu.dylib`, or `torch_cpu.dll` plus its generated import
+library. Wheel repair excludes that unresolved external runtime edge, and
+payload/linkage checks prove that no Torch library or stub is bundled. The
+installed-wheel tests import the separately installed Torch 2.13 runtime first,
+then run CPU forward, forces, and autograd through the compiled op.
+
+PyTorch 2.10+ publishes no supported PyPI runtime wheel for macOS x86_64 or
+Windows ARM64. xTBloom therefore does not ship an untested extension in those
+two wheel cohorts; their payload checks require its absence. Pyodide likewise
+has no LibTorch runtime and contains no Torch extension.
 
 The Pyodide `cp314-pyodide_wasm32` wheel targets Pyodide 314.x and its stable
 `pyemscripten_2026_0_wasm32` ABI, then is smoke-tested as a CI-only artifact.
