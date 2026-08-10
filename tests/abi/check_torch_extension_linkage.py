@@ -31,6 +31,8 @@ ELF_NEEDED_EXPECTED = {
     "libstdc++.so.6",
     "libgcc_s.so.1",
     "libc.so.6",
+    # Some manylinux compilers retain a separate edge for standard math calls.
+    "libm.so.6",
     # glibc < 2.34 still carries dlopen/dlsym/dladdr in a separate library.
     "libdl.so.2",
     # manylinux_2_28 keeps std::thread support in a separate system library.

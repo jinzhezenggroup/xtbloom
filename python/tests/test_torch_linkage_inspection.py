@@ -17,6 +17,35 @@ _CHECKER = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_CHECKER)
 
 
+def test_elf_checker_accepts_standard_math_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Allow the separate libm edge retained by hosted manylinux compilers."""
+    library = tmp_path / "libxtbloom_torch_ext.so"
+    outputs = iter(
+        [
+            "\n".join(
+                f" (NEEDED) Shared library: [{name}]"
+                for name in (
+                    "libtorch_cpu.so",
+                    "libstdc++.so.6",
+                    "libgcc_s.so.1",
+                    "libm.so.6",
+                    "libc.so.6",
+                )
+            ),
+            "                 U aoti_torch_get_data_ptr\n",
+        ]
+    )
+    monkeypatch.setattr(_CHECKER, "_run", lambda command: next(outputs))
+    _CHECKER._check_elf(
+        library,
+        {"aoti_torch_get_data_ptr"},
+        readelf="readelf",
+        nm="nm",
+    )
+
+
 def test_stable_symbol_parser_accepts_macho_leading_underscore() -> None:
     """Normalize the underscore that Mach-O tooling adds to C symbol names."""
     assert _CHECKER._stable_symbols(
