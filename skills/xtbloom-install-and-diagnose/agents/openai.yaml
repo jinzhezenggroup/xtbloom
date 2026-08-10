@@ -1,0 +1,4 @@
+interface:
+  display_name: "Install and Diagnose xTBloom"
+  short_description: "Install xTBloom and verify CPU or CUDA runtime"
+  default_prompt: "Use $xtbloom-install-and-diagnose to install xTBloom here and prove which backend actually runs."

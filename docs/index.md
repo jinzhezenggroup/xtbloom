@@ -30,6 +30,8 @@ demo adapter, not the native single-point API.
   complete example, descriptor ownership, CUDA memory, and error handling.
 - **Embedding QM/MM:** [QM/MM guide](user-guide/qmmm.md) for explicit point
   charges and caller-supplied charge response.
+- **Working with AI agents:** [user skills](user-guide/agent-skills.md) for
+  installation, Python, ASE/dpdata, zero-copy ML, C/C++, and QM/MM workflows.
 - **Evaluating performance:** [performance summary](user-guide/performance.md)
   for published results and [benchmark harnesses](../benchmarks/README.md) for
   reproducible methodology.

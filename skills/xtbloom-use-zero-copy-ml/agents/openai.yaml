@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use xTBloom Zero-Copy ML"
+  short_description: "Connect DLPack arrays and PyTorch autograd safely"
+  default_prompt: "Use $xtbloom-use-zero-copy-ml to connect these NumPy, CuPy, JAX, or PyTorch arrays to xTBloom without hidden host copies."
