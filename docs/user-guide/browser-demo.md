@@ -53,6 +53,8 @@ xTBloom's published native benchmark evidence.
 - The deployed engine is the single-threaded CPU backend compiled to wasm32.
 - Its Web-only LP64 LAPACKE/CBLAS side module uses pinned Eigen 5.0.1 while
   preserving the same loader symbols and public xTBloom C ABI as before.
+- Eigen is downloaded only when building the Web demo, with a fixed archive
+  SHA-256; native builds, installs, and Python wheels do not acquire or carry it.
 - The demo supports modern browsers with WebAssembly, module Workers, and
   WebGL for molecular visualization.
 - SMILES-to-3D and L-BFGS optimization are browser-adapter features, not

@@ -134,6 +134,11 @@ PyPI accepts this platform tag, but xTBloom excludes the wheel from the PyPI
 artifact prefix until the Python wheel has a production WebAssembly eigensolver
 path; the existing Web demo uses its separate preloaded Eigen LAPACKE/CBLAS
 side-module design.
+Eigen is acquired only by Web-enabled CMake configurations from the fixed
+official archive (or `XTBLOOM_WEB_EIGEN_ARCHIVE` for offline builds). The
+repository and sdist retain the provenance manifest and exact legal records,
+but the Eigen archive/header tree is excluded from sdists, native installs, and
+Python wheels.
 Windows/macOS wheels must pass installed GFN2 inference, missing-provider,
 concurrency, and host numerical-coexistence tests before being release-eligible.
 
