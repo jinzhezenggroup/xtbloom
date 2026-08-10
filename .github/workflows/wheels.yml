@@ -148,6 +148,9 @@ jobs:
             build: "cp311-macosx_x86_64"
             platform: auto
             archs: auto
+            # xTBloom uses aligned C++17/C allocation APIs introduced in
+            # macOS 10.15. Make the wheel tag reflect that real runtime floor.
+            build_environment: "MACOSX_DEPLOYMENT_TARGET=10.15"
             variant: cpu
             tests: desktop
             compiler_cache: false
@@ -243,7 +246,7 @@ jobs:
           # where actions/cache can save it after the job. The XTBLOOM_*_LAUNCHER
           # variables map to CMAKE_*_COMPILER_LAUNCHER defines in pyproject.toml
           # and enable caching for the C, C++, and nvcc compilations.
-          CIBW_ENVIRONMENT: ${{ matrix.compiler_cache && format('XTBLOOM_ENABLE_CUDA={0} XTBLOOM_BUNDLE_WHEEL_OPENBLAS=ON XTBLOOM_C_COMPILER_LAUNCHER=ccache XTBLOOM_CXX_COMPILER_LAUNCHER=ccache XTBLOOM_CUDA_COMPILER_LAUNCHER=ccache CCACHE_DIR=/host{1}/ccache CCACHE_MAXSIZE=1G', matrix.variant == 'cuda' && 'ON' || 'OFF', runner.temp) || format('XTBLOOM_ENABLE_CUDA=OFF XTBLOOM_BUNDLE_WHEEL_OPENBLAS={0}', matrix.bundle_openblas && 'ON' || 'OFF') }}
+          CIBW_ENVIRONMENT: ${{ matrix.compiler_cache && format('XTBLOOM_ENABLE_CUDA={0} XTBLOOM_BUNDLE_WHEEL_OPENBLAS=ON XTBLOOM_C_COMPILER_LAUNCHER=ccache XTBLOOM_CXX_COMPILER_LAUNCHER=ccache XTBLOOM_CUDA_COMPILER_LAUNCHER=ccache CCACHE_DIR=/host{1}/ccache CCACHE_MAXSIZE=1G {2}', matrix.variant == 'cuda' && 'ON' || 'OFF', runner.temp, matrix.build_environment || '') || format('XTBLOOM_ENABLE_CUDA=OFF XTBLOOM_BUNDLE_WHEEL_OPENBLAS={0} {1}', matrix.bundle_openblas && 'ON' || 'OFF', matrix.build_environment || '') }}
           # Hosted wheel builders have no NVIDIA kernel driver.  Expose the
           # toolkit stub only inside the isolated wheel test so the dynamic
           # driver resolver can exercise its no-device fallback; production
