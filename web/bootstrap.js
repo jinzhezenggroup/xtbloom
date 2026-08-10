@@ -277,29 +277,41 @@ export async function prepareVersionedApplication({
   throw new Error("bootstrap retry loop exhausted");
 }
 
-function bootstrapText(zh, en) {
-  return String(globalThis.navigator?.language || "").toLowerCase().startsWith("zh") ? zh : en;
+function bootstrapText(zh, en, navigatorImpl = globalThis.navigator) {
+  return String(navigatorImpl?.language || "").toLowerCase().startsWith("zh") ? zh : en;
 }
 
-export async function startBrowserApplication({ forceReload = false } = {}) {
+/* Browser globals and the verified-application preparer are injectable so the
+ * page-owned recovery UI can be executed under Node; production callers use
+ * the defaults and retain the same one-generation-at-a-time lifecycle. */
+export async function startBrowserApplication({
+  forceReload = false,
+  documentImpl = globalThis.document,
+  navigatorImpl = globalThis.navigator,
+  prepareApplication = prepareVersionedApplication,
+} = {}) {
   const generation = ++bootstrapGeneration;
   bootstrapController?.abort();
   const controller = new AbortController();
   bootstrapController = controller;
 
-  const overlay = document.getElementById("overlay");
-  const overlayText = document.getElementById("overlay-text");
-  const loadBar = document.getElementById("load-bar-wrap");
-  const errorBox = document.getElementById("error");
-  const retryButton = document.getElementById("retry");
+  const overlay = documentImpl.getElementById("overlay");
+  const overlayText = documentImpl.getElementById("overlay-text");
+  const loadBar = documentImpl.getElementById("load-bar-wrap");
+  const errorBox = documentImpl.getElementById("error");
+  const retryButton = documentImpl.getElementById("retry");
   overlay.hidden = false;
-  overlayText.textContent = bootstrapText("正在检查引擎更新…", "Checking engine updates…");
+  overlayText.textContent = bootstrapText(
+    "正在检查引擎更新…",
+    "Checking engine updates…",
+    navigatorImpl,
+  );
   loadBar.hidden = true;
   errorBox.hidden = true;
   retryButton.hidden = true;
 
   try {
-    await prepareVersionedApplication({
+    await prepareApplication({
       forceReload,
       signal: controller.signal,
       loadApplication: true,
@@ -309,6 +321,7 @@ export async function startBrowserApplication({ forceReload = false } = {}) {
         overlayText.textContent = bootstrapText(
           `网络暂时不可用，${Math.ceil(waitMs / 1000)} 秒后重试（${nextAttempt}/${maxAttempts}）…`,
           `Network temporarily unavailable; retrying in ${Math.ceil(waitMs / 1000)} s (${nextAttempt}/${maxAttempts})…`,
+          navigatorImpl,
         );
       },
     });
@@ -321,10 +334,16 @@ export async function startBrowserApplication({ forceReload = false } = {}) {
     errorBox.textContent = bootstrapText(
       `引擎启动文件加载失败：${String(error?.message || error)}`,
       `Failed to load the engine startup files: ${String(error?.message || error)}`,
+      navigatorImpl,
     );
     errorBox.hidden = false;
     retryButton.hidden = false;
-    retryButton.onclick = () => { void startBrowserApplication({ forceReload: true }); };
+    retryButton.onclick = () => startBrowserApplication({
+      forceReload: true,
+      documentImpl,
+      navigatorImpl,
+      prepareApplication,
+    });
   } finally {
     if (generation === bootstrapGeneration && bootstrapController === controller) {
       bootstrapController = null;

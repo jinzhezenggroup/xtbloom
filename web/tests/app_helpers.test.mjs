@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   prepareVersionedApplication,
+  startBrowserApplication,
   validateBootstrapManifest,
 } from "../bootstrap.js";
 
@@ -16,6 +17,7 @@ import {
   clampProgressPercent,
   comparableContentLength,
   copyFloat64FromMemory,
+  delayWithSignal,
   fetchResourceBatch,
   downloadProgressPercent,
   initializeDownloadedEngineModule,
@@ -47,6 +49,26 @@ class FakeWorker {
   terminate() {
     this.terminated = true;
   }
+}
+
+function createBootstrapDocument() {
+  const elements = new Map([
+    "overlay",
+    "overlay-text",
+    "load-bar-wrap",
+    "error",
+    "retry",
+  ].map((id) => [id, { hidden: false, textContent: "", onclick: null }]));
+  return {
+    documentImpl: {
+      getElementById(id) {
+        const element = elements.get(id);
+        assert.ok(element, `missing bootstrap element ${id}`);
+        return element;
+      },
+    },
+    element: (id) => elements.get(id),
+  };
 }
 
 test("angstrom controls are converted to optimizer bohr", () => {
@@ -188,6 +210,92 @@ test("bootstrap prefetches and verifies one coherent versioned module graph", as
   assert.equal(result.appUrl.searchParams.get("xtbloom_bootstrap"), "manual-2");
   assert.equal(result.helpersUrl.searchParams.get("xtbloom_version"), "c".repeat(64));
   assert.deepEqual(requests.map((request) => request.cache), ["no-cache", "default", "default"]);
+});
+
+test("bootstrap manifest validation rejects unsafe partial metadata", () => {
+  const digest = "a".repeat(64);
+  const valid = {
+    schema_version: 1,
+    version: "b".repeat(64),
+    assets: [
+      { id: "app", path: "app.js", bytes: 10, sha256: digest },
+      { id: "helpers", path: "app_helpers.js", bytes: 20, sha256: digest },
+    ],
+  };
+  assert.throws(() => validateBootstrapManifest(null), /unsupported/);
+  assert.throws(() => validateBootstrapManifest({ ...valid, version: "latest" }), /invalid/);
+  assert.throws(() => validateBootstrapManifest({
+    ...valid,
+    assets: [
+      { ...valid.assets[0], path: "../app.js" },
+      valid.assets[1],
+    ],
+  }), /unsafe path/);
+  assert.throws(() => validateBootstrapManifest({
+    ...valid,
+    assets: [
+      { ...valid.assets[0], bytes: 0 },
+      valid.assets[1],
+    ],
+  }), /invalid size/);
+  assert.throws(() => validateBootstrapManifest({
+    ...valid,
+    assets: [
+      { ...valid.assets[0], sha256: "unverified" },
+      valid.assets[1],
+    ],
+  }), /invalid digest/);
+  assert.throws(() => validateBootstrapManifest({
+    ...valid,
+    assets: [valid.assets[0]],
+  }), /missing helpers/);
+});
+
+test("bootstrap UI exposes retry progress and clears stale recovery state", async () => {
+  const page = createBootstrapDocument();
+  let preparedOptions = null;
+  await startBrowserApplication({
+    documentImpl: page.documentImpl,
+    navigatorImpl: { language: "en-US" },
+    prepareApplication: async (options) => {
+      preparedOptions = options;
+      options.onRetry({ nextAttempt: 2, maxAttempts: 3, waitMs: 500 });
+    },
+  });
+  assert.equal(preparedOptions.forceReload, false);
+  assert.equal(preparedOptions.loadApplication, true);
+  assert.match(preparedOptions.applicationTokenPrefix, /^\d+$/);
+  assert.equal(page.element("overlay").hidden, false);
+  assert.equal(page.element("load-bar-wrap").hidden, true);
+  assert.equal(page.element("error").hidden, true);
+  assert.equal(page.element("retry").hidden, true);
+  assert.equal(page.element("retry").onclick, null);
+  assert.match(page.element("overlay-text").textContent, /retrying in 1 s \(2\/3\)/);
+});
+
+test("bootstrap manual retry stays in-page and uses a forced reload", async () => {
+  const page = createBootstrapDocument();
+  const forceReloads = [];
+  await startBrowserApplication({
+    documentImpl: page.documentImpl,
+    navigatorImpl: { language: "zh-CN" },
+    prepareApplication: async (options) => {
+      forceReloads.push(options.forceReload);
+      if (!options.forceReload) throw new TypeError("Load failed");
+    },
+  });
+  assert.equal(page.element("overlay").hidden, true);
+  assert.equal(page.element("error").hidden, false);
+  assert.match(page.element("error").textContent, /引擎启动文件加载失败：Load failed/);
+  assert.equal(page.element("retry").hidden, false);
+  assert.equal(typeof page.element("retry").onclick, "function");
+
+  await page.element("retry").onclick();
+  assert.deepEqual(forceReloads, [false, true]);
+  assert.equal(page.element("overlay").hidden, false);
+  assert.equal(page.element("error").hidden, true);
+  assert.equal(page.element("retry").hidden, true);
+  assert.equal(page.element("retry").onclick, null);
 });
 
 test("application import timeout retries with a distinct guarded module URL", async () => {
@@ -409,6 +517,25 @@ test("retry policy separates transient transport errors from deterministic failu
   assert.equal(result, "ready");
   assert.deepEqual(attempts, [1, 2, 3]);
   assert.deepEqual(retries, [500, 1000]);
+});
+
+test("abortable retry delays resolve normally and reject both abort timings", async () => {
+  await delayWithSignal(0);
+
+  const alreadyAborted = new AbortController();
+  alreadyAborted.abort();
+  await assert.rejects(delayWithSignal(1000, alreadyAborted.signal), (error) => {
+    assert.equal(error.name, "AbortError");
+    return true;
+  });
+
+  const pendingAbort = new AbortController();
+  const delayed = delayWithSignal(1000, pendingAbort.signal);
+  pendingAbort.abort();
+  await assert.rejects(delayed, (error) => {
+    assert.equal(error.name, "AbortError");
+    return true;
+  });
 });
 
 test("deterministic loader failures are not retried", async () => {
