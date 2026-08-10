@@ -7,6 +7,37 @@ description: Connect xTBloom to eager NumPy, CuPy, JAX, or PyTorch arrays throug
 
 Choose the simplest public interface that satisfies the data-placement and differentiation requirements. Zero-copy is a strict aliasing contract, not a promise to coerce arbitrary arrays without allocation.
 
+## Preserve the Selected ML Environment
+
+Do not install NumPy, CuPy, JAX, and PyTorch together. Use the framework the
+user selected and preserve an existing project or active environment whenever
+it encodes a framework, accelerator, or package-index choice.
+
+For a standalone NumPy program, use PEP 723 metadata and run it with `uv run
+--script workflow.py` without requiring prior installation:
+
+```python
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["xtbloom>=0.1.1"]
+# ///
+```
+
+For a new standalone CuPy, JAX, or PyTorch program, add only that chosen
+framework and the required xTBloom extras to the inline metadata. Do not add
+inline metadata to a script that belongs to an existing ML project: PEP 723
+would create an isolated environment and either hide the project's framework or
+resolve another copy of it. Instead, add xTBloom as a temporary dependency over
+the selected environment:
+
+```bash
+uv run --no-sync --with 'xtbloom>=0.1.1' python workflow.py
+```
+
+Add `--active` when the selected framework lives in an already prepared active
+virtual environment rather than the current uv project. `--no-sync` keeps uv
+from changing that base environment; the `--with` package is temporary.
+
 ## Load the Relevant References
 
 - Read [array-contract.md](references/array-contract.md) before implementing or reviewing any `ArrayBatch`, `compute_arrays`, DLPack, `out=`, or device-result path.

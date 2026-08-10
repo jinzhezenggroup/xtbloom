@@ -15,21 +15,33 @@ Do not substitute an unreviewed package with a similar name.
 ## PyPI Python Installation
 
 For an agent-owned one-off program, avoid mutating the current environment or
-requiring xTBloom to be preinstalled. Resolve directly from PyPI:
+requiring xTBloom to be preinstalled. Add PEP 723 metadata to the program:
 
-```bash
-UV_DEFAULT_INDEX=https://pypi.org/simple \
-  uv run --no-project --with xtbloom python your_program.py
+```python
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["xtbloom>=0.1.1"]
+# ///
 ```
 
-If the user explicitly wants a persistent environment, install the base package
-or selected extras there:
+Then let uv create the temporary environment using the user's configured index:
+
+```bash
+uv run --script your_program.py
+```
+
+If the user explicitly wants a persistent environment, install only the base
+package and extras needed by that environment:
 
 ```bash
 pip install xtbloom
 pip install 'xtbloom[cuda12]'
-pip install 'xtbloom[cuda12,ase,dpdata]'
+pip install 'xtbloom[ase]'
+pip install 'xtbloom[dpdata]'
 ```
+
+Combine extras, such as `xtbloom[cuda12,ase]`, only when the same workflow
+actually needs both.
 
 Published Linux, macOS, and Windows wheels include a reviewed private LP64
 OpenBLAS provider. Linux x86_64 and aarch64 wheels also include the CUDA backend.

@@ -3,6 +3,14 @@
 User-facing skills live in [`skills/`](../../skills). Contributor workflows
 remain separate under [`.agents/skills/`](../../.agents/skills).
 
+These user skills are intentionally task-scoped rather than one monolithic
+skill. Each `SKILL.md` is a small router that loads only the references needed
+for Python inference, adapters, ML arrays, the C API, QM/MM, or installation.
+For standalone Python tasks, they prefer PEP 723 metadata and execute it with
+`uv run --script`. Framework integrations add only the adapter or ML framework
+the user actually selected. Native C/C++ workflows continue to use the
+installed CMake package and compiler toolchain.
+
 ## Choose a skill
 
 | Skill | Use it for |
@@ -32,5 +40,6 @@ Repository: jinzhezenggroup/xtbloom
 Path: skills/xtbloom-run-python-inference
 ```
 
-Each skill directory is self-contained. Clients may ignore
-`agents/openai.yaml` when they use only the portable `SKILL.md` convention.
+Each skill directory is self-contained and uses its `references/` directory for
+progressive disclosure. Clients may ignore `agents/openai.yaml` when they use
+only the portable `SKILL.md` convention.

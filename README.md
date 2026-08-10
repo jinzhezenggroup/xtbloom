@@ -50,24 +50,17 @@ for usage and scope.
 
 [![PyPI version](https://img.shields.io/pypi/v/xtbloom.svg)](https://pypi.org/project/xtbloom/)
 
-Install the published package from PyPI. Python 3.10 or newer is required:
+Install from PyPI with Python 3.10 or newer:
 
 ```console
 pip install xtbloom
-```
-
-On supported 64-bit Linux systems, install the CUDA 12 host-library cohort when
-it is not already supplied by the environment:
-
-```console
+# Or add CUDA 12 user-space libraries on supported Linux systems:
 pip install "xtbloom[cuda12]"
 ```
 
-Published desktop wheels contain a reviewed private LP64 OpenBLAS provider.
-Linux x86_64 and aarch64 wheels also contain the CUDA backend; the `cuda12`
-extra supplies its user-space CUDA libraries but cannot install an NVIDIA
-driver or GPU. See the [Python guide](docs/user-guide/python.md) for optional
-ASE/dpdata extras and the
+Wheels support Linux, macOS, and Windows; CUDA is available on Linux x86_64 and
+aarch64 and still requires an NVIDIA driver and GPU. See the
+[Python guide](docs/user-guide/python.md) for extras and the
 [installation guide](docs/user-guide/index.md#installation) for platform and
 source-build details.
 
@@ -97,11 +90,8 @@ print(result["forces"])
 print(result["charges"])
 ```
 
-`BatchCalculator` submits multiple `Structure` objects in one native ragged
-call. `ArrayBatch` additionally accepts packed NumPy, CuPy, JAX, or PyTorch
-arrays through Array API and DLPack protocols. See the
-[Python guide](docs/user-guide/python.md) for batching, spin, direct device
-buffers, point charges, ASE, dpdata, and the positions-gradient PyTorch op.
+See the [Python guide](docs/user-guide/python.md) for ragged batches, direct
+device arrays, point charges, ASE, dpdata, and PyTorch integration.
 
 Native consumers can install the CMake package and link
 `xtbloom::xtbloom`. The [C/C++ guide](docs/user-guide/c-api.md) contains a

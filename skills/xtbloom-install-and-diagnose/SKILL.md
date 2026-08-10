@@ -29,26 +29,23 @@ For a fresh probe of the current PyPI release, run the bundled read-only
 inventory through its PEP 723 metadata so xTBloom need not be preinstalled:
 
 ```bash
-UV_DEFAULT_INDEX=https://pypi.org/simple \
-  uv run --script scripts/diagnose_xtbloom.py
+uv run --script scripts/diagnose_xtbloom.py
 ```
 
 The default mode imports the package and resolves the candidate native library without creating a backend context. Probe exactly the backend the user needs:
 
 ```bash
-UV_DEFAULT_INDEX=https://pypi.org/simple \
-  uv run --script scripts/diagnose_xtbloom.py --backend cpu
-UV_DEFAULT_INDEX=https://pypi.org/simple \
-  uv run --with 'xtbloom[cuda12]>=0.1.1' \
+uv run --script scripts/diagnose_xtbloom.py --backend cpu
+uv run --with 'xtbloom[cuda12]>=0.1.1' \
   --script scripts/diagnose_xtbloom.py --backend cuda
-UV_DEFAULT_INDEX=https://pypi.org/simple \
-  uv run --script scripts/diagnose_xtbloom.py --backend auto
+uv run --script scripts/diagnose_xtbloom.py --backend auto
 ```
 
-The `--script` form creates an isolated environment and therefore proves the
-declared PyPI artifact, not an already configured application environment. To
-diagnose an active virtual environment, invoke the helper with that environment's
-Python, for example `uv run --active --no-project python
+The `--script` form creates an isolated environment, respects the user's uv
+index configuration, and therefore proves the declared package artifact rather
+than an already configured application environment. To diagnose an active
+virtual environment, invoke the helper with that environment's Python, for
+example `uv run --active --no-project python
 scripts/diagnose_xtbloom.py --backend cpu`. From an already synced xTBloom source
 checkout, use `uv run --no-sync python
 skills/xtbloom-install-and-diagnose/scripts/diagnose_xtbloom.py`. The helper emits
