@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "issue": 315,
+  "label": "eigen-5.0.1",
+  "source_revision": "19bfece28ab5560bc3195723e1c66f198c6b6aab",
+  "source_dirty_at_start": false,
+  "measured_at_utc": "2026-08-10T11:38:54.933Z",
+  "runtime": {
+    "node": "v24.19.0",
+    "platform": "linux-x64",
+    "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+    "logical_cpu_count": 48,
+    "process_affinity": "CPU 0 via taskset -c 0"
+  },
+  "protocol": {
+    "public_entry_point": "xtbloom_web_compute",
+    "backend": "single-threaded wasm32 CPU",
+    "descriptors": "host-resident Web adapter inputs and outputs",
+    "requested_properties": "energy, charges, analytic forces",
+    "charge": 0,
+    "unpaired_electrons": 0,
+    "electronic_temperature": "300 K default",
+    "energy_tolerance_Eh": 1e-8,
+    "charge_tolerance_e": 0.00001,
+    "maximum_scc_iterations": 250,
+    "warmups": 1,
+    "repetitions": 5,
+    "synchronization_boundary": "synchronous return from Emscripten ccall"
+  },
+  "artifacts": {
+    "site_path": "/home/jzzeng/codes/xtbloom-web-eigen/build/wasm32-web-eigen/web/site",
+    "site_payload_bytes": 2428898,
+    "wasm": {
+      "bytes": 1138058,
+      "sha256": "d2e8055e75210e393fbc4899a0b6c7e3d4e5f8d370ccc29ca31ce56ff6796e83"
+    },
+    "data": {
+      "bytes": 136277,
+      "sha256": "db1d49cb4755ed96ae1fbce907b13882e1cc62657bd56418a21c902b10dfdc34"
+    },
+    "side_module": {
+      "bytes": 136277,
+      "sha256": "db1d49cb4755ed96ae1fbce907b13882e1cc62657bd56418a21c902b10dfdc34"
+    }
+  },
+  "workloads": [
+    {
+      "name": "water-3-atoms",
+      "warmupResults": [
+        {
+          "milliseconds": 28.837275999999996,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        }
+      ],
+      "samples": [
+        {
+          "milliseconds": 5.073184999999995,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        },
+        {
+          "milliseconds": 4.7293769999999995,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        },
+        {
+          "milliseconds": 4.714769000000004,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        },
+        {
+          "milliseconds": 1.232958999999994,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        },
+        {
+          "milliseconds": 1.193643999999992,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        }
+      ],
+      "correctness_qualified": true
+    },
+    {
+      "name": "c60-60-atoms-240-orbitals",
+      "warmupResults": [
+        {
+          "milliseconds": 1372.863292,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -128.249019,
+            "scc_converged": 1,
+            "scc_iterations": 13,
+            "charge_sum_e": -1.2499991926956389e-11,
+            "force_sum_Eh_per_bohr": [
+              3.610000614412412e-10,
+              -1.000012572749398e-11,
+              -1.1000000563199386e-10
+            ],
+            "max_abs_force_Eh_per_bohr": 0.0796463997,
+            "max_checkpoint_charge_error_e": 1.8776571335081538e-11,
+            "max_checkpoint_force_error_Eh_per_bohr": 4.4847868821418224e-10
+          }
+        }
+      ],
+      "samples": [
+        {
+          "milliseconds": 1059.0080220000002,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -128.249019,
+            "scc_converged": 1,
+            "scc_iterations": 13,
+            "charge_sum_e": -1.2499991926956389e-11,
+            "force_sum_Eh_per_bohr": [
+              3.610000614412412e-10,
+              -1.000012572749398e-11,
+              -1.1000000563199386e-10
+            ],
+            "max_abs_force_Eh_per_bohr": 0.0796463997,
+            "max_checkpoint_charge_error_e": 1.8776571335081538e-11,
+            "max_checkpoint_force_error_Eh_per_bohr": 4.4847868821418224e-10
+          }
+        },
+        {
+          "milliseconds": 1064.9096720000002,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -128.249019,
+            "scc_converged": 1,
+            "scc_iterations": 13,
+            "charge_sum_e": -1.2499991926956389e-11,
+            "force_sum_Eh_per_bohr": [
+              3.610000614412412e-10,
+              -1.000012572749398e-11,
+              -1.1000000563199386e-10
+            ],
+            "max_abs_force_Eh_per_bohr": 0.0796463997,
+            "max_checkpoint_charge_error_e": 1.8776571335081538e-11,
+            "max_checkpoint_force_error_Eh_per_bohr": 4.4847868821418224e-10
+          }
+        },
+        {
+          "milliseconds": 1044.4496329999997,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -128.249019,
+            "scc_converged": 1,
+            "scc_iterations": 13,
+            "charge_sum_e": -1.2499991926956389e-11,
+            "force_sum_Eh_per_bohr": [
+              3.610000614412412e-10,
+              -1.000012572749398e-11,
+              -1.1000000563199386e-10
+            ],
+            "max_abs_force_Eh_per_bohr": 0.0796463997,
+            "max_checkpoint_charge_error_e": 1.8776571335081538e-11,
+            "max_checkpoint_force_error_Eh_per_bohr": 4.4847868821418224e-10
+          }
+        },
+        {
+          "milliseconds": 1039.9882079999998,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -128.249019,
+            "scc_converged": 1,
+            "scc_iterations": 13,
+            "charge_sum_e": -1.2499991926956389e-11,
+            "force_sum_Eh_per_bohr": [
+              3.610000614412412e-10,
+              -1.000012572749398e-11,
+              -1.1000000563199386e-10
+            ],
+            "max_abs_force_Eh_per_bohr": 0.0796463997,
+            "max_checkpoint_charge_error_e": 1.8776571335081538e-11,
+            "max_checkpoint_force_error_Eh_per_bohr": 4.4847868821418224e-10
+          }
+        },
+        {
+          "milliseconds": 1037.1858380000003,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -128.249019,
+            "scc_converged": 1,
+            "scc_iterations": 13,
+            "charge_sum_e": -1.2499991926956389e-11,
+            "force_sum_Eh_per_bohr": [
+              3.610000614412412e-10,
+              -1.000012572749398e-11,
+              -1.1000000563199386e-10
+            ],
+            "max_abs_force_Eh_per_bohr": 0.0796463997,
+            "max_checkpoint_charge_error_e": 1.8776571335081538e-11,
+            "max_checkpoint_force_error_Eh_per_bohr": 4.4847868821418224e-10
+          }
+        }
+      ],
+      "correctness_qualified": true
+    }
+  ]
+}

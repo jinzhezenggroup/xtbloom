@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "issue": 315,
+  "label": "jacobi-baseline",
+  "source_revision": "fc7af11845481f94455c3fd8843ef110e2dd39c0",
+  "source_dirty_at_start": false,
+  "measured_at_utc": "2026-08-10T11:38:08.285Z",
+  "runtime": {
+    "node": "v24.19.0",
+    "platform": "linux-x64",
+    "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+    "logical_cpu_count": 48,
+    "process_affinity": "CPU 0 via taskset -c 0"
+  },
+  "protocol": {
+    "public_entry_point": "xtbloom_web_compute",
+    "backend": "single-threaded wasm32 CPU",
+    "descriptors": "host-resident Web adapter inputs and outputs",
+    "requested_properties": "energy, charges, analytic forces",
+    "charge": 0,
+    "unpaired_electrons": 0,
+    "electronic_temperature": "300 K default",
+    "energy_tolerance_Eh": 1e-8,
+    "charge_tolerance_e": 0.00001,
+    "maximum_scc_iterations": 250,
+    "warmups": 1,
+    "repetitions": 5,
+    "synchronization_boundary": "synchronous return from Emscripten ccall"
+  },
+  "artifacts": {
+    "site_path": "/home/jzzeng/codes/xtbloom-web-eigen/build/wasm32-web-baseline/web/site",
+    "site_payload_bytes": 2073156,
+    "wasm": {
+      "bytes": 1138049,
+      "sha256": "ff81d3a4014fec2646f8c91b0dc372e61d5d01f47f0c9e3bc20eb02f65e469ac"
+    },
+    "data": {
+      "bytes": 11483,
+      "sha256": "17bfef8ddd2b9d927969fc8e9c12304a82ff210a96cbc9a4ae8298f33d9c9dcd"
+    },
+    "side_module": {
+      "bytes": 11483,
+      "sha256": "17bfef8ddd2b9d927969fc8e9c12304a82ff210a96cbc9a4ae8298f33d9c9dcd"
+    }
+  },
+  "workloads": [
+    {
+      "name": "water-3-atoms",
+      "warmupResults": [
+        {
+          "milliseconds": 25.356927999999996,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        }
+      ],
+      "samples": [
+        {
+          "milliseconds": 5.145573999999996,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        },
+        {
+          "milliseconds": 3.097436000000002,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        },
+        {
+          "milliseconds": 7.126113000000004,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        },
+        {
+          "milliseconds": 1.0803870000000018,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        },
+        {
+          "milliseconds": 1.0438469999999995,
+          "result": {
+            "ok": 1,
+            "error_code": null,
+            "message": null,
+            "energy_Eh": -5.06262145,
+            "scc_converged": 1,
+            "scc_iterations": 9
+          }
+        }
+      ],
+      "correctness_qualified": true
+    },
+    {
+      "name": "c60-60-atoms-240-orbitals",
+      "warmupResults": [
+        {
+          "milliseconds": 5584.966496,
+          "result": {
+            "ok": 0,
+            "error_code": "err_compute",
+            "message": null,
+            "energy_Eh": null,
+            "scc_converged": null,
+            "scc_iterations": null,
+            "failure_payload": {
+              "ok": 0,
+              "error_code": "err_compute",
+              "error": "eigensolver failed"
+            }
+          }
+        }
+      ],
+      "samples": [
+        {
+          "milliseconds": 5360.6302860000005,
+          "result": {
+            "ok": 0,
+            "error_code": "err_compute",
+            "message": null,
+            "energy_Eh": null,
+            "scc_converged": null,
+            "scc_iterations": null,
+            "failure_payload": {
+              "ok": 0,
+              "error_code": "err_compute",
+              "error": "eigensolver failed"
+            }
+          }
+        },
+        {
+          "milliseconds": 5351.220127000002,
+          "result": {
+            "ok": 0,
+            "error_code": "err_compute",
+            "message": null,
+            "energy_Eh": null,
+            "scc_converged": null,
+            "scc_iterations": null,
+            "failure_payload": {
+              "ok": 0,
+              "error_code": "err_compute",
+              "error": "eigensolver failed"
+            }
+          }
+        },
+        {
+          "milliseconds": 5355.847312999998,
+          "result": {
+            "ok": 0,
+            "error_code": "err_compute",
+            "message": null,
+            "energy_Eh": null,
+            "scc_converged": null,
+            "scc_iterations": null,
+            "failure_payload": {
+              "ok": 0,
+              "error_code": "err_compute",
+              "error": "eigensolver failed"
+            }
+          }
+        },
+        {
+          "milliseconds": 5348.803240999998,
+          "result": {
+            "ok": 0,
+            "error_code": "err_compute",
+            "message": null,
+            "energy_Eh": null,
+            "scc_converged": null,
+            "scc_iterations": null,
+            "failure_payload": {
+              "ok": 0,
+              "error_code": "err_compute",
+              "error": "eigensolver failed"
+            }
+          }
+        },
+        {
+          "milliseconds": 5350.411410000001,
+          "result": {
+            "ok": 0,
+            "error_code": "err_compute",
+            "message": null,
+            "energy_Eh": null,
+            "scc_converged": null,
+            "scc_iterations": null,
+            "failure_payload": {
+              "ok": 0,
+              "error_code": "err_compute",
+              "error": "eigensolver failed"
+            }
+          }
+        }
+      ],
+      "correctness_qualified": true
+    }
+  ]
+}
