@@ -16,7 +16,7 @@ import re
 import stat
 import tarfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import tomllib
 
@@ -31,6 +31,8 @@ IMPLIB_VENDOR_PATH = "cmake/3rdparty/implib"
 IMPLIB_REVISION = "6f4fc02ae058ef11848046af01a1a756f3229c29"
 IMPLIB_TREE = "5fbe7e9f2c4efe0c2be4d2eed409e81f35458ba4"
 ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
+OPENBLAS_LICENSE = "LICENSES/scipy-openblas32-0.3.34.0.0.txt"
+OPENBLAS_MANIFEST_PATH = "cmake/3rdparty/scipy_openblas32_manifest.json"
 OPEN_CHEMLIB_LICENSE = "LICENSES/openchemlib-BSD-3-Clause.txt"
 OPEN_CHEMLIB_MANIFEST = "web/openchemlib_manifest.json"
 OPEN_CHEMLIB_VERSION = "9.21.0"
@@ -63,6 +65,7 @@ SOURCE_FILES = (
     "LICENSES/Apache-2.0.txt",
     "LICENSES/MIT.txt",
     ARRAY_API_COMPAT_LICENSE,
+    OPENBLAS_LICENSE,
     *WEB_SOURCE_FILES,
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
@@ -76,6 +79,7 @@ SOURCE_FILES = (
     "data/parameters/d4_manifest.json",
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
+    OPENBLAS_MANIFEST_PATH,
 )
 COMMON_ARCHIVE_SUFFIXES = (
     "LICENSE",
@@ -85,6 +89,7 @@ COMMON_ARCHIVE_SUFFIXES = (
     "LICENSES/Apache-2.0.txt",
     "LICENSES/MIT.txt",
     ARRAY_API_COMPAT_LICENSE,
+    OPENBLAS_LICENSE,
 )
 SDIST_ARCHIVE_SUFFIXES = (
     *WEB_SOURCE_FILES,
@@ -100,6 +105,7 @@ SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/d4_manifest.json",
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
+    OPENBLAS_MANIFEST_PATH,
 )
 WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/THIRD_PARTY_NOTICES.md",
@@ -110,8 +116,10 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/provenance/d4_manifest.json",
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
+    "share/licenses/xtbloom/provenance/scipy_openblas32_manifest.json",
     "share/licenses/xtbloom/third-party/MIT.txt",
     "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
+    "share/licenses/xtbloom/third-party/scipy-openblas32-0.3.34.0.0.txt",
     "share/licenses/xtbloom/third-party/d4/d4.NOTICE",
     "share/licenses/xtbloom/third-party/d4/dftd4-COPYING",
     "share/licenses/xtbloom/third-party/d4/dftd4-COPYING.LESSER",
@@ -126,12 +134,14 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/third-party/Apache-2.0.txt",
     "share/licenses/xtbloom/third-party/MIT.txt",
     "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
+    "share/licenses/xtbloom/third-party/scipy-openblas32-0.3.34.0.0.txt",
     "share/licenses/xtbloom/provenance/manifest.json",
     "share/licenses/xtbloom/provenance/sto_manifest.json",
     "share/licenses/xtbloom/provenance/spin_manifest.json",
     "share/licenses/xtbloom/provenance/d4_manifest.json",
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
+    "share/licenses/xtbloom/provenance/scipy_openblas32_manifest.json",
     "share/licenses/xtbloom/third-party/d4/d4.NOTICE",
     "share/licenses/xtbloom/third-party/d4/dftd4-COPYING",
     "share/licenses/xtbloom/third-party/d4/dftd4-COPYING.LESSER",
@@ -203,6 +213,10 @@ FORBIDDEN_VENDOR_LIBRARY_RE = re.compile(
     r"(?:^|/)(?:lib(?:cuda|cudart|cublas|cusolver|cusparse|nvjitlink|mkl)[^/]*)"
     r"(?:\.a|\.so(?:\.[0-9]+)*)$",
     re.IGNORECASE,
+)
+OPENBLAS_BINARY_RE = re.compile(
+    r"(?:^|/)(?:libxtbloom_openblas_lp64_shim\.so|libscipy_openblas[^/]*\.so|"
+    r"libgfortran-[^/]*\.so(?:\.[0-9]+)*|libquadmath-[^/]*\.so(?:\.[0-9]+)*)$"
 )
 WEB_SITE_SOURCE_MAP = {
     "LICENSE": "LICENSE",
@@ -300,20 +314,11 @@ def _require_dependency_policy(project: object) -> None:
         raise LicenseCheckError(
             "array-api-compat must use the reviewed >=1.15,<2 runtime range"
         )
-    if "scipy-openblas32" not in mandatory:
-        raise LicenseCheckError("Linux CPU installs must require scipy-openblas32")
-    openblas = mandatory["scipy-openblas32"]
-    for token in (
-        "scipy-openblas32==0.3.34.0.0",
-        "sys_platform == 'linux'",
-        "x86_64",
-        "aarch64",
-    ):
-        if token not in openblas:
-            raise LicenseCheckError(
-                "scipy-openblas32 must use the reviewed exact version and cover Linux "
-                "x86_64 and aarch64"
-            )
+    if "scipy-openblas32" in mandatory:
+        raise LicenseCheckError(
+            "scipy-openblas32 is a wheel-build input and must not be a "
+            "runtime dependency"
+        )
     if "mkl" in mandatory:
         raise LicenseCheckError("mkl must not be a mandatory Python dependency")
     unexpected_nvidia = NVIDIA_DEPENDENCIES.intersection(mandatory)
@@ -332,9 +337,14 @@ def _require_dependency_policy(project: object) -> None:
         if extra == "cuda12" or not isinstance(requirements, list):
             continue
         names = {_requirement_name(item) for item in requirements}
-        if names.intersection(NVIDIA_DEPENDENCIES) or "mkl" in names:
+        if (
+            names.intersection(NVIDIA_DEPENDENCIES)
+            or "mkl" in names
+            or "scipy-openblas32" in names
+        ):
             raise LicenseCheckError(
-                f"proprietary providers must not be included in the {extra} extra"
+                "build-only or proprietary providers must not be included in "
+                f"the {extra} extra"
             )
 
 
@@ -397,6 +407,54 @@ def _require_version_metadata_policy(metadata: object) -> None:
     if tool.get("setuptools_scm") != expected_setuptools_scm:
         raise LicenseCheckError(
             "setuptools-scm must use the reviewed strict Git-tag policy"
+        )
+
+
+def _require_openblas_build_policy(metadata: object) -> None:
+    """Require an exact build-only pin without publishing a runtime edge."""
+    if not isinstance(metadata, dict):
+        raise LicenseCheckError("pyproject metadata must be a table")
+    dependency_groups = metadata.get("dependency-groups", {})
+    wheel_group = dependency_groups.get("wheel-build", [])
+    if not isinstance(wheel_group, list) or len(wheel_group) != 1:
+        raise LicenseCheckError(
+            "wheel-build must lock one reviewed scipy-openblas32 input"
+        )
+    requirement = wheel_group[0]
+    for token in (
+        "scipy-openblas32==0.3.34.0.0",
+        "sys_platform == 'linux'",
+        "x86_64",
+        "aarch64",
+    ):
+        if token not in requirement:
+            raise LicenseCheckError(
+                "wheel-build must lock the reviewed scipy-openblas32 version "
+                "and architectures"
+            )
+
+    scikit_build = metadata.get("tool", {}).get("scikit-build", {})
+    overrides = scikit_build.get("overrides", [])
+    matching = [
+        override
+        for override in overrides
+        if override.get("build", {}).get("requires") == ["scipy-openblas32==0.3.34.0.0"]
+    ]
+    if len(matching) != 1:
+        raise LicenseCheckError(
+            "scikit-build must request exactly one reviewed scipy-openblas32 "
+            "wheel build input"
+        )
+    conditions = matching[0].get("if", {})
+    if conditions != {
+        "state": "^wheel$",
+        "platform-system": "^linux$",
+        "platform-machine": "^(x86_64|aarch64)$",
+        "env": {"XTBLOOM_BUNDLE_WHEEL_OPENBLAS": "^ON$"},
+    }:
+        raise LicenseCheckError(
+            "scipy-openblas32 build input must be confined to Linux "
+            "x86_64/aarch64 wheels"
         )
 
 
@@ -547,6 +605,141 @@ def _check_implib_provenance(root: Path) -> None:
         raise LicenseCheckError("implib vendored tree does not match the pinned tree")
 
 
+def _check_openblas_manifest(manifest: object) -> dict[str, dict[str, object]]:
+    """Validate the reviewed upstream wheels and their exact ELF inventories."""
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise LicenseCheckError("scipy-openblas32 manifest has an unsupported schema")
+    dependency = manifest.get("dependency", {})
+    source = manifest.get("source", {})
+    if dependency != {
+        "name": "scipy-openblas32",
+        "version": "0.3.34.0.0",
+        "classification": "wheel build input and redistributed private binary provider",
+        "runtime_dependency": False,
+    }:
+        raise LicenseCheckError(
+            "scipy-openblas32 manifest has unreviewed dependency metadata"
+        )
+    for key, value in {
+        "repository": "https://github.com/MacPython/openblas-libs",
+        "release_tag": "v0.3.34.0.0",
+        "release_commit": "7e5538356afac3934e872b8b572799b875900657",
+        "openblas_repository": "https://github.com/OpenMathLib/OpenBLAS",
+        "openblas_tag": "v0.3.34",
+        "openblas_commit": "e0166008be8e466242aa76b2ff75ce3f0fbf574a",
+        "license_source": (
+            "scipy_openblas32-0.3.34.0.0.dist-info/licenses/LICENSE.txt"
+        ),
+        "license_sha256": (
+            "51b0d449fdce3b1fabfead1af1cc6eff1df46a70b378c27dc0f5663afc6cc66a"
+        ),
+        "local_license": OPENBLAS_LICENSE,
+    }.items():
+        if source.get(key) != value:
+            raise LicenseCheckError(f"scipy-openblas32 manifest has unreviewed {key}")
+
+    architectures = manifest.get("architectures", {})
+    expected = {
+        "x86_64": {
+            "wheel_filename": (
+                "scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_x86_64."
+                "manylinux_2_28_x86_64.whl"
+            ),
+            "wheel_url": (
+                "https://files.pythonhosted.org/packages/89/d1/"
+                "e201ef4ff4cb22a30bbba58a6917a1ee097c685b8d8ac0165f66149731bf/"
+                "scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_x86_64."
+                "manylinux_2_28_x86_64.whl"
+            ),
+            "wheel_sha256": (
+                "5b5df658f32271b3115d845ea91b19bed190591b55d27d9b5399b83071c68ea1"
+            ),
+            "wheel_size": 8836393,
+            "machine": "Advanced Micro Devices X86-64",
+            "files": {
+                "libscipy_openblas.so": (
+                    24306817,
+                    "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98",
+                ),
+                "libgfortran-83c28eba.so.5.0.0": (
+                    2751569,
+                    "468e71e59e1d784821a76702e5ecd1e0dbcfc024499f74a552d1bea4b26f27ad",
+                ),
+                "libquadmath-2284e583.so.0.0.0": (
+                    272193,
+                    "a9307bbaa353623fa014e8b682d50c4629f5e5c7d61daa9a8652f7d165cd421a",
+                ),
+            },
+        },
+        "aarch64": {
+            "wheel_filename": (
+                "scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_aarch64."
+                "manylinux_2_28_aarch64.whl"
+            ),
+            "wheel_url": (
+                "https://files.pythonhosted.org/packages/4b/b5/"
+                "6e296b54ac83a0a59d678d295b1695224b2cf1cd67533e0a286d7e216655/"
+                "scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_aarch64."
+                "manylinux_2_28_aarch64.whl"
+            ),
+            "wheel_sha256": (
+                "b534496a7c5fd69abf7938cbcc3f4fbb8108d9ed99ac9f93db229abd99281b06"
+            ),
+            "wheel_size": 9329914,
+            "machine": "AArch64",
+            "files": {
+                "libscipy_openblas.so": (
+                    26122881,
+                    "2361f5caadd43626514106cc72b848b90b652bf87c084acc46bc57be6a65c21b",
+                ),
+                "libgfortran-e1b7dfc8.so.5.0.0": (
+                    1540409,
+                    "d8198c0142688f3455b9b09ab53427c38585dfd74857b6d895da2a47425b1cdf",
+                ),
+            },
+        },
+    }
+    if set(architectures) != set(expected):
+        raise LicenseCheckError("scipy-openblas32 manifest architecture set differs")
+    for architecture, policy in expected.items():
+        record = architectures[architecture]
+        wheel = record.get("wheel", {})
+        if (
+            wheel.get("filename") != policy["wheel_filename"]
+            or wheel.get("url") != policy["wheel_url"]
+            or wheel.get("sha256") != policy["wheel_sha256"]
+            or wheel.get("size") != policy["wheel_size"]
+            or record.get("elf_machine") != policy["machine"]
+        ):
+            raise LicenseCheckError(f"scipy-openblas32 {architecture} wheel differs")
+        observed_files = {
+            PurePath(item.get("source", "")).name: (
+                item.get("size"),
+                item.get("sha256"),
+            )
+            for item in record.get("files", [])
+            if isinstance(item, dict)
+        }
+        if observed_files != policy["files"]:
+            raise LicenseCheckError(
+                f"scipy-openblas32 {architecture} ELF cohort differs"
+            )
+    return architectures
+
+
+def _check_openblas_provenance(root: Path) -> None:
+    manifest = json.loads((root / OPENBLAS_MANIFEST_PATH).read_text(encoding="utf-8"))
+    _check_openblas_manifest(manifest)
+    license_bytes = (root / OPENBLAS_LICENSE).read_bytes()
+    if (
+        hashlib.sha256(license_bytes).hexdigest()
+        != manifest["source"]["license_sha256"]
+    ):
+        raise LicenseCheckError(
+            "scipy-openblas32 license differs from pinned upstream bytes"
+        )
+
+
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
     _require_files(root, SOURCE_FILES, "source tree")
@@ -572,6 +765,7 @@ def check_source(root: Path) -> None:
     _require_dependency_policy(project)
     _require_build_dependency_policy(metadata.get("build-system"))
     _require_version_metadata_policy(metadata)
+    _require_openblas_build_policy(metadata)
     _require_exception_policy(root)
 
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -747,6 +941,7 @@ def check_source(root: Path) -> None:
             )
 
     _check_implib_provenance(root)
+    _check_openblas_provenance(root)
 
     gfn2 = json.loads(
         (root / "data/parameters/manifest.json").read_text(encoding="utf-8")
@@ -832,6 +1027,17 @@ def check_install(prefix: Path) -> None:
     if bundled:
         raise LicenseCheckError(
             "install tree bundles a CUDA/MKL provider library: " + bundled[0]
+        )
+    openblas_binaries = sorted(
+        path.relative_to(prefix).as_posix()
+        for path in prefix.rglob("*")
+        if path.is_file()
+        and OPENBLAS_BINARY_RE.search(path.relative_to(prefix).as_posix())
+    )
+    if openblas_binaries:
+        raise LicenseCheckError(
+            "native install bundles a wheel-only OpenBLAS binary: "
+            + openblas_binaries[0]
         )
 
 
@@ -962,6 +1168,69 @@ def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:
             )
 
 
+def _auditwheel_name(source_name: str, sha256: str) -> str:
+    index = source_name.find(".so")
+    if index < 0:
+        raise LicenseCheckError(
+            f"OpenBLAS manifest payload is not a DSO: {source_name}"
+        )
+    return source_name[:index] + f"-{sha256[:8]}" + source_name[index:]
+
+
+def _check_archived_openblas(path: Path, names: set[str], wheel: bool) -> None:
+    manifest_suffix = (
+        "share/licenses/xtbloom/provenance/scipy_openblas32_manifest.json"
+        if wheel
+        else OPENBLAS_MANIFEST_PATH
+    )
+    manifest_name = _find_archive_name(names, manifest_suffix)
+    license_suffix = (
+        "share/licenses/xtbloom/third-party/scipy-openblas32-0.3.34.0.0.txt"
+        if wheel
+        else OPENBLAS_LICENSE
+    )
+    license_name = _find_archive_name(names, license_suffix)
+    payloads = _read_archive_members(path, {manifest_name, license_name})
+    manifest = json.loads(payloads[manifest_name].decode("utf-8"))
+    architectures = _check_openblas_manifest(manifest)
+    if (
+        hashlib.sha256(payloads[license_name]).hexdigest()
+        != manifest["source"]["license_sha256"]
+    ):
+        raise LicenseCheckError("archived scipy-openblas32 license bytes differ")
+
+    openblas_binaries = sorted(
+        name for name in names if OPENBLAS_BINARY_RE.search(name)
+    )
+    if not wheel:
+        if openblas_binaries:
+            raise LicenseCheckError(
+                "sdist must not bundle wheel-only OpenBLAS binary: "
+                f"{openblas_binaries[0]}"
+            )
+        return
+
+    if path.name.endswith("_x86_64.whl"):
+        architecture = "x86_64"
+    elif path.name.endswith("_aarch64.whl"):
+        architecture = "aarch64"
+    else:
+        raise LicenseCheckError(
+            "cannot select OpenBLAS provenance from wheel architecture"
+        )
+    expected = {"libxtbloom_openblas_lp64_shim.so"}
+    for record in architectures[architecture]["files"]:
+        expected.add(
+            _auditwheel_name(PurePath(record["source"]).name, record["sha256"])
+        )
+    observed = {PurePath(name).name for name in openblas_binaries}
+    if observed != expected:
+        raise LicenseCheckError(
+            "wheel OpenBLAS binary cohort differs: expected "
+            f"{sorted(expected)}, found {sorted(observed)}"
+        )
+
+
 def check_archive(path: Path) -> None:
     """Require every distribution archive to retain the common legal set."""
     names = _archive_names(path)
@@ -983,6 +1252,7 @@ def check_archive(path: Path) -> None:
             f"{path} bundles a CUDA/MKL provider library: {bundled[0]}"
         )
     _check_archived_implib(path, names, wheel=path.suffix == ".whl")
+    _check_archived_openblas(path, names, wheel=path.suffix == ".whl")
     leaked = sorted(
         name
         for name in names

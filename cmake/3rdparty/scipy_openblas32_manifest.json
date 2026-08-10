@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "dependency": {
+    "name": "scipy-openblas32",
+    "version": "0.3.34.0.0",
+    "classification": "wheel build input and redistributed private binary provider",
+    "runtime_dependency": false
+  },
+  "source": {
+    "repository": "https://github.com/MacPython/openblas-libs",
+    "release_tag": "v0.3.34.0.0",
+    "release_commit": "7e5538356afac3934e872b8b572799b875900657",
+    "openblas_repository": "https://github.com/OpenMathLib/OpenBLAS",
+    "openblas_tag": "v0.3.34",
+    "openblas_commit": "e0166008be8e466242aa76b2ff75ce3f0fbf574a",
+    "license_source": "scipy_openblas32-0.3.34.0.0.dist-info/licenses/LICENSE.txt",
+    "license_sha256": "51b0d449fdce3b1fabfead1af1cc6eff1df46a70b378c27dc0f5663afc6cc66a",
+    "local_license": "LICENSES/scipy-openblas32-0.3.34.0.0.txt"
+  },
+  "architectures": {
+    "x86_64": {
+      "wheel": {
+        "filename": "scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+        "url": "https://files.pythonhosted.org/packages/89/d1/e201ef4ff4cb22a30bbba58a6917a1ee097c685b8d8ac0165f66149731bf/scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+        "sha256": "5b5df658f32271b3115d845ea91b19bed190591b55d27d9b5399b83071c68ea1",
+        "size": 8836393
+      },
+      "elf_machine": "Advanced Micro Devices X86-64",
+      "files": [
+        {
+          "source": "scipy_openblas32/lib/libscipy_openblas.so",
+          "size": 24306817,
+          "sha256": "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98"
+        },
+        {
+          "source": "scipy_openblas32/lib/libgfortran-83c28eba.so.5.0.0",
+          "size": 2751569,
+          "sha256": "468e71e59e1d784821a76702e5ecd1e0dbcfc024499f74a552d1bea4b26f27ad"
+        },
+        {
+          "source": "scipy_openblas32/lib/libquadmath-2284e583.so.0.0.0",
+          "size": 272193,
+          "sha256": "a9307bbaa353623fa014e8b682d50c4629f5e5c7d61daa9a8652f7d165cd421a"
+        }
+      ]
+    },
+    "aarch64": {
+      "wheel": {
+        "filename": "scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+        "url": "https://files.pythonhosted.org/packages/4b/b5/6e296b54ac83a0a59d678d295b1695224b2cf1cd67533e0a286d7e216655/scipy_openblas32-0.3.34.0.0-py3-none-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+        "sha256": "b534496a7c5fd69abf7938cbcc3f4fbb8108d9ed99ac9f93db229abd99281b06",
+        "size": 9329914
+      },
+      "elf_machine": "AArch64",
+      "files": [
+        {
+          "source": "scipy_openblas32/lib/libscipy_openblas.so",
+          "size": 26122881,
+          "sha256": "2361f5caadd43626514106cc72b848b90b652bf87c084acc46bc57be6a65c21b"
+        },
+        {
+          "source": "scipy_openblas32/lib/libgfortran-e1b7dfc8.so.5.0.0",
+          "size": 1540409,
+          "sha256": "d8198c0142688f3455b9b09ab53427c38585dfd74857b6d895da2a47425b1cdf"
+        }
+      ]
+    }
+  }
+}

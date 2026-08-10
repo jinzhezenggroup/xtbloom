@@ -10,7 +10,7 @@ name: Python wheels
 #   via `test-extras` (deps from the package's `[test,cuda12]` optional
 #   dependencies).
 # - Linux aarch64 builds CUDA-enabled on the native ARM runner (no QEMU) and
-#   runs a real CPU inference through the installed wheel and scipy-openblas32.
+#   runs a real CPU inference through the wheel's private OpenBLAS provider.
 # macOS/Windows artifacts are intentionally not published until their CPU
 # eigensolver runtime is functional; an import-only wheel is not a usable
 # scientific package.
@@ -148,7 +148,7 @@ jobs:
           # where actions/cache can save it after the job. The XTBLOOM_*_LAUNCHER
           # variables map to CMAKE_*_COMPILER_LAUNCHER defines in pyproject.toml
           # and enable caching for the C, C++, and nvcc compilations.
-          CIBW_ENVIRONMENT: "XTBLOOM_ENABLE_CUDA=${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }} XTBLOOM_C_COMPILER_LAUNCHER=ccache XTBLOOM_CXX_COMPILER_LAUNCHER=ccache XTBLOOM_CUDA_COMPILER_LAUNCHER=ccache CCACHE_DIR=/host${{ runner.temp }}/ccache CCACHE_MAXSIZE=1G"
+          CIBW_ENVIRONMENT: "XTBLOOM_ENABLE_CUDA=${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }} XTBLOOM_BUNDLE_WHEEL_OPENBLAS=ON XTBLOOM_C_COMPILER_LAUNCHER=ccache XTBLOOM_CXX_COMPILER_LAUNCHER=ccache XTBLOOM_CUDA_COMPILER_LAUNCHER=ccache CCACHE_DIR=/host${{ runner.temp }}/ccache CCACHE_MAXSIZE=1G"
           # Hosted wheel builders have no NVIDIA kernel driver.  Expose the
           # toolkit stub only inside the isolated wheel test so the dynamic
           # driver resolver can exercise its no-device fallback; production
@@ -168,6 +168,12 @@ jobs:
         run: python python/ci/check-wheel-version.py wheelhouse/*.whl
       - name: Verify wheel licenses
         run: python tools/licensing/check_licenses.py --source-root . wheelhouse/*.whl
+      - name: Inspect private OpenBLAS provider
+        run: >-
+          python python/ci/inspect-openblas-wheel.py
+          --manifest cmake/3rdparty/scipy_openblas32_manifest.json
+          --readelf readelf
+          wheelhouse/*.whl
       - name: Inspect CUDA host-library dependencies
         run: >-
           python python/ci/inspect-cuda-wheel.py
