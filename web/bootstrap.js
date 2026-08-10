@@ -1,9 +1,9 @@
 /* Minimal unversioned entry point for the browser demo.
  *
  * Keep this file dependency-free: it revalidates the content manifest, warms
- * and verifies the versioned app/helper module graph, and only then imports
- * app.js. That prevents a deployment from linking a new app.js against a
- * stale app_helpers.js before the normal retry UI has had a chance to start.
+ * and verifies the versioned application module graph, and only then imports
+ * app.js. That prevents a deployment from linking a new app.js against stale
+ * helpers or preset data before the normal retry UI has had a chance to start.
  */
 
 const BOOTSTRAP_MAX_ATTEMPTS = 3;
@@ -79,6 +79,7 @@ export function validateBootstrapManifest(manifest) {
     manifest,
     version,
     app: validateManifestAsset(byId.get("app"), "app"),
+    c60: validateManifestAsset(byId.get("c60"), "c60"),
     helpers: validateManifestAsset(byId.get("helpers"), "helpers"),
   };
 }
@@ -158,6 +159,7 @@ async function loadBootstrapAttempt({
   }
   const validated = validateBootstrapManifest(rawManifest);
   const appUrl = versionedAssetUrl(baseUrl, validated.app, validated.version, bootstrapToken);
+  const c60Url = versionedAssetUrl(baseUrl, validated.c60, validated.version, bootstrapToken);
   const helpersUrl = versionedAssetUrl(
     baseUrl,
     validated.helpers,
@@ -166,9 +168,10 @@ async function loadBootstrapAttempt({
   );
   await Promise.all([
     fetchVerifiedAsset(validated.app, appUrl, { fetchImpl, cryptoImpl, signal, cache }),
+    fetchVerifiedAsset(validated.c60, c60Url, { fetchImpl, cryptoImpl, signal, cache }),
     fetchVerifiedAsset(validated.helpers, helpersUrl, { fetchImpl, cryptoImpl, signal, cache }),
   ]);
-  return { manifest: rawManifest, appUrl, helpersUrl };
+  return { manifest: rawManifest, appUrl, c60Url, helpersUrl };
 }
 
 function withAttemptTimeout(operation, timeoutMs, controller, onTimeout = () => {}) {

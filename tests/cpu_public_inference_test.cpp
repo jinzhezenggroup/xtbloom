@@ -1678,10 +1678,11 @@ int test_plan_creation_model_and_abi_prefix_contracts() {
   PublicBatch request = make_repeated_h2_he_batch(2u);
   request.bind(flags);
 
-  /* This allocation contains only the ABI-v1 prefix. Plan normalization must
+  /* This storage contains only the ABI-v1 prefix. Plan normalization must
    * not copy/read the ABI-v2 suffix that an older caller does not own. */
-  void* short_storage = ::operator new(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE);
-  auto* short_options = static_cast<xtbloom_compute_options_t*>(short_storage);
+  alignas(xtbloom_compute_options_t) std::array<unsigned char, XTBLOOM_COMPUTE_OPTIONS_V1_SIZE>
+      short_storage{};
+  auto* short_options = reinterpret_cast<xtbloom_compute_options_t*>(short_storage.data());
   CHECK(xtbloom_compute_options_init(short_options, XTBLOOM_COMPUTE_OPTIONS_V1_SIZE) ==
         XTBLOOM_STATUS_SUCCESS);
   short_options->flags = flags;
@@ -1690,7 +1691,6 @@ int test_plan_creation_model_and_abi_prefix_contracts() {
         XTBLOOM_STATUS_SUCCESS);
   CHECK(raw_short_plan != nullptr);
   xtbloom_plan_destroy(raw_short_plan);
-  ::operator delete(short_storage);
 
   /* GFN1 is a reserved ABI value. Plan setup rejects it consistently on CPU
    * before it creates a GFN2 cache that would fail only at execution time. */

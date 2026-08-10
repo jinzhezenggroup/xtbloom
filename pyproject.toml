@@ -133,9 +133,11 @@ sdist.include = [
   "cmake/3rdparty/implib/**",
   "cmake/3rdparty/implib_manifest.json",
   "cmake/3rdparty/torch-stable/**",
+  "cmake/3rdparty/eigen/**",
   "cmake/3rdparty/scipy_openblas32_manifest.json",
   "cmake/3rdparty/pyodide_openblas_manifest.json",
   "cmake/3rdparty/pyodide-openblas/**",
+  "tools/eigen_vendor.py",
   "data/parameters/*_manifest.json",
   "data/parameters/manifest.json",
 ]

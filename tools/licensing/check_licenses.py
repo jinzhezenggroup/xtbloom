@@ -37,6 +37,46 @@ TORCH_STABLE_VENDOR_PATH = "cmake/3rdparty/torch-stable"
 TORCH_STABLE_INCLUDE_SUBDIR = "include"
 TORCH_STABLE_REVISION = "2.12.1"
 TORCH_STABLE_TREE = "e2df0197562bc2b0f55ee910d9899ecaac465e78"
+EIGEN_MANIFEST_PATH = "cmake/3rdparty/eigen/manifest.json"
+EIGEN_VENDOR_PATH = "cmake/3rdparty/eigen"
+EIGEN_VERSION = "5.0.1"
+EIGEN_REVISION = "bc3b39870ecb690a623a3f49149a358b95c5781d"
+EIGEN_ARCHIVE_URL = (
+    "https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz"
+)
+EIGEN_ARCHIVE_SHA256 = (
+    "e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec"
+)
+EIGEN_LICENSE_RECORDS = (
+    ("COPYING.MPL2", "MPL-2.0", "Primary license for the Eigen source tree."),
+    (
+        "COPYING.BSD",
+        "BSD-3-Clause",
+        "BSD and other permissive files identified by upstream.",
+    ),
+    (
+        "COPYING.APACHE",
+        "Apache-2.0",
+        "Apache-licensed files identified by upstream.",
+    ),
+    (
+        "COPYING.MINPACK",
+        "Minpack",
+        "Retained upstream legal record; unsupported/ and its MINPACK sources "
+        "are excluded from this vendor tree.",
+    ),
+    (
+        "COPYING.README",
+        "NOASSERTION",
+        "Upstream explanation of the accompanying license records.",
+    ),
+)
+EIGEN_EMBEDDED_NOTICE_PATHS = (
+    "Eigen/src/Core/arch/Default/Half.h",
+    "Eigen/src/Core/arch/Default/BFloat16.h",
+    "Eigen/src/Geometry/AlignedBox.h",
+    "Eigen/src/LU/arch/InverseSize4.h",
+)
 ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
 OPENBLAS_LICENSE = "LICENSES/scipy-openblas32-0.3.34.0.0.txt"
 OPENBLAS_WINDOWS_LICENSE = "LICENSES/scipy-openblas32-tools-LICENSE_win32.txt"
@@ -83,6 +123,8 @@ WEB_SOURCE_FILES = (
     *WEB_LICENSE_FILES,
     "web/package.json",
     "web/package-lock.json",
+    "web/c60_case.js",
+    "web/wasm/linalg_eigen.cpp",
     OPEN_CHEMLIB_MANIFEST,
 )
 SOURCE_FILES = (
@@ -112,6 +154,8 @@ SOURCE_FILES = (
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
+    EIGEN_MANIFEST_PATH,
+    "tools/eigen_vendor.py",
     OPENBLAS_MANIFEST_PATH,
     PYODIDE_OPENBLAS_MANIFEST_PATH,
 )
@@ -144,6 +188,8 @@ SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
+    EIGEN_MANIFEST_PATH,
+    "tools/eigen_vendor.py",
     OPENBLAS_MANIFEST_PATH,
     PYODIDE_OPENBLAS_MANIFEST_PATH,
 )
@@ -252,6 +298,11 @@ NOTICE_TOKENS = (
     "27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf",
     "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
     "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
+    "Eigen 5.0.1",
+    EIGEN_REVISION,
+    EIGEN_ARCHIVE_SHA256,
+    "cmake/3rdparty/eigen/manifest.json",
+    "unsupported/",
     EXCEPTION_FILE,
 )
 EXCEPTION_TOKENS = (
@@ -322,12 +373,25 @@ WEB_SITE_SOURCE_MAP = {
     "provenance/parameters/d4_manifest.json": "data/parameters/d4_manifest.json",
     "provenance/parameters/mctc_manifest.json": "data/parameters/mctc_manifest.json",
     "provenance/openchemlib_manifest.json": OPEN_CHEMLIB_MANIFEST,
+    "LICENSES/eigen/COPYING.MPL2": f"{EIGEN_VENDOR_PATH}/COPYING.MPL2",
+    "LICENSES/eigen/COPYING.BSD": f"{EIGEN_VENDOR_PATH}/COPYING.BSD",
+    "LICENSES/eigen/COPYING.APACHE": f"{EIGEN_VENDOR_PATH}/COPYING.APACHE",
+    "LICENSES/eigen/COPYING.MINPACK": f"{EIGEN_VENDOR_PATH}/COPYING.MINPACK",
+    "LICENSES/eigen/COPYING.README": f"{EIGEN_VENDOR_PATH}/COPYING.README",
+    **{
+        f"LICENSES/eigen/notices/{Path(relative).name}": (
+            f"{EIGEN_VENDOR_PATH}/{relative}"
+        )
+        for relative in EIGEN_EMBEDDED_NOTICE_PATHS
+    },
+    "provenance/eigen_manifest.json": EIGEN_MANIFEST_PATH,
 }
 WEB_SITE_RUNTIME_FILES = (
     "index.html",
     "style.css",
     "bootstrap.js",
     "app.js",
+    "c60_case.js",
     "app_helpers.js",
     "worker.js",
     "smiles_helpers.js",
@@ -341,6 +405,7 @@ WEB_SITE_RUNTIME_FILES = (
 )
 WEB_VERSIONED_ASSETS = (
     ("app", "app.js"),
+    ("c60", "c60_case.js"),
     ("worker", "worker.js"),
     ("helpers", "app_helpers.js"),
     ("module", "xtbloom_web.js"),
@@ -876,6 +941,125 @@ def _check_torch_stable_provenance(root: Path) -> None:
         raise LicenseCheckError(
             "torch-stable vendored tree does not match the pinned tree"
         )
+
+
+def _check_eigen_manifest(manifest: object) -> dict[str, tuple[int, str]]:
+    """Validate Eigen release metadata and return its exact file mapping."""
+    if not isinstance(manifest, dict):
+        raise LicenseCheckError("Eigen manifest root must be an object")
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("dependency") != "Eigen"
+        or manifest.get("version") != EIGEN_VERSION
+        or manifest.get("revision") != EIGEN_REVISION
+        or manifest.get("upstream_repository") != "https://gitlab.com/libeigen/eigen"
+        or manifest.get("release_archive")
+        != {"url": EIGEN_ARCHIVE_URL, "sha256": EIGEN_ARCHIVE_SHA256}
+    ):
+        raise LicenseCheckError("Eigen manifest has incorrect pinned provenance")
+
+    expected_records = [
+        {"path": path, "spdx": spdx, "scope": scope}
+        for path, spdx, scope in EIGEN_LICENSE_RECORDS
+    ]
+    if manifest.get("license") != {
+        "primary_spdx": "MPL-2.0",
+        "records": expected_records,
+    }:
+        raise LicenseCheckError("Eigen manifest has incorrect license records")
+    distribution = manifest.get("distribution")
+    if not isinstance(distribution, str) or not all(
+        token in distribution
+        for token in ("source distributions", "not installed", "not bundled")
+    ):
+        raise LicenseCheckError("Eigen manifest has incorrect distribution policy")
+
+    files = manifest.get("files")
+    if not isinstance(files, list) or len(files) != 413:
+        raise LicenseCheckError("Eigen manifest must describe exactly 413 files")
+    declared: dict[str, tuple[int, str]] = {}
+    for entry in files:
+        if not isinstance(entry, dict):
+            raise LicenseCheckError("Eigen manifest has a non-object file entry")
+        path = entry.get("path")
+        size = entry.get("size_bytes")
+        sha256 = entry.get("sha256")
+        if (
+            not isinstance(path, str)
+            or not path
+            or Path(path).is_absolute()
+            or ".." in Path(path).parts
+            or "unsupported" in Path(path).parts
+            or path == "manifest.json"
+            or not isinstance(size, int)
+            or size < 0
+            or not isinstance(sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", sha256)
+        ):
+            raise LicenseCheckError("Eigen manifest contains an invalid file entry")
+        if path in declared:
+            raise LicenseCheckError(f"Eigen manifest duplicates {path}")
+        declared[path] = (size, sha256)
+
+    expected_licenses = {path for path, _spdx, _scope in EIGEN_LICENSE_RECORDS}
+    if not expected_licenses.issubset(declared) or "Eigen/Core" not in declared:
+        raise LicenseCheckError("Eigen manifest has incomplete source/license coverage")
+    return declared
+
+
+def _check_eigen_provenance(root: Path) -> None:
+    """Verify every vendored Eigen byte and its source-distribution policy."""
+    manifest = json.loads((root / EIGEN_MANIFEST_PATH).read_text(encoding="utf-8"))
+    declared = _check_eigen_manifest(manifest)
+    vendor_root = root / EIGEN_VENDOR_PATH
+    observed = {
+        path.relative_to(vendor_root).as_posix()
+        for path in vendor_root.rglob("*")
+        if path.is_file() and path.name != "manifest.json"
+    }
+    if observed != set(declared):
+        missing = sorted(set(declared) - observed)
+        unexpected = sorted(observed - set(declared))
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise LicenseCheckError(
+            "Eigen vendored file set differs: " + "; ".join(details)
+        )
+    for relative, (expected_size, expected_sha256) in declared.items():
+        path = vendor_root / relative
+        if path.is_symlink():
+            raise LicenseCheckError(f"Eigen vendored file is a symlink: {relative}")
+        data = path.read_bytes()
+        if (
+            len(data) != expected_size
+            or hashlib.sha256(data).hexdigest() != expected_sha256
+        ):
+            raise LicenseCheckError(
+                f"Eigen vendored file differs from pinned bytes: {relative}"
+            )
+
+    attributes = (root / ".gitattributes").read_text(encoding="utf-8")
+    if "cmake/3rdparty/eigen/** -text" not in attributes:
+        raise LicenseCheckError(".gitattributes does not preserve Eigen bytes")
+    metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    sdist_include = (
+        metadata.get("tool", {})
+        .get("scikit-build", {})
+        .get("sdist", {})
+        .get("include", [])
+    )
+    for required in ("cmake/3rdparty/eigen/**", "tools/eigen_vendor.py"):
+        if required not in sdist_include:
+            raise LicenseCheckError(f"sdist.include omits {required}")
+
+
+def _is_eigen_payload_name(name: str) -> bool:
+    """Recognize Web-only Eigen source even after install-path relocation."""
+    parts = {part.lower() for part in PurePath(name).parts}
+    return "eigen_manifest.json" in parts or bool(parts & {"eigen", "eigen3"})
 
 
 def _check_openblas_manifest(manifest: object) -> dict[str, dict[str, object]]:
@@ -1440,6 +1624,7 @@ def check_source(root: Path) -> None:
 
     _check_implib_provenance(root)
     _check_torch_stable_provenance(root)
+    _check_eigen_provenance(root)
     _check_openblas_provenance(root)
     _check_pyodide_openblas_provenance(root)
 
@@ -1568,6 +1753,16 @@ def check_install(prefix: Path) -> None:
             "native install bundles a WebAssembly shared module: "
             + wasm_shared_modules[0]
         )
+    eigen_payloads = sorted(
+        path.relative_to(prefix).as_posix()
+        for path in prefix.rglob("*")
+        if path.is_file()
+        and _is_eigen_payload_name(path.relative_to(prefix).as_posix())
+    )
+    if eigen_payloads:
+        raise LicenseCheckError(
+            "native install bundles Web-only Eigen source: " + eigen_payloads[0]
+        )
 
 
 def _check_web_engine_manifest(site: Path) -> None:
@@ -1607,8 +1802,8 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
     )
     if (site / "libscipy_openblas.so").exists():
         raise LicenseCheckError(
-            "web site contains the raw LAPACK side module; it must only be "
-            "conveyed inside xtbloom_web.data"
+            "web site contains the raw Eigen LAPACKE/CBLAS side module; "
+            "it must only be conveyed inside xtbloom_web.data"
         )
     # Pages uploads the complete site directory, so accepting arbitrary extra
     # files would allow an obsolete JS/WASM variant or unreviewed payload to be
@@ -1632,6 +1827,8 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
         "https://xtbloom.jinzhezeng.group",
         "https://github.com/jinzhezenggroup/xtbloom",
         'href="LICENSES/openchemlib-BSD-3-Clause.txt"',
+        'href="LICENSES/eigen/COPYING.MPL2"',
+        'href="provenance/eigen_manifest.json"',
     ):
         if token not in index:
             raise LicenseCheckError(f"web site index does not expose {token}")
@@ -1822,6 +2019,42 @@ def _check_archived_torch_stable(path: Path, names: set[str]) -> None:
             raise LicenseCheckError(
                 "sdist torch-stable vendored file differs from pinned bytes: "
                 f"{relative}"
+            )
+
+
+def _check_archived_eigen(path: Path, names: set[str]) -> None:
+    """Validate the sdist carries the complete byte-exact Eigen source tree."""
+    manifest_name = _find_archive_name(names, EIGEN_MANIFEST_PATH)
+    manifest_bytes = _read_archive_members(path, {manifest_name})[manifest_name]
+    declared = _check_eigen_manifest(json.loads(manifest_bytes.decode("utf-8")))
+
+    archive_root = manifest_name[: -len(EIGEN_MANIFEST_PATH)]
+    vendor_prefix = archive_root + EIGEN_VENDOR_PATH + "/"
+    archived_vendor = {
+        name.removeprefix(vendor_prefix): name
+        for name in names
+        if name.startswith(vendor_prefix) and name != manifest_name
+    }
+    if set(archived_vendor) != set(declared):
+        missing = sorted(set(declared) - set(archived_vendor))
+        unexpected = sorted(set(archived_vendor) - set(declared))
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise LicenseCheckError(
+            "sdist Eigen vendored file set differs: " + "; ".join(details)
+        )
+    payloads = _read_archive_members(path, set(archived_vendor.values()))
+    for relative, (expected_size, expected_sha256) in declared.items():
+        data = payloads[archived_vendor[relative]]
+        if (
+            len(data) != expected_size
+            or hashlib.sha256(data).hexdigest() != expected_sha256
+        ):
+            raise LicenseCheckError(
+                f"sdist Eigen vendored file differs from pinned bytes: {relative}"
             )
 
 
@@ -2135,6 +2368,9 @@ def check_archive(path: Path) -> None:
     _check_archived_implib(path, names, wheel=path.suffix == ".whl")
     if path.suffix != ".whl":
         _check_archived_torch_stable(path, names)
+        _check_archived_eigen(path, names)
+    elif any(_is_eigen_payload_name(name) for name in names):
+        raise LicenseCheckError("wheel must not bundle the Web-only Eigen source tree")
     _check_archived_openblas(path, names, wheel=path.suffix == ".whl")
     _check_archived_pyodide_openblas(path, names, wheel=path.suffix == ".whl")
     leaked = sorted(

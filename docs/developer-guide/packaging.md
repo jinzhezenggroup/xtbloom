@@ -136,7 +136,7 @@ supported auditwheel path, then run installed-wheel conformance, invariance,
 finite-difference, failure-isolation, and NumPy/SciPy coexistence tests. The
 wheel is release-eligible and enters the same PyPI artifact prefix as the
 validated native wheels; the existing Web demo continues to use its separate
-preloaded Eigen provider.
+preloaded Eigen LAPACKE/CBLAS side-module design.
 Windows/macOS wheels must pass installed GFN2 inference, missing-provider,
 concurrency, and host numerical-coexistence tests before being release-eligible.
 

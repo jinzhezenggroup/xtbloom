@@ -21,5 +21,7 @@ LICENSES/libf2c-AT&T-Lucent-Bellcore.txt -text whitespace=-blank-at-eol,-blank-a
 cmake/3rdparty/implib/** -text
 cmake/3rdparty/torch-stable/include/** -text
 cmake/3rdparty/pyodide-openblas/** -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+cmake/3rdparty/eigen/** -text
+cmake/3rdparty/eigen/** -whitespace
 
 .git_archival.txt export-subst

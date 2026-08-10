@@ -61,6 +61,8 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
             "cmake/3rdparty/torch-stable/include/** -text",
             "cmake/3rdparty/pyodide-openblas/** -text "
             "whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab",
+            "cmake/3rdparty/eigen/** -text",
+            "cmake/3rdparty/eigen/** -whitespace",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, attributes.splitlines())
@@ -234,6 +236,16 @@ class LicenseArchiveTests(unittest.TestCase):
             wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "libcudart"):
+                CHECKER.check_archive(wheel)
+
+    def test_wheel_must_not_bundle_relocated_eigen_headers(self) -> None:
+        """Reject Eigen even when packaging moves it outside the vendor path."""
+        names = self._valid_wheel_names()
+        names.add("xtbloom/include/eigen3/Eigen/Core")
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+            self._write_wheel(wheel, names)
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "Web-only Eigen"):
                 CHECKER.check_archive(wheel)
 
     def test_wheel_requires_complete_private_openblas_cohort(self) -> None:
@@ -520,6 +532,31 @@ class InstallPayloadTests(unittest.TestCase):
             ):
                 CHECKER.check_install(root)
 
+    def test_install_rejects_relocated_eigen_source(self) -> None:
+        """Keep the browser-only headers and manifest out of native installs."""
+        for candidate in (
+            "include/eigen3/Eigen/Core",
+            "share/xtbloom/provenance/eigen_manifest.json",
+        ):
+            with (
+                self.subTest(candidate=candidate),
+                tempfile.TemporaryDirectory(
+                    prefix="xtbloom-install-license-test-"
+                ) as directory,
+            ):
+                root = Path(directory)
+                for relative in CHECKER.INSTALL_FILES:
+                    destination = root / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(b"test\n")
+                bundled = root / candidate
+                bundled.parent.mkdir(parents=True, exist_ok=True)
+                bundled.write_bytes(b"Web-only Eigen payload")
+                with self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError, "Web-only Eigen"
+                ):
+                    CHECKER.check_install(root)
+
 
 class WebSiteLicenseTests(unittest.TestCase):
     """Require the Pages artifact to retain its complete legal boundary."""
@@ -562,6 +599,8 @@ class WebSiteLicenseTests(unittest.TestCase):
             '<a href="LICENSE">license</a>\n'
             '<a href="THIRD_PARTY_NOTICES.md">notices</a>\n'
             '<a href="LICENSES/openchemlib-BSD-3-Clause.txt">OpenChemLib</a>\n'
+            '<a href="LICENSES/eigen/COPYING.MPL2">Eigen</a>\n'
+            '<a href="provenance/eigen_manifest.json">Eigen source</a>\n'
             '<a href="CUDA_MKL_LINKING_EXCEPTION">permission</a>\n'
             '<a href="https://xtbloom.jinzhezeng.group">demo</a>\n'
             '<a href="https://github.com/jinzhezenggroup/xtbloom">source</a>\n',
@@ -620,6 +659,23 @@ class WebSiteLicenseTests(unittest.TestCase):
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "openchemlib"):
                 CHECKER.check_web_site(root, REPOSITORY)
 
+    def test_web_site_requires_eigen_license_and_provenance(self) -> None:
+        """Retain Eigen's MPL source offer and exact vendor manifest."""
+        for relative in (
+            "LICENSES/eigen/COPYING.MPL2",
+            "LICENSES/eigen/notices/AlignedBox.h",
+            "provenance/eigen_manifest.json",
+        ):
+            with (
+                self.subTest(relative=relative),
+                tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory,
+            ):
+                root = Path(directory)
+                self._write_valid_site(root)
+                (root / relative).unlink()
+                with self.assertRaisesRegex(CHECKER.LicenseCheckError, "Eigen|eigen"):
+                    CHECKER.check_web_site(root, REPOSITORY)
+
     def test_web_site_rejects_raw_lapack_side_module(self) -> None:
         """Do not deploy a second untracked copy of the preloaded side module."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
@@ -627,7 +683,7 @@ class WebSiteLicenseTests(unittest.TestCase):
             self._write_valid_site(root)
             (root / "libscipy_openblas.so").write_bytes(b"unexpected raw side module")
             with self.assertRaisesRegex(
-                CHECKER.LicenseCheckError, "raw LAPACK side module"
+                CHECKER.LicenseCheckError, "raw Eigen LAPACKE/CBLAS side module"
             ):
                 CHECKER.check_web_site(root, REPOSITORY)
 
@@ -1062,6 +1118,133 @@ class TorchStableProvenanceTests(unittest.TestCase):
                 "differs from pinned bytes.*tensor.h",
             ):
                 CHECKER._check_archived_torch_stable(archive, names)
+
+
+class EigenProvenanceTests(unittest.TestCase):
+    """Pin the complete Eigen WebAssembly build input byte-for-byte."""
+
+    def _copy_payload(self, root: Path) -> None:
+        shutil.copytree(
+            REPOSITORY / CHECKER.EIGEN_VENDOR_PATH,
+            root / CHECKER.EIGEN_VENDOR_PATH,
+        )
+        shutil.copy2(REPOSITORY / ".gitattributes", root / ".gitattributes")
+        shutil.copy2(REPOSITORY / "pyproject.toml", root / "pyproject.toml")
+
+    def _write_sdist(
+        self,
+        root: Path,
+        *,
+        missing: str | None = None,
+        modified: str | None = None,
+        unexpected: str | None = None,
+    ) -> Path:
+        """Create a focused Eigen sdist fixture with optional payload drift."""
+        archive_path = root / "xtbloom-0.1.0.tar.gz"
+        archive_root = "xtbloom-0.1.0"
+        vendor_root = REPOSITORY / CHECKER.EIGEN_VENDOR_PATH
+        with tarfile.open(archive_path, "w:gz") as archive:
+            manifest = vendor_root / "manifest.json"
+            archive.add(
+                manifest,
+                arcname=f"{archive_root}/{CHECKER.EIGEN_MANIFEST_PATH}",
+            )
+            for source in sorted(
+                path for path in vendor_root.rglob("*") if path.is_file()
+            ):
+                relative = source.relative_to(vendor_root).as_posix()
+                if relative == "manifest.json" or relative == missing:
+                    continue
+                payload = source.read_bytes()
+                if relative == modified:
+                    payload += b"// modified\n"
+                member = tarfile.TarInfo(
+                    f"{archive_root}/{CHECKER.EIGEN_VENDOR_PATH}/{relative}"
+                )
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+            if unexpected is not None:
+                payload = b"// unexpected\n"
+                member = tarfile.TarInfo(
+                    f"{archive_root}/{CHECKER.EIGEN_VENDOR_PATH}/{unexpected}"
+                )
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+        return archive_path
+
+    def test_exact_vendored_tree_is_accepted(self) -> None:
+        """Accept the reviewed Eigen release and its mixed-license records."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
+            root = Path(directory)
+            self._copy_payload(root)
+            CHECKER._check_eigen_provenance(root)
+
+    def test_modified_vendored_header_is_rejected(self) -> None:
+        """Reject any change to a manifest-declared Eigen header."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
+            root = Path(directory)
+            self._copy_payload(root)
+            header = root / CHECKER.EIGEN_VENDOR_PATH / "Eigen/Core"
+            header.write_bytes(header.read_bytes() + b"// modified\n")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "differs from pinned bytes.*Eigen/Core"
+            ):
+                CHECKER._check_eigen_provenance(root)
+
+    def test_unexpected_vendored_source_is_rejected(self) -> None:
+        """Do not let unreviewed Eigen or unsupported files enter an sdist."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
+            root = Path(directory)
+            self._copy_payload(root)
+            unexpected = root / CHECKER.EIGEN_VENDOR_PATH / "unsupported/Eigen/test.h"
+            unexpected.parent.mkdir(parents=True)
+            unexpected.write_text("// unexpected\n", encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unexpected"):
+                CHECKER._check_eigen_provenance(root)
+
+    def test_manifest_revision_drift_is_rejected(self) -> None:
+        """Require a dependency re-audit before the pinned Eigen tag changes."""
+        manifest = json.loads(
+            (REPOSITORY / CHECKER.EIGEN_MANIFEST_PATH).read_text(encoding="utf-8")
+        )
+        manifest["revision"] = "0" * 40
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "pinned provenance"):
+            CHECKER._check_eigen_manifest(manifest)
+
+    def test_sdist_exact_eigen_tree_is_accepted(self) -> None:
+        """Accept an sdist carrying every manifest-declared Eigen byte."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
+            archive = self._write_sdist(Path(directory))
+            CHECKER._check_archived_eigen(archive, CHECKER._archive_names(archive))
+
+    def test_sdist_missing_eigen_header_is_rejected(self) -> None:
+        """Reject an sdist that loses a manifest-declared Eigen header."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
+            archive = self._write_sdist(Path(directory), missing="Eigen/Core")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "missing Eigen/Core"
+            ):
+                CHECKER._check_archived_eigen(archive, CHECKER._archive_names(archive))
+
+    def test_sdist_modified_eigen_header_is_rejected(self) -> None:
+        """Reject an sdist whose Eigen bytes differ from the pinned source."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
+            archive = self._write_sdist(Path(directory), modified="Eigen/Core")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "differs from pinned bytes.*Eigen/Core"
+            ):
+                CHECKER._check_archived_eigen(archive, CHECKER._archive_names(archive))
+
+    def test_sdist_unexpected_eigen_source_is_rejected(self) -> None:
+        """Reject an sdist that adds unreviewed Eigen or unsupported source."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
+            archive = self._write_sdist(
+                Path(directory), unexpected="unsupported/Eigen/test.h"
+            )
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "unexpected unsupported/Eigen/test.h"
+            ):
+                CHECKER._check_archived_eigen(archive, CHECKER._archive_names(archive))
 
 
 class CudaWheelInspectionTests(unittest.TestCase):

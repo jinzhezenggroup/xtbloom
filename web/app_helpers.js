@@ -456,8 +456,9 @@ export async function initializeDownloadedEngineModule(
 }
 
 /* Transfer private copies of the downloaded wasm/data payloads and resolve
- * only after Emscripten has loaded the prepackaged LAPACK side module. Keeping
- * the caller's original bytes attached makes a failed Worker safely retryable. */
+ * only after Emscripten has loaded the prepackaged Eigen LAPACKE/CBLAS side
+ * module. Keeping the caller's original bytes attached makes a failed Worker
+ * safely retryable. */
 export function initializeWorker(
   worker,
   { wasmBinary, dataBinary, moduleUrl, helpersUrl },

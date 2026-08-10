@@ -1412,15 +1412,17 @@ int test_control_storage_alias_matrix() {
            fixture.plan.reference_shell_occupations() == references;
   };
 
+  CHECK(sizeof(fixture.plan) > sizeof(double));
+  CHECK(fixture.plan.resident_bytes() > sizeof(double));
   const auto* plan_address = reinterpret_cast<const std::byte*>(&fixture.plan);
   const auto* data_address = reinterpret_cast<const std::byte*>(fixture.plan.identity());
   const auto& reference_occupations = fixture.plan.reference_shell_occupations();
   CHECK(reference_occupations.size() >= 2u);
   const std::array<const std::byte*, 6> exact_and_partial_controls{
       plan_address,
-      plan_address + sizeof(double),
+      &plan_address[sizeof(double)],
       data_address,
-      data_address + sizeof(double),
+      &data_address[sizeof(double)],
       reinterpret_cast<const std::byte*>(reference_occupations.data()),
       reinterpret_cast<const std::byte*>(reference_occupations.data() + 1u)};
   for (const std::byte* control : exact_and_partial_controls) {
