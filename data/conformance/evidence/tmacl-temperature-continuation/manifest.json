@@ -41,7 +41,7 @@
   },
   "distribution": {
     "classification": "copied test fixture and xtbloom-generated test diagnostics",
-    "source_distribution": true,
+    "source_distribution": false,
     "native_install": false,
     "wheel": false,
     "notice": "THIRD_PARTY_NOTICES.md"

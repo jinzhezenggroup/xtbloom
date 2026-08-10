@@ -28,6 +28,13 @@ EXPECTED_EVIDENCE = (
     "tmacl_trace_500K.txt",
     "tmacl_trace_1000K.txt",
 )
+EXPECTED_DISTRIBUTION = {
+    "classification": "copied test fixture and xtbloom-generated test diagnostics",
+    "source_distribution": False,
+    "native_install": False,
+    "wheel": False,
+    "notice": "THIRD_PARTY_NOTICES.md",
+}
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 
@@ -235,14 +242,7 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
     )
 
     distribution = manifest.get("distribution")
-    expected_distribution = {
-        "classification": "copied test fixture and xtbloom-generated test diagnostics",
-        "source_distribution": True,
-        "native_install": False,
-        "wheel": False,
-        "notice": "THIRD_PARTY_NOTICES.md",
-    }
-    if distribution != expected_distribution:
+    if distribution != EXPECTED_DISTRIBUTION:
         raise EvidenceError("distribution boundaries or notice path are not canonical")
     notice_path = repository_path(distribution["notice"], "distribution.notice")
     try:
@@ -253,7 +253,7 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
         "## xTB issue #678 difficult-SCC input",
         "https://github.com/grimme-lab/xtb/issues/678",
         "SPDX: NOASSERTION",
-        "included in source distributions",
+        "excluded from installation-focused PyPI source distributions",
         "data/conformance/evidence/tmacl-temperature-continuation/manifest.json",
     )
     if any(value not in notice for value in required_notice_text):
@@ -304,7 +304,7 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
 
 
 def update_manifest(path: Path = DEFAULT_MANIFEST) -> None:
-    """Refresh only local content digests after intentional regeneration."""
+    """Refresh canonical distribution metadata and intentional content digests."""
     manifest = load_manifest(path)
     fixture = manifest["fixture"]
     generator = manifest["generator"]
@@ -318,6 +318,7 @@ def update_manifest(path: Path = DEFAULT_MANIFEST) -> None:
     source["excerpt_sha256"] = fixture_digest
     generator_path = repository_path(generator["source"], "generator.source")
     generator["source_sha256"] = sha256(generator_path)
+    manifest["distribution"] = dict(EXPECTED_DISTRIBUTION)
     manifest["evidence_files"] = [
         {
             "path": (EVIDENCE_DIRECTORY_RELATIVE / name).as_posix(),
@@ -336,7 +337,7 @@ def main() -> int:
     parser.add_argument(
         "--update",
         action="store_true",
-        help="refresh hashes after reviewed regeneration",
+        help="refresh canonical metadata and hashes after a reviewed change",
     )
     arguments = parser.parse_args()
     try:

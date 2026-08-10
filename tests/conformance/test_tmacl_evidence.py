@@ -42,7 +42,7 @@ class TmaclEvidenceTest(unittest.TestCase):
                 EVIDENCE.check_manifest(path)
 
     def test_distribution_boundary_drift_is_rejected(self) -> None:
-        """The copied fixture's sdist and notice treatment stays explicit."""
+        """The copied fixture's repository-only treatment stays explicit."""
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
         manifest["distribution"]["wheel"] = True
         with tempfile.TemporaryDirectory() as temporary:
