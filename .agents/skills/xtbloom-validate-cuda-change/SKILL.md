@@ -5,7 +5,7 @@ description: Validate xTBloom CUDA kernels and public runtime behavior on a real
 
 # Validate a xTBloom CUDA Change
 
-Prove both numerical behavior and runtime contracts on actual hardware. Read `AGENTS.md`, `docs/architecture.md`, the active issue, and every directly blocking CUDA issue before selecting the matrix.
+Prove both numerical behavior and runtime contracts on actual hardware. Read `AGENTS.md`, `docs/developer-guide/architecture.md`, the active issue, and every directly blocking CUDA issue before selecting the matrix.
 
 ## Capture the Environment
 

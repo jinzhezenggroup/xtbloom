@@ -216,8 +216,9 @@ skip = ["*-win32", "*-manylinux_i686", "*-musllinux*"]
 # xTBloom self-declares the host C API surface (src/runtime/nvidia_host_api.h)
 # and generates lazy-dlopen trampolines from the curated symbol lists with
 # pinned SONAMEs. The dlopen'd libraries are supplied at run time by the system
-# or the PyPI-distributed nvidia-* packages. Pin the reviewed 2026.06.30-1
-# snapshot by digest because Quay's moving latest tag is not reproducible.
+# or the PyPI-distributed nvidia-* packages. Quay deletes an untagged previous
+# manifest when latest rotates, so retain the reviewed dated tag and also pin
+# its immutable digest instead of following latest.
 manylinux-x86_64-image = "quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda12_9:2026.06.30-1@sha256:c436610a82597bfff72a6e8aa0de0eaa5a717a00d93354a422fde02beddd15d3"
 manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_9:2026.06.30-1@sha256:c994f30615152ae4ec6287d67a15ab79d7bbda14debd5b38bc4d4d96b8d267fb"
 # Default test is an import smoke test (importing xTBloom needs no runtime); the

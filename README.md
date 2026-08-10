@@ -160,6 +160,7 @@ and response properties are central.
 - [Python API](docs/user-guide/python.md)
 - [C and C++ API](docs/user-guide/c-api.md)
 - [QM/MM usage](docs/user-guide/qmmm.md)
+- [Skills for AI agents](docs/user-guide/agent-skills.md)
 - [Theory guide](docs/theory/index.md)
 - [Developer guide](docs/developer-guide/index.md)
 - [Benchmark harnesses](benchmarks/README.md)

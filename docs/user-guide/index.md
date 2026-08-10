@@ -177,6 +177,7 @@ exception-oriented control flow.
 ## Guides
 
 - [Browser demo](browser-demo.md)
+- [Skills for AI agents](agent-skills.md)
 - [Python API](python.md)
 - [C and C++ API](c-api.md)
 - [QM/MM usage](qmmm.md)
