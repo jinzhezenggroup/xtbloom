@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "xtbloom/version.h"
+
 #if defined(_WIN32)
 #if defined(XTBLOOM_BUILDING_LIBRARY)
 #define XTBLOOM_API __declspec(dllexport)
@@ -21,10 +23,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define XTBLOOM_VERSION_MAJOR 0
-#define XTBLOOM_VERSION_MINOR 0
-#define XTBLOOM_VERSION_PATCH 0
 
 /* Increment this value only when an ABI-incompatible C API change is made. */
 #define XTBLOOM_API_VERSION 1u

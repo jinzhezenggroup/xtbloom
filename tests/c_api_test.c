@@ -313,7 +313,7 @@ int main(void) {
     fprintf(stderr, "explicit CPU backend was not selected\n");
     return 6;
   }
-  if (strcmp(xtbloom_version_string(), "0.0.0") != 0) {
+  if (strcmp(xtbloom_version_string(), XTBLOOM_VERSION_STRING) != 0) {
     fprintf(stderr, "unexpected version string\n");
     return 7;
   }

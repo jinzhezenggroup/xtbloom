@@ -10,7 +10,7 @@ integrations.
 Atomic units everywhere: bohr, Hartree, Hartree/bohr, elementary charge.
 """
 
-__version__ = "0.0.0"
+from importlib.metadata import version as _distribution_version
 
 from ._dlpack import DLPackResultBuffer
 from .exceptions import (
@@ -35,6 +35,12 @@ from .interface import (
     symbols_to_numbers,
 )
 from .torch import xtbloom_torch
+
+# The installed distribution metadata is resolved from Git tags by the build
+# backend. Reading it here avoids a second generated or hand-maintained Python
+# version source.
+__version__ = _distribution_version("xtbloom")
+del _distribution_version
 
 __all__ = [
     "ArrayBatch",

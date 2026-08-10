@@ -1,2 +1,3 @@
 # Preserve the canonical tblite exporter byte stream, including its final blank line.
 data/parameters/gfn2.toml whitespace=-blank-at-eof
+.git_archival.txt export-subst

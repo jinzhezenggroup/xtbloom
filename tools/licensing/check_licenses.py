@@ -21,6 +21,10 @@ from pathlib import Path, PurePath
 import tomllib
 
 PROJECT_LICENSE = "GPL-3.0-or-later"
+REVIEWED_BUILD_REQUIREMENTS = {
+    "scikit-build-core>=1.0.3",
+    "setuptools-scm>=10.2.1",
+}
 EXCEPTION_FILE = "CUDA_MKL_LINKING_EXCEPTION"
 IMPLIB_MANIFEST_PATH = "cmake/3rdparty/implib_manifest.json"
 IMPLIB_VENDOR_PATH = "cmake/3rdparty/implib"
@@ -163,6 +167,8 @@ NOTICE_TOKENS = (
     "No LAMMPS source code",
     "scipy-openblas32",
     "array-api-compat",
+    "scikit-build-core >=1.0.3",
+    "setuptools-scm >=10.2.1",
     "076218e4f5aa18578418c7d04fad9ab581a16bb8",
     "Copyright (c) 2022 Consortium for Python Data API Standards",
     "3dmol@2.5.5",
@@ -340,6 +346,68 @@ def _require_dependency_policy(project: object) -> None:
                 "build-only or proprietary providers must not be included in "
                 f"the {extra} extra"
             )
+
+
+def _require_build_dependency_policy(build_system: object) -> None:
+    """Require the reviewed direct PEP 517 tools with compatible lower bounds."""
+    if not isinstance(build_system, dict):
+        raise LicenseCheckError("pyproject build-system metadata must be a table")
+    requirements = build_system.get("requires")
+    if (
+        not isinstance(requirements, list)
+        or set(requirements) != REVIEWED_BUILD_REQUIREMENTS
+    ):
+        raise LicenseCheckError(
+            "build-system.requires must equal the reviewed direct compatible "
+            "requirements"
+        )
+    if build_system.get("build-backend") != "scikit_build_core.build":
+        raise LicenseCheckError("pyproject uses an unreviewed build backend")
+
+
+def _require_version_metadata_policy(metadata: object) -> None:
+    """Require strict tag-derived metadata with no usable fallback version."""
+    if not isinstance(metadata, dict):
+        raise LicenseCheckError("pyproject metadata must be a table")
+    project = metadata.get("project")
+    tool = metadata.get("tool")
+    if not isinstance(project, dict) or not isinstance(tool, dict):
+        raise LicenseCheckError("pyproject project/tool metadata must be tables")
+    if project.get("dynamic") != ["version"] or "version" in project:
+        raise LicenseCheckError("project version must be exclusively dynamic")
+    if tool.get("dynamic-metadata") != [
+        {"provider": "scikit_build_core.metadata.setuptools_scm"}
+    ]:
+        raise LicenseCheckError("project uses an unreviewed dynamic version provider")
+    expected_setuptools_scm = {
+        "version_scheme": "only-version",
+        "local_scheme": "no-local-version",
+        "tag": {
+            "regex": (
+                r"^v(?P<version>(?:0|[1-9][0-9]*)\."
+                r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$"
+            ),
+        },
+        "scm": {
+            "git": {
+                "pre_parse": "fail_on_shallow",
+                "describe_command": [
+                    "git",
+                    "describe",
+                    "--dirty",
+                    "--tags",
+                    "--long",
+                    "--abbrev=40",
+                    "--match",
+                    "v*",
+                ],
+            }
+        },
+    }
+    if tool.get("setuptools_scm") != expected_setuptools_scm:
+        raise LicenseCheckError(
+            "setuptools-scm must use the reviewed strict Git-tag policy"
+        )
 
 
 def _require_openblas_build_policy(metadata: object) -> None:
@@ -681,7 +749,6 @@ def check_source(root: Path) -> None:
         or "Version 3" not in license_text
     ):
         raise LicenseCheckError("LICENSE is not the complete GNU GPL version 3 text")
-
     metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     project = metadata.get("project", {})
     if project.get("license") != PROJECT_LICENSE:
@@ -696,6 +763,8 @@ def check_source(root: Path) -> None:
         if required not in declared:
             raise LicenseCheckError(f"pyproject license-files omits {required}")
     _require_dependency_policy(project)
+    _require_build_dependency_policy(metadata.get("build-system"))
+    _require_version_metadata_policy(metadata)
     _require_openblas_build_policy(metadata)
     _require_exception_policy(root)
 

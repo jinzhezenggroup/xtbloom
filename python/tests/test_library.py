@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
-from xtbloom import library
+from xtbloom import __version__, library
 from xtbloom.exceptions import XTBloomValueError
 
 if TYPE_CHECKING:
@@ -16,8 +16,8 @@ if TYPE_CHECKING:
 
 
 def test_version_string() -> None:
-    """Expose the native library version through the ctypes wrapper."""
-    assert library.get_version() == "0.0.0"
+    """Keep Python distribution metadata and the native C API in lockstep."""
+    assert library.get_version() == __version__
 
 
 def test_runtime_search_includes_user_site_packages(

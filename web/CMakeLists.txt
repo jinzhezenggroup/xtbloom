@@ -25,7 +25,10 @@ endif()
 set(_xtbloom_web_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_xtbloom_web_site "${CMAKE_CURRENT_BINARY_DIR}/site")
 set(_xtbloom_web_obj "${CMAKE_CURRENT_BINARY_DIR}/xtbloom_web.o")
-set(_xtbloom_web_include "-I${CMAKE_SOURCE_DIR}/include")
+# The adapter is compiled by a custom emcc command rather than a CMake target,
+# so propagate both halves of the public-header build interface explicitly.
+set(_xtbloom_web_source_include "-I${CMAKE_SOURCE_DIR}/include")
+set(_xtbloom_web_generated_include "-I${XTBLOOM_GENERATED_INCLUDE_DIR}")
 
 # The core library's data model is selected before this subdirectory is
 # processed, through the Emscripten compiler flags used at configure time.
@@ -83,7 +86,8 @@ add_custom_command(
   OUTPUT "${_xtbloom_web_obj}"
   COMMAND ${CMAKE_C_COMPILER}
           "${_xtbloom_web_arch_flag}" -fPIC -O2
-          "${_xtbloom_web_include}"
+          "${_xtbloom_web_generated_include}"
+          "${_xtbloom_web_source_include}"
           -c "${_xtbloom_web_src}/xtbloom_web.c"
           -o "${_xtbloom_web_obj}"
   DEPENDS "${_xtbloom_web_src}/xtbloom_web.c"
@@ -106,7 +110,8 @@ add_custom_command(
           ${CMAKE_CXX_COMPILER}
           "${_xtbloom_web_obj}"
           $<TARGET_FILE:xtbloom>
-          "${_xtbloom_web_include}"
+          "${_xtbloom_web_generated_include}"
+          "${_xtbloom_web_source_include}"
           -o "${_xtbloom_web_site}/xtbloom_web.js"
           "${_xtbloom_web_arch_flag}" -O2 -sMAIN_MODULE=2
           -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createXTBloomModule

@@ -330,6 +330,11 @@ static int parse_mode(int argc, char** argv, consumer_mode_t* mode) {
 }
 
 int main(int argc, char** argv) {
+  if (strcmp(xtbloom_version_string(), XTBLOOM_VERSION_STRING) != 0) {
+    fprintf(stderr, "installed product-version header and C API disagree\n");
+    return 2;
+  }
+
   consumer_mode_t mode;
   if (!parse_mode(argc, argv, &mode)) {
     return 1;

@@ -1,10 +1,9 @@
 name: Python wheels
 
-# Builds cross-platform wheels with cibuildwheel (one matrix entry per
-# platform, as recommended by cibuildwheel and modeled on DeePMD-kit's
-# build_wheel.yml). Each entry tells cibuildwheel exactly which build to
-# produce via CIBW_BUILD and which test (if any) to run through cibuildwheel's
-# own test feature.
+# Builds wheels directly from complete Git checkouts so every platform resolves
+# the product version from the reachable release tag. The independent sdist job
+# verifies that unpacked source archives retain the same frozen version through
+# PKG-INFO when Git metadata is no longer present.
 #
 # - Linux x86_64 builds a CUDA-enabled wheel in the PyPA CUDA manylinux image
 #   ([tool.cibuildwheel] in pyproject.toml) and runs the full conformance suite
@@ -21,12 +20,58 @@ on:
   # same-repository PR branch does not schedule duplicate wheel builds.
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a clean exact strict release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "release tag must match vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
+          test "$(git describe --tags --exact-match HEAD)" = "$GITHUB_REF_NAME"
+          test -z "$(git status --porcelain)"
+      - name: Install uv and Python 3.11
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.10.7"
+          python-version: "3.11"
+          enable-cache: true
+      - name: Build source distribution
+        run: uv build --sdist --out-dir source-dist
+      - name: Verify source archive version and licenses
+        shell: bash
+        run: |
+          mapfile -t archives < <(find source-dist -maxdepth 1 -name 'xtbloom-*.tar.gz' -print)
+          test "${#archives[@]}" -eq 1
+          version=$(tar -xOzf "${archives[0]}" --wildcards '*/PKG-INFO' |
+            sed -n 's/^Version: //p')
+          test -n "$version"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            test "$version" = "${GITHUB_REF_NAME#v}"
+          fi
+          python tools/licensing/check_licenses.py --source-root . "${archives[0]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: xtbloom-sdist
+          path: source-dist/*.tar.gz
+          if-no-files-found: error
+
   build_wheels:
     name: Build wheels for ${{ matrix.platform_id }}
     runs-on: ${{ matrix.os }}
@@ -47,7 +92,21 @@ jobs:
             variant: cuda
             tests: cpu
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a clean exact strict release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "release tag must match vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          test "$(git cat-file -t "$GITHUB_REF_NAME")" = tag
+          test "$(git describe --tags --exact-match HEAD)" = "$GITHUB_REF_NAME"
+          test -z "$(git status --porcelain)"
       - name: Restore ccache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -79,7 +138,7 @@ jobs:
           restore-keys: |
             cibw-${{ runner.os }}-${{ matrix.platform_id }}-
       - name: Build wheels
-        uses: pypa/cibuildwheel@v4.2
+        uses: pypa/cibuildwheel@1828c10ab37f080699c7b81cea34097c684a7074 # v4.2
         env:
           CIBW_ARCHS: all
           CIBW_BUILD: ${{ matrix.build }}
@@ -95,15 +154,18 @@ jobs:
           # driver resolver can exercise its no-device fallback; production
           # code never searches or preloads stubs. A real-GPU forced-CUDA test
           # is run separately on the project GPU before merge/release.
-          CIBW_TEST_COMMAND: bash {project}/python/ci/run-wheel-test.sh ${{ matrix.tests }} {project}
+          CIBW_TEST_COMMAND: bash {package}/python/ci/run-wheel-test.sh ${{ matrix.tests }} {package}
           CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test,cuda12' || '' }}
         with:
+          package-dir: .
           output-dir: wheelhouse
           # cibuildwheel[uv]: install uv so `build-frontend = "build[uv]"`
           # (pyproject.toml) can use it for builds and test environments.
           extras: "uv"
       - name: Enforce PyPI wheel size limit
         run: python python/ci/check-wheel-size.py wheelhouse
+      - name: Verify wheel product-version parity
+        run: python python/ci/check-wheel-version.py wheelhouse/*.whl
       - name: Verify wheel licenses
         run: python tools/licensing/check_licenses.py --source-root . wheelhouse/*.whl
       - name: Inspect private OpenBLAS provider
@@ -118,14 +180,14 @@ jobs:
           --checker tests/abi/check_cuda_dependencies.py
           --readelf readelf
           wheelhouse/*.whl
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: xtbloom-wheels-${{ matrix.platform_id }}
           path: ./wheelhouse/*.whl
 
   pass:
     name: Pass building wheels
-    needs: [build_wheels]
+    needs: [build_sdist, build_wheels]
     runs-on: ubuntu-24.04
     if: always()
     steps:

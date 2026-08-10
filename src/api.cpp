@@ -78,7 +78,7 @@ xtbloom_status_t initialize_structure(T* value, std::size_t caller_size, std::si
 
 extern "C" {
 
-const char* xtbloom_version_string(void) { return "0.0.0"; }
+const char* xtbloom_version_string(void) { return XTBLOOM_VERSION_STRING; }
 
 const char* xtbloom_status_string(xtbloom_status_t status) {
   switch (status) {

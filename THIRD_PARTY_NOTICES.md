@@ -7,6 +7,24 @@ retained under its own terms and is not relicensed by that permission.
 The manifests named below pin the source revisions and content digests used
 to produce the redistributed data.
 
+## Python build and Git-version tooling
+
+The isolated PEP 517 environment installs two direct build requirements from
+PyPI:
+
+- scikit-build-core >=1.0.3
+  (<https://github.com/scikit-build/scikit-build-core>, `Apache-2.0`) provides
+  the build backend and dynamic-metadata bridge;
+- setuptools-scm >=10.2.1
+  (<https://github.com/pypa/setuptools-scm>, `MIT`) parses Git and archive
+  metadata according to xTBloom's strict tag configuration.
+
+These tools are not vendored, linked into `libxtbloom`, or redistributed in
+xTBloom source archives, native installs, or wheels. Their installed Python
+distributions retain their own license metadata; the corresponding Apache and
+MIT texts are also available as `LICENSES/Apache-2.0.txt` and
+`LICENSES/MIT.txt`.
+
 ## array-api-compat
 
 Repository: <https://github.com/data-apis/array-api-compat>

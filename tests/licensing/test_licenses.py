@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[2]
+WHEEL_DIST_INFO = "xtbloom-test.dist-info"
 CHECKER_PATH = REPOSITORY / "tools" / "licensing" / "check_licenses.py"
 SPEC = importlib.util.spec_from_file_location("xtbloom_check_licenses", CHECKER_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -43,7 +44,7 @@ class LicenseArchiveTests(unittest.TestCase):
 
     def _valid_wheel_names(self) -> set[str]:
         names = {
-            f"xtbloom-0.0.0.dist-info/licenses/{suffix}"
+            f"{WHEEL_DIST_INFO}/licenses/{suffix}"
             for suffix in CHECKER.COMMON_ARCHIVE_SUFFIXES
         } | {f"xtbloom/{suffix}" for suffix in CHECKER.WHEEL_ARCHIVE_SUFFIXES}
         manifest = CHECKER.json.loads(
@@ -61,7 +62,7 @@ class LicenseArchiveTests(unittest.TestCase):
     def test_project_license_cannot_be_satisfied_by_third_party_filename(self) -> None:
         """Require the project license at its exact archive location."""
         names = self._valid_wheel_names()
-        names.remove("xtbloom-0.0.0.dist-info/licenses/LICENSE")
+        names.remove(f"{WHEEL_DIST_INFO}/licenses/LICENSE")
         names.add("xtbloom/share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
             wheel = Path(directory) / "xtbloom-test_x86_64.whl"
@@ -94,7 +95,7 @@ class LicenseArchiveTests(unittest.TestCase):
     def test_wheel_must_retain_linking_exception(self) -> None:
         """Require the GPLv3 Section 7 exception in wheel archives."""
         names = self._valid_wheel_names()
-        missing = "xtbloom-0.0.0.dist-info/licenses/CUDA_MKL_LINKING_EXCEPTION"
+        missing = f"{WHEEL_DIST_INFO}/licenses/CUDA_MKL_LINKING_EXCEPTION"
         names.remove(missing)
         names.remove("xtbloom/share/licenses/xtbloom/CUDA_MKL_LINKING_EXCEPTION")
         with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
@@ -109,7 +110,7 @@ class LicenseArchiveTests(unittest.TestCase):
         """Keep the new runtime dependency's distinct MIT grant in wheels."""
         names = self._valid_wheel_names()
         suffix = "LICENSES/array-api-compat-MIT.txt"
-        names.remove(f"xtbloom-0.0.0.dist-info/licenses/{suffix}")
+        names.remove(f"{WHEEL_DIST_INFO}/licenses/{suffix}")
         names.remove(
             "xtbloom/share/licenses/xtbloom/third-party/array-api-compat-MIT.txt"
         )
@@ -343,6 +344,121 @@ class DependencyPolicyTests(unittest.TestCase):
         project["optional-dependencies"]["cuda12"].pop()
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed NVIDIA"):
             CHECKER._require_dependency_policy(project)
+
+
+class BuildDependencyPolicyTests(unittest.TestCase):
+    """Keep direct isolated build requirements compatible and reviewed."""
+
+    def setUp(self) -> None:
+        """Load the build-system table used by each policy mutation."""
+        metadata = CHECKER.tomllib.loads(
+            (REPOSITORY / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        self.build_system = metadata["build-system"]
+
+    def test_current_build_dependency_policy_is_accepted(self) -> None:
+        """Accept the two reviewed direct requirements with lower bounds."""
+        CHECKER._require_build_dependency_policy(self.build_system)
+
+    def test_build_dependency_lower_bound_must_not_be_weakened(self) -> None:
+        """Reject a scikit-build-core release lacking the provider API."""
+        build_system = copy.deepcopy(self.build_system)
+        build_system["requires"] = [
+            requirement.replace(">=1.0.3", ">=1.0.2")
+            if requirement.startswith("scikit-build-core")
+            else requirement
+            for requirement in build_system["requires"]
+        ]
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "direct compatible"):
+            CHECKER._require_build_dependency_policy(build_system)
+
+    def test_build_dependency_must_not_be_exactly_pinned(self) -> None:
+        """Do not freeze the user's isolated build environment to one release."""
+        build_system = copy.deepcopy(self.build_system)
+        build_system["requires"] = [
+            requirement.replace(">=1.0.3", "==1.0.3")
+            if requirement.startswith("scikit-build-core")
+            else requirement
+            for requirement in build_system["requires"]
+        ]
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "direct compatible"):
+            CHECKER._require_build_dependency_policy(build_system)
+
+    def test_direct_build_dependency_set_must_remain_complete(self) -> None:
+        """Reject omission of the direct Git metadata provider."""
+        build_system = copy.deepcopy(self.build_system)
+        build_system["requires"] = [
+            requirement
+            for requirement in build_system["requires"]
+            if not requirement.startswith("setuptools-scm")
+        ]
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "direct compatible"):
+            CHECKER._require_build_dependency_policy(build_system)
+
+    def test_transitive_build_dependency_is_not_declared_directly(self) -> None:
+        """Keep backend implementation dependencies out of the user contract."""
+        build_system = copy.deepcopy(self.build_system)
+        build_system["requires"].append("packaging==26.3")
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "direct compatible"):
+            CHECKER._require_build_dependency_policy(build_system)
+
+
+class VersionMetadataPolicyTests(unittest.TestCase):
+    """Keep every product version dependent on strict Git-tag metadata."""
+
+    def setUp(self) -> None:
+        """Load the complete project metadata used by each policy mutation."""
+        self.metadata = CHECKER.tomllib.loads(
+            (REPOSITORY / "pyproject.toml").read_text(encoding="utf-8")
+        )
+
+    def test_current_version_metadata_policy_is_accepted(self) -> None:
+        """Accept the reviewed dynamic provider and strict tag grammar."""
+        CHECKER._require_version_metadata_policy(self.metadata)
+
+    def test_static_project_version_is_rejected(self) -> None:
+        """Reject reintroduction of a hand-maintained project version."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["project"]["version"] = "0.0.0"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "exclusively dynamic"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+    def test_usable_fallback_version_is_rejected(self) -> None:
+        """Reject silent version synthesis when Git/archive metadata is absent."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["tool"]["setuptools_scm"]["fallback_version"] = "0.0.0"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "strict Git-tag"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+    def test_loose_tag_regex_is_rejected(self) -> None:
+        """Reject tags outside the exact vMAJOR.MINOR.PATCH grammar."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["tool"]["setuptools_scm"]["tag"]["regex"] = r"^(?P<version>.+)$"
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "strict Git-tag"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+    def test_describe_must_not_skip_malformed_v_tags(self) -> None:
+        """Reserve the full v* namespace so malformed newer tags fail."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["tool"]["setuptools_scm"]["scm"]["git"]["describe_command"][-1] = (
+            "v[0-9]*.[0-9]*.[0-9]*"
+        )
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "strict Git-tag"):
+            CHECKER._require_version_metadata_policy(metadata)
+
+    def test_custom_provider_cannot_replace_builtin_plugin(self) -> None:
+        """Keep version resolution on scikit-build-core's supported plugin."""
+        metadata = copy.deepcopy(self.metadata)
+        metadata["tool"]["dynamic-metadata"] = [
+            {
+                "provider": {
+                    "path": "python/ci",
+                    "module": "custom_version_provider",
+                }
+            }
+        ]
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed"):
+            CHECKER._require_version_metadata_policy(metadata)
 
 
 class LinkingExceptionTests(unittest.TestCase):

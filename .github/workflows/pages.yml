@@ -57,8 +57,9 @@ jobs:
       # including custom web-adapter and side-module commands.
       EM_COMPILER_WRAPPER: ccache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node for npm and scientific smoke tests
@@ -127,7 +128,9 @@ jobs:
 
       - name: Run public C ABI layout and short-initializer checks
         run: |
-          emcc "${ARCH_FLAG}" -std=c11 -Iinclude -c tests/c_api_test.c \
+          emcc "${ARCH_FLAG}" -std=c11 \
+            -I"${BUILD_DIR}/generated/include" -Iinclude \
+            -c tests/c_api_test.c \
             -o "build/${{ matrix.architecture }}-c-api-test.o"
           EMCC_FORCE_STDLIBS=1 em++ "${ARCH_FLAG}" \
             "build/${{ matrix.architecture }}-c-api-test.o" \

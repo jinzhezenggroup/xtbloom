@@ -1,11 +1,30 @@
 cmake_minimum_required(VERSION 3.24)
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/xtbloom_version.cmake)
+xtbloom_resolve_version(XTBLOOM_VERSION_RELEASE XTBLOOM_VERSION_FULL)
+
 project(
   xtbloom
-  VERSION 0.0.0
+  VERSION ${XTBLOOM_VERSION_RELEASE}
   DESCRIPTION "Batched CPU and GPU inference for GFN-xTB"
   LANGUAGES C CXX
 )
+
+# The product version follows Git tags. ABI generation and SONAME changes are
+# independent compatibility decisions and must remain manually reviewed.
+set(XTBLOOM_ABI_SOVERSION 0)
+set(XTBLOOM_GENERATED_INCLUDE_DIR
+  ${CMAKE_CURRENT_BINARY_DIR}/generated/include
+)
+file(MAKE_DIRECTORY ${XTBLOOM_GENERATED_INCLUDE_DIR}/xtbloom)
+configure_file(
+  cmake/xtbloom_version.h.in
+  ${XTBLOOM_GENERATED_INCLUDE_DIR}/xtbloom/version.h
+  @ONLY
+)
+# Several provider-free ABI tests compile the public header without linking the
+# library target. Make the one generated public header visible consistently.
+include_directories(BEFORE ${XTBLOOM_GENERATED_INCLUDE_DIR})
 
 include(CheckLanguage)
 include(CheckLibraryExists)
@@ -540,6 +559,7 @@ add_library(xtbloom::xtbloom ALIAS xtbloom)
 target_compile_features(xtbloom PUBLIC cxx_std_17)
 target_include_directories(xtbloom
   PUBLIC
+    $<BUILD_INTERFACE:${XTBLOOM_GENERATED_INCLUDE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   PRIVATE
@@ -563,7 +583,7 @@ if(NOT XTBLOOM_PYTHON_WHEEL)
   # library instead.
   set_target_properties(xtbloom PROPERTIES
     VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
+    SOVERSION ${XTBLOOM_ABI_SOVERSION}
   )
 endif()
 if(UNIX AND NOT APPLE)
@@ -1061,6 +1081,11 @@ if(XTBLOOM_BUILD_TESTS)
     NAME xtbloom.cmake.cuda_toolkit_metadata
     COMMAND ${CMAKE_COMMAND} -P
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/cuda_toolkit_metadata_test.cmake
+  )
+  add_test(
+    NAME xtbloom.cmake.version_resolution
+    COMMAND ${CMAKE_COMMAND} -P
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/version_resolution_test.cmake
   )
 
   if(XTBLOOM_CPU_LINALG_RUNTIME)
@@ -3147,6 +3172,9 @@ endif()
 
 install(TARGETS xtbloom EXPORT xtbloomTargets)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES ${XTBLOOM_GENERATED_INCLUDE_DIR}/xtbloom/version.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/xtbloom
+)
 # Legal material is part of the installed SDK contract. Keep project terms,
 # third-party notices, and machine-readable provenance together so native
 # consumers receive the same audit trail as source and Python distributions.
@@ -3202,6 +3230,7 @@ install(FILES
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/xtbloom
 )
 
+message(STATUS "xtbloom product version: ${XTBLOOM_VERSION_FULL}")
 message(STATUS "xtbloom CUDA backend: ${XTBLOOM_HAS_CUDA}")
 
 if(XTBLOOM_BUILD_WEB_DEMO)
