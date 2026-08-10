@@ -108,12 +108,13 @@ vendored from tag revision
 SHA-256
 `e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec`.
 Its complete retained include tree is byte-pinned in
-`cmake/3rdparty/eigen/manifest.json`. Source checkouts and source distributions
-carry that corresponding source. The deployed Pages site carries the compiled
-provider, upstream license records, and provenance manifest, while native
-CMake installs and Python wheels exclude the Web-only Eigen tree. The site
-also carries the project license, third-party notices, applicable dependency
-license texts, and parameter provenance.
+`cmake/3rdparty/eigen/manifest.json`. The pinned Git checkout carries that
+corresponding source; installation-focused PyPI source distributions, native
+CMake installs, and Python wheels exclude the Web-only Eigen tree. The
+deployed Pages site carries the compiled provider, upstream license records,
+and provenance manifest identifying the exact Git/release source. The site also
+carries the project license, third-party notices, applicable dependency license
+texts, and parameter provenance.
 
 Do not replace pinned URLs with floating versions or add a Web dependency
 without updating the provenance, license payload, lockfile, and deployment

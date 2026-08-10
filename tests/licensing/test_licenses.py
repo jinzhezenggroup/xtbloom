@@ -38,6 +38,211 @@ VERSION_INSPECTOR = importlib.util.module_from_spec(VERSION_SPEC)
 VERSION_SPEC.loader.exec_module(VERSION_INSPECTOR)
 
 
+class SourceDistributionBoundaryTests(unittest.TestCase):
+    """Keep PyPI sdists limited to wheel-build and provenance inputs."""
+
+    @staticmethod
+    def _archive_names(relative_names: set[str]) -> set[str]:
+        root = "xtbloom-0.1.0"
+        return {f"{root}/{relative}" for relative in relative_names}
+
+    @staticmethod
+    def _installation_files() -> set[str]:
+        return {
+            "CMakeLists.txt",
+            "PKG-INFO",
+            "cmake/xtbloom_cuda_toolkit.cmake",
+            "data/parameters/d4.hpp",
+            "python/xtbloom/__init__.py",
+            "src/backends/cuda/gfn2_scc_loop.cu",
+            "tools/implib_stubgen.py",
+        }
+
+    def test_installation_focused_payload_is_accepted(self) -> None:
+        """Accept an archive that exactly matches its tracked allow-surface."""
+        expected = self._installation_files()
+        CHECKER._check_sdist_installation_payload(
+            self._archive_names(expected), expected
+        )
+
+    def test_repository_only_tree_is_rejected(self) -> None:
+        """Prevent tests and similar repository surfaces from leaking back in."""
+        expected = self._installation_files()
+        names = self._archive_names(expected)
+        names.add("xtbloom-0.1.0/tests/runtime_test.cpp")
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError,
+            "unexpected repository-only or generated payload.*tests/",
+        ):
+            CHECKER._check_sdist_installation_payload(names, expected)
+
+    def test_development_lockfile_is_rejected(self) -> None:
+        """Keep the repository uv resolution out of the PEP 517 source input."""
+        expected = self._installation_files()
+        names = self._archive_names(expected)
+        names.add("xtbloom-0.1.0/uv.lock")
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError,
+            "unexpected repository-only or generated payload.*uv.lock",
+        ):
+            CHECKER._check_sdist_installation_payload(names, expected)
+
+    def test_checkout_wheel_orchestration_is_rejected(self) -> None:
+        """Retain only the CMake-invoked resolver from repository CI helpers."""
+        expected = self._installation_files()
+        names = self._archive_names(expected)
+        names.add("xtbloom-0.1.0/python/ci/repair-wheel.sh")
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError,
+            "unexpected repository-only or generated payload.*python/ci/repair-wheel",
+        ):
+            CHECKER._check_sdist_installation_payload(names, expected)
+
+    def test_missing_build_generator_is_rejected(self) -> None:
+        """Retain the CUDA shim generator required by CUDA source builds."""
+        expected = self._installation_files()
+        names = self._archive_names(expected)
+        names.remove("xtbloom-0.1.0/tools/implib_stubgen.py")
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError, "payload differs.*missing.*implib_stubgen"
+        ):
+            CHECKER._check_sdist_installation_payload(names, expected)
+
+    def test_generated_binary_is_rejected(self) -> None:
+        """Source archives must not carry locally compiled native artifacts."""
+        expected = self._installation_files()
+        names = self._archive_names(expected)
+        names.add("xtbloom-0.1.0/src/libxtbloom.so")
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError,
+            "unexpected repository-only or generated payload.*libxtbloom.so",
+        ):
+            CHECKER._check_sdist_installation_payload(names, expected)
+
+    def test_tracked_policy_covers_complete_cuda_and_parameter_sources(self) -> None:
+        """Derive the allow-surface from tracked files, not directory sentinels."""
+        expected = CHECKER._tracked_sdist_installation_files(REPOSITORY)
+        for required in (
+            "cmake/xtbloom_cuda_toolkit.cmake",
+            "cmake/3rdparty/torch-stable/aoti_symbols.txt",
+            "data/parameters/d4.hpp",
+            "data/parameters/gfn2.hpp",
+            "src/backends/cuda/gfn2_scc_loop.cu",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, expected)
+        for excluded in (
+            "cmake/3rdparty/eigen/Eigen/Core",
+            "cmake/3rdparty/eigen/manifest.json",
+            "tests/runtime_test.cpp",
+            "tools/eigen_vendor.py",
+            "uv.lock",
+            "web/app.js",
+        ):
+            with self.subTest(excluded=excluded):
+                self.assertNotIn(excluded, expected)
+
+    def test_archive_bytes_and_modes_must_match_source(self) -> None:
+        """Accept only byte-exact source with the tracked executable bit."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-sdist-test-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            (source / "build.sh").write_bytes(b"#!/bin/sh\n")
+            archive = root / "xtbloom-0.1.0.tar.gz"
+            info = tarfile.TarInfo("xtbloom-0.1.0/build.sh")
+            info.mode = 0o755
+            info.size = len(b"#!/bin/sh\n")
+            with tarfile.open(archive, "w:gz") as tar:
+                tar.addfile(info, io.BytesIO(b"#!/bin/sh\n"))
+            CHECKER._check_sdist_archive_against_manifest(
+                archive, source, {"build.sh": 0o755}
+            )
+
+    def test_archive_modified_bytes_are_rejected(self) -> None:
+        """Reject an allowlisted path whose archived bytes were rewritten."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-sdist-test-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            (source / "source.cpp").write_bytes(b"source\n")
+            archive = root / "xtbloom-0.1.0.tar.gz"
+            info = tarfile.TarInfo("xtbloom-0.1.0/source.cpp")
+            info.mode = 0o644
+            info.size = len(b"modified\n")
+            with tarfile.open(archive, "w:gz") as tar:
+                tar.addfile(info, io.BytesIO(b"modified\n"))
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "tracked file bytes differ.*source.cpp"
+            ):
+                CHECKER._check_sdist_archive_against_manifest(
+                    archive, source, {"source.cpp": 0o644}
+                )
+
+    def test_archive_mode_drift_is_rejected(self) -> None:
+        """Reject an executable source generator made non-executable in tar."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-sdist-test-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            (source / "generator.py").write_bytes(b"#!/usr/bin/env python3\n")
+            archive = root / "xtbloom-0.1.0.tar.gz"
+            info = tarfile.TarInfo("xtbloom-0.1.0/generator.py")
+            info.mode = 0o644
+            payload = b"#!/usr/bin/env python3\n"
+            info.size = len(payload)
+            with tarfile.open(archive, "w:gz") as tar:
+                tar.addfile(info, io.BytesIO(payload))
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "file mode differs.*generator.py"
+            ):
+                CHECKER._check_sdist_archive_against_manifest(
+                    archive, source, {"generator.py": 0o755}
+                )
+
+    def test_archive_link_member_is_rejected(self) -> None:
+        """Reject symlink entries before extracting an installation sdist."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-sdist-test-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            archive = root / "xtbloom-0.1.0.tar.gz"
+            info = tarfile.TarInfo("xtbloom-0.1.0/link")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "../../outside"
+            with tarfile.open(archive, "w:gz") as tar:
+                tar.addfile(info)
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "non-regular archive member.*link"
+            ):
+                CHECKER._check_sdist_archive_against_manifest(archive, source, {})
+
+    def test_archive_normalized_duplicate_is_rejected(self) -> None:
+        """Reject two tar names that normalize to the same payload path."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-sdist-test-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            (source / "source.cpp").write_bytes(b"source\n")
+            archive = root / "xtbloom-0.1.0.tar.gz"
+            payload = b"source\n"
+            with tarfile.open(archive, "w:gz") as tar:
+                for name in (
+                    "xtbloom-0.1.0/source.cpp",
+                    "xtbloom-0.1.0/./source.cpp",
+                ):
+                    info = tarfile.TarInfo(name)
+                    info.mode = 0o644
+                    info.size = len(payload)
+                    tar.addfile(info, io.BytesIO(payload))
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "duplicate archive member"
+            ):
+                CHECKER._check_sdist_archive_against_manifest(
+                    archive, source, {"source.cpp": 0o644}
+                )
+
+
 class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
     """Keep hash-pinned text stable across Git checkout platforms."""
 
@@ -911,47 +1116,6 @@ class EigenProvenanceTests(unittest.TestCase):
         shutil.copy2(REPOSITORY / ".gitattributes", root / ".gitattributes")
         shutil.copy2(REPOSITORY / "pyproject.toml", root / "pyproject.toml")
 
-    def _write_sdist(
-        self,
-        root: Path,
-        *,
-        missing: str | None = None,
-        modified: str | None = None,
-        unexpected: str | None = None,
-    ) -> Path:
-        """Create a focused Eigen sdist fixture with optional payload drift."""
-        archive_path = root / "xtbloom-0.1.0.tar.gz"
-        archive_root = "xtbloom-0.1.0"
-        vendor_root = REPOSITORY / CHECKER.EIGEN_VENDOR_PATH
-        with tarfile.open(archive_path, "w:gz") as archive:
-            manifest = vendor_root / "manifest.json"
-            archive.add(
-                manifest,
-                arcname=f"{archive_root}/{CHECKER.EIGEN_MANIFEST_PATH}",
-            )
-            for source in sorted(
-                path for path in vendor_root.rglob("*") if path.is_file()
-            ):
-                relative = source.relative_to(vendor_root).as_posix()
-                if relative == "manifest.json" or relative == missing:
-                    continue
-                payload = source.read_bytes()
-                if relative == modified:
-                    payload += b"// modified\n"
-                member = tarfile.TarInfo(
-                    f"{archive_root}/{CHECKER.EIGEN_VENDOR_PATH}/{relative}"
-                )
-                member.size = len(payload)
-                archive.addfile(member, io.BytesIO(payload))
-            if unexpected is not None:
-                payload = b"// unexpected\n"
-                member = tarfile.TarInfo(
-                    f"{archive_root}/{CHECKER.EIGEN_VENDOR_PATH}/{unexpected}"
-                )
-                member.size = len(payload)
-                archive.addfile(member, io.BytesIO(payload))
-        return archive_path
-
     def test_exact_vendored_tree_is_accepted(self) -> None:
         """Accept the reviewed Eigen release and its mixed-license records."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
@@ -972,7 +1136,7 @@ class EigenProvenanceTests(unittest.TestCase):
                 CHECKER._check_eigen_provenance(root)
 
     def test_unexpected_vendored_source_is_rejected(self) -> None:
-        """Do not let unreviewed Eigen or unsupported files enter an sdist."""
+        """Do not let unreviewed Eigen or unsupported files enter the vendor tree."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
             root = Path(directory)
             self._copy_payload(root)
@@ -991,40 +1155,22 @@ class EigenProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "pinned provenance"):
             CHECKER._check_eigen_manifest(manifest)
 
-    def test_sdist_exact_eigen_tree_is_accepted(self) -> None:
-        """Accept an sdist carrying every manifest-declared Eigen byte."""
+    def test_sdist_policy_requires_explicit_eigen_exclusion(self) -> None:
+        """Keep the checkout-only provider out of installation source archives."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
-            archive = self._write_sdist(Path(directory))
-            CHECKER._check_archived_eigen(archive, CHECKER._archive_names(archive))
-
-    def test_sdist_missing_eigen_header_is_rejected(self) -> None:
-        """Reject an sdist that loses a manifest-declared Eigen header."""
-        with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
-            archive = self._write_sdist(Path(directory), missing="Eigen/Core")
-            with self.assertRaisesRegex(
-                CHECKER.LicenseCheckError, "missing Eigen/Core"
-            ):
-                CHECKER._check_archived_eigen(archive, CHECKER._archive_names(archive))
-
-    def test_sdist_modified_eigen_header_is_rejected(self) -> None:
-        """Reject an sdist whose Eigen bytes differ from the pinned source."""
-        with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
-            archive = self._write_sdist(Path(directory), modified="Eigen/Core")
-            with self.assertRaisesRegex(
-                CHECKER.LicenseCheckError, "differs from pinned bytes.*Eigen/Core"
-            ):
-                CHECKER._check_archived_eigen(archive, CHECKER._archive_names(archive))
-
-    def test_sdist_unexpected_eigen_source_is_rejected(self) -> None:
-        """Reject an sdist that adds unreviewed Eigen or unsupported source."""
-        with tempfile.TemporaryDirectory(prefix="xtbloom-eigen-test-") as directory:
-            archive = self._write_sdist(
-                Path(directory), unexpected="unsupported/Eigen/test.h"
+            root = Path(directory)
+            self._copy_payload(root)
+            metadata = root / "pyproject.toml"
+            metadata.write_text(
+                metadata.read_text(encoding="utf-8").replace(
+                    '  "cmake/3rdparty/eigen/**",\n', "", 1
+                ),
+                encoding="utf-8",
             )
             with self.assertRaisesRegex(
-                CHECKER.LicenseCheckError, "unexpected unsupported/Eigen/test.h"
+                CHECKER.LicenseCheckError, "sdist.exclude omits Web-only"
             ):
-                CHECKER._check_archived_eigen(archive, CHECKER._archive_names(archive))
+                CHECKER._check_eigen_provenance(root)
 
 
 class CudaWheelInspectionTests(unittest.TestCase):

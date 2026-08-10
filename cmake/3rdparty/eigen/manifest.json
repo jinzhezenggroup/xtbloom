@@ -38,7 +38,7 @@
       }
     ]
   },
-  "distribution": "Header-only WebAssembly build input. The source tree is retained in source distributions, is not installed by native CMake, and is not bundled in Python wheels. The Pages artifact contains only compiled code plus the applicable license/provenance files.",
+  "distribution": "Header-only WebAssembly build input. The source tree is retained in Git checkouts for Pages builds and is excluded from installation-focused PyPI source distributions, native CMake installs, and Python wheels. The Pages artifact contains only compiled code plus the applicable license/provenance files and identifies the pinned source revision.",
   "files": [
     {
       "path": "COPYING.APACHE",

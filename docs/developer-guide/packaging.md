@@ -148,6 +148,29 @@ without an NVIDIA driver do not count as real CUDA runtime validation.
 
 ## Source distributions
 
+The PyPI sdist is an installation artifact, not a repository snapshot. It
+contains the native and Python sources needed for a PEP 517 wheel build, the
+generated parameter sources plus their deterministic generators, vendored
+build inputs, manifests, licenses, notices, and frozen version metadata.
+
+Repository-only validation and publication surfaces stay in Git: native and
+Python tests, benchmark harnesses and evidence, conformance/oracle corpora,
+maintainer documentation, the Web demo, CI and coding-agent configuration, and
+the development dependency lock. This includes the vendored Eigen provider and
+generator used only by the checkout-based Web/Pages build. Excluding those
+files does not claim that the corresponding validation passed inside the
+sdist; release evidence remains in the repository and its issue/CI records.
+
+The sdist supports ordinary PEP 517 CPU or CUDA source builds. The project's
+release-wheel orchestration, repair scripts, and locked private-provider setup
+remain checkout-only; official cibuildwheel jobs build from the exact release
+tag rather than using the sdist as their input. The one `python/ci` helper kept
+in the archive is the OpenBLAS manifest resolver that CMake invokes directly
+when a source build explicitly requests that reviewed provider input.
+Repository tests and the Web demo are likewise checkout-only. A native CMake
+consumer unpacking the sdist must configure with
+`-DXTBLOOM_BUILD_TESTS=OFF`; ordinary PEP 517 builds set that option already.
+
 Build and inspect a source archive with:
 
 ```console
@@ -157,9 +180,12 @@ python3 tools/licensing/check_licenses.py --source-root . \
 ```
 
 The archive must retain the license, CUDA/MKL additional permission,
-third-party notices, required license texts, parameter and source provenance,
-the pinned implib generator source, both README roles, and maintained
-documentation.
+third-party notices, required license texts, parameter generators and source
+provenance, the pinned implib generator source, vendored LibTorch Stable ABI
+headers, both README roles, and every native/Python input used by ordinary PEP
+517 source builds. CI unpacks the archive and builds a CPU wheel from that
+extracted tree so a missing hidden checkout dependency cannot be masked by the
+repository.
 
 ## External material
 

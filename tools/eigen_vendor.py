@@ -25,6 +25,13 @@ VERSION = "5.0.1"
 REVISION = "bc3b39870ecb690a623a3f49149a358b95c5781d"
 ARCHIVE_URL = "https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz"
 ARCHIVE_SHA256 = "e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec"
+EIGEN_DISTRIBUTION = (
+    "Header-only WebAssembly build input. The source tree is retained in Git "
+    "checkouts for Pages builds and is excluded from installation-focused "
+    "PyPI source distributions, native CMake installs, and Python wheels. "
+    "The Pages artifact contains only compiled code plus the applicable "
+    "license/provenance files and identifies the pinned source revision."
+)
 VENDOR_RELPATH = Path("cmake/3rdparty/eigen")
 MANIFEST_NAME = "manifest.json"
 LICENSE_NAMES = (
@@ -120,12 +127,7 @@ def generate(args: argparse.Namespace) -> int:
             "primary_spdx": "MPL-2.0",
             "records": list(LICENSE_RECORDS),
         },
-        "distribution": (
-            "Header-only WebAssembly build input. The source tree is retained "
-            "in source distributions, is not installed by native CMake, and "
-            "is not bundled in Python wheels. The Pages artifact contains "
-            "only compiled code plus the applicable license/provenance files."
-        ),
+        "distribution": EIGEN_DISTRIBUTION,
         "files": files,
     }
     (out / MANIFEST_NAME).write_text(
@@ -164,6 +166,8 @@ def check(args: argparse.Namespace) -> int:
         "records": list(LICENSE_RECORDS),
     }:
         errors.append("license declaration differs")
+    if manifest.get("distribution") != EIGEN_DISTRIBUTION:
+        errors.append("distribution boundary differs")
 
     declared_entries = manifest.get("files", [])
     declared = {
