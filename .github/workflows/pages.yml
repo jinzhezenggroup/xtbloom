@@ -62,7 +62,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node for npm and scientific smoke tests
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -165,7 +165,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node for dual-width parity
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '24'
 
