@@ -2,7 +2,7 @@
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
+    rev: v6.0.0 # v6.0.0
     hooks:
       - id: trailing-whitespace
         # These exact generated or hash-pinned artifacts have canonical bytes.
@@ -22,7 +22,7 @@ repos:
       - id: check-symlinks
       - id: check-toml
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: cb8c523fd4835aba42af70f4cad5568db4df0b6c # v0.16.0
+    rev: v0.16.2 # v0.16.0
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -33,7 +33,7 @@ repos:
         types_or: [python, pyi, jupyter]
         exclude: ^cmake/3rdparty/implib/implib-gen\.py$
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: a4405bd34b6505ed51226ba2a5b5428625177d6a # v0.0.69
+    rev: v0.0.69 # v0.0.69
     hooks:
       - id: ty
         # --isolated stops uv from rewriting the pinned uv.lock or the local
@@ -42,7 +42,7 @@ repos:
         # needed for `uv check` to resolve it.
         args: [--isolated]
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: f4d7745e17a28aad7eed2f4874ca8d1568c11c4c # v22.1.8
+    rev: v22.1.8 # v22.1.8
     hooks:
       - id: clang-format
         types_or: [c++, c, cuda]
