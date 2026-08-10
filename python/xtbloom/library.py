@@ -18,8 +18,9 @@ import ctypes
 import ctypes.util
 import os
 import sys
+import weakref
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 import numpy.typing as npt
@@ -43,6 +44,10 @@ STATUS_NOT_IMPLEMENTED = 5
 STATUS_INTERNAL_ERROR = 6
 STATUS_SCC_NOT_CONVERGED = 7
 STATUS_EIGENSOLVER_FAILED = 8
+
+REQUEST_IDLE = 0
+REQUEST_PENDING = 1
+REQUEST_COMPLETE = 2
 
 BACKEND_AUTO = 0
 BACKEND_CPU = 1
@@ -237,6 +242,19 @@ class WorkspaceQuery(ctypes.Structure):
         ("device_required_bytes", ctypes.c_uint64),
         ("device_required_alignment", ctypes.c_uint32),
         ("reserved_v2", ctypes.c_uint32),
+    ]
+
+
+class RequestInfo(ctypes.Structure):
+    """ctypes mirror of ``xtbloom_request_info_t`` ABI version 1."""
+
+    _fields_: ClassVar[list[tuple[str, object]]] = [
+        ("struct_size", ctypes.c_uint32),
+        ("api_version", ctypes.c_uint32),
+        ("state", ctypes.c_int32),
+        ("completion_status", ctypes.c_int32),
+        ("result_flags", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
     ]
 
 
@@ -435,6 +453,85 @@ def _configure_library(library: ctypes.CDLL) -> None:
         ctypes.POINTER(BatchResult),
     ]
     library.xtbloom_compute.restype = ctypes.c_int32
+    _configure_request_api(library)
+
+
+_REQUEST_API_SYMBOLS = (
+    "xtbloom_request_info_init",
+    "xtbloom_request_create",
+    "xtbloom_compute_enqueue",
+    "xtbloom_plan_compute_enqueue",
+    "xtbloom_request_query",
+    "xtbloom_request_wait",
+    "xtbloom_request_get_error",
+    "xtbloom_request_destroy",
+)
+_REQUEST_API_AVAILABILITY: weakref.WeakKeyDictionary[object, bool] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _configure_request_api(library: ctypes.CDLL) -> bool:
+    """Configure the additive request ABI when the loaded library provides it.
+
+    ``XTBLOOM_LIBRARY`` may intentionally select an older ABI-compatible core
+    library. Such a library remains usable through the synchronous API when it
+    exports none of the additive request symbols. A partial symbol group,
+    however, identifies an incompatible or damaged installation and is rejected
+    before any request operation can observe mismatched semantics.
+    """
+    missing = [name for name in _REQUEST_API_SYMBOLS if not hasattr(library, name)]
+
+    if len(missing) == len(_REQUEST_API_SYMBOLS):
+        _REQUEST_API_AVAILABILITY[library] = False
+        return False
+    if missing:
+        missing_list = ", ".join(missing)
+        raise XTBloomRuntimeError(
+            "incompatible xtbloom shared library: the request ABI symbol group "
+            f"is incomplete; missing {missing_list}"
+        )
+
+    symbols: dict[str, Any] = {
+        name: getattr(library, name) for name in _REQUEST_API_SYMBOLS
+    }
+    symbols["xtbloom_request_info_init"].argtypes = [
+        ctypes.POINTER(RequestInfo),
+        ctypes.c_size_t,
+    ]
+    symbols["xtbloom_request_info_init"].restype = ctypes.c_int32
+    symbols["xtbloom_request_create"].argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    symbols["xtbloom_request_create"].restype = ctypes.c_int32
+    for name in ("xtbloom_compute_enqueue", "xtbloom_plan_compute_enqueue"):
+        symbols[name].argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(Batch),
+            ctypes.POINTER(ComputeOptions),
+            ctypes.POINTER(BatchResult),
+            ctypes.c_void_p,
+        ]
+        symbols[name].restype = ctypes.c_int32
+    for name in ("xtbloom_request_query", "xtbloom_request_wait"):
+        symbols[name].argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(RequestInfo),
+        ]
+        symbols[name].restype = ctypes.c_int32
+    symbols["xtbloom_request_get_error"].argtypes = [ctypes.c_void_p]
+    symbols["xtbloom_request_get_error"].restype = ctypes.c_char_p
+    symbols["xtbloom_request_destroy"].argtypes = [ctypes.c_void_p]
+    symbols["xtbloom_request_destroy"].restype = None
+    _REQUEST_API_AVAILABILITY[library] = True
+    return True
+
+
+def request_api_available(library: ctypes.CDLL | None = None) -> bool:
+    """Return whether the resolved native library has the complete request ABI."""
+    handle = load_library() if library is None else library
+    return _REQUEST_API_AVAILABILITY.get(handle, False)
 
 
 _lib: ctypes.CDLL | None = None
@@ -928,6 +1025,9 @@ __all__ = [
     "MEMORY_ROCM_DEVICE",
     "MODEL_GFN1_XTB",
     "MODEL_GFN2_XTB",
+    "REQUEST_COMPLETE",
+    "REQUEST_IDLE",
+    "REQUEST_PENDING",
     "RESULT_DIPOLE_MOMENTS",
     "RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES",
     "SCC_START_FRESH",
@@ -950,6 +1050,7 @@ __all__ = [
     "DlpackView",
     "Interaction",
     "Plan",
+    "RequestInfo",
     "ResultOwnerOptions",
     "WorkspaceQuery",
     "compute_checked",

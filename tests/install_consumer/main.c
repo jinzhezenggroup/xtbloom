@@ -74,6 +74,46 @@ _Static_assert(offsetof(xtbloom_batch_result_t, spin_populations) == 256,
                "installed reserved result outlet offsets must remain stable");
 _Static_assert(XTBLOOM_RESULT_DIPOLE_MOMENTS == (1 << 4),
                "installed dipole publication result flag must remain at bit 4");
+_Static_assert(sizeof(xtbloom_request_state_t) == sizeof(int32_t),
+               "installed request state tag must remain 32-bit");
+_Static_assert(XTBLOOM_REQUEST_INFO_V1_SIZE == 24,
+               "installed request-info ABI-v1 image must remain 24 bytes");
+_Static_assert(sizeof(xtbloom_request_info_t) == XTBLOOM_REQUEST_INFO_V1_SIZE,
+               "installed request-info layout must end at ABI v1");
+_Static_assert(offsetof(xtbloom_request_info_t, completion_status) == 12,
+               "installed request completion status offset must remain stable");
+
+/* Prove that an external C consumer can own and inspect the additive request
+ * ABI without any CUDA headers. CPU enqueue is an explicit capability probe:
+ * it returns NOT_SUPPORTED before touching descriptors or request state. */
+static int run_installed_request_shell(xtbloom_context_t* context) {
+  xtbloom_request_info_t info;
+  if (xtbloom_request_info_init(&info, sizeof(info)) != XTBLOOM_STATUS_SUCCESS) {
+    return 30;
+  }
+  xtbloom_request_t* request = NULL;
+  if (xtbloom_request_create(context, &request) != XTBLOOM_STATUS_SUCCESS || request == NULL) {
+    return 31;
+  }
+  if (xtbloom_request_query(request, &info) != XTBLOOM_STATUS_SUCCESS ||
+      info.state != XTBLOOM_REQUEST_IDLE || info.completion_status != XTBLOOM_STATUS_SUCCESS ||
+      info.result_flags != 0u || strcmp(xtbloom_request_get_error(request), "") != 0) {
+    xtbloom_request_destroy(request);
+    return 32;
+  }
+  if (xtbloom_context_get_backend(context) == XTBLOOM_BACKEND_CPU &&
+      xtbloom_compute_enqueue(context, NULL, NULL, NULL, request) != XTBLOOM_STATUS_NOT_SUPPORTED) {
+    xtbloom_request_destroy(request);
+    return 33;
+  }
+  if (xtbloom_request_wait(request, &info) != XTBLOOM_STATUS_SUCCESS ||
+      info.state != XTBLOOM_REQUEST_IDLE) {
+    xtbloom_request_destroy(request);
+    return 34;
+  }
+  xtbloom_request_destroy(request);
+  return 0;
+}
 
 typedef enum consumer_mode {
   CONSUMER_MODE_SMOKE,
@@ -264,11 +304,25 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
   }
 
   /* Exercise the installed fixed-topology plan and workspace-query ABI. */
+  const xtbloom_backend_t backend = xtbloom_context_get_backend(context);
   xtbloom_plan_t* plan = NULL;
   if (xtbloom_plan_create(context, &batch, &options, &plan) != XTBLOOM_STATUS_SUCCESS ||
       plan == NULL) {
     fprintf(stderr, "installed %s plan creation failed: %s\n", mode_name, xtbloom_get_last_error());
     return 12;
+  }
+  if (backend == XTBLOOM_BACKEND_CPU) {
+    xtbloom_request_t* request = NULL;
+    if (xtbloom_request_create(context, &request) != XTBLOOM_STATUS_SUCCESS || request == NULL ||
+        xtbloom_plan_compute_enqueue(plan, NULL, NULL, NULL, request) !=
+            XTBLOOM_STATUS_NOT_SUPPORTED) {
+      fprintf(stderr, "installed %s plan request probe failed: %s\n", mode_name,
+              xtbloom_get_last_error());
+      xtbloom_request_destroy(request);
+      xtbloom_plan_destroy(plan);
+      return 17;
+    }
+    xtbloom_request_destroy(request);
   }
   xtbloom_workspace_query_t workspace;
   if (xtbloom_workspace_query_init(&workspace, sizeof(workspace)) != XTBLOOM_STATUS_SUCCESS) {
@@ -284,7 +338,6 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
     xtbloom_plan_destroy(plan);
     return 14;
   }
-  const xtbloom_backend_t backend = xtbloom_context_get_backend(context);
   const int device_workspace_invalid =
       backend == XTBLOOM_BACKEND_CUDA
           ? workspace.device_required_bytes == 0u || workspace.device_required_alignment == 0u
@@ -365,6 +418,14 @@ int main(int argc, char** argv) {
     fprintf(stderr, "installed consumer selected an unexpected backend\n");
     xtbloom_context_destroy(context);
     return 4;
+  }
+
+  const int request_status = run_installed_request_shell(context);
+  if (request_status != 0) {
+    fprintf(stderr, "installed request ABI shell failed (%d): %s\n", request_status,
+            xtbloom_get_last_error());
+    xtbloom_context_destroy(context);
+    return request_status;
   }
 
   int inference_status = 0;

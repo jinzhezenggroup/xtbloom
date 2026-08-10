@@ -213,11 +213,35 @@ The required Python CI job installs PyTorch 2.13.0 from PyPI solely to execute
 the public `xtbloom_torch` CPU/autograd tests. The canonical resolution and
 artifact hashes, including PyTorch's separately installed transitive
 dependencies, are recorded in `uv.lock`. PyTorch is imported lazily by the
-optional integration and is not a xTBloom runtime dependency, project extra,
+optional integration and is not an xTBloom runtime dependency, project extra,
 source-distribution payload, native install artifact, or bundled wheel file.
 The locked Linux resolution also installs NVIDIA CUDA provider packages under
 their vendor terms; those test-environment packages are likewise not
 redistributed in xTBloom artifacts.
+
+## LibTorch Stable ABI headers (vendored build input)
+
+Repository: <https://github.com/pytorch/pytorch>
+
+License: `BSD-3-Clause` (`LICENSES/BSD-3-Clause.txt`; Copyright (c) 2016,
+Facebook, Inc.)
+
+The optional compiled torch integration `libxtbloom_torch_ext` is written
+against the LibTorch Stable ABI. The exact transitive `#include` closure of
+its stable-ABI headers is vendored in `cmake/3rdparty/torch-stable/` from the
+PyPI `torch 2.12.1` wheel so the extension compiles without downloading torch.
+Every file is pinned by Git blob and SHA-256 in
+`cmake/3rdparty/torch-stable/manifest.json` (tree `e2df0197562bc2b0f55ee910d9899ecaac465e78`), which is
+regenerated only through `tools/torch_stable_vendor.py --check`. The extension
+links a build-time-only stub `libtorch_cpu.so` that carries the real library's
+SONAME and defines exactly the `aoti_torch_*` / `torch_library_impl` /
+`torch_get_mutable_data_ptr` symbols the extension references; the shipped
+binary therefore has a plain `DT_NEEDED libtorch_cpu.so` that binds to the
+torch the end user already imported. The vendored headers and the stub are
+build-time inputs only: they are never copied into native installs or wheels
+(the sdist retains the pinned header tree so offline wheel builds remain
+possible). The extension itself loads on any torch >= 2.10 because
+`TORCH_TARGET_VERSION` floors the emitted symbol set at 2.10.
 
 ## Matplotlib publication tool
 

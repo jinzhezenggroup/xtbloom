@@ -121,6 +121,18 @@ _Static_assert(offsetof(xtbloom_batch_result_t, spin_populations) == EXPECTED_RE
                "batch-result spin outlet offset must remain stable");
 _Static_assert(XTBLOOM_RESULT_DIPOLE_MOMENTS == (1 << 4),
                "dipole publication result flag must remain at bit 4");
+_Static_assert(sizeof(xtbloom_request_state_t) == sizeof(int32_t),
+               "request state tag must remain 32-bit");
+_Static_assert(XTBLOOM_REQUEST_INFO_V1_SIZE == 24,
+               "request-info ABI-v1 image must remain 24 bytes");
+_Static_assert(sizeof(xtbloom_request_info_t) == XTBLOOM_REQUEST_INFO_V1_SIZE,
+               "request-info public layout must end at ABI v1");
+_Static_assert(offsetof(xtbloom_request_info_t, state) == 8,
+               "request-info state offset must remain stable");
+_Static_assert(offsetof(xtbloom_request_info_t, completion_status) == 12,
+               "request-info completion status offset must remain stable");
+_Static_assert(offsetof(xtbloom_request_info_t, result_flags) == 16,
+               "request-info result flags offset must remain stable");
 
 static int check_short_compute_options_init(size_t caller_size) {
   enum { CANARY_BYTES = 16 };
@@ -260,6 +272,133 @@ static int check_batch_result_suffix_init(void) {
   return 1;
 }
 
+static int check_request_info_init(void) {
+  struct extended_request_info {
+    xtbloom_request_info_t info;
+    unsigned char future[16];
+  } extended;
+  memset(&extended, 0xa5, sizeof(extended));
+  if (xtbloom_request_info_init(&extended.info, sizeof(extended)) != XTBLOOM_STATUS_SUCCESS) {
+    return 0;
+  }
+  if (extended.info.struct_size != sizeof(extended) ||
+      extended.info.api_version != XTBLOOM_API_VERSION ||
+      extended.info.state != XTBLOOM_REQUEST_IDLE ||
+      extended.info.completion_status != XTBLOOM_STATUS_SUCCESS ||
+      extended.info.result_flags != 0u || extended.info.reserved != 0u) {
+    return 0;
+  }
+  for (size_t index = 0; index < sizeof(extended.future); ++index) {
+    if (extended.future[index] != 0xa5) {
+      return 0;
+    }
+  }
+
+  xtbloom_request_info_t short_info;
+  xtbloom_request_info_t short_before;
+  memset(&short_info, 0xa5, sizeof(short_info));
+  memcpy(&short_before, &short_info, sizeof(short_info));
+  if (xtbloom_request_info_init(&short_info, XTBLOOM_REQUEST_INFO_V1_SIZE - 1) !=
+          XTBLOOM_STATUS_INVALID_ARGUMENT ||
+      memcmp(&short_info, &short_before, sizeof(short_info)) != 0 ||
+      xtbloom_request_info_init(NULL, sizeof(short_info)) != XTBLOOM_STATUS_INVALID_ARGUMENT) {
+    return 0;
+  }
+  return 1;
+}
+
+static int check_cpu_request_shell(xtbloom_context_t* context) {
+  xtbloom_request_t* request = NULL;
+  if (xtbloom_request_create(context, &request) != XTBLOOM_STATUS_SUCCESS || request == NULL) {
+    return 0;
+  }
+
+  xtbloom_request_info_t info;
+  if (xtbloom_request_info_init(&info, sizeof(info)) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom_request_query(request, &info) != XTBLOOM_STATUS_SUCCESS ||
+      info.state != XTBLOOM_REQUEST_IDLE || info.completion_status != XTBLOOM_STATUS_SUCCESS ||
+      info.result_flags != 0u || strcmp(xtbloom_request_get_error(request), "") != 0) {
+    xtbloom_request_destroy(request);
+    return 0;
+  }
+
+  struct query_future_info {
+    xtbloom_request_info_t info;
+    unsigned char future[16];
+  } future_info;
+  memset(&future_info, 0xa5, sizeof(future_info));
+  if (xtbloom_request_info_init(&future_info.info, sizeof(future_info)) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom_request_query(request, &future_info.info) != XTBLOOM_STATUS_SUCCESS) {
+    xtbloom_request_destroy(request);
+    return 0;
+  }
+  for (size_t index = 0; index < sizeof(future_info.future); ++index) {
+    if (future_info.future[index] != 0xa5) {
+      xtbloom_request_destroy(request);
+      return 0;
+    }
+  }
+
+  xtbloom_request_info_t one_byte_short = info;
+  one_byte_short.struct_size = XTBLOOM_REQUEST_INFO_V1_SIZE - 1u;
+  xtbloom_request_info_t one_byte_short_before = one_byte_short;
+  if (xtbloom_request_query(request, &one_byte_short) != XTBLOOM_STATUS_INVALID_ARGUMENT ||
+      memcmp(&one_byte_short, &one_byte_short_before, sizeof(one_byte_short)) != 0) {
+    xtbloom_request_destroy(request);
+    return 0;
+  }
+
+  /* CPU capability probing happens before descriptor validation. Even hostile
+   * NULL descriptors therefore leave both caller outputs and request state
+   * untouched, allowing a synchronous fallback without state repair. */
+  xtbloom_batch_result_t result;
+  memset(&result, 0, sizeof(result));
+  result.flags = 0x5a5a5a5au;
+  double energy = 123.5;
+  result.energies.data = &energy;
+  result.energies.size_bytes = sizeof(energy);
+  result.energies.memory_space = XTBLOOM_MEMORY_HOST;
+  if (xtbloom_compute_enqueue(context, NULL, NULL, &result, request) !=
+          XTBLOOM_STATUS_NOT_SUPPORTED ||
+      result.flags != 0x5a5a5a5au || energy != 123.5) {
+    xtbloom_request_destroy(request);
+    return 0;
+  }
+  /* Repeated unsupported probes exercise reuse without creating a hidden
+   * PENDING transition or retaining the first call's descriptors. */
+  if (xtbloom_compute_enqueue(context, NULL, NULL, NULL, request) != XTBLOOM_STATUS_NOT_SUPPORTED) {
+    xtbloom_request_destroy(request);
+    return 0;
+  }
+  if (xtbloom_request_wait(request, &info) != XTBLOOM_STATUS_SUCCESS ||
+      info.state != XTBLOOM_REQUEST_IDLE || info.completion_status != XTBLOOM_STATUS_SUCCESS ||
+      info.result_flags != 0u || strcmp(xtbloom_request_get_error(request), "") != 0) {
+    xtbloom_request_destroy(request);
+    return 0;
+  }
+
+  xtbloom_request_info_t invalid_info = info;
+  invalid_info.api_version = XTBLOOM_API_VERSION + 1u;
+  invalid_info.state = (xtbloom_request_state_t)77;
+  if (xtbloom_request_query(request, &invalid_info) != XTBLOOM_STATUS_INVALID_ARGUMENT ||
+      invalid_info.state != (xtbloom_request_state_t)77) {
+    xtbloom_request_destroy(request);
+    return 0;
+  }
+  invalid_info = info;
+  invalid_info.reserved = 1u;
+  invalid_info.result_flags = 0x11223344u;
+  if (xtbloom_request_wait(request, &invalid_info) != XTBLOOM_STATUS_INVALID_ARGUMENT ||
+      invalid_info.result_flags != 0x11223344u) {
+    xtbloom_request_destroy(request);
+    return 0;
+  }
+
+  xtbloom_request_destroy(request);
+  xtbloom_request_destroy(NULL);
+  return 1;
+}
+
 int main(void) {
   if (sizeof(xtbloom_status_t) != sizeof(int32_t) || sizeof(xtbloom_backend_t) != sizeof(int32_t) ||
       sizeof(xtbloom_memory_space_t) != sizeof(int32_t) ||
@@ -267,6 +406,7 @@ int main(void) {
       sizeof(xtbloom_scc_start_mode_t) != sizeof(int32_t) ||
       sizeof(xtbloom_compute_flag_t) != sizeof(int32_t) ||
       sizeof(xtbloom_result_flag_t) != sizeof(int32_t) ||
+      sizeof(xtbloom_request_state_t) != sizeof(int32_t) ||
       sizeof(xtbloom_interaction_type_t) != sizeof(int32_t)) {
     fprintf(stderr, "public ABI tags and flags must all be 32-bit\n");
     return 1;
@@ -295,6 +435,10 @@ int main(void) {
     fprintf(stderr, "batch/result suffix initialization is incorrect\n");
     return 5;
   }
+  if (!check_request_info_init()) {
+    fprintf(stderr, "request-info descriptor initialization is incorrect\n");
+    return 6;
+  }
 
   xtbloom_context_options_t options;
   if (xtbloom_context_options_init(&options, sizeof(options)) != XTBLOOM_STATUS_SUCCESS) {
@@ -321,6 +465,10 @@ int main(void) {
       strcmp(xtbloom_status_string(XTBLOOM_STATUS_EIGENSOLVER_FAILED), "eigensolver failed") != 0) {
     fprintf(stderr, "per-system failure status strings are not stable\n");
     return 8;
+  }
+  if (!check_cpu_request_shell(context)) {
+    fprintf(stderr, "CPU request ABI shell behavior is incorrect: %s\n", xtbloom_get_last_error());
+    return 9;
   }
 
   xtbloom_context_destroy(context);

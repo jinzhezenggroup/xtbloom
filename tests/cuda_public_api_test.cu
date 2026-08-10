@@ -3,12 +3,16 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -16,6 +20,12 @@
 
 #include "tests/support/gfn2_scc_test_case.hpp"
 #include "xtbloom/xtbloom.h"
+
+/* Some minimal CUDA toolkit packages omit cuda_profiler_api.h while retaining
+ * the stable cudart entry points. Keep this non-default profiling test usable
+ * with those packages without changing the production library surface. */
+extern "C" cudaError_t CUDARTAPI cudaProfilerStart(void);
+extern "C" cudaError_t CUDARTAPI cudaProfilerStop(void);
 
 /* End-to-end contract test for the public single-flight CUDA transaction. */
 namespace {
@@ -33,6 +43,10 @@ constexpr double kChargeAbsoluteTolerance = 1.0e-7;
 constexpr double kChargeRelativeTolerance = 1.0e-7;
 constexpr double kForceAbsoluteTolerance = 3.0e-7;
 constexpr double kForceRelativeTolerance = 3.0e-7;
+/* A blocked-stream enqueue should return promptly, but Compute Sanitizer can
+ * make otherwise cheap host admission substantially slower. Keep one generous
+ * watchdog that still releases the gate before joining a regressed submitter. */
+constexpr auto kBlockedEnqueueWatchdog = std::chrono::seconds(30);
 
 const char* g_scenario = "uninitialized";
 
@@ -81,6 +95,57 @@ class StreamOwner {
   cudaStream_t stream_ = nullptr;
 };
 
+class EventOwner {
+ public:
+  EventOwner() noexcept = default;
+  ~EventOwner() {
+    if (event_ != nullptr) (void)cudaEventDestroy(event_);
+  }
+  EventOwner(const EventOwner&) = delete;
+  EventOwner& operator=(const EventOwner&) = delete;
+
+  cudaError_t create() noexcept {
+    return event_ == nullptr ? cudaEventCreateWithFlags(&event_, cudaEventDisableTiming)
+                             : cudaErrorInvalidResourceHandle;
+  }
+  [[nodiscard]] cudaEvent_t get() const noexcept { return event_; }
+
+ private:
+  cudaEvent_t event_ = nullptr;
+};
+
+void CUDART_CB hold_stream_until_released(void* user_data) {
+  auto* const released = static_cast<std::atomic<bool>*>(user_data);
+  while (!released->load(std::memory_order_acquire)) std::this_thread::yield();
+}
+
+class BlockingStreamGate {
+ public:
+  ~BlockingStreamGate() { release(); }
+  BlockingStreamGate(const BlockingStreamGate&) = delete;
+  BlockingStreamGate& operator=(const BlockingStreamGate&) = delete;
+  BlockingStreamGate() = default;
+
+  cudaError_t arm(cudaStream_t blocked_stream) {
+    cudaError_t status = gate_stream_.create();
+    if (status != cudaSuccess) return status;
+    status = gate_event_.create();
+    if (status != cudaSuccess) return status;
+    status = cudaLaunchHostFunc(gate_stream_.get(), hold_stream_until_released, &released_);
+    if (status != cudaSuccess) return status;
+    status = cudaEventRecord(gate_event_.get(), gate_stream_.get());
+    return status == cudaSuccess ? cudaStreamWaitEvent(blocked_stream, gate_event_.get(), 0u)
+                                 : status;
+  }
+
+  void release() noexcept { released_.store(true, std::memory_order_release); }
+
+ private:
+  std::atomic<bool> released_{false};
+  StreamOwner gate_stream_;
+  EventOwner gate_event_;
+};
+
 /* Restore the test thread even when a CHECK returns early. The public API has
  * its own current-device preservation contract, verified separately below. */
 class CurrentDeviceRestore {
@@ -109,6 +174,7 @@ struct PublicBatch {
   std::vector<double> positions;
   std::vector<double> molecular_charges;
   std::vector<std::int32_t> unpaired_electrons;
+  std::vector<std::int32_t> spin_channels;
   std::vector<std::int64_t> point_charge_offsets;
   std::vector<double> point_charge_positions;
   std::vector<double> point_charge_values;
@@ -130,6 +196,7 @@ struct PublicBatch {
     descriptor.positions = host_input(positions);
     descriptor.molecular_charges = host_input(molecular_charges);
     descriptor.unpaired_electrons = host_input(unpaired_electrons);
+    if (!spin_channels.empty()) descriptor.spin_channels = host_input(spin_channels);
     if (!point_charge_values.empty()) {
       descriptor.point_charge_offsets = host_input(point_charge_offsets);
       descriptor.point_charge_positions = host_input(point_charge_positions);
@@ -152,6 +219,13 @@ struct PublicBatch {
     batch.positions = fixture.positions();
     batch.molecular_charges = fixture.molecular_charges();
     batch.unpaired_electrons = fixture.unpaired_electrons();
+    batch.spin_channels = fixture.spin_channels();
+    if (batch.spin_channels.empty()) {
+      /* Some restricted fixtures intentionally exercise the ABI-v1 NULL
+       * default. PublicBatch materializes that default so direct-device tests
+       * can bind and mutate the ABI-v2 topology leaf explicitly. */
+      batch.spin_channels.assign(batch.molecular_charges.size(), 1);
+    }
     batch.point_charge_offsets = fixture.point_charge_offsets();
     batch.point_charge_positions = fixture.point_charge_positions();
     batch.point_charge_values = fixture.point_charge_charges();
@@ -302,7 +376,7 @@ class DeviceInputArray {
 };
 
 /* Mirrors every public input leaf so the end-to-end matrix can exercise all
- * six topology buffers and every numerical QM/MM buffer without managed
+ * seven topology buffers and every numerical QM/MM buffer without managed
  * memory obscuring the ABI memory-space contract. */
 class DeviceBatchInputs {
  public:
@@ -314,6 +388,8 @@ class DeviceBatchInputs {
     status = molecular_charges_.upload(batch.molecular_charges);
     if (status != cudaSuccess) return status;
     status = unpaired_electrons_.upload(batch.unpaired_electrons);
+    if (status != cudaSuccess) return status;
+    status = spin_channels_.upload(batch.spin_channels);
     if (status != cudaSuccess) return status;
     status = point_charge_offsets_.upload(batch.point_charge_offsets);
     if (status != cudaSuccess) return status;
@@ -340,11 +416,12 @@ class DeviceBatchInputs {
   }
 
   /* Pointer identity for every required or optional public input leaf. */
-  [[nodiscard]] std::array<std::uintptr_t, 12> identity() const noexcept {
+  [[nodiscard]] std::array<std::uintptr_t, 13> identity() const noexcept {
     return {atom_offsets_.address(),
             atomic_numbers_.address(),
             molecular_charges_.address(),
             unpaired_electrons_.address(),
+            spin_channels_.address(),
             point_charge_offsets_.address(),
             charge_response_offsets_.address(),
             positions_.address(),
@@ -359,6 +436,7 @@ class DeviceBatchInputs {
   DeviceInputArray<std::int32_t> atomic_numbers_;
   DeviceInputArray<double> molecular_charges_;
   DeviceInputArray<std::int32_t> unpaired_electrons_;
+  DeviceInputArray<std::int32_t> spin_channels_;
   DeviceInputArray<std::int64_t> point_charge_offsets_;
   DeviceInputArray<std::int64_t> charge_response_offsets_;
   DeviceInputArray<double> positions_;
@@ -380,6 +458,9 @@ void bind_inputs(PublicBatch& batch, const DeviceBatchInputs* device, InputLayou
   if (all_device) batch.descriptor.atomic_numbers = device->atomic_numbers_.descriptor();
   batch.descriptor.molecular_charges = device->molecular_charges_.descriptor();
   batch.descriptor.unpaired_electrons = device->unpaired_electrons_.descriptor();
+  if (!batch.spin_channels.empty()) {
+    batch.descriptor.spin_channels = device->spin_channels_.descriptor();
+  }
   if (!batch.point_charge_offsets.empty()) {
     batch.descriptor.point_charge_offsets = device->point_charge_offsets_.descriptor();
   }
@@ -491,7 +572,14 @@ class GuardedOutput {
   T* device_ = nullptr;
 };
 
-enum class ResultLayout { kHost, kDevice, kMixed };
+enum class ResultLayout {
+  kHost,
+  kDevice,
+  kMixed,
+  /* The Torch request path publishes primary tensors on device while keeping
+   * atomic charges and convergence diagnostics in request-owned host slots. */
+  kTorchRequest,
+};
 
 struct MaterializedResult {
   std::vector<double> energies;
@@ -512,13 +600,17 @@ class ResultOwner {
     const std::size_t atoms = static_cast<std::size_t>(batch.descriptor.total_atoms);
     const std::size_t points = static_cast<std::size_t>(batch.descriptor.total_point_charges);
     const Placement all = layout == ResultLayout::kDevice ? Placement::kDevice : Placement::kHost;
+    const Placement energies_placement =
+        layout == ResultLayout::kDevice || layout == ResultLayout::kTorchRequest
+            ? Placement::kDevice
+            : Placement::kHost;
     const Placement forces_placement =
         layout == ResultLayout::kHost ? Placement::kHost : Placement::kDevice;
     const Placement iterations_placement =
         layout == ResultLayout::kMixed ? Placement::kDevice : all;
     const Placement statuses_placement = layout == ResultLayout::kMixed ? Placement::kDevice : all;
 
-    cudaError_t status = energies_.initialize(systems, all);
+    cudaError_t status = energies_.initialize(systems, energies_placement);
     if (status != cudaSuccess) return status;
     status = forces_.initialize(3u * atoms, forces_placement);
     if (status != cudaSuccess) return status;
@@ -622,6 +714,27 @@ class ResultOwner {
     return cudaSuccess;
   }
 
+  cudaError_t torch_host_diagnostics_unchanged(bool& same) const {
+    same = true;
+    bool field = false;
+    cudaError_t status = charges_.unchanged(field);
+    if (status != cudaSuccess) return status;
+    same = same && field;
+    status = point_forces_.unchanged(field);
+    if (status != cudaSuccess) return status;
+    same = same && field;
+    status = iterations_.unchanged(field);
+    if (status != cudaSuccess) return status;
+    same = same && field;
+    status = converged_.unchanged(field);
+    if (status != cudaSuccess) return status;
+    same = same && field;
+    status = statuses_.unchanged(field);
+    if (status != cudaSuccess) return status;
+    same = same && field;
+    return cudaSuccess;
+  }
+
   xtbloom_batch_result_t descriptor{};
 
  private:
@@ -688,6 +801,7 @@ int make_fixture_batch(std::size_t batch_size, bool enable_qmmm, PublicBatch& ba
   HostSccCaseOptions options{};
   constexpr std::array<SmallSystemKind, 4> kSystems = {
       SmallSystemKind::kH2, SmallSystemKind::kHe, SmallSystemKind::kLiH, SmallSystemKind::kCH2};
+  options.systems.clear();
   options.systems.reserve(batch_size);
   for (std::size_t system = 0; system < batch_size; ++system) {
     options.systems.push_back(kSystems[system % kSystems.size()]);
@@ -723,6 +837,7 @@ PublicBatch make_representability_batch() {
    * nextafter(3, 0) electrons in each restricted spin channel. */
   batch.molecular_charges = {0.0, 3.0 - 2.0 * std::nextafter(3.0, 0.0)};
   batch.unpaired_electrons = {0, 0};
+  batch.spin_channels = {1, 1};
   batch.bind();
   return batch;
 }
@@ -1067,11 +1182,20 @@ struct PlanDeleter {
 
 using PlanHandle = std::unique_ptr<xtbloom_plan_t, PlanDeleter>;
 
+struct RequestDeleter {
+  void operator()(xtbloom_request_t* request) const noexcept { xtbloom_request_destroy(request); }
+};
+
+using RequestHandle = std::unique_ptr<xtbloom_request_t, RequestDeleter>;
+
+enum class PlanTestMode { kFull, kRequestOnly, kSanitizer, kProfileSteadyState };
+
 /* Fixed-topology CUDA plans reuse the prepared runtime, expose host/device
  * workspace queries that differ by requested properties, and reject topology
  * mismatches before output mutation (matching the CPU plan contract). */
 int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
-                       const xtbloom_compute_options_t& base_options) {
+                       const xtbloom_compute_options_t& base_options,
+                       PlanTestMode mode = PlanTestMode::kFull) {
   g_scenario = "plan-api";
   StreamOwner stream;
   CUDA_CHECK(stream.create());
@@ -1080,153 +1204,490 @@ int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
   CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
 
-  PublicBatch batch;
-  CHECK(make_fixture_batch(4u, false, batch) == 0);
   xtbloom_compute_options_t options = base_options;
 
-  MaterializedResult reference;
-  CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
+  if (mode == PlanTestMode::kFull) {
+    PublicBatch batch;
+    CHECK(make_fixture_batch(4u, false, batch) == 0);
 
-  /* Plan identity is canonicalized by the CUDA owner, so a plan accepts the
-   * same all-device topology descriptors as xtbloom_compute. */
-  DeviceBatchInputs device_inputs;
-  CUDA_CHECK(device_inputs.upload_all(batch));
-  bind_inputs(batch, &device_inputs, InputLayout::kDevice);
-  CHECK(verify_input_layout(batch, InputLayout::kDevice, false) == 0);
+    MaterializedResult reference;
+    CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
 
-  /* CUDA pointer ownership is checked before topology staging reads a buffer.
-   * A device pointer tagged as HOST must fail plan creation transactionally. */
-  xtbloom_batch_t mislabeled = batch.descriptor;
-  mislabeled.atom_offsets.memory_space = XTBLOOM_MEMORY_HOST;
-  xtbloom_plan_t* raw_mislabeled_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
-  CHECK(xtbloom_plan_create(context.get(), &mislabeled, &options, &raw_mislabeled_plan) ==
-        XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(raw_mislabeled_plan == nullptr);
+    /* Plan identity is canonicalized by the CUDA owner, so a plan accepts the
+     * same all-device topology descriptors as xtbloom_compute. */
+    DeviceBatchInputs device_inputs;
+    CUDA_CHECK(device_inputs.upload_all(batch));
+    bind_inputs(batch, &device_inputs, InputLayout::kDevice);
+    CHECK(verify_input_layout(batch, InputLayout::kDevice, false) == 0);
 
-  xtbloom_plan_t* raw_plan = nullptr;
-  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
-        XTBLOOM_STATUS_SUCCESS);
-  CHECK(raw_plan != nullptr);
-  PlanHandle plan(raw_plan);
+    /* CUDA pointer ownership is checked before topology staging reads a buffer.
+     * A device pointer tagged as HOST must fail plan creation transactionally. */
+    xtbloom_batch_t mislabeled = batch.descriptor;
+    mislabeled.atom_offsets.memory_space = XTBLOOM_MEMORY_HOST;
+    xtbloom_plan_t* raw_mislabeled_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
+    CHECK(xtbloom_plan_create(context.get(), &mislabeled, &options, &raw_mislabeled_plan) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(raw_mislabeled_plan == nullptr);
 
-  /* Host workspace is nonzero and well-aligned; the CUDA runtime reserves
-   * device workspace that grows when forces are requested. */
-  xtbloom_workspace_query_t query{};
-  CHECK(xtbloom_workspace_query_init(&query, sizeof(query)) == XTBLOOM_STATUS_SUCCESS);
-  query.compute_flags = options.flags;
-  CHECK(xtbloom_plan_query_workspace(plan.get(), &query) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(query.host_required_bytes > 0u);
-  CHECK(query.host_required_alignment >= 8u);
-  CHECK(query.device_required_bytes > 0u);
-  CHECK(query.device_required_alignment >= 8u);
-
-  xtbloom_compute_options_t energy_options = options;
-  energy_options.flags = XTBLOOM_COMPUTE_ENERGY;
-  xtbloom_plan_t* raw_energy_plan = nullptr;
-  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &energy_options, &raw_energy_plan) ==
-        XTBLOOM_STATUS_SUCCESS);
-  CHECK(raw_energy_plan != nullptr);
-  PlanHandle energy_plan(raw_energy_plan);
-
-  xtbloom_workspace_query_t energy_query{};
-  CHECK(xtbloom_workspace_query_init(&energy_query, sizeof(energy_query)) ==
-        XTBLOOM_STATUS_SUCCESS);
-  energy_query.compute_flags = XTBLOOM_COMPUTE_ENERGY;
-  CHECK(xtbloom_plan_query_workspace(energy_plan.get(), &energy_query) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(energy_query.host_required_bytes > 0u);
-  CHECK(query.device_required_bytes >= energy_query.device_required_bytes);
-
-  /* Point-charge forces need the CUDA force arenas even when QM forces are
-   * not requested. Compare two plans over the exact same embedded topology so
-   * the property flag is the only source of the workspace-size difference. */
-  PublicBatch qmmm_batch;
-  CHECK(make_fixture_batch(4u, true, qmmm_batch) == 0);
-  xtbloom_compute_options_t qmmm_energy_options = options;
-  qmmm_energy_options.flags = XTBLOOM_COMPUTE_ENERGY;
-  xtbloom_plan_t* raw_qmmm_energy_plan = nullptr;
-  CHECK(xtbloom_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_energy_options,
-                            &raw_qmmm_energy_plan) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(raw_qmmm_energy_plan != nullptr);
-  PlanHandle qmmm_energy_plan(raw_qmmm_energy_plan);
-
-  xtbloom_workspace_query_t qmmm_energy_query{};
-  CHECK(xtbloom_workspace_query_init(&qmmm_energy_query, sizeof(qmmm_energy_query)) ==
-        XTBLOOM_STATUS_SUCCESS);
-  qmmm_energy_query.compute_flags = qmmm_energy_options.flags;
-  CHECK(xtbloom_plan_query_workspace(qmmm_energy_plan.get(), &qmmm_energy_query) ==
-        XTBLOOM_STATUS_SUCCESS);
-
-  xtbloom_compute_options_t qmmm_point_force_options = options;
-  qmmm_point_force_options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
-  xtbloom_plan_t* raw_qmmm_point_force_plan = nullptr;
-  CHECK(xtbloom_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_point_force_options,
-                            &raw_qmmm_point_force_plan) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(raw_qmmm_point_force_plan != nullptr);
-  PlanHandle qmmm_point_force_plan(raw_qmmm_point_force_plan);
-
-  xtbloom_workspace_query_t qmmm_point_force_query{};
-  CHECK(xtbloom_workspace_query_init(&qmmm_point_force_query, sizeof(qmmm_point_force_query)) ==
-        XTBLOOM_STATUS_SUCCESS);
-  qmmm_point_force_query.compute_flags = qmmm_point_force_options.flags;
-  CHECK(xtbloom_plan_query_workspace(qmmm_point_force_plan.get(), &qmmm_point_force_query) ==
-        XTBLOOM_STATUS_SUCCESS);
-  CHECK(qmmm_point_force_query.device_required_bytes > qmmm_energy_query.device_required_bytes);
-
-  /* Plan compute equals the CPU reference on the original and a changed
-   * geometry, proving fixed-topology reuse. */
-  {
-    ResultOwner owner;
-    CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
-    CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options, &owner.descriptor) ==
+    xtbloom_plan_t* raw_plan = nullptr;
+    CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
           XTBLOOM_STATUS_SUCCESS);
-    MaterializedResult actual;
-    CUDA_CHECK(owner.materialize(actual));
-    CHECK(compare_result(owner, actual, reference, options) == 0);
-  }
+    CHECK(raw_plan != nullptr);
+    PlanHandle plan(raw_plan);
 
-  batch.perturb(0.003);
-  MaterializedResult changed_reference;
-  CHECK(run_cpu_reference(cpu_context, batch, options, changed_reference) == 0);
-  CUDA_CHECK(device_inputs.upload_numerical(batch));
-  bind_inputs(batch, &device_inputs, InputLayout::kDevice);
-  {
-    ResultOwner owner;
-    CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
-    CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options, &owner.descriptor) ==
+    /* Host workspace is nonzero and well-aligned; the CUDA runtime reserves
+     * device workspace that grows when forces are requested. */
+    xtbloom_workspace_query_t query{};
+    CHECK(xtbloom_workspace_query_init(&query, sizeof(query)) == XTBLOOM_STATUS_SUCCESS);
+    query.compute_flags = options.flags;
+    CHECK(xtbloom_plan_query_workspace(plan.get(), &query) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(query.host_required_bytes > 0u);
+    CHECK(query.host_required_alignment >= 8u);
+    CHECK(query.device_required_bytes > 0u);
+    CHECK(query.device_required_alignment >= 8u);
+
+    xtbloom_compute_options_t energy_options = options;
+    energy_options.flags = XTBLOOM_COMPUTE_ENERGY;
+    xtbloom_plan_t* raw_energy_plan = nullptr;
+    CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &energy_options,
+                              &raw_energy_plan) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(raw_energy_plan != nullptr);
+    PlanHandle energy_plan(raw_energy_plan);
+
+    xtbloom_workspace_query_t energy_query{};
+    CHECK(xtbloom_workspace_query_init(&energy_query, sizeof(energy_query)) ==
           XTBLOOM_STATUS_SUCCESS);
-    MaterializedResult actual;
-    CUDA_CHECK(owner.materialize(actual));
-    CHECK(compare_result(owner, actual, changed_reference, options) == 0);
-  }
+    energy_query.compute_flags = XTBLOOM_COMPUTE_ENERGY;
+    CHECK(xtbloom_plan_query_workspace(energy_plan.get(), &energy_query) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(energy_query.host_required_bytes > 0u);
+    CHECK(query.device_required_bytes >= energy_query.device_required_bytes);
 
-  /* A mislabeled device topology on compute is rejected before output
-   * mutation, before host-side identity code could dereference it. */
-  {
-    ResultOwner owner;
-    CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
-    xtbloom_batch_t mislabeled_compute = batch.descriptor;
-    mislabeled_compute.atomic_numbers.memory_space = XTBLOOM_MEMORY_HOST;
-    CHECK(xtbloom_plan_compute(plan.get(), &mislabeled_compute, &options, &owner.descriptor) ==
+    /* Point-charge forces need the CUDA force arenas even when QM forces are
+     * not requested. Compare two plans over the exact same embedded topology so
+     * the property flag is the only source of the workspace-size difference. */
+    PublicBatch qmmm_batch;
+    CHECK(make_fixture_batch(4u, true, qmmm_batch) == 0);
+    xtbloom_compute_options_t qmmm_energy_options = options;
+    qmmm_energy_options.flags = XTBLOOM_COMPUTE_ENERGY;
+    xtbloom_plan_t* raw_qmmm_energy_plan = nullptr;
+    CHECK(xtbloom_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_energy_options,
+                              &raw_qmmm_energy_plan) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(raw_qmmm_energy_plan != nullptr);
+    PlanHandle qmmm_energy_plan(raw_qmmm_energy_plan);
+
+    xtbloom_workspace_query_t qmmm_energy_query{};
+    CHECK(xtbloom_workspace_query_init(&qmmm_energy_query, sizeof(qmmm_energy_query)) ==
+          XTBLOOM_STATUS_SUCCESS);
+    qmmm_energy_query.compute_flags = qmmm_energy_options.flags;
+    CHECK(xtbloom_plan_query_workspace(qmmm_energy_plan.get(), &qmmm_energy_query) ==
+          XTBLOOM_STATUS_SUCCESS);
+
+    xtbloom_compute_options_t qmmm_point_force_options = options;
+    qmmm_point_force_options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+    xtbloom_plan_t* raw_qmmm_point_force_plan = nullptr;
+    CHECK(xtbloom_plan_create(context.get(), &qmmm_batch.descriptor, &qmmm_point_force_options,
+                              &raw_qmmm_point_force_plan) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(raw_qmmm_point_force_plan != nullptr);
+    PlanHandle qmmm_point_force_plan(raw_qmmm_point_force_plan);
+
+    xtbloom_workspace_query_t qmmm_point_force_query{};
+    CHECK(xtbloom_workspace_query_init(&qmmm_point_force_query, sizeof(qmmm_point_force_query)) ==
+          XTBLOOM_STATUS_SUCCESS);
+    qmmm_point_force_query.compute_flags = qmmm_point_force_options.flags;
+    CHECK(xtbloom_plan_query_workspace(qmmm_point_force_plan.get(), &qmmm_point_force_query) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(qmmm_point_force_query.device_required_bytes > qmmm_energy_query.device_required_bytes);
+
+    /* Plan compute equals the CPU reference on the original and a changed
+     * geometry, proving fixed-topology reuse. */
+    {
+      ResultOwner owner;
+      CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
+      CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options, &owner.descriptor) ==
+            XTBLOOM_STATUS_SUCCESS);
+      MaterializedResult actual;
+      CUDA_CHECK(owner.materialize(actual));
+      CHECK(compare_result(owner, actual, reference, options) == 0);
+    }
+
+    batch.perturb(0.003);
+    MaterializedResult changed_reference;
+    CHECK(run_cpu_reference(cpu_context, batch, options, changed_reference) == 0);
+    CUDA_CHECK(device_inputs.upload_numerical(batch));
+    bind_inputs(batch, &device_inputs, InputLayout::kDevice);
+    {
+      ResultOwner owner;
+      CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
+      CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options, &owner.descriptor) ==
+            XTBLOOM_STATUS_SUCCESS);
+      MaterializedResult actual;
+      CUDA_CHECK(owner.materialize(actual));
+      CHECK(compare_result(owner, actual, changed_reference, options) == 0);
+    }
+
+    /* A mislabeled device topology on compute is rejected before output
+     * mutation, before host-side identity code could dereference it. */
+    {
+      ResultOwner owner;
+      CUDA_CHECK(owner.bind(batch, ResultLayout::kHost, options.flags));
+      xtbloom_batch_t mislabeled_compute = batch.descriptor;
+      mislabeled_compute.atomic_numbers.memory_space = XTBLOOM_MEMORY_HOST;
+      CHECK(xtbloom_plan_compute(plan.get(), &mislabeled_compute, &options, &owner.descriptor) ==
+            XTBLOOM_STATUS_INVALID_ARGUMENT);
+      bool unchanged = false;
+      CUDA_CHECK(owner.unchanged(unchanged));
+      CHECK(unchanged);
+    }
+
+    /* A mismatched all-device topology fails before output mutation (corrupted
+     * plan) rather than rebuilding the plan-owned prepared runtime. */
+    PublicBatch other;
+    CHECK(make_fixture_batch(2u, false, other) == 0);
+    DeviceBatchInputs other_inputs;
+    CUDA_CHECK(other_inputs.upload_all(other));
+    bind_inputs(other, &other_inputs, InputLayout::kDevice);
+    ResultOwner other_result;
+    CUDA_CHECK(other_result.bind(other, ResultLayout::kDevice, options.flags));
+    CHECK(xtbloom_plan_compute(plan.get(), &other.descriptor, &options, &other_result.descriptor) ==
           XTBLOOM_STATUS_INVALID_ARGUMENT);
     bool unchanged = false;
-    CUDA_CHECK(owner.unchanged(unchanged));
+    CUDA_CHECK(other_result.unchanged(unchanged));
     CHECK(unchanged);
   }
 
-  /* A mismatched all-device topology fails before output mutation (corrupted
-   * plan) rather than rebuilding the plan-owned prepared runtime. */
-  PublicBatch other;
-  CHECK(make_fixture_batch(2u, false, other) == 0);
-  DeviceBatchInputs other_inputs;
-  CUDA_CHECK(other_inputs.upload_all(other));
-  bind_inputs(other, &other_inputs, InputLayout::kDevice);
-  ResultOwner other_result;
-  CUDA_CHECK(other_result.bind(other, ResultLayout::kDevice, options.flags));
-  CHECK(xtbloom_plan_compute(plan.get(), &other.descriptor, &options, &other_result.descriptor) ==
-        XTBLOOM_STATUS_INVALID_ARGUMENT);
-  bool unchanged = false;
-  CUDA_CHECK(other_result.unchanged(unchanged));
-  CHECK(unchanged);
+  if (mode != PlanTestMode::kSanitizer) {
+    /* A fixed plan with host topology admits without fencing the owner stream.
+     * Numerical HOST leaves are snapshotted, the device-gated commit is queued
+     * before enqueue returns, and the request-owned cache survives plan destroy. */
+    PublicBatch async_batch;
+    CHECK(make_fixture_batch(2u, false, async_batch) == 0);
+    bind_inputs(async_batch, nullptr, InputLayout::kHost);
+    MaterializedResult async_reference;
+    CHECK(run_cpu_reference(cpu_context, async_batch, options, async_reference) == 0);
+    xtbloom_plan_t* raw_async_plan = nullptr;
+    CHECK(xtbloom_plan_create(context.get(), &async_batch.descriptor, &options, &raw_async_plan) ==
+          XTBLOOM_STATUS_SUCCESS);
+    PlanHandle async_plan(raw_async_plan);
+
+    /* Caller buffers must outlive every accepted request even when a later test
+     * assertion returns early. Declare the result owner before request handles
+     * so reverse-order cleanup settles native work first. */
+    ResultOwner async_result;
+    CUDA_CHECK(async_result.bind(async_batch, ResultLayout::kDevice, options.flags));
+
+    xtbloom_request_t* raw_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle request(raw_request);
+    xtbloom_request_t* raw_busy_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_busy_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle busy_request(raw_busy_request);
+
+    xtbloom_batch_result_t enqueue_result = async_result.descriptor;
+
+    /* WARM is rejected without changing the reusable request or result flags. */
+    xtbloom_compute_options_t warm_options = options;
+    warm_options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+    CHECK(xtbloom_plan_compute_enqueue(async_plan.get(), &async_batch.descriptor, &warm_options,
+                                       &enqueue_result,
+                                       request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
+    xtbloom_request_info_t info{};
+    CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.state == XTBLOOM_REQUEST_IDLE);
+    CHECK(enqueue_result.flags == kResultFlagsCanary);
+
+    BlockingStreamGate gate;
+    CUDA_CHECK(gate.arm(stream.get()));
+
+    /* Exact ABI-v1 storage catches accidental reads of the optional v2
+     * suffixes after the public structural validator has accepted them. */
+    alignas(xtbloom_compute_options_t) std::array<unsigned char, XTBLOOM_COMPUTE_OPTIONS_V1_SIZE>
+        short_options_storage{};
+    std::memcpy(short_options_storage.data(), &options, short_options_storage.size());
+    auto* const short_options =
+        reinterpret_cast<xtbloom_compute_options_t*>(short_options_storage.data());
+    short_options->struct_size = XTBLOOM_COMPUTE_OPTIONS_V1_SIZE;
+    alignas(xtbloom_batch_result_t) std::array<unsigned char, XTBLOOM_BATCH_RESULT_V1_SIZE>
+        short_result_storage{};
+    std::memcpy(short_result_storage.data(), &enqueue_result, short_result_storage.size());
+    auto* const short_result =
+        reinterpret_cast<xtbloom_batch_result_t*>(short_result_storage.data());
+    short_result->struct_size = XTBLOOM_BATCH_RESULT_V1_SIZE;
+    xtbloom_batch_t enqueue_batch = async_batch.descriptor;
+    CHECK(xtbloom_plan_compute_enqueue(async_plan.get(), &enqueue_batch, short_options,
+                                       short_result, request.get()) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.state == XTBLOOM_REQUEST_PENDING);
+    CHECK(short_result->flags == kResultFlagsCanary);
+
+    /* Cache and request single-flight gates precede topology staging. Neither a
+     * second request nor the synchronous API may wait on the blocked stream. */
+    CHECK(xtbloom_plan_compute_enqueue(async_plan.get(), &async_batch.descriptor, &options,
+                                       &enqueue_result,
+                                       busy_request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    xtbloom_request_info_t busy_info{};
+    CHECK(xtbloom_request_info_init(&busy_info, sizeof(busy_info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_query(busy_request.get(), &busy_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(busy_info.state == XTBLOOM_REQUEST_IDLE);
+    ResultOwner busy_result;
+    CUDA_CHECK(busy_result.bind(async_batch, ResultLayout::kHost, options.flags));
+    CHECK(xtbloom_plan_compute(async_plan.get(), &async_batch.descriptor, &options,
+                               &busy_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    bool busy_unchanged = false;
+    CUDA_CHECK(busy_result.unchanged(busy_unchanged));
+    CHECK(busy_unchanged);
+
+    /* Descriptor structs may be reused immediately; host numerical bytes may
+     * also be released or changed because enqueue copied them before return. */
+    enqueue_batch = {};
+    short_options->flags = 0u;
+    short_result->energies.data = nullptr;
+    async_batch.perturb(0.125);
+    async_plan.reset();
+
+    gate.release();
+    CUDA_CHECK(cudaStreamSynchronize(stream.get()));
+    MaterializedResult async_actual;
+    CUDA_CHECK(async_result.materialize(async_actual));
+    CHECK(async_actual.flags == kResultFlagsCanary);
+    async_actual.flags = async_reference.flags;
+    CHECK(compare_result(async_result, async_actual, async_reference, options) == 0);
+    CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+    CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.result_flags == 0u);
+    CHECK(std::string(xtbloom_request_get_error(request.get())).empty());
+    CHECK(short_result->flags == kResultFlagsCanary);
+  }
+
+  /* Device and mixed fixed topology is validated by a comparison kernel on
+   * the owner stream. The ordering modes require enqueue to return while
+   * preceding work is blocked; sanitizer mode runs the same production path
+   * without a gate so instrumentation cost stays bounded. */
+  for (const auto [layout, name] :
+       {std::pair{InputLayout::kDevice, "device"}, std::pair{InputLayout::kMixed, "mixed"}}) {
+    if (mode == PlanTestMode::kSanitizer && layout != InputLayout::kMixed) continue;
+    std::string scenario = mode == PlanTestMode::kSanitizer ? "plan-async-sanitizer-topology/"
+                                                            : "plan-async-blocked-topology/";
+    scenario += name;
+    g_scenario = scenario.c_str();
+
+    PublicBatch device_async_batch;
+    /* Default CTest retains the established batch-8 matrix. The focused
+     * sanitizer/profile entry uses one four-system H2/He/LiH/CH2 cycle so it
+     * still covers ragged restricted/unrestricted QM/MM and periodic work
+     * without multiplying instruction-level sanitizer time unnecessarily. */
+    const std::size_t request_batch_size = mode == PlanTestMode::kFull ? 8u : 4u;
+    CHECK(make_fixture_batch(request_batch_size, true, device_async_batch) == 0);
+    CHECK(device_async_batch.spin_channels.size() == request_batch_size);
+    /* Exercise both explicit ABI-v2 modes in one fixed topology. CH2 has an
+     * even electron count, so two unpaired electrons form a valid triplet. */
+    device_async_batch.spin_channels.back() = 2;
+    device_async_batch.unpaired_electrons.back() = 2;
+    device_async_batch.bind();
+    xtbloom_compute_options_t device_async_options = options;
+    device_async_options.flags |= XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+    MaterializedResult device_async_reference;
+    CHECK(run_cpu_reference(cpu_context, device_async_batch, device_async_options,
+                            device_async_reference) == 0);
+    DeviceBatchInputs device_async_inputs;
+    CUDA_CHECK(device_async_inputs.upload_all(device_async_batch));
+    bind_inputs(device_async_batch, &device_async_inputs, layout);
+
+    xtbloom_plan_t* raw_device_async_plan = nullptr;
+    CHECK(xtbloom_plan_create(context.get(), &device_async_batch.descriptor, &device_async_options,
+                              &raw_device_async_plan) == XTBLOOM_STATUS_SUCCESS);
+    PlanHandle device_async_plan(raw_device_async_plan);
+    const ResultLayout request_result_layout =
+        layout == InputLayout::kMixed ? ResultLayout::kTorchRequest : ResultLayout::kDevice;
+    ResultOwner device_async_result;
+    CUDA_CHECK(device_async_result.bind(device_async_batch, request_result_layout,
+                                        device_async_options.flags));
+    xtbloom_request_t* raw_device_async_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_device_async_request) ==
+          XTBLOOM_STATUS_SUCCESS);
+    RequestHandle device_async_request(raw_device_async_request);
+
+    xtbloom_status_t enqueue_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    BlockingStreamGate device_gate;
+    if (mode == PlanTestMode::kSanitizer) {
+      enqueue_status = xtbloom_plan_compute_enqueue(
+          device_async_plan.get(), &device_async_batch.descriptor, &device_async_options,
+          &device_async_result.descriptor, device_async_request.get());
+    } else {
+      CUDA_CHECK(device_gate.arm(stream.get()));
+      bool enqueue_returned = false;
+      std::mutex enqueue_mutex;
+      std::condition_variable enqueue_changed;
+      std::thread submitter([&] {
+        enqueue_status = xtbloom_plan_compute_enqueue(
+            device_async_plan.get(), &device_async_batch.descriptor, &device_async_options,
+            &device_async_result.descriptor, device_async_request.get());
+        {
+          std::lock_guard<std::mutex> lock(enqueue_mutex);
+          enqueue_returned = true;
+        }
+        enqueue_changed.notify_one();
+      });
+      bool returned_while_blocked = false;
+      {
+        std::unique_lock<std::mutex> lock(enqueue_mutex);
+        returned_while_blocked = enqueue_changed.wait_for(lock, kBlockedEnqueueWatchdog,
+                                                          [&] { return enqueue_returned; });
+      }
+      if (!returned_while_blocked) device_gate.release();
+      submitter.join();
+      CHECK(returned_while_blocked);
+    }
+    CHECK(enqueue_status == XTBLOOM_STATUS_SUCCESS);
+
+    xtbloom_request_info_t device_info{};
+    CHECK(xtbloom_request_info_init(&device_info, sizeof(device_info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_query(device_async_request.get(), &device_info) ==
+          XTBLOOM_STATUS_SUCCESS);
+    if (mode == PlanTestMode::kSanitizer) {
+      CHECK(device_info.state == XTBLOOM_REQUEST_PENDING ||
+            device_info.state == XTBLOOM_REQUEST_COMPLETE);
+    } else {
+      CHECK(device_info.state == XTBLOOM_REQUEST_PENDING);
+    }
+    /* Do not synchronously copy device sentinels while the owner stream is
+     * deliberately blocked: CUDA may serialize that D2H read with the pending
+     * stream. The copied descriptor itself must remain untouched, and final
+     * correctness below proves publication happens only after release. */
+    CHECK(device_async_result.descriptor.flags == kResultFlagsCanary);
+    if (request_result_layout == ResultLayout::kTorchRequest &&
+        device_info.state == XTBLOOM_REQUEST_PENDING) {
+      bool host_diagnostics_unchanged = false;
+      CUDA_CHECK(device_async_result.torch_host_diagnostics_unchanged(host_diagnostics_unchanged));
+      CHECK(host_diagnostics_unchanged);
+    }
+
+    if (mode != PlanTestMode::kSanitizer) device_gate.release();
+    CHECK(xtbloom_request_wait(device_async_request.get(), &device_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(device_info.state == XTBLOOM_REQUEST_COMPLETE);
+    CHECK(device_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+    CHECK(device_info.result_flags == device_async_reference.flags);
+    MaterializedResult device_async_actual;
+    CUDA_CHECK(device_async_result.materialize(device_async_actual));
+    device_async_actual.flags = device_info.result_flags;
+    CHECK(compare_result(device_async_result, device_async_actual, device_async_reference,
+                         device_async_options) == 0);
+
+    if (mode == PlanTestMode::kProfileSteadyState) {
+      constexpr int kProfileIterations = 10;
+      xtbloom_request_info_t profile_info{};
+      CHECK(xtbloom_request_info_init(&profile_info, sizeof(profile_info)) ==
+            XTBLOOM_STATUS_SUCCESS);
+      CUDA_CHECK(cudaProfilerStart());
+      for (int iteration = 0; iteration < kProfileIterations; ++iteration) {
+        CHECK(xtbloom_plan_compute_enqueue(device_async_plan.get(), &device_async_batch.descriptor,
+                                           &device_async_options, &device_async_result.descriptor,
+                                           device_async_request.get()) == XTBLOOM_STATUS_SUCCESS);
+        CHECK(xtbloom_request_wait(device_async_request.get(), &profile_info) ==
+              XTBLOOM_STATUS_SUCCESS);
+        CHECK(profile_info.state == XTBLOOM_REQUEST_COMPLETE);
+        CHECK(profile_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+        CHECK(profile_info.result_flags == device_async_reference.flags);
+      }
+      CUDA_CHECK(cudaProfilerStop());
+      MaterializedResult profile_actual;
+      CUDA_CHECK(device_async_result.materialize(profile_actual));
+      profile_actual.flags = profile_info.result_flags;
+      CHECK(compare_result(device_async_result, profile_actual, device_async_reference,
+                           device_async_options) == 0);
+      CHECK(device_async_result.descriptor.flags == kResultFlagsCanary);
+      std::printf("request_profile_iterations=%d\n", kProfileIterations);
+      g_scenario = "plan-api-profile";
+      return 0;
+    }
+
+    /* A topology mutation ordered before the comparison is a deferred
+     * INVALID_ARGUMENT, not a host admission wait. The device commit remains
+     * gated, so every caller output keeps its sentinel bytes. */
+    ResultOwner mismatch_result;
+    CUDA_CHECK(mismatch_result.bind(device_async_batch, request_result_layout,
+                                    device_async_options.flags));
+    xtbloom_request_t* raw_mismatch_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_mismatch_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle mismatch_request(raw_mismatch_request);
+    BlockingStreamGate mismatch_gate;
+    if (mode != PlanTestMode::kSanitizer) CUDA_CHECK(mismatch_gate.arm(stream.get()));
+    /* spin_channels is device-backed in both layouts. A device-side memset is
+     * guaranteed to enqueue behind the gate; a pageable host-to-device copy
+     * is allowed to block in the CUDA runtime before the request is submitted. */
+    CUDA_CHECK(cudaMemsetAsync(const_cast<void*>(device_async_batch.descriptor.spin_channels.data),
+                               0, device_async_batch.descriptor.spin_channels.size_bytes,
+                               stream.get()));
+    xtbloom_status_t mismatch_enqueue_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    if (mode == PlanTestMode::kSanitizer) {
+      mismatch_enqueue_status = xtbloom_plan_compute_enqueue(
+          device_async_plan.get(), &device_async_batch.descriptor, &device_async_options,
+          &mismatch_result.descriptor, mismatch_request.get());
+    } else {
+      bool mismatch_enqueue_returned = false;
+      std::mutex mismatch_enqueue_mutex;
+      std::condition_variable mismatch_enqueue_changed;
+      std::thread mismatch_submitter([&] {
+        mismatch_enqueue_status = xtbloom_plan_compute_enqueue(
+            device_async_plan.get(), &device_async_batch.descriptor, &device_async_options,
+            &mismatch_result.descriptor, mismatch_request.get());
+        {
+          std::lock_guard<std::mutex> lock(mismatch_enqueue_mutex);
+          mismatch_enqueue_returned = true;
+        }
+        mismatch_enqueue_changed.notify_one();
+      });
+      bool mismatch_returned_while_blocked = false;
+      {
+        std::unique_lock<std::mutex> lock(mismatch_enqueue_mutex);
+        mismatch_returned_while_blocked = mismatch_enqueue_changed.wait_for(
+            lock, kBlockedEnqueueWatchdog, [&] { return mismatch_enqueue_returned; });
+      }
+      if (!mismatch_returned_while_blocked) mismatch_gate.release();
+      mismatch_submitter.join();
+      CHECK(mismatch_returned_while_blocked);
+    }
+    CHECK(mismatch_enqueue_status == XTBLOOM_STATUS_SUCCESS);
+    xtbloom_request_info_t mismatch_info{};
+    CHECK(xtbloom_request_info_init(&mismatch_info, sizeof(mismatch_info)) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_query(mismatch_request.get(), &mismatch_info) == XTBLOOM_STATUS_SUCCESS);
+    if (mode == PlanTestMode::kSanitizer) {
+      CHECK(mismatch_info.state == XTBLOOM_REQUEST_PENDING ||
+            mismatch_info.state == XTBLOOM_REQUEST_COMPLETE);
+    } else {
+      CHECK(mismatch_info.state == XTBLOOM_REQUEST_PENDING);
+      mismatch_gate.release();
+    }
+    CHECK(xtbloom_request_wait(mismatch_request.get(), &mismatch_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(mismatch_info.state == XTBLOOM_REQUEST_COMPLETE);
+    CHECK(mismatch_info.completion_status == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(std::strstr(xtbloom_request_get_error(mismatch_request.get()),
+                      "does not match the fixed CUDA plan topology") != nullptr);
+    bool mismatch_unchanged = false;
+    CUDA_CHECK(mismatch_result.unchanged(mismatch_unchanged));
+    CHECK(mismatch_unchanged);
+
+    /* Admission of this FRESH request consumed the preceding successful warm
+     * checkpoint before its deferred topology failure became visible. Restore
+     * the borrowed topology bytes, then prove strict WARM rejects instead of
+     * silently consuming stale electronic state from the earlier success. */
+    CUDA_CHECK(device_async_inputs.spin_channels_.upload(device_async_batch.spin_channels));
+    xtbloom_compute_options_t device_warm_options = device_async_options;
+    device_warm_options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+    ResultOwner stale_warm_result;
+    CUDA_CHECK(stale_warm_result.bind(device_async_batch, ResultLayout::kDevice,
+                                      device_warm_options.flags));
+    CHECK(xtbloom_plan_compute(device_async_plan.get(), &device_async_batch.descriptor,
+                               &device_warm_options,
+                               &stale_warm_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(std::strstr(xtbloom_get_last_error(), "preceding successful public checkpoint") !=
+          nullptr);
+    bool stale_warm_unchanged = false;
+    CUDA_CHECK(stale_warm_result.unchanged(stale_warm_unchanged));
+    CHECK(stale_warm_unchanged);
+  }
 
   g_scenario = "plan-api";
   return 0;
@@ -1238,9 +1699,10 @@ int verify_input_layout(const PublicBatch& batch, InputLayout layout, bool qmmm)
     CHECK(is_cuda_buffer(batch.descriptor.atomic_numbers));
     CHECK(is_cuda_buffer(batch.descriptor.molecular_charges));
     CHECK(is_cuda_buffer(batch.descriptor.unpaired_electrons));
+    CHECK(is_cuda_buffer(batch.descriptor.spin_channels));
     CHECK(is_cuda_buffer(batch.descriptor.positions));
     if (qmmm) {
-      /* The six topology fields include point and dense-response partitions. */
+      /* The seven topology fields include spin, point, and response partitions. */
       CHECK(is_cuda_buffer(batch.descriptor.point_charge_offsets));
       CHECK(is_cuda_buffer(batch.descriptor.charge_response_offsets));
       CHECK(is_cuda_buffer(batch.descriptor.point_charge_positions));
@@ -1257,6 +1719,7 @@ int verify_input_layout(const PublicBatch& batch, InputLayout layout, bool qmmm)
   CHECK(is_host_buffer(batch.descriptor.atomic_numbers));
   CHECK(is_cuda_buffer(batch.descriptor.molecular_charges));
   CHECK(is_cuda_buffer(batch.descriptor.unpaired_electrons));
+  CHECK(is_cuda_buffer(batch.descriptor.spin_channels));
   CHECK(is_cuda_buffer(batch.descriptor.positions));
   if (qmmm) {
     CHECK(is_cuda_buffer(batch.descriptor.point_charge_offsets));
@@ -1598,18 +2061,32 @@ int test_stream_capture_transactionality(std::int32_t device, PublicBatch& batch
   CHECK(context != nullptr);
   ResultOwner result;
   CUDA_CHECK(result.bind(batch, ResultLayout::kHost));
+  xtbloom_plan_t* raw_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  PlanHandle plan(raw_plan);
+  xtbloom_request_t* raw_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle request(raw_request);
 
   CUDA_CHECK(cudaStreamBeginCapture(stream.get(), cudaStreamCaptureModeThreadLocal));
-  const xtbloom_status_t status =
+  const xtbloom_status_t compute_status =
       xtbloom_compute(context.get(), &batch.descriptor, &options, &result.descriptor);
+  const xtbloom_status_t enqueue_status = xtbloom_plan_compute_enqueue(
+      plan.get(), &batch.descriptor, &options, &result.descriptor, request.get());
   cudaGraph_t graph = nullptr;
   const cudaError_t end_status = cudaStreamEndCapture(stream.get(), &graph);
   if (graph != nullptr) (void)cudaGraphDestroy(graph);
   CUDA_CHECK(end_status);
-  CHECK(status == XTBLOOM_STATUS_NOT_SUPPORTED);
+  CHECK(compute_status == XTBLOOM_STATUS_NOT_SUPPORTED);
+  CHECK(enqueue_status == XTBLOOM_STATUS_NOT_SUPPORTED);
   bool unchanged = false;
   CUDA_CHECK(result.unchanged(unchanged));
   CHECK(unchanged);
+  xtbloom_request_info_t info{};
+  CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
   return 0;
 }
 
@@ -1735,7 +2212,15 @@ int test_independent_contexts(std::int32_t device, xtbloom_context_t* cpu_contex
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  const bool request_only = argc == 2 && std::strcmp(argv[1], "--request-only") == 0;
+  const bool request_sanitizer = argc == 2 && std::strcmp(argv[1], "--request-sanitizer") == 0;
+  const bool request_profile = argc == 2 && std::strcmp(argv[1], "--request-profile") == 0;
+  if (argc != 1 && !request_only && !request_sanitizer && !request_profile) {
+    std::fprintf(stderr, "usage: %s [--request-only|--request-sanitizer|--request-profile]\n",
+                 argv[0]);
+    return 2;
+  }
   int device_count = 0;
   const cudaError_t count_status = cudaGetDeviceCount(&device_count);
   if (count_status == cudaErrorNoDevice || device_count == 0) {
@@ -1766,6 +2251,22 @@ int main() {
   g_scenario = "CPU-reference";
   if (const int line = run_cpu_reference(cpu_context.get(), batch, options, reference); line != 0) {
     return line;
+  }
+
+  /* Compute Sanitizer can make the unrelated batch-128 conformance matrix
+   * prohibitively slow. This opt-in entry point keeps default CTest coverage
+   * unchanged while exercising fixed-plan request production without the
+   * blocked-stream watchdog, plus topology mismatch, publication, reuse, and
+   * teardown. The default/request-only modes retain blocked-stream ordering. */
+  if (request_only) {
+    return test_cuda_plan_api(device, cpu_context.get(), options, PlanTestMode::kRequestOnly);
+  }
+  if (request_sanitizer) {
+    return test_cuda_plan_api(device, cpu_context.get(), options, PlanTestMode::kSanitizer);
+  }
+  if (request_profile) {
+    return test_cuda_plan_api(device, cpu_context.get(), options,
+                              PlanTestMode::kProfileSteadyState);
   }
 
   if (const int line = test_host_device_mixed_and_streams(device, batch, options, reference);

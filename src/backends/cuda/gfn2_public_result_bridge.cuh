@@ -28,6 +28,7 @@ enum class Gfn2PublicResultBridgeError : std::uint32_t {
   kInvalidFlags = 5u,
   kInvalidExtents = 6u,
   kInvalidDestinations = 7u,
+  kRequestTopologyMismatch = 8u,
 };
 
 /* Host and CUDA outputs are both staged before the caller-visible commit. */
@@ -71,6 +72,9 @@ struct Gfn2PublicResultBridgeDeviceInput {
 
   /* Control values produced by internal inference publication. */
   const std::uint32_t* publication_plan_error = nullptr;
+  /* Stream-ordered fixed-plan validation. Nonzero suppresses every caller
+   * destination without requiring a host admission fence. */
+  const std::uint32_t* request_topology_error = nullptr;
   const std::uint64_t* publication_epoch_snapshot = nullptr;
   const std::uint64_t* current_geometry_epoch = nullptr;
   std::uint64_t plan_token = 0u;
@@ -183,10 +187,11 @@ static_assert(std::is_standard_layout_v<Gfn2PublicResultBridgeDeviceDiagnostics>
  * The preflight kernel seals the aggregate gate before copying every active
  * field into runtime-owned device staging. Requested host routes are then
  * downloaded into pinned staging, followed by the control record. This phase
- * never writes a caller CUDA destination. The owner must wait for completion,
- * accept the control record, and settle every other recoverable transaction
- * phase before calling commit_gfn2_public_results_cuda(). No allocation, host
- * polling, callback, or synchronization is performed here.
+ * never writes a caller CUDA destination. A synchronous owner waits and
+ * accepts the downloaded control before commit. A stream-asynchronous owner
+ * may queue commit immediately: the commit kernel reads the same device
+ * control and becomes a no-op unless prepare sealed aggregate success. No
+ * allocation, host polling, callback, or synchronization is performed here.
  */
 cudaError_t prepare_gfn2_public_results_cuda(
     const Gfn2PublicResultBridgeDevicePlan& plan, const Gfn2PublicResultBridgeDeviceInput& input,

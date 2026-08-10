@@ -40,6 +40,13 @@ typedef struct xtbloom_context xtbloom_context_t;
 typedef struct xtbloom_plan xtbloom_plan_t;
 
 /*
+ * Opaque reusable owner of one native asynchronous submission. See
+ * xtbloom_request_create. A request is bound to the context that created it
+ * and must be destroyed before that context.
+ */
+typedef struct xtbloom_request xtbloom_request_t;
+
+/*
  * Opaque owner of one xtbloom-allocated result arena. See
  * xtbloom_result_owner_create. A result owner is a ref-counted host or CUDA
  * device allocation that outlives the compute context used to fill it, so a
@@ -68,6 +75,16 @@ enum xtbloom_status_value {
   XTBLOOM_STATUS_SCC_NOT_CONVERGED = 7,
   /* Per-system generalized eigensolver failed or produced an unusable eigensystem. */
   XTBLOOM_STATUS_EIGENSOLVER_FAILED = 8
+};
+
+typedef int32_t xtbloom_request_state_t;
+enum xtbloom_request_state_value {
+  /* No submission has ever been accepted by this request. */
+  XTBLOOM_REQUEST_IDLE = 0,
+  /* Native work has been accepted and may still access caller-owned buffers. */
+  XTBLOOM_REQUEST_PENDING = 1,
+  /* Native work and result publication have finished, successfully or not. */
+  XTBLOOM_REQUEST_COMPLETE = 2
 };
 
 typedef int32_t xtbloom_backend_t;
@@ -179,6 +196,8 @@ typedef struct xtbloom_interaction {
  */
 #if defined(__cplusplus)
 static_assert(sizeof(xtbloom_status_t) == sizeof(int32_t), "xtbloom_status_t must be 32-bit");
+static_assert(sizeof(xtbloom_request_state_t) == sizeof(int32_t),
+              "xtbloom_request_state_t must be 32-bit");
 static_assert(sizeof(xtbloom_backend_t) == sizeof(int32_t), "xtbloom_backend_t must be 32-bit");
 static_assert(sizeof(xtbloom_memory_space_t) == sizeof(int32_t),
               "xtbloom_memory_space_t must be 32-bit");
@@ -193,6 +212,8 @@ static_assert(sizeof(xtbloom_interaction_type_t) == sizeof(int32_t),
               "xtbloom_interaction_type_t must be 32-bit");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(xtbloom_status_t) == sizeof(int32_t), "xtbloom_status_t must be 32-bit");
+_Static_assert(sizeof(xtbloom_request_state_t) == sizeof(int32_t),
+               "xtbloom_request_state_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_backend_t) == sizeof(int32_t), "xtbloom_backend_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_memory_space_t) == sizeof(int32_t),
                "xtbloom_memory_space_t must be 32-bit");
@@ -421,6 +442,11 @@ typedef struct xtbloom_batch {
  * compatible fully converged predecessor (first call, changed topology or
  * policy, or a preceding non-converged batch) is rejected with
  * XTBLOOM_STATUS_INVALID_ARGUMENT before any caller output is modified.
+ *
+ * An accepted FRESH attempt consumes the preceding compatible checkpoint
+ * before execution starts. If that attempt later fails, including a CUDA
+ * failure discovered in stream order after enqueue, no stale checkpoint from
+ * an older call survives; a subsequent strict WARM request is rejected.
  */
 typedef struct xtbloom_compute_options {
   uint32_t struct_size;
@@ -623,6 +649,53 @@ _Static_assert(sizeof(xtbloom_workspace_query_t) == XTBLOOM_WORKSPACE_QUERY_V1_S
                "xtbloom_workspace_query_t must not add trailing ABI padding");
 #endif
 
+/*
+ * Snapshot of one reusable asynchronous request.
+ *
+ * state is IDLE immediately after request creation, PENDING after a submission
+ * has been accepted, and COMPLETE after all native work and caller-output
+ * publication have finished. completion_status is meaningful in COMPLETE and
+ * reports the submitted computation's final status; query/wait themselves
+ * return a separate status describing whether the snapshot operation worked.
+ * result_flags is the asynchronous counterpart of xtbloom_batch_result_t.flags:
+ * enqueue functions take a const result descriptor and never modify that
+ * descriptor object.
+ */
+typedef struct xtbloom_request_info {
+  uint32_t struct_size;
+  uint32_t api_version;
+  xtbloom_request_state_t state;
+  xtbloom_status_t completion_status;
+  uint32_t result_flags;
+  uint32_t reserved;
+} xtbloom_request_info_t;
+
+#define XTBLOOM_REQUEST_INFO_V1_SIZE (offsetof(xtbloom_request_info_t, reserved) + sizeof(uint32_t))
+
+#if defined(__cplusplus)
+static_assert(offsetof(xtbloom_request_info_t, state) == 8u,
+              "xtbloom_request_info_t state must start at byte 8");
+static_assert(offsetof(xtbloom_request_info_t, completion_status) == 12u,
+              "xtbloom_request_info_t completion status must start at byte 12");
+static_assert(offsetof(xtbloom_request_info_t, result_flags) == 16u,
+              "xtbloom_request_info_t result flags must start at byte 16");
+static_assert(XTBLOOM_REQUEST_INFO_V1_SIZE == 24u,
+              "xtbloom_request_info_t ABI-v1 image must remain 24 bytes");
+static_assert(sizeof(xtbloom_request_info_t) == XTBLOOM_REQUEST_INFO_V1_SIZE,
+              "xtbloom_request_info_t must not add trailing ABI padding");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(offsetof(xtbloom_request_info_t, state) == 8u,
+               "xtbloom_request_info_t state must start at byte 8");
+_Static_assert(offsetof(xtbloom_request_info_t, completion_status) == 12u,
+               "xtbloom_request_info_t completion status must start at byte 12");
+_Static_assert(offsetof(xtbloom_request_info_t, result_flags) == 16u,
+               "xtbloom_request_info_t result flags must start at byte 16");
+_Static_assert(XTBLOOM_REQUEST_INFO_V1_SIZE == 24u,
+               "xtbloom_request_info_t ABI-v1 image must remain 24 bytes");
+_Static_assert(sizeof(xtbloom_request_info_t) == XTBLOOM_REQUEST_INFO_V1_SIZE,
+               "xtbloom_request_info_t must not add trailing ABI padding");
+#endif
+
 XTBLOOM_API const char* xtbloom_version_string(void);
 XTBLOOM_API const char* xtbloom_status_string(xtbloom_status_t status);
 
@@ -638,12 +711,49 @@ XTBLOOM_API xtbloom_status_t xtbloom_batch_result_init(xtbloom_batch_result_t* r
                                                        size_t struct_size);
 XTBLOOM_API xtbloom_status_t xtbloom_workspace_query_init(xtbloom_workspace_query_t* query,
                                                           size_t struct_size);
+XTBLOOM_API xtbloom_status_t xtbloom_request_info_init(xtbloom_request_info_t* info,
+                                                       size_t struct_size);
 
 XTBLOOM_API xtbloom_status_t xtbloom_context_create(const xtbloom_context_options_t* options,
                                                     xtbloom_context_t** context);
 XTBLOOM_API void xtbloom_context_destroy(xtbloom_context_t* context);
 XTBLOOM_API xtbloom_backend_t xtbloom_context_get_backend(const xtbloom_context_t* context);
 XTBLOOM_API int32_t xtbloom_context_get_device_id(const xtbloom_context_t* context);
+
+/*
+ * Create a backend-neutral reusable request bound to context. Creating a
+ * request is supported for CPU and CUDA contexts, but asynchronous enqueue is
+ * currently CUDA-only. The request must be destroyed before its context.
+ */
+XTBLOOM_API xtbloom_status_t xtbloom_request_create(xtbloom_context_t* context,
+                                                    xtbloom_request_t** request);
+
+/*
+ * Query without blocking, or wait until the current submission finishes.
+ * Query takes a mutable request because observing a ready native event may
+ * finalize deferred host-output publication and transition it to COMPLETE.
+ * Both calls write info only after validating its complete ABI-v1 header and
+ * reserved field. An IDLE request returns immediately. The API return value
+ * describes the query/wait operation; inspect info.completion_status only
+ * when info.state is COMPLETE for the submitted compute status.
+ */
+XTBLOOM_API xtbloom_status_t xtbloom_request_query(xtbloom_request_t* request,
+                                                   xtbloom_request_info_t* info);
+XTBLOOM_API xtbloom_status_t xtbloom_request_wait(xtbloom_request_t* request,
+                                                  xtbloom_request_info_t* info);
+
+/*
+ * Return the request-owned diagnostic for its completed submission. The
+ * returned pointer remains valid until the next accepted enqueue or request
+ * destruction. It is empty for IDLE, PENDING, and successful completion;
+ * invalid handles return NULL and set xtbloom_get_last_error().
+ * Do not concurrently reuse, query, wait on, or destroy the same request while
+ * retaining this pointer.
+ */
+XTBLOOM_API const char* xtbloom_request_get_error(const xtbloom_request_t* request);
+
+/* A NULL request is a harmless no-op. Destroying PENDING waits for completion. */
+XTBLOOM_API void xtbloom_request_destroy(xtbloom_request_t* request);
 
 /*
  * Performs a synchronous batched inference. Host buffers are accepted by both
@@ -665,6 +775,33 @@ XTBLOOM_API xtbloom_status_t xtbloom_compute(xtbloom_context_t* context,
                                              const xtbloom_batch_t* batch,
                                              const xtbloom_compute_options_t* options,
                                              xtbloom_batch_result_t* result);
+
+/*
+ * Submit one CUDA computation on the context stream without waiting for
+ * inference or result publication.
+ * The request must be IDLE or COMPLETE and bound to context. An accepted
+ * submission resets its previous completion status/error and becomes PENDING,
+ * or COMPLETE when the backend must settle it inline. Reusing a PENDING
+ * request is rejected. Descriptor structs are copied, and every HOST input is
+ * copied or fully consumed before a successful enqueue returns; those host
+ * descriptors and bytes may then be reused or released.
+ * Every CUDA_DEVICE input and every HOST or CUDA_DEVICE output remains a
+ * caller-owned borrowed buffer and must stay valid until COMPLETE.
+ *
+ * The result descriptor is copied during submission and is never retained or
+ * modified. In particular, result->flags is not an asynchronous publication
+ * channel; completed flags are returned in xtbloom_request_info_t.result_flags.
+ * CPU contexts return XTBLOOM_STATUS_NOT_SUPPORTED before descriptor validation
+ * and leave all result bytes and the request state unchanged. The initial V1
+ * implementation reserves this context-convenience symbol but returns
+ * XTBLOOM_STATUS_NOT_IMPLEMENTED for CUDA; use xtbloom_plan_compute_enqueue for
+ * the connected fixed-topology CUDA path.
+ */
+XTBLOOM_API xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context,
+                                                     const xtbloom_batch_t* batch,
+                                                     const xtbloom_compute_options_t* options,
+                                                     const xtbloom_batch_result_t* result,
+                                                     xtbloom_request_t* request);
 
 /*
  * Create a fixed-topology plan from one already-validated-shaped batch
@@ -718,6 +855,23 @@ XTBLOOM_API xtbloom_status_t xtbloom_plan_compute(xtbloom_plan_t* plan,
                                                   const xtbloom_batch_t* batch,
                                                   const xtbloom_compute_options_t* options,
                                                   xtbloom_batch_result_t* result);
+
+/* Fixed-topology counterpart of xtbloom_compute_enqueue with identical request,
+ * result-descriptor, buffer-lifetime, and CPU NOT_SUPPORTED semantics. Host
+ * topology is compared before return; CUDA-device topology is compared in
+ * stream order, and a mismatch completes with INVALID_ARGUMENT without
+ * modifying caller outputs. Accepted inference and publication remain
+ * stream-asynchronous. The V1 CUDA path accepts FRESH only; strict WARM returns
+ * NOT_SUPPORTED without changing request or result state. Once enqueue is
+ * accepted, FRESH consumes any preceding plan checkpoint even if completion
+ * later reports a deferred topology or execution failure. The request retains
+ * the plan's execution cache and the plan handle may be destroyed before
+ * completion (the creating context must still outlive the request). */
+XTBLOOM_API xtbloom_status_t xtbloom_plan_compute_enqueue(xtbloom_plan_t* plan,
+                                                          const xtbloom_batch_t* batch,
+                                                          const xtbloom_compute_options_t* options,
+                                                          const xtbloom_batch_result_t* result,
+                                                          xtbloom_request_t* request);
 
 /*
  * xtbloom-owned result arenas and their DLPack export.

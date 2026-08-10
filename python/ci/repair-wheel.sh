@@ -28,4 +28,5 @@ exec auditwheel repair -w "$destination" "$wheel" \
   --exclude libnvJitLink.so.12 \
   --exclude libcufft.so.11 \
   --exclude libcurand.so.10 \
-  --exclude libcuda.so.1
+  --exclude libcuda.so.1 \
+  --exclude libtorch_cpu.so

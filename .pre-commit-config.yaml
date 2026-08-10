@@ -46,9 +46,10 @@ repos:
     hooks:
       - id: clang-format
         types_or: [c++, c, cuda]
-        # Only the two generated parameter headers are canonical exports;
-        # future hand-written C/C++ files under data must still be formatted.
-        exclude: ^data/parameters/(?:gfn2|d4)\.hpp$
+        # Only the generated parameter headers and the manifest-pinned upstream
+        # LibTorch header closure are canonical bytes. Future hand-written C/C++
+        # files in either parent directory must still be formatted.
+        exclude: ^(?:data/parameters/(?:gfn2|d4)\.hpp|cmake/3rdparty/torch-stable/include/)
   - repo: local
     hooks:
       - id: forbid-retired-project-name-content

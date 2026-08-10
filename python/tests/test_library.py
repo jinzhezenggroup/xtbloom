@@ -9,15 +9,62 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 from xtbloom import __version__, library
-from xtbloom.exceptions import XTBloomValueError
+from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
+class _FakeSymbol:
+    """Minimal mutable stand-in for a configured ``ctypes`` function."""
+
+    argtypes: object = None
+    restype: object = None
+
+
+class _FakeLibrary:
+    """Weak-referenceable fake shared-library handle for symbol probing."""
+
+
+def _fake_request_library(*, omit: str | None = None) -> _FakeLibrary:
+    """Build a fake library with all but an optional request ABI symbol."""
+    fake = _FakeLibrary()
+    for name in library._REQUEST_API_SYMBOLS:
+        if name != omit:
+            setattr(fake, name, _FakeSymbol())
+    return fake
+
+
 def test_version_string() -> None:
     """Keep Python distribution metadata and the native C API in lockstep."""
     assert library.get_version() == __version__
+
+
+def test_request_api_is_optional_as_a_complete_symbol_group() -> None:
+    """An older core library remains usable when every request symbol is absent."""
+    fake = _FakeLibrary()
+
+    assert not library._configure_request_api(fake)
+    assert not library.request_api_available(fake)
+
+
+def test_request_api_configures_only_when_complete() -> None:
+    """Configure all signatures and advertise the complete additive ABI."""
+    fake = _fake_request_library()
+
+    assert library._configure_request_api(fake)
+    assert library.request_api_available(fake)
+    assert fake.xtbloom_request_info_init.restype is ctypes.c_int32
+    assert fake.xtbloom_plan_compute_enqueue.restype is ctypes.c_int32
+    assert fake.xtbloom_request_destroy.restype is None
+
+
+def test_partial_request_api_is_incompatible() -> None:
+    """Reject a library that cannot provide one coherent request contract."""
+    fake = _fake_request_library(omit="xtbloom_request_wait")
+
+    with pytest.raises(XTBloomRuntimeError, match="xtbloom_request_wait"):
+        library._configure_request_api(fake)
 
 
 def test_runtime_search_includes_user_site_packages(
@@ -126,6 +173,20 @@ def test_abi_struct_sizes() -> None:
     assert query.host_required_alignment == 0
     assert query.device_required_bytes == 0
     assert query.device_required_alignment == 0
+    assert ctypes.sizeof(library.RequestInfo) == 24
+    assert library.RequestInfo.state.offset == 8
+    assert library.RequestInfo.completion_status.offset == 12
+    assert library.RequestInfo.result_flags.offset == 16
+    request_info = library.RequestInfo()
+    library.load_library().xtbloom_request_info_init(
+        ctypes.byref(request_info), ctypes.sizeof(request_info)
+    )
+    assert request_info.struct_size == 24
+    assert request_info.api_version == library.API_VERSION
+    assert request_info.state == library.REQUEST_IDLE
+    assert request_info.completion_status == library.STATUS_SUCCESS
+    assert request_info.result_flags == 0
+    assert request_info.reserved == 0
 
 
 def test_unknown_method_rejected() -> None:

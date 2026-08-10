@@ -128,8 +128,10 @@ xtbloom = "xtbloom.dpdata"
 [tool.scikit-build]
 minimum-version = "build-system.requires"
 sdist.include = [
+  "src/bindings/torch/xtbloom_torch_ext.cpp",
   "cmake/3rdparty/implib/**",
   "cmake/3rdparty/implib_manifest.json",
+  "cmake/3rdparty/torch-stable/**",
   "cmake/3rdparty/scipy_openblas32_manifest.json",
   "data/parameters/*_manifest.json",
   "data/parameters/manifest.json",
@@ -148,6 +150,10 @@ cmake.args = [
   "-DXTBLOOM_BUILD_TESTS=OFF",
   "-DXTBLOOM_PYTHON_WHEEL=ON",
   "-DBUILD_SHARED_LIBS=ON",
+  # Wheel payload paths are part of the Python package contract. Do not let
+  # GNUInstallDirs select architecture-specific directories such as lib64 on
+  # aarch64; native libraries live in xtbloom/lib on every wheel platform.
+  "-DCMAKE_INSTALL_LIBDIR=lib",
 ]
 wheel.packages = ["python/xtbloom"]
 wheel.install-dir = "xtbloom"
@@ -188,9 +194,9 @@ CMAKE_CUDA_COMPILER_LAUNCHER = { env = "XTBLOOM_CUDA_COMPILER_LAUNCHER", default
 # cibuildwheel: build wheels across platforms. The .github/workflows/wheels.yml
 # matrix drives exactly which build each runner produces via CIBW_BUILD and
 # whether XTBLOOM_ENABLE_CUDA is ON (Linux x86_64, CUDA manylinux image) or OFF
-# everywhere else. Linux x86_64 also runs the full conformance suite through
-# cibuildwheel's own test feature (`test-extras`); the other platforms get an
-# import smoke test.
+# everywhere else. Linux x86_64 runs the full Python suite; native aarch64 runs
+# an installed-wheel CPU and Torch inference smoke; other platforms retain the
+# default import smoke test.
 [tool.cibuildwheel]
 build = ["cp311-*"]
 # Use uv for the isolated build environment (via `build --installer=uv`) and
@@ -211,11 +217,17 @@ manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_
 test-command = "python -c 'import xtbloom; print(xtbloom.library.get_version())'"
 
 [tool.cibuildwheel.linux]
+# Install the PEP 735 test-only Torch group in both repaired-wheel test
+# environments. Project extras alone do not include dependency groups.
+test-groups = ["torch-testing"]
 # before-build runs inside the build container (once per container, idempotent
 # scripts). The image supplies nvcc's compiler-support files, while provider
 # shared libraries are unnecessary (see the stub-mode comment above), so only
 # the CUDA-capable ccache (>= 4.1, needed for nvcc; the manylinux_2_28 distro
-# ccache 3.7 cannot cache CUDA) is installed.
+# ccache 3.7 cannot cache CUDA) and the provenance-pinned private OpenBLAS
+# wheel provider are prepared. The PyTorch stable-ABI extension is compiled
+# from manifest-pinned vendored headers plus a build-time-only libtorch_cpu
+# stub.
 before-build = "bash {package}/python/ci/prepare-wheel-build.sh"
 # CUDA host shared libraries (cublas/cusolver/cudart/...) are intentionally not
 # bundled: the trampolines resolve the system CUDA driver plus the
@@ -223,6 +235,12 @@ before-build = "bash {package}/python/ci/prepare-wheel-build.sh"
 # driver interface and is likewise provided by the system, never bundled.
 # The device link disables cudadevrt explicitly. NVIDIA libdevice compiler
 # output may still be present and remains covered by the additional permission.
+# The torch extension links only libtorch_cpu.so for its stable aoti_torch_*
+# C shim symbols. With the vendored-headers + build-time-stub build the wheel is
+# produced in an environment that never installs torch, so auditwheel cannot
+# see libtorch_cpu.so and it is never bundled. The repair script still excludes
+# it defensively while also resolving and vendoring the reviewed private
+# OpenBLAS cohort.
 repair-wheel-command = "bash {package}/python/ci/repair-wheel.sh {dest_dir} {wheel}"
 
 [tool.ruff]

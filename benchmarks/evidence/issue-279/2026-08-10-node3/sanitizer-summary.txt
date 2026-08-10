@@ -1,0 +1,25 @@
+source_revision=99f235959dccb7084dd6d9db4b4f172e3b4ebcf8
+binary_sha256=9af3bbb7d1d2d62673b5b09d63b52270ecb9cd4359de8bb51dc2108c1d931670
+compute_sanitizer_version=2025.2.1.0 build 35969825
+test_binary=build/request-cuda129/xtbloom_cuda_public_api_test
+test_mode=--request-sanitizer
+
+command_template=/group/software/cuda-12.9.1/bin/compute-sanitizer --tool <tool> --error-exitcode=99 --log-file <outside-repository-log> build/request-cuda129/xtbloom_cuda_public_api_test --request-sanitizer
+
+memcheck_exit=0
+memcheck_summary=ERROR SUMMARY: 0 errors
+memcheck_log_sha256=a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425
+
+racecheck_exit=0
+racecheck_summary=RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)
+racecheck_log_sha256=91dbb142f8feb8786cd6fde6ac035e816b67db14e4b7b400a01386ec106b75c4
+
+initcheck_exit=0
+initcheck_summary=ERROR SUMMARY: 0 errors
+initcheck_log_sha256=a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425
+
+synccheck_exit=99
+synccheck_summary=ERROR SUMMARY: 1024 errors; 924 reports suppressed by the default print limit
+synccheck_signature=Barrier error detected. Divergent thread(s) in warp at reduce_spin_atomic_charges_kernel+0x2b0
+synccheck_log_sha256=b0102a263b514f6c2897af62b2cd652899e7977725b65e845061a157a774d80f
+synccheck_classification=FAIL; exact match to the issue #80 owner-classified NVIDIA CUDA / Compute Sanitizer device-Graph signature, not a literal pass

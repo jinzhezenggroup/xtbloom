@@ -201,11 +201,12 @@ API semantics do not depend on one device's measured timing.
 
 ## PyTorch autograd op (positions gradient only)
 
-`xtbloom.xtbloom_torch` runs the packed DLPack inference on PyTorch tensors (host
-CPU or CUDA device) and returns `(energies, forces)` as float64 tensors. It is
-the only autograd entry point in the Python API, and its gradient contract is
-deliberately narrow: it supports exactly `dE/dR = -F` with respect to
-`positions`, which the native library evaluates analytically.
+`xtbloom.xtbloom_torch` runs packed xtbloom inference on PyTorch tensors (host CPU
+or CUDA device) and returns `(energies, forces)` as float64 tensors, with
+zero-copy tensor data plane. It is the only autograd entry point in the Python
+API, and its gradient contract is deliberately narrow: it supports exactly
+`dE/dR = -F` with respect to `positions`, which the native library evaluates
+analytically.
 
 ```python
 import torch
@@ -233,9 +234,42 @@ loss.backward()      # positions.grad == -forces
   `molecular_charges`, `unpaired_electrons`, `spin_channels` — raises
   `XTBloomNotSupportedError` eagerly at forward time.
 - PyTorch is imported lazily only when the op is called; `import xtbloom` never
-  imports torch.
+  imports torch or the compiled torch extension.
 - Non-contiguous or strided inputs are packed into a compact copy by the op;
   scalar types must still match the C ABI exactly.
+- CUDA calls always follow `torch.cuda.current_stream()`. Select a custom
+  stream with the ordinary PyTorch context manager:
+
+  ```python
+  with torch.cuda.stream(stream):
+      energies, forces = xtbloom_torch(...)
+  ```
+
+The op itself is a compiled extension, `libxtbloom_torch_ext`, written against
+the LibTorch Stable ABI (torch >= 2.10). It binds tensor data pointers directly
+to the public xtbloom C ABI. CPU calls complete synchronously; CUDA calls return
+ordinary `(energies, forces)` tensors ordered on `torch.cuda.current_stream()`,
+just like other CUDA-enabled PyTorch operations. Stream management and native
+execution lifetime are implementation details rather than Python API choices.
+
+Because only ABI-stable symbols are used, a single binary works across torch
+releases without per-version rebuilds. The extension is optional: when the
+wheels were built without it (or Torch < 2.10 is installed), calling
+`xtbloom_torch` raises a clear error instead of silently degrading. Building the
+extension never downloads or requires torch: its stable headers are vendored
+in `cmake/3rdparty/torch-stable` and it links a build-time-only stub
+`libtorch_cpu.so`, so the shipped binary simply carries `DT_NEEDED
+libtorch_cpu.so` and binds to the torch the end user already imported. Torch is
+still required at *runtime* to call `xtbloom_torch`; the rest of xtbloom builds
+and runs without torch. See `cmake/3rdparty/torch-stable/README.md` for
+provenance and regeneration.
+
+`xtbloom_torch` is eager-only: it drives the native library through a custom op,
+which `torch.compile` cannot trace.  The op is therefore marked opaque to the
+compiler, so wrapping it in `torch.compile` inserts a clean graph
+break and runs it eagerly: correct results and no trace-time error, but no
+compilation speedup for the xtbloom call itself (the surrounding graph is still
+compiled).
 
 ## Open-shell calculations
 

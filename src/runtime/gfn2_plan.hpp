@@ -15,6 +15,7 @@ namespace xtbloom::detail {
 
 class Gfn2CpuExecutionCache;
 class Gfn2CudaExecutionCache;
+struct RequestSubmission;
 struct Context;
 
 /*
@@ -49,9 +50,13 @@ class Gfn2Plan {
                                    std::string& error);
   xtbloom_status_t compute(const xtbloom_batch_t& batch, const xtbloom_compute_options_t& options,
                            xtbloom_batch_result_t& result, std::string& error);
+  xtbloom_status_t enqueue(const xtbloom_batch_t& batch, const xtbloom_compute_options_t& options,
+                           const xtbloom_batch_result_t& result, RequestSubmission& submission,
+                           std::string& error);
   void destroy() noexcept;
 
   [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] Context* context() const noexcept;
 
  private:
   struct Impl;

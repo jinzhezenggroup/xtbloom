@@ -177,6 +177,7 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       structurally_safe_buffer(input.system_statuses, input.batch_elements,
                                alignof(xtbloom_status_t)) &&
       canonical(input.publication_plan_error, 1, alignof(std::uint32_t)) &&
+      canonical(input.request_topology_error, 1, alignof(std::uint32_t)) &&
       canonical(input.publication_epoch_snapshot, 1, alignof(std::uint64_t)) &&
       canonical(input.current_geometry_epoch, 1, alignof(std::uint64_t)) &&
       structurally_safe_buffer(device_staging.energies, device_staging.energy_elements,
@@ -214,7 +215,7 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       diagnostics.control_elements >= 0;
   if (!fields_safe) return false;
 
-  RangeList<10> device_reads;
+  RangeList<11> device_reads;
   RangeList<8> device_writes;
   const bool device_ranges_valid =
       device_reads.add(input.energies, input.energy_elements, sizeof(double)) &&
@@ -225,6 +226,7 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       device_reads.add(input.converged, input.batch_elements, sizeof(std::uint8_t)) &&
       device_reads.add(input.system_statuses, input.batch_elements, sizeof(xtbloom_status_t)) &&
       device_reads.add(input.publication_plan_error, 1, sizeof(std::uint32_t)) &&
+      device_reads.add(input.request_topology_error, 1, sizeof(std::uint32_t)) &&
       device_reads.add(input.publication_epoch_snapshot, 1, sizeof(std::uint64_t)) &&
       device_reads.add(input.current_geometry_epoch, 1, sizeof(std::uint64_t)) &&
       device_writes.add(device_staging.energies, device_staging.energy_elements, sizeof(double)) &&
@@ -376,6 +378,9 @@ __global__ void public_result_preflight_kernel(
       static_contract_error(plan, input, device_staging, destinations, staging, diagnostics);
   if (error == BridgeError::kSuccess && control.internal_publication_plan_error != 0u) {
     error = BridgeError::kInternalPublicationFailure;
+  }
+  if (error == BridgeError::kSuccess && *input.request_topology_error != 0u) {
+    error = BridgeError::kRequestTopologyMismatch;
   }
   if (error == BridgeError::kSuccess &&
       (control.publication_epoch_snapshot == 0u || control.current_geometry_epoch == 0u ||

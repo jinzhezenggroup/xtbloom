@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "runtime/request.hpp"
 #include "xtbloom/xtbloom.h"
 
 namespace xtbloom::detail {
@@ -76,6 +77,10 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t scc_loop_active_count = 0u;
   std::uintptr_t scc_loop_numerical_body_count = 0u;
   std::uintptr_t energy_force_descriptors = 0u;
+  /* Stable completion owner and accepted single-flight submission count. */
+  std::uintptr_t request_completion_owner = 0u;
+  std::uint64_t request_submissions = 0u;
+  std::uint8_t request_active = 0u;
 
   std::uintptr_t topology_arena = 0u;
   std::uintptr_t input_arena = 0u;
@@ -223,10 +228,10 @@ struct Gfn2CudaNumericalInputView {
  * only serially on the context owner stream. A future controlled launch API
  * can replace these caller-enforced lifetime and stream constraints.
  */
-class Gfn2CudaExecutionCache {
+class Gfn2CudaExecutionCache : public RequestCompletion {
  public:
   Gfn2CudaExecutionCache(std::int32_t device_id, void* stream);
-  ~Gfn2CudaExecutionCache();
+  ~Gfn2CudaExecutionCache() override;
 
   Gfn2CudaExecutionCache(const Gfn2CudaExecutionCache&) = delete;
   Gfn2CudaExecutionCache& operator=(const Gfn2CudaExecutionCache&) = delete;
@@ -262,6 +267,12 @@ class Gfn2CudaExecutionCache {
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
 
+  /* The single-flight cache is its own preallocated completion owner, so
+   * publishing it into a reusable request needs no per-enqueue allocation. */
+  [[nodiscard]] xtbloom_status_t probe(bool wait,
+                                       RequestCompletionResult& result) noexcept override;
+  void settle_noexcept() noexcept override;
+
  private:
   friend xtbloom_status_t execute_restricted_gfn2_cuda_impl(
       Gfn2CudaExecutionCache& cache, const xtbloom_batch_t& batch,
@@ -272,6 +283,10 @@ class Gfn2CudaExecutionCache {
                                                        const xtbloom_compute_options_t& options,
                                                        xtbloom_batch_result_t& result,
                                                        std::string& error);
+  friend xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
+      const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const xtbloom_batch_t& batch,
+      const xtbloom_compute_options_t& options, const xtbloom_batch_result_t& result,
+      RequestSubmission& submission, std::string& error);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;
@@ -281,8 +296,11 @@ class Gfn2CudaExecutionCache {
  * Execute one synchronous public CUDA request as a single cache transaction.
  * Validation, topology staging, candidate refresh, SCC, internal publication,
  * public result bridging, and completion all remain serialized by the cache
- * mutex. Failures detected before caller-output commit leave output bytes and
- * result.flags unchanged. Any later catastrophic failure may return
+ * mutex. The owner drives prepare submission, completion observation, host
+ * aggregate acceptance, caller-device commit, and host publication as
+ * separate phases while preserving the synchronous wait points. Failures
+ * detected before caller-output commit leave output bytes and result.flags
+ * unchanged. Any later catastrophic failure may return
  * INTERNAL_ERROR after results were modified. Current-device restoration is a
  * separate exit boundary and may fail before or after output commit, as
  * documented by the public API.
@@ -298,6 +316,16 @@ class Gfn2CudaExecutionCache {
 [[nodiscard]] xtbloom_status_t execute_restricted_gfn2_cuda_plan(
     Gfn2CudaExecutionCache& cache, const xtbloom_batch_t& batch,
     const xtbloom_compute_options_t& options, xtbloom_batch_result_t& result, std::string& error);
+
+/* Submit one fixed-topology CUDA plan transaction without waiting for
+ * inference or caller-output publication. Descriptor structs are copied,
+ * every host numerical leaf is snapshotted, host topology is compared before
+ * return, and device topology is compared in owner-stream order before the
+ * transactional result gate can commit any caller output. */
+[[nodiscard]] xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
+    const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const xtbloom_batch_t& batch,
+    const xtbloom_compute_options_t& options, const xtbloom_batch_result_t& result,
+    RequestSubmission& submission, std::string& error);
 
 }  // namespace xtbloom::detail
 

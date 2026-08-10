@@ -123,6 +123,11 @@ static cudaError_t xtbloom_cuda_event_destroy(cudaEvent_t event) {
   return cudaErrorSharedObjectSymbolNotFound;
 }
 
+static cudaError_t xtbloom_cuda_event_query(cudaEvent_t event) {
+  (void)event;
+  return cudaErrorSharedObjectSymbolNotFound;
+}
+
 static cudaError_t xtbloom_cuda_event_record(cudaEvent_t event, cudaStream_t stream) {
   (void)event;
   (void)stream;
@@ -498,6 +503,11 @@ static cudaError_t xtbloom_cuda_stream_is_capturing(cudaStream_t stream,
   if (status != NULL) {
     *status = cudaStreamCaptureStatusNone;
   }
+  return cudaErrorSharedObjectSymbolNotFound;
+}
+
+static cudaError_t xtbloom_cuda_stream_query(cudaStream_t stream) {
+  (void)stream;
   return cudaErrorSharedObjectSymbolNotFound;
 }
 
@@ -1001,6 +1011,7 @@ XTBLOOM_CHECK_SIGNATURE(cudaEventCreate, xtbloom_cuda_event_create_default);
 XTBLOOM_CHECK_SIGNATURE(cudaEventCreateWithFlags, xtbloom_cuda_event_create);
 XTBLOOM_CHECK_SIGNATURE(cudaEventDestroy, xtbloom_cuda_event_destroy);
 XTBLOOM_CHECK_SIGNATURE(cudaEventElapsedTime, xtbloom_cuda_event_elapsed_time);
+XTBLOOM_CHECK_SIGNATURE(cudaEventQuery, xtbloom_cuda_event_query);
 XTBLOOM_CHECK_SIGNATURE(cudaEventRecord, xtbloom_cuda_event_record);
 XTBLOOM_CHECK_SIGNATURE(cudaEventSynchronize, xtbloom_cuda_event_synchronize);
 XTBLOOM_CHECK_SIGNATURE(cudaFree, xtbloom_cuda_free);
@@ -1050,6 +1061,7 @@ XTBLOOM_CHECK_SIGNATURE(cudaStreamEndCapture, xtbloom_cuda_stream_end_capture);
 XTBLOOM_CHECK_SIGNATURE(cudaStreamGetCaptureInfo_v2, xtbloom_cuda_stream_get_capture_info);
 XTBLOOM_CHECK_SIGNATURE(cudaStreamGetDevice, xtbloom_cuda_stream_get_device);
 XTBLOOM_CHECK_SIGNATURE(cudaStreamIsCapturing, xtbloom_cuda_stream_is_capturing);
+XTBLOOM_CHECK_SIGNATURE(cudaStreamQuery, xtbloom_cuda_stream_query);
 XTBLOOM_CHECK_SIGNATURE(cudaStreamSynchronize, xtbloom_cuda_stream_synchronize);
 XTBLOOM_CHECK_SIGNATURE(cudaStreamUpdateCaptureDependencies,
                         xtbloom_cuda_stream_update_capture_dependencies);
@@ -1147,6 +1159,7 @@ static void* xtbloom_fallback_for_symbol(const char* symbol) {
   XTBLOOM_SYMBOL("cudaEventCreate", xtbloom_cuda_event_create_default)
   XTBLOOM_SYMBOL("cudaEventDestroy", xtbloom_cuda_event_destroy)
   XTBLOOM_SYMBOL("cudaEventElapsedTime", xtbloom_cuda_event_elapsed_time)
+  XTBLOOM_SYMBOL("cudaEventQuery", xtbloom_cuda_event_query)
   XTBLOOM_SYMBOL("cudaEventRecord", xtbloom_cuda_event_record)
   XTBLOOM_SYMBOL("cudaEventSynchronize", xtbloom_cuda_event_synchronize)
   XTBLOOM_SYMBOL("cudaFree", xtbloom_cuda_free)
@@ -1197,6 +1210,7 @@ static void* xtbloom_fallback_for_symbol(const char* symbol) {
   XTBLOOM_SYMBOL("cudaStreamGetCaptureInfo_v2", xtbloom_cuda_stream_get_capture_info)
   XTBLOOM_SYMBOL("cudaStreamGetDevice", xtbloom_cuda_stream_get_device)
   XTBLOOM_SYMBOL("cudaStreamIsCapturing", xtbloom_cuda_stream_is_capturing)
+  XTBLOOM_SYMBOL("cudaStreamQuery", xtbloom_cuda_stream_query)
   XTBLOOM_SYMBOL("cudaStreamSynchronize", xtbloom_cuda_stream_synchronize)
   XTBLOOM_SYMBOL("cudaStreamUpdateCaptureDependencies",
                  xtbloom_cuda_stream_update_capture_dependencies)

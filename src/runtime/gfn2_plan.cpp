@@ -12,6 +12,7 @@
 
 #include "runtime/backend.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
+#include "runtime/request.hpp"
 #include "runtime/validation.hpp"
 #if defined(XTBLOOM_HAS_CUDA)
 #include "runtime/gfn2_cuda_execution.hpp"
@@ -217,6 +218,8 @@ Gfn2Plan::~Gfn2Plan() = default;
 
 bool Gfn2Plan::valid() const noexcept { return impl_ != nullptr && impl_->context != nullptr; }
 
+Context* Gfn2Plan::context() const noexcept { return impl_ == nullptr ? nullptr : impl_->context; }
+
 void Gfn2Plan::destroy() noexcept {
   /* Prepared caches belong to the plan, while the context pointer remains a
    * borrowed lifetime binding. Callers must still destroy the plan first. */
@@ -416,6 +419,62 @@ xtbloom_status_t Gfn2Plan::compute(const xtbloom_batch_t& batch,
     return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   return execute_restricted_gfn2_cuda_plan(*impl_->cuda_cache, batch, options, result, error);
+#else
+  error = "the xtbloom library was built without CUDA support";
+  return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
+#endif
+}
+
+xtbloom_status_t Gfn2Plan::enqueue(const xtbloom_batch_t& batch,
+                                   const xtbloom_compute_options_t& options,
+                                   const xtbloom_batch_result_t& result,
+                                   RequestSubmission& submission, std::string& error) {
+  if (impl_->context == nullptr || impl_->backend == XTBLOOM_BACKEND_AUTO) {
+    error = "plan is not created or has been destroyed";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (impl_->backend == XTBLOOM_BACKEND_CPU) {
+    error = "asynchronous plan enqueue is not supported by the CPU backend";
+    return XTBLOOM_STATUS_NOT_SUPPORTED;
+  }
+
+  try {
+    const DescriptorValidationResult validation =
+        validate_compute_descriptor_structure(impl_->backend, &batch, &options, &result);
+    if (!validation.ok()) {
+      error = validation.error;
+      return validation.status;
+    }
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate temporary storage while validating a plan enqueue request";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  } catch (const std::exception& exception) {
+    error = exception.what();
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  } catch (...) {
+    error = "unknown exception while validating a plan enqueue request";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+
+  if (!plan_policy_matches(impl_->policy, options)) {
+    error = "the compute options do not match the fixed plan policy";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
+      options.scc_start_mode == XTBLOOM_SCC_START_WARM) {
+    /* WARM publication changes a persistent epoch. Keep V1 request semantics
+     * explicit until that epoch transition is stream ordered and reusable. */
+    error = "asynchronous CUDA plan enqueue does not support strict WARM SCC start yet";
+    return XTBLOOM_STATUS_NOT_SUPPORTED;
+  }
+
+#if defined(XTBLOOM_HAS_CUDA)
+  if (impl_->cuda_cache == nullptr) {
+    error = "plan does not own a CUDA GFN2 execution cache";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  return enqueue_restricted_gfn2_cuda_plan(impl_->cuda_cache, batch, options, result, submission,
+                                           error);
 #else
   error = "the xtbloom library was built without CUDA support";
   return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;

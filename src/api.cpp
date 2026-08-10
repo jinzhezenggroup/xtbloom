@@ -17,6 +17,7 @@
 #if defined(XTBLOOM_HAS_CUDA)
 #include "runtime/gfn2_cuda_execution.hpp"
 #endif
+#include "runtime/request.hpp"
 #include "runtime/result_owner.hpp"
 #include "runtime/validation.hpp"
 
@@ -26,6 +27,10 @@ struct xtbloom_context {
 
 struct xtbloom_plan {
   xtbloom::detail::Gfn2Plan* implementation;
+};
+
+struct xtbloom_request {
+  xtbloom::detail::Request* implementation;
 };
 
 struct xtbloom_result_owner {
@@ -73,6 +78,23 @@ xtbloom_status_t initialize_structure(T* value, std::size_t caller_size, std::si
   last_error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }
+
+class CompletionSettlementGuard {
+ public:
+  explicit CompletionSettlementGuard(
+      std::shared_ptr<xtbloom::detail::RequestCompletion> completion) noexcept
+      : completion_(std::move(completion)) {}
+  ~CompletionSettlementGuard() {
+    if (completion_ != nullptr) completion_->settle_noexcept();
+  }
+  CompletionSettlementGuard(const CompletionSettlementGuard&) = delete;
+  CompletionSettlementGuard& operator=(const CompletionSettlementGuard&) = delete;
+
+  void dismiss() noexcept { completion_.reset(); }
+
+ private:
+  std::shared_ptr<xtbloom::detail::RequestCompletion> completion_;
+};
 
 }  // namespace
 
@@ -151,6 +173,10 @@ xtbloom_status_t xtbloom_workspace_query_init(xtbloom_workspace_query_t* query,
                               "workspace query");
 }
 
+xtbloom_status_t xtbloom_request_info_init(xtbloom_request_info_t* info, size_t struct_size) {
+  return initialize_structure(info, struct_size, XTBLOOM_REQUEST_INFO_V1_SIZE, "request info");
+}
+
 xtbloom_status_t xtbloom_context_create(const xtbloom_context_options_t* options,
                                         xtbloom_context_t** context) {
   if (context == nullptr) {
@@ -217,6 +243,150 @@ int32_t xtbloom_context_get_device_id(const xtbloom_context_t* context) {
   }
   last_error.clear();
   return context->implementation->device_id;
+}
+
+xtbloom_status_t xtbloom_request_create(xtbloom_context_t* context, xtbloom_request_t** request) {
+  if (request == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "request output pointer is NULL");
+  }
+  *request = nullptr;
+  if (context == nullptr || context->implementation == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "context is NULL");
+  }
+  try {
+    xtbloom::detail::Request* implementation =
+        new (std::nothrow) xtbloom::detail::Request(*context->implementation);
+    if (implementation == nullptr) {
+      return fail(XTBLOOM_STATUS_ALLOCATION_FAILED, "failed to allocate a request implementation");
+    }
+    xtbloom_request_t* wrapper = new (std::nothrow) xtbloom_request_t{implementation};
+    if (wrapper == nullptr) {
+      delete implementation;
+      return fail(XTBLOOM_STATUS_ALLOCATION_FAILED, "failed to allocate a request handle");
+    }
+    *request = wrapper;
+    last_error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    return fail(XTBLOOM_STATUS_ALLOCATION_FAILED, "failed to allocate a request");
+  } catch (const std::exception& exception) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR, "unknown exception while creating a request");
+  }
+}
+
+namespace {
+
+xtbloom_status_t validate_request_info(xtbloom_request_info_t* info) {
+  if (!valid_header(info, XTBLOOM_REQUEST_INFO_V1_SIZE)) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT,
+                "request info is NULL, too small, or uses an unsupported API version");
+  }
+  if (info->reserved != 0u) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "request info reserved field must be zero");
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+}  // namespace
+
+xtbloom_status_t xtbloom_request_query(xtbloom_request_t* request, xtbloom_request_info_t* info) {
+  if (request == nullptr || request->implementation == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "request is NULL");
+  }
+  const xtbloom_status_t status = validate_request_info(info);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  try {
+    std::string error;
+    const xtbloom_status_t query_status = request->implementation->query(false, *info, error);
+    if (query_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(query_status, std::move(error));
+    }
+    last_error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
+                "failed to allocate while querying a request completion");
+  } catch (const std::exception& exception) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                "unknown exception while querying a request completion");
+  }
+}
+
+xtbloom_status_t xtbloom_request_wait(xtbloom_request_t* request, xtbloom_request_info_t* info) {
+  if (request == nullptr || request->implementation == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "request is NULL");
+  }
+  const xtbloom_status_t status = validate_request_info(info);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  try {
+    std::string error;
+    const xtbloom_status_t wait_status = request->implementation->query(true, *info, error);
+    if (wait_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(wait_status, std::move(error));
+    }
+    last_error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
+                "failed to allocate while waiting for a request completion");
+  } catch (const std::exception& exception) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                "unknown exception while waiting for a request completion");
+  }
+}
+
+const char* xtbloom_request_get_error(const xtbloom_request_t* request) {
+  if (request == nullptr || request->implementation == nullptr) {
+    last_error = "request is NULL";
+    return nullptr;
+  }
+  last_error.clear();
+  return request->implementation->error();
+}
+
+void xtbloom_request_destroy(xtbloom_request_t* request) {
+  if (request == nullptr) {
+    return;
+  }
+  delete request->implementation;
+  delete request;
+  last_error.clear();
+}
+
+xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtbloom_batch_t* batch,
+                                         const xtbloom_compute_options_t* options,
+                                         const xtbloom_batch_result_t* result,
+                                         xtbloom_request_t* request) {
+  if (context == nullptr || context->implementation == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "context is NULL");
+  }
+  if (request == nullptr || request->implementation == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "request is NULL");
+  }
+  if (request->implementation->context() != context->implementation) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "request was created by a different context");
+  }
+  if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
+    /* Do not inspect descriptors or touch request/result state: callers may
+     * probe capability with sentinels and then fall back to xtbloom_compute. */
+    return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+                "asynchronous compute enqueue is not supported by the CPU backend");
+  }
+  (void)batch;
+  (void)options;
+  (void)result;
+  return fail(XTBLOOM_STATUS_NOT_IMPLEMENTED,
+              "CUDA asynchronous compute enqueue is not connected in this build");
 }
 
 xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch_t* batch,
@@ -417,6 +587,79 @@ xtbloom_status_t xtbloom_plan_compute(xtbloom_plan_t* plan, const xtbloom_batch_
   } catch (...) {
     return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
                 "unknown exception while executing a plan compute request");
+  }
+}
+
+xtbloom_status_t xtbloom_plan_compute_enqueue(xtbloom_plan_t* plan, const xtbloom_batch_t* batch,
+                                              const xtbloom_compute_options_t* options,
+                                              const xtbloom_batch_result_t* result,
+                                              xtbloom_request_t* request) {
+  if (plan == nullptr || plan->implementation == nullptr || !plan->implementation->valid()) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "plan is NULL");
+  }
+  if (request == nullptr || request->implementation == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "request is NULL");
+  }
+  xtbloom::detail::Context* context = plan->implementation->context();
+  if (context == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "plan has no creating context");
+  }
+  if (request->implementation->context() != context) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT,
+                "request and plan were created by different contexts");
+  }
+  if (context->backend == XTBLOOM_BACKEND_CPU) {
+    /* Match the context enqueue capability probe: no descriptor validation,
+     * request transition, result flag update, or caller-buffer write. */
+    return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+                "asynchronous plan enqueue is not supported by the CPU backend");
+  }
+  if (batch == nullptr || options == nullptr || result == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "batch, compute options, or batch result is NULL");
+  }
+
+  bool reserved = false;
+  try {
+    std::string error;
+    const xtbloom_status_t reserve_status =
+        request->implementation->reserve_submission(*context, error);
+    if (reserve_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(reserve_status, std::move(error));
+    }
+    reserved = true;
+    xtbloom::detail::RequestSubmission submission;
+    const xtbloom_status_t enqueue_status =
+        plan->implementation->enqueue(*batch, *options, *result, submission, error);
+    if (enqueue_status != XTBLOOM_STATUS_SUCCESS) {
+      request->implementation->rollback_submission();
+      return fail(enqueue_status, std::move(error));
+    }
+    /* Keep an allocation-free guard until the request state owns completion.
+     * If mutex acquisition or an invariant check fails during publication,
+     * the accepted cache transaction must still be settled. */
+    CompletionSettlementGuard completion_guard(submission.pending);
+    const xtbloom_status_t publish_status =
+        request->implementation->publish_submission(std::move(submission), error);
+    if (publish_status != XTBLOOM_STATUS_SUCCESS) {
+      request->implementation->rollback_submission();
+      reserved = false;
+      return fail(publish_status, std::move(error));
+    }
+    completion_guard.dismiss();
+    reserved = false;
+    last_error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
+                "failed to allocate CUDA plan request submission state");
+  } catch (const std::exception& exception) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                "unknown exception while enqueueing a CUDA plan request");
   }
 }
 

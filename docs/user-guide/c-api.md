@@ -283,7 +283,10 @@ Keep a context alive across calls to retain worker pools, topology plans, and
 backend workspaces. ABI-v2 `XTBLOOM_SCC_START_WARM` additionally consumes the
 checkpoint from the most recent fully converged compatible batch. It is strict:
 a first call, topology/policy change, or missing compatible checkpoint is an
-invalid argument and never falls back to `FRESH`.
+invalid argument and never falls back to `FRESH`. An accepted `FRESH` attempt
+consumes the preceding compatible checkpoint before execution. If that attempt
+later fails—including a stream-ordered CUDA error discovered after enqueue—the
+older checkpoint is not reused, and the next strict `WARM` call rejects.
 
 For otherwise identical inputs at the same geometry, a `WARM` call restarts SCC
 from the checkpoint electronic state and reconverges, so its reported energy

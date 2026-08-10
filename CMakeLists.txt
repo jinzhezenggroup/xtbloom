@@ -37,6 +37,112 @@ find_package(Threads REQUIRED)
 
 set(XTBLOOM_ENABLE_CUDA "AUTO" CACHE STRING "Build the CUDA backend: AUTO, ON, or OFF")
 set_property(CACHE XTBLOOM_ENABLE_CUDA PROPERTY STRINGS AUTO ON OFF)
+option(XTBLOOM_ENABLE_TORCH_EXT
+  "Build the PyTorch stable-ABI integration extension (vendored headers + stub)" ON)
+# ----------------------------------------------------------------------------#
+# PyTorch integration extension (LibTorch Stable ABI).
+#
+# src/bindings/torch/xtbloom_torch_ext.cpp binds torch tensors directly to
+# the public xtbloom C ABI.  It is compiled against the vendored stable-ABI
+# headers (cmake/3rdparty/torch-stable, see its README) and linked against a
+# build-time-only stub libtorch_cpu.so, so building the extension never
+# downloads or depends on a torch install.
+#
+# The stub has the real library's SONAME (libtorch_cpu.so) and defines exactly
+# the aoti_torch_* / torch_library_impl / torch_get_mutable_data_ptr symbols
+# the extension references.  The shipped binary therefore carries a plain
+# DT_NEEDED libtorch_cpu.so, which torch.ops.load_library resolves against the
+# torch the end user already imported; the stub is never installed.  Linking
+# with -z defs turns any header/version drift that introduces an unstubbed
+# torch symbol into a hard build error (the same discipline the CUDA implib
+# uses).
+set(XTBLOOM_HAS_TORCH_EXT OFF)
+if(XTBLOOM_ENABLE_TORCH_EXT)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(STATUS
+      "xtbloom PyTorch extension disabled: build-time stub supports Linux ELF only")
+  else()
+    set(XTBLOOM_TORCH_STABLE_DIR
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/torch-stable")
+    set(XTBLOOM_TORCH_STABLE_INCLUDE "${XTBLOOM_TORCH_STABLE_DIR}/include")
+    if(NOT EXISTS "${XTBLOOM_TORCH_STABLE_INCLUDE}/torch/csrc/stable/library.h")
+      message(FATAL_ERROR
+        "vendored torch stable headers missing; regenerate with "
+        "tools/torch_stable_vendor.py")
+    endif()
+    if(NOT EXISTS "${XTBLOOM_TORCH_STABLE_DIR}/aoti_symbols.txt")
+      message(FATAL_ERROR
+        "missing ${XTBLOOM_TORCH_STABLE_DIR}/aoti_symbols.txt")
+    endif()
+
+    # Generate the build-time stub source: one C-linkage abort() per required
+    # symbol.  Signatures are irrelevant because the stub is only consumed by
+    # the linker (name-based C linkage); the real libtorch_cpu.so provides the
+    # actual ABI at runtime.
+    set(XTBLOOM_TORCH_STUB_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/torch_stub")
+    file(MAKE_DIRECTORY "${XTBLOOM_TORCH_STUB_DIR}")
+    set(XTBLOOM_TORCH_STUB_C "${XTBLOOM_TORCH_STUB_DIR}/libtorch_cpu_stub.c")
+    file(WRITE "${XTBLOOM_TORCH_STUB_C}"
+      "/* Build-time-only stub for the LibTorch Stable ABI.\n"
+      " * Provides the exact aoti_torch_* / torch_* stable symbols the\n"
+      " * extension references so xtbloom_torch_ext can link without a torch\n"
+      " * install. Never installed; the shipped DT_NEEDED libtorch_cpu.so\n"
+      " * binds to the real torch at runtime. Generated from\n"
+      " * cmake/3rdparty/torch-stable/aoti_symbols.txt.\n"
+      " */\n"
+      "#include <stdlib.h>\n"
+    )
+    file(STRINGS "${XTBLOOM_TORCH_STABLE_DIR}/aoti_symbols.txt"
+      XTBLOOM_TORCH_SYMBOLS)
+    foreach(_xtbloom_torch_symbol IN LISTS XTBLOOM_TORCH_SYMBOLS)
+      string(STRIP "${_xtbloom_torch_symbol}" _xtbloom_torch_symbol)
+      if(_xtbloom_torch_symbol STREQUAL "")
+        continue()
+      endif()
+      file(APPEND "${XTBLOOM_TORCH_STUB_C}"
+        "void ${_xtbloom_torch_symbol}(void) { abort(); }\n")
+    endforeach()
+
+    add_library(xtbloom_torch_stub SHARED "${XTBLOOM_TORCH_STUB_C}")
+    set_target_properties(xtbloom_torch_stub PROPERTIES
+      OUTPUT_NAME torch_cpu
+      # Same SONAME as the real torch library so the extension's DT_NEEDED is
+      # indistinguishable from one built against torch itself.
+      LINK_FLAGS "-Wl,-soname,libtorch_cpu.so"
+      C_STANDARD 11
+    )
+    add_library(xtbloom_torch_ext SHARED
+      "${CMAKE_CURRENT_SOURCE_DIR}/src/bindings/torch/xtbloom_torch_ext.cpp"
+    )
+    set_target_properties(xtbloom_torch_ext PROPERTIES
+      OUTPUT_NAME xtbloom_torch_ext
+      CXX_VISIBILITY_PRESET hidden
+      VISIBILITY_INLINES_HIDDEN YES
+      # The stub lives next to the built extension in the build tree; never let
+      # RPATH/RUNPATH discover it at runtime.
+      SKIP_BUILD_RPATH TRUE
+      INSTALL_RPATH ""
+    )
+    target_include_directories(xtbloom_torch_ext PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/include"
+      "${XTBLOOM_TORCH_STABLE_INCLUDE}"
+    )
+    target_link_libraries(xtbloom_torch_ext PRIVATE
+      xtbloom_torch_stub
+      ${CMAKE_DL_LIBS}
+      Threads::Threads
+    )
+    target_compile_features(xtbloom_torch_ext PRIVATE cxx_std_17)
+    target_link_options(xtbloom_torch_ext PRIVATE "-Wl,-z,defs")
+    install(TARGETS xtbloom_torch_ext
+      LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
+    set(XTBLOOM_HAS_TORCH_EXT ON)
+    message(STATUS "xtbloom PyTorch stable-ABI extension: enabled (vendored headers + stub)")
+  endif()
+else()
+  message(STATUS "xtbloom PyTorch extension disabled: XTBLOOM_ENABLE_TORCH_EXT=OFF")
+endif()
 option(XTBLOOM_BUILD_TESTS "Build xtbloom tests" ${PROJECT_IS_TOP_LEVEL})
 option(XTBLOOM_BUILD_WEB_DEMO
   "Build the GitHub Pages WebAssembly demo assets (requires the Emscripten toolchain)"
@@ -550,6 +656,7 @@ add_library(xtbloom
   src/runtime/backend.cpp
   src/runtime/gfn2_cpu_execution.cpp
   src/runtime/gfn2_plan.cpp
+  src/runtime/request.cpp
   src/runtime/result_owner.cpp
   src/runtime/validation.cpp
   $<TARGET_OBJECTS:xtbloom_gfn2_cpu>
@@ -646,6 +753,7 @@ if(XTBLOOM_HAS_CUDA)
     cudaEventCreateWithFlags
     cudaEventDestroy
     cudaEventElapsedTime
+    cudaEventQuery
     cudaEventRecord
     cudaEventSynchronize
     cudaFree
@@ -694,6 +802,7 @@ if(XTBLOOM_HAS_CUDA)
     cudaStreamGetCaptureInfo_v2
     cudaStreamGetDevice
     cudaStreamIsCapturing
+    cudaStreamQuery
     cudaStreamSynchronize
     cudaStreamUpdateCaptureDependencies
     cudaStreamWaitEvent
@@ -1121,6 +1230,19 @@ if(XTBLOOM_BUILD_TESTS)
   set_target_properties(xtbloom_c_api_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
   add_test(NAME xtbloom.c_api COMMAND xtbloom_c_api_test)
 
+  add_executable(xtbloom_request_test
+    tests/request_test.cpp
+    src/runtime/request.cpp
+  )
+  target_include_directories(xtbloom_request_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_link_libraries(xtbloom_request_test PRIVATE Threads::Threads)
+  target_compile_features(xtbloom_request_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.request COMMAND xtbloom_request_test)
+
   # The browser adapter test supplies a fake public C ABI so failure
   # publication and optimizer math remain testable without a WASM toolchain or
   # an external BLAS/LAPACK runtime.
@@ -1219,6 +1341,21 @@ if(XTBLOOM_BUILD_TESTS)
       )
       set_tests_properties(xtbloom.abi_cuda_no_runtime_concurrent PROPERTIES
         ENVIRONMENT "XTBLOOM_CUDA_FORCE_FALLBACK=1"
+      )
+    endif()
+    if(XTBLOOM_HAS_TORCH_EXT)
+      find_program(XTBLOOM_READELF NAMES readelf REQUIRED)
+      add_test(
+        NAME xtbloom.abi_torch_extension_linkage
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/check_torch_extension_linkage.py
+                --readelf ${XTBLOOM_READELF} --nm ${CMAKE_NM}
+                --symbol-list
+                ${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/torch-stable/aoti_symbols.txt
+                --library $<TARGET_FILE:xtbloom_torch_ext>
+      )
+      set_tests_properties(xtbloom.abi_torch_extension_linkage PROPERTIES
+        LABELS "abi;torch"
       )
     endif()
   endif()
@@ -3193,6 +3330,10 @@ install(FILES
   cmake/3rdparty/implib_manifest.json
   cmake/3rdparty/scipy_openblas32_manifest.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/xtbloom/provenance
+)
+install(FILES cmake/3rdparty/torch-stable/manifest.json
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/xtbloom/provenance
+  RENAME torch_stable_manifest.json
 )
 install(FILES data/parameters/d4.NOTICE
   DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/xtbloom/third-party/d4

@@ -50,6 +50,14 @@ constexpr std::uint32_t kAllProperties = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUT
                                          XTBLOOM_COMPUTE_ATOMIC_CHARGES |
                                          XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
 
+__global__ void hold_result_stream_kernel(unsigned long long clock_cycles) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+  const unsigned long long start = clock64();
+  while (clock64() - start < clock_cycles) {
+    __nanosleep(1000u);
+  }
+}
+
 template <typename T>
 class DeviceBuffer {
  public:
@@ -179,6 +187,7 @@ struct Fixture {
   DeviceBuffer<std::uint8_t> internal_converged;
   DeviceBuffer<xtbloom_status_t> internal_statuses;
   DeviceBuffer<std::uint32_t> publication_plan_error;
+  DeviceBuffer<std::uint32_t> request_topology_error;
   DeviceBuffer<std::uint64_t> publication_epoch;
   DeviceBuffer<std::uint64_t> current_epoch;
 
@@ -288,38 +297,38 @@ struct Fixture {
 
     const std::size_t atom_coordinates = static_cast<std::size_t>(3 * total_atoms);
     const std::size_t point_coordinates = static_cast<std::size_t>(3 * total_points);
-    const bool allocated = internal_energies.allocate(host_energies.size()) &&
-                           internal_forces.allocate(host_forces.size()) &&
-                           internal_charges.allocate(host_charges.size()) &&
-                           internal_point_forces.allocate(host_point_forces.size()) &&
-                           internal_iterations.allocate(host_iterations.size()) &&
-                           internal_converged.allocate(host_converged.size()) &&
-                           internal_statuses.allocate(host_statuses.size()) &&
-                           publication_plan_error.allocate(1) && publication_epoch.allocate(1) &&
-                           current_epoch.allocate(1) &&
-                           shadow_energies.allocate(host_energies.size()) &&
-                           shadow_forces.allocate(host_forces.size()) &&
-                           shadow_charges.allocate(host_charges.size()) &&
-                           shadow_point_forces.allocate(host_point_forces.size()) &&
-                           shadow_iterations.allocate(host_iterations.size()) &&
-                           shadow_converged.allocate(host_converged.size()) &&
-                           shadow_statuses.allocate(host_statuses.size()) &&
-                           output_energies.allocate(static_cast<std::size_t>(batch_size)) &&
-                           output_forces.allocate(atom_coordinates) &&
-                           output_charges.allocate(static_cast<std::size_t>(total_atoms)) &&
-                           output_point_forces.allocate(point_coordinates) &&
-                           output_iterations.allocate(static_cast<std::size_t>(batch_size)) &&
-                           output_converged.allocate(static_cast<std::size_t>(batch_size)) &&
-                           output_statuses.allocate(static_cast<std::size_t>(batch_size)) &&
-                           device_control.allocate(1) &&
-                           staging_energies.allocate(static_cast<std::size_t>(batch_size)) &&
-                           staging_forces.allocate(atom_coordinates) &&
-                           staging_charges.allocate(static_cast<std::size_t>(total_atoms)) &&
-                           staging_point_forces.allocate(point_coordinates) &&
-                           staging_iterations.allocate(static_cast<std::size_t>(batch_size)) &&
-                           staging_converged.allocate(static_cast<std::size_t>(batch_size)) &&
-                           staging_statuses.allocate(static_cast<std::size_t>(batch_size)) &&
-                           host_control.allocate(1) && pending_flags.allocate(1);
+    const bool allocated =
+        internal_energies.allocate(host_energies.size()) &&
+        internal_forces.allocate(host_forces.size()) &&
+        internal_charges.allocate(host_charges.size()) &&
+        internal_point_forces.allocate(host_point_forces.size()) &&
+        internal_iterations.allocate(host_iterations.size()) &&
+        internal_converged.allocate(host_converged.size()) &&
+        internal_statuses.allocate(host_statuses.size()) && publication_plan_error.allocate(1) &&
+        request_topology_error.allocate(1) && publication_epoch.allocate(1) &&
+        current_epoch.allocate(1) && shadow_energies.allocate(host_energies.size()) &&
+        shadow_forces.allocate(host_forces.size()) &&
+        shadow_charges.allocate(host_charges.size()) &&
+        shadow_point_forces.allocate(host_point_forces.size()) &&
+        shadow_iterations.allocate(host_iterations.size()) &&
+        shadow_converged.allocate(host_converged.size()) &&
+        shadow_statuses.allocate(host_statuses.size()) &&
+        output_energies.allocate(static_cast<std::size_t>(batch_size)) &&
+        output_forces.allocate(atom_coordinates) &&
+        output_charges.allocate(static_cast<std::size_t>(total_atoms)) &&
+        output_point_forces.allocate(point_coordinates) &&
+        output_iterations.allocate(static_cast<std::size_t>(batch_size)) &&
+        output_converged.allocate(static_cast<std::size_t>(batch_size)) &&
+        output_statuses.allocate(static_cast<std::size_t>(batch_size)) &&
+        device_control.allocate(1) &&
+        staging_energies.allocate(static_cast<std::size_t>(batch_size)) &&
+        staging_forces.allocate(atom_coordinates) &&
+        staging_charges.allocate(static_cast<std::size_t>(total_atoms)) &&
+        staging_point_forces.allocate(point_coordinates) &&
+        staging_iterations.allocate(static_cast<std::size_t>(batch_size)) &&
+        staging_converged.allocate(static_cast<std::size_t>(batch_size)) &&
+        staging_statuses.allocate(static_cast<std::size_t>(batch_size)) &&
+        host_control.allocate(1) && pending_flags.allocate(1);
     if (!allocated) return false;
 
     if (!internal_energies.upload(host_energies) || !internal_forces.upload(host_forces) ||
@@ -327,6 +336,7 @@ struct Fixture {
         !internal_point_forces.upload(host_point_forces) ||
         !internal_iterations.upload(host_iterations) ||
         !internal_converged.upload(host_converged) || !internal_statuses.upload(host_statuses) ||
+        !request_topology_error.upload(std::vector<std::uint32_t>{0u}) ||
         !set_control_values(0u, 37u, 37u) || !reset_outputs()) {
       return false;
     }
@@ -351,6 +361,7 @@ struct Fixture {
     input.system_statuses = internal_statuses.get();
     input.batch_elements = batch_size;
     input.publication_plan_error = publication_plan_error.get();
+    input.request_topology_error = request_topology_error.get();
     input.publication_epoch_snapshot = publication_epoch.get();
     input.current_geometry_epoch = current_epoch.get();
     input.plan_token = kPlanToken;
@@ -637,6 +648,11 @@ bool test_aggregate_gate(cudaStream_t stream) {
       Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream));
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
+        return fixture.request_topology_error.upload(std::vector<std::uint32_t>{1u});
+      },
+      Gfn2PublicResultBridgeError::kRequestTopologyMismatch, stream));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
         fixture.host_statuses[0] = XTBLOOM_STATUS_INTERNAL_ERROR;
         return fixture.internal_statuses.upload(fixture.host_statuses);
       },
@@ -690,6 +706,43 @@ bool test_unrequested_outputs(cudaStream_t stream) {
   return true;
 }
 
+bool test_prepare_submission_precedes_host_acceptance(cudaStream_t stream) {
+  Fixture fixture(1, kAllProperties);
+  CHECK(fixture.initialize());
+  fixture.configure(uniform_routes(Gfn2PublicResultRoute::kHost));
+
+  int device = 0;
+  int clock_rate_khz = 0;
+  CUDA_CHECK(cudaGetDevice(&device));
+  CUDA_CHECK(cudaDeviceGetAttribute(&clock_rate_khz, cudaDevAttrClockRate, device));
+  CHECK(clock_rate_khz > 0);
+  const unsigned long long delay_cycles = static_cast<unsigned long long>(clock_rate_khz) * 250ULL;
+  hold_result_stream_kernel<<<1, 1, 0, stream>>>(delay_cycles);
+  CUDA_CHECK(cudaPeekAtLastError());
+
+  CUDA_CHECK(prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
+                                              fixture.destinations, fixture.staging,
+                                              fixture.diagnostics, stream));
+  const cudaError_t query_status = cudaStreamQuery(stream);
+  CHECK(query_status == cudaErrorNotReady || query_status == cudaSuccess);
+
+  /* Submission owns the pending flag image immediately, but the downloaded
+   * aggregate is not host-readable as an acceptance decision until the owner
+   * observes stream completion. Instrumented CUDA runtimes may serialize the
+   * delay; in an ordinary run the not-ready branch proves that separation. */
+  CHECK(*fixture.pending_flags.get() == fixture.plan.result_flags);
+  if (query_status == cudaErrorNotReady) {
+    CHECK(fixture.host_control.get()->aggregate_error == UINT32_MAX);
+  }
+
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(fixture.host_control.get()->aggregate_error ==
+        static_cast<std::uint32_t>(Gfn2PublicResultBridgeError::kSuccess));
+  CHECK(fixture.verify_prepared_shadow());
+  CHECK(fixture.all_device_outputs_are_sentinels());
+  return true;
+}
+
 bool test_staging_enqueue_failure_precedes_device_writes(cudaStream_t stream) {
   Fixture fixture(8, kAllProperties);
   CHECK(fixture.initialize());
@@ -738,6 +791,7 @@ int main(int argc, char** argv) {
   const bool success =
       test_success_matrix(stream) && test_aggregate_gate(stream) &&
       test_unrequested_outputs(stream) &&
+      test_prepare_submission_precedes_host_acceptance(stream) &&
       (skip_expected_api_error || test_staging_enqueue_failure_precedes_device_writes(stream));
   const cudaError_t destroy_status = cudaStreamDestroy(stream);
   return success && destroy_status == cudaSuccess ? 0 : 1;

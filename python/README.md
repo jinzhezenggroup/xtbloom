@@ -130,10 +130,22 @@ DLPack producers. Exact dtype, shape, layout, lifetime, stream, and ownership
 rules are documented in the
 [Python API guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/python.md#array-api-and-dlpack-input-arrays).
 
-`xtbloom_torch(...)` is the optional PyTorch autograd entry point. It supports
-the positions gradient `dE/dR = -F`. Gradients with respect to other inputs,
-force-output differentiation, Hessians, and higher-order differentiation are
-rejected explicitly.
+`xtbloom_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
+unpaired_electrons, ...)` runs xTBloom inference on PyTorch tensors (host or
+CUDA) and is the only autograd entry point in the Python API. It supports
+exactly the positions gradient `dE/dR = -F`; autograd on any other input, or a
+gradient flowing through the `forces` output (the Hessian), raises
+`XTBloomNotSupportedError`. Higher-order differentiation is likewise rejected
+explicitly rather than returning a partial or zero Hessian. The native data
+plane is a compiled extension written against the LibTorch Stable ABI
+(torch >= 2.10), so a single binary works across torch releases; its stable
+headers are vendored in `cmake/3rdparty/torch-stable` and it links a
+build-time-only stub, so building xTBloom never downloads or requires torch
+(torch is still required at runtime to call `xtbloom_torch`). PyTorch is
+imported only when the op is called. CPU execution is synchronous; CUDA follows
+`torch.cuda.current_stream()` and returns the ordinary `(energies, forces)`
+pair. See
+`docs/user-guide/python.md` for the full contract.
 
 ## Charge, spin, and embedding
 
