@@ -34,8 +34,9 @@ only when a missing CUDA compiler must make configuration fail.
 
 For native CMake builds, set `CMAKE_CUDA_ARCHITECTURES` to the target GPU
 capabilities. For Python source builds, set `XTBLOOM_CUDA_ARCHITECTURES`; its
-default is `all`, which compiles for every architecture the build CUDA toolkit
-supports. `backend="auto"` can fall back to CPU when CUDA
+default is `all-major`, which compiles one representative architecture per
+computed-major family supported by the build CUDA toolkit (a smaller artifact
+than `all`). `backend="auto"` can fall back to CPU when CUDA
 is unavailable; `backend="cuda"` requires the CUDA runtime prerequisites above.
 
 ### Python
