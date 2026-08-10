@@ -1439,11 +1439,9 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
 #endif
       }
 #if defined(_WIN32) || defined(__APPLE__)
-      constexpr const char* kPrivateProviderName =
-          XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME;
+      constexpr const char* kPrivateProviderName = XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME;
 #else
-      constexpr const char* kPrivateProviderName =
-          "libxtbloom_openblas_lp64_shim.so";
+      constexpr const char* kPrivateProviderName = "libxtbloom_openblas_lp64_shim.so";
 #endif
       state.message = std::string("private wheel OpenBLAS provider is missing or failed ") +
                       "verification (" + kPrivateProviderName + ")";
