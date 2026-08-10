@@ -259,12 +259,14 @@ releases without per-version rebuilds. The extension is optional: when the
 wheels were built without it (or Torch < 2.10 is installed), calling
 `xtbloom_torch` raises a clear error instead of silently degrading. Building the
 extension never downloads or requires torch: its stable headers are vendored
-in `cmake/3rdparty/torch-stable` and it links a build-time-only stub
-`libtorch_cpu.so`, so the shipped binary simply carries `DT_NEEDED
-libtorch_cpu.so` and binds to the torch the end user already imported. Torch is
-still required at *runtime* to call `xtbloom_torch`; the rest of xtbloom builds
-and runs without torch. See `cmake/3rdparty/torch-stable/README.md` for
-provenance and regeneration.
+in `cmake/3rdparty/torch-stable` and it links a build-time-only platform stub.
+The shipped plugin retains only the official runtime edge
+(`DT_NEEDED libtorch_cpu.so` on Linux, `@rpath/libtorch_cpu.dylib` on macOS, or
+`torch_cpu.dll` on Windows) and binds to the torch the end user already
+imported. Torch is still required at *runtime* to call `xtbloom_torch`; the rest
+of xtbloom builds and runs without torch. See
+`cmake/3rdparty/torch-stable/README.md` for provenance, supported wheel cohorts,
+and regeneration.
 
 `xtbloom_torch` is eager-only: it drives the native library through a custom op,
 which `torch.compile` cannot trace.  The op is therefore marked opaque to the

@@ -171,6 +171,11 @@ jobs:
             torch_extension: absent
             test_groups: ""
             desktop_test_args: ""
+            # No Torch edge exists in this cohort, so every missing dependency
+            # remains a hard delocate failure.
+            macos_repair_command: >-
+              delocate-wheel --require-archs {delocate_archs}
+              -w {dest_dir} -v {wheel}
             publish: true
           # macOS ARM64 (CPU-only, native Apple Silicon hosted runner)
           - os: macos-14
@@ -187,6 +192,13 @@ jobs:
             torch_extension: present
             test_groups: torch-testing
             desktop_test_args: --torch
+            # Torch is intentionally absent from the isolated build. The
+            # linkage and OpenBLAS inspectors below prove that its one stable
+            # runtime edge is the only unresolved Mach-O dependency allowed.
+            macos_repair_command: >-
+              delocate-wheel --exclude libtorch_cpu.dylib
+              --ignore-missing-dependencies --require-archs {delocate_archs}
+              -w {dest_dir} -v {wheel}
             publish: true
           # Pyodide/WebAssembly (Pyodide 314.x uses the stable PyEmscripten
           # 2026 ABI accepted by PyPI for CPython 3.14 wheels).
@@ -260,6 +272,7 @@ jobs:
           CIBW_BUILD: ${{ matrix.build }}
           CIBW_TEST_GROUPS: ${{ matrix.test_groups }}
           CIBW_CACHE_PATH: ${{ runner.temp }}/cibw-cache
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: ${{ matrix.macos_repair_command }}
           # Inside the manylinux container the host filesystem is mounted at
           # /host, so CCACHE_DIR=/host/... persists the ccache on the host
           # where actions/cache can save it after the job. The XTBLOOM_*_LAUNCHER

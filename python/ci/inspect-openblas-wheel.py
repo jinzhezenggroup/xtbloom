@@ -21,6 +21,12 @@ class InspectionError(RuntimeError):
     """Report wheel metadata or native structure outside reviewed policy."""
 
 
+MACHO_LIBXTBLOOM_DEPENDENCIES = {
+    "/usr/lib/libSystem.B.dylib",
+    "/usr/lib/libc++.1.dylib",
+}
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -379,12 +385,29 @@ def _inspect_macos(
                     f"expected {sorted(expected_private)}, "
                     f"found {sorted(observed_private)}"
                 )
-        lib_dependencies = _macho_dependencies(otool, extracted[libxtbloom_name])
-        if any(
-            re.search(r"openblas|gfortran|quadmath|gcc_s", item)
-            for item in lib_dependencies
-        ):
-            raise InspectionError("libxtbloom has a hard macOS provider dependency")
+        libxtbloom = extracted[libxtbloom_name]
+        expected_id = "@rpath/libxtbloom.dylib"
+        lib_ids = {
+            line.strip()
+            for line in _run(
+                [otool, "-D", str(libxtbloom)],
+                "otool ID for libxtbloom.dylib",
+            ).splitlines()[1:]
+            if line.strip()
+        }
+        if lib_ids != {expected_id}:
+            raise InspectionError(
+                f"libxtbloom LC_ID differs: expected {expected_id}, "
+                f"found {sorted(lib_ids)}"
+            )
+        lib_dependencies = set(_macho_dependencies(otool, libxtbloom))
+        lib_dependencies.discard(expected_id)
+        if lib_dependencies != MACHO_LIBXTBLOOM_DEPENDENCIES:
+            raise InspectionError(
+                "libxtbloom dependency closure differs: expected "
+                f"{sorted(MACHO_LIBXTBLOOM_DEPENDENCIES)}, "
+                f"found {sorted(lib_dependencies)}"
+            )
 
         if target_record["installed_provider_id"] != provider_record["install_id"]:
             raise InspectionError("macOS provider manifest IDs disagree")

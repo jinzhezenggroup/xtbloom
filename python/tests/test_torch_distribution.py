@@ -54,6 +54,10 @@ def test_wheel_rejects_packaged_cpp(tmp_path: Path) -> None:
         "xtbloom/bin/torch_cpu.lib",
         "xtbloom/bin/torch_cpu_stub.def",
         "xtbloom/bin/torch_cuda.dll",
+        "xtbloom/bin/torch_python.dll",
+        "xtbloom/lib/libtorch_cpu.so.2.13",
+        "xtbloom/lib/librenamed_torch_runtime.so.2",
+        "xtbloom/bin/c10_custom.dll",
     ],
 )
 def test_wheel_rejects_torch_runtime_or_build_stub(
@@ -117,7 +121,14 @@ def test_sdist_keeps_nonpackage_cpp(tmp_path: Path) -> None:
     _CHECKER.check_sdist(sdist)
 
 
-def test_sdist_rejects_generated_torch_stub(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "stub_path",
+    [
+        "xtbloom-0.1.0/generated/torch_cpu_stub.c",
+        "xtbloom-0.1.0/generated/torch_cpu_stub.generated.c",
+    ],
+)
+def test_sdist_rejects_generated_torch_stub(tmp_path: Path, stub_path: str) -> None:
     """Source archives retain inputs, never generated platform stub bytes."""
     sdist = tmp_path / "xtbloom.tar.gz"
     with tarfile.open(sdist, "w:gz") as archive:
@@ -128,7 +139,7 @@ def test_sdist_rejects_generated_torch_stub(tmp_path: Path) -> None:
         source_info.size = len(source)
         archive.addfile(source_info, io.BytesIO(source))
         stub = b"void aoti_torch_stub(void) {}"
-        stub_info = tarfile.TarInfo("xtbloom-0.1.0/generated/torch_cpu_stub.c")
+        stub_info = tarfile.TarInfo(stub_path)
         stub_info.size = len(stub)
         archive.addfile(stub_info, io.BytesIO(stub))
     with pytest.raises(RuntimeError, match="generated PyTorch runtime/stub"):

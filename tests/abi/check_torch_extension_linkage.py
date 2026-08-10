@@ -38,13 +38,23 @@ ELF_NEEDED_EXPECTED = {
     # manylinux_2_28 keeps std::thread support in a separate system library.
     "libpthread.so.0",
 }
-FORBIDDEN_PROVIDER_FRAGMENTS = (
-    "nvidia-",
-    "cudart",
-    "cublas",
-    "cusolver",
-    "cusparse",
-)
+MACHO_DEPENDENCIES_EXPECTED = {
+    "@rpath/libtorch_cpu.dylib",
+    "/usr/lib/libSystem.B.dylib",
+    "/usr/lib/libc++.1.dylib",
+}
+PE_DEPENDENCIES_EXPECTED = {
+    "api-ms-win-crt-environment-l1-1-0.dll",
+    "api-ms-win-crt-heap-l1-1-0.dll",
+    "api-ms-win-crt-runtime-l1-1-0.dll",
+    "api-ms-win-crt-stdio-l1-1-0.dll",
+    "api-ms-win-crt-string-l1-1-0.dll",
+    "kernel32.dll",
+    "msvcp140.dll",
+    "torch_cpu.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+}
 PE_MACHINE_AMD64 = 0x8664
 WHEEL_EXTENSION_PATHS = {
     "linux": "xtbloom/lib/libxtbloom_torch_ext.so",
@@ -85,24 +95,6 @@ def _check_stable_symbols(actual: set[str], pinned: set[str]) -> None:
         )
 
 
-def _check_forbidden_dependencies(dependencies: set[str]) -> None:
-    """Reject direct dependencies outside the single stable Torch CPU image."""
-    forbidden = set()
-    for dependency in dependencies:
-        lowered = dependency.lower()
-        basename = re.split(r"[/\\]", lowered)[-1]
-        if (
-            "torch" in basename
-            or "c10" in basename
-            or any(fragment in lowered for fragment in FORBIDDEN_PROVIDER_FRAGMENTS)
-        ):
-            forbidden.add(dependency)
-    if forbidden:
-        raise SystemExit(
-            "forbidden Torch/provider dependency found: " + ", ".join(sorted(forbidden))
-        )
-
-
 def _check_elf(
     library: Path, pinned: set[str], *, readelf: str | None, nm: str | None
 ) -> None:
@@ -117,7 +109,6 @@ def _check_elf(
     unexpected = needed - ELF_NEEDED_EXPECTED
     if unexpected:
         raise SystemExit(f"unexpected DT_NEEDED entries: {sorted(unexpected)}")
-    _check_forbidden_dependencies(needed - {"libtorch_cpu.so"})
     if "libtorch_cpu.so" not in needed:
         raise SystemExit("extension must carry DT_NEEDED libtorch_cpu.so")
     if re.search(r"\(RPATH\)|\(RUNPATH\)", dynamic):
@@ -159,14 +150,11 @@ def _check_macho(
     # otool -L includes a dylib's own LC_ID_DYLIB before its true dependency
     # load commands, so remove the separately verified self-identity.
     dependencies.discard(expected_identity)
-    if "@rpath/libtorch_cpu.dylib" not in dependencies:
+    if dependencies != MACHO_DEPENDENCIES_EXPECTED:
         raise SystemExit(
-            "extension must load @rpath/libtorch_cpu.dylib; found "
-            + ", ".join(sorted(dependencies))
+            "unexpected Mach-O dependencies: expected "
+            f"{sorted(MACHO_DEPENDENCIES_EXPECTED)}, found {sorted(dependencies)}"
         )
-    _check_forbidden_dependencies(dependencies - {"@rpath/libtorch_cpu.dylib"})
-    if any(str(library.parent) in dependency for dependency in dependencies):
-        raise SystemExit("extension leaks a build-tree Mach-O dependency path")
 
     load_commands = _run([otool_command, "-l", str(library)])
     if re.search(r"\bcmd LC_RPATH\b", load_commands):
@@ -295,12 +283,11 @@ def _check_pe(library: Path, pinned: set[str]) -> None:
         )
     imports = _pe_imports(library)
     dependencies = set(imports)
-    if "torch_cpu.dll" not in dependencies:
+    if dependencies != PE_DEPENDENCIES_EXPECTED:
         raise SystemExit(
-            "extension must import torch_cpu.dll; found "
-            + ", ".join(sorted(dependencies))
+            "unexpected PE dependencies: expected "
+            f"{sorted(PE_DEPENDENCIES_EXPECTED)}, found {sorted(dependencies)}"
         )
-    _check_forbidden_dependencies(dependencies - {"torch_cpu.dll"})
     actual = imports["torch_cpu.dll"]
     nonstable = {
         symbol for symbol in actual if not symbol.startswith(("aoti_torch_", "torch_"))

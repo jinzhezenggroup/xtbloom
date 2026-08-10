@@ -15,12 +15,14 @@ a megabyte) removes that download entirely. The extension still needs torch at
 runtime — that is inherent to being a torch extension — but the build never
 touches torch.
 
-The extension also links a *build-time-only* stub `libtorch_cpu.so` instead of
-the real one. The stub has the same `DT_NEEDED` name (`libtorch_cpu.so`), so
-the shipped `libxtbloom_torch_ext.so` behaves exactly like one built against
-real torch: when `torch.ops.load_library` loads it, the dependency resolves to
-the torch the end user already imported. The stub is generated from
-`aoti_symbols.txt` at configure time and is never installed or shipped.
+The extension also links a *build-time-only* platform stub instead of the real
+Torch CPU library. The stub uses the official runtime identity:
+`libtorch_cpu.so` on ELF, `@rpath/libtorch_cpu.dylib` on Mach-O, and
+`torch_cpu.dll` plus a generated import library on PE. The shipped plugin
+therefore behaves exactly like one linked against real torch: when
+`torch.ops.load_library` loads it, the dependency resolves to the torch the end
+user already imported. The stub is generated from `aoti_symbols.txt` at
+configure time and is never installed or shipped.
 
 ## Provenance
 

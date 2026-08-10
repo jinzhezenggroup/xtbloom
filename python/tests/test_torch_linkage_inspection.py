@@ -69,6 +69,8 @@ def test_macho_checker_removes_verified_self_identity(
                 "current version 1.0.0)\n"
                 "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, "
                 "current version 1.0.0)\n"
+                "\t/usr/lib/libc++.1.dylib (compatibility version 1.0.0, "
+                "current version 1.0.0)\n"
             ),
             "Load command 0\n      cmd LC_SEGMENT_64\n",
             "_aoti_torch_get_data_ptr\n",
@@ -81,6 +83,39 @@ def test_macho_checker_removes_verified_self_identity(
         otool="otool",
         nm="nm",
     )
+
+
+def test_macho_checker_rejects_unreviewed_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject even non-Torch dylibs outside the complete reviewed load set."""
+    library = tmp_path / "libxtbloom_torch_ext.dylib"
+    outputs = iter(
+        [
+            f"{library}:\n@rpath/{library.name}\n",
+            (
+                f"{library}:\n"
+                f"\t@rpath/{library.name} (compatibility version 0.0.0, "
+                "current version 0.0.0)\n"
+                "\t@rpath/libtorch_cpu.dylib (compatibility version 1.0.0, "
+                "current version 1.0.0)\n"
+                "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, "
+                "current version 1.0.0)\n"
+                "\t/usr/lib/libc++.1.dylib (compatibility version 1.0.0, "
+                "current version 1.0.0)\n"
+                "\t@rpath/libevil.dylib (compatibility version 1.0.0, "
+                "current version 1.0.0)\n"
+            ),
+        ]
+    )
+    monkeypatch.setattr(_CHECKER, "_run", lambda command: next(outputs))
+    with pytest.raises(SystemExit, match="unexpected Mach-O dependencies"):
+        _CHECKER._check_macho(
+            library,
+            {"aoti_torch_get_data_ptr"},
+            otool="otool",
+            nm="nm",
+        )
 
 
 def _minimal_pe_imports(
@@ -132,21 +167,52 @@ def test_pe_parser_returns_named_stable_imports(tmp_path: Path) -> None:
     symbols = ["aoti_torch_get_data_ptr", "torch_library_impl"]
     library.write_bytes(_minimal_pe_imports("torch_cpu.dll", symbols))
     assert _CHECKER._pe_imports(library) == {"torch_cpu.dll": set(symbols)}
-    _CHECKER._check_pe(library, set(symbols))
+
+
+def test_pe_checker_accepts_exact_reviewed_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Accept the hosted MSVC runtime closure and stable Torch imports."""
+    library = tmp_path / "xtbloom_torch_ext.dll"
+    symbols = {"aoti_torch_get_data_ptr", "torch_library_impl"}
+    imports = {name: set() for name in _CHECKER.PE_DEPENDENCIES_EXPECTED}
+    imports["torch_cpu.dll"] = symbols
+    monkeypatch.setattr(_CHECKER, "_pe_machine", lambda path: 0x8664)
+    monkeypatch.setattr(_CHECKER, "_pe_imports", lambda path: imports)
+    _CHECKER._check_pe(library, symbols)
+
+
+def test_pe_checker_rejects_unreviewed_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reject ordinary DLL imports outside the complete reviewed load set."""
+    library = tmp_path / "xtbloom_torch_ext.dll"
+    imports = {name: set() for name in _CHECKER.PE_DEPENDENCIES_EXPECTED}
+    imports["torch_cpu.dll"] = {"aoti_torch_get_data_ptr"}
+    imports["evil.dll"] = {"evil"}
+    monkeypatch.setattr(_CHECKER, "_pe_machine", lambda path: 0x8664)
+    monkeypatch.setattr(_CHECKER, "_pe_imports", lambda path: imports)
+    with pytest.raises(SystemExit, match="unexpected PE dependencies"):
+        _CHECKER._check_pe(library, {"aoti_torch_get_data_ptr"})
 
 
 def test_pe_checker_rejects_direct_nonstable_torch_dependency(tmp_path: Path) -> None:
     """A plugin may import stable symbols only from torch_cpu.dll."""
     library = tmp_path / "xtbloom_torch_ext.dll"
     library.write_bytes(_minimal_pe_imports("c10.dll", ["aoti_torch_get_data_ptr"]))
-    with pytest.raises(SystemExit, match=r"must import torch_cpu\.dll"):
+    with pytest.raises(SystemExit, match="unexpected PE dependencies"):
         _CHECKER._check_pe(library, {"aoti_torch_get_data_ptr"})
 
 
-def test_pe_checker_rejects_nonstable_torch_cpu_symbol(tmp_path: Path) -> None:
+def test_pe_checker_rejects_nonstable_torch_cpu_symbol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The one Torch DLL edge may contain only stable-C imports."""
     library = tmp_path / "xtbloom_torch_ext.dll"
-    library.write_bytes(_minimal_pe_imports("torch_cpu.dll", ["at_tensor_new"]))
+    imports = {name: set() for name in _CHECKER.PE_DEPENDENCIES_EXPECTED}
+    imports["torch_cpu.dll"] = {"at_tensor_new"}
+    monkeypatch.setattr(_CHECKER, "_pe_machine", lambda path: 0x8664)
+    monkeypatch.setattr(_CHECKER, "_pe_imports", lambda path: imports)
     with pytest.raises(SystemExit, match="non-stable symbols"):
         _CHECKER._check_pe(library, {"aoti_torch_get_data_ptr"})
 
