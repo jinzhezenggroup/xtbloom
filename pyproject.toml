@@ -215,9 +215,12 @@ build.requires = ["scipy-openblas32==0.3.34.0.0"]
 [tool.scikit-build.cmake.define]
 XTBLOOM_ENABLE_CUDA = { env = "XTBLOOM_ENABLE_CUDA", default = "AUTO" }
 XTBLOOM_BUNDLE_WHEEL_OPENBLAS = { env = "XTBLOOM_BUNDLE_WHEEL_OPENBLAS", default = "OFF" }
-# Ship optimized SASS for the main data-center/consumer generations plus
-# Blackwell instead of relying on nvcc's legacy default architecture/PTX JIT.
-CMAKE_CUDA_ARCHITECTURES = { env = "XTBLOOM_CUDA_ARCHITECTURES", default = "80;89;90;120" }
+# Compile for every CUDA architecture the toolkit supports (`all` is CMake's
+# CUDA_ARCHITECTURES keyword for that set), so wheels run on any NVIDIA GPU the
+# build toolkit covers instead of a curated SASS subset. Set
+# XTBLOOM_CUDA_ARCHITECTURES to a narrower list to trade coverage for faster
+# builds/smaller artifacts.
+CMAKE_CUDA_ARCHITECTURES = { env = "XTBLOOM_CUDA_ARCHITECTURES", default = "all" }
 # ccache compiler launchers: CI sets the XTBLOOM_*_COMPILER_LAUNCHER variables to
 # "ccache" (see ci.yml and wheels.yml) to reuse compiled C, C++, and CUDA
 # objects across runs. An empty default keeps local builds launcher-free when
