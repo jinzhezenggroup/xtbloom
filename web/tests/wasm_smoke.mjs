@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { copyFloat64FromMemory } from "../app_helpers.js";
+import {
+  copyFloat64FromMemory,
+  initializeDownloadedEngineModule,
+} from "../app_helpers.js";
 
 const water = "O 0 0 0\nH 0 0 0.9572\nH 0 0.75718 -0.58552";
 const stretchedWater = "O 0 0 0\nH 0 0 1.15\nH 0 0.9 -0.7";
@@ -11,11 +15,15 @@ export async function runWebCases(sitePath) {
   const site = path.resolve(sitePath);
   const moduleUrl = pathToFileURL(path.join(site, "xtbloom_web.js")).href;
   const createModule = (await import(moduleUrl)).default;
-  const Module = await createModule({
-    // Use absolute paths so two pointer-width modules can be instantiated and
-    // compared in one Node process without changing global working directory.
-    locateFile: (name) => path.join(site, name),
-  });
+  const [wasmBinary, dataBinary] = await Promise.all([
+    readFile(path.join(site, "xtbloom_web.wasm")),
+    readFile(path.join(site, "xtbloom_web.data")),
+  ]);
+  const Module = await initializeDownloadedEngineModule(
+    createModule,
+    wasmBinary,
+    dataBinary,
+  );
 
   function compute(maxIterations, forces) {
     const raw = Module.ccall(

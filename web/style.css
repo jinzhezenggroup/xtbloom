@@ -357,7 +357,7 @@ td.num, th.num { text-align: right; }
 a.btn { text-decoration: none; max-width: 120px; }
 .roadmap-item.disabled a.btn { color: var(--muted); }
 
-.loadbar { margin-top: 14px; width: 260px; }
+.loadbar { margin-top: 14px; width: min(360px, calc(100vw - 40px)); }
 .loadbar-track {
   height: 8px;
   border-radius: 999px;

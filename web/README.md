@@ -13,6 +13,13 @@ The deployment runs entirely in the browser:
 - the xTBloom CPU backend is compiled as a single-threaded wasm32 module;
 - `worker.js` owns the synchronous native calls so calculations do not block
   the UI thread;
+- `bootstrap.js` revalidates the manifest and verifies the versioned app/helper
+  module graph before importing application code, so a deployment cannot link
+  mismatched cached modules before recovery UI exists; the small inline loader
+  in `index.html` also retries a transient failure fetching `bootstrap.js`;
+- `app.js` downloads the five engine resources under one file/byte progress
+  ledger, retries transient startup failures with generation-safe cleanup, and
+  passes the wasm and Emscripten data bytes into the Worker;
 - `smiles_worker.js` independently loads the pinned OpenChemLib release,
   generates explicit-hydrogen 3D conformers, and applies MMFF94
   pre-relaxation;
@@ -23,6 +30,16 @@ The deployment runs entirely in the browser:
 The optional SMILES worker never gates ordinary XYZ calculations. The
 optimizer repeatedly calls the same single-point adapter and is not part of the
 stable C ABI.
+
+The build hashes `app.js` and the five engine files into
+`engine-manifest.json`. The browser revalidates only that small manifest on
+refresh, then addresses every application/engine asset with the shared content
+version. An unchanged version stays cacheable; a transient failure reloads the
+complete resource set under that same content
+version, replacing rather than abandoning the reusable cache entries. Digest
+verification prevents the Worker glue, wasm, and preloaded data from being
+mixed across attempts. Late messages from a failed Worker are ignored by a
+monotonically increasing loader generation.
 
 The deployed build is wasm32 so it works without browser Memory64 support. CI
 also builds wasm64 and compares its public results with wasm32 as a

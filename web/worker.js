@@ -5,17 +5,36 @@
  * the multi-iteration geometry optimization) never block the UI thread.
  *
  * Protocol (all messages JSON-ish, transfer lists for binary payloads):
- *   main -> worker {type:"init", wasmBinary: Uint8Array}
+ *   main -> worker {type:"init", wasmBinary, dataBinary, moduleUrl, helpersUrl}
  *   worker -> main {type:"ready", version: string} | {type:"error", error}
  *   main -> worker {type:"call", id, cmd: "compute"|"optimize", args: [...]}
  *   worker -> main {type:"result", id, ok, raw?: string, error?: string}
  */
-import createXTBloomModule from "./xtbloom_web.js";
-import { copyFloat64FromMemory } from "./app_helpers.js";
-
 let Module = null;
 let stepFn = null;
 let onStep = null;
+let copyFloat64FromMemory = null;
+let initializeDownloadedEngineModule = null;
+
+function withPhase(error, phase) {
+  const wrapped = error instanceof Error ? error : new Error(String(error || "init failed"));
+  wrapped.phase = phase;
+  return wrapped;
+}
+
+function serializedError(error) {
+  const phase = String(error?.phase || "engine-initialize");
+  const name = String(error?.name || "Error");
+  return {
+    name,
+    message: String(error?.message || error || "init failed"),
+    phase,
+    // Dynamic imports are the only remaining startup network operations in
+    // the Worker. Payload/module validation and WebAssembly linking are
+    // deterministic and should not consume all retry attempts.
+    retryable: (phase === "module-import" || phase === "helpers-import") && name === "TypeError",
+  };
+}
 
 function ensureStepCallback() {
   if (stepFn !== null || !Module || typeof Module.addFunction !== "function") return;
@@ -38,17 +57,50 @@ self.onmessage = async (event) => {
 
   if (msg.type === "init") {
     try {
-      // The main thread already downloaded the wasm with a progress bar;
-      // pass those bytes in so the glue does not fetch it again. The small
-      // .data payload (preloaded LAPACK side module in the virtual FS) is
-      // fetched by the glue itself.
-      Module = await createXTBloomModule({ wasmBinary: msg.wasmBinary });
+      if (!(msg.wasmBinary instanceof Uint8Array) || msg.wasmBinary.byteLength === 0) {
+        throw withPhase(new TypeError("missing wasm payload"), "payload-validation");
+      }
+      if (!(msg.dataBinary instanceof Uint8Array) || msg.dataBinary.byteLength === 0) {
+        throw withPhase(new TypeError("missing data payload"), "payload-validation");
+      }
+
+      let moduleNamespace;
+      try {
+        moduleNamespace = await import(msg.moduleUrl);
+      } catch (error) {
+        throw withPhase(error, "module-import");
+      }
+      let helpers;
+      try {
+        helpers = await import(msg.helpersUrl);
+      } catch (error) {
+        throw withPhase(error, "helpers-import");
+      }
+      const createXTBloomModule = moduleNamespace?.default;
+      copyFloat64FromMemory = helpers?.copyFloat64FromMemory;
+      initializeDownloadedEngineModule = helpers?.initializeDownloadedEngineModule;
+      if (
+        typeof createXTBloomModule !== "function" ||
+        typeof copyFloat64FromMemory !== "function" ||
+        typeof initializeDownloadedEngineModule !== "function"
+      ) {
+        throw withPhase(new TypeError("invalid engine module exports"), "module-validation");
+      }
+
+      // Both binary payloads were counted by the UI loader. Supplying the data
+      // package here prevents Emscripten from issuing an invisible second fetch
+      // before it can load the LAPACK side module from the virtual filesystem.
+      Module = await initializeDownloadedEngineModule(
+        createXTBloomModule,
+        msg.wasmBinary,
+        msg.dataBinary,
+      );
       const version = Module.ccall("xtbloom_web_version", "string", [], []);
       self.postMessage({ type: "ready", version });
     } catch (err) {
       self.postMessage({
         type: "error",
-        error: String((err && (err.message || err)) || "init failed"),
+        error: serializedError(err),
       });
     }
     return;
