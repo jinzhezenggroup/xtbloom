@@ -42,9 +42,9 @@ class TmaclEvidenceTest(unittest.TestCase):
                 EVIDENCE.check_manifest(path)
 
     def test_distribution_boundary_drift_is_rejected(self) -> None:
-        """The copied fixture's sdist and notice treatment stays explicit."""
+        """The copied fixture's repository-only treatment stays explicit."""
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-        manifest["distribution"]["wheel"] = True
+        manifest["distribution"]["source_distribution"] = True
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "manifest.json"
             path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -52,6 +52,26 @@ class TmaclEvidenceTest(unittest.TestCase):
                 EVIDENCE.EvidenceError, "distribution boundaries"
             ):
                 EVIDENCE.check_manifest(path)
+
+    def test_distribution_documentation_drift_is_rejected(self) -> None:
+        """Human-readable packaging claims must match the canonical manifest."""
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "README.md"
+            path.write_text(
+                "This repository-only fixture is included in source distributions.\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                EVIDENCE.EvidenceError, "missing required distribution text"
+            ):
+                EVIDENCE.require_document_text(
+                    path,
+                    (
+                        "repository-only validation data",
+                        "excluded from installation-focused PyPI source distributions",
+                    ),
+                    "tmacl evidence README",
+                )
 
     def test_evidence_path_alias_is_rejected(self) -> None:
         """A digest match cannot redirect one entry away from its canonical file."""

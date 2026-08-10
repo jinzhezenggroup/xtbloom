@@ -263,6 +263,26 @@ jobs:
           --sdist dist-license/*.tar.gz
       - name: Verify source distribution licenses
         run: python tools/licensing/check_licenses.py --source-root . dist-license/*.tar.gz
+      - name: Build and inspect a CPU wheel from the source distribution
+        shell: bash
+        env:
+          XTBLOOM_ENABLE_CUDA: "OFF"
+        run: |
+          mapfile -t archives < <(find dist-license -maxdepth 1 -name 'xtbloom-*.tar.gz' -print)
+          test "${#archives[@]}" -eq 1
+          mkdir -p build/sdist-unpacked
+          tar -xzf "${archives[0]}" -C build/sdist-unpacked
+          mapfile -t source_dirs < <(find build/sdist-unpacked -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#source_dirs[@]}" -eq 1
+          uv build --wheel --out-dir build/sdist-wheel "${source_dirs[0]}"
+          version=$(tar -xOzf "${archives[0]}" --wildcards '*/PKG-INFO' |
+            sed -n 's/^Version: //p')
+          test -n "$version"
+          python python/ci/check-wheel-version.py --metadata-only \
+            --expected-version "$version" build/sdist-wheel/*.whl
+          python python/ci/check-torch-distribution.py \
+            --wheel build/sdist-wheel/*.whl --expect present
+          python tools/licensing/check_licenses.py --source-root . build/sdist-wheel/*.whl
 
   static-cpu-package:
     runs-on: ubuntu-24.04

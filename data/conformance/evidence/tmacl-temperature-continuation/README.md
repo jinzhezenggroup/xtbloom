@@ -15,8 +15,8 @@ the source tree, while the explicit `--write-evidence` mode regenerates every
 text artifact. `manifest.json` pins the fixture, generator source, generated
 files, upstream issue metadata, and the MKL/scipy-OpenBLAS providers used for
 generation and semantic cross-checking. It also records that this test-only
-material is included in source distributions but excluded from native installs
-and wheels.
+material is repository-only validation data and is excluded from
+installation-focused PyPI source distributions, native installs, and wheels.
 
 Each row reports: iteration, internal SCC free energy (Eh), free-energy
 change, mixer residual RMS, mixer residual maximum, the summed `Me4N+`

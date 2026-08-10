@@ -127,9 +127,10 @@ The test-only `data/conformance/inputs/tmacl.xyz` fixture reproduces the
 `corinwagen` in upstream xTB issue #678. The upstream issue states no license
 for that user-provided input (`SPDX: NOASSERTION`). xTBloom retains only these
 factual scientific input values, not the issue prose, xTB source, or an xTB
-binary. The fixture and xTBloom-generated SCC diagnostics are source/test data;
-they are included in source distributions for test reproducibility, but are
-not installed by the native CMake package or bundled in wheels.
+binary. The fixture and xTBloom-generated SCC diagnostics are repository-only
+validation data. They remain available from the hash-pinned Git source and are
+excluded from installation-focused PyPI source distributions, native CMake
+installs, and wheels.
 
 The upstream issue node, timestamps, extraction description, fixture digest,
 xTBloom evidence-generator digest, LP64 provider identities, and every generated
@@ -259,10 +260,10 @@ distribution).
 
 The benchmark figure renderer declares Matplotlib 3.10.9 through PEP 723
 inline script metadata. Its complete isolated PyPI resolution and artifact
-hashes are recorded in `benchmarks/plot_natoms_cross_engine.py.lock`.
-Matplotlib and its dependencies are publication tools only: they are not
-xTBloom project dependencies and are not bundled in source distributions,
-native installs, or wheels.
+hashes are recorded in the repository-only
+`benchmarks/plot_natoms_cross_engine.py.lock`. Matplotlib, its dependencies,
+and that publication lock are not xTBloom project dependencies or payloads of
+installation-focused source distributions, native installs, or wheels.
 
 ## Private OpenBLAS wheel provider
 

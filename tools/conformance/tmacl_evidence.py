@@ -18,6 +18,7 @@ EVIDENCE_DIRECTORY = REPOSITORY_ROOT / EVIDENCE_DIRECTORY_RELATIVE
 FIXTURE_RELATIVE = Path("data/conformance/inputs/tmacl.xyz")
 GENERATOR_RELATIVE = Path("tests/scc_temperature_continuation_test.cpp")
 DEFAULT_MANIFEST = EVIDENCE_DIRECTORY / "manifest.json"
+EVIDENCE_README = EVIDENCE_DIRECTORY / "README.md"
 EXPECTED_EVIDENCE = (
     "tmacl_continuation_funnel.txt",
     "tmacl_mixer_sweep.txt",
@@ -28,6 +29,13 @@ EXPECTED_EVIDENCE = (
     "tmacl_trace_500K.txt",
     "tmacl_trace_1000K.txt",
 )
+EXPECTED_DISTRIBUTION = {
+    "classification": "copied test fixture and xtbloom-generated test diagnostics",
+    "source_distribution": False,
+    "native_install": False,
+    "wheel": False,
+    "notice": "THIRD_PARTY_NOTICES.md",
+}
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 
@@ -83,6 +91,21 @@ def require_exact_path(value: object, expected: Path, field: str) -> Path:
     if value != canonical:
         raise EvidenceError(f"{field} must be the canonical path {canonical}")
     return repository_path(value, field)
+
+
+def require_document_text(
+    path: Path, required_text: tuple[str, ...], document: str
+) -> None:
+    """Keep human-readable distribution claims aligned with the manifest."""
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise EvidenceError(f"cannot read {document}: {exc}") from exc
+    normalized_content = " ".join(content.split())
+    if any(
+        " ".join(value.split()) not in normalized_content for value in required_text
+    ):
+        raise EvidenceError(f"{document} is missing required distribution text")
 
 
 def validate_xyz(path: Path) -> None:
@@ -235,31 +258,28 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
     )
 
     distribution = manifest.get("distribution")
-    expected_distribution = {
-        "classification": "copied test fixture and xtbloom-generated test diagnostics",
-        "source_distribution": True,
-        "native_install": False,
-        "wheel": False,
-        "notice": "THIRD_PARTY_NOTICES.md",
-    }
-    if distribution != expected_distribution:
+    if distribution != EXPECTED_DISTRIBUTION:
         raise EvidenceError("distribution boundaries or notice path are not canonical")
     notice_path = repository_path(distribution["notice"], "distribution.notice")
-    try:
-        notice = notice_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise EvidenceError(f"cannot read tmacl third-party notice: {exc}") from exc
-    required_notice_text = (
-        "## xTB issue #678 difficult-SCC input",
-        "https://github.com/grimme-lab/xtb/issues/678",
-        "SPDX: NOASSERTION",
-        "included in source distributions",
-        "data/conformance/evidence/tmacl-temperature-continuation/manifest.json",
+    require_document_text(
+        notice_path,
+        (
+            "## xTB issue #678 difficult-SCC input",
+            "https://github.com/grimme-lab/xtb/issues/678",
+            "SPDX: NOASSERTION",
+            "excluded from installation-focused PyPI source distributions",
+            "data/conformance/evidence/tmacl-temperature-continuation/manifest.json",
+        ),
+        "tmacl third-party notice",
     )
-    if any(value not in notice for value in required_notice_text):
-        raise EvidenceError(
-            "tmacl third-party notice is missing required provenance text"
-        )
+    require_document_text(
+        EVIDENCE_README,
+        (
+            "repository-only validation data",
+            "excluded from installation-focused PyPI source distributions",
+        ),
+        "tmacl evidence README",
+    )
 
     files = manifest.get("evidence_files")
     if not isinstance(files, list):
@@ -304,7 +324,7 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
 
 
 def update_manifest(path: Path = DEFAULT_MANIFEST) -> None:
-    """Refresh only local content digests after intentional regeneration."""
+    """Refresh canonical distribution metadata and intentional content digests."""
     manifest = load_manifest(path)
     fixture = manifest["fixture"]
     generator = manifest["generator"]
@@ -318,6 +338,7 @@ def update_manifest(path: Path = DEFAULT_MANIFEST) -> None:
     source["excerpt_sha256"] = fixture_digest
     generator_path = repository_path(generator["source"], "generator.source")
     generator["source_sha256"] = sha256(generator_path)
+    manifest["distribution"] = dict(EXPECTED_DISTRIBUTION)
     manifest["evidence_files"] = [
         {
             "path": (EVIDENCE_DIRECTORY_RELATIVE / name).as_posix(),
@@ -336,7 +357,7 @@ def main() -> int:
     parser.add_argument(
         "--update",
         action="store_true",
-        help="refresh hashes after reviewed regeneration",
+        help="refresh canonical metadata and hashes after a reviewed change",
     )
     arguments = parser.parse_args()
     try:

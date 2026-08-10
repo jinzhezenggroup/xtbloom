@@ -18,7 +18,7 @@ import stat
 import subprocess
 import tarfile
 import zipfile
-from pathlib import Path, PurePath
+from pathlib import Path, PurePath, PurePosixPath
 
 import tomllib
 
@@ -217,7 +217,6 @@ COMMON_ARCHIVE_SUFFIXES = (
     *OPENBLAS_EXACT_PACKAGED_LICENSES,
 )
 SDIST_ARCHIVE_SUFFIXES = (
-    *WEB_SOURCE_FILES,
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
     "data/parameters/tblite_spin.hpp",
@@ -262,6 +261,36 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE",
 )
 FORBIDDEN_ARCHIVE_PARTS = ("/build/", "/.cache/", "/.claude/", "/.ruff_cache/")
+SDIST_INSTALLATION_FILES = (
+    ".git_archival.txt",
+    "CMakeLists.txt",
+    "CUDA_MKL_LINKING_EXCEPTION",
+    "LICENSE",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "pyproject.toml",
+    "python/README.md",
+    "python/ci/resolve-openblas-wheel.py",
+    "tools/eigen_dependency.py",
+    "tools/implib_stubgen.py",
+    "tools/torch_stable_vendor.py",
+)
+SDIST_INSTALLATION_PREFIXES = (
+    "LICENSES/",
+    "cmake/",
+    "data/parameters/",
+    "include/",
+    "python/xtbloom/",
+    "src/",
+    "tools/parameters/",
+)
+SDIST_INSTALLATION_EXCLUDED_FILES = (
+    # This white-box helper is included only by a repository test translation
+    # unit; the similarly named SCC helper remains because production CUDA
+    # compilation includes its macro-gated declarations.
+    "src/backends/cuda/gfn2_energy_force_execution_test.cuh",
+)
+SDIST_INSTALLATION_EXCLUDED_PREFIXES: tuple[str, ...] = ()
 INSTALL_FILES = (
     "share/licenses/xtbloom/LICENSE",
     f"share/licenses/xtbloom/{EXCEPTION_FILE}",
@@ -2054,7 +2083,167 @@ def _check_archived_openblas(path: Path, names: set[str], wheel: bool) -> None:
                 )
 
 
-def check_archive(path: Path) -> None:
+def _tracked_sdist_installation_manifest(source_root: Path) -> dict[str, int]:
+    """Select allowed tracked files and their executable-bit contract."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source_root), "ls-files", "--stage", "-z"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise LicenseCheckError(
+            "cannot enumerate tracked files for the sdist payload audit"
+        ) from exc
+    tracked: dict[str, str] = {}
+    for record in result.stdout.split("\0"):
+        if not record:
+            continue
+        metadata, name = record.split("\t", 1)
+        tracked[name] = metadata.split(" ", 1)[0]
+    policy_files = set(SDIST_INSTALLATION_FILES) | set(
+        SDIST_INSTALLATION_EXCLUDED_FILES
+    )
+    missing_policy_files = sorted(policy_files - set(tracked))
+    if missing_policy_files:
+        raise LicenseCheckError(
+            "sdist installation policy names untracked files: "
+            + ", ".join(missing_policy_files)
+        )
+    missing_excluded_prefixes = [
+        prefix
+        for prefix in SDIST_INSTALLATION_EXCLUDED_PREFIXES
+        if not any(name.startswith(prefix) for name in tracked)
+    ]
+    if missing_excluded_prefixes:
+        raise LicenseCheckError(
+            "sdist installation policy names empty tracked prefixes: "
+            + ", ".join(missing_excluded_prefixes)
+        )
+    selected: dict[str, int] = {}
+    for name, git_mode in tracked.items():
+        if name in SDIST_INSTALLATION_EXCLUDED_FILES or any(
+            name.startswith(prefix) for prefix in SDIST_INSTALLATION_EXCLUDED_PREFIXES
+        ):
+            continue
+        if not (
+            name in SDIST_INSTALLATION_FILES
+            or any(name.startswith(prefix) for prefix in SDIST_INSTALLATION_PREFIXES)
+        ):
+            continue
+        if git_mode == "100644":
+            selected[name] = 0o644
+        elif git_mode == "100755":
+            selected[name] = 0o755
+        else:
+            raise LicenseCheckError(
+                f"sdist installation file has unsupported Git mode {git_mode}: {name}"
+            )
+    # scikit-build-core freezes the setuptools-scm result into this generated
+    # metadata file so builds from an unpacked archive do not need Git history.
+    selected["PKG-INFO"] = 0o644
+    return selected
+
+
+def _tracked_sdist_installation_files(source_root: Path) -> set[str]:
+    """Return the exact relative file set allowed in a PyPI sdist."""
+    return set(_tracked_sdist_installation_manifest(source_root))
+
+
+def _check_sdist_archive_against_manifest(
+    path: Path, source_root: Path, expected: dict[str, int]
+) -> None:
+    """Reject archive-shape surprises and require expected bytes and modes."""
+    file_members: dict[str, tarfile.TarInfo] = {}
+    seen: set[str] = set()
+    with tarfile.open(path, "r:*") as archive:
+        for info in archive.getmembers():
+            member_path = PurePosixPath(info.name)
+            if member_path.is_absolute() or ".." in member_path.parts:
+                raise LicenseCheckError(
+                    f"sdist contains unsafe archive path: {info.name}"
+                )
+            # Tar member names are POSIX paths even when this checker runs on
+            # Windows. Compare their canonical spelling so aliases such as
+            # ``root/file`` and ``root/./file`` cannot hide duplicate payload.
+            canonical_name = member_path.as_posix()
+            if canonical_name in seen:
+                raise LicenseCheckError(
+                    f"sdist contains duplicate archive member: {info.name}"
+                )
+            seen.add(canonical_name)
+            if info.isdir():
+                continue
+            if not info.isfile():
+                raise LicenseCheckError(
+                    "sdist contains non-regular archive member: " + info.name
+                )
+            file_members[canonical_name] = info
+
+        _check_sdist_installation_payload(set(file_members), set(expected))
+        roots = {PurePosixPath(name).parts[0] for name in file_members}
+        root = next(iter(roots))
+        for relative, expected_mode in expected.items():
+            archive_name = f"{root}/{relative}"
+            info = file_members[archive_name]
+            observed_mode = info.mode & 0o777
+            if observed_mode != expected_mode:
+                raise LicenseCheckError(
+                    "sdist file mode differs: "
+                    f"{relative} expected {expected_mode:o}, found {observed_mode:o}"
+                )
+            if relative == "PKG-INFO":
+                continue
+            extracted = archive.extractfile(info)
+            if extracted is None:
+                raise LicenseCheckError(f"cannot read archived file: {archive_name}")
+            if extracted.read() != (source_root / relative).read_bytes():
+                raise LicenseCheckError(
+                    "sdist tracked file bytes differ from source: " + relative
+                )
+
+
+def _check_sdist_archive_payload(path: Path, source_root: Path) -> None:
+    """Audit an sdist against the exact tracked installation manifest."""
+    _check_sdist_archive_against_manifest(
+        path, source_root, _tracked_sdist_installation_manifest(source_root)
+    )
+
+
+def _check_sdist_installation_payload(
+    names: set[str], expected_relative_names: set[str]
+) -> None:
+    """Require the sdist to match the tracked installation allow-surface."""
+    paths = [PurePosixPath(name) for name in names]
+    roots = {path.parts[0] for path in paths if path.parts}
+    if len(roots) != 1:
+        raise LicenseCheckError(
+            f"sdist must contain exactly one archive root; found {sorted(roots)}"
+        )
+    root = next(iter(roots))
+    relative_names = {
+        PurePosixPath(*path.parts[1:]).as_posix()
+        for path in paths
+        if path.parts[0] == root and len(path.parts) > 1
+    }
+    missing = sorted(expected_relative_names - relative_names)
+    unexpected = sorted(relative_names - expected_relative_names)
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append(
+                "unexpected repository-only or generated payload "
+                + ", ".join(unexpected)
+            )
+        raise LicenseCheckError(
+            "sdist installation payload differs: " + "; ".join(details)
+        )
+
+
+def check_archive(path: Path, source_root: Path | None = None) -> None:
     """Require every distribution archive to retain the common legal set."""
     names = _archive_names(path)
     required = COMMON_ARCHIVE_SUFFIXES + (
@@ -2076,6 +2265,11 @@ def check_archive(path: Path) -> None:
         )
     _check_archived_implib(path, names, wheel=path.suffix == ".whl")
     if path.suffix != ".whl":
+        if source_root is None:
+            raise LicenseCheckError(
+                "sdist payload audit requires the tracked source root"
+            )
+        _check_sdist_archive_payload(path, source_root)
         _check_archived_torch_stable(path, names)
         _check_archived_eigen(path, names)
     elif any(_is_eigen_payload_name(name) for name in names):
@@ -2108,7 +2302,7 @@ def main() -> int:
         if args.web_site is not None:
             check_web_site(args.web_site.resolve(), args.source_root.resolve())
         for archive in args.archives:
-            check_archive(archive.resolve())
+            check_archive(archive.resolve(), source_root=args.source_root.resolve())
     except (LicenseCheckError, OSError, KeyError, ValueError) as exc:
         raise SystemExit(f"license check failed: {exc}") from exc
     return 0
