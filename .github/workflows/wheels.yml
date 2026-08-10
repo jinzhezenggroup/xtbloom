@@ -289,7 +289,7 @@ jobs:
           # driver resolver can exercise its no-device fallback; production
           # code never searches or preloads stubs. A real-GPU forced-CUDA test
           # is run separately on the project GPU before merge/release.
-          CIBW_TEST_COMMAND: ${{ matrix.tests == 'smoke' && 'python -c "import xtbloom; print(xtbloom.library.get_version())"' || matrix.tests == 'desktop' && format('python {{package}}/python/ci/run-desktop-wheel-test.py {0}', matrix.desktop_test_args) || matrix.tests == 'pyodide' && 'bash {{package}}/python/ci/run-pyodide-wheel-test.sh {{package}}' || format('bash {{package}}/python/ci/run-wheel-test.sh {0} {{package}}', matrix.tests) }}
+          CIBW_TEST_COMMAND: ${{ matrix.tests == 'smoke' && 'python -c "import xtbloom; print(xtbloom.library.get_version())"' || matrix.tests == 'desktop' && format('python {{package}}/python/ci/run-desktop-wheel-test.py {0}', matrix.desktop_test_args) || matrix.tests == 'pyodide' && 'bash {package}/python/ci/run-pyodide-wheel-test.sh {package}' || format('bash {{package}}/python/ci/run-wheel-test.sh {0} {{package}}', matrix.tests) }}
           CIBW_TEST_EXTRAS: ${{ matrix.tests == 'full' && 'test,cuda12' || '' }}
         with:
           package-dir: .
