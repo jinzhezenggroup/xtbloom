@@ -78,7 +78,8 @@ jobs:
       - name: Collect C++ coverage
         if: matrix.compiler == 'gcc'
         env:
-          # Cobertura is the XML schema accepted by actions/upload-code-coverage.
+          # Cobertura is accepted by Codecov and keeps repository-relative
+          # source paths explicit for the upload-only job below.
           COVERAGE_XML: coverage-cpp.xml
         run: |
           sudo apt-get update
@@ -194,38 +195,50 @@ jobs:
 
   upload-coverage:
     needs: [cpu, python]
-    # if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
-    # disable due to no license
-    if: false
+    if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
+    # Coverage reporting is observability rather than a correctness gate. A
+    # Codecov or artifact-service outage must not fail the workflow.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         include:
           - artifact: coverage-report-cpp
             file: coverage-cpp.xml
-            language: C++
-            label: code-coverage/cpp
+            flag: cpp
+            name: code-coverage/cpp
           - artifact: coverage-report-python
             file: coverage-python.xml
-            language: Python
-            label: code-coverage/python
+            flag: python
+            name: code-coverage/python
     runs-on: ubuntu-24.04
-    # No pull-request code or dependencies execute with this write-scoped token.
+    # Keep OIDC away from jobs that build or execute pull-request code. This
+    # job only checks out source metadata and consumes trusted job artifacts.
     permissions:
       contents: read
-      pull-requests: read
-      code-quality: write
+      id-token: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - name: Download coverage report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ matrix.artifact }}
-      - name: Upload coverage to GitHub
-        uses: actions/upload-code-coverage@1c15be36fc3733ba839b1dd643bd9556e4426dc1 # v1.4.1
+      - name: Upload coverage to Codecov
+        # fail_ci_if_error covers CLI upload errors; continue-on-error also
+        # covers action setup, integrity-check, and OIDC failures.
+        continue-on-error: true
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
-          file: ${{ matrix.file }}
-          language: ${{ matrix.language }}
-          label: ${{ matrix.label }}
+          files: ${{ matrix.file }}
+          flags: ${{ matrix.flag }}
+          name: ${{ matrix.name }}
+          disable_search: true
+          fail_ci_if_error: false
+          use_oidc: true
+          version: v11.3.1
 
   licensing-source-distribution:
     runs-on: ubuntu-24.04
