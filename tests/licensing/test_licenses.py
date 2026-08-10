@@ -624,6 +624,54 @@ class ImplibProvenanceTests(unittest.TestCase):
         """Accept the checked-in implib tree at its pinned revision."""
         CHECKER._check_implib_provenance(REPOSITORY)
 
+    def test_git_index_mode_overrides_unreliable_filesystem_mode(self) -> None:
+        """Use tracked modes when Windows cannot represent the executable bit."""
+        manifest = CHECKER.json.loads(
+            (REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH).read_text(encoding="utf-8")
+        )
+        declared = CHECKER._check_implib_manifest(manifest)
+        index_modes = {
+            f"{CHECKER.IMPLIB_VENDOR_PATH}/{relative}": mode
+            for relative, (mode, _blob, _sha256) in declared.items()
+        }
+        with tempfile.TemporaryDirectory(prefix="xtbloom-implib-test-") as directory:
+            root = Path(directory)
+            self._copy_payload(root)
+            with (
+                mock.patch.object(
+                    CHECKER, "_git_index_modes", return_value=index_modes
+                ),
+                mock.patch.object(CHECKER, "_filesystem_git_mode", return_value=None),
+            ):
+                CHECKER._check_implib_provenance(root)
+
+    def test_mode_mismatch_has_a_specific_diagnostic(self) -> None:
+        """Distinguish mode drift from changed vendored bytes."""
+        manifest = CHECKER.json.loads(
+            (REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH).read_text(encoding="utf-8")
+        )
+        declared = CHECKER._check_implib_manifest(manifest)
+        wrong_modes = {
+            f"{CHECKER.IMPLIB_VENDOR_PATH}/{relative}": (
+                "100644" if relative == "implib-gen.py" else mode
+            )
+            for relative, (mode, _blob, _sha256) in declared.items()
+        }
+        with tempfile.TemporaryDirectory(prefix="xtbloom-implib-test-") as directory:
+            root = Path(directory)
+            self._copy_payload(root)
+            with (
+                mock.patch.object(
+                    CHECKER, "_git_index_modes", return_value=wrong_modes
+                ),
+                self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError,
+                    "mode differs.*implib-gen.py.*Git index: expected 100755.*"
+                    "observed 100644",
+                ),
+            ):
+                CHECKER._check_implib_provenance(root)
+
     def test_unexpected_vendored_file_is_rejected(self) -> None:
         """Reject undeclared files in the vendored implib tree."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-implib-test-") as directory:

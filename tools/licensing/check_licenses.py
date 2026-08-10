@@ -12,8 +12,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import stat
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path, PurePath
@@ -556,6 +558,72 @@ def _git_tree_id(entries: dict[str, tuple[str, str]]) -> str:
     return digest_tree(root)
 
 
+def _git_index_modes(root: Path, relative_paths: set[str]) -> dict[str, str] | None:
+    """Return tracked Git modes when ``root`` is an actual checkout.
+
+    Windows filesystems do not reliably expose Git's executable bit through
+    ``stat``.  The index remains authoritative in a checkout, while extracted
+    source archives intentionally fall back to filesystem capabilities.
+    """
+    if not (root / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "ls-files",
+                "--stage",
+                "--",
+                *sorted(relative_paths),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise LicenseCheckError("cannot inspect vendored Git index modes") from error
+    if result.returncode != 0:
+        raise LicenseCheckError(
+            "cannot inspect vendored Git index modes: " + result.stderr.strip()
+        )
+
+    observed: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        try:
+            metadata, relative = line.split("\t", 1)
+            mode, _object_id, stage = metadata.split()
+        except ValueError as error:
+            raise LicenseCheckError(
+                "Git returned an invalid index-mode record"
+            ) from error
+        if stage != "0" or mode not in ("100644", "100755"):
+            raise LicenseCheckError(f"Git returned an invalid mode for {relative}")
+        if relative in observed:
+            raise LicenseCheckError(f"Git returned duplicate modes for {relative}")
+        observed[relative] = mode
+    if set(observed) != relative_paths:
+        missing = sorted(relative_paths - set(observed))
+        unexpected = sorted(set(observed) - relative_paths)
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise LicenseCheckError(
+            "vendored Git index paths differ: " + "; ".join(details)
+        )
+    return observed
+
+
+def _filesystem_git_mode(path: Path) -> str | None:
+    """Map a filesystem mode to Git semantics when the platform supports it."""
+    if os.name == "nt":
+        return None
+    return "100755" if path.stat().st_mode & stat.S_IXUSR else "100644"
+
+
 def _check_implib_manifest(manifest: object) -> dict[str, tuple[str, str, str]]:
     """Validate pinned implib metadata and return its declared file mapping."""
     if not isinstance(manifest, dict):
@@ -631,6 +699,8 @@ def _check_implib_provenance(root: Path) -> None:
             "implib vendored file set differs: " + "; ".join(details)
         )
 
+    index_paths = {f"{IMPLIB_VENDOR_PATH}/{relative}" for relative in declared}
+    index_modes = _git_index_modes(root, index_paths)
     observed_tree: dict[str, tuple[str, str]] = {}
     for relative, (expected_mode, expected_blob, expected_sha256) in declared.items():
         path = vendor_root / relative
@@ -639,18 +709,27 @@ def _check_implib_provenance(root: Path) -> None:
                 f"implib vendored file must not be a symlink: {relative}"
             )
         data = path.read_bytes()
-        observed_mode = "100755" if path.stat().st_mode & stat.S_IXUSR else "100644"
+        index_path = f"{IMPLIB_VENDOR_PATH}/{relative}"
+        available_modes: list[tuple[str, str]] = []
+        if index_modes is not None:
+            available_modes.append(("Git index", index_modes[index_path]))
+        filesystem_mode = _filesystem_git_mode(path)
+        if filesystem_mode is not None:
+            available_modes.append(("filesystem", filesystem_mode))
+        for source, observed_mode in available_modes:
+            if observed_mode != expected_mode:
+                raise LicenseCheckError(
+                    "implib vendored file mode differs from pinned Git mode: "
+                    f"{relative} ({source}: expected {expected_mode}, "
+                    f"observed {observed_mode})"
+                )
         observed_blob = _git_object_id("blob", data)
         observed_sha256 = hashlib.sha256(data).hexdigest()
-        if (
-            observed_mode != expected_mode
-            or observed_blob != expected_blob
-            or observed_sha256 != expected_sha256
-        ):
+        if observed_blob != expected_blob or observed_sha256 != expected_sha256:
             raise LicenseCheckError(
                 f"implib vendored file differs from pinned bytes: {relative}"
             )
-        observed_tree[relative] = (observed_mode, observed_blob)
+        observed_tree[relative] = (expected_mode, observed_blob)
     if _git_tree_id(observed_tree) != IMPLIB_TREE:
         raise LicenseCheckError("implib vendored tree does not match the pinned tree")
 
