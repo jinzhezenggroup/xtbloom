@@ -35,6 +35,22 @@ VERSION_INSPECTOR = importlib.util.module_from_spec(VERSION_SPEC)
 VERSION_SPEC.loader.exec_module(VERSION_INSPECTOR)
 
 
+class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
+    """Keep hash-pinned text stable across Git checkout platforms."""
+
+    def test_hash_pinned_text_disables_checkout_conversion(self) -> None:
+        """Prevent Windows autocrlf from invalidating provenance digests."""
+        attributes = (REPOSITORY / ".gitattributes").read_text(encoding="utf-8")
+        for pathspec in (
+            "LICENSES/scipy-openblas32-0.3.34.0.0.txt",
+            "LICENSES/openchemlib-BSD-3-Clause.txt",
+            "cmake/3rdparty/implib/**",
+            "cmake/3rdparty/torch-stable/include/**",
+        ):
+            with self.subTest(pathspec=pathspec):
+                self.assertIn(f"{pathspec} -text", attributes.splitlines())
+
+
 class LicenseArchiveTests(unittest.TestCase):
     """Verify legal payload requirements for built distribution archives."""
 
