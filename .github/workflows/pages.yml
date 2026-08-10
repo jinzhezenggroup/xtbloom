@@ -118,9 +118,33 @@ jobs:
       - name: Show ccache statistics
         run: ccache -s
 
-      - name: Test browser helpers
+      - name: Test browser helpers with coverage
         if: matrix.architecture == 'wasm32'
-        run: npm test --prefix web
+        run: |
+          node --test \
+            --experimental-test-coverage \
+            --test-coverage-include='web/*.js' \
+            --test-reporter=spec \
+            --test-reporter-destination=stdout \
+            --test-reporter=lcov \
+            --test-reporter-destination=coverage-web.lcov \
+            web/tests/*.test.mjs
+
+          # The helper tests intentionally cover the extracted testable
+          # modules, not browser-only workers or generated Emscripten glue.
+          coverage_sources="$(sed -n 's/^SF://p' coverage-web.lcov | sort -u)"
+          expected_sources=$'web/app_helpers.js\nweb/smiles_helpers.js'
+          test "${coverage_sources}" = "${expected_sources}"
+
+      - name: Preserve web coverage for the upload-only job
+        if: matrix.architecture == 'wasm32'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-report-web
+          path: coverage-web.lcov
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Verify pinned OpenChemLib CDN integration
         if: matrix.architecture == 'wasm32'
@@ -156,6 +180,41 @@ jobs:
           path: ${{ env.BUILD_DIR }}/web/site
           if-no-files-found: error
           retention-days: 1
+
+  upload-coverage:
+    needs: build
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    # Coverage is an optional reporting service and must never gate the web
+    # build, scientific parity validation, or Pages deployment.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download web coverage report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: coverage-report-web
+
+      - name: Upload web coverage to Codecov
+        # fail_ci_if_error covers CLI upload errors; continue-on-error also
+        # covers action setup, integrity-check, and OIDC failures.
+        continue-on-error: true
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: coverage-web.lcov
+          flags: web
+          name: code-coverage/web
+          disable_search: true
+          fail_ci_if_error: false
+          use_oidc: true
+          version: v11.3.1
 
   validate:
     needs: build
