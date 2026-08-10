@@ -22,8 +22,8 @@ project does not test.
 | CMake and generator | CMake 3.24 or newer. The documented commands use Ninja, so Ninja must be installed for those commands; no numeric Ninja minimum is enforced. |
 | `uv` and Nox | `uv` is needed for the locked Python/source-checkout workflows. Use uv 0.10.7 for lockfile maintenance and CI parity. Nox 2026.7.11 is already pinned in the lock and does not need a separate global install. Neither tool is a runtime dependency of `libxtbloom`. |
 | Source version metadata | Native CMake checkouts and non-exact-tag Python checkouts need complete tag history plus a reachable strict `vMAJOR.MINOR.PATCH` tag. An exact-tag Python build may use that tag from a shallow checkout. An sdist or expanded Git archive carries frozen version metadata instead. |
-| Current distribution platforms | xTBloom is not yet published on PyPI. Current wheel jobs build Linux x86_64 and aarch64 artifacts. CPU source CI runs on Ubuntu 24.04; other operating systems are not part of the current binary distribution surface. |
-| CPU linear algebra | CPU inference needs one `dlopen`-able monolithic shared LP64 runtime exporting both LAPACKE and CBLAS plus provider-local thread control. Split `liblapack` + `libblas`, ILP64 providers, and static archives do not satisfy this contract. Compatible OpenBLAS or MKL installations are common source-build candidates; CMake validates the exact file. Wheel packaging separately uses a reviewed scipy-openblas32 build input. Official Linux wheels bundle the resulting private OpenBLAS provider. |
+| Current distribution platforms | PyPI publishes an sdist plus wheels for Linux x86_64/aarch64, macOS x86_64/arm64, Windows AMD64/ARM64, and Pyodide wasm32. Linux wheels contain CPU and CUDA backends; macOS and Windows wheels are CPU-only. Pyodide uses its separately qualified CPU/WebAssembly path. |
+| CPU linear algebra | CPU inference needs one `dlopen`-able monolithic shared LP64 runtime exporting both LAPACKE and CBLAS plus provider-local thread control. Split `liblapack` + `libblas`, ILP64 providers, and static archives do not satisfy this contract. Compatible OpenBLAS or MKL installations are common source-build candidates; CMake validates the exact file. Published Linux, macOS, and Windows wheels bundle their reviewed private OpenBLAS provider. |
 | CUDA source build | The CUDA backend currently supports 64-bit Linux ELF on x86_64 and aarch64. Use `nvcc` from CUDA Toolkit 12.9 for the current qualified build baseline; the wheel CI reference is NVCC 12.9.86 with GNU 14.2.1 as host compiler. `nvcc` must be on `PATH` or selected exactly with `CUDACXX`. Configuration also needs a Python 3 interpreter for CUDA shim generation, and source builds should set the actual GPU architectures. |
 | CUDA version qualification | CUDA 12.9 is the only current CI-compiled cohort. CMake contains provider-SONAME metadata for CUDA major 12 and 13, but that metadata is not by itself a full CUDA 13 build or real-GPU support claim. Toolkits outside 12.9 are unqualified and should not be treated as supported without project evidence. |
 | CUDA runtime | Calling the CUDA backend requires a real NVIDIA GPU, a compatible NVIDIA driver, and cudart, cuBLAS, and cuSOLVER host libraries matching the build CUDA major. They are loaded at runtime and are not bundled in xTBloom wheels. The `cuda12` extra installs the supported CUDA 12 host packages; it cannot install the system driver. Hosted wheel CI compiles CUDA but is not real-GPU evidence. |
@@ -41,30 +41,34 @@ is unavailable; `backend="cuda"` requires the CUDA runtime prerequisites above.
 
 ### Python
 
-xTBloom is not yet published on PyPI. Sync a source checkout as a locked,
-non-editable uv project environment. The first command uses the default `AUTO`
-build selection; the second also installs the CUDA 12 host-library providers:
+Install the published package from PyPI. The second command adds the supported
+CUDA 12 user-space libraries for CUDA-capable Linux wheels:
+
+```console
+pip install xtbloom
+pip install "xtbloom[cuda12]"
+```
+
+The `cuda12` extra cannot install an NVIDIA driver or GPU. Pass
+`backend="cuda"` to require GPU execution and receive an error when CUDA is
+unavailable; use `backend="auto"` only when CPU fallback is intended. Optional
+integrations are available as `xtbloom[ase]`, `xtbloom[dpdata]`, or combined
+extras such as `xtbloom[cuda12,ase,dpdata]`. Python 3.10 or newer is supported.
+See the [Python guide](python.md) for native-library discovery and the complete
+API.
+
+For development or an unsupported target, build from a complete source checkout
+as a locked, non-editable uv project environment:
 
 ```console
 uv sync --locked --no-editable --no-default-groups \
   --reinstall-package xtbloom
-uv sync --locked --no-editable --no-default-groups \
-  --extra cuda12 --reinstall-package xtbloom
 ```
 
-The CUDA-capable build requires the build prerequisites above. The `cuda12`
-extra installs the supported host-library cohort but cannot install the NVIDIA
-driver or make a missing `nvcc` appear. Pass `backend="cuda"` to require GPU
-execution and receive an error when CUDA is unavailable. Use `backend="auto"`
-only when CPU fallback is intended.
-Use `uv run --no-sync` for commands in the synced environment, or activate
-`.venv` directly. Ordinary source builds auto-discover a compatible system
-LP64 LAPACKE+CBLAS runtime; otherwise set
+Source builds use the default `AUTO` backend selection and auto-discover a
+compatible system LP64 LAPACKE+CBLAS runtime. When discovery fails, set
 `CMAKE_ARGS="-DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/provider.so"` on the
-sync command. Official Linux wheels contain their reviewed private OpenBLAS
-provider. Python 3.10 or newer is supported. See the
-[Python guide](python.md) for package extras, native-library discovery, and the
-complete API.
+sync command. Use `uv run --no-sync` for commands in that environment.
 
 ### C and C++
 

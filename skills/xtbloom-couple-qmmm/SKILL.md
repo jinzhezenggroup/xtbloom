@@ -9,6 +9,14 @@ Treat xTBloom as the variational GFN2 subsystem and make the calling
 electrostatics or simulation program own every external term that xTBloom does
 not calculate.
 
+## Choose the Host Environment
+
+For an agent-generated standalone Python coupling example, add PEP 723 metadata
+with `dependencies = ["xtbloom>=0.1.1"]`, then run it with `uv run --script
+qmmm.py`. Add only the host package the user actually selected. Preserve an
+existing simulation environment when integrating into one; do not impose uv on
+a C/C++ or native simulation workflow.
+
 ## Workflow
 
 1. Define the coupling boundary before writing descriptors. Decide whether the

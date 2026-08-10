@@ -51,9 +51,8 @@ Use `benchmarks/run.py` for the public cross-library matrix and `benchmarks/nato
 Run harness self-tests after code changes:
 
 ```bash
-python3 -m unittest -v benchmarks.test_run
-python3 -m unittest -v benchmarks.test_natoms_scaling
-python3 -m unittest -v benchmarks.test_dxtb_adapter
+UV_DEFAULT_INDEX=https://pypi.org/simple \
+  uv run --isolated --locked --only-group nox nox -s python
 ```
 
 Report a missing optional engine, runtime, GPU coordinate, or workload as `unavailable`; do not reduce the requested matrix without saying so.

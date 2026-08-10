@@ -1,5 +1,7 @@
 # xTBloom for Python
 
+[![PyPI version](https://img.shields.io/pypi/v/xtbloom.svg)](https://pypi.org/project/xtbloom/)
+
 xTBloom provides batched GFN2-xTB energies, analytic forces, and atomic charges
 through a NumPy-friendly interface backed by the same stable C ABI used by
 native C and C++ applications.
@@ -10,7 +12,37 @@ response, CPU and CUDA backends, ASE, dpdata, and eager Array API/DLPack arrays.
 
 ## Installation
 
-xTBloom is not yet published on PyPI. From a source checkout, sync the locked,
+Install xTBloom from PyPI. Python 3.10 or newer is required:
+
+```console
+pip install xtbloom
+```
+
+Linux x86_64 and aarch64 wheels include the CUDA backend. Add the supported
+CUDA 12 user-space libraries when the environment does not already provide
+them:
+
+```console
+pip install "xtbloom[cuda12]"
+```
+
+Optional integrations can be combined with either backend. For example, add
+ASE and dpdata to the CUDA environment with:
+
+```console
+pip install "xtbloom[cuda12,ase,dpdata]"
+```
+
+Published Linux, macOS, and Windows wheels include a private LP64 OpenBLAS
+provider for CPU inference; `scipy-openblas32` is used only while building the
+wheels and is not installed as a runtime dependency. CUDA execution additionally
+needs a real NVIDIA GPU and compatible driver. The `cuda12` extra supplies the
+supported `nvidia-*` user-space packages but cannot install the driver.
+
+## Build from source
+
+Use a source build only when developing xTBloom or when a published wheel does
+not cover the target. From a complete source checkout, sync the locked,
 non-editable package into uv's project environment:
 
 ```console
@@ -18,25 +50,9 @@ uv sync --locked --no-editable --no-default-groups --reinstall-package xtbloom
 ```
 
 CUDA build selection defaults to `AUTO`: an available `nvcc` enables CUDA;
-otherwise the package is CPU-only. Add `--extra cuda12` to the command when the
-supported CUDA 12 host libraries are not supplied by the system.
-
-Optional integrations can be combined with either backend. For example, add
-ASE and dpdata to the CUDA environment with:
-
-```console
-uv sync --locked --no-editable --no-default-groups \
-  --extra cuda12 --extra ase --extra dpdata --reinstall-package xtbloom
-```
-
-Run commands with `uv run --no-sync` or activate `.venv` directly.
-
-Python 3.10 or newer is required. Linux wheels include a private LP64 OpenBLAS
-provider for CPU inference; `scipy-openblas32` is used only while building the
-wheel and is not installed as a runtime dependency. A CUDA-enabled wheel
-additionally needs an NVIDIA driver and compatible CUDA 12 host libraries; the
-`cuda12` extra supplies the supported `nvidia-*` packages. CUDA libraries are
-not bundled inside the xTBloom wheel.
+otherwise the source build is CPU-only. Add `--extra cuda12` when the supported
+CUDA 12 host libraries are not supplied by the system. Run commands with
+`uv run --no-sync` or activate `.venv` directly.
 
 Ordinary source builds do not bundle OpenBLAS. They auto-discover a compatible
 system monolithic LP64 LAPACKE+CBLAS runtime; if none is discoverable, add
@@ -212,6 +228,7 @@ low-level C ABI.
 
 ## More documentation
 
+- [PyPI project](https://pypi.org/project/xtbloom/)
 - [Documentation home](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/index.md)
 - [Python API guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/python.md)
 - [Units and result meaning](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/index.md#units-and-result-meaning)

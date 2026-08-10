@@ -19,14 +19,12 @@ Record the equation, units, sign convention, variational quantity, backend consu
 
 ## Establish the Baseline
 
-Run immutable-data checks before editing so pre-existing drift is visible:
+Run the locked project's canonical session before editing so pre-existing drift
+is visible without requiring globally installed Python tools:
 
 ```bash
-python3 tools/parameters/generate_gfn2.py --check
-python3 tools/conformance/xtbloom_conformance.py check
-python3 -m unittest discover -s tests/parameters -p 'test_*.py' -v
-python3 -m unittest discover -s tests/conformance -p 'test_*.py' -v
-python3 -m unittest discover -s tests/oracle -p 'test_*.py' -v
+UV_DEFAULT_INDEX=https://pypi.org/simple \
+  uv run --isolated --locked --only-group nox nox -s canonical
 ```
 
 Do not hand-edit generated parameters, manifests, conformance goldens, trace fixtures, or hashes to make the implementation pass.
@@ -48,10 +46,10 @@ For CUDA-visible changes, cover host, device, and mixed descriptors plus the com
 Regenerate a golden only when the active issue explicitly requires a reviewed oracle update. Generate into a separate build directory first, then compare:
 
 ```bash
-python3 tools/conformance/xtbloom_conformance.py generate \
+uv run --no-sync python tools/conformance/xtbloom_conformance.py generate \
   --executable /path/to/pinned/tblite \
   --output-dir build/conformance/tblite
-python3 tools/conformance/xtbloom_conformance.py compare \
+uv run --no-sync python tools/conformance/xtbloom_conformance.py compare \
   --actual-dir build/conformance/tblite
 ```
 

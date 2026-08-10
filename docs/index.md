@@ -4,7 +4,7 @@ xTBloom provides native, batched GFN2-xTB energies, analytic forces, and
 charges through one stable C ABI and Python interfaces built on that ABI.
 
 [Try the browser demo](https://xtbloom.jinzhezeng.group) ·
-[Install from source](user-guide/index.md#installation) ·
+[Install xTBloom](user-guide/index.md#installation) ·
 [Python API](user-guide/python.md) ·
 [C/C++ API](user-guide/c-api.md)
 
@@ -23,9 +23,9 @@ demo adapter, not the native single-point API.
 ## Start here
 
 - **Using Python:** start with the
-  [installation prerequisites](user-guide/index.md#prerequisites), then use the
-  [Python API guide](user-guide/python.md) for single systems, native ragged
-  batches, spin, point charges, Array API/DLPack, ASE, and dpdata.
+  [Python installation guide](user-guide/python.md#installation), then continue
+  there for single systems, native ragged batches, spin, point charges, Array
+  API/DLPack, ASE, and dpdata.
 - **Using C or C++:** [C ABI guide](user-guide/c-api.md) for installation, a
   complete example, descriptor ownership, CUDA memory, and error handling.
 - **Embedding QM/MM:** [QM/MM guide](user-guide/qmmm.md) for explicit point
