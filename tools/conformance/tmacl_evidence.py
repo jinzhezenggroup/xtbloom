@@ -18,6 +18,7 @@ EVIDENCE_DIRECTORY = REPOSITORY_ROOT / EVIDENCE_DIRECTORY_RELATIVE
 FIXTURE_RELATIVE = Path("data/conformance/inputs/tmacl.xyz")
 GENERATOR_RELATIVE = Path("tests/scc_temperature_continuation_test.cpp")
 DEFAULT_MANIFEST = EVIDENCE_DIRECTORY / "manifest.json"
+EVIDENCE_README = EVIDENCE_DIRECTORY / "README.md"
 EXPECTED_EVIDENCE = (
     "tmacl_continuation_funnel.txt",
     "tmacl_mixer_sweep.txt",
@@ -90,6 +91,21 @@ def require_exact_path(value: object, expected: Path, field: str) -> Path:
     if value != canonical:
         raise EvidenceError(f"{field} must be the canonical path {canonical}")
     return repository_path(value, field)
+
+
+def require_document_text(
+    path: Path, required_text: tuple[str, ...], document: str
+) -> None:
+    """Keep human-readable distribution claims aligned with the manifest."""
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise EvidenceError(f"cannot read {document}: {exc}") from exc
+    normalized_content = " ".join(content.split())
+    if any(
+        " ".join(value.split()) not in normalized_content for value in required_text
+    ):
+        raise EvidenceError(f"{document} is missing required distribution text")
 
 
 def validate_xyz(path: Path) -> None:
@@ -245,21 +261,25 @@ def check_manifest(path: Path = DEFAULT_MANIFEST) -> None:
     if distribution != EXPECTED_DISTRIBUTION:
         raise EvidenceError("distribution boundaries or notice path are not canonical")
     notice_path = repository_path(distribution["notice"], "distribution.notice")
-    try:
-        notice = notice_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise EvidenceError(f"cannot read tmacl third-party notice: {exc}") from exc
-    required_notice_text = (
-        "## xTB issue #678 difficult-SCC input",
-        "https://github.com/grimme-lab/xtb/issues/678",
-        "SPDX: NOASSERTION",
-        "excluded from installation-focused PyPI source distributions",
-        "data/conformance/evidence/tmacl-temperature-continuation/manifest.json",
+    require_document_text(
+        notice_path,
+        (
+            "## xTB issue #678 difficult-SCC input",
+            "https://github.com/grimme-lab/xtb/issues/678",
+            "SPDX: NOASSERTION",
+            "excluded from installation-focused PyPI source distributions",
+            "data/conformance/evidence/tmacl-temperature-continuation/manifest.json",
+        ),
+        "tmacl third-party notice",
     )
-    if any(value not in notice for value in required_notice_text):
-        raise EvidenceError(
-            "tmacl third-party notice is missing required provenance text"
-        )
+    require_document_text(
+        EVIDENCE_README,
+        (
+            "repository-only validation data",
+            "excluded from installation-focused PyPI source distributions",
+        ),
+        "tmacl evidence README",
+    )
 
     files = manifest.get("evidence_files")
     if not isinstance(files, list):
