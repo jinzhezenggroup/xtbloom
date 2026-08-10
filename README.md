@@ -48,12 +48,20 @@ for usage and scope.
 
 ## Python quickstart
 
-xTBloom is not yet published on PyPI. Install a source checkout explicitly for
-the CPU backend:
+xTBloom is not yet published on PyPI. Sync a source checkout into uv's locked,
+non-editable project environment for the CPU backend:
 
 ```console
-XTBLOOM_ENABLE_CUDA=OFF python -m pip install .
+XTBLOOM_ENABLE_CUDA=OFF uv sync --locked --no-editable --no-default-groups \
+  --reinstall-package xtbloom
 ```
+
+Run commands from that environment with `uv run --no-sync` or activate
+`.venv` directly. Ordinary source builds auto-discover a compatible system
+LP64 LAPACKE+CBLAS runtime; when none is discoverable, set
+`CMAKE_ARGS="-DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/provider.so"` on the
+sync command. Official Linux wheels instead contain their reviewed private
+OpenBLAS provider.
 
 Positions use bohr; energies and forces are returned in Hartree and
 Hartree/bohr. The high-level Python `electronic_temperature` argument is in

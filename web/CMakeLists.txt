@@ -25,7 +25,10 @@ endif()
 set(_xtbloom_web_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_xtbloom_web_site "${CMAKE_CURRENT_BINARY_DIR}/site")
 set(_xtbloom_web_obj "${CMAKE_CURRENT_BINARY_DIR}/xtbloom_web.o")
-set(_xtbloom_web_include "-I${CMAKE_SOURCE_DIR}/include")
+# The adapter is compiled by a custom emcc command rather than a CMake target,
+# so propagate both halves of the public-header build interface explicitly.
+set(_xtbloom_web_source_include "-I${CMAKE_SOURCE_DIR}/include")
+set(_xtbloom_web_generated_include "-I${XTBLOOM_GENERATED_INCLUDE_DIR}")
 
 # The core library's data model is selected before this subdirectory is
 # processed, through the Emscripten compiler flags used at configure time.
@@ -83,7 +86,8 @@ add_custom_command(
   OUTPUT "${_xtbloom_web_obj}"
   COMMAND ${CMAKE_C_COMPILER}
           "${_xtbloom_web_arch_flag}" -fPIC -O2
-          "${_xtbloom_web_include}"
+          "${_xtbloom_web_generated_include}"
+          "${_xtbloom_web_source_include}"
           -c "${_xtbloom_web_src}/xtbloom_web.c"
           -o "${_xtbloom_web_obj}"
   DEPENDS "${_xtbloom_web_src}/xtbloom_web.c"
@@ -106,7 +110,8 @@ add_custom_command(
           ${CMAKE_CXX_COMPILER}
           "${_xtbloom_web_obj}"
           $<TARGET_FILE:xtbloom>
-          "${_xtbloom_web_include}"
+          "${_xtbloom_web_generated_include}"
+          "${_xtbloom_web_source_include}"
           -o "${_xtbloom_web_site}/xtbloom_web.js"
           "${_xtbloom_web_arch_flag}" -O2 -sMAIN_MODULE=2
           -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createXTBloomModule
@@ -179,10 +184,7 @@ add_custom_command(
 #    engine, LGPL/Apache-derived parameter data, and a 3Dmol bundle containing
 #    npm transitive code, so recipients must receive every applicable notice.
 # ---------------------------------------------------------------------------
-set(_xtbloom_web_legal_sources
-    "${CMAKE_SOURCE_DIR}/LICENSE"
-    "${CMAKE_SOURCE_DIR}/CUDA_MKL_LINKING_EXCEPTION"
-    "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+set(_xtbloom_web_license_sources
     "${CMAKE_SOURCE_DIR}/LICENSES/3Dmol.js-BSD-3-Clause.txt"
     "${CMAKE_SOURCE_DIR}/LICENSES/openchemlib-BSD-3-Clause.txt"
     "${CMAKE_SOURCE_DIR}/LICENSES/Apache-2.0.txt"
@@ -194,7 +196,13 @@ set(_xtbloom_web_legal_sources
     "${CMAKE_SOURCE_DIR}/LICENSES/netcdfjs-MIT.txt"
     "${CMAKE_SOURCE_DIR}/LICENSES/pako-MIT.txt"
     "${CMAKE_SOURCE_DIR}/LICENSES/pako-Zlib.txt"
-    "${CMAKE_SOURCE_DIR}/LICENSES/upng-js-MIT.txt"
+    "${CMAKE_SOURCE_DIR}/LICENSES/upng-js-MIT.txt")
+
+set(_xtbloom_web_legal_sources
+    "${CMAKE_SOURCE_DIR}/LICENSE"
+    "${CMAKE_SOURCE_DIR}/CUDA_MKL_LINKING_EXCEPTION"
+    "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+    ${_xtbloom_web_license_sources}
     "${CMAKE_SOURCE_DIR}/data/parameters/d4.NOTICE"
     "${CMAKE_SOURCE_DIR}/data/parameters/licenses/dftd4-COPYING"
     "${CMAKE_SOURCE_DIR}/data/parameters/licenses/dftd4-COPYING.LESSER"
@@ -235,6 +243,8 @@ set(_xtbloom_web_legal_outputs
 
 add_custom_command(
   OUTPUT ${_xtbloom_web_legal_outputs}
+  COMMAND ${CMAKE_COMMAND} -E remove_directory
+          "${_xtbloom_web_site}/LICENSES"
   COMMAND ${CMAKE_COMMAND} -E make_directory
           "${_xtbloom_web_site}/LICENSES/parameters"
           "${_xtbloom_web_site}/provenance/parameters"
@@ -246,8 +256,10 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
           "${_xtbloom_web_site}/THIRD_PARTY_NOTICES.md"
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-          "${CMAKE_SOURCE_DIR}/LICENSES" "${_xtbloom_web_site}/LICENSES"
+  # Copy the explicit web-license allowlist rather than the whole source
+  # directory: wheel-only or native-only licenses are orphaned Pages payloads.
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${_xtbloom_web_license_sources} "${_xtbloom_web_site}/LICENSES"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_SOURCE_DIR}/data/parameters/licenses"
           "${_xtbloom_web_site}/LICENSES/parameters"

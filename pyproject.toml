@@ -1,10 +1,13 @@
 [build-system]
-requires = ["scikit-build-core>=0.9"]
+requires = [
+  "scikit-build-core>=1.0.3",
+  "setuptools-scm>=10.2.1",
+]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "xtbloom"
-version = "0.0.0"
+dynamic = ["version"]
 description = "Batched CPU and GPU inference for GFN2-xTB through the public C ABI"
 readme = { file = "python/README.md", content-type = "text/markdown" }
 license = "GPL-3.0-or-later"
@@ -37,10 +40,6 @@ dependencies = [
   # MIT-licensed, dependency-free backend-neutral array probing for the
   # DLPack/Array API consumption path; see THIRD_PARTY_NOTICES.md.
   "array-api-compat>=1.15,<2",
-  # One BSD-licensed LP64 LAPACKE+CBLAS runtime serves both Linux wheel
-  # architectures. Pin the reviewed ABI because later provider wheels may
-  # remove the local-thread-control symbol required for host isolation.
-  "scipy-openblas32==0.3.34.0.0; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
 ]
 
 [project.urls]
@@ -83,12 +82,45 @@ nox = ["nox==2026.7.11"]
 # required CI. Keep it out of project extras so wheels and normal test-extra
 # installations retain the package's optional, lazy-import contract.
 torch-testing = ["torch==2.13.0"]
+# Lock the reviewed wheel-build input without publishing it as Requires-Dist.
+# auditwheel vendors only its verified LP64 provider cohort into xTBloom;
+# users must not install or import scipy-openblas32 at runtime.
+wheel-build = [
+  "scipy-openblas32==0.3.34.0.0; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+]
 
 # Install the typechecking group by default so `uv check` (the ty-pre-commit
 # hook) and plain `uv sync` both resolve ase/dpdata without extra flags. The
 # repository has no `dev` group to preserve.
 [tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { git = { commit = true, tags = true } },
+]
 default-groups = ["typechecking"]
+
+[[tool.dynamic-metadata]]
+provider = "scikit_build_core.metadata.setuptools_scm"
+
+[tool.setuptools_scm]
+version_scheme = "only-version"
+local_scheme = "no-local-version"
+
+[tool.setuptools_scm.tag]
+regex = '^v(?P<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$'
+
+[tool.setuptools_scm.scm.git]
+pre_parse = "fail_on_shallow"
+describe_command = [
+  "git",
+  "describe",
+  "--dirty",
+  "--tags",
+  "--long",
+  "--abbrev=40",
+  "--match",
+  "v*",
+]
 
 [project.entry-points."dpdata.plugins"]
 xtbloom = "xtbloom.dpdata"
@@ -100,6 +132,7 @@ sdist.include = [
   "cmake/3rdparty/implib/**",
   "cmake/3rdparty/implib_manifest.json",
   "cmake/3rdparty/torch-stable/**",
+  "cmake/3rdparty/scipy_openblas32_manifest.json",
   "data/parameters/*_manifest.json",
   "data/parameters/manifest.json",
 ]
@@ -129,6 +162,16 @@ wheel.install-dir = "xtbloom"
 # archives containing identical native code.
 wheel.py-api = "py3"
 
+# scipy-openblas32 explicitly warns against use as an end-user dependency. It
+# is therefore requested only for audited cibuildwheel builds and never appears
+# in runtime metadata, editable builds, or an sdist build environment.
+[[tool.scikit-build.overrides]]
+if.state = "^wheel$"
+if.platform-system = "^linux$"
+if.platform-machine = "^(x86_64|aarch64)$"
+if.env.XTBLOOM_BUNDLE_WHEEL_OPENBLAS = "^ON$"
+build.requires = ["scipy-openblas32==0.3.34.0.0"]
+
 # XTBLOOM_ENABLE_CUDA: AUTO enables the CUDA backend whenever a CUDA toolkit with
 # nvcc is available at build time and produces a CPU-only wheel otherwise. It
 # can be forced with, e.g.,
@@ -136,6 +179,7 @@ wheel.py-api = "py3"
 # (see python/README.md).
 [tool.scikit-build.cmake.define]
 XTBLOOM_ENABLE_CUDA = { env = "XTBLOOM_ENABLE_CUDA", default = "AUTO" }
+XTBLOOM_BUNDLE_WHEEL_OPENBLAS = { env = "XTBLOOM_BUNDLE_WHEEL_OPENBLAS", default = "OFF" }
 # Ship optimized SASS for the main data-center/consumer generations plus
 # Blackwell instead of relying on nvcc's legacy default architecture/PTX JIT.
 CMAKE_CUDA_ARCHITECTURES = { env = "XTBLOOM_CUDA_ARCHITECTURES", default = "80;89;90;120" }
@@ -180,10 +224,11 @@ test-groups = ["torch-testing"]
 # scripts). The image supplies nvcc's compiler-support files, while provider
 # shared libraries are unnecessary (see the stub-mode comment above), so only
 # the CUDA-capable ccache (>= 4.1, needed for nvcc; the manylinux_2_28 distro
-# ccache 3.7 cannot cache CUDA) is installed. The PyTorch stable-ABI extension
-# is compiled from manifest-pinned vendored headers plus a build-time-only
-# libtorch_cpu stub.
-before-build = "bash {package}/python/ci/install-ccache.sh"
+# ccache 3.7 cannot cache CUDA) and the provenance-pinned private OpenBLAS
+# wheel provider are prepared. The PyTorch stable-ABI extension is compiled
+# from manifest-pinned vendored headers plus a build-time-only libtorch_cpu
+# stub.
+before-build = "bash {package}/python/ci/prepare-wheel-build.sh"
 # CUDA host shared libraries (cublas/cusolver/cudart/...) are intentionally not
 # bundled: the trampolines resolve the system CUDA driver plus the
 # PyPI-distributed nvidia-* packages at runtime. libcuda.so.1 is the NVIDIA
@@ -193,9 +238,10 @@ before-build = "bash {package}/python/ci/install-ccache.sh"
 # The torch extension links only libtorch_cpu.so for its stable aoti_torch_*
 # C shim symbols. With the vendored-headers + build-time-stub build the wheel is
 # produced in an environment that never installs torch, so auditwheel cannot
-# see libtorch_cpu.so and it is never bundled; the explicit exclude below is a
-# defensive no-op in case a future build environment pre-installs torch.
-repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel} --exclude libcublas.so.12 --exclude libcublasLt.so.12 --exclude libcusolver.so.11 --exclude libcusparse.so.12 --exclude libcudart.so.12 --exclude libnvJitLink.so.12 --exclude libcufft.so.11 --exclude libcurand.so.10 --exclude libcuda.so.1 --exclude libtorch_cpu.so"
+# see libtorch_cpu.so and it is never bundled. The repair script still excludes
+# it defensively while also resolving and vendoring the reviewed private
+# OpenBLAS cohort.
+repair-wheel-command = "bash {package}/python/ci/repair-wheel.sh {dest_dir} {wheel}"
 
 [tool.ruff]
 # Ruff owns both formatting and import ordering so those policies cannot drift.

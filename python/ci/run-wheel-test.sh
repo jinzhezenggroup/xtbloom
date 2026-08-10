@@ -20,6 +20,20 @@ trap 'rm -rf "$stub_dir"' EXIT
 ln -s "$stub_source" "$stub_dir/libcuda.so.1"
 export LD_LIBRARY_PATH="$stub_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# scipy-openblas32 is a wheel-build input whose upstream project explicitly
+# says it must not be installed as an end-user dependency. CPU inference below
+# must succeed solely from the auditwheel-vendored private provider cohort.
+python - <<'PY'
+import importlib.metadata
+
+try:
+    importlib.metadata.distribution("scipy-openblas32")
+except importlib.metadata.PackageNotFoundError:
+    pass
+else:
+    raise SystemExit("scipy-openblas32 leaked into the installed wheel environment")
+PY
+
 case "$mode" in
   full)
     python -c 'import torch; print(f"wheel test torch: {torch.__version__}")'

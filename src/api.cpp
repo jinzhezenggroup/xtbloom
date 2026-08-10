@@ -100,7 +100,7 @@ class CompletionSettlementGuard {
 
 extern "C" {
 
-const char* xtbloom_version_string(void) { return "0.0.0"; }
+const char* xtbloom_version_string(void) { return XTBLOOM_VERSION_STRING; }
 
 const char* xtbloom_status_string(xtbloom_status_t status) {
   switch (status) {

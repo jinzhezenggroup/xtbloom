@@ -10,25 +10,38 @@ response, CPU and CUDA backends, ASE, dpdata, and eager Array API/DLPack arrays.
 
 ## Installation
 
-xTBloom is not yet published on PyPI. From a source checkout, build and install
-the CPU package with:
+xTBloom is not yet published on PyPI. From a source checkout, sync the locked,
+non-editable CPU package into uv's project environment with:
 
 ```console
-XTBLOOM_ENABLE_CUDA=OFF python -m pip install .
+XTBLOOM_ENABLE_CUDA=OFF uv sync --locked --no-editable --no-default-groups \
+  --reinstall-package xtbloom
 ```
 
 Install optional integrations from the checkout:
 
 ```console
-XTBLOOM_ENABLE_CUDA=OFF python -m pip install ".[ase,dpdata]"
-XTBLOOM_ENABLE_CUDA=ON python -m pip install ".[cuda12]"
+XTBLOOM_ENABLE_CUDA=OFF uv sync --locked --no-editable --no-default-groups \
+  --extra ase --extra dpdata --reinstall-package xtbloom
+XTBLOOM_ENABLE_CUDA=ON uv sync --locked --no-editable --no-default-groups \
+  --extra cuda12 --reinstall-package xtbloom
 ```
 
-Python 3.10 or newer is required. Linux CPU inference uses the separately
-installed `scipy-openblas32` LP64 LAPACKE+CBLAS runtime. A CUDA build also
-requires an NVIDIA driver and compatible CUDA 12 host libraries; the `cuda12`
-extra supplies the supported `nvidia-*` packages. CUDA provider libraries are
+Run commands with `uv run --no-sync` or activate `.venv` directly.
+
+Python 3.10 or newer is required. Linux wheels include a private LP64 OpenBLAS
+provider for CPU inference; `scipy-openblas32` is used only while building the
+wheel and is not installed as a runtime dependency. A CUDA-enabled wheel
+additionally needs an NVIDIA driver and compatible CUDA 12 host libraries; the
+`cuda12` extra supplies the supported `nvidia-*` packages. CUDA libraries are
 not bundled inside the xTBloom wheel.
+
+Ordinary source builds do not bundle OpenBLAS. They auto-discover a compatible
+system monolithic LP64 LAPACKE+CBLAS runtime; if none is discoverable, add
+`CMAKE_ARGS="-DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/provider.so"` to the
+sync command. Keep `--reinstall-package xtbloom` when changing this path or
+switching `XTBLOOM_ENABLE_CUDA`, because uv's local wheel cache does not key
+native builds by those environment variables.
 
 Source-build and package-boundary details are in the
 [developer guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/developer-guide/packaging.md).

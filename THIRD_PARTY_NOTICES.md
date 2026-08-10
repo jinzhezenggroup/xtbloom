@@ -7,6 +7,24 @@ retained under its own terms and is not relicensed by that permission.
 The manifests named below pin the source revisions and content digests used
 to produce the redistributed data.
 
+## Python build and Git-version tooling
+
+The isolated PEP 517 environment installs two direct build requirements from
+PyPI:
+
+- scikit-build-core >=1.0.3
+  (<https://github.com/scikit-build/scikit-build-core>, `Apache-2.0`) provides
+  the build backend and dynamic-metadata bridge;
+- setuptools-scm >=10.2.1
+  (<https://github.com/pypa/setuptools-scm>, `MIT`) parses Git and archive
+  metadata according to xTBloom's strict tag configuration.
+
+These tools are not vendored, linked into `libxtbloom`, or redistributed in
+xTBloom source archives, native installs, or wheels. Their installed Python
+distributions retain their own license metadata; the corresponding Apache and
+MIT texts are also available as `LICENSES/Apache-2.0.txt` and
+`LICENSES/MIT.txt`.
+
 ## array-api-compat
 
 Repository: <https://github.com/data-apis/array-api-compat>
@@ -240,19 +258,34 @@ Matplotlib and its dependencies are publication tools only: they are not
 xTBloom project dependencies and are not bundled in source distributions,
 native installs, or wheels.
 
-## OpenBLAS runtime dependency
+## Private OpenBLAS wheel provider
 
 Repository: <https://github.com/MacPython/openblas-libs>
 
-The separately installed `scipy-openblas32` distribution provides xTBloom's
-default Linux LP64 LAPACKE+CBLAS runtime. Version 0.3.34.0.0 is pinned exactly:
-it is the reviewed provider ABI with the local-thread-control symbol required
-by xTBloom, while later provider releases may change that optional symbol. Its
-own license payload records the MacPython wrapper under BSD-2-Clause, OpenBLAS
-and LAPACK under BSD-3-Clause terms, and its GCC runtime dependencies under
-GPL-3.0 with the GCC Runtime Library Exception. The runtime is not bundled in
-xTBloom source archives, native installs, or wheels; its own Python distribution
-retains the complete notices and license texts.
+The `scipy-openblas32` project states that it is a build artifact and must not
+be used as an end-user dependency. xTBloom therefore never publishes it in
+`Requires-Dist` and never imports its Python module. Version 0.3.34.0.0 is an
+exact Linux x86_64/aarch64 wheel-build input: it is the reviewed LP64
+LAPACKE+CBLAS ABI with the local-thread-control symbol required by xTBloom,
+while later provider releases may change that optional symbol.
+
+The source manifest pins MacPython release commit
+`7e5538356afac3934e872b8b572799b875900657`, OpenBLAS commit
+`e0166008be8e466242aa76b2ff75ce3f0fbf574a`, both upstream wheel hashes, and
+every architecture-specific ELF input. CMake verifies those bytes without
+importing the package and links a wheel-only private shim to the provider.
+`auditwheel repair` follows that shim's `DT_NEEDED` closure, collision-renames
+and redistributes OpenBLAS plus the required `libgfortran`/`libquadmath`
+components, rewrites the vendored dependency closure for private relative
+resolution, and gives the shim a relative RPATH into that private directory.
+`libxtbloom` itself has no hard OpenBLAS dependency and lazily loads the shim in
+a new glibc link-map namespace. Source archives and native installs contain the
+provenance and license records but no OpenBLAS or GCC runtime binaries.
+
+The retained upstream license records the MacPython wrapper under
+BSD-2-Clause, OpenBLAS and LAPACK under BSD-3-Clause terms, redistributed
+`libgfortran` under GPL-3.0 with the GCC Runtime Library Exception, and the
+x86_64-only `libquadmath` component under LGPL-2.1-or-later.
 
 ## CUDA and Intel MKL provider components
 

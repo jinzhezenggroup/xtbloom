@@ -271,7 +271,14 @@ forbidden on the steady-state inference path; the context grows and reuses works
 libxtbloom does not require a proprietary BLAS or CUDA host shared library merely to load. The CPU
 eigensolver dlopens an LP64 BLAS/LAPACK runtime (Intel MKL or OpenBLAS) by SONAME on first use
 (`src/model/gfn2/eigensolver.cpp`), so a machine without a compatible provider still loads the
-library. The MKL path is host-isolated: CMake builds a private
+library. Linux wheels are deterministic rather than host-discovered: CMake verifies the exact
+`scipy-openblas32` build input without importing it, links a private
+`libxtbloom_openblas_lp64_shim`, and lets auditwheel vendor and collision-rename that shim's
+OpenBLAS/GCC dependency closure. The factory loads the adjacent shim by absolute path with
+`RTLD_LOCAL` in a new glibc link-map namespace. A missing or corrupt wheel provider fails without
+falling back to host OpenBLAS, and `libxtbloom` never acquires an OpenBLAS `DT_NEEDED` edge.
+
+The native MKL path is also host-isolated: CMake builds a private
 `libxtbloom_mkl_lp64_shim` with fixed `DT_NEEDED` dependencies on `libmkl_intel_lp64`,
 `libmkl_sequential`, and `libmkl_core`. The factory loads the adjacent shim with `RTLD_LOCAL`
 in a new glibc link-map namespace; `RTLD_LOCAL` in the base namespace would still allow a

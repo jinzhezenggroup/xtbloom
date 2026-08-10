@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
-from xtbloom import library
+from xtbloom import __version__, library
 from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
 if TYPE_CHECKING:
@@ -36,8 +36,8 @@ def _fake_request_library(*, omit: str | None = None) -> _FakeLibrary:
 
 
 def test_version_string() -> None:
-    """Expose the native library version through the ctypes wrapper."""
-    assert library.get_version() == "0.0.0"
+    """Keep Python distribution metadata and the native C API in lockstep."""
+    assert library.get_version() == __version__
 
 
 def test_request_api_is_optional_as_a_complete_symbol_group() -> None:
@@ -81,10 +81,10 @@ def test_runtime_search_includes_user_site_packages(
     assert runtime_dir in library._runtime_search_dirs()
 
 
-def test_runtime_search_and_preload_match_scipy_openblas32(
+def test_runtime_search_does_not_load_scipy_openblas32(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Keep runtime discovery aligned with scipy-openblas32's wheel layout."""
+    """Keep the build-only provider out of the process-global namespace."""
     user_site = tmp_path / "site-packages"
     runtime_dir = user_site / "scipy_openblas32" / "lib"
     runtime_dir.mkdir(parents=True)
@@ -92,10 +92,11 @@ def test_runtime_search_and_preload_match_scipy_openblas32(
     monkeypatch.setattr(site, "getusersitepackages", lambda: str(user_site))
     monkeypatch.setattr(site, "ENABLE_USER_SITE", True)
 
-    assert runtime_dir in library._runtime_search_dirs()
-    assert any(
-        "libscipy_openblas.so" in alternatives
+    assert runtime_dir not in library._runtime_search_dirs()
+    assert all(
+        "openblas" not in name
         for alternatives in library._RUNTIME_LIBRARY_GROUPS
+        for name in alternatives
     )
 
 
