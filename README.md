@@ -49,11 +49,14 @@ for usage and scope.
 ## Python quickstart
 
 xTBloom is not yet published on PyPI. Sync a source checkout into uv's locked,
-non-editable project environment for the CPU backend:
+non-editable project environment:
+
+Python 3.10 or newer is required. See the
+[prerequisites matrix](docs/user-guide/index.md#prerequisites) for native and
+CUDA build requirements.
 
 ```console
-XTBLOOM_ENABLE_CUDA=OFF uv sync --locked --no-editable --no-default-groups \
-  --reinstall-package xtbloom
+uv sync --locked --no-editable --no-default-groups --reinstall-package xtbloom
 ```
 
 Run commands from that environment with `uv run --no-sync` or activate
@@ -80,7 +83,8 @@ positions = np.array(
     ]
 )
 
-with Calculator("GFN2-xTB", numbers, positions, backend="auto") as calc:
+backend = "cuda"  # Use "cpu" to require CPU execution instead.
+with Calculator("GFN2-xTB", numbers, positions, backend=backend) as calc:
     result = calc.singlepoint()
 
 print(result["energy"])

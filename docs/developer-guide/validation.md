@@ -4,6 +4,23 @@ Validation follows the changed surface and issue acceptance criteria. Record
 the exact command, configuration, test count, backend, provider, and result.
 An absent or skipped test is not a pass.
 
+## Toolchain prerequisites
+
+Repository validation requires Python 3.11 or newer, CMake 3.24 or newer,
+C11/C++17 compilers, Ninja for the documented build commands, and a full Git
+checkout with tag history. The lock and CI baseline is uv 0.10.7; the locked
+Nox runner is 2026.7.11. CPU CI follows the Ubuntu 24.04 runner defaults; the
+2026-08-10 run for this revision reported GCC 13.3 and Clang 18.1. Those
+versions are references, not pinned minimums.
+
+Full CPU inference validation additionally requires the compatible shared LP64
+LAPACKE+CBLAS provider described in the
+[prerequisites matrix](../user-guide/index.md#prerequisites). CUDA validation
+uses the current CUDA Toolkit/NVCC 12.9 baseline and requires a visible real
+NVIDIA GPU, compatible driver, and runtime host libraries; the current wheel
+compiler reference is NVCC 12.9.86. Source CUDA validation must select the
+actual compiler and GPU architectures rather than relying on `AUTO`.
+
 ## One-command Nox workflow
 
 The recommended CPU validation entry point for developers and AI agents is:

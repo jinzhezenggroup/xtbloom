@@ -6,14 +6,40 @@ guards, so C and C++ consumers share the same ABI and semantics.
 
 ## Install and link
 
+Read the [installation prerequisites](index.md#prerequisites) first. The command
+below keeps the default `AUTO` CUDA selection and disables repository tests;
+leave tests enabled only when Python 3.11 or newer and the development
+prerequisites are available.
+
 ```console
 cmake -S . -B build/release -G Ninja \
-  -DXTBLOOM_ENABLE_CUDA=OFF \
+  -DXTBLOOM_BUILD_TESTS=OFF \
   -DBUILD_SHARED_LIBS=ON \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build/release --parallel
 cmake --install build/release --prefix "$PWD/build/install"
 ```
+
+CUDA selection normally defaults to `AUTO`. For an explicitly verified CUDA
+build, use a separate directory, set `XTBLOOM_ENABLE_CUDA=ON` so a missing
+compiler is an error, and select the deployment GPU architecture:
+
+```console
+cmake -S . -B build/cuda -G Ninja \
+  -DXTBLOOM_ENABLE_CUDA=ON \
+  -DCMAKE_CUDA_ARCHITECTURES=89 \
+  -DXTBLOOM_BUILD_TESTS=OFF \
+  -DBUILD_SHARED_LIBS=ON \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build/cuda --parallel
+cmake --install build/cuda --prefix "$PWD/build/install-cuda"
+```
+
+Replace `89` with the target compute capability. Set
+`context_options.backend = XTBLOOM_BACKEND_CUDA` to require GPU execution;
+`XTBLOOM_BACKEND_AUTO` may fall back to CPU. The complete example below uses
+CPU by default so it also runs with the CPU-only install; change its one backend
+line to `XTBLOOM_BACKEND_CUDA` to verify the CUDA build explicitly.
 
 A consumer CMake project needs only the exported target:
 
@@ -27,7 +53,8 @@ target_link_libraries(xtbloom_example PRIVATE xtbloom::xtbloom)
 target_compile_features(xtbloom_example PRIVATE c_std_11)
 ```
 
-Configure it with the install prefix:
+Configure it with the selected install prefix. Use `build/install-cuda` instead
+when following the CUDA build above:
 
 ```console
 cmake -S example -B example/build -G Ninja \
@@ -38,8 +65,9 @@ example/build/xtbloom_example
 
 ## Complete energy and force example
 
-This example submits one H2 molecule using host buffers. The same descriptors
-are accepted by a CUDA context, which stages host data internally.
+This example submits one H2 molecule using host buffers. A CUDA context accepts
+the same descriptors and stages them internally; select it explicitly as
+described above when verifying GPU execution.
 
 ```c
 #include <math.h>

@@ -11,20 +11,22 @@ response, CPU and CUDA backends, ASE, dpdata, and eager Array API/DLPack arrays.
 ## Installation
 
 xTBloom is not yet published on PyPI. From a source checkout, sync the locked,
-non-editable CPU package into uv's project environment with:
+non-editable package into uv's project environment:
 
 ```console
-XTBLOOM_ENABLE_CUDA=OFF uv sync --locked --no-editable --no-default-groups \
-  --reinstall-package xtbloom
+uv sync --locked --no-editable --no-default-groups --reinstall-package xtbloom
 ```
 
-Install optional integrations from the checkout:
+CUDA build selection defaults to `AUTO`: an available `nvcc` enables CUDA;
+otherwise the package is CPU-only. Add `--extra cuda12` to the command when the
+supported CUDA 12 host libraries are not supplied by the system.
+
+Optional integrations can be combined with either backend. For example, add
+ASE and dpdata to the CUDA environment with:
 
 ```console
-XTBLOOM_ENABLE_CUDA=OFF uv sync --locked --no-editable --no-default-groups \
-  --extra ase --extra dpdata --reinstall-package xtbloom
-XTBLOOM_ENABLE_CUDA=ON uv sync --locked --no-editable --no-default-groups \
-  --extra cuda12 --reinstall-package xtbloom
+uv sync --locked --no-editable --no-default-groups \
+  --extra cuda12 --extra ase --extra dpdata --reinstall-package xtbloom
 ```
 
 Run commands with `uv run --no-sync` or activate `.venv` directly.
@@ -40,8 +42,16 @@ Ordinary source builds do not bundle OpenBLAS. They auto-discover a compatible
 system monolithic LP64 LAPACKE+CBLAS runtime; if none is discoverable, add
 `CMAKE_ARGS="-DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/provider.so"` to the
 sync command. Keep `--reinstall-package xtbloom` when changing this path or
-switching `XTBLOOM_ENABLE_CUDA`, because uv's local wheel cache does not key
-native builds by those environment variables.
+explicitly overriding the `XTBLOOM_ENABLE_CUDA=AUTO` default, because uv's local
+wheel cache does not key native builds by those environment variables.
+
+A normal branch checkout must include complete Git tag history; an exact-tag
+Python build is the documented shallow-checkout exception. Source builds need
+C/C++ compilers with C11/C++17 support, and repository test configurations
+require Python 3.11 or newer. CMake, GCC/Clang, NVCC/CUDA Toolkit, Ninja/uv,
+BLAS, platform, driver, and wheel/source-build boundaries are listed in the
+authoritative
+[prerequisites matrix](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/index.md#prerequisites).
 
 Source-build and package-boundary details are in the
 [developer guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/developer-guide/packaging.md).
@@ -65,7 +75,8 @@ positions = np.array(
     ]
 )
 
-with Calculator("GFN2-xTB", numbers, positions, backend="auto") as calc:
+backend = "cuda"  # Use "cpu" to require CPU execution instead.
+with Calculator("GFN2-xTB", numbers, positions, backend=backend) as calc:
     result = calc.singlepoint()
 
 print(result["energy"])
@@ -77,10 +88,11 @@ print(result["charges"])
 electronic temperature, the reported variational energy is the electronic
 Helmholtz free energy.
 
-Set `backend="cpu"` or `backend="cuda"` to require one backend. `"auto"`
-prefers an available CUDA backend and otherwise selects CPU. Compatible calls
-can opt into electronic warm starts; the default is an independent fresh SCC
-solve.
+Set `backend="cpu"` or `backend="cuda"` to require one backend. The CUDA
+quickstart above deliberately uses `"cuda"` so an unavailable GPU fails clearly
+instead of running on CPU. `"auto"` prefers CUDA but falls back to CPU.
+Compatible calls can opt into electronic warm starts; the default is an
+independent fresh SCC solve.
 
 ## Native ragged batches
 
@@ -106,7 +118,7 @@ structures = [
     ),
 ]
 
-with BatchCalculator(structures, backend="auto") as calc:
+with BatchCalculator(structures, backend="cuda") as calc:  # Use "cpu" for CPU-only builds.
     batch = calc.compute()
 
 print(batch.energies)
