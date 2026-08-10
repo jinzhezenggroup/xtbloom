@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# Rapid PR updates need only the newest full-file hook result. Main pushes use
+# their unique run ID and therefore remain independent release records.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   pre_commit:
     runs-on: ubuntu-24.04

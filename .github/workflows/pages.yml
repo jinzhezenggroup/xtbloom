@@ -4,7 +4,9 @@
 # optimization page: a single-threaded wasm32 module (so no COOP/COEP headers
 # are needed, which GitHub Pages cannot configure anyway) that dlopens a
 # preloaded minimal LAPACK side module. A separate wasm64 build is retained as
-# an ABI/scientific parity gate but is not deployed. Everything is produced by
+# an ABI/scientific parity gate but is not deployed. The widths build on
+# independent runners, then a read-only validation job compares their outputs
+# before the trusted main artifact can be published. Everything is produced by
 # the CMake web target (web/CMakeLists.txt, enabled here with
 # -DXTBLOOM_BUILD_WEB_DEMO=ON).
 #
@@ -29,11 +31,28 @@ concurrency:
 
 jobs:
   build:
+    name: build (${{ matrix.architecture }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: wasm32
+            pointer_width: '32'
+          - architecture: wasm64
+            pointer_width: '64'
     env:
+      ARCH_FLAG: -m${{ matrix.pointer_width }}
+      BUILD_DIR: build/${{ matrix.architecture }}-web
       CCACHE_MAXSIZE: 1G
+      # The SDK action installs the same pinned compiler under a runner-temp
+      # path on every job. Hash compiler content, rather than its fresh mtime,
+      # and normalize source paths so unchanged objects remain reusable.
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      SITE_ARTIFACT: xtbloom-web-${{ matrix.architecture }}
       # Emscripten invokes this wrapper around its internal Clang compilation,
       # including custom web-adapter and side-module commands.
       EM_COMPILER_WRAPPER: ccache
@@ -42,7 +61,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Node for npm and dual-width smoke tests
+      - name: Set up Node for npm and scientific smoke tests
         uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -51,6 +70,12 @@ jobs:
       - uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021
         with:
           version: '6.0.6'
+          # Cache the pinned SDK itself. The previous ccache covered compiled
+          # objects only, so every run still downloaded roughly 300 MiB first.
+          actions-cache-folder: emsdk-cache
+          # The matrix jobs save independently instead of racing to reserve one
+          # cache key on a cold run. The version pin keeps both byte-identical.
+          cache-key: emsdk-6.0.6-${{ runner.os }}-${{ runner.arch }}-${{ matrix.architecture }}
 
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
@@ -62,77 +87,99 @@ jobs:
           # ccache validates compiler identity and flags itself. The broad
           # restore prefix therefore safely reuses unchanged objects while a
           # source/configuration hash creates a fresh writable cache entry.
-          key: ccache-wasm-emscripten-6.0.6-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'data/parameters/**', 'web/CMakeLists.txt', 'web/*.c', 'web/wasm/**') }}
+          key: ccache-${{ matrix.architecture }}-emscripten-6.0.6-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'include/**', 'src/**', 'data/parameters/**', 'web/CMakeLists.txt', 'web/*.c', 'web/wasm/**') }}
           restore-keys: |
+            ccache-${{ matrix.architecture }}-emscripten-6.0.6-
             ccache-wasm-emscripten-6.0.6-
 
-      - name: Configure wasm32 deployment build
+      - name: Reset ccache statistics
+        # Report this job's reuse instead of lifetime counters restored with
+        # the cache directory.
+        run: ccache --zero-stats
+
+      - name: Install web build dependencies
+        run: npm ci --prefix web --ignore-scripts --no-audit --no-fund
+
+      - name: Configure ${{ matrix.architecture }} build
         run: |
-          emcmake cmake -S . -B build/wasm32-web -G Ninja \
+          emcmake cmake -S . -B "${BUILD_DIR}" -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
             -DXTBLOOM_BUILD_TESTS=OFF \
             -DXTBLOOM_BUILD_WEB_DEMO=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-m32 -fPIC" \
-            -DCMAKE_CXX_FLAGS="-m32 -fPIC"
+            -DCMAKE_C_FLAGS="${ARCH_FLAG} -fPIC" \
+            -DCMAKE_CXX_FLAGS="${ARCH_FLAG} -fPIC"
 
-      - name: Build wasm32 deployment site
-        run: cmake --build build/wasm32-web --parallel 2
-
-      - name: Configure wasm64 parity build
-        run: |
-          emcmake cmake -S . -B build/wasm64-web -G Ninja \
-            -DXTBLOOM_ENABLE_CUDA=OFF \
-            -DXTBLOOM_BUILD_TESTS=OFF \
-            -DXTBLOOM_BUILD_WEB_DEMO=ON \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-m64 -fPIC" \
-            -DCMAKE_CXX_FLAGS="-m64 -fPIC"
-
-      - name: Build wasm64 parity site
-        run: cmake --build build/wasm64-web --parallel 2
+      - name: Build ${{ matrix.architecture }} site
+        run: cmake --build "${BUILD_DIR}" --parallel 2
 
       - name: Show ccache statistics
         run: ccache -s
 
       - name: Test browser helpers
+        if: matrix.architecture == 'wasm32'
         run: npm test --prefix web
 
       - name: Verify pinned OpenChemLib CDN integration
+        if: matrix.architecture == 'wasm32'
         run: node web/tests/openchemlib_smoke.mjs
 
       - name: Run public C ABI layout and short-initializer checks
         run: |
-          emcc -m32 -std=c11 -Iinclude -c tests/c_api_test.c \
-            -o build/wasm32-c-api-test.o
-          EMCC_FORCE_STDLIBS=1 em++ -m32 build/wasm32-c-api-test.o \
-            build/wasm32-web/libxtbloom.a -o build/wasm32-c-api-test.js \
+          emcc "${ARCH_FLAG}" -std=c11 -Iinclude -c tests/c_api_test.c \
+            -o "build/${{ matrix.architecture }}-c-api-test.o"
+          EMCC_FORCE_STDLIBS=1 em++ "${ARCH_FLAG}" \
+            "build/${{ matrix.architecture }}-c-api-test.o" \
+            "${BUILD_DIR}/libxtbloom.a" \
+            -o "build/${{ matrix.architecture }}-c-api-test.js" \
             -sMAIN_MODULE=2 -sALLOW_MEMORY_GROWTH
-          node build/wasm32-c-api-test.js
-
-          emcc -m64 -std=c11 -Iinclude -c tests/c_api_test.c \
-            -o build/wasm64-c-api-test.o
-          EMCC_FORCE_STDLIBS=1 em++ -m64 build/wasm64-c-api-test.o \
-            build/wasm64-web/libxtbloom.a -o build/wasm64-c-api-test.js \
-            -sMAIN_MODULE=2 -sALLOW_MEMORY_GROWTH
-          node build/wasm64-c-api-test.js
+          node "build/${{ matrix.architecture }}-c-api-test.js"
 
       - name: Check deployed legal payload
-        run: |
-          python3 tools/licensing/check_licenses.py --source-root . \
-            --web-site build/wasm32-web/web/site
-          python3 tools/licensing/check_licenses.py --source-root . \
-            --web-site build/wasm64-web/web/site
+        run: >-
+          python3 tools/licensing/check_licenses.py --source-root .
+          --web-site "${BUILD_DIR}/web/site"
 
-      - name: Run wasm32 scientific smoke tests
-        run: node web/tests/wasm_smoke.mjs build/wasm32-web/web/site
-
-      - name: Run wasm64 scientific smoke tests
+      - name: Run ${{ matrix.architecture }} scientific smoke tests
         # memory64 first shipped in V8 13.3 (Chrome 133); Node 24 is the first
         # Node release line that enables it by default.
-        run: node web/tests/wasm_smoke.mjs build/wasm64-web/web/site
+        run: node web/tests/wasm_smoke.mjs "${BUILD_DIR}/web/site"
+
+      - name: Preserve ${{ matrix.architecture }} site for parity
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ env.SITE_ARTIFACT }}
+          path: ${{ env.BUILD_DIR }}/web/site
+          if-no-files-found: error
+          retention-days: 1
+
+  validate:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node for dual-width parity
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Restore wasm32 site
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: xtbloom-web-wasm32
+          path: build/wasm32-web/web/site
+
+      - name: Restore wasm64 site
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: xtbloom-web-wasm64
+          path: build/wasm64-web/web/site
 
       - name: Compare wasm32 and wasm64 scientific results
         run: >-
@@ -147,7 +194,7 @@ jobs:
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
+    needs: validate
     runs-on: ubuntu-latest
     permissions:
       contents: read
