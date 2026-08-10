@@ -1,6 +1,0 @@
-GPUXTB_0.1 {
-  global:
-    gpuxtb_*;
-  local:
-    *;
-};

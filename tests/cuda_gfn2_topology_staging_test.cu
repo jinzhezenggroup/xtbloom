@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "runtime/gfn2_cuda_topology_staging.hpp"
+#include "xtbloom/xtbloom.h"
 
 #define CHECK(condition)                                                                    \
   do {                                                                                      \
@@ -26,14 +26,14 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2CudaTopologyHostSnapshot;
-using gpuxtb::detail::Gfn2CudaTopologyStageDisposition;
-using gpuxtb::detail::Gfn2CudaTopologyStaging;
-using gpuxtb::detail::Gfn2CudaTopologyStagingField;
+using xtbloom::detail::Gfn2CudaTopologyHostSnapshot;
+using xtbloom::detail::Gfn2CudaTopologyStageDisposition;
+using xtbloom::detail::Gfn2CudaTopologyStaging;
+using xtbloom::detail::Gfn2CudaTopologyStagingField;
 
 template <typename T>
-gpuxtb_const_buffer_t host_buffer(const std::vector<T>& values) noexcept {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), GPUXTB_MEMORY_HOST,
+xtbloom_const_buffer_t host_buffer(const std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
           0u};
 }
 
@@ -65,8 +65,8 @@ class DeviceArray {
                                          cudaMemcpyHostToDevice, stream);
   }
 
-  gpuxtb_const_buffer_t view() const noexcept {
-    return {data_, size_ * sizeof(T), GPUXTB_MEMORY_CUDA_DEVICE, 0u};
+  xtbloom_const_buffer_t view() const noexcept {
+    return {data_, size_ * sizeof(T), XTBLOOM_MEMORY_CUDA_DEVICE, 0u};
   }
 
  private:
@@ -130,12 +130,12 @@ struct DeviceTopology {
 
 enum class SourceMode { kHost, kDevice, kMixed };
 
-gpuxtb_batch_t make_batch(const Topology& host, const DeviceTopology& device, SourceMode mode,
-                          bool include_points = true, bool include_response = true,
-                          bool include_spin = true) {
-  gpuxtb_batch_t batch{};
+xtbloom_batch_t make_batch(const Topology& host, const DeviceTopology& device, SourceMode mode,
+                           bool include_points = true, bool include_response = true,
+                           bool include_spin = true) {
+  xtbloom_batch_t batch{};
   batch.struct_size = sizeof(batch);
-  batch.api_version = GPUXTB_API_VERSION;
+  batch.api_version = XTBLOOM_API_VERSION;
   batch.batch_size = static_cast<std::int64_t>(host.molecular_charges.size());
   batch.total_atoms = static_cast<std::int64_t>(host.atomic_numbers.size());
   batch.total_point_charges = include_points ? host.point_offsets.back() : 0;
@@ -192,7 +192,7 @@ int exercise_sources_and_transactions(std::int64_t batch_size, int device_id, cu
   Gfn2CudaTopologyStaging staging(device_id, stream);
   CHECK(staging.valid());
   std::string error;
-  gpuxtb_batch_t host_batch = make_batch(topology, device, SourceMode::kHost);
+  xtbloom_batch_t host_batch = make_batch(topology, device, SourceMode::kHost);
   auto result = staging.stage_and_validate(host_batch, error);
   CHECK(result.success());
   CHECK(result.disposition == Gfn2CudaTopologyStageDisposition::kCandidate);
@@ -211,7 +211,7 @@ int exercise_sources_and_transactions(std::int64_t batch_size, int device_id, cu
   CHECK(fixed_identity.staging.packed_base != fixed_identity.committed.packed_base);
 
   for (SourceMode mode : {SourceMode::kHost, SourceMode::kDevice, SourceMode::kMixed}) {
-    gpuxtb_batch_t batch = make_batch(topology, device, mode);
+    xtbloom_batch_t batch = make_batch(topology, device, mode);
     result = staging.stage_and_validate(batch, error);
     CHECK(result.success());
     CHECK(result.disposition == Gfn2CudaTopologyStageDisposition::kMatchesCommitted);
@@ -227,7 +227,7 @@ int exercise_sources_and_transactions(std::int64_t batch_size, int device_id, cu
   changed.molecular_charges[static_cast<std::size_t>(batch_size / 2)] += 0.125;
   DeviceTopology changed_device;
   CHECK(changed_device.upload(changed, stream) == 0);
-  gpuxtb_batch_t changed_batch = make_batch(changed, changed_device, SourceMode::kMixed);
+  xtbloom_batch_t changed_batch = make_batch(changed, changed_device, SourceMode::kMixed);
   result = staging.stage_and_validate(changed_batch, error);
   CHECK(result.success());
   CHECK(result.disposition == Gfn2CudaTopologyStageDisposition::kCandidate);
@@ -263,7 +263,7 @@ int exercise_absent_normalization(int device_id, cudaStream_t stream) {
   topology.point_offsets.assign(9u, 0);
   DeviceTopology device;
   CHECK(device.upload(topology, stream) == 0);
-  gpuxtb_batch_t batch = make_batch(topology, device, SourceMode::kMixed, false, false);
+  xtbloom_batch_t batch = make_batch(topology, device, SourceMode::kMixed, false, false);
   Gfn2CudaTopologyStaging staging(device_id, stream);
   CHECK(staging.valid());
   std::string error;
@@ -289,8 +289,8 @@ int exercise_abi_v1_spin_default(int device_id, cudaStream_t stream) {
   Topology topology = Topology::make(8);
   DeviceTopology device;
   CHECK(device.upload(topology, stream) == 0);
-  gpuxtb_batch_t batch = make_batch(topology, device, SourceMode::kMixed, true, true, false);
-  batch.struct_size = GPUXTB_BATCH_V1_SIZE;
+  xtbloom_batch_t batch = make_batch(topology, device, SourceMode::kMixed, true, true, false);
+  batch.struct_size = XTBLOOM_BATCH_V1_SIZE;
 
   Gfn2CudaTopologyStaging staging(device_id, stream);
   CHECK(staging.valid());
@@ -361,7 +361,7 @@ int exercise_layout_replacement(int device_id, cudaStream_t stream) {
   Topology resized = Topology::make(9);
   DeviceTopology resized_device;
   CHECK(resized_device.upload(resized, stream) == 0);
-  gpuxtb_batch_t resized_batch = make_batch(resized, resized_device, SourceMode::kMixed);
+  xtbloom_batch_t resized_batch = make_batch(resized, resized_device, SourceMode::kMixed);
   result = staging.stage_and_validate(resized_batch, error);
   CHECK(result.success());
   CHECK(result.disposition == Gfn2CudaTopologyStageDisposition::kCandidate);
@@ -481,7 +481,7 @@ int exercise_invalid_matrix(int device_id, cudaStream_t stream) {
       mutate_invalid(topology, invalid);
       DeviceTopology device;
       CHECK(device.upload(topology, stream) == 0);
-      gpuxtb_batch_t batch = make_batch(topology, device, mode);
+      xtbloom_batch_t batch = make_batch(topology, device, mode);
       /* Declared totals are ABI inline facts and remain unmodified by bad offset bytes. */
       const Topology canonical = Topology::make(8);
       batch.total_point_charges = canonical.point_offsets.back();
@@ -500,7 +500,7 @@ int exercise_invalid_matrix(int device_id, cudaStream_t stream) {
       CHECK(staging.committed_snapshot() == nullptr);
       CHECK(staging.candidate_snapshot() == nullptr);
       CHECK(staging.identity().full_metadata_downloads == 0u);
-      CHECK(result.status == GPUXTB_STATUS_INVALID_ARGUMENT);
+      CHECK(result.status == XTBLOOM_STATUS_INVALID_ARGUMENT);
     }
   }
   return 0;

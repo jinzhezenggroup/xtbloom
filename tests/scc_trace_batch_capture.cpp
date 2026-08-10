@@ -1,4 +1,4 @@
-// gpuxtb ragged-batch SCC trace capture executable (issue #50).
+// xtbloom ragged-batch SCC trace capture executable (issue #50).
 //
 // Loads several corpus case.spec files and runs them as ONE heterogeneous
 // ragged GFN2 SCC driver batch.  The healthy lanes must follow their pinned
@@ -7,11 +7,11 @@
 // per-system failure lane must not corrupt or suppress successful members.
 //
 // Output: for every lane, a "batch_system <index>" marker followed by the
-// complete recorder-raw stream for that lane, so gpuxtb_scc_cpu_trace.py can
+// complete recorder-raw stream for that lane, so xtbloom_scc_cpu_trace.py can
 // canonicalize and compare each lane independently against its golden.
 //
 // Usage:
-//   gpuxtb_scc_trace_batch_capture <spec1> [<spec2> ...] [--poison <index>]
+//   xtbloom_scc_trace_batch_capture <spec1> [<spec2> ...] [--poison <index>]
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,9 +21,9 @@
 #include "support/scc_trace_harness.hpp"
 
 int main(int argc, char** argv) {
-  using namespace gpuxtb_trace_harness;
+  using namespace xtbloom_trace_harness;
   if (argc < 2) {
-    std::cerr << "usage: gpuxtb_scc_trace_batch_capture <spec1> [<spec2> ...] "
+    std::cerr << "usage: xtbloom_scc_trace_batch_capture <spec1> [<spec2> ...] "
                  "[--poison <index>]\n";
     return 64;
   }
@@ -47,14 +47,14 @@ int main(int argc, char** argv) {
     }
     batch.add_case(spec);
   }
-  if (gpuxtb_status_t s = batch.build(err); s != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom_status_t s = batch.build(err); s != XTBLOOM_STATUS_SUCCESS) {
     std::cerr << "geometry build failed: " << err << "\n";
     return static_cast<int>(s);
   }
   if (poison_index >= 0 && poison_index < batch.system_count()) {
     batch.poison_h0(poison_index);
   }
-  if (gpuxtb_status_t s = batch.run(err); s != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom_status_t s = batch.run(err); s != XTBLOOM_STATUS_SUCCESS) {
     std::cerr << "SCC run failed: " << err << "\n";
     return static_cast<int>(s);
   }

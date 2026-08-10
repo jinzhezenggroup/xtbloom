@@ -2,7 +2,7 @@
 
 Measured on one AMD EPYC 7K62 node (48 logical CPUs, shared cluster node),
 Ubuntu 22.04.5, `g++ 11.4.0`, `cmake 4.2.1`, CMake `Unix Makefiles` Release
-configuration with `GPUXTB_ENABLE_CUDA=OFF` and no BLAS/LAPACK runtime (the
+configuration with `XTBLOOM_ENABLE_CUDA=OFF` and no BLAS/LAPACK runtime (the
 mixer layer is pure C++ and never calls the eigensolver provider). The rerun
 was pinned to CPU 0 with one-thread BLAS environment variables.
 
@@ -16,14 +16,14 @@ history**, not **total batch history**.
 
 ## Artifacts
 
-- `gpuxtb-mixer-transaction.json` — authoritative raw per-row samples (200
+- `xtbloom-mixer-transaction.json` — authoritative raw per-row samples (200
   samples per row) and exact byte accounting for the default rows
   (active = 8/16/32/64 of a fixed batch of 64).
-- `gpuxtb-mixer-transaction-full-range.json` — same protocol with explicit
+- `xtbloom-mixer-transaction-full-range.json` — same protocol with explicit
   active counts 1/2/4/8/16/32/64.
-- `gpuxtb-mixer-transaction.csv` — compact table view of the default row
+- `xtbloom-mixer-transaction.csv` — compact table view of the default row
   medians.
-- `gpuxtb-mixer-transaction.txt` — full stdout transcript of the default run
+- `xtbloom-mixer-transaction.txt` — full stdout transcript of the default run
   including the configuration line.
 
 ## Command
@@ -39,14 +39,14 @@ Build and run commands:
 
 ```bash
 cmake -S . -B build/issue41-final -G 'Unix Makefiles' \
-  -DGPUXTB_ENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
-cmake --build build/issue41-final --target gpuxtb_scc_mixer_transaction_benchmark --parallel
+  -DXTBLOOM_ENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build/issue41-final --target xtbloom_scc_mixer_transaction_benchmark --parallel
 env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 taskset -c 0 \
-  ./build/issue41-final/gpuxtb_scc_mixer_transaction_benchmark 64 6 64 200 \
-  benchmarks/evidence/issue-41/2026-08-06-epyc7k62/gpuxtb-mixer-transaction.json
+  ./build/issue41-final/xtbloom_scc_mixer_transaction_benchmark 64 6 64 200 \
+  benchmarks/evidence/issue-41/2026-08-06-epyc7k62/xtbloom-mixer-transaction.json
 env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 taskset -c 0 \
-  ./build/issue41-final/gpuxtb_scc_mixer_transaction_benchmark 64 6 64 200 \
-  benchmarks/evidence/issue-41/2026-08-06-epyc7k62/gpuxtb-mixer-transaction-full-range.json \
+  ./build/issue41-final/xtbloom_scc_mixer_transaction_benchmark 64 6 64 200 \
+  benchmarks/evidence/issue-41/2026-08-06-epyc7k62/xtbloom-mixer-transaction-full-range.json \
   "1,2,4,8,16,32,64"
 ```
 

@@ -9,7 +9,7 @@ const stretchedWater = "O 0 0 0\nH 0 0 1.15\nH 0 0.9 -0.7";
 
 export async function runWebCases(sitePath) {
   const site = path.resolve(sitePath);
-  const moduleUrl = pathToFileURL(path.join(site, "gpuxtb_web.js")).href;
+  const moduleUrl = pathToFileURL(path.join(site, "xtbloom_web.js")).href;
   const createModule = (await import(moduleUrl)).default;
   const Module = await createModule({
     // Use absolute paths so two pointer-width modules can be instantiated and
@@ -19,7 +19,7 @@ export async function runWebCases(sitePath) {
 
   function compute(maxIterations, forces) {
     const raw = Module.ccall(
-      "gpuxtb_web_compute", "string",
+      "xtbloom_web_compute", "string",
       ["string", "number", "number", "number", "number", "number", "number", "number"],
       [water, 0, 0, 0, 1e-8, 1e-5, maxIterations, forces ? 1 : 0],
     );
@@ -27,7 +27,7 @@ export async function runWebCases(sitePath) {
   }
 
   const failedOptimize = JSON.parse(Module.ccall(
-    "gpuxtb_web_optimize", "string",
+    "xtbloom_web_optimize", "string",
     ["string", "number", "number", "number", "number", "number", "number", "number", "number", "number"],
     [water, 0, 0, 0, 1e-8, 1e-5, 1, 2, 4.5e-4, 0.4],
   ));
@@ -41,20 +41,20 @@ export async function runWebCases(sitePath) {
       fmax,
     });
   }, "viipdd");
-  Module.ccall("gpuxtb_web_set_optimize_step_cb", "void", ["pointer"], [stepFn]);
+  Module.ccall("xtbloom_web_set_optimize_step_cb", "void", ["pointer"], [stepFn]);
   let optimized;
   try {
     optimized = JSON.parse(Module.ccall(
-      "gpuxtb_web_optimize", "string",
+      "xtbloom_web_optimize", "string",
       ["string", "number", "number", "number", "number", "number", "number", "number", "number", "number"],
       [stretchedWater, 0, 0, 0, 1e-8, 1e-5, 250, 2, 1e-12, 0.4],
     ));
   } finally {
-    Module.ccall("gpuxtb_web_set_optimize_step_cb", "void", ["pointer"], [0]);
+    Module.ccall("xtbloom_web_set_optimize_step_cb", "void", ["pointer"], [0]);
   }
 
   return {
-    version: Module.ccall("gpuxtb_web_version", "string", [], []),
+    version: Module.ccall("xtbloom_web_version", "string", [], []),
     withForces: compute(250, true),
     withoutForces: compute(250, false),
     failedCompute: compute(1, true),

@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_EXTERNAL_POINT_CHARGES_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_EXTERNAL_POINT_CHARGES_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_EXTERNAL_POINT_CHARGES_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_EXTERNAL_POINT_CHARGES_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -10,7 +10,7 @@
 #include "backends/cuda/gfn2_force_common.cuh"
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* Semantic input errors detected asynchronously by external point-charge kernels. */
 enum class Gfn2ExternalPointChargeDeviceError : std::uint32_t {
@@ -194,6 +194,6 @@ cudaError_t evaluate_gfn2_external_point_charge_scc_energy_cuda(
  * other valid systems in the failing stage may already have completed.
  */
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_EXTERNAL_POINT_CHARGES_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_EXTERNAL_POINT_CHARGES_CUH

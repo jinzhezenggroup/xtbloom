@@ -24,7 +24,7 @@ occupations change is the only source difference relevant to this comparison.
 - Nsight Systems 2025.1.3:
   `/group/software/cuda-12.9.1/nsight-systems-2025.1.3/target-linux-x64/nsys`.
 - Build: Release, shared library, strict `sm_120`, CUDA 12.9.86 nvcc; both
-  builds produced `libgpuxtb.so.0.1.0`.
+  builds produced `libxtbloom.so.0.1.0`.
 - Measured env: `LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib:/group/software/deepmd-kit-3.1.1/lib`,
   `CUDA_VISIBLE_DEVICES=0`, `MKL_INTERFACE_LAYER=LP64`,
   `MKL_THREADING_LAYER=SEQUENTIAL`.
@@ -50,7 +50,7 @@ benchmark CLI.
 ## Protocol
 
 All rows run GFN2-xTB analytic forces for a batch of one neutral closed-shell
-C40H82 (122 atoms) alkane through gpuxtb's public C ABI with host-pointed CUDA
+C40H82 (122 atoms) alkane through xTBloom's public C ABI with host-pointed CUDA
 descriptors and fresh SCC execution. The matrix uses one warmup and three
 recorded samples per row; every row reports 13 SCC attempts. Setup, result
 inspection, and serialization are outside the timing interval.
@@ -93,9 +93,9 @@ latency reduction. The full derived tables are the
 
 ## Files
 
-- `gpuxtb-baseline.json` / `gpuxtb-repaired.json`: benchmark matrices with raw
+- `xtbloom-baseline.json` / `xtbloom-repaired.json`: benchmark matrices with raw
   samples, SCC iterations, energy values, and status failures (B1/8/32/128).
-- `gpuxtb-baseline.csv` / `gpuxtb-repaired.csv`: same data as CSV.
+- `xtbloom-baseline.csv` / `xtbloom-repaired.csv`: same data as CSV.
 - `natoms_scaling_pr172.py.txt`: the historical runner snapshot used for the
   matrix and profile JSON rows; it is stored as text so repository Python hooks
   do not rewrite its canonical bytes.
@@ -120,10 +120,10 @@ before running the matrix:
 
 ```bash
 cmake -S . -B <build> -G 'Unix Makefiles' \
-  -DGPUXTB_ENABLE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 \
+  -DXTBLOOM_ENABLE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 \
   -DCMAKE_CUDA_COMPILER=/group/software/cuda-12.9.1/bin/nvcc \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
-  -DGPUXTB_MKL_RT_LIBRARY=/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so.2
+  -DXTBLOOM_MKL_RT_LIBRARY=/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so.2
 cmake --build <build> --parallel
 ```
 
@@ -137,9 +137,9 @@ srun --gres=gpu:1 env \
   LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib:/group/software/deepmd-kit-3.1.1/lib \
   MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL \
 python3 benchmarks/natoms_scaling.py \
-  --library <build>/libgpuxtb.so.0.1.0 \
+  --library <build>/libxtbloom.so.0.1.0 \
   --molecules 122 --batch-sizes 1,8,32,128 \
-  --engines gpuxtb --backends cuda --properties force \
+  --engines xtbloom --backends cuda --properties force \
   --cuda-root /group/software/cuda-12.9.1 \
   --warmups 1 --repetitions 3 \
   --output-json <out>.json --output-csv <out>.csv
@@ -156,8 +156,8 @@ srun --gres=gpu:1 env -i \
 /group/software/cuda-12.9.1/nsight-systems-2025.1.3/target-linux-x64/nsys profile \
   --force-overwrite true -o <report-prefix> -t cuda \
   python3 benchmarks/natoms_scaling.py \
-    --library <build>/libgpuxtb.so.0.1.0 \
-    --molecules 122 --batch-sizes <B> --engines gpuxtb --backends cuda \
+    --library <build>/libxtbloom.so.0.1.0 \
+    --molecules 122 --batch-sizes <B> --engines xtbloom --backends cuda \
     --properties force --warmups <1 for B1, 0 for B128> \
     --repetitions 1 \
     --output-json <out>.json --output-csv <out>.csv
@@ -183,7 +183,7 @@ order; the public binary64 occupation policy, deterministic serial orbital-order
 validation, and transactional per-system failure publication are unchanged and
 were re-validated in PR #172:
 
-- focused `^gpuxtb\.cuda\.occupations$`: 1/1 PASS;
+- focused `^xtbloom\.cuda\.occupations$`: 1/1 PASS;
 - full RTX 5090 CUDA CTest: 101/101 PASS, including public CUDA host/device/
   mixed conformance and the 63/64/65/129-orbital threshold matrix;
 - restricted and mixed-spin B=1/8/32/128, finite-T/T=0/zero/full/near-capacity/

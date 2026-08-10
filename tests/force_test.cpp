@@ -23,7 +23,7 @@
 
 namespace {
 
-using namespace gpuxtb::detail::gfn2;
+using namespace xtbloom::detail::gfn2;
 
 constexpr std::uint64_t kGeneration = 7007u;
 
@@ -195,26 +195,26 @@ struct Fixture {
       return false;
     }
     if (make_basis_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), basis, error) !=
-            GPUXTB_STATUS_SUCCESS ||
-        make_integral_plan(basis, integrals, error) != GPUXTB_STATUS_SUCCESS ||
+            XTBLOOM_STATUS_SUCCESS ||
+        make_integral_plan(basis, integrals, error) != XTBLOOM_STATUS_SUCCESS ||
         make_coordination_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(),
-                               coordination_plan, error) != GPUXTB_STATUS_SUCCESS ||
+                               coordination_plan, error) != XTBLOOM_STATUS_SUCCESS ||
         make_repulsion_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), repulsion,
-                            error) != GPUXTB_STATUS_SUCCESS ||
+                            error) != XTBLOOM_STATUS_SUCCESS ||
         make_h0_plan(basis, integrals, atomic_numbers.data(), h0_plan, error) !=
-            GPUXTB_STATUS_SUCCESS ||
+            XTBLOOM_STATUS_SUCCESS ||
         make_wavefunction_layout(basis, atomic_numbers.data(), molecular_charges.data(),
                                  unpaired.data(), spins.data(), wavefunction_layout,
-                                 error) != GPUXTB_STATUS_SUCCESS ||
+                                 error) != XTBLOOM_STATUS_SUCCESS ||
         make_mulliken_plan(basis, integrals, wavefunction_layout, mulliken, error) !=
-            GPUXTB_STATUS_SUCCESS ||
-        make_es2_plan(basis, atomic_numbers.data(), es2, error) != GPUXTB_STATUS_SUCCESS ||
-        make_es3_plan(basis, atomic_numbers.data(), es3, error) != GPUXTB_STATUS_SUCCESS ||
-        make_aes2_plan(basis, atomic_numbers.data(), aes2, error) != GPUXTB_STATUS_SUCCESS ||
+            XTBLOOM_STATUS_SUCCESS ||
+        make_es2_plan(basis, atomic_numbers.data(), es2, error) != XTBLOOM_STATUS_SUCCESS ||
+        make_es3_plan(basis, atomic_numbers.data(), es3, error) != XTBLOOM_STATUS_SUCCESS ||
+        make_aes2_plan(basis, atomic_numbers.data(), aes2, error) != XTBLOOM_STATUS_SUCCESS ||
         make_d4_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), d4, error) !=
-            GPUXTB_STATUS_SUCCESS ||
+            XTBLOOM_STATUS_SUCCESS ||
         make_external_point_charge_plan(basis, atomic_numbers.data(), batch, point_offsets.data(),
-                                        external, error) != GPUXTB_STATUS_SUCCESS) {
+                                        external, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
 
@@ -354,7 +354,7 @@ struct Fixture {
     d4_storage = new AlignedBuffer(d4.workspace_size_bytes());
     if (d4_storage->data == nullptr ||
         bind_d4_workspace(d4, d4_storage->data, d4.workspace_size_bytes(), d4_workspace, error) !=
-            GPUXTB_STATUS_SUCCESS) {
+            XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     d4_pairs.resize(static_cast<std::size_t>(d4.total_pairs()) * kD4PairDataElements);
@@ -420,25 +420,25 @@ struct Fixture {
     state.total_energies.assign(kinds.size(), 0.0);
     state.stationary_lagrangian.assign(kinds.size(), 0.0);
     if (evaluate_coordination_cpu(coordination_plan, positions.data(), state.coordination.data(),
-                                  error) != GPUXTB_STATUS_SUCCESS ||
+                                  error) != XTBLOOM_STATUS_SUCCESS ||
         evaluate_overlap_cpu(basis, integrals, positions.data(), state.overlap.data(),
                              integral_workspace.data(), integral_workspace.size(),
-                             error) != GPUXTB_STATUS_SUCCESS ||
+                             error) != XTBLOOM_STATUS_SUCCESS ||
         evaluate_multipole_cpu(basis, integrals, positions.data(), state.dipole_integrals.data(),
                                state.quadrupole_integrals.data(), integral_workspace.data(),
-                               integral_workspace.size(), error) != GPUXTB_STATUS_SUCCESS ||
+                               integral_workspace.size(), error) != XTBLOOM_STATUS_SUCCESS ||
         evaluate_h0_cpu(basis, integrals, h0_plan, positions.data(), state.coordination.data(),
-                        state.overlap.data(), state.h0.data(), error) != GPUXTB_STATUS_SUCCESS ||
+                        state.overlap.data(), state.h0.data(), error) != XTBLOOM_STATUS_SUCCESS ||
         update_es2_geometry_cache_cpu(es2, positions.data(), kGeneration, es2_matrix.data(),
                                       es2_matrix.size(), es2_workspace, es2_cache,
-                                      error) != GPUXTB_STATUS_SUCCESS ||
+                                      error) != XTBLOOM_STATUS_SUCCESS ||
         update_aes2_geometry_cache_cpu(
             aes2, positions.data(), state.coordination.data(), kGeneration, aes2_pairs.data(),
-            aes2_pairs.size(), aes2_workspace, aes2_cache, error) != GPUXTB_STATUS_SUCCESS ||
+            aes2_pairs.size(), aes2_workspace, aes2_cache, error) != XTBLOOM_STATUS_SUCCESS ||
         update_d4_geometry_cache_cpu(d4, positions.data(), kGeneration, d4_pairs.data(),
                                      d4_pairs.size(), d4_coordination.data(),
                                      d4_coordination.size(), d4_workspace, d4_cache,
-                                     error) != GPUXTB_STATUS_SUCCESS) {
+                                     error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
 
@@ -469,7 +469,7 @@ struct Fixture {
     const MullikenWorkspace mulliken_workspace{mulliken_scratch.data(),
                                                static_cast<std::int64_t>(mulliken_scratch.size())};
     if (evaluate_mulliken_population_cpu(mulliken, integral_view, density_view, population_view,
-                                         mulliken_workspace, error) != GPUXTB_STATUS_SUCCESS) {
+                                         mulliken_workspace, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     std::size_t shell_cursor = 0u;
@@ -504,12 +504,12 @@ struct Fixture {
     std::vector<double> d4_energies(kinds.size());
     if (evaluate_es2_potential_cpu(es2, es2_cache, state.shell_charges.data(),
                                    shell_component.data(), es2_workspace,
-                                   error) != GPUXTB_STATUS_SUCCESS) {
+                                   error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     state.scalar_shell_potentials = shell_component;
     if (evaluate_es3_potential_cpu(make_es3_view(es3), state.shell_charges.data(),
-                                   shell_component.data(), error) != GPUXTB_STATUS_SUCCESS) {
+                                   shell_component.data(), error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     for (std::size_t shell = 0; shell < shells; ++shell) {
@@ -519,13 +519,13 @@ struct Fixture {
                                     state.atomic_dipoles.data(), state.atomic_quadrupoles.data(),
                                     atomic_potential.data(), state.dipole_potentials.data(),
                                     state.quadrupole_potentials.data(), aes2_workspace,
-                                    error) != GPUXTB_STATUS_SUCCESS ||
+                                    error) != XTBLOOM_STATUS_SUCCESS ||
         evaluate_d4_two_body_cpu(d4, d4_cache, state.atomic_charges.data(), d4_energies.data(),
                                  d4_potential.data(), d4_workspace,
-                                 error) != GPUXTB_STATUS_SUCCESS ||
+                                 error) != XTBLOOM_STATUS_SUCCESS ||
         evaluate_external_point_charge_potential_cpu(
             external, positions.data(), point_positions.data(), point_charges.data(),
-            point_hardnesses.data(), shell_component.data(), error) != GPUXTB_STATUS_SUCCESS) {
+            point_hardnesses.data(), shell_component.data(), error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     for (std::size_t shell = 0; shell < shells; ++shell) {
@@ -550,24 +550,24 @@ struct Fixture {
       state.stationary_lagrangian[system] = -pulay_constraint;
     }
     if (add_es2_energy_cpu(es2, es2_cache, state.shell_charges.data(), state.scc_energies.data(),
-                           es2_workspace, error) != GPUXTB_STATUS_SUCCESS ||
+                           es2_workspace, error) != XTBLOOM_STATUS_SUCCESS ||
         add_es3_energy_cpu(make_es3_view(es3), state.shell_charges.data(),
-                           state.scc_energies.data(), error) != GPUXTB_STATUS_SUCCESS ||
+                           state.scc_energies.data(), error) != XTBLOOM_STATUS_SUCCESS ||
         add_aes2_energy_cpu(aes2, aes2_cache, state.atomic_charges.data(),
                             state.atomic_dipoles.data(), state.atomic_quadrupoles.data(),
                             state.scc_energies.data(), aes2_workspace,
-                            error) != GPUXTB_STATUS_SUCCESS ||
+                            error) != XTBLOOM_STATUS_SUCCESS ||
         add_external_point_charge_energy_cpu(external, state.shell_charges.data(),
                                              shell_component.data(), state.scc_energies.data(),
-                                             error) != GPUXTB_STATUS_SUCCESS) {
+                                             error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     state.total_energies = state.scc_energies;
     std::vector<double> atm(kinds.size());
     if (add_repulsion_cpu(repulsion, positions.data(), state.total_energies.data(), nullptr,
-                          error) != GPUXTB_STATUS_SUCCESS ||
+                          error) != XTBLOOM_STATUS_SUCCESS ||
         evaluate_d4_atm_cpu(d4, d4_cache, atm.data(), d4_workspace, error) !=
-            GPUXTB_STATUS_SUCCESS) {
+            XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     for (std::size_t system = 0; system < kinds.size(); ++system) {
@@ -612,7 +612,7 @@ struct Fixture {
                basis, integrals, coordination_plan, repulsion, h0_plan, mulliken, es2, es2_cache,
                aes2, aes2_cache, &d4, &d4_cache, &external, input, energies.data(),
                qm_forces.data(), point_forces.data(), components, force_workspace,
-               error) == GPUXTB_STATUS_SUCCESS;
+               error) == XTBLOOM_STATUS_SUCCESS;
   }
 };
 
@@ -896,7 +896,8 @@ int test_energy_only_ignores_force_intermediates() {
             fixture.basis, fixture.integrals, fixture.coordination_plan, fixture.repulsion,
             fixture.h0_plan, fixture.mulliken, fixture.es2, fixture.es2_cache, fixture.aes2,
             fixture.aes2_cache, &fixture.d4, &fixture.d4_cache, &fixture.external, input,
-            energy.data(), nullptr, nullptr, {}, energy_workspace, error) == GPUXTB_STATUS_SUCCESS);
+            energy.data(), nullptr, nullptr, {}, energy_workspace,
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(energy[0], state.total_energies[0], 2.0e-13));
   return 0;
 }
@@ -954,7 +955,7 @@ int test_unrestricted_spin_response_and_alias_atomicity() {
             fixture.h0_plan, fixture.mulliken, fixture.es2, fixture.es2_cache, fixture.aes2,
             fixture.aes2_cache, &fixture.d4, &fixture.d4_cache, &fixture.external, input,
             energies.data(), forces.data(), points.data(), {}, fixture.force_workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energies == std::vector<double>(fixture.kinds.size(), 91.0));
   CHECK(forces == std::vector<double>(state.positions.size(), 92.0));
   CHECK(points == std::vector<double>(state.point_positions.size(), 93.0));
@@ -971,7 +972,7 @@ int test_unrestricted_spin_response_and_alias_atomicity() {
             fixture.h0_plan, fixture.mulliken, fixture.es2, fixture.es2_cache, fixture.aes2,
             fixture.aes2_cache, &fixture.d4, &fixture.d4_cache, &fixture.external, input,
             energies.data(), aliased_spin_and_force.data(), points.data(), {},
-            fixture.force_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            fixture.force_workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energies == std::vector<double>(fixture.kinds.size(), 95.0));
   CHECK(aliased_spin_and_force == std::vector<double>(alias_elements, 94.0));
   CHECK(points == std::vector<double>(state.point_positions.size(), 96.0));
@@ -1011,7 +1012,7 @@ int test_validation_and_progressive_diagnostics() {
             fixture.h0_plan, fixture.mulliken, fixture.es2, fixture.es2_cache, fixture.aes2,
             fixture.aes2_cache, &fixture.d4, &fixture.d4_cache, &fixture.external, input,
             energies.data(), fixture.total_gradient.data(), points.data(), {},
-            fixture.force_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            fixture.force_workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energies[0] == 91.0);
   CHECK(points == std::vector<double>(3u, 92.0));
 
@@ -1021,7 +1022,7 @@ int test_validation_and_progressive_diagnostics() {
             fixture.h0_plan, fixture.mulliken, fixture.es2, fixture.es2_cache, fixture.aes2,
             fixture.aes2_cache, &fixture.d4, &fixture.d4_cache, &fixture.external, input,
             state.scc_energies.data(), fixture.force_scratch.data(), points.data(), {},
-            fixture.force_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            fixture.force_workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(state.scc_energies == unchanged_scc);
 
   RestrictedGfn2ComponentGradients alias_component{};
@@ -1033,7 +1034,7 @@ int test_validation_and_progressive_diagnostics() {
             fixture.h0_plan, fixture.mulliken, fixture.es2, fixture.es2_cache, fixture.aes2,
             fixture.aes2_cache, &fixture.d4, &fixture.d4_cache, &fixture.external, input,
             energies.data(), forces.data(), points.data(), alias_component, fixture.force_workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energies[0] == 93.0);
 
   std::vector<double> electronic(state.positions.size(), -73.0);
@@ -1048,7 +1049,7 @@ int test_validation_and_progressive_diagnostics() {
             fixture.h0_plan, fixture.mulliken, fixture.es2, fixture.es2_cache, fixture.aes2,
             fixture.aes2_cache, &fixture.d4, &fixture.d4_cache, &fixture.external, stale,
             energies.data(), forces.data(), points.data(), components, fixture.force_workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energies[0] == 43.0);
   CHECK(forces == std::vector<double>(state.positions.size(), 41.0));
   CHECK(points == std::vector<double>(3u, 42.0));

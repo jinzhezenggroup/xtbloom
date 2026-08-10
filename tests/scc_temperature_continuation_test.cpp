@@ -49,7 +49,6 @@
 #include <utility>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/coordination.hpp"
@@ -63,9 +62,10 @@
 #include "model/gfn2/scc_driver.hpp"
 #include "model/gfn2/scc_mixer.hpp"
 #include "model/gfn2/wavefunction.hpp"
+#include "xtbloom/xtbloom.h"
 
-#ifndef GPUXTB_TMACL_FIXTURE_PATH
-#error "GPUXTB_TMACL_FIXTURE_PATH must name the committed tmacl.xyz fixture"
+#ifndef XTBLOOM_TMACL_FIXTURE_PATH
+#error "XTBLOOM_TMACL_FIXTURE_PATH must name the committed tmacl.xyz fixture"
 #endif
 
 #define CHECK(condition)                                                              \
@@ -78,7 +78,7 @@
 
 namespace {
 
-using namespace gpuxtb::detail::gfn2;
+using namespace xtbloom::detail::gfn2;
 
 constexpr double kAngPerBohr = 0.529177210903;
 constexpr double kKelvinToHartree = 3.166808578545117e-6;
@@ -145,7 +145,7 @@ struct Geometry {
 
   SccDriverGeometryView geom;
 
-  gpuxtb_status_t build(std::string& err);
+  xtbloom_status_t build(std::string& err);
 };
 
 struct Stage {
@@ -158,8 +158,8 @@ struct Stage {
   AlignedBuffer drvws_s{1u << 20};
   SccDriverWorkspace drv_ws;
 
-  gpuxtb_status_t build(Geometry& g, std::int64_t history, double damping, double rms_tol,
-                        double e_tol, std::uint64_t max_iter, double etemp, std::string& err);
+  xtbloom_status_t build(Geometry& g, std::int64_t history, double damping, double rms_tol,
+                         double e_tol, std::uint64_t max_iter, double etemp, std::string& err);
 };
 
 struct TraceRow {
@@ -192,10 +192,10 @@ struct PolicyRow {
   ElectronicState state;
 };
 
-gpuxtb_status_t Geometry::build(std::string& err) {
+xtbloom_status_t Geometry::build(std::string& err) {
   err.clear();
   const std::int64_t natoms = static_cast<std::int64_t>(atomic_numbers.size());
-  gpuxtb_status_t s =
+  xtbloom_status_t s =
       make_basis_plan(batch_size, natoms, atom_offsets.data(), atomic_numbers.data(), basis, err);
   if (s) return s;
   s = make_integral_plan(basis, integrals, err);
@@ -227,7 +227,7 @@ gpuxtb_status_t Geometry::build(std::string& err) {
   qint.assign(6 * matrix, 0.0);
   h0.assign(matrix, 0.0);
   cn.assign(static_cast<std::size_t>(natoms), 0.0);
-  if (iscratch.size < integrals.workspace_size_bytes) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (iscratch.size < integrals.workspace_size_bytes) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = evaluate_coordination_cpu(coordination_plan, positions.data(), cn.data(), err);
   if (s) return s;
   s = evaluate_overlap_cpu(basis, integrals, positions.data(), overlap.data(), iscratch.data,
@@ -241,7 +241,7 @@ gpuxtb_status_t Geometry::build(std::string& err) {
   if (s) return s;
 
   const std::size_t e2n = static_cast<std::size_t>(es2_plan.total_matrix_elements());
-  if (e2s.size < e2n * sizeof(double)) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (e2s.size < e2n * sizeof(double)) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   es2_ws.matrix_scratch = static_cast<double*>(e2scratch.data);
   es2_ws.matrix_elements = es2_plan.total_matrix_elements();
   s = update_es2_geometry_cache_cpu(es2_plan, positions.data(), 1u, static_cast<double*>(e2s.data),
@@ -249,7 +249,7 @@ gpuxtb_status_t Geometry::build(std::string& err) {
   if (s) return s;
 
   const std::size_t a2n = static_cast<std::size_t>(aes2_plan.pair_data_elements());
-  if (a2s.size < a2n * sizeof(double)) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (a2s.size < a2n * sizeof(double)) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   aes2_ws.pair_scratch = static_cast<double*>(a2scratch.data);
   aes2_ws.pair_elements = aes2_plan.pair_data_elements();
   s = update_aes2_geometry_cache_cpu(aes2_plan, positions.data(), cn.data(), 1u,
@@ -266,21 +266,21 @@ gpuxtb_status_t Geometry::build(std::string& err) {
 
   s = make_mkl_rt_lp64_backend(backend, err);
   if (s) return s;
-  if (wfn_s.size < layout.workspace_size_bytes) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (wfn_s.size < layout.workspace_size_bytes) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_wavefunction_view(layout, wfn_s.data, wfn_s.size, wfn, err);
   if (s) return s;
   s = initialize_sad_multipole_state(layout, wfn, err);
   if (s) return s;
-  if (oc_s.size < eig_plan.overlap_cache_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (oc_s.size < eig_plan.overlap_cache_size_bytes()) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_eigensolver_overlap_cache(eig_plan, oc_s.data, oc_s.size, ocache, err);
   if (s) return s;
-  if (eig_s.size < eig_plan.workspace_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (eig_s.size < eig_plan.workspace_size_bytes()) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_eigensolver_workspace(eig_plan, eig_s.data, eig_s.size, eig_ws, err);
   if (s) return s;
   s = factor_overlap_cpu(eig_plan, overlap.data(), 1u, backend, eig_ws, ocache, err);
   if (s) return s;
 
-  if (d4scratch.size < d4_plan.workspace_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (d4scratch.size < d4_plan.workspace_size_bytes()) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_d4_workspace(d4_plan, d4scratch.data, d4scratch.size, d4_ws, err);
   if (s) return s;
   const std::size_t pair_elements =
@@ -292,26 +292,27 @@ gpuxtb_status_t Geometry::build(std::string& err) {
                                    d4_coordination.size(), d4_ws, d4_cache, err);
   if (s) return s;
   geom.d4_cache = d4_cache;
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t Stage::build(Geometry& g, std::int64_t history, double damping, double rms_tol,
-                             double e_tol, std::uint64_t max_iter, double etemp, std::string& err) {
+xtbloom_status_t Stage::build(Geometry& g, std::int64_t history, double damping, double rms_tol,
+                              double e_tol, std::uint64_t max_iter, double etemp,
+                              std::string& err) {
   err.clear();
-  gpuxtb_status_t s =
+  xtbloom_status_t s =
       make_scc_mixer_plan(g.layout, history, damping, rms_tol, rms_tol, mixer_plan, err);
   if (s) return s;
   s = make_scc_driver_plan(g.layout, g.mulliken_plan, g.es2_plan, g.es3_plan, g.aes2_plan,
                            g.eig_plan, mixer_plan, &g.d4_plan, nullptr, max_iter, etemp, e_tol,
                            driver_plan, err);
   if (s) return s;
-  if (mixer_s.size < mixer_plan.state_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (mixer_s.size < mixer_plan.state_size_bytes()) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_scc_mixer_state(mixer_plan, mixer_s.data, mixer_s.size, mixer_state, err);
   if (s) return s;
-  if (drv_s.size < driver_plan.state_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (drv_s.size < driver_plan.state_size_bytes()) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_scc_driver_state(driver_plan, drv_s.data, drv_s.size, driver_state, err);
   if (s) return s;
-  if (drvws_s.size < driver_plan.workspace_size_bytes()) return GPUXTB_STATUS_ALLOCATION_FAILED;
+  if (drvws_s.size < driver_plan.workspace_size_bytes()) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_scc_driver_workspace(driver_plan, drvws_s.data, drvws_s.size, drv_ws, err);
   if (s) return s;
   s = initialize_scc_driver_state_cpu(driver_plan, g.wfn, mixer_state, driver_state, err);
@@ -403,10 +404,10 @@ bool run_stage(Geometry& g, Stage& st, std::uint64_t max_iter, std::vector<Trace
                std::string& err) {
   trace.clear();
   for (std::uint64_t it = 0; it < max_iter; ++it) {
-    const gpuxtb_status_t s =
+    const xtbloom_status_t s =
         iterate_scc_driver_batch_cpu(st.driver_plan, g.geom, g.backend, g.ocache, g.wfn,
                                      st.mixer_state, st.driver_state, st.drv_ws, err);
-    if (s != GPUXTB_STATUS_SUCCESS && s != GPUXTB_STATUS_SCC_NOT_CONVERGED) {
+    if (s != XTBLOOM_STATUS_SUCCESS && s != XTBLOOM_STATUS_SCC_NOT_CONVERGED) {
       const std::string detail = err;
       err = "unexpected SCC driver status " + std::to_string(static_cast<int>(s));
       if (!detail.empty()) {
@@ -447,7 +448,7 @@ bool run_stage(Geometry& g, Stage& st, std::uint64_t max_iter, std::vector<Trace
 
 bool load_tmacl(std::vector<std::int32_t>& numbers, std::vector<double>& positions,
                 std::string& err) {
-  std::ifstream file(GPUXTB_TMACL_FIXTURE_PATH);
+  std::ifstream file(XTBLOOM_TMACL_FIXTURE_PATH);
   if (!file) {
     err = "cannot open tmacl fixture";
     return false;
@@ -521,14 +522,14 @@ bool near(double lhs, double rhs, double atol) { return std::abs(lhs - rhs) <= a
 bool run_policy(Geometry& geometry, double kelvin, std::int64_t history, double damping,
                 std::uint64_t maximum_iterations, PolicyRow& result, std::vector<TraceRow>& trace,
                 std::string& err) {
-  gpuxtb_status_t status = initialize_sad_multipole_state(geometry.layout, geometry.wfn, err);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_status_t status = initialize_sad_multipole_state(geometry.layout, geometry.wfn, err);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   Stage stage;
   status = stage.build(geometry, history, damping, kDefaultRmsTolerance, kDefaultEnergyTolerance,
                        maximum_iterations, temperature_hartree(kelvin), err);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   const bool converged = run_stage(geometry, stage, maximum_iterations, trace, err);
@@ -554,8 +555,8 @@ struct SequenceResult {
 bool run_sequence(Geometry& geometry, const std::vector<double>& temperatures,
                   std::uint64_t maximum_iterations, SequenceResult& result, std::string& err) {
   result = {};
-  gpuxtb_status_t status = initialize_sad_multipole_state(geometry.layout, geometry.wfn, err);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_status_t status = initialize_sad_multipole_state(geometry.layout, geometry.wfn, err);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   bool all_converged = true;
@@ -563,7 +564,7 @@ bool run_sequence(Geometry& geometry, const std::vector<double>& temperatures,
     Stage stage;
     status = stage.build(geometry, 8, 0.4, kDefaultRmsTolerance, kDefaultEnergyTolerance,
                          maximum_iterations, temperature_hartree(kelvin), err);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     std::vector<TraceRow> trace;
@@ -604,7 +605,7 @@ bool write_sequence_file(const std::string& directory, const std::string& filena
 }
 
 // Expected converged 300 K internal SCC free energies and fragment charges
-// pinned by the issue #217 investigation on gpuxtb main 9fd7d4d.
+// pinned by the issue #217 investigation on xtbloom main 9fd7d4d.
 constexpr double kExpected300KEnergy = -22.271821505;
 constexpr double kExpected300KQMe4N = 0.8285;
 constexpr double kExpected300KQCl = -0.8285;
@@ -632,7 +633,7 @@ int main(int argc, char** argv) {
   geo.atomic_numbers = numbers;
   geo.positions = positions;
   geo.atom_offsets[1] = 18;
-  CHECK(geo.build(err) == GPUXTB_STATUS_SUCCESS);
+  CHECK(geo.build(err) == XTBLOOM_STATUS_SUCCESS);
 
   // ------------------------------------------------------------------ baseline
   // Exact baseline matrix reproduced from the issue description, using the
@@ -655,12 +656,12 @@ int main(int argc, char** argv) {
     // Each fresh baseline cell must start from the SAD multipole guess so a
     // failure genuinely reflects the default policy, not warm continuation
     // from the previous row's terminal state.
-    gpuxtb_status_t sad_status = initialize_sad_multipole_state(geo.layout, geo.wfn, err);
-    CHECK(sad_status == GPUXTB_STATUS_SUCCESS);
+    xtbloom_status_t sad_status = initialize_sad_multipole_state(geo.layout, geo.wfn, err);
+    CHECK(sad_status == XTBLOOM_STATUS_SUCCESS);
     Stage st;
     CHECK(st.build(geo, 8, 0.4, kDefaultRmsTolerance, kDefaultEnergyTolerance,
                    row.maximum_iterations, temperature_hartree(row.kelvin),
-                   err) == GPUXTB_STATUS_SUCCESS);
+                   err) == XTBLOOM_STATUS_SUCCESS);
     std::vector<TraceRow> trace;
     const bool converged = run_stage(geo, st, row.maximum_iterations, trace, err);
     CHECK(!trace.empty());
@@ -670,8 +671,8 @@ int main(int argc, char** argv) {
     // providers.
     CHECK(trace.back().iter == row.expected_iterations);
     CHECK(trace.back().status == (row.expect_converged
-                                      ? static_cast<int>(GPUXTB_STATUS_SUCCESS)
-                                      : static_cast<int>(GPUXTB_STATUS_SCC_NOT_CONVERGED)));
+                                      ? static_cast<int>(XTBLOOM_STATUS_SUCCESS)
+                                      : static_cast<int>(XTBLOOM_STATUS_SCC_NOT_CONVERGED)));
     std::printf(
         "baseline %.0f K / %llu: converged=%d iterations=%llu E=%.12f q(Me4N+)=%.5f q(Cl)=%.5f\n",
         row.kelvin, (unsigned long long)row.maximum_iterations, converged ? 1 : 0,

@@ -27,10 +27,10 @@ bool near(double actual, double expected, double tolerance) {
 }
 
 struct Evaluation {
-  gpuxtb::detail::gfn2::BasisPlan basis;
-  gpuxtb::detail::gfn2::IntegralPlan integrals;
-  gpuxtb::detail::gfn2::CoordinationPlan coordination;
-  gpuxtb::detail::gfn2::H0Plan h0;
+  xtbloom::detail::gfn2::BasisPlan basis;
+  xtbloom::detail::gfn2::IntegralPlan integrals;
+  xtbloom::detail::gfn2::CoordinationPlan coordination;
+  xtbloom::detail::gfn2::H0Plan h0;
   std::vector<double> workspace;
 };
 
@@ -38,17 +38,17 @@ bool make_evaluation(std::int64_t batch_size, const std::vector<std::int64_t>& a
                      const std::vector<std::int32_t>& atomic_numbers, Evaluation& evaluation,
                      std::string& error) {
   const auto total_atoms = static_cast<std::int64_t>(atomic_numbers.size());
-  if (gpuxtb::detail::gfn2::make_basis_plan(batch_size, total_atoms, atom_offsets.data(),
-                                            atomic_numbers.data(), evaluation.basis,
-                                            error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_integral_plan(evaluation.basis, evaluation.integrals, error) !=
-          GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_coordination_plan(batch_size, total_atoms, atom_offsets.data(),
-                                                   atomic_numbers.data(), evaluation.coordination,
-                                                   error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_h0_plan(evaluation.basis, evaluation.integrals,
-                                         atomic_numbers.data(), evaluation.h0,
-                                         error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_basis_plan(batch_size, total_atoms, atom_offsets.data(),
+                                             atomic_numbers.data(), evaluation.basis,
+                                             error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_integral_plan(evaluation.basis, evaluation.integrals, error) !=
+          XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_coordination_plan(batch_size, total_atoms, atom_offsets.data(),
+                                                    atomic_numbers.data(), evaluation.coordination,
+                                                    error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_h0_plan(evaluation.basis, evaluation.integrals,
+                                          atomic_numbers.data(), evaluation.h0,
+                                          error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   evaluation.workspace.resize((evaluation.integrals.workspace_size_bytes + sizeof(double) - 1u) /
@@ -64,10 +64,10 @@ bool evaluate_h0(const Evaluation& evaluation, const std::vector<double>& positi
                  const std::vector<double>& coordination, const std::vector<double>& overlap,
                  std::vector<double>& hamiltonian, std::string& error) {
   hamiltonian.resize(static_cast<std::size_t>(evaluation.integrals.total_matrix_elements));
-  return gpuxtb::detail::gfn2::evaluate_h0_cpu(evaluation.basis, evaluation.integrals,
-                                               evaluation.h0, positions.data(), coordination.data(),
-                                               overlap.data(), hamiltonian.data(),
-                                               error) == GPUXTB_STATUS_SUCCESS;
+  return xtbloom::detail::gfn2::evaluate_h0_cpu(
+             evaluation.basis, evaluation.integrals, evaluation.h0, positions.data(),
+             coordination.data(), overlap.data(), hamiltonian.data(),
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool evaluate_full(Evaluation& evaluation, const std::vector<double>& positions,
@@ -75,13 +75,13 @@ bool evaluate_full(Evaluation& evaluation, const std::vector<double>& positions,
                    std::vector<double>& hamiltonian, std::string& error) {
   coordination.resize(static_cast<std::size_t>(evaluation.basis.total_atoms));
   overlap.resize(static_cast<std::size_t>(evaluation.integrals.total_matrix_elements));
-  if (gpuxtb::detail::gfn2::evaluate_coordination_cpu(evaluation.coordination, positions.data(),
-                                                      coordination.data(),
-                                                      error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  if (xtbloom::detail::gfn2::evaluate_coordination_cpu(evaluation.coordination, positions.data(),
+                                                       coordination.data(),
+                                                       error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::evaluate_overlap_cpu(
           evaluation.basis, evaluation.integrals, positions.data(), overlap.data(),
           evaluation.workspace.data(), evaluation.workspace.size() * sizeof(double),
-          error) != GPUXTB_STATUS_SUCCESS) {
+          error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   return evaluate_h0(evaluation, positions, coordination, overlap, hamiltonian, error);
@@ -92,7 +92,7 @@ int test_tblite_h2_and_lih_scaling_goldens() {
    * Coordinates and H0/overlap scaling matrices are from dxtb's Apache-2.0
    * test_hamiltonian/test_gfn2.py corpus, whose references were generated by
    * tblite 0.3.0. The formulas and relevant GFN2 parameters are unchanged in
-   * the tblite 0.7.0 revision pinned by gpuxtb.
+   * the tblite 0.7.0 revision pinned by xtbloom.
    */
   const std::vector<std::int64_t> atom_offsets{0, 2, 4};
   const std::vector<std::int32_t> atomic_numbers{1, 1, 3, 1};
@@ -107,9 +107,9 @@ int test_tblite_h2_and_lih_scaling_goldens() {
   CHECK(evaluation.h0.shell_pair_offsets == std::vector<std::int64_t>({0, 4, 13}));
 
   std::vector<double> coordination(4);
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(evaluation.coordination, positions.data(),
-                                                        coordination.data(),
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(evaluation.coordination, positions.data(),
+                                                         coordination.data(),
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
   std::vector<double> overlap(29, 1.0);
   std::vector<double> hamiltonian;
   CHECK(evaluate_h0(evaluation, positions, coordination, overlap, hamiltonian, error));
@@ -161,10 +161,10 @@ int test_independent_h0_vjp() {
   std::vector<double> dE_doverlap(matrix_size, 0.0);
   std::vector<double> dE_dcn(3, 0.0);
   std::vector<double> gradients(9, 0.0);
-  CHECK(gpuxtb::detail::gfn2::add_h0_vjp_cpu(evaluation.basis, evaluation.integrals, evaluation.h0,
-                                             positions.data(), coordination.data(), overlap.data(),
-                                             weights.data(), dE_doverlap.data(), dE_dcn.data(),
-                                             gradients.data(), error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_h0_vjp_cpu(evaluation.basis, evaluation.integrals, evaluation.h0,
+                                              positions.data(), coordination.data(), overlap.data(),
+                                              weights.data(), dE_doverlap.data(), dE_dcn.data(),
+                                              gradients.data(), error) == XTBLOOM_STATUS_SUCCESS);
 
   constexpr double matrix_step = 1.0e-6;
   for (std::size_t element = 0; element < matrix_size; ++element) {
@@ -234,17 +234,17 @@ int test_composed_coordinate_vjp() {
   std::vector<double> dE_doverlap(matrix_size, 0.0);
   std::vector<double> dE_dcn(3, 0.0);
   std::vector<double> gradients(9, 0.0);
-  CHECK(gpuxtb::detail::gfn2::add_h0_vjp_cpu(evaluation.basis, evaluation.integrals, evaluation.h0,
-                                             positions.data(), coordination.data(), overlap.data(),
-                                             weights.data(), dE_doverlap.data(), dE_dcn.data(),
-                                             gradients.data(), error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_overlap_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_h0_vjp_cpu(evaluation.basis, evaluation.integrals, evaluation.h0,
+                                              positions.data(), coordination.data(), overlap.data(),
+                                              weights.data(), dE_doverlap.data(), dE_dcn.data(),
+                                              gradients.data(), error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_overlap_gradient_cpu(
             evaluation.basis, evaluation.integrals, positions.data(), dE_doverlap.data(),
             gradients.data(), evaluation.workspace.data(),
-            evaluation.workspace.size() * sizeof(double), error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_coordination_gradient_cpu(
+            evaluation.workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_coordination_gradient_cpu(
             evaluation.coordination, positions.data(), dE_dcn.data(), gradients.data(), error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
 
   constexpr double step = 2.0e-5;
   for (std::size_t coordinate = 0; coordinate < positions.size(); ++coordinate) {
@@ -285,17 +285,18 @@ int test_validation() {
 
   auto corrupt = evaluation.h0;
   corrupt.shell_pair_offsets[1] -= 1;
-  CHECK(gpuxtb::detail::gfn2::evaluate_h0_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_h0_cpu(
             evaluation.basis, evaluation.integrals, corrupt, positions.data(), coordination.data(),
-            overlap.data(), hamiltonian.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::evaluate_h0_cpu(evaluation.basis, evaluation.integrals, evaluation.h0,
-                                              positions.data(), coordination.data(), overlap.data(),
-                                              nullptr, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            overlap.data(), hamiltonian.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_h0_cpu(evaluation.basis, evaluation.integrals,
+                                               evaluation.h0, positions.data(), coordination.data(),
+                                               overlap.data(), nullptr,
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   overlap[0] = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::evaluate_h0_cpu(evaluation.basis, evaluation.integrals, evaluation.h0,
-                                              positions.data(), coordination.data(), overlap.data(),
-                                              hamiltonian.data(),
-                                              error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_h0_cpu(evaluation.basis, evaluation.integrals,
+                                               evaluation.h0, positions.data(), coordination.data(),
+                                               overlap.data(), hamiltonian.data(),
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   overlap[0] = 1.0;
 
   std::vector<double> coincident_positions(6, 0.0);
@@ -303,16 +304,16 @@ int test_validation() {
   std::vector<double> dE_doverlap(4, 0.0);
   std::vector<double> dE_dcn(2, 0.0);
   std::vector<double> gradients(6, 0.0);
-  CHECK(gpuxtb::detail::gfn2::add_h0_vjp_cpu(
+  CHECK(xtbloom::detail::gfn2::add_h0_vjp_cpu(
             evaluation.basis, evaluation.integrals, evaluation.h0, coincident_positions.data(),
             coordination.data(), overlap.data(), weights.data(), dE_doverlap.data(), dE_dcn.data(),
-            gradients.data(), error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            gradients.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   const std::vector<std::int32_t> mismatched_atomic_numbers{1, 2};
-  gpuxtb::detail::gfn2::H0Plan mismatched;
-  CHECK(gpuxtb::detail::gfn2::make_h0_plan(evaluation.basis, evaluation.integrals,
-                                           mismatched_atomic_numbers.data(), mismatched,
-                                           error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  xtbloom::detail::gfn2::H0Plan mismatched;
+  CHECK(xtbloom::detail::gfn2::make_h0_plan(evaluation.basis, evaluation.integrals,
+                                            mismatched_atomic_numbers.data(), mismatched,
+                                            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   return 0;
 }
 

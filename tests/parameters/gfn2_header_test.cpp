@@ -1,7 +1,7 @@
 // Compile-time boundary checks for the generated host/device parameter tables.
 #include "data/parameters/gfn2.hpp"
 
-using namespace gpuxtb::parameters::gfn2;
+using namespace xtbloom::parameters::gfn2;
 
 static_assert(kElementCount == 86u);
 static_assert(find_element(0u) == nullptr);

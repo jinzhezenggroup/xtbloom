@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Validate source, installed, and archived gpuxtb legal material.
+"""Validate source, installed, and archived xtbloom legal material.
 
 The release workflows invoke this script at each distribution boundary. A
 single validator keeps the required filenames and provenance invariants from
@@ -32,8 +32,18 @@ TORCH_STABLE_INCLUDE_SUBDIR = "include"
 TORCH_STABLE_REVISION = "2.12.1"
 TORCH_STABLE_TREE = "e2df0197562bc2b0f55ee910d9899ecaac465e78"
 ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
+OPEN_CHEMLIB_LICENSE = "LICENSES/openchemlib-BSD-3-Clause.txt"
+OPEN_CHEMLIB_MANIFEST = "web/openchemlib_manifest.json"
+OPEN_CHEMLIB_VERSION = "9.21.0"
+OPEN_CHEMLIB_MODULE_URL = (
+    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js"
+)
+OPEN_CHEMLIB_RESOURCES_URL = (
+    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json"
+)
 WEB_LICENSE_FILES = (
     "LICENSES/3Dmol.js-BSD-3-Clause.txt",
+    OPEN_CHEMLIB_LICENSE,
     "LICENSES/iobuffer-MIT.txt",
     "LICENSES/netcdfjs-MIT.txt",
     "LICENSES/pako-MIT.txt",
@@ -44,6 +54,7 @@ WEB_SOURCE_FILES = (
     *WEB_LICENSE_FILES,
     "web/package.json",
     "web/package-lock.json",
+    OPEN_CHEMLIB_MANIFEST,
 )
 SOURCE_FILES = (
     "LICENSE",
@@ -96,44 +107,44 @@ SDIST_ARCHIVE_SUFFIXES = (
     TORCH_STABLE_MANIFEST_PATH,
 )
 WHEEL_ARCHIVE_SUFFIXES = (
-    "share/licenses/gpuxtb/THIRD_PARTY_NOTICES.md",
-    f"share/licenses/gpuxtb/{EXCEPTION_FILE}",
-    "share/licenses/gpuxtb/provenance/manifest.json",
-    "share/licenses/gpuxtb/provenance/sto_manifest.json",
-    "share/licenses/gpuxtb/provenance/spin_manifest.json",
-    "share/licenses/gpuxtb/provenance/d4_manifest.json",
-    "share/licenses/gpuxtb/provenance/mctc_manifest.json",
-    "share/licenses/gpuxtb/provenance/implib_manifest.json",
-    "share/licenses/gpuxtb/provenance/torch_stable_manifest.json",
-    "share/licenses/gpuxtb/third-party/MIT.txt",
-    "share/licenses/gpuxtb/third-party/BSD-3-Clause.txt",
-    "share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt",
-    "share/licenses/gpuxtb/third-party/d4/d4.NOTICE",
-    "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING",
-    "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING.LESSER",
-    "share/licenses/gpuxtb/third-party/d4/mctc-lib-LICENSE",
+    "share/licenses/xtbloom/THIRD_PARTY_NOTICES.md",
+    f"share/licenses/xtbloom/{EXCEPTION_FILE}",
+    "share/licenses/xtbloom/provenance/manifest.json",
+    "share/licenses/xtbloom/provenance/sto_manifest.json",
+    "share/licenses/xtbloom/provenance/spin_manifest.json",
+    "share/licenses/xtbloom/provenance/d4_manifest.json",
+    "share/licenses/xtbloom/provenance/mctc_manifest.json",
+    "share/licenses/xtbloom/provenance/implib_manifest.json",
+    "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
+    "share/licenses/xtbloom/third-party/MIT.txt",
+    "share/licenses/xtbloom/third-party/BSD-3-Clause.txt",
+    "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
+    "share/licenses/xtbloom/third-party/d4/d4.NOTICE",
+    "share/licenses/xtbloom/third-party/d4/dftd4-COPYING",
+    "share/licenses/xtbloom/third-party/d4/dftd4-COPYING.LESSER",
+    "share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE",
 )
 FORBIDDEN_ARCHIVE_PARTS = ("/build/", "/.cache/", "/.claude/", "/.ruff_cache/")
 INSTALL_FILES = (
-    "share/licenses/gpuxtb/LICENSE",
-    f"share/licenses/gpuxtb/{EXCEPTION_FILE}",
-    "share/licenses/gpuxtb/THIRD_PARTY_NOTICES.md",
-    "share/licenses/gpuxtb/third-party/LGPL-3.0-or-later.txt",
-    "share/licenses/gpuxtb/third-party/Apache-2.0.txt",
-    "share/licenses/gpuxtb/third-party/MIT.txt",
-    "share/licenses/gpuxtb/third-party/BSD-3-Clause.txt",
-    "share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt",
-    "share/licenses/gpuxtb/provenance/manifest.json",
-    "share/licenses/gpuxtb/provenance/sto_manifest.json",
-    "share/licenses/gpuxtb/provenance/spin_manifest.json",
-    "share/licenses/gpuxtb/provenance/d4_manifest.json",
-    "share/licenses/gpuxtb/provenance/mctc_manifest.json",
-    "share/licenses/gpuxtb/provenance/implib_manifest.json",
-    "share/licenses/gpuxtb/provenance/torch_stable_manifest.json",
-    "share/licenses/gpuxtb/third-party/d4/d4.NOTICE",
-    "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING",
-    "share/licenses/gpuxtb/third-party/d4/dftd4-COPYING.LESSER",
-    "share/licenses/gpuxtb/third-party/d4/mctc-lib-LICENSE",
+    "share/licenses/xtbloom/LICENSE",
+    f"share/licenses/xtbloom/{EXCEPTION_FILE}",
+    "share/licenses/xtbloom/THIRD_PARTY_NOTICES.md",
+    "share/licenses/xtbloom/third-party/LGPL-3.0-or-later.txt",
+    "share/licenses/xtbloom/third-party/Apache-2.0.txt",
+    "share/licenses/xtbloom/third-party/MIT.txt",
+    "share/licenses/xtbloom/third-party/BSD-3-Clause.txt",
+    "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
+    "share/licenses/xtbloom/provenance/manifest.json",
+    "share/licenses/xtbloom/provenance/sto_manifest.json",
+    "share/licenses/xtbloom/provenance/spin_manifest.json",
+    "share/licenses/xtbloom/provenance/d4_manifest.json",
+    "share/licenses/xtbloom/provenance/mctc_manifest.json",
+    "share/licenses/xtbloom/provenance/implib_manifest.json",
+    "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
+    "share/licenses/xtbloom/third-party/d4/d4.NOTICE",
+    "share/licenses/xtbloom/third-party/d4/dftd4-COPYING",
+    "share/licenses/xtbloom/third-party/d4/dftd4-COPYING.LESSER",
+    "share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE",
 )
 SPDX_FILES = {
     "data/parameters/gfn2.hpp": "LGPL-3.0-or-later",
@@ -164,6 +175,11 @@ NOTICE_TOKENS = (
     "UPNG.js 2.1.0",
     "pako 2.2.0 and pako 1.0.11",
     "475e2213ac02fbf2d4a8c4fc287b570fc476da2fda9de3f5a72a2554b5716e71",
+    "OpenChemLib 9.21.0",
+    "36aec7791ac38e7fdc23a37ba07e19514eb1e5c9",
+    "27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf",
+    "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
+    "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
     EXCEPTION_FILE,
 )
 EXCEPTION_TOKENS = (
@@ -181,7 +197,7 @@ EXCEPTION_TOKENS = (
     "does not apply to third-party material",
 )
 EXCEPTION_NOTICE = (
-    "gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION."
+    "xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION."
 )
 NVIDIA_DEPENDENCIES = {
     "nvidia-cublas-cu12",
@@ -219,6 +235,7 @@ WEB_SITE_SOURCE_MAP = {
     "provenance/parameters/spin_manifest.json": "data/parameters/spin_manifest.json",
     "provenance/parameters/d4_manifest.json": "data/parameters/d4_manifest.json",
     "provenance/parameters/mctc_manifest.json": "data/parameters/mctc_manifest.json",
+    "provenance/openchemlib_manifest.json": OPEN_CHEMLIB_MANIFEST,
 }
 WEB_SITE_RUNTIME_FILES = (
     "index.html",
@@ -226,9 +243,12 @@ WEB_SITE_RUNTIME_FILES = (
     "app.js",
     "app_helpers.js",
     "worker.js",
-    "gpuxtb_web.js",
-    "gpuxtb_web.wasm",
-    "gpuxtb_web.data",
+    "smiles_helpers.js",
+    "smiles_worker.js",
+    "xtbloom-mark.svg",
+    "xtbloom_web.js",
+    "xtbloom_web.wasm",
+    "xtbloom_web.data",
     "vendor/3Dmol-min.js",
 )
 
@@ -293,14 +313,14 @@ def _require_dependency_policy(project: object) -> None:
         raise LicenseCheckError("Linux CPU installs must require scipy-openblas32")
     openblas = mandatory["scipy-openblas32"]
     for token in (
-        "scipy-openblas32>=0.3.34.0.0",
+        "scipy-openblas32==0.3.34.0.0",
         "sys_platform == 'linux'",
         "x86_64",
         "aarch64",
     ):
         if token not in openblas:
             raise LicenseCheckError(
-                "scipy-openblas32 must use the reviewed minimum and cover Linux "
+                "scipy-openblas32 must use the reviewed exact version and cover Linux "
                 "x86_64 and aarch64"
             )
     if "mkl" in mandatory:
@@ -661,12 +681,105 @@ def check_source(root: Path) -> None:
             "Copyright (C) 1995-2013 Jean-loup Gailly and Mark Adler",
             "This notice may not be removed or altered",
         ),
+        OPEN_CHEMLIB_LICENSE: (
+            "Copyright (c) 2015-2017, cheminfo",
+            "Redistribution and use in source and binary forms",
+        ),
     }
     for relative, tokens in web_license_tokens.items():
         text = (root / relative).read_text(encoding="utf-8")
         for token in tokens:
             if token not in text:
                 raise LicenseCheckError(f"{relative} omits upstream text: {token}")
+
+    openchemlib = json.loads((root / OPEN_CHEMLIB_MANIFEST).read_text(encoding="utf-8"))
+    dependency = openchemlib.get("dependency", {})
+    source = openchemlib.get("source", {})
+    license_info = openchemlib.get("license", {})
+    if (
+        openchemlib.get("schema_version") != 1
+        or dependency.get("npm_package") != "openchemlib"
+        or dependency.get("version") != OPEN_CHEMLIB_VERSION
+        or dependency.get("classification") != "runtime-provided browser dependency"
+        or source.get("release_commit") != "36aec7791ac38e7fdc23a37ba07e19514eb1e5c9"
+        or source.get("openchemlib_java_submodule_commit")
+        != "27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf"
+        or license_info.get("spdx") != "BSD-3-Clause"
+        or license_info.get("local_copy") != OPEN_CHEMLIB_LICENSE
+        or license_info.get("sha256")
+        != "38dc3aed3def8cc4dd15ac879daa4af9b0d71af86fef82611ca1752497c6f464"
+    ):
+        raise LicenseCheckError("OpenChemLib manifest has unreviewed provenance")
+    if (
+        hashlib.sha256((root / OPEN_CHEMLIB_LICENSE).read_bytes()).hexdigest()
+        != (license_info["sha256"])
+    ):
+        raise LicenseCheckError(
+            "OpenChemLib license differs from pinned upstream bytes"
+        )
+
+    artifacts = {
+        artifact.get("url"): artifact
+        for artifact in openchemlib.get("cdn_artifacts", [])
+        if isinstance(artifact, dict)
+    }
+    expected_artifacts = {
+        OPEN_CHEMLIB_MODULE_URL: (
+            "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
+            1097449,
+        ),
+        OPEN_CHEMLIB_RESOURCES_URL: (
+            "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
+            1351963,
+        ),
+    }
+    if set(artifacts) != set(expected_artifacts):
+        raise LicenseCheckError("OpenChemLib manifest has unreviewed CDN URLs")
+    for url, (digest, size) in expected_artifacts.items():
+        artifact = artifacts[url]
+        if (
+            artifact.get("sha256") != digest
+            or artifact.get("size_bytes") != size
+            or artifact.get("redistributed_by_xtbloom") is not False
+        ):
+            raise LicenseCheckError(f"OpenChemLib manifest has unreviewed bytes: {url}")
+
+    resource_payload = openchemlib.get("resource_payload", {})
+    groups = resource_payload.get("groups", [])
+    resource_paths = [
+        path
+        for group in groups
+        if isinstance(group, dict)
+        for path in group.get("paths", [])
+    ]
+    if (
+        resource_payload.get("entry_count") != 35
+        or len(resource_paths) != 35
+        or len(set(resource_paths)) != 35
+        or not any("toxpredictor" in path for path in resource_paths)
+        or not any("druglikeness" in path for path in resource_paths)
+        or not any("forcefield/mmff94" in path for path in resource_paths)
+        or not any("/cod/" in path for path in resource_paths)
+    ):
+        raise LicenseCheckError("OpenChemLib resource inventory is incomplete")
+
+    smiles_helpers = (root / "web/smiles_helpers.js").read_text(encoding="utf-8")
+    smiles_worker = (root / "web/smiles_worker.js").read_text(encoding="utf-8")
+    for token in (
+        OPEN_CHEMLIB_VERSION,
+        OPEN_CHEMLIB_MODULE_URL,
+        OPEN_CHEMLIB_RESOURCES_URL,
+    ):
+        if token not in smiles_helpers:
+            raise LicenseCheckError(
+                f"SMILES helper omits pinned OpenChemLib token: {token}"
+            )
+    if "Resources.registerFromUrl(OPEN_CHEMLIB_RESOURCES_URL)" not in smiles_worker:
+        raise LicenseCheckError(
+            "SMILES worker does not register the pinned resources URL"
+        )
+    if re.search(r"openchemlib@(?:latest|[^\"'`]*\+esm)", smiles_helpers):
+        raise LicenseCheckError("SMILES helper uses a floating/transformed CDN URL")
 
     array_compat_license = (root / ARRAY_API_COMPAT_LICENSE).read_text(encoding="utf-8")
     for token in (
@@ -779,7 +892,7 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
     if (site / "libscipy_openblas.so").exists():
         raise LicenseCheckError(
             "web site contains the raw LAPACK side module; it must only be "
-            "conveyed inside gpuxtb_web.data"
+            "conveyed inside xtbloom_web.data"
         )
     # Pages uploads the complete site directory, so accepting arbitrary extra
     # files would allow an obsolete JS/WASM variant or unreviewed payload to be
@@ -799,8 +912,9 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
         'href="LICENSE"',
         'href="THIRD_PARTY_NOTICES.md"',
         f'href="{EXCEPTION_FILE}"',
-        "https://jinzhezeng.group/gpuxtb/",
-        "https://github.com/jinzhezenggroup/gpuxtb",
+        "https://xtbloom.jinzhezeng.group",
+        "https://github.com/jinzhezenggroup/xtbloom",
+        'href="LICENSES/openchemlib-BSD-3-Clause.txt"',
     ):
         if token not in index:
             raise LicenseCheckError(f"web site index does not expose {token}")
@@ -855,7 +969,7 @@ def _find_archive_name(names: set[str], suffix: str) -> str:
 def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:
     """Validate the installed manifest and the complete sdist vendor payload."""
     manifest_suffix = (
-        "share/licenses/gpuxtb/provenance/implib_manifest.json"
+        "share/licenses/xtbloom/provenance/implib_manifest.json"
         if wheel
         else IMPLIB_MANIFEST_PATH
     )

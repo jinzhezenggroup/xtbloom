@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_ELECTRONIC_GRADIENT_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_ELECTRONIC_GRADIENT_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_ELECTRONIC_GRADIENT_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_ELECTRONIC_GRADIENT_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -12,7 +12,7 @@
 #include "backends/cuda/gfn2_hamiltonian_force.cuh"
 #include "backends/cuda/gfn2_integral_force.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* A zero request is the energy-only fast path and binds no force storage. */
 struct Gfn2ElectronicGradientRequest {
@@ -78,6 +78,6 @@ cudaError_t compose_gfn2_electronic_gradient_cuda(
     const Gfn2ElectronicGradientDeviceDiagnostics& diagnostics,
     cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_ELECTRONIC_GRADIENT_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_ELECTRONIC_GRADIENT_CUH

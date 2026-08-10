@@ -14,30 +14,30 @@
 #include <vector>
 
 #include "backends/cuda/gfn2_inference_publication.cuh"
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/coordination.hpp"
 #include "model/gfn2/es3.hpp"
 #include "model/gfn2/force.hpp"
 #include "model/gfn2/repulsion.hpp"
 #include "runtime/gfn2_cuda_execution.hpp"
 #include "tests/support/gfn2_scc_test_case.hpp"
+#include "xtbloom/xtbloom.h"
 
 namespace {
 
-using gpuxtb::detail::Gfn2CudaExecutionCache;
-using gpuxtb::detail::Gfn2CudaExecutionIdentity;
-using gpuxtb::detail::Gfn2CudaSccStartMode;
-using gpuxtb::detail::cuda::Gfn2InferencePublicationPlanError;
-using gpuxtb::detail::cuda::Gfn2InferencePublicationSystemError;
-using gpuxtb::test::gfn2::HostSccCase;
-using gpuxtb::test::gfn2::HostSccCaseOptions;
-using gpuxtb::test::gfn2::SmallSystemKind;
-namespace gfn2 = gpuxtb::detail::gfn2;
+using xtbloom::detail::Gfn2CudaExecutionCache;
+using xtbloom::detail::Gfn2CudaExecutionIdentity;
+using xtbloom::detail::Gfn2CudaSccStartMode;
+using xtbloom::detail::cuda::Gfn2InferencePublicationPlanError;
+using xtbloom::detail::cuda::Gfn2InferencePublicationSystemError;
+using xtbloom::test::gfn2::HostSccCase;
+using xtbloom::test::gfn2::HostSccCaseOptions;
+using xtbloom::test::gfn2::SmallSystemKind;
+namespace gfn2 = xtbloom::detail::gfn2;
 
 constexpr std::array<std::int64_t, 4> kBatchSizes{1, 8, 32, 128};
-constexpr std::uint32_t kAllResultFlags = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES |
-                                          GPUXTB_COMPUTE_ATOMIC_CHARGES |
-                                          GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
+constexpr std::uint32_t kAllResultFlags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
+                                          XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+                                          XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
 
 /*
  * These bounds cover different reduction/eigensolver orders while remaining
@@ -73,22 +73,22 @@ const char* g_scenario = "uninitialized";
   } while (false)
 
 template <typename T>
-gpuxtb_const_buffer_t input_buffer(const std::vector<T>& values) noexcept {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), GPUXTB_MEMORY_HOST,
+xtbloom_const_buffer_t input_buffer(const std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
           0u};
 }
 
 template <typename T>
-gpuxtb_buffer_t output_buffer(std::vector<T>& values) noexcept {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), GPUXTB_MEMORY_HOST,
+xtbloom_buffer_t output_buffer(std::vector<T>& values) noexcept {
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
           0u};
 }
 
 struct CpuContextDeleter {
-  void operator()(gpuxtb_context_t* context) const noexcept { gpuxtb_context_destroy(context); }
+  void operator()(xtbloom_context_t* context) const noexcept { xtbloom_context_destroy(context); }
 };
 
-using CpuContext = std::unique_ptr<gpuxtb_context_t, CpuContextDeleter>;
+using CpuContext = std::unique_ptr<xtbloom_context_t, CpuContextDeleter>;
 
 /* Host model workspaces require at least double alignment; 64 bytes also
  * matches the fixture and eigensolver cache contracts. */
@@ -122,22 +122,22 @@ class AlignedBuffer {
 };
 
 CpuContext make_cpu_context() {
-  gpuxtb_context_options_t options{};
-  if (gpuxtb_context_options_init(&options, sizeof(options)) != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_context_options_t options{};
+  if (xtbloom_context_options_init(&options, sizeof(options)) != XTBLOOM_STATUS_SUCCESS) {
     return {};
   }
-  options.backend = GPUXTB_BACKEND_CPU;
-  gpuxtb_context_t* raw = nullptr;
-  if (gpuxtb_context_create(&options, &raw) != GPUXTB_STATUS_SUCCESS) {
+  options.backend = XTBLOOM_BACKEND_CPU;
+  xtbloom_context_t* raw = nullptr;
+  if (xtbloom_context_create(&options, &raw) != XTBLOOM_STATUS_SUCCESS) {
     return {};
   }
   return CpuContext(raw);
 }
 
-gpuxtb_compute_options_t compute_options() noexcept {
-  gpuxtb_compute_options_t options{};
-  (void)gpuxtb_compute_options_init(&options, sizeof(options));
-  options.model = GPUXTB_MODEL_GFN2_XTB;
+xtbloom_compute_options_t compute_options() noexcept {
+  xtbloom_compute_options_t options{};
+  (void)xtbloom_compute_options_init(&options, sizeof(options));
+  options.model = XTBLOOM_MODEL_GFN2_XTB;
   options.flags = kAllResultFlags;
   options.max_scc_iterations = 64;
   options.charge_tolerance = 1.0e-8;
@@ -161,10 +161,10 @@ struct PublicHostBatch {
   std::vector<double> periodic_shifts;
   std::vector<std::int64_t> response_offsets;
   std::vector<double> response_matrix;
-  gpuxtb_batch_t descriptor{};
+  xtbloom_batch_t descriptor{};
 
   void bind() noexcept {
-    (void)gpuxtb_batch_init(&descriptor, sizeof(descriptor));
+    (void)xtbloom_batch_init(&descriptor, sizeof(descriptor));
     descriptor.batch_size = static_cast<std::int64_t>(molecular_charges.size());
     descriptor.total_atoms = static_cast<std::int64_t>(atomic_numbers.size());
     descriptor.total_point_charges = static_cast<std::int64_t>(point_values.size());
@@ -235,7 +235,7 @@ struct ReferenceResult {
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> statuses;
-  gpuxtb_batch_result_t descriptor{};
+  xtbloom_batch_result_t descriptor{};
 
   void bind(const PublicHostBatch& batch) {
     const std::size_t systems = static_cast<std::size_t>(batch.descriptor.batch_size);
@@ -245,8 +245,8 @@ struct ReferenceResult {
     point_forces.assign(3u * batch.point_values.size(), 0.0);
     iterations.assign(systems, 0);
     converged.assign(systems, 0u);
-    statuses.assign(systems, GPUXTB_STATUS_INTERNAL_ERROR);
-    (void)gpuxtb_batch_result_init(&descriptor, sizeof(descriptor));
+    statuses.assign(systems, XTBLOOM_STATUS_INTERNAL_ERROR);
+    (void)xtbloom_batch_result_init(&descriptor, sizeof(descriptor));
     descriptor.energies = output_buffer(energies);
     descriptor.forces = output_buffer(qm_forces);
     descriptor.atomic_charges = output_buffer(atomic_charges);
@@ -264,23 +264,23 @@ struct DeviceResult {
   std::vector<double> point_forces;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint32_t> publication_system_errors;
   std::uint64_t publication_epoch = 0u;
   std::uint32_t publication_plan_error = 0u;
   std::uint64_t numerical_body_count = 0u;
 };
 
-int run_public_cpu_reference(gpuxtb_context_t* context, PublicHostBatch& batch,
-                             const gpuxtb_compute_options_t& options, ReferenceResult& result) {
+int run_public_cpu_reference(xtbloom_context_t* context, PublicHostBatch& batch,
+                             const xtbloom_compute_options_t& options, ReferenceResult& result) {
   result.bind(batch);
-  const gpuxtb_status_t status =
-      gpuxtb_compute(context, &batch.descriptor, &options, &result.descriptor);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  const xtbloom_status_t status =
+      xtbloom_compute(context, &batch.descriptor, &options, &result.descriptor);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return __LINE__;
   }
   for (std::size_t system = 0; system < result.statuses.size(); ++system) {
-    if (result.statuses[system] != GPUXTB_STATUS_SUCCESS || result.converged[system] != 1u ||
+    if (result.statuses[system] != XTBLOOM_STATUS_SUCCESS || result.converged[system] != 1u ||
         result.iterations[system] <= 0 || result.iterations[system] > options.max_scc_iterations) {
       std::fprintf(stderr,
                    "CPU reference did not converge in %s system=%zu status=%d converged=%u "
@@ -344,7 +344,7 @@ int download_device_result(const Gfn2CudaExecutionIdentity& identity, cudaStream
       result.converged.size() * sizeof(std::uint8_t), cudaMemcpyDeviceToHost, stream));
   CUDA_CHECK(cudaMemcpyAsync(
       result.statuses.data(), reinterpret_cast<const void*>(identity.inference_system_statuses),
-      result.statuses.size() * sizeof(gpuxtb_status_t), cudaMemcpyDeviceToHost, stream));
+      result.statuses.size() * sizeof(xtbloom_status_t), cudaMemcpyDeviceToHost, stream));
   CUDA_CHECK(
       cudaMemcpyAsync(&result.publication_epoch,
                       reinterpret_cast<const void*>(identity.inference_publication_epoch_snapshot),
@@ -392,13 +392,13 @@ int compare_values(const char* quantity, const std::vector<double>& actual,
 
 int compare_device_to_reference(const DeviceResult& actual, const ReferenceResult& expected,
                                 std::uint64_t expected_epoch,
-                                const gpuxtb_compute_options_t& options) {
+                                const xtbloom_compute_options_t& options) {
   CHECK(actual.statuses.size() == expected.statuses.size());
   CHECK(actual.publication_epoch == expected_epoch);
   CHECK(actual.publication_plan_error ==
         static_cast<std::uint32_t>(Gfn2InferencePublicationPlanError::kSuccess));
   for (std::size_t system = 0; system < actual.statuses.size(); ++system) {
-    CHECK(actual.statuses[system] == GPUXTB_STATUS_SUCCESS);
+    CHECK(actual.statuses[system] == XTBLOOM_STATUS_SUCCESS);
     CHECK(actual.statuses[system] == expected.statuses[system]);
     CHECK(actual.converged[system] == 1u);
     CHECK(actual.iterations[system] > 0);
@@ -504,15 +504,15 @@ struct TinyReferenceWorkspace {
             aes2_plan.coordination_scratch_elements()};
     return gfn2::bind_eigensolver_workspace(eigensolver_plan, eigensolver.data(),
                                             eigensolver.size(), eigensolver_view,
-                                            error) == GPUXTB_STATUS_SUCCESS;
+                                            error) == XTBLOOM_STATUS_SUCCESS;
   }
 };
 
-gpuxtb_status_t refresh_tiny_reference_geometry(HostSccCase& host, const PublicHostBatch& batch,
-                                                TinyReferenceWorkspace& workspace,
-                                                gfn2::CoordinationPlan& coordination,
-                                                gfn2::RepulsionPlan& repulsion,
-                                                std::string& error) {
+xtbloom_status_t refresh_tiny_reference_geometry(HostSccCase& host, const PublicHostBatch& batch,
+                                                 TinyReferenceWorkspace& workspace,
+                                                 gfn2::CoordinationPlan& coordination,
+                                                 gfn2::RepulsionPlan& repulsion,
+                                                 std::string& error) {
   auto& positions = const_cast<std::vector<double>&>(host.positions());
   auto& coordination_numbers = const_cast<std::vector<double>&>(host.coordination_numbers());
   auto& point_positions = const_cast<std::vector<double>&>(host.point_charge_positions());
@@ -527,49 +527,49 @@ gpuxtb_status_t refresh_tiny_reference_geometry(HostSccCase& host, const PublicH
     host.periodic_response_matrices() = batch.response_matrix;
   }
 
-  gpuxtb_status_t status = gfn2::make_coordination_plan(
+  xtbloom_status_t status = gfn2::make_coordination_plan(
       host.batch_size(), host.total_atoms(), host.atom_offsets().data(),
       host.atomic_numbers().data(), coordination, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status =
       gfn2::make_repulsion_plan(host.batch_size(), host.total_atoms(), host.atom_offsets().data(),
                                 host.atomic_numbers().data(), repulsion, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = gfn2::evaluate_coordination_cpu(coordination, positions.data(),
                                            coordination_numbers.data(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = gfn2::evaluate_overlap_cpu(host.basis_plan(), host.integral_plan(), positions.data(),
                                       host.overlap().data(), workspace.integral.data(),
                                       workspace.integral.size(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = gfn2::evaluate_multipole_cpu(
       host.basis_plan(), host.integral_plan(), positions.data(), host.dipole_integrals().data(),
       host.quadrupole_integrals().data(), workspace.integral.data(), workspace.integral.size(),
       error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = gfn2::evaluate_h0_cpu(host.basis_plan(), host.integral_plan(), host.h0_plan(),
                                  positions.data(), coordination_numbers.data(),
                                  host.overlap().data(), host.h0().data(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   const std::uint64_t generation = host.options().geometry_generation;
   auto& es2_cache = host.es2_cache();
   status = gfn2::update_es2_geometry_cache_cpu(
       host.es2_plan(), positions.data(), generation, es2_cache.coulomb_matrix,
       static_cast<std::size_t>(es2_cache.matrix_elements), workspace.es2, es2_cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   auto& aes2_cache = host.aes2_cache();
   status = gfn2::update_aes2_geometry_cache_cpu(
       host.aes2_plan(), positions.data(), coordination_numbers.data(), generation,
       aes2_cache.pair_data, static_cast<std::size_t>(aes2_cache.pair_data_elements), workspace.aes2,
       aes2_cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   if (host.point_charge_plan() != nullptr) {
     status = gfn2::evaluate_external_point_charge_potential_cpu(
         *host.point_charge_plan(), positions.data(), point_positions.data(), point_charges.data(),
         point_hardnesses.data(), host.explicit_point_charge_shell_potential().data(), error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
   if (host.d4_plan() != nullptr) {
     auto* d4_cache = host.d4_cache();
@@ -578,13 +578,13 @@ gpuxtb_status_t refresh_tiny_reference_geometry(HostSccCase& host, const PublicH
         static_cast<std::size_t>(d4_cache->pair_data_elements), d4_cache->coordination_numbers,
         static_cast<std::size_t>(d4_cache->coordination_elements),
         host.driver_workspace().d4_workspace, *d4_cache, error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
   auto& overlap_cache = const_cast<gfn2::EigensolverOverlapCache&>(host.overlap_cache());
   status = gfn2::factor_overlap_cpu(host.eigensolver_plan(), host.overlap().data(), generation,
                                     host.cpu_backend(), workspace.eigensolver_view, overlap_cache,
                                     error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   auto& geometry = host.geometry();
   geometry.h0 = host.h0().data();
@@ -600,14 +600,14 @@ gpuxtb_status_t refresh_tiny_reference_geometry(HostSccCase& host, const PublicH
     geometry.periodic_response_matrices = host.periodic_response_matrices().data();
     geometry.periodic_embedding_generation = generation;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t compose_tiny_reference(HostSccCase& host, const PublicHostBatch& batch,
-                                       TinyReferenceWorkspace& workspace,
-                                       const gfn2::CoordinationPlan& coordination,
-                                       const gfn2::RepulsionPlan& repulsion,
-                                       ReferenceResult& result, std::string& error) {
+xtbloom_status_t compose_tiny_reference(HostSccCase& host, const PublicHostBatch& batch,
+                                        TinyReferenceWorkspace& workspace,
+                                        const gfn2::CoordinationPlan& coordination,
+                                        const gfn2::RepulsionPlan& repulsion,
+                                        ReferenceResult& result, std::string& error) {
   const std::size_t batch_size = static_cast<std::size_t>(host.batch_size());
   const std::size_t atoms = static_cast<std::size_t>(host.total_atoms());
   const std::size_t shells = static_cast<std::size_t>(host.wavefunction_layout().total_shells);
@@ -622,14 +622,14 @@ gpuxtb_status_t compose_tiny_reference(HostSccCase& host, const PublicHostBatch&
   std::vector<double> quadrupole_potential(6u * atoms);
   std::vector<double> component_energy(batch_size);
 
-  gpuxtb_status_t status =
+  xtbloom_status_t status =
       gfn2::evaluate_es2_potential_cpu(host.es2_plan(), host.es2_cache(), host.wavefunction().qsh,
                                        component_shell.data(), workspace.es2, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   scalar_shell = component_shell;
   status = gfn2::evaluate_es3_potential_cpu(gfn2::make_es3_view(host.es3_plan()),
                                             host.wavefunction().qsh, component_shell.data(), error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   for (std::size_t shell = 0; shell < shells; ++shell) {
     scalar_shell[shell] += component_shell[shell];
     if (host.point_charge_plan() != nullptr) {
@@ -640,16 +640,16 @@ gpuxtb_status_t compose_tiny_reference(HostSccCase& host, const PublicHostBatch&
       host.aes2_plan(), host.aes2_cache(), host.wavefunction().qat, host.wavefunction().dipole,
       host.wavefunction().quadrupole, atomic_potential.data(), dipole_potential.data(),
       quadrupole_potential.data(), workspace.aes2, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   if (host.d4_plan() != nullptr) {
     status = gfn2::evaluate_d4_two_body_cpu(
         *host.d4_plan(), *host.d4_cache(), host.wavefunction().qat, component_energy.data(),
         d4_atomic_potential.data(), host.driver_workspace().d4_workspace, error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
   if (host.periodic_plan() != nullptr) {
     std::vector<double> periodic_energy(batch_size);
-    std::vector<gpuxtb_status_t> periodic_status(batch_size);
+    std::vector<xtbloom_status_t> periodic_status(batch_size);
     const gfn2::PeriodicEmbeddingView view{
         host.periodic_shifts().data(),
         static_cast<std::int64_t>(host.periodic_shifts().size()),
@@ -667,7 +667,7 @@ gpuxtb_status_t compose_tiny_reference(HostSccCase& host, const PublicHostBatch&
     };
     status = gfn2::evaluate_periodic_embedding_batch_cpu(
         *host.periodic_plan(), view, host.driver_workspace().periodic_embedding_workspace, error);
-    if (status != GPUXTB_STATUS_SUCCESS) return status;
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
   for (std::size_t atom = 0; atom < atoms; ++atom) {
     atomic_potential[atom] += d4_atomic_potential[atom] + periodic_atomic_potential[atom];
@@ -741,7 +741,7 @@ gpuxtb_status_t compose_tiny_reference(HostSccCase& host, const PublicHostBatch&
       host.d4_plan(), host.d4_cache(), host.point_charge_plan(), input, result.energies.data(),
       result.qm_forces.data(), result.point_forces.empty() ? nullptr : result.point_forces.data(),
       {}, force_workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
   std::copy_n(host.wavefunction().qat, atoms, result.atomic_charges.data());
   for (std::size_t system = 0; system < batch_size; ++system) {
     result.iterations[system] = static_cast<std::int32_t>(std::min<std::uint64_t>(
@@ -750,16 +750,16 @@ gpuxtb_status_t compose_tiny_reference(HostSccCase& host, const PublicHostBatch&
     result.converged[system] = host.driver_state().converged[system];
     result.statuses[system] = host.driver_state().system_statuses[system];
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 int run_tiny_cpu_reference(const Configuration& configuration, PublicHostBatch& batch,
                            ReferenceResult& result) {
   HostSccCase host;
   std::string error;
-  gpuxtb_status_t status =
+  xtbloom_status_t status =
       HostSccCase::create(fixture_options(configuration, batch.descriptor.batch_size), host, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "portable CPU fixture failed in %s: status=%d error=%s\n", g_scenario,
                  static_cast<int>(status), error.c_str());
     return __LINE__;
@@ -772,15 +772,15 @@ int run_tiny_cpu_reference(const Configuration& configuration, PublicHostBatch& 
   gfn2::CoordinationPlan coordination;
   gfn2::RepulsionPlan repulsion;
   status = refresh_tiny_reference_geometry(host, batch, workspace, coordination, repulsion, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "portable CPU geometry refresh failed in %s: status=%d error=%s\n",
                  g_scenario, static_cast<int>(status), error.c_str());
     return __LINE__;
   }
   for (std::uint64_t iteration = 0u; iteration < host.options().maximum_iterations; ++iteration) {
     status = host.run_one_iteration(error);
-    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
-        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+    if (status != XTBLOOM_STATUS_SUCCESS && status != XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
+        status != XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
       std::fprintf(stderr, "portable CPU SCC failed in %s iteration=%llu status=%d error=%s\n",
                    g_scenario, static_cast<unsigned long long>(iteration), static_cast<int>(status),
                    error.c_str());
@@ -789,7 +789,7 @@ int run_tiny_cpu_reference(const Configuration& configuration, PublicHostBatch& 
   }
   result.bind(batch);
   for (std::size_t system = 0; system < result.statuses.size(); ++system) {
-    if (host.driver_state().system_statuses[system] != GPUXTB_STATUS_SUCCESS ||
+    if (host.driver_state().system_statuses[system] != XTBLOOM_STATUS_SUCCESS ||
         host.driver_state().converged[system] != 1u) {
       std::fprintf(stderr,
                    "portable CPU reference did not converge in %s system=%zu status=%d "
@@ -801,7 +801,7 @@ int run_tiny_cpu_reference(const Configuration& configuration, PublicHostBatch& 
     }
   }
   status = compose_tiny_reference(host, batch, workspace, coordination, repulsion, result, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "portable CPU terminal composition failed in %s: status=%d error=%s\n",
                  g_scenario, static_cast<int>(status), error.c_str());
     return __LINE__;
@@ -809,12 +809,12 @@ int run_tiny_cpu_reference(const Configuration& configuration, PublicHostBatch& 
   return 0;
 }
 
-int run_cpu_reference(gpuxtb_context_t* context, const Configuration& configuration,
-                      PublicHostBatch& batch, const gpuxtb_compute_options_t& options,
+int run_cpu_reference(xtbloom_context_t* context, const Configuration& configuration,
+                      PublicHostBatch& batch, const xtbloom_compute_options_t& options,
                       ReferenceResult& result) {
   const int public_status = run_public_cpu_reference(context, batch, options, result);
   if (public_status == 0) return 0;
-  const char* public_error = gpuxtb_get_last_error();
+  const char* public_error = xtbloom_get_last_error();
   if (public_error == nullptr || std::strstr(public_error, "failed to load libmkl_rt") == nullptr) {
     std::fprintf(stderr, "CPU reference failed in %s: error=%s\n", g_scenario,
                  public_error == nullptr ? "unknown public CPU failure" : public_error);
@@ -828,10 +828,10 @@ int run_cpu_reference(gpuxtb_context_t* context, const Configuration& configurat
 
 int execute_and_compare(Gfn2CudaExecutionCache& cache, cudaStream_t stream,
                         Gfn2CudaSccStartMode mode, const ReferenceResult& reference,
-                        std::uint64_t expected_epoch, const gpuxtb_compute_options_t& options) {
+                        std::uint64_t expected_epoch, const xtbloom_compute_options_t& options) {
   std::string error;
-  const gpuxtb_status_t status = cache.execute_inference_async(mode, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  const xtbloom_status_t status = cache.execute_inference_async(mode, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "CUDA inference submission failed in %s: status=%d error=%s\n", g_scenario,
                  static_cast<int>(status), error.c_str());
     return __LINE__;
@@ -849,7 +849,7 @@ int execute_and_compare(Gfn2CudaExecutionCache& cache, cudaStream_t stream,
   return compare_device_to_reference(result, reference, expected_epoch, options);
 }
 
-int run_matrix_member(gpuxtb_context_t* cpu_context, cudaStream_t stream, std::int32_t device_id,
+int run_matrix_member(xtbloom_context_t* cpu_context, cudaStream_t stream, std::int32_t device_id,
                       const Configuration& configuration, std::int64_t batch_size) {
   std::string scenario = std::string(configuration.name) +
                          "/batch=" + std::to_string(static_cast<long long>(batch_size)) + "/setup";
@@ -858,9 +858,9 @@ int run_matrix_member(gpuxtb_context_t* cpu_context, cudaStream_t stream, std::i
   HostSccCase fixture;
   std::string error;
   CHECK(HostSccCase::create(fixture_options(configuration, batch_size), fixture, error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   PublicHostBatch batch = PublicHostBatch::from_fixture(fixture, configuration.enable_periodic);
-  const gpuxtb_compute_options_t options = compute_options();
+  const xtbloom_compute_options_t options = compute_options();
 
   ReferenceResult initial_reference;
   scenario = std::string(configuration.name) +
@@ -871,8 +871,9 @@ int run_matrix_member(gpuxtb_context_t* cpu_context, cudaStream_t stream, std::i
 
   Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
   bool reused = true;
-  const gpuxtb_status_t setup_status = cache.prepare_host(batch.descriptor, options, reused, error);
-  if (setup_status != GPUXTB_STATUS_SUCCESS) {
+  const xtbloom_status_t setup_status =
+      cache.prepare_host(batch.descriptor, options, reused, error);
+  if (setup_status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "CUDA setup failed in %s: status=%d error=%s\n", g_scenario,
                  static_cast<int>(setup_status), error.c_str());
     return __LINE__;
@@ -904,9 +905,9 @@ int run_matrix_member(gpuxtb_context_t* cpu_context, cudaStream_t stream, std::i
   line = run_cpu_reference(cpu_context, configuration, batch, options, changed_reference);
   if (line != 0) return line;
 
-  const gpuxtb_status_t refresh_status =
+  const xtbloom_status_t refresh_status =
       cache.prepare_host(batch.descriptor, options, reused, error);
-  if (refresh_status != GPUXTB_STATUS_SUCCESS) {
+  if (refresh_status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "CUDA changed-geometry refresh failed in %s: status=%d error=%s\n",
                  g_scenario, static_cast<int>(refresh_status), error.c_str());
     return __LINE__;
@@ -962,7 +963,7 @@ int main() {
 
   CpuContext cpu_context = make_cpu_context();
   if (cpu_context == nullptr) {
-    std::fprintf(stderr, "failed to create CPU reference context: %s\n", gpuxtb_get_last_error());
+    std::fprintf(stderr, "failed to create CPU reference context: %s\n", xtbloom_get_last_error());
     (void)cudaStreamDestroy(stream);
     return 1;
   }

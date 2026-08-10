@@ -17,29 +17,29 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::compose_gfn2_scc_free_energy_cuda;
-using gpuxtb::detail::cuda::evaluate_gfn2_scc_classical_energy_cuda;
-using gpuxtb::detail::cuda::evaluate_gfn2_scc_electronic_energy_cuda;
-using gpuxtb::detail::cuda::Gfn2SccClassicalEnergyComponent;
-using gpuxtb::detail::cuda::Gfn2SccClassicalEnergyDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2SccClassicalEnergyDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2SccClassicalEnergyDeviceDiagnostics;
-using gpuxtb::detail::cuda::Gfn2SccClassicalEnergyDeviceInput;
-using gpuxtb::detail::cuda::Gfn2SccClassicalEnergyDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2SccEnergyDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2SccFreeEnergyDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2SccFreeEnergyDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2SccFreeEnergyDeviceDiagnostics;
-using gpuxtb::detail::cuda::Gfn2SccFreeEnergyDeviceError;
-using gpuxtb::detail::cuda::Gfn2SccFreeEnergyDeviceInput;
-using gpuxtb::detail::cuda::Gfn2SccFreeEnergyDeviceWorkspace;
-using gpuxtb::detail::cuda::kGfn2SccClassicalAllComponents;
-using gpuxtb::detail::cuda::kGfn2SccFreeEnergyDiagnosticComponents;
-using gpuxtb::detail::cuda::kGfn2SccFreeEnergyInputComponents;
-using gpuxtb::detail::cuda::reset_gfn2_scc_classical_energy_device_errors_cuda;
-using gpuxtb::detail::cuda::reset_gfn2_scc_energy_device_errors_cuda;
-using gpuxtb::detail::cuda::reset_gfn2_scc_free_energy_device_errors_cuda;
+using xtbloom::detail::cuda::compose_gfn2_scc_free_energy_cuda;
+using xtbloom::detail::cuda::evaluate_gfn2_scc_classical_energy_cuda;
+using xtbloom::detail::cuda::evaluate_gfn2_scc_electronic_energy_cuda;
+using xtbloom::detail::cuda::Gfn2SccClassicalEnergyComponent;
+using xtbloom::detail::cuda::Gfn2SccClassicalEnergyDeviceActivity;
+using xtbloom::detail::cuda::Gfn2SccClassicalEnergyDeviceBatch;
+using xtbloom::detail::cuda::Gfn2SccClassicalEnergyDeviceDiagnostics;
+using xtbloom::detail::cuda::Gfn2SccClassicalEnergyDeviceInput;
+using xtbloom::detail::cuda::Gfn2SccClassicalEnergyDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2SccEnergyDeviceBatch;
+using xtbloom::detail::cuda::Gfn2SccEnergyDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2SccFreeEnergyDeviceActivity;
+using xtbloom::detail::cuda::Gfn2SccFreeEnergyDeviceBatch;
+using xtbloom::detail::cuda::Gfn2SccFreeEnergyDeviceDiagnostics;
+using xtbloom::detail::cuda::Gfn2SccFreeEnergyDeviceError;
+using xtbloom::detail::cuda::Gfn2SccFreeEnergyDeviceInput;
+using xtbloom::detail::cuda::Gfn2SccFreeEnergyDeviceWorkspace;
+using xtbloom::detail::cuda::kGfn2SccClassicalAllComponents;
+using xtbloom::detail::cuda::kGfn2SccFreeEnergyDiagnosticComponents;
+using xtbloom::detail::cuda::kGfn2SccFreeEnergyInputComponents;
+using xtbloom::detail::cuda::reset_gfn2_scc_classical_energy_device_errors_cuda;
+using xtbloom::detail::cuda::reset_gfn2_scc_energy_device_errors_cuda;
+using xtbloom::detail::cuda::reset_gfn2_scc_free_energy_device_errors_cuda;
 
 #define CHECK(condition)                                                                   \
   do {                                                                                     \

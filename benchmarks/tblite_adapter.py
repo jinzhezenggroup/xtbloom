@@ -177,13 +177,29 @@ def _load_first(candidates: list[str | None]) -> ctypes.CDLL | None:
 
 def _enforce_single_thread(library_directory: Path) -> dict[str, Any]:
     """Pin the OpenMP and BLAS runtimes before tblite numerical work."""
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
+    return _configure_runtime_threads(library_directory, 1)
+
+
+def _configure_runtime_threads(library_directory: Path, threads: int) -> dict[str, Any]:
+    """Expose one bounded CPU worker budget to the reference engine.
+
+    The cross-engine benchmark runs every engine with the same worker budget so
+    the three figures compare equal resources. tblite uses its requested OpenMP
+    workers while BLAS remains single-threaded; allowing both layers to create
+    ``threads`` workers causes nested oversubscription inside a fixed CPU
+    affinity mask and no longer represents that budget.
+    """
+    thread_text = str(int(threads))
+    blas_thread_text = "1"
+    os.environ["OMP_NUM_THREADS"] = thread_text
+    os.environ["OPENBLAS_NUM_THREADS"] = blas_thread_text
+    os.environ["MKL_NUM_THREADS"] = blas_thread_text
     controls: dict[str, Any] = {
-        "OMP_NUM_THREADS": "1",
-        "OPENBLAS_NUM_THREADS": "1",
-        "MKL_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": thread_text,
+        "OPENBLAS_NUM_THREADS": blas_thread_text,
+        "MKL_NUM_THREADS": blas_thread_text,
+        "openmp_threads": threads,
+        "blas_threads": 1,
         "omp_set_num_threads": False,
         "openblas_set_num_threads": False,
     }
@@ -201,7 +217,7 @@ def _enforce_single_thread(library_directory: Path) -> dict[str, Any]:
             openmp.omp_set_num_threads.argtypes = [ctypes.c_int]
             openmp.omp_set_num_threads.restype = None
             openmp.omp_set_dynamic(0)
-            openmp.omp_set_num_threads(1)
+            openmp.omp_set_num_threads(threads)
             controls["omp_set_num_threads"] = True
         except AttributeError:
             pass
@@ -265,11 +281,17 @@ class TbliteAdapter:
         max_iterations: int = 500,
         electronic_temperature_hartree: float = 300.0 * 3.166808578545117e-6,
         collect_atomic_charges: bool = True,
+        threads: int = 1,
     ) -> None:
         if storage.point_charge_values:
             raise TbliteError(self.external_point_charge_reason)
+        if type(threads) is not int or threads <= 0:
+            raise TbliteError("tblite threads must be a positive integer")
         self.library_path = library_path
-        self.thread_control = _enforce_single_thread(library_path.resolve().parent)
+        self.threads = threads
+        self.thread_control = _configure_runtime_threads(
+            library_path.resolve().parent, threads
+        )
         self.library = _configure_library(library_path)
         self.version = int(self.library.tblite_get_version())
         self.storage = storage
@@ -312,6 +334,58 @@ class TbliteAdapter:
             messages.append(message or "empty tblite context error")
         raise TbliteError(f"{operation} failed: {'; '.join(messages)}")
 
+    def _configure_calculator(
+        self, context: ctypes.c_void_p, calculator: ctypes.c_void_p
+    ) -> None:
+        """Apply the benchmark's SCC settings to one calculator."""
+        self.library.tblite_set_calculator_accuracy(context, calculator, self.accuracy)
+        self.library.tblite_set_calculator_max_iter(
+            context, calculator, self.max_iterations
+        )
+        self.library.tblite_set_calculator_temperature(
+            context, calculator, self.electronic_temperature_hartree
+        )
+        self._check_context(context, "configure tblite calculator")
+
+    def restart_scc(self) -> None:
+        """Drop the converged density and restart every system from SAD.
+
+        tblite 0.7 exposes no public wavefunction-reset call, so a genuinely
+        cold measured sample rebuilds the calculator (and result) while keeping
+        the persistent context, structure, and caller-owned buffers. This makes
+        a ``--cold-samples`` panel-1 row the real cold-start comparison instead
+        of the warm continuation a persistent adapter would otherwise get.
+        """
+        for state in self.states:
+            old_result = state.result
+            old_calculator = state.calculator
+            state.result = ctypes.c_void_p()
+            state.calculator = ctypes.c_void_p()
+            _delete(self.library, "tblite_delete_result", old_result)
+            _delete(self.library, "tblite_delete_calculator", old_calculator)
+
+            calculator = ctypes.c_void_p()
+            result = ctypes.c_void_p()
+            try:
+                calculator = ctypes.c_void_p(
+                    self.library.tblite_new_gfn2_calculator(
+                        state.context, state.structure, None
+                    )
+                )
+                self._check_context(state.context, "tblite_new_gfn2_calculator")
+                if not calculator:
+                    raise TbliteError("tblite calculator allocation returned NULL")
+                self._configure_calculator(state.context, calculator)
+                result = ctypes.c_void_p(self.library.tblite_new_result())
+                if not result:
+                    raise TbliteError("tblite result allocation returned NULL")
+            except BaseException:
+                _delete(self.library, "tblite_delete_result", result)
+                _delete(self.library, "tblite_delete_calculator", calculator)
+                raise
+            state.calculator = calculator
+            state.result = result
+
     def _create_state(self, index: int) -> TbliteState:
         """Create one complete persistent state outside measured calls."""
         item = self.storage.slices[index]
@@ -353,19 +427,10 @@ class TbliteAdapter:
                 self.library.tblite_new_gfn2_calculator(context, structure, None)
             )
             self._check_context(context, "tblite_new_gfn2_calculator")
+            self._configure_calculator(context, calculator)
             result = ctypes.c_void_p(self.library.tblite_new_result())
             if not calculator or not result:
                 raise TbliteError("tblite calculator/result allocation returned NULL")
-            self.library.tblite_set_calculator_accuracy(
-                context, calculator, self.accuracy
-            )
-            self.library.tblite_set_calculator_max_iter(
-                context, calculator, self.max_iterations
-            )
-            self.library.tblite_set_calculator_temperature(
-                context, calculator, self.electronic_temperature_hartree
-            )
-            self._check_context(context, "configure tblite calculator")
             gradient = (
                 (ctypes.c_double * (3 * atom_count))()
                 if self.property_name == "force"

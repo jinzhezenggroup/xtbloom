@@ -149,7 +149,7 @@
         "pcharge": "8c202803dd8d796e8c102f4d800cbdb5e0c72ea51302ef6c0735b1186be4d8c4",
         "xcontrol": "d25714b8bc3918aad9df2a074786760d6d90d5432583afe7348ac87da7e2003f"
       },
-      "schema": "gpuxtb-xtb-pcem-cli-v1"
+      "schema": "xtbloom-xtb-pcem-cli-v1"
     },
     "qmmm_input_sha256": "bdb99422adb70deec60dfcaccc78cd47cc468752994e0b952264c819c077407b",
     "runtime": {

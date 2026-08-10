@@ -1,5 +1,5 @@
 #include <cuda_runtime_api.h>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <array>
 #include <cstdint>
@@ -13,7 +13,7 @@
 #include "data/parameters/gfn2.hpp"
 #include "runtime/backend.hpp"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 constexpr std::size_t kPairOverrideStorage = parameters::gfn2::kPairScaleOverrides.size() == 0u
                                                  ? 1u
@@ -74,9 +74,9 @@ bool table_bytes_match(const std::array<T, Size>& actual, const std::array<T, Si
 
 }  // namespace
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 bool ensure_cuda_gfn2_parameters(std::int32_t device_id, std::string& error) {
   int device_count = 0;
@@ -225,4 +225,4 @@ bool cuda_gfn2_parameters_match_host(std::int32_t device_id, std::string& error)
   return true;
 }
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail

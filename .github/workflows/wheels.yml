@@ -86,10 +86,10 @@ jobs:
           CIBW_CACHE_PATH: ${{ runner.temp }}/cibw-cache
           # Inside the manylinux container the host filesystem is mounted at
           # /host, so CCACHE_DIR=/host/... persists the ccache on the host
-          # where actions/cache can save it after the job. The GPUXTB_*_LAUNCHER
+          # where actions/cache can save it after the job. The XTBLOOM_*_LAUNCHER
           # variables map to CMAKE_*_COMPILER_LAUNCHER defines in pyproject.toml
           # and enable caching for the C, C++, and nvcc compilations.
-          CIBW_ENVIRONMENT: "GPUXTB_ENABLE_CUDA=${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }} GPUXTB_C_COMPILER_LAUNCHER=ccache GPUXTB_CXX_COMPILER_LAUNCHER=ccache GPUXTB_CUDA_COMPILER_LAUNCHER=ccache CCACHE_DIR=/host${{ runner.temp }}/ccache CCACHE_MAXSIZE=1G"
+          CIBW_ENVIRONMENT: "XTBLOOM_ENABLE_CUDA=${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }} XTBLOOM_C_COMPILER_LAUNCHER=ccache XTBLOOM_CXX_COMPILER_LAUNCHER=ccache XTBLOOM_CUDA_COMPILER_LAUNCHER=ccache CCACHE_DIR=/host${{ runner.temp }}/ccache CCACHE_MAXSIZE=1G"
           # Hosted wheel builders have no NVIDIA kernel driver.  Expose the
           # toolkit stub only inside the isolated wheel test so the dynamic
           # driver resolver can exercise its no-device fallback; production
@@ -116,7 +116,7 @@ jobs:
           wheelhouse/*.whl
       - uses: actions/upload-artifact@v7
         with:
-          name: gpuxtb-wheels-${{ matrix.platform_id }}
+          name: xtbloom-wheels-${{ matrix.platform_id }}
           path: ./wheelhouse/*.whl
 
   pass:

@@ -1,14 +1,14 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_FORCE_COMMON_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_FORCE_COMMON_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_FORCE_COMMON_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_FORCE_COMMON_CUH
 
 #include <cstdint>
 #include <type_traits>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /*
  * Common post-SCC force gate. A member is evaluated only when it is requested
@@ -22,7 +22,7 @@ namespace gpuxtb::detail::cuda {
  */
 struct Gfn2ForceDeviceActivity {
   const std::uint8_t* requested_mask = nullptr;
-  const gpuxtb_status_t* system_statuses = nullptr;
+  const xtbloom_status_t* system_statuses = nullptr;
   std::int64_t batch_elements = 0;
   std::uint64_t plan_token = 0u;
 };
@@ -30,6 +30,6 @@ struct Gfn2ForceDeviceActivity {
 static_assert(std::is_trivially_copyable_v<Gfn2ForceDeviceActivity>);
 static_assert(std::is_standard_layout_v<Gfn2ForceDeviceActivity>);
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_FORCE_COMMON_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_FORCE_COMMON_CUH

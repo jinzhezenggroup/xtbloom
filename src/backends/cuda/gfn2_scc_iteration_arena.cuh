@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_ARENA_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_SCC_ITERATION_ARENA_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_ARENA_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_SCC_ITERATION_ARENA_CUH
 
 #include <cstddef>
 #include <cstdint>
@@ -9,7 +9,7 @@
 
 #include "backends/cuda/gfn2_scc_iteration_reports.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::uint32_t kGfn2SccIterationArenaAbiVersion = 4u;
 inline constexpr std::size_t kGfn2SccIterationArenaAlignment = 256u;
@@ -112,6 +112,6 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationArenaRequirements>);
     Gfn2SccIterationDeviceState& state, Gfn2SccIterationDeviceWorkspace& workspace,
     Gfn2SccIterationReportStorage& report_storage) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_ARENA_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_SCC_ITERATION_ARENA_CUH

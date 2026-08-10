@@ -1,4 +1,4 @@
-# Builds the gpuxtb WASM web demo and publishes it to GitHub Pages.
+# Builds the xtbloom WASM web demo and publishes it to GitHub Pages.
 #
 # The artifact is a fully client-side GFN2-xTB single-point + geometry
 # optimization page: a single-threaded wasm32 module (so no COOP/COEP headers
@@ -6,7 +6,7 @@
 # preloaded minimal LAPACK side module. A separate wasm64 build is retained as
 # an ABI/scientific parity gate but is not deployed. Everything is produced by
 # the CMake web target (web/CMakeLists.txt, enabled here with
-# -DGPUXTB_BUILD_WEB_DEMO=ON).
+# -DXTBLOOM_BUILD_WEB_DEMO=ON).
 #
 # Deploys only on pushes to main; pull requests build + smoke-test without
 # publishing.
@@ -69,9 +69,9 @@ jobs:
       - name: Configure wasm32 deployment build
         run: |
           emcmake cmake -S . -B build/wasm32-web -G Ninja \
-            -DGPUXTB_ENABLE_CUDA=OFF \
-            -DGPUXTB_BUILD_TESTS=OFF \
-            -DGPUXTB_BUILD_WEB_DEMO=ON \
+            -DXTBLOOM_ENABLE_CUDA=OFF \
+            -DXTBLOOM_BUILD_TESTS=OFF \
+            -DXTBLOOM_BUILD_WEB_DEMO=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="-m32 -fPIC" \
@@ -83,9 +83,9 @@ jobs:
       - name: Configure wasm64 parity build
         run: |
           emcmake cmake -S . -B build/wasm64-web -G Ninja \
-            -DGPUXTB_ENABLE_CUDA=OFF \
-            -DGPUXTB_BUILD_TESTS=OFF \
-            -DGPUXTB_BUILD_WEB_DEMO=ON \
+            -DXTBLOOM_ENABLE_CUDA=OFF \
+            -DXTBLOOM_BUILD_TESTS=OFF \
+            -DXTBLOOM_BUILD_WEB_DEMO=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="-m64 -fPIC" \
@@ -100,19 +100,22 @@ jobs:
       - name: Test browser helpers
         run: npm test --prefix web
 
+      - name: Verify pinned OpenChemLib CDN integration
+        run: node web/tests/openchemlib_smoke.mjs
+
       - name: Run public C ABI layout and short-initializer checks
         run: |
           emcc -m32 -std=c11 -Iinclude -c tests/c_api_test.c \
             -o build/wasm32-c-api-test.o
           EMCC_FORCE_STDLIBS=1 em++ -m32 build/wasm32-c-api-test.o \
-            build/wasm32-web/libgpuxtb.a -o build/wasm32-c-api-test.js \
+            build/wasm32-web/libxtbloom.a -o build/wasm32-c-api-test.js \
             -sMAIN_MODULE=2 -sALLOW_MEMORY_GROWTH
           node build/wasm32-c-api-test.js
 
           emcc -m64 -std=c11 -Iinclude -c tests/c_api_test.c \
             -o build/wasm64-c-api-test.o
           EMCC_FORCE_STDLIBS=1 em++ -m64 build/wasm64-c-api-test.o \
-            build/wasm64-web/libgpuxtb.a -o build/wasm64-c-api-test.js \
+            build/wasm64-web/libxtbloom.a -o build/wasm64-c-api-test.js \
             -sMAIN_MODULE=2 -sALLOW_MEMORY_GROWTH
           node build/wasm64-c-api-test.js
 

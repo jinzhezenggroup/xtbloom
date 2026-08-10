@@ -1,0 +1,23 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+if(@XTBLOOM_HAS_CUDA@)
+  # libxtbloom.so resolves the CUDA host APIs in cudart/cuBLAS/cuSOLVER/libcuda
+  # dynamically (see src/runtime/cuda_dlopen.c), so a consumer does not need
+  # the CUDA toolkit merely to link. A compatible major host runtime is still
+  # required when the CUDA backend is called; record the build toolkit as a
+  # non-fatal diagnostic instead of a hard package dependency.
+  find_package(CUDAToolkit QUIET)
+  if(CUDAToolkit_FOUND AND NOT CUDAToolkit_VERSION_MAJOR EQUAL @XTBLOOM_CUDA_TOOLKIT_MAJOR@)
+    message(WARNING
+      "xtbloom was built with CUDA @XTBLOOM_CUDA_TOOLKIT_MAJOR@.@XTBLOOM_CUDA_TOOLKIT_MINOR@; "
+      "found incompatible CUDA ${CUDAToolkit_VERSION}. The CUDA backend loads the "
+      "NVIDIA runtime libraries at run time and may fail on this toolkit."
+    )
+  endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/xtbloomTargets.cmake")
+
+check_required_components(xtbloom)

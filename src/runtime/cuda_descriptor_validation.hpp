@@ -1,7 +1,7 @@
-#ifndef GPUXTB_RUNTIME_CUDA_DESCRIPTOR_VALIDATION_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_RUNTIME_CUDA_DESCRIPTOR_VALIDATION_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_RUNTIME_CUDA_DESCRIPTOR_VALIDATION_HPP
+#define XTBLOOM_RUNTIME_CUDA_DESCRIPTOR_VALIDATION_HPP
 
 #include <cuda_runtime_api.h>
 
@@ -9,9 +9,9 @@
 #include <cstdint>
 #include <string>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 /*
  * Managed storage is rejected by default at the public CUDA boundary.  An
@@ -33,7 +33,7 @@ enum class CudaManagedMemoryPolicy : std::uint8_t {
 struct CudaValidatedConstBuffer {
   const void* data = nullptr;
   std::size_t logical_bytes = 0u;
-  gpuxtb_memory_space_t memory_space = GPUXTB_MEMORY_HOST;
+  xtbloom_memory_space_t memory_space = XTBLOOM_MEMORY_HOST;
   cudaMemoryType pointer_type = cudaMemoryTypeUnregistered;
   std::int32_t allocation_device = -1;
 };
@@ -42,7 +42,7 @@ struct CudaValidatedConstBuffer {
 struct CudaValidatedBuffer {
   void* data = nullptr;
   std::size_t logical_bytes = 0u;
-  gpuxtb_memory_space_t memory_space = GPUXTB_MEMORY_HOST;
+  xtbloom_memory_space_t memory_space = XTBLOOM_MEMORY_HOST;
   cudaMemoryType pointer_type = cudaMemoryTypeUnregistered;
   std::int32_t allocation_device = -1;
 };
@@ -64,17 +64,17 @@ class ScopedCudaDevice {
   ScopedCudaDevice(const ScopedCudaDevice&) = delete;
   ScopedCudaDevice& operator=(const ScopedCudaDevice&) = delete;
 
-  [[nodiscard]] bool ok() const noexcept { return status_ == GPUXTB_STATUS_SUCCESS; }
-  [[nodiscard]] gpuxtb_status_t status() const noexcept { return status_; }
+  [[nodiscard]] bool ok() const noexcept { return status_ == XTBLOOM_STATUS_SUCCESS; }
+  [[nodiscard]] xtbloom_status_t status() const noexcept { return status_; }
   [[nodiscard]] std::int32_t previous_device() const noexcept { return previous_device_; }
   [[nodiscard]] std::int32_t selected_device() const noexcept { return selected_device_; }
 
-  [[nodiscard]] gpuxtb_status_t restore(std::string& error);
+  [[nodiscard]] xtbloom_status_t restore(std::string& error);
 
  private:
   std::int32_t previous_device_ = -1;
   std::int32_t selected_device_ = -1;
-  gpuxtb_status_t status_ = GPUXTB_STATUS_BACKEND_UNAVAILABLE;
+  xtbloom_status_t status_ = XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
   bool restore_pending_ = false;
 };
 
@@ -86,9 +86,9 @@ class ScopedCudaDevice {
  *
  * The calling thread's current device is preserved on every reported path.
  */
-[[nodiscard]] gpuxtb_status_t validate_cuda_stream_owner(std::int32_t device_id,
-                                                         cudaStream_t stream, bool reject_capture,
-                                                         std::string& error);
+[[nodiscard]] xtbloom_status_t validate_cuda_stream_owner(std::int32_t device_id,
+                                                          cudaStream_t stream, bool reject_capture,
+                                                          std::string& error);
 
 /*
  * Validate a complete logical byte range without dereferencing it.
@@ -108,18 +108,16 @@ class ScopedCudaDevice {
  * On failure validated is reset, CUDA runtime validation errors are consumed
  * from the per-thread last-error slot, and no caller bytes are read or written.
  */
-[[nodiscard]] gpuxtb_status_t validate_cuda_const_buffer(
-    std::int32_t device_id, const char* name, const gpuxtb_const_buffer_t& buffer,
+[[nodiscard]] xtbloom_status_t validate_cuda_const_buffer(
+    std::int32_t device_id, const char* name, const xtbloom_const_buffer_t& buffer,
     std::size_t logical_bytes, std::size_t alignment, CudaManagedMemoryPolicy managed_policy,
     CudaValidatedConstBuffer& validated, std::string& error);
 
-[[nodiscard]] gpuxtb_status_t validate_cuda_buffer(std::int32_t device_id, const char* name,
-                                                   const gpuxtb_buffer_t& buffer,
-                                                   std::size_t logical_bytes, std::size_t alignment,
-                                                   CudaManagedMemoryPolicy managed_policy,
-                                                   CudaValidatedBuffer& validated,
-                                                   std::string& error);
+[[nodiscard]] xtbloom_status_t validate_cuda_buffer(
+    std::int32_t device_id, const char* name, const xtbloom_buffer_t& buffer,
+    std::size_t logical_bytes, std::size_t alignment, CudaManagedMemoryPolicy managed_policy,
+    CudaValidatedBuffer& validated, std::string& error);
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail
 
-#endif  // GPUXTB_RUNTIME_CUDA_DESCRIPTOR_VALIDATION_HPP
+#endif  // XTBLOOM_RUNTIME_CUDA_DESCRIPTOR_VALIDATION_HPP

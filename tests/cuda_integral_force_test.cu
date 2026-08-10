@@ -23,14 +23,14 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2ForceDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2IntegralDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2IntegralDeviceError;
-using gpuxtb::detail::cuda::Gfn2IntegralForceDeviceInput;
-using gpuxtb::detail::cuda::Gfn2IntegralForceDeviceOutput;
-using gpuxtb::detail::cuda::Gfn2IntegralForceDeviceWorkspace;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::IntegralPlan;
+using xtbloom::detail::cuda::Gfn2ForceDeviceActivity;
+using xtbloom::detail::cuda::Gfn2IntegralDeviceBatch;
+using xtbloom::detail::cuda::Gfn2IntegralDeviceError;
+using xtbloom::detail::cuda::Gfn2IntegralForceDeviceInput;
+using xtbloom::detail::cuda::Gfn2IntegralForceDeviceOutput;
+using xtbloom::detail::cuda::Gfn2IntegralForceDeviceWorkspace;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::IntegralPlan;
 
 constexpr std::uint64_t kPlanToken = 0x2b41602af7c913d5ULL;
 
@@ -132,14 +132,14 @@ bool update_reference(HostCase& data, std::string& error) {
   data.reference = data.seed;
   std::vector<double> workspace((data.integrals.workspace_size_bytes + sizeof(double) - 1u) /
                                 sizeof(double));
-  return gpuxtb::detail::gfn2::add_overlap_gradient_cpu(
+  return xtbloom::detail::gfn2::add_overlap_gradient_cpu(
              data.basis, data.integrals, data.positions.data(), data.overlap_adjoint.data(),
              data.reference.data(), workspace.data(), workspace.size() * sizeof(double),
-             error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::add_multipole_gradient_cpu(
+             error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::add_multipole_gradient_cpu(
              data.basis, data.integrals, data.positions.data(), data.dipole_adjoint.data(),
              data.quadrupole_adjoint.data(), data.reference.data(), workspace.data(),
-             workspace.size() * sizeof(double), error) == GPUXTB_STATUS_SUCCESS;
+             workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 bool make_case(std::size_t batch_size, HostCase& data, std::string& error) {
@@ -150,11 +150,12 @@ bool make_case(std::size_t batch_size, HostCase& data, std::string& error) {
     append_system(system, atomic_numbers, data.positions);
   }
   atom_offsets[batch_size] = static_cast<std::int64_t>(atomic_numbers.size());
-  if (gpuxtb::detail::gfn2::make_basis_plan(
-          static_cast<std::int64_t>(batch_size), static_cast<std::int64_t>(atomic_numbers.size()),
-          atom_offsets.data(), atomic_numbers.data(), data.basis, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_integral_plan(data.basis, data.integrals, error) !=
-          GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(batch_size),
+                                             static_cast<std::int64_t>(atomic_numbers.size()),
+                                             atom_offsets.data(), atomic_numbers.data(), data.basis,
+                                             error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_integral_plan(data.basis, data.integrals, error) !=
+          XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -210,7 +211,7 @@ struct DeviceFixture {
   DeviceBuffer<double> gradients;
   DeviceBuffer<double> gradient_scratch;
   DeviceBuffer<std::uint8_t> requested;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<std::uint32_t> sequence_active;
   DeviceBuffer<std::uint32_t> system_errors;
   DeviceBuffer<std::uint32_t> device_error;
@@ -272,7 +273,7 @@ struct DeviceFixture {
       return status;
     }
     std::vector<std::uint8_t> all_requested(systems, 1u);
-    std::vector<gpuxtb_status_t> all_success(systems, GPUXTB_STATUS_SUCCESS);
+    std::vector<xtbloom_status_t> all_success(systems, XTBLOOM_STATUS_SUCCESS);
     status = requested.copy_from(all_requested.data(), systems, stream);
     if (status == cudaSuccess) {
       status = statuses.copy_from(all_success.data(), systems, stream);
@@ -367,9 +368,9 @@ struct DeviceFixture {
 
 int run_force(DeviceFixture& device, const HostCase& host, cudaStream_t stream) {
   const Gfn2IntegralDeviceBatch batch = device.batch(host);
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_integral_force_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_force_device_errors_cuda(
       batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_integral_gradient_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_integral_gradient_cuda(
       batch, device.activity(host), device.input(host), device.output(host), device.workspace(host),
       device.system_errors.get(), device.device_error.get(), stream));
   return 0;
@@ -424,12 +425,12 @@ double weighted_integral_value(const HostCase& host, const std::vector<double>& 
   std::vector<double> quadrupole(6u * matrices);
   std::vector<double> workspace((host.integrals.workspace_size_bytes + sizeof(double) - 1u) /
                                 sizeof(double));
-  if (gpuxtb::detail::gfn2::evaluate_overlap_cpu(
+  if (xtbloom::detail::gfn2::evaluate_overlap_cpu(
           host.basis, host.integrals, positions.data(), overlap.data(), workspace.data(),
-          workspace.size() * sizeof(double), error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::evaluate_multipole_cpu(
+          workspace.size() * sizeof(double), error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::evaluate_multipole_cpu(
           host.basis, host.integrals, positions.data(), dipole.data(), quadrupole.data(),
-          workspace.data(), workspace.size() * sizeof(double), error) != GPUXTB_STATUS_SUCCESS) {
+          workspace.data(), workspace.size() * sizeof(double), error) != XTBLOOM_STATUS_SUCCESS) {
     return std::numeric_limits<double>::quiet_NaN();
   }
   double value = 0.0;
@@ -498,9 +499,9 @@ int test_requested_and_failed_poison_peers() {
   constexpr std::size_t unrequested = 1u;
   constexpr std::size_t failed = 2u;
   std::vector<std::uint8_t> requested(8u, 1u);
-  std::vector<gpuxtb_status_t> statuses(8u, GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   requested[unrequested] = 0u;
-  statuses[failed] = GPUXTB_STATUS_INTERNAL_ERROR;
+  statuses[failed] = XTBLOOM_STATUS_INTERNAL_ERROR;
   CUDA_CHECK(device.requested.copy_from(requested.data(), requested.size(), stream));
   CUDA_CHECK(device.statuses.copy_from(statuses.data(), statuses.size(), stream));
 
@@ -564,9 +565,9 @@ int test_changed_input_graph_replay() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_integral_force_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_force_device_errors_cuda(
       batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_integral_gradient_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_integral_gradient_cuda(
       batch, device.activity(host), device.input(host), device.output(host), device.workspace(host),
       device.system_errors.get(), device.device_error.get(), stream));
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));

@@ -8,11 +8,11 @@ ground truth for the Python bindings.
 from __future__ import annotations
 
 import _cases
-import gpuxtb.library as _library
 import numpy as np
 import pytest
-from gpuxtb import Calculator, PointCharge, Result, Structure
-from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
+import xtbloom.library as _library
+from xtbloom import Calculator, PointCharge, Result, Structure
+from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
 # Cases whose goldens are pure molecular (no external point charges).
 MOLECULAR_CASES = [
@@ -105,7 +105,7 @@ def test_charge_and_multiplicity_are_consistent() -> None:
     numbers, positions, charge, _, _ = _cases.structure_inputs(case)
     calc = Calculator("GFN2-xTB", numbers, positions, charge=charge, multiplicity=1)
     assert calc.uhf == 0
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         Calculator("GFN2-xTB", numbers, positions, charge=charge, uhf=1, multiplicity=1)
 
 
@@ -113,7 +113,7 @@ def test_structure_update_is_transactional() -> None:
     """Leave a structure unchanged when a multi-field update is invalid."""
     structure = Structure(np.array([1, 1]), np.zeros((2, 3)))
     original = structure.positions.copy()
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         structure.update(positions=np.ones((2, 3)), spin_channels=3)
     assert structure.positions == pytest.approx(original, abs=0.0)
     assert structure.spin_channels == 1
@@ -132,7 +132,7 @@ def test_structure_update_is_transactional() -> None:
 def test_invalid_compute_settings_are_rejected(setting: str, value: object) -> None:
     """Reject nonfinite, nonpositive, or nonintegral compute settings."""
     calc = Calculator("GFN2-xTB", np.array([1, 1]), np.zeros((2, 3)))
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         calc.set(setting, value)
 
 
@@ -193,7 +193,7 @@ def test_scc_failure_raises() -> None:
         spin_channels=spin,
         max_scc_iterations=1,
     )
-    with pytest.raises(GPUxtbRuntimeError):
+    with pytest.raises(XTBloomRuntimeError):
         calc.singlepoint()
 
 
@@ -360,9 +360,9 @@ def test_efield_dipole_publication_flag() -> None:
 
 def test_efield_invalid_input_is_rejected() -> None:
     """A malformed electric field is rejected eagerly by the high-level API."""
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         _water_calculator(efield=[0.001, 0.002])
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         _water_calculator(efield=[0.001, 0.002, float("nan")])
 
 

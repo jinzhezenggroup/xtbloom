@@ -1,14 +1,14 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_REPORTS_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_SCC_ITERATION_REPORTS_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_REPORTS_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_SCC_ITERATION_REPORTS_CUH
 
 #include <cstdint>
 #include <type_traits>
 
 #include "backends/cuda/gfn2_scc_iteration.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /*
  * Canonical arena projection for stage-local diagnostics not already owned by
@@ -88,6 +88,6 @@ static_assert(std::is_standard_layout_v<Gfn2SccIterationProjectedDescriptors>);
     const Gfn2SccIterationDeviceWorkspace& workspace_seed,
     Gfn2SccIterationBinding& binding) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_ITERATION_REPORTS_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_SCC_ITERATION_REPORTS_CUH

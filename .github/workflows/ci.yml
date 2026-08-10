@@ -55,7 +55,7 @@ jobs:
           COVERAGE_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage' || '' }}
         run: |
           cmake -S . -B build -G Ninja \
-            -DGPUXTB_ENABLE_CUDA=OFF \
+            -DXTBLOOM_ENABLE_CUDA=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
@@ -107,8 +107,8 @@ jobs:
           enable-cache: true
       # --locked fails if uv.lock is stale, so an out-of-date lock shows up as
       # a CI failure instead of drifting silently. --no-editable installs the
-      # real wheel (not an editable hook), so gpuxtb.library can discover the
-      # bundled libgpuxtb exactly as an installed package does.
+      # real wheel (not an editable hook), so xtbloom.library can discover the
+      # bundled libxtbloom exactly as an installed package does.
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
       - name: Restore ccache
@@ -120,9 +120,9 @@ jobs:
             ccache-python-
       - name: Install package with test extras
         env:
-          GPUXTB_ENABLE_CUDA: "OFF"
-          GPUXTB_C_COMPILER_LAUNCHER: ccache
-          GPUXTB_CXX_COMPILER_LAUNCHER: ccache
+          XTBLOOM_ENABLE_CUDA: "OFF"
+          XTBLOOM_C_COMPILER_LAUNCHER: ccache
+          XTBLOOM_CXX_COMPILER_LAUNCHER: ccache
         run: >-
           uv sync --locked --no-editable --extra test
           --group torch-testing
@@ -130,11 +130,14 @@ jobs:
         run: ccache -s
       - name: Run Python tests with coverage
         run: |
-          installed_library="$(uv run --no-sync python -c 'from gpuxtb.library import library_path; print(library_path())')"
+          installed_library="$(uv run --no-sync python -c 'from xtbloom.library import library_path; print(library_path())')"
           test -f "${installed_library}"
-          GPUXTB_LIBRARY="${installed_library}" PYTHONPATH="${PWD}/python" \
+          XTBLOOM_LIBRARY="${installed_library}" PYTHONPATH="${PWD}/python" \
             uv run --no-sync pytest python/tests -q --cov \
               --cov-report=xml:coverage-python.xml
+          uv run --no-sync python -m unittest -v \
+            benchmarks.test_run benchmarks.test_natoms_scaling \
+            benchmarks.test_natoms_cross_engine benchmarks.test_dxtb_adapter
       - name: Validate repository-relative Python coverage paths
         run: |
           uv run --no-sync python - <<'PY'
@@ -142,7 +145,7 @@ jobs:
           from xml.etree import ElementTree
 
           expected = {
-              path.as_posix() for path in Path("python/gpuxtb").rglob("*.py")
+              path.as_posix() for path in Path("python/xtbloom").rglob("*.py")
           }
           report = ElementTree.parse("coverage-python.xml")
           reported = {
@@ -237,8 +240,8 @@ jobs:
       - name: Configure static package
         run: |
           cmake -S . -B build-static -G Ninja \
-            -DGPUXTB_ENABLE_CUDA=OFF \
-            -DGPUXTB_BUILD_TESTS=OFF \
+            -DXTBLOOM_ENABLE_CUDA=OFF \
+            -DXTBLOOM_BUILD_TESTS=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
@@ -246,17 +249,17 @@ jobs:
       - name: Build and install
         run: |
           cmake --build build-static --parallel
-          cmake --install build-static --prefix "${RUNNER_TEMP}/gpuxtb-static-install"
+          cmake --install build-static --prefix "${RUNNER_TEMP}/xtbloom-static-install"
           python3 tools/licensing/check_licenses.py --source-root . \
-            --install-prefix "${RUNNER_TEMP}/gpuxtb-static-install"
+            --install-prefix "${RUNNER_TEMP}/xtbloom-static-install"
       - name: Show ccache statistics
         run: ccache -s
       - name: Consume static exported CMake package
         run: |
           cmake -S tests/install_consumer -B build-static-consumer -G Ninja \
-            -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/gpuxtb-static-install"
+            -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/xtbloom-static-install"
           cmake --build build-static-consumer --parallel
-          "${PWD}/build-static-consumer/gpuxtb_install_consumer" smoke
+          "${PWD}/build-static-consumer/xtbloom_install_consumer" smoke
 
   public-cpu-release:
     runs-on: ubuntu-24.04
@@ -282,14 +285,17 @@ jobs:
           restore-keys: |
             ccache-public-
       - name: Install LP64 eigensolver runtime
-        run: uv pip install --system 'scipy-openblas32>=0.3.34.0.0'
+        # Keep CI on the reviewed provider ABI. Newer scipy-openblas32 wheels
+        # may change optional local-thread-control symbols independently of
+        # xtbloom, which would turn this gate into an unreviewed moving target.
+        run: uv pip install --system 'scipy-openblas32==0.3.34.0.0'
       - name: Configure shared public inference build
         run: |
           openblas="$(python -c 'from pathlib import Path; import scipy_openblas32; print(Path(scipy_openblas32.get_lib_dir()) / scipy_openblas32.get_library(fullname=True))')"
           test -f "${openblas}"
           cmake -S . -B build-public -G Ninja \
-            -DGPUXTB_ENABLE_CUDA=OFF \
-            -DGPUXTB_CPU_LINALG_LIBRARY="${openblas}" \
+            -DXTBLOOM_ENABLE_CUDA=OFF \
+            -DXTBLOOM_CPU_LINALG_LIBRARY="${openblas}" \
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
@@ -302,13 +308,13 @@ jobs:
         run: ctest --test-dir build-public --output-on-failure
       - name: Install and consume exported CMake package
         run: |
-          cmake --install build-public --prefix "${RUNNER_TEMP}/gpuxtb-install"
+          cmake --install build-public --prefix "${RUNNER_TEMP}/xtbloom-install"
           python3 tools/licensing/check_licenses.py --source-root . \
-            --install-prefix "${RUNNER_TEMP}/gpuxtb-install"
+            --install-prefix "${RUNNER_TEMP}/xtbloom-install"
           cmake -S tests/install_consumer -B build-consumer -G Ninja \
-            -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/gpuxtb-install"
+            -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/xtbloom-install"
           cmake --build build-consumer --parallel
-          "${PWD}/build-consumer/gpuxtb_install_consumer" cpu
+          "${PWD}/build-consumer/xtbloom_install_consumer" cpu
 
   pass:
     name: Pass CI checks

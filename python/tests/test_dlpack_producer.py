@@ -1,12 +1,12 @@
-"""Tests for the gpuxtb-owned DLPack result producer.
+"""Tests for the xTBloom-owned DLPack result producer.
 
-``gpuxtb._dlpack.DLPackResultBuffer`` wraps a native ref-counted result arena
-(gpuxtb_result_owner_t) and hands finished host slices to importing frameworks
+``xtbloom._dlpack.DLPackResultBuffer`` wraps a native ref-counted result arena
+(xtbloom_result_owner_t) and hands finished host slices to importing frameworks
 through the DLPack producer protocol.  These tests cover the protocol
 lifecycle (repeated exports, legacy/versioned capsules, close semantics,
 unconsumed-capsule cleanup, and external-import survival) on the CPU/host
 path, plus the ``result_memory="host"`` / default policies of
-:class:`gpuxtb.ArrayBatch`.  Real-provider (CuPy/PyTorch/JAX) imports live in
+:class:`xtbloom.ArrayBatch`.  Real-provider (CuPy/PyTorch/JAX) imports live in
 the CUDA-backed matrix because the device path is the primary objective of
 issue #214.
 """
@@ -16,12 +16,12 @@ from __future__ import annotations
 import ctypes
 import gc
 
-import gpuxtb._dlpack as dlpack
 import numpy as np
 import pytest
-from gpuxtb import library
-from gpuxtb.exceptions import GPUxtbNotSupportedError, GPUxtbValueError
-from gpuxtb.interface import ArrayBatch, ArrayBatchResult, Calculator, Structure
+import xtbloom._dlpack as dlpack
+from xtbloom import library
+from xtbloom.exceptions import XTBloomNotSupportedError, XTBloomValueError
+from xtbloom.interface import ArrayBatch, ArrayBatchResult, Calculator, Structure
 
 
 def _water() -> Calculator:
@@ -98,8 +98,8 @@ def _host_arena(size_bytes: int = 256) -> dlpack._ResultArena:
     """Create a native host result arena."""
     options = library.ResultOwnerOptions()
     library._check_init(
-        "gpuxtb_result_owner_options_init",
-        library.load_library().gpuxtb_result_owner_options_init(
+        "xtbloom_result_owner_options_init",
+        library.load_library().xtbloom_result_owner_options_init(
             ctypes.byref(options), ctypes.sizeof(options)
         ),
     )
@@ -107,7 +107,7 @@ def _host_arena(size_bytes: int = 256) -> dlpack._ResultArena:
     options.device_id = -1
     options.size_bytes = size_bytes
     handle = ctypes.c_void_p()
-    status = library.load_library().gpuxtb_result_owner_create(
+    status = library.load_library().xtbloom_result_owner_create(
         ctypes.byref(options), ctypes.byref(handle)
     )
     assert status == library.STATUS_SUCCESS, library.get_last_error()
@@ -118,8 +118,8 @@ def _filled_buffer(arena: dlpack._ResultArena) -> dlpack.DLPackResultBuffer:
     """Fill an arena with a known ramp and return one float64 slice."""
     buffer = library.Buffer()
     library._check_init(
-        "gpuxtb_result_owner_buffer",
-        library.load_library().gpuxtb_result_owner_buffer(
+        "xtbloom_result_owner_buffer",
+        library.load_library().xtbloom_result_owner_buffer(
             arena.handle, ctypes.byref(buffer)
         ),
     )
@@ -163,7 +163,7 @@ def test_producer_imports_without_copy_via_numpy() -> None:
     # Zero-copy: the imported array aliases the arena bytes.
     pointer = int(imported.ctypes.data)
     buffer = library.Buffer()
-    library.load_library().gpuxtb_result_owner_buffer(
+    library.load_library().xtbloom_result_owner_buffer(
         arena.handle, ctypes.byref(buffer)
     )
     expected = int(buffer.data) + 64
@@ -225,7 +225,7 @@ def test_producer_imports_via_jax_on_host() -> None:
 def _producer_host_pointer(arena: dlpack._ResultArena) -> int:
     """Return the arena base host pointer for zero-copy pointer checks."""
     buffer = library.Buffer()
-    library.load_library().gpuxtb_result_owner_buffer(
+    library.load_library().xtbloom_result_owner_buffer(
         arena.handle, ctypes.byref(buffer)
     )
     return int(buffer.data or 0)
@@ -323,7 +323,7 @@ def test_producer_export_after_close_raises() -> None:
     arena = _host_arena()
     producer = _filled_buffer(arena)
     producer.close()
-    with pytest.raises(GPUxtbValueError, match="closed"):
+    with pytest.raises(XTBloomValueError, match="closed"):
         producer.__dlpack__()
     producer.close()  # idempotent
     arena.close()
@@ -422,7 +422,7 @@ def test_array_batch_invalid_result_memory_rejected() -> None:
     water = _water()
     packed = _pack_single([water])
     batch = ArrayBatch(**packed, backend="cpu")
-    with pytest.raises(GPUxtbValueError, match="result_memory"):
+    with pytest.raises(XTBloomValueError, match="result_memory"):
         batch.compute(result_memory="hip")
 
 
@@ -431,5 +431,5 @@ def test_array_batch_cuda_policy_requires_cuda_backend() -> None:
     water = _water()
     packed = _pack_single([water])
     batch = ArrayBatch(**packed, backend="cpu")
-    with pytest.raises(GPUxtbNotSupportedError, match="CUDA"):
+    with pytest.raises(XTBloomNotSupportedError, match="CUDA"):
         batch.compute(result_memory="cuda")

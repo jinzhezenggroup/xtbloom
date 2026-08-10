@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include "model/gfn2/h0.hpp"
 
@@ -13,7 +13,7 @@
 
 #include "data/parameters/gfn2.hpp"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 namespace {
 
 /* GFN2 keeps this historical conversion to reproduce the published model. */
@@ -49,8 +49,8 @@ bool checked_square(std::int64_t value, std::int64_t& square) {
   return true;
 }
 
-gpuxtb_status_t validate_basis_and_integrals(const BasisPlan& basis, const IntegralPlan& integrals,
-                                             std::string& error) {
+xtbloom_status_t validate_basis_and_integrals(const BasisPlan& basis, const IntegralPlan& integrals,
+                                              std::string& error) {
   if (basis.batch_size <= 0 || basis.total_atoms <= 0 || basis.total_shells <= 0 ||
       basis.total_orbitals <= 0 || !representable_as_size(basis.batch_size) ||
       !representable_as_size(basis.total_atoms) || !representable_as_size(basis.total_shells) ||
@@ -60,7 +60,7 @@ gpuxtb_status_t validate_basis_and_integrals(const BasisPlan& basis, const Integ
       integrals.total_matrix_elements < 0 ||
       !representable_as_size(integrals.total_matrix_elements)) {
     error = "H0 requires a positive, representable basis plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const auto batch_count = static_cast<std::size_t>(basis.batch_size);
@@ -74,7 +74,7 @@ gpuxtb_status_t validate_basis_and_integrals(const BasisPlan& basis, const Integ
       basis.shell_to_atom.size() != shell_count || basis.angular_momenta.size() != shell_count ||
       basis.slater_exponents.size() != shell_count) {
     error = "H0 basis plan is incomplete or internally inconsistent";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (basis.atom_offsets.front() != 0 || basis.atom_offsets.back() != basis.total_atoms ||
       basis.batch_shell_offsets.front() != 0 ||
@@ -86,7 +86,7 @@ gpuxtb_status_t validate_basis_and_integrals(const BasisPlan& basis, const Integ
       basis.shell_orbital_offsets.front() != 0 ||
       basis.shell_orbital_offsets.back() != basis.total_orbitals) {
     error = "H0 basis offsets do not span the stored dimensions";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   if (integrals.batch_size != basis.batch_size ||
@@ -94,7 +94,7 @@ gpuxtb_status_t validate_basis_and_integrals(const BasisPlan& basis, const Integ
       integrals.matrix_offsets.front() != 0 ||
       integrals.matrix_offsets.back() != integrals.total_matrix_elements) {
     error = "H0 integral plan is incompatible with the basis plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   for (std::size_t batch = 0; batch < batch_count; ++batch) {
@@ -108,7 +108,7 @@ gpuxtb_status_t validate_basis_and_integrals(const BasisPlan& basis, const Integ
         shell_begin < 0 || shell_begin > shell_end || shell_end > basis.total_shells ||
         orbital_begin < 0 || orbital_begin > orbital_end || orbital_end > basis.total_orbitals) {
       error = "H0 basis offsets are not valid ragged partitions";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     std::int64_t matrix_size = 0;
@@ -118,7 +118,7 @@ gpuxtb_status_t validate_basis_and_integrals(const BasisPlan& basis, const Integ
         integrals.matrix_offsets[batch + 1u] > integrals.total_matrix_elements ||
         integrals.matrix_offsets[batch + 1u] - integrals.matrix_offsets[batch] != matrix_size) {
       error = "H0 integral matrix offsets do not match the ragged orbital dimensions";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
 
@@ -127,7 +127,7 @@ gpuxtb_status_t validate_basis_and_integrals(const BasisPlan& basis, const Integ
     const std::int64_t end = basis.atom_shell_offsets[atom + 1u];
     if (begin < 0 || begin > end || end > basis.total_shells) {
       error = "H0 atom-to-shell offsets are invalid";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   for (std::size_t shell = 0; shell < shell_count; ++shell) {
@@ -138,17 +138,17 @@ gpuxtb_status_t validate_basis_and_integrals(const BasisPlan& basis, const Integ
         basis.angular_momenta[shell] > 2u || !(basis.slater_exponents[shell] > 0.0) ||
         !std::isfinite(basis.slater_exponents[shell])) {
       error = "H0 shell metadata is invalid";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
 
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_plan(const BasisPlan& basis, const IntegralPlan& integrals,
-                              const H0Plan& plan, std::string& error) {
-  gpuxtb_status_t status = validate_basis_and_integrals(basis, integrals, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t validate_plan(const BasisPlan& basis, const IntegralPlan& integrals,
+                               const H0Plan& plan, std::string& error) {
+  xtbloom_status_t status = validate_basis_and_integrals(basis, integrals, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (plan.batch_size != basis.batch_size || plan.total_atoms != basis.total_atoms ||
@@ -159,7 +159,7 @@ gpuxtb_status_t validate_plan(const BasisPlan& basis, const IntegralPlan& integr
       plan.batch_orbital_offsets != basis.batch_orbital_offsets ||
       plan.matrix_offsets != integrals.matrix_offsets) {
     error = "H0 plan is incompatible with the supplied basis or integral plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const auto batch_count = static_cast<std::size_t>(plan.batch_size);
@@ -172,7 +172,7 @@ gpuxtb_status_t validate_plan(const BasisPlan& basis, const IntegralPlan& integr
       !representable_as_size(plan.shell_pair_offsets.back()) ||
       static_cast<std::size_t>(plan.shell_pair_offsets.back()) != plan.shell_pair_scale.size()) {
     error = "H0 plan is incomplete or internally inconsistent";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   for (std::size_t batch = 0; batch < batch_count; ++batch) {
@@ -182,13 +182,13 @@ gpuxtb_status_t validate_plan(const BasisPlan& basis, const IntegralPlan& integr
     if (!checked_square(molecule_shells, expected_pairs) || plan.shell_pair_offsets[batch] < 0 ||
         plan.shell_pair_offsets[batch + 1u] - plan.shell_pair_offsets[batch] != expected_pairs) {
       error = "H0 shell-pair offsets do not match the ragged shell dimensions";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   for (double radius : plan.atomic_radii) {
     if (!(radius > 0.0) || !std::isfinite(radius)) {
       error = "H0 plan contains an invalid atomic radius";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   for (std::size_t shell = 0; shell < shell_count; ++shell) {
@@ -196,64 +196,65 @@ gpuxtb_status_t validate_plan(const BasisPlan& basis, const IntegralPlan& integr
         !std::isfinite(plan.shell_coordination_scale[shell]) ||
         !std::isfinite(plan.shell_polynomial[shell])) {
       error = "H0 plan contains an invalid shell parameter";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   for (double scale : plan.shell_pair_scale) {
     if (!(scale > 0.0) || !std::isfinite(scale)) {
       error = "H0 plan contains an invalid shell-pair scale";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_evaluation_inputs(const BasisPlan& basis, const IntegralPlan& integrals,
-                                           const H0Plan& plan, const double* positions,
-                                           const double* coordination_numbers,
-                                           const double* overlap, std::string& error) {
-  gpuxtb_status_t status = validate_plan(basis, integrals, plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t validate_evaluation_inputs(const BasisPlan& basis, const IntegralPlan& integrals,
+                                            const H0Plan& plan, const double* positions,
+                                            const double* coordination_numbers,
+                                            const double* overlap, std::string& error) {
+  xtbloom_status_t status = validate_plan(basis, integrals, plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (positions == nullptr || coordination_numbers == nullptr || overlap == nullptr) {
     error = "H0 positions, coordination numbers, and overlap must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const auto atom_count = static_cast<std::size_t>(plan.total_atoms);
   for (std::size_t coordinate = 0; coordinate < atom_count * 3u; ++coordinate) {
     if (!std::isfinite(positions[coordinate])) {
       error = "H0 positions contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   for (std::size_t atom = 0; atom < atom_count; ++atom) {
     if (!std::isfinite(coordination_numbers[atom])) {
       error = "H0 coordination numbers contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   for (std::int64_t element = 0; element < plan.total_matrix_elements; ++element) {
     if (!std::isfinite(overlap[element])) {
       error = "H0 overlap contains NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 }  // namespace
 
-gpuxtb_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integrals,
-                             const std::int32_t* atomic_numbers, H0Plan& plan, std::string& error) {
-  gpuxtb_status_t status = validate_basis_and_integrals(basis, integrals, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integrals,
+                              const std::int32_t* atomic_numbers, H0Plan& plan,
+                              std::string& error) {
+  xtbloom_status_t status = validate_basis_and_integrals(basis, integrals, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (atomic_numbers == nullptr) {
     error = "H0 atomic numbers must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   try {
@@ -278,7 +279,7 @@ gpuxtb_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integra
           parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_number));
       if (element == nullptr || element->atomic_number != atomic_number) {
         error = "H0 plan contains an unsupported atomic number";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
 
       const auto atom_index = static_cast<std::size_t>(atom);
@@ -288,7 +289,7 @@ gpuxtb_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integra
       const std::int64_t shell_end = basis.atom_shell_offsets[atom_index + 1u];
       if (shell_end - shell_begin != element->shell_count) {
         error = "H0 atomic numbers do not match the supplied basis plan";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
         const std::size_t local_shell = static_cast<std::size_t>(shell - shell_begin);
@@ -299,7 +300,7 @@ gpuxtb_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integra
         if (parameter.angular_momentum != basis.angular_momenta[shell_index] ||
             parameter.slater != basis.slater_exponents[shell_index]) {
           error = "H0 shell parameters do not match the supplied basis plan";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
         created.shell_levels[shell_index] = parameter.level * kElectronvoltToHartree;
         created.shell_coordination_scale[shell_index] =
@@ -319,14 +320,14 @@ gpuxtb_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integra
           created.shell_pair_offsets[static_cast<std::size_t>(batch)] >
               std::numeric_limits<std::int64_t>::max() - pair_count) {
         error = "H0 shell-pair storage size overflows int64";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       created.shell_pair_offsets[static_cast<std::size_t>(batch + 1)] =
           created.shell_pair_offsets[static_cast<std::size_t>(batch)] + pair_count;
     }
     if (!representable_as_size(created.shell_pair_offsets.back())) {
       error = "H0 shell-pair storage is not representable on this platform";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     created.shell_pair_scale.resize(static_cast<std::size_t>(created.shell_pair_offsets.back()));
 
@@ -376,25 +377,25 @@ gpuxtb_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integra
 
     plan = std::move(created);
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the GFN2 H0 plan";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
-gpuxtb_status_t evaluate_h0_cpu(const BasisPlan& basis, const IntegralPlan& integrals,
-                                const H0Plan& plan, const double* positions,
-                                const double* coordination_numbers, const double* overlap,
-                                double* hamiltonian, std::string& error) {
-  gpuxtb_status_t status = validate_evaluation_inputs(basis, integrals, plan, positions,
-                                                      coordination_numbers, overlap, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t evaluate_h0_cpu(const BasisPlan& basis, const IntegralPlan& integrals,
+                                 const H0Plan& plan, const double* positions,
+                                 const double* coordination_numbers, const double* overlap,
+                                 double* hamiltonian, std::string& error) {
+  xtbloom_status_t status = validate_evaluation_inputs(basis, integrals, plan, positions,
+                                                       coordination_numbers, overlap, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (hamiltonian == nullptr) {
     error = "H0 Hamiltonian output must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   for (std::int64_t batch = 0; batch < plan.batch_size; ++batch) {
@@ -462,28 +463,28 @@ gpuxtb_status_t evaluate_h0_cpu(const BasisPlan& basis, const IntegralPlan& inte
   }
 
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t add_h0_vjp_cpu(const BasisPlan& basis, const IntegralPlan& integrals,
-                               const H0Plan& plan, const double* positions,
-                               const double* coordination_numbers, const double* overlap,
-                               const double* dE_dhamiltonian, double* dE_doverlap, double* dE_dcn,
-                               double* gradients, std::string& error) {
-  gpuxtb_status_t status = validate_evaluation_inputs(basis, integrals, plan, positions,
-                                                      coordination_numbers, overlap, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t add_h0_vjp_cpu(const BasisPlan& basis, const IntegralPlan& integrals,
+                                const H0Plan& plan, const double* positions,
+                                const double* coordination_numbers, const double* overlap,
+                                const double* dE_dhamiltonian, double* dE_doverlap, double* dE_dcn,
+                                double* gradients, std::string& error) {
+  xtbloom_status_t status = validate_evaluation_inputs(basis, integrals, plan, positions,
+                                                       coordination_numbers, overlap, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (dE_dhamiltonian == nullptr || dE_doverlap == nullptr || dE_dcn == nullptr ||
       gradients == nullptr) {
     error = "H0 VJP inputs and outputs must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t element = 0; element < plan.total_matrix_elements; ++element) {
     if (!std::isfinite(dE_dhamiltonian[element])) {
       error = "H0 Hamiltonian derivatives contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
 
@@ -529,7 +530,7 @@ gpuxtb_status_t add_h0_vjp_cpu(const BasisPlan& basis, const IntegralPlan& integ
           const double distance_squared = dx * dx + dy * dy + dz * dz;
           if (distance_squared <= kMinimumDistanceSquared) {
             error = "H0 coordinate derivative is undefined for coincident atoms";
-            return GPUXTB_STATUS_INVALID_ARGUMENT;
+            return XTBLOOM_STATUS_INVALID_ARGUMENT;
           }
           distance = std::sqrt(distance_squared);
           const double reduced_distance =
@@ -590,7 +591,7 @@ gpuxtb_status_t add_h0_vjp_cpu(const BasisPlan& basis, const IntegralPlan& integ
   }
 
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2

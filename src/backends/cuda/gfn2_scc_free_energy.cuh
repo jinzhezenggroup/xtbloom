@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_SCC_FREE_ENERGY_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_SCC_FREE_ENERGY_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_SCC_FREE_ENERGY_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_SCC_FREE_ENERGY_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -10,7 +10,7 @@
 
 #include "backends/cuda/gfn2_scc_classical_energy.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::int64_t kGfn2SccFreeEnergyInputComponents = 9;
 inline constexpr std::int64_t kGfn2SccFreeEnergyDiagnosticComponents = 11;
@@ -173,6 +173,6 @@ cudaError_t compose_gfn2_scc_free_energy_cuda(const Gfn2SccFreeEnergyDeviceBatch
                                               std::uint32_t* device_error,
                                               cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_FREE_ENERGY_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_SCC_FREE_ENERGY_CUH

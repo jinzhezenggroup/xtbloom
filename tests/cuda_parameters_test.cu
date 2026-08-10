@@ -23,12 +23,12 @@ int main() {
   int device = -1;
   CHECK(cudaGetDevice(&device) == cudaSuccess);
   std::string error;
-  CHECK(gpuxtb::detail::ensure_cuda_gfn2_parameters(device, error));
-  const std::uint64_t first_count = gpuxtb::detail::cuda_gfn2_parameter_upload_count(device);
+  CHECK(xtbloom::detail::ensure_cuda_gfn2_parameters(device, error));
+  const std::uint64_t first_count = xtbloom::detail::cuda_gfn2_parameter_upload_count(device);
   CHECK(first_count == 1u);
-  CHECK(gpuxtb::detail::ensure_cuda_gfn2_parameters(device, error));
-  CHECK(gpuxtb::detail::cuda_gfn2_parameter_upload_count(device) == first_count);
+  CHECK(xtbloom::detail::ensure_cuda_gfn2_parameters(device, error));
+  CHECK(xtbloom::detail::cuda_gfn2_parameter_upload_count(device) == first_count);
 
-  CHECK(gpuxtb::detail::cuda_gfn2_parameters_match_host(device, error));
+  CHECK(xtbloom::detail::cuda_gfn2_parameters_match_host(device, error));
   return 0;
 }

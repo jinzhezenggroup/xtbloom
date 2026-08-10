@@ -1,16 +1,16 @@
-#ifndef GPUXTB_MODEL_GFN2_EXTERNAL_POINT_CHARGES_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_EXTERNAL_POINT_CHARGES_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_EXTERNAL_POINT_CHARGES_HPP
+#define XTBLOOM_MODEL_GFN2_EXTERNAL_POINT_CHARGES_HPP
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/basis.hpp"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 /*
  * Geometry-independent layout and shell hardnesses for GFN2 external point
@@ -47,11 +47,11 @@ struct ExternalPointChargePlan {
  * selecting generated GFN2 hardnesses, this is checked against the basis shell
  * layout so an accidentally mismatched element list fails during setup.
  */
-gpuxtb_status_t make_external_point_charge_plan(const BasisPlan& basis,
-                                                const std::int32_t* atomic_numbers,
-                                                std::int64_t total_point_charges,
-                                                const std::int64_t* point_charge_offsets,
-                                                ExternalPointChargePlan& plan, std::string& error);
+xtbloom_status_t make_external_point_charge_plan(const BasisPlan& basis,
+                                                 const std::int32_t* atomic_numbers,
+                                                 std::int64_t total_point_charges,
+                                                 const std::int64_t* point_charge_offsets,
+                                                 ExternalPointChargePlan& plan, std::string& error);
 
 /*
  * Overwrite shell_potentials with the xTB 6.7.1 GFN2 shell-monopole shift
@@ -63,7 +63,7 @@ gpuxtb_status_t make_external_point_charge_plan(const BasisPlan& basis,
  * For zero point sites, all point-site pointers may be NULL and the shell
  * output is still overwritten with zero.
  */
-gpuxtb_status_t evaluate_external_point_charge_potential_cpu(
+xtbloom_status_t evaluate_external_point_charge_potential_cpu(
     const ExternalPointChargePlan& plan, const double* qm_positions, const double* point_positions,
     const double* point_charges, const double* point_hardnesses, double* shell_potentials,
     std::string& error);
@@ -77,10 +77,10 @@ gpuxtb_status_t evaluate_external_point_charge_potential_cpu(
  * follow BasisPlan shell order. This routine deliberately consumes the
  * precomputed potential used by SCC instead of recomputing it.
  */
-gpuxtb_status_t add_external_point_charge_energy_cpu(const ExternalPointChargePlan& plan,
-                                                     const double* shell_charges,
-                                                     const double* shell_potentials,
-                                                     double* energies, std::string& error);
+xtbloom_status_t add_external_point_charge_energy_cpu(const ExternalPointChargePlan& plan,
+                                                      const double* shell_charges,
+                                                      const double* shell_potentials,
+                                                      double* energies, std::string& error);
 
 /*
  * Accumulate explicit external-charge forces for fixed converged shell
@@ -89,11 +89,11 @@ gpuxtb_status_t add_external_point_charge_energy_cpu(const ExternalPointChargePl
  * point-charge term. Coincident QM/site positions are valid for finite
  * positive hardnesses and contribute zero force.
  */
-gpuxtb_status_t add_external_point_charge_forces_cpu(
+xtbloom_status_t add_external_point_charge_forces_cpu(
     const ExternalPointChargePlan& plan, const double* qm_positions, const double* point_positions,
     const double* point_charges, const double* point_hardnesses, const double* shell_charges,
     double* qm_forces, double* point_forces, std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_EXTERNAL_POINT_CHARGES_HPP
+#endif  // XTBLOOM_MODEL_GFN2_EXTERNAL_POINT_CHARGES_HPP

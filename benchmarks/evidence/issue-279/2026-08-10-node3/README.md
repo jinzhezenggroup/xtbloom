@@ -4,7 +4,7 @@ This bundle records the narrow runtime claim required by issue #279: after
 setup and one warmup, reusing one fixed-topology CUDA plan/request slot for ten
 submissions performs no steady-state allocation, CUDA resource creation or
 destruction, progress-query polling, stream synchronization, or device-wide
-synchronization. Each public `gpuxtb_request_wait` blocks on the request's
+synchronization. Each public `xtbloom_request_wait` blocks on the request's
 single completion event.
 
 This is a resource/synchronization audit, not a latency or throughput claim.
@@ -23,8 +23,8 @@ publication, and exact request completion waits.
 - Driver: 580.95.05.
 - CUDA compiler/toolkit: 12.9.86; `CMAKE_CUDA_ARCHITECTURES=120`.
 - Host compiler: GCC 11.4.0; CMake 4.2.1; Ninja 1.13.0.
-- Build: shared Release, `GPUXTB_ENABLE_CUDA=ON`, LP64 SciPy OpenBLAS at
-  `/home/jzzeng/codes/gpuxtb-pr269-fix/.venv/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so`.
+- Build: shared Release, `XTBLOOM_ENABLE_CUDA=ON`, LP64 SciPy OpenBLAS at
+  `/home/jzzeng/codes/xtbloom-pr269-fix/.venv/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so`.
 - Nsight Systems: 2025.1.3.140.
 - Compute Sanitizer: 2025.2.1.0, build 35969825.
 - Profile binary SHA-256:
@@ -34,7 +34,7 @@ publication, and exact request completion waits.
 
 ## Workload and capture boundary
 
-`gpuxtb_cuda_public_api_test --request-profile` constructs and warms one
+`xtbloom_cuda_public_api_test --request-profile` constructs and warms one
 four-system H2/He/LiH/CH2 fixed-topology request path, including ragged
 restricted/unrestricted systems, QM/MM, periodic inputs, mixed host/device
 descriptors, CUDA tensor outputs, and host diagnostics. It then places exactly
@@ -47,16 +47,16 @@ The scheduler/profile command was:
 srun --partition=main --nodes=1 --ntasks=1 --cpus-per-task=4 --mem=16G \
   --gres=gpu:5090:1 --time=00:20:00 --job-name=codex-279-nsys-final2 \
   bash -lc '
-    cd /home/jzzeng/codes/gpuxtb-pr279
-    export LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib:/home/jzzeng/codes/gpuxtb-pr269-fix/.venv/lib/python3.13/site-packages/scipy_openblas32/lib
+    cd /home/jzzeng/codes/xtbloom-pr279
+    export LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib:/home/jzzeng/codes/xtbloom-pr269-fix/.venv/lib/python3.13/site-packages/scipy_openblas32/lib
     export MKL_INTERFACE_LAYER=LP64
     export MKL_THREADING_LAYER=SEQUENTIAL
     /group/software/cuda-12.9.1/bin/nsys profile \
       --force-overwrite=true \
       --capture-range=cudaProfilerApi --capture-range-end=stop \
       --trace=cuda,osrt --cuda-memory-usage=true \
-      --output=/tmp/gpuxtb-issue279-nsys-final2.jtjXN8/request-profile \
-      build/request-cuda129/gpuxtb_cuda_public_api_test --request-profile
+      --output=/tmp/xtbloom-issue279-nsys-final2.jtjXN8/request-profile \
+      build/request-cuda129/xtbloom_cuda_public_api_test --request-profile
   '
 ```
 
@@ -67,16 +67,16 @@ embed process environment data. Only the sanitized reports below were retained:
 ```bash
 nsys stats --force-export=true --force-overwrite=true \
   --report cuda_api_sum --format csv \
-  --output /tmp/gpuxtb-issue279-nsys-final2.jtjXN8/cuda_api_sum \
-  /tmp/gpuxtb-issue279-nsys-final2.jtjXN8/request-profile.nsys-rep
+  --output /tmp/xtbloom-issue279-nsys-final2.jtjXN8/cuda_api_sum \
+  /tmp/xtbloom-issue279-nsys-final2.jtjXN8/request-profile.nsys-rep
 nsys stats --force-export=true --force-overwrite=true \
   --report cuda_gpu_mem_time_sum --format csv \
-  --output /tmp/gpuxtb-issue279-nsys-final2.jtjXN8/cuda_gpu_mem_time_sum \
-  /tmp/gpuxtb-issue279-nsys-final2.jtjXN8/request-profile.nsys-rep
+  --output /tmp/xtbloom-issue279-nsys-final2.jtjXN8/cuda_gpu_mem_time_sum \
+  /tmp/xtbloom-issue279-nsys-final2.jtjXN8/request-profile.nsys-rep
 nsys stats --force-export=true --force-overwrite=true \
   --report cuda_gpu_mem_size_sum --format csv \
-  --output /tmp/gpuxtb-issue279-nsys-final2.jtjXN8/cuda_gpu_mem_size_sum \
-  /tmp/gpuxtb-issue279-nsys-final2.jtjXN8/request-profile.nsys-rep
+  --output /tmp/xtbloom-issue279-nsys-final2.jtjXN8/cuda_gpu_mem_size_sum \
+  /tmp/xtbloom-issue279-nsys-final2.jtjXN8/request-profile.nsys-rep
 ```
 
 ## Result

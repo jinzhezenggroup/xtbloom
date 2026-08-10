@@ -1,29 +1,29 @@
 #pragma once
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstdint>
 
 #if defined(__CUDACC__)
-#define GPUXTB_OCCUPATION_HD __host__ __device__
+#define XTBLOOM_OCCUPATION_HD __host__ __device__
 #else
-#define GPUXTB_OCCUPATION_HD
+#define XTBLOOM_OCCUPATION_HD
 #endif
 
-namespace gpuxtb::detail::gfn2::binary64_policy {
+namespace xtbloom::detail::gfn2::binary64_policy {
 
 constexpr double kMaximum = 1.79769313486231570814527423731704357e308;
 constexpr double kEpsilon = 2.220446049250313080847263336181640625e-16;
 constexpr double kRepresentableErrorScale = 2.0 * kEpsilon;
 constexpr int kMaximumRootIterations = 4096;
 
-GPUXTB_OCCUPATION_HD inline double maximum(double first, double second) {
+XTBLOOM_OCCUPATION_HD inline double maximum(double first, double second) {
   return first > second ? first : second;
 }
 
-GPUXTB_OCCUPATION_HD inline double absolute(double value) { return value < 0.0 ? -value : value; }
+XTBLOOM_OCCUPATION_HD inline double absolute(double value) { return value < 0.0 ? -value : value; }
 
-GPUXTB_OCCUPATION_HD inline bool finite(double value) {
+XTBLOOM_OCCUPATION_HD inline bool finite(double value) {
 #if defined(__CUDA_ARCH__)
   return isfinite(value);
 #else
@@ -31,7 +31,7 @@ GPUXTB_OCCUPATION_HD inline bool finite(double value) {
 #endif
 }
 
-GPUXTB_OCCUPATION_HD inline bool negative_sign(double value) {
+XTBLOOM_OCCUPATION_HD inline bool negative_sign(double value) {
 #if defined(__CUDA_ARCH__)
   return signbit(value);
 #else
@@ -39,7 +39,7 @@ GPUXTB_OCCUPATION_HD inline bool negative_sign(double value) {
 #endif
 }
 
-GPUXTB_OCCUPATION_HD inline double exponential(double value) {
+XTBLOOM_OCCUPATION_HD inline double exponential(double value) {
 #if defined(__CUDA_ARCH__)
   return exp(value);
 #else
@@ -47,7 +47,7 @@ GPUXTB_OCCUPATION_HD inline double exponential(double value) {
 #endif
 }
 
-GPUXTB_OCCUPATION_HD inline double logarithm(double value) {
+XTBLOOM_OCCUPATION_HD inline double logarithm(double value) {
 #if defined(__CUDA_ARCH__)
   return log(value);
 #else
@@ -55,7 +55,7 @@ GPUXTB_OCCUPATION_HD inline double logarithm(double value) {
 #endif
 }
 
-GPUXTB_OCCUPATION_HD inline double logarithm_one_plus(double value) {
+XTBLOOM_OCCUPATION_HD inline double logarithm_one_plus(double value) {
 #if defined(__CUDA_ARCH__)
   return log1p(value);
 #else
@@ -63,7 +63,7 @@ GPUXTB_OCCUPATION_HD inline double logarithm_one_plus(double value) {
 #endif
 }
 
-GPUXTB_OCCUPATION_HD inline double adjacent(double value, double direction) {
+XTBLOOM_OCCUPATION_HD inline double adjacent(double value, double direction) {
 #if defined(__CUDA_ARCH__)
   return nextafter(value, direction);
 #else
@@ -71,7 +71,7 @@ GPUXTB_OCCUPATION_HD inline double adjacent(double value, double direction) {
 #endif
 }
 
-GPUXTB_OCCUPATION_HD inline double saturated_add(double first, double second) {
+XTBLOOM_OCCUPATION_HD inline double saturated_add(double first, double second) {
   const double result = first + second;
   if (finite(result)) {
     return result;
@@ -80,7 +80,7 @@ GPUXTB_OCCUPATION_HD inline double saturated_add(double first, double second) {
                                                                                : kMaximum;
 }
 
-GPUXTB_OCCUPATION_HD inline double saturated_subtract(double first, double second) {
+XTBLOOM_OCCUPATION_HD inline double saturated_subtract(double first, double second) {
   const double result = first - second;
   if (finite(result)) {
     return result;
@@ -88,15 +88,15 @@ GPUXTB_OCCUPATION_HD inline double saturated_subtract(double first, double secon
   return first < second ? -kMaximum : kMaximum;
 }
 
-GPUXTB_OCCUPATION_HD inline double saturated_multiply_nonnegative(double first, double second) {
+XTBLOOM_OCCUPATION_HD inline double saturated_multiply_nonnegative(double first, double second) {
   if (first == 0.0 || second == 0.0) {
     return 0.0;
   }
   return first > kMaximum / second ? kMaximum : first * second;
 }
 
-GPUXTB_OCCUPATION_HD inline double saturated_affine(double reference, double multiplier,
-                                                    double scale) {
+XTBLOOM_OCCUPATION_HD inline double saturated_affine(double reference, double multiplier,
+                                                     double scale) {
   const double product = multiplier * scale;
   if (finite(product)) {
     return saturated_add(reference, product);
@@ -111,8 +111,8 @@ GPUXTB_OCCUPATION_HD inline double saturated_affine(double reference, double mul
   return normalized * kMaximum;
 }
 
-GPUXTB_OCCUPATION_HD inline double scaled_energy_difference(double energy, double reference,
-                                                            double temperature) {
+XTBLOOM_OCCUPATION_HD inline double scaled_energy_difference(double energy, double reference,
+                                                             double temperature) {
   if (negative_sign(energy) == negative_sign(reference)) {
     const double result = (energy - reference) / temperature;
     if (finite(result)) {
@@ -129,11 +129,11 @@ GPUXTB_OCCUPATION_HD inline double scaled_energy_difference(double energy, doubl
   return energy < reference ? -kMaximum : kMaximum;
 }
 
-GPUXTB_OCCUPATION_HD inline double stable_middle(double lower, double upper) {
+XTBLOOM_OCCUPATION_HD inline double stable_middle(double lower, double upper) {
   return 0.5 * lower + 0.5 * upper;
 }
 
-GPUXTB_OCCUPATION_HD inline double fermi_value(double scaled_energy, double scaled_mu) {
+XTBLOOM_OCCUPATION_HD inline double fermi_value(double scaled_energy, double scaled_mu) {
   const double argument = saturated_subtract(scaled_energy, scaled_mu);
   if (argument >= 0.0) {
     const double value = exponential(-argument);
@@ -142,7 +142,7 @@ GPUXTB_OCCUPATION_HD inline double fermi_value(double scaled_energy, double scal
   return 1.0 / (exponential(argument) + 1.0);
 }
 
-GPUXTB_OCCUPATION_HD inline double fermi_hole_value(double scaled_energy, double scaled_mu) {
+XTBLOOM_OCCUPATION_HD inline double fermi_hole_value(double scaled_energy, double scaled_mu) {
   const double argument = saturated_subtract(scaled_energy, scaled_mu);
   if (argument >= 0.0) {
     return 1.0 / (exponential(-argument) + 1.0);
@@ -156,16 +156,16 @@ struct CompensatedSum {
   double compensation = 0.0;
 };
 
-GPUXTB_OCCUPATION_HD inline void add_compensated(CompensatedSum& sum, double value) {
+XTBLOOM_OCCUPATION_HD inline void add_compensated(CompensatedSum& sum, double value) {
   const double corrected = value - sum.compensation;
   const double updated = sum.value + corrected;
   sum.compensation = (updated - sum.value) - corrected;
   sum.value = updated;
 }
 
-GPUXTB_OCCUPATION_HD inline double quantity(const double* eigenvalues, std::int64_t count,
-                                            double energy_reference, double scaled_mu,
-                                            double temperature, bool solve_holes) {
+XTBLOOM_OCCUPATION_HD inline double quantity(const double* eigenvalues, std::int64_t count,
+                                             double energy_reference, double scaled_mu,
+                                             double temperature, bool solve_holes) {
   CompensatedSum sum{};
   for (std::int64_t orbital = 0; orbital < count; ++orbital) {
     const double scaled_energy =
@@ -193,10 +193,10 @@ struct Root {
  * and the CPU rare path deliberately reuses it so publication candidates and
  * chemical-potential tie breaking do not depend on wider host long double.
  */
-GPUXTB_OCCUPATION_HD inline bool solve_root_once(const double* eigenvalues, std::int64_t count,
-                                                 double quantity_target, double temperature,
-                                                 bool solve_holes, double energy_reference,
-                                                 Root& root) {
+XTBLOOM_OCCUPATION_HD inline bool solve_root_once(const double* eigenvalues, std::int64_t count,
+                                                  double quantity_target, double temperature,
+                                                  bool solve_holes, double energy_reference,
+                                                  Root& root) {
   const double log_fraction = logarithm(quantity_target) - logarithm(static_cast<double>(count));
   const double thermal_steps = maximum(64.0, -log_fraction + 8.0);
   const double scaled_minimum =
@@ -263,7 +263,7 @@ GPUXTB_OCCUPATION_HD inline bool solve_root_once(const double* eigenvalues, std:
   return true;
 }
 
-GPUXTB_OCCUPATION_HD inline std::int64_t unique_changing_degenerate_frontier(
+XTBLOOM_OCCUPATION_HD inline std::int64_t unique_changing_degenerate_frontier(
     const double* eigenvalues, std::int64_t count, double temperature, bool solve_holes,
     const Root& root) {
   std::int64_t frontier = count;
@@ -291,10 +291,10 @@ GPUXTB_OCCUPATION_HD inline std::int64_t unique_changing_degenerate_frontier(
   return frontier;
 }
 
-GPUXTB_OCCUPATION_HD inline bool root_straddles_target(const double* eigenvalues,
-                                                       std::int64_t count, double target,
-                                                       double temperature, bool solve_holes,
-                                                       const Root& root) {
+XTBLOOM_OCCUPATION_HD inline bool root_straddles_target(const double* eigenvalues,
+                                                        std::int64_t count, double target,
+                                                        double temperature, bool solve_holes,
+                                                        const Root& root) {
   const double lower_quantity =
       quantity(eigenvalues, count, root.energy_reference, root.lower, temperature, solve_holes);
   const double upper_quantity =
@@ -304,9 +304,9 @@ GPUXTB_OCCUPATION_HD inline bool root_straddles_target(const double* eigenvalues
                       : lower_quantity <= target && upper_quantity >= target);
 }
 
-GPUXTB_OCCUPATION_HD inline bool solve_root(const double* eigenvalues, std::int64_t count,
-                                            double target, double temperature, bool solve_holes,
-                                            Root& root) {
+XTBLOOM_OCCUPATION_HD inline bool solve_root(const double* eigenvalues, std::int64_t count,
+                                             double target, double temperature, bool solve_holes,
+                                             Root& root) {
   const double reference = solve_holes ? eigenvalues[count - 1] : eigenvalues[0];
   if (!solve_root_once(eigenvalues, count, target, temperature, solve_holes, reference, root)) {
     return false;
@@ -345,8 +345,8 @@ GPUXTB_OCCUPATION_HD inline bool solve_root(const double* eigenvalues, std::int6
   return true;
 }
 
-GPUXTB_OCCUPATION_HD inline std::int64_t largest_degenerate_block(const double* eigenvalues,
-                                                                  std::int64_t count) {
+XTBLOOM_OCCUPATION_HD inline std::int64_t largest_degenerate_block(const double* eigenvalues,
+                                                                   std::int64_t count) {
   std::int64_t largest = 0;
   for (std::int64_t begin = 0; begin < count;) {
     std::int64_t end = begin + 1;
@@ -361,9 +361,9 @@ GPUXTB_OCCUPATION_HD inline std::int64_t largest_degenerate_block(const double* 
   return largest;
 }
 
-GPUXTB_OCCUPATION_HD inline double baseline_occupation(const double* eigenvalues,
-                                                       std::int64_t orbital, double temperature,
-                                                       const Root& root) {
+XTBLOOM_OCCUPATION_HD inline double baseline_occupation(const double* eigenvalues,
+                                                        std::int64_t orbital, double temperature,
+                                                        const Root& root) {
   return fermi_value(
       scaled_energy_difference(eigenvalues[orbital], root.energy_reference, temperature),
       root.scaled_mu);
@@ -383,10 +383,10 @@ struct Publication {
   double compensated_error = 0.0;
 };
 
-GPUXTB_OCCUPATION_HD inline double published_occupation(const double* eigenvalues,
-                                                        std::int64_t orbital, double temperature,
-                                                        const Root& root,
-                                                        const Publication& publication) {
+XTBLOOM_OCCUPATION_HD inline double published_occupation(const double* eigenvalues,
+                                                         std::int64_t orbital, double temperature,
+                                                         const Root& root,
+                                                         const Publication& publication) {
   for (int correction = publication.correction_count; correction > 0; --correction) {
     const Correction& selected = publication.corrections[correction - 1];
     if (orbital >= selected.begin && orbital < selected.end) {
@@ -406,8 +406,9 @@ struct Candidate {
   double tolerance = 0.0;
 };
 
-GPUXTB_OCCUPATION_HD inline bool better_candidate(double error, bool fractional, std::int64_t begin,
-                                                  double occupation, const Candidate& best) {
+XTBLOOM_OCCUPATION_HD inline bool better_candidate(double error, bool fractional,
+                                                   std::int64_t begin, double occupation,
+                                                   const Candidate& best) {
   return !best.found || error < best.error ||
          (error == best.error && fractional && !best.fractional) ||
          (error == best.error && fractional == best.fractional && occupation < best.occupation) ||
@@ -415,7 +416,7 @@ GPUXTB_OCCUPATION_HD inline bool better_candidate(double error, bool fractional,
           begin < best.begin);
 }
 
-GPUXTB_OCCUPATION_HD inline double compensated_publication_error(
+XTBLOOM_OCCUPATION_HD inline double compensated_publication_error(
     const double* eigenvalues, std::int64_t count, double temperature, const Root& root,
     const Publication& publication, bool solve_holes, double target) {
   CompensatedSum sum{};
@@ -432,7 +433,7 @@ struct DoubleDouble {
   double low = 0.0;
 };
 
-GPUXTB_OCCUPATION_HD inline void add_double_double(DoubleDouble& total, double value) {
+XTBLOOM_OCCUPATION_HD inline void add_double_double(DoubleDouble& total, double value) {
   const double sum = total.high + value;
   const double virtual_value = sum - total.high;
   const double error = (total.high - (sum - virtual_value)) + (value - virtual_value) + total.low;
@@ -441,7 +442,7 @@ GPUXTB_OCCUPATION_HD inline void add_double_double(DoubleDouble& total, double v
   total.high = high;
 }
 
-GPUXTB_OCCUPATION_HD inline DoubleDouble audited_publication_residual(
+XTBLOOM_OCCUPATION_HD inline DoubleDouble audited_publication_residual(
     const double* eigenvalues, std::int64_t count, double temperature, const Root& root,
     const Publication& publication, bool solve_holes, double target) {
   DoubleDouble total{};
@@ -454,7 +455,7 @@ GPUXTB_OCCUPATION_HD inline DoubleDouble audited_publication_residual(
   return total;
 }
 
-GPUXTB_OCCUPATION_HD inline int double_double_sign(const DoubleDouble& value) {
+XTBLOOM_OCCUPATION_HD inline int double_double_sign(const DoubleDouble& value) {
   if (value.high > 0.0) {
     return 1;
   }
@@ -464,8 +465,8 @@ GPUXTB_OCCUPATION_HD inline int double_double_sign(const DoubleDouble& value) {
   return value.low > 0.0 ? 1 : (value.low < 0.0 ? -1 : 0);
 }
 
-GPUXTB_OCCUPATION_HD inline bool double_double_within(const DoubleDouble& residual,
-                                                      double tolerance) {
+XTBLOOM_OCCUPATION_HD inline bool double_double_within(const DoubleDouble& residual,
+                                                       double tolerance) {
   DoubleDouble below_upper = residual;
   DoubleDouble above_lower = residual;
   add_double_double(below_upper, -tolerance);
@@ -473,7 +474,7 @@ GPUXTB_OCCUPATION_HD inline bool double_double_within(const DoubleDouble& residu
   return double_double_sign(below_upper) <= 0 && double_double_sign(above_lower) >= 0;
 }
 
-GPUXTB_OCCUPATION_HD inline bool audited_publication_within(
+XTBLOOM_OCCUPATION_HD inline bool audited_publication_within(
     const double* eigenvalues, std::int64_t count, double temperature, const Root& root,
     const Publication& publication, bool solve_holes, double target, double tolerance) {
   const DoubleDouble residual = audited_publication_residual(eigenvalues, count, temperature, root,
@@ -481,10 +482,10 @@ GPUXTB_OCCUPATION_HD inline bool audited_publication_within(
   return double_double_within(residual, tolerance);
 }
 
-GPUXTB_OCCUPATION_HD inline double publication_entropy(const double* eigenvalues,
-                                                       std::int64_t count, double temperature,
-                                                       const Root& root,
-                                                       const Publication& publication) {
+XTBLOOM_OCCUPATION_HD inline double publication_entropy(const double* eigenvalues,
+                                                        std::int64_t count, double temperature,
+                                                        const Root& root,
+                                                        const Publication& publication) {
   CompensatedSum entropy{};
   for (std::int64_t orbital = 0; orbital < count; ++orbital) {
     const double occupation =
@@ -497,10 +498,10 @@ GPUXTB_OCCUPATION_HD inline double publication_entropy(const double* eigenvalues
   return entropy.value;
 }
 
-GPUXTB_OCCUPATION_HD inline bool select_publication(const double* eigenvalues, std::int64_t count,
-                                                    double target, double temperature,
-                                                    bool solve_holes, const Root& root,
-                                                    Publication& publication) {
+XTBLOOM_OCCUPATION_HD inline bool select_publication(const double* eigenvalues, std::int64_t count,
+                                                     double target, double temperature,
+                                                     bool solve_holes, const Root& root,
+                                                     Publication& publication) {
   publication = {};
   const double strict_tolerance = 64.0 * kEpsilon * target;
   publication.compensated_error = compensated_publication_error(
@@ -604,7 +605,7 @@ GPUXTB_OCCUPATION_HD inline bool select_publication(const double* eigenvalues, s
                                      solve_holes, target, publication.relaxed_tolerance));
 }
 
-GPUXTB_OCCUPATION_HD inline double root_acceptance_tolerance(double target, const Root& root) {
+XTBLOOM_OCCUPATION_HD inline double root_acceptance_tolerance(double target, const Root& root) {
   double tolerance = 1024.0 * kEpsilon * target;
   if (root.frontier_begin >= 0 && root.frontier_end > root.frontier_begin) {
     const double frontier_floor =
@@ -614,6 +615,6 @@ GPUXTB_OCCUPATION_HD inline double root_acceptance_tolerance(double target, cons
   return tolerance;
 }
 
-}  // namespace gpuxtb::detail::gfn2::binary64_policy
+}  // namespace xtbloom::detail::gfn2::binary64_policy
 
-#undef GPUXTB_OCCUPATION_HD
+#undef XTBLOOM_OCCUPATION_HD

@@ -1,6 +1,4 @@
-#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 
 #include <algorithm>
 #include <array>
@@ -22,6 +20,7 @@
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
 #include "data/parameters/d4.hpp"
 #include "model/gfn2/coordination.hpp"
+#include "runtime/nvidia_host_api.h"
 #include "tests/support/gfn2_scc_test_case.hpp"
 
 #define CHECK(condition)                                                                          \
@@ -36,12 +35,12 @@
 
 namespace {
 
-using namespace gpuxtb::detail;
-using namespace gpuxtb::detail::cuda;
-using gpuxtb::test::gfn2::HostSccCase;
-using gpuxtb::test::gfn2::HostSccCaseOptions;
-using gpuxtb::test::gfn2::HostSccCheckpoint;
-using gpuxtb::test::gfn2::SmallSystemKind;
+using namespace xtbloom::detail;
+using namespace xtbloom::detail::cuda;
+using xtbloom::test::gfn2::HostSccCase;
+using xtbloom::test::gfn2::HostSccCaseOptions;
+using xtbloom::test::gfn2::HostSccCheckpoint;
+using xtbloom::test::gfn2::SmallSystemKind;
 
 constexpr std::uint64_t kPlanToken = 0x105105105ULL;
 constexpr std::uint64_t kGeometryGeneration = 105u;
@@ -221,16 +220,16 @@ class OrderedExecutionStream {
  * finite image therefore supplies the production owner until the host fixture
  * grows a common geometry-cache accessor. */
 struct InputBacking {
-  gpuxtb::detail::gfn2::CoordinationPlan coordination_plan;
+  xtbloom::detail::gfn2::CoordinationPlan coordination_plan;
   std::vector<double> geometry_pair_data;
   std::vector<std::uint64_t> geometry_generations;
   std::vector<Gfn2D4DeviceElementData> d4_elements;
   std::vector<Gfn2D4DeviceReferenceData> d4_references;
 
   bool prepare(const HostSccCase& host, std::string& error) {
-    if (gpuxtb::detail::gfn2::make_coordination_plan(
+    if (xtbloom::detail::gfn2::make_coordination_plan(
             host.batch_size(), host.total_atoms(), host.atom_offsets().data(),
-            host.atomic_numbers().data(), coordination_plan, error) != GPUXTB_STATUS_SUCCESS) {
+            host.atomic_numbers().data(), coordination_plan, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     geometry_pair_data.resize(static_cast<std::size_t>(host.aes2_plan().total_pairs()) *
@@ -241,14 +240,14 @@ struct InputBacking {
     geometry_generations.assign(static_cast<std::size_t>(host.batch_size()),
                                 host.options().geometry_generation);
 
-    d4_elements.reserve(gpuxtb::parameters::d4::kElements.size());
-    for (const auto& element : gpuxtb::parameters::d4::kElements) {
+    d4_elements.reserve(xtbloom::parameters::d4::kElements.size());
+    for (const auto& element : xtbloom::parameters::d4::kElements) {
       d4_elements.push_back({element.reference_offset, element.reference_count,
                              element.covalent_radius, element.electronegativity,
                              element.effective_charge, element.hardness, element.r4r2});
     }
-    d4_references.reserve(gpuxtb::parameters::d4::kReferences.size());
-    for (const auto& reference : gpuxtb::parameters::d4::kReferences) {
+    d4_references.reserve(xtbloom::parameters::d4::kReferences.size());
+    for (const auto& reference : xtbloom::parameters::d4::kReferences) {
       d4_references.push_back(
           {reference.coordination_number, reference.charge, reference.gaussian_count});
     }
@@ -288,8 +287,8 @@ struct InputBacking {
       result.d4.elements = setup_view(d4_elements);
       result.d4.references = setup_view(d4_references);
       result.d4.reference_c6 = {
-          gpuxtb::parameters::d4::kReferenceC6.data(),
-          static_cast<std::int64_t>(gpuxtb::parameters::d4::kReferenceC6.size())};
+          xtbloom::parameters::d4::kReferenceC6.data(),
+          static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
       result.d4.pair_data = {host.d4_cache()->pair_data, host.d4_cache()->pair_data_elements};
       result.d4.coordination_numbers = {host.d4_cache()->coordination_numbers,
                                         host.d4_cache()->coordination_elements};
@@ -335,8 +334,8 @@ Gfn2SccIterationHostInitialization fresh_initialization(const HostSccCase& host)
 
 Gfn2SccIterationHostInitialization fresh_initialization(
     const Gfn2WavefunctionLayoutView& host_layout,
-    const gpuxtb::detail::gfn2::WavefunctionLayout& layout,
-    const gpuxtb::detail::gfn2::WavefunctionView& wavefunction) noexcept {
+    const xtbloom::detail::gfn2::WavefunctionLayout& layout,
+    const xtbloom::detail::gfn2::WavefunctionView& wavefunction) noexcept {
   Gfn2SccIterationHostInitialization result{};
   result.mode = Gfn2SccIterationInitializationMode::kFresh;
   result.plan_token = kPlanToken;
@@ -702,7 +701,7 @@ int compare_energy_mixer_and_scc_trace(const HostSccCase& host,
   std::vector<double> mixer_residual_maximum;
   std::vector<std::uint64_t> mixer_iterations;
   std::vector<std::uint64_t> mixer_restart_counts;
-  std::vector<gpuxtb_status_t> mixer_statuses;
+  std::vector<xtbloom_status_t> mixer_statuses;
   std::vector<std::uint8_t> mixer_initialized;
   std::vector<std::uint8_t> mixer_residual_converged;
   std::vector<double> scc_free_energies;
@@ -710,7 +709,7 @@ int compare_energy_mixer_and_scc_trace(const HostSccCase& host,
   std::vector<double> scc_free_energy_changes;
   std::vector<double> scc_residual_rms;
   std::vector<std::uint64_t> scc_iterations;
-  std::vector<gpuxtb_status_t> scc_statuses;
+  std::vector<xtbloom_status_t> scc_statuses;
   std::vector<std::uint8_t> scc_converged;
 
   CHECK(download(state.free_energy.core, batch, core, stream));
@@ -927,7 +926,7 @@ struct ProductionFixture {
     options.enable_periodic_embedding = optional_components || coupling.periodic;
 
     std::string error;
-    if (HostSccCase::create(options, host, error) != GPUXTB_STATUS_SUCCESS) {
+    if (HostSccCase::create(options, host, error) != XTBLOOM_STATUS_SUCCESS) {
       std::fprintf(stderr, "HostSccCase::create failed: %s\n", error.c_str());
       return false;
     }
@@ -1150,7 +1149,7 @@ int test_unrestricted_mixed_production_iteration_smoke() {
   CHECK(upload_fill(state.scc.residual_rms, state.scc.batch_elements, kSentinel));
 
   const std::array<std::uint64_t, 2> iterations{{0u, 0u}};
-  const std::array<gpuxtb_status_t, 2> statuses{{GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS}};
+  const std::array<xtbloom_status_t, 2> statuses{{XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS}};
   const std::array<std::uint8_t, 2> converged{{0u, 1u}};
   CUDA_CHECK(cudaMemcpy(state.scc.iterations, iterations.data(), sizeof(iterations),
                         cudaMemcpyHostToDevice));
@@ -1337,12 +1336,12 @@ int test_production_iteration_cpu_parity(bool optional_components, std::int64_t 
   CHECK(launch.success());
 
   std::string error;
-  const gpuxtb_status_t cpu_status = fixture.host.run_one_iteration(error);
-  if (cpu_status != GPUXTB_STATUS_SUCCESS) {
+  const xtbloom_status_t cpu_status = fixture.host.run_one_iteration(error);
+  if (cpu_status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "CPU production SCC iteration failed: status=%d error=%s\n", cpu_status,
                  error.c_str());
   }
-  CHECK(cpu_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(cpu_status == XTBLOOM_STATUS_SUCCESS);
 
   const auto& layout = fixture.host.wavefunction_layout();
   const auto& state = fixture.binding.state;
@@ -1363,7 +1362,7 @@ int test_production_iteration_cpu_parity(bool optional_components, std::int64_t 
   std::vector<double> free_energy;
   std::vector<double> current_inputs;
   std::vector<std::uint64_t> iterations;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint8_t> converged;
 
   CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, eigenvalues,
@@ -1482,7 +1481,7 @@ int test_production_iteration_cpu_parity(bool optional_components, std::int64_t 
   const Gfn2SccIterationLaunchResult repeat_launch =
       launch_gfn2_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
   CHECK(repeat_launch.success());
-  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.run_one_iteration(error) == XTBLOOM_STATUS_SUCCESS);
 
   CHECK(download(state.density.density, state.density.density_elements, density,
                  fixture.handles.stream()));
@@ -1593,7 +1592,7 @@ int verify_near_degenerate_fractional_frontier(const HostSccCase& host) {
 }
 
 int test_production_iteration_finite_temperature_cpu_parity() {
-  const double kDefaultTemperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+  const double kDefaultTemperature = XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
   for (const std::int64_t batch_size : {1, 8, 32, 128}) {
     const int status = test_production_iteration_cpu_parity(
         false, batch_size, false, true, false, finite_temperature_systems(), kDefaultTemperature);
@@ -1606,7 +1605,7 @@ int test_production_iteration_finite_temperature_cpu_parity() {
     CHECK(fixture.create(false, batch_size, false, false, finite_temperature_systems(),
                          kDefaultTemperature));
     std::string error;
-    CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(fixture.host.run_one_iteration(error) == XTBLOOM_STATUS_SUCCESS);
     CHECK(verify_near_degenerate_fractional_frontier(fixture.host) == 0);
   }
   /* A hotter finite-temperature regime spreads fractional occupations over
@@ -1622,7 +1621,7 @@ int test_production_iteration_finite_temperature_cpu_parity() {
     ProductionFixture fixture;
     CHECK(fixture.create(false, 8, false, false, finite_temperature_systems(), kHotTemperature));
     std::string error;
-    CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(fixture.host.run_one_iteration(error) == XTBLOOM_STATUS_SUCCESS);
     CHECK(verify_near_degenerate_fractional_frontier(fixture.host) == 0);
   }
   /* Optional couplings at finite temperature compose all charge-dependent
@@ -1670,7 +1669,7 @@ int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_compo
                                     double electronic_temperature);
 
 int test_production_loop_finite_temperature_cpu_parity() {
-  const double kDefaultTemperature = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+  const double kDefaultTemperature = XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
   const int status = test_production_loop_cpu_parity(
       8, false, false, false, 0u, false, finite_temperature_systems(), kDefaultTemperature);
   if (status != 0) {
@@ -1785,9 +1784,9 @@ int test_changed_device_overlap_is_consumed_by_production_scc() {
 int run_host_fixed_scc_loop(HostSccCase& host) {
   std::string error;
   for (std::uint64_t iteration = 0u; iteration < host.options().maximum_iterations; ++iteration) {
-    const gpuxtb_status_t status = host.run_one_iteration(error);
-    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
-        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+    const xtbloom_status_t status = host.run_one_iteration(error);
+    if (status != XTBLOOM_STATUS_SUCCESS && status != XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
+        status != XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
       std::fprintf(stderr, "CPU Graph reference failed at %llu: status=%d error=%s\n",
                    static_cast<unsigned long long>(iteration), status, error.c_str());
       return __LINE__;
@@ -1803,16 +1802,16 @@ int run_host_until_globally_terminal(HostSccCase& host, std::uint64_t& body_coun
     bool any_active = false;
     const auto& state = host.driver_state();
     for (std::int64_t system = 0; system < host.batch_size(); ++system) {
-      any_active = any_active || (state.system_statuses[system] == GPUXTB_STATUS_SUCCESS &&
+      any_active = any_active || (state.system_statuses[system] == XTBLOOM_STATUS_SUCCESS &&
                                   state.converged[system] == 0u &&
                                   state.iterations[system] < host.options().maximum_iterations);
     }
     if (!any_active) {
       return 0;
     }
-    const gpuxtb_status_t status = host.run_one_iteration(error);
-    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
-        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+    const xtbloom_status_t status = host.run_one_iteration(error);
+    if (status != XTBLOOM_STATUS_SUCCESS && status != XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
+        status != XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
       std::fprintf(stderr, "CPU conditional reference failed at %llu: status=%d error=%s\n",
                    static_cast<unsigned long long>(body_count), status, error.c_str());
       return __LINE__;
@@ -1835,7 +1834,7 @@ int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIteratio
   std::vector<double> dipoles;
   std::vector<double> quadrupoles;
   std::vector<std::uint64_t> iterations;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint8_t> converged;
 
   CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, eigenvalues,
@@ -1965,7 +1964,7 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size,
   CHECK(run_and_compare() == 0);
 
   std::string error;
-  CHECK(fixture.host.restore(initial, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.restore(initial, error) == XTBLOOM_STATUS_SUCCESS);
   Gfn2SccIterationInitializationReady ready{};
   CHECK(fixture.initializer
             .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
@@ -2010,7 +2009,7 @@ int test_large_singleton_tridiagonal_graph() {
 
   std::vector<std::uint64_t> iterations;
   std::vector<std::uint8_t> converged;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<double> free_energies;
   std::uint32_t terminal_active_count = 1u;
   std::uint64_t body_count = 0u;
@@ -2026,7 +2025,7 @@ int test_large_singleton_tridiagonal_graph() {
   CHECK(iterations[0] > 0u);
   CHECK(iterations[0] < fixture.host.options().maximum_iterations);
   CHECK(converged[0] == 1u);
-  CHECK(statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::isfinite(free_energies[0]));
   CHECK(body_count == iterations[0]);
   CHECK(terminal_active_count == 0u);
@@ -2063,7 +2062,7 @@ int test_large_singleton_tridiagonal_graph() {
   CUDA_CHECK(cudaStreamSynchronize(limited.handles.stream()));
   CHECK(iterations[0] == 7u);
   CHECK(converged[0] == 0u);
-  CHECK(statuses[0] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(statuses[0] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   CHECK(body_count == 7u);
   CHECK(terminal_active_count == 0u);
 
@@ -2096,7 +2095,7 @@ int test_large_singleton_tridiagonal_graph() {
   CHECK(body_count == iterations[0]);
   CHECK(iterations[0] > 0u && iterations[0] < 50u);
   CHECK(converged[0] == 1u);
-  CHECK(statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(statuses[0] == XTBLOOM_STATUS_SUCCESS);
   return 0;
 }
 
@@ -2120,14 +2119,14 @@ int test_large_singleton_tridiagonal_sanitizer_smoke() {
   CHECK(launch.execution_mode == Gfn2SccLoopExecutionMode::kDeviceTailGraph);
   std::uint64_t body_count = 0u;
   std::vector<std::uint64_t> iterations;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   CHECK(download_value(owner.numerical_body_count_device(), body_count, fixture.handles.stream()));
   CHECK(download(fixture.binding.state.scc.iterations, 1, iterations, fixture.handles.stream()));
   CHECK(download(fixture.binding.state.scc.system_statuses, 1, statuses, fixture.handles.stream()));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
   CHECK(body_count == 1u);
   CHECK(iterations == std::vector<std::uint64_t>{1u});
-  CHECK(statuses == std::vector<gpuxtb_status_t>{GPUXTB_STATUS_SCC_NOT_CONVERGED});
+  CHECK(statuses == std::vector<xtbloom_status_t>{XTBLOOM_STATUS_SCC_NOT_CONVERGED});
   return 0;
 }
 
@@ -2216,7 +2215,7 @@ int test_dispatch_chain_forced_build_and_parity(std::int64_t batch_size) {
   CHECK(run_and_compare() == 0);
 
   std::string error;
-  CHECK(fixture.host.restore(initial, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.restore(initial, error) == XTBLOOM_STATUS_SUCCESS);
   Gfn2SccIterationInitializationReady ready{};
   CHECK(fixture.initializer
             .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
@@ -2462,7 +2461,7 @@ int test_dispatch_chain_dynamic_geometry_epoch_parity() {
   CHECK(run_and_compare() == 0);
 
   std::string error;
-  CHECK(fixture.host.restore(initial, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.restore(initial, error) == XTBLOOM_STATUS_SUCCESS);
   Gfn2SccIterationInitializationReady ready{};
   CHECK(fixture.initializer
             .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
@@ -2667,7 +2666,7 @@ int test_conditional_graph_mixed_warm_peer_parity() {
   for (int iteration = 0; iteration < 2; ++iteration) {
     CHECK(launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream())
               .success());
-    CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(fixture.host.run_one_iteration(error) == XTBLOOM_STATUS_SUCCESS);
   }
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
@@ -2680,18 +2679,18 @@ int test_conditional_graph_mixed_warm_peer_parity() {
    * mixer residual views with values that satisfy the bound tolerances. */
   mixer.residual_rms[1] = 0.0;
   mixer.residual_maximum[1] = 0.0;
-  driver.system_statuses[2] = GPUXTB_STATUS_INTERNAL_ERROR;
-  mixer.system_statuses[2] = GPUXTB_STATUS_INTERNAL_ERROR;
+  driver.system_statuses[2] = XTBLOOM_STATUS_INTERNAL_ERROR;
+  mixer.system_statuses[2] = XTBLOOM_STATUS_INTERNAL_ERROR;
   driver.iterations[3] = fixture.host.options().maximum_iterations;
-  driver.system_statuses[3] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+  driver.system_statuses[3] = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
   mixer.iterations[3] = fixture.host.options().maximum_iterations;
-  mixer.system_statuses[3] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+  mixer.system_statuses[3] = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
 
   CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.scc.iterations, driver.iterations,
                              kBatch * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
                              fixture.handles.stream()));
   CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.scc.system_statuses, driver.system_statuses,
-                             kBatch * sizeof(gpuxtb_status_t), cudaMemcpyHostToDevice,
+                             kBatch * sizeof(xtbloom_status_t), cudaMemcpyHostToDevice,
                              fixture.handles.stream()));
   CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.scc.converged, driver.converged,
                              kBatch * sizeof(std::uint8_t), cudaMemcpyHostToDevice,
@@ -2700,7 +2699,7 @@ int test_conditional_graph_mixed_warm_peer_parity() {
                              kBatch * sizeof(std::uint64_t), cudaMemcpyHostToDevice,
                              fixture.handles.stream()));
   CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.mixer.system_statuses, mixer.system_statuses,
-                             kBatch * sizeof(gpuxtb_status_t), cudaMemcpyHostToDevice,
+                             kBatch * sizeof(xtbloom_status_t), cudaMemcpyHostToDevice,
                              fixture.handles.stream()));
   CUDA_CHECK(cudaMemcpyAsync(fixture.binding.state.mixer.residual_converged, mixer.converged,
                              kBatch * sizeof(std::uint8_t), cudaMemcpyHostToDevice,
@@ -2725,9 +2724,9 @@ int test_conditional_graph_mixed_warm_peer_parity() {
   CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream()) ==
         0);
   CHECK(driver.converged[1] == 1u);
-  CHECK(driver.system_statuses[2] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(driver.system_statuses[2] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(driver.iterations[3] == fixture.host.options().maximum_iterations);
-  CHECK(driver.system_statuses[3] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(driver.system_statuses[3] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   return 0;
 }
 
@@ -2754,7 +2753,7 @@ int benchmark_dispatch_chain_vs_monolithic() {
     std::vector<double> dipoles;
     std::vector<double> quadrupoles;
     std::vector<std::uint64_t> iterations;
-    std::vector<gpuxtb_status_t> statuses;
+    std::vector<xtbloom_status_t> statuses;
     std::vector<std::uint8_t> converged;
   };
   std::printf(
@@ -2965,9 +2964,9 @@ int benchmark_dispatch_chain_vs_monolithic() {
             CHECK(monolithic_state.iterations[static_cast<std::size_t>(system)] <= chain_bodies);
           }
           CHECK(monolithic_state.statuses[static_cast<std::size_t>(system)] ==
-                    GPUXTB_STATUS_SUCCESS ||
+                    XTBLOOM_STATUS_SUCCESS ||
                 monolithic_state.statuses[static_cast<std::size_t>(system)] ==
-                    GPUXTB_STATUS_SCC_NOT_CONVERGED);
+                    XTBLOOM_STATUS_SCC_NOT_CONVERGED);
           CHECK(monolithic_state.converged[static_cast<std::size_t>(system)] <= 1u);
         }
         return 0;
@@ -2979,13 +2978,13 @@ int benchmark_dispatch_chain_vs_monolithic() {
        * chain must match the CPU sequential reference exactly. */
       if (active_every == 1) {
         std::string restore_error;
-        CHECK(fixture.host.restore(initial, restore_error) == GPUXTB_STATUS_SUCCESS);
+        CHECK(fixture.host.restore(initial, restore_error) == XTBLOOM_STATUS_SUCCESS);
         std::uint64_t reference_bodies = 0u;
         CHECK(run_host_until_globally_terminal(fixture.host, reference_bodies) == 0);
         CHECK(reference_bodies == chain_bodies);
         CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding,
                                             fixture.handles.stream()) == 0);
-        CHECK(fixture.host.restore(initial, restore_error) == GPUXTB_STATUS_SUCCESS);
+        CHECK(fixture.host.restore(initial, restore_error) == XTBLOOM_STATUS_SUCCESS);
       }
     }
 
@@ -3134,7 +3133,7 @@ int test_production_graph_changed_input_replay(std::int64_t batch_size,
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
 
   std::string error;
-  CHECK(fixture.host.restore(initial, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.restore(initial, error) == XTBLOOM_STATUS_SUCCESS);
   const std::vector<double> changed_h0 = changed_core_hamiltonian(fixture.host);
   fixture.host.h0() = changed_h0;
   Gfn2SccIterationInitializationReady ready{};
@@ -3250,7 +3249,7 @@ int test_production_graph_device_epoch_replay() {
   CUDA_CHECK(cudaMemcpyAsync(eligible, eligibility.data(), eligibility.size(),
                              cudaMemcpyHostToDevice, fixture.handles.stream()));
   CUDA_CHECK(cudaGraphLaunch(graph.executable(), fixture.handles.stream()));
-  std::vector<gpuxtb_status_t> pending_statuses;
+  std::vector<xtbloom_status_t> pending_statuses;
   std::vector<std::uint64_t> failures;
   CHECK(download(fixture.binding.state.scc.iterations, batch_size, iterations,
                  fixture.handles.stream()));
@@ -3263,7 +3262,7 @@ int test_production_graph_device_epoch_replay() {
   CHECK(iterations[1] == 0u);
   CHECK(iterations[2] == 0u);
   for (const std::size_t system : {1u, 2u}) {
-    CHECK(pending_statuses[system] == GPUXTB_STATUS_INTERNAL_ERROR);
+    CHECK(pending_statuses[system] == XTBLOOM_STATUS_INTERNAL_ERROR);
     CHECK(failures[system] ==
           gfn2_scc_stage_failure_record(
               Gfn2SccStageId::kGeometry,
@@ -3320,9 +3319,9 @@ int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_compo
     const Gfn2SccIterationLaunchResult resumed_launch =
         launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, execution_stream);
     CHECK(resumed_launch.success());
-    const gpuxtb_status_t cpu_status = fixture.host.run_one_iteration(error);
-    CHECK(cpu_status == GPUXTB_STATUS_SUCCESS || cpu_status == GPUXTB_STATUS_SCC_NOT_CONVERGED ||
-          cpu_status == GPUXTB_STATUS_EIGENSOLVER_FAILED);
+    const xtbloom_status_t cpu_status = fixture.host.run_one_iteration(error);
+    CHECK(cpu_status == XTBLOOM_STATUS_SUCCESS || cpu_status == XTBLOOM_STATUS_SCC_NOT_CONVERGED ||
+          cpu_status == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   }
 
   const Gfn2SccLoopLaunchResult launch =
@@ -3356,7 +3355,7 @@ int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_compo
   std::vector<double> first_free_energy_changes;
   std::vector<double> first_mixer_inputs;
   std::vector<std::uint64_t> first_iterations;
-  std::vector<gpuxtb_status_t> first_statuses;
+  std::vector<xtbloom_status_t> first_statuses;
   std::vector<std::uint8_t> first_converged;
   const auto& first_state = fixture.binding.state;
   CHECK(download(first_state.eigenpairs.coefficients, first_state.eigenpairs.coefficient_elements,
@@ -3398,9 +3397,9 @@ int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_compo
    * a fixed bucket schedule until #80 compacts inactive members. */
   for (std::uint64_t iteration = 0u; iteration < fixture.host.options().maximum_iterations;
        ++iteration) {
-    const gpuxtb_status_t status = fixture.host.run_one_iteration(error);
-    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
-        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+    const xtbloom_status_t status = fixture.host.run_one_iteration(error);
+    if (status != XTBLOOM_STATUS_SUCCESS && status != XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
+        status != XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
       std::fprintf(stderr, "CPU production SCC loop failed at %llu: status=%d error=%s\n",
                    static_cast<unsigned long long>(iteration), status, error.c_str());
       return __LINE__;
@@ -3425,7 +3424,7 @@ int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_compo
   std::vector<double> entropies;
   std::vector<double> current_inputs;
   std::vector<std::uint64_t> iterations;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint8_t> converged;
 
   CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, eigenvalues,
@@ -3557,7 +3556,7 @@ int test_production_loop_cpu_parity(std::int64_t batch_size, bool optional_compo
     const auto converged_count =
         std::count(converged.begin(), converged.end(), static_cast<std::uint8_t>(1u));
     const auto nonconverged_count =
-        std::count(statuses.begin(), statuses.end(), GPUXTB_STATUS_SCC_NOT_CONVERGED);
+        std::count(statuses.begin(), statuses.end(), XTBLOOM_STATUS_SCC_NOT_CONVERGED);
     CHECK(converged_count > 0);
     CHECK(nonconverged_count > 0);
     CHECK(converged_count + nonconverged_count == batch_size);
@@ -3673,7 +3672,7 @@ int main(int argc, char** argv) {
   }
   CUDA_CHECK(count_status);
   CUDA_CHECK(cudaSetDevice(0));
-#ifdef GPUXTB_SCC_LOOP_BENCHMARK_ONLY
+#ifdef XTBLOOM_SCC_LOOP_BENCHMARK_ONLY
   if (argc == 1) {
     return benchmark_conditional_graph_vs_bounded_fallback();
   }

@@ -1,5 +1,5 @@
 #include "model/gfn2/d4.hpp"
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
 #include <array>
@@ -16,7 +16,7 @@
 #include "data/parameters/d4.hpp"
 #include "data/parameters/gfn2.hpp"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 struct D4PlanData {
   std::int64_t batch_size = 0;
@@ -160,17 +160,17 @@ bool valid_count(std::int64_t value) {
                            static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max());
 }
 
-gpuxtb_status_t validate_plan(const D4Plan& plan, std::string& error) {
+xtbloom_status_t validate_plan(const D4Plan& plan, std::string& error) {
   if (!plan.sealed() || plan.batch_size() <= 0 || plan.total_atoms() <= 0 ||
       plan.total_pairs() < 0) {
     error = "D4 plan is not sealed or has invalid extents";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_workspace(const D4Plan& plan, const D4Workspace& workspace,
-                                   std::string& error) {
+xtbloom_status_t validate_workspace(const D4Plan& plan, const D4Workspace& workspace,
+                                    std::string& error) {
   const D4PlanData& data = *plan.identity();
   if (workspace.plan_identity != plan.identity() ||
       !aligned(workspace.workspace_base, kD4WorkspaceAlignment) ||
@@ -201,13 +201,13 @@ gpuxtb_status_t validate_workspace(const D4Plan& plan, const D4Workspace& worksp
       workspace.batch_elements != plan.batch_size() ||
       workspace.gradient_elements != plan.total_atoms() * 3) {
     error = "D4 workspace is incomplete or belongs to another plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_cache(const D4Plan& plan, const D4GeometryCache& cache,
-                               std::string& error) {
+xtbloom_status_t validate_cache(const D4Plan& plan, const D4GeometryCache& cache,
+                                std::string& error) {
   if (cache.plan_identity != plan.identity() || cache.geometry_generation == 0u ||
       !aligned(cache.pair_data, alignof(double)) ||
       !aligned(cache.coordination_numbers, alignof(double)) ||
@@ -215,9 +215,9 @@ gpuxtb_status_t validate_cache(const D4Plan& plan, const D4GeometryCache& cache,
           plan.total_pairs() * static_cast<std::int64_t>(kD4PairDataElements) ||
       cache.coordination_elements != plan.total_atoms()) {
     error = "D4 geometry cache is incomplete or belongs to another plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 bool finite_values(const double* values, std::size_t count) {
@@ -365,16 +365,16 @@ void prepare_weight_slice(const D4PlanData& data, const double* coordination, co
   }
 }
 
-gpuxtb_status_t prepare_weights(const D4PlanData& data, const double* coordination,
-                                const double* charges, bool derivatives,
-                                const D4Workspace& workspace, std::string& error) {
+xtbloom_status_t prepare_weights(const D4PlanData& data, const double* coordination,
+                                 const double* charges, bool derivatives,
+                                 const D4Workspace& workspace, std::string& error) {
   const std::size_t atom_count = static_cast<std::size_t>(data.total_atoms);
   if (!finite_values(coordination, atom_count) || !finite_values(charges, atom_count)) {
     error = "D4 coordination numbers and charges must be finite";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   prepare_weight_slice(data, coordination, charges, 0, data.total_atoms, derivatives, workspace);
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 struct PairCoefficient {
@@ -452,8 +452,8 @@ void add_coordination_vjp(const D4PlanData& data, const D4GeometryCache& cache,
   }
 }
 
-gpuxtb_status_t prepare_zero_charge_weights(const D4PlanData& data, const D4GeometryCache& cache,
-                                            const D4Workspace& workspace, std::string& error) {
+xtbloom_status_t prepare_zero_charge_weights(const D4PlanData& data, const D4GeometryCache& cache,
+                                             const D4Workspace& workspace, std::string& error) {
   std::fill_n(workspace.atom_scratch, static_cast<std::size_t>(data.total_atoms), 0.0);
   return prepare_weights(data, cache.coordination_numbers, workspace.atom_scratch, true, workspace,
                          error);
@@ -537,14 +537,14 @@ std::size_t D4Plan::resident_bytes() const noexcept {
 
 const D4PlanData* D4Plan::identity() const noexcept { return data_.get(); }
 
-gpuxtb_status_t make_d4_plan(std::int64_t batch_size, std::int64_t total_atoms,
-                             const std::int64_t* atom_offsets, const std::int32_t* atomic_numbers,
-                             D4Plan& plan, std::string& error) {
+xtbloom_status_t make_d4_plan(std::int64_t batch_size, std::int64_t total_atoms,
+                              const std::int64_t* atom_offsets, const std::int32_t* atomic_numbers,
+                              D4Plan& plan, std::string& error) {
   if (batch_size <= 0 || total_atoms <= 0 || !valid_count(batch_size) ||
       !valid_count(total_atoms) || atom_offsets == nullptr || atomic_numbers == nullptr ||
       atom_offsets[0] != 0 || atom_offsets[batch_size] != total_atoms) {
     error = "D4 plan requires a valid positive ragged batch";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   try {
     auto created = std::make_shared<D4PlanData>();
@@ -558,21 +558,21 @@ gpuxtb_status_t make_d4_plan(std::int64_t batch_size, std::int64_t total_atoms,
       const std::int64_t end = atom_offsets[batch + 1];
       if (begin < 0 || begin > end || end > total_atoms) {
         error = "D4 atom offsets are not a valid ragged partition";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       const std::uint64_t count = static_cast<std::uint64_t>(end - begin);
       if (count > 0u &&
           count - 1u >
               static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) / count) {
         error = "D4 pair count overflows";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       const std::uint64_t pairs = count * (count - 1u) / 2u;
       if (pairs >
           static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max() -
                                      created->pair_offsets[static_cast<std::size_t>(batch)])) {
         error = "D4 total pair count overflows";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       created->pair_offsets[static_cast<std::size_t>(batch + 1)] =
           created->pair_offsets[static_cast<std::size_t>(batch)] + static_cast<std::int64_t>(pairs);
@@ -583,7 +583,7 @@ gpuxtb_status_t make_d4_plan(std::int64_t batch_size, std::int64_t total_atoms,
       if (atomic_number <= 0 ||
           atomic_number > static_cast<std::int32_t>(parameters::d4::kElementCount)) {
         error = "D4 plan contains an unsupported atomic number";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       created->element_indices[static_cast<std::size_t>(atom)] =
           static_cast<std::uint8_t>(atomic_number - 1);
@@ -625,7 +625,7 @@ gpuxtb_status_t make_d4_plan(std::int64_t batch_size, std::int64_t total_atoms,
         !checked_multiply_size(atom_count, kD4MaximumReferences, weight_elements) ||
         !checked_multiply_size(atom_count, 3u, gradient_elements)) {
       error = "D4 workspace element count overflows";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     std::size_t cursor = 0u;
     std::size_t bytes = 0u;
@@ -643,22 +643,22 @@ gpuxtb_status_t make_d4_plan(std::int64_t batch_size, std::int64_t total_atoms,
         !append_doubles(gradient_elements, created->gradient_scratch_offset) ||
         !align_up(cursor, kD4WorkspaceAlignment, created->workspace_size_bytes)) {
       error = "D4 workspace byte count overflows";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     plan = D4Plan(std::move(created));
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate D4 plan";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
-gpuxtb_status_t bind_d4_workspace(const D4Plan& plan, void* workspace, std::size_t workspace_size,
-                                  D4Workspace& view, std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t bind_d4_workspace(const D4Plan& plan, void* workspace, std::size_t workspace_size,
+                                   D4Workspace& view, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   AddressRange workspace_range;
@@ -672,7 +672,7 @@ gpuxtb_status_t bind_d4_workspace(const D4Plan& plan, void* workspace, std::size
       ranges_overlap(view_range, error_range) ||
       plan.overlaps_storage(workspace, plan.workspace_size_bytes())) {
     error = "D4 workspace must be sufficiently large and 64-byte aligned";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const D4PlanData& data = *plan.identity();
   auto* base = static_cast<std::byte*>(workspace);
@@ -697,20 +697,20 @@ gpuxtb_status_t bind_d4_workspace(const D4Plan& plan, void* workspace, std::size
   bound.plan_identity = plan.identity();
   view = bound;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t update_d4_geometry_cache_cpu(
+xtbloom_status_t update_d4_geometry_cache_cpu(
     const D4Plan& plan, const double* positions, std::uint64_t geometry_generation,
     double* pair_storage, std::size_t pair_storage_elements, double* coordination_storage,
     std::size_t coordination_storage_elements, const D4Workspace& workspace, D4GeometryCache& cache,
     std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_workspace(plan, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const D4PlanData& data = *plan.identity();
@@ -722,7 +722,7 @@ gpuxtb_status_t update_d4_geometry_cache_cpu(
       pair_storage_elements < expected_pairs || coordination_storage_elements < atom_count ||
       !finite_values(positions, atom_count * 3u)) {
     error = "D4 geometry update requires finite positions and complete output storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   std::size_t position_bytes = 0u;
   std::size_t pair_bytes = 0u;
@@ -741,7 +741,7 @@ gpuxtb_status_t update_d4_geometry_cache_cpu(
       !make_range(&error, sizeof(error), controls[3]) ||
       !valid_call_storage(plan, workspace, numerical, controls)) {
     error = "D4 geometry buffers overlap numerical, plan, workspace, or descriptor storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   std::fill_n(workspace.coordination_scratch, atom_count, 0.0);
@@ -761,7 +761,7 @@ gpuxtb_status_t update_d4_geometry_cache_cpu(
         const double distance_squared = pair[0] * pair[0] + pair[1] * pair[1] + pair[2] * pair[2];
         if (distance_squared < kMinimumDistanceSquared) {
           error = "D4 geometry contains coincident atoms";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
         if (distance_squared <= kCoordinationCutoff * kCoordinationCutoff) {
           const double distance = std::sqrt(distance_squared);
@@ -791,7 +791,7 @@ gpuxtb_status_t update_d4_geometry_cache_cpu(
         }
         if (!std::isfinite(pair[3]) || !std::isfinite(pair[4])) {
           error = "D4 geometry cache overflowed";
-          return GPUXTB_STATUS_INTERNAL_ERROR;
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
         }
       }
     }
@@ -806,30 +806,30 @@ gpuxtb_status_t update_d4_geometry_cache_cpu(
   cache.geometry_generation = geometry_generation;
   cache.plan_identity = plan.identity();
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t evaluate_d4_two_body_cpu(const D4Plan& plan, const D4GeometryCache& cache,
-                                         const double* atomic_charges, double* energies,
-                                         double* atomic_potentials, const D4Workspace& workspace,
-                                         std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t evaluate_d4_two_body_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                          const double* atomic_charges, double* energies,
+                                          double* atomic_potentials, const D4Workspace& workspace,
+                                          std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_workspace(plan, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_cache(plan, cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const D4PlanData& data = *plan.identity();
   if (!aligned(atomic_charges, alignof(double)) || !aligned(energies, alignof(double)) ||
       !aligned(atomic_potentials, alignof(double))) {
     error = "D4 two-body outputs must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t pair_count = static_cast<std::size_t>(cache.pair_data_elements);
   const std::size_t atom_count = static_cast<std::size_t>(data.total_atoms);
@@ -853,11 +853,11 @@ gpuxtb_status_t evaluate_d4_two_body_cpu(const D4Plan& plan, const D4GeometryCac
       !make_range(&error, sizeof(error), controls[3]) ||
       !valid_call_storage(plan, workspace, numerical, controls)) {
     error = "D4 two-body buffers overlap numerical, plan, workspace, or descriptor storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   status =
       prepare_weights(data, cache.coordination_numbers, atomic_charges, true, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   std::fill_n(workspace.batch_scratch, static_cast<std::size_t>(data.batch_size), 0.0);
@@ -883,40 +883,40 @@ gpuxtb_status_t evaluate_d4_two_body_cpu(const D4Plan& plan, const D4GeometryCac
   if (!finite_values(workspace.batch_scratch, static_cast<std::size_t>(data.batch_size)) ||
       !finite_values(workspace.atom_scratch, static_cast<std::size_t>(data.total_atoms))) {
     error = "D4 two-body evaluation overflowed";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   std::memcpy(energies, workspace.batch_scratch,
               static_cast<std::size_t>(data.batch_size) * sizeof(double));
   std::memcpy(atomic_potentials, workspace.atom_scratch,
               static_cast<std::size_t>(data.total_atoms) * sizeof(double));
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4GeometryCache& cache,
-                                                std::int64_t system, const double* atomic_charges,
-                                                double& energy, double* atomic_potentials,
-                                                const D4Workspace& workspace, std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                                 std::int64_t system, const double* atomic_charges,
+                                                 double& energy, double* atomic_potentials,
+                                                 const D4Workspace& workspace, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_workspace(plan, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_cache(plan, cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (system < 0 || system >= plan.batch_size()) {
     error = "D4 two-body system index is out of range";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!aligned(atomic_charges, alignof(double)) || !aligned(&energy, alignof(double)) ||
       (atomic_potentials != nullptr && !aligned(atomic_potentials, alignof(double)))) {
     error = "D4 system two-body inputs and outputs must not be NULL or misaligned";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const D4PlanData& data = *plan.identity();
@@ -940,7 +940,7 @@ gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4Geom
       !make_range(&error, sizeof(error), controls[3]) ||
       !valid_call_storage(plan, workspace, numerical, controls)) {
     error = "D4 system two-body buffers overlap numerical, plan, workspace, or descriptor storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const std::size_t system_index = static_cast<std::size_t>(system);
@@ -951,7 +951,7 @@ gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4Geom
   if (atom_begin < 0 || atom_begin > atom_end || atom_end > data.total_atoms || pair_begin < 0 ||
       pair_begin > pair_end || pair_end > data.total_pairs) {
     error = "D4 target system partition is structurally invalid";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::uint64_t target_atom_count = static_cast<std::uint64_t>(atom_end - atom_begin);
   if (target_atom_count > 0u &&
@@ -959,24 +959,24 @@ gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4Geom
           static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) /
               target_atom_count) {
     error = "D4 target system pair count overflows";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::uint64_t expected_pairs = target_atom_count * (target_atom_count - 1u) / 2u;
   if (expected_pairs != static_cast<std::uint64_t>(pair_end - pair_begin)) {
     error = "D4 target atom and pair partitions disagree";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const std::size_t target_atoms = static_cast<std::size_t>(atom_end - atom_begin);
   if (!finite_values(cache.coordination_numbers + atom_begin, target_atoms) ||
       !finite_values(atomic_charges + atom_begin, target_atoms)) {
     error = "D4 target coordination numbers and charges must be finite";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
     if (cache.coordination_numbers[atom] < 0.0) {
       error = "D4 target coordination numbers must be nonnegative";
-      return GPUXTB_STATUS_INTERNAL_ERROR;
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
   }
   for (std::int64_t pair_index = pair_begin; pair_index < pair_end; ++pair_index) {
@@ -984,7 +984,7 @@ gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4Geom
         cache.pair_data + static_cast<std::size_t>(pair_index) * kD4PairDataElements;
     if (!finite_values(pair, kD4PairDataElements) || pair[3] < 0.0) {
       error = "D4 target geometry cache contains invalid numerical data";
-      return GPUXTB_STATUS_INTERNAL_ERROR;
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
   }
 
@@ -1013,12 +1013,12 @@ gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4Geom
   }
   if (packed_pair != static_cast<std::size_t>(pair_end)) {
     error = "D4 target pair enumeration disagrees with the plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!std::isfinite(contribution) ||
       (derivatives && !finite_values(workspace.atom_scratch + atom_begin, target_atoms))) {
     error = "D4 target two-body evaluation overflowed";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
 
   workspace.batch_scratch[system_index] = contribution;
@@ -1028,22 +1028,22 @@ gpuxtb_status_t evaluate_d4_two_body_system_cpu(const D4Plan& plan, const D4Geom
   }
   energy = contribution;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t add_d4_two_body_gradient_cpu(const D4Plan& plan, const D4GeometryCache& cache,
-                                             const double* atomic_charges, double* gradients,
-                                             const D4Workspace& workspace, std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t add_d4_two_body_gradient_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                              const double* atomic_charges, double* gradients,
+                                              const D4Workspace& workspace, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_workspace(plan, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_cache(plan, cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const D4PlanData& data = *plan.identity();
@@ -1051,7 +1051,7 @@ gpuxtb_status_t add_d4_two_body_gradient_cpu(const D4Plan& plan, const D4Geometr
   if (!aligned(atomic_charges, alignof(double)) || !aligned(gradients, alignof(double)) ||
       !finite_values(gradients, gradient_count)) {
     error = "D4 gradient output must contain finite values";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t pair_count = static_cast<std::size_t>(cache.pair_data_elements);
   const std::size_t atom_count = static_cast<std::size_t>(data.total_atoms);
@@ -1073,11 +1073,11 @@ gpuxtb_status_t add_d4_two_body_gradient_cpu(const D4Plan& plan, const D4Geometr
       !make_range(&error, sizeof(error), controls[3]) ||
       !valid_call_storage(plan, workspace, numerical, controls)) {
     error = "D4 gradient buffers overlap numerical, plan, workspace, or descriptor storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   status =
       prepare_weights(data, cache.coordination_numbers, atomic_charges, true, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   std::fill_n(workspace.gradient_scratch, gradient_count, 0.0);
@@ -1108,33 +1108,33 @@ gpuxtb_status_t add_d4_two_body_gradient_cpu(const D4Plan& plan, const D4Geometr
   add_coordination_vjp(data, cache, workspace.coordination_adjoints, workspace.gradient_scratch);
   if (!finite_values(workspace.gradient_scratch, gradient_count)) {
     error = "D4 two-body gradient overflowed";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   for (std::size_t coordinate = 0; coordinate < gradient_count; ++coordinate) {
     gradients[coordinate] += workspace.gradient_scratch[coordinate];
   }
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t evaluate_d4_atm_cpu(const D4Plan& plan, const D4GeometryCache& cache,
-                                    double* energies, const D4Workspace& workspace,
-                                    std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t evaluate_d4_atm_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                     double* energies, const D4Workspace& workspace,
+                                     std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_workspace(plan, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_cache(plan, cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (!aligned(energies, alignof(double))) {
     error = "D4 ATM energy output must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const D4PlanData& data = *plan.identity();
   const std::size_t pair_count = static_cast<std::size_t>(cache.pair_data_elements);
@@ -1157,10 +1157,10 @@ gpuxtb_status_t evaluate_d4_atm_cpu(const D4Plan& plan, const D4GeometryCache& c
       !make_range(&error, sizeof(error), controls[3]) ||
       !valid_call_storage(plan, workspace, numerical, controls)) {
     error = "D4 ATM energy buffers overlap numerical, plan, workspace, or descriptor storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   status = prepare_zero_charge_weights(data, cache, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   std::fill_n(workspace.batch_scratch, static_cast<std::size_t>(data.batch_size), 0.0);
@@ -1208,34 +1208,34 @@ gpuxtb_status_t evaluate_d4_atm_cpu(const D4Plan& plan, const D4GeometryCache& c
   }
   if (!finite_values(workspace.batch_scratch, static_cast<std::size_t>(data.batch_size))) {
     error = "D4 ATM energy overflowed";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   std::memcpy(energies, workspace.batch_scratch,
               static_cast<std::size_t>(data.batch_size) * sizeof(double));
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t add_d4_atm_gradient_cpu(const D4Plan& plan, const D4GeometryCache& cache,
-                                        double* gradients, const D4Workspace& workspace,
-                                        std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t add_d4_atm_gradient_cpu(const D4Plan& plan, const D4GeometryCache& cache,
+                                         double* gradients, const D4Workspace& workspace,
+                                         std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_workspace(plan, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_cache(plan, cache, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const D4PlanData& data = *plan.identity();
   const std::size_t gradient_count = static_cast<std::size_t>(data.total_atoms) * 3u;
   if (!aligned(gradients, alignof(double)) || !finite_values(gradients, gradient_count)) {
     error = "D4 ATM gradient output must contain finite values";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t pair_count = static_cast<std::size_t>(cache.pair_data_elements);
   const std::size_t atom_count = static_cast<std::size_t>(data.total_atoms);
@@ -1256,10 +1256,10 @@ gpuxtb_status_t add_d4_atm_gradient_cpu(const D4Plan& plan, const D4GeometryCach
       !make_range(&error, sizeof(error), controls[3]) ||
       !valid_call_storage(plan, workspace, numerical, controls)) {
     error = "D4 ATM gradient buffers overlap numerical, plan, workspace, or descriptor storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   status = prepare_zero_charge_weights(data, cache, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   std::fill_n(workspace.gradient_scratch, gradient_count, 0.0);
@@ -1289,7 +1289,7 @@ gpuxtb_status_t add_d4_atm_gradient_cpu(const D4Plan& plan, const D4GeometryCach
           const PairCoefficient c6jk = pair_coefficient(data, j, k, workspace, true);
           if (!(c6ij.c6 > 0.0) || !(c6ik.c6 > 0.0) || !(c6jk.c6 > 0.0)) {
             error = "D4 ATM encountered a nonpositive C6 coefficient";
-            return GPUXTB_STATUS_INTERNAL_ERROR;
+            return XTBLOOM_STATUS_INTERNAL_ERROR;
           }
           const double r0ij = data.pair_damping_radii[pair_index(data, batch, j, i)];
           const double r0ik = data.pair_damping_radii[pair_index(data, batch, k, i)];
@@ -1352,13 +1352,13 @@ gpuxtb_status_t add_d4_atm_gradient_cpu(const D4Plan& plan, const D4GeometryCach
   add_coordination_vjp(data, cache, workspace.coordination_adjoints, workspace.gradient_scratch);
   if (!finite_values(workspace.gradient_scratch, gradient_count)) {
     error = "D4 ATM gradient overflowed";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   for (std::size_t coordinate = 0; coordinate < gradient_count; ++coordinate) {
     gradients[coordinate] += workspace.gradient_scratch[coordinate];
   }
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2

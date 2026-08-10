@@ -15,19 +15,19 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2PairMapKind;
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::Gfn2RaggedTopologyView;
-using gpuxtb::detail::cuda::collect_gfn2_scc_shell_scalar_potential_cuda;
-using gpuxtb::detail::cuda::Gfn2SccBridgeDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2SccBridgeDeviceError;
-using gpuxtb::detail::cuda::Gfn2SccBridgeDeviceOutput;
-using gpuxtb::detail::cuda::Gfn2SccBridgeDevicePotentialFields;
-using gpuxtb::detail::cuda::Gfn2SccBridgeDeviceStageInput;
-using gpuxtb::detail::cuda::Gfn2SccBridgeDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
-using gpuxtb::detail::cuda::reset_gfn2_scc_bridge_device_errors_cuda;
-using gpuxtb::detail::cuda::reset_gfn2_scc_bridge_stage_cuda;
+using xtbloom::detail::Gfn2PairMapKind;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::Gfn2RaggedTopologyView;
+using xtbloom::detail::cuda::collect_gfn2_scc_shell_scalar_potential_cuda;
+using xtbloom::detail::cuda::Gfn2SccBridgeDeviceBatch;
+using xtbloom::detail::cuda::Gfn2SccBridgeDeviceError;
+using xtbloom::detail::cuda::Gfn2SccBridgeDeviceOutput;
+using xtbloom::detail::cuda::Gfn2SccBridgeDevicePotentialFields;
+using xtbloom::detail::cuda::Gfn2SccBridgeDeviceStageInput;
+using xtbloom::detail::cuda::Gfn2SccBridgeDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceActivity;
+using xtbloom::detail::cuda::reset_gfn2_scc_bridge_device_errors_cuda;
+using xtbloom::detail::cuda::reset_gfn2_scc_bridge_stage_cuda;
 
 #define CHECK(condition)                                                                   \
   do {                                                                                     \

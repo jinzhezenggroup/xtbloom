@@ -1,17 +1,17 @@
 {
-  "engine": "gpuxtb",
+  "engine": "xtbloom",
   "protocol": {
     "energy_atol_hartree": 1e-08,
     "force_atol_hartree_per_bohr": 5e-07,
     "force_tolerance_source": {
       "json_field": "tolerances.forces",
-      "path": "/tmp/gpuxtb-main-issue256/data/conformance/manifest.json",
+      "path": "/tmp/xtbloom-main-issue256/data/conformance/manifest.json",
       "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
     },
     "reference_cold_sample": null,
     "repetitions": 10,
     "start_mode": "fresh",
-    "timing_scope": "one synchronous gpuxtb_compute public-C-ABI call; persistent context, descriptors, options, and caller-owned result buffers; result inspection is outside the measured interval",
+    "timing_scope": "one synchronous xtbloom_compute public-C-ABI call; persistent context, descriptors, options, and caller-owned result buffers; result inspection is outside the measured interval",
     "warm_seed": null,
     "warmups": 5
   },
@@ -26,7 +26,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 3,
         "max_scc_iterations": 500,
         "model": 2,
@@ -241,9 +241,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -251,7 +251,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/tmp/gpuxtb-main-issue256/data/conformance/manifest.json",
+            "path": "/tmp/xtbloom-main-issue256/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -264,7 +264,7 @@
         "max_hartree": -64.27950675607325,
         "min_hartree": -64.27950675607325
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 18,
         "median": 18.0,
@@ -2330,11 +2330,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/tmp/gpuxtb-main-issue256/benchmarks/natoms_scaling.py",
+          "/tmp/xtbloom-main-issue256/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/tmp/gpuxtb-main-issue256/build/issue256-main/libgpuxtb.so.0.1.0",
+          "/tmp/xtbloom-main-issue256/build/issue256-main/libxtbloom.so.0.1.0",
           "--backend",
           "cpu",
           "--cpu-threads",
@@ -2356,9 +2356,9 @@
           "--force-atol",
           "5e-7",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb/build/benchmarks/issue-256-stage-a-final/main-fresh.json",
+          "/home/jzzeng/codes/xtbloom/build/benchmarks/issue-256-stage-a-final/main-fresh.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb/build/benchmarks/issue-256-stage-a-final/main-fresh.csv"
+          "/home/jzzeng/codes/xtbloom/build/benchmarks/issue-256-stage-a-final/main-fresh.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -2423,11 +2423,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/tmp/gpuxtb-main-issue256/build/issue256-main",
+            "build_directory": "/tmp/xtbloom-main-issue256/build/issue256-main",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/tmp/gpuxtb-main-issue256/build/issue256-main/CMakeCache.txt",
+              "path": "/tmp/xtbloom-main-issue256/build/issue256-main/CMakeCache.txt",
               "sha256": "11e6cc0a8ca57c79c83e9b5d6594ec90f486179bc21ecbd91332e56580369c4e"
             },
             "cache_entries": {
@@ -2438,10 +2438,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/tmp/gpuxtb-main-issue256",
+              "CMAKE_HOME_DIRECTORY": "/tmp/xtbloom-main-issue256",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "OFF",
-              "GPUXTB_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
+              "XTBLOOM_ENABLE_CUDA": "OFF",
+              "XTBLOOM_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -2459,31 +2459,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/tmp/gpuxtb-main-issue256",
+                "path": "/tmp/xtbloom-main-issue256",
                 "revision": "fa0513302a9b4e95c6dca6c57cd8e064b422d6a4"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/tmp/gpuxtb-main-issue256/CMakeLists.txt",
+                  "path": "/tmp/xtbloom-main-issue256/CMakeLists.txt",
                   "sha256": "2fef9f423899516fbfb4fbe1bf8bdd40ae96454015bf6517447b0b421e5f0731"
                 },
                 {
                   "is_file": true,
-                  "path": "/tmp/gpuxtb-main-issue256/cmake/gpuxtb.map",
+                  "path": "/tmp/xtbloom-main-issue256/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/tmp/gpuxtb-main-issue256"
+              "path": "/tmp/xtbloom-main-issue256"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/tmp/gpuxtb-main-issue256/build/issue256-main/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/tmp/xtbloom-main-issue256/build/issue256-main/libxtbloom.so.0.1.0",
           "sha256": "b1519386c96cec23f2b43ef6f1bf00afb42c5b76b0bd5e77eb639ca82b1839d5"
         },
         "repository": {
           "dirty": false,
-          "path": "/tmp/gpuxtb-main-issue256",
+          "path": "/tmp/xtbloom-main-issue256",
           "revision": "fa0513302a9b4e95c6dca6c57cd8e064b422d6a4"
         },
         "runner": {
@@ -2550,7 +2550,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 3,
         "max_scc_iterations": 500,
         "model": 2,
@@ -2945,9 +2945,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -2955,7 +2955,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/tmp/gpuxtb-main-issue256/data/conformance/manifest.json",
+            "path": "/tmp/xtbloom-main-issue256/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -2968,7 +2968,7 @@
         "max_hartree": -127.56031921826143,
         "min_hartree": -127.56031921826143
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 19,
         "median": 19.0,
@@ -6834,11 +6834,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/tmp/gpuxtb-main-issue256/benchmarks/natoms_scaling.py",
+          "/tmp/xtbloom-main-issue256/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/tmp/gpuxtb-main-issue256/build/issue256-main/libgpuxtb.so.0.1.0",
+          "/tmp/xtbloom-main-issue256/build/issue256-main/libxtbloom.so.0.1.0",
           "--backend",
           "cpu",
           "--cpu-threads",
@@ -6860,9 +6860,9 @@
           "--force-atol",
           "5e-7",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb/build/benchmarks/issue-256-stage-a-final/main-fresh.json",
+          "/home/jzzeng/codes/xtbloom/build/benchmarks/issue-256-stage-a-final/main-fresh.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb/build/benchmarks/issue-256-stage-a-final/main-fresh.csv"
+          "/home/jzzeng/codes/xtbloom/build/benchmarks/issue-256-stage-a-final/main-fresh.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -6927,11 +6927,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/tmp/gpuxtb-main-issue256/build/issue256-main",
+            "build_directory": "/tmp/xtbloom-main-issue256/build/issue256-main",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/tmp/gpuxtb-main-issue256/build/issue256-main/CMakeCache.txt",
+              "path": "/tmp/xtbloom-main-issue256/build/issue256-main/CMakeCache.txt",
               "sha256": "11e6cc0a8ca57c79c83e9b5d6594ec90f486179bc21ecbd91332e56580369c4e"
             },
             "cache_entries": {
@@ -6942,10 +6942,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/tmp/gpuxtb-main-issue256",
+              "CMAKE_HOME_DIRECTORY": "/tmp/xtbloom-main-issue256",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "OFF",
-              "GPUXTB_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
+              "XTBLOOM_ENABLE_CUDA": "OFF",
+              "XTBLOOM_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -6963,31 +6963,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/tmp/gpuxtb-main-issue256",
+                "path": "/tmp/xtbloom-main-issue256",
                 "revision": "fa0513302a9b4e95c6dca6c57cd8e064b422d6a4"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/tmp/gpuxtb-main-issue256/CMakeLists.txt",
+                  "path": "/tmp/xtbloom-main-issue256/CMakeLists.txt",
                   "sha256": "2fef9f423899516fbfb4fbe1bf8bdd40ae96454015bf6517447b0b421e5f0731"
                 },
                 {
                   "is_file": true,
-                  "path": "/tmp/gpuxtb-main-issue256/cmake/gpuxtb.map",
+                  "path": "/tmp/xtbloom-main-issue256/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/tmp/gpuxtb-main-issue256"
+              "path": "/tmp/xtbloom-main-issue256"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/tmp/gpuxtb-main-issue256/build/issue256-main/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/tmp/xtbloom-main-issue256/build/issue256-main/libxtbloom.so.0.1.0",
           "sha256": "b1519386c96cec23f2b43ef6f1bf00afb42c5b76b0bd5e77eb639ca82b1839d5"
         },
         "repository": {
           "dirty": false,
-          "path": "/tmp/gpuxtb-main-issue256",
+          "path": "/tmp/xtbloom-main-issue256",
           "revision": "fa0513302a9b4e95c6dca6c57cd8e064b422d6a4"
         },
         "runner": {
@@ -7054,7 +7054,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 3,
         "max_scc_iterations": 500,
         "model": 2,
@@ -7809,9 +7809,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -7819,7 +7819,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/tmp/gpuxtb-main-issue256/data/conformance/manifest.json",
+            "path": "/tmp/xtbloom-main-issue256/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -7832,7 +7832,7 @@
         "max_hartree": -254.12194514715932,
         "min_hartree": -254.12194514715932
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 17,
         "median": 17.0,
@@ -15298,11 +15298,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/tmp/gpuxtb-main-issue256/benchmarks/natoms_scaling.py",
+          "/tmp/xtbloom-main-issue256/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/tmp/gpuxtb-main-issue256/build/issue256-main/libgpuxtb.so.0.1.0",
+          "/tmp/xtbloom-main-issue256/build/issue256-main/libxtbloom.so.0.1.0",
           "--backend",
           "cpu",
           "--cpu-threads",
@@ -15324,9 +15324,9 @@
           "--force-atol",
           "5e-7",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb/build/benchmarks/issue-256-stage-a-final/main-fresh.json",
+          "/home/jzzeng/codes/xtbloom/build/benchmarks/issue-256-stage-a-final/main-fresh.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb/build/benchmarks/issue-256-stage-a-final/main-fresh.csv"
+          "/home/jzzeng/codes/xtbloom/build/benchmarks/issue-256-stage-a-final/main-fresh.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -15391,11 +15391,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/tmp/gpuxtb-main-issue256/build/issue256-main",
+            "build_directory": "/tmp/xtbloom-main-issue256/build/issue256-main",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/tmp/gpuxtb-main-issue256/build/issue256-main/CMakeCache.txt",
+              "path": "/tmp/xtbloom-main-issue256/build/issue256-main/CMakeCache.txt",
               "sha256": "11e6cc0a8ca57c79c83e9b5d6594ec90f486179bc21ecbd91332e56580369c4e"
             },
             "cache_entries": {
@@ -15406,10 +15406,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/tmp/gpuxtb-main-issue256",
+              "CMAKE_HOME_DIRECTORY": "/tmp/xtbloom-main-issue256",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "OFF",
-              "GPUXTB_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
+              "XTBLOOM_ENABLE_CUDA": "OFF",
+              "XTBLOOM_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -15427,31 +15427,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/tmp/gpuxtb-main-issue256",
+                "path": "/tmp/xtbloom-main-issue256",
                 "revision": "fa0513302a9b4e95c6dca6c57cd8e064b422d6a4"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/tmp/gpuxtb-main-issue256/CMakeLists.txt",
+                  "path": "/tmp/xtbloom-main-issue256/CMakeLists.txt",
                   "sha256": "2fef9f423899516fbfb4fbe1bf8bdd40ae96454015bf6517447b0b421e5f0731"
                 },
                 {
                   "is_file": true,
-                  "path": "/tmp/gpuxtb-main-issue256/cmake/gpuxtb.map",
+                  "path": "/tmp/xtbloom-main-issue256/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/tmp/gpuxtb-main-issue256"
+              "path": "/tmp/xtbloom-main-issue256"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/tmp/gpuxtb-main-issue256/build/issue256-main/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/tmp/xtbloom-main-issue256/build/issue256-main/libxtbloom.so.0.1.0",
           "sha256": "b1519386c96cec23f2b43ef6f1bf00afb42c5b76b0bd5e77eb639ca82b1839d5"
         },
         "repository": {
           "dirty": false,
-          "path": "/tmp/gpuxtb-main-issue256",
+          "path": "/tmp/xtbloom-main-issue256",
           "revision": "fa0513302a9b4e95c6dca6c57cd8e064b422d6a4"
         },
         "runner": {
@@ -15518,7 +15518,7 @@
         "device_id": 0,
         "electronic_temperature_hartree": 0.000950042573563535,
         "energy_tolerance": 1e-12,
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "flags": 3,
         "max_scc_iterations": 500,
         "model": 2,
@@ -16633,9 +16633,9 @@
             "max_abs_delta_hartree_per_bohr": null,
             "status": "not_requested"
           },
-          "gpuxtb_binary_identity": "not_comparable_cross_engine",
-          "gpuxtb_option_identity": "not_comparable_cross_engine",
-          "gpuxtb_repository_revision": "not_comparable_cross_engine",
+          "xtbloom_binary_identity": "not_comparable_cross_engine",
+          "xtbloom_option_identity": "not_comparable_cross_engine",
+          "xtbloom_repository_revision": "not_comparable_cross_engine",
           "measured_samples": {
             "count": null,
             "status": "not_requested"
@@ -16643,7 +16643,7 @@
           "status": "not_requested",
           "tolerance_source": {
             "json_field": "cross_engine_tolerances",
-            "path": "/tmp/gpuxtb-main-issue256/data/conformance/manifest.json",
+            "path": "/tmp/xtbloom-main-issue256/data/conformance/manifest.json",
             "sha256": "0f7d222c089c1d03603239ebef8fa03522f77374ca3f403e3749e0937e52b1e9"
           }
         },
@@ -16656,7 +16656,7 @@
         "max_hartree": -380.68357136729344,
         "min_hartree": -380.68357136729344
       },
-      "engine": "gpuxtb",
+      "engine": "xtbloom",
       "iteration_summary": {
         "max": 18,
         "median": 18.0,
@@ -27722,11 +27722,11 @@
       "run_identity": {
         "argv": [
           "/home/jzzeng/miniconda3/bin/python3",
-          "/tmp/gpuxtb-main-issue256/benchmarks/natoms_scaling.py",
+          "/tmp/xtbloom-main-issue256/benchmarks/natoms_scaling.py",
           "--engine",
-          "gpuxtb",
+          "xtbloom",
           "--library",
-          "/tmp/gpuxtb-main-issue256/build/issue256-main/libgpuxtb.so.0.1.0",
+          "/tmp/xtbloom-main-issue256/build/issue256-main/libxtbloom.so.0.1.0",
           "--backend",
           "cpu",
           "--cpu-threads",
@@ -27748,9 +27748,9 @@
           "--force-atol",
           "5e-7",
           "--output-json",
-          "/home/jzzeng/codes/gpuxtb/build/benchmarks/issue-256-stage-a-final/main-fresh.json",
+          "/home/jzzeng/codes/xtbloom/build/benchmarks/issue-256-stage-a-final/main-fresh.json",
           "--output-csv",
-          "/home/jzzeng/codes/gpuxtb/build/benchmarks/issue-256-stage-a-final/main-fresh.csv"
+          "/home/jzzeng/codes/xtbloom/build/benchmarks/issue-256-stage-a-final/main-fresh.csv"
         ],
         "evidence_eligibility": {
           "allow_dirty_evidence": false,
@@ -27815,11 +27815,11 @@
         },
         "library": {
           "build": {
-            "build_directory": "/tmp/gpuxtb-main-issue256/build/issue256-main",
+            "build_directory": "/tmp/xtbloom-main-issue256/build/issue256-main",
             "build_system": "cmake",
             "cache": {
               "is_file": true,
-              "path": "/tmp/gpuxtb-main-issue256/build/issue256-main/CMakeCache.txt",
+              "path": "/tmp/xtbloom-main-issue256/build/issue256-main/CMakeCache.txt",
               "sha256": "11e6cc0a8ca57c79c83e9b5d6594ec90f486179bc21ecbd91332e56580369c4e"
             },
             "cache_entries": {
@@ -27830,10 +27830,10 @@
               "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
               "CMAKE_EXE_LINKER_FLAGS": "",
               "CMAKE_GENERATOR": "Ninja",
-              "CMAKE_HOME_DIRECTORY": "/tmp/gpuxtb-main-issue256",
+              "CMAKE_HOME_DIRECTORY": "/tmp/xtbloom-main-issue256",
               "CMAKE_SHARED_LINKER_FLAGS": "",
-              "GPUXTB_ENABLE_CUDA": "OFF",
-              "GPUXTB_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
+              "XTBLOOM_ENABLE_CUDA": "OFF",
+              "XTBLOOM_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
             },
             "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
             "compiler": {
@@ -27851,31 +27851,31 @@
             "source": {
               "git": {
                 "dirty": false,
-                "path": "/tmp/gpuxtb-main-issue256",
+                "path": "/tmp/xtbloom-main-issue256",
                 "revision": "fa0513302a9b4e95c6dca6c57cd8e064b422d6a4"
               },
               "inputs": [
                 {
                   "is_file": true,
-                  "path": "/tmp/gpuxtb-main-issue256/CMakeLists.txt",
+                  "path": "/tmp/xtbloom-main-issue256/CMakeLists.txt",
                   "sha256": "2fef9f423899516fbfb4fbe1bf8bdd40ae96454015bf6517447b0b421e5f0731"
                 },
                 {
                   "is_file": true,
-                  "path": "/tmp/gpuxtb-main-issue256/cmake/gpuxtb.map",
+                  "path": "/tmp/xtbloom-main-issue256/cmake/xtbloom.map",
                   "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
                 }
               ],
-              "path": "/tmp/gpuxtb-main-issue256"
+              "path": "/tmp/xtbloom-main-issue256"
             }
           },
-          "engine": "gpuxtb",
-          "path": "/tmp/gpuxtb-main-issue256/build/issue256-main/libgpuxtb.so.0.1.0",
+          "engine": "xtbloom",
+          "path": "/tmp/xtbloom-main-issue256/build/issue256-main/libxtbloom.so.0.1.0",
           "sha256": "b1519386c96cec23f2b43ef6f1bf00afb42c5b76b0bd5e77eb639ca82b1839d5"
         },
         "repository": {
           "dirty": false,
-          "path": "/tmp/gpuxtb-main-issue256",
+          "path": "/tmp/xtbloom-main-issue256",
           "revision": "fa0513302a9b4e95c6dca6c57cd8e064b422d6a4"
         },
         "runner": {
@@ -27936,11 +27936,11 @@
   "run_identity": {
     "argv": [
       "/home/jzzeng/miniconda3/bin/python3",
-      "/tmp/gpuxtb-main-issue256/benchmarks/natoms_scaling.py",
+      "/tmp/xtbloom-main-issue256/benchmarks/natoms_scaling.py",
       "--engine",
-      "gpuxtb",
+      "xtbloom",
       "--library",
-      "/tmp/gpuxtb-main-issue256/build/issue256-main/libgpuxtb.so.0.1.0",
+      "/tmp/xtbloom-main-issue256/build/issue256-main/libxtbloom.so.0.1.0",
       "--backend",
       "cpu",
       "--cpu-threads",
@@ -27962,9 +27962,9 @@
       "--force-atol",
       "5e-7",
       "--output-json",
-      "/home/jzzeng/codes/gpuxtb/build/benchmarks/issue-256-stage-a-final/main-fresh.json",
+      "/home/jzzeng/codes/xtbloom/build/benchmarks/issue-256-stage-a-final/main-fresh.json",
       "--output-csv",
-      "/home/jzzeng/codes/gpuxtb/build/benchmarks/issue-256-stage-a-final/main-fresh.csv"
+      "/home/jzzeng/codes/xtbloom/build/benchmarks/issue-256-stage-a-final/main-fresh.csv"
     ],
     "evidence_eligibility": {
       "allow_dirty_evidence": false,
@@ -28029,11 +28029,11 @@
     },
     "library": {
       "build": {
-        "build_directory": "/tmp/gpuxtb-main-issue256/build/issue256-main",
+        "build_directory": "/tmp/xtbloom-main-issue256/build/issue256-main",
         "build_system": "cmake",
         "cache": {
           "is_file": true,
-          "path": "/tmp/gpuxtb-main-issue256/build/issue256-main/CMakeCache.txt",
+          "path": "/tmp/xtbloom-main-issue256/build/issue256-main/CMakeCache.txt",
           "sha256": "11e6cc0a8ca57c79c83e9b5d6594ec90f486179bc21ecbd91332e56580369c4e"
         },
         "cache_entries": {
@@ -28044,10 +28044,10 @@
           "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
           "CMAKE_EXE_LINKER_FLAGS": "",
           "CMAKE_GENERATOR": "Ninja",
-          "CMAKE_HOME_DIRECTORY": "/tmp/gpuxtb-main-issue256",
+          "CMAKE_HOME_DIRECTORY": "/tmp/xtbloom-main-issue256",
           "CMAKE_SHARED_LINKER_FLAGS": "",
-          "GPUXTB_ENABLE_CUDA": "OFF",
-          "GPUXTB_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
+          "XTBLOOM_ENABLE_CUDA": "OFF",
+          "XTBLOOM_MKL_RT_LIBRARY": "/group/software/deepmd-kit-3.1.1/lib/libmkl_rt.so"
         },
         "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
         "compiler": {
@@ -28065,31 +28065,31 @@
         "source": {
           "git": {
             "dirty": false,
-            "path": "/tmp/gpuxtb-main-issue256",
+            "path": "/tmp/xtbloom-main-issue256",
             "revision": "fa0513302a9b4e95c6dca6c57cd8e064b422d6a4"
           },
           "inputs": [
             {
               "is_file": true,
-              "path": "/tmp/gpuxtb-main-issue256/CMakeLists.txt",
+              "path": "/tmp/xtbloom-main-issue256/CMakeLists.txt",
               "sha256": "2fef9f423899516fbfb4fbe1bf8bdd40ae96454015bf6517447b0b421e5f0731"
             },
             {
               "is_file": true,
-              "path": "/tmp/gpuxtb-main-issue256/cmake/gpuxtb.map",
+              "path": "/tmp/xtbloom-main-issue256/cmake/xtbloom.map",
               "sha256": "c9b56266769cbadb9c0aade9b813e6afed3c272b26145e4f5dc60854abbfd9b4"
             }
           ],
-          "path": "/tmp/gpuxtb-main-issue256"
+          "path": "/tmp/xtbloom-main-issue256"
         }
       },
-      "engine": "gpuxtb",
-      "path": "/tmp/gpuxtb-main-issue256/build/issue256-main/libgpuxtb.so.0.1.0",
+      "engine": "xtbloom",
+      "path": "/tmp/xtbloom-main-issue256/build/issue256-main/libxtbloom.so.0.1.0",
       "sha256": "b1519386c96cec23f2b43ef6f1bf00afb42c5b76b0bd5e77eb639ca82b1839d5"
     },
     "repository": {
       "dirty": false,
-      "path": "/tmp/gpuxtb-main-issue256",
+      "path": "/tmp/xtbloom-main-issue256",
       "revision": "fa0513302a9b4e95c6dca6c57cd8e064b422d6a4"
     },
     "runner": {

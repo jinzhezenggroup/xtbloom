@@ -50,13 +50,13 @@ int test_mctc_reference() {
   };
   constexpr std::array<std::int64_t, 2> offsets{0, 16};
 
-  gpuxtb::detail::gfn2::CoordinationPlan plan;
+  xtbloom::detail::gfn2::CoordinationPlan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(1, 16, offsets.data(), atomic_numbers.data(),
-                                                     plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(1, 16, offsets.data(), atomic_numbers.data(),
+                                                      plan, error) == XTBLOOM_STATUS_SUCCESS);
   std::array<double, 16> coordination{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), coordination.data(),
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(
+            plan, positions.data(), coordination.data(), error) == XTBLOOM_STATUS_SUCCESS);
   for (std::size_t atom = 0; atom < coordination.size(); ++atom) {
     CHECK(near(coordination[atom], expected[atom], 4.0e-13));
   }
@@ -71,13 +71,13 @@ int test_ragged_batch_and_invariance() {
       0.0, 0.0, 0.0, 1.4, 0.0, 0.0, 0.0, 0.0, 0.0, 1.4, 0.0, 0.0,
   };
 
-  gpuxtb::detail::gfn2::CoordinationPlan plan;
+  xtbloom::detail::gfn2::CoordinationPlan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(4, 4, offsets.data(), atomic_numbers.data(),
-                                                     plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(4, 4, offsets.data(), atomic_numbers.data(),
+                                                      plan, error) == XTBLOOM_STATUS_SUCCESS);
   std::array<double, 4> coordination{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), coordination.data(),
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(
+            plan, positions.data(), coordination.data(), error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(coordination[0], 0.8202925308871246, 2.0e-15));
   CHECK(near(coordination[1], 0.8202925308871246, 2.0e-15));
   CHECK(coordination[2] == 0.0);
@@ -93,21 +93,21 @@ int test_ragged_batch_and_invariance() {
     transformed[atom * 3 + 2] = z + 0.5;
   }
   std::array<double, 4> transformed_coordination{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, transformed.data(),
-                                                        transformed_coordination.data(),
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(plan, transformed.data(),
+                                                         transformed_coordination.data(),
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
   for (std::size_t atom = 0; atom < coordination.size(); ++atom) {
     CHECK(near(transformed_coordination[atom], coordination[atom], 2.0e-15));
   }
   return 0;
 }
 
-bool weighted_coordination(const gpuxtb::detail::gfn2::CoordinationPlan& plan,
+bool weighted_coordination(const xtbloom::detail::gfn2::CoordinationPlan& plan,
                            const std::vector<double>& positions, const std::vector<double>& weights,
                            double& value, std::string& error) {
   std::vector<double> coordination(weights.size());
-  if (gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), coordination.data(),
-                                                      error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), coordination.data(),
+                                                       error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   value = 0.0;
@@ -126,16 +126,16 @@ int test_analytic_gradient() {
   };
   const std::vector<double> weights{0.3, -0.7, 1.1, -0.2, 0.8, 0.45};
 
-  gpuxtb::detail::gfn2::CoordinationPlan plan;
+  xtbloom::detail::gfn2::CoordinationPlan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(2, 6, offsets.data(), atomic_numbers.data(),
-                                                     plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(2, 6, offsets.data(), atomic_numbers.data(),
+                                                      plan, error) == XTBLOOM_STATUS_SUCCESS);
 
   constexpr double baseline = 0.125;
   std::vector<double> gradients(positions.size(), baseline);
-  CHECK(gpuxtb::detail::gfn2::add_coordination_gradient_cpu(plan, positions.data(), weights.data(),
-                                                            gradients.data(),
-                                                            error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_coordination_gradient_cpu(plan, positions.data(), weights.data(),
+                                                             gradients.data(),
+                                                             error) == XTBLOOM_STATUS_SUCCESS);
 
   constexpr double step = 1.0e-5;
   for (std::size_t coordinate = 0; coordinate < positions.size(); ++coordinate) {
@@ -166,93 +166,93 @@ int test_analytic_gradient() {
 int test_distance_boundaries() {
   constexpr std::array<std::int64_t, 2> offsets{0, 2};
   constexpr std::array<std::int32_t, 2> atomic_numbers{1, 8};
-  gpuxtb::detail::gfn2::CoordinationPlan plan;
+  xtbloom::detail::gfn2::CoordinationPlan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(1, 2, offsets.data(), atomic_numbers.data(),
-                                                     plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(1, 2, offsets.data(), atomic_numbers.data(),
+                                                      plan, error) == XTBLOOM_STATUS_SUCCESS);
 
   std::array<double, 6> positions{};
   std::array<double, 2> coordination{};
   std::array<double, 2> weights{1.0, -0.5};
   std::array<double, 6> gradients{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), coordination.data(),
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::add_coordination_gradient_cpu(plan, positions.data(), weights.data(),
-                                                            gradients.data(), error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(
+            plan, positions.data(), coordination.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_coordination_gradient_cpu(plan, positions.data(), weights.data(),
+                                                             gradients.data(), error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   positions[3] = 5.0e-7;
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), coordination.data(),
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(
+            plan, positions.data(), coordination.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   /* Upstream includes a pair exactly at cutoff and excludes only r > cutoff. */
   positions[3] = 25.0;
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), coordination.data(),
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(
+            plan, positions.data(), coordination.data(), error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(coordination[0] > 0.0);
   CHECK(coordination[1] == coordination[0]);
 
   positions[3] = std::nextafter(25.0, std::numeric_limits<double>::infinity());
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), coordination.data(),
-                                                        error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(
+            plan, positions.data(), coordination.data(), error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(coordination[0] == 0.0);
   CHECK(coordination[1] == 0.0);
   return 0;
 }
 
 int test_validation() {
-  gpuxtb::detail::gfn2::CoordinationPlan plan;
+  xtbloom::detail::gfn2::CoordinationPlan plan;
   std::string error;
   constexpr std::array<std::int64_t, 2> offsets{0, 2};
   constexpr std::array<std::int64_t, 2> bad_start{1, 2};
   constexpr std::array<std::int64_t, 3> descending{0, 2, 1};
   constexpr std::array<std::int32_t, 2> atoms{1, 8};
   constexpr std::array<std::int32_t, 2> bad_atoms{1, 87};
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(1, 2, nullptr, atoms.data(), plan, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(1, 2, bad_start.data(), atoms.data(), plan,
-                                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(2, 1, descending.data(), atoms.data(), plan,
-                                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(1, 2, offsets.data(), bad_atoms.data(), plan,
-                                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(1, 2, offsets.data(), atoms.data(), plan,
-                                                     error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(1, 2, nullptr, atoms.data(), plan, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(1, 2, bad_start.data(), atoms.data(), plan,
+                                                      error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(2, 1, descending.data(), atoms.data(), plan,
+                                                      error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(1, 2, offsets.data(), bad_atoms.data(), plan,
+                                                      error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(1, 2, offsets.data(), atoms.data(), plan,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
 
   std::array<double, 6> positions{0.0, 0.0, 0.0, 1.8, 0.0, 0.0};
   std::array<double, 2> coordination{};
   std::array<double, 2> weights{1.0, 1.0};
   std::array<double, 6> gradients{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, nullptr, coordination.data(),
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), nullptr, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(plan, nullptr, coordination.data(),
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), nullptr, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   positions[0] = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, positions.data(), coordination.data(),
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(
+            plan, positions.data(), coordination.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   positions[0] = 0.0;
-  CHECK(gpuxtb::detail::gfn2::add_coordination_gradient_cpu(plan, positions.data(), nullptr,
-                                                            gradients.data(), error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_coordination_gradient_cpu(plan, positions.data(), nullptr,
+                                                             gradients.data(), error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   weights[1] = std::numeric_limits<double>::infinity();
-  CHECK(gpuxtb::detail::gfn2::add_coordination_gradient_cpu(plan, positions.data(), weights.data(),
-                                                            gradients.data(), error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_coordination_gradient_cpu(plan, positions.data(), weights.data(),
+                                                             gradients.data(), error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   std::vector<std::int64_t> all_offsets{0, 86};
   std::vector<std::int32_t> all_elements(86);
   for (std::int32_t atomic_number = 1; atomic_number <= 86; ++atomic_number) {
     all_elements[static_cast<std::size_t>(atomic_number - 1)] = atomic_number;
   }
-  CHECK(gpuxtb::detail::gfn2::make_coordination_plan(1, 86, all_offsets.data(), all_elements.data(),
-                                                     plan, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_coordination_plan(
+            1, 86, all_offsets.data(), all_elements.data(), plan, error) == XTBLOOM_STATUS_SUCCESS);
 
   plan.atom_offsets.back() = 85;
   std::vector<double> all_positions(86 * 3, 0.0);
   std::vector<double> all_coordination(86);
-  CHECK(gpuxtb::detail::gfn2::evaluate_coordination_cpu(plan, all_positions.data(),
-                                                        all_coordination.data(),
-                                                        error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_coordination_cpu(plan, all_positions.data(),
+                                                         all_coordination.data(),
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   return 0;
 }
 

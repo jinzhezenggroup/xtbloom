@@ -1,11 +1,9 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_EIGENSOLVER_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_SCC_SETUP_EIGENSOLVER_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_EIGENSOLVER_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_SCC_SETUP_EIGENSOLVER_CUH
 
-#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -15,9 +13,10 @@
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_scc_iteration_arena.cuh"
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
-#include "gpuxtb/gpuxtb.h"
+#include "runtime/nvidia_host_api.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 inline constexpr std::size_t kGfn2SccSetupEigensolverArenaAlignment = 256u;
 
@@ -60,7 +59,7 @@ enum class Gfn2SccSetupEigensolverField : std::uint32_t {
 };
 
 struct Gfn2SccSetupEigensolverDiagnostic {
-  gpuxtb_status_t status = GPUXTB_STATUS_SUCCESS;
+  xtbloom_status_t status = XTBLOOM_STATUS_SUCCESS;
   Gfn2SccSetupEigensolverError error = Gfn2SccSetupEigensolverError::kSuccess;
   Gfn2SccSetupEigensolverField field = Gfn2SccSetupEigensolverField::kNone;
   std::int64_t index = -1;
@@ -71,7 +70,7 @@ struct Gfn2SccSetupEigensolverDiagnostic {
   cusolverStatus_t cusolver_status = CUSOLVER_STATUS_SUCCESS;
 
   [[nodiscard]] bool success() const noexcept {
-    return status == GPUXTB_STATUS_SUCCESS && error == Gfn2SccSetupEigensolverError::kSuccess;
+    return status == XTBLOOM_STATUS_SUCCESS && error == Gfn2SccSetupEigensolverError::kSuccess;
   }
 };
 
@@ -244,6 +243,6 @@ class Gfn2SccSetupEigensolver {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_SCC_SETUP_EIGENSOLVER_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_SCC_SETUP_EIGENSOLVER_CUH

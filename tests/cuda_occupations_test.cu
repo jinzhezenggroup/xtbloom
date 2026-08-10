@@ -14,8 +14,8 @@
 #include <vector>
 
 #include "backends/cuda/gfn2_occupations.cuh"
-#include "gpuxtb/gpuxtb.h"
 #include "model/gfn2/eigensolver.hpp"
+#include "xtbloom/xtbloom.h"
 
 #define CHECK(condition)                                                                           \
   do {                                                                                             \
@@ -29,10 +29,10 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2OccupationsDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2OccupationsDeviceError;
-using gpuxtb::detail::cuda::Gfn2OccupationsDeviceResults;
-using gpuxtb::detail::cuda::Gfn2OccupationsDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2OccupationsDeviceBatch;
+using xtbloom::detail::cuda::Gfn2OccupationsDeviceError;
+using xtbloom::detail::cuda::Gfn2OccupationsDeviceResults;
+using xtbloom::detail::cuda::Gfn2OccupationsDeviceWorkspace;
 
 constexpr std::uint64_t kPlanToken = 0x3c6ef372fe94f82bULL;
 constexpr double kSentinel = -771.25;
@@ -167,10 +167,10 @@ bool build_cpu_reference(HostCase& host, std::string& error) {
       double* const output = host.expected_occupations.data() + 2 * begin + spin * count;
       const std::int64_t spin_spectrum_begin =
           spectrum_begin + (channels == 2u ? static_cast<std::int64_t>(spin) * count : 0);
-      if (gpuxtb::detail::gfn2::fill_occupations_cpu(
+      if (xtbloom::detail::gfn2::fill_occupations_cpu(
               count, host.eigenvalues.data() + spin_spectrum_begin,
               host.electron_counts[2u * system + spin], host.temperatures[system], output, mu,
-              entropy, error) != GPUXTB_STATUS_SUCCESS) {
+              entropy, error) != XTBLOOM_STATUS_SUCCESS) {
         return false;
       }
       host.expected_chemical_potentials[2u * system + spin] = mu;
@@ -258,7 +258,7 @@ HostCase make_parallel_case(std::size_t batch_size) {
     const double capacity = static_cast<double>(count);
     switch (system % 4u) {
       case 0u:
-        host.temperatures[system] = GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+        host.temperatures[system] = XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
         host.electron_counts[2u * system] = 0.37 * capacity;
         host.electron_counts[2u * system + 1u] = 0.23 * capacity;
         break;
@@ -426,9 +426,9 @@ struct DeviceFixture {
     return result;
   }
 
-  gpuxtb::detail::Gfn2WavefunctionLayoutView layout(const HostCase& host) const {
-    gpuxtb::detail::Gfn2WavefunctionLayoutView result{};
-    result.memory_space = gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice;
+  xtbloom::detail::Gfn2WavefunctionLayoutView layout(const HostCase& host) const {
+    xtbloom::detail::Gfn2WavefunctionLayoutView result{};
+    result.memory_space = xtbloom::detail::Gfn2PlanMemorySpace::kCudaDevice;
     result.plan_token = kPlanToken;
     result.batch_size = static_cast<std::int64_t>(host.batch_size());
     result.total_spin_channels = host.spin_channel_offsets.back();
@@ -564,10 +564,10 @@ int test_cpu_parity_ragged_batches_and_custom_stream() {
     CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), device.system_errors.get(),
         device.device_error.get(), stream));
-    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
         device.batch(host), device.eigenvalues.get(),
         static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
         device.workspace(), device.system_errors.get(), device.device_error.get(), stream));
@@ -597,16 +597,16 @@ int test_parallel_threshold_parity_and_determinism() {
       Results first;
       for (int repetition = 0; repetition < 2; ++repetition) {
         CUDA_CHECK(device.reset_outputs(host, stream));
-        CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+        CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
             static_cast<std::int64_t>(batch_size), device.system_errors.get(),
             device.device_error.get(), stream));
         const cudaError_t status =
-            mixed_spin ? gpuxtb::detail::cuda::evaluate_gfn2_occupations_cuda(
+            mixed_spin ? xtbloom::detail::cuda::evaluate_gfn2_occupations_cuda(
                              device.batch(host), device.layout(host), device.eigenvalues.get(),
                              static_cast<std::int64_t>(device.eigenvalues.size()),
                              device.results(host), device.workspace(), device.system_errors.get(),
                              device.device_error.get(), stream)
-                       : gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+                       : xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
                              device.batch(host), device.eigenvalues.get(),
                              static_cast<std::int64_t>(device.eigenvalues.size()),
                              device.results(host), device.workspace(), device.system_errors.get(),
@@ -636,15 +636,15 @@ int test_parallel_threshold_parity_and_determinism() {
   degenerate.eigenvalues.assign(65u, 1.0);
   degenerate.electron_counts = {std::nextafter(65.0, 0.0),
                                 std::numeric_limits<double>::denorm_min()};
-  degenerate.temperatures = {GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE};
+  degenerate.temperatures = {XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE};
   degenerate.active = {1u};
   std::string error;
   CHECK(build_cpu_reference(degenerate, error));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(degenerate, nullptr));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
       1, device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
       device.batch(degenerate), device.eigenvalues.get(), 65, device.results(degenerate),
       device.workspace(), device.system_errors.get(), device.device_error.get()));
   Results actual;
@@ -672,9 +672,9 @@ int test_parallel_validation_priority_and_failure_isolation() {
   CUDA_CHECK(device.eigenvalues.copy_from(poisoned.data(), poisoned.size()));
   for (int repetition = 0; repetition < 5; ++repetition) {
     CUDA_CHECK(device.reset_outputs(host, nullptr));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
         8, device.system_errors.get(), device.device_error.get()));
-    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
         device.batch(host), device.eigenvalues.get(),
         static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
         device.workspace(), device.system_errors.get(), device.device_error.get()));
@@ -761,7 +761,7 @@ HostCase make_representability_case() {
     /* finite temperature everywhere so the Fermi (not Aufbau) path runs */
     host.temperatures[system] = system == 7u    ? std::numeric_limits<double>::max()
                                 : system >= 10u ? 1.0e-7
-                                                : GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE;
+                                                : XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
     host.electron_counts[2u * system] = electron0[system];
     host.electron_counts[2u * system + 1u] = electron0[system];
   }
@@ -774,10 +774,10 @@ int test_degenerate_representability_policy_parity() {
   CHECK(build_cpu_reference(host, error));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, nullptr));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
       static_cast<std::int64_t>(host.batch_size()), device.system_errors.get(),
       device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
       device.batch(host), device.eigenvalues.get(),
       static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
       device.workspace(), device.system_errors.get(), device.device_error.get()));
@@ -1121,10 +1121,10 @@ int test_mixed_spin_spectra_batches_and_system_transaction() {
     CHECK(build_cpu_reference(host, error));
     DeviceFixture device;
     CUDA_CHECK(device.initialize(host, nullptr));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
         static_cast<std::int64_t>(batch_size), device.system_errors.get(),
         device.device_error.get()));
-    CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_occupations_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_occupations_cuda(
         device.batch(host), device.layout(host), device.eigenvalues.get(),
         static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
         device.workspace(), device.system_errors.get(), device.device_error.get()));
@@ -1132,7 +1132,7 @@ int test_mixed_spin_spectra_batches_and_system_transaction() {
     CUDA_CHECK(copy_results(host, device, actual, nullptr));
     CUDA_CHECK(cudaDeviceSynchronize());
     CHECK(compare_success(host, actual) == 0);
-    CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+    CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
               device.batch(host), device.eigenvalues.get(),
               static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
               device.workspace(), device.system_errors.get(),
@@ -1147,9 +1147,9 @@ int test_mixed_spin_spectra_batches_and_system_transaction() {
           std::numeric_limits<double>::quiet_NaN();
       CUDA_CHECK(device.eigenvalues.copy_from(poisoned.data(), poisoned.size()));
       CUDA_CHECK(device.reset_outputs(host, nullptr));
-      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
           8, device.system_errors.get(), device.device_error.get()));
-      CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_occupations_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_occupations_cuda(
           device.batch(host), device.layout(host), device.eigenvalues.get(),
           static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
           device.workspace(), device.system_errors.get(), device.device_error.get()));
@@ -1170,9 +1170,9 @@ int test_mixed_spin_spectra_batches_and_system_transaction() {
       hostile_spin[failed_system] = 257;
       CUDA_CHECK(device.spin_channels.copy_from(hostile_spin.data(), hostile_spin.size()));
       CUDA_CHECK(device.reset_outputs(host, nullptr));
-      CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
           8, device.system_errors.get(), device.device_error.get()));
-      CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_occupations_cuda(
+      CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_occupations_cuda(
           device.batch(host), device.layout(host), device.eigenvalues.get(),
           static_cast<std::int64_t>(device.eigenvalues.size()), device.results(host),
           device.workspace(), device.system_errors.get(), device.device_error.get()));
@@ -1212,7 +1212,7 @@ HostCase make_difficult_case() {
                           0.7,  1.0, 1.0e-300, 1.0e-300, 1.0e-16, 0.0,     2.0,
                           1.25, 1.75};
   host.temperatures = {0.0,
-                       GPUXTB_DEFAULT_ELECTRONIC_TEMPERATURE,
+                       XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE,
                        0.01,
                        1.0e-7,
                        std::numeric_limits<double>::max(),
@@ -1229,9 +1229,9 @@ int test_boundary_degenerate_translated_and_extreme_spectra() {
   CHECK(build_cpu_reference(host, error));
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, nullptr));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
       device.batch(host), device.eigenvalues.get(),
       static_cast<std::int64_t>(host.total_orbitals()), device.results(host), device.workspace(),
       device.system_errors.get(), device.device_error.get()));
@@ -1264,9 +1264,9 @@ int test_peer_isolated_failures_inactive_mask_and_hostile_offsets() {
   CUDA_CHECK(device.eigenvalues.copy_from(bad_eigenvalues.data(), bad_eigenvalues.size()));
   CUDA_CHECK(device.electron_counts.copy_from(bad_counts.data(), bad_counts.size()));
   CUDA_CHECK(device.temperatures.copy_from(bad_temperatures.data(), bad_temperatures.size()));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
       device.batch(host), device.eigenvalues.get(),
       static_cast<std::int64_t>(host.total_orbitals()), device.results(host), device.workspace(),
       device.system_errors.get(), device.device_error.get()));
@@ -1305,9 +1305,9 @@ int test_peer_isolated_failures_inactive_mask_and_hostile_offsets() {
       device.electron_counts.copy_from(host.electron_counts.data(), host.electron_counts.size()));
   CUDA_CHECK(device.temperatures.copy_from(host.temperatures.data(), host.temperatures.size()));
   CUDA_CHECK(device.reset_outputs(host, nullptr));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
       device.batch(host), device.eigenvalues.get(),
       static_cast<std::int64_t>(host.total_orbitals()), device.results(host), device.workspace(),
       device.system_errors.get(), device.device_error.get()));
@@ -1319,9 +1319,9 @@ int test_peer_isolated_failures_inactive_mask_and_hostile_offsets() {
   host.active[2] = 2u;
   CUDA_CHECK(device.active.copy_from(host.active.data(), host.active.size()));
   CUDA_CHECK(device.reset_outputs(host, nullptr));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
       device.batch(host), device.eigenvalues.get(),
       static_cast<std::int64_t>(host.total_orbitals()), device.results(host), device.workspace(),
       device.system_errors.get(), device.device_error.get()));
@@ -1341,9 +1341,9 @@ int test_peer_isolated_failures_inactive_mask_and_hostile_offsets() {
   hostile[6] = std::numeric_limits<std::int64_t>::min();
   CUDA_CHECK(device.offsets.copy_from(hostile.data(), hostile.size()));
   CUDA_CHECK(device.reset_outputs(host, nullptr));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
       8, device.system_errors.get(), device.device_error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
       device.batch(host), device.eigenvalues.get(),
       static_cast<std::int64_t>(host.total_orbitals()), device.results(host), device.workspace(),
       device.system_errors.get(), device.device_error.get()));
@@ -1369,7 +1369,7 @@ int test_peer_isolated_failures_inactive_mask_and_hostile_offsets() {
       static_cast<std::uint32_t>(Gfn2OccupationsDeviceError::kNonfiniteEntropy);
   CUDA_CHECK(
       cudaMemcpy(device.device_error.get(), &sticky, sizeof(sticky), cudaMemcpyHostToDevice));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
       device.batch(host), device.eigenvalues.get(),
       static_cast<std::int64_t>(host.total_orbitals()), device.results(host), device.workspace(),
       device.system_errors.get(), device.device_error.get()));
@@ -1396,9 +1396,9 @@ int test_cuda_graph_capture_and_replay() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
       32, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
       device.batch(host), device.eigenvalues.get(),
       static_cast<std::int64_t>(host.total_orbitals()), device.results(host), device.workspace(),
       device.system_errors.get(), device.device_error.get(), stream));
@@ -1428,35 +1428,35 @@ int test_host_argument_alias_and_alignment_validation() {
   Gfn2OccupationsDeviceWorkspace workspace = device.workspace();
   batch.orbital_offsets = reinterpret_cast<const std::int64_t*>(
       reinterpret_cast<const unsigned char*>(device.offsets.get()) + 1u);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
             batch, device.eigenvalues.get(), static_cast<std::int64_t>(host.total_orbitals()),
             results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   batch = device.batch(host);
   results.occupations = workspace.occupation_scratch;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
             batch, device.eigenvalues.get(), static_cast<std::int64_t>(host.total_orbitals()),
             results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   results = device.results(host);
   workspace.entropy_scratch = results.entropies;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
             batch, device.eigenvalues.get(), static_cast<std::int64_t>(host.total_orbitals()),
             results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   workspace = device.workspace();
   results.electron_sums = reinterpret_cast<double*>(device.device_error.get());
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
             batch, device.eigenvalues.get(), static_cast<std::int64_t>(host.total_orbitals()),
             results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   results = device.results(host);
   batch.electron_count_elements = std::numeric_limits<std::int64_t>::max();
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_occupations_cuda(
             batch, device.eigenvalues.get(), static_cast<std::int64_t>(host.total_orbitals()),
             results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
+  CHECK(xtbloom::detail::cuda::reset_gfn2_occupations_device_errors_cuda(
             8, device.system_errors.get(), device.system_errors.get()) == cudaErrorInvalidValue);
   return 0;
 }

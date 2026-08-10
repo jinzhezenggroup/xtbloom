@@ -23,13 +23,13 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2ForceDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2HamiltonianForceDeviceInput;
-using gpuxtb::detail::cuda::Gfn2HamiltonianForceDeviceOutput;
-using gpuxtb::detail::cuda::Gfn2HamiltonianForceDeviceWorkspace;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::IntegralPlan;
+using xtbloom::detail::cuda::Gfn2ForceDeviceActivity;
+using xtbloom::detail::cuda::Gfn2HamiltonianDeviceBatch;
+using xtbloom::detail::cuda::Gfn2HamiltonianForceDeviceInput;
+using xtbloom::detail::cuda::Gfn2HamiltonianForceDeviceOutput;
+using xtbloom::detail::cuda::Gfn2HamiltonianForceDeviceWorkspace;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::IntegralPlan;
 
 constexpr std::uint64_t kPlanToken = 0x643cec739a68e512ULL;
 
@@ -108,9 +108,10 @@ bool make_case(HostCase& data, std::string& error) {
   const std::vector<std::int32_t> atomic_numbers{1, 1, 8, 1, 1};
   BasisPlan basis;
   IntegralPlan integrals;
-  if (gpuxtb::detail::gfn2::make_basis_plan(2, 5, data.atom_offsets.data(), atomic_numbers.data(),
-                                            basis, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_integral_plan(basis, integrals, error) != GPUXTB_STATUS_SUCCESS) {
+  if (xtbloom::detail::gfn2::make_basis_plan(2, 5, data.atom_offsets.data(), atomic_numbers.data(),
+                                             basis, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_integral_plan(basis, integrals, error) !=
+          XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   data.batch_size = basis.batch_size;
@@ -306,7 +307,7 @@ struct DeviceFixture {
   DeviceBuffer<double> density, spin_density, shell_scalar, spin_shell_scalar, dipole_potential,
       quadrupole_potential;
   DeviceBuffer<std::uint8_t> requested;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<double> overlap, dipole, quadrupole, overlap_scratch, dipole_scratch,
       quadrupole_scratch;
   DeviceBuffer<std::uint32_t> sequence_active, system_errors, device_error;
@@ -428,9 +429,9 @@ struct DeviceFixture {
 
 cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t stream,
                    bool spin = false) {
-  cudaError_t status = gpuxtb::detail::cuda::reset_gfn2_hamiltonian_force_device_errors_cuda(
+  cudaError_t status = xtbloom::detail::cuda::reset_gfn2_hamiltonian_force_device_errors_cuda(
       host.batch_size, device.system_errors.get(), device.device_error.get(), stream);
-  return status == cudaSuccess ? gpuxtb::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
+  return status == cudaSuccess ? xtbloom::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
                                      device.batch(host), device.activity(host),
                                      spin ? device.spin_input(host) : device.input(host),
                                      device.output(host), device.workspace(host),
@@ -504,7 +505,7 @@ int test_reference_finite_difference_and_graph() {
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, stream));
   const std::vector<std::uint8_t> requested(2u, 1u);
-  const std::vector<gpuxtb_status_t> statuses(2u, GPUXTB_STATUS_SUCCESS);
+  const std::vector<xtbloom_status_t> statuses(2u, XTBLOOM_STATUS_SUCCESS);
   CUDA_CHECK(device.requested.copy_from(requested.data(), requested.size(), stream));
   CUDA_CHECK(device.statuses.copy_from(statuses.data(), statuses.size(), stream));
   CUDA_CHECK(device.seed(host, stream));
@@ -550,8 +551,8 @@ int test_status_gate_skips_poisoned_peer() {
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, stream));
   const std::vector<std::uint8_t> requested{1u, 1u};
-  const std::vector<gpuxtb_status_t> statuses{GPUXTB_STATUS_SUCCESS,
-                                              GPUXTB_STATUS_SCC_NOT_CONVERGED};
+  const std::vector<xtbloom_status_t> statuses{XTBLOOM_STATUS_SUCCESS,
+                                               XTBLOOM_STATUS_SCC_NOT_CONVERGED};
   CUDA_CHECK(device.requested.copy_from(requested.data(), requested.size(), stream));
   CUDA_CHECK(device.statuses.copy_from(statuses.data(), statuses.size(), stream));
   CUDA_CHECK(device.density.copy_from(poisoned.data(), poisoned.size(), stream));
@@ -573,7 +574,7 @@ int test_unrestricted_overlap_response_and_binding_validation() {
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host, stream));
   const std::vector<std::uint8_t> requested(2u, 1u);
-  const std::vector<gpuxtb_status_t> statuses(2u, GPUXTB_STATUS_SUCCESS);
+  const std::vector<xtbloom_status_t> statuses(2u, XTBLOOM_STATUS_SUCCESS);
   CUDA_CHECK(device.requested.copy_from(requested.data(), requested.size(), stream));
   CUDA_CHECK(device.statuses.copy_from(statuses.data(), statuses.size(), stream));
   CUDA_CHECK(device.seed(host, stream));
@@ -582,19 +583,19 @@ int test_unrestricted_overlap_response_and_binding_validation() {
 
   Gfn2HamiltonianForceDeviceInput invalid = device.spin_input(host);
   invalid.spin_shell_scalar_potentials = nullptr;
-  CHECK(gpuxtb::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
             device.batch(host), device.activity(host), invalid, device.output(host),
             device.workspace(host), device.system_errors.get(), device.device_error.get(),
             stream) == cudaErrorInvalidValue);
   invalid = device.spin_input(host);
   invalid.spin_density_elements = host.total_matrices - 1;
-  CHECK(gpuxtb::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
             device.batch(host), device.activity(host), invalid, device.output(host),
             device.workspace(host), device.system_errors.get(), device.device_error.get(),
             stream) == cudaErrorInvalidValue);
   invalid = device.spin_input(host);
   invalid.spin_density = device.overlap.get();
-  CHECK(gpuxtb::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_hamiltonian_integral_adjoints_cuda(
             device.batch(host), device.activity(host), invalid, device.output(host),
             device.workspace(host), device.system_errors.get(), device.device_error.get(),
             stream) == cudaErrorInvalidValue);

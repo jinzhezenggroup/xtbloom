@@ -11,13 +11,13 @@
 
 namespace {
 
-using gpuxtb::detail::CudaManagedMemoryPolicy;
-using gpuxtb::detail::CudaValidatedBuffer;
-using gpuxtb::detail::CudaValidatedConstBuffer;
-using gpuxtb::detail::ScopedCudaDevice;
-using gpuxtb::detail::validate_cuda_buffer;
-using gpuxtb::detail::validate_cuda_const_buffer;
-using gpuxtb::detail::validate_cuda_stream_owner;
+using xtbloom::detail::CudaManagedMemoryPolicy;
+using xtbloom::detail::CudaValidatedBuffer;
+using xtbloom::detail::CudaValidatedConstBuffer;
+using xtbloom::detail::ScopedCudaDevice;
+using xtbloom::detail::validate_cuda_buffer;
+using xtbloom::detail::validate_cuda_const_buffer;
+using xtbloom::detail::validate_cuda_stream_owner;
 
 #define CHECK(condition)                                                                       \
   do {                                                                                         \
@@ -36,12 +36,12 @@ int current_device() {
   return device;
 }
 
-gpuxtb_const_buffer_t const_view(const void* data, std::size_t bytes,
-                                 gpuxtb_memory_space_t memory_space) {
+xtbloom_const_buffer_t const_view(const void* data, std::size_t bytes,
+                                  xtbloom_memory_space_t memory_space) {
   return {data, bytes, memory_space, 0u};
 }
 
-gpuxtb_buffer_t mutable_view(void* data, std::size_t bytes, gpuxtb_memory_space_t memory_space) {
+xtbloom_buffer_t mutable_view(void* data, std::size_t bytes, xtbloom_memory_space_t memory_space) {
   return {data, bytes, memory_space, 0u};
 }
 
@@ -66,11 +66,11 @@ int main() {
   CudaValidatedBuffer mutable_validated{};
 
   alignas(double) double ordinary_host[4]{1.0, 2.0, 3.0, 4.0};
-  auto host_input = const_view(ordinary_host, sizeof(ordinary_host), GPUXTB_MEMORY_HOST);
-  auto host_output = mutable_view(ordinary_host, sizeof(ordinary_host), GPUXTB_MEMORY_HOST);
+  auto host_input = const_view(ordinary_host, sizeof(ordinary_host), XTBLOOM_MEMORY_HOST);
+  auto host_output = mutable_view(ordinary_host, sizeof(ordinary_host), XTBLOOM_MEMORY_HOST);
   CHECK(validate_cuda_const_buffer(
             context_device, "ordinary_host", host_input, sizeof(ordinary_host), alignof(double),
-            CudaManagedMemoryPolicy::kReject, const_validated, error) == GPUXTB_STATUS_SUCCESS);
+            CudaManagedMemoryPolicy::kReject, const_validated, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(error.empty());
   CHECK(const_validated.data == ordinary_host);
   CHECK(const_validated.logical_bytes == sizeof(ordinary_host));
@@ -79,40 +79,40 @@ int main() {
   CHECK(validate_cuda_buffer(context_device, "ordinary_host_output", host_output,
                              sizeof(ordinary_host), alignof(double),
                              CudaManagedMemoryPolicy::kReject, mutable_validated,
-                             error) == GPUXTB_STATUS_SUCCESS);
+                             error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(mutable_validated.data == ordinary_host);
   CHECK(current_device() == context_device);
 
   void* pinned_host = nullptr;
   CUDA_CHECK(cudaMallocHost(&pinned_host, 128u));
-  auto registered_input = const_view(pinned_host, 128u, GPUXTB_MEMORY_HOST);
-  auto registered_output = mutable_view(pinned_host, 128u, GPUXTB_MEMORY_HOST);
+  auto registered_input = const_view(pinned_host, 128u, XTBLOOM_MEMORY_HOST);
+  auto registered_output = mutable_view(pinned_host, 128u, XTBLOOM_MEMORY_HOST);
   CHECK(validate_cuda_const_buffer(context_device, "registered_host", registered_input, 128u,
                                    alignof(double), CudaManagedMemoryPolicy::kReject,
-                                   const_validated, error) == GPUXTB_STATUS_SUCCESS);
+                                   const_validated, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(const_validated.pointer_type == cudaMemoryTypeHost);
   CHECK(validate_cuda_buffer(context_device, "registered_host_output", registered_output, 128u,
                              alignof(double), CudaManagedMemoryPolicy::kReject, mutable_validated,
-                             error) == GPUXTB_STATUS_SUCCESS);
+                             error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(mutable_validated.pointer_type == cudaMemoryTypeHost);
-  auto registered_as_device = const_view(pinned_host, 128u, GPUXTB_MEMORY_CUDA_DEVICE);
+  auto registered_as_device = const_view(pinned_host, 128u, XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(context_device, "registered_as_device", registered_as_device,
                                    128u, alignof(double), CudaManagedMemoryPolicy::kReject,
-                                   const_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   const_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(current_device() == context_device);
 
   double* device_data = nullptr;
   CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&device_data), 4u * sizeof(double)));
-  auto device_input = const_view(device_data, 4u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
-  auto device_output = mutable_view(device_data, 4u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+  auto device_input = const_view(device_data, 4u * sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
+  auto device_output = mutable_view(device_data, 4u * sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(
             context_device, "device_input", device_input, 4u * sizeof(double), alignof(double),
-            CudaManagedMemoryPolicy::kReject, const_validated, error) == GPUXTB_STATUS_SUCCESS);
+            CudaManagedMemoryPolicy::kReject, const_validated, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(const_validated.pointer_type == cudaMemoryTypeDevice);
   CHECK(const_validated.allocation_device == context_device);
   CHECK(validate_cuda_buffer(context_device, "device_output", device_output, 4u * sizeof(double),
                              alignof(double), CudaManagedMemoryPolicy::kReject, mutable_validated,
-                             error) == GPUXTB_STATUS_SUCCESS);
+                             error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(mutable_validated.pointer_type == cudaMemoryTypeDevice);
   CHECK(current_device() == context_device);
 
@@ -120,25 +120,25 @@ int main() {
    * capacity must remain inside that allocation even when the logical prefix
    * needed by this call would fit. */
   auto interior_device =
-      const_view(device_data + 1u, 3u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+      const_view(device_data + 1u, 3u * sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(context_device, "interior_device", interior_device,
                                    2u * sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_SUCCESS);
+                                   error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(const_validated.data == device_data + 1u);
   auto interior_device_overrun =
-      const_view(device_data + 1u, 4u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+      const_view(device_data + 1u, 4u * sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(context_device, "interior_device_overrun",
                                    interior_device_overrun, sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(error.find("extends past") != std::string::npos);
   CHECK(const_validated.data == nullptr);
   auto device_output_overrun =
-      mutable_view(device_data, 4u * sizeof(double) + 1u, GPUXTB_MEMORY_CUDA_DEVICE);
+      mutable_view(device_data, 4u * sizeof(double) + 1u, XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_buffer(context_device, "device_output_overrun", device_output_overrun,
                              sizeof(double), alignof(double), CudaManagedMemoryPolicy::kReject,
-                             mutable_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                             mutable_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(error.find("extends past") != std::string::npos);
   CHECK(mutable_validated.data == nullptr);
 
@@ -146,124 +146,125 @@ int main() {
   const std::size_t overflowing_device_bytes =
       std::numeric_limits<std::uintptr_t>::max() - device_address + 1u;
   auto overflowing_device =
-      const_view(device_data, overflowing_device_bytes, GPUXTB_MEMORY_CUDA_DEVICE);
+      const_view(device_data, overflowing_device_bytes, XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(context_device, "overflowing_device", overflowing_device,
                                    sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(error.find("overflows uintptr_t") != std::string::npos);
   CHECK(cudaPeekAtLastError() == cudaSuccess);
   CHECK(current_device() == context_device);
 
   /* A truthful CUDA allocation and an ordinary host pointer must both fail
    * closed when their public memory-space tags are swapped. */
-  auto device_as_host = const_view(device_data, 4u * sizeof(double), GPUXTB_MEMORY_HOST);
+  auto device_as_host = const_view(device_data, 4u * sizeof(double), XTBLOOM_MEMORY_HOST);
   CHECK(validate_cuda_const_buffer(context_device, "device_as_host", device_as_host,
                                    4u * sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(!error.empty());
   CHECK(const_validated.data == nullptr);
   CHECK(current_device() == context_device);
-  auto host_as_device = const_view(ordinary_host, sizeof(ordinary_host), GPUXTB_MEMORY_CUDA_DEVICE);
+  auto host_as_device =
+      const_view(ordinary_host, sizeof(ordinary_host), XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(context_device, "host_as_device", host_as_device,
                                    sizeof(ordinary_host), alignof(double),
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(cudaPeekAtLastError() == cudaSuccess);
   CHECK(current_device() == context_device);
 
   double* managed_data = nullptr;
   CUDA_CHECK(cudaMallocManaged(reinterpret_cast<void**>(&managed_data), 4u * sizeof(double)));
-  auto managed_input = const_view(managed_data, 4u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+  auto managed_input = const_view(managed_data, 4u * sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(context_device, "managed_rejected", managed_input,
                                    4u * sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(validate_cuda_const_buffer(context_device, "managed_allowed", managed_input,
                                    4u * sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kAllowOnAllocationDevice,
-                                   const_validated, error) == GPUXTB_STATUS_SUCCESS);
+                                   const_validated, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(const_validated.pointer_type == cudaMemoryTypeManaged);
   CHECK(const_validated.allocation_device == context_device);
-  auto managed_output = mutable_view(managed_data, 4u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+  auto managed_output = mutable_view(managed_data, 4u * sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_buffer(context_device, "managed_output", managed_output, 4u * sizeof(double),
                              alignof(double), CudaManagedMemoryPolicy::kAllowOnAllocationDevice,
-                             mutable_validated, error) == GPUXTB_STATUS_SUCCESS);
+                             mutable_validated, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(mutable_validated.pointer_type == cudaMemoryTypeManaged);
   auto interior_managed =
-      const_view(managed_data + 2u, 2u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+      const_view(managed_data + 2u, 2u * sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(context_device, "interior_managed", interior_managed,
                                    sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kAllowOnAllocationDevice,
-                                   const_validated, error) == GPUXTB_STATUS_SUCCESS);
+                                   const_validated, error) == XTBLOOM_STATUS_SUCCESS);
   auto interior_managed_overrun =
-      const_view(managed_data + 2u, 3u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+      const_view(managed_data + 2u, 3u * sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(context_device, "interior_managed_overrun",
                                    interior_managed_overrun, sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kAllowOnAllocationDevice,
-                                   const_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   const_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(error.find("extends past") != std::string::npos);
   CHECK(const_validated.data == nullptr);
-  auto managed_as_host = const_view(managed_data, 4u * sizeof(double), GPUXTB_MEMORY_HOST);
+  auto managed_as_host = const_view(managed_data, 4u * sizeof(double), XTBLOOM_MEMORY_HOST);
   CHECK(validate_cuda_const_buffer(context_device, "managed_as_host", managed_as_host,
                                    4u * sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kAllowOnAllocationDevice,
-                                   const_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   const_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(current_device() == context_device);
 
   alignas(double) std::byte misaligned_storage[2u * sizeof(double)]{};
-  auto misaligned_host = const_view(misaligned_storage + 1u, sizeof(double), GPUXTB_MEMORY_HOST);
+  auto misaligned_host = const_view(misaligned_storage + 1u, sizeof(double), XTBLOOM_MEMORY_HOST);
   CHECK(validate_cuda_const_buffer(context_device, "misaligned_host", misaligned_host,
                                    sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   auto misaligned_device = const_view(reinterpret_cast<const std::byte*>(device_data) + 1u,
-                                      sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+                                      sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(context_device, "misaligned_device", misaligned_device,
                                    sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  auto short_host = const_view(ordinary_host, sizeof(double) - 1u, GPUXTB_MEMORY_HOST);
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  auto short_host = const_view(ordinary_host, sizeof(double) - 1u, XTBLOOM_MEMORY_HOST);
   CHECK(validate_cuda_const_buffer(context_device, "short_host", short_host, sizeof(double),
                                    alignof(double), CudaManagedMemoryPolicy::kReject,
-                                   const_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   const_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(validate_cuda_const_buffer(context_device, "bad_alignment", host_input, sizeof(double), 3u,
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   const auto* overflowing_pointer = reinterpret_cast<const void*>(
       std::numeric_limits<std::uintptr_t>::max() - static_cast<std::uintptr_t>(3u));
-  auto overflowing_host = const_view(overflowing_pointer, 8u, GPUXTB_MEMORY_HOST);
+  auto overflowing_host = const_view(overflowing_pointer, 8u, XTBLOOM_MEMORY_HOST);
   CHECK(validate_cuda_const_buffer(context_device, "overflowing_host", overflowing_host, 8u, 1u,
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(current_device() == context_device);
 
-  auto null_nonempty = const_view(nullptr, sizeof(double), GPUXTB_MEMORY_HOST);
+  auto null_nonempty = const_view(nullptr, sizeof(double), XTBLOOM_MEMORY_HOST);
   CHECK(validate_cuda_const_buffer(context_device, "null_nonempty", null_nonempty, sizeof(double),
                                    alignof(double), CudaManagedMemoryPolicy::kReject,
-                                   const_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  auto empty = const_view(nullptr, 0u, GPUXTB_MEMORY_HOST);
+                                   const_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  auto empty = const_view(nullptr, 0u, XTBLOOM_MEMORY_HOST);
   CHECK(validate_cuda_const_buffer(context_device, "empty", empty, 0u, alignof(double),
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_SUCCESS);
+                                   error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(const_validated.data == nullptr);
   CHECK(error.empty());
   auto reserved = host_input;
   reserved.reserved = 1u;
   CHECK(validate_cuda_const_buffer(context_device, "reserved", reserved, sizeof(double),
                                    alignof(double), CudaManagedMemoryPolicy::kReject,
-                                   const_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   const_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   auto rocm = host_input;
-  rocm.memory_space = GPUXTB_MEMORY_ROCM_DEVICE;
+  rocm.memory_space = XTBLOOM_MEMORY_ROCM_DEVICE;
   CHECK(validate_cuda_const_buffer(context_device, "rocm", rocm, sizeof(double), alignof(double),
                                    CudaManagedMemoryPolicy::kReject, const_validated,
-                                   error) == GPUXTB_STATUS_NOT_SUPPORTED);
+                                   error) == XTBLOOM_STATUS_NOT_SUPPORTED);
   auto unknown_space = host_input;
   unknown_space.memory_space = 97;
   CHECK(validate_cuda_const_buffer(context_device, "unknown_space", unknown_space, sizeof(double),
                                    alignof(double), CudaManagedMemoryPolicy::kReject,
-                                   const_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   const_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(current_device() == context_device);
 
   /* A stale device address forces cudaPointerGetAttributes down its failure
@@ -271,23 +272,23 @@ int main() {
   double* stale_device = nullptr;
   CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&stale_device), sizeof(double)));
   CUDA_CHECK(cudaFree(stale_device));
-  auto stale = const_view(stale_device, sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+  auto stale = const_view(stale_device, sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
   CHECK(validate_cuda_const_buffer(context_device, "stale_device", stale, sizeof(double),
                                    alignof(double), CudaManagedMemoryPolicy::kReject,
-                                   const_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                   const_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(cudaPeekAtLastError() == cudaSuccess);
   CHECK(current_device() == context_device);
 
   cudaStream_t stream = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-  CHECK(validate_cuda_stream_owner(context_device, nullptr, true, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(validate_cuda_stream_owner(context_device, stream, true, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(validate_cuda_stream_owner(context_device, nullptr, true, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(validate_cuda_stream_owner(context_device, stream, true, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(error.empty());
   CHECK(current_device() == context_device);
 
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
   CHECK(validate_cuda_stream_owner(context_device, stream, true, error) ==
-        GPUXTB_STATUS_NOT_SUPPORTED);
+        XTBLOOM_STATUS_NOT_SUPPORTED);
   CHECK(!error.empty());
   CHECK(current_device() == context_device);
   cudaGraph_t graph = nullptr;
@@ -297,13 +298,13 @@ int main() {
   /* Invalid device selection is rejected without changing the caller's
    * thread-local current device. */
   CHECK(validate_cuda_stream_owner(device_count, stream, true, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(cudaPeekAtLastError() == cudaSuccess);
   CHECK(current_device() == context_device);
   {
     ScopedCudaDevice guard(device_count, error);
     CHECK(!guard.ok());
-    CHECK(guard.status() == GPUXTB_STATUS_INVALID_ARGUMENT);
+    CHECK(guard.status() == XTBLOOM_STATUS_INVALID_ARGUMENT);
   }
   CHECK(current_device() == context_device);
 
@@ -322,32 +323,32 @@ int main() {
     CHECK(validate_cuda_const_buffer(context_device, "target_from_other_current", device_input,
                                      4u * sizeof(double), alignof(double),
                                      CudaManagedMemoryPolicy::kReject, const_validated,
-                                     error) == GPUXTB_STATUS_SUCCESS);
+                                     error) == XTBLOOM_STATUS_SUCCESS);
     CHECK(current_device() == other_device);
-    auto wrong_device = const_view(other_data, 4u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+    auto wrong_device = const_view(other_data, 4u * sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
     CHECK(validate_cuda_const_buffer(context_device, "wrong_device", wrong_device,
                                      4u * sizeof(double), alignof(double),
                                      CudaManagedMemoryPolicy::kReject, const_validated,
-                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                     error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(current_device() == other_device);
-    auto wrong_managed = const_view(other_managed, 4u * sizeof(double), GPUXTB_MEMORY_CUDA_DEVICE);
+    auto wrong_managed = const_view(other_managed, 4u * sizeof(double), XTBLOOM_MEMORY_CUDA_DEVICE);
     CHECK(validate_cuda_const_buffer(context_device, "wrong_managed", wrong_managed,
                                      4u * sizeof(double), alignof(double),
                                      CudaManagedMemoryPolicy::kAllowOnAllocationDevice,
-                                     const_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                     const_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(current_device() == other_device);
     CHECK(validate_cuda_stream_owner(context_device, other_stream, true, error) ==
-          GPUXTB_STATUS_INVALID_ARGUMENT);
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(current_device() == other_device);
     CHECK(validate_cuda_stream_owner(context_device, nullptr, true, error) ==
-          GPUXTB_STATUS_SUCCESS);
+          XTBLOOM_STATUS_SUCCESS);
     CHECK(current_device() == other_device);
 
     {
       ScopedCudaDevice guard(context_device, error);
       CHECK(guard.ok());
       CHECK(current_device() == context_device);
-      CHECK(guard.restore(error) == GPUXTB_STATUS_SUCCESS);
+      CHECK(guard.restore(error) == XTBLOOM_STATUS_SUCCESS);
       CHECK(current_device() == other_device);
     }
     {
@@ -375,14 +376,15 @@ int main() {
     const cudaError_t register_status =
         cudaHostRegister(readonly_host, kPageBytes, cudaHostRegisterReadOnly);
     if (register_status == cudaSuccess) {
-      auto readonly_input = const_view(readonly_host, kPageBytes, GPUXTB_MEMORY_HOST);
-      auto readonly_output = mutable_view(readonly_host, kPageBytes, GPUXTB_MEMORY_HOST);
-      CHECK(validate_cuda_const_buffer(
-                context_device, "readonly_input", readonly_input, sizeof(double), alignof(double),
-                CudaManagedMemoryPolicy::kReject, const_validated, error) == GPUXTB_STATUS_SUCCESS);
+      auto readonly_input = const_view(readonly_host, kPageBytes, XTBLOOM_MEMORY_HOST);
+      auto readonly_output = mutable_view(readonly_host, kPageBytes, XTBLOOM_MEMORY_HOST);
+      CHECK(validate_cuda_const_buffer(context_device, "readonly_input", readonly_input,
+                                       sizeof(double), alignof(double),
+                                       CudaManagedMemoryPolicy::kReject, const_validated,
+                                       error) == XTBLOOM_STATUS_SUCCESS);
       CHECK(validate_cuda_buffer(context_device, "readonly_output", readonly_output, sizeof(double),
                                  alignof(double), CudaManagedMemoryPolicy::kReject,
-                                 mutable_validated, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+                                 mutable_validated, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
       CHECK(cudaPeekAtLastError() == cudaSuccess);
       CUDA_CHECK(cudaHostUnregister(readonly_host));
     } else {

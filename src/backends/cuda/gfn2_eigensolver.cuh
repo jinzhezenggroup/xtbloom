@@ -1,11 +1,9 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_EIGENSOLVER_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_EIGENSOLVER_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_EIGENSOLVER_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_EIGENSOLVER_CUH
 
-#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -14,8 +12,9 @@
 
 #include "backends/common/gfn2_plan_schema.hpp"
 #include "backends/cuda/gfn2_geometry.cuh"
+#include "runtime/nvidia_host_api.h"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* Per-system numerical and semantic diagnostics produced asynchronously. */
 enum class Gfn2EigensolverDeviceError : std::uint32_t {
@@ -571,6 +570,6 @@ Gfn2EigensolverLaunchResult solve_gfn2_eigensystems_cuda(
     const Gfn2EigensolverDeviceResults& results, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_EIGENSOLVER_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_EIGENSOLVER_CUH

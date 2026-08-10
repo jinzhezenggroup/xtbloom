@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace gpuxtb::parameters::d4 {
+namespace xtbloom::parameters::d4 {
 
 inline constexpr char kSourceRevision[] = "6e1f59c3f39d919a2dbef0601d2576727c8b30e8";
 inline constexpr char kSourceDigest[] = "9201fd82434f37dc0d8466326ebfc5038f2df174176a31e998c84e3accd06db6";
@@ -17550,4 +17550,4 @@ inline constexpr std::array<double, kReferenceCount * kReferenceCount> kReferenc
     442.2849412744016, 448.36559574111317, 449.66335432290396, 414.74873378750385,
 }};
 
-}  // namespace gpuxtb::parameters::d4
+}  // namespace xtbloom::parameters::d4

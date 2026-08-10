@@ -35,7 +35,7 @@ fallback and submitted every configured SCC body.
 - Clean measured source: `2d5f67fa6327798c1f5d865b1c91bb19d64b5add`.
 - Library SHA-256: `12874d2a4b65c9b89b66a378ee0140b1ea9609ff35b93ae226de87fee5c6b8a8`.
 
-The CUDA build used `GPUXTB_ENABLE_CUDA=ON`,
+The CUDA build used `XTBLOOM_ENABLE_CUDA=ON`,
 `CMAKE_CUDA_ARCHITECTURES=120`, `BUILD_SHARED_LIBS=ON`, and
 `CMAKE_BUILD_TYPE=Release`. `cuda-b128.json` retains the complete CMake cache,
 compiler, provider, library, source, and clean-worktree identities checked by
@@ -124,7 +124,7 @@ srun --partition=main --gres=gpu:5090:1 --ntasks=1 env \
   LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64:/group/software/deepmd-kit-3.1.1/lib \
   MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL \
   python3 benchmarks/natoms_scaling.py \
-  --library build/cuda-fix232/libgpuxtb.so \
+  --library build/cuda-fix232/libxtbloom.so \
   --output-json cuda-b128.json --output-csv cuda-b128.csv \
   --natoms 62 --batch-sizes 128 --backend cuda --property energy \
   --start-mode fresh --warmups 5 --repetitions 50

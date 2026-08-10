@@ -24,14 +24,14 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2ES2DeviceBatch;
-using gpuxtb::detail::cuda::Gfn2ES2DeviceCache;
-using gpuxtb::detail::cuda::Gfn2ES2DeviceError;
-using gpuxtb::detail::cuda::Gfn2ES2DeviceWorkspace;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::ES2GeometryCache;
-using gpuxtb::detail::gfn2::ES2Plan;
-using gpuxtb::detail::gfn2::ES2Workspace;
+using xtbloom::detail::cuda::Gfn2ES2DeviceBatch;
+using xtbloom::detail::cuda::Gfn2ES2DeviceCache;
+using xtbloom::detail::cuda::Gfn2ES2DeviceError;
+using xtbloom::detail::cuda::Gfn2ES2DeviceWorkspace;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::ES2GeometryCache;
+using xtbloom::detail::gfn2::ES2Plan;
+using xtbloom::detail::gfn2::ES2Workspace;
 
 constexpr std::uint64_t kGeneration = 17u;
 
@@ -132,11 +132,11 @@ bool make_host_evaluation(const std::vector<std::int64_t>& atom_offsets,
                           const std::vector<double>& positions, const std::vector<double>& charges,
                           HostEvaluation& host, std::string& error) {
   const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
-  if (gpuxtb::detail::gfn2::make_basis_plan(
+  if (xtbloom::detail::gfn2::make_basis_plan(
           batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-          atomic_numbers.data(), host.basis, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_es2_plan(host.basis, atomic_numbers.data(), host.plan, error) !=
-          GPUXTB_STATUS_SUCCESS) {
+          atomic_numbers.data(), host.basis, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_es2_plan(host.basis, atomic_numbers.data(), host.plan, error) !=
+          XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   if (positions.size() != static_cast<std::size_t>(host.plan.total_atoms() * 3) ||
@@ -163,18 +163,18 @@ bool make_host_evaluation(const std::vector<std::int64_t>& atom_offsets,
 bool evaluate_cpu(HostEvaluation& host, std::uint64_t generation, std::string& error) {
   std::fill(host.energies.begin(), host.energies.end(), 0.0);
   std::fill(host.gradients.begin(), host.gradients.end(), 0.0);
-  return gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  return xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
              host.plan, host.positions.data(), generation, host.matrix.data(), host.matrix.size(),
-             host.workspace, host.cache, error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::evaluate_es2_potential_cpu(
+             host.workspace, host.cache, error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::evaluate_es2_potential_cpu(
              host.plan, host.cache, host.charges.data(), host.potential.data(), host.workspace,
-             error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::add_es2_energy_cpu(host.plan, host.cache, host.charges.data(),
-                                                  host.energies.data(), host.workspace,
-                                                  error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::add_es2_gradient_cpu(
+             error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::add_es2_energy_cpu(host.plan, host.cache, host.charges.data(),
+                                                   host.energies.data(), host.workspace,
+                                                   error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::add_es2_gradient_cpu(
              host.plan, host.cache, host.positions.data(), generation, host.charges.data(),
-             host.gradients.data(), host.workspace, error) == GPUXTB_STATUS_SUCCESS;
+             host.gradients.data(), host.workspace, error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 struct UploadedES2 {
@@ -279,12 +279,12 @@ struct UploadedES2 {
 };
 
 bool reset_error(UploadedES2& device) {
-  return gpuxtb::detail::cuda::reset_gfn2_es2_device_error_cuda(device.error.get(),
-                                                                device.stream) == cudaSuccess;
+  return xtbloom::detail::cuda::reset_gfn2_es2_device_error_cuda(device.error.get(),
+                                                                 device.stream) == cudaSuccess;
 }
 
 bool update_cache(UploadedES2& device) {
-  return gpuxtb::detail::cuda::update_gfn2_es2_geometry_cache_cuda(
+  return xtbloom::detail::cuda::update_gfn2_es2_geometry_cache_cuda(
              device.batch, device.positions.get(), device.cache, device.workspace,
              device.error.get(), device.stream) == cudaSuccess;
 }
@@ -292,13 +292,13 @@ bool update_cache(UploadedES2& device) {
 bool evaluate_gpu_sequence(UploadedES2& device, std::uint64_t generation = kGeneration) {
   device.cache.geometry_generation = generation;
   return reset_error(device) && update_cache(device) &&
-         gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+         xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
              device.batch, device.cache, device.charges.get(), device.potential.get(),
              device.workspace, device.error.get(), device.stream) == cudaSuccess &&
-         gpuxtb::detail::cuda::add_gfn2_es2_energy_cuda(
+         xtbloom::detail::cuda::add_gfn2_es2_energy_cuda(
              device.batch, device.cache, device.charges.get(), device.energies.get(),
              device.workspace, device.error.get(), device.stream) == cudaSuccess &&
-         gpuxtb::detail::cuda::add_gfn2_es2_gradient_cuda(
+         xtbloom::detail::cuda::add_gfn2_es2_gradient_cuda(
              device.batch, device.cache, device.positions.get(), generation, device.charges.get(),
              device.gradients.get(), device.workspace, device.error.get(),
              device.stream) == cudaSuccess;
@@ -365,7 +365,7 @@ bool gpu_energy_at(UploadedES2& device, const std::vector<double>& positions,
   }
   device.cache.geometry_generation = generation;
   if (!reset_error(device) || !update_cache(device) ||
-      gpuxtb::detail::cuda::add_gfn2_es2_energy_cuda(
+      xtbloom::detail::cuda::add_gfn2_es2_energy_cuda(
           device.batch, device.cache, device.charges.get(), device.energies.get(), device.workspace,
           device.error.get(), device.stream) != cudaSuccess ||
       !device.energies.copy_to(energies.data(), energies.size(), device.stream)) {
@@ -387,7 +387,7 @@ int test_finite_difference_and_generation() {
                         device.stream) == cudaSuccess);
   CHECK(reset_error(device));
   CHECK(update_cache(device));
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_gradient_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_gradient_cuda(
             device.batch, device.cache, device.positions.get(), kGeneration, device.charges.get(),
             device.gradients.get(), device.workspace, device.error.get(),
             device.stream) == cudaSuccess);
@@ -411,7 +411,7 @@ int test_finite_difference_and_generation() {
 
   std::vector<double> sentinel(host.gradients.size(), 12.0);
   CHECK(device.gradients.copy_from(sentinel.data(), sentinel.size(), device.stream));
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_gradient_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_gradient_cuda(
             device.batch, device.cache, device.positions.get(), kGeneration + 1u,
             device.charges.get(), device.gradients.get(), device.workspace, device.error.get(),
             device.stream) == cudaErrorInvalidValue);
@@ -422,7 +422,7 @@ int test_finite_difference_and_generation() {
 
   Gfn2ES2DeviceCache wrong_cache = device.cache;
   wrong_cache.plan_token += 1u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, wrong_cache, device.charges.get(), device.potential.get(),
             device.workspace, device.error.get(), device.stream) == cudaErrorInvalidValue);
   return 0;
@@ -452,11 +452,11 @@ int test_late_failure_atomicity_sticky_and_aliases() {
   CHECK(device.energies.copy_from(energy_sentinel.data(), energy_sentinel.size(), device.stream));
   CHECK(device.charges.copy_from(bad_charges.data(), bad_charges.size(), device.stream));
   CHECK(reset_error(device));
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, device.cache, device.charges.get(), device.potential.get(),
             device.workspace, device.error.get(), device.stream) == cudaSuccess);
   /* Sticky failure makes this dependent stage a no-op without a host round trip. */
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_energy_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_energy_cuda(
             device.batch, device.cache, device.charges.get(), device.energies.get(),
             device.workspace, device.error.get(), device.stream) == cudaSuccess);
   std::vector<double> potential_result(potential_sentinel.size());
@@ -471,23 +471,23 @@ int test_late_failure_atomicity_sticky_and_aliases() {
 
   /* A reset makes the same sequence usable again after a sticky device error. */
   CHECK(reset_error(device));
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, device.cache, device.charges.get(), device.potential.get(),
             device.workspace, device.error.get(), device.stream) == cudaSuccess);
   CHECK(device.synchronize_error(device_error));
   CHECK(device_error == 0u);
 
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, device.cache, device.charges.get(), device.charges.get(),
             device.workspace, device.error.get(), device.stream) == cudaErrorInvalidValue);
   Gfn2ES2DeviceWorkspace partial_alias = device.workspace;
   partial_alias.shell_scratch = device.potential.get() + 1;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, device.cache, device.charges.get(), device.potential.get(), partial_alias,
             device.error.get(), device.stream) == cudaErrorInvalidValue);
   auto* misaligned =
       reinterpret_cast<double*>(reinterpret_cast<unsigned char*>(device.potential.get()) + 1u);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, device.cache, device.charges.get(), misaligned, device.workspace,
             device.error.get(), device.stream) == cudaErrorInvalidValue);
 
@@ -503,15 +503,15 @@ int test_late_failure_atomicity_sticky_and_aliases() {
   *managed_batch = device.batch;
   *managed_cache = device.cache;
   *managed_workspace = device.workspace;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             *managed_batch, device.cache, device.charges.get(),
             reinterpret_cast<double*>(managed_batch), device.workspace, device.error.get(),
             device.stream) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, *managed_cache, device.charges.get(),
             reinterpret_cast<double*>(managed_cache), device.workspace, device.error.get(),
             device.stream) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, device.cache, device.charges.get(),
             reinterpret_cast<double*>(managed_workspace), *managed_workspace, device.error.get(),
             device.stream) == cudaErrorInvalidValue);
@@ -549,7 +549,7 @@ int test_late_failure_atomicity_sticky_and_aliases() {
   /* Host descriptor count mismatches are rejected without enqueueing kernels. */
   Gfn2ES2DeviceBatch wrong_count = device.batch;
   --wrong_count.shell_to_atom_count;
-  CHECK(gpuxtb::detail::cuda::update_gfn2_es2_geometry_cache_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_es2_geometry_cache_cuda(
             wrong_count, device.positions.get(), device.cache, device.workspace, device.error.get(),
             device.stream) == cudaErrorInvalidValue);
 
@@ -568,7 +568,7 @@ int test_late_failure_atomicity_sticky_and_aliases() {
   CHECK(device.potential.copy_from(potential_sentinel.data(), potential_sentinel.size(),
                                    device.stream));
   CHECK(reset_error(device));
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, device.cache, device.charges.get(), device.potential.get(),
             device.workspace, device.error.get(), device.stream) == cudaSuccess);
   CHECK(device.potential.copy_to(potential_result.data(), potential_result.size(), device.stream));
@@ -585,10 +585,10 @@ int test_late_failure_atomicity_sticky_and_aliases() {
   CHECK(device.potential.copy_from(potential_sentinel.data(), potential_sentinel.size(),
                                    device.stream));
   CHECK(reset_error(device));
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_energy_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_energy_cuda(
             device.batch, device.cache, device.charges.get(), device.energies.get(),
             device.workspace, device.error.get(), device.stream) == cudaSuccess);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, device.cache, device.charges.get(), device.potential.get(),
             device.workspace, device.error.get(), device.stream) == cudaSuccess);
   CHECK(device.potential.copy_to(potential_result.data(), potential_result.size(), device.stream));
@@ -602,7 +602,7 @@ int test_late_failure_atomicity_sticky_and_aliases() {
   CHECK(device.charges.copy_from(overflow_charges.data(), overflow_charges.size(), device.stream));
   CHECK(device.energies.copy_from(energy_sentinel.data(), energy_sentinel.size(), device.stream));
   CHECK(reset_error(device));
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_energy_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_energy_cuda(
             device.batch, device.cache, device.charges.get(), device.energies.get(),
             device.workspace, device.error.get(), device.stream) == cudaSuccess);
   CHECK(device.energies.copy_to(energy_result.data(), energy_result.size(), device.stream));
@@ -629,7 +629,7 @@ int test_gradient_seed_overflow_atomicity() {
   gradient_seed[0] = std::numeric_limits<double>::max();
   CHECK(device.gradients.copy_from(gradient_seed.data(), gradient_seed.size(), device.stream));
   CHECK(reset_error(device));
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_gradient_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_gradient_cuda(
             device.batch, device.cache, device.positions.get(), kGeneration, device.charges.get(),
             device.gradients.get(), device.workspace, device.error.get(),
             device.stream) == cudaSuccess);
@@ -645,7 +645,7 @@ int test_gradient_seed_overflow_atomicity() {
   nonfinite_seed[0] = std::numeric_limits<double>::quiet_NaN();
   CHECK(device.gradients.copy_from(nonfinite_seed.data(), nonfinite_seed.size(), device.stream));
   CHECK(reset_error(device));
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_gradient_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_gradient_cuda(
             device.batch, device.cache, device.positions.get(), kGeneration, device.charges.get(),
             device.gradients.get(), device.workspace, device.error.get(),
             device.stream) == cudaSuccess);
@@ -668,7 +668,7 @@ int test_gradient_seed_overflow_atomicity() {
   std::vector<double> single_sentinel(single_atom.gradients.size(), 35.0);
   CHECK(single_device.gradients.copy_from(single_sentinel.data(), single_sentinel.size(),
                                           single_device.stream));
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_gradient_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_gradient_cuda(
             single_device.batch, single_device.cache, single_device.positions.get(), kGeneration,
             single_device.charges.get(), single_device.gradients.get(), single_device.workspace,
             single_device.error.get(), single_device.stream) == cudaSuccess);
@@ -686,13 +686,13 @@ int test_energy_seed_is_added_after_batch_reduction() {
   std::string error;
   CHECK(make_host_evaluation({0, 2}, {1, 1}, {0.0, 0.0, 0.0, 1.0, 0.0, 0.0}, {1.0e153, -2.0e153},
                              host, error));
-  CHECK(gpuxtb::detail::gfn2::update_es2_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_es2_geometry_cache_cpu(
             host.plan, host.positions.data(), kGeneration, host.matrix.data(), host.matrix.size(),
-            host.workspace, host.cache, error) == GPUXTB_STATUS_SUCCESS);
+            host.workspace, host.cache, error) == XTBLOOM_STATUS_SUCCESS);
   host.energies[0] = -std::numeric_limits<double>::max();
-  CHECK(gpuxtb::detail::gfn2::add_es2_energy_cpu(host.plan, host.cache, host.charges.data(),
-                                                 host.energies.data(), host.workspace,
-                                                 error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_es2_energy_cpu(host.plan, host.cache, host.charges.data(),
+                                                  host.energies.data(), host.workspace,
+                                                  error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::isfinite(host.energies[0]));
   CHECK(host.energies[0] > -std::numeric_limits<double>::max());
 
@@ -702,7 +702,7 @@ int test_energy_seed_is_added_after_batch_reduction() {
   CHECK(device.energies.copy_from(&seed, 1u, device.stream));
   CHECK(reset_error(device));
   CHECK(update_cache(device));
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_energy_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_energy_cuda(
             device.batch, device.cache, device.charges.get(), device.energies.get(),
             device.workspace, device.error.get(), device.stream) == cudaSuccess);
   double result = 0.0;
@@ -803,7 +803,7 @@ int test_extreme_arithmetic_and_large_stride() {
   CHECK(large_device.initialize(large));
   CHECK(reset_error(large_device));
   CHECK(update_cache(large_device));
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             large_device.batch, large_device.cache, large_device.charges.get(),
             large_device.potential.get(), large_device.workspace, large_device.error.get(),
             large_device.stream) == cudaSuccess);
@@ -821,11 +821,11 @@ int test_extreme_arithmetic_and_large_stride() {
   CHECK(cudaMemsetAsync(large_device.gradients.get(), 0, large.gradients.size() * sizeof(double),
                         large_device.stream) == cudaSuccess);
   CHECK(reset_error(large_device));
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_energy_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_energy_cuda(
             large_device.batch, large_device.cache, large_device.charges.get(),
             large_device.energies.get(), large_device.workspace, large_device.error.get(),
             large_device.stream) == cudaSuccess);
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_gradient_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_gradient_cuda(
             large_device.batch, large_device.cache, large_device.positions.get(), kGeneration,
             large_device.charges.get(), large_device.gradients.get(), large_device.workspace,
             large_device.error.get(), large_device.stream) == cudaSuccess);
@@ -865,13 +865,13 @@ int test_cuda_graph_capture_and_replay() {
   CHECK(cudaMemsetAsync(device.gradients.get(), 0, host.gradients.size() * sizeof(double),
                         device.stream) == cudaSuccess);
   CHECK(update_cache(device));
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_es2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_es2_potential_cuda(
             device.batch, device.cache, device.charges.get(), device.potential.get(),
             device.workspace, device.error.get(), device.stream) == cudaSuccess);
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_energy_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_energy_cuda(
             device.batch, device.cache, device.charges.get(), device.energies.get(),
             device.workspace, device.error.get(), device.stream) == cudaSuccess);
-  CHECK(gpuxtb::detail::cuda::add_gfn2_es2_gradient_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_es2_gradient_cuda(
             device.batch, device.cache, device.positions.get(), kGeneration, device.charges.get(),
             device.gradients.get(), device.workspace, device.error.get(),
             device.stream) == cudaSuccess);

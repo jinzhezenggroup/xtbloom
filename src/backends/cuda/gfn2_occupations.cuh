@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_OCCUPATIONS_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_OCCUPATIONS_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_OCCUPATIONS_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_OCCUPATIONS_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -10,7 +10,7 @@
 
 #include "backends/common/gfn2_plan_schema.hpp"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /* Semantic or arithmetic failure reported per system and by canonical lowest index. */
 enum class Gfn2OccupationsDeviceError : std::uint32_t {
@@ -138,6 +138,6 @@ cudaError_t evaluate_gfn2_occupations_cuda(
     std::uint32_t* system_errors, std::uint32_t* device_error,
     cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_OCCUPATIONS_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_OCCUPATIONS_CUH

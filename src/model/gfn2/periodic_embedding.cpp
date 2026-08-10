@@ -1,5 +1,5 @@
 #include "model/gfn2/periodic_embedding.hpp"
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
 #include <array>
@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 struct PeriodicEmbeddingPlanData final {
   std::int64_t batch_size = 0;
@@ -161,7 +161,7 @@ bool overlaps_plan_storage(const PeriodicEmbeddingPlan& plan, const AddressRange
   return false;
 }
 
-gpuxtb_status_t validate_plan(const PeriodicEmbeddingPlan& plan, std::string& error) {
+xtbloom_status_t validate_plan(const PeriodicEmbeddingPlan& plan, std::string& error) {
   if (!plan.sealed() || plan.batch_size() <= 0 || plan.total_atoms() < 0 ||
       plan.total_matrix_elements() < 0 || plan.maximum_atoms() < 0 ||
       plan.batch_size() == std::numeric_limits<std::int64_t>::max() ||
@@ -169,7 +169,7 @@ gpuxtb_status_t validate_plan(const PeriodicEmbeddingPlan& plan, std::string& er
       !representable_as_size(plan.total_matrix_elements()) ||
       !representable_as_size(plan.maximum_atoms())) {
     error = "periodic embedding plan is unsealed or has invalid dimensions";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const std::size_t batch_count = static_cast<std::size_t>(plan.batch_size());
@@ -178,7 +178,7 @@ gpuxtb_status_t validate_plan(const PeriodicEmbeddingPlan& plan, std::string& er
       plan.atom_offsets().back() != plan.total_atoms() || plan.matrix_offsets().front() != 0 ||
       plan.matrix_offsets().back() != plan.total_matrix_elements()) {
     error = "periodic embedding plan storage is internally inconsistent";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   std::int64_t expected_matrix_offset = 0;
@@ -192,20 +192,20 @@ gpuxtb_status_t validate_plan(const PeriodicEmbeddingPlan& plan, std::string& er
         !checked_square(end - begin, matrix_elements) ||
         !checked_add(matrix_elements, expected_matrix_offset)) {
       error = "periodic embedding plan offsets are not valid ragged partitions";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     expected_maximum = std::max(expected_maximum, end - begin);
   }
   if (expected_matrix_offset != plan.total_matrix_elements() ||
       expected_maximum != plan.maximum_atoms()) {
     error = "periodic embedding plan extents disagree with its offsets";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_view_shape(const PeriodicEmbeddingPlan& plan,
-                                    const PeriodicEmbeddingView& view, std::string& error) {
+xtbloom_status_t validate_view_shape(const PeriodicEmbeddingPlan& plan,
+                                     const PeriodicEmbeddingView& view, std::string& error) {
   if (view.plan_identity != plan.identity() || view.shift_elements < plan.total_atoms() ||
       view.response_elements < plan.total_matrix_elements() ||
       view.charge_elements < plan.total_atoms() || view.potential_elements < plan.total_atoms() ||
@@ -217,27 +217,27 @@ gpuxtb_status_t validate_view_shape(const PeriodicEmbeddingPlan& plan,
       !required_pointer(view.energies, plan.batch_size()) ||
       !required_pointer(view.system_statuses, plan.batch_size())) {
     error = "periodic embedding view is malformed, undersized, or belongs to another plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_workspace_shape(const PeriodicEmbeddingPlan& plan,
-                                         const PeriodicEmbeddingWorkspace& workspace,
-                                         std::string& error) {
+xtbloom_status_t validate_workspace_shape(const PeriodicEmbeddingPlan& plan,
+                                          const PeriodicEmbeddingWorkspace& workspace,
+                                          std::string& error) {
   if (workspace.plan_identity != plan.identity() ||
       workspace.potential_elements < plan.maximum_atoms() ||
       !required_pointer(workspace.potential_scratch, plan.maximum_atoms())) {
     error = "periodic embedding workspace is malformed, undersized, or belongs to another plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_view_binding_ranges(const PeriodicEmbeddingPlan& plan,
-                                             const PeriodicEmbeddingView& view,
-                                             const PeriodicEmbeddingView& destination,
-                                             std::string& error) {
+xtbloom_status_t validate_view_binding_ranges(const PeriodicEmbeddingPlan& plan,
+                                              const PeriodicEmbeddingView& view,
+                                              const PeriodicEmbeddingView& destination,
+                                              std::string& error) {
   std::array<AddressRange, 7> active;
   if (!range_for_count(view.shifts, plan.total_atoms(), sizeof(double), active[0]) ||
       !range_for_count(view.response_matrices, plan.total_matrix_elements(), sizeof(double),
@@ -245,34 +245,34 @@ gpuxtb_status_t validate_view_binding_ranges(const PeriodicEmbeddingPlan& plan,
       !range_for_count(view.atomic_charges, plan.total_atoms(), sizeof(double), active[2]) ||
       !range_for_count(view.atomic_potentials, plan.total_atoms(), sizeof(double), active[3]) ||
       !range_for_count(view.energies, plan.batch_size(), sizeof(double), active[4]) ||
-      !range_for_count(view.system_statuses, plan.batch_size(), sizeof(gpuxtb_status_t),
+      !range_for_count(view.system_statuses, plan.batch_size(), sizeof(xtbloom_status_t),
                        active[5]) ||
       !make_range(&error, sizeof(error), active[6])) {
     error = "periodic embedding view ranges exceed addressable host storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!pairwise_disjoint(active)) {
     error = "periodic embedding view buffers and error storage must not overlap";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   AddressRange destination_range;
   if (!make_range(&destination, sizeof(destination), destination_range)) {
     error = "periodic embedding view descriptor range is invalid";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (const AddressRange& range : active) {
     if (overlaps_plan_storage(plan, range) || ranges_overlap(range, destination_range)) {
       error = "periodic embedding view buffers must not overlap plan or descriptor storage";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_workspace_binding_range(const PeriodicEmbeddingPlan& plan,
-                                                 const PeriodicEmbeddingWorkspace& workspace,
-                                                 const PeriodicEmbeddingWorkspace& destination,
-                                                 std::string& error) {
+xtbloom_status_t validate_workspace_binding_range(const PeriodicEmbeddingPlan& plan,
+                                                  const PeriodicEmbeddingWorkspace& workspace,
+                                                  const PeriodicEmbeddingWorkspace& destination,
+                                                  std::string& error) {
   AddressRange scratch;
   AddressRange error_range;
   AddressRange destination_range;
@@ -281,20 +281,20 @@ gpuxtb_status_t validate_workspace_binding_range(const PeriodicEmbeddingPlan& pl
       !make_range(&error, sizeof(error), error_range) ||
       !make_range(&destination, sizeof(destination), destination_range)) {
     error = "periodic embedding workspace ranges exceed addressable host storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (ranges_overlap(scratch, error_range) || overlaps_plan_storage(plan, scratch) ||
       ranges_overlap(scratch, destination_range)) {
     error = "periodic embedding scratch must not overlap plan, descriptor, or error storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_active_ranges(const PeriodicEmbeddingPlan& plan,
-                                       const PeriodicEmbeddingView& view,
-                                       const PeriodicEmbeddingWorkspace& workspace,
-                                       std::string& error) {
+xtbloom_status_t validate_active_ranges(const PeriodicEmbeddingPlan& plan,
+                                        const PeriodicEmbeddingView& view,
+                                        const PeriodicEmbeddingWorkspace& workspace,
+                                        std::string& error) {
   std::array<AddressRange, 8> active;
   if (!range_for_count(view.shifts, plan.total_atoms(), sizeof(double), active[0]) ||
       !range_for_count(view.response_matrices, plan.total_matrix_elements(), sizeof(double),
@@ -302,17 +302,17 @@ gpuxtb_status_t validate_active_ranges(const PeriodicEmbeddingPlan& plan,
       !range_for_count(view.atomic_charges, plan.total_atoms(), sizeof(double), active[2]) ||
       !range_for_count(view.atomic_potentials, plan.total_atoms(), sizeof(double), active[3]) ||
       !range_for_count(view.energies, plan.batch_size(), sizeof(double), active[4]) ||
-      !range_for_count(view.system_statuses, plan.batch_size(), sizeof(gpuxtb_status_t),
+      !range_for_count(view.system_statuses, plan.batch_size(), sizeof(xtbloom_status_t),
                        active[5]) ||
       !range_for_count(workspace.potential_scratch, plan.maximum_atoms(), sizeof(double),
                        active[6]) ||
       !make_range(&error, sizeof(error), active[7])) {
     error = "periodic embedding active ranges exceed addressable host storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!pairwise_disjoint(active)) {
     error = "periodic embedding inputs, outputs, statuses, scratch, and error must not overlap";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   AddressRange view_descriptor;
@@ -320,30 +320,30 @@ gpuxtb_status_t validate_active_ranges(const PeriodicEmbeddingPlan& plan,
   if (!make_range(&view, sizeof(view), view_descriptor) ||
       !make_range(&workspace, sizeof(workspace), workspace_descriptor)) {
     error = "periodic embedding descriptor ranges are invalid";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (const AddressRange& range : active) {
     if (overlaps_plan_storage(plan, range) || ranges_overlap(range, view_descriptor) ||
         ranges_overlap(range, workspace_descriptor)) {
       error = "periodic embedding buffers must not overlap plan or descriptor storage";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_call(const PeriodicEmbeddingPlan& plan, const PeriodicEmbeddingView& view,
-                              const PeriodicEmbeddingWorkspace& workspace, std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t validate_call(const PeriodicEmbeddingPlan& plan, const PeriodicEmbeddingView& view,
+                               const PeriodicEmbeddingWorkspace& workspace, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_view_shape(plan, view, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_workspace_shape(plan, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   return validate_active_ranges(plan, view, workspace, error);
@@ -357,7 +357,7 @@ bool evaluate_system_unchecked(const PeriodicEmbeddingPlan& plan, std::size_t sy
   const std::int64_t atom_count = atom_end - atom_begin;
   if (atom_count == 0) {
     view.energies[system] = 0.0;
-    view.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+    view.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
     return true;
   }
   const std::int64_t matrix_begin = plan.matrix_offsets()[system];
@@ -431,7 +431,7 @@ bool evaluate_system_unchecked(const PeriodicEmbeddingPlan& plan, std::size_t sy
                 workspace.potential_scratch, static_cast<std::size_t>(atom_count) * sizeof(double));
   }
   view.energies[system] = energy;
-  view.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+  view.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
   return true;
 }
 
@@ -492,16 +492,16 @@ const PeriodicEmbeddingPlanData* PeriodicEmbeddingPlan::identity() const noexcep
   return data_.get();
 }
 
-gpuxtb_status_t make_periodic_embedding_plan(std::int64_t batch_size, std::int64_t total_atoms,
-                                             const std::int64_t* atom_offsets,
-                                             PeriodicEmbeddingPlan& plan, std::string& error) {
+xtbloom_status_t make_periodic_embedding_plan(std::int64_t batch_size, std::int64_t total_atoms,
+                                              const std::int64_t* atom_offsets,
+                                              PeriodicEmbeddingPlan& plan, std::string& error) {
   if (batch_size <= 0 || total_atoms < 0 ||
       batch_size == std::numeric_limits<std::int64_t>::max() ||
       !count_fits_storage(batch_size, sizeof(std::int64_t), true) ||
       !count_fits_storage(total_atoms, sizeof(double)) || atom_offsets == nullptr ||
       !is_aligned(atom_offsets, alignof(std::int64_t))) {
     error = "periodic embedding requires positive batch size and valid atom offsets";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   try {
@@ -513,7 +513,7 @@ gpuxtb_status_t make_periodic_embedding_plan(std::int64_t batch_size, std::int64
     created->matrix_offsets.resize(offset_count, 0);
     if (created->atom_offsets.front() != 0 || created->atom_offsets.back() != total_atoms) {
       error = "periodic embedding atom offsets must span exactly total_atoms";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     for (std::size_t system = 0u; system < static_cast<std::size_t>(batch_size); ++system) {
@@ -524,7 +524,7 @@ gpuxtb_status_t make_periodic_embedding_plan(std::int64_t batch_size, std::int64
           !checked_square(end - begin, matrix_elements) ||
           !checked_add(matrix_elements, created->total_matrix_elements)) {
         error = "periodic embedding atom partition or dense matrix extent overflows";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       created->maximum_atoms = std::max(created->maximum_atoms, end - begin);
       created->matrix_offsets[system + 1u] = created->total_matrix_elements;
@@ -532,34 +532,34 @@ gpuxtb_status_t make_periodic_embedding_plan(std::int64_t batch_size, std::int64
     if (!count_fits_storage(created->total_matrix_elements, sizeof(double)) ||
         !count_fits_storage(created->maximum_atoms, sizeof(double))) {
       error = "periodic embedding plan dimensions exceed host storage limits";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     PeriodicEmbeddingPlan completed(std::move(created));
-    const gpuxtb_status_t status = validate_plan(completed, error);
-    if (status != GPUXTB_STATUS_SUCCESS) {
+    const xtbloom_status_t status = validate_plan(completed, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
     plan = std::move(completed);
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate periodic embedding plan";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   } catch (const std::length_error&) {
     error = "periodic embedding plan dimensions exceed host container limits";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
-gpuxtb_status_t bind_periodic_embedding_view(
+xtbloom_status_t bind_periodic_embedding_view(
     const PeriodicEmbeddingPlan& plan, const double* shifts, std::size_t shift_elements,
     const double* response_matrices, std::size_t response_elements, const double* atomic_charges,
     std::size_t charge_elements, double* atomic_potentials, std::size_t potential_elements,
-    double* energies, std::size_t energy_elements, gpuxtb_status_t* system_statuses,
+    double* energies, std::size_t energy_elements, xtbloom_status_t* system_statuses,
     std::size_t status_elements, PeriodicEmbeddingView& view, std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const auto fits_i64 = [](std::size_t value) {
@@ -568,7 +568,7 @@ gpuxtb_status_t bind_periodic_embedding_view(
   if (!fits_i64(shift_elements) || !fits_i64(response_elements) || !fits_i64(charge_elements) ||
       !fits_i64(potential_elements) || !fits_i64(energy_elements) || !fits_i64(status_elements)) {
     error = "periodic embedding view counts exceed signed backend dimensions";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   PeriodicEmbeddingView completed{shifts,
@@ -585,91 +585,91 @@ gpuxtb_status_t bind_periodic_embedding_view(
                                   static_cast<std::int64_t>(status_elements),
                                   plan.identity()};
   status = validate_view_shape(plan, completed, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_view_binding_ranges(plan, completed, view, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   view = completed;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t bind_periodic_embedding_workspace(const PeriodicEmbeddingPlan& plan,
-                                                  double* potential_scratch,
-                                                  std::size_t potential_elements,
-                                                  PeriodicEmbeddingWorkspace& workspace,
-                                                  std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t bind_periodic_embedding_workspace(const PeriodicEmbeddingPlan& plan,
+                                                   double* potential_scratch,
+                                                   std::size_t potential_elements,
+                                                   PeriodicEmbeddingWorkspace& workspace,
+                                                   std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (potential_elements > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     error = "periodic embedding workspace count exceeds signed backend dimensions";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   PeriodicEmbeddingWorkspace completed{
       potential_scratch, static_cast<std::int64_t>(potential_elements), plan.identity()};
   status = validate_workspace_shape(plan, completed, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = validate_workspace_binding_range(plan, completed, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   workspace = completed;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t evaluate_periodic_embedding_system_cpu(const PeriodicEmbeddingPlan& plan,
-                                                       std::int64_t system,
-                                                       const PeriodicEmbeddingView& view,
-                                                       const PeriodicEmbeddingWorkspace& workspace,
-                                                       std::string& error) {
-  const gpuxtb_status_t status = validate_call(plan, view, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t evaluate_periodic_embedding_system_cpu(const PeriodicEmbeddingPlan& plan,
+                                                        std::int64_t system,
+                                                        const PeriodicEmbeddingView& view,
+                                                        const PeriodicEmbeddingWorkspace& workspace,
+                                                        std::string& error) {
+  const xtbloom_status_t status = validate_call(plan, view, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (system < 0 || system >= plan.batch_size()) {
     error = "periodic embedding system index is out of range";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t system_index = static_cast<std::size_t>(system);
   if (!evaluate_system_unchecked(plan, system_index, view, workspace)) {
-    view.system_statuses[system_index] = GPUXTB_STATUS_INTERNAL_ERROR;
+    view.system_statuses[system_index] = XTBLOOM_STATUS_INTERNAL_ERROR;
     error = "periodic embedding system contains invalid numerical data or overflowed";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t evaluate_periodic_embedding_batch_cpu(const PeriodicEmbeddingPlan& plan,
-                                                      const PeriodicEmbeddingView& view,
-                                                      const PeriodicEmbeddingWorkspace& workspace,
-                                                      std::string& error) {
-  const gpuxtb_status_t status = validate_call(plan, view, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t evaluate_periodic_embedding_batch_cpu(const PeriodicEmbeddingPlan& plan,
+                                                       const PeriodicEmbeddingView& view,
+                                                       const PeriodicEmbeddingWorkspace& workspace,
+                                                       std::string& error) {
+  const xtbloom_status_t status = validate_call(plan, view, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
 
   bool failed = false;
   for (std::size_t system = 0u; system < static_cast<std::size_t>(plan.batch_size()); ++system) {
     if (!evaluate_system_unchecked(plan, system, view, workspace)) {
-      view.system_statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+      view.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
       failed = true;
     }
   }
   if (failed) {
     error = "periodic embedding failed numerically for at least one system";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2

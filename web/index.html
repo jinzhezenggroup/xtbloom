@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>gpuxtb · GFN2-xTB 在线计算（WASM）</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='24' font-size='24'%3E%E2%9A%9B%EF%B8%8F%3C/text%3E%3C/svg%3E">
+<title>xTBloom · 浏览器内运行 GFN2-xTB</title>
+<link rel="icon" href="xtbloom-mark.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
-    <span class="logo">⚛️</span>
+    <img class="logo" src="xtbloom-mark.svg" width="42" height="42" alt="" aria-hidden="true">
     <div>
-      <h1>gpuxtb<span class="accent">·GFN2-xTB</span></h1>
-      <p class="tagline" data-i18n="tagline">浏览器内运行的原生 GFN2-xTB 单点能与几何优化 · C++17 WASM32 · CPU 后端</p>
+      <h1>xTBloom<span class="accent">·GFN2-xTB</span></h1>
+      <p class="tagline" data-i18n="tagline">无需安装或上传，在浏览器中运行 GFN2-xTB 单点与几何优化</p>
     </div>
   </div>
   <div class="badges">
@@ -37,6 +37,25 @@
         <button class="chip" data-preset="benzene" data-i18n="preset_benzene">苯</button>
         <button class="chip" data-preset="ethanol" data-i18n="preset_ethanol">乙醇</button>
       </div>
+    </div>
+
+    <div class="field smiles-field" id="smiles-field">
+      <label for="smiles" data-i18n="smiles_label">SMILES → 三维结构</label>
+      <div class="smiles-row">
+        <input
+          id="smiles"
+          type="text"
+          maxlength="2048"
+          spellcheck="false"
+          autocomplete="off"
+          data-i18n-placeholder="smiles_placeholder"
+          placeholder="例如：CCO 或 c1ccccc1">
+        <button class="btn btn-secondary smiles-button" id="smiles-generate" disabled>
+          <span class="mini-spinner" id="smiles-spinner" aria-hidden="true"></span>
+          <span id="smiles-button-text">正在下载…</span>
+        </button>
+      </div>
+      <div class="hint smiles-status" id="smiles-status" role="status" aria-live="polite"></div>
     </div>
 
     <div class="field">
@@ -143,7 +162,7 @@
 
     <div class="stats">
       <div class="stat"><div class="stat-k" id="stat-atoms">–</div><div class="stat-l" data-i18n="stat_atoms">原子</div></div>
-      <div class="stat"><div class="stat-k" id="stat-iter">–</div><div class="stat-l" data-i18n="stat_iter">SCC 迭代</div></div>
+      <div class="stat"><div class="stat-k" id="stat-iter">–</div><div class="stat-l" id="stat-iter-label" data-i18n="stat_iter">SCC 迭代</div></div>
       <div class="stat"><div class="stat-k" id="stat-conv">–</div><div class="stat-l" data-i18n="stat_conv">收敛</div></div>
       <div class="stat"><div class="stat-k" id="stat-ms">–</div><div class="stat-l" data-i18n="stat_ms">耗时 ms</div></div>
     </div>
@@ -184,17 +203,17 @@
   </div><!-- .col-right -->
 </main>
 
-<!-- 路线图 -->
+<!-- 可直接尝试的浏览器工作流 -->
 <section class="card roadmap">
-  <h2 class="panel-title" data-i18n="roadmap">路线图</h2>
+  <h2 class="panel-title" data-i18n="roadmap">浏览器中可以尝试</h2>
   <div class="roadmap-grid">
-    <div class="roadmap-item disabled" title="">
+    <div class="roadmap-item" title="">
       <span class="rm-emoji">🧪</span>
       <div>
-        <div class="rm-title"><span data-i18n="roadmap_smiles_title">SMILES → 结构</span> <span class="tag" data-i18n="tag_pending">暂不实现</span></div>
-        <div class="rm-desc" data-i18n="roadmap_smiles_desc">输入 SMILES 自动生成三维坐标，然后直接计算。</div>
+        <div class="rm-title"><span data-i18n="roadmap_smiles_title">SMILES → 结构</span> <span class="tag tag-good" data-i18n="tag_done">已支持</span></div>
+        <div class="rm-desc" data-i18n="roadmap_smiles_desc">输入 SMILES，生成显式氢三维构象并进行 MMFF94 预优化。</div>
       </div>
-      <button class="btn" id="smiles-alert" data-i18n="btn_pending">即将推出</button>
+      <a class="btn" href="#smiles-field" data-i18n="smiles_go" style="text-align:center">去生成</a>
     </div>
     <div class="roadmap-item" title="">
       <span class="rm-emoji">🎯</span>
@@ -209,15 +228,16 @@
 
 <footer class="footer">
   <p data-i18n="footer">
-    由 gpuxtb 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32，面向支持 WebAssembly 与模块 Worker 的现代浏览器。
-    BLAS/LAPACK 层为演示用最小实现，经 numpy 与原生 gpuxtb 逐位验证。仅供演示，非科学计算生产环境。
+    由 xTBloom 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32，面向支持 WebAssembly 与模块 Worker 的现代浏览器。
+    可选的 SMILES 三维结构由固定版本的 OpenChemLib 生成并以 MMFF94 预优化。BLAS/LAPACK 层为演示用最小实现。仅供演示，非科学计算生产环境。
   </p>
   <p class="legal-links">
-    <a href="https://jinzhezeng.group/gpuxtb/">Web demo</a> ·
+    <a href="https://xtbloom.jinzhezeng.group">Web demo</a> ·
     <a href="LICENSE">GPL-3.0-or-later</a> ·
     <a href="THIRD_PARTY_NOTICES.md">Third-party notices</a> ·
+    <a href="LICENSES/openchemlib-BSD-3-Clause.txt">OpenChemLib license</a> ·
     <a href="CUDA_MKL_LINKING_EXCEPTION">Additional permission</a> ·
-    <a href="https://github.com/jinzhezenggroup/gpuxtb">Source</a>
+    <a href="https://github.com/jinzhezenggroup/xtbloom">Source</a>
   </p>
 </footer>
 

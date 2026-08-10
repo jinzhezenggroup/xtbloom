@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -8,7 +8,7 @@
 
 #include "backends/cuda/gfn2_scc_publication.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -325,7 +325,7 @@ bool valid_mixer(const Gfn2SccMixerDeviceState& values, const Gfn2SccPublication
          is_aligned(values.residual_maximum, alignof(double)) &&
          is_aligned(values.iterations, alignof(std::uint64_t)) &&
          is_aligned(values.restart_counts, alignof(std::uint64_t)) &&
-         is_aligned(values.system_statuses, alignof(gpuxtb_status_t)) &&
+         is_aligned(values.system_statuses, alignof(xtbloom_status_t)) &&
          is_aligned(values.initialized, alignof(std::uint8_t)) &&
          is_aligned(values.residual_converged, alignof(std::uint8_t));
 }
@@ -361,7 +361,7 @@ bool valid_scc_state(const Gfn2SccDeviceState& values, const Gfn2SccPublicationD
          is_aligned(values.free_energy_changes, alignof(double)) &&
          is_aligned(values.residual_rms, alignof(double)) &&
          is_aligned(values.iterations, alignof(std::uint64_t)) &&
-         is_aligned(values.system_statuses, alignof(gpuxtb_status_t)) &&
+         is_aligned(values.system_statuses, alignof(xtbloom_status_t)) &&
          is_aligned(values.converged, alignof(std::uint8_t));
 }
 
@@ -409,7 +409,7 @@ bool valid_ledger(const Gfn2SccIterationDeviceLedger& ledger,
                   const Gfn2SccPublicationDevicePlan& plan) noexcept {
   return ledger.plan_token == plan.plan_token && ledger.batch_elements == plan.batch_size &&
          ledger.scalar_elements == 1 && is_aligned(ledger.active_mask, alignof(std::uint8_t)) &&
-         is_aligned(ledger.pending_statuses, alignof(gpuxtb_status_t)) &&
+         is_aligned(ledger.pending_statuses, alignof(xtbloom_status_t)) &&
          is_aligned(ledger.system_failure_records, alignof(std::uint64_t)) &&
          is_aligned(ledger.plan_failure_record, alignof(std::uint64_t)) &&
          is_aligned(ledger.sequence_active, alignof(std::uint32_t)) &&
@@ -428,7 +428,7 @@ bool valid_workspace(const Gfn2SccPublicationDeviceWorkspace& workspace,
          is_aligned(workspace.previous_free_energies, alignof(double)) &&
          is_aligned(workspace.free_energy_changes, alignof(double)) &&
          is_aligned(workspace.next_iterations, alignof(std::uint64_t)) &&
-         is_aligned(workspace.next_statuses, alignof(gpuxtb_status_t)) &&
+         is_aligned(workspace.next_statuses, alignof(xtbloom_status_t)) &&
          is_aligned(workspace.next_converged, alignof(std::uint8_t)) &&
          is_aligned(workspace.system_errors, alignof(std::uint32_t)) &&
          is_aligned(workspace.device_error, alignof(std::uint32_t)) &&
@@ -512,7 +512,7 @@ bool append_mixer_ranges(RangeSet<Capacity>* set, const Gfn2SccMixerDeviceState&
          append_range(set, values.residual_maximum, plan.batch_size, sizeof(double)) &&
          append_range(set, values.iterations, plan.batch_size, sizeof(std::uint64_t)) &&
          append_range(set, values.restart_counts, plan.batch_size, sizeof(std::uint64_t)) &&
-         append_range(set, values.system_statuses, plan.batch_size, sizeof(gpuxtb_status_t)) &&
+         append_range(set, values.system_statuses, plan.batch_size, sizeof(xtbloom_status_t)) &&
          append_range(set, values.initialized, plan.batch_size, sizeof(std::uint8_t)) &&
          append_range(set, values.residual_converged, plan.batch_size, sizeof(std::uint8_t));
 }
@@ -533,7 +533,7 @@ bool transaction_ranges_are_valid(const Gfn2SccPublicationDevicePlan& plan,
 
   if (!append_range(&control_reads, ledger.active_mask, plan.batch_size, sizeof(std::uint8_t)) ||
       !append_range(&control_reads, ledger.pending_statuses, plan.batch_size,
-                    sizeof(gpuxtb_status_t)) ||
+                    sizeof(xtbloom_status_t)) ||
       !append_range(&control_reads, ledger.system_failure_records, plan.batch_size,
                     sizeof(std::uint64_t)) ||
       !append_range(&control_reads, ledger.plan_failure_record, 1, sizeof(std::uint64_t)) ||
@@ -616,7 +616,7 @@ bool transaction_ranges_are_valid(const Gfn2SccPublicationDevicePlan& plan,
       !append_range(&public_writes, public_state.scc.iterations, plan.batch_size,
                     sizeof(std::uint64_t)) ||
       !append_range(&public_writes, public_state.scc.system_statuses, plan.batch_size,
-                    sizeof(gpuxtb_status_t)) ||
+                    sizeof(xtbloom_status_t)) ||
       !append_range(&public_writes, public_state.scc.converged, plan.batch_size,
                     sizeof(std::uint8_t))) {
     return false;
@@ -631,7 +631,7 @@ bool transaction_ranges_are_valid(const Gfn2SccPublicationDevicePlan& plan,
       !append_range(&scratch_writes, workspace.next_iterations, plan.batch_size,
                     sizeof(std::uint64_t)) ||
       !append_range(&scratch_writes, workspace.next_statuses, plan.batch_size,
-                    sizeof(gpuxtb_status_t)) ||
+                    sizeof(xtbloom_status_t)) ||
       !append_range(&scratch_writes, workspace.next_converged, plan.batch_size,
                     sizeof(std::uint8_t)) ||
       !append_range(&scratch_writes, workspace.system_errors, plan.batch_size,
@@ -828,12 +828,12 @@ __global__ void publication_numerical_preflight_kernel(
     if (*activity.sequence_active == 1u && atomicAdd(workspace.sequence_active, 0u) == 1u &&
         activity.active_mask[system] == 1u) {
       active = 1;
-      const gpuxtb_status_t public_status = public_state.scc.system_statuses[system];
+      const xtbloom_status_t public_status = public_state.scc.system_statuses[system];
       const std::uint8_t public_converged = public_state.scc.converged[system];
       const std::uint64_t public_iteration = public_state.scc.iterations[system];
-      if (public_status != GPUXTB_STATUS_SUCCESS || public_converged != 0u ||
+      if (public_status != XTBLOOM_STATUS_SUCCESS || public_converged != 0u ||
           public_iteration >= plan.maximum_iterations ||
-          staged.mixer.system_statuses[system] != GPUXTB_STATUS_SUCCESS ||
+          staged.mixer.system_statuses[system] != XTBLOOM_STATUS_SUCCESS ||
           staged.mixer.initialized[system] != 1u) {
         record_plan_error(workspace, Gfn2SccPublicationDeviceError::kInvalidState);
         plan_valid = 0;
@@ -940,8 +940,8 @@ __global__ void publication_numerical_preflight_kernel(
       workspace.next_iterations[system] = next_iteration;
       workspace.next_converged[system] = converged ? 1u : 0u;
       workspace.next_statuses[system] = !converged && next_iteration >= plan.maximum_iterations
-                                            ? GPUXTB_STATUS_SCC_NOT_CONVERGED
-                                            : GPUXTB_STATUS_SUCCESS;
+                                            ? XTBLOOM_STATUS_SCC_NOT_CONVERGED
+                                            : XTBLOOM_STATUS_SUCCESS;
     }
   }
   __syncthreads();
@@ -1266,4 +1266,4 @@ cudaError_t commit_gfn2_scc_publication_cuda(
   return cudaPeekAtLastError();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

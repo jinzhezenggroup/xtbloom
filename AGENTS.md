@@ -5,7 +5,7 @@ if one is added later, overrides this file only for its subtree.
 
 ## Project mission
 
-gpuxtb is a C++17 library for high-throughput GFN-xTB inference through one
+xTBloom is a C++17 library for high-throughput GFN-xTB inference through one
 stable C ABI. GFN2-xTB is implemented on CPU and CUDA, including restricted
 and unrestricted SCC, analytic forces, ragged batches, explicit point charges,
 and periodic charge response. Python, ASE, and dpdata interfaces all call the
@@ -75,9 +75,9 @@ all pass without delegation.
 
 ## Repository map
 
-- `include/gpuxtb/gpuxtb.h`: the only public C ABI. It defines contexts,
+- `include/xtbloom/xtbloom.h`: the only public C ABI. It defines contexts,
   caller-owned buffers, ragged batches, result descriptors, status values, and
-  `gpuxtb_compute`.
+  `xtbloom_compute`.
 - `src/api.cpp`: public entry points, structure initialization, context
   lifetime, error reporting, and compute dispatch.
 - `src/runtime/`: backend selection, public descriptor validation, CPU batch
@@ -87,7 +87,7 @@ all pass without delegation.
 - `src/backends/common/`: plan and workspace schemas shared across backends.
 - `src/backends/cuda/`: CUDA terms and the complete setup/SCC/publication/force
   execution chain.
-- `python/gpuxtb/`: ctypes ABI mirror, native runtime loading, high-level
+- `python/xtbloom/`: ctypes ABI mirror, native runtime loading, high-level
   interfaces, ASE calculator, and dpdata plugin.
 - `tests/`: C/C++/CUDA unit, ABI, conformance, install-consumer, licensing,
   parameter, and oracle tests.
@@ -112,9 +112,9 @@ changing the corresponding subsystem.
 - Positions are in bohr, energy is in Hartree, and forces are in Hartree/bohr.
 - Forces are the negative coordinate derivative of the reported energy with
   caller-supplied periodic charge-response fields held fixed. When
-  `atomic_potential_shifts` or `charge_response_matrix` is supplied, gpuxtb
+  `atomic_potential_shifts` or `charge_response_matrix` is supplied, xTBloom
   does not include `db/dR` or `dA/dR`; callers own those derivatives and the
-  result sets `GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES`.
+  result sets `XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES`.
 - `electronic_temperature` is the energy scale `k_B T` in Hartree, not a
   Kelvin value.
 - At finite electronic temperature, the reported variational energy is the
@@ -135,17 +135,17 @@ changing the corresponding subsystem.
 - Buffers are caller-owned borrowed views. The library never takes ownership.
 - Ragged topology uses flat arrays with `int64_t` offsets. Validate extents,
   overflow, aliases, memory-space tags, and pointer ownership before execution.
-- Linux exports are restricted by `cmake/gpuxtb.map`. Public symbols use the
-  `gpuxtb_*` namespace; do not expose implementation symbols accidentally.
+- Linux exports are restricted by `cmake/xtbloom.map`. Public symbols use the
+  `xtbloom_*` namespace; do not expose implementation symbols accidentally.
 
 A C ABI change normally requires coordinated review of at least:
 
-- `include/gpuxtb/gpuxtb.h`
+- `include/xtbloom/xtbloom.h`
 - `src/api.cpp`
 - `src/runtime/validation.*`
 - `src/runtime/cuda_descriptor_validation.*`
-- `python/gpuxtb/library.py`
-- `python/gpuxtb/interface.py`
+- `python/xtbloom/library.py`
+- `python/xtbloom/interface.py`
 - `tests/c_api_test.c`
 - `tests/batch_validation_test.cpp`
 - `tests/abi/check_symbols.py`
@@ -161,7 +161,7 @@ A C ABI change normally requires coordinated review of at least:
 - A failed system's requested floating-point slices are fully filled with
   quiet NaNs; never publish a partial result.
 - After CUDA caller-output commit begins, a catastrophic failure may have
-  modified output but must return `GPUXTB_STATUS_INTERNAL_ERROR` with a useful
+  modified output but must return `XTBLOOM_STATUS_INTERNAL_ERROR` with a useful
   diagnostic.
 - CUDA paths must attempt to restore the caller's current device on every exit.
 - Public CUDA compute is synchronous and rejects active stream capture.
@@ -185,11 +185,11 @@ A C ABI change normally requires coordinated review of at least:
   `libmkl_intel_lp64`, `libmkl_sequential`, and `libmkl_core`, and the runtime
   factory loads the adjacent shim with `RTLD_LOCAL` in a new glibc link-map
   namespace. `RTLD_LOCAL` in the base namespace is not isolation because
-  pre-existing global symbols can still interpose. gpuxtb must never call
+  pre-existing global symbols can still interpose. xTBloom must never call
   `MKL_Set_Interface_Layer`, never read `MKL_INTERFACE_LAYER` for the isolated
   path, and never expose provider libraries with `RTLD_GLOBAL`. Do not regress
-  host coexistence: LP64 gpuxtb calls must stay correct when the host uses
-  ILP64, both before and after gpuxtb backend creation.
+  host coexistence: LP64 xTBloom calls must stay correct when the host uses
+  ILP64, both before and after xTBloom backend creation.
 
 ## Generated, canonical, and licensed artifacts
 
@@ -238,8 +238,20 @@ skipped or unavailable backend passed.
 
 The native build requires CMake 3.24 or newer and C/C++17. Configuring tests
 requires a Python 3.11-or-newer interpreter even though the installed Python
-package supports Python 3.10 or newer. The repository has no CMake presets or
-wrapper task runner; the explicit CMake/CTest commands below are authoritative.
+package supports Python 3.10 or newer. The recommended fixed CPU validation
+entry point for humans and AI agents is:
+
+```bash
+UV_DEFAULT_INDEX=https://pypi.org/simple \
+  uv run --isolated --locked --only-group nox nox -s agent
+```
+
+Focused `fast`, `cpu`, `python`, `canonical`, `package`, `cuda`, and `full`
+sessions are defined in `noxfile.py`. Nox only orchestrates the explicit
+CMake/CTest and uv commands below. The runner uses a separate uv-isolated
+environment, while project Python commands use the locked non-editable project
+environment. The underlying commands remain authoritative for diagnosis and
+specialized validation. Do not run sessions in parallel within one worktree.
 Use separate build directories for CPU, shared, static, and CUDA configurations
 so an old `CMakeCache.txt` cannot hide which tests were enabled.
 
@@ -255,7 +267,7 @@ git diff --check
 
 ```bash
 cmake -S . -B build/cpu -G Ninja \
-  -DGPUXTB_ENABLE_CUDA=OFF \
+  -DXTBLOOM_ENABLE_CUDA=OFF \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cpu --parallel
 ctest --test-dir build/cpu --output-on-failure
@@ -266,8 +278,8 @@ a compatible LP64 runtime when auto-discovery is unavailable:
 
 ```bash
 cmake -S . -B build/cpu-public -G Ninja \
-  -DGPUXTB_ENABLE_CUDA=OFF \
-  -DGPUXTB_MKL_RT_LIBRARY=/absolute/path/to/libmkl_rt.so \
+  -DXTBLOOM_ENABLE_CUDA=OFF \
+  -DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/libmkl_rt.so \
   -DBUILD_SHARED_LIBS=ON \
   -DCMAKE_BUILD_TYPE=Release
 ```
@@ -288,11 +300,11 @@ changing `pyproject.toml`, run `uv lock` and commit the lock with the change.
 In a clean isolated environment, build/install the local native package with
 the test extras before running the suite; a missing native library is a test
 failure, not a supported skip. Install non-editable (`--no-editable`) so
-`library_path()` finds the bundled `libgpuxtb` inside the wheel, and run with
+`library_path()` finds the bundled `libxtbloom` inside the wheel, and run with
 `--no-sync` so `uv run` does not re-sync the environment as editable:
 
 ```bash
-GPUXTB_ENABLE_CUDA=OFF uv sync --no-editable --extra test
+XTBLOOM_ENABLE_CUDA=OFF uv sync --no-editable --extra test
 uv run --no-sync pytest python/tests -q
 ```
 
@@ -304,7 +316,7 @@ the loader.
 
 ```bash
 python3 tools/parameters/generate_gfn2.py --check
-python3 tools/conformance/gpuxtb_conformance.py check
+python3 tools/conformance/xtbloom_conformance.py check
 python3 tools/licensing/check_licenses.py --source-root .
 python3 -m unittest discover -s tests/parameters -p 'test_*.py' -v
 python3 -m unittest discover -s tests/conformance -p 'test_*.py' -v
@@ -322,11 +334,11 @@ python3 -m unittest -v benchmarks.test_dxtb_adapter
 
 ### CUDA
 
-For CUDA changes, configure explicitly with `GPUXTB_ENABLE_CUDA=ON`; `AUTO` can
+For CUDA changes, configure explicitly with `XTBLOOM_ENABLE_CUDA=ON`; `AUTO` can
 silently produce a CPU-only build when `nvcc` is not found. Select the actual
 CUDA compiler/toolkit and GPU architecture rather than copying a
 machine-specific path or `sm_120` unconditionally. Run the affected
-`gpuxtb.cuda.*` tests on a real NVIDIA GPU. Run public conformance for host,
+`xtbloom.cuda.*` tests on a real NVIDIA GPU. Run public conformance for host,
 device, and mixed memory modes when the public execution path changes. Use the
 local scheduler (for example `srun`) if the machine requires one.
 
@@ -355,7 +367,7 @@ python3 tools/licensing/check_licenses.py --source-root . \
 cmake -S tests/install_consumer -B build/cpu-public-consumer -G Ninja \
   -DCMAKE_PREFIX_PATH="$PWD/build/cpu-public-install"
 cmake --build build/cpu-public-consumer --parallel
-"$PWD/build/cpu-public-consumer/gpuxtb_install_consumer" cpu
+"$PWD/build/cpu-public-consumer/xtbloom_install_consumer" cpu
 ```
 
 For source-distribution changes:

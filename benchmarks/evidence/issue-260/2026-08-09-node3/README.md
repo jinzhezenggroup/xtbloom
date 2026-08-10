@@ -21,7 +21,7 @@ drift summaries needed for the performance claim. The run used the repository
 `benchmarks/natoms_scaling.py` harness through the public C ABI:
 
 ```text
-srun --partition=main --gres=gpu:5090:1 --ntasks=1 --cpus-per-task=48 --wait=60 env PYTHONPATH="$PWD/python" LD_LIBRARY_PATH="$PWD/build/bench-cuda-shared:/group/software/cuda-12.9.1/lib64:/group/software/deepmd-kit-3.1.1/lib:$LD_LIBRARY_PATH" OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_DYNAMIC=FALSE MKL_DYNAMIC=FALSE MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL python3 benchmarks/natoms_scaling.py --engine gpuxtb --library "$PWD/build/bench-cuda-shared/libgpuxtb.so.0.1.0" --backend cuda --property force --natoms 62,122,242 --batch-sizes 1,128 --warmups 3 --repetitions 5 --start-mode fresh --output-json "$PWD/benchmarks/evidence/issue-260/2026-08-09-node3/cuda-fresh.json" --output-csv "$PWD/benchmarks/evidence/issue-260/2026-08-09-node3/cuda-fresh.csv"
+srun --partition=main --gres=gpu:5090:1 --ntasks=1 --cpus-per-task=48 --wait=60 env PYTHONPATH="$PWD/python" LD_LIBRARY_PATH="$PWD/build/bench-cuda-shared:/group/software/cuda-12.9.1/lib64:/group/software/deepmd-kit-3.1.1/lib:$LD_LIBRARY_PATH" OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_DYNAMIC=FALSE MKL_DYNAMIC=FALSE MKL_INTERFACE_LAYER=LP64 MKL_THREADING_LAYER=SEQUENTIAL python3 benchmarks/natoms_scaling.py --engine xtbloom --library "$PWD/build/bench-cuda-shared/libxtbloom.so.0.1.0" --backend cuda --property force --natoms 62,122,242 --batch-sizes 1,128 --warmups 3 --repetitions 5 --start-mode fresh --output-json "$PWD/benchmarks/evidence/issue-260/2026-08-09-node3/cuda-fresh.json" --output-csv "$PWD/benchmarks/evidence/issue-260/2026-08-09-node3/cuda-fresh.csv"
 ```
 
 All 30 measured samples were available and passed the harness finite-output
@@ -54,8 +54,8 @@ is the retained numerical-correctness evidence.
 Systems `2025.1.3.140-251335620677v`, generated with:
 
 ```text
-/group/software/cuda-12.9.1/bin/nsys profile --trace=cuda --sample=none --cpuctxsw=none --stats=true --force-overwrite=true -o /tmp/gpuxtb-261-d4-atm build/bench-cuda-shared/gpuxtb_cuda_d4_test
-/group/software/cuda-12.9.1/bin/nsys stats --force-overwrite=true --force-export=true --report cuda_gpu_kern_sum --format csv --output benchmarks/evidence/issue-260/2026-08-09-node3/nsys-kernel /tmp/gpuxtb-261-d4-atm.nsys-rep
+/group/software/cuda-12.9.1/bin/nsys profile --trace=cuda --sample=none --cpuctxsw=none --stats=true --force-overwrite=true -o /tmp/xtbloom-261-d4-atm build/bench-cuda-shared/xtbloom_cuda_d4_test
+/group/software/cuda-12.9.1/bin/nsys stats --force-overwrite=true --force-export=true --report cuda_gpu_kern_sum --format csv --output benchmarks/evidence/issue-260/2026-08-09-node3/nsys-kernel /tmp/xtbloom-261-d4-atm.nsys-rep
 ```
 
 The focused D4 test's split kernels measured `0.244289 ms` for

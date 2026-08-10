@@ -27,25 +27,25 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::Gfn2WavefunctionLayoutView;
-using gpuxtb::detail::cuda::assemble_gfn2_hamiltonian_cuda;
-using gpuxtb::detail::cuda::assemble_gfn2_spin_hamiltonian_cuda;
-using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceError;
-using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceInput;
-using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceOutput;
-using gpuxtb::detail::cuda::Gfn2HamiltonianDeviceWorkspace;
-using gpuxtb::detail::cuda::reset_gfn2_hamiltonian_device_errors_cuda;
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::IntegralPlan;
-using gpuxtb::detail::gfn2::MullikenHamiltonianView;
-using gpuxtb::detail::gfn2::MullikenIntegralView;
-using gpuxtb::detail::gfn2::MullikenPlan;
-using gpuxtb::detail::gfn2::MullikenPotentialView;
-using gpuxtb::detail::gfn2::MullikenWorkspace;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::Gfn2WavefunctionLayoutView;
+using xtbloom::detail::cuda::assemble_gfn2_hamiltonian_cuda;
+using xtbloom::detail::cuda::assemble_gfn2_spin_hamiltonian_cuda;
+using xtbloom::detail::cuda::Gfn2HamiltonianDeviceActivity;
+using xtbloom::detail::cuda::Gfn2HamiltonianDeviceBatch;
+using xtbloom::detail::cuda::Gfn2HamiltonianDeviceError;
+using xtbloom::detail::cuda::Gfn2HamiltonianDeviceInput;
+using xtbloom::detail::cuda::Gfn2HamiltonianDeviceOutput;
+using xtbloom::detail::cuda::Gfn2HamiltonianDeviceWorkspace;
+using xtbloom::detail::cuda::reset_gfn2_hamiltonian_device_errors_cuda;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::IntegralPlan;
+using xtbloom::detail::gfn2::MullikenHamiltonianView;
+using xtbloom::detail::gfn2::MullikenIntegralView;
+using xtbloom::detail::gfn2::MullikenPlan;
+using xtbloom::detail::gfn2::MullikenPotentialView;
+using xtbloom::detail::gfn2::MullikenWorkspace;
+using xtbloom::detail::gfn2::WavefunctionLayout;
 
 constexpr std::uint64_t kPlanToken = 0x73a541c28de960bfULL;
 constexpr double kSentinel = -973.375;
@@ -690,17 +690,17 @@ int test_production_cpu_parity() {
   WavefunctionLayout wavefunction;
   MullikenPlan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_basis_plan(1, static_cast<std::int64_t>(atomic_numbers.size()),
-                                              atom_offsets.data(), atomic_numbers.data(), basis,
-                                              error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_basis_plan(1, static_cast<std::int64_t>(atomic_numbers.size()),
+                                               atom_offsets.data(), atomic_numbers.data(), basis,
+                                               error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(basis.maximum_angular_momentum >= 2u);
-  CHECK(gpuxtb::detail::gfn2::make_integral_plan(basis, integral_plan, error) ==
-        GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(
+  CHECK(xtbloom::detail::gfn2::make_integral_plan(basis, integral_plan, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
             basis, atomic_numbers.data(), charges.data(), unpaired.data(), spin_channels.data(),
-            wavefunction, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::make_mulliken_plan(basis, integral_plan, wavefunction, plan, error) ==
-        GPUXTB_STATUS_SUCCESS);
+            wavefunction, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_mulliken_plan(basis, integral_plan, wavefunction, plan,
+                                                  error) == XTBLOOM_STATUS_SUCCESS);
 
   HostCase host;
   host.batch_size = 1;
@@ -768,8 +768,8 @@ int test_production_cpu_parity() {
   const MullikenHamiltonianView hamiltonian{expected.data(), plan.density_elements(),
                                             plan.identity()};
   const MullikenWorkspace workspace{scratch.data(), static_cast<std::int64_t>(scratch.size())};
-  CHECK(gpuxtb::detail::gfn2::add_mulliken_hamiltonian_cpu(
-            plan, integrals, potential, hamiltonian, workspace, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_cpu(
+            plan, integrals, potential, hamiltonian, workspace, error) == XTBLOOM_STATUS_SUCCESS);
 
   DeviceFixture device;
   CUDA_CHECK(device.initialize(host));

@@ -1,6 +1,6 @@
 """Verify the PyTorch stable-ABI extension's runtime linkage contract.
 
-The compiled `libgpuxtb_torch_ext.so` is linked against a build-time-only
+The compiled `libxtbloom_torch_ext.so` is linked against a build-time-only
 stub `libtorch_cpu.so` that carries the real library's SONAME (see
 `cmake/3rdparty/torch-stable/README.md`).  The acceptance contract is:
 

@@ -11,7 +11,7 @@ This directory archives the correctness-qualified benchmark evidence for PR
 - OS: Linux 6.8.0-110-generic x86_64, glibc 2.35.
 - Build: CMake 4.2.1, Ninja, Release, shared library, CUDA disabled.
 - Compiler: GCC 11.4.0 (`/usr/bin/x86_64-linux-gnu-g++-11`).
-- gpuxtb library SHA-256: `b93b312c3b1aa9f76ed7a382e9d42d1d1ecf4d31abc240db442e5ac537994d5c`.
+- xTBloom library SHA-256: `b93b312c3b1aa9f76ed7a382e9d42d1d1ecf4d31abc240db442e5ac537994d5c`.
 - MKL runtime SHA-256: `b2ff0e31d7cd18c91813d8f6500f37665597d89de22649d90687aa6bf7bd2c0f`.
 - tblite 0.7.0 library SHA-256: `1c2fb4308b398851580af11ccad5eec22314ff45a34a553380277e776a44c3b5`.
 - tblite C compiler: GCC 13.4.0 at
@@ -34,21 +34,21 @@ content-hashed without consulting the later benchmark process's `PATH`.
 ## Protocol
 
 All rows request GFN2-xTB energy and analytic force at 300 K for a batch of one
-neutral closed-shell alkane. gpuxtb uses the conformance SCC policy: 500 maximum
+neutral closed-shell alkane. xTBloom uses the conformance SCC policy: 500 maximum
 iterations, charge tolerance `1e-10`, and energy tolerance `1e-12`. Each row has
-10 untimed warmups followed by 30 recorded samples. gpuxtb WARM performs one
+10 untimed warmups followed by 30 recorded samples. xTBloom WARM performs one
 additional untimed FRESH seed before its warmups. Setup, result inspection, and
 serialization are outside the timing interval.
 
-| atoms | gpuxtb FRESH median (ms) | FRESH iterations | gpuxtb WARM median (ms) | WARM iterations | FRESH / WARM | tblite persistent median (ms) | tblite / WARM |
+| atoms | xTBloom FRESH median (ms) | FRESH iterations | xTBloom WARM median (ms) | WARM iterations | FRESH / WARM | tblite persistent median (ms) | tblite / WARM |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 32 | 19.0047 | 17 | 6.1541 | 2 | 3.09x | 9.4993 | 1.54x |
 | 62 | 74.1555 | 18 | 20.6437 | 2 | 3.59x | 27.1112 | 1.31x |
 | 98 | 195.7811 | 18 | 47.4718 | 2 | 4.12x | 54.7487 | 1.15x |
 | 122 | 344.6569 | 18 | 72.4041 | 2 | 4.76x | 78.9223 | 1.09x |
 
-Every measured sample was compared with the validated gpuxtb FRESH artifact.
-The maximum gpuxtb WARM delta over the complete sweep was
+Every measured sample was compared with the validated xTBloom FRESH artifact.
+The maximum xTBloom WARM delta over the complete sweep was
 `9.3792e-13` Hartree for energy and `1.2888e-11` Hartree/bohr for force. The
 maximum tblite delta was `5.2012e-12` Hartree and `1.2916e-11` Hartree/bohr.
 All rows passed their within-engine and cross-engine gates. xTB 6.7.1 is not
@@ -83,25 +83,25 @@ env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   OMP_DYNAMIC=FALSE MKL_DYNAMIC=FALSE MKL_INTERFACE_LAYER=LP64 \
   MKL_THREADING_LAYER=SEQUENTIAL taskset -c 0 \
 python3 benchmarks/natoms_scaling.py \
-  --engine gpuxtb --library "$PWD/build/pr169-cpu-public/libgpuxtb.so.0.1.0" \
+  --engine xtbloom --library "$PWD/build/pr169-cpu-public/libxtbloom.so.0.1.0" \
   --backend cpu --cpu-threads 1 --property force \
   --natoms 32,62,98,122 --batch-sizes 1 \
   --warmups 10 --repetitions 30 --start-mode fresh \
-  --output-json build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json \
-  --output-csv build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.csv
+  --output-json build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json \
+  --output-csv build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.csv
 
 env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   OMP_DYNAMIC=FALSE MKL_DYNAMIC=FALSE MKL_INTERFACE_LAYER=LP64 \
   MKL_THREADING_LAYER=SEQUENTIAL taskset -c 0 \
 python3 benchmarks/natoms_scaling.py \
-  --engine gpuxtb --library "$PWD/build/pr169-cpu-public/libgpuxtb.so.0.1.0" \
+  --engine xtbloom --library "$PWD/build/pr169-cpu-public/libxtbloom.so.0.1.0" \
   --backend cpu --cpu-threads 1 --property force \
   --natoms 32,62,98,122 --batch-sizes 1 \
   --warmups 10 --repetitions 30 --start-mode warm \
-  --energy-reference-json build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json \
+  --energy-reference-json build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json \
   --cross-engine-energy-atol 5e-7 --cross-engine-force-atol 5e-6 \
-  --output-json build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.json \
-  --output-csv build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-warm.csv
+  --output-json build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-warm.json \
+  --output-csv build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-warm.csv
 
 env OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   OMP_DYNAMIC=FALSE MKL_DYNAMIC=FALSE MKL_INTERFACE_LAYER=LP64 \
@@ -113,7 +113,7 @@ python3 benchmarks/natoms_scaling.py \
   --backend cpu --cpu-threads 1 --property force \
   --natoms 32,62,98,122 --batch-sizes 1 \
   --warmups 10 --repetitions 30 \
-  --energy-reference-json build/benchmarks/pr169-evidence-6f7f1e2/gpuxtb-fresh.json \
+  --energy-reference-json build/benchmarks/pr169-evidence-6f7f1e2/xtbloom-fresh.json \
   --cross-engine-energy-atol 5e-7 --cross-engine-force-atol 5e-6 \
   --output-json build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.json \
   --output-csv build/benchmarks/pr169-evidence-6f7f1e2/tblite-persistent.csv

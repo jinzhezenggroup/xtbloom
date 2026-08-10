@@ -31,7 +31,7 @@ case "$mode" in
     python - <<'PY'
 import numpy as np
 import torch
-from gpuxtb import Calculator, gpuxtb_torch
+from xtbloom import Calculator, xtbloom_torch
 
 calculator = Calculator(
     "GFN2-xTB",
@@ -49,14 +49,14 @@ result = calculator.singlepoint()
 assert result.scc_converged
 assert np.isfinite(result.energy)
 assert np.isfinite(result.forces).all()
-print(f"gpuxtb CPU wheel smoke energy: {result.energy:.16g}")
+print(f"xTBloom CPU wheel smoke energy: {result.energy:.16g}")
 
 # Exercise the repaired wheel's stable-ABI extension and its external
 # libtorch_cpu.so resolution on native aarch64 as well as x86_64.
 torch_positions = torch.tensor(
     calculator.positions, dtype=torch.float64, requires_grad=True
 )
-torch_energies, torch_forces = gpuxtb_torch(
+torch_energies, torch_forces = xtbloom_torch(
     torch_positions,
     torch.tensor(calculator.numbers, dtype=torch.int32),
     torch.tensor([0, len(calculator.numbers)], dtype=torch.int64),
@@ -79,11 +79,11 @@ torch.testing.assert_close(
     rtol=1.0e-12,
 )
 torch.testing.assert_close(torch_positions.grad, -torch_forces, atol=0.0, rtol=0.0)
-print(f"gpuxtb Torch wheel smoke: torch {torch.__version__}")
+print(f"xTBloom Torch wheel smoke: torch {torch.__version__}")
 PY
     ;;
   smoke)
-    python -c 'import gpuxtb; print(gpuxtb.library.get_version())'
+    python -c 'import xtbloom; print(xtbloom.library.get_version())'
     ;;
   *)
     echo "unknown wheel-test mode: $mode" >&2

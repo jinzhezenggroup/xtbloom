@@ -25,14 +25,14 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2AES2DeviceBatch;
-using gpuxtb::detail::cuda::Gfn2AES2DeviceCache;
-using gpuxtb::detail::cuda::Gfn2AES2DeviceError;
-using gpuxtb::detail::cuda::Gfn2AES2DeviceWorkspace;
-using gpuxtb::detail::gfn2::AES2GeometryCache;
-using gpuxtb::detail::gfn2::AES2Plan;
-using gpuxtb::detail::gfn2::AES2Workspace;
-using gpuxtb::detail::gfn2::BasisPlan;
+using xtbloom::detail::cuda::Gfn2AES2DeviceBatch;
+using xtbloom::detail::cuda::Gfn2AES2DeviceCache;
+using xtbloom::detail::cuda::Gfn2AES2DeviceError;
+using xtbloom::detail::cuda::Gfn2AES2DeviceWorkspace;
+using xtbloom::detail::gfn2::AES2GeometryCache;
+using xtbloom::detail::gfn2::AES2Plan;
+using xtbloom::detail::gfn2::AES2Workspace;
+using xtbloom::detail::gfn2::BasisPlan;
 
 constexpr std::uint64_t kGeneration = 91u;
 constexpr std::uint64_t kPlanToken = 0x6a09e667f3bcc909ULL;
@@ -148,11 +148,11 @@ bool make_host_evaluation(const std::vector<std::int64_t>& atom_offsets,
                           const std::vector<double>& quadrupoles, HostEvaluation& host,
                           std::string& error) {
   const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
-  if (gpuxtb::detail::gfn2::make_basis_plan(
+  if (xtbloom::detail::gfn2::make_basis_plan(
           batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-          atomic_numbers.data(), host.basis, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_aes2_plan(host.basis, atomic_numbers.data(), host.plan, error) !=
-          GPUXTB_STATUS_SUCCESS) {
+          atomic_numbers.data(), host.basis, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_aes2_plan(host.basis, atomic_numbers.data(), host.plan, error) !=
+          XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   const std::size_t atom_count = static_cast<std::size_t>(host.plan.total_atoms());
@@ -188,23 +188,23 @@ bool make_host_evaluation(const std::vector<std::int64_t>& atom_offsets,
 }
 
 bool evaluate_cpu(HostEvaluation& host, std::uint64_t generation, std::string& error) {
-  return gpuxtb::detail::gfn2::update_aes2_geometry_cache_cpu(
+  return xtbloom::detail::gfn2::update_aes2_geometry_cache_cpu(
              host.plan, host.positions.data(), host.coordination.data(), generation,
              host.pair_data.data(), host.pair_data.size(), host.workspace, host.cache,
-             error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::evaluate_aes2_potential_cpu(
+             error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::evaluate_aes2_potential_cpu(
              host.plan, host.cache, host.charges.data(), host.dipoles.data(),
              host.quadrupoles.data(), host.charge_potentials.data(), host.dipole_potentials.data(),
-             host.quadrupole_potentials.data(), host.workspace, error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::add_aes2_energy_cpu(host.plan, host.cache, host.charges.data(),
-                                                   host.dipoles.data(), host.quadrupoles.data(),
-                                                   host.energies.data(), host.workspace,
-                                                   error) == GPUXTB_STATUS_SUCCESS &&
-         gpuxtb::detail::gfn2::add_aes2_vjp_cpu(
+             host.quadrupole_potentials.data(), host.workspace, error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::add_aes2_energy_cpu(host.plan, host.cache, host.charges.data(),
+                                                    host.dipoles.data(), host.quadrupoles.data(),
+                                                    host.energies.data(), host.workspace,
+                                                    error) == XTBLOOM_STATUS_SUCCESS &&
+         xtbloom::detail::gfn2::add_aes2_vjp_cpu(
              host.plan, host.cache, host.positions.data(), host.coordination.data(), generation,
              host.charges.data(), host.dipoles.data(), host.quadrupoles.data(),
              host.gradients.data(), host.coordination_adjoints.data(), host.workspace,
-             error) == GPUXTB_STATUS_SUCCESS;
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 HostEvaluation make_ragged_case() {
@@ -373,23 +373,23 @@ struct DeviceEvaluation {
 };
 
 bool enqueue_full(DeviceEvaluation& device, cudaStream_t stream) {
-  return gpuxtb::detail::cuda::reset_gfn2_aes2_device_errors_cuda(
+  return xtbloom::detail::cuda::reset_gfn2_aes2_device_errors_cuda(
              device.batch.batch_size, device.system_errors.get(), device.device_error.get(),
              stream) == cudaSuccess &&
-         gpuxtb::detail::cuda::update_gfn2_aes2_geometry_cache_cuda(
+         xtbloom::detail::cuda::update_gfn2_aes2_geometry_cache_cuda(
              device.batch, device.positions.get(), device.coordination.get(), device.cache,
              device.workspace, device.system_errors.get(), device.device_error.get(),
              stream) == cudaSuccess &&
-         gpuxtb::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
+         xtbloom::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
              device.batch, device.cache, device.charges.get(), device.dipoles.get(),
              device.quadrupoles.get(), device.charge_potentials.get(),
              device.dipole_potentials.get(), device.quadrupole_potentials.get(), device.workspace,
              device.system_errors.get(), device.device_error.get(), stream) == cudaSuccess &&
-         gpuxtb::detail::cuda::add_gfn2_aes2_energy_cuda(
+         xtbloom::detail::cuda::add_gfn2_aes2_energy_cuda(
              device.batch, device.cache, device.charges.get(), device.dipoles.get(),
              device.quadrupoles.get(), device.energies.get(), device.workspace,
              device.system_errors.get(), device.device_error.get(), stream) == cudaSuccess &&
-         gpuxtb::detail::cuda::add_gfn2_aes2_vjp_cuda(
+         xtbloom::detail::cuda::add_gfn2_aes2_vjp_cuda(
              device.batch, device.cache, device.positions.get(), device.coordination.get(),
              kGeneration, device.charges.get(), device.dipoles.get(), device.quadrupoles.get(),
              device.gradients.get(), device.coordination_adjoints.get(), device.workspace,
@@ -521,10 +521,10 @@ int test_geometry_and_compute_failure_isolation() {
   CHECK(geometry_device.pair_data.copy_from(pair_sentinel.data(), pair_sentinel.size(), stream));
   CHECK(geometry_device.coordination.copy_from(bad_coordination.data(), bad_coordination.size(),
                                                stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_aes2_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_aes2_device_errors_cuda(
       geometry_device.batch.batch_size, geometry_device.system_errors.get(),
       geometry_device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_aes2_geometry_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_aes2_geometry_cache_cuda(
       geometry_device.batch, geometry_device.positions.get(), geometry_device.coordination.get(),
       geometry_device.cache, geometry_device.workspace, geometry_device.system_errors.get(),
       geometry_device.device_error.get(), stream));
@@ -563,10 +563,10 @@ int test_geometry_and_compute_failure_isolation() {
   CHECK(evaluate_cpu(expected, kGeneration, error));
   DeviceEvaluation compute_device;
   CHECK(compute_device.initialize(expected, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_aes2_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_aes2_device_errors_cuda(
       compute_device.batch.batch_size, compute_device.system_errors.get(),
       compute_device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_aes2_geometry_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_aes2_geometry_cache_cuda(
       compute_device.batch, compute_device.positions.get(), compute_device.coordination.get(),
       compute_device.cache, compute_device.workspace, compute_device.system_errors.get(),
       compute_device.device_error.get(), stream));
@@ -590,18 +590,18 @@ int test_geometry_and_compute_failure_isolation() {
                                            stream));
   CHECK(compute_device.coordination_adjoints.copy_from(coordination_sentinel.data(),
                                                        coordination_sentinel.size(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
       compute_device.batch, compute_device.cache, compute_device.charges.get(),
       compute_device.dipoles.get(), compute_device.quadrupoles.get(),
       compute_device.charge_potentials.get(), compute_device.dipole_potentials.get(),
       compute_device.quadrupole_potentials.get(), compute_device.workspace,
       compute_device.system_errors.get(), compute_device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_aes2_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_aes2_energy_cuda(
       compute_device.batch, compute_device.cache, compute_device.charges.get(),
       compute_device.dipoles.get(), compute_device.quadrupoles.get(), compute_device.energies.get(),
       compute_device.workspace, compute_device.system_errors.get(),
       compute_device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_aes2_vjp_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_aes2_vjp_cuda(
       compute_device.batch, compute_device.cache, compute_device.positions.get(),
       compute_device.coordination.get(), kGeneration, compute_device.charges.get(),
       compute_device.dipoles.get(), compute_device.quadrupoles.get(),
@@ -699,21 +699,21 @@ int run_hostile_offset_case(bool corrupt_atom_offsets, cudaStream_t stream) {
   CHECK(device.coordination_adjoints.copy_from(coordination_sentinel.data(),
                                                coordination_sentinel.size(), stream));
 
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_aes2_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_aes2_device_errors_cuda(
       device.batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_aes2_geometry_cache_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_aes2_geometry_cache_cuda(
       device.batch, device.positions.get(), device.coordination.get(), device.cache,
       device.workspace, device.system_errors.get(), device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
       device.batch, device.cache, device.charges.get(), device.dipoles.get(),
       device.quadrupoles.get(), device.charge_potentials.get(), device.dipole_potentials.get(),
       device.quadrupole_potentials.get(), device.workspace, device.system_errors.get(),
       device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_aes2_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_aes2_energy_cuda(
       device.batch, device.cache, device.charges.get(), device.dipoles.get(),
       device.quadrupoles.get(), device.energies.get(), device.workspace, device.system_errors.get(),
       device.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::add_gfn2_aes2_vjp_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_aes2_vjp_cuda(
       device.batch, device.cache, device.positions.get(), device.coordination.get(), kGeneration,
       device.charges.get(), device.dipoles.get(), device.quadrupoles.get(), device.gradients.get(),
       device.coordination_adjoints.get(), device.workspace, device.system_errors.get(),
@@ -784,18 +784,18 @@ int test_graph_capture_and_structural_guards() {
 
   Gfn2AES2DeviceCache stale_cache = device.cache;
   stale_cache.plan_token ^= 1u;
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
             device.batch, stale_cache, device.charges.get(), device.dipoles.get(),
             device.quadrupoles.get(), device.charge_potentials.get(),
             device.dipole_potentials.get(), device.quadrupole_potentials.get(), device.workspace,
             device.system_errors.get(), device.device_error.get(),
             stream) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
             device.batch, device.cache, device.charges.get(), device.dipoles.get(),
             device.quadrupoles.get(), device.charges.get(), device.dipole_potentials.get(),
             device.quadrupole_potentials.get(), device.workspace, device.system_errors.get(),
             device.device_error.get(), stream) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::add_gfn2_aes2_vjp_cuda(
+  CHECK(xtbloom::detail::cuda::add_gfn2_aes2_vjp_cuda(
             device.batch, device.cache, device.positions.get(), device.coordination.get(),
             kGeneration + 1u, device.charges.get(), device.dipoles.get(), device.quadrupoles.get(),
             device.gradients.get(), device.coordination_adjoints.get(), device.workspace,

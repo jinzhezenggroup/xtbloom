@@ -3,9 +3,9 @@ requires = ["scikit-build-core>=0.9"]
 build-backend = "scikit_build_core.build"
 
 [project]
-name = "gpuxtb"
-version = "0.1.0"
-description = "Batched CPU and GPU inference for GFN-xTB through the public C ABI"
+name = "xtbloom"
+version = "0.0.0"
+description = "Batched CPU and GPU inference for GFN2-xTB through the public C ABI"
 readme = { file = "python/README.md", content-type = "text/markdown" }
 license = "GPL-3.0-or-later"
 license-files = [
@@ -17,7 +17,7 @@ license-files = [
   "data/parameters/licenses/*",
 ]
 requires-python = ">=3.10"
-authors = [{ name = "gpuxtb developers" }]
+authors = [{ name = "xTBloom developers" }]
 maintainers = [{ name = "Jinzhe Zeng", email = "jinzhe.zeng@ustc.edu.cn" }]
 keywords = ["xtb", "tight-binding", "semiempirical", "qm", "gpu"]
 classifiers = [
@@ -38,15 +38,17 @@ dependencies = [
   # DLPack/Array API consumption path; see THIRD_PARTY_NOTICES.md.
   "array-api-compat>=1.15,<2",
   # One BSD-licensed LP64 LAPACKE+CBLAS runtime serves both Linux wheel
-  # architectures. Its scipy_-prefixed ABI avoids interposing on NumPy's BLAS.
-  "scipy-openblas32>=0.3.34.0.0; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
+  # architectures. Pin the reviewed ABI because later provider wheels may
+  # remove the local-thread-control symbol required for host isolation.
+  "scipy-openblas32==0.3.34.0.0; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
 ]
 
 [project.urls]
-Homepage = "https://github.com/njzjz/gpuxtb"
-Documentation = "https://github.com/njzjz/gpuxtb/blob/main/docs/index.md"
-Repository = "https://github.com/njzjz/gpuxtb"
-Issues = "https://github.com/njzjz/gpuxtb/issues"
+Homepage = "https://xtbloom.jinzhezeng.group"
+Documentation = "https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/index.md"
+Repository = "https://github.com/jinzhezenggroup/xtbloom"
+Issues = "https://github.com/jinzhezenggroup/xtbloom/issues"
+"Web demo" = "https://xtbloom.jinzhezeng.group"
 
 [project.optional-dependencies]
 ase = ["ase"]
@@ -68,11 +70,15 @@ test = [
 ]
 
 # Used by the ty-pre-commit hook so its ephemeral type-check environment can
-# resolve the optional third-party imports that ``python/gpuxtb`` actually
+# resolve the optional third-party imports that ``python/xtbloom`` actually
 # type checks (ase.py, dpdata.py). Kept separate from the `extras` so type
 # checking never installs the pytest test tooling.
 [dependency-groups]
 typechecking = ["ase", "dpdata"]
+# Nox is a locked development orchestrator, not a project extra or published
+# runtime dependency.  The noxfile keeps the exact CMake/CTest and uv commands
+# authoritative instead of resolving another copy of the project environment.
+nox = ["nox==2026.7.11"]
 # PyTorch is needed only to execute the public autograd integration tests in
 # required CI. Keep it out of project extras so wheels and normal test-extra
 # installations retain the package's optional, lazy-import contract.
@@ -85,12 +91,12 @@ torch-testing = ["torch==2.13.0"]
 default-groups = ["typechecking"]
 
 [project.entry-points."dpdata.plugins"]
-gpuxtb = "gpuxtb.dpdata"
+xtbloom = "xtbloom.dpdata"
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"
 sdist.include = [
-  "src/bindings/torch/gpuxtb_torch_ext.cpp",
+  "src/bindings/torch/xtbloom_torch_ext.cpp",
   "cmake/3rdparty/implib/**",
   "cmake/3rdparty/implib_manifest.json",
   "cmake/3rdparty/torch-stable/**",
@@ -98,6 +104,9 @@ sdist.include = [
   "data/parameters/manifest.json",
 ]
 sdist.exclude = [
+  # Raw performance evidence is repository-only and hash-pinned in place; it
+  # is not a runtime, build, or source-consumer input.
+  "benchmarks/evidence/**",
   "build*/**",
   ".cache/**",
   ".claude/**",
@@ -105,38 +114,38 @@ sdist.exclude = [
   "compile_commands.json",
 ]
 cmake.args = [
-  "-DGPUXTB_BUILD_TESTS=OFF",
-  "-DGPUXTB_PYTHON_WHEEL=ON",
+  "-DXTBLOOM_BUILD_TESTS=OFF",
+  "-DXTBLOOM_PYTHON_WHEEL=ON",
   "-DBUILD_SHARED_LIBS=ON",
 ]
-wheel.packages = ["python/gpuxtb"]
-wheel.install-dir = "gpuxtb"
+wheel.packages = ["python/xtbloom"]
+wheel.install-dir = "xtbloom"
 # ctypes does not link against a CPython ABI.  Emit one platform wheel that is
 # usable by every supported Python version instead of duplicate cp311/cp314
 # archives containing identical native code.
 wheel.py-api = "py3"
 
-# GPUXTB_ENABLE_CUDA: AUTO enables the CUDA backend whenever a CUDA toolkit with
+# XTBLOOM_ENABLE_CUDA: AUTO enables the CUDA backend whenever a CUDA toolkit with
 # nvcc is available at build time and produces a CPU-only wheel otherwise. It
 # can be forced with, e.g.,
-# ``GPUXTB_ENABLE_CUDA=ON uv sync --no-editable --extra cuda12``
+# ``XTBLOOM_ENABLE_CUDA=ON uv sync --no-editable --extra cuda12``
 # (see python/README.md).
 [tool.scikit-build.cmake.define]
-GPUXTB_ENABLE_CUDA = { env = "GPUXTB_ENABLE_CUDA", default = "AUTO" }
+XTBLOOM_ENABLE_CUDA = { env = "XTBLOOM_ENABLE_CUDA", default = "AUTO" }
 # Ship optimized SASS for the main data-center/consumer generations plus
 # Blackwell instead of relying on nvcc's legacy default architecture/PTX JIT.
-CMAKE_CUDA_ARCHITECTURES = { env = "GPUXTB_CUDA_ARCHITECTURES", default = "80;89;90;120" }
-# ccache compiler launchers: CI sets the GPUXTB_*_COMPILER_LAUNCHER variables to
+CMAKE_CUDA_ARCHITECTURES = { env = "XTBLOOM_CUDA_ARCHITECTURES", default = "80;89;90;120" }
+# ccache compiler launchers: CI sets the XTBLOOM_*_COMPILER_LAUNCHER variables to
 # "ccache" (see ci.yml and wheels.yml) to reuse compiled C, C++, and CUDA
 # objects across runs. An empty default keeps local builds launcher-free when
 # the variables are unset.
-CMAKE_C_COMPILER_LAUNCHER = { env = "GPUXTB_C_COMPILER_LAUNCHER", default = "" }
-CMAKE_CXX_COMPILER_LAUNCHER = { env = "GPUXTB_CXX_COMPILER_LAUNCHER", default = "" }
-CMAKE_CUDA_COMPILER_LAUNCHER = { env = "GPUXTB_CUDA_COMPILER_LAUNCHER", default = "" }
+CMAKE_C_COMPILER_LAUNCHER = { env = "XTBLOOM_C_COMPILER_LAUNCHER", default = "" }
+CMAKE_CXX_COMPILER_LAUNCHER = { env = "XTBLOOM_CXX_COMPILER_LAUNCHER", default = "" }
+CMAKE_CUDA_COMPILER_LAUNCHER = { env = "XTBLOOM_CUDA_COMPILER_LAUNCHER", default = "" }
 
 # cibuildwheel: build wheels across platforms. The .github/workflows/wheels.yml
 # matrix drives exactly which build each runner produces via CIBW_BUILD and
-# whether GPUXTB_ENABLE_CUDA is ON (Linux x86_64, CUDA manylinux image) or OFF
+# whether XTBLOOM_ENABLE_CUDA is ON (Linux x86_64, CUDA manylinux image) or OFF
 # everywhere else. Linux x86_64 runs the full Python suite; native aarch64 runs
 # an installed-wheel CPU and Torch inference smoke; other platforms retain the
 # default import smoke test.
@@ -146,25 +155,31 @@ build = ["cp311-*"]
 # for creating the test environments.
 build-frontend = "build[uv]"
 skip = ["*-win32", "*-manylinux_i686", "*-musllinux*"]
-# CUDA-enabled manylinux images provided by PyPA (quay.io/manylinux_cuda); they
-# ship nvcc/cublas/cudart but not cuSOLVER, so a Linux before-build installs
-# the missing libcusolver/libnvJitLink from PyPI into the toolkit lib dir.
+# CUDA-enabled manylinux images provided by PyPA (quay.io/manylinux_cuda). They
+# ship nvcc and the cudart headers the compile needs; the proprietary provider
+# libraries (cuBLAS/cuSOLVER/cudart/driver) are never required to build, because
+# xTBloom self-declares the host C API surface (src/runtime/nvidia_host_api.h)
+# and generates lazy-dlopen trampolines from the curated symbol lists with
+# pinned SONAMEs. The dlopen'd libraries are supplied at run time by the system
+# or the PyPI-distributed nvidia-* packages.
 manylinux-x86_64-image = "quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda12_9@sha256:a35c3237c45cb761c99c0c52d2a26f9dffe89f0104f5daaa45284e9efe4bdf9d"
 manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_9@sha256:0aa4ed0b679c8e73d422ca583dab8c41d0e8e0700dc8334be40cbd61e5a85b14"
-# Default test is an import smoke test (importing gpuxtb needs no runtime); the
+# Default test is an import smoke test (importing xTBloom needs no runtime); the
 # x86_64 Linux CI entry overrides it with the full conformance suite.
-test-command = "python -c 'import gpuxtb; print(gpuxtb.library.get_version())'"
+test-command = "python -c 'import xtbloom; print(xtbloom.library.get_version())'"
 
 [tool.cibuildwheel.linux]
 # Install the PEP 735 test-only Torch group in both repaired-wheel test
 # environments. Project extras alone do not include dependency groups.
 test-groups = ["torch-testing"]
 # before-build runs inside the build container (once per container, idempotent
-# scripts). CUDA deps come first, then a CUDA-capable ccache (>= 4.1, needed
-# for nvcc; the manylinux_2_28 distro ccache 3.7 cannot cache CUDA). The
-# PyTorch stable-ABI extension is compiled from manifest-pinned vendored
-# headers plus a build-time-only libtorch_cpu stub.
-before-build = "bash {package}/python/ci/install-cuda-wheel-deps.sh && bash {package}/python/ci/install-ccache.sh"
+# scripts). The image supplies nvcc's compiler-support files, while provider
+# shared libraries are unnecessary (see the stub-mode comment above), so only
+# the CUDA-capable ccache (>= 4.1, needed for nvcc; the manylinux_2_28 distro
+# ccache 3.7 cannot cache CUDA) is installed. The PyTorch stable-ABI extension
+# is compiled from manifest-pinned vendored headers plus a build-time-only
+# libtorch_cpu stub.
+before-build = "bash {package}/python/ci/install-ccache.sh"
 # CUDA host shared libraries (cublas/cusolver/cudart/...) are intentionally not
 # bundled: the trampolines resolve the system CUDA driver plus the
 # PyPI-distributed nvidia-* packages at runtime. libcuda.so.1 is the NVIDIA
@@ -230,14 +245,14 @@ banned-module-level-imports = ["torch"]
 
 [tool.ruff.lint.per-file-ignores]
 # benchmarks/run.py appends a tools path to sys.path before importing
-# gpuxtb_conformance/gpuxtb_public_api; those imports cannot move to the top.
+# xtbloom_conformance/xtbloom_public_api; those imports cannot move to the top.
 "benchmarks/run.py" = ["E402"]
 
 [tool.ty.src]
 # The ty-pre-commit hook checks the whole project with no positional paths, so
 # the default include determines what CI type checks. Scope it to the Python
-# package: gpuxtb's tools, tests, and benchmarks are not type checked.
-include = ["python/gpuxtb"]
+# package: xTBloom's tools, tests, and benchmarks are not type checked.
+include = ["python/xtbloom"]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
@@ -247,7 +262,7 @@ addopts = "-ra"
 # The CI suite imports the source tree while loading the native library from
 # the installed wheel. Relative paths let GitHub map every measured line back
 # to the corresponding repository file.
-include = ["python/gpuxtb/*"]
+include = ["python/xtbloom/*"]
 relative_files = true
 
 [tool.coverage.report]

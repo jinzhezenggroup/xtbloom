@@ -1,7 +1,7 @@
-#ifndef GPUXTB_RUNTIME_GFN2_CUDA_TOPOLOGY_STAGING_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_RUNTIME_GFN2_CUDA_TOPOLOGY_STAGING_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_RUNTIME_GFN2_CUDA_TOPOLOGY_STAGING_HPP
+#define XTBLOOM_RUNTIME_GFN2_CUDA_TOPOLOGY_STAGING_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 /*
  * Result of one synchronous topology-staging transaction.  A match reuses the
@@ -55,14 +55,14 @@ enum class Gfn2CudaTopologyStagingField : std::uint32_t {
 
 /* CUDA-free diagnostic. cuda_status stores the numeric cudaError_t value. */
 struct Gfn2CudaTopologyStagingDiagnostic {
-  gpuxtb_status_t status = GPUXTB_STATUS_SUCCESS;
+  xtbloom_status_t status = XTBLOOM_STATUS_SUCCESS;
   Gfn2CudaTopologyStagingError error = Gfn2CudaTopologyStagingError::kSuccess;
   Gfn2CudaTopologyStagingField field = Gfn2CudaTopologyStagingField::kNone;
   Gfn2CudaTopologyStageDisposition disposition = Gfn2CudaTopologyStageDisposition::kNone;
   std::int64_t index = -1;
   std::int32_t cuda_status = 0;
 
-  [[nodiscard]] bool success() const noexcept { return status == GPUXTB_STATUS_SUCCESS; }
+  [[nodiscard]] bool success() const noexcept { return status == XTBLOOM_STATUS_SUCCESS; }
 };
 
 /*
@@ -151,7 +151,7 @@ class Gfn2CudaTopologyStaging {
 
   [[nodiscard]] bool valid() const noexcept;
 
-  [[nodiscard]] Gfn2CudaTopologyStagingDiagnostic stage_and_validate(const gpuxtb_batch_t& batch,
+  [[nodiscard]] Gfn2CudaTopologyStagingDiagnostic stage_and_validate(const xtbloom_batch_t& batch,
                                                                      std::string& error);
 
   /*
@@ -186,6 +186,6 @@ class Gfn2CudaTopologyStaging {
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail
 
-#endif  // GPUXTB_RUNTIME_GFN2_CUDA_TOPOLOGY_STAGING_HPP
+#endif  // XTBLOOM_RUNTIME_GFN2_CUDA_TOPOLOGY_STAGING_HPP

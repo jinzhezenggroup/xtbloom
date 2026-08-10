@@ -12,8 +12,8 @@
 
 namespace {
 
-using namespace gpuxtb::detail;
-using namespace gpuxtb::detail::cuda;
+using namespace xtbloom::detail;
+using namespace xtbloom::detail::cuda;
 
 #define CHECK(condition) \
   do {                   \
@@ -642,8 +642,8 @@ struct WarmData {
   std::vector<double> residual_maximum{0.3, 0.02};
   std::vector<std::uint64_t> iterations{2u, 3u};
   std::vector<std::uint64_t> restart_counts{1u, 4u};
-  std::vector<gpuxtb_status_t> mixer_statuses{GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS};
-  std::vector<gpuxtb_status_t> scc_statuses{GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS};
+  std::vector<xtbloom_status_t> mixer_statuses{XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS};
+  std::vector<xtbloom_status_t> scc_statuses{XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS};
   std::vector<std::uint8_t> initialized{1u, 1u};
   std::vector<std::uint8_t> residual_converged{0u, 1u};
   std::vector<double> previous_free{1.0, 2.0};
@@ -804,8 +804,8 @@ int test_max_iteration_preserves_mixer_and_scc_status_roles() {
   CHECK(arena.valid);
   WarmData data;
   data.iterations[0] = arena.plan.state_policy.maximum_iterations;
-  data.mixer_statuses[0] = GPUXTB_STATUS_SUCCESS;
-  data.scc_statuses[0] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+  data.mixer_statuses[0] = XTBLOOM_STATUS_SUCCESS;
+  data.scc_statuses[0] = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
   data.converged[0] = 0u;
 
   Gfn2SccIterationInitializer initializer;
@@ -828,7 +828,7 @@ int test_max_iteration_preserves_mixer_and_scc_status_roles() {
   /* Equal terminal statuses are not a publication-produced checkpoint: the
    * mixer reports its successful transition while the SCC driver reports the
    * maximum-iteration terminal state. */
-  data.mixer_statuses[0] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+  data.mixer_statuses[0] = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
   diagnostic = Gfn2SccIterationInitializer::create(
       arena.plan, arena.requirements, arena.allocation.pointer, arena.requirements.total_bytes,
       arena.state, arena.workspace, arena.reports, data.view(), initializer);

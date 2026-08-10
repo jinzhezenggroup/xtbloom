@@ -1,10 +1,10 @@
 # Packaging, dependencies, and licensing
 
-gpuxtb has three related distribution surfaces:
+xTBloom has three related distribution surfaces:
 
 1. native CMake installs for C and C++ consumers;
 2. source distributions containing build inputs and provenance; and
-3. Python wheels containing the Python package and one native `libgpuxtb`.
+3. Python wheels containing the Python package and one native `libxtbloom`.
 
 Changing one surface does not prove the other two remain correct.
 
@@ -22,22 +22,22 @@ selected README or project URLs change.
 
 ## Native install
 
-The install exports `gpuxtb::gpuxtb`, the public header, version/config files,
+The install exports `xtbloom::xtbloom`, the public header, version/config files,
 licenses, third-party notices, and applicable provenance manifests. Validate
 both shared and static consumers when CMake export or dependency behavior
 changes.
 
-The shared library exports only versioned `gpuxtb_*` C symbols on Linux. CPU
+The shared library exports only versioned `xtbloom_*` C symbols on Linux. CPU
 BLAS/LAPACK and CUDA host providers are opened dynamically; they must not
 become accidental `DT_NEEDED` dependencies merely to simplify discovery.
 
 ## Python wheels
 
-scikit-build-core builds `libgpuxtb` through CMake and installs it under the
+scikit-build-core builds `libxtbloom` through CMake and installs it under the
 Python package. The ctypes binding is independent of the CPython extension ABI,
 so one platform wheel can serve supported Python 3 versions.
 
-Linux CUDA wheels contain compiled gpuxtb device code but do not bundle CUDA
+Linux CUDA wheels contain compiled xTBloom device code but do not bundle CUDA
 host shared libraries or the NVIDIA driver. The optional `cuda12` extra installs
 supported host providers separately from PyPI. CPU-only installations remain
 usable without the proprietary stack.

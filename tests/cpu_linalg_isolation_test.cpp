@@ -1,19 +1,19 @@
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 // Host-isolation tests for the CPU LP64 eigensolver provider (issue #30).
 //
-// This binary deliberately links only gpuxtb_gfn2_cpu (plus dl), never a BLAS or
+// This binary deliberately links only xtbloom_gfn2_cpu (plus dl), never a BLAS or
 // MKL runtime encoded in DT_NEEDED. All provider libraries are loaded lazily at
 // runtime through the factory, so this process is a clean host in which we can
 // prove:
-//   1. gpuxtb never exposes MKL or LAPACK symbols into the global namespace
+//   1. xtbloom never exposes MKL or LAPACK symbols into the global namespace
 //      (RTLD_DEFAULT); the provider lives in a separate glibc link-map.
-//   2. gpuxtb never loads libmkl_rt at all when the private MKL shim is used.
+//   2. xtbloom never loads libmkl_rt at all when the private MKL shim is used.
 //   3. A real LP64 generalized eigensolve through the production backend stays
 //      correct while the host drives its own MKL instance into and out of ILP64,
-//      both before and after gpuxtb backend creation.
+//      both before and after xtbloom backend creation.
 //   4. The host's MKL state is left unchanged: the host's own libmkl_rt handle
-//      continues to behave as ILP64 after gpuxtb has created its backend.
+//      continues to behave as ILP64 after xtbloom has created its backend.
 
 #include "model/gfn2/eigensolver.hpp"
 
@@ -39,14 +39,14 @@
 
 #include <cerrno>
 
-using gpuxtb::detail::gfn2::CpuLinearAlgebraBackend;
-using gpuxtb::detail::gfn2::EigensolverOverlapCache;
-using gpuxtb::detail::gfn2::EigensolverPlan;
-using gpuxtb::detail::gfn2::EigensolverThermodynamicsView;
-using gpuxtb::detail::gfn2::EigensolverWorkspace;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
-using gpuxtb::detail::gfn2::WavefunctionSystemView;
-using gpuxtb::detail::gfn2::WavefunctionView;
+using xtbloom::detail::gfn2::CpuLinearAlgebraBackend;
+using xtbloom::detail::gfn2::EigensolverOverlapCache;
+using xtbloom::detail::gfn2::EigensolverPlan;
+using xtbloom::detail::gfn2::EigensolverThermodynamicsView;
+using xtbloom::detail::gfn2::EigensolverWorkspace;
+using xtbloom::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::gfn2::WavefunctionSystemView;
+using xtbloom::detail::gfn2::WavefunctionView;
 
 namespace {
 
@@ -64,7 +64,7 @@ struct AlignedBuffer {
   std::size_t size = 0u;
 
   explicit AlignedBuffer(std::size_t requested) : size(requested) {
-    data = std::aligned_alloc(gpuxtb::detail::gfn2::kEigensolverWorkspaceAlignment, requested);
+    data = std::aligned_alloc(xtbloom::detail::gfn2::kEigensolverWorkspaceAlignment, requested);
   }
 
   ~AlignedBuffer() { std::free(data); }
@@ -81,7 +81,7 @@ struct Evaluation {
   WavefunctionView wavefunction;
   EigensolverOverlapCache cache;
   EigensolverWorkspace scratch;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<double> chemical_potentials;
   std::vector<double> entropies;
   std::vector<double> band_energies;
@@ -107,16 +107,16 @@ bool initialize_evaluation(const std::vector<std::int64_t>& atom_offsets,
                            const std::vector<std::int32_t>& unpaired,
                            const std::vector<std::int32_t>& spins, Evaluation& evaluation,
                            std::string& error) {
-  gpuxtb::detail::gfn2::BasisPlan basis;
-  if (gpuxtb::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
-                                            static_cast<std::int64_t>(atomic_numbers.size()),
-                                            atom_offsets.data(), atomic_numbers.data(), basis,
-                                            error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_wavefunction_layout(
+  xtbloom::detail::gfn2::BasisPlan basis;
+  if (xtbloom::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
+                                             static_cast<std::int64_t>(atomic_numbers.size()),
+                                             atom_offsets.data(), atomic_numbers.data(), basis,
+                                             error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_wavefunction_layout(
           basis, atomic_numbers.data(), charges.data(), unpaired.data(), spins.data(),
-          evaluation.layout, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::make_eigensolver_plan(evaluation.layout, evaluation.plan, error,
-                                                  1.0e-12) != GPUXTB_STATUS_SUCCESS) {
+          evaluation.layout, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::make_eigensolver_plan(evaluation.layout, evaluation.plan, error,
+                                                   1.0e-12) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -128,16 +128,16 @@ bool initialize_evaluation(const std::vector<std::int64_t>& atom_offsets,
       std::make_unique<AlignedBuffer>(evaluation.plan.workspace_size_bytes());
   if (evaluation.wavefunction_storage->data == nullptr ||
       evaluation.cache_storage->data == nullptr || evaluation.scratch_storage->data == nullptr ||
-      gpuxtb::detail::gfn2::bind_wavefunction_view(
+      xtbloom::detail::gfn2::bind_wavefunction_view(
           evaluation.layout, evaluation.wavefunction_storage->data,
           evaluation.wavefunction_storage->size, evaluation.wavefunction,
-          error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::bind_eigensolver_overlap_cache(
+          error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::bind_eigensolver_overlap_cache(
           evaluation.plan, evaluation.cache_storage->data, evaluation.cache_storage->size,
-          evaluation.cache, error) != GPUXTB_STATUS_SUCCESS ||
-      gpuxtb::detail::gfn2::bind_eigensolver_workspace(
+          evaluation.cache, error) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom::detail::gfn2::bind_eigensolver_workspace(
           evaluation.plan, evaluation.scratch_storage->data, evaluation.scratch_storage->size,
-          evaluation.scratch, error) != GPUXTB_STATUS_SUCCESS) {
+          evaluation.scratch, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   const std::size_t batch = static_cast<std::size_t>(evaluation.plan.batch_size());
@@ -162,18 +162,18 @@ int run_literal_generalized_eigenproblem(const CpuLinearAlgebraBackend& backend,
   CHECK(initialize_evaluation({0, 2}, {1, 1}, {0.0}, {0}, {2}, evaluation, error));
   const std::vector<double> overlap{1.2, 0.15, 0.15, 0.9};
   const std::vector<double> hamiltonian{-0.8, 0.13, 0.13, 0.25, -0.55, -0.08, -0.08, 0.42};
-  CHECK(gpuxtb::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), 73u, backend,
-                                                 evaluation.scratch, evaluation.cache,
-                                                 error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::solve_eigensystems_cpu(
+  CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(evaluation.plan, overlap.data(), 73u, backend,
+                                                  evaluation.scratch, evaluation.cache,
+                                                  error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             evaluation.plan, evaluation.cache, 73u, hamiltonian.data(), 0.0, backend,
             evaluation.scratch, evaluation.wavefunction, evaluation.thermodynamics(),
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
 
-  CHECK(evaluation.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(evaluation.statuses[0] == XTBLOOM_STATUS_SUCCESS);
   WavefunctionSystemView view;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_system_view(
-            evaluation.layout, evaluation.wavefunction, 0, view, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_system_view(
+            evaluation.layout, evaluation.wavefunction, 0, view, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(view.eigenvalues[0], -0.7192210550444913, 3.0e-13));
   CHECK(near(view.eigenvalues[1], 0.28517850185300192, 3.0e-13));
   CHECK(near(view.eigenvalues[2], -0.45845957914509017, 3.0e-13));
@@ -219,8 +219,8 @@ void host_mkl(void** handle_out, SetInterfaceLayer* set_interface_out, DpotrfWor
 int run_correctness_with_backend() {
   std::string error;
   CpuLinearAlgebraBackend backend;
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::make_mkl_rt_lp64_backend(backend, error);
-  CHECK(status == GPUXTB_STATUS_SUCCESS);
+  const xtbloom_status_t status = xtbloom::detail::gfn2::make_mkl_rt_lp64_backend(backend, error);
+  CHECK(status == XTBLOOM_STATUS_SUCCESS);
   CHECK(backend.ready());
   /* This test is registered only when the configure-time MKL shim exists. */
   CHECK(backend.production_mkl_isolated());
@@ -230,7 +230,7 @@ int run_correctness_with_backend() {
 }
 
 /* After the host accepts ILP64, its explicit 64-bit LAPACK entry must remain
- * usable before and after gpuxtb creates its private provider namespace. */
+ * usable before and after xtbloom creates its private provider namespace. */
 int host_ilp64_works(void* host_handle, DpotrfWork64 host_dpotrf64) {
   CHECK(host_handle != nullptr);
   CHECK(host_dpotrf64 != nullptr);
@@ -241,13 +241,13 @@ int host_ilp64_works(void* host_handle, DpotrfWork64 host_dpotrf64) {
   return 0;
 }
 
-/* Host present with an ILP64 interface layer can coexist with gpuxtb: after the
- * host switches its own MKL instance to ILP64, gpuxtb's LP64 calls must remain
- * correct and the host's MKL state must not be mutated by gpuxtb. This
+/* Host present with an ILP64 interface layer can coexist with xtbloom: after the
+ * host switches its own MKL instance to ILP64, xtbloom's LP64 calls must remain
+ * correct and the host's MKL state must not be mutated by xtbloom. This
  * coexistence contract is only claimed for the host-isolated shim provider. */
-int run_coexistence_gpuxtb_after_host_ilp64() {
-#if !defined(GPUXTB_TEST_HAS_MKL_SHIM)
-  return 0; /* No isolated shim was built; skip (see gpuxtb.cpu.linalg_isolation). */
+int run_coexistence_xtbloom_after_host_ilp64() {
+#if !defined(XTBLOOM_TEST_HAS_MKL_SHIM)
+  return 0; /* No isolated shim was built; skip (see xtbloom.cpu.linalg_isolation). */
 #else
   std::string error;
   void* host_handle = nullptr;
@@ -272,16 +272,16 @@ int run_coexistence_gpuxtb_after_host_ilp64() {
 #endif
 }
 
-/* gpuxtb created its backend first (LP64); the host later switches its own MKL
- * to ILP64. gpuxtb's already-verified LP64 provider must keep producing correct
+/* xtbloom created its backend first (LP64); the host later switches its own MKL
+ * to ILP64. xtbloom's already-verified LP64 provider must keep producing correct
  * results, because it is resolved inside its own link-map namespace. */
-int run_coexistence_host_ilp64_after_gpuxtb() {
-#if !defined(GPUXTB_TEST_HAS_MKL_SHIM)
-  return 0; /* No isolated shim was built; skip (see gpuxtb.cpu.linalg_isolation). */
+int run_coexistence_host_ilp64_after_xtbloom() {
+#if !defined(XTBLOOM_TEST_HAS_MKL_SHIM)
+  return 0; /* No isolated shim was built; skip (see xtbloom.cpu.linalg_isolation). */
 #else
   std::string error;
   CpuLinearAlgebraBackend backend;
-  if (gpuxtb::detail::gfn2::make_mkl_rt_lp64_backend(backend, error) == GPUXTB_STATUS_SUCCESS &&
+  if (xtbloom::detail::gfn2::make_mkl_rt_lp64_backend(backend, error) == XTBLOOM_STATUS_SUCCESS &&
       backend.ready() && !backend.production_mkl()) {
     return 0; /* OpenBLAS: no MKL interface-layer state to isolate. */
   }
@@ -297,7 +297,7 @@ int run_coexistence_host_ilp64_after_gpuxtb() {
   host_mkl(&host_handle, &host_set_interface, &host_dpotrf64);
   CHECK(host_handle != nullptr);
   CHECK(dlsym(RTLD_DEFAULT, "MKL_Set_Interface_Layer") != nullptr);
-  const int ilp64_acceptance = host_set_interface(1); /* Host switches to ILP64 after gpuxtb. */
+  const int ilp64_acceptance = host_set_interface(1); /* Host switches to ILP64 after xtbloom. */
   CHECK(ilp64_acceptance == 1);
   CHECK(host_ilp64_works(host_handle, host_dpotrf64) == 0);
 
@@ -310,9 +310,9 @@ int run_coexistence_host_ilp64_after_gpuxtb() {
 #endif
 }
 
-/* After gpuxtb creates its backend, MKL/LAPACK symbols must not appear in the
+/* After xtbloom creates its backend, MKL/LAPACK symbols must not appear in the
  * process-global namespace: the provider is loaded into a new link-map
- * namespace, and the gpuxtb path never loads libmkl_rt at all. */
+ * namespace, and the xtbloom path never loads libmkl_rt at all. */
 int run_no_global_scope_exposure() {
 #if !defined(_WIN32)
   void* mkl_global = dlsym(RTLD_DEFAULT, "MKL_Set_Interface_Layer");
@@ -346,8 +346,8 @@ int wait_and_check(const pid_t child) {
 int run_expect_missing_shim() {
   std::string error;
   CpuLinearAlgebraBackend backend;
-  const gpuxtb_status_t status = gpuxtb::detail::gfn2::make_mkl_rt_lp64_backend(backend, error);
-  CHECK(status == GPUXTB_STATUS_BACKEND_UNAVAILABLE);
+  const xtbloom_status_t status = xtbloom::detail::gfn2::make_mkl_rt_lp64_backend(backend, error);
+  CHECK(status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE);
   CHECK(!backend.ready());
   CHECK(error.find("host-isolated MKL provider shim") != std::string::npos);
   return 0;
@@ -357,7 +357,7 @@ int run_expect_missing_shim() {
  * shim. This proves the factory neither follows a baked build-tree path nor
  * falls back to a process-global libmkl_rt when the private artifact is gone. */
 int run_missing_shim_failure() {
-  char temporary_template[] = "/tmp/gpuxtb-linalg-isolation-XXXXXX";
+  char temporary_template[] = "/tmp/xtbloom-linalg-isolation-XXXXXX";
   char* temporary_directory = mkdtemp(temporary_template);
   CHECK(temporary_directory != nullptr);
 
@@ -397,11 +397,11 @@ int main(int argc, char** argv) {
   if (std::strcmp(mode, "--no-global-scope-exposure") == 0) {
     return run_no_global_scope_exposure();
   }
-  if (std::strcmp(mode, "--coexistence-gpuxtb-after-host-ilp64") == 0) {
-    return run_coexistence_gpuxtb_after_host_ilp64();
+  if (std::strcmp(mode, "--coexistence-xtbloom-after-host-ilp64") == 0) {
+    return run_coexistence_xtbloom_after_host_ilp64();
   }
-  if (std::strcmp(mode, "--coexistence-host-ilp64-after-gpuxtb") == 0) {
-    return run_coexistence_host_ilp64_after_gpuxtb();
+  if (std::strcmp(mode, "--coexistence-host-ilp64-after-xtbloom") == 0) {
+    return run_coexistence_host_ilp64_after_xtbloom();
   }
   if (std::strcmp(mode, "--correctness") == 0) {
     return run_correctness_with_backend();
@@ -435,20 +435,20 @@ int main(int argc, char** argv) {
     return result;
   }
 
-  const pid_t child_gpuxtb_after = fork();
-  if (child_gpuxtb_after == 0) {
-    execl(executable_path, executable_path, "--coexistence-gpuxtb-after-host-ilp64",
+  const pid_t child_xtbloom_after = fork();
+  if (child_xtbloom_after == 0) {
+    execl(executable_path, executable_path, "--coexistence-xtbloom-after-host-ilp64",
           static_cast<char*>(nullptr));
     _exit(121);
   }
-  result = wait_and_check(child_gpuxtb_after);
+  result = wait_and_check(child_xtbloom_after);
   if (result != 0) {
     return result;
   }
 
   const pid_t child_host_after = fork();
   if (child_host_after == 0) {
-    execl(executable_path, executable_path, "--coexistence-host-ilp64-after-gpuxtb",
+    execl(executable_path, executable_path, "--coexistence-host-ilp64-after-xtbloom",
           static_cast<char*>(nullptr));
     _exit(121);
   }

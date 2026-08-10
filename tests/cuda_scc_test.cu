@@ -20,13 +20,13 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2SccDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2SccDeviceConstMultipoles;
-using gpuxtb::detail::cuda::Gfn2SccDeviceError;
-using gpuxtb::detail::cuda::Gfn2SccDeviceMultipoles;
-using gpuxtb::detail::cuda::Gfn2SccDevicePolicy;
-using gpuxtb::detail::cuda::Gfn2SccDeviceState;
-using gpuxtb::detail::cuda::Gfn2SccDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2SccDeviceBatch;
+using xtbloom::detail::cuda::Gfn2SccDeviceConstMultipoles;
+using xtbloom::detail::cuda::Gfn2SccDeviceError;
+using xtbloom::detail::cuda::Gfn2SccDeviceMultipoles;
+using xtbloom::detail::cuda::Gfn2SccDevicePolicy;
+using xtbloom::detail::cuda::Gfn2SccDeviceState;
+using xtbloom::detail::cuda::Gfn2SccDeviceWorkspace;
 
 constexpr std::uint64_t kPlanToken = 0x9ac53e7b41d26f08ULL;
 
@@ -103,7 +103,7 @@ struct HostCase {
   std::vector<double> free_energy_changes;
   std::vector<double> residual_rms;
   std::vector<std::uint64_t> iterations;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint8_t> converged;
 
   std::size_t batch_size() const { return shell_offsets.size() - 1u; }
@@ -174,7 +174,7 @@ HostCase make_case(std::size_t batch_size) {
   data.free_energy_changes.assign(batch_size, 93.0);
   data.residual_rms.assign(batch_size, 94.0);
   data.iterations.resize(batch_size);
-  data.statuses.assign(batch_size, GPUXTB_STATUS_SUCCESS);
+  data.statuses.assign(batch_size, XTBLOOM_STATUS_SUCCESS);
   data.converged.assign(batch_size, 0u);
   for (std::size_t system = 0u; system < batch_size; ++system) {
     data.iterations[system] = static_cast<std::uint64_t>(system % 2u);
@@ -207,7 +207,7 @@ double residual_square(const HostCase& data, std::size_t system) {
 
 void simulate_successful_step(HostCase& data, const Gfn2SccDevicePolicy& policy) {
   for (std::size_t system = 0u; system < data.batch_size(); ++system) {
-    if (data.statuses[system] != GPUXTB_STATUS_SUCCESS || data.converged[system] == 1u) {
+    if (data.statuses[system] != XTBLOOM_STATUS_SUCCESS || data.converged[system] == 1u) {
       continue;
     }
     if (data.iterations[system] >= policy.maximum_iterations) {
@@ -245,8 +245,8 @@ void simulate_successful_step(HostCase& data, const Gfn2SccDevicePolicy& policy)
     ++data.iterations[system];
     data.converged[system] = converged ? 1u : 0u;
     data.statuses[system] = !converged && data.iterations[system] >= policy.maximum_iterations
-                                ? GPUXTB_STATUS_SCC_NOT_CONVERGED
-                                : GPUXTB_STATUS_SUCCESS;
+                                ? XTBLOOM_STATUS_SCC_NOT_CONVERGED
+                                : XTBLOOM_STATUS_SUCCESS;
   }
 }
 
@@ -257,7 +257,7 @@ void simulate_numeric_failure(HostCase& data, std::size_t system) {
   data.free_energy_changes[system] = nan;
   data.residual_rms[system] = nan;
   ++data.iterations[system];
-  data.statuses[system] = GPUXTB_STATUS_INTERNAL_ERROR;
+  data.statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
 }
 
 struct DeviceFixture {
@@ -281,7 +281,7 @@ struct DeviceFixture {
   DeviceBuffer<double> free_energy_changes;
   DeviceBuffer<double> residual_rms;
   DeviceBuffer<std::uint64_t> iterations;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<std::uint8_t> converged;
   DeviceBuffer<std::uint32_t> sequence_active;
   DeviceBuffer<std::uint32_t> error;
@@ -462,8 +462,8 @@ int run_and_compare(std::size_t batch_size, cudaStream_t stream) {
   simulate_successful_step(expected, policy);
   DeviceFixture fixture;
   CUDA_CHECK(fixture.initialize(input, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       fixture.batch(), policy, fixture.mixed(), fixture.raw(), fixture.complete_free_energies.get(),
       fixture.published(), fixture.state(), fixture.workspace(), fixture.error.get(), stream));
   HostCase actual = input;
@@ -509,20 +509,20 @@ int test_strict_boundaries_first_iteration_and_maximum() {
   input.previous_free_energies = {17.0, 18.0};
   input.free_energy_changes = {19.0, 20.0};
   input.residual_rms = {21.0, 22.0};
-  input.statuses = {GPUXTB_STATUS_SUCCESS, GPUXTB_STATUS_SUCCESS};
+  input.statuses = {XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS};
   input.converged = {0u, 0u};
   const Gfn2SccDevicePolicy policy{1u, residual_boundary, 0.125, kPlanToken};
   HostCase expected = input;
   simulate_successful_step(expected, policy);
   CHECK(expected.converged[0] == 0u && expected.converged[1] == 0u);
   CHECK(expected.previous_free_energies[0] == 0.0 && expected.previous_free_energies[1] == 0.0);
-  CHECK(expected.statuses[0] == GPUXTB_STATUS_SCC_NOT_CONVERGED &&
-        expected.statuses[1] == GPUXTB_STATUS_SCC_NOT_CONVERGED);
+  CHECK(expected.statuses[0] == XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
+        expected.statuses[1] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
 
   DeviceFixture fixture;
   CUDA_CHECK(fixture.initialize(input));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       fixture.batch(), policy, fixture.mixed(), fixture.raw(), fixture.complete_free_energies.get(),
       fixture.published(), fixture.state(), fixture.workspace(), fixture.error.get()));
   HostCase actual = input;
@@ -543,7 +543,7 @@ int test_failure_isolation_terminal_skip_and_sticky_error() {
   input.converged[2] = 1u;
   input.raw_shell[static_cast<std::size_t>(input.shell_offsets[2])] =
       std::numeric_limits<double>::quiet_NaN();
-  input.statuses[3] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+  input.statuses[3] = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
   input.raw_shell[static_cast<std::size_t>(input.shell_offsets[3])] =
       std::numeric_limits<double>::quiet_NaN();
 
@@ -553,8 +553,8 @@ int test_failure_isolation_terminal_skip_and_sticky_error() {
 
   DeviceFixture fixture;
   CUDA_CHECK(fixture.initialize(input));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       fixture.batch(), policy, fixture.mixed(), fixture.raw(), fixture.complete_free_energies.get(),
       fixture.published(), fixture.state(), fixture.workspace(), fixture.error.get()));
   HostCase actual = input;
@@ -569,7 +569,7 @@ int test_failure_isolation_terminal_skip_and_sticky_error() {
   std::vector<double> restored_raw_shell = input.raw_shell;
   restored_raw_shell[failed_shell] = saved_failed_raw;
   CUDA_CHECK(fixture.raw_shell.copy_from(restored_raw_shell.data(), restored_raw_shell.size()));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       fixture.batch(), policy, fixture.mixed(), fixture.raw(), fixture.complete_free_energies.get(),
       fixture.published(), fixture.state(), fixture.workspace(), fixture.error.get()));
   HostCase sticky_actual = actual;
@@ -645,8 +645,8 @@ int test_each_numeric_failure_matches_cpu_attempt_accounting() {
 
     DeviceFixture fixture;
     CUDA_CHECK(fixture.initialize(input));
-    CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
-    CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
+    CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
         fixture.batch(), policy, fixture.mixed(), fixture.raw(),
         fixture.complete_free_energies.get(), fixture.published(), fixture.state(),
         fixture.workspace(), fixture.error.get()));
@@ -664,19 +664,19 @@ int test_maximum_iteration_entry_matches_cpu_skip() {
   const Gfn2SccDevicePolicy policy{4u, 1.0e-6, 1.0e-7, kPlanToken};
   HostCase input = make_case(2u);
   input.iterations[0] = policy.maximum_iterations;
-  input.statuses[0] = GPUXTB_STATUS_SUCCESS;
+  input.statuses[0] = XTBLOOM_STATUS_SUCCESS;
   input.converged[0] = 0u;
   input.raw_shell[static_cast<std::size_t>(input.shell_offsets[0])] =
       std::numeric_limits<double>::quiet_NaN();
   HostCase expected = input;
   simulate_successful_step(expected, policy);
-  CHECK(expected.statuses[0] == GPUXTB_STATUS_SUCCESS);
+  CHECK(expected.statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(expected.iterations[0] == policy.maximum_iterations);
 
   DeviceFixture fixture;
   CUDA_CHECK(fixture.initialize(input));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       fixture.batch(), policy, fixture.mixed(), fixture.raw(), fixture.complete_free_energies.get(),
       fixture.published(), fixture.state(), fixture.workspace(), fixture.error.get()));
   HostCase actual = input;
@@ -693,13 +693,13 @@ int test_unknown_status_failure_isolation() {
   HostCase input = make_case(2u);
   input.statuses[0] = 12345;
   HostCase expected = input;
-  expected.statuses[0] = GPUXTB_STATUS_INTERNAL_ERROR;
+  expected.statuses[0] = XTBLOOM_STATUS_INTERNAL_ERROR;
   simulate_successful_step(expected, policy);
 
   DeviceFixture fixture;
   CUDA_CHECK(fixture.initialize(input));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       fixture.batch(), policy, fixture.mixed(), fixture.raw(), fixture.complete_free_energies.get(),
       fixture.published(), fixture.state(), fixture.workspace(), fixture.error.get()));
   HostCase actual = input;
@@ -719,8 +719,8 @@ int test_invalid_device_offsets_are_whole_call_atomic() {
   std::vector<std::int64_t> bad_offsets = input.shell_offsets;
   bad_offsets[1] = static_cast<std::int64_t>(input.total_shells()) + 1;
   CUDA_CHECK(fixture.shell_offsets.copy_from(bad_offsets.data(), bad_offsets.size()));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       fixture.batch(), policy, fixture.mixed(), fixture.raw(), fixture.complete_free_energies.get(),
       fixture.published(), fixture.state(), fixture.workspace(), fixture.error.get()));
   HostCase actual = input;
@@ -757,15 +757,15 @@ int test_host_validation_provenance_and_aliases() {
     CHECK(attributes.type == cudaMemoryTypeDevice);
   }
 
-  CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
             fixture.batch(kPlanToken + 1u), policy, fixture.mixed(), fixture.raw(),
             fixture.complete_free_energies.get(), fixture.published(), fixture.state(),
             fixture.workspace(), fixture.error.get()) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
             fixture.batch(), policy, fixture.mixed(kPlanToken + 1u), fixture.raw(),
             fixture.complete_free_energies.get(), fixture.published(), fixture.state(),
             fixture.workspace(), fixture.error.get()) == cudaErrorInvalidValue);
-  CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
             fixture.batch(), policy, fixture.mixed(), fixture.raw(),
             fixture.complete_free_energies.get(), fixture.published(),
             fixture.state(kPlanToken + 1u), fixture.workspace(),
@@ -773,14 +773,14 @@ int test_host_validation_provenance_and_aliases() {
 
   Gfn2SccDeviceMultipoles partial_alias = fixture.published();
   partial_alias.shell_charges = fixture.mixed_shell.get() + 1;
-  CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
             fixture.batch(), policy, fixture.mixed(), fixture.raw(),
             fixture.complete_free_energies.get(), partial_alias, fixture.state(),
             fixture.workspace(), fixture.error.get()) == cudaErrorInvalidValue);
 
   /* Exact corresponding next-mixed aliases are the supported in-place form. */
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get()));
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       fixture.batch(), policy, fixture.mixed(), fixture.raw(), fixture.complete_free_energies.get(),
       fixture.published(true), fixture.state(), fixture.workspace(), fixture.error.get()));
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -804,13 +804,13 @@ int test_independent_streams() {
   CUDA_CHECK(first.initialize(first_input, first_stream));
   CUDA_CHECK(second.initialize(second_input, second_stream));
   CUDA_CHECK(
-      gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(first.error.get(), first_stream));
+      xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(first.error.get(), first_stream));
   CUDA_CHECK(
-      gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(second.error.get(), second_stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+      xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(second.error.get(), second_stream));
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       first.batch(), policy, first.mixed(), first.raw(), first.complete_free_energies.get(),
       first.published(), first.state(), first.workspace(), first.error.get(), first_stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       second.batch(), policy, second.mixed(), second.raw(), second.complete_free_energies.get(),
       second.published(), second.state(), second.workspace(), second.error.get(), second_stream));
   HostCase first_actual = first_input;
@@ -849,8 +849,8 @@ int test_cuda_graph_double_replay() {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t graph_exec = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::update_gfn2_scc_state_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_scc_device_error_cuda(fixture.error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_scc_state_cuda(
       fixture.batch(), policy, fixture.mixed(), fixture.raw(), fixture.complete_free_energies.get(),
       fixture.published(true), fixture.state(), fixture.workspace(), fixture.error.get(), stream));
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));

@@ -34,14 +34,14 @@ void* operator new(std::size_t size) {
 void* operator new[](std::size_t size) { return ::operator new(size); }
 
 #if defined(__GNUC__) && !defined(__clang__)
-#define GPUXTB_TEST_NOINLINE __attribute__((noinline))
+#define XTBLOOM_TEST_NOINLINE __attribute__((noinline))
 #else
-#define GPUXTB_TEST_NOINLINE
+#define XTBLOOM_TEST_NOINLINE
 #endif
 
 /* GCC 11 diagnoses the intentional malloc/free implementation as a mismatched
  * pair only after inlining this test-only allocation counter shim. */
-GPUXTB_TEST_NOINLINE void operator delete(void* pointer) noexcept { std::free(pointer); }
+XTBLOOM_TEST_NOINLINE void operator delete(void* pointer) noexcept { std::free(pointer); }
 
 void operator delete[](void* pointer) noexcept { ::operator delete(pointer); }
 
@@ -49,7 +49,7 @@ void operator delete(void* pointer, std::size_t) noexcept { ::operator delete(po
 
 void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[](pointer); }
 
-#undef GPUXTB_TEST_NOINLINE
+#undef XTBLOOM_TEST_NOINLINE
 
 #define CHECK(condition) \
   do {                   \
@@ -60,14 +60,14 @@ void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[
 
 namespace {
 
-using gpuxtb::detail::gfn2::BasisPlan;
-using gpuxtb::detail::gfn2::ConstWavefunctionSystemView;
-using gpuxtb::detail::gfn2::ConstWavefunctionView;
-using gpuxtb::detail::gfn2::WavefunctionFieldLayout;
-using gpuxtb::detail::gfn2::WavefunctionLayout;
-using gpuxtb::detail::gfn2::WavefunctionSystemView;
-using gpuxtb::detail::gfn2::WavefunctionView;
-using gpuxtb::detail::gfn2::WavefunctionWarmStartIdentity;
+using xtbloom::detail::gfn2::BasisPlan;
+using xtbloom::detail::gfn2::ConstWavefunctionSystemView;
+using xtbloom::detail::gfn2::ConstWavefunctionView;
+using xtbloom::detail::gfn2::WavefunctionFieldLayout;
+using xtbloom::detail::gfn2::WavefunctionLayout;
+using xtbloom::detail::gfn2::WavefunctionSystemView;
+using xtbloom::detail::gfn2::WavefunctionView;
+using xtbloom::detail::gfn2::WavefunctionWarmStartIdentity;
 
 bool near(double actual, double expected, double tolerance = 1.0e-14) {
   return std::abs(actual - expected) <= tolerance;
@@ -76,18 +76,19 @@ bool near(double actual, double expected, double tolerance = 1.0e-14) {
 bool make_basis(const std::vector<std::int64_t>& atom_offsets,
                 const std::vector<std::int32_t>& atomic_numbers, BasisPlan& basis,
                 std::string& error) {
-  return gpuxtb::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
-                                               static_cast<std::int64_t>(atomic_numbers.size()),
-                                               atom_offsets.data(), atomic_numbers.data(), basis,
-                                               error) == GPUXTB_STATUS_SUCCESS;
+  return xtbloom::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
+                                                static_cast<std::int64_t>(atomic_numbers.size()),
+                                                atom_offsets.data(), atomic_numbers.data(), basis,
+                                                error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 double reference_electrons(std::int32_t atomic_number) {
   const auto* element =
-      gpuxtb::parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_number));
+      xtbloom::parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_number));
   double result = 0.0;
   for (std::size_t local = 0; local < element->shell_count; ++local) {
-    result += gpuxtb::parameters::gfn2::kShells[element->shell_offset + local].reference_occupation;
+    result +=
+        xtbloom::parameters::gfn2::kShells[element->shell_offset + local].reference_occupation;
   }
   return result;
 }
@@ -143,17 +144,17 @@ struct AlignedWorkspace {
   void* data = nullptr;
 
   explicit AlignedWorkspace(std::size_t size)
-      : storage(size + gpuxtb::detail::gfn2::kWavefunctionWorkspaceAlignment - 1u) {
+      : storage(size + xtbloom::detail::gfn2::kWavefunctionWorkspaceAlignment - 1u) {
     void* candidate = storage.data();
     std::size_t space = storage.size();
     data =
-        std::align(gpuxtb::detail::gfn2::kWavefunctionWorkspaceAlignment, size, candidate, space);
+        std::align(xtbloom::detail::gfn2::kWavefunctionWorkspaceAlignment, size, candidate, space);
   }
 };
 
 int test_all_elements_reference_occupations() {
   constexpr std::int64_t element_count =
-      static_cast<std::int64_t>(gpuxtb::parameters::gfn2::kElementCount);
+      static_cast<std::int64_t>(xtbloom::parameters::gfn2::kElementCount);
   std::vector<std::int64_t> atom_offsets(static_cast<std::size_t>(element_count) + 1u);
   std::vector<std::int32_t> atomic_numbers(static_cast<std::size_t>(element_count));
   std::vector<double> charges(static_cast<std::size_t>(element_count), 0.0);
@@ -171,16 +172,16 @@ int test_all_elements_reference_occupations() {
   std::string error;
   CHECK(make_basis(atom_offsets, atomic_numbers, basis, error));
   WavefunctionLayout layout;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(basis, atomic_numbers.data(), charges.data(),
-                                                       unpaired.data(), spin_channels.data(),
-                                                       layout, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
+            basis, atomic_numbers.data(), charges.data(), unpaired.data(), spin_channels.data(),
+            layout, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(error.empty());
   CHECK(layout.batch_size == element_count);
   CHECK(layout.reference_atom_occupations.size() == atomic_numbers.size());
 
   for (std::size_t atom = 0; atom < atomic_numbers.size(); ++atom) {
     const auto* element =
-        gpuxtb::parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_numbers[atom]));
+        xtbloom::parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_numbers[atom]));
     CHECK(near(layout.reference_atom_occupations[atom], reference_electrons(atomic_numbers[atom]),
                0.0));
     const std::int64_t shell_begin = basis.atom_shell_offsets[atom];
@@ -189,7 +190,7 @@ int test_all_elements_reference_occupations() {
     for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
       const std::size_t local = static_cast<std::size_t>(shell - shell_begin);
       CHECK(layout.reference_shell_occupations[static_cast<std::size_t>(shell)] ==
-            gpuxtb::parameters::gfn2::kShells[element->shell_offset + local].reference_occupation);
+            xtbloom::parameters::gfn2::kShells[element->shell_offset + local].reference_occupation);
     }
     CHECK(layout.electron_counts[atom] == layout.reference_atom_occupations[atom]);
     CHECK(layout.spin_channels[atom] == 1);
@@ -208,18 +209,18 @@ int test_ions_radical_fractional_and_layout() {
   std::string error;
   CHECK(make_basis(atom_offsets, atomic_numbers, basis, error));
   WavefunctionLayout layout;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(basis, atomic_numbers.data(), charges.data(),
-                                                       unpaired.data(), spin_channels.data(),
-                                                       layout, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
+            basis, atomic_numbers.data(), charges.data(), unpaired.data(), spin_channels.data(),
+            layout, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(layout.electron_counts == std::vector<double>({0.0, 2.0, 7.0, 5.5, 7.0}));
   CHECK(layout.alpha_electron_counts == std::vector<double>({0.0, 1.0, 4.0, 2.75, 4.0}));
   CHECK(layout.beta_electron_counts == std::vector<double>({0.0, 1.0, 3.0, 2.75, 3.0}));
   CHECK(layout.spin_channels == spin_channels);
-  CHECK(layout.workspace_size_bytes % gpuxtb::detail::gfn2::kWavefunctionWorkspaceAlignment == 0u);
+  CHECK(layout.workspace_size_bytes % xtbloom::detail::gfn2::kWavefunctionWorkspaceAlignment == 0u);
 
   std::size_t previous_end = 0u;
   for (const WavefunctionFieldLayout* field : fields(layout)) {
-    CHECK(field->offset_bytes % gpuxtb::detail::gfn2::kWavefunctionWorkspaceAlignment == 0u);
+    CHECK(field->offset_bytes % xtbloom::detail::gfn2::kWavefunctionWorkspaceAlignment == 0u);
     CHECK(field->offset_bytes >= previous_end);
     CHECK(field->size_bytes == static_cast<std::size_t>(field->element_count) * sizeof(double));
     CHECK(field->system_offsets.size() == atom_offsets.size());
@@ -253,15 +254,15 @@ int test_ions_radical_fractional_and_layout() {
           nat * nspin * 3);
     CHECK(layout.quadrupole.system_offsets[system + 1u] -
               layout.quadrupole.system_offsets[system] ==
-          nat * nspin * gpuxtb::detail::gfn2::kWavefunctionQuadrupoleComponents);
+          nat * nspin * xtbloom::detail::gfn2::kWavefunctionQuadrupoleComponents);
   }
 
   AlignedWorkspace workspace(layout.workspace_size_bytes);
   CHECK(workspace.data != nullptr);
   WavefunctionView view;
-  CHECK(gpuxtb::detail::gfn2::bind_wavefunction_view(layout, workspace.data,
-                                                     layout.workspace_size_bytes, view,
-                                                     error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_wavefunction_view(layout, workspace.data,
+                                                      layout.workspace_size_bytes, view,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(reinterpret_cast<std::byte*>(view.coefficients) ==
         static_cast<std::byte*>(workspace.data) + layout.coefficients.offset_bytes);
   CHECK(view.workspace_base == workspace.data);
@@ -271,8 +272,8 @@ int test_ions_radical_fractional_and_layout() {
 
   for (std::int64_t system = 0; system < layout.batch_size; ++system) {
     WavefunctionSystemView system_view;
-    CHECK(gpuxtb::detail::gfn2::make_wavefunction_system_view(layout, view, system, system_view,
-                                                              error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::make_wavefunction_system_view(layout, view, system, system_view,
+                                                               error) == XTBLOOM_STATUS_SUCCESS);
     const std::size_t index = static_cast<std::size_t>(system);
     CHECK(system_view.coefficients ==
           view.coefficients + layout.coefficients.system_offsets[index]);
@@ -285,29 +286,29 @@ int test_ions_radical_fractional_and_layout() {
   }
 
   ConstWavefunctionView const_view;
-  CHECK(gpuxtb::detail::gfn2::bind_wavefunction_view(
+  CHECK(xtbloom::detail::gfn2::bind_wavefunction_view(
             layout, static_cast<const void*>(workspace.data), layout.workspace_size_bytes,
-            const_view, error) == GPUXTB_STATUS_SUCCESS);
+            const_view, error) == XTBLOOM_STATUS_SUCCESS);
   ConstWavefunctionSystemView const_system;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_system_view(layout, const_view, 2, const_system,
-                                                            error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_system_view(layout, const_view, 2, const_system,
+                                                             error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(const_system.spin_channels == 1);
   CHECK(const_system.alpha_electron_count == 4.0);
   CHECK(const_system.beta_electron_count == 3.0);
 
   WavefunctionView sentinel;
   sentinel.coefficients = reinterpret_cast<double*>(1);
-  CHECK(gpuxtb::detail::gfn2::bind_wavefunction_view(
+  CHECK(xtbloom::detail::gfn2::bind_wavefunction_view(
             layout, static_cast<std::byte*>(workspace.data) + 1, layout.workspace_size_bytes - 1u,
-            sentinel, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(sentinel.coefficients == reinterpret_cast<double*>(1));
-  CHECK(gpuxtb::detail::gfn2::bind_wavefunction_view(layout, workspace.data,
-                                                     layout.workspace_size_bytes - 1u, sentinel,
-                                                     error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::bind_wavefunction_view(layout, workspace.data,
+                                                      layout.workspace_size_bytes - 1u, sentinel,
+                                                      error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   WavefunctionSystemView invalid_system_view;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_system_view(layout, view, layout.batch_size,
-                                                            invalid_system_view, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_system_view(layout, view, layout.batch_size,
+                                                             invalid_system_view, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   return 0;
 }
 
@@ -322,60 +323,60 @@ int test_invalid_electronic_states_and_overflow() {
   const std::array<double, 1> neutral{0.0};
   const std::array<std::int32_t, 1> singlet{0};
   const std::array<std::int32_t, 1> restricted{1};
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(oh_basis, oh_atoms.data(), neutral.data(),
-                                                       singlet.data(), restricted.data(), sentinel,
-                                                       error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(oh_basis, oh_atoms.data(), neutral.data(),
+                                                        singlet.data(), restricted.data(), sentinel,
+                                                        error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(sentinel.batch_size == 17);
 
   const std::array<double, 1> fractional_charge{0.5};
   const std::array<std::int32_t, 1> wrong_fractional_parity{0};
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
             oh_basis, oh_atoms.data(), fractional_charge.data(), wrong_fractional_parity.data(),
-            restricted.data(), sentinel, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            restricted.data(), sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   const std::vector<std::int64_t> h_offsets{0, 1};
   const std::vector<std::int32_t> h_atom{1};
   BasisPlan h_basis;
   CHECK(make_basis(h_offsets, h_atom, h_basis, error));
   const std::array<double, 1> negative_electrons{2.0};
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
             h_basis, h_atom.data(), negative_electrons.data(), singlet.data(), restricted.data(),
-            sentinel, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   const std::array<double, 1> too_many_electrons{-2.0};
   const std::array<std::int32_t, 1> doublet{1};
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
             h_basis, h_atom.data(), too_many_electrons.data(), doublet.data(), restricted.data(),
-            sentinel, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   const std::array<double, 1> nonfinite_charge{std::numeric_limits<double>::infinity()};
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
             h_basis, h_atom.data(), nonfinite_charge.data(), singlet.data(), restricted.data(),
-            sentinel, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   const std::array<std::int32_t, 1> negative_unpaired{-1};
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
             h_basis, h_atom.data(), neutral.data(), negative_unpaired.data(), restricted.data(),
-            sentinel, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(h_basis, nullptr, neutral.data(),
-                                                       singlet.data(), restricted.data(), sentinel,
-                                                       error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(h_basis, nullptr, neutral.data(),
+                                                        singlet.data(), restricted.data(), sentinel,
+                                                        error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   const std::array<std::int32_t, 1> unsupported{87};
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(h_basis, unsupported.data(), neutral.data(),
-                                                       singlet.data(), restricted.data(), sentinel,
-                                                       error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(h_basis, unsupported.data(), neutral.data(),
+                                                        singlet.data(), restricted.data(), sentinel,
+                                                        error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   const std::array<std::int32_t, 1> invalid_spin{3};
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
             h_basis, h_atom.data(), neutral.data(), doublet.data(), invalid_spin.data(), sentinel,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(h_basis, h_atom.data(), neutral.data(),
-                                                       doublet.data(), nullptr, sentinel,
-                                                       error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(h_basis, h_atom.data(), neutral.data(),
+                                                        doublet.data(), nullptr, sentinel,
+                                                        error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   BasisPlan overflow = h_basis;
   overflow.total_orbitals = std::numeric_limits<std::int64_t>::max();
   overflow.batch_orbital_offsets.back() = overflow.total_orbitals;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(overflow, h_atom.data(), neutral.data(),
-                                                       singlet.data(), restricted.data(), sentinel,
-                                                       error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(overflow, h_atom.data(), neutral.data(),
+                                                        singlet.data(), restricted.data(), sentinel,
+                                                        error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(sentinel.batch_size == 17);
   return 0;
 }
@@ -390,15 +391,15 @@ int test_tampered_layout_rejected_atomically() {
   std::string error;
   CHECK(make_basis(atom_offsets, atomic_numbers, basis, error));
   WavefunctionLayout layout;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(basis, atomic_numbers.data(), charges.data(),
-                                                       unpaired.data(), spin_channels.data(),
-                                                       layout, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(
+            basis, atomic_numbers.data(), charges.data(), unpaired.data(), spin_channels.data(),
+            layout, error) == XTBLOOM_STATUS_SUCCESS);
 
   AlignedWorkspace workspace(layout.workspace_size_bytes);
   WavefunctionView valid_view;
-  CHECK(gpuxtb::detail::gfn2::bind_wavefunction_view(layout, workspace.data,
-                                                     layout.workspace_size_bytes, valid_view,
-                                                     error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_wavefunction_view(layout, workspace.data,
+                                                      layout.workspace_size_bytes, valid_view,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
 
   WavefunctionView view_sentinel;
   view_sentinel.workspace_base = reinterpret_cast<void*>(64);
@@ -432,28 +433,28 @@ int test_tampered_layout_rejected_atomically() {
   system_sentinel.energy_weighted_density = reinterpret_cast<double*>(19);
 
   WavefunctionWarmStartIdentity identity_sentinel;
-  identity_sentinel.model = GPUXTB_MODEL_GFN1_XTB;
+  identity_sentinel.model = XTBLOOM_MODEL_GFN1_XTB;
   identity_sentinel.geometry_cache_generation = 91u;
   identity_sentinel.batch_size = 92;
   identity_sentinel.atom_offsets = {93, 94};
 
   const auto rejects = [&](const WavefunctionLayout& bad) {
     WavefunctionView output_view = view_sentinel;
-    if (gpuxtb::detail::gfn2::bind_wavefunction_view(bad, workspace.data,
-                                                     layout.workspace_size_bytes, output_view,
-                                                     error) != GPUXTB_STATUS_INVALID_ARGUMENT ||
+    if (xtbloom::detail::gfn2::bind_wavefunction_view(bad, workspace.data,
+                                                      layout.workspace_size_bytes, output_view,
+                                                      error) != XTBLOOM_STATUS_INVALID_ARGUMENT ||
         !same_view(output_view, view_sentinel)) {
       return false;
     }
     WavefunctionSystemView output_system = system_sentinel;
-    if (gpuxtb::detail::gfn2::make_wavefunction_system_view(
-            bad, valid_view, 0, output_system, error) != GPUXTB_STATUS_INVALID_ARGUMENT ||
+    if (xtbloom::detail::gfn2::make_wavefunction_system_view(
+            bad, valid_view, 0, output_system, error) != XTBLOOM_STATUS_INVALID_ARGUMENT ||
         !same_system_view(output_system, system_sentinel)) {
       return false;
     }
     WavefunctionWarmStartIdentity output_identity = identity_sentinel;
-    if (gpuxtb::detail::gfn2::make_wavefunction_warm_start_identity(
-            bad, 7u, output_identity, error) != GPUXTB_STATUS_INVALID_ARGUMENT ||
+    if (xtbloom::detail::gfn2::make_wavefunction_warm_start_identity(
+            bad, 7u, output_identity, error) != XTBLOOM_STATUS_INVALID_ARGUMENT ||
         !same_identity(output_identity, identity_sentinel)) {
       return false;
     }
@@ -495,28 +496,28 @@ int test_tampered_layout_rejected_atomically() {
   bad.eigenvalues.size_bytes += sizeof(double);
   CHECK(rejects(bad));
   bad = layout;
-  bad.density.offset_bytes += gpuxtb::detail::gfn2::kWavefunctionWorkspaceAlignment;
+  bad.density.offset_bytes += xtbloom::detail::gfn2::kWavefunctionWorkspaceAlignment;
   CHECK(rejects(bad));
   bad = layout;
-  bad.workspace_size_bytes += gpuxtb::detail::gfn2::kWavefunctionWorkspaceAlignment;
+  bad.workspace_size_bytes += xtbloom::detail::gfn2::kWavefunctionWorkspaceAlignment;
   CHECK(rejects(bad));
 
   WavefunctionSystemView output_system = system_sentinel;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_system_view(layout, valid_view, layout.batch_size,
-                                                            output_system, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_system_view(layout, valid_view, layout.batch_size,
+                                                             output_system, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(same_system_view(output_system, system_sentinel));
   WavefunctionView null_batch_view = valid_view;
   null_batch_view.qsh = nullptr;
   output_system = system_sentinel;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_system_view(
-            layout, null_batch_view, 0, output_system, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_system_view(
+            layout, null_batch_view, 0, output_system, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(same_system_view(output_system, system_sentinel));
 
   const auto rejects_view = [&](const WavefunctionView& bad_view) {
     WavefunctionSystemView candidate = system_sentinel;
-    return gpuxtb::detail::gfn2::make_wavefunction_system_view(
-               layout, bad_view, 0, candidate, error) == GPUXTB_STATUS_INVALID_ARGUMENT &&
+    return xtbloom::detail::gfn2::make_wavefunction_system_view(
+               layout, bad_view, 0, candidate, error) == XTBLOOM_STATUS_INVALID_ARGUMENT &&
            same_system_view(candidate, system_sentinel);
   };
   WavefunctionView bad_view = valid_view;
@@ -530,28 +531,28 @@ int test_tampered_layout_rejected_atomically() {
   CHECK(rejects_view(bad_view));
   bad_view = valid_view;
   bad_view.workspace_base = static_cast<std::byte*>(workspace.data) +
-                            gpuxtb::detail::gfn2::kWavefunctionWorkspaceAlignment;
-  bad_view.workspace_size_bytes -= gpuxtb::detail::gfn2::kWavefunctionWorkspaceAlignment;
+                            xtbloom::detail::gfn2::kWavefunctionWorkspaceAlignment;
+  bad_view.workspace_size_bytes -= xtbloom::detail::gfn2::kWavefunctionWorkspaceAlignment;
   CHECK(rejects_view(bad_view));
   bad_view = valid_view;
   --bad_view.workspace_size_bytes;
   CHECK(rejects_view(bad_view));
 
   ConstWavefunctionView valid_const_view;
-  CHECK(gpuxtb::detail::gfn2::bind_wavefunction_view(
+  CHECK(xtbloom::detail::gfn2::bind_wavefunction_view(
             layout, static_cast<const void*>(workspace.data), layout.workspace_size_bytes,
-            valid_const_view, error) == GPUXTB_STATUS_SUCCESS);
+            valid_const_view, error) == XTBLOOM_STATUS_SUCCESS);
   ConstWavefunctionView bad_const_view = valid_const_view;
   bad_const_view.coefficients = bad_const_view.coefficients + 1;
   ConstWavefunctionSystemView const_candidate;
   const_candidate.atom_count = 23;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_system_view(
-            layout, bad_const_view, 0, const_candidate, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_system_view(
+            layout, bad_const_view, 0, const_candidate, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(const_candidate.atom_count == 23);
   WavefunctionView output_view = view_sentinel;
-  CHECK(gpuxtb::detail::gfn2::bind_wavefunction_view(
+  CHECK(xtbloom::detail::gfn2::bind_wavefunction_view(
             layout, static_cast<std::byte*>(workspace.data) + 1, layout.workspace_size_bytes - 1u,
-            output_view, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            output_view, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(same_view(output_view, view_sentinel));
   return 0;
 }
@@ -566,19 +567,19 @@ int test_sad_multipole_initialization() {
   std::string error;
   CHECK(make_basis(atom_offsets, atomic_numbers, basis, error));
   WavefunctionLayout layout;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(basis, atomic_numbers.data(), charge.data(),
-                                                       unpaired.data(), spin_channels.data(),
-                                                       layout, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(basis, atomic_numbers.data(), charge.data(),
+                                                        unpaired.data(), spin_channels.data(),
+                                                        layout, error) == XTBLOOM_STATUS_SUCCESS);
   AlignedWorkspace workspace(layout.workspace_size_bytes);
   CHECK(workspace.data != nullptr);
   std::fill_n(static_cast<double*>(workspace.data), layout.workspace_size_bytes / sizeof(double),
               9.0);
   WavefunctionView view;
-  CHECK(gpuxtb::detail::gfn2::bind_wavefunction_view(layout, workspace.data,
-                                                     layout.workspace_size_bytes, view,
-                                                     error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::initialize_sad_multipole_state(layout, view, error) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_wavefunction_view(layout, workspace.data,
+                                                      layout.workspace_size_bytes, view,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::initialize_sad_multipole_state(layout, view, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(view.coefficients[0] == 9.0);
 
   const std::int64_t nat = layout.total_atoms;
@@ -591,7 +592,7 @@ int test_sad_multipole_initialization() {
   std::int64_t shell = 0;
   for (std::size_t atom = 0; atom < atomic_numbers.size(); ++atom) {
     const auto* element =
-        gpuxtb::parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_numbers[atom]));
+        xtbloom::parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_numbers[atom]));
     for (std::size_t local_shell = 0; local_shell < element->shell_count; ++local_shell, ++shell) {
       const double expected = 0.5 *
                               layout.reference_shell_occupations[static_cast<std::size_t>(shell)] /
@@ -624,18 +625,18 @@ int test_sad_multipole_initialization() {
   };
   WavefunctionLayout bad = layout;
   bad.electron_counts[0] += 1.0;
-  CHECK(gpuxtb::detail::gfn2::initialize_sad_multipole_state(bad, view, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::initialize_sad_multipole_state(bad, view, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(multipoles_are(13.0));
   WavefunctionView null_view = view;
   null_view.qsh = nullptr;
-  CHECK(gpuxtb::detail::gfn2::initialize_sad_multipole_state(layout, null_view, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::initialize_sad_multipole_state(layout, null_view, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(multipoles_are(13.0));
 
   const auto sad_rejects = [&](const WavefunctionView& bad_view) {
-    return gpuxtb::detail::gfn2::initialize_sad_multipole_state(layout, bad_view, error) ==
-               GPUXTB_STATUS_INVALID_ARGUMENT &&
+    return xtbloom::detail::gfn2::initialize_sad_multipole_state(layout, bad_view, error) ==
+               XTBLOOM_STATUS_INVALID_ARGUMENT &&
            multipoles_are(13.0);
   };
   WavefunctionView bad_view = view;
@@ -649,8 +650,8 @@ int test_sad_multipole_initialization() {
   CHECK(sad_rejects(bad_view));
   bad_view = view;
   bad_view.workspace_base = static_cast<std::byte*>(workspace.data) +
-                            gpuxtb::detail::gfn2::kWavefunctionWorkspaceAlignment;
-  bad_view.workspace_size_bytes -= gpuxtb::detail::gfn2::kWavefunctionWorkspaceAlignment;
+                            xtbloom::detail::gfn2::kWavefunctionWorkspaceAlignment;
+  bad_view.workspace_size_bytes -= xtbloom::detail::gfn2::kWavefunctionWorkspaceAlignment;
   CHECK(sad_rejects(bad_view));
   bad_view = view;
   --bad_view.workspace_size_bytes;
@@ -659,11 +660,11 @@ int test_sad_multipole_initialization() {
   error.reserve(256u);
   const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t sad_status =
-      gpuxtb::detail::gfn2::initialize_sad_multipole_state(layout, view, error);
+  const xtbloom_status_t sad_status =
+      xtbloom::detail::gfn2::initialize_sad_multipole_state(layout, view, error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
   const std::size_t after = allocation_test::count.load(std::memory_order_relaxed);
-  CHECK(sad_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(sad_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(after == before);
   return 0;
 }
@@ -678,65 +679,65 @@ int test_warm_start_identity_and_zero_allocation_views() {
   std::string error;
   CHECK(make_basis(atom_offsets, atomic_numbers, basis, error));
   WavefunctionLayout layout;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_layout(basis, atomic_numbers.data(), charge.data(),
-                                                       unpaired.data(), spin_channels.data(),
-                                                       layout, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_layout(basis, atomic_numbers.data(), charge.data(),
+                                                        unpaired.data(), spin_channels.data(),
+                                                        layout, error) == XTBLOOM_STATUS_SUCCESS);
 
   WavefunctionWarmStartIdentity expected;
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_warm_start_identity(layout, 41u, expected, error) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_warm_start_identity(
+            layout, 41u, expected, error) == XTBLOOM_STATUS_SUCCESS);
   WavefunctionWarmStartIdentity candidate = expected;
-  CHECK(gpuxtb::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
-  CHECK(gpuxtb::detail::gfn2::validate_wavefunction_warm_start(expected, candidate, error) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
+  CHECK(xtbloom::detail::gfn2::validate_wavefunction_warm_start(expected, candidate, error) ==
+        XTBLOOM_STATUS_SUCCESS);
 
-  candidate.model = GPUXTB_MODEL_GFN1_XTB;
-  CHECK(!gpuxtb::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
+  candidate.model = XTBLOOM_MODEL_GFN1_XTB;
+  CHECK(!xtbloom::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
   candidate = expected;
   ++candidate.geometry_cache_generation;
-  CHECK(!gpuxtb::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
+  CHECK(!xtbloom::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
   candidate = expected;
   candidate.atomic_numbers[0] = 7;
-  CHECK(!gpuxtb::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
+  CHECK(!xtbloom::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
   candidate = expected;
   candidate.atom_offsets[1] = 1;
-  CHECK(!gpuxtb::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
+  CHECK(!xtbloom::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
   candidate = expected;
   candidate.molecular_charges[0] = 1.0;
-  CHECK(!gpuxtb::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
+  CHECK(!xtbloom::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
   candidate = expected;
   candidate.unpaired_electrons[0] = 3;
-  CHECK(!gpuxtb::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
+  CHECK(!xtbloom::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
   candidate = expected;
   candidate.spin_channels[0] = 1;
-  CHECK(!gpuxtb::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
-  CHECK(gpuxtb::detail::gfn2::validate_wavefunction_warm_start(expected, candidate, error) ==
-        GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(!xtbloom::detail::gfn2::wavefunction_warm_start_matches(expected, candidate));
+  CHECK(xtbloom::detail::gfn2::validate_wavefunction_warm_start(expected, candidate, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   AlignedWorkspace workspace(layout.workspace_size_bytes);
   WavefunctionView view;
   WavefunctionSystemView system_view;
-  CHECK(gpuxtb::detail::gfn2::bind_wavefunction_view(layout, workspace.data,
-                                                     layout.workspace_size_bytes, view,
-                                                     error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::make_wavefunction_system_view(layout, view, 0, system_view, error) ==
-        GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_wavefunction_view(layout, workspace.data,
+                                                      layout.workspace_size_bytes, view,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_wavefunction_system_view(layout, view, 0, system_view, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   candidate = expected;
 
   /* Warm successful paths so std::string retains any implementation capacity. */
   error.reserve(256u);
   const std::size_t before = allocation_test::count.load(std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t bind_status = gpuxtb::detail::gfn2::bind_wavefunction_view(
+  const xtbloom_status_t bind_status = xtbloom::detail::gfn2::bind_wavefunction_view(
       layout, workspace.data, layout.workspace_size_bytes, view, error);
-  const gpuxtb_status_t slice_status =
-      gpuxtb::detail::gfn2::make_wavefunction_system_view(layout, view, 0, system_view, error);
+  const xtbloom_status_t slice_status =
+      xtbloom::detail::gfn2::make_wavefunction_system_view(layout, view, 0, system_view, error);
   const bool identity_matches =
-      gpuxtb::detail::gfn2::wavefunction_warm_start_matches(expected, candidate);
+      xtbloom::detail::gfn2::wavefunction_warm_start_matches(expected, candidate);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
   const std::size_t after = allocation_test::count.load(std::memory_order_relaxed);
-  CHECK(bind_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(slice_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(bind_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(slice_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(identity_matches);
   CHECK(after == before);
   return 0;

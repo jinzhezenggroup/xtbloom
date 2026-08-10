@@ -43,9 +43,9 @@ void operator delete[](void* pointer, std::size_t) noexcept { std::free(pointer)
 
 namespace {
 
-using gpuxtb::detail::gfn2::D4GeometryCache;
-using gpuxtb::detail::gfn2::D4Plan;
-using gpuxtb::detail::gfn2::D4Workspace;
+using xtbloom::detail::gfn2::D4GeometryCache;
+using xtbloom::detail::gfn2::D4Plan;
+using xtbloom::detail::gfn2::D4Workspace;
 
 bool near(double actual, double expected, double tolerance) {
   return std::abs(actual - expected) <= tolerance;
@@ -78,34 +78,34 @@ struct Fixture {
   std::uint64_t generation = 1u;
 
   bool initialize(std::string& error) {
-    if (gpuxtb::detail::gfn2::make_d4_plan(1, 4, offsets.data(), atomic_numbers.data(), plan,
-                                           error) != GPUXTB_STATUS_SUCCESS) {
+    if (xtbloom::detail::gfn2::make_d4_plan(1, 4, offsets.data(), atomic_numbers.data(), plan,
+                                            error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     storage = AlignedWorkspace(plan.workspace_size_bytes());
-    if (gpuxtb::detail::gfn2::bind_d4_workspace(plan, storage.data, plan.workspace_size_bytes(),
-                                                workspace, error) != GPUXTB_STATUS_SUCCESS) {
+    if (xtbloom::detail::gfn2::bind_d4_workspace(plan, storage.data, plan.workspace_size_bytes(),
+                                                 workspace, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     pair_data.resize(static_cast<std::size_t>(plan.total_pairs()) *
-                     gpuxtb::detail::gfn2::kD4PairDataElements);
+                     xtbloom::detail::gfn2::kD4PairDataElements);
     coordination.resize(static_cast<std::size_t>(plan.total_atoms()));
     return update(error);
   }
 
   bool update(std::string& error) {
-    return gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+    return xtbloom::detail::gfn2::update_d4_geometry_cache_cpu(
                plan, positions.data(), generation++, pair_data.data(), pair_data.size(),
                coordination.data(), coordination.size(), workspace, cache,
-               error) == GPUXTB_STATUS_SUCCESS;
+               error) == XTBLOOM_STATUS_SUCCESS;
   }
 
   bool two_body_energy(double& energy, std::string& error) {
     std::array<double, 1> energies{};
     std::array<double, 4> potentials{};
-    if (!update(error) || gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+    if (!update(error) || xtbloom::detail::gfn2::evaluate_d4_two_body_cpu(
                               plan, cache, charges.data(), energies.data(), potentials.data(),
-                              workspace, error) != GPUXTB_STATUS_SUCCESS) {
+                              workspace, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     energy = energies[0];
@@ -115,8 +115,8 @@ struct Fixture {
   bool atm_energy(double& energy, std::string& error) {
     std::array<double, 1> energies{};
     if (!update(error) ||
-        gpuxtb::detail::gfn2::evaluate_d4_atm_cpu(plan, cache, energies.data(), workspace, error) !=
-            GPUXTB_STATUS_SUCCESS) {
+        xtbloom::detail::gfn2::evaluate_d4_atm_cpu(plan, cache, energies.data(), workspace,
+                                                   error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     energy = energies[0];
@@ -133,8 +133,8 @@ int test_d4_coordination_and_ragged_batch() {
   };
   D4Plan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_d4_plan(4, 7, offsets.data(), atomic_numbers.data(), plan,
-                                           error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_d4_plan(4, 7, offsets.data(), atomic_numbers.data(), plan,
+                                            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(plan.total_pairs() == 6);
   CHECK(plan.matches_atomic_numbers(atomic_numbers.data()));
   CHECK(plan.overlaps_storage(&plan, sizeof(plan)));
@@ -150,15 +150,15 @@ int test_d4_coordination_and_ragged_batch() {
 
   AlignedWorkspace storage(plan.workspace_size_bytes());
   D4Workspace workspace;
-  CHECK(gpuxtb::detail::gfn2::bind_d4_workspace(plan, storage.data, plan.workspace_size_bytes(),
-                                                workspace, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_d4_workspace(plan, storage.data, plan.workspace_size_bytes(),
+                                                 workspace, error) == XTBLOOM_STATUS_SUCCESS);
   std::vector<double> pair_data(static_cast<std::size_t>(plan.total_pairs()) *
-                                gpuxtb::detail::gfn2::kD4PairDataElements);
+                                xtbloom::detail::gfn2::kD4PairDataElements);
   std::array<double, 7> coordination{};
   D4GeometryCache cache;
-  CHECK(gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_d4_geometry_cache_cpu(
             plan, positions.data(), 1u, pair_data.data(), pair_data.size(), coordination.data(),
-            coordination.size(), workspace, cache, error) == GPUXTB_STATUS_SUCCESS);
+            coordination.size(), workspace, cache, error) == XTBLOOM_STATUS_SUCCESS);
 
   /* Pinned mctc-lib D4 erf-CN semantics: kcn=7.5 and EN weighting. */
   CHECK(near(coordination[0], 1.6117226819127606, 2.0e-15));
@@ -178,12 +178,12 @@ int test_two_body_charge_and_coordinate_derivatives() {
   std::array<double, 1> energies{};
   std::array<double, 4> potentials{};
   std::array<double, 12> gradients{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_cpu(
             fixture.plan, fixture.cache, fixture.charges.data(), energies.data(), potentials.data(),
-            fixture.workspace, error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_d4_two_body_gradient_cpu(
+            fixture.workspace, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_d4_two_body_gradient_cpu(
             fixture.plan, fixture.cache, fixture.charges.data(), gradients.data(),
-            fixture.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            fixture.workspace, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(near(energies[0], -0.0005923540861122829, 2.0e-18));
 
   constexpr double step = 1.0e-5;
@@ -227,25 +227,25 @@ int test_system_two_body_isolation_and_batch_parity() {
   std::array<double, 7> charges{-0.55, 0.27, 0.28, 0.0, -0.3, 0.1, 0.2};
   D4Plan plan;
   std::string error;
-  CHECK(gpuxtb::detail::gfn2::make_d4_plan(4, 7, offsets.data(), atomic_numbers.data(), plan,
-                                           error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::make_d4_plan(4, 7, offsets.data(), atomic_numbers.data(), plan,
+                                            error) == XTBLOOM_STATUS_SUCCESS);
   AlignedWorkspace storage(plan.workspace_size_bytes());
   D4Workspace workspace;
-  CHECK(gpuxtb::detail::gfn2::bind_d4_workspace(plan, storage.data, plan.workspace_size_bytes(),
-                                                workspace, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_d4_workspace(plan, storage.data, plan.workspace_size_bytes(),
+                                                 workspace, error) == XTBLOOM_STATUS_SUCCESS);
   std::vector<double> pair_data(static_cast<std::size_t>(plan.total_pairs()) *
-                                gpuxtb::detail::gfn2::kD4PairDataElements);
+                                xtbloom::detail::gfn2::kD4PairDataElements);
   std::array<double, 7> coordination{};
   D4GeometryCache cache;
-  CHECK(gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_d4_geometry_cache_cpu(
             plan, positions.data(), 1u, pair_data.data(), pair_data.size(), coordination.data(),
-            coordination.size(), workspace, cache, error) == GPUXTB_STATUS_SUCCESS);
+            coordination.size(), workspace, cache, error) == XTBLOOM_STATUS_SUCCESS);
 
   std::array<double, 4> batch_energies{};
   std::array<double, 7> batch_potentials{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_cpu(
             plan, cache, charges.data(), batch_energies.data(), batch_potentials.data(), workspace,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(batch_energies[1] == 0.0);
   CHECK(batch_energies[2] == 0.0);
 
@@ -253,9 +253,9 @@ int test_system_two_body_isolation_and_batch_parity() {
     double system_energy = 41.0;
     std::array<double, 7> system_potentials{};
     system_potentials.fill(73.0);
-    CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+    CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_system_cpu(
               plan, cache, system, charges.data(), system_energy, system_potentials.data(),
-              workspace, error) == GPUXTB_STATUS_SUCCESS);
+              workspace, error) == XTBLOOM_STATUS_SUCCESS);
     CHECK(system_energy == batch_energies[static_cast<std::size_t>(system)]);
     const std::int64_t begin = offsets[static_cast<std::size_t>(system)];
     const std::int64_t end = offsets[static_cast<std::size_t>(system) + 1u];
@@ -266,9 +266,9 @@ int test_system_two_body_isolation_and_batch_parity() {
     }
 
     double energy_only = -19.0;
-    CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(plan, cache, system, charges.data(),
-                                                                energy_only, nullptr, workspace,
-                                                                error) == GPUXTB_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_system_cpu(
+              plan, cache, system, charges.data(), energy_only, nullptr, workspace, error) ==
+          XTBLOOM_STATUS_SUCCESS);
     CHECK(energy_only == batch_energies[static_cast<std::size_t>(system)]);
   }
 
@@ -276,7 +276,7 @@ int test_system_two_body_isolation_and_batch_parity() {
    * of system zero must ignore those peer slices. */
   const std::size_t peer_atom = 4u;
   const std::size_t peer_pair =
-      static_cast<std::size_t>(plan.pair_offsets()[3]) * gpuxtb::detail::gfn2::kD4PairDataElements;
+      static_cast<std::size_t>(plan.pair_offsets()[3]) * xtbloom::detail::gfn2::kD4PairDataElements;
   const double saved_charge = charges[peer_atom];
   const double saved_coordination = coordination[peer_atom];
   const double saved_pair = pair_data[peer_pair];
@@ -286,25 +286,25 @@ int test_system_two_body_isolation_and_batch_parity() {
   double isolated_energy = 17.0;
   std::array<double, 7> isolated_potentials{};
   isolated_potentials.fill(29.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_system_cpu(
             plan, cache, 0, charges.data(), isolated_energy, isolated_potentials.data(), workspace,
-            error) == GPUXTB_STATUS_SUCCESS);
+            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(isolated_energy == batch_energies[0]);
   for (std::size_t atom = 0; atom < isolated_potentials.size(); ++atom) {
     CHECK(isolated_potentials[atom] == (atom < 3u ? batch_potentials[atom] : 29.0));
   }
   double isolated_energy_only = 31.0;
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_system_cpu(
             plan, cache, 0, charges.data(), isolated_energy_only, nullptr, workspace, error) ==
-        GPUXTB_STATUS_SUCCESS);
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(isolated_energy_only == batch_energies[0]);
 
   double failed_energy = 37.0;
   std::array<double, 7> failed_potentials{};
   failed_potentials.fill(43.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_system_cpu(
             plan, cache, 3, charges.data(), failed_energy, failed_potentials.data(), workspace,
-            error) == GPUXTB_STATUS_INTERNAL_ERROR);
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(failed_energy == 37.0);
   CHECK(std::all_of(failed_potentials.begin(), failed_potentials.end(),
                     [](double value) { return value == 43.0; }));
@@ -313,13 +313,13 @@ int test_system_two_body_isolation_and_batch_parity() {
   pair_data[peer_pair] = saved_pair;
 
   const double aliased_charge = charges[0];
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_system_cpu(
             plan, cache, 0, charges.data(), charges[0], failed_potentials.data(), workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(charges[0] == aliased_charge);
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_system_cpu(
             plan, cache, plan.batch_size(), charges.data(), failed_energy, failed_potentials.data(),
-            workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(failed_energy == 37.0);
   return 0;
 }
@@ -330,12 +330,12 @@ int test_atm_gradient_and_charge_independence() {
   CHECK(fixture.initialize(error));
   std::array<double, 1> energies{};
   std::array<double, 12> gradients{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_atm_cpu(fixture.plan, fixture.cache, energies.data(),
-                                                  fixture.workspace,
-                                                  error) == GPUXTB_STATUS_SUCCESS);
-  CHECK(gpuxtb::detail::gfn2::add_d4_atm_gradient_cpu(fixture.plan, fixture.cache, gradients.data(),
-                                                      fixture.workspace,
-                                                      error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_atm_cpu(fixture.plan, fixture.cache, energies.data(),
+                                                   fixture.workspace,
+                                                   error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_d4_atm_gradient_cpu(fixture.plan, fixture.cache,
+                                                       gradients.data(), fixture.workspace,
+                                                       error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::isfinite(energies[0]));
 
   constexpr double step = 1.0e-5;
@@ -361,59 +361,59 @@ int test_validation_and_zero_allocation_hot_path() {
   double system_energy = 0.0;
   std::array<double, 4> system_potentials{};
   std::array<double, 12> gradients{};
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_cpu(
             fixture.plan, fixture.cache, fixture.charges.data(), energies.data(), potentials.data(),
-            fixture.workspace, error) == GPUXTB_STATUS_SUCCESS);
+            fixture.workspace, error) == XTBLOOM_STATUS_SUCCESS);
 
   allocation_test::count.store(0u, std::memory_order_relaxed);
   allocation_test::enabled.store(true, std::memory_order_relaxed);
-  const gpuxtb_status_t update_status = gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+  const xtbloom_status_t update_status = xtbloom::detail::gfn2::update_d4_geometry_cache_cpu(
       fixture.plan, fixture.positions.data(), fixture.generation++, fixture.pair_data.data(),
       fixture.pair_data.size(), fixture.coordination.data(), fixture.coordination.size(),
       fixture.workspace, fixture.cache, error);
-  const gpuxtb_status_t energy_status = gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+  const xtbloom_status_t energy_status = xtbloom::detail::gfn2::evaluate_d4_two_body_cpu(
       fixture.plan, fixture.cache, fixture.charges.data(), energies.data(), potentials.data(),
       fixture.workspace, error);
-  const gpuxtb_status_t system_energy_status =
-      gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(
+  const xtbloom_status_t system_energy_status =
+      xtbloom::detail::gfn2::evaluate_d4_two_body_system_cpu(
           fixture.plan, fixture.cache, 0, fixture.charges.data(), system_energy,
           system_potentials.data(), fixture.workspace, error);
-  const gpuxtb_status_t system_energy_only_status =
-      gpuxtb::detail::gfn2::evaluate_d4_two_body_system_cpu(fixture.plan, fixture.cache, 0,
-                                                            fixture.charges.data(), system_energy,
-                                                            nullptr, fixture.workspace, error);
-  const gpuxtb_status_t gradient_status = gpuxtb::detail::gfn2::add_d4_two_body_gradient_cpu(
+  const xtbloom_status_t system_energy_only_status =
+      xtbloom::detail::gfn2::evaluate_d4_two_body_system_cpu(fixture.plan, fixture.cache, 0,
+                                                             fixture.charges.data(), system_energy,
+                                                             nullptr, fixture.workspace, error);
+  const xtbloom_status_t gradient_status = xtbloom::detail::gfn2::add_d4_two_body_gradient_cpu(
       fixture.plan, fixture.cache, fixture.charges.data(), gradients.data(), fixture.workspace,
       error);
-  const gpuxtb_status_t atm_energy_status = gpuxtb::detail::gfn2::evaluate_d4_atm_cpu(
+  const xtbloom_status_t atm_energy_status = xtbloom::detail::gfn2::evaluate_d4_atm_cpu(
       fixture.plan, fixture.cache, energies.data(), fixture.workspace, error);
-  const gpuxtb_status_t atm_gradient_status = gpuxtb::detail::gfn2::add_d4_atm_gradient_cpu(
+  const xtbloom_status_t atm_gradient_status = xtbloom::detail::gfn2::add_d4_atm_gradient_cpu(
       fixture.plan, fixture.cache, gradients.data(), fixture.workspace, error);
   allocation_test::enabled.store(false, std::memory_order_relaxed);
-  CHECK(update_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(energy_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(system_energy_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(system_energy_only_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(gradient_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(atm_energy_status == GPUXTB_STATUS_SUCCESS);
-  CHECK(atm_gradient_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(update_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(energy_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(system_energy_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(system_energy_only_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(gradient_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(atm_energy_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(atm_gradient_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
 
   auto invalid_positions = fixture.positions;
   invalid_positions[0] = std::numeric_limits<double>::quiet_NaN();
-  CHECK(gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_d4_geometry_cache_cpu(
             fixture.plan, invalid_positions.data(), fixture.generation++, fixture.pair_data.data(),
             fixture.pair_data.size(), fixture.coordination.data(), fixture.coordination.size(),
-            fixture.workspace, fixture.cache, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            fixture.workspace, fixture.cache, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   const auto positions_before = fixture.positions;
   const auto pair_before = fixture.pair_data;
   const auto coordination_before = fixture.coordination;
   const D4GeometryCache cache_before = fixture.cache;
-  CHECK(gpuxtb::detail::gfn2::update_d4_geometry_cache_cpu(
+  CHECK(xtbloom::detail::gfn2::update_d4_geometry_cache_cpu(
             fixture.plan, fixture.positions.data(), fixture.generation++, fixture.pair_data.data(),
             fixture.pair_data.size(), fixture.positions.data(), fixture.positions.size(),
-            fixture.workspace, fixture.cache, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            fixture.workspace, fixture.cache, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.positions == positions_before);
   CHECK(fixture.pair_data == pair_before);
   CHECK(fixture.coordination == coordination_before);
@@ -425,45 +425,45 @@ int test_validation_and_zero_allocation_hot_path() {
   ++malformed_workspace.weights;
   energies.fill(17.0);
   potentials.fill(19.0);
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_cpu(
             fixture.plan, fixture.cache, fixture.charges.data(), energies.data(), potentials.data(),
-            malformed_workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            malformed_workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energies[0] == 17.0);
   CHECK(std::all_of(potentials.begin(), potentials.end(),
                     [](double value) { return value == 19.0; }));
 
   std::array<double, 4> overlapping_outputs{23.0, 23.0, 23.0, 23.0};
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_cpu(
             fixture.plan, fixture.cache, fixture.charges.data(), overlapping_outputs.data(),
             overlapping_outputs.data(), fixture.workspace,
-            error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(overlapping_outputs.begin(), overlapping_outputs.end(),
                     [](double value) { return value == 23.0; }));
 
   const auto atom_offsets_before = fixture.plan.atom_offsets();
   auto* plan_storage =
       reinterpret_cast<double*>(const_cast<std::int64_t*>(fixture.plan.atom_offsets().data()));
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_cpu(
             fixture.plan, fixture.cache, fixture.charges.data(), plan_storage, potentials.data(),
-            fixture.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            fixture.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.plan.atom_offsets() == atom_offsets_before);
 
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_two_body_cpu(
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_cpu(
             fixture.plan, fixture.cache, fixture.workspace.weights, energies.data(),
-            potentials.data(), fixture.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            potentials.data(), fixture.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   std::array<double, 12> charge_gradient_alias{};
   std::copy(fixture.charges.begin(), fixture.charges.end(), charge_gradient_alias.begin());
-  CHECK(gpuxtb::detail::gfn2::add_d4_two_body_gradient_cpu(
+  CHECK(xtbloom::detail::gfn2::add_d4_two_body_gradient_cpu(
             fixture.plan, fixture.cache, charge_gradient_alias.data(), charge_gradient_alias.data(),
-            fixture.workspace, error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+            fixture.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
-  CHECK(gpuxtb::detail::gfn2::evaluate_d4_atm_cpu(fixture.plan, fixture.cache,
-                                                  fixture.coordination.data(), fixture.workspace,
-                                                  error) == GPUXTB_STATUS_INVALID_ARGUMENT);
-  CHECK(gpuxtb::detail::gfn2::add_d4_atm_gradient_cpu(fixture.plan, fixture.cache,
-                                                      fixture.pair_data.data(), fixture.workspace,
-                                                      error) == GPUXTB_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_atm_cpu(fixture.plan, fixture.cache,
+                                                   fixture.coordination.data(), fixture.workspace,
+                                                   error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn2::add_d4_atm_gradient_cpu(fixture.plan, fixture.cache,
+                                                       fixture.pair_data.data(), fixture.workspace,
+                                                       error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   return 0;
 }
 

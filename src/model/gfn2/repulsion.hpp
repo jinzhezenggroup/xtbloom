@@ -1,15 +1,15 @@
-#ifndef GPUXTB_MODEL_GFN2_REPULSION_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_MODEL_GFN2_REPULSION_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_MODEL_GFN2_REPULSION_HPP
+#define XTBLOOM_MODEL_GFN2_REPULSION_HPP
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 /*
  * Geometry-independent data for the GFN2 screened nuclear repulsion term.
@@ -26,19 +26,19 @@ struct RepulsionPlan {
 };
 
 /* Build a reusable ragged-batch plan from atomic numbers and molecule offsets. */
-gpuxtb_status_t make_repulsion_plan(std::int64_t batch_size, std::int64_t total_atoms,
-                                    const std::int64_t* atom_offsets,
-                                    const std::int32_t* atomic_numbers, RepulsionPlan& plan,
-                                    std::string& error);
+xtbloom_status_t make_repulsion_plan(std::int64_t batch_size, std::int64_t total_atoms,
+                                     const std::int64_t* atom_offsets,
+                                     const std::int32_t* atomic_numbers, RepulsionPlan& plan,
+                                     std::string& error);
 
 /*
  * Accumulate GFN2 repulsion energy and optional forces into caller-owned
  * buffers. Positions use atom-major xyz layout in bohr; output is Hartree and
  * Hartree/bohr. Forces may be NULL for an energy-only evaluation.
  */
-gpuxtb_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* positions,
-                                  double* energies, double* forces, std::string& error);
+xtbloom_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* positions,
+                                   double* energies, double* forces, std::string& error);
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2
 
-#endif  // GPUXTB_MODEL_GFN2_REPULSION_HPP
+#endif  // XTBLOOM_MODEL_GFN2_REPULSION_HPP

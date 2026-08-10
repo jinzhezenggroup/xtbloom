@@ -13,4 +13,4 @@ Collecting data...
 Generating '/tmp/nsys-report-990e.qdstrm'
 [1/1] [0%                          ] nsys-active0.nsys-rep[1/1] [0%                          ] nsys-active0.nsys-rep[1/1] [=================72%        ] nsys-active0.nsys-rep[1/1] [====================85%     ] nsys-active0.nsys-rep[1/1] [========================97% ] nsys-active0.nsys-rep[1/1] [========================98% ] nsys-active0.nsys-rep[1/1] [========================100%] nsys-active0.nsys-rep[1/1] [========================100%] nsys-active0.nsys-rep
 Generated:
-	/home/jzzeng/codes/gpuxtb4/build/pr201-evidence-clean/nsys-active0.nsys-rep
+	/home/jzzeng/codes/xtbloom4/build/pr201-evidence-clean/nsys-active0.nsys-rep

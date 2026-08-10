@@ -1,5 +1,5 @@
 #include "model/gfn2/eigensolver.hpp"
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include "model/gfn2/occupation_binary64_policy.hpp"
 
@@ -7,7 +7,7 @@
 #include <dlfcn.h>
 #endif
 
-#if defined(GPUXTB_CONFIGURED_CPU_LINALG_SHIM)
+#if defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM)
 #include <link.h>
 #endif
 
@@ -23,7 +23,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 
 namespace {
 
@@ -122,7 +122,7 @@ struct CpuLinearAlgebraAccess {
 namespace {
 
 static_assert(sizeof(LapackInt) == 4u, "the CPU eigensolver requires an LP64 LAPACK ABI");
-static_assert(sizeof(gpuxtb_status_t) == 4u, "cache statuses require the public 32-bit ABI");
+static_assert(sizeof(xtbloom_status_t) == 4u, "cache statuses require the public 32-bit ABI");
 static_assert(std::is_trivially_copyable_v<EigensolverOverlapCache>);
 static_assert(std::is_standard_layout_v<EigensolverOverlapCache>);
 static_assert(std::is_trivially_copyable_v<EigensolverWorkspace>);
@@ -217,20 +217,20 @@ std::array<double*, kEigensolverFieldCount> eigensolver_view_fields(const Wavefu
            view.energy_weighted_density}};
 }
 
-gpuxtb_status_t validate_plan(const EigensolverPlan& plan, std::string& error) {
+xtbloom_status_t validate_plan(const EigensolverPlan& plan, std::string& error) {
   if (!plan.sealed()) {
     error = "eigensolver plan is default-constructed or moved-from";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_backend(const CpuLinearAlgebraBackend& backend, std::string& error) {
+xtbloom_status_t validate_backend(const CpuLinearAlgebraBackend& backend, std::string& error) {
   if (!backend.ready()) {
     error = "CPU eigensolver requires a verified LP64 backend";
-    return GPUXTB_STATUS_BACKEND_UNAVAILABLE;
+    return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 template <typename Function>
@@ -298,7 +298,7 @@ bool backend_self_test(const CpuLinearAlgebraBackend& backend) {
   return rhs[0] == 2.0 && product[0] == 4.0;
 }
 
-#if defined(GPUXTB_CONFIGURED_CPU_LINALG_SHIM)
+#if defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM)
 void* open_host_isolated_sibling(const char* soname) {
   /* A LOCAL handle still resolves relocations against already-global objects.
    * A new link-map namespace is required to keep a host's libmkl_rt ILP64
@@ -413,8 +413,8 @@ bool disjoint_from_control(const EigensolverPlan& plan,
   return true;
 }
 
-gpuxtb_status_t validate_cache(const EigensolverPlan& plan, const EigensolverOverlapCache& cache,
-                               std::string& error) {
+xtbloom_status_t validate_cache(const EigensolverPlan& plan, const EigensolverOverlapCache& cache,
+                                std::string& error) {
   const EigensolverPlanData& data = *plan.identity();
   if (cache.workspace_base == nullptr ||
       cache.workspace_size_bytes < data.overlap_cache_size_bytes ||
@@ -425,22 +425,22 @@ gpuxtb_status_t validate_cache(const EigensolverPlan& plan, const EigensolverOve
       cache.geometry_generations !=
           offset_pointer<std::uint64_t>(cache.workspace_base,
                                         data.overlap_generation_offset_bytes) ||
-      cache.system_statuses !=
-          offset_pointer<gpuxtb_status_t>(cache.workspace_base, data.overlap_status_offset_bytes)) {
+      cache.system_statuses != offset_pointer<xtbloom_status_t>(cache.workspace_base,
+                                                                data.overlap_status_offset_bytes)) {
     error = "eigensolver overlap cache is not a canonical binding for this plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   AddressRange range;
   if (!make_range(cache.workspace_base, data.overlap_cache_size_bytes, range)) {
     error = "eigensolver overlap cache address range is not representable";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_worker_workspace(const EigensolverPlan& plan,
-                                          const EigensolverWorkspace& workspace,
-                                          std::string& error) {
+xtbloom_status_t validate_worker_workspace(const EigensolverPlan& plan,
+                                           const EigensolverWorkspace& workspace,
+                                           std::string& error) {
   const EigensolverPlanData& data = *plan.identity();
   if (workspace.workspace_base == nullptr ||
       workspace.workspace_size_bytes < data.worker_workspace_size_bytes ||
@@ -463,20 +463,20 @@ gpuxtb_status_t validate_worker_workspace(const EigensolverPlan& plan,
           offset_pointer<LapackInt>(workspace.workspace_base,
                                     data.lapack_integer_work_offset_bytes)) {
     error = "eigensolver worker scratch is not a canonical binding for this plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   AddressRange range;
   if (!make_range(workspace.workspace_base, data.worker_workspace_size_bytes, range)) {
     error = "eigensolver worker scratch address range is not representable";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_workspace(const EigensolverPlan& plan,
-                                   const EigensolverWorkspace& workspace, std::string& error) {
-  gpuxtb_status_t status = validate_worker_workspace(plan, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t validate_workspace(const EigensolverPlan& plan,
+                                    const EigensolverWorkspace& workspace, std::string& error) {
+  xtbloom_status_t status = validate_worker_workspace(plan, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const EigensolverPlanData& data = *plan.identity();
@@ -487,8 +487,8 @@ gpuxtb_status_t validate_workspace(const EigensolverPlan& plan,
           offset_pointer<std::uint64_t>(workspace.workspace_base,
                                         data.factor_generation_staging_offset_bytes) ||
       workspace.factor_status_staging !=
-          offset_pointer<gpuxtb_status_t>(workspace.workspace_base,
-                                          data.factor_status_staging_offset_bytes) ||
+          offset_pointer<xtbloom_status_t>(workspace.workspace_base,
+                                           data.factor_status_staging_offset_bytes) ||
       workspace.batch_coefficients !=
           offset_pointer<double>(workspace.workspace_base,
                                  data.batch_coefficient_staging_offset_bytes) ||
@@ -505,8 +505,8 @@ gpuxtb_status_t validate_workspace(const EigensolverPlan& plan,
           offset_pointer<double>(workspace.workspace_base,
                                  data.batch_occupation_staging_offset_bytes) ||
       workspace.batch_system_statuses !=
-          offset_pointer<gpuxtb_status_t>(workspace.workspace_base,
-                                          data.batch_system_status_staging_offset_bytes) ||
+          offset_pointer<xtbloom_status_t>(workspace.workspace_base,
+                                           data.batch_system_status_staging_offset_bytes) ||
       workspace.batch_chemical_potentials !=
           offset_pointer<double>(workspace.workspace_base,
                                  data.batch_chemical_potential_staging_offset_bytes) ||
@@ -520,39 +520,39 @@ gpuxtb_status_t validate_workspace(const EigensolverPlan& plan,
           offset_pointer<double>(workspace.workspace_base,
                                  data.batch_free_energy_staging_offset_bytes)) {
     error = "eigensolver full-batch staging is not a canonical binding for this plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   AddressRange range;
   if (!make_range(workspace.workspace_base, data.workspace_size_bytes, range)) {
     error = "eigensolver full-batch workspace address range is not representable";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_wavefunction(const EigensolverPlan& plan,
-                                      const WavefunctionView& wavefunction, std::string& error) {
+xtbloom_status_t validate_wavefunction(const EigensolverPlan& plan,
+                                       const WavefunctionView& wavefunction, std::string& error) {
   const EigensolverPlanData& data = *plan.identity();
   if (wavefunction.workspace_base == nullptr ||
       wavefunction.workspace_size_bytes < data.wavefunction_workspace_size_bytes ||
       !is_aligned(wavefunction.workspace_base, kWavefunctionWorkspaceAlignment)) {
     error = "eigensolver wavefunction is not a canonical binding for this plan";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   AddressRange range;
   if (!make_range(wavefunction.workspace_base, data.wavefunction_workspace_size_bytes, range)) {
     error = "eigensolver wavefunction address range is not representable";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const auto pointers = eigensolver_view_fields(wavefunction);
   for (std::size_t field = 0u; field < pointers.size(); ++field) {
     if (pointers[field] != offset_pointer<double>(wavefunction.workspace_base,
                                                   data.wavefunction_fields[field].offset_bytes)) {
       error = "eigensolver wavefunction is not a canonical binding for this plan";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 bool validate_result_view(const EigensolverPlan& plan, const EigensolverThermodynamicsView& results,
@@ -562,12 +562,12 @@ bool validate_result_view(const EigensolverPlan& plan, const EigensolverThermody
   if (!checked_multiply(batch, 2u, chemical_count) || results.system_status_capacity < batch ||
       results.chemical_potential_capacity < chemical_count || results.entropy_capacity < batch ||
       results.band_energy_capacity < batch || results.free_energy_capacity < batch ||
-      !is_aligned(results.system_statuses, alignof(gpuxtb_status_t)) ||
+      !is_aligned(results.system_statuses, alignof(xtbloom_status_t)) ||
       !is_aligned(results.chemical_potentials, alignof(double)) ||
       !is_aligned(results.entropies, alignof(double)) ||
       !is_aligned(results.band_energies, alignof(double)) ||
       !is_aligned(results.free_energies, alignof(double)) ||
-      !make_range(results.system_statuses, batch * sizeof(gpuxtb_status_t), ranges[0]) ||
+      !make_range(results.system_statuses, batch * sizeof(xtbloom_status_t), ranges[0]) ||
       !make_range(results.chemical_potentials, chemical_count * sizeof(double), ranges[1]) ||
       !make_range(results.entropies, batch * sizeof(double), ranges[2]) ||
       !make_range(results.band_energies, batch * sizeof(double), ranges[3]) ||
@@ -943,8 +943,8 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
                                        const WavefunctionView& wavefunction,
                                        const EigensolverThermodynamicsView& thermodynamics) {
   if (overlap_cache.geometry_generations[system] != geometry_generation ||
-      overlap_cache.system_statuses[system] != GPUXTB_STATUS_SUCCESS) {
-    thermodynamics.system_statuses[system] = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+      overlap_cache.system_statuses[system] != XTBLOOM_STATUS_SUCCESS) {
+    thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
     return NumericalResult::kDataFailure;
   }
 
@@ -963,7 +963,7 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
                        workspace.eigenvalues + spin_index * orbital_count, workspace);
     if (result != NumericalResult::kSuccess) {
       if (result == NumericalResult::kDataFailure) {
-        thermodynamics.system_statuses[system] = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+        thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
       }
       return result;
     }
@@ -981,7 +981,7 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
                              electron_count, temperature,
                              workspace.occupations + spin_index * orbital_count,
                              chemical_potentials[spin_index], spin_entropies[spin_index])) {
-      thermodynamics.system_statuses[system] = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+      thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
       return NumericalResult::kDataFailure;
     }
   }
@@ -1032,7 +1032,7 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
     if (!symmetric_finite_column_major(workspace.densities + spin_matrix_offset, orbital_count) ||
         !symmetric_finite_column_major(workspace.energy_weighted_densities + spin_matrix_offset,
                                        orbital_count)) {
-      thermodynamics.system_statuses[system] = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+      thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
       return NumericalResult::kDataFailure;
     }
   }
@@ -1040,7 +1040,7 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
       !finite_array(workspace.energy_weighted_densities, spin_matrix_count) ||
       !std::isfinite(chemical_potentials[0]) || !std::isfinite(chemical_potentials[1]) ||
       !std::isfinite(entropy) || !std::isfinite(band_energy) || !std::isfinite(free_energy)) {
-    thermodynamics.system_statuses[system] = GPUXTB_STATUS_EIGENSOLVER_FAILED;
+    thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
     return NumericalResult::kDataFailure;
   }
 
@@ -1071,7 +1071,7 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
   thermodynamics.entropies[system] = entropy;
   thermodynamics.band_energies[system] = band_energy;
   thermodynamics.free_energies[system] = free_energy;
-  thermodynamics.system_statuses[system] = GPUXTB_STATUS_SUCCESS;
+  thermodynamics.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
   return NumericalResult::kSuccess;
 }
 
@@ -1103,9 +1103,9 @@ void commit_batch_solve_results(const EigensolverPlanData& data,
   const auto output_fields = eigensolver_view_fields(wavefunction);
   const std::size_t batch = static_cast<std::size_t>(data.batch_size);
   for (std::size_t system = 0u; system < batch; ++system) {
-    const gpuxtb_status_t system_status = workspace.batch_system_statuses[system];
+    const xtbloom_status_t system_status = workspace.batch_system_statuses[system];
     thermodynamics.system_statuses[system] = system_status;
-    if (system_status != GPUXTB_STATUS_SUCCESS) {
+    if (system_status != XTBLOOM_STATUS_SUCCESS) {
       continue;
     }
     for (std::size_t field = 0u; field < kEigensolverFieldCount; ++field) {
@@ -1125,28 +1125,28 @@ void commit_batch_solve_results(const EigensolverPlanData& data,
   }
 }
 
-gpuxtb_status_t validate_solve_bindings(
+xtbloom_status_t validate_solve_bindings(
     const EigensolverPlan& plan, const EigensolverOverlapCache& overlap_cache,
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     bool require_full_batch_staging, std::array<AddressRange, 5>& result_ranges,
     std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS ||
-      (status = validate_backend(backend, error)) != GPUXTB_STATUS_SUCCESS ||
-      (status = validate_cache(plan, overlap_cache, error)) != GPUXTB_STATUS_SUCCESS) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS ||
+      (status = validate_backend(backend, error)) != XTBLOOM_STATUS_SUCCESS ||
+      (status = validate_cache(plan, overlap_cache, error)) != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   status = require_full_batch_staging ? validate_workspace(plan, workspace, error)
                                       : validate_worker_workspace(plan, workspace, error);
-  if (status != GPUXTB_STATUS_SUCCESS ||
-      (status = validate_wavefunction(plan, wavefunction, error)) != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS ||
+      (status = validate_wavefunction(plan, wavefunction, error)) != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (!validate_result_view(plan, thermodynamics, result_ranges, error)) {
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 }  // namespace
@@ -1168,7 +1168,7 @@ bool CpuLinearAlgebraBackend::production_mkl_isolated() const noexcept {
   return origin_ == Origin::kMklShimLp64;
 }
 
-gpuxtb_status_t make_internal_test_lp64_backend(
+xtbloom_status_t make_internal_test_lp64_backend(
     LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
     CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
     CpuLinearAlgebraBackend& backend, std::string& error) {
@@ -1177,17 +1177,17 @@ gpuxtb_status_t make_internal_test_lp64_backend(
                                    dpocon_work, dsyevd_work, dtrsm, dgemm, set_num_threads_local);
   if (!created.ready() || !backend_self_test(created)) {
     error = "internal LP64 test backend failed its column-major preflight";
-    return GPUXTB_STATUS_BACKEND_UNAVAILABLE;
+    return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
   }
   backend = created;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::string& error) {
+xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::string& error) {
   struct LinalgRuntimeState {
     CpuLinearAlgebraBackend backend;
-    gpuxtb_status_t status = GPUXTB_STATUS_BACKEND_UNAVAILABLE;
+    xtbloom_status_t status = XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
     std::string message;
   };
   static const LinalgRuntimeState runtime = [] {
@@ -1199,7 +1199,7 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
     state.message = "CPU linear-algebra runtime loading is not ported to Windows yet";
     return state;
 #else
-#ifdef GPUXTB_CONFIGURED_CPU_LINALG_SHIM
+#ifdef XTBLOOM_CONFIGURED_CPU_LINALG_SHIM
     /* Preferred isolated MKL provider: a private shim built at CMake time with
      * fixed DT_NEEDED dependencies on libmkl_intel_lp64, libmkl_sequential, and
      * libmkl_core. RTLD_LOCAL alone does not prevent a global host libmkl_rt
@@ -1208,7 +1208,7 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
      * MKL_Set_Interface_Layer, or read MKL interface-layer state. */
     {
       dlerror();
-      void* handle = open_host_isolated_sibling("libgpuxtb_mkl_lp64_shim.so");
+      void* handle = open_host_isolated_sibling("libxtbloom_mkl_lp64_shim.so");
       if (handle != nullptr) {
         LapackDpotrfWork dpotrf_work = nullptr;
         LapackDpoconWork dpocon_work = nullptr;
@@ -1226,7 +1226,7 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
             /* Retain one process-lifetime loader reference so all dispatch
              * pointers and the private namespace stay valid. */
             state.backend = created;
-            state.status = GPUXTB_STATUS_SUCCESS;
+            state.status = XTBLOOM_STATUS_SUCCESS;
             return state;
           }
         }
@@ -1234,21 +1234,21 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
       }
       state.message =
           "host-isolated MKL provider shim is configured but did not verify "
-          "(libgpuxtb_mkl_lp64_shim)";
+          "(libxtbloom_mkl_lp64_shim)";
       return state;
     }
 #endif
 
-#if !defined(GPUXTB_CONFIGURED_CPU_LINALG_MKL)
-#ifdef GPUXTB_CONFIGURED_CPU_LINALG_RUNTIME
-    constexpr const char* kConfiguredRuntime = GPUXTB_CONFIGURED_CPU_LINALG_RUNTIME;
+#if !defined(XTBLOOM_CONFIGURED_CPU_LINALG_MKL)
+#ifdef XTBLOOM_CONFIGURED_CPU_LINALG_RUNTIME
+    constexpr const char* kConfiguredRuntime = XTBLOOM_CONFIGURED_CPU_LINALG_RUNTIME;
 #else
     constexpr const char* kConfiguredRuntime = nullptr;
 #endif
 
     using OpenBlasGetConfig = const char* (*)();
     /* dlopen candidates in preference order: the absolute path CMake baked in
-     * (GPUXTB_CPU_LINALG_LIBRARY / find_package(BLAS) in CMakeLists.txt) first,
+     * (XTBLOOM_CPU_LINALG_LIBRARY / find_package(BLAS) in CMakeLists.txt) first,
      * then known OpenBLAS sonames that the Python layer may already have
      * preloaded. MKL is never accepted through this base-namespace fallback;
      * its only production path is the isolated component shim above. */
@@ -1313,7 +1313,7 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
       }
       /* Retain one process-lifetime loader reference so all dispatch pointers stay valid. */
       state.backend = created;
-      state.status = GPUXTB_STATUS_SUCCESS;
+      state.status = XTBLOOM_STATUS_SUCCESS;
       return state;
     }
     state.message =
@@ -1329,14 +1329,14 @@ gpuxtb_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std::
 #endif
   }();
 
-  if (runtime.status != GPUXTB_STATUS_SUCCESS) {
+  if (runtime.status != XTBLOOM_STATUS_SUCCESS) {
     error = runtime.message.empty() ? "LP64 CPU linear-algebra backend initialization failed"
                                     : runtime.message;
     return runtime.status;
   }
   backend = runtime.backend;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 namespace {
@@ -1408,18 +1408,18 @@ bool EigensolverPlan::overlaps_storage(const void* data, std::size_t size_bytes)
 }
 const EigensolverPlanData* EigensolverPlan::identity() const noexcept { return data_.get(); }
 
-gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,
-                                      std::string& error, double minimum_overlap_rcond) {
+xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,
+                                       std::string& error, double minimum_overlap_rcond) {
   WavefunctionWarmStartIdentity validated_layout;
-  gpuxtb_status_t status =
+  xtbloom_status_t status =
       make_wavefunction_warm_start_identity(layout, 1u, validated_layout, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (!std::isfinite(minimum_overlap_rcond) || minimum_overlap_rcond <= 0.0 ||
       minimum_overlap_rcond >= 1.0) {
     error = "minimum overlap reciprocal condition must be finite and in (0, 1)";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   try {
@@ -1454,7 +1454,7 @@ gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigensol
           created.total_matrix_elements >
               std::numeric_limits<std::int64_t>::max() - orbitals * orbitals) {
         error = "wavefunction dimensions or electron counts exceed LP64 eigensolver limits";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       created.total_matrix_elements += orbitals * orbitals;
       created.matrix_offsets[system + 1u] = created.total_matrix_elements;
@@ -1465,7 +1465,7 @@ gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigensol
     std::size_t maximum_matrix = 0u;
     if (!checked_multiply(maximum, maximum, maximum_matrix)) {
       error = "eigensolver maximum matrix size overflows size_t";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     const std::uint64_t work_count = 1u + 6u * static_cast<std::uint64_t>(maximum) +
                                      2u * static_cast<std::uint64_t>(maximum_matrix);
@@ -1473,7 +1473,7 @@ gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigensol
     if (work_count > static_cast<std::uint64_t>(std::numeric_limits<LapackInt>::max()) ||
         integer_work_count > static_cast<std::uint64_t>(std::numeric_limits<LapackInt>::max())) {
       error = "LAPACK eigensolver work dimensions exceed LP64 integer limits";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     created.lapack_work_count = static_cast<LapackInt>(work_count);
     created.lapack_integer_work_count = static_cast<LapackInt>(integer_work_count);
@@ -1484,9 +1484,9 @@ gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigensol
     if (!checked_multiply(static_cast<std::size_t>(created.total_matrix_elements), sizeof(double),
                           factor_bytes) ||
         !checked_multiply(batch, sizeof(std::uint64_t), generation_bytes) ||
-        !checked_multiply(batch, sizeof(gpuxtb_status_t), status_bytes)) {
+        !checked_multiply(batch, sizeof(xtbloom_status_t), status_bytes)) {
       error = "eigensolver overlap cache size overflows size_t";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     std::size_t cursor = 0u;
     if (!append_segment(factor_bytes, cursor, created.overlap_factor_offset_bytes) ||
@@ -1494,7 +1494,7 @@ gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigensol
         !append_segment(status_bytes, cursor, created.overlap_status_offset_bytes) ||
         !align_up(cursor, created.overlap_cache_size_bytes)) {
       error = "eigensolver overlap cache packing overflows size_t";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     std::size_t two_matrices = 0u;
@@ -1502,7 +1502,7 @@ gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigensol
     if (!checked_multiply(maximum_matrix, 2u, two_matrices) ||
         !checked_multiply(maximum, 2u, two_orbitals)) {
       error = "eigensolver scratch dimensions overflow size_t";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     const std::array<std::size_t, 6> worker_double_counts{
         {two_matrices, two_matrices, two_matrices, two_orbitals, two_orbitals,
@@ -1518,7 +1518,7 @@ gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigensol
       if (!checked_multiply(worker_double_counts[field], sizeof(double), bytes) ||
           !append_segment(bytes, cursor, *worker_double_offsets[field])) {
         error = "eigensolver worker floating-point scratch packing overflows size_t";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
     std::size_t integer_bytes = 0u;
@@ -1527,14 +1527,14 @@ gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigensol
         !append_segment(integer_bytes, cursor, created.lapack_integer_work_offset_bytes) ||
         !align_up(cursor, created.worker_workspace_size_bytes)) {
       error = "eigensolver worker integer scratch packing overflows size_t";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     cursor = created.worker_workspace_size_bytes;
     std::size_t chemical_potential_count = 0u;
     if (!checked_multiply(batch, 2u, chemical_potential_count)) {
       error = "eigensolver thermodynamic staging dimensions overflow size_t";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     const std::array<std::size_t, 10> staging_double_counts{
         {static_cast<std::size_t>(created.total_matrix_elements),
@@ -1559,7 +1559,7 @@ gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigensol
       if (!checked_multiply(staging_double_counts[field], sizeof(double), bytes) ||
           !append_segment(bytes, cursor, *staging_double_offsets[field])) {
         error = "eigensolver full-batch floating-point staging packing overflows size_t";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
     if (!append_segment(generation_bytes, cursor, created.factor_generation_staging_offset_bytes) ||
@@ -1567,24 +1567,25 @@ gpuxtb_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigensol
         !append_segment(status_bytes, cursor, created.batch_system_status_staging_offset_bytes) ||
         !align_up(cursor, created.workspace_size_bytes)) {
       error = "eigensolver full-batch integral staging packing overflows size_t";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
     auto sealed = std::make_shared<const EigensolverPlanData>(std::move(created));
     plan = EigensolverPlan(std::move(sealed));
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate CPU eigensolver plan metadata";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
-gpuxtb_status_t bind_eigensolver_overlap_cache(const EigensolverPlan& plan, void* workspace,
-                                               std::size_t workspace_size,
-                                               EigensolverOverlapCache& cache, std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t bind_eigensolver_overlap_cache(const EigensolverPlan& plan, void* workspace,
+                                                std::size_t workspace_size,
+                                                EigensolverOverlapCache& cache,
+                                                std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const EigensolverPlanData& data = *plan.identity();
@@ -1602,7 +1603,7 @@ gpuxtb_status_t bind_eigensolver_overlap_cache(const EigensolverPlan& plan, void
       ranges_overlap(workspace_range, cache_descriptor) ||
       ranges_overlap(workspace_range, error_descriptor)) {
     error = "eigensolver overlap cache workspace is invalid or overlaps control storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   EigensolverOverlapCache created;
   created.workspace_base = workspace;
@@ -1611,22 +1612,22 @@ gpuxtb_status_t bind_eigensolver_overlap_cache(const EigensolverPlan& plan, void
   created.geometry_generations =
       offset_pointer<std::uint64_t>(workspace, data.overlap_generation_offset_bytes);
   created.system_statuses =
-      offset_pointer<gpuxtb_status_t>(workspace, data.overlap_status_offset_bytes);
+      offset_pointer<xtbloom_status_t>(workspace, data.overlap_status_offset_bytes);
   created.plan_identity = &data;
   std::fill_n(created.cholesky_factors, static_cast<std::size_t>(data.total_matrix_elements), 0.0);
   std::fill_n(created.geometry_generations, static_cast<std::size_t>(data.batch_size), 0u);
   std::fill_n(created.system_statuses, static_cast<std::size_t>(data.batch_size),
-              GPUXTB_STATUS_EIGENSOLVER_FAILED);
+              XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   cache = created;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t bind_eigensolver_workspace(const EigensolverPlan& plan, void* workspace,
-                                           std::size_t workspace_size, EigensolverWorkspace& view,
-                                           std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t bind_eigensolver_workspace(const EigensolverPlan& plan, void* workspace,
+                                            std::size_t workspace_size, EigensolverWorkspace& view,
+                                            std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const EigensolverPlanData& data = *plan.identity();
@@ -1644,7 +1645,7 @@ gpuxtb_status_t bind_eigensolver_workspace(const EigensolverPlan& plan, void* wo
       ranges_overlap(workspace_range, view_descriptor) ||
       ranges_overlap(workspace_range, error_descriptor)) {
     error = "eigensolver scratch workspace is invalid or overlaps control storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   EigensolverWorkspace created;
   created.workspace_base = workspace;
@@ -1662,7 +1663,7 @@ gpuxtb_status_t bind_eigensolver_workspace(const EigensolverPlan& plan, void* wo
   created.factor_generation_staging =
       offset_pointer<std::uint64_t>(workspace, data.factor_generation_staging_offset_bytes);
   created.factor_status_staging =
-      offset_pointer<gpuxtb_status_t>(workspace, data.factor_status_staging_offset_bytes);
+      offset_pointer<xtbloom_status_t>(workspace, data.factor_status_staging_offset_bytes);
   created.batch_coefficients =
       offset_pointer<double>(workspace, data.batch_coefficient_staging_offset_bytes);
   created.batch_densities =
@@ -1674,7 +1675,7 @@ gpuxtb_status_t bind_eigensolver_workspace(const EigensolverPlan& plan, void* wo
   created.batch_occupations =
       offset_pointer<double>(workspace, data.batch_occupation_staging_offset_bytes);
   created.batch_system_statuses =
-      offset_pointer<gpuxtb_status_t>(workspace, data.batch_system_status_staging_offset_bytes);
+      offset_pointer<xtbloom_status_t>(workspace, data.batch_system_status_staging_offset_bytes);
   created.batch_chemical_potentials =
       offset_pointer<double>(workspace, data.batch_chemical_potential_staging_offset_bytes);
   created.batch_entropies =
@@ -1686,14 +1687,14 @@ gpuxtb_status_t bind_eigensolver_workspace(const EigensolverPlan& plan, void* wo
   created.plan_identity = &data;
   view = created;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, void* workspace,
-                                                  std::size_t workspace_size,
-                                                  EigensolverWorkspace& view, std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, void* workspace,
+                                                   std::size_t workspace_size,
+                                                   EigensolverWorkspace& view, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const EigensolverPlanData& data = *plan.identity();
@@ -1711,7 +1712,7 @@ gpuxtb_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, v
       ranges_overlap(workspace_range, view_descriptor) ||
       ranges_overlap(workspace_range, error_descriptor)) {
     error = "eigensolver worker scratch is invalid or overlaps control storage";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   EigensolverWorkspace created;
   created.workspace_base = workspace;
@@ -1728,25 +1729,25 @@ gpuxtb_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, v
   created.plan_identity = &data;
   view = created;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* overlap,
-                                   std::uint64_t geometry_generation,
-                                   const CpuLinearAlgebraBackend& backend,
-                                   const EigensolverWorkspace& workspace,
-                                   const EigensolverOverlapCache& cache, std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS ||
-      (status = validate_backend(backend, error)) != GPUXTB_STATUS_SUCCESS ||
-      (status = validate_workspace(plan, workspace, error)) != GPUXTB_STATUS_SUCCESS ||
-      (status = validate_cache(plan, cache, error)) != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* overlap,
+                                    std::uint64_t geometry_generation,
+                                    const CpuLinearAlgebraBackend& backend,
+                                    const EigensolverWorkspace& workspace,
+                                    const EigensolverOverlapCache& cache, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS ||
+      (status = validate_backend(backend, error)) != XTBLOOM_STATUS_SUCCESS ||
+      (status = validate_workspace(plan, workspace, error)) != XTBLOOM_STATUS_SUCCESS ||
+      (status = validate_cache(plan, cache, error)) != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const EigensolverPlanData& data = *plan.identity();
   if (geometry_generation == 0u || !is_aligned(overlap, alignof(double))) {
     error = "overlap factorization requires a nonzero generation and aligned overlap input";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t overlap_bytes =
       static_cast<std::size_t>(data.total_matrix_elements) * sizeof(double);
@@ -1762,7 +1763,7 @@ gpuxtb_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* ov
       !make_range(&error, sizeof(error), controls[4]) || !pairwise_disjoint(active) ||
       !disjoint_from_control(plan, active, controls)) {
     error = "overlap input, cache, scratch, plan, and descriptors must not overlap";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const std::size_t batch = static_cast<std::size_t>(data.batch_size);
@@ -1772,7 +1773,7 @@ gpuxtb_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* ov
     if (!symmetric_finite_row_major(overlap + static_cast<std::size_t>(data.matrix_offsets[system]),
                                     n)) {
       error = "overlap matrices must be finite and symmetric";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
 
@@ -1795,7 +1796,7 @@ gpuxtb_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* ov
     }
     if (info < 0) {
       error = "LP64 LAPACK rejected an internal overlap-factorization argument";
-      return GPUXTB_STATUS_INTERNAL_ERROR;
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     const bool usable = info == 0 && std::isfinite(reciprocal_condition) &&
                         reciprocal_condition >= data.minimum_overlap_rcond;
@@ -1808,34 +1809,34 @@ gpuxtb_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* ov
     }
     workspace.factor_generation_staging[system] = geometry_generation;
     workspace.factor_status_staging[system] =
-        usable ? GPUXTB_STATUS_SUCCESS : GPUXTB_STATUS_EIGENSOLVER_FAILED;
+        usable ? XTBLOOM_STATUS_SUCCESS : XTBLOOM_STATUS_EIGENSOLVER_FAILED;
   }
 
   /* No backend failure occurred: publish the complete staged batch. */
   for (std::size_t system = 0u; system < batch; ++system) {
     cache.geometry_generations[system] = workspace.factor_generation_staging[system];
     cache.system_statuses[system] = workspace.factor_status_staging[system];
-    if (workspace.factor_status_staging[system] == GPUXTB_STATUS_SUCCESS) {
+    if (workspace.factor_status_staging[system] == XTBLOOM_STATUS_SUCCESS) {
       const std::size_t begin = static_cast<std::size_t>(data.matrix_offsets[system]);
       const std::size_t end = static_cast<std::size_t>(data.matrix_offsets[system + 1u]);
       std::copy_n(workspace.factor_staging + begin, end - begin, cache.cholesky_factors + begin);
     }
   }
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t fill_occupations_cpu(std::int64_t orbital_count, const double* eigenvalues,
-                                     double electron_count, double temperature, double* occupations,
-                                     double& chemical_potential, double& entropy,
-                                     std::string& error) {
+xtbloom_status_t fill_occupations_cpu(std::int64_t orbital_count, const double* eigenvalues,
+                                      double electron_count, double temperature,
+                                      double* occupations, double& chemical_potential,
+                                      double& entropy, std::string& error) {
   if (orbital_count <= 0 || orbital_count > std::numeric_limits<LapackInt>::max() ||
       !is_aligned(eigenvalues, alignof(double)) || !is_aligned(occupations, alignof(double)) ||
       !std::isfinite(electron_count) || electron_count < 0.0 ||
       electron_count > static_cast<double>(orbital_count) || !std::isfinite(temperature) ||
       temperature < 0.0) {
     error = "occupation inputs are invalid, unrepresentable, or misaligned";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t count = static_cast<std::size_t>(orbital_count);
   std::array<AddressRange, 5> ranges{};
@@ -1845,13 +1846,13 @@ gpuxtb_status_t fill_occupations_cpu(std::int64_t orbital_count, const double* e
       !make_range(&entropy, sizeof(entropy), ranges[3]) ||
       !make_range(&error, sizeof(error), ranges[4]) || !pairwise_disjoint(ranges)) {
     error = "occupation inputs and scalar outputs must not overlap";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::size_t orbital = 0u; orbital < count; ++orbital) {
     if (!std::isfinite(eigenvalues[orbital]) ||
         (orbital != 0u && eigenvalues[orbital] < eigenvalues[orbital - 1u])) {
       error = "orbital energies must be finite and nondecreasing";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   double candidate_mu = 0.0;
@@ -1859,37 +1860,37 @@ gpuxtb_status_t fill_occupations_cpu(std::int64_t orbital_count, const double* e
   if (!compute_occupations(eigenvalues, count, electron_count, temperature, nullptr, candidate_mu,
                            candidate_entropy)) {
     error = "Fermi filling failed to produce finite electron-conserving results";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!compute_occupations(eigenvalues, count, electron_count, temperature, occupations,
                            candidate_mu, candidate_entropy)) {
     error = "Fermi filling failed during atomic publication";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   chemical_potential = candidate_mu;
   entropy = candidate_entropy;
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t solve_eigensystems_cpu(
+xtbloom_status_t solve_eigensystems_cpu(
     const EigensolverPlan& plan, const EigensolverOverlapCache& overlap_cache,
     std::uint64_t geometry_generation, const double* hamiltonians, double temperature,
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     std::string& error) {
   std::array<AddressRange, 5> result_ranges{};
-  gpuxtb_status_t status =
+  xtbloom_status_t status =
       validate_solve_bindings(plan, overlap_cache, backend, workspace, wavefunction, thermodynamics,
                               true, result_ranges, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const EigensolverPlanData& data = *plan.identity();
   if (geometry_generation == 0u || !is_aligned(hamiltonians, alignof(double)) ||
       !std::isfinite(temperature) || temperature < 0.0) {
     error = "eigensolver requires aligned Hamiltonians, a nonzero generation, and valid kBT";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t hamiltonian_count =
       static_cast<std::size_t>(data.wavefunction_fields[0].element_count);
@@ -1909,23 +1910,23 @@ gpuxtb_status_t solve_eigensystems_cpu(
       !make_range(&error, sizeof(error), controls[6]) || !pairwise_disjoint(principal) ||
       !disjoint_from_control(plan, principal, controls)) {
     error = "eigensolver arrays, plan storage, and descriptors must not overlap";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (const AddressRange& result : result_ranges) {
     if (overlaps_plan_storage(plan, result)) {
       error = "eigensolver scalar outputs must not overlap immutable plan storage";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     for (const AddressRange& range : principal) {
       if (ranges_overlap(result, range)) {
         error = "eigensolver scalar outputs must not overlap numerical arrays";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
     for (const AddressRange& control : controls) {
       if (ranges_overlap(result, control)) {
         error = "eigensolver scalar outputs must not overlap descriptors";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
   }
@@ -1942,7 +1943,7 @@ gpuxtb_status_t solve_eigensystems_cpu(
               hamiltonians + hamiltonian_offset + static_cast<std::size_t>(spin) * matrix_count,
               n)) {
         error = "Hamiltonian matrices must be finite and symmetric";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
   }
@@ -1959,25 +1960,25 @@ gpuxtb_status_t solve_eigensystems_cpu(
         temperature, backend, workspace, staging_wavefunction, staging_thermodynamics);
     if (result == NumericalResult::kBackendFailure) {
       error = "LP64 LAPACK rejected an internal eigensolver argument";
-      return GPUXTB_STATUS_INTERNAL_ERROR;
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
   }
   commit_batch_solve_results(data, workspace, wavefunction, thermodynamics);
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t solve_eigensystem_cpu(
+xtbloom_status_t solve_eigensystem_cpu(
     const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
     std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     std::string& error) {
   std::array<AddressRange, 5> result_ranges{};
-  gpuxtb_status_t status =
+  xtbloom_status_t status =
       validate_solve_bindings(plan, overlap_cache, backend, workspace, wavefunction, thermodynamics,
                               false, result_ranges, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const EigensolverPlanData& data = *plan.identity();
@@ -1985,7 +1986,7 @@ gpuxtb_status_t solve_eigensystem_cpu(
       !is_aligned(system_hamiltonians, alignof(double)) || !std::isfinite(temperature) ||
       temperature < 0.0) {
     error = "one-system eigensolver inputs are invalid";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t system_index = static_cast<std::size_t>(system);
   const std::size_t n = static_cast<std::size_t>(data.orbital_offsets[system_index + 1u] -
@@ -2009,23 +2010,23 @@ gpuxtb_status_t solve_eigensystem_cpu(
       !make_range(&error, sizeof(error), controls[6]) || !pairwise_disjoint(principal) ||
       !disjoint_from_control(plan, principal, controls)) {
     error = "one-system eigensolver arrays and control storage must not overlap";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (const AddressRange& result : result_ranges) {
     if (overlaps_plan_storage(plan, result)) {
       error = "one-system scalar outputs must not overlap immutable plan storage";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     for (const AddressRange& range : principal) {
       if (ranges_overlap(result, range)) {
         error = "one-system scalar outputs must not overlap numerical arrays";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
     for (const AddressRange& control : controls) {
       if (ranges_overlap(result, control)) {
         error = "one-system scalar outputs must not overlap descriptors";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
   }
@@ -2033,7 +2034,7 @@ gpuxtb_status_t solve_eigensystem_cpu(
     if (!symmetric_finite_row_major(
             system_hamiltonians + static_cast<std::size_t>(spin) * matrix_count, n)) {
       error = "one-system Hamiltonians must be finite and symmetric";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   ScopedSequentialBlas sequential_blas(backend);
@@ -2042,10 +2043,10 @@ gpuxtb_status_t solve_eigensystem_cpu(
       backend, workspace, wavefunction, thermodynamics);
   if (result == NumericalResult::kBackendFailure) {
     error = "LP64 LAPACK rejected an internal one-system eigensolver argument";
-    return GPUXTB_STATUS_INTERNAL_ERROR;
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2

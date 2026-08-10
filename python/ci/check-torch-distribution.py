@@ -9,8 +9,8 @@ import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-SOURCE_SUFFIX = "src/bindings/torch/gpuxtb_torch_ext.cpp"
-WHEEL_EXTENSION_PATH = "gpuxtb/lib/libgpuxtb_torch_ext.so"
+SOURCE_SUFFIX = "src/bindings/torch/xtbloom_torch_ext.cpp"
+WHEEL_EXTENSION_PATH = "xtbloom/lib/libxtbloom_torch_ext.so"
 
 
 def _wheel_names(path: Path) -> list[str]:
@@ -28,13 +28,13 @@ def _sdist_names(path: Path) -> list[str]:
 def check_wheel(path: Path) -> None:
     """Require the compiled extension and reject leaked C++ build inputs."""
     names = _wheel_names(path)
-    leaked = [name for name in names if name.endswith("gpuxtb_torch_ext.cpp")]
+    leaked = [name for name in names if name.endswith("xtbloom_torch_ext.cpp")]
     if leaked:
         raise RuntimeError(f"{path} leaks Torch extension source: {leaked[0]}")
     extensions = sorted(
         name
         for name in names
-        if PurePosixPath(name).name.startswith("libgpuxtb_torch_ext")
+        if PurePosixPath(name).name.startswith("libxtbloom_torch_ext")
     )
     if extensions != [WHEEL_EXTENSION_PATH]:
         raise RuntimeError(
@@ -54,7 +54,7 @@ def check_sdist(path: Path) -> None:
         )
     expected = f"{next(iter(roots))}/{SOURCE_SUFFIX}"
     sources = sorted(
-        name for name in names if PurePosixPath(name).name == "gpuxtb_torch_ext.cpp"
+        name for name in names if PurePosixPath(name).name == "xtbloom_torch_ext.cpp"
     )
     if sources != [expected]:
         raise RuntimeError(f"{path} must contain only {expected}; found {sources}")

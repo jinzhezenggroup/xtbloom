@@ -15,19 +15,19 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::commit_gfn2_public_results_cuda;
-using gpuxtb::detail::cuda::Gfn2PublicResultBridgeControl;
-using gpuxtb::detail::cuda::Gfn2PublicResultBridgeDestination;
-using gpuxtb::detail::cuda::Gfn2PublicResultBridgeDeviceDestinations;
-using gpuxtb::detail::cuda::Gfn2PublicResultBridgeDeviceDiagnostics;
-using gpuxtb::detail::cuda::Gfn2PublicResultBridgeDeviceInput;
-using gpuxtb::detail::cuda::Gfn2PublicResultBridgeDevicePlan;
-using gpuxtb::detail::cuda::Gfn2PublicResultBridgeDeviceStaging;
-using gpuxtb::detail::cuda::Gfn2PublicResultBridgeError;
-using gpuxtb::detail::cuda::Gfn2PublicResultBridgeHostBuffer;
-using gpuxtb::detail::cuda::Gfn2PublicResultBridgeHostStaging;
-using gpuxtb::detail::cuda::Gfn2PublicResultRoute;
-using gpuxtb::detail::cuda::prepare_gfn2_public_results_cuda;
+using xtbloom::detail::cuda::commit_gfn2_public_results_cuda;
+using xtbloom::detail::cuda::Gfn2PublicResultBridgeControl;
+using xtbloom::detail::cuda::Gfn2PublicResultBridgeDestination;
+using xtbloom::detail::cuda::Gfn2PublicResultBridgeDeviceDestinations;
+using xtbloom::detail::cuda::Gfn2PublicResultBridgeDeviceDiagnostics;
+using xtbloom::detail::cuda::Gfn2PublicResultBridgeDeviceInput;
+using xtbloom::detail::cuda::Gfn2PublicResultBridgeDevicePlan;
+using xtbloom::detail::cuda::Gfn2PublicResultBridgeDeviceStaging;
+using xtbloom::detail::cuda::Gfn2PublicResultBridgeError;
+using xtbloom::detail::cuda::Gfn2PublicResultBridgeHostBuffer;
+using xtbloom::detail::cuda::Gfn2PublicResultBridgeHostStaging;
+using xtbloom::detail::cuda::Gfn2PublicResultRoute;
+using xtbloom::detail::cuda::prepare_gfn2_public_results_cuda;
 
 #define CHECK(condition)                                                                           \
   do {                                                                                             \
@@ -44,11 +44,11 @@ constexpr std::uint64_t kPlanToken = UINT64_C(0x72f154e8a31bc906);
 constexpr double kDoubleSentinel = -9137.625;
 constexpr std::int32_t kIterationSentinel = -123456789;
 constexpr std::uint8_t kConvergedSentinel = UINT8_C(0xa5);
-constexpr gpuxtb_status_t kStatusSentinel = INT32_C(0x5a5a5a5a);
+constexpr xtbloom_status_t kStatusSentinel = INT32_C(0x5a5a5a5a);
 constexpr std::uint32_t kFlagsSentinel = UINT32_C(0xc35aa53c);
-constexpr std::uint32_t kAllProperties = GPUXTB_COMPUTE_ENERGY | GPUXTB_COMPUTE_FORCES |
-                                         GPUXTB_COMPUTE_ATOMIC_CHARGES |
-                                         GPUXTB_COMPUTE_POINT_CHARGE_FORCES;
+constexpr std::uint32_t kAllProperties = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
+                                         XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+                                         XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
 
 __global__ void hold_result_stream_kernel(unsigned long long clock_cycles) {
   if (blockIdx.x != 0 || threadIdx.x != 0) return;
@@ -177,7 +177,7 @@ struct Fixture {
   std::vector<double> host_point_forces;
   std::vector<std::int32_t> host_iterations;
   std::vector<std::uint8_t> host_converged;
-  std::vector<gpuxtb_status_t> host_statuses;
+  std::vector<xtbloom_status_t> host_statuses;
 
   DeviceBuffer<double> internal_energies;
   DeviceBuffer<double> internal_forces;
@@ -185,7 +185,7 @@ struct Fixture {
   DeviceBuffer<double> internal_point_forces;
   DeviceBuffer<std::int32_t> internal_iterations;
   DeviceBuffer<std::uint8_t> internal_converged;
-  DeviceBuffer<gpuxtb_status_t> internal_statuses;
+  DeviceBuffer<xtbloom_status_t> internal_statuses;
   DeviceBuffer<std::uint32_t> publication_plan_error;
   DeviceBuffer<std::uint32_t> request_topology_error;
   DeviceBuffer<std::uint64_t> publication_epoch;
@@ -197,7 +197,7 @@ struct Fixture {
   DeviceBuffer<double> shadow_point_forces;
   DeviceBuffer<std::int32_t> shadow_iterations;
   DeviceBuffer<std::uint8_t> shadow_converged;
-  DeviceBuffer<gpuxtb_status_t> shadow_statuses;
+  DeviceBuffer<xtbloom_status_t> shadow_statuses;
 
   DeviceBuffer<double> output_energies;
   DeviceBuffer<double> output_forces;
@@ -205,7 +205,7 @@ struct Fixture {
   DeviceBuffer<double> output_point_forces;
   DeviceBuffer<std::int32_t> output_iterations;
   DeviceBuffer<std::uint8_t> output_converged;
-  DeviceBuffer<gpuxtb_status_t> output_statuses;
+  DeviceBuffer<xtbloom_status_t> output_statuses;
   DeviceBuffer<Gfn2PublicResultBridgeControl> device_control;
 
   PinnedBuffer<double> staging_energies;
@@ -214,7 +214,7 @@ struct Fixture {
   PinnedBuffer<double> staging_point_forces;
   PinnedBuffer<std::int32_t> staging_iterations;
   PinnedBuffer<std::uint8_t> staging_converged;
-  PinnedBuffer<gpuxtb_status_t> staging_statuses;
+  PinnedBuffer<xtbloom_status_t> staging_statuses;
   PinnedBuffer<Gfn2PublicResultBridgeControl> host_control;
   PinnedBuffer<std::uint32_t> pending_flags;
 
@@ -226,7 +226,7 @@ struct Fixture {
   Gfn2PublicResultBridgeDeviceDiagnostics diagnostics{};
   std::array<Gfn2PublicResultRoute, kFieldCount> routes{};
 
-  bool requested(gpuxtb_compute_flag_t property) const {
+  bool requested(xtbloom_compute_flag_t property) const {
     return (flags & static_cast<std::uint32_t>(property)) != 0u;
   }
 
@@ -242,10 +242,10 @@ struct Fixture {
     total_atoms = atom_offsets.back();
     total_points = point_offsets.back();
 
-    if (requested(GPUXTB_COMPUTE_ENERGY)) host_energies.resize(batch_size);
-    if (requested(GPUXTB_COMPUTE_FORCES)) host_forces.resize(3 * total_atoms);
-    if (requested(GPUXTB_COMPUTE_ATOMIC_CHARGES)) host_charges.resize(total_atoms);
-    if (requested(GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) {
+    if (requested(XTBLOOM_COMPUTE_ENERGY)) host_energies.resize(batch_size);
+    if (requested(XTBLOOM_COMPUTE_FORCES)) host_forces.resize(3 * total_atoms);
+    if (requested(XTBLOOM_COMPUTE_ATOMIC_CHARGES)) host_charges.resize(total_atoms);
+    if (requested(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES)) {
       host_point_forces.resize(3 * total_points);
     }
     host_iterations.resize(batch_size);
@@ -268,7 +268,7 @@ struct Fixture {
       host_iterations[static_cast<std::size_t>(system)] =
           static_cast<std::int32_t>(4 + system % 17);
       host_converged[static_cast<std::size_t>(system)] = 1u;
-      host_statuses[static_cast<std::size_t>(system)] = GPUXTB_STATUS_SUCCESS;
+      host_statuses[static_cast<std::size_t>(system)] = XTBLOOM_STATUS_SUCCESS;
     }
 
     /* Internal publication already owns failed-peer NaN/status semantics. */
@@ -292,7 +292,7 @@ struct Fixture {
             nan);
       }
       host_converged[static_cast<std::size_t>(failed)] = 0u;
-      host_statuses[static_cast<std::size_t>(failed)] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+      host_statuses[static_cast<std::size_t>(failed)] = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
     }
 
     const std::size_t atom_coordinates = static_cast<std::size_t>(3 * total_atoms);
@@ -342,7 +342,7 @@ struct Fixture {
     }
 
     plan.requested_properties = flags;
-    plan.result_flags = GPUXTB_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES;
+    plan.result_flags = XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES;
     plan.plan_token = kPlanToken;
     plan.batch_size = batch_size;
     plan.total_atoms = total_atoms;
@@ -450,25 +450,25 @@ struct Fixture {
 
   void configure(const std::array<Gfn2PublicResultRoute, kFieldCount>& requested_routes) {
     routes = requested_routes;
-    if (requested(GPUXTB_COMPUTE_ENERGY)) {
+    if (requested(XTBLOOM_COMPUTE_ENERGY)) {
       bind_field(destinations.energies, staging.energies, routes[kEnergy], batch_size,
                  output_energies, staging_energies);
     } else {
       bind_absent(destinations.energies, staging.energies);
     }
-    if (requested(GPUXTB_COMPUTE_FORCES)) {
+    if (requested(XTBLOOM_COMPUTE_FORCES)) {
       bind_field(destinations.qm_forces, staging.qm_forces, routes[kForces], 3 * total_atoms,
                  output_forces, staging_forces);
     } else {
       bind_absent(destinations.qm_forces, staging.qm_forces);
     }
-    if (requested(GPUXTB_COMPUTE_ATOMIC_CHARGES)) {
+    if (requested(XTBLOOM_COMPUTE_ATOMIC_CHARGES)) {
       bind_field(destinations.atomic_charges, staging.atomic_charges, routes[kCharges], total_atoms,
                  output_charges, staging_charges);
     } else {
       bind_absent(destinations.atomic_charges, staging.atomic_charges);
     }
-    if (requested(GPUXTB_COMPUTE_POINT_CHARGE_FORCES)) {
+    if (requested(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES)) {
       bind_field(destinations.point_forces, staging.point_forces, routes[kPointForces],
                  3 * total_points, output_point_forces, staging_point_forces);
     } else {
@@ -590,8 +590,8 @@ bool run_aggregate_failure(Mutator&& mutate, Gfn2PublicResultBridgeError expecte
                                           kDoubleSentinel);
   std::vector<std::int32_t> host_caller_iterations(static_cast<std::size_t>(fixture.batch_size),
                                                    kIterationSentinel);
-  std::vector<gpuxtb_status_t> host_caller_statuses(static_cast<std::size_t>(fixture.batch_size),
-                                                    kStatusSentinel);
+  std::vector<xtbloom_status_t> host_caller_statuses(static_cast<std::size_t>(fixture.batch_size),
+                                                     kStatusSentinel);
   std::uint32_t caller_flags = kFlagsSentinel;
 
   CUDA_CHECK(prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
@@ -653,7 +653,7 @@ bool test_aggregate_gate(cudaStream_t stream) {
       Gfn2PublicResultBridgeError::kRequestTopologyMismatch, stream));
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
-        fixture.host_statuses[0] = GPUXTB_STATUS_INTERNAL_ERROR;
+        fixture.host_statuses[0] = XTBLOOM_STATUS_INTERNAL_ERROR;
         return fixture.internal_statuses.upload(fixture.host_statuses);
       },
       Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream));
@@ -685,7 +685,7 @@ bool test_aggregate_gate(cudaStream_t stream) {
 }
 
 bool test_unrequested_outputs(cudaStream_t stream) {
-  Fixture fixture(8, GPUXTB_COMPUTE_ENERGY);
+  Fixture fixture(8, XTBLOOM_COMPUTE_ENERGY);
   CHECK(fixture.initialize());
   fixture.configure({Gfn2PublicResultRoute::kCudaDevice, Gfn2PublicResultRoute::kAbsent,
                      Gfn2PublicResultRoute::kAbsent, Gfn2PublicResultRoute::kAbsent,

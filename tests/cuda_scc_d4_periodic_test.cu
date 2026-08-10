@@ -21,17 +21,17 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::Gfn2D4DeviceBatch;
-using gpuxtb::detail::cuda::Gfn2D4DeviceCache;
-using gpuxtb::detail::cuda::Gfn2D4DeviceElementData;
-using gpuxtb::detail::cuda::Gfn2D4DeviceError;
-using gpuxtb::detail::cuda::Gfn2D4DeviceParameters;
-using gpuxtb::detail::cuda::Gfn2D4DeviceReferenceData;
-using gpuxtb::detail::cuda::Gfn2D4DeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2PeriodicEmbeddingDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2PeriodicEmbeddingDeviceError;
-using gpuxtb::detail::cuda::Gfn2PeriodicEmbeddingDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
+using xtbloom::detail::cuda::Gfn2D4DeviceBatch;
+using xtbloom::detail::cuda::Gfn2D4DeviceCache;
+using xtbloom::detail::cuda::Gfn2D4DeviceElementData;
+using xtbloom::detail::cuda::Gfn2D4DeviceError;
+using xtbloom::detail::cuda::Gfn2D4DeviceParameters;
+using xtbloom::detail::cuda::Gfn2D4DeviceReferenceData;
+using xtbloom::detail::cuda::Gfn2D4DeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2PeriodicEmbeddingDeviceBatch;
+using xtbloom::detail::cuda::Gfn2PeriodicEmbeddingDeviceError;
+using xtbloom::detail::cuda::Gfn2PeriodicEmbeddingDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceActivity;
 
 constexpr std::uint64_t kPlanToken = 0x93d4a11ce5cc2026ULL;
 constexpr std::uint64_t kGeometryGeneration = 17u;
@@ -161,7 +161,7 @@ struct D4Fixture {
     host_atom_offsets.resize(systems + 1u);
     host_pair_offsets.resize(systems + 1u);
     host_atomic_numbers.resize(atom_count);
-    host_pair_data.resize(systems * gpuxtb::detail::cuda::kGfn2D4PairDataElements);
+    host_pair_data.resize(systems * xtbloom::detail::cuda::kGfn2D4PairDataElements);
     host_coordination.assign(atom_count, 0.0);
     host_mixed.resize(atom_count);
     host_raw.resize(atom_count);
@@ -182,7 +182,7 @@ struct D4Fixture {
       host_raw[atom] = -0.24 + 0.004 * static_cast<double>(system % 11u);
       host_raw[atom + 1u] = 0.13 - 0.002 * static_cast<double>(system % 3u);
       host_active[system] = system % 2u == 0u ? 1u : 0u;
-      const std::size_t pair = system * gpuxtb::detail::cuda::kGfn2D4PairDataElements;
+      const std::size_t pair = system * xtbloom::detail::cuda::kGfn2D4PairDataElements;
       host_pair_data[pair] = 1.0;
       host_pair_data[pair + 1u] = 0.0;
       host_pair_data[pair + 2u] = 0.0;
@@ -197,7 +197,7 @@ struct D4Fixture {
         host_raw[atom + 1u] = std::numeric_limits<double>::quiet_NaN();
         host_coordination[atom] = std::numeric_limits<double>::quiet_NaN();
         host_coordination[atom + 1u] = std::numeric_limits<double>::quiet_NaN();
-        for (std::size_t field = 0u; field < gpuxtb::detail::cuda::kGfn2D4PairDataElements;
+        for (std::size_t field = 0u; field < xtbloom::detail::cuda::kGfn2D4PairDataElements;
              ++field) {
           host_pair_data[pair + field] = std::numeric_limits<double>::quiet_NaN();
         }
@@ -209,7 +209,7 @@ struct D4Fixture {
     const std::vector<double> host_reference_c6{kReferenceC6};
     const std::vector<double> potential_seed(atom_count, kSentinel);
     const std::vector<double> energy_seed(systems, kSentinel);
-    const std::size_t weight_count = atom_count * gpuxtb::detail::cuda::kGfn2D4MaximumReferences;
+    const std::size_t weight_count = atom_count * xtbloom::detail::cuda::kGfn2D4MaximumReferences;
     CUDA_CHECK(atom_offsets.allocate(host_atom_offsets.size()));
     CUDA_CHECK(pair_offsets.allocate(host_pair_offsets.size()));
     CUDA_CHECK(atomic_numbers.allocate(atom_count));
@@ -245,7 +245,7 @@ struct D4Fixture {
              static_cast<std::int64_t>(atom_count),
              static_cast<std::int64_t>(systems),
              kPlanToken,
-             gpuxtb::detail::cuda::gfn2_d4_atomic_number_hash(
+             xtbloom::detail::cuda::gfn2_d4_atomic_number_hash(
                  host_atomic_numbers.data(), static_cast<std::int64_t>(atom_count)),
              atom_offsets.get(),
              pair_offsets.get(),
@@ -262,7 +262,7 @@ struct D4Fixture {
     workspace.weights = weights.get();
     workspace.weight_charge_derivatives = charge_derivatives.get();
     workspace.weight_elements = static_cast<std::int64_t>(
-        batch.total_atoms * gpuxtb::detail::cuda::kGfn2D4MaximumReferences);
+        batch.total_atoms * xtbloom::detail::cuda::kGfn2D4MaximumReferences);
     workspace.atom_scratch = atom_scratch.get();
     workspace.atom_elements = batch.total_atoms;
     workspace.system_errors = system_errors.get();
@@ -274,7 +274,7 @@ struct D4Fixture {
     Gfn2D4DeviceWorkspace workspace{};
     workspace.weights = weights.get();
     workspace.weight_elements = static_cast<std::int64_t>(
-        batch.total_atoms * gpuxtb::detail::cuda::kGfn2D4MaximumReferences);
+        batch.total_atoms * xtbloom::detail::cuda::kGfn2D4MaximumReferences);
     workspace.batch_scratch = batch_scratch.get();
     workspace.batch_elements = batch.batch_size;
     workspace.system_errors = system_errors.get();
@@ -303,7 +303,7 @@ int check_d4_outputs(D4Fixture& fixture, cudaStream_t stream) {
       continue;
     }
     const double damping =
-        fixture.host_pair_data[system * gpuxtb::detail::cuda::kGfn2D4PairDataElements + 3u];
+        fixture.host_pair_data[system * xtbloom::detail::cuda::kGfn2D4PairDataElements + 3u];
     const double mixed_first = d4_charge_scale(fixture.host_mixed[atom]);
     const double mixed_second = d4_charge_scale(fixture.host_mixed[atom + 1u]);
     const double expected_first = -d4_charge_scale_derivative(fixture.host_mixed[atom]) *
@@ -325,16 +325,16 @@ int check_d4_outputs(D4Fixture& fixture, cudaStream_t stream) {
 int run_d4_batch(std::size_t batch_size, cudaStream_t stream) {
   D4Fixture fixture;
   CHECK(fixture.initialize(batch_size, stream) == 0);
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_d4_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_d4_device_errors_cuda(
       static_cast<std::int64_t>(batch_size), fixture.system_errors.get(),
       fixture.device_error.get(), stream));
   Gfn2D4DeviceWorkspace potential_workspace = fixture.potential_workspace();
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration, fixture.mixed.get(),
       fixture.activity.view(static_cast<std::int64_t>(batch_size)), fixture.potentials.get(),
       potential_workspace, fixture.device_error.get(), stream));
   Gfn2D4DeviceWorkspace energy_workspace = fixture.energy_workspace();
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration, fixture.raw.get(),
       fixture.activity.view(static_cast<std::int64_t>(batch_size)), fixture.energies.get(),
       energy_workspace, fixture.device_error.get(), stream));
@@ -347,7 +347,7 @@ int test_d4_all_inactive_and_stale(cudaStream_t stream) {
   const std::vector<std::uint8_t> inactive(8u, 0u);
   const std::vector<std::int64_t> poison_offsets(9u, std::numeric_limits<std::int64_t>::min());
   const std::vector<std::int32_t> poison_numbers(16u, -1);
-  const std::vector<double> poison_pairs(8u * gpuxtb::detail::cuda::kGfn2D4PairDataElements,
+  const std::vector<double> poison_pairs(8u * xtbloom::detail::cuda::kGfn2D4PairDataElements,
                                          std::numeric_limits<double>::quiet_NaN());
   const std::vector<double> poison_atoms(16u, std::numeric_limits<double>::quiet_NaN());
   CUDA_CHECK(fixture.activity.mask.upload(inactive, stream));
@@ -358,13 +358,13 @@ int test_d4_all_inactive_and_stale(cudaStream_t stream) {
   CUDA_CHECK(fixture.coordination.upload(poison_atoms, stream));
   CUDA_CHECK(fixture.mixed.upload(poison_atoms, stream));
   CUDA_CHECK(fixture.raw.upload(poison_atoms, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_d4_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_d4_device_errors_cuda(
       8, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration + 1u,
       fixture.mixed.get(), fixture.activity.view(8), fixture.potentials.get(),
       fixture.potential_workspace(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration + 1u, fixture.raw.get(),
       fixture.activity.view(8), fixture.energies.get(), fixture.energy_workspace(),
       fixture.device_error.get(), stream));
@@ -386,9 +386,9 @@ int test_d4_all_inactive_and_stale(cudaStream_t stream) {
   const std::vector<std::uint32_t> closed{0u};
   CUDA_CHECK(fixture.activity.mask.upload(malformed_mask, stream));
   CUDA_CHECK(fixture.activity.sequence.upload(closed, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_d4_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_d4_device_errors_cuda(
       8, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration + 1u,
       fixture.mixed.get(), fixture.activity.view(8), fixture.potentials.get(),
       fixture.potential_workspace(), fixture.device_error.get(), stream));
@@ -401,9 +401,9 @@ int test_d4_all_inactive_and_stale(cudaStream_t stream) {
 int test_d4_active_stale_and_peer_failure(cudaStream_t stream) {
   D4Fixture fixture;
   CHECK(fixture.initialize(8u, stream) == 0);
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_d4_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_d4_device_errors_cuda(
       8, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration + 1u, fixture.raw.get(),
       fixture.activity.view(8), fixture.energies.get(), fixture.energy_workspace(),
       fixture.device_error.get(), stream));
@@ -418,9 +418,9 @@ int test_d4_active_stale_and_peer_failure(cudaStream_t stream) {
 
   fixture.host_raw[0] = std::numeric_limits<double>::quiet_NaN();
   CUDA_CHECK(fixture.raw.upload(fixture.host_raw, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_d4_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_d4_device_errors_cuda(
       8, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration, fixture.raw.get(),
       fixture.activity.view(8), fixture.energies.get(), fixture.energy_workspace(),
       fixture.device_error.get(), stream));
@@ -442,9 +442,9 @@ int test_d4_atomic_number_reorder_is_plan_failure(cudaStream_t stream) {
   std::swap(fixture.host_atomic_numbers[0], fixture.host_atomic_numbers[1]);
   CUDA_CHECK(fixture.atomic_numbers.upload(fixture.host_atomic_numbers, stream));
 
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_d4_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_d4_device_errors_cuda(
       1, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration, fixture.mixed.get(),
       fixture.activity.view(1), fixture.potentials.get(), fixture.potential_workspace(),
       fixture.device_error.get(), stream));
@@ -459,9 +459,9 @@ int test_d4_atomic_number_reorder_is_plan_failure(cudaStream_t stream) {
   CHECK(system_errors[0] == 0u);
   CHECK(potentials[0] == kSentinel && potentials[1] == kSentinel);
 
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_d4_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_d4_device_errors_cuda(
       1, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration, fixture.raw.get(),
       fixture.activity.view(1), fixture.energies.get(), fixture.energy_workspace(),
       fixture.device_error.get(), stream));
@@ -495,13 +495,13 @@ int test_d4_inactive_offsets_are_not_consumed(cudaStream_t stream) {
   }
   CUDA_CHECK(fixture.atom_offsets.upload(atom_offsets, stream));
   CUDA_CHECK(fixture.pair_offsets.upload(pair_offsets, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_d4_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_d4_device_errors_cuda(
       8, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration, fixture.mixed.get(),
       fixture.activity.view(8), fixture.potentials.get(), fixture.potential_workspace(),
       fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
       fixture.batch, fixture.parameters, fixture.cache, kGeometryGeneration, fixture.raw.get(),
       fixture.activity.view(8), fixture.energies.get(), fixture.energy_workspace(),
       fixture.device_error.get(), stream));
@@ -672,15 +672,15 @@ int check_periodic_outputs(PeriodicFixture& fixture, cudaStream_t stream) {
 int run_periodic_batch(std::size_t batch_size, cudaStream_t stream) {
   PeriodicFixture fixture;
   CHECK(fixture.initialize(batch_size, stream) == 0);
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
       static_cast<std::int64_t>(batch_size), fixture.system_errors.get(),
       fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_scc_potential_cuda(
       fixture.batch, kGeometryGeneration, fixture.mixed.get(),
       fixture.activity.view(static_cast<std::int64_t>(batch_size)), fixture.potentials.get(),
       fixture.potential_workspace(), fixture.system_errors.get(), fixture.device_error.get(),
       stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_scc_energy_cuda(
       fixture.batch, kGeometryGeneration, fixture.raw.get(),
       fixture.activity.view(static_cast<std::int64_t>(batch_size)), fixture.energies.get(),
       fixture.energy_workspace(), fixture.system_errors.get(), fixture.device_error.get(), stream));
@@ -701,13 +701,13 @@ int test_periodic_all_inactive_and_stale(cudaStream_t stream) {
   CUDA_CHECK(fixture.matrices.upload(poison_matrix, stream));
   CUDA_CHECK(fixture.mixed.upload(poison_atoms, stream));
   CUDA_CHECK(fixture.raw.upload(poison_atoms, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
       8, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_scc_potential_cuda(
       fixture.batch, kGeometryGeneration + 1u, fixture.mixed.get(), fixture.activity.view(8),
       fixture.potentials.get(), fixture.potential_workspace(), fixture.system_errors.get(),
       fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_scc_energy_cuda(
       fixture.batch, kGeometryGeneration + 1u, fixture.raw.get(), fixture.activity.view(8),
       fixture.energies.get(), fixture.energy_workspace(), fixture.system_errors.get(),
       fixture.device_error.get(), stream));
@@ -728,9 +728,9 @@ int test_periodic_all_inactive_and_stale(cudaStream_t stream) {
   const std::vector<std::uint32_t> closed{0u};
   CUDA_CHECK(fixture.activity.mask.upload(malformed_mask, stream));
   CUDA_CHECK(fixture.activity.sequence.upload(closed, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
       8, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_scc_energy_cuda(
       fixture.batch, kGeometryGeneration + 1u, fixture.raw.get(), fixture.activity.view(8),
       fixture.energies.get(), fixture.energy_workspace(), fixture.system_errors.get(),
       fixture.device_error.get(), stream));
@@ -743,9 +743,9 @@ int test_periodic_all_inactive_and_stale(cudaStream_t stream) {
 int test_periodic_active_stale_and_peer_failure(cudaStream_t stream) {
   PeriodicFixture fixture;
   CHECK(fixture.initialize(8u, stream) == 0);
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
       8, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_scc_potential_cuda(
       fixture.batch, kGeometryGeneration + 1u, fixture.mixed.get(), fixture.activity.view(8),
       fixture.potentials.get(), fixture.potential_workspace(), fixture.system_errors.get(),
       fixture.device_error.get(), stream));
@@ -760,9 +760,9 @@ int test_periodic_active_stale_and_peer_failure(cudaStream_t stream) {
 
   fixture.host_mixed[0] = std::numeric_limits<double>::quiet_NaN();
   CUDA_CHECK(fixture.mixed.upload(fixture.host_mixed, stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
       8, fixture.system_errors.get(), fixture.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_scc_potential_cuda(
       fixture.batch, kGeometryGeneration, fixture.mixed.get(), fixture.activity.view(8),
       fixture.potentials.get(), fixture.potential_workspace(), fixture.system_errors.get(),
       fixture.device_error.get(), stream));
@@ -788,21 +788,21 @@ int test_graph_replay(cudaStream_t stream) {
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_d4_device_errors_cuda(1, d4.system_errors.get(),
-                                                                    d4.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_d4_device_errors_cuda(
+      1, d4.system_errors.get(), d4.device_error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_potential_cuda(
       d4.batch, d4.parameters, d4.cache, kGeometryGeneration, d4.mixed.get(), d4.activity.view(1),
       d4.potentials.get(), d4.potential_workspace(), d4.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_scc_energy_cuda(
       d4.batch, d4.parameters, d4.cache, kGeometryGeneration, d4.raw.get(), d4.activity.view(1),
       d4.energies.get(), d4.energy_workspace(), d4.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_periodic_embedding_scc_device_errors_cuda(
       1, periodic.system_errors.get(), periodic.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_scc_potential_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_scc_potential_cuda(
       periodic.batch, kGeometryGeneration, periodic.mixed.get(), periodic.activity.view(1),
       periodic.potentials.get(), periodic.potential_workspace(), periodic.system_errors.get(),
       periodic.device_error.get(), stream));
-  CUDA_CHECK(gpuxtb::detail::cuda::evaluate_gfn2_periodic_embedding_scc_energy_cuda(
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_periodic_embedding_scc_energy_cuda(
       periodic.batch, kGeometryGeneration, periodic.raw.get(), periodic.activity.view(1),
       periodic.energies.get(), periodic.energy_workspace(), periodic.system_errors.get(),
       periodic.device_error.get(), stream));

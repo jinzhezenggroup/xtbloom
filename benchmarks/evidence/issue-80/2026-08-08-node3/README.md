@@ -25,11 +25,11 @@ PR #227 makes a runtime choice.
 - Compute Sanitizer: 2025.2.1.0.
 - Measured source revision: `847dc1db90db072aab255c6deef76f4b3e7ef7de`
   (clean #227 source commit; evidence files were replaced only after the run).
-- Benchmark binary: `build/fix227-cuda/gpuxtb_cuda_scc_loop_benchmark`, SHA-256
+- Benchmark binary: `build/fix227-cuda/xtbloom_cuda_scc_loop_benchmark`, SHA-256
   `5ccf7186058017134e80a6763a7dfc851b5ee176fca0932cbcbc550a7f5e8156`.
-- Shared library: `build/fix227-cuda/libgpuxtb.so.0.1.0`, SHA-256
+- Shared library: `build/fix227-cuda/libxtbloom.so.0.1.0`, SHA-256
   `9cfbf77194204cd39bc8681329b4a2f9b1145484872f958a2fe43ad3df707be4`.
-- Effective CMake cache: `GPUXTB_ENABLE_CUDA=ON`,
+- Effective CMake cache: `XTBLOOM_ENABLE_CUDA=ON`,
   `CMAKE_CUDA_COMPILER=/group/software/cuda-12.9.1/bin/nvcc`,
   `CMAKE_CUDA_ARCHITECTURES=120`, `CMAKE_BUILD_TYPE=Release`,
   `BUILD_SHARED_LIBS=ON`, and the LP64 SciPy OpenBLAS runtime listed in
@@ -38,12 +38,12 @@ PR #227 makes a runtime choice.
 The CUDA runtime loaded for every run is the 12.9 toolkit
 (`/group/software/cuda-12.9.1/lib64`), matching the compiler used to build the
 benchmark binary; the default system loader otherwise resolves the older
-12.4 runtime that gpuxtb correctly rejects.
+12.4 runtime that xTBloom correctly rejects.
 
 ## Methodology
 
 `benchmark_dispatch_chain_vs_monolithic` (invoked as
-`gpuxtb_cuda_scc_loop_benchmark --benchmark-chain`) builds, from the identical
+`xtbloom_cuda_scc_loop_benchmark --benchmark-chain`) builds, from the identical
 binding and state, both `kDeviceDispatchChain` and `kDeviceTailGraph` owners
 for batch sizes 1/8/32/128 in the heterogeneous small-system production fixture
 (H2/He/LiH/CH2 cycled, `maximum_iterations = 8`).
@@ -153,7 +153,7 @@ derived CSV summaries are retained. Export commands:
 ```bash
 /group/software/cuda-12.9.1/bin/nsys profile --force-overwrite=true \
   --output=chain32-aquarter-847dc1d --trace=cuda --show-output=false \
-  build/fix227-cuda/gpuxtb_cuda_scc_loop_benchmark \
+  build/fix227-cuda/xtbloom_cuda_scc_loop_benchmark \
   --benchmark-chain-one 32 4 chain 40
 /group/software/cuda-12.9.1/bin/nsys stats --force-export=true \
   --report cuda_gpu_kern_sum --format csv \
@@ -179,7 +179,7 @@ the authoritative timing.
   `sanitizer-racecheck-monolithic.log`: 0 errors for the monolithic loop.
 - `sanitizer-synccheck-chain.log`, `sanitizer-synccheck-monolithic.log`:
   the same NVIDIA-tool report signature in both families at
-  `gpuxtb::detail::cuda::reduce_spin_atomic_charges_kernel` when a device-
+  `xtbloom::detail::cuda::reduce_spin_atomic_charges_kernel` when a device-
   launched CUDA Graph is replayed under Compute Sanitizer's synccheck tool.
   The chain run exits 99 with 7,136 errors and the monolithic run exits 99 with
   7,456 errors; both retained logs use the tool's default 100-report print
@@ -199,12 +199,12 @@ The Graph-family sanitizer command was, for each tool and mode:
 ```bash
 /group/software/cuda-12.9.1/bin/compute-sanitizer --tool <tool> \
   --error-exitcode=99 --log-file <log> \
-  build/fix227-cuda/gpuxtb_cuda_scc_loop_benchmark \
+  build/fix227-cuda/xtbloom_cuda_scc_loop_benchmark \
   --benchmark-chain-one 32 4 <chain|monolithic> 1
 ```
 
 The direct control used synccheck on
-`gpuxtb_cuda_scc_iteration_production_test --unrestricted-parity`.
+`xtbloom_cuda_scc_iteration_production_test --unrestricted-parity`.
 
 ## Limitations
 

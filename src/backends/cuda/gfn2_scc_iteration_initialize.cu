@@ -1,5 +1,5 @@
 #include <cmath>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cstddef>
 #include <cstdint>
@@ -10,7 +10,7 @@
 
 #include "backends/cuda/gfn2_scc_iteration_initialize.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 using Diagnostic = Gfn2SccIterationInitializationDiagnostic;
@@ -36,11 +36,11 @@ Diagnostic fail(Error error, Field field, std::int64_t index = -1, std::size_t r
   diagnostic.provided_bytes = provided;
   diagnostic.cuda_status = cuda_status;
   if (error == Error::kAllocationFailed) {
-    diagnostic.status = GPUXTB_STATUS_ALLOCATION_FAILED;
+    diagnostic.status = XTBLOOM_STATUS_ALLOCATION_FAILED;
   } else if (error == Error::kCudaError) {
-    diagnostic.status = GPUXTB_STATUS_INTERNAL_ERROR;
+    diagnostic.status = XTBLOOM_STATUS_INTERNAL_ERROR;
   } else {
-    diagnostic.status = GPUXTB_STATUS_INVALID_ARGUMENT;
+    diagnostic.status = XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   return diagnostic;
 }
@@ -168,8 +168,8 @@ bool finite_array(const Gfn2SccIterationHostArrayView<double>& view) noexcept {
   return true;
 }
 
-bool valid_status(gpuxtb_status_t status) noexcept {
-  return status >= GPUXTB_STATUS_SUCCESS && status <= GPUXTB_STATUS_EIGENSOLVER_FAILED;
+bool valid_status(xtbloom_status_t status) noexcept {
+  return status >= XTBLOOM_STATUS_SUCCESS && status <= XTBLOOM_STATUS_EIGENSOLVER_FAILED;
 }
 
 bool enabled(const Shape& shape, Gfn2SccPotentialComponent component) noexcept {
@@ -494,15 +494,16 @@ Diagnostic validate_warm_invariants(const Shape& shape,
   const auto& mixer = host.mixer;
   const auto& scc = host.scc;
   for (std::int64_t system = 0; system < shape.batch; ++system) {
-    const gpuxtb_status_t mixer_status = mixer.system_statuses.data[system];
-    const gpuxtb_status_t scc_status = scc.system_statuses.data[system];
+    const xtbloom_status_t mixer_status = mixer.system_statuses.data[system];
+    const xtbloom_status_t scc_status = scc.system_statuses.data[system];
     const std::uint64_t iteration = scc.iterations.data[system];
     const bool terminal_nonconvergence =
         scc.converged.data[system] == 0u && iteration == plan.state_policy.maximum_iterations;
     const bool statuses_match_publication =
         terminal_nonconvergence
-            ? mixer_status == GPUXTB_STATUS_SUCCESS && scc_status == GPUXTB_STATUS_SCC_NOT_CONVERGED
-            : mixer_status == scc_status && scc_status != GPUXTB_STATUS_SCC_NOT_CONVERGED;
+            ? mixer_status == XTBLOOM_STATUS_SUCCESS &&
+                  scc_status == XTBLOOM_STATUS_SCC_NOT_CONVERGED
+            : mixer_status == scc_status && scc_status != XTBLOOM_STATUS_SCC_NOT_CONVERGED;
     if (mixer.initialized.data[system] != 1u || mixer.residual_converged.data[system] > 1u ||
         scc.converged.data[system] > 1u || !valid_status(mixer_status) ||
         !valid_status(scc_status) || !statuses_match_publication ||
@@ -514,7 +515,7 @@ Diagnostic validate_warm_invariants(const Shape& shape,
             scc.free_energies.data[system] - scc.previous_free_energies.data[system] ||
         host.energy.entropy.data[system] != wave.occupation_entropies.data[system] ||
         (scc.converged.data[system] == 1u &&
-         scc.system_statuses.data[system] != GPUXTB_STATUS_SUCCESS)) {
+         scc.system_statuses.data[system] != XTBLOOM_STATUS_SUCCESS)) {
       return fail(Error::kInvalidWarmState, Field::kSccTrace, system);
     }
 
@@ -1313,4 +1314,4 @@ Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::upload_asy
   return {};
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

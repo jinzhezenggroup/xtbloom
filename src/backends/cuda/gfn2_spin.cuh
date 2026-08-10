@@ -1,7 +1,7 @@
-#ifndef GPUXTB_BACKENDS_CUDA_GFN2_SPIN_CUH
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_BACKENDS_CUDA_GFN2_SPIN_CUH
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_BACKENDS_CUDA_GFN2_SPIN_CUH
+#define XTBLOOM_BACKENDS_CUDA_GFN2_SPIN_CUH
 
 #include <cuda_runtime_api.h>
 
@@ -10,7 +10,7 @@
 
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 
 /*
  * First asynchronous peer-local failure in one spin-polarization stage.
@@ -154,6 +154,6 @@ cudaError_t evaluate_gfn2_spin_polarization_cuda(
     const Gfn2SpinDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream = nullptr) noexcept;
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda
 
-#endif  // GPUXTB_BACKENDS_CUDA_GFN2_SPIN_CUH
+#endif  // XTBLOOM_BACKENDS_CUDA_GFN2_SPIN_CUH

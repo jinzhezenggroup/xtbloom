@@ -1,4 +1,4 @@
-"""Tests for the low-level ctypes binding (``gpuxtb.library``)."""
+"""Tests for the low-level ctypes binding (``xtbloom.library``)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
-from gpuxtb import library
-from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
+from xtbloom import library
+from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -37,7 +37,7 @@ def _fake_request_library(*, omit: str | None = None) -> _FakeLibrary:
 
 def test_version_string() -> None:
     """Expose the native library version through the ctypes wrapper."""
-    assert library.get_version() == "0.1.0"
+    assert library.get_version() == "0.0.0"
 
 
 def test_request_api_is_optional_as_a_complete_symbol_group() -> None:
@@ -54,16 +54,16 @@ def test_request_api_configures_only_when_complete() -> None:
 
     assert library._configure_request_api(fake)
     assert library.request_api_available(fake)
-    assert fake.gpuxtb_request_info_init.restype is ctypes.c_int32
-    assert fake.gpuxtb_plan_compute_enqueue.restype is ctypes.c_int32
-    assert fake.gpuxtb_request_destroy.restype is None
+    assert fake.xtbloom_request_info_init.restype is ctypes.c_int32
+    assert fake.xtbloom_plan_compute_enqueue.restype is ctypes.c_int32
+    assert fake.xtbloom_request_destroy.restype is None
 
 
 def test_partial_request_api_is_incompatible() -> None:
     """Reject a library that cannot provide one coherent request contract."""
-    fake = _fake_request_library(omit="gpuxtb_request_wait")
+    fake = _fake_request_library(omit="xtbloom_request_wait")
 
-    with pytest.raises(GPUxtbRuntimeError, match="gpuxtb_request_wait"):
+    with pytest.raises(XTBloomRuntimeError, match="xtbloom_request_wait"):
         library._configure_request_api(fake)
 
 
@@ -145,7 +145,7 @@ def test_abi_struct_sizes() -> None:
     assert library.DlpackView.byte_offset.offset == 8
     assert library.DlpackView.shape.offset == 40
     options = library.ComputeOptions()
-    library.load_library().gpuxtb_compute_options_init(
+    library.load_library().xtbloom_compute_options_init(
         ctypes.byref(options), ctypes.sizeof(options)
     )
     assert options.electronic_temperature == pytest.approx(
@@ -155,7 +155,7 @@ def test_abi_struct_sizes() -> None:
     assert options.scc_start_mode == library.SCC_START_FRESH
     assert options.reserved_v2 == 0
     assert library.SCC_START_WARM == 2
-    # gpuxtb_workspace_query_t: struct_size/api_version/flags/reserved (16) +
+    # xtbloom_workspace_query_t: struct_size/api_version/flags/reserved (16) +
     # host bytes (8) + host alignment (4) + device bytes (8) + device alignment
     # (4) + reserved_v2 (4) = 48 bytes, with device bytes aligned to 8.
     assert ctypes.sizeof(library.WorkspaceQuery) == 48
@@ -164,7 +164,7 @@ def test_abi_struct_sizes() -> None:
     assert library.WorkspaceQuery.device_required_bytes.offset == 32
     assert library.WorkspaceQuery.device_required_alignment.offset == 40
     query = library.WorkspaceQuery()
-    library.load_library().gpuxtb_workspace_query_init(
+    library.load_library().xtbloom_workspace_query_init(
         ctypes.byref(query), ctypes.sizeof(query)
     )
     assert query.compute_flags == 0
@@ -177,7 +177,7 @@ def test_abi_struct_sizes() -> None:
     assert library.RequestInfo.completion_status.offset == 12
     assert library.RequestInfo.result_flags.offset == 16
     request_info = library.RequestInfo()
-    library.load_library().gpuxtb_request_info_init(
+    library.load_library().xtbloom_request_info_init(
         ctypes.byref(request_info), ctypes.sizeof(request_info)
     )
     assert request_info.struct_size == 24
@@ -190,12 +190,12 @@ def test_abi_struct_sizes() -> None:
 
 def test_unknown_method_rejected() -> None:
     """Distinguish unknown methods from reserved unsupported GFN1-xTB."""
-    from gpuxtb.exceptions import GPUxtbNotSupportedError
-    from gpuxtb.interface import Calculator
+    from xtbloom.exceptions import XTBloomNotSupportedError
+    from xtbloom.interface import Calculator
 
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         Calculator("NoSuchMethod", np.array([1]), np.zeros((1, 3)))
-    with pytest.raises(GPUxtbNotSupportedError):
+    with pytest.raises(XTBloomNotSupportedError):
         Calculator("GFN1-xTB", np.array([1]), np.zeros((1, 3)))
 
 

@@ -1,22 +1,22 @@
-#ifndef GPUXTB_RUNTIME_REQUEST_HPP
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+#ifndef XTBLOOM_RUNTIME_REQUEST_HPP
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define GPUXTB_RUNTIME_REQUEST_HPP
+#define XTBLOOM_RUNTIME_REQUEST_HPP
 
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
-namespace gpuxtb::detail {
+namespace xtbloom::detail {
 
 struct Context;
 
 struct RequestCompletionResult {
   bool complete = false;
-  gpuxtb_status_t completion_status = GPUXTB_STATUS_SUCCESS;
+  xtbloom_status_t completion_status = XTBLOOM_STATUS_SUCCESS;
   std::uint32_t result_flags = 0u;
   std::string completion_error;
 };
@@ -33,15 +33,15 @@ struct RequestCompletionResult {
 class RequestCompletion {
  public:
   virtual ~RequestCompletion() = default;
-  [[nodiscard]] virtual gpuxtb_status_t probe(bool wait,
-                                              RequestCompletionResult& result) noexcept = 0;
+  [[nodiscard]] virtual xtbloom_status_t probe(bool wait,
+                                               RequestCompletionResult& result) noexcept = 0;
   virtual void settle_noexcept() noexcept = 0;
 };
 
 struct RequestSubmission {
   std::shared_ptr<RequestCompletion> pending;
   bool completed_inline = false;
-  gpuxtb_status_t completion_status = GPUXTB_STATUS_SUCCESS;
+  xtbloom_status_t completion_status = XTBLOOM_STATUS_SUCCESS;
   std::uint32_t result_flags = 0u;
   std::string completion_error;
 };
@@ -64,7 +64,7 @@ class Request {
   Request& operator=(const Request&) = delete;
 
   [[nodiscard]] Context* context() const noexcept { return context_; }
-  [[nodiscard]] gpuxtb_backend_t backend() const noexcept;
+  [[nodiscard]] xtbloom_backend_t backend() const noexcept;
 
   /*
    * Reserve an IDLE/COMPLETE handle before backend staging. SUBMITTING is an
@@ -73,32 +73,32 @@ class Request {
    * pre-acceptance failure must call rollback_submission(), preserving an
    * earlier IDLE or COMPLETE snapshot and its diagnostic exactly.
    */
-  [[nodiscard]] gpuxtb_status_t reserve_submission(Context& context, std::string& error);
+  [[nodiscard]] xtbloom_status_t reserve_submission(Context& context, std::string& error);
   void rollback_submission() noexcept;
-  [[nodiscard]] gpuxtb_status_t publish_submission(RequestSubmission submission,
-                                                   std::string& error);
+  [[nodiscard]] xtbloom_status_t publish_submission(RequestSubmission submission,
+                                                    std::string& error);
 
   /* Copy a coherent state snapshot without changing the request. */
-  [[nodiscard]] gpuxtb_status_t query(bool wait, gpuxtb_request_info_t& info, std::string& error);
+  [[nodiscard]] xtbloom_status_t query(bool wait, xtbloom_request_info_t& info, std::string& error);
 
   [[nodiscard]] const char* error() const noexcept;
 
  private:
-  void fill_info_locked(gpuxtb_request_info_t& info) const noexcept;
-  [[nodiscard]] gpuxtb_status_t probe_locked(bool wait, std::string& error);
+  void fill_info_locked(xtbloom_request_info_t& info) const noexcept;
+  [[nodiscard]] xtbloom_status_t probe_locked(bool wait, std::string& error);
 
   enum class Lifecycle : std::uint8_t { kStable, kSubmitting, kPending };
 
   Context* context_;
   mutable std::mutex mutex_;
   Lifecycle lifecycle_ = Lifecycle::kStable;
-  gpuxtb_request_state_t state_ = GPUXTB_REQUEST_IDLE;
-  gpuxtb_status_t completion_status_ = GPUXTB_STATUS_SUCCESS;
+  xtbloom_request_state_t state_ = XTBLOOM_REQUEST_IDLE;
+  xtbloom_status_t completion_status_ = XTBLOOM_STATUS_SUCCESS;
   std::uint32_t result_flags_ = 0u;
   std::string error_;
   std::shared_ptr<RequestCompletion> completion_;
 };
 
-}  // namespace gpuxtb::detail
+}  // namespace xtbloom::detail
 
-#endif  // GPUXTB_RUNTIME_REQUEST_HPP
+#endif  // XTBLOOM_RUNTIME_REQUEST_HPP

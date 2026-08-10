@@ -1,6 +1,6 @@
-"""Unit tests for the DLPack consumer bridge (``gpuxtb._dlpack``).
+"""Unit tests for the DLPack consumer bridge (``xtbloom._dlpack``).
 
-The bridge is the zero-copy path behind :class:`gpuxtb.ArrayBatch`: it turns
+The bridge is the zero-copy path behind :class:`xtbloom.ArrayBatch`: it turns
 any DLPack producer array into a validated C-ABI buffer view with an exact
 capsule-lifetime contract.  Happy paths run against real NumPy arrays; the
 protocol edge cases (legacy/read-only capsules, producer exceptions, version
@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import ctypes
 
-import gpuxtb._dlpack as dlpack
 import numpy as np
 import pytest
+import xtbloom._dlpack as dlpack
 from _dlpack_fakes import FakeArray
-from gpuxtb import library
-from gpuxtb.exceptions import GPUxtbNotSupportedError, GPUxtbValueError
+from xtbloom import library
+from xtbloom.exceptions import XTBloomNotSupportedError, XTBloomValueError
 
 F64 = np.dtype(np.float64)
 I32 = np.dtype(np.int32)
@@ -73,20 +73,20 @@ def test_numpy_int32_contract() -> None:
 def test_numpy_dtype_mismatch_is_rejected() -> None:
     """A float64 descriptor must not silently accept float32/bytes."""
     values = np.arange(3, dtype=np.float32)
-    with pytest.raises(GPUxtbValueError, match="dtype"):
+    with pytest.raises(XTBloomValueError, match="dtype"):
         _consume(values, shape=(3,))
 
 
 def test_numpy_shape_mismatch_is_rejected() -> None:
     """Shape/ndim mismatches fail before any buffer is taken."""
-    with pytest.raises(GPUxtbValueError, match=r"ndim|shape"):
+    with pytest.raises(XTBloomValueError, match=r"ndim|shape"):
         _consume(np.zeros((2, 3)), shape=(3,))
 
 
 def test_capsule_rank_mismatch_is_rejected_before_shape_access() -> None:
     """Rank is bounded before the parser walks producer-owned shape memory."""
     fake = FakeArray(np.arange(3.0), capsule_ndim=1024)
-    with pytest.raises(GPUxtbValueError, match="ndim"):
+    with pytest.raises(XTBloomValueError, match="ndim"):
         _consume(fake, shape=(3,))
 
 
@@ -117,7 +117,7 @@ def test_numpy_copy_true_makes_contiguous_copy() -> None:
 def test_numpy_copy_true_does_not_convert_dtype() -> None:
     """A layout copy never hides an ABI dtype mismatch."""
     values = np.arange(3, dtype=np.float32)
-    with pytest.raises(GPUxtbValueError, match="dtype"):
+    with pytest.raises(XTBloomValueError, match="dtype"):
         _consume(values, shape=(3,), copy=True)
 
 
@@ -220,7 +220,7 @@ def test_fake_copy_true_accepts_copied_flag() -> None:
 def test_fake_producer_exception_propagates() -> None:
     """Producer failures surface to the caller, not as generic errors."""
     fake = FakeArray(np.arange(3.0), force_error=RuntimeError("boom"))
-    with pytest.raises(GPUxtbValueError, match="boom"):
+    with pytest.raises(XTBloomValueError, match="boom"):
         _consume(fake, shape=(3,))
 
 
@@ -228,7 +228,7 @@ def test_fake_producer_exception_propagates() -> None:
 
 
 def test_fake_cuda_maps_to_cuda_device_memory() -> None:
-    """CUDA device producers map to GPUXTB_MEMORY_CUDA_DEVICE."""
+    """CUDA device producers map to XTBLOOM_MEMORY_CUDA_DEVICE."""
     fake = FakeArray(np.arange(3.0), device=dlpack._DLPACK_DEVICE_CUDA)
     view = _consume(fake, shape=(3,))
     assert view.memory_space == library.MEMORY_CUDA_DEVICE
@@ -269,7 +269,7 @@ def test_fake_cuda_host_maps_to_host() -> None:
 def test_fake_unsupported_device_kinds_are_rejected(device_kind: int) -> None:
     """ROCm, managed CUDA, and other device kinds fail with a precise error."""
     fake = FakeArray(np.arange(3.0), device=device_kind)
-    with pytest.raises(GPUxtbNotSupportedError, match="device"):
+    with pytest.raises(XTBloomNotSupportedError, match="device"):
         _consume(fake, shape=(3,))
 
 
@@ -334,7 +334,7 @@ def test_fake_cuda_legacy_signature_keeps_stream_argument() -> None:
 
 
 def test_fake_cuda_without_stream_support_is_rejected() -> None:
-    """A CUDA producer that cannot synchronize with gpuxtb is unsafe to borrow."""
+    """A CUDA producer that cannot synchronize with xTBloom is unsafe to borrow."""
     fake = FakeArray(
         np.arange(3.0),
         device=dlpack._DLPACK_DEVICE_CUDA,
@@ -347,7 +347,7 @@ def test_fake_cuda_without_stream_support_is_rejected() -> None:
 def test_fake_copy_unsupported_raises_precise_error() -> None:
     """A copy request to a producer without copy support fails clearly."""
     fake = FakeArray(np.arange(3.0), copy_support=False)
-    with pytest.raises(GPUxtbNotSupportedError, match="copy"):
+    with pytest.raises(XTBloomNotSupportedError, match="copy"):
         _consume(fake, shape=(3,), copy=True)
 
 

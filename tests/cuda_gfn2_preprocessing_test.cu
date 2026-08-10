@@ -22,9 +22,9 @@
 
 namespace {
 
-using namespace gpuxtb::detail;
-using namespace gpuxtb::detail::cuda;
-using namespace gpuxtb::detail::gfn2;
+using namespace xtbloom::detail;
+using namespace xtbloom::detail::cuda;
+using namespace xtbloom::detail::gfn2;
 
 #define CHECK(condition)                                                                    \
   do {                                                                                      \
@@ -160,14 +160,14 @@ struct HostCase {
     pair_offsets.back() = batch;
     const std::int64_t atoms = static_cast<std::int64_t>(atomic_numbers.size());
     if (make_coordination_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(),
-                               coordination_plan, error) != GPUXTB_STATUS_SUCCESS ||
+                               coordination_plan, error) != XTBLOOM_STATUS_SUCCESS ||
         make_basis_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), basis, error) !=
-            GPUXTB_STATUS_SUCCESS ||
-        make_integral_plan(basis, integrals, error) != GPUXTB_STATUS_SUCCESS ||
+            XTBLOOM_STATUS_SUCCESS ||
+        make_integral_plan(basis, integrals, error) != XTBLOOM_STATUS_SUCCESS ||
         make_h0_plan(basis, integrals, atomic_numbers.data(), h0_plan, error) !=
-            GPUXTB_STATUS_SUCCESS ||
-        make_es2_plan(basis, atomic_numbers.data(), es2_plan, error) != GPUXTB_STATUS_SUCCESS ||
-        make_aes2_plan(basis, atomic_numbers.data(), aes2_plan, error) != GPUXTB_STATUS_SUCCESS) {
+            XTBLOOM_STATUS_SUCCESS ||
+        make_es2_plan(basis, atomic_numbers.data(), es2_plan, error) != XTBLOOM_STATUS_SUCCESS ||
+        make_aes2_plan(basis, atomic_numbers.data(), aes2_plan, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     shell_pair_offsets.assign(static_cast<std::size_t>(batch + 1), 0);
@@ -196,7 +196,7 @@ struct HostCase {
     result.es2.resize(static_cast<std::size_t>(es2_plan.total_matrix_elements()));
     result.aes2.resize(static_cast<std::size_t>(aes2_plan.pair_data_elements()));
     if (evaluate_coordination_cpu(coordination_plan, coordinates.data(), result.coordination.data(),
-                                  error) != GPUXTB_STATUS_SUCCESS) {
+                                  error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     for (std::int64_t system = 0; system < batch; ++system) {
@@ -232,13 +232,13 @@ struct HostCase {
                                            sizeof(double));
     if (evaluate_overlap_cpu(basis, integrals, coordinates.data(), result.overlap.data(),
                              integral_workspace.data(), integral_workspace.size() * sizeof(double),
-                             error) != GPUXTB_STATUS_SUCCESS ||
+                             error) != XTBLOOM_STATUS_SUCCESS ||
         evaluate_multipole_cpu(basis, integrals, coordinates.data(), result.dipole.data(),
                                result.quadrupole.data(), integral_workspace.data(),
                                integral_workspace.size() * sizeof(double),
-                               error) != GPUXTB_STATUS_SUCCESS ||
+                               error) != XTBLOOM_STATUS_SUCCESS ||
         evaluate_h0_cpu(basis, integrals, h0_plan, coordinates.data(), result.coordination.data(),
-                        result.overlap.data(), result.h0.data(), error) != GPUXTB_STATUS_SUCCESS) {
+                        result.overlap.data(), result.h0.data(), error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     std::vector<double> es2_scratch(result.es2.size());
@@ -248,7 +248,7 @@ struct HostCase {
     ES2GeometryCache es2_cache{};
     if (update_es2_geometry_cache_cpu(es2_plan, coordinates.data(), generation, result.es2.data(),
                                       result.es2.size(), es2_workspace, es2_cache,
-                                      error) != GPUXTB_STATUS_SUCCESS) {
+                                      error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     std::vector<double> aes2_scratch(result.aes2.size());
@@ -259,7 +259,7 @@ struct HostCase {
     return update_aes2_geometry_cache_cpu(aes2_plan, coordinates.data(), result.coordination.data(),
                                           generation, result.aes2.data(), result.aes2.size(),
                                           aes2_workspace, aes2_cache,
-                                          error) == GPUXTB_STATUS_SUCCESS;
+                                          error) == XTBLOOM_STATUS_SUCCESS;
   }
 };
 
@@ -287,7 +287,7 @@ struct DeviceFixture {
       geometry_device_error, integral_system_errors, integral_device_error, es2_device_error,
       aes2_system_errors, aes2_device_error, system_stages, plan_error;
   /* Sparse pair-list gate buffers, allocated only by enable_pairlist(). */
-  DeviceBuffer<gpuxtb::detail::Gfn2AtomPair> pairlist_pairs;
+  DeviceBuffer<xtbloom::detail::Gfn2AtomPair> pairlist_pairs;
   DeviceBuffer<std::int64_t> pairlist_offsets, pairlist_neighbor_offsets, pairlist_neighbors,
       pairlist_atom_cells, pairlist_cell_counts, pairlist_cell_offsets, pairlist_cell_fill,
       pairlist_cell_atoms, pairlist_neighbor_cursor, pairlist_neighbor_scratch,
@@ -295,11 +295,11 @@ struct DeviceFixture {
   DeviceBuffer<std::int64_t> pairlist_pair_counts, pairlist_neighbor_counts;
   DeviceBuffer<std::int32_t> pairlist_system_modes;
   DeviceBuffer<std::uint64_t> pairlist_generations;
-  DeviceBuffer<gpuxtb::detail::cuda::Gfn2PairListSystemMeta> pairlist_meta;
+  DeviceBuffer<xtbloom::detail::cuda::Gfn2PairListSystemMeta> pairlist_meta;
   DeviceBuffer<std::uint32_t> pairlist_sequence, sparse_system_errors, sparse_device_error;
   DeviceBuffer<double> sparse_coordination;
   /* Committed output pair-list storage (step 4), allocated by enable_pairlist(). */
-  DeviceBuffer<gpuxtb::detail::Gfn2AtomPair> committed_pairs;
+  DeviceBuffer<xtbloom::detail::Gfn2AtomPair> committed_pairs;
   DeviceBuffer<std::int64_t> committed_pair_offsets, committed_pair_counts,
       committed_neighbor_offsets, committed_neighbor_counts, committed_neighbors;
   DeviceBuffer<std::uint64_t> committed_pair_generations;
@@ -663,18 +663,18 @@ struct DeviceFixture {
     {
       std::vector<std::int32_t> modes(
           static_cast<std::size_t>(batch),
-          static_cast<std::int32_t>(gpuxtb::detail::cuda::Gfn2PairListMode::kDense));
+          static_cast<std::int32_t>(xtbloom::detail::cuda::Gfn2PairListMode::kDense));
       status = pairlist_system_modes.upload(modes.data(), modes.size(), stream);
       if (status != cudaSuccess) return status;
     }
     binding.plan.pairlist = {batch,
                              atoms,
                              batch + 1,
-                             gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                             xtbloom::detail::cuda::kDefaultPairlistCutoffBohr,
                              max_cells_per_system,
                              max_neighbors_per_atom,
                              max_pairs_per_system,
-                             gpuxtb::detail::cuda::Gfn2PairListMode::kSparse,
+                             xtbloom::detail::cuda::Gfn2PairListMode::kSparse,
                              kPlanToken,
                              atom_offsets.get(),
                              kGfn2PairListAllowDenseFallback,
@@ -721,13 +721,13 @@ struct DeviceFixture {
                                   pairlist_sequence.get(),
                                   1,
                                   kPlanToken};
-    binding.output.pairlist = {gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice,
-                               gpuxtb::detail::Gfn2PairListState::kCommitted,
-                               gpuxtb::detail::Gfn2PairListRole::kCoordination,
-                               gpuxtb::detail::Gfn2PairMapKind::kExplicit,
+    binding.output.pairlist = {xtbloom::detail::Gfn2PlanMemorySpace::kCudaDevice,
+                               xtbloom::detail::Gfn2PairListState::kCommitted,
+                               xtbloom::detail::Gfn2PairListRole::kCoordination,
+                               xtbloom::detail::Gfn2PairMapKind::kExplicit,
                                kPlanToken,
-                               gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
-                               gpuxtb::detail::cuda::kDefaultPairlistCutoffBohr,
+                               xtbloom::detail::cuda::kDefaultPairlistCutoffBohr,
+                               xtbloom::detail::cuda::kDefaultPairlistCutoffBohr,
                                batch,
                                atoms,
                                max_pairs_per_system,
@@ -785,7 +785,7 @@ struct Downloaded {
   std::vector<std::uint64_t> geometry_generations, operator_generations;
   std::vector<std::uint8_t> published;
   std::vector<std::uint32_t> geometry_errors, integral_errors, aes2_errors, stages;
-  std::vector<gpuxtb::detail::Gfn2AtomPair> committed_pairs;
+  std::vector<xtbloom::detail::Gfn2AtomPair> committed_pairs;
   std::vector<std::int64_t> committed_pair_offsets, committed_pair_counts,
       committed_neighbor_offsets, committed_neighbor_counts, committed_neighbors;
   std::vector<std::uint64_t> committed_generations;
@@ -1477,7 +1477,7 @@ int test_sparse_pairlist_gate() {
 
     Gfn2PreprocessingDeviceBinding aliased = device.binding;
     aliased.binding_seal = 0u;
-    aliased.workspace.pairlist_candidate.pairs = reinterpret_cast<gpuxtb::detail::Gfn2AtomPair*>(
+    aliased.workspace.pairlist_candidate.pairs = reinterpret_cast<xtbloom::detail::Gfn2AtomPair*>(
         const_cast<double*>(aliased.input.positions));
     const Gfn2PreprocessingBindingDiagnostic alias_diagnostic =
         seal_gfn2_preprocessing_binding_cuda(aliased);

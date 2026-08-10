@@ -1,4 +1,4 @@
-"""Tests for the PyTorch autograd op :func:`gpuxtb.gpuxtb_torch`.
+"""Tests for the PyTorch autograd op :func:`xtbloom.xtbloom_torch`.
 
 The op runs packed inference on PyTorch tensors through the compiled stable-ABI
 extension and
@@ -24,20 +24,41 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from gpuxtb import Calculator, gpuxtb_torch
-from gpuxtb.exceptions import GPUxtbNotSupportedError, GPUxtbValueError
+from xtbloom import Calculator, xtbloom_torch
+from xtbloom.exceptions import XTBloomNotSupportedError, XTBloomValueError
 
 _TORCH = importlib.util.find_spec("torch")
 
 
 def test_torch_public_signature_hides_execution_details() -> None:
     """Users select Torch execution context without raw stream/async controls."""
-    import gpuxtb.torch as torch_module
+    import xtbloom
+    import xtbloom.torch as torch_module
 
-    parameters = inspect.signature(gpuxtb_torch).parameters
-    assert "stream" not in parameters
-    assert "async_exec" not in parameters
-    assert not hasattr(torch_module, "_gpuxtb_torch_async")
+    parameters = inspect.signature(xtbloom_torch).parameters
+    assert tuple(parameters) == (
+        "positions",
+        "atomic_numbers",
+        "atom_offsets",
+        "molecular_charges",
+        "unpaired_electrons",
+        "spin_channels",
+        "backend",
+        "device_id",
+        "cpu_threads",
+        "max_scc_iterations",
+        "charge_tolerance",
+        "energy_tolerance",
+        "electronic_temperature",
+    )
+    assert not hasattr(torch_module, "_xtbloom_torch_async")
+    for internal_name in (
+        "XTBloomTorchFuture",
+        "XTBloomTorchRequest",
+        "XTBloomTorchEngine",
+        "xtbloom_torch_wait",
+    ):
+        assert not hasattr(xtbloom, internal_name)
 
 
 def test_output_allocation_is_failure_safe() -> None:
@@ -46,7 +67,7 @@ def test_output_allocation_is_failure_safe() -> None:
     if reason:
         pytest.skip(reason)
     import torch
-    from gpuxtb import torch as torch_module
+    from xtbloom import torch as torch_module
 
     energies, forces = torch_module._allocate_outputs(torch, "cpu", 2, 3)
     assert torch.isnan(energies).all()
@@ -60,8 +81,8 @@ def test_fork_rejection_precedes_input_normalization(
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
-    import gpuxtb.torch as torch_module
     import torch
+    import xtbloom.torch as torch_module
 
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
     monkeypatch.setattr(torch_module, "_CUDA_PROCESS_ID", os.getpid() + 1)
@@ -71,8 +92,8 @@ def test_fork_rejection_precedes_input_normalization(
         raise AssertionError("normalization touched inherited producer state")
 
     monkeypatch.setattr(torch_module, "_normalize_layout", reject_normalization)
-    with pytest.raises(GPUxtbNotSupportedError, match="inherited by fork"):
-        gpuxtb_torch(
+    with pytest.raises(XTBloomNotSupportedError, match="inherited by fork"):
+        xtbloom_torch(
             arrays["positions"],
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -91,14 +112,14 @@ def test_compiled_schema_marks_outputs_mutable() -> None:
     if sys.platform != "linux":
         pytest.skip("the vendored stable-ABI extension is currently Linux-only")
     import torch
-    from gpuxtb import torch as torch_module
+    from xtbloom import torch as torch_module
 
-    schema = str(torch_module._gpuxtb_torch_op().default._schema)
-    assert schema.startswith("gpuxtb::_gpuxtb_torch_forward(")
+    schema = str(torch_module._xtbloom_torch_op().default._schema)
+    assert schema.startswith("xtbloom::_xtbloom_torch_forward(")
     assert "Tensor(a!) out_energies" in schema
     assert "Tensor(b!) out_forces" in schema
     assert "-> (Tensor(a!), Tensor(b!), int)" in schema
-    assert str(torch.ops.gpuxtb._gpuxtb_torch_wait.default._schema).endswith(
+    assert str(torch.ops.xtbloom._xtbloom_torch_wait.default._schema).endswith(
         "(int submission_id) -> ()"
     )
 
@@ -131,14 +152,14 @@ def _skip_reason() -> str | None:
 
 def _library_has_cuda() -> bool:
     """Check whether a CUDA context can actually be created on this host."""
-    from gpuxtb.exceptions import GPUxtbRuntimeError
-    from gpuxtb.interface import Context
+    from xtbloom.exceptions import XTBloomRuntimeError
+    from xtbloom.interface import Context
 
     try:
         with Context("cuda"):
             pass
         return True
-    except GPUxtbRuntimeError:
+    except XTBloomRuntimeError:
         return False
 
 
@@ -207,7 +228,7 @@ def test_forward_matches_calculator_host() -> None:
 
     positions = torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float64)
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    energies, forces = gpuxtb_torch(
+    energies, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -244,7 +265,7 @@ def test_backward_grad_equals_neg_forces() -> None:
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    energies, forces = gpuxtb_torch(
+    energies, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -265,8 +286,8 @@ def test_backward_settles_its_private_forward_token(
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
-    import gpuxtb.torch as torch_module
     import torch
+    import xtbloom.torch as torch_module
 
     positions = torch.tensor(
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
@@ -288,7 +309,7 @@ def test_backward_settles_its_private_forward_token(
 
     monkeypatch.setattr(torch_module, "_native_forward", fake_native_forward)
     monkeypatch.setattr(torch_module, "_native_wait", fail_wait)
-    energies, _ = gpuxtb_torch(
+    energies, _ = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -316,7 +337,7 @@ def test_energy_backward_does_not_scan_unused_force_grad(
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    energies, _ = gpuxtb_torch(
+    energies, _ = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -351,7 +372,7 @@ def test_numpy_auxiliary_arrays_dispatch_as_tensors() -> None:
         for name, value in arrays.items()
         if name != "positions"
     }
-    energies, forces = gpuxtb_torch(
+    energies, forces = xtbloom_torch(
         positions,
         auxiliary["atomic_numbers"],
         auxiliary["atom_offsets"],
@@ -376,7 +397,7 @@ def test_dlpack_only_auxiliaries_survive_backward() -> None:
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    energies, forces = gpuxtb_torch(
+    energies, forces = xtbloom_torch(
         positions,
         _DLPackOnly(arrays["atomic_numbers"]),
         _DLPackOnly(arrays["atom_offsets"]),
@@ -390,7 +411,7 @@ def test_dlpack_only_auxiliaries_survive_backward() -> None:
     assert torch.allclose(positions.grad, -forces, atol=0.0, rtol=0.0)
 
 
-def test_native_loader_honors_gpuxtb_library_override() -> None:
+def test_native_loader_honors_xtbloom_library_override() -> None:
     """The extension must not replace an explicit native runtime with its neighbor."""
     reason = _skip_reason()
     if reason:
@@ -399,7 +420,7 @@ def test_native_loader_honors_gpuxtb_library_override() -> None:
         pytest.skip("the vendored stable-ABI extension is currently Linux-only")
 
     import torch
-    from gpuxtb import torch as torch_module
+    from xtbloom import torch as torch_module
 
     extension = torch_module._torch_extension_path()
     assert extension is not None, "compiled Torch extension is missing"
@@ -409,8 +430,8 @@ def test_native_loader_honors_gpuxtb_library_override() -> None:
 
     # Load the extension directly in a fresh process so both its once-only API
     # table and torch's operator registry start clean. libtorch_cpu is a valid
-    # DSO but not a gpuxtb ABI implementation: honoring the override must fail
-    # closed instead of silently opening the extension-adjacent libgpuxtb.
+    # DSO but not a xtbloom ABI implementation: honoring the override must fail
+    # closed instead of silently opening the extension-adjacent libxtbloom.
     script = """
 import sys
 import torch
@@ -418,7 +439,7 @@ import torch
 torch.ops.load_library(sys.argv[1])
 positions = torch.zeros((1, 3), dtype=torch.float64)
 try:
-    torch.ops.gpuxtb._gpuxtb_torch_forward(
+    torch.ops.xtbloom._xtbloom_torch_forward(
         positions,
         torch.ones(1, dtype=torch.int32),
         torch.tensor([0, 1], dtype=torch.int64),
@@ -431,13 +452,13 @@ try:
         1, -1, 0, 0, 50, 1.0e-6, 1.0e-8, 300.0,
     )
 except RuntimeError as exc:
-    if "cannot load libgpuxtb" not in str(exc):
+    if "cannot load libxtbloom" not in str(exc):
         raise
 else:
-    raise AssertionError("GPUXTB_LIBRARY was ignored by the torch extension")
+    raise AssertionError("XTBLOOM_LIBRARY was ignored by the torch extension")
 """
     env = os.environ.copy()
-    env["GPUXTB_LIBRARY"] = str(torch_cpu)
+    env["XTBLOOM_LIBRARY"] = str(torch_cpu)
     completed = subprocess.run(
         [sys.executable, "-c", script, str(extension)],
         check=False,
@@ -449,7 +470,7 @@ else:
 
 
 def test_torch_entrypoint_preloads_native_runtime_providers() -> None:
-    """A fresh process may call gpuxtb_torch before any ctypes-backed API."""
+    """A fresh process may call xtbloom_torch before any ctypes-backed API."""
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
@@ -457,7 +478,7 @@ def test_torch_entrypoint_preloads_native_runtime_providers() -> None:
     script = """
 import numpy as np
 import torch
-from gpuxtb import gpuxtb_torch
+from xtbloom import xtbloom_torch
 
 positions = torch.tensor(
     [[0.0, 0.0, -0.73578586109551],
@@ -465,7 +486,7 @@ positions = torch.tensor(
      [-1.44183152868459, 0.0, 0.36789293054775]],
     dtype=torch.float64,
 )
-energies, forces = gpuxtb_torch(
+energies, forces = xtbloom_torch(
     positions,
     np.array([8, 1, 1], dtype=np.int32),
     np.array([0, 3], dtype=np.int64),
@@ -499,7 +520,7 @@ def test_energy_gradient_finite_difference() -> None:
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
 
     def energy_at(p: torch.Tensor) -> torch.Tensor:
-        values, _ = gpuxtb_torch(
+        values, _ = xtbloom_torch(
             p,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -541,7 +562,7 @@ def test_batch_gradient_selects_its_system() -> None:
         [WATER_POSITIONS, METHANE_POSITIONS],
         torch,
     )
-    energies, _ = gpuxtb_torch(
+    energies, _ = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -568,8 +589,8 @@ def test_nonposition_requires_grad_raises() -> None:
     arrays["molecular_charges"] = torch.zeros(
         1, dtype=torch.float64, requires_grad=True
     )
-    with pytest.raises(GPUxtbNotSupportedError, match="molecular_charges"):
-        gpuxtb_torch(
+    with pytest.raises(XTBloomNotSupportedError, match="molecular_charges"):
+        xtbloom_torch(
             positions,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -591,7 +612,7 @@ def test_grad_through_forces_raises() -> None:
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    _, forces = gpuxtb_torch(
+    _, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -600,7 +621,7 @@ def test_grad_through_forces_raises() -> None:
         arrays["spin_channels"],
         backend="cpu",
     )
-    with pytest.raises(GPUxtbNotSupportedError, match="forces"):
+    with pytest.raises(XTBloomNotSupportedError, match="forces"):
         (forces**2).sum().backward()
 
 
@@ -615,7 +636,7 @@ def test_zero_grad_through_forces_raises() -> None:
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    _, forces = gpuxtb_torch(
+    _, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -624,7 +645,7 @@ def test_zero_grad_through_forces_raises() -> None:
         arrays["spin_channels"],
         backend="cpu",
     )
-    with pytest.raises(GPUxtbNotSupportedError, match="forces"):
+    with pytest.raises(XTBloomNotSupportedError, match="forces"):
         forces.backward(torch.zeros_like(forces))
 
 
@@ -639,7 +660,7 @@ def test_higher_order_gradient_raises() -> None:
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
 
     def total_energy(values: torch.Tensor) -> torch.Tensor:
-        energies, _ = gpuxtb_torch(
+        energies, _ = xtbloom_torch(
             values,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -651,11 +672,11 @@ def test_higher_order_gradient_raises() -> None:
         return energies.sum()
 
     direct_positions = positions.clone().requires_grad_(True)
-    with pytest.raises(GPUxtbNotSupportedError, match="higher-order"):
+    with pytest.raises(XTBloomNotSupportedError, match="higher-order"):
         torch.autograd.grad(
             total_energy(direct_positions), direct_positions, create_graph=True
         )
-    with pytest.raises(GPUxtbNotSupportedError, match="higher-order"):
+    with pytest.raises(XTBloomNotSupportedError, match="higher-order"):
         torch.autograd.functional.hessian(total_energy, positions)
 
 
@@ -672,7 +693,7 @@ def test_noncontiguous_positions_copied() -> None:
     positions = noncontiguous.requires_grad_(True)
     transposed_geometry = noncontiguous.detach().numpy()
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    energies, forces = gpuxtb_torch(
+    energies, forces = xtbloom_torch(
         positions,
         arrays["atomic_numbers"],
         arrays["atom_offsets"],
@@ -702,8 +723,8 @@ def test_positions_must_be_float64() -> None:
 
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
     positions32 = torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float32)
-    with pytest.raises(GPUxtbValueError, match="float64"):
-        gpuxtb_torch(
+    with pytest.raises(XTBloomValueError, match="float64"):
+        xtbloom_torch(
             positions32,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -717,10 +738,10 @@ def test_positions_must_be_float64() -> None:
 def test_torch_compile_graph_breaks_for_eager_op() -> None:
     """torch.compile around the op graph-breaks and stays correct (no error).
 
-    gpuxtb_torch is eager-only: it drives the native library through a compiled
+    xtbloom_torch is eager-only: it drives the native library through a compiled
     stable-ABI custom op, which Dynamo cannot trace, so the op is marked opaque
     and ``torch.compile`` inserts a graph break. There is no compilation
-    speedup for the gpuxtb call, but compilation must never fail at trace time.
+    speedup for the xtbloom call, but compilation must never fail at trace time.
     """
     reason = _skip_reason()
     if reason:
@@ -733,7 +754,7 @@ def test_torch_compile_graph_breaks_for_eager_op() -> None:
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
 
     def loss(p: torch.Tensor) -> torch.Tensor:
-        energies, _ = gpuxtb_torch(
+        energies, _ = xtbloom_torch(
             p,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -763,8 +784,8 @@ def test_torch_auto_all_host_passes_current_stream(
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
-    import gpuxtb.torch as torch_module
     import torch
+    import xtbloom.torch as torch_module
 
     if not torch.cuda.is_available():
         pytest.skip("torch has no usable CUDA device")
@@ -779,7 +800,7 @@ def test_torch_auto_all_host_passes_current_stream(
     host_arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
-        gpuxtb_torch(
+        xtbloom_torch(
             torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float64),
             host_arrays["atomic_numbers"],
             host_arrays["atom_offsets"],
@@ -802,12 +823,12 @@ def test_torch_auto_all_host_keeps_cpu_only_fallback() -> None:
     if not torch.cuda.is_available():
         pytest.skip("torch has no usable CUDA device")
     if _library_has_cuda():
-        pytest.skip("requires a CPU-only gpuxtb build")
+        pytest.skip("requires a CPU-only xtbloom build")
 
     host_arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
-        energies, forces = gpuxtb_torch(
+        energies, forces = xtbloom_torch(
             torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float64),
             host_arrays["atomic_numbers"],
             host_arrays["atom_offsets"],
@@ -835,7 +856,7 @@ def test_torch_cuda_matches_host() -> None:
         WATER_POSITIONS.tolist(), dtype=torch.float64, requires_grad=True
     )
     host_arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    host_energies, host_forces = gpuxtb_torch(
+    host_energies, host_forces = xtbloom_torch(
         host_positions,
         host_arrays["atomic_numbers"],
         host_arrays["atom_offsets"],
@@ -852,7 +873,7 @@ def test_torch_cuda_matches_host() -> None:
         name: value.to("cuda")
         for name, value in _packed([WATER_NUMBERS], [WATER_POSITIONS], torch).items()
     }
-    cuda_energies, cuda_forces = gpuxtb_torch(
+    cuda_energies, cuda_forces = xtbloom_torch(
         cuda_positions,
         cuda_arrays["atomic_numbers"],
         cuda_arrays["atom_offsets"],
@@ -882,7 +903,7 @@ def test_torch_cuda_accepts_host_auxiliary_descriptors() -> None:
 
     host_positions = torch.tensor(WATER_POSITIONS.tolist(), dtype=torch.float64)
     host_arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
-    host_energies, host_forces = gpuxtb_torch(
+    host_energies, host_forces = xtbloom_torch(
         host_positions,
         host_arrays["atomic_numbers"],
         host_arrays["atom_offsets"],
@@ -895,7 +916,7 @@ def test_torch_cuda_accepts_host_auxiliary_descriptors() -> None:
     mixed_positions = torch.tensor(
         WATER_POSITIONS.tolist(), dtype=torch.float64, device="cuda", requires_grad=True
     )
-    mixed_energies, mixed_forces = gpuxtb_torch(
+    mixed_energies, mixed_forces = xtbloom_torch(
         mixed_positions,
         host_arrays["atomic_numbers"],
         host_arrays["atom_offsets"],
@@ -925,7 +946,7 @@ def test_torch_cuda_rejects_explicit_device_mismatch() -> None:
     arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
     positions = torch.tensor(WATER_POSITIONS, dtype=torch.float64, device="cuda:0")
     with pytest.raises(RuntimeError, match="does not match requested context device"):
-        gpuxtb_torch(
+        xtbloom_torch(
             positions,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -953,7 +974,7 @@ def test_torch_cuda_uses_current_stream() -> None:
 
     host_arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
     geometry_b = WATER_POSITIONS * 1.15
-    reference_energies, _ = gpuxtb_torch(
+    reference_energies, _ = xtbloom_torch(
         torch.tensor(geometry_b.tolist(), dtype=torch.float64),
         host_arrays["atomic_numbers"],
         host_arrays["atom_offsets"],
@@ -974,7 +995,7 @@ def test_torch_cuda_uses_current_stream() -> None:
     with torch.cuda.stream(producer):
         cuda_sleep(100_000_000)
         positions.copy_(geometry_b_device)
-        energies, _ = gpuxtb_torch(
+        energies, _ = xtbloom_torch(
             positions,
             host_arrays["atomic_numbers"],
             host_arrays["atom_offsets"],
@@ -1015,7 +1036,7 @@ def test_torch_cuda_returns_before_blocked_stream_completes() -> None:
     # Create and settle one slot before blocking the stream. This isolates the
     # steady-state enqueue contract from first-use plan construction.
     with torch.cuda.stream(stream):
-        warm_energies, _ = gpuxtb_torch(
+        warm_energies, _ = xtbloom_torch(
             positions,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -1040,7 +1061,7 @@ def test_torch_cuda_returns_before_blocked_stream_completes() -> None:
     started = time.monotonic()
     with torch.cuda.stream(stream):
         cuda_sleep(sleep_cycles)
-        energies, forces = gpuxtb_torch(
+        energies, forces = xtbloom_torch(
             positions.detach(),
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -1092,7 +1113,7 @@ def test_torch_cuda_keeps_two_same_stream_submissions_in_flight() -> None:
     # may wait while its plan is constructed, but afterward exact backward has
     # settled both slots and the measured burst must allocate neither again.
     with torch.cuda.stream(stream):
-        first_warm, _ = gpuxtb_torch(
+        first_warm, _ = xtbloom_torch(
             device_geometries[0],
             host_arrays["atomic_numbers"],
             host_arrays["atom_offsets"],
@@ -1105,7 +1126,7 @@ def test_torch_cuda_keeps_two_same_stream_submissions_in_flight() -> None:
 
         cuda_sleep(250_000_000)
         priming = [
-            gpuxtb_torch(
+            xtbloom_torch(
                 positions,
                 host_arrays["atomic_numbers"],
                 host_arrays["atom_offsets"],
@@ -1134,7 +1155,7 @@ def test_torch_cuda_keeps_two_same_stream_submissions_in_flight() -> None:
     with torch.cuda.stream(stream):
         cuda_sleep(sleep_cycles)
         submissions = [
-            gpuxtb_torch(
+            xtbloom_torch(
                 positions.detach(),
                 host_arrays["atomic_numbers"],
                 host_arrays["atom_offsets"],
@@ -1186,7 +1207,7 @@ def test_torch_cuda_streams_complete_independently() -> None:
     # completion from first-use context and plan construction.
     for stream in (stream_a, stream_b):
         with torch.cuda.stream(stream):
-            warm_energies, _ = gpuxtb_torch(
+            warm_energies, _ = xtbloom_torch(
                 torch.tensor(WATER_POSITIONS, dtype=torch.float64, device="cuda"),
                 arrays["atomic_numbers"],
                 arrays["atom_offsets"],
@@ -1207,7 +1228,7 @@ def test_torch_cuda_streams_complete_independently() -> None:
     torch.cuda.synchronize()
     with torch.cuda.stream(stream_a):
         cuda_sleep(750_000_000)
-        delayed_energies, _ = gpuxtb_torch(
+        delayed_energies, _ = xtbloom_torch(
             delayed_positions,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -1217,7 +1238,7 @@ def test_torch_cuda_streams_complete_independently() -> None:
             backend="cuda",
         )
     with torch.cuda.stream(stream_b):
-        independent_energies, _ = gpuxtb_torch(
+        independent_energies, _ = xtbloom_torch(
             independent_positions,
             arrays["atomic_numbers"],
             arrays["atom_offsets"],
@@ -1260,7 +1281,7 @@ def test_torch_cuda_retains_dlpack_inputs_until_completion() -> None:
 
     # Warm the exact pointer-keyed topology before blocking the stream.
     with torch.cuda.stream(stream):
-        warm_energies, _ = gpuxtb_torch(
+        warm_energies, _ = xtbloom_torch(
             torch.tensor(WATER_POSITIONS, dtype=torch.float64, device="cuda"),
             wrappers["atomic_numbers"],
             wrappers["atom_offsets"],
@@ -1276,7 +1297,7 @@ def test_torch_cuda_retains_dlpack_inputs_until_completion() -> None:
     torch.cuda.synchronize()
     with torch.cuda.stream(stream):
         cuda_sleep(250_000_000)
-        energies, forces = gpuxtb_torch(
+        energies, forces = xtbloom_torch(
             positions,
             wrappers["atomic_numbers"],
             wrappers["atom_offsets"],
@@ -1330,7 +1351,7 @@ def test_torch_cuda_rebuilds_after_dlpack_topology_mismatch() -> None:
     stream = torch.cuda.Stream()
 
     with torch.cuda.stream(stream):
-        initial_energies, _ = gpuxtb_torch(
+        initial_energies, _ = xtbloom_torch(
             positions,
             wrappers["atomic_numbers"],
             wrappers["atom_offsets"],
@@ -1352,7 +1373,7 @@ def test_torch_cuda_rebuilds_after_dlpack_topology_mismatch() -> None:
             torch.tensor(changed_numbers, dtype=torch.int32, device="cuda")
         )
         failed_positions = positions.detach().requires_grad_(True)
-        failed_energies, _ = gpuxtb_torch(
+        failed_energies, _ = xtbloom_torch(
             failed_positions,
             wrappers["atomic_numbers"],
             wrappers["atom_offsets"],
@@ -1364,7 +1385,7 @@ def test_torch_cuda_rebuilds_after_dlpack_topology_mismatch() -> None:
         with pytest.raises(RuntimeError, match="fixed CUDA plan topology"):
             failed_energies.sum().backward()
 
-        energies, forces = gpuxtb_torch(
+        energies, forces = xtbloom_torch(
             positions.detach(),
             wrappers["atomic_numbers"],
             wrappers["atom_offsets"],
@@ -1409,7 +1430,7 @@ def test_torch_cuda_rebuilds_in_place_changed_device_topology() -> None:
     atomic_numbers = device_arrays["atomic_numbers"]
 
     with torch.cuda.stream(stream):
-        first_energies, _ = gpuxtb_torch(
+        first_energies, _ = xtbloom_torch(
             positions,
             atomic_numbers,
             device_arrays["atom_offsets"],
@@ -1428,7 +1449,7 @@ def test_torch_cuda_rebuilds_in_place_changed_device_topology() -> None:
     reference = Calculator("GFN2-xTB", changed_numbers, WATER_POSITIONS).singlepoint()
     with torch.cuda.stream(stream):
         atomic_numbers.copy_(torch.tensor(changed_numbers, device="cuda"))
-        energies, forces = gpuxtb_torch(
+        energies, forces = xtbloom_torch(
             positions.detach(),
             atomic_numbers,
             device_arrays["atom_offsets"],

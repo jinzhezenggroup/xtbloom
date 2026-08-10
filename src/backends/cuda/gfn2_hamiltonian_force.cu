@@ -1,5 +1,5 @@
 #include <array>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cmath>
 #include <cstddef>
@@ -8,7 +8,7 @@
 
 #include "backends/cuda/gfn2_hamiltonian_force.cuh"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 256;
@@ -77,7 +77,7 @@ __device__ bool load_force_gate(const Gfn2ForceDeviceActivity& activity, std::in
     if (requested > 1u) {
       record_system_error(system_errors, system, device_error,
                           Gfn2HamiltonianForceDeviceError::kInvalidActiveMask);
-    } else if (requested == 1u && activity.system_statuses[system] == GPUXTB_STATUS_SUCCESS) {
+    } else if (requested == 1u && activity.system_statuses[system] == XTBLOOM_STATUS_SUCCESS) {
       *selected = 1;
     }
   }
@@ -386,7 +386,7 @@ __global__ void publish_kernel(Gfn2HamiltonianDeviceBatch batch, Gfn2ForceDevice
                                const std::uint32_t* system_errors) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (!sequence_is_active(workspace) || activity.requested_mask[system] != 1u ||
-      activity.system_statuses[system] != GPUXTB_STATUS_SUCCESS ||
+      activity.system_statuses[system] != XTBLOOM_STATUS_SUCCESS ||
       !system_is_valid(system_errors, system)) {
     return;
   }
@@ -518,7 +518,7 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
       !is_aligned(batch.orbital_to_shell, alignof(std::int64_t)) ||
       !is_aligned(batch.orbital_to_atom, alignof(std::int64_t)) ||
       !is_aligned(activity.requested_mask, alignof(std::uint8_t)) ||
-      !is_aligned(activity.system_statuses, alignof(gpuxtb_status_t)) ||
+      !is_aligned(activity.system_statuses, alignof(xtbloom_status_t)) ||
       !required_pointer(input.density, batch.total_matrix_elements) ||
       !required_pointer(input.shell_scalar_potentials, batch.total_shells) ||
       !required_pointer(input.atomic_dipole_potentials,
@@ -667,4 +667,4 @@ cudaError_t add_gfn2_hamiltonian_integral_adjoints_cuda(
   return check_launch();
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

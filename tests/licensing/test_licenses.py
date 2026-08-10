@@ -13,13 +13,13 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 CHECKER_PATH = REPOSITORY / "tools" / "licensing" / "check_licenses.py"
-SPEC = importlib.util.spec_from_file_location("gpuxtb_check_licenses", CHECKER_PATH)
+SPEC = importlib.util.spec_from_file_location("xtbloom_check_licenses", CHECKER_PATH)
 assert SPEC is not None and SPEC.loader is not None
 CHECKER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECKER)
 WHEEL_INSPECTOR_PATH = REPOSITORY / "python" / "ci" / "inspect-cuda-wheel.py"
 WHEEL_SPEC = importlib.util.spec_from_file_location(
-    "gpuxtb_inspect_cuda_wheel", WHEEL_INSPECTOR_PATH
+    "xtbloom_inspect_cuda_wheel", WHEEL_INSPECTOR_PATH
 )
 assert WHEEL_SPEC is not None and WHEEL_SPEC.loader is not None
 WHEEL_INSPECTOR = importlib.util.module_from_spec(WHEEL_SPEC)
@@ -40,17 +40,17 @@ class LicenseArchiveTests(unittest.TestCase):
 
     def _valid_wheel_names(self) -> set[str]:
         return {
-            f"gpuxtb-0.1.0.dist-info/licenses/{suffix}"
+            f"xtbloom-0.0.0.dist-info/licenses/{suffix}"
             for suffix in CHECKER.COMMON_ARCHIVE_SUFFIXES
-        } | {f"gpuxtb/{suffix}" for suffix in CHECKER.WHEEL_ARCHIVE_SUFFIXES}
+        } | {f"xtbloom/{suffix}" for suffix in CHECKER.WHEEL_ARCHIVE_SUFFIXES}
 
     def test_project_license_cannot_be_satisfied_by_third_party_filename(self) -> None:
         """Require the project license at its exact archive location."""
         names = self._valid_wheel_names()
-        names.remove("gpuxtb-0.1.0.dist-info/licenses/LICENSE")
-        names.add("gpuxtb/share/licenses/gpuxtb/third-party/d4/mctc-lib-LICENSE")
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
-            wheel = Path(directory) / "gpuxtb-test.whl"
+        names.remove("xtbloom-0.0.0.dist-info/licenses/LICENSE")
+        names.add("xtbloom/share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE")
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "LICENSE"):
                 CHECKER.check_archive(wheel)
@@ -58,10 +58,10 @@ class LicenseArchiveTests(unittest.TestCase):
     def test_wheel_must_retain_every_provenance_manifest(self) -> None:
         """Require all provenance manifests in wheel payloads."""
         names = self._valid_wheel_names()
-        missing = "gpuxtb/share/licenses/gpuxtb/provenance/mctc_manifest.json"
+        missing = "xtbloom/share/licenses/xtbloom/provenance/mctc_manifest.json"
         names.remove(missing)
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
-            wheel = Path(directory) / "gpuxtb-test.whl"
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "mctc_manifest"):
                 CHECKER.check_archive(wheel)
@@ -69,10 +69,10 @@ class LicenseArchiveTests(unittest.TestCase):
     def test_wheel_must_retain_implib_provenance_manifest(self) -> None:
         """Require the vendored implib provenance manifest in wheels."""
         names = self._valid_wheel_names()
-        missing = "gpuxtb/share/licenses/gpuxtb/provenance/implib_manifest.json"
+        missing = "xtbloom/share/licenses/xtbloom/provenance/implib_manifest.json"
         names.remove(missing)
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
-            wheel = Path(directory) / "gpuxtb-test.whl"
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "implib_manifest"):
                 CHECKER.check_archive(wheel)
@@ -80,10 +80,10 @@ class LicenseArchiveTests(unittest.TestCase):
     def test_wheel_must_retain_torch_stable_provenance_manifest(self) -> None:
         """Require the vendored LibTorch provenance manifest in wheels."""
         names = self._valid_wheel_names()
-        missing = "gpuxtb/share/licenses/gpuxtb/provenance/torch_stable_manifest.json"
+        missing = "xtbloom/share/licenses/xtbloom/provenance/torch_stable_manifest.json"
         names.remove(missing)
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
-            wheel = Path(directory) / "gpuxtb-test.whl"
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "torch_stable"):
                 CHECKER.check_archive(wheel)
@@ -91,11 +91,11 @@ class LicenseArchiveTests(unittest.TestCase):
     def test_wheel_must_retain_linking_exception(self) -> None:
         """Require the GPLv3 Section 7 exception in wheel archives."""
         names = self._valid_wheel_names()
-        missing = "gpuxtb-0.1.0.dist-info/licenses/CUDA_MKL_LINKING_EXCEPTION"
+        missing = "xtbloom-0.0.0.dist-info/licenses/CUDA_MKL_LINKING_EXCEPTION"
         names.remove(missing)
-        names.remove("gpuxtb/share/licenses/gpuxtb/CUDA_MKL_LINKING_EXCEPTION")
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
-            wheel = Path(directory) / "gpuxtb-test.whl"
+        names.remove("xtbloom/share/licenses/xtbloom/CUDA_MKL_LINKING_EXCEPTION")
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(
                 CHECKER.LicenseCheckError, "CUDA_MKL_LINKING_EXCEPTION"
@@ -106,12 +106,12 @@ class LicenseArchiveTests(unittest.TestCase):
         """Keep the new runtime dependency's distinct MIT grant in wheels."""
         names = self._valid_wheel_names()
         suffix = "LICENSES/array-api-compat-MIT.txt"
-        names.remove(f"gpuxtb-0.1.0.dist-info/licenses/{suffix}")
+        names.remove(f"xtbloom-0.0.0.dist-info/licenses/{suffix}")
         names.remove(
-            "gpuxtb/share/licenses/gpuxtb/third-party/array-api-compat-MIT.txt"
+            "xtbloom/share/licenses/xtbloom/third-party/array-api-compat-MIT.txt"
         )
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
-            wheel = Path(directory) / "gpuxtb-test.whl"
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(
                 CHECKER.LicenseCheckError, "array-api-compat-MIT"
@@ -121,9 +121,9 @@ class LicenseArchiveTests(unittest.TestCase):
     def test_wheel_must_not_bundle_vendor_library(self) -> None:
         """Reject wheels that bundle separately licensed vendor libraries."""
         names = self._valid_wheel_names()
-        names.add("gpuxtb/lib/libcudart.so.12")
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
-            wheel = Path(directory) / "gpuxtb-test.whl"
+        names.add("xtbloom/lib/libcudart.so.12")
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test.whl"
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "libcudart"):
                 CHECKER.check_archive(wheel)
@@ -144,22 +144,23 @@ class WebSiteLicenseTests(unittest.TestCase):
         (root / "index.html").write_text(
             '<a href="LICENSE">license</a>\n'
             '<a href="THIRD_PARTY_NOTICES.md">notices</a>\n'
+            '<a href="LICENSES/openchemlib-BSD-3-Clause.txt">OpenChemLib</a>\n'
             '<a href="CUDA_MKL_LINKING_EXCEPTION">permission</a>\n'
-            '<a href="https://jinzhezeng.group/gpuxtb/">demo</a>\n'
-            '<a href="https://github.com/jinzhezenggroup/gpuxtb">source</a>\n',
+            '<a href="https://xtbloom.jinzhezeng.group">demo</a>\n'
+            '<a href="https://github.com/jinzhezenggroup/xtbloom">source</a>\n',
             encoding="utf-8",
         )
 
     def test_complete_web_site_payload_is_accepted(self) -> None:
         """Accept exact source legal bytes beside the deployed runtime."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
             root = Path(directory)
             self._write_valid_site(root)
             CHECKER.check_web_site(root, REPOSITORY)
 
     def test_web_site_requires_project_license(self) -> None:
         """The GPL-covered WASM cannot be deployed without the project grant."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
             root = Path(directory)
             self._write_valid_site(root)
             (root / "LICENSE").unlink()
@@ -168,7 +169,7 @@ class WebSiteLicenseTests(unittest.TestCase):
 
     def test_web_site_requires_pako_zlib_notice(self) -> None:
         """Keep the non-MIT zlib grant for code inside the 3Dmol bundle."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
             root = Path(directory)
             self._write_valid_site(root)
             (root / "LICENSES/pako-Zlib.txt").unlink()
@@ -177,16 +178,34 @@ class WebSiteLicenseTests(unittest.TestCase):
 
     def test_web_site_requires_torch_bsd_license(self) -> None:
         """Keep the vendored LibTorch headers' BSD grant in Pages payloads."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
             root = Path(directory)
             self._write_valid_site(root)
             (root / "LICENSES/BSD-3-Clause.txt").unlink()
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "BSD-3-Clause"):
                 CHECKER.check_web_site(root, REPOSITORY)
 
+    def test_web_site_requires_openchemlib_license(self) -> None:
+        """Retain the BSD grant for the runtime-provided SMILES dependency."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / CHECKER.OPEN_CHEMLIB_LICENSE).unlink()
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "openchemlib"):
+                CHECKER.check_web_site(root, REPOSITORY)
+
+    def test_web_site_requires_openchemlib_provenance(self) -> None:
+        """Retain exact CDN hashes and revisions beside the deployed adapter."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "provenance/openchemlib_manifest.json").unlink()
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "openchemlib"):
+                CHECKER.check_web_site(root, REPOSITORY)
+
     def test_web_site_rejects_raw_lapack_side_module(self) -> None:
         """Do not deploy a second untracked copy of the preloaded side module."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
             root = Path(directory)
             self._write_valid_site(root)
             (root / "libscipy_openblas.so").write_bytes(b"unexpected raw side module")
@@ -197,10 +216,10 @@ class WebSiteLicenseTests(unittest.TestCase):
 
     def test_web_site_rejects_arbitrary_stale_artifact(self) -> None:
         """Reject obsolete engine variants because Pages uploads every file."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-web-license-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
             root = Path(directory)
             self._write_valid_site(root)
-            (root / "gpuxtb_web-old.wasm").write_bytes(b"stale engine")
+            (root / "xtbloom_web-old.wasm").write_bytes(b"stale engine")
             with self.assertRaisesRegex(
                 CHECKER.LicenseCheckError, "unexpected or orphaned files"
             ):
@@ -259,16 +278,16 @@ class DependencyPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "x86_64 and aarch64"):
             CHECKER._require_dependency_policy(project)
 
-    def test_openblas_must_use_reviewed_minimum(self) -> None:
-        """Require the minimum reviewed scipy-openblas32 version."""
+    def test_openblas_must_use_reviewed_exact_version(self) -> None:
+        """Require the exact scipy-openblas32 ABI reviewed for runtime loading."""
         project = copy.deepcopy(self.project)
         project["dependencies"] = [
-            requirement.replace(">=0.3.34.0.0", "")
+            requirement.replace("==0.3.34.0.0", ">=0.3.34.0.0")
             if requirement.startswith("scipy-openblas32")
             else requirement
             for requirement in project["dependencies"]
         ]
-        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed minimum"):
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "reviewed exact"):
             CHECKER._require_dependency_policy(project)
 
     def test_cuda_extra_must_be_complete(self) -> None:
@@ -288,7 +307,7 @@ class LinkingExceptionTests(unittest.TestCase):
 
     def test_cudadevrt_cannot_be_added_without_review(self) -> None:
         """Reject an exception document that newly covers cudadevrt."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-license-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
             root = Path(directory)
             shutil.copytree(REPOSITORY / "src", root / "src")
             shutil.copytree(REPOSITORY / "include", root / "include")
@@ -318,7 +337,7 @@ class ImplibProvenanceTests(unittest.TestCase):
 
     def test_unexpected_vendored_file_is_rejected(self) -> None:
         """Reject undeclared files in the vendored implib tree."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-implib-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-implib-test-") as directory:
             root = Path(directory)
             self._copy_payload(root)
             (root / CHECKER.IMPLIB_VENDOR_PATH / "unexpected.txt").write_text(
@@ -331,7 +350,7 @@ class ImplibProvenanceTests(unittest.TestCase):
 
     def test_modified_vendored_bytes_are_rejected(self) -> None:
         """Reject modified bytes in a declared vendored implib file."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-implib-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-implib-test-") as directory:
             root = Path(directory)
             self._copy_payload(root)
             modified = (
@@ -363,7 +382,7 @@ class TorchStableProvenanceTests(unittest.TestCase):
 
     def test_unexpected_vendored_file_is_rejected(self) -> None:
         """Reject undeclared files in the vendored torch-stable tree."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-torch-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-torch-test-") as directory:
             root = Path(directory)
             self._copy_payload(root)
             vendor_root = root / CHECKER.TORCH_STABLE_VENDOR_PATH
@@ -384,7 +403,7 @@ class TorchStableProvenanceTests(unittest.TestCase):
 
     def test_modified_vendored_bytes_are_rejected(self) -> None:
         """Reject modified bytes in a declared vendored torch-stable header."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-torch-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-torch-test-") as directory:
             root = Path(directory)
             self._copy_payload(root)
             modified = (
@@ -405,31 +424,31 @@ class TorchStableProvenanceTests(unittest.TestCase):
 
     def test_sdist_must_carry_the_pinned_header_tree(self) -> None:
         """Accept an sdist whose vendored headers match the manifest bytes."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-torch-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-torch-test-") as directory:
             root = Path(directory)
-            archive = root / "gpuxtb-0.1.0.tar.gz"
+            archive = root / "xtbloom-0.1.0.tar.gz"
             with tarfile.open(archive, "w:gz") as tar:
                 tar.add(
                     REPOSITORY / CHECKER.TORCH_STABLE_MANIFEST_PATH,
-                    arcname=f"gpuxtb-0.1.0/{CHECKER.TORCH_STABLE_MANIFEST_PATH}",
+                    arcname=f"xtbloom-0.1.0/{CHECKER.TORCH_STABLE_MANIFEST_PATH}",
                 )
                 vendor_source = REPOSITORY / CHECKER.TORCH_STABLE_VENDOR_PATH
                 for relative in (vendor_source / "include").rglob("*"):
                     if relative.is_file():
                         rel = relative.relative_to(REPOSITORY).as_posix()
-                        tar.add(relative, arcname=f"gpuxtb-0.1.0/{rel}")
+                        tar.add(relative, arcname=f"xtbloom-0.1.0/{rel}")
             names = CHECKER._archive_names(archive)
             CHECKER._check_archived_torch_stable(archive, names)
 
     def test_sdist_with_modified_header_is_rejected(self) -> None:
         """Reject an sdist whose vendored header bytes were altered."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-torch-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-torch-test-") as directory:
             root = Path(directory)
-            archive = root / "gpuxtb-0.1.0.tar.gz"
+            archive = root / "xtbloom-0.1.0.tar.gz"
             with tarfile.open(archive, "w:gz") as tar:
                 tar.add(
                     REPOSITORY / CHECKER.TORCH_STABLE_MANIFEST_PATH,
-                    arcname=f"gpuxtb-0.1.0/{CHECKER.TORCH_STABLE_MANIFEST_PATH}",
+                    arcname=f"xtbloom-0.1.0/{CHECKER.TORCH_STABLE_MANIFEST_PATH}",
                 )
                 vendor_source = REPOSITORY / CHECKER.TORCH_STABLE_VENDOR_PATH
                 for relative in (vendor_source / "include").rglob("*"):
@@ -441,7 +460,7 @@ class TorchStableProvenanceTests(unittest.TestCase):
                         root_child = root / rel
                         root_child.parent.mkdir(parents=True, exist_ok=True)
                         root_child.write_bytes(payload)
-                        tar.add(root_child, arcname=f"gpuxtb-0.1.0/{rel}")
+                        tar.add(root_child, arcname=f"xtbloom-0.1.0/{rel}")
             names = CHECKER._archive_names(archive)
             with self.assertRaisesRegex(
                 CHECKER.LicenseCheckError,
@@ -455,12 +474,12 @@ class CudaWheelInspectionTests(unittest.TestCase):
 
     def test_wheel_payload_is_forwarded_to_cuda_abi_checker(self) -> None:
         """Forward the extracted ELF payload and selected readelf command."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-wheel-test-") as directory:
+        with tempfile.TemporaryDirectory(prefix="xtbloom-wheel-test-") as directory:
             root = Path(directory)
-            wheel = root / "gpuxtb-test.whl"
+            wheel = root / "xtbloom-test.whl"
             marker = root / "checker-ran"
             with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr("gpuxtb/lib/libgpuxtb.so", b"\x7fELFtest")
+                archive.writestr("xtbloom/lib/libxtbloom.so", b"\x7fELFtest")
             checker = root / "checker.py"
             checker.write_text(
                 "import argparse\n"
@@ -482,13 +501,13 @@ class CudaWheelInspectionTests(unittest.TestCase):
             self.assertEqual(marker.read_text(encoding="utf-8"), "test-readelf")
 
     def test_wheel_with_multiple_elf_payloads_is_rejected(self) -> None:
-        """Reject wheels containing ambiguous gpuxtb ELF payloads."""
-        with tempfile.TemporaryDirectory(prefix="gpuxtb-wheel-test-") as directory:
+        """Reject wheels containing ambiguous xtbloom ELF payloads."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-wheel-test-") as directory:
             root = Path(directory)
-            wheel = root / "gpuxtb-test.whl"
+            wheel = root / "xtbloom-test.whl"
             with zipfile.ZipFile(wheel, "w") as archive:
-                archive.writestr("gpuxtb/lib/libgpuxtb.so", b"\x7fELFfirst")
-                archive.writestr("gpuxtb/lib/libgpuxtb.so.1", b"\x7fELFsecond")
+                archive.writestr("xtbloom/lib/libxtbloom.so", b"\x7fELFfirst")
+                archive.writestr("xtbloom/lib/libxtbloom.so.1", b"\x7fELFsecond")
             with self.assertRaisesRegex(RuntimeError, "exactly one ELF"):
                 WHEEL_INSPECTOR.inspect_wheel(
                     wheel,

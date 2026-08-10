@@ -68,21 +68,21 @@ class FakeRunner:
 def make_reference_document(
     natoms: int = 32, batch_size: int = 1, property_name: str = "force"
 ) -> dict[str, Any]:
-    """Create one fully valid in-memory gpuxtb FRESH reference artifact."""
+    """Create one fully valid in-memory xtbloom FRESH reference artifact."""
     molecule = natoms_scaling.make_alkane(natoms)
-    cell = natoms_scaling.Cell("gpuxtb", molecule, batch_size, "cpu", property_name)
-    flags = natoms_scaling.public_api.GPUXTB_COMPUTE_ENERGY
+    cell = natoms_scaling.Cell("xtbloom", molecule, batch_size, "cpu", property_name)
+    flags = natoms_scaling.public_api.XTBLOOM_COMPUTE_ENERGY
     if property_name == "force":
-        flags |= natoms_scaling.public_api.GPUXTB_COMPUTE_FORCES
+        flags |= natoms_scaling.public_api.XTBLOOM_COMPUTE_FORCES
     options = {
-        "engine": "gpuxtb",
-        "model": natoms_scaling.public_api.GPUXTB_MODEL_GFN2_XTB,
+        "engine": "xtbloom",
+        "model": natoms_scaling.public_api.XTBLOOM_MODEL_GFN2_XTB,
         "flags": flags,
-        "max_scc_iterations": natoms_scaling.GPUXTB_CONFORMANCE_MAX_SCC_ITERATIONS,
-        "charge_tolerance": natoms_scaling.GPUXTB_CONFORMANCE_CHARGE_TOLERANCE,
-        "energy_tolerance": natoms_scaling.GPUXTB_CONFORMANCE_ENERGY_TOLERANCE,
+        "max_scc_iterations": natoms_scaling.XTBLOOM_CONFORMANCE_MAX_SCC_ITERATIONS,
+        "charge_tolerance": natoms_scaling.XTBLOOM_CONFORMANCE_CHARGE_TOLERANCE,
+        "energy_tolerance": natoms_scaling.XTBLOOM_CONFORMANCE_ENERGY_TOLERANCE,
         "electronic_temperature_hartree": (
-            natoms_scaling.GPUXTB_CONFORMANCE_ELECTRONIC_TEMPERATURE
+            natoms_scaling.XTBLOOM_CONFORMANCE_ELECTRONIC_TEMPERATURE
         ),
         "cpu_threads": 1,
         "device_id": 0,
@@ -99,8 +99,8 @@ def make_reference_document(
         "argv": ["reference"],
         "repository": dict(source_git),
         "library": {
-            "engine": "gpuxtb",
-            "path": "/build/libgpuxtb.so",
+            "engine": "xtbloom",
+            "path": "/build/libxtbloom.so",
             "sha256": "b" * 64,
             "build": {
                 "build_system": "cmake",
@@ -110,7 +110,7 @@ def make_reference_document(
     }
     row = {
         "availability": "available",
-        "engine": "gpuxtb",
+        "engine": "xtbloom",
         "backend": "cpu",
         "memory_mode": "host",
         "molecule": molecule.name,
@@ -180,13 +180,19 @@ def set_measured_observables(
 class NatomsScalingTest(unittest.TestCase):
     """Exercise parser, protocol ordering, provenance, and serialization."""
 
+    def test_storage_records_absent_uniform_electric_fields(self) -> None:
+        """Keep benchmark storage compatible with the public batch builder."""
+        molecule = natoms_scaling.make_alkane(14)
+        storage = natoms_scaling.make_storage(molecule, 3)
+        self.assertEqual(storage.efields, [None, None, None])
+
     def test_parser_requires_explicit_mode_and_output_paths(self) -> None:
         """Require explicit mode and artifact paths for reproducible runs."""
         parser = natoms_scaling.build_parser()
         arguments = parser.parse_args(
             [
                 "--library",
-                "libgpuxtb.so",
+                "libxtbloom.so",
                 "--output-json",
                 "fresh.json",
                 "--output-csv",
@@ -206,31 +212,31 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(arguments.cross_engine_energy_atol, 5.0e-7)
         self.assertEqual(arguments.cross_engine_force_atol, 5.0e-6)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            parser.parse_args(["--library", "libgpuxtb.so"])
+            parser.parse_args(["--library", "libxtbloom.so"])
 
-    def test_gpuxtb_benchmark_pins_conformance_scc_and_retains_300k(self) -> None:
+    def test_xtbloom_benchmark_pins_conformance_scc_and_retains_300k(self) -> None:
         """Pin SCC tolerances while retaining the initialized temperature."""
         options = SimpleNamespace(
             max_scc_iterations=250,
             charge_tolerance=1.0e-6,
             energy_tolerance=1.0e-8,
             electronic_temperature=(
-                natoms_scaling.GPUXTB_CONFORMANCE_ELECTRONIC_TEMPERATURE
+                natoms_scaling.XTBLOOM_CONFORMANCE_ELECTRONIC_TEMPERATURE
             ),
         )
         original_temperature = options.electronic_temperature
-        natoms_scaling.configure_gpuxtb_conformance_scc(options)
+        natoms_scaling.configure_xtbloom_conformance_scc(options)
         self.assertEqual(
             options.max_scc_iterations,
-            natoms_scaling.GPUXTB_CONFORMANCE_MAX_SCC_ITERATIONS,
+            natoms_scaling.XTBLOOM_CONFORMANCE_MAX_SCC_ITERATIONS,
         )
         self.assertEqual(
             options.charge_tolerance,
-            natoms_scaling.GPUXTB_CONFORMANCE_CHARGE_TOLERANCE,
+            natoms_scaling.XTBLOOM_CONFORMANCE_CHARGE_TOLERANCE,
         )
         self.assertEqual(
             options.energy_tolerance,
-            natoms_scaling.GPUXTB_CONFORMANCE_ENERGY_TOLERANCE,
+            natoms_scaling.XTBLOOM_CONFORMANCE_ENERGY_TOLERANCE,
         )
         self.assertEqual(options.electronic_temperature, original_temperature)
 
@@ -259,10 +265,10 @@ class NatomsScalingTest(unittest.TestCase):
                     values.extend(("--start-mode", mode))
                 return values
 
-            fresh = parser.parse_args(arguments("gpuxtb", "fresh"))
+            fresh = parser.parse_args(arguments("xtbloom", "fresh"))
             natoms_scaling.validate_arguments(fresh)
             for engine, mode in (
-                ("gpuxtb", "warm"),
+                ("xtbloom", "warm"),
                 ("tblite", None),
                 ("xtb", None),
             ):
@@ -277,7 +283,7 @@ class NatomsScalingTest(unittest.TestCase):
                     )
 
             strict = [
-                *arguments("gpuxtb", "warm"),
+                *arguments("xtbloom", "warm"),
                 "--energy-reference-json",
                 str(reference),
             ]
@@ -414,11 +420,11 @@ class NatomsScalingTest(unittest.TestCase):
         identity = {
             "argv": ["python", "natoms_scaling.py", "--start-mode", "fresh"],
             "repository": {"revision": "abc", "dirty": False},
-            "library": {"path": "/tmp/libgpuxtb.so", "sha256": "123"},
+            "library": {"path": "/tmp/libxtbloom.so", "sha256": "123"},
         }
         row = {
             "availability": "available",
-            "engine": "gpuxtb",
+            "engine": "xtbloom",
             "start_mode": "fresh",
             "run_identity": identity,
             "raw_samples": [{"latency_ms": 1.0, "scc_iterations": [13]}],
@@ -444,8 +450,8 @@ class NatomsScalingTest(unittest.TestCase):
             )
             provider = root / "libblas.so"
             provider.write_bytes(b"blas")
-            library = build / "libgpuxtb.so"
-            library.write_bytes(b"gpuxtb")
+            library = build / "libxtbloom.so"
+            library.write_bytes(b"xtbloom")
             cache = build / "CMakeCache.txt"
             cache.write_text(
                 "\n".join(
@@ -457,8 +463,8 @@ class NatomsScalingTest(unittest.TestCase):
                         "CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG",
                         "CMAKE_GENERATOR:INTERNAL=Ninja",
                         f"CMAKE_HOME_DIRECTORY:INTERNAL={source}",
-                        "GPUXTB_ENABLE_CUDA:STRING=OFF",
-                        f"GPUXTB_MKL_RT_LIBRARY:FILEPATH={provider}",
+                        "XTBLOOM_ENABLE_CUDA:STRING=OFF",
+                        f"XTBLOOM_CPU_LINALG_LIBRARY:FILEPATH={provider}",
                     )
                 ),
                 encoding="utf-8",
@@ -837,11 +843,11 @@ class NatomsScalingTest(unittest.TestCase):
 
         rows, failed = natoms_scaling.collect_rows(
             [
-                natoms_scaling.Cell("gpuxtb", molecule_a, 1, "cpu", "force"),
-                natoms_scaling.Cell("gpuxtb", molecule_b, 1, "cpu", "force"),
+                natoms_scaling.Cell("xtbloom", molecule_a, 1, "cpu", "force"),
+                natoms_scaling.Cell("xtbloom", molecule_b, 1, "cpu", "force"),
             ],
             natoms_scaling.Protocol("fresh", 0, 1, 1.0e-8, 1.0e-7),
-            Path("libgpuxtb.so"),
+            Path("libxtbloom.so"),
             1,
             0,
             {"argv": ["test"]},
@@ -996,7 +1002,7 @@ class NatomsScalingTest(unittest.TestCase):
         comparison = row["correctness"]["fresh_reference_comparison"]
         self.assertEqual(comparison["status"], "pass")
         self.assertEqual(
-            comparison["gpuxtb_option_identity"], "not_comparable_cross_engine"
+            comparison["xtbloom_option_identity"], "not_comparable_cross_engine"
         )
         self.assertAlmostEqual(comparison["energy"]["max_abs_delta_hartree"], 4e-7)
         self.assertAlmostEqual(
@@ -1065,8 +1071,8 @@ class NatomsScalingTest(unittest.TestCase):
                     self.assertEqual(comparison["status"], "fail")
                     self.assertEqual(comparison["measured_samples"]["status"], "fail")
 
-    def test_gpuxtb_reference_requires_exact_compute_option_identity(self) -> None:
-        """Require exact gpuxtb compute options for same-engine comparison."""
+    def test_xtbloom_reference_requires_exact_compute_option_identity(self) -> None:
+        """Require exact xtbloom compute options for same-engine comparison."""
         document = make_reference_document()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fresh.json"
@@ -1085,9 +1091,9 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertTrue(failed)
         comparison = row["correctness"]["fresh_reference_comparison"]
         self.assertEqual(comparison["status"], "fail")
-        self.assertEqual(comparison["gpuxtb_option_identity"], "fail")
+        self.assertEqual(comparison["xtbloom_option_identity"], "fail")
 
-    def test_gpuxtb_warm_reference_requires_same_binary_and_revision(self) -> None:
+    def test_xtbloom_warm_reference_requires_same_binary_and_revision(self) -> None:
         """Require WARM rows to match the FRESH binary and source revision."""
         document = make_reference_document()
         with tempfile.TemporaryDirectory() as directory:
@@ -1109,8 +1115,8 @@ class NatomsScalingTest(unittest.TestCase):
             )
         comparison = row["correctness"]["fresh_reference_comparison"]
         self.assertTrue(failed)
-        self.assertEqual(comparison["gpuxtb_binary_identity"], "fail")
-        self.assertEqual(comparison["gpuxtb_repository_revision"], "fail")
+        self.assertEqual(comparison["xtbloom_binary_identity"], "fail")
+        self.assertEqual(comparison["xtbloom_repository_revision"], "fail")
 
     def test_cross_engine_force_above_manifest_gate_is_not_performance_evidence(
         self,

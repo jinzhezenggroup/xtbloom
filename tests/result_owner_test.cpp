@@ -1,12 +1,12 @@
-// Unit tests for the gpuxtb-owned result arena and its DLPack export.
+// Unit tests for the xtbloom-owned result arena and its DLPack export.
 //
-// gpuxtb_result_owner_t allocates a host or CUDA device arena that the caller
+// xtbloom_result_owner_t allocates a host or CUDA device arena that the caller
 // fills through a normal compute call and hands to an importing framework
 // through the DLPack producer protocol. These tests prove the ref-counting
 // contract, transactional failure behavior, and the byte-exact DLPack
 // managed-tensor layout independently of Python.
 //
-// gpuxtb's public CUDA compute is synchronous, so after gpuxtb_compute
+// xtbloom's public CUDA compute is synchronous, so after xtbloom_compute
 // returns the requested result bytes are fully committed and a producer
 // export needs no additional device-wide synchronization or hidden host
 // polling.
@@ -15,7 +15,7 @@
 #include <cstring>
 #include <string>
 
-#include "gpuxtb/gpuxtb.h"
+#include "xtbloom/xtbloom.h"
 
 namespace {
 
@@ -70,35 +70,35 @@ void expect(bool condition, const std::string& message) {
 // Allocate a host arena, bind it, export one float64 slice, and verify the
 // managed tensor fields byte-by-byte without importing through a framework.
 int test_host_arena_and_versioned_export() {
-  gpuxtb_result_owner_options_t options;
-  gpuxtb_status_t status = gpuxtb_result_owner_options_init(&options, sizeof(options));
-  expect(status == GPUXTB_STATUS_SUCCESS, "result owner options init");
-  expect(options.memory_space == GPUXTB_MEMORY_HOST, "host default memory space");
+  xtbloom_result_owner_options_t options;
+  xtbloom_status_t status = xtbloom_result_owner_options_init(&options, sizeof(options));
+  expect(status == XTBLOOM_STATUS_SUCCESS, "result owner options init");
+  expect(options.memory_space == XTBLOOM_MEMORY_HOST, "host default memory space");
   expect(options.device_id == -1, "host default device id");
-  options.memory_space = GPUXTB_MEMORY_HOST;
+  options.memory_space = XTBLOOM_MEMORY_HOST;
   options.device_id = -1;
   options.size_bytes = 4096;
 
-  gpuxtb_result_owner_t* owner = NULL;
-  status = gpuxtb_result_owner_create(&options, &owner);
-  expect(status == GPUXTB_STATUS_SUCCESS && owner != NULL, "host arena create");
-  if (status != GPUXTB_STATUS_SUCCESS || owner == NULL) {
+  xtbloom_result_owner_t* owner = NULL;
+  status = xtbloom_result_owner_create(&options, &owner);
+  expect(status == XTBLOOM_STATUS_SUCCESS && owner != NULL, "host arena create");
+  if (status != XTBLOOM_STATUS_SUCCESS || owner == NULL) {
     return 1;
   }
 
-  gpuxtb_buffer_t buffer;
-  status = gpuxtb_result_owner_buffer(owner, &buffer);
-  expect(status == GPUXTB_STATUS_SUCCESS, "result owner buffer");
+  xtbloom_buffer_t buffer;
+  status = xtbloom_result_owner_buffer(owner, &buffer);
+  expect(status == XTBLOOM_STATUS_SUCCESS, "result owner buffer");
   expect(buffer.data != NULL, "arena data is non-null");
   expect(buffer.size_bytes == 4096u, "arena size is preserved");
-  expect(buffer.memory_space == GPUXTB_MEMORY_HOST, "arena host memory space");
+  expect(buffer.memory_space == XTBLOOM_MEMORY_HOST, "arena host memory space");
   expect(buffer.reserved == 0u, "arena buffer reserved is zero");
 
   const int64_t shape[2] = {8, 8};
-  gpuxtb_dlpack_view_t view;
+  xtbloom_dlpack_view_t view;
   std::memset(&view, 0, sizeof(view));
   view.struct_size = sizeof(view);
-  view.api_version = GPUXTB_API_VERSION;
+  view.api_version = XTBLOOM_API_VERSION;
   view.byte_offset = 64;
   view.dtype_code = 2; /* float */
   view.dtype_bits = 64;
@@ -107,10 +107,10 @@ int test_host_arena_and_versioned_export() {
   view.shape = shape;
 
   void* managed = reinterpret_cast<void*>(0x1);
-  status = gpuxtb_result_owner_export_dltensor(owner, &view, 1, &managed);
-  expect(status == GPUXTB_STATUS_SUCCESS, "versioned export succeeds");
+  status = xtbloom_result_owner_export_dltensor(owner, &view, 1, &managed);
+  expect(status == XTBLOOM_STATUS_SUCCESS, "versioned export succeeds");
   expect(managed != NULL, "versioned export returns a managed tensor");
-  if (status != GPUXTB_STATUS_SUCCESS || managed == NULL) {
+  if (status != XTBLOOM_STATUS_SUCCESS || managed == NULL) {
     return 1;
   }
 
@@ -133,14 +133,14 @@ int test_host_arena_and_versioned_export() {
 
   // A second export must be an independent single-use managed tensor.
   void* managed2 = NULL;
-  status = gpuxtb_result_owner_export_dltensor(owner, &view, 1, &managed2);
-  expect(status == GPUXTB_STATUS_SUCCESS && managed2 != NULL && managed2 != managed,
+  status = xtbloom_result_owner_export_dltensor(owner, &view, 1, &managed2);
+  expect(status == XTBLOOM_STATUS_SUCCESS && managed2 != NULL && managed2 != managed,
          "repeated export creates a fresh managed tensor");
 
   // Legacy export mirror.
   void* legacy = NULL;
-  status = gpuxtb_result_owner_export_dltensor(owner, &view, 0, &legacy);
-  expect(status == GPUXTB_STATUS_SUCCESS && legacy != NULL, "legacy export succeeds");
+  status = xtbloom_result_owner_export_dltensor(owner, &view, 0, &legacy);
+  expect(status == XTBLOOM_STATUS_SUCCESS && legacy != NULL, "legacy export succeeds");
   if (legacy != NULL) {
     DtManagedTensor* legacy_tensor = static_cast<DtManagedTensor*>(legacy);
     expect(legacy_tensor->dl_tensor.ndim == 2, "legacy ndim is 2");
@@ -151,7 +151,7 @@ int test_host_arena_and_versioned_export() {
   // Producer close must not invalidate live exported tensors: each export
   // retains the arena independently, and each native deleter releases it
   // exactly once when an importing framework is done.
-  gpuxtb_result_owner_release(owner);
+  xtbloom_result_owner_release(owner);
 
   // Consume all three exports through their native deleters. Each managed
   // tensor must be freed exactly once with no use-after-free or leak.
@@ -167,65 +167,65 @@ int test_host_arena_and_versioned_export() {
 }
 
 int test_owner_lifetime_and_failures() {
-  gpuxtb_result_owner_options_t options;
-  gpuxtb_result_owner_options_init(&options, sizeof(options));
-  options.memory_space = GPUXTB_MEMORY_HOST;
+  xtbloom_result_owner_options_t options;
+  xtbloom_result_owner_options_init(&options, sizeof(options));
+  options.memory_space = XTBLOOM_MEMORY_HOST;
   options.device_id = -1;
   options.size_bytes = 512;
 
   // Host creation and retain/release accounting.
-  gpuxtb_result_owner_t* owner = NULL;
-  gpuxtb_status_t status = gpuxtb_result_owner_create(&options, &owner);
-  expect(status == GPUXTB_STATUS_SUCCESS && owner != NULL, "host arena create");
+  xtbloom_result_owner_t* owner = NULL;
+  xtbloom_status_t status = xtbloom_result_owner_create(&options, &owner);
+  expect(status == XTBLOOM_STATUS_SUCCESS && owner != NULL, "host arena create");
   if (owner == NULL) {
     return 1;
   }
-  gpuxtb_result_owner_retain(owner);
-  gpuxtb_result_owner_retain(owner);
-  gpuxtb_result_owner_release(owner); /* 2 refs remain */
-  gpuxtb_result_owner_release(owner); /* 1 ref remains */
-  gpuxtb_result_owner_release(owner); /* freed here */
+  xtbloom_result_owner_retain(owner);
+  xtbloom_result_owner_retain(owner);
+  xtbloom_result_owner_release(owner); /* 2 refs remain */
+  xtbloom_result_owner_release(owner); /* 1 ref remains */
+  xtbloom_result_owner_release(owner); /* freed here */
 
   // NULL release is a no-op and must not crash.
-  gpuxtb_result_owner_buffer(NULL, NULL);
-  const std::string diagnostic_before_release = gpuxtb_get_last_error();
-  gpuxtb_result_owner_release(NULL);
-  expect(std::string(gpuxtb_get_last_error()) == diagnostic_before_release,
+  xtbloom_result_owner_buffer(NULL, NULL);
+  const std::string diagnostic_before_release = xtbloom_get_last_error();
+  xtbloom_result_owner_release(NULL);
+  expect(std::string(xtbloom_get_last_error()) == diagnostic_before_release,
          "NULL release preserves the previous diagnostic");
 
   // Zero-size arena is rejected.
   options.size_bytes = 0;
-  status = gpuxtb_result_owner_create(&options, &owner);
-  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && owner == NULL, "zero-size arena rejected");
+  status = xtbloom_result_owner_create(&options, &owner);
+  expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT && owner == NULL, "zero-size arena rejected");
   options.size_bytes = 512;
 
   // Reserved field must be zero.
   options.reserved = 1;
-  status = gpuxtb_result_owner_create(&options, &owner);
-  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && owner == NULL, "nonzero reserved rejected");
+  status = xtbloom_result_owner_create(&options, &owner);
+  expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT && owner == NULL, "nonzero reserved rejected");
   options.reserved = 0;
 
   // Host arenas use the sentinel device id -1; accepting a CUDA ordinal here
   // would produce a descriptor whose public metadata contradicts its storage.
   options.device_id = 0;
-  status = gpuxtb_result_owner_create(&options, &owner);
-  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && owner == NULL,
+  status = xtbloom_result_owner_create(&options, &owner);
+  expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT && owner == NULL,
          "host arena rejects a non-sentinel device id");
   options.device_id = -1;
 
   owner = NULL;
-  status = gpuxtb_result_owner_create(&options, &owner);
-  if (status != GPUXTB_STATUS_SUCCESS || owner == NULL) {
+  status = xtbloom_result_owner_create(&options, &owner);
+  if (status != XTBLOOM_STATUS_SUCCESS || owner == NULL) {
     return 1;
   }
 
   // Export failure paths must leave *out_managed untouched and the arena ref
   // counting intact.
   const int64_t shape[2] = {8, 64}; /* 8*64*8 = 4096 > 512 arena */
-  gpuxtb_dlpack_view_t view;
+  xtbloom_dlpack_view_t view;
   std::memset(&view, 0, sizeof(view));
   view.struct_size = sizeof(view);
-  view.api_version = GPUXTB_API_VERSION;
+  view.api_version = XTBLOOM_API_VERSION;
   view.dtype_code = 2;
   view.dtype_bits = 64;
   view.dtype_lanes = 1;
@@ -233,45 +233,45 @@ int test_owner_lifetime_and_failures() {
   view.shape = shape;
 
   void* managed = reinterpret_cast<void*>(0x1234);
-  status = gpuxtb_result_owner_export_dltensor(owner, &view, 1, &managed);
-  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && managed == NULL,
+  status = xtbloom_result_owner_export_dltensor(owner, &view, 1, &managed);
+  expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT && managed == NULL,
          "out-of-range export fails transactionally");
 
-  gpuxtb_dlpack_view_t bad_dtype = view;
+  xtbloom_dlpack_view_t bad_dtype = view;
   bad_dtype.ndim = 1;
   const int64_t scalar_shape[1] = {16};
   bad_dtype.shape = scalar_shape;
   bad_dtype.dtype_code = 3; /* unsupported code */
   managed = reinterpret_cast<void*>(0x1234);
-  status = gpuxtb_result_owner_export_dltensor(owner, &bad_dtype, 1, &managed);
-  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && managed == NULL,
+  status = xtbloom_result_owner_export_dltensor(owner, &bad_dtype, 1, &managed);
+  expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT && managed == NULL,
          "unsupported dtype rejected transactionally");
 
   // The public ABI intentionally exposes only scalar integer and float dtypes
-  // documented in gpuxtb.h.  Do not silently accept wider unsigned or special
+  // documented in xtbloom.h.  Do not silently accept wider unsigned or special
   // DLPack encodings merely because they have a representable byte width.
   const int32_t unsupported_codes[][2] = {{1, 16}, {1, 32}, {1, 64}, {4, 16}, {6, 8}};
   for (const auto& dtype : unsupported_codes) {
-    gpuxtb_dlpack_view_t unsupported = bad_dtype;
+    xtbloom_dlpack_view_t unsupported = bad_dtype;
     unsupported.dtype_code = dtype[0];
     unsupported.dtype_bits = dtype[1];
     managed = reinterpret_cast<void*>(0x1234);
-    status = gpuxtb_result_owner_export_dltensor(owner, &unsupported, 1, &managed);
-    expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && managed == NULL,
+    status = xtbloom_result_owner_export_dltensor(owner, &unsupported, 1, &managed);
+    expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT && managed == NULL,
            "undocumented DLPack dtype rejected transactionally");
   }
 
   // Empty tensors are valid compact views and must not trigger a zero-divisor
   // while validating subsequent shape extents.
   const int64_t empty_shape[2] = {0, 3};
-  gpuxtb_dlpack_view_t empty = view;
+  xtbloom_dlpack_view_t empty = view;
   empty.shape = empty_shape;
   empty.dtype_code = 2;
   empty.dtype_bits = 64;
   empty.byte_offset = 0;
   managed = NULL;
-  status = gpuxtb_result_owner_export_dltensor(owner, &empty, 1, &managed);
-  expect(status == GPUXTB_STATUS_SUCCESS && managed != NULL,
+  status = xtbloom_result_owner_export_dltensor(owner, &empty, 1, &managed);
+  expect(status == XTBLOOM_STATUS_SUCCESS && managed != NULL,
          "empty DLPack shape exports successfully");
   if (managed != NULL) {
     DtManagedTensorVersioned* empty_tensor = static_cast<DtManagedTensorVersioned*>(managed);
@@ -283,38 +283,38 @@ int test_owner_lifetime_and_failures() {
   }
 
   // Unaligned offset must be rejected for an 8-byte scalar.
-  gpuxtb_dlpack_view_t unaligned = view;
+  xtbloom_dlpack_view_t unaligned = view;
   unaligned.ndim = 1;
   unaligned.shape = scalar_shape;
   unaligned.byte_offset = 4;
   managed = reinterpret_cast<void*>(0x1234);
-  status = gpuxtb_result_owner_export_dltensor(owner, &unaligned, 1, &managed);
-  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && managed == NULL,
+  status = xtbloom_result_owner_export_dltensor(owner, &unaligned, 1, &managed);
+  expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT && managed == NULL,
          "unaligned offset rejected transactionally");
 
   // Negative extents must be rejected.
-  gpuxtb_dlpack_view_t negative = view;
+  xtbloom_dlpack_view_t negative = view;
   negative.ndim = 1;
   const int64_t negative_shape[1] = {-1};
   negative.shape = negative_shape;
   negative.byte_offset = 0;
   managed = reinterpret_cast<void*>(0x1234);
-  status = gpuxtb_result_owner_export_dltensor(owner, &negative, 1, &managed);
-  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && managed == NULL,
+  status = xtbloom_result_owner_export_dltensor(owner, &negative, 1, &managed);
+  expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT && managed == NULL,
          "negative extent rejected transactionally");
 
   // Bad version is rejected before any pointer is touched.
   managed = reinterpret_cast<void*>(0x1234);
-  status = gpuxtb_result_owner_export_dltensor(owner, &view, 7, &managed);
-  expect(status == GPUXTB_STATUS_INVALID_ARGUMENT && managed == NULL,
+  status = xtbloom_result_owner_export_dltensor(owner, &view, 7, &managed);
+  expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT && managed == NULL,
          "unknown export version rejected");
 
   // Buffer output must reflect the arena even with several retained exports.
-  gpuxtb_buffer_t arena_buffer;
-  gpuxtb_result_owner_buffer(owner, &arena_buffer);
+  xtbloom_buffer_t arena_buffer;
+  xtbloom_result_owner_buffer(owner, &arena_buffer);
   expect(arena_buffer.size_bytes == 512u, "buffer reflects arena after exports");
 
-  gpuxtb_result_owner_release(owner);
+  xtbloom_result_owner_release(owner);
   return 0;
 }
 
@@ -323,15 +323,15 @@ int test_owner_lifetime_and_failures() {
 int main() {
   // Short-structure init must fail so a future header suffix stays safe.
   {
-    gpuxtb_result_owner_options_t options;
-    gpuxtb_status_t status =
-        gpuxtb_result_owner_options_init(&options, GPUXTB_RESULT_OWNER_OPTIONS_V1_SIZE - 1);
-    expect(status == GPUXTB_STATUS_INVALID_ARGUMENT, "short result-owner options rejected");
+    xtbloom_result_owner_options_t options;
+    xtbloom_status_t status =
+        xtbloom_result_owner_options_init(&options, XTBLOOM_RESULT_OWNER_OPTIONS_V1_SIZE - 1);
+    expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT, "short result-owner options rejected");
   }
   {
-    gpuxtb_dlpack_view_t view;
-    gpuxtb_status_t status = gpuxtb_result_owner_export_dltensor(NULL, &view, 1, NULL);
-    expect(status == GPUXTB_STATUS_INVALID_ARGUMENT, "NULL owner export rejected");
+    xtbloom_dlpack_view_t view;
+    xtbloom_status_t status = xtbloom_result_owner_export_dltensor(NULL, &view, 1, NULL);
+    expect(status == XTBLOOM_STATUS_INVALID_ARGUMENT, "NULL owner export rejected");
   }
 
   test_host_arena_and_versioned_export();

@@ -1,5 +1,5 @@
 #include <algorithm>
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <climits>
 #include <cstddef>
@@ -14,7 +14,7 @@
 
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
 
-namespace gpuxtb::detail::cuda {
+namespace xtbloom::detail::cuda {
 namespace {
 
 using gfn2::BasisPlan;
@@ -22,7 +22,7 @@ using gfn2::IntegralPlan;
 using gfn2::WavefunctionFieldLayout;
 using gfn2::WavefunctionLayout;
 
-Gfn2SccSetupTopologyDiagnostic failure(gpuxtb_status_t status, Gfn2SccSetupTopologyError error,
+Gfn2SccSetupTopologyDiagnostic failure(xtbloom_status_t status, Gfn2SccSetupTopologyError error,
                                        Gfn2SccSetupTopologyField field,
                                        std::int64_t index = -1) noexcept {
   Gfn2SccSetupTopologyDiagnostic result{};
@@ -37,8 +37,8 @@ Gfn2SccSetupTopologyDiagnostic arena_failure(Gfn2SccSetupTopologyError error,
                                              std::size_t required_bytes,
                                              cudaError_t cuda_status = cudaSuccess) noexcept {
   Gfn2SccSetupTopologyDiagnostic result =
-      failure(error == Gfn2SccSetupTopologyError::kCudaError ? GPUXTB_STATUS_INTERNAL_ERROR
-                                                             : GPUXTB_STATUS_INVALID_ARGUMENT,
+      failure(error == Gfn2SccSetupTopologyError::kCudaError ? XTBLOOM_STATUS_INTERNAL_ERROR
+                                                             : XTBLOOM_STATUS_INVALID_ARGUMENT,
               error, Gfn2SccSetupTopologyField::kArena);
   result.required_bytes = required_bytes;
   result.cuda_status = cuda_status;
@@ -163,7 +163,7 @@ Gfn2SccSetupTopologyDiagnostic validate_plan_compatibility(const BasisPlan& basi
                                                            const WavefunctionLayout& wavefunction,
                                                            std::uint64_t plan_token) noexcept {
   if (plan_token == 0u) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                    Gfn2SccSetupTopologyField::kPlanToken);
   }
   if (basis.batch_size <= 0 || basis.batch_size > INT32_MAX || basis.total_atoms <= 0 ||
@@ -174,12 +174,12 @@ Gfn2SccSetupTopologyDiagnostic validate_plan_compatibility(const BasisPlan& basi
       !valid_offsets(basis.atom_shell_offsets, basis.total_atoms, basis.total_shells) ||
       !valid_offsets(basis.shell_orbital_offsets, basis.total_shells, basis.total_orbitals) ||
       !exact_extent(basis.shell_to_atom, basis.total_shells)) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                    Gfn2SccSetupTopologyField::kBasis);
   }
   if (integrals.batch_size != basis.batch_size || integrals.total_matrix_elements <= 0 ||
       !valid_offsets(integrals.matrix_offsets, basis.batch_size, integrals.total_matrix_elements)) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                    Gfn2SccSetupTopologyField::kIntegrals);
   }
   if (wavefunction.batch_size != basis.batch_size ||
@@ -190,18 +190,18 @@ Gfn2SccSetupTopologyDiagnostic validate_plan_compatibility(const BasisPlan& basi
       wavefunction.batch_shell_offsets != basis.batch_shell_offsets ||
       wavefunction.batch_orbital_offsets != basis.batch_orbital_offsets ||
       !exact_extent(wavefunction.spin_channels, basis.batch_size)) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                    Gfn2SccSetupTopologyField::kWavefunction);
   }
   for (std::int64_t system = 0; system < basis.batch_size; ++system) {
     const std::int32_t channels = wavefunction.spin_channels[static_cast<std::size_t>(system)];
     if (channels != 1 && channels != 2) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                      Gfn2SccSetupTopologyField::kWavefunction, system);
     }
   }
   if (!valid_wavefunction_field_offsets(basis, integrals, wavefunction)) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                    Gfn2SccSetupTopologyField::kWavefunction);
   }
   return {};
@@ -224,7 +224,7 @@ Gfn2SccSetupTopologyDiagnostic build_buckets(const BasisPlan& basis, const Integ
         integrals.matrix_offsets[static_cast<std::size_t>(system + 1)] -
                 integrals.matrix_offsets[static_cast<std::size_t>(system)] !=
             matrix_elements) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT,
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT,
                      orbitals > INT32_MAX || matrix_elements > INT_MAX
                          ? Gfn2SccSetupTopologyError::kCountOverflow
                          : Gfn2SccSetupTopologyError::kInvalidPlan,
@@ -268,7 +268,7 @@ Gfn2SccSetupTopologyDiagnostic build_buckets(const BasisPlan& basis, const Integ
         orbital_span > INT_MAX ||
         packed_matrix_offset > std::numeric_limits<std::int64_t>::max() - matrix_span ||
         packed_orbital_offset > std::numeric_limits<std::int64_t>::max() - orbital_span) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
                      Gfn2SccSetupTopologyField::kBuckets,
                      static_cast<std::int64_t>(buckets.size()));
     }
@@ -283,7 +283,7 @@ Gfn2SccSetupTopologyDiagnostic build_buckets(const BasisPlan& basis, const Integ
   }
   if (packed_matrix_offset != integrals.total_matrix_elements ||
       packed_orbital_offset != basis.total_orbitals) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                    Gfn2SccSetupTopologyField::kBuckets);
   }
   return {};
@@ -309,19 +309,19 @@ Gfn2SccSetupTopologyDiagnostic configure_spin_buckets(
         bucket.system_index_offset + static_cast<std::int64_t>(bucket.system_count);
     if (bucket.system_index_offset < 0 || system_end < bucket.system_index_offset ||
         static_cast<std::uint64_t>(system_end) > bucket_systems.size()) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                      Gfn2SccSetupTopologyField::kBuckets, static_cast<std::int64_t>(bucket_index));
     }
     for (std::int64_t position = bucket.system_index_offset; position < system_end; ++position) {
       const std::int32_t system = bucket_systems[static_cast<std::size_t>(position)];
       if (system < 0 || static_cast<std::uint64_t>(system) >= spin_channels.size()) {
-        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                        Gfn2SccSetupTopologyField::kBuckets, position);
       }
       const std::int32_t channels = spin_channels[static_cast<std::size_t>(system)];
       if ((channels != 1 && channels != 2) ||
           solve_count > std::numeric_limits<std::int64_t>::max() - channels) {
-        return failure(GPUXTB_STATUS_INVALID_ARGUMENT,
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT,
                        channels == 1 || channels == 2 ? Gfn2SccSetupTopologyError::kCountOverflow
                                                       : Gfn2SccSetupTopologyError::kInvalidPlan,
                        Gfn2SccSetupTopologyField::kWavefunction, system);
@@ -340,7 +340,7 @@ Gfn2SccSetupTopologyDiagnostic configure_spin_buckets(
         solve_offset > std::numeric_limits<std::int64_t>::max() - solve_count ||
         orbital_offset > std::numeric_limits<std::int64_t>::max() - orbital_span ||
         matrix_offset > std::numeric_limits<std::int64_t>::max() - matrix_span) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
                      Gfn2SccSetupTopologyField::kBuckets, static_cast<std::int64_t>(bucket_index));
     }
     bucket.solve_count = static_cast<std::int32_t>(solve_count);
@@ -353,7 +353,7 @@ Gfn2SccSetupTopologyDiagnostic configure_spin_buckets(
   }
   if (solve_offset != expected_spin_channels || orbital_offset != expected_spin_orbitals ||
       matrix_offset != expected_spin_matrix_elements) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                    Gfn2SccSetupTopologyField::kBuckets);
   }
   return {};
@@ -608,7 +608,7 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
   try {
     std::unique_ptr<Impl> candidate(new (std::nothrow) Impl());
     if (candidate == nullptr) {
-      return failure(GPUXTB_STATUS_ALLOCATION_FAILED, Gfn2SccSetupTopologyError::kAllocationFailed,
+      return failure(XTBLOOM_STATUS_ALLOCATION_FAILED, Gfn2SccSetupTopologyError::kAllocationFailed,
                      Gfn2SccSetupTopologyField::kHostTopology);
     }
     candidate->plan_token = plan_token;
@@ -629,13 +629,13 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
     for (std::int64_t system = 0; system < basis.batch_size; ++system) {
       const std::int32_t channels = candidate->spin_channels[static_cast<std::size_t>(system)];
       if (channels != 1 && channels != 2) {
-        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                        Gfn2SccSetupTopologyField::kWavefunction, system);
       }
       const std::int64_t previous =
           candidate->spin_channel_offsets[static_cast<std::size_t>(system)];
       if (previous > std::numeric_limits<std::int64_t>::max() - channels) {
-        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
                        Gfn2SccSetupTopologyField::kWavefunction, system);
       }
       candidate->spin_channel_offsets[static_cast<std::size_t>(system + 1)] = previous + channels;
@@ -646,7 +646,7 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
     candidate->spin_atom_offsets = wavefunction.qat.system_offsets;
     if (wavefunction.coefficients.system_offsets != candidate->spin_matrix_offsets ||
         wavefunction.energy_weighted_density.system_offsets != candidate->spin_matrix_offsets) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                      Gfn2SccSetupTopologyField::kWavefunction);
     }
 
@@ -669,7 +669,7 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
     for (std::int64_t shell = 0; shell < basis.total_shells; ++shell) {
       const std::int64_t atom = basis.shell_to_atom[static_cast<std::size_t>(shell)];
       if (atom < 0 || atom >= basis.total_atoms) {
-        return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                        Gfn2SccSetupTopologyField::kOrbitalMap, shell);
       }
       const std::int64_t begin = basis.shell_orbital_offsets[static_cast<std::size_t>(shell)];
@@ -680,13 +680,13 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
       }
     }
     if (!candidate->make_arena_layout()) {
-      return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
                      Gfn2SccSetupTopologyField::kArena);
     }
     candidate->bind_host_descriptor();
     const Gfn2PlanSchemaDiagnostic schema = validate_gfn2_topology_host(candidate->host);
     if (schema.error != Gfn2PlanSchemaError::kSuccess) {
-      diagnostic = failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+      diagnostic = failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                            Gfn2SccSetupTopologyField::kHostTopology, schema.index);
       diagnostic.schema = schema;
       return diagnostic;
@@ -694,7 +694,7 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
     const Gfn2PlanSchemaDiagnostic wavefunction_schema =
         validate_gfn2_wavefunction_layout_host(candidate->host, candidate->host_wavefunction);
     if (wavefunction_schema.error != Gfn2PlanSchemaError::kSuccess) {
-      diagnostic = failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+      diagnostic = failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                            Gfn2SccSetupTopologyField::kWavefunction, wavefunction_schema.index);
       diagnostic.schema = wavefunction_schema;
       return diagnostic;
@@ -702,13 +702,13 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
 
     const cudaError_t upload_image_status = candidate->make_upload_image();
     if (upload_image_status != cudaSuccess) {
-      Gfn2SccSetupTopologyDiagnostic upload_diagnostic =
-          failure(upload_image_status == cudaErrorMemoryAllocation ? GPUXTB_STATUS_ALLOCATION_FAILED
-                                                                   : GPUXTB_STATUS_INTERNAL_ERROR,
-                  upload_image_status == cudaErrorMemoryAllocation
-                      ? Gfn2SccSetupTopologyError::kAllocationFailed
-                      : Gfn2SccSetupTopologyError::kCudaError,
-                  Gfn2SccSetupTopologyField::kHostTopology);
+      Gfn2SccSetupTopologyDiagnostic upload_diagnostic = failure(
+          upload_image_status == cudaErrorMemoryAllocation ? XTBLOOM_STATUS_ALLOCATION_FAILED
+                                                           : XTBLOOM_STATUS_INTERNAL_ERROR,
+          upload_image_status == cudaErrorMemoryAllocation
+              ? Gfn2SccSetupTopologyError::kAllocationFailed
+              : Gfn2SccSetupTopologyError::kCudaError,
+          Gfn2SccSetupTopologyField::kHostTopology);
       upload_diagnostic.required_bytes = candidate->arena.total_bytes;
       upload_diagnostic.cuda_status = upload_image_status;
       return upload_diagnostic;
@@ -719,10 +719,10 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
     output = std::move(replacement);
     return {};
   } catch (const std::bad_alloc&) {
-    return failure(GPUXTB_STATUS_ALLOCATION_FAILED, Gfn2SccSetupTopologyError::kAllocationFailed,
+    return failure(XTBLOOM_STATUS_ALLOCATION_FAILED, Gfn2SccSetupTopologyError::kAllocationFailed,
                    Gfn2SccSetupTopologyField::kHostTopology);
   } catch (...) {
-    return failure(GPUXTB_STATUS_INTERNAL_ERROR, Gfn2SccSetupTopologyError::kInvalidPlan,
+    return failure(XTBLOOM_STATUS_INTERNAL_ERROR, Gfn2SccSetupTopologyError::kInvalidPlan,
                    Gfn2SccSetupTopologyField::kHostTopology);
   }
 }
@@ -773,7 +773,7 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::bind_device_arena_and_uploa
     void* device_arena, std::size_t device_arena_bytes, Gfn2RaggedTopologyView& device_topology,
     Gfn2WavefunctionLayoutView& device_wavefunction, cudaStream_t stream) const noexcept {
   if (impl_ == nullptr) {
-    return failure(GPUXTB_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
                    Gfn2SccSetupTopologyField::kHostTopology);
   }
 
@@ -861,7 +861,7 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::bind_device_arena_and_uploa
       validate_gfn2_topology_binding(candidate, Gfn2PlanMemorySpace::kCudaDevice);
   if (schema.error != Gfn2PlanSchemaError::kSuccess) {
     Gfn2SccSetupTopologyDiagnostic diagnostic =
-        failure(GPUXTB_STATUS_INTERNAL_ERROR, Gfn2SccSetupTopologyError::kInvalidPlan,
+        failure(XTBLOOM_STATUS_INTERNAL_ERROR, Gfn2SccSetupTopologyError::kInvalidPlan,
                 Gfn2SccSetupTopologyField::kHostTopology, schema.index);
     diagnostic.schema = schema;
     return diagnostic;
@@ -870,7 +870,7 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::bind_device_arena_and_uploa
       candidate, wavefunction_candidate, Gfn2PlanMemorySpace::kCudaDevice);
   if (wavefunction_schema.error != Gfn2PlanSchemaError::kSuccess) {
     Gfn2SccSetupTopologyDiagnostic diagnostic =
-        failure(GPUXTB_STATUS_INTERNAL_ERROR, Gfn2SccSetupTopologyError::kInvalidPlan,
+        failure(XTBLOOM_STATUS_INTERNAL_ERROR, Gfn2SccSetupTopologyError::kInvalidPlan,
                 Gfn2SccSetupTopologyField::kWavefunction, wavefunction_schema.index);
     diagnostic.schema = wavefunction_schema;
     return diagnostic;
@@ -900,4 +900,4 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::bind_device_arena_and_uploa
                                             ignored, stream);
 }
 
-}  // namespace gpuxtb::detail::cuda
+}  // namespace xtbloom::detail::cuda

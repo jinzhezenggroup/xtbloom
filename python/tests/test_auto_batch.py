@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, NoReturn
 import _cases
 import numpy as np
 import pytest
-from gpuxtb import (
+from xtbloom import (
     BatchCalculator,
     BatchResult,
     ChargeResponse,
@@ -17,8 +17,8 @@ from gpuxtb import (
     Structure,
     library,
 )
-from gpuxtb.exceptions import GPUxtbRuntimeError, GPUxtbValueError
-from gpuxtb.interface import (
+from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
+from xtbloom.interface import (
     _AUTO_BATCH_BYTES_PER_ATOM,
     _AUTO_BATCH_FALLBACK_MAX_ATOMS,
     _AUTO_BATCH_MAX_ATOMS,
@@ -83,7 +83,7 @@ def _library_has_cuda() -> bool:
         with Context("cuda"):
             pass
         return True
-    except GPUxtbRuntimeError:
+    except XTBloomRuntimeError:
         return False
 
 
@@ -135,7 +135,7 @@ def test_slice_keeps_systems_whole_and_documents_soft_limit() -> None:
     assert [len(chunk) for chunk in chunks] == [1, 1, 1]
     assert all(sum(len(structure) for structure in chunk) == 5 for chunk in chunks)
 
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         _slice_by_total_atoms(structures, max_total_atoms=0)
 
 
@@ -145,7 +145,7 @@ def test_split_chunk_balances_atoms_and_preserves_order() -> None:
     left, right = _split_chunk_near_half(structures)
     assert [*left, *right] == structures
     assert left and right
-    with pytest.raises(GPUxtbValueError):
+    with pytest.raises(XTBloomValueError):
         _split_chunk_near_half(structures[:1])
 
 
@@ -232,12 +232,12 @@ def test_auto_retries_only_allocation_failure(
     ) -> _ComputedBatch:
         calls.append(len(chunk))
         if len(chunk) > 1:
-            raise GPUxtbRuntimeError("synthetic OOM", library.STATUS_ALLOCATION_FAILED)
+            raise XTBloomRuntimeError("synthetic OOM", library.STATUS_ALLOCATION_FAILED)
         return _fake_computed(chunk)
 
-    monkeypatch.setattr("gpuxtb.interface._compute_batch", fail_large)
+    monkeypatch.setattr("xtbloom.interface._compute_batch", fail_large)
     monkeypatch.setattr(
-        "gpuxtb.interface._resolve_auto_batch_limit",
+        "xtbloom.interface._resolve_auto_batch_limit",
         lambda _context, _structures: 1_000,
     )
     result = BatchCalculator(structures).compute(auto_batch_size=True)
@@ -261,14 +261,14 @@ def test_auto_propagates_internal_and_indivisible_failures(
         **_kwargs: object,
     ) -> NoReturn:
         calls.append(len(chunk))
-        raise GPUxtbRuntimeError("synthetic failure", status)
+        raise XTBloomRuntimeError("synthetic failure", status)
 
-    monkeypatch.setattr("gpuxtb.interface._compute_batch", fail)
+    monkeypatch.setattr("xtbloom.interface._compute_batch", fail)
     monkeypatch.setattr(
-        "gpuxtb.interface._resolve_auto_batch_limit",
+        "xtbloom.interface._resolve_auto_batch_limit",
         lambda _context, _structures: 1_000,
     )
-    with pytest.raises(GPUxtbRuntimeError) as caught:
+    with pytest.raises(XTBloomRuntimeError) as caught:
         BatchCalculator(structures).compute(auto_batch_size=True)
     assert caught.value.status == status
     assert calls == [1]
@@ -285,10 +285,10 @@ def test_explicit_limit_does_not_override_allocation_failure(
         _chunk: Sequence[Structure],
         **_kwargs: object,
     ) -> NoReturn:
-        raise GPUxtbRuntimeError("synthetic OOM", library.STATUS_ALLOCATION_FAILED)
+        raise XTBloomRuntimeError("synthetic OOM", library.STATUS_ALLOCATION_FAILED)
 
-    monkeypatch.setattr("gpuxtb.interface._compute_batch", fail)
-    with pytest.raises(GPUxtbRuntimeError):
+    monkeypatch.setattr("xtbloom.interface._compute_batch", fail)
+    with pytest.raises(XTBloomRuntimeError):
         BatchCalculator(structures).compute(auto_batch_size=100)
 
 
@@ -310,7 +310,7 @@ def test_chunk_output_flags_follow_local_point_charge_shape(
         flags.append(kwargs["flags"])
         return _fake_computed(chunk)
 
-    monkeypatch.setattr("gpuxtb.interface._compute_batch", record_flags)
+    monkeypatch.setattr("xtbloom.interface._compute_batch", record_flags)
     result = BatchCalculator(structures).compute(auto_batch_size=1)
     assert len(result) == 2
     base_flags = (
@@ -397,7 +397,7 @@ def test_auto_batch_rejects_invalid_limit() -> None:
     """Reject nonpositive and nonintegral explicit atom limits."""
     structures = _make_structures(["ketene"])
     for invalid in (0, -3, 1.5):
-        with pytest.raises(GPUxtbValueError):
+        with pytest.raises(XTBloomValueError):
             BatchCalculator(structures).compute(auto_batch_size=invalid)
 
 

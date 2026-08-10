@@ -1,6 +1,4 @@
-#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 
 #include <algorithm>
 #include <charconv>
@@ -16,40 +14,41 @@
 #include <vector>
 
 #include "backends/cuda/gfn2_eigensolver.cuh"
+#include "runtime/nvidia_host_api.h"
 
 namespace {
 
-using gpuxtb::detail::cuda::build_gfn2_compacted_eigensolver_graph_cuda;
-using gpuxtb::detail::cuda::capture_gfn2_backtransform_capacity_cuda;
-using gpuxtb::detail::cuda::capture_gfn2_eigensolver_capacity_cuda;
-using gpuxtb::detail::cuda::compact_gfn2_solve_bucket_counts_cuda;
-using gpuxtb::detail::cuda::compact_gfn2_successful_eigenpair_counts_cuda;
-using gpuxtb::detail::cuda::factor_gfn2_overlap_cuda;
-using gpuxtb::detail::cuda::gfn2_eigensolver_uses_jacobi;
-using gpuxtb::detail::cuda::gfn2_eigensolver_uses_tridiagonal;
-using gpuxtb::detail::cuda::Gfn2EigensolverBucket;
-using gpuxtb::detail::cuda::Gfn2EigensolverBucketActivity;
-using gpuxtb::detail::cuda::Gfn2EigensolverCompactedSolveGraph;
-using gpuxtb::detail::cuda::Gfn2EigensolverDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2EigensolverDeviceError;
-using gpuxtb::detail::cuda::Gfn2EigensolverDeviceResults;
-using gpuxtb::detail::cuda::Gfn2EigensolverDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2EigensolverLaunchResult;
-using gpuxtb::detail::cuda::Gfn2EigensolverLaunchStatus;
-using gpuxtb::detail::cuda::Gfn2EigensolverOptions;
-using gpuxtb::detail::cuda::Gfn2EigensolverOverlapCache;
-using gpuxtb::detail::cuda::Gfn2EigensolverStrategy;
-using gpuxtb::detail::cuda::Gfn2EigensolverWorkspaceRequirements;
-using gpuxtb::detail::cuda::Gfn2GeometryEpochDevice;
-using gpuxtb::detail::cuda::prepare_and_compact_gfn2_solve_buckets_cuda;
-using gpuxtb::detail::cuda::prepare_gfn2_eigensolver_launch_sequence_cuda;
-using gpuxtb::detail::cuda::query_gfn2_eigensolver_bucket_workspace_cuda;
-using gpuxtb::detail::cuda::query_gfn2_jacobi_bucket_workspace_cuda;
-using gpuxtb::detail::cuda::query_gfn2_spin_eigensolver_bucket_workspace_cuda;
-using gpuxtb::detail::cuda::query_gfn2_tridiagonal_bucket_workspace_cuda;
-using gpuxtb::detail::cuda::reset_gfn2_eigensolver_device_errors_cuda;
-using gpuxtb::detail::cuda::solve_gfn2_eigensystems_cuda;
-using gpuxtb::detail::cuda::solve_gfn2_spin_eigensystems_cuda;
+using xtbloom::detail::cuda::build_gfn2_compacted_eigensolver_graph_cuda;
+using xtbloom::detail::cuda::capture_gfn2_backtransform_capacity_cuda;
+using xtbloom::detail::cuda::capture_gfn2_eigensolver_capacity_cuda;
+using xtbloom::detail::cuda::compact_gfn2_solve_bucket_counts_cuda;
+using xtbloom::detail::cuda::compact_gfn2_successful_eigenpair_counts_cuda;
+using xtbloom::detail::cuda::factor_gfn2_overlap_cuda;
+using xtbloom::detail::cuda::gfn2_eigensolver_uses_jacobi;
+using xtbloom::detail::cuda::gfn2_eigensolver_uses_tridiagonal;
+using xtbloom::detail::cuda::Gfn2EigensolverBucket;
+using xtbloom::detail::cuda::Gfn2EigensolverBucketActivity;
+using xtbloom::detail::cuda::Gfn2EigensolverCompactedSolveGraph;
+using xtbloom::detail::cuda::Gfn2EigensolverDeviceBatch;
+using xtbloom::detail::cuda::Gfn2EigensolverDeviceError;
+using xtbloom::detail::cuda::Gfn2EigensolverDeviceResults;
+using xtbloom::detail::cuda::Gfn2EigensolverDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2EigensolverLaunchResult;
+using xtbloom::detail::cuda::Gfn2EigensolverLaunchStatus;
+using xtbloom::detail::cuda::Gfn2EigensolverOptions;
+using xtbloom::detail::cuda::Gfn2EigensolverOverlapCache;
+using xtbloom::detail::cuda::Gfn2EigensolverStrategy;
+using xtbloom::detail::cuda::Gfn2EigensolverWorkspaceRequirements;
+using xtbloom::detail::cuda::Gfn2GeometryEpochDevice;
+using xtbloom::detail::cuda::prepare_and_compact_gfn2_solve_buckets_cuda;
+using xtbloom::detail::cuda::prepare_gfn2_eigensolver_launch_sequence_cuda;
+using xtbloom::detail::cuda::query_gfn2_eigensolver_bucket_workspace_cuda;
+using xtbloom::detail::cuda::query_gfn2_jacobi_bucket_workspace_cuda;
+using xtbloom::detail::cuda::query_gfn2_spin_eigensolver_bucket_workspace_cuda;
+using xtbloom::detail::cuda::query_gfn2_tridiagonal_bucket_workspace_cuda;
+using xtbloom::detail::cuda::reset_gfn2_eigensolver_device_errors_cuda;
+using xtbloom::detail::cuda::solve_gfn2_eigensystems_cuda;
+using xtbloom::detail::cuda::solve_gfn2_spin_eigensystems_cuda;
 
 constexpr double kSentinel = 91.25;
 
@@ -592,7 +591,7 @@ struct SpinSolveFixture {
   PinnedBuffer solver_host_workspace;
   DeviceBuffer<double> eigenvalues;
   DeviceBuffer<double> coefficients;
-  gpuxtb::detail::Gfn2WavefunctionLayoutView layout{};
+  xtbloom::detail::Gfn2WavefunctionLayoutView layout{};
   Gfn2EigensolverDeviceWorkspace workspace{};
   Gfn2EigensolverDeviceResults results{};
 
@@ -704,7 +703,7 @@ struct SpinSolveFixture {
         !solver_host_workspace.allocate(requirements.solver_host_workspace_bytes)) {
       return false;
     }
-    layout.memory_space = gpuxtb::detail::Gfn2PlanMemorySpace::kCudaDevice;
+    layout.memory_space = xtbloom::detail::Gfn2PlanMemorySpace::kCudaDevice;
     layout.plan_token = physical.batch.plan_token;
     layout.batch_size = host.batch_size;
     layout.total_spin_channels = spin_channel_offsets.back();
@@ -806,7 +805,7 @@ bool solve_spin(DeviceFixture& physical, SpinSolveFixture& spin, std::uint64_t g
  * large-singleton provider must reuse its setup-owned arena sequentially and
  * preserve the physical-system transaction boundary across both spin solves. */
 bool test_spin_eigensolver_tridiagonal_singleton() {
-  constexpr std::int32_t kOrbitals = gpuxtb::detail::cuda::kGfn2TridiagonalMinimumOrbitals;
+  constexpr std::int32_t kOrbitals = xtbloom::detail::cuda::kGfn2TridiagonalMinimumOrbitals;
   DeviceFixture physical;
   if (!physical.create(make_batch(1, false, -1, kOrbitals)) || !factor(physical, 54u)) {
     return false;
@@ -1199,7 +1198,7 @@ bool test_tridiagonal_provider_parity_and_degeneracy() {
   Gfn2EigensolverOptions forced{};
   forced.strategy = Gfn2EigensolverStrategy::kTridiagonalBisection;
   if (!gfn2_eigensolver_uses_tridiagonal(forced, policy)) return false;
-  policy.orbital_count = gpuxtb::detail::cuda::kGfn2TridiagonalMaximumOrbitals + 1;
+  policy.orbital_count = xtbloom::detail::cuda::kGfn2TridiagonalMaximumOrbitals + 1;
   if (gfn2_eigensolver_uses_tridiagonal(forced, policy)) return false;
 
   DeviceFixture distinct;
@@ -1276,7 +1275,7 @@ bool test_tridiagonal_device_launch(std::int32_t kOrbitals, bool check_upper_bou
   Gfn2EigensolverBucket policy{kOrbitals, 1, 0, 0, 0};
   if (!gfn2_eigensolver_uses_tridiagonal(options, policy)) return false;
   if (check_upper_bound) {
-    if (kOrbitals != gpuxtb::detail::cuda::kGfn2TridiagonalMaximumOrbitals) return false;
+    if (kOrbitals != xtbloom::detail::cuda::kGfn2TridiagonalMaximumOrbitals) return false;
     ++policy.orbital_count;
     if (gfn2_eigensolver_uses_tridiagonal(options, policy)) return false;
   }
@@ -1364,7 +1363,7 @@ bool test_tridiagonal_device_launch(std::int32_t kOrbitals, bool check_upper_bou
 /* Qualify the advertised automatic upper bound independently of the alkane
  * sweep. The adjacent 1025 policy point must remain rejected. */
 bool test_tridiagonal_upper_bound_device_launch() {
-  return test_tridiagonal_device_launch(gpuxtb::detail::cuda::kGfn2TridiagonalMaximumOrbitals,
+  return test_tridiagonal_device_launch(xtbloom::detail::cuda::kGfn2TridiagonalMaximumOrbitals,
                                         true);
 }
 
@@ -2912,7 +2911,7 @@ bool parse_direct_control_arguments(char** argv, std::int64_t& batch, bool& hete
 
 }  // namespace
 
-#ifdef GPUXTB_COMPACTION_BENCHMARK_ONLY
+#ifdef XTBLOOM_COMPACTION_BENCHMARK_ONLY
 int main() {
   int device_count = 0;
   if (!cuda_ok(cudaGetDeviceCount(&device_count), "cudaGetDeviceCount") || device_count == 0) {

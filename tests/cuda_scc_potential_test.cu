@@ -22,25 +22,25 @@
 
 namespace {
 
-using gpuxtb::detail::Gfn2PlanMemorySpace;
-using gpuxtb::detail::Gfn2WavefunctionLayoutView;
-using gpuxtb::detail::cuda::compose_gfn2_scc_potentials_cuda;
-using gpuxtb::detail::cuda::compose_gfn2_scc_spin_potentials_cuda;
-using gpuxtb::detail::cuda::gather_gfn2_scc_mixed_multipoles_cuda;
-using gpuxtb::detail::cuda::Gfn2SccIterationDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2SccPotentialComponent;
-using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceActivity;
-using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceComponents;
-using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceError;
-using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceMixedFields;
-using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceResults;
-using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceSpinComponent;
-using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceTopologyMultipoles;
-using gpuxtb::detail::cuda::Gfn2SccPotentialDeviceWorkspace;
-using gpuxtb::detail::cuda::kGfn2SccPotentialAllComponents;
-using gpuxtb::detail::cuda::reduce_gfn2_scc_mixed_atomic_charges_cuda;
-using gpuxtb::detail::cuda::reset_gfn2_scc_potential_device_errors_cuda;
+using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::Gfn2WavefunctionLayoutView;
+using xtbloom::detail::cuda::compose_gfn2_scc_potentials_cuda;
+using xtbloom::detail::cuda::compose_gfn2_scc_spin_potentials_cuda;
+using xtbloom::detail::cuda::gather_gfn2_scc_mixed_multipoles_cuda;
+using xtbloom::detail::cuda::Gfn2SccIterationDeviceActivity;
+using xtbloom::detail::cuda::Gfn2SccPotentialComponent;
+using xtbloom::detail::cuda::Gfn2SccPotentialDeviceActivity;
+using xtbloom::detail::cuda::Gfn2SccPotentialDeviceBatch;
+using xtbloom::detail::cuda::Gfn2SccPotentialDeviceComponents;
+using xtbloom::detail::cuda::Gfn2SccPotentialDeviceError;
+using xtbloom::detail::cuda::Gfn2SccPotentialDeviceMixedFields;
+using xtbloom::detail::cuda::Gfn2SccPotentialDeviceResults;
+using xtbloom::detail::cuda::Gfn2SccPotentialDeviceSpinComponent;
+using xtbloom::detail::cuda::Gfn2SccPotentialDeviceTopologyMultipoles;
+using xtbloom::detail::cuda::Gfn2SccPotentialDeviceWorkspace;
+using xtbloom::detail::cuda::kGfn2SccPotentialAllComponents;
+using xtbloom::detail::cuda::reduce_gfn2_scc_mixed_atomic_charges_cuda;
+using xtbloom::detail::cuda::reset_gfn2_scc_potential_device_errors_cuda;
 
 constexpr std::uint64_t kPlanToken = 0x77c20a5e61d934bfULL;
 constexpr double kSentinel = -770.625;
@@ -1361,7 +1361,7 @@ int test_alias_token_misalignment_and_reset_validation() {
                                          device.device_error.get()) == cudaErrorInvalidValue);
   auto overflow_batch = batch;
   overflow_batch.total_atoms = std::numeric_limits<std::int64_t>::max() /
-                                   gpuxtb::detail::cuda::kGfn2SccPotentialQuadrupoleComponents +
+                                   xtbloom::detail::cuda::kGfn2SccPotentialQuadrupoleComponents +
                                1;
   CHECK(compose_gfn2_scc_potentials_cuda(overflow_batch, components, activity, results, workspace,
                                          device.system_errors.get(),

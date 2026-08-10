@@ -24,15 +24,15 @@
 
 namespace {
 
-using gpuxtb::detail::cuda::compose_gfn2_forces_cuda;
-using gpuxtb::detail::cuda::Gfn2ForceCompositionComponent;
-using gpuxtb::detail::cuda::Gfn2ForceCompositionDeviceBatch;
-using gpuxtb::detail::cuda::Gfn2ForceCompositionDeviceError;
-using gpuxtb::detail::cuda::Gfn2ForceCompositionDeviceInput;
-using gpuxtb::detail::cuda::Gfn2ForceCompositionDeviceOutput;
-using gpuxtb::detail::cuda::Gfn2ForceCompositionDeviceWorkspace;
-using gpuxtb::detail::cuda::Gfn2ForceDeviceActivity;
-using gpuxtb::detail::cuda::reset_gfn2_force_composition_device_errors_cuda;
+using xtbloom::detail::cuda::compose_gfn2_forces_cuda;
+using xtbloom::detail::cuda::Gfn2ForceCompositionComponent;
+using xtbloom::detail::cuda::Gfn2ForceCompositionDeviceBatch;
+using xtbloom::detail::cuda::Gfn2ForceCompositionDeviceError;
+using xtbloom::detail::cuda::Gfn2ForceCompositionDeviceInput;
+using xtbloom::detail::cuda::Gfn2ForceCompositionDeviceOutput;
+using xtbloom::detail::cuda::Gfn2ForceCompositionDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2ForceDeviceActivity;
+using xtbloom::detail::cuda::reset_gfn2_force_composition_device_errors_cuda;
 
 constexpr std::uint64_t kPlanToken = 0x67f0ce55ULL;
 constexpr double kSentinel = 731.25;
@@ -84,7 +84,7 @@ struct HostCase {
   std::vector<std::int64_t> atom_offsets;
   std::vector<std::int64_t> point_offsets;
   std::vector<std::uint8_t> requested;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<double> electronic;
   std::vector<double> classical;
   std::vector<double> explicit_qm;
@@ -106,7 +106,7 @@ HostCase make_case(std::size_t batch_size) {
   const std::size_t qm_elements = static_cast<std::size_t>(host.atom_offsets.back()) * 3u;
   const std::size_t point_elements = static_cast<std::size_t>(host.point_offsets.back()) * 3u;
   host.requested.assign(batch_size, 1u);
-  host.statuses.assign(batch_size, GPUXTB_STATUS_SUCCESS);
+  host.statuses.assign(batch_size, XTBLOOM_STATUS_SUCCESS);
   host.electronic.resize(qm_elements);
   host.classical.resize(qm_elements);
   host.explicit_qm.resize(qm_elements);
@@ -214,7 +214,7 @@ struct DeviceCase {
   DeviceBuffer<std::int64_t> atom_offsets;
   DeviceBuffer<std::int64_t> point_offsets;
   DeviceBuffer<std::uint8_t> requested;
-  DeviceBuffer<gpuxtb_status_t> statuses;
+  DeviceBuffer<xtbloom_status_t> statuses;
   DeviceBuffer<double> electronic;
   DeviceBuffer<double> classical;
   DeviceBuffer<double> explicit_qm;
@@ -274,7 +274,7 @@ int test_batch_matrix() {
 int test_terminal_gate_and_transactionality() {
   HostCase host = make_case(4u);
   host.requested[1] = 0u;
-  host.statuses[2] = GPUXTB_STATUS_SCC_NOT_CONVERGED;
+  host.statuses[2] = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
   const auto poison_system = [&](std::size_t system) {
     const std::size_t atom_begin = static_cast<std::size_t>(host.atom_offsets[system]) * 3u;
     const std::size_t atom_end = static_cast<std::size_t>(host.atom_offsets[system + 1u]) * 3u;

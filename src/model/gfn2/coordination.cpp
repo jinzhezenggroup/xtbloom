@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// gpuxtb's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
+// xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include "model/gfn2/coordination.hpp"
 
@@ -12,7 +12,7 @@
 
 #include "data/parameters/gfn2.hpp"
 
-namespace gpuxtb::detail::gfn2 {
+namespace xtbloom::detail::gfn2 {
 namespace {
 
 constexpr double kCutoffBohr = 25.0;
@@ -58,13 +58,13 @@ bool representable_geometry_size(std::int64_t atom_count) {
          count <= static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max()) / 3u;
 }
 
-gpuxtb_status_t validate_plan(const CoordinationPlan& plan, std::string& error) {
+xtbloom_status_t validate_plan(const CoordinationPlan& plan, std::string& error) {
   if (plan.batch_size <= 0 || plan.total_atoms <= 0 || !representable_as_size(plan.batch_size) ||
       !representable_geometry_size(plan.total_atoms) ||
       static_cast<std::uint64_t>(plan.batch_size) >=
           static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
     error = "coordination plan has invalid batch or atom counts";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   const auto atom_count = static_cast<std::size_t>(plan.total_atoms);
@@ -72,39 +72,39 @@ gpuxtb_status_t validate_plan(const CoordinationPlan& plan, std::string& error) 
       plan.covalent_radius.size() != atom_count || plan.atom_offsets.front() != 0 ||
       plan.atom_offsets.back() != plan.total_atoms) {
     error = "coordination plan is incomplete or internally inconsistent";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t batch = 0; batch < plan.batch_size; ++batch) {
     const std::int64_t begin = plan.atom_offsets[static_cast<std::size_t>(batch)];
     const std::int64_t end = plan.atom_offsets[static_cast<std::size_t>(batch + 1)];
     if (begin < 0 || begin > end || end > plan.total_atoms) {
       error = "coordination plan offsets are not a valid ragged partition";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
   for (double radius : plan.covalent_radius) {
     if (!(radius > 0.0) || !std::isfinite(radius)) {
       error = "coordination plan contains an invalid covalent radius";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t validate_positions(const CoordinationPlan& plan, const double* positions,
-                                   std::string& error) {
+xtbloom_status_t validate_positions(const CoordinationPlan& plan, const double* positions,
+                                    std::string& error) {
   if (positions == nullptr) {
     error = "coordination positions must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const auto coordinate_count = static_cast<std::size_t>(plan.total_atoms) * 3u;
   for (std::size_t coordinate = 0; coordinate < coordinate_count; ++coordinate) {
     if (!std::isfinite(positions[coordinate])) {
       error = "coordination positions contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 /* Stable logistic form of 1 / (1 + exp(-argument)). */
@@ -139,29 +139,29 @@ PairCount double_exponential_count(double distance, double radius) {
 
 }  // namespace
 
-gpuxtb_status_t make_coordination_plan(std::int64_t batch_size, std::int64_t total_atoms,
-                                       const std::int64_t* atom_offsets,
-                                       const std::int32_t* atomic_numbers, CoordinationPlan& plan,
-                                       std::string& error) {
+xtbloom_status_t make_coordination_plan(std::int64_t batch_size, std::int64_t total_atoms,
+                                        const std::int64_t* atom_offsets,
+                                        const std::int32_t* atomic_numbers, CoordinationPlan& plan,
+                                        std::string& error) {
   if (batch_size <= 0 || total_atoms <= 0 || !representable_as_size(batch_size) ||
       !representable_geometry_size(total_atoms) ||
       static_cast<std::uint64_t>(batch_size) >=
           static_cast<std::uint64_t>(std::numeric_limits<std::ptrdiff_t>::max())) {
     error = "coordination plan requires positive, representable batch and atom counts";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (atom_offsets == nullptr || atomic_numbers == nullptr) {
     error = "coordination plan offsets and atomic numbers must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (atom_offsets[0] != 0 || atom_offsets[batch_size] != total_atoms) {
     error = "coordination plan offsets must start at zero and end at total_atoms";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t batch = 0; batch < batch_size; ++batch) {
     if (atom_offsets[batch] > atom_offsets[batch + 1]) {
       error = "coordination plan offsets must be monotonically nondecreasing";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
 
@@ -179,7 +179,7 @@ gpuxtb_status_t make_coordination_plan(std::int64_t batch_size, std::int64_t tot
           parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_number));
       if (element == nullptr || element->atomic_number != atomic_number) {
         error = "coordination plan contains an unsupported atomic number";
-        return GPUXTB_STATUS_INVALID_ARGUMENT;
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       created.covalent_radius[static_cast<std::size_t>(atom)] =
           radius_scale * kCovalentRadiiAngstrom[static_cast<std::size_t>(atomic_number - 1)];
@@ -187,25 +187,25 @@ gpuxtb_status_t make_coordination_plan(std::int64_t batch_size, std::int64_t tot
 
     plan = std::move(created);
     error.clear();
-    return GPUXTB_STATUS_SUCCESS;
+    return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the GFN2 coordination plan";
-    return GPUXTB_STATUS_ALLOCATION_FAILED;
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
-gpuxtb_status_t evaluate_coordination_cpu(const CoordinationPlan& plan, const double* positions,
-                                          double* coordination_numbers, std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t evaluate_coordination_cpu(const CoordinationPlan& plan, const double* positions,
+                                           double* coordination_numbers, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (coordination_numbers == nullptr) {
     error = "coordination output must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   status = validate_positions(plan, positions, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
 
@@ -235,7 +235,7 @@ gpuxtb_status_t evaluate_coordination_cpu(const CoordinationPlan& plan, const do
            * threshold means two distinct atoms are coincident or nearly so.
            */
           error = "coordination is undefined for coincident or near-coincident atoms";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
         if (distance_squared > cutoff_squared) {
           continue;
@@ -251,29 +251,29 @@ gpuxtb_status_t evaluate_coordination_cpu(const CoordinationPlan& plan, const do
   }
 
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-gpuxtb_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan, const double* positions,
-                                              const double* dE_dcn, double* gradients,
-                                              std::string& error) {
-  gpuxtb_status_t status = validate_plan(plan, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+xtbloom_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan,
+                                               const double* positions, const double* dE_dcn,
+                                               double* gradients, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   if (dE_dcn == nullptr || gradients == nullptr) {
     error = "coordination derivative inputs and gradients must not be NULL";
-    return GPUXTB_STATUS_INVALID_ARGUMENT;
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   status = validate_positions(plan, positions, error);
-  if (status != GPUXTB_STATUS_SUCCESS) {
+  if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const auto atom_count = static_cast<std::size_t>(plan.total_atoms);
   for (std::size_t atom = 0; atom < atom_count; ++atom) {
     if (!std::isfinite(dE_dcn[atom])) {
       error = "coordination derivatives contain NaN or infinity";
-      return GPUXTB_STATUS_INVALID_ARGUMENT;
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
 
@@ -291,7 +291,7 @@ gpuxtb_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan, cons
         const double distance_squared = dx * dx + dy * dy + dz * dz;
         if (distance_squared < kMinimumDistanceSquared) {
           error = "coordination derivative is undefined for coincident or near-coincident atoms";
-          return GPUXTB_STATUS_INVALID_ARGUMENT;
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
         if (distance_squared > cutoff_squared) {
           continue;
@@ -318,7 +318,7 @@ gpuxtb_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan, cons
   }
 
   error.clear();
-  return GPUXTB_STATUS_SUCCESS;
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
-}  // namespace gpuxtb::detail::gfn2
+}  // namespace xtbloom::detail::gfn2

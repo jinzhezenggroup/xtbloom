@@ -1,6 +1,4 @@
-#include <cublas_v2.h>
 #include <cuda_runtime_api.h>
-#include <cusolverDn.h>
 
 #include <algorithm>
 #include <array>
@@ -24,6 +22,7 @@
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
 #include "data/parameters/d4.hpp"
 #include "model/gfn2/coordination.hpp"
+#include "runtime/nvidia_host_api.h"
 #include "tests/support/gfn2_scc_test_case.hpp"
 
 /*
@@ -63,12 +62,12 @@
 
 namespace {
 
-using namespace gpuxtb::detail;
-using namespace gpuxtb::detail::cuda;
-using gpuxtb::test::gfn2::HostSccCase;
-using gpuxtb::test::gfn2::HostSccCaseOptions;
-using gpuxtb::test::gfn2::HostSccCheckpoint;
-using gpuxtb::test::gfn2::SmallSystemKind;
+using namespace xtbloom::detail;
+using namespace xtbloom::detail::cuda;
+using xtbloom::test::gfn2::HostSccCase;
+using xtbloom::test::gfn2::HostSccCaseOptions;
+using xtbloom::test::gfn2::HostSccCheckpoint;
+using xtbloom::test::gfn2::SmallSystemKind;
 
 constexpr std::uint64_t kPlanToken = 0x9500c0deULL;
 constexpr std::uint64_t kGeometryGeneration = 105u;
@@ -214,16 +213,16 @@ Gfn2SccIterationHostArrayView<T> initialization_view(const T* values,
 }
 
 struct InputBacking {
-  gpuxtb::detail::gfn2::CoordinationPlan coordination_plan;
+  xtbloom::detail::gfn2::CoordinationPlan coordination_plan;
   std::vector<double> geometry_pair_data;
   std::vector<std::uint64_t> geometry_generations;
   std::vector<Gfn2D4DeviceElementData> d4_elements;
   std::vector<Gfn2D4DeviceReferenceData> d4_references;
 
   bool prepare(const HostSccCase& host, std::string& error) {
-    if (gpuxtb::detail::gfn2::make_coordination_plan(
+    if (xtbloom::detail::gfn2::make_coordination_plan(
             host.batch_size(), host.total_atoms(), host.atom_offsets().data(),
-            host.atomic_numbers().data(), coordination_plan, error) != GPUXTB_STATUS_SUCCESS) {
+            host.atomic_numbers().data(), coordination_plan, error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     geometry_pair_data.resize(static_cast<std::size_t>(host.aes2_plan().total_pairs()) *
@@ -234,14 +233,14 @@ struct InputBacking {
     geometry_generations.assign(static_cast<std::size_t>(host.batch_size()),
                                 host.options().geometry_generation);
 
-    d4_elements.reserve(gpuxtb::parameters::d4::kElements.size());
-    for (const auto& element : gpuxtb::parameters::d4::kElements) {
+    d4_elements.reserve(xtbloom::parameters::d4::kElements.size());
+    for (const auto& element : xtbloom::parameters::d4::kElements) {
       d4_elements.push_back({element.reference_offset, element.reference_count,
                              element.covalent_radius, element.electronegativity,
                              element.effective_charge, element.hardness, element.r4r2});
     }
-    d4_references.reserve(gpuxtb::parameters::d4::kReferences.size());
-    for (const auto& reference : gpuxtb::parameters::d4::kReferences) {
+    d4_references.reserve(xtbloom::parameters::d4::kReferences.size());
+    for (const auto& reference : xtbloom::parameters::d4::kReferences) {
       d4_references.push_back(
           {reference.coordination_number, reference.charge, reference.gaussian_count});
     }
@@ -281,8 +280,8 @@ struct InputBacking {
       result.d4.elements = setup_view(d4_elements);
       result.d4.references = setup_view(d4_references);
       result.d4.reference_c6 = {
-          gpuxtb::parameters::d4::kReferenceC6.data(),
-          static_cast<std::int64_t>(gpuxtb::parameters::d4::kReferenceC6.size())};
+          xtbloom::parameters::d4::kReferenceC6.data(),
+          static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
       result.d4.pair_data = {host.d4_cache()->pair_data, host.d4_cache()->pair_data_elements};
       result.d4.coordination_numbers = {host.d4_cache()->coordination_numbers,
                                         host.d4_cache()->coordination_elements};
@@ -384,7 +383,7 @@ struct ComposerFixture {
     options.enable_periodic_embedding = optional_components || coupling.periodic;
 
     std::string error;
-    if (HostSccCase::create(options, host, error) != GPUXTB_STATUS_SUCCESS) {
+    if (HostSccCase::create(options, host, error) != XTBLOOM_STATUS_SUCCESS) {
       std::fprintf(stderr, "HostSccCase::create failed: %s\n", error.c_str());
       return false;
     }
@@ -707,14 +706,14 @@ int compare_cuda_cpu_checkpoint(const char* checkpoint, const ComposerFixture& f
   std::vector<double> mixer_residual_maximum;
   std::vector<std::uint64_t> mixer_iterations;
   std::vector<std::uint64_t> mixer_restart_counts;
-  std::vector<gpuxtb_status_t> mixer_statuses;
+  std::vector<xtbloom_status_t> mixer_statuses;
   std::vector<std::uint8_t> mixer_initialized;
   std::vector<std::uint8_t> mixer_residual_converged;
   std::vector<double> previous_free_energies;
   std::vector<double> free_energy_changes;
   std::vector<double> scc_residual_rms;
   std::vector<std::uint64_t> iterations;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint8_t> converged;
 
   CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, eigenvalues,
@@ -883,9 +882,9 @@ std::uint64_t failure_record(Gfn2SccStageId stage, std::uint32_t code) {
 int run_host_fixed_scc_loop(HostSccCase& host) {
   std::string error;
   for (std::uint64_t iteration = 0u; iteration < host.options().maximum_iterations; ++iteration) {
-    const gpuxtb_status_t status = host.run_one_iteration(error);
-    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
-        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+    const xtbloom_status_t status = host.run_one_iteration(error);
+    if (status != XTBLOOM_STATUS_SUCCESS && status != XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
+        status != XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
       std::fprintf(stderr, "CPU composer reference failed at %llu: status=%d error=%s\n",
                    static_cast<unsigned long long>(iteration), status, error.c_str());
       return __LINE__;
@@ -903,16 +902,16 @@ int run_host_until_globally_terminal(HostSccCase& host) {
     bool any_active = false;
     const auto& state = host.driver_state();
     for (std::int64_t system = 0; system < host.batch_size(); ++system) {
-      any_active = any_active || (state.system_statuses[system] == GPUXTB_STATUS_SUCCESS &&
+      any_active = any_active || (state.system_statuses[system] == XTBLOOM_STATUS_SUCCESS &&
                                   state.converged[system] == 0u &&
                                   state.iterations[system] < host.options().maximum_iterations);
     }
     if (!any_active) {
       return 0;
     }
-    const gpuxtb_status_t status = host.run_one_iteration(error);
-    if (status != GPUXTB_STATUS_SUCCESS && status != GPUXTB_STATUS_SCC_NOT_CONVERGED &&
-        status != GPUXTB_STATUS_EIGENSOLVER_FAILED) {
+    const xtbloom_status_t status = host.run_one_iteration(error);
+    if (status != XTBLOOM_STATUS_SUCCESS && status != XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
+        status != XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
       std::fprintf(stderr, "CPU composer terminal reference failed: status=%d error=%s\n", status,
                    error.c_str());
       return __LINE__;
@@ -951,7 +950,7 @@ struct PublicSnapshot {
   std::vector<double> published_shell_charges;
   std::vector<double> free_energies;
   std::vector<std::uint64_t> iterations;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint8_t> converged;
 };
 
@@ -997,7 +996,7 @@ int test_composer_binding_and_repeat_launch() {
   }
   CHECK(first.success());
   std::string error;
-  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.run_one_iteration(error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(compare_cuda_cpu_checkpoint("repeat launch 1", fixture, 3.0e-9, true) == 0);
   std::vector<std::uint64_t> first_cpu_iterations(
       fixture.host.driver_state().iterations,
@@ -1006,7 +1005,7 @@ int test_composer_binding_and_repeat_launch() {
   for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
     second_transition_expected =
         second_transition_expected ||
-        (fixture.host.driver_state().system_statuses[system] == GPUXTB_STATUS_SUCCESS &&
+        (fixture.host.driver_state().system_statuses[system] == XTBLOOM_STATUS_SUCCESS &&
          fixture.host.driver_state().converged[system] == 0u &&
          fixture.host.driver_state().iterations[system] <
              fixture.host.options().maximum_iterations);
@@ -1020,7 +1019,7 @@ int test_composer_binding_and_repeat_launch() {
   const Gfn2SccIterationLaunchResult second =
       launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
   CHECK(second.success());
-  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.run_one_iteration(error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(compare_cuda_cpu_checkpoint("repeat launch 2", fixture, 3.0e-9, true) == 0);
   bool second_transition_advanced = false;
   for (std::int64_t system = 0; system < fixture.host.batch_size(); ++system) {
@@ -1047,12 +1046,12 @@ int test_composer_one_step_cpu_parity(std::int64_t batch_size, bool optional_com
   }
   CHECK(launch.success());
   std::string error;
-  const gpuxtb_status_t cpu_status = fixture.host.run_one_iteration(error);
-  if (cpu_status != GPUXTB_STATUS_SUCCESS) {
+  const xtbloom_status_t cpu_status = fixture.host.run_one_iteration(error);
+  if (cpu_status != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "CPU composer iteration failed: status=%d error=%s\n", cpu_status,
                  error.c_str());
   }
-  CHECK(cpu_status == GPUXTB_STATUS_SUCCESS);
+  CHECK(cpu_status == XTBLOOM_STATUS_SUCCESS);
 
   const auto& layout = fixture.host.wavefunction_layout();
   const auto& state = fixture.binding.state;
@@ -1068,7 +1067,7 @@ int test_composer_one_step_cpu_parity(std::int64_t batch_size, bool optional_com
   std::vector<double> free_energy;
   std::vector<double> current_inputs;
   std::vector<std::uint64_t> iterations;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint8_t> converged;
   CHECK(download(state.raw_population.qsh, state.raw_population.qsh_elements, public_qsh,
                  fixture.handles.stream()));
@@ -1200,7 +1199,7 @@ int test_composer_raw_publication_policy(bool terminal) {
     std::vector<double> raw_qsh;
     std::vector<std::uint8_t> converged;
     std::vector<std::uint64_t> iterations;
-    std::vector<gpuxtb_status_t> statuses;
+    std::vector<xtbloom_status_t> statuses;
     CHECK(download(fixture.binding.state.raw_population.qsh,
                    fixture.binding.state.raw_population.qsh_elements, public_qsh,
                    fixture.handles.stream()));
@@ -1247,7 +1246,7 @@ int test_composer_raw_publication_policy(bool terminal) {
       launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
   CHECK(launch.success());
   std::string error;
-  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.run_one_iteration(error) == XTBLOOM_STATUS_SUCCESS);
 
   const auto& layout = fixture.host.wavefunction_layout();
   std::vector<double> public_qsh;
@@ -1322,7 +1321,7 @@ int test_composer_changed_input_graph_replay(std::int64_t batch_size, bool optio
    * immutable H0 buffer in place. No descriptor, arena, or provider is
    * rebuilt between the two executions. */
   std::string error;
-  CHECK(fixture.host.restore(initial, error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.restore(initial, error) == XTBLOOM_STATUS_SUCCESS);
   const std::vector<double> changed_h0 = changed_core_hamiltonian(fixture.host);
   fixture.host.h0() = changed_h0;
   CHECK(fixture.initializer
@@ -1393,7 +1392,7 @@ int test_composer_peer_numerical_failure_dag() {
   CHECK(launch.success());
 
   std::vector<std::uint64_t> iterations;
-  std::vector<gpuxtb_status_t> statuses;
+  std::vector<xtbloom_status_t> statuses;
   std::vector<std::uint64_t> failures;
   std::vector<double> public_qsh;
   std::vector<double> public_qat;
@@ -1416,7 +1415,7 @@ int test_composer_peer_numerical_failure_dag() {
 
   CHECK(plan_failure == 0u);
   CHECK(iterations[static_cast<std::size_t>(kTarget)] == 0u);
-  CHECK(statuses[static_cast<std::size_t>(kTarget)] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(statuses[static_cast<std::size_t>(kTarget)] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(failures[static_cast<std::size_t>(kTarget)] ==
         failure_record(
             Gfn2SccStageId::kMixedGather,
@@ -1434,7 +1433,7 @@ int test_composer_peer_numerical_failure_dag() {
       continue;
     }
     CHECK(iterations[static_cast<std::size_t>(system)] == 1u);
-    CHECK(statuses[static_cast<std::size_t>(system)] == GPUXTB_STATUS_SUCCESS);
+    CHECK(statuses[static_cast<std::size_t>(system)] == XTBLOOM_STATUS_SUCCESS);
     CHECK(failures[static_cast<std::size_t>(system)] == 0u);
     CHECK(system_slice_is_finite(public_qsh, layout.qsh.system_offsets, system));
     CHECK(system_slice_is_finite(public_qat, layout.qat.system_offsets, system));
@@ -1478,7 +1477,7 @@ int test_composer_plan_provenance_failure_dag() {
 
   CHECK(plan_failure == 0u);
   CHECK(after.iterations[static_cast<std::size_t>(kTarget)] == 0u);
-  CHECK(after.statuses[static_cast<std::size_t>(kTarget)] == GPUXTB_STATUS_INTERNAL_ERROR);
+  CHECK(after.statuses[static_cast<std::size_t>(kTarget)] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(failures[static_cast<std::size_t>(kTarget)] ==
         failure_record(Gfn2SccStageId::kGeometry,
                        static_cast<std::uint32_t>(Gfn2SccIterationControlCode::kStaleGeneration)));
@@ -1495,7 +1494,7 @@ int test_composer_plan_provenance_failure_dag() {
   for (std::int64_t system = 1; system < fixture.host.batch_size(); ++system) {
     CHECK(after.iterations[static_cast<std::size_t>(system)] ==
           before.iterations[static_cast<std::size_t>(system)] + 1u);
-    CHECK(after.statuses[static_cast<std::size_t>(system)] == GPUXTB_STATUS_SUCCESS);
+    CHECK(after.statuses[static_cast<std::size_t>(system)] == XTBLOOM_STATUS_SUCCESS);
     CHECK(failures[static_cast<std::size_t>(system)] == 0u);
   }
   return 0;
@@ -1521,14 +1520,14 @@ int test_composer_inactive_dormant_poisoning() {
   const auto& workspace = fixture.binding.workspace;
 
   std::vector<std::uint64_t> iterations(static_cast<std::size_t>(fixture.host.batch_size()), 0u);
-  std::vector<gpuxtb_status_t> statuses(static_cast<std::size_t>(fixture.host.batch_size()),
-                                        GPUXTB_STATUS_SUCCESS);
+  std::vector<xtbloom_status_t> statuses(static_cast<std::size_t>(fixture.host.batch_size()),
+                                         XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(static_cast<std::size_t>(fixture.host.batch_size()), 0u);
   converged[static_cast<std::size_t>(kInactive)] = 1u;
   iterations[static_cast<std::size_t>(kInactive)] = fixture.host.options().maximum_iterations;
   fixture.host.driver_state().converged[kInactive] = 1u;
   fixture.host.driver_state().iterations[kInactive] = fixture.host.options().maximum_iterations;
-  fixture.host.driver_state().system_statuses[kInactive] = GPUXTB_STATUS_SUCCESS;
+  fixture.host.driver_state().system_statuses[kInactive] = XTBLOOM_STATUS_SUCCESS;
   CHECK(upload(iterations.data(), state.scc.iterations, fixture.host.batch_size(),
                fixture.handles.stream()));
   CHECK(upload(statuses.data(), state.scc.system_statuses, fixture.host.batch_size(),
@@ -1625,7 +1624,7 @@ int test_composer_inactive_dormant_poisoning() {
       launch_gfn2_restricted_scc_iteration_cuda(fixture.binding, fixture.handles.stream());
   CHECK(launch.success());
   std::string error;
-  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.run_one_iteration(error) == XTBLOOM_STATUS_SUCCESS);
 
   std::vector<double> coordination_numbers;
   std::vector<double> current_shell_charges;
@@ -1654,7 +1653,7 @@ int test_composer_inactive_dormant_poisoning() {
   std::vector<double> staged_quadrupoles;
   std::vector<std::uint64_t> geometry_generations;
   std::vector<std::uint64_t> after_iterations;
-  std::vector<gpuxtb_status_t> after_statuses;
+  std::vector<xtbloom_status_t> after_statuses;
   std::vector<std::uint8_t> after_converged;
   CHECK(download(fixture.binding.plan.geometry_cache.coordination_numbers,
                  fixture.host.total_atoms(), coordination_numbers, fixture.handles.stream()));
@@ -1763,7 +1762,7 @@ int test_composer_inactive_dormant_poisoning() {
   CHECK(scc_free_energies[static_cast<std::size_t>(kInactive)] == kSentinel);
   CHECK(after_iterations[static_cast<std::size_t>(kInactive)] ==
         fixture.host.options().maximum_iterations);
-  CHECK(after_statuses[static_cast<std::size_t>(kInactive)] == GPUXTB_STATUS_SUCCESS);
+  CHECK(after_statuses[static_cast<std::size_t>(kInactive)] == XTBLOOM_STATUS_SUCCESS);
   CHECK(after_converged[static_cast<std::size_t>(kInactive)] == 1u);
 
   /* The unpoisoned CPU transition is the control for every active peer. This
@@ -1824,7 +1823,7 @@ int test_composer_default_stream_parity() {
   CHECK(launch.success());
   CUDA_CHECK(cudaStreamSynchronize(nullptr));
   std::string error;
-  CHECK(fixture.host.run_one_iteration(error) == GPUXTB_STATUS_SUCCESS);
+  CHECK(fixture.host.run_one_iteration(error) == XTBLOOM_STATUS_SUCCESS);
 
   const auto& layout = fixture.host.wavefunction_layout();
   std::vector<double> public_qsh;
