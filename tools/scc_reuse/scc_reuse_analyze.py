@@ -53,7 +53,7 @@ class DocumentError(ValueError):
 
 class Parser:
     def __init__(self, path):
-        with open(path, "r", encoding="ascii") as handle:
+        with open(path, encoding="ascii") as handle:
             self.lines = [line.strip() for line in handle if line.strip()]
         self.index = 0
 
@@ -88,14 +88,18 @@ class Parser:
         try:
             return int(text)
         except ValueError as exc:
-            raise DocumentError(f"line {self.index}: expected integer for {label!r}") from exc
+            raise DocumentError(
+                f"line {self.index}: expected integer for {label!r}"
+            ) from exc
 
     def float_value(self, label):
         text, _ = self.scalar(label)
         try:
             return float(text)
         except ValueError as exc:
-            raise DocumentError(f"line {self.index}: expected float for {label!r}") from exc
+            raise DocumentError(
+                f"line {self.index}: expected float for {label!r}"
+            ) from exc
 
     def ints(self, count):
         try:
@@ -171,7 +175,9 @@ def parse_document(path):
                     nspin, nao, nao
                 )
                 p.expect("eigenvalues")
-                eps = np.asarray(p.floats(nspin * nao), dtype=np.float64).reshape(nspin, nao)
+                eps = np.asarray(p.floats(nspin * nao), dtype=np.float64).reshape(
+                    nspin, nao
+                )
                 p.expect("occupations")
                 occ = np.asarray(p.floats(2 * nao), dtype=np.float64).reshape(2, nao)
                 p.expect("density")
@@ -194,7 +200,9 @@ def parse_document(path):
                     nspin, nao, nao
                 )
                 p.expect("eigenvalues")
-                eps = np.asarray(p.floats(nspin * nao), dtype=np.float64).reshape(nspin, nao)
+                eps = np.asarray(p.floats(nspin * nao), dtype=np.float64).reshape(
+                    nspin, nao
+                )
                 p.expect("occupations")
                 occ = np.asarray(p.floats(2 * nao), dtype=np.float64).reshape(2, nao)
                 p.expect("density")
@@ -241,7 +249,8 @@ def occupied_total(occ):
 
 def occupied_mask(occ, spin, nspin):
     """Binary occupied mask for one spin channel: shared orbitals use the
-    summed alpha+beta occupation, unrestricted channels use their own row."""
+    summed alpha+beta occupation, unrestricted channels use their own row.
+    """
     if nspin == 1:
         return occupied_total(occ) > 0.5
     return occ[spin] > 0.5
@@ -297,7 +306,8 @@ def density_overlap(p1, p2):
 def generalized_residual(h_new, c_old, eps_old, s_matrix, occ_old, nspin):
     """||H_new C_old - S C_old diag(eps_old)||_F / ||H_new||_F (full, then
     restricted to the occupied columns of C_old), averaged over spin channels
-    for unrestricted systems."""
+    for unrestricted systems.
+    """
     h = np.asarray(h_new)
     s = np.asarray(s_matrix)
     hnorm = max(float(np.linalg.norm(h)), 1e-300)
@@ -313,7 +323,10 @@ def generalized_residual(h_new, c_old, eps_old, s_matrix, occ_old, nspin):
         if c_occ.shape[1] == 0:
             rel_occ_total += float("nan")
         else:
-            rel_occ_total += float(np.linalg.norm(h @ c_occ - s @ c_occ @ np.diag(eps[mask]))) / hnorm
+            rel_occ_total += (
+                float(np.linalg.norm(h @ c_occ - s @ c_occ @ np.diag(eps[mask])))
+                / hnorm
+            )
     return rel_full_total / nspin, rel_occ_total / nspin
 
 
@@ -366,7 +379,11 @@ def analyze_geometry(geo):
     s = geo["overlap"]
     rows = []
     for idx, it in enumerate(geo["iterations"]):
-        row = {"k": it["k"], "step_micros": it["step_micros"], "eigensolve_micros": it["eigensolve_micros"]}
+        row = {
+            "k": it["k"],
+            "step_micros": it["step_micros"],
+            "eigensolve_micros": it["eigensolve_micros"],
+        }
         ctsc, hc = validate_eigenpairs(it["H"], it["C"], it["eps"], s)
         row["validation_ctsc_max"] = ctsc
         row["validation_he_max"] = hc
@@ -417,7 +434,9 @@ def trajectory_metrics(g1, g2):
     rel_dh0 = float(np.linalg.norm(g2["core_hamiltonian"] - g1["core_hamiltonian"])) / (
         float(np.linalg.norm(g1["core_hamiltonian"])) or 1.0
     )
-    rel_dp = float(np.linalg.norm(c2["P"] - c1["P"])) / (float(np.linalg.norm(c1["P"])) or 1.0)
+    rel_dp = float(np.linalg.norm(c2["P"] - c1["P"])) / (
+        float(np.linalg.norm(c1["P"])) or 1.0
+    )
     # Consecutive geometries share one basis, so S is identical; still use the
     # appropriate S for each subspace.
     cos_min, angle_max, capture, chordal = subspace_metrics(
@@ -448,7 +467,9 @@ def build_report(path, doc):
         "geometries": geometries,
     }
     if len(geometries) >= 2:
-        report["trajectory"] = trajectory_metrics(doc["geometries"][0], doc["geometries"][1])
+        report["trajectory"] = trajectory_metrics(
+            doc["geometries"][0], doc["geometries"][1]
+        )
     return report
 
 
@@ -457,7 +478,11 @@ def summarize(report):
     for geo in report["geometries"]:
         rows = geo["iterations"]
         iters = len(rows)
-        conv = "converged" if geo["converged_state"] else "NOT converged (max iterations/failure)"
+        conv = (
+            "converged"
+            if geo["converged_state"]
+            else "NOT converged (max iterations/failure)"
+        )
         lines.append(
             f"geometry {geo['generation']}: nao={geo['nao']} iterations={iters} [{conv}]"
         )
@@ -468,12 +493,28 @@ def summarize(report):
             )
 
         if iters >= 2:
-            lines.append("  rel||dH||      " + " ".join(f"{r['rel_dH']:9.3e}" for r in rows[1:]))
-            lines.append("  rel||dP||      " + " ".join(f"{r['rel_dP']:9.3e}" for r in rows[1:]))
-            lines.append("  ang_max(deg)   " + " ".join(f"{r['subspace_max_angle_deg']:9.3f}" for r in rows[1:]))
-            lines.append("  capture frac   " + " ".join(f"{r['subspace_capture_fraction']:9.4f}" for r in rows[1:]))
-            lines.append("  resid occ      " + " ".join(f"{r['rel_residual_occupied']:9.3e}" for r in rows[1:]))
-            lines.append("  RR eig err     " + " ".join(f"{r['rr_eigenvalue_max_err']:9.3e}" for r in rows[1:]))
+            lines.append(
+                "  rel||dH||      " + " ".join(f"{r['rel_dH']:9.3e}" for r in rows[1:])
+            )
+            lines.append(
+                "  rel||dP||      " + " ".join(f"{r['rel_dP']:9.3e}" for r in rows[1:])
+            )
+            lines.append(
+                "  ang_max(deg)   "
+                + " ".join(f"{r['subspace_max_angle_deg']:9.3f}" for r in rows[1:])
+            )
+            lines.append(
+                "  capture frac   "
+                + " ".join(f"{r['subspace_capture_fraction']:9.4f}" for r in rows[1:])
+            )
+            lines.append(
+                "  resid occ      "
+                + " ".join(f"{r['rel_residual_occupied']:9.3e}" for r in rows[1:])
+            )
+            lines.append(
+                "  RR eig err     "
+                + " ".join(f"{r['rr_eigenvalue_max_err']:9.3e}" for r in rows[1:])
+            )
     if "trajectory" in report:
         t = report["trajectory"]
         lines.append(
@@ -486,9 +527,13 @@ def summarize(report):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("documents", nargs="+", help="scc_reuse_capture diagnostic stream(s)")
+    parser.add_argument(
+        "documents", nargs="+", help="scc_reuse_capture diagnostic stream(s)"
+    )
     parser.add_argument("--report", help="write the JSON report to this path")
-    parser.add_argument("-q", "--quiet", action="store_true", help="suppress the console summary")
+    parser.add_argument(
+        "-q", "--quiet", action="store_true", help="suppress the console summary"
+    )
     args = parser.parse_args(argv)
 
     reports = []
@@ -501,7 +546,12 @@ def main(argv=None):
             print()
     if args.report:
         with open(args.report, "w", encoding="utf-8") as handle:
-            json.dump(reports if len(reports) > 1 else reports[0], handle, indent=2, allow_nan=True)
+            json.dump(
+                reports if len(reports) > 1 else reports[0],
+                handle,
+                indent=2,
+                allow_nan=True,
+            )
             handle.write("\n")
     return 0
 

@@ -22,7 +22,9 @@ def run(argv):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--capture", required=True, help="path to xtbloom_scc_reuse_capture")
+    parser.add_argument(
+        "--capture", required=True, help="path to xtbloom_scc_reuse_capture"
+    )
     parser.add_argument("--spec", required=True, help="path to h3_plus.spec")
     parser.add_argument(
         "--analyzer",
@@ -52,16 +54,23 @@ def main():
             print("unexpected geometry shape", file=sys.stderr)
             return 1
         for row in geo["iterations"]:
-            for key in ("rel_dH", "rel_dP", "subspace_capture_fraction",
-                        "rel_residual_occupied", "rr_eigenvalue_max_err"):
-                if key in row and not (0.0 <= row[key] and row[key] < 1e10):
+            for key in (
+                "rel_dH",
+                "rel_dP",
+                "subspace_capture_fraction",
+                "rel_residual_occupied",
+                "rr_eigenvalue_max_err",
+            ):
+                if key in row and not (row[key] >= 0.0 and row[key] < 1e10):
                     print(f"non-finite metric {key}", file=sys.stderr)
                     return 1
             if abs(row["validation_ctsc_max"]) > 1e-9:
                 print("C^T S C = I violated", file=sys.stderr)
                 return 1
-        print("h3_plus smoke test passed: "
-              f"iterations={len(geo['iterations'])} nao={geo['nao']}")
+        print(
+            "h3_plus smoke test passed: "
+            f"iterations={len(geo['iterations'])} nao={geo['nao']}"
+        )
         return 0
 
 

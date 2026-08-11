@@ -245,8 +245,8 @@ xtbloom_status_t Geometry::load(const CaseSpec& spec, std::string& err) {
   molecular_charges = {spec.molecular_charge};
   unpaired = {spec.unpaired_electrons};
 
-  xtbloom_status_t s = make_basis_plan(batch_size, nat, atom_offsets.data(),
-                                       atomic_numbers.data(), basis, err);
+  xtbloom_status_t s =
+      make_basis_plan(batch_size, nat, atom_offsets.data(), atomic_numbers.data(), basis, err);
   if (s) return s;
   s = make_integral_plan(basis, integrals, err);
   if (s) return s;
@@ -347,7 +347,8 @@ xtbloom_status_t Geometry::load(const CaseSpec& spec, std::string& err) {
   geom.geometry_generation = geometry_generation;
   if (npc > 0) {
     geom.explicit_point_charge_shell_potential = pc_shell_potential.data();
-    geom.explicit_point_charge_shell_elements = static_cast<std::int64_t>(pc_shell_potential.size());
+    geom.explicit_point_charge_shell_elements =
+        static_cast<std::int64_t>(pc_shell_potential.size());
   }
 
   s = make_mkl_rt_lp64_backend(backend, err);
@@ -409,8 +410,8 @@ xtbloom_status_t Geometry::advance_geometry(const CaseSpec& spec, std::string& e
     pc_hardnesses.push_back(row[4]);
   }
 
-  xtbloom_status_t s = evaluate_coordination_cpu(coordination_plan, positions.data(), cn.data(),
-                                                 err);
+  xtbloom_status_t s =
+      evaluate_coordination_cpu(coordination_plan, positions.data(), cn.data(), err);
   if (s) return s;
   s = evaluate_overlap_cpu(basis, integrals, positions.data(), overlap.data(), iscratch.data,
                            iscratch.size, err);
@@ -432,9 +433,8 @@ xtbloom_status_t Geometry::advance_geometry(const CaseSpec& spec, std::string& e
   if (s) return s;
   d4_coordination.assign(static_cast<std::size_t>(d4_plan.total_atoms()), 0.0);
   s = update_d4_geometry_cache_cpu(d4_plan, positions.data(), geometry_generation,
-                                   d4_pair_data.data(), d4_pair_data.size(),
-                                   d4_coordination.data(), d4_coordination.size(), d4_ws, d4_cache,
-                                   err);
+                                   d4_pair_data.data(), d4_pair_data.size(), d4_coordination.data(),
+                                   d4_coordination.size(), d4_ws, d4_cache, err);
   if (s) return s;
   if (npc > 0) {
     s = evaluate_external_point_charge_potential_cpu(pc_plan, positions.data(), pc_positions.data(),
@@ -456,7 +456,8 @@ xtbloom_status_t Geometry::advance_geometry(const CaseSpec& spec, std::string& e
   geom.geometry_generation = geometry_generation;
   if (npc > 0) {
     geom.explicit_point_charge_shell_potential = pc_shell_potential.data();
-    geom.explicit_point_charge_shell_elements = static_cast<std::int64_t>(pc_shell_potential.size());
+    geom.explicit_point_charge_shell_elements =
+        static_cast<std::int64_t>(pc_shell_potential.size());
   }
   err.clear();
   return XTBLOOM_STATUS_SUCCESS;
@@ -468,11 +469,10 @@ xtbloom_status_t Stage::build(Geometry& g, const CaseSpec& spec, std::string& er
       make_scc_mixer_plan(g.layout, spec.mixer_memory, spec.mixer_damping, kTbliteRmsTolerance,
                           kTbliteRmsTolerance, mixer_plan, err);
   if (s) return s;
-  s = make_scc_driver_plan(g.layout, g.mulliken_plan, g.es2_plan, g.es3_plan, g.aes2_plan,
-                           g.eig_plan, mixer_plan, &g.d4_plan, nullptr,
-                           static_cast<std::uint64_t>(spec.maximum_iterations),
-                           spec.temperature_kelvin * kKelvinToHartree, kTbliteEnergyTolerance,
-                           driver_plan, err);
+  s = make_scc_driver_plan(
+      g.layout, g.mulliken_plan, g.es2_plan, g.es3_plan, g.aes2_plan, g.eig_plan, mixer_plan,
+      &g.d4_plan, nullptr, static_cast<std::uint64_t>(spec.maximum_iterations),
+      spec.temperature_kelvin * kKelvinToHartree, kTbliteEnergyTolerance, driver_plan, err);
   if (s) return s;
   if (mixer_s.size < mixer_plan.state_size_bytes()) return XTBLOOM_STATUS_ALLOCATION_FAILED;
   s = bind_scc_mixer_state(mixer_plan, mixer_s.data, mixer_s.size, mixer_state, err);
@@ -549,9 +549,9 @@ std::int64_t run_geometry(Geometry& g, Stage& st, std::ostream& out, std::string
                         st.driver_state.converged[0] == 0u;
     if (!active) break;
     const auto t0 = std::chrono::steady_clock::now();
-    const xtbloom_status_t step_status = iterate_scc_driver_batch_cpu(
-        st.driver_plan, g.geom, g.backend, g.ocache, g.wfn, st.mixer_state, st.driver_state,
-        st.drv_ws, err);
+    const xtbloom_status_t step_status =
+        iterate_scc_driver_batch_cpu(st.driver_plan, g.geom, g.backend, g.ocache, g.wfn,
+                                     st.mixer_state, st.driver_state, st.drv_ws, err);
     const auto t1 = std::chrono::steady_clock::now();
     if (step_status != XTBLOOM_STATUS_SUCCESS && step_status != XTBLOOM_STATUS_SCC_NOT_CONVERGED &&
         step_status != XTBLOOM_STATUS_EIGENSOLVER_FAILED &&
@@ -603,8 +603,8 @@ std::int64_t run_geometry(Geometry& g, Stage& st, std::ostream& out, std::string
     std::string solve_error;
     const auto s0 = std::chrono::steady_clock::now();
     const xtbloom_status_t solve_status = solve_eigensystem_cpu(
-        g.eig_plan, 0, g.ocache, g.geometry_generation, st.drv_ws.hamiltonian + matrix_begin,
-        etemp, g.backend, g.eig_ws, st.timing_wfn, therm, solve_error);
+        g.eig_plan, 0, g.ocache, g.geometry_generation, st.drv_ws.hamiltonian + matrix_begin, etemp,
+        g.backend, g.eig_ws, st.timing_wfn, therm, solve_error);
     const auto s1 = std::chrono::steady_clock::now();
     snap.eigensolve_micros = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(s1 - s0).count());
