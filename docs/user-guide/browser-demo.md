@@ -14,6 +14,16 @@ browser; the site does not upload a calculation to a server.
 4. Select **Optimize geometry** to run the demo's L-BFGS adapter and inspect
    its energy trajectory.
 
+The 3D view is an input-validation preview, independent of the calculation
+path. Valid XYZ coordinates render automatically about 400 ms after you stop
+typing, and a generated SMILES structure renders immediately. Malformed input
+(invalid element symbols, missing or non-numeric coordinates, more than 512
+atoms) is flagged inline beside the coordinates box while the last valid
+structure stays on screen, and **Compute energy** / **Optimize geometry**
+remain disabled until a valid structure is present. **Reset** clears the
+SMILES box, coordinates, settings, preview, results, and errors, then restores
+the water template.
+
 The URL
 [`?smiles=CCO`](https://xtbloom.jinzhezeng.group/?smiles=CCO) waits for the
 SMILES and xTBloom workers, generates ethanol, runs the demo optimizer, and

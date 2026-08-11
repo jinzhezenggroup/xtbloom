@@ -313,6 +313,156 @@ export async function runWithRetries(
   throw new Error("retry loop exhausted");
 }
 
+/* Elements 1..103, index aligned with atomic number. This is the same table
+ * as the C web adapter (web/xtbloom_web.c), so the inline preview accepts
+ * exactly the structures the wasm engine can calculate. */
+export const ELEMENT_SYMBOLS = [
+  "", "H","He","Li","Be","B","C","N","O","F","Ne","Na","Mg","Al","Si","P","S","Cl","Ar",
+  "K","Ca","Sc","Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br","Kr",
+  "Rb","Sr","Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te","I","Xe",
+  "Cs","Ba","La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu",
+  "Hf","Ta","W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi","Po","At","Rn","Fr","Ra","Ac",
+  "Th","Pa","U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr",
+];
+
+/* Case-insensitive element lookup mirroring symbol_to_z in web/xtbloom_web.c:
+ * title-case the first letter, lowercase the second, then compare to the
+ * reference table. Returns the atomic number or 0 when unknown. */
+function elementSymbolToZ(symbol) {
+  const normalized = String(symbol || "").slice(0, 2);
+  if (!normalized) return 0;
+  let key = normalized[0].toUpperCase();
+  if (normalized.length > 1) key += normalized[1].toLowerCase();
+  const z = ELEMENT_SYMBOLS.indexOf(key);
+  return z > 0 && z <= ELEMENT_SYMBOLS.length - 1 ? z : 0;
+}
+
+/* Convert parsed atoms back to canonical XYZ text ("Symbol x y z", angstrom)
+ * for the 3D viewer, so numeric atomic numbers ("8 0 0 0") and non-title-case
+ * symbols render the same way the engine interprets them. */
+export function xyzAtomsToText(atoms) {
+  return atoms.map((atom) =>
+    `${atom.symbol} ${atom.x} ${atom.y} ${atom.z}`,
+  ).join("\n");
+}
+
+/* A small ownership primitive for async UI work. Advancing the revision
+ * supersedes every captured token, while release() succeeds only for the task
+ * that still owns the current revision. This prevents an old finally block
+ * from clearing the busy state of work started after Reset. */
+export function createRevisionOwner() {
+  let revision = 0;
+  let activeOwner = null;
+  return {
+    capture: () => revision,
+    isCurrent: (token) => token === revision,
+    advance() {
+      revision += 1;
+      activeOwner = null;
+      return revision;
+    },
+    claim(token = revision) {
+      if (token !== revision || activeOwner !== null) return false;
+      activeOwner = token;
+      return true;
+    },
+    release(token) {
+      if (token !== revision || activeOwner !== token) return false;
+      activeOwner = null;
+      return true;
+    },
+    isBusy: () => activeOwner === revision,
+  };
+}
+
+/* Debounce only publication, not validation. cancel() invalidates the queued
+ * callback even if a test scheduler later invokes the cleared timer, matching
+ * browser races where an already-queued callback may still run. */
+export function createDebouncedPublisher(
+  publish,
+  {
+    delayMs = 0,
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+  } = {},
+) {
+  if (typeof publish !== "function") throw new TypeError("publish must be a function");
+  const delay = Math.max(0, Number(delayMs) || 0);
+  let generation = 0;
+  let timer = null;
+
+  function cancel() {
+    generation += 1;
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+  }
+
+  return {
+    cancel,
+    schedule(value) {
+      cancel();
+      const owner = generation;
+      timer = setTimer(() => {
+        timer = null;
+        if (owner === generation) publish(value);
+      }, delay);
+    },
+  };
+}
+
+/* Input validation for the live 3D preview, independent of the compute path.
+ * It accepts ordinary surrounding whitespace and blank lines, then callers
+ * submit xyzAtomsToText(atoms) rather than the raw editor text. That canonical
+ * form obeys parse_xyz in web/xtbloom_web.c even where its line scanner rejects
+ * leading or whitespace-only rows. Additional trailing tokens are ignored by
+ * both parsers. The front end is deliberately stricter about coordinates:
+ * they must be finite, so unusable structures are rejected before execution.
+ *
+ * Returns { ok: true, atoms, atomCount } or
+ *         { ok: false, errorCode, messageVars } where errorCode is one of
+ *         "no_xyz" | "err_xyz_parse" | "err_xyz_too_many" | "err_xyz_element".
+ */
+export function parseXyzCoordinates(xyz, { maxAtoms = 512 } = {}) {
+  const max = Math.max(1, Math.trunc(Number(maxAtoms) || 512));
+  const lines = String(xyz || "").split(/\r?\n/);
+  const atoms = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const tokens = trimmed.split(/\s+/);
+    if (tokens.length < 4) {
+      return { ok: false, errorCode: "err_xyz_parse" };
+    }
+    const symbolToken = tokens[0];
+    let symbol;
+    if (/^[+-]?\d+$/.test(symbolToken)) {
+      const z = Number(symbolToken);
+      if (!Number.isInteger(z) || z < 1 || z > ELEMENT_SYMBOLS.length - 1) {
+        return { ok: false, errorCode: "err_xyz_element", messageVars: { sym: symbolToken } };
+      }
+      symbol = ELEMENT_SYMBOLS[z];
+    } else {
+      const z = elementSymbolToZ(symbolToken);
+      if (z === 0) {
+        return { ok: false, errorCode: "err_xyz_element", messageVars: { sym: symbolToken } };
+      }
+      symbol = ELEMENT_SYMBOLS[z];
+    }
+    if (atoms.length >= max) {
+      return { ok: false, errorCode: "err_xyz_too_many" };
+    }
+    const coords = tokens.slice(1, 4).map(Number);
+    if (coords.some((value) => !Number.isFinite(value))) {
+      return { ok: false, errorCode: "err_xyz_parse" };
+    }
+    atoms.push({ symbol, x: coords[0], y: coords[1], z: coords[2] });
+  }
+  if (atoms.length === 0) {
+    return { ok: false, errorCode: "no_xyz" };
+  }
+  return { ok: true, atoms, atomCount: atoms.length };
+}
+
 /* URLSearchParams performs the required percent decoding. Literal '+' in a
  * charged SMILES must therefore be encoded as %2B, as required by URL syntax. */
 export function readSmilesQuery(url, maxLength = 2048) {
