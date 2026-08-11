@@ -42,6 +42,7 @@ using xtbloom::detail::cuda::Gfn2EigensolverWorkspaceRequirements;
 using xtbloom::detail::cuda::Gfn2GeometryEpochDevice;
 using xtbloom::detail::cuda::prepare_and_compact_gfn2_solve_buckets_cuda;
 using xtbloom::detail::cuda::prepare_gfn2_eigensolver_launch_sequence_cuda;
+using xtbloom::detail::cuda::prepare_gfn2_spin_solve_buckets_cuda;
 using xtbloom::detail::cuda::query_gfn2_eigensolver_bucket_workspace_cuda;
 using xtbloom::detail::cuda::query_gfn2_jacobi_bucket_workspace_cuda;
 using xtbloom::detail::cuda::query_gfn2_spin_eigensolver_bucket_workspace_cuda;
@@ -596,14 +597,16 @@ struct SpinSolveFixture {
   Gfn2EigensolverDeviceResults results{};
 
   bool create(DeviceFixture& physical,
-              const Gfn2EigensolverOptions& options = Gfn2EigensolverOptions{}) {
+              const Gfn2EigensolverOptions& options = Gfn2EigensolverOptions{},
+              bool force_restricted = false) {
     const TestBatch& host = physical.host;
     spin_channels.resize(static_cast<std::size_t>(host.batch_size));
     spin_channel_offsets.assign(static_cast<std::size_t>(host.batch_size + 1), 0);
     spin_orbital_offsets.assign(static_cast<std::size_t>(host.batch_size + 1), 0);
     spin_matrix_offsets.assign(static_cast<std::size_t>(host.batch_size + 1), 0);
     for (std::int64_t system = 0; system < host.batch_size; ++system) {
-      const std::int32_t channels = host.batch_size == 1 || system % 3 != 0 ? 2 : 1;
+      const std::int32_t channels =
+          force_restricted ? 1 : (host.batch_size == 1 || system % 3 != 0 ? 2 : 1);
       const std::int64_t orbitals = host.orbital_offsets[static_cast<std::size_t>(system + 1)] -
                                     host.orbital_offsets[static_cast<std::size_t>(system)];
       const std::int64_t matrices = host.matrix_offsets[static_cast<std::size_t>(system + 1)] -
@@ -925,6 +928,152 @@ bool test_spin_eigensolver_mixed_batches_and_transaction() {
       if (!expect_failure(nonfinite, Gfn2EigensolverDeviceError::kStaleOverlapCache, true)) {
         return false;
       }
+    }
+  }
+  return true;
+}
+
+bool test_parallel_spin_solve_tail_validation_and_cache_borrow() {
+  constexpr std::int32_t kOrbitals = 33;
+  constexpr std::int64_t kHealthy = 0;
+  constexpr std::int64_t kNonfiniteBeforeOthers = 1;
+  constexpr std::int64_t kNonsymmetricBeforeFactor = 2;
+  constexpr std::int64_t kInvalidFactor = 3;
+  constexpr std::uint64_t kGeneration = 57u;
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(kOrbitals) * kOrbitals;
+
+  DeviceFixture physical;
+  if (!physical.create(make_batch(4, false, -1, kOrbitals)) || !factor(physical, kGeneration)) {
+    return false;
+  }
+  SpinSolveFixture spin;
+  if (!spin.create(physical, Gfn2EigensolverOptions{}, true) || spin.buckets.size() != 1u ||
+      spin.buckets[0].solve_count != 4) {
+    return false;
+  }
+  const auto element = [&](std::int64_t system, std::int64_t row, std::int64_t column) {
+    return static_cast<std::size_t>(spin.spin_matrix_offsets[static_cast<std::size_t>(system)] +
+                                    row * kOrbitals + column);
+  };
+  /* All corruptions lie beyond one 256-thread stride. The first failed peer
+   * carries every error class to pin nonfinite > nonsymmetric > bad factor. */
+  spin.hamiltonian[element(kNonfiniteBeforeOthers, kOrbitals - 1, kOrbitals - 2)] =
+      std::numeric_limits<double>::quiet_NaN();
+  spin.hamiltonian[element(kNonfiniteBeforeOthers, kOrbitals - 3, kOrbitals - 4)] += 1.0e-3;
+  spin.hamiltonian[element(kNonsymmetricBeforeFactor, kOrbitals - 2, kOrbitals - 4)] += 1.0e-3;
+
+  std::vector<double> factors;
+  if (!physical.cache_factors.download(factors)) {
+    return false;
+  }
+  const Gfn2EigensolverBucket& bucket = spin.buckets[0];
+  const auto factor_diagonal = [&](std::int64_t system) {
+    const auto local =
+        static_cast<std::int64_t>(std::find(physical.host.bucket_systems.begin(),
+                                            physical.host.bucket_systems.end(), system) -
+                                  physical.host.bucket_systems.begin());
+    const std::int64_t factor_begin = bucket.matrix_scratch_offset + local * matrix_stride;
+    return static_cast<std::size_t>(factor_begin + (kOrbitals - 1) * kOrbitals + (kOrbitals - 1));
+  };
+  factors[factor_diagonal(kNonfiniteBeforeOthers)] = std::numeric_limits<double>::infinity();
+  factors[factor_diagonal(kNonsymmetricBeforeFactor)] = 0.0;
+  factors[factor_diagonal(kInvalidFactor)] = -1.0;
+  const std::vector<double> scratch_sentinel(spin.matrix_a.size(), kSentinel);
+  if (!physical.cache_factors.upload(factors) ||
+      !spin.device_hamiltonian.upload(spin.hamiltonian) ||
+      !spin.matrix_a.upload(scratch_sentinel) || !spin.matrix_b.upload(scratch_sentinel) ||
+      !cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
+                   physical.host.batch_size, physical.system_errors.get(),
+                   physical.device_error.get(), physical.providers.stream),
+               "reset spin preflight errors")) {
+    return false;
+  }
+  const auto preflight = prepare_gfn2_spin_solve_buckets_cuda(
+      physical.batch, spin.layout, spin.buckets.data(),
+      static_cast<std::int64_t>(spin.buckets.size()), physical.cache, kGeneration,
+      spin.device_hamiltonian.get(), Gfn2EigensolverOptions{}, spin.workspace,
+      physical.system_errors.get(), physical.device_error.get(), physical.providers.stream);
+  if (!preflight.success() ||
+      !cuda_ok(cudaStreamSynchronize(physical.providers.stream), "spin preflight synchronize")) {
+    return false;
+  }
+
+  std::vector<std::uint32_t> errors;
+  std::vector<std::uint8_t> eligible;
+  std::vector<double> factor_scratch;
+  std::vector<double> matrix_scratch;
+  std::vector<double> factors_after;
+  std::vector<double*> factor_pointers;
+  std::vector<double*> matrix_pointers;
+  if (!physical.system_errors.download(errors) || !spin.eligible.download(eligible) ||
+      !spin.matrix_a.download(factor_scratch) || !spin.matrix_b.download(matrix_scratch) ||
+      !physical.cache_factors.download(factors_after) ||
+      !spin.factor_pointers.download(factor_pointers) ||
+      !spin.matrix_pointers.download(matrix_pointers)) {
+    return false;
+  }
+  const std::uint32_t nonfinite =
+      static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kNonfiniteHamiltonian);
+  const std::uint32_t nonsymmetric =
+      static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kNonsymmetricHamiltonian);
+  const std::uint32_t stale =
+      static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kStaleOverlapCache);
+  if (errors != std::vector<std::uint32_t>{0u, nonfinite, nonsymmetric, stale} ||
+      factors_after != factors) {
+    return false;
+  }
+
+  for (std::int64_t local = 0; local < bucket.system_count; ++local) {
+    const std::int64_t system =
+        physical.host.bucket_systems[static_cast<std::size_t>(bucket.system_index_offset + local)];
+    const std::int64_t solve_slot = bucket.solve_index_offset + local;
+    const std::int64_t factor_begin = bucket.matrix_scratch_offset + local * matrix_stride;
+    const std::int64_t scratch_begin = bucket.spin_matrix_scratch_offset + local * matrix_stride;
+    const double* expected_pointer = system == kHealthy
+                                         ? physical.cache_factors.get() + factor_begin
+                                         : spin.matrix_a.get() + scratch_begin;
+    if (factor_pointers[static_cast<std::size_t>(solve_slot)] != expected_pointer ||
+        matrix_pointers[static_cast<std::size_t>(solve_slot)] !=
+            spin.matrix_b.get() + scratch_begin ||
+        eligible[static_cast<std::size_t>(solve_slot)] != (system == kHealthy ? 1u : 0u)) {
+      return false;
+    }
+    for (std::int64_t index = 0; index < matrix_stride; ++index) {
+      const std::int64_t row = index % kOrbitals;
+      const std::int64_t column = index / kOrbitals;
+      const double expected_factor = system == kHealthy ? kSentinel : (row == column ? 1.0 : 0.0);
+      double expected_matrix = row == column ? 1.0 : 0.0;
+      if (system == kHealthy) {
+        const std::int64_t input_begin = spin.spin_matrix_offsets[static_cast<std::size_t>(system)];
+        const double first =
+            spin.hamiltonian[static_cast<std::size_t>(input_begin + row * kOrbitals + column)];
+        const double second =
+            spin.hamiltonian[static_cast<std::size_t>(input_begin + column * kOrbitals + row)];
+        expected_matrix = row == column ? first : 0.5 * first + 0.5 * second;
+      }
+      if (factor_scratch[static_cast<std::size_t>(scratch_begin + index)] != expected_factor ||
+          matrix_scratch[static_cast<std::size_t>(scratch_begin + index)] != expected_matrix) {
+        return false;
+      }
+    }
+  }
+
+  if (!spin.fill_outputs(kSentinel) || !solve_spin(physical, spin, kGeneration)) {
+    return false;
+  }
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  if (!physical.system_errors.download(errors) || !spin.eigenvalues.download(eigenvalues) ||
+      !spin.coefficients.download(coefficients) ||
+      !physical.cache_factors.download(factors_after) || factors_after != factors ||
+      errors != std::vector<std::uint32_t>{0u, nonfinite, nonsymmetric, stale} ||
+      !validate_spin_system(physical, spin, kHealthy, 0, eigenvalues, coefficients)) {
+    return false;
+  }
+  for (const std::int64_t failed :
+       {kNonfiniteBeforeOthers, kNonsymmetricBeforeFactor, kInvalidFactor}) {
+    if (!system_outputs_equal(physical.host, failed, eigenvalues, coefficients, kSentinel)) {
+      return false;
     }
   }
   return true;
@@ -3071,6 +3220,10 @@ int main(int argc, char** argv) {
     std::cerr << "spin eigensolver batch/transaction test failed\n";
     return 1;
   }
+  if (!test_parallel_spin_solve_tail_validation_and_cache_borrow()) {
+    std::cerr << "parallel spin solve/cache-borrow test failed\n";
+    return 1;
+  }
   if (!test_spin_eigensolver_tridiagonal_singleton()) {
     std::cerr << "spin eigensolver tridiagonal-singleton test failed\n";
     return 1;
@@ -3098,8 +3251,7 @@ int main(int argc, char** argv) {
       !test_cpu_literal_parity() || !test_inactive_poison_is_skipped() ||
       !test_overlap_and_hamiltonian_validation() || !test_parallel_overlap_tail_validation() ||
       !test_active_offset_and_singular_failures() || !test_ill_conditioned_peer_isolation() ||
-      !test_cache_generation_staleness() ||
-      !test_single_cache_member_peer_isolation() ||
+      !test_cache_generation_staleness() || !test_single_cache_member_peer_isolation() ||
       !test_sticky_error_and_invalid_bucket_map_fail_closed() ||
       !test_host_validation_aliases_and_limits() || !test_graph_capture() ||
       !test_large_ao_device_launch_capture()) {
