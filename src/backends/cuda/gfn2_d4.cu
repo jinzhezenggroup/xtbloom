@@ -2166,11 +2166,13 @@ __global__ void atm_energy_split_kernel(Gfn2D4DeviceBatch batch, Gfn2D4DevicePar
 __global__ void atm_energy_split_reduce_kernel(Gfn2D4DeviceBatch batch,
                                                Gfn2D4DeviceWorkspace workspace,
                                                std::int32_t blocks_per_system,
+                                               const std::uint8_t* active_mask,
                                                std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   __shared__ double partial[kThreadsPerBlock];
   __shared__ std::uint32_t shared_error;
-  if (!block_system_is_valid(workspace, system, device_error, shared_error)) {
+  if ((active_mask != nullptr && active_mask[system] != 1u) ||
+      !block_system_is_valid(workspace, system, device_error, shared_error)) {
     return;
   }
   double energy = 0.0;
@@ -2725,6 +2727,21 @@ __global__ void publish_batch_kernel(std::int64_t batch_size, const double* scra
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (system < batch_size && sequence_is_valid(device_error) &&
       system_is_valid(workspace, system)) {
+    output[system] = scratch[system];
+  }
+}
+
+/* A committed role's optional active mask is caller intent.  Inactive peers
+ * leave caller outputs untouched while their fixed-capacity physical list
+ * storage remains committed for later transactions. */
+__global__ void publish_pairlist_batch_kernel(std::int64_t batch_size,
+                                              const std::uint8_t* active_mask,
+                                              const double* scratch, double* output,
+                                              const Gfn2D4DeviceWorkspace workspace,
+                                              const std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system < batch_size && (active_mask == nullptr || active_mask[system] == 1u) &&
+      sequence_is_valid(device_error) && system_is_valid(workspace, system)) {
     output[system] = scratch[system];
   }
 }
@@ -4078,7 +4095,7 @@ cudaError_t evaluate_gfn2_d4_atm_cuda(const Gfn2D4DeviceBatch& batch,
       return status;
     }
     atm_energy_split_reduce_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                     0, stream>>>(batch, workspace, blocks_per_system,
+                                     0, stream>>>(batch, workspace, blocks_per_system, nullptr,
                                                   device_error);
     status = check_launch();
     if (status != cudaSuccess) {
@@ -4563,7 +4580,7 @@ cudaError_t evaluate_d4_atm_pairlist_impl(const Gfn2D4DeviceBatch& batch,
     if (status != cudaSuccess) return status;
     atm_energy_split_reduce_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
                                      0, stream>>>(batch, workspace, blocks_per_system,
-                                                  device_error);
+                                                  cache.atm_pairs.active_mask, device_error);
     status = check_launch();
     if (status != cudaSuccess) return status;
   } else {
@@ -4575,8 +4592,9 @@ cudaError_t evaluate_d4_atm_pairlist_impl(const Gfn2D4DeviceBatch& batch,
   unsigned int batch_blocks = 0;
   status = launch_grid(batch.batch_size, &batch_blocks);
   if (status != cudaSuccess) return status;
-  publish_batch_kernel<<<batch_blocks, kThreadsPerBlock, 0, stream>>>(
-      batch.batch_size, workspace.batch_scratch, energies, workspace, device_error);
+  publish_pairlist_batch_kernel<<<batch_blocks, kThreadsPerBlock, 0, stream>>>(
+      batch.batch_size, cache.atm_pairs.active_mask, workspace.batch_scratch, energies, workspace,
+      device_error);
   return check_launch();
 }
 

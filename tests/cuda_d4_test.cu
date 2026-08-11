@@ -339,7 +339,8 @@ struct DeviceFixture {
    * and ATM role projections; each consumer reapplies its physical cutoff. */
   template <typename Offsets, typename Positions>
   bool initialize_pairlist(const Offsets& host_atom_offsets, const Positions& host_positions,
-                           std::uint64_t generation, cudaStream_t stream) {
+                           std::uint64_t generation, cudaStream_t stream,
+                           bool include_pairs_outside_builder_cutoff = false) {
     const std::int64_t batch_count = batch.batch_size;
     const std::int64_t atom_count = batch.total_atoms;
     if (batch_count < 1 || atom_count < 1 || generation == 0u ||
@@ -380,7 +381,8 @@ struct DeviceFixture {
                                  host_positions[static_cast<std::size_t>(first * 3 + axis)];
             distance_squared += delta * delta;
           }
-          if (!std::isfinite(distance_squared) || distance_squared > kBuilderCutoffSquared) {
+          if (!std::isfinite(distance_squared) ||
+              (!include_pairs_outside_builder_cutoff && distance_squared > kBuilderCutoffSquared)) {
             continue;
           }
           pairs[static_cast<std::size_t>(pair_begin + count++)] = {first, second};
@@ -490,7 +492,8 @@ template <typename Offsets, typename AtomicNumbers, typename Positions>
 bool initialize_pairlist_case(const Offsets& atom_offsets, const AtomicNumbers& atomic_numbers,
                               const Positions& positions, std::uint64_t generation,
                               xtbloom::detail::gfn2::D4Plan& plan, DeviceFixture& device,
-                              cudaStream_t stream) {
+                              cudaStream_t stream,
+                              bool include_pairs_outside_builder_cutoff = false) {
   std::string error;
   if (xtbloom::detail::gfn2::make_d4_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
                                           static_cast<std::int64_t>(atomic_numbers.size()),
@@ -504,7 +507,8 @@ bool initialize_pairlist_case(const Offsets& atom_offsets, const AtomicNumbers& 
   const std::vector<double> charges(atomic_numbers.size(), 0.0);
   return device.initialize(plan, atom_offsets, atomic_numbers, pair_data, coordination, charges,
                            stream) &&
-         device.initialize_pairlist(atom_offsets, positions, generation, stream);
+         device.initialize_pairlist(atom_offsets, positions, generation, stream,
+                                    include_pairs_outside_builder_cutoff);
 }
 
 int run_geometry_refresh_batch_case(std::size_t batch_count) {
@@ -1286,6 +1290,48 @@ int test_atm_split_path_large_single_system() {
   }
   CUDA_CHECK(cudaGraphExecDestroy(executable));
   CUDA_CHECK(cudaGraphDestroy(graph));
+
+  /* An inactive committed D4 projection is caller intent, not a zero-valued
+   * calculation.  The three role views are projections of one physical list
+   * and therefore share this mask.  Poison the split partials so the test
+   * fails if the finish kernel reads stale scratch or ATM publication
+   * overwrites the caller canary. */
+  DeviceBuffer<std::uint8_t> inactive_mask;
+  CHECK(inactive_mask.allocate(1) == cudaSuccess);
+  constexpr std::array<std::uint8_t, 1> inactive{0u};
+  constexpr std::array<double, 1> energy_canary{8125.75};
+  constexpr std::array<double, 1> batch_scratch_canary{-991.25};
+  const std::vector<double> stale_partials(atom_count, 7.0);
+  CUDA_CHECK(inactive_mask.copy_from(inactive.data(), inactive.size(), stream));
+  CUDA_CHECK(device.energies.copy_from(energy_canary.data(), energy_canary.size(), stream));
+  CUDA_CHECK(device.atom_scratch.copy_from(stale_partials.data(), stale_partials.size(), stream));
+  CUDA_CHECK(device.batch_scratch.copy_from(batch_scratch_canary.data(),
+                                            batch_scratch_canary.size(), stream));
+  auto inactive_cache = device.pairlist_cache;
+  inactive_cache.coordination_pairs.active_mask_count = 1;
+  inactive_cache.coordination_pairs.active_mask = inactive_mask.get();
+  inactive_cache.two_body_pairs.active_mask_count = 1;
+  inactive_cache.two_body_pairs.active_mask = inactive_mask.get();
+  inactive_cache.atm_pairs.active_mask_count = 1;
+  inactive_cache.atm_pairs.active_mask = inactive_mask.get();
+  CUDA_CHECK(device.reset(stream));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_atm_pairlist_cuda(
+      device.batch, device.parameters, 41u, inactive_cache, device.energies.get(), device.workspace,
+      device.error.get(), stream));
+  std::array<double, 1> actual_batch_scratch{};
+  std::array<std::uint32_t, 1> actual_system_errors{99u};
+  std::array<std::uint32_t, 1> actual_device_error{99u};
+  CUDA_CHECK(device.energies.copy_to(pairlist_atm.data(), batch_count, stream));
+  CUDA_CHECK(device.batch_scratch.copy_to(actual_batch_scratch.data(), actual_batch_scratch.size(),
+                                          stream));
+  CUDA_CHECK(device.system_errors.copy_to(actual_system_errors.data(), actual_system_errors.size(),
+                                          stream));
+  CUDA_CHECK(device.error.copy_to(actual_device_error.data(), actual_device_error.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(pairlist_atm[0] == energy_canary[0]);
+  CHECK(actual_batch_scratch[0] == batch_scratch_canary[0]);
+  CHECK(actual_system_errors[0] == 0u);
+  CHECK(actual_device_error[0] == static_cast<std::uint32_t>(Gfn2D4DeviceError::kSuccess));
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }
@@ -1362,7 +1408,12 @@ int test_pairlist_role_cutoff_boundaries() {
     const std::array<double, 6> positions{0.0, 0.0, 0.0, distance, 0.0, 0.0};
     xtbloom::detail::gfn2::D4Plan plan;
     DeviceFixture device;
-    CHECK(initialize_pairlist_case(offsets, numbers, positions, generation, plan, device, stream));
+    /* Keep the just-outside pair structurally present in this test-only view.
+     * Production's 50-bohr builder would omit it, so forcing it into the
+     * committed superset is what proves the two-body consumer independently
+     * reapplies its inclusive physical cutoff. */
+    CHECK(initialize_pairlist_case(offsets, numbers, positions, generation, plan, device, stream,
+                                   true));
     CUDA_CHECK(device.reset(stream));
     CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_two_body_pairlist_cuda(
         device.batch, device.parameters, generation, device.pairlist_cache, device.charges.get(),
