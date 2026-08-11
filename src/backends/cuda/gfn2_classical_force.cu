@@ -96,6 +96,75 @@ bool aligned_pointer(const T* pointer) noexcept {
   return pointer != nullptr && reinterpret_cast<std::uintptr_t>(pointer) % alignof(T) == 0u;
 }
 
+bool same_pairlist_storage(const Gfn2PairListConsumerView& first,
+                           const Gfn2PairListConsumerView& second) noexcept {
+  return first.memory_space == second.memory_space && first.state == second.state &&
+         first.pair_map_kind == second.pair_map_kind && first.plan_token == second.plan_token &&
+         first.list_builder_cutoff_bohr == second.list_builder_cutoff_bohr &&
+         first.batch_size == second.batch_size && first.total_atoms == second.total_atoms &&
+         first.max_pairs_per_system == second.max_pairs_per_system &&
+         first.max_neighbors_per_atom == second.max_neighbors_per_atom &&
+         first.pair_offset_count == second.pair_offset_count &&
+         first.neighbor_offset_count == second.neighbor_offset_count &&
+         first.pair_count == second.pair_count && first.neighbor_count == second.neighbor_count &&
+         first.pair_offsets == second.pair_offsets && first.pairs == second.pairs &&
+         first.pair_count_elements == second.pair_count_elements &&
+         first.neighbor_count_elements == second.neighbor_count_elements &&
+         first.pair_counts == second.pair_counts &&
+         first.neighbor_counts == second.neighbor_counts &&
+         first.neighbor_offsets == second.neighbor_offsets && first.neighbors == second.neighbors &&
+         first.committed_generation_count == second.committed_generation_count &&
+         first.eligible_mask_count == second.eligible_mask_count &&
+         first.active_mask_count == second.active_mask_count &&
+         first.committed_generations == second.committed_generations &&
+         first.eligible_mask == second.eligible_mask && first.active_mask == second.active_mask;
+}
+
+bool valid_pairlist_role(const Gfn2PairListConsumerView& view, Gfn2PairListRole role, double cutoff,
+                         std::int64_t batch, std::int64_t atoms, std::uint64_t token) noexcept {
+  return view.memory_space == Gfn2PlanMemorySpace::kCudaDevice &&
+         view.state == Gfn2PairListState::kCommitted && view.role == role &&
+         view.pair_map_kind == Gfn2PairMapKind::kExplicit && view.plan_token == token &&
+         view.cutoff_bohr == cutoff && std::isfinite(view.list_builder_cutoff_bohr) &&
+         view.list_builder_cutoff_bohr >= kGfn2D4TwoBodyCutoffBohr && view.batch_size == batch &&
+         view.total_atoms == atoms && view.max_pairs_per_system > 0 &&
+         view.max_neighbors_per_atom > 0 && view.pair_offset_count == batch + 1 &&
+         view.neighbor_offset_count == atoms + 1 && view.pair_count_elements == batch &&
+         view.neighbor_count_elements == atoms && view.committed_generation_count == batch &&
+         view.eligible_mask_count == batch &&
+         (view.active_mask_count == 0 || view.active_mask_count == batch) &&
+         aligned_pointer(view.pair_offsets) && aligned_pointer(view.pairs) &&
+         aligned_pointer(view.pair_counts) && aligned_pointer(view.neighbor_counts) &&
+         aligned_pointer(view.neighbor_offsets) && aligned_pointer(view.neighbors) &&
+         aligned_pointer(view.committed_generations) && aligned_pointer(view.eligible_mask) &&
+         (view.active_mask_count == 0 ? view.active_mask == nullptr
+                                      : aligned_pointer(view.active_mask));
+}
+
+bool valid_d4_pairlist_cache(const Gfn2ClassicalForceDevicePlan& plan,
+                             const Gfn2ClassicalForceDeviceInput& input) noexcept {
+  const auto& cache = plan.d4_pairlist_cache;
+  const auto& coordination = cache.coordination_pairs;
+  const auto& two_body = cache.two_body_pairs;
+  const auto& atm = cache.atm_pairs;
+  return cache.plan_token == plan.plan_token && cache.positions == input.positions &&
+         cache.position_elements == plan.total_atoms * 3 &&
+         cache.coordination_elements == plan.total_atoms &&
+         cache.coordination_generation_elements == plan.batch_size &&
+         cache.coordination_eligible_elements == plan.batch_size &&
+         aligned_pointer(cache.coordination_numbers) &&
+         aligned_pointer(cache.coordination_generations) &&
+         aligned_pointer(cache.coordination_eligible_mask) &&
+         valid_pairlist_role(coordination, Gfn2PairListRole::kD4Coordination,
+                             kGfn2D4CoordinationCutoffBohr, plan.batch_size, plan.total_atoms,
+                             plan.plan_token) &&
+         valid_pairlist_role(two_body, Gfn2PairListRole::kD4TwoBody, kGfn2D4TwoBodyCutoffBohr,
+                             plan.batch_size, plan.total_atoms, plan.plan_token) &&
+         valid_pairlist_role(atm, Gfn2PairListRole::kD4Atm, kGfn2D4AtmCutoffBohr, plan.batch_size,
+                             plan.total_atoms, plan.plan_token) &&
+         same_pairlist_storage(coordination, two_body) && same_pairlist_storage(coordination, atm);
+}
+
 bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
                                  const Gfn2ForceDeviceActivity& activity,
                                  const Gfn2ClassicalForceDeviceInput& input,
@@ -189,8 +258,7 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
                    plan.d4_batch.plan_token != plan.plan_token ||
                    plan.d4_batch.atom_offsets != plan.atom_offsets ||
                    plan.d4_batch.atomic_numbers != plan.atomic_numbers ||
-                   plan.d4_cache.plan_token != plan.plan_token ||
-                   plan.d4_cache.geometry_generation != plan.geometry_generation ||
+                   !valid_d4_pairlist_cache(plan, input) ||
                    workspace.d4_workspace.system_errors != workspace.primitive_system_errors ||
                    workspace.d4_workspace.system_error_elements < plan.batch_size)) {
     return false;
@@ -202,15 +270,13 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
 
   std::int64_t geometry_pair_elements = 0;
   std::int64_t aes2_pair_elements = 0;
-  std::int64_t d4_pair_elements = 0;
   std::int64_t d4_weight_elements = 0;
   if ((needs_aes2 && (!checked_product(plan.geometry_batch.total_pairs,
                                        kGfn2GeometryPairDataElements, &geometry_pair_elements) ||
                       !checked_product(plan.aes2_batch.total_pairs, kGfn2AES2PairDataElements,
                                        &aes2_pair_elements))) ||
       (needs_d4 &&
-       (!checked_product(plan.d4_batch.total_pairs, kGfn2D4PairDataElements, &d4_pair_elements) ||
-        !checked_product(plan.total_atoms, kGfn2D4MaximumReferences, &d4_weight_elements)))) {
+       !checked_product(plan.total_atoms, kGfn2D4MaximumReferences, &d4_weight_elements))) {
     return false;
   }
 
@@ -274,7 +340,7 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
     return false;
   }
 
-  std::array<AddressRange, 41> reads{};
+  std::array<AddressRange, 64> reads{};
   std::size_t read_count = 0u;
   if (!append_range(reads, &read_count, plan.atom_offsets, plan.batch_size + 1) ||
       !append_range(reads, &read_count, plan.atomic_numbers, plan.total_atoms) ||
@@ -314,17 +380,30 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
                      plan.batch_size))) {
     return false;
   }
-  if (needs_d4 &&
-      (!append_range(reads, &read_count, plan.d4_batch.pair_offsets, plan.batch_size + 1) ||
-       !append_range(reads, &read_count, plan.d4_parameters.elements,
-                     plan.d4_parameters.element_count) ||
-       !append_range(reads, &read_count, plan.d4_parameters.references,
-                     plan.d4_parameters.reference_count) ||
-       !append_range(reads, &read_count, plan.d4_parameters.reference_c6,
-                     plan.d4_parameters.reference_c6_elements) ||
-       !append_range(reads, &read_count, plan.d4_cache.pair_data, d4_pair_elements) ||
-       !append_range(reads, &read_count, plan.d4_cache.coordination_numbers, plan.total_atoms))) {
-    return false;
+  if (needs_d4) {
+    const auto& cache = plan.d4_pairlist_cache;
+    const auto& pairs = cache.coordination_pairs;
+    if (!append_range(reads, &read_count, plan.d4_parameters.elements,
+                      plan.d4_parameters.element_count) ||
+        !append_range(reads, &read_count, plan.d4_parameters.references,
+                      plan.d4_parameters.reference_count) ||
+        !append_range(reads, &read_count, plan.d4_parameters.reference_c6,
+                      plan.d4_parameters.reference_c6_elements) ||
+        !append_range(reads, &read_count, cache.coordination_numbers, plan.total_atoms) ||
+        !append_range(reads, &read_count, cache.coordination_generations, plan.batch_size) ||
+        !append_range(reads, &read_count, cache.coordination_eligible_mask, plan.batch_size) ||
+        !append_range(reads, &read_count, pairs.pair_offsets, pairs.pair_offset_count) ||
+        !append_range(reads, &read_count, pairs.pairs, pairs.pair_count) ||
+        !append_range(reads, &read_count, pairs.pair_counts, pairs.pair_count_elements) ||
+        !append_range(reads, &read_count, pairs.neighbor_offsets, pairs.neighbor_offset_count) ||
+        !append_range(reads, &read_count, pairs.neighbor_counts, pairs.neighbor_count_elements) ||
+        !append_range(reads, &read_count, pairs.neighbors, pairs.neighbor_count) ||
+        !append_range(reads, &read_count, pairs.committed_generations,
+                      pairs.committed_generation_count) ||
+        !append_range(reads, &read_count, pairs.eligible_mask, pairs.eligible_mask_count) ||
+        !append_range(reads, &read_count, pairs.active_mask, pairs.active_mask_count)) {
+      return false;
+    }
   }
   /* q is already represented by AES2 when both charge-dependent components run. */
   if (!needs_aes2 &&
@@ -973,10 +1052,15 @@ static cudaError_t add_classical_forces_impl(
     if (status != cudaSuccess) {
       return status;
     }
-    status = add_gfn2_d4_two_body_gradient_cuda(plan.d4_batch, plan.d4_parameters, plan.d4_cache,
-                                                input.atomic_charges, workspace.gradient_scratch,
-                                                workspace.d4_workspace,
-                                                workspace.primitive_device_error, stream);
+    status = geometry_epoch == nullptr
+                 ? add_gfn2_d4_two_body_gradient_pairlist_cuda(
+                       plan.d4_batch, plan.d4_parameters, plan.geometry_generation,
+                       plan.d4_pairlist_cache, input.atomic_charges, workspace.gradient_scratch,
+                       workspace.d4_workspace, workspace.primitive_device_error, stream)
+                 : add_gfn2_d4_two_body_gradient_pairlist_cuda(
+                       plan.d4_batch, plan.d4_parameters, *geometry_epoch, plan.d4_pairlist_cache,
+                       input.atomic_charges, workspace.gradient_scratch, workspace.d4_workspace,
+                       workspace.primitive_device_error, stream);
     if (status != cudaSuccess) {
       return status;
     }
@@ -993,9 +1077,15 @@ static cudaError_t add_classical_forces_impl(
     if (status != cudaSuccess) {
       return status;
     }
-    status = add_gfn2_d4_atm_gradient_cuda(plan.d4_batch, plan.d4_parameters, plan.d4_cache,
-                                           workspace.gradient_scratch, workspace.d4_workspace,
-                                           workspace.primitive_device_error, stream);
+    status = geometry_epoch == nullptr
+                 ? add_gfn2_d4_atm_gradient_pairlist_cuda(
+                       plan.d4_batch, plan.d4_parameters, plan.geometry_generation,
+                       plan.d4_pairlist_cache, workspace.gradient_scratch, workspace.d4_workspace,
+                       workspace.primitive_device_error, stream)
+                 : add_gfn2_d4_atm_gradient_pairlist_cuda(
+                       plan.d4_batch, plan.d4_parameters, *geometry_epoch, plan.d4_pairlist_cache,
+                       workspace.gradient_scratch, workspace.d4_workspace,
+                       workspace.primitive_device_error, stream);
     if (status != cudaSuccess) {
       return status;
     }
