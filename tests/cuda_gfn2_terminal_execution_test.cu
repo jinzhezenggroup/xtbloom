@@ -123,11 +123,12 @@ struct TerminalHostData {
 
   bool initialize() {
     std::string error;
-    if (make_repulsion_plan(2, 5, atom_offsets.data(), atomic_numbers.data(), repulsion, error) !=
-            XTBLOOM_STATUS_SUCCESS ||
+    const auto total_atoms = static_cast<std::int64_t>(atomic_numbers.size());
+    if (make_repulsion_plan(2, total_atoms, atom_offsets.data(), atomic_numbers.data(), repulsion,
+                            error) != XTBLOOM_STATUS_SUCCESS ||
         add_repulsion_cpu(repulsion, positions.data(), expected_repulsion.data(), nullptr, error) !=
             XTBLOOM_STATUS_SUCCESS ||
-        make_d4_plan(2, 5, atom_offsets.data(), atomic_numbers.data(), d4, error) !=
+        make_d4_plan(2, total_atoms, atom_offsets.data(), atomic_numbers.data(), d4, error) !=
             XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
