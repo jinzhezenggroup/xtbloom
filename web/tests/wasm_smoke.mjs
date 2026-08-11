@@ -62,6 +62,12 @@ export async function runWebCases(sitePath) {
     Module.ccall("xtbloom_web_set_optimize_step_cb", "void", ["pointer"], [0]);
   }
 
+  /* Standalone single-point evaluations remain fresh and independent: two
+   * identical calls after an optimization must cost the same SCC iterations as
+   * the very first compute, never inheriting the optimizer's warm state. */
+  const repeated1 = compute(water, 250, true);
+  const repeated2 = compute(water, 250, true);
+
   return {
     version: Module.ccall("xtbloom_web_version", "string", [], []),
     withForces: compute(water, 250, true),
@@ -71,6 +77,8 @@ export async function runWebCases(sitePath) {
     failedOptimize,
     optimized,
     callbackFrames,
+    repeated1,
+    repeated2,
   };
 }
 
@@ -90,6 +98,21 @@ export function validateWebCases(cases) {
   assert.equal(cases.callbackFrames.length, 2);
   assert.equal(cases.callbackFrames[0].coords.length, 9);
   assert.ok(cases.callbackFrames[0].coords.every(Number.isFinite));
+  /* Browser geometry optimization runs SCC warm from the previous converged
+   * electronic state: after the fresh first evaluation, every successive step
+   * must report a warm solve, and per-step SCC iterations must be published
+   * alongside the energy trajectory. */
+  assert.ok(cases.optimized.scc_fresh_solves >= 1);
+  assert.ok(cases.optimized.scc_warm_solves >= 1);
+  assert.equal(cases.optimized.scc_warm_fallbacks, 0);
+  assert.equal(cases.optimized.scc_iterations.length, cases.optimized.trajectory.length);
+  assert.ok(cases.optimized.scc_iterations.every((count) => Number.isInteger(count) && count > 0));
+  assert.ok(Number.isInteger(cases.optimized.scc_iterations_total));
+  /* Standalone single-point evaluations stay fresh and independent: identical
+   * calls before and after the optimization cost the same SCC work. */
+  assert.equal(cases.repeated1.scc_iterations, cases.repeated2.scc_iterations);
+  assert.equal(cases.repeated1.scc_iterations, cases.withForces.scc_iterations);
+  assert.ok(Math.abs(cases.repeated1.energy_Eh - cases.repeated2.energy_Eh) < 1e-10);
   assert.equal(cases.c60.ok, 1);
   assert.equal(cases.c60.scc_converged, 1);
   assert.equal(cases.c60.scc_iterations, C60_REFERENCE.sccIterations);

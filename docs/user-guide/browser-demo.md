@@ -14,6 +14,12 @@ browser; the site does not upload a calculation to a server.
 4. Select **Optimize geometry** to run the demo's L-BFGS adapter and inspect
    its energy trajectory.
 
+Each optimization step after the first is seeded from the previous step's
+converged electronic state (native SCC warm start), so closely related
+successive geometries reconverge faster; a new optimization or a standalone
+single-point calculation always starts fresh and never inherits another run's
+electronic state.
+
 The URL
 [`?smiles=CCO`](https://xtbloom.jinzhezeng.group/?smiles=CCO) waits for the
 SMILES and xTBloom workers, generates ethanol, runs the demo optimizer, and
