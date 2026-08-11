@@ -1,0 +1,18 @@
+Commit: 7442018c0f063970f29e689d481769827110851a
+GPU: NVIDIA GeForce RTX 5090 (sm_120)
+Driver: 580.95.05
+CUDA runtime/toolkit: 12.9.86
+Compute Sanitizer: 2025.2.1.0 build 35969825
+Error exit code: 99
+
+production-memcheck        exit 0   ERROR SUMMARY: 0 errors
+production-racecheck       exit 0   RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)
+production-initcheck       exit 0   ERROR SUMMARY: 0 errors
+production-synccheck       exit 0   ERROR SUMMARY: 0 errors
+eigensolver-full-synccheck exit 99  ERROR SUMMARY: 768 errors, all printed signatures are NVIDIA cuSOLVER lansy_M_stage1+0x19a0 Graph barrier reports
+eigensolver-direct-sync    exit 0   ERROR SUMMARY: 0 errors
+
+The exit-99 row is preserved literally. It matches the owner-approved CUDA
+12.9.1 / Compute Sanitizer 2025.2.1 provider/Graph disposition in issue #140;
+it is not reported as a clean synccheck pass. The changed production
+unrestricted path and the provider-free direct spin-solve control are clean.
