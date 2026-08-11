@@ -149,7 +149,6 @@ struct InputBacking {
       result.d4.reference_c6 = {
           xtbloom::parameters::d4::kReferenceC6.data(),
           static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
-      result.d4.pair_data = {host.d4_cache()->pair_data, host.d4_cache()->pair_data_elements};
       result.d4.coordination_numbers = {host.d4_cache()->coordination_numbers,
                                         host.d4_cache()->coordination_elements};
     }
@@ -294,6 +293,18 @@ int test_all_optional_four_system_upload() {
   CHECK(fixture.device_wavefunction.total_spin_shells == fixture.host.basis_plan().total_shells);
   CHECK(fixture.device_wavefunction.total_spin_atoms == fixture.host.total_atoms());
   CHECK(plan.d4_batch.atomic_number_hash != 0u);
+  CHECK(plan.d4_pairlist_cache.positions != nullptr);
+  CHECK(plan.d4_pairlist_cache.position_elements == 3 * fixture.host.total_atoms());
+  CHECK(plan.d4_pairlist_cache.coordination_numbers != nullptr);
+  CHECK(plan.d4_pairlist_cache.coordination_elements == fixture.host.total_atoms());
+  CHECK(plan.d4_pairlist_cache.coordination_generations == nullptr);
+  CHECK(plan.d4_pairlist_cache.coordination_generation_elements == 0);
+  CHECK(plan.d4_pairlist_cache.coordination_eligible_mask == nullptr);
+  CHECK(plan.d4_pairlist_cache.coordination_eligible_elements == 0);
+  CHECK(all_zero(plan.d4_pairlist_cache.coordination_pairs));
+  CHECK(all_zero(plan.d4_pairlist_cache.two_body_pairs));
+  CHECK(all_zero(plan.d4_pairlist_cache.atm_pairs));
+  CHECK(plan.d4_pairlist_cache.plan_token == kPlanToken);
   std::int64_t minimum_atoms = std::numeric_limits<std::int64_t>::max();
   for (std::size_t system = 0; system < fixture.host.atom_offsets().size() - 1u; ++system) {
     minimum_atoms = std::min(minimum_atoms, fixture.host.atom_offsets()[system + 1u] -
@@ -356,7 +367,7 @@ int test_base_canonical_null_and_transactional_failures() {
   CUDA_CHECK(cudaStreamSynchronize(fixture.stream));
   CHECK(all_zero(plan.d4_batch));
   CHECK(all_zero(plan.d4_parameters));
-  CHECK(all_zero(plan.d4_cache));
+  CHECK(all_zero(plan.d4_pairlist_cache));
   CHECK(all_zero(plan.explicit_point_charge_batch));
   CHECK(all_zero(plan.explicit_point_charge_cache));
   CHECK(all_zero(plan.periodic_batch));

@@ -22,6 +22,7 @@
 #include "data/parameters/d4.hpp"
 #include "model/gfn2/coordination.hpp"
 #include "runtime/nvidia_host_api.h"
+#include "tests/support/cuda_d4_pairlist_fixture.cuh"
 #include "tests/support/gfn2_scc_test_case.hpp"
 
 #define CHECK(condition)                                                                          \
@@ -223,7 +224,6 @@ struct InputBacking {
       result.d4.reference_c6 = {
           xtbloom::parameters::d4::kReferenceC6.data(),
           static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
-      result.d4.pair_data = {host.d4_cache()->pair_data, host.d4_cache()->pair_data_elements};
       result.d4.coordination_numbers = {host.d4_cache()->coordination_numbers,
                                         host.d4_cache()->coordination_elements};
     }
@@ -334,6 +334,7 @@ bool compare_doubles(const char* field, const std::vector<double>& actual, const
 struct ProductionFixture {
   HostSccCase host;
   InputBacking backing;
+  xtbloom::test::cuda::D4CommittedPairListFixture d4_pairlist;
   ProviderHandles handles;
   Gfn2SccSetupTopology topology_owner;
   Gfn2SccSetupInputs inputs_owner;
@@ -437,6 +438,15 @@ struct ProductionFixture {
       std::fprintf(stderr, "production SCC immutable-input upload failed: error=%u field=%u\n",
                    static_cast<unsigned>(input_diagnostic.error),
                    static_cast<unsigned>(input_diagnostic.field));
+      return false;
+    }
+    if (host.d4_plan() != nullptr &&
+        !d4_pairlist.bind(host.atom_offsets(), host.positions(), device_topology,
+                          plan_seed.d4_pairlist_cache.positions,
+                          plan_seed.d4_pairlist_cache.coordination_numbers,
+                          host.options().geometry_generation, plan_seed.d4_pairlist_cache,
+                          handles.stream())) {
+      std::fprintf(stderr, "failure-matrix D4 committed pair-list setup failed\n");
       return false;
     }
 
@@ -1206,7 +1216,7 @@ int test_potential_population_stage_injections() {
       kAES2Cache,
       kOverlapFactor,
       kMullikenReference,
-      kD4PairData,
+      kD4Coordination,
       kPeriodicShift,
       kPointChargeCache,
     } kind;
@@ -1230,9 +1240,9 @@ int test_potential_population_stage_injections() {
       {"Mulliken reference occupation", Gfn2SccStageId::kMulliken,
        static_cast<std::uint32_t>(Gfn2MullikenDeviceError::kNonfiniteReferenceOccupation), false,
        1u, XTBLOOM_STATUS_INTERNAL_ERROR, Injection::Kind::kMullikenReference},
-      {"D4 pair data", Gfn2SccStageId::kD4Potential,
-       static_cast<std::uint32_t>(Gfn2D4DeviceError::kNonfiniteArithmetic), true, 0u,
-       XTBLOOM_STATUS_INTERNAL_ERROR, Injection::Kind::kD4PairData},
+      {"D4 coordination", Gfn2SccStageId::kD4Potential,
+       static_cast<std::uint32_t>(Gfn2D4DeviceError::kInvalidCoordination), true, 0u,
+       XTBLOOM_STATUS_INTERNAL_ERROR, Injection::Kind::kD4Coordination},
       {"periodic shift", Gfn2SccStageId::kPeriodicPotential,
        static_cast<std::uint32_t>(Gfn2PeriodicEmbeddingDeviceError::kNonfiniteShift), true, 0u,
        XTBLOOM_STATUS_INTERNAL_ERROR, Injection::Kind::kPeriodicShift},
@@ -1293,8 +1303,8 @@ int test_potential_population_stage_injections() {
             const_cast<double*>(fixture.binding.plan.mulliken_batch.reference_shell_occupations), 1,
             fixture.handles.stream()));
         break;
-      case Injection::Kind::kD4PairData:
-        CHECK(upload(&nan, const_cast<double*>(fixture.binding.plan.d4_cache.pair_data), 1,
+      case Injection::Kind::kD4Coordination:
+        CHECK(upload(&nan, fixture.binding.plan.d4_pairlist_cache.coordination_numbers, 1,
                      fixture.handles.stream()));
         break;
       case Injection::Kind::kPeriodicShift:

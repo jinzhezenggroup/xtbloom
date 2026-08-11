@@ -1249,16 +1249,19 @@ int test_energy_only_configuration(cudaStream_t stream, std::int32_t device_id) 
 int test_independent_optional_configurations(cudaStream_t stream, std::int32_t device_id) {
   struct Configuration {
     const char* name;
+    std::int64_t batch_size;
     SmallSystemKind system;
     bool d4;
     bool points;
     bool periodic;
   };
-  constexpr std::array<Configuration, 4> configurations{{
-      {"single-atom base", SmallSystemKind::kHe, false, false, false},
-      {"D4 only", SmallSystemKind::kH2, true, false, false},
-      {"point charge only", SmallSystemKind::kHe, false, true, false},
-      {"periodic only", SmallSystemKind::kHe, false, false, true},
+  constexpr std::array<Configuration, 6> configurations{{
+      {"single-atom base", 4, SmallSystemKind::kHe, false, false, false},
+      {"D4 singleton", 1, SmallSystemKind::kHe, true, false, false},
+      {"D4 all-singleton ragged batch", 8, SmallSystemKind::kHe, true, false, false},
+      {"D4 only", 4, SmallSystemKind::kH2, true, false, false},
+      {"point charge only", 4, SmallSystemKind::kHe, false, true, false},
+      {"periodic only", 4, SmallSystemKind::kHe, false, false, true},
   }};
 
   for (const Configuration& configuration : configurations) {
@@ -1266,9 +1269,11 @@ int test_independent_optional_configurations(cudaStream_t stream, std::int32_t d
     HostSccCase host;
     std::string error;
     CHECK(
-        HostSccCase::create(homogeneous_case_options(4, configuration.system, configuration.d4,
-                                                     configuration.points, configuration.periodic),
-                            host, error) == XTBLOOM_STATUS_SUCCESS);
+        HostSccCase::create(
+            homogeneous_case_options(configuration.batch_size, configuration.system,
+                                     configuration.d4, configuration.points,
+                                     configuration.periodic),
+            host, error) == XTBLOOM_STATUS_SUCCESS);
     PublicHostBatch batch = PublicHostBatch::from_host(host, configuration.periodic);
     xtbloom_compute_options_t options = compute_options();
     bool reused = true;
@@ -1279,8 +1284,8 @@ int test_independent_optional_configurations(cudaStream_t stream, std::int32_t d
     }
     CHECK(status == XTBLOOM_STATUS_SUCCESS);
     CHECK(!reused);
-    CHECK(validate_identity(cache.identity(), 4, configuration.d4, configuration.points,
-                            configuration.periodic) == 0);
+    CHECK(validate_identity(cache.identity(), configuration.batch_size, configuration.d4,
+                            configuration.points, configuration.periodic) == 0);
   }
   return 0;
 }
@@ -1346,7 +1351,10 @@ int test_fresh_warm_inference_and_post_scc_refresh(cudaStream_t stream, std::int
   Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
   HostSccCase host;
   std::string error;
-  CHECK(HostSccCase::create(homogeneous_case_options(1, SmallSystemKind::kHe, false, false, false),
+  /* Keep D4 enabled so changed-geometry WARM/FRESH execution proves that the
+   * final committed-position/CN provenance survives the complete SCC and
+   * post-SCC consumer chain. */
+  CHECK(HostSccCase::create(homogeneous_case_options(1, SmallSystemKind::kH2, true, false, false),
                             host, error) == XTBLOOM_STATUS_SUCCESS);
   PublicHostBatch batch = PublicHostBatch::from_host(host, false);
   xtbloom_compute_options_t options = compute_options(false);
@@ -1355,7 +1363,7 @@ int test_fresh_warm_inference_and_post_scc_refresh(cudaStream_t stream, std::int
   CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
   const Gfn2CudaExecutionIdentity initial = cache.identity();
-  CHECK(validate_identity(initial, 1, false, false, false, false) == 0);
+  CHECK(validate_identity(initial, 1, true, false, false, false) == 0);
 
   /* Warm is a real checkpoint mode, not an alias for the setup SAD image. */
   CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kWarm, error) ==
