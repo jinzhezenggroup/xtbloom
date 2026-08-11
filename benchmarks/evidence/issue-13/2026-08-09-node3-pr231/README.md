@@ -7,11 +7,15 @@ selected high-throughput workload, not a general ranking of xTB-family
 libraries.
 
 All measured JSON/CSV artifacts were produced from clean xTBloom commit
-`c9c0a432947f122d25cb91d0a4624af0a3e761ad` on 2026-08-09. JSON is
-authoritative and retains raw samples, complete final force vectors, per-sample
-output checks, convergence state, build/runtime identity, CPU affinity, and GPU
-UUID. CSV is the compact tabular view. The SVG was derived from those measured
-artifacts with `benchmarks/plot_natoms_cross_engine.py` SHA-256
+`c9c0a432947f122d25cb91d0a4624af0a3e761ad` on 2026-08-09. JSON retains raw
+samples, complete final force vectors, per-sample output checks, convergence
+state, build/runtime identity, CPU affinity, and GPU UUID. Issue #348 removed
+seven JSON files over the repository's 1 MiB evidence limit from the current
+tree while retaining their compact CSV views. Their exact historical path,
+byte count, SHA-256, and retrieval revision are recorded in
+`benchmarks/evidence/legacy-large-artifacts.tsv`; under-limit JSON remains in
+this bundle. The SVG was derived from the complete measured artifacts with
+`benchmarks/plot_natoms_cross_engine.py` SHA-256
 `deeaf58589cabc2b9ae71a314492be8a9420e3eeef1ddc00c9728ddeabac9aa9`.
 
 ## Result
@@ -159,14 +163,22 @@ srun -n 1 --gres=gpu:1 -c 16 -w node3 \
   taskset -c 0-15 bash run-evidence-phase-2.sh
 ```
 
-Render the figure from every JSON artifact:
+To render the figure again, first restore the complete historical bundle, then
+pass every JSON artifact to the plotter:
 
 ```bash
+restore=/tmp/issue-13-pr231-evidence
+mkdir -p "$restore"
+git archive cbdf755f27ab02b548783bce3573ecb4385ed167 -- \
+  benchmarks/evidence/issue-13/2026-08-09-node3-pr231 | \
+  tar -x -C "$restore"
+cd "$restore/benchmarks/evidence/issue-13/2026-08-09-node3-pr231"
 artifacts=()
 for artifact in ./*.json; do
   artifacts+=(--artifact "$artifact")
 done
-uv run --script ../../../plot_natoms_cross_engine.py "${artifacts[@]}" \
+uv run --script /path/to/xtbloom/benchmarks/plot_natoms_cross_engine.py \
+  "${artifacts[@]}" \
   --output natoms_cross_engine.svg
 ```
 
@@ -181,4 +193,6 @@ uv run --script ../../../plot_natoms_cross_engine.py "${artifacts[@]}" \
 - The evidence supports the stated coordinates and hardware only; it is not a
   release-wide performance guarantee.
 
-`SHA256SUMS` covers the JSON, CSV, scripts, README, and SVG retained here.
+`SHA256SUMS` covers the JSON, CSV, scripts, README, and SVG retained in the
+current tree. The legacy artifact table independently pins the removed raw
+JSON bytes.

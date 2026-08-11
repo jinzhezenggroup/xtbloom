@@ -127,6 +127,9 @@ textarea:focus, input:focus {
 }
 textarea { resize: vertical; line-height: 1.45; }
 .hint { font-size: 11.5px; color: var(--muted); margin-top: 5px; }
+/* Inline input-validation feedback under the XYZ editor. */
+.hint.ok { color: var(--good); }
+.hint.err { color: var(--bad); }
 .tip { color: var(--accent); cursor: help; margin-left: 4px; }
 
 .grid2 {

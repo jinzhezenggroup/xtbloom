@@ -3492,17 +3492,33 @@ if(XTBLOOM_BUILD_TESTS)
       Threads::Threads
     )
     target_compile_features(xtbloom_scc_reuse_capture PRIVATE cxx_std_17)
-    add_test(
-      NAME xtbloom.gfn2.scc_reuse_smoke
-      COMMAND ${Python3_EXECUTABLE}
-              ${CMAKE_CURRENT_SOURCE_DIR}/tools/scc_reuse/smoke_test.py
-              --capture $<TARGET_FILE:xtbloom_scc_reuse_capture>
-              --spec ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces/specs/h3_plus.spec
-              --analyzer ${CMAKE_CURRENT_SOURCE_DIR}/tools/scc_reuse/scc_reuse_analyze.py
+    # The analyzer intentionally uses NumPy for stable dense linear algebra.
+    # A bare native CMake environment guarantees only an interpreter, so never
+    # register a test that will fail later merely because that interpreter has
+    # no project dependencies. Required CI selects the locked project Python.
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}" -c "import numpy"
+      RESULT_VARIABLE xtbloom_scc_reuse_numpy_status
+      OUTPUT_QUIET
+      ERROR_QUIET
     )
-    xtbloom_configure_linalg_runtime_test(
-      xtbloom_scc_reuse_capture xtbloom.gfn2.scc_reuse_smoke
-    )
+    if(xtbloom_scc_reuse_numpy_status EQUAL 0)
+      add_test(
+        NAME xtbloom.gfn2.scc_reuse_smoke
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/scc_reuse/smoke_test.py
+                --capture $<TARGET_FILE:xtbloom_scc_reuse_capture>
+                --spec ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces/specs/h3_plus.spec
+                --analyzer ${CMAKE_CURRENT_SOURCE_DIR}/tools/scc_reuse/scc_reuse_analyze.py
+      )
+      xtbloom_configure_linalg_runtime_test(
+        xtbloom_scc_reuse_capture xtbloom.gfn2.scc_reuse_smoke
+      )
+    else()
+      message(STATUS
+        "Skipping xtbloom.gfn2.scc_reuse_smoke: ${Python3_EXECUTABLE} cannot import NumPy"
+      )
+    endif()
   endif()
 
   add_executable(xtbloom_parameters_header_test tests/parameters/gfn2_header_test.cpp)

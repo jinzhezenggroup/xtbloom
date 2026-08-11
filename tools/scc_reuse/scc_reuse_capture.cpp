@@ -218,17 +218,17 @@ struct Stage {
 
   xtbloom_status_t build(Geometry& g, const CaseSpec& spec, std::string& err);
   // Re-seed driver/mixer state from the current wavefunction (warm start).
-  void reset_driver_state(Geometry& g);
+  xtbloom_status_t reset_driver_state(Geometry& g, std::string& err);
 };
 
 // Per-iteration diagnostic snapshot.
 struct Snapshot {
   std::uint64_t iteration = 0u;
-  std::vector<double> hamiltonian;   // nao*nao row-major (symmetric)
+  std::vector<double> hamiltonian;   // nao*nao row-major (restricted only)
   std::vector<double> coefficients;  // nspin * nao*nao, spin-major row-major
   std::vector<double> eigenvalues;   // nspin * nao
   std::vector<double> occupations;   // 2 * nao (alpha then beta)
-  std::vector<double> density;       // nao*nao row-major
+  std::vector<double> density;       // nao*nao row-major (restricted only)
   std::uint64_t step_micros = 0u;
   std::uint64_t eigensolve_micros = 0u;
 };
@@ -492,9 +492,8 @@ xtbloom_status_t Stage::build(Geometry& g, const CaseSpec& spec, std::string& er
   return XTBLOOM_STATUS_SUCCESS;
 }
 
-void Stage::reset_driver_state(Geometry& g) {
-  std::string ignored;
-  initialize_scc_driver_state_cpu(driver_plan, g.wfn, mixer_state, driver_state, ignored);
+xtbloom_status_t Stage::reset_driver_state(Geometry& g, std::string& err) {
+  return initialize_scc_driver_state_cpu(driver_plan, g.wfn, mixer_state, driver_state, err);
 }
 
 void emit_int(std::ostream& out, std::int64_t value) { out << value << "\n"; }
@@ -515,14 +514,86 @@ void emit_case(std::ostream& out, const CaseSpec& spec) {
   emit_int(out, spec.unpaired_electrons);
   out << "temperature_kelvin\n";
   emit_value(out, spec.temperature_kelvin);
+  out << "mixer_memory\n";
+  emit_int(out, spec.mixer_memory);
+  out << "mixer_damping\n";
+  emit_value(out, spec.mixer_damping);
   out << "maximum_iterations\n";
   emit_int(out, spec.maximum_iterations);
+}
+
+bool same_trajectory_policy(const CaseSpec& first, const CaseSpec& second, std::string& err) {
+  if (first.nat != second.nat || first.atomic_numbers != second.atomic_numbers ||
+      first.molecular_charge != second.molecular_charge ||
+      first.unpaired_electrons != second.unpaired_electrons) {
+    err = "trajectory target must keep atoms, molecular charge, and spin";
+    return false;
+  }
+  if (first.temperature_kelvin != second.temperature_kelvin ||
+      first.mixer_memory != second.mixer_memory || first.mixer_damping != second.mixer_damping ||
+      first.maximum_iterations != second.maximum_iterations) {
+    err = "trajectory target must keep identical SCC policy fields";
+    return false;
+  }
+  return true;
+}
+
+// Evaluate the physical AO cross overlap <chi_mu(R_source)|chi_nu(R_target)>.
+// The production integral evaluator accepts one molecule, so the diagnostic
+// forms a doubled [source atoms, target atoms] molecule and extracts its
+// off-diagonal block. Basis construction is atom-major, making both halves
+// use identical AO ordering for an unchanged topology.
+xtbloom_status_t evaluate_cross_geometry_overlap(const CaseSpec& source, const CaseSpec& target,
+                                                 std::vector<double>& cross_overlap,
+                                                 std::string& err) {
+  if (source.nat != target.nat || source.atomic_numbers != target.atomic_numbers) {
+    err = "cross-geometry overlap requires identical atom ordering";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::int64_t doubled_atoms = source.nat * 2;
+  std::vector<std::int64_t> atom_offsets{0, doubled_atoms};
+  std::vector<std::int32_t> numbers = source.atomic_numbers;
+  numbers.insert(numbers.end(), target.atomic_numbers.begin(), target.atomic_numbers.end());
+  std::vector<double> positions = source.positions;
+  positions.insert(positions.end(), target.positions.begin(), target.positions.end());
+
+  BasisPlan basis;
+  IntegralPlan integrals;
+  xtbloom_status_t status =
+      make_basis_plan(1, doubled_atoms, atom_offsets.data(), numbers.data(), basis, err);
+  if (status) return status;
+  status = make_integral_plan(basis, integrals, err);
+  if (status) return status;
+  if (basis.total_orbitals % 2 != 0) {
+    err = "doubled trajectory basis has an odd orbital count";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+
+  const std::int64_t nao = basis.total_orbitals / 2;
+  const std::int64_t doubled_nao = basis.total_orbitals;
+  std::vector<double> overlap(static_cast<std::size_t>(integrals.total_matrix_elements), 0.0);
+  AlignedBuffer scratch(integrals.workspace_size_bytes);
+  if (scratch.data == nullptr) return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  status = evaluate_overlap_cpu(basis, integrals, positions.data(), overlap.data(), scratch.data,
+                                scratch.size, err);
+  if (status) return status;
+
+  cross_overlap.resize(static_cast<std::size_t>(nao * nao));
+  for (std::int64_t row = 0; row < nao; ++row) {
+    for (std::int64_t column = 0; column < nao; ++column) {
+      cross_overlap[static_cast<std::size_t>(row * nao + column)] =
+          overlap[static_cast<std::size_t>(row * doubled_nao + nao + column)];
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 // Run the current geometry to a terminal state, streaming the diagnostic
 // document for this geometry to out. Returns the completed iteration count or
 // -1 on a structural failure.
-std::int64_t run_geometry(Geometry& g, Stage& st, std::ostream& out, std::string& err) {
+std::int64_t run_geometry(Geometry& g, Stage& st, std::ostream& out, const char* role,
+                          const char* start_mode, const std::vector<double>* source_cross_overlap,
+                          std::string& err) {
   const std::int64_t nao =
       g.layout.eigenvalues.system_offsets[1] - g.layout.eigenvalues.system_offsets[0];
   const std::int64_t matrix = nao * nao;
@@ -532,8 +603,14 @@ std::int64_t run_geometry(Geometry& g, Stage& st, std::ostream& out, std::string
   const double etemp = st.driver_plan.electronic_temperature();
 
   out << "geometry " << g.geometry_generation << "\n";
+  out << "trajectory_role " << role << "\n";
+  out << "start_mode " << start_mode << "\n";
   out << "nao " << nao << "\n";
   out << "nspin " << nspin << "\n";
+  if (nspin != 1) {
+    err = "issue #343 Phase-1 capture currently supports restricted SCC only";
+    return -1;
+  }
   out << "overlap\n";
   for (std::int64_t r = 0; r < nao; ++r)
     for (std::int64_t c = 0; c < nao; ++c)
@@ -542,8 +619,18 @@ std::int64_t run_geometry(Geometry& g, Stage& st, std::ostream& out, std::string
   for (std::int64_t r = 0; r < nao; ++r)
     for (std::int64_t c = 0; c < nao; ++c)
       emit_value(out, g.h0[static_cast<std::size_t>(matrix_begin + c * nao + r)]);
+  out << "has_cross_overlap " << (source_cross_overlap != nullptr ? 1 : 0) << "\n";
+  if (source_cross_overlap != nullptr) {
+    if (source_cross_overlap->size() != static_cast<std::size_t>(matrix)) {
+      err = "cross-geometry overlap has the wrong matrix extent";
+      return -1;
+    }
+    out << "cross_overlap_from_source\n";
+    for (double value : *source_cross_overlap) emit_value(out, value);
+  }
 
   std::int64_t completed = 0;
+  std::vector<double> terminal_hamiltonian;
   for (std::uint64_t total = 0u; total < st.driver_plan.maximum_iterations(); ++total) {
     const bool active = st.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS &&
                         st.driver_state.converged[0] == 0u;
@@ -570,6 +657,7 @@ std::int64_t run_geometry(Geometry& g, Stage& st, std::ostream& out, std::string
         std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count());
     snap.hamiltonian.assign(st.drv_ws.hamiltonian + matrix_begin,
                             st.drv_ws.hamiltonian + matrix_begin + matrix);
+    terminal_hamiltonian = snap.hamiltonian;
     const std::int64_t coeff_base = g.layout.coefficients.system_offsets[0];
     const std::int64_t eig_base = g.layout.eigenvalues.system_offsets[0];
     const std::int64_t density_base = g.layout.density.system_offsets[0];
@@ -638,12 +726,20 @@ std::int64_t run_geometry(Geometry& g, Stage& st, std::ostream& out, std::string
     ++completed;
   }
 
-  // Terminal eigenpairs as committed in the live wavefunction.
+  // Terminal eigenpairs as committed in the live wavefunction. The matching
+  // effective Hamiltonian is retained so cross-geometry residuals never use
+  // the core Hamiltonian as a proxy for the converged generalized problem.
+  if (terminal_hamiltonian.size() != static_cast<std::size_t>(matrix)) {
+    err = "geometry completed without an effective Hamiltonian snapshot";
+    return -1;
+  }
   const std::int64_t coeff_base = g.layout.coefficients.system_offsets[0];
   const std::int64_t eig_base = g.layout.eigenvalues.system_offsets[0];
   const std::int64_t density_base = g.layout.density.system_offsets[0];
   const std::int64_t occ_base = g.layout.occupations.system_offsets[0];
   out << "converged\n";
+  out << "terminal_effective_hamiltonian\n";
+  for (double value : terminal_hamiltonian) emit_value(out, value);
   out << "coefficients\n";
   for (std::int64_t ch = 0; ch < nspin; ++ch)
     for (std::int64_t r = 0; r < nao; ++r)
@@ -704,6 +800,14 @@ int main(int argc, char** argv) {
   }
   if (mode == "traj") {
     second.name = base_name(second_path);
+    if (!same_trajectory_policy(first, second, err)) {
+      std::cerr << err << "\n";
+      return 2;
+    }
+  }
+  if (first.unpaired_electrons != 0 || (mode == "traj" && second.unpaired_electrons != 0)) {
+    std::cerr << "issue #343 Phase-1 capture currently supports restricted SCC only\n";
+    return 2;
   }
 
   std::ostream* out = &std::cout;
@@ -729,34 +833,72 @@ int main(int argc, char** argv) {
     return 100;
   }
 
-  (*out) << "diagnostic xtbloom-scc-reuse-v1\n";
+  (*out) << "diagnostic xtbloom-scc-reuse-v2\n";
   emit_case(*out, first);
 
-  const std::int64_t first_iters = run_geometry(g, st, *out, err);
+  const std::int64_t first_iters =
+      run_geometry(g, st, *out, mode == "traj" ? "source" : "single", "fresh", nullptr, err);
   if (first_iters < 0) {
     std::cerr << "single-geometry run failed: " << err << "\n";
     return 100;
   }
 
+  std::int64_t warm_iters = -1;
+  std::int64_t fresh_iters = -1;
   if (mode == "traj") {
+    std::vector<double> cross_overlap;
+    if (evaluate_cross_geometry_overlap(first, second, cross_overlap, err) !=
+        XTBLOOM_STATUS_SUCCESS) {
+      std::cerr << "cross-geometry overlap failed: " << err << "\n";
+      return 100;
+    }
     if (g.advance_geometry(second, err) != XTBLOOM_STATUS_SUCCESS) {
       std::cerr << "trajectory advance failed: " << err << "\n";
       return 2;
     }
     // Warm start: keep the converged wavefunction (multipoles seed the next
     // SCC), reinitialize driver/mixer state from it.
-    st.reset_driver_state(g);
+    if (st.reset_driver_state(g, err) != XTBLOOM_STATUS_SUCCESS) {
+      std::cerr << "warm-start state reset failed: " << err << "\n";
+      return 100;
+    }
     emit_case(*out, second);
-    const std::int64_t second_iters = run_geometry(g, st, *out, err);
-    if (second_iters < 0) {
+    warm_iters = run_geometry(g, st, *out, "target_warm", "warm", &cross_overlap, err);
+    if (warm_iters < 0) {
       std::cerr << "second-geometry run failed: " << err << "\n";
       return 100;
     }
-    if (second_iters == 0) {
+    if (warm_iters == 0) {
       std::cerr << "warm-start second geometry completed no iterations\n";
       return 100;
     }
+
+    // Scientific control: run the exact same target geometry and SCC policy
+    // from the zero-multipole FRESH seed. Comparing the source geometry's
+    // iteration count with WARM would conflate warm-start benefit with target
+    // geometry difficulty.
+    Geometry fresh_geometry;
+    if (fresh_geometry.load(second, err) != XTBLOOM_STATUS_SUCCESS) {
+      std::cerr << "fresh-control geometry build failed: " << err << "\n";
+      return 100;
+    }
+    Stage fresh_stage;
+    if (fresh_stage.build(fresh_geometry, second, err) != XTBLOOM_STATUS_SUCCESS) {
+      std::cerr << "fresh-control stage build failed: " << err << "\n";
+      return 100;
+    }
+    emit_case(*out, second);
+    fresh_iters = run_geometry(fresh_geometry, fresh_stage, *out, "target_fresh", "fresh",
+                               &cross_overlap, err);
+    if (fresh_iters <= 0) {
+      std::cerr << "fresh-control target geometry failed: " << err << "\n";
+      return 100;
+    }
   }
-  (*out) << "end-of-diagnostics terminal single_iterations=" << first_iters << "\n";
+  (*out) << "end-of-diagnostics terminal source_iterations=" << first_iters;
+  if (mode == "traj") {
+    (*out) << " warm_iterations=" << warm_iters << " fresh_iterations=" << fresh_iters;
+  }
+  (*out) << "\n";
   return 0;
 }

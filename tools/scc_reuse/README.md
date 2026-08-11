@@ -1,85 +1,104 @@
 # SCC subspace-reuse diagnostics (issue #343, Phase 1)
 
-Experimental investigation tooling for
-[issue #343](https://github.com/anomalyco/gpuxtb4/issues/343): measuring
-whether the occupied eigenspace of one SCC iteration (or one converged
-geometry) can be reused by the next, before committing to a recycled or
-inexact eigensolver.
+Experimental repository-only tooling for
+[issue #343](https://github.com/jinzhezenggroup/xtbloom/issues/343). It
+measures whether an occupied eigenspace from one SCC iteration or geometry can
+seed the next generalized eigensolve. Nothing in this directory is public ABI,
+an installation payload, a conformance golden, or part of the versioned
+`xtbloom-scc-trace-v1` contract.
 
-Nothing here is part of the public C ABI, the versioned
-`xtbloom-scc-trace-v1` contract, or any conformance/acceptance gate.
+The current Phase-1 capture is deliberately **restricted-SCC only**. Inputs
+with nonzero unpaired electrons are rejected before execution. Extending the
+tool to unrestricted SCC requires spin-major Hamiltonian and density capture;
+silently analyzing both spin channels against one matrix is invalid.
 
 ## Components
 
-- `scc_reuse_capture.cpp` — native executable `xtbloom_scc_reuse_capture`
-  (built from this directory and registered in `CMakeLists.txt`). It drives
-  the production CPU GFN2 SCC driver through a corpus-style `case.spec` and
-  streams, per completed iteration: the effective Hamiltonian and density, the
-  generalized eigenpairs `(C, eps)` with `C^T S C = I`, the overlap `S`, the
-  core Hamiltonian `H0`, driver-step wall time, and an isolated
-  eigensolve-only wall time obtained by re-running the production
-  `solve_eigensystem_cpu` on the same `H_k`.
-- `scc_reuse_analyze.py` — reads the stream and computes the Phase-1 metrics
-  below; emits a JSON report and a console summary.
-- `prepare_cases.py` — regenerates the diagnostic `case.spec` inputs in
-  `cases/` (ASE g2 molecules, a deterministic trans-planar alkane, and the
-  committed `tmacl.xyz` fixture). The five conformance corpus specs in
-  `data/conformance/scc-traces/specs/` are consumed directly.
-- `cases/` — generated `.spec` inputs (no goldens; exact geometry is
-  informational only).
+- `scc_reuse_capture.cpp` builds the internal
+  `xtbloom_scc_reuse_capture` executable. It drives the production CPU GFN2
+  SCC driver and records the effective Hamiltonian, generalized eigenpairs,
+  overlap, density, and isolated eigensolve timing at every completed
+  iteration.
+- `scc_reuse_analyze.py` validates the eigenpairs and produces compact JSON
+  metrics.
+- `prepare_cases.py` generates analytic benzene/pyridine inputs, a validated
+  all-trans C12H26 geometry, a deterministic perturbed C12H26 target, and the
+  committed TMAC/Cl diagnostic input. The ring and alkane coordinates are
+  constructed directly; no external molecule database is copied.
+- `smoke_test.py` covers single and trajectory capture, cross-AO overlap,
+  same-target WARM/FRESH control, C12H26 formula/connectivity, SCC-policy
+  mismatch rejection, and restricted-only rejection.
 
-## Usage
+## Capture protocol
 
 ```bash
-# single geometry, stream to stdout but also save
-build/issue343-cpu/xtbloom_scc_reuse_capture single <case.spec> out.diag
-# warm-start trajectory: first geometry to convergence, then advance to a
-# second geometry keeping the converged wavefunction as the SCC seed
-build/issue343-cpu/xtbloom_scc_reuse_capture traj <a.spec> <b.spec> out.diag
+# One FRESH geometry.
+build/issue343-cpu/xtbloom_scc_reuse_capture \
+  single <case.spec> out.diag
 
-python3 tools/scc_reuse/scc_reuse_analyze.py out.diag [--report out.json]
+# Source FRESH, target WARM, then the exact same target FRESH control.
+build/issue343-cpu/xtbloom_scc_reuse_capture \
+  traj <source.spec> <target.spec> out.diag
+
+python3 tools/scc_reuse/scc_reuse_analyze.py \
+  out.diag --report out.json
 ```
 
-The capture requires a configured CPU LP64 eigensolver runtime (same build
-gate as `xtbloom_scc_trace_capture`).
+Trajectory specifications must have identical atoms, charge, spin,
+temperature, mixer memory/damping, and maximum iterations. Only coordinates
+and geometry-dependent point-charge values may change. This matches the
+strict-WARM requirement that the compute policy remain fixed.
 
-## Metrics
+The `xtbloom-scc-reuse-v2` trajectory contains three explicit roles:
 
-For consecutive SCC iterations (previous `k-1` → current `k`):
+1. `source` / `fresh`;
+2. `target_warm` / `warm`;
+3. `target_fresh` / `fresh`.
 
-- `rel_dH`, `rel_dP` — relative Frobenius change of the effective Hamiltonian
-  and the density matrix;
-- `subspace_capture_fraction` — `sum_i cos^2(theta_i) / n_occ,new`, the
-  fraction of the new occupied subspace reproduced by the previous one
-  (principal angles in the S metric via the SVD of
-  `C_prev_occ^T S C_cur_occ`);
-- `subspace_max_angle_deg` — the largest principal angle between the two
-  occupied subspaces;
-- `rel_residual_occupied` — `||H_k C_prev - S C_prev diag(eps_prev)||_F` over
-  the occupied columns, relative to `||H_k||_F`. This mixes subspace capture
-  with eigenvalue drift;
-- `rr_eigenvalue_max_err` — the max absolute error of the Rayleigh-Ritz
-  eigenvalues `eigvals(C_prev_occ^T H_k C_prev_occ)` against the new occupied
-  eigenvalues. This is the decisive number: when the recycled subspace is
-  captured, it is ~0 even if individual eigenvalues drifted, because the cheap
-  RR rediagonalization inside the recycled subspace cures the drift;
-- `step_micros` / `eigensolve_micros` — driver-step and isolated-eigensolve
-  wall time (CPU, whole-step proxy; not a CUDA sytrd microbenchmark).
+Iteration reduction is reported only between roles 2 and 3, which use the
+same target geometry and policy.
 
-For trajectory documents, the same quantities (plus `rel_dH0`) are computed
-between the converged states of consecutive geometries.
+## Same-geometry metrics
 
-## Reading the results
+For consecutive SCC iterations, the AO basis and overlap are unchanged:
 
-Bundles of captures and analysis live under
-`benchmarks/evidence/issue-343/`. The headline Phase-1 finding so far: in
-converged restricted GFN2 SCC, the occupied subspace is already ≥0.999
-captured by iteration ~4–6 of 9–17, the Rayleigh-Ritz eigenvalue error drops
-below 1e-6 well before energy convergence, and the first few iterations
-(including the zero-charge-seeded first solve) are the only ones requiring a
-full diagonalization. A non-converging sloshing case (tmacl at 300 K) keeps a
-0.95–1.0 capture with small principal angles but shows periodic one-orbital
-frontier switches — the exact situation a recycled solver must detect and
-fall back from. Consecutive-geometry warm starts converge faster and the
-converged occupied subspace transfers across geometries nearly unchanged
-(>0.99 capture for a small MD-style step).
+- `rel_dH` and `rel_dP` are relative Frobenius changes;
+- `subspace_capture_fraction` and `subspace_max_angle_deg` come from the SVD
+  of `C_prev,occ^T S C_cur,occ`;
+- `rel_residual_occupied` applies the previous occupied eigenpairs to the new
+  effective Hamiltonian;
+- `rr_eigenvalue_max_err` rediagonalizes that Hamiltonian in the previous
+  occupied subspace;
+- `step_micros` and `eigensolve_micros` are development CPU timings, not a
+  CUDA performance claim.
+
+## Cross-geometry metrics
+
+Atom-centered basis functions move with their atoms, so `C1^T S1 C2` is not a
+cross-geometry overlap. The capture evaluates the physical cross-AO matrix
+
+```text
+S12(mu,nu) = <chi_mu(R1) | chi_nu(R2)>
+```
+
+by constructing a diagnostic doubled `[source atoms, target atoms]` molecule
+and extracting the off-diagonal block from the production overlap evaluator.
+Physical principal angles use `C1,occ^T S12 C2,occ`. Density-operator change
+uses `S1`, `S2`, `S12`, and `S21`; raw `P2-P1` is not interpreted across
+different AO bases.
+
+The algorithmic reuse residual is separate from that physical angle. Source
+occupied coefficients retain their atom/AO labels on the target geometry,
+are reorthonormalized in `S2`, Rayleigh--Ritz rotated with the **target terminal
+effective SCC Hamiltonian**, and tested against that target generalized
+eigenproblem. The analyzer rejects ill-conditioned transports, changed
+occupied dimensions, missing cross overlaps, and nonconverged endpoints.
+
+## Evidence discipline
+
+Final evidence must be generated from a clean committed tooling revision.
+Record the full source revision, complete capture-binary SHA-256, build/runtime
+identity, exact commands, and all retained input/report hashes. Reproducible raw
+diagnostics that exceed the repository's 1 MiB per-file or 16 MiB aggregate
+budget stay untracked; compact reports and reproduction metadata remain in
+Git. `SHA256SUMS` hashes every retained artifact except itself.

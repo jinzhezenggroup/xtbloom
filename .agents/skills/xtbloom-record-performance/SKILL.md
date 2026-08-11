@@ -70,7 +70,7 @@ benchmarks/evidence/issue-<N>/<date>-<machine>/
   derived-profiler-reports
 ```
 
-Treat JSON with raw samples and identities as authoritative; keep CSV as a compact view. Do not edit harness artifacts after generation. In `README.md`, record exact argv, environment boundary, build/source revisions, limitations, correctness qualification, and which requested coordinates were unavailable. Hash every retained artifact and verify `SHA256SUMS` after the bundle is final.
+Git retains only compact evidence: no tracked file under `benchmarks/evidence/` may exceed 1 MiB, and the complete tracked directory may not exceed 16 MiB. Never add a benchmark path to the large-file hook exclusion. If a reproducible raw harness artifact exceeds either budget, omit it by default and retain the generated compact result, exact argv, environment boundary, clean build/source and binary identities, input hashes, limitations, correctness qualification, and unavailable coordinates needed to reproduce the claim. Do not shrink the requested matrix or hand-edit a harness artifact to fit the budget. External archival is optional only when the exact raw bytes are themselves necessary evidence or reproduction is not practical; when used, record and independently verify its immutable URL, byte count, SHA-256, producing revision, and retrieval command. Hash every retained repository artifact and verify `SHA256SUMS` after the bundle is final.
 
 If an old runner or external source produced the data, retain or hash-pin that exact source and command. Never claim the current runner can reproduce a historical workload unless it actually can.
 
