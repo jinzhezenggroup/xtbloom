@@ -316,14 +316,13 @@ static xtbloom_status_t compute_adaptive(xtbloom_context_t* context, const xtblo
     status = xtbloom_compute(context, batch, options, result);
   }
   if (stats != NULL) {
-    if (want_warm) {
+    if (used_warm) {
       ++stats->warm_solves;
-      if (!used_warm) {
-        ++stats->warm_fallbacks;
-        ++stats->fresh_solves;
-      }
     } else {
       ++stats->fresh_solves;
+      if (want_warm) {
+        ++stats->warm_fallbacks;
+      }
     }
     const int32_t* iterations = (const int32_t*)result->scc_iterations.data;
     if (iterations != NULL) {

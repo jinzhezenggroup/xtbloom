@@ -328,9 +328,16 @@ static int test_warm_rejection_falls_back_to_fresh(void) {
   CHECK(strstr(actual, "\"ok\":1") != NULL);
   CHECK(mock_warm_rejections >= 1);
   CHECK(mock_fresh_solves >= 2);
-  /* the JSON optimizer stats must expose the transparent fallback count */
-  CHECK(strstr(actual, "\"scc_warm_fallbacks\":") != NULL);
-  CHECK(strstr(actual, "\"scc_warm_fallbacks\":0") == NULL);
+  CHECK(mock_warm_solves == 0);
+  /* Rejected WARM requests are fallbacks, not warm SCC solves. Reconcile the
+   * published diagnostics with the mock's accepted native solve counters. */
+  char want[64];
+  snprintf(want, sizeof(want), "\"scc_warm_solves\":%d", mock_warm_solves);
+  CHECK(strstr(actual, want) != NULL);
+  snprintf(want, sizeof(want), "\"scc_fresh_solves\":%d", mock_fresh_solves);
+  CHECK(strstr(actual, want) != NULL);
+  snprintf(want, sizeof(want), "\"scc_warm_fallbacks\":%d", mock_warm_rejections);
+  CHECK(strstr(actual, want) != NULL);
   return 0;
 }
 

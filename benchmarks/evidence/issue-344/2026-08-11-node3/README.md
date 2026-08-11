@@ -20,9 +20,9 @@ rejects WARM (changed identity or no converged predecessor).
 `benchmarks/natoms_scaling.py` FRESH vs WARM per-call latency and SCC
 iteration counts on deterministic alkanes (identical geometry per cell,
 single thread, 10 warmups, 30 repetitions; WARM derives its checkpoint from
-one untimed FRESH seed). `warm.json` is validated against `fresh.json` with
-the conformance cross-engine energy (`5e-7 Eh`) and force (`5e-6 Eh/bohr`)
-gates and is marked `eligible`.
+one untimed FRESH seed). `natoms-warm.json` is validated against
+`natoms-fresh.json` with the conformance cross-engine energy (`5e-7 Eh`) and
+force (`5e-6 Eh/bohr`) gates and is marked `eligible`.
 
 Commands:
 
@@ -53,10 +53,10 @@ Median latency (ms):
 
 | molecules | natoms | FRESH | WARM | speedup |
 | --- | --- | --- | --- | --- |
-| C10H22 | 32 | 19.01 | 6.27 | 3.0x |
-| C20H42 | 62 | 74.05 | 20.95 | 3.5x |
-| C32H66 | 98 | 192.83 | 48.27 | 4.0x |
-| C40H82 | 122 | 314.96 | 73.60 | 4.3x |
+| C10H22 | 32 | 19.096 | 6.272 | 3.04x |
+| C20H42 | 62 | 74.180 | 21.059 | 3.52x |
+| C32H66 | 98 | 193.150 | 48.497 | 3.98x |
+| C40H82 | 122 | 314.561 | 73.866 | 4.26x |
 
 Raw samples, energy, force vectors, convergence flags, per-solve SCC counts,
 and eligibility are retained in `natoms-{fresh,warm}.json`.
@@ -87,14 +87,14 @@ Median end-to-end optimization wall time (single-threaded native CPU):
 
 | molecule | natoms | before (ms) | after (ms) | speedup |
 | --- | --- | --- | --- | --- |
-| water (5 steps) | 3 | 1.842 | 1.392 | 1.32x |
-| ethanol | 9 | 15.663 | 13.674 | 1.15x |
-| C10H22 | 32 | 136.798 | 108.954 | 1.26x |
-| C20H42 | 62 | 450.650 | 348.234 | 1.29x |
+| water (5 steps) | 3 | 1.834 | 1.395 | 1.31x |
+| ethanol | 9 | 15.640 | 13.676 | 1.14x |
+| C10H22 | 32 | 136.351 | 109.227 | 1.25x |
+| C20H42 | 62 | 451.292 | 347.870 | 1.30x |
 
 "After" runs report `scc_iterations_total` (all solves, including the fresh
 first step and any line-search trials): water 41, ethanol 93, C10H22 64,
-C20H42 57 over 6-11 solves, with exactly 1 `scc_fresh_solves` and
+C20H42 57 over 7-12 SCC solves, with exactly 1 `scc_fresh_solves` and
 `scc_warm_fallbacks = 0` in every run. Both variants publish final energies
 that agree to `~1e-7..1e-6 Eh` (SCC convergence tolerance), i.e. the warm
 trajectory is numerically consistent with the fresh path. Final
@@ -117,7 +117,7 @@ water is therefore reported at 5 steps where both variants are valid.
   and standalone single-point independence in that CI.
 - The `natoms` harness measures identical repeated geometry (the strongest
   warm case). The optimizer's successive steps change geometry, so its warm
-  benefit is smaller but still ~15-30% end-to-end on these molecules.
+  benefit is smaller but still ~13-24% end-to-end on these molecules.
 - `driver/optbench.c` is an ad hoc reproduction of the real adapter flow for
   the missing wasm coordinate; the authoritative browser tests are
   `xtbloom.web.adapter` (host C mock) and `web/tests/wasm_smoke.mjs` (CI).

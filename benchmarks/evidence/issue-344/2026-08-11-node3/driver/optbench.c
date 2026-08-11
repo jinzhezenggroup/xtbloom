@@ -43,7 +43,6 @@ int main(int argc, char** argv) {
     }
   }
   double* samples = (double*)malloc((size_t)reps * sizeof(double));
-  int result_ok = 0;
   long long scc_total = 0;
   int warm_solves = -1, fresh_solves = -1, fallbacks = -1;
   double energy_final = 0.0;
@@ -53,8 +52,13 @@ int main(int argc, char** argv) {
     const char* s = xtbloom_web_optimize(xyz, charge, unpaired, 0.0, 1e-8, 1e-5, scc_max, opt_max,
                                          grad_tol, 0.4);
     samples[r] = now_ms() - t0;
-    result_ok = strstr(s, "\"ok\":1") != NULL;
-    const char* h;
+    /* A publishable sample set requires every timed repetition to succeed;
+     * fail immediately so a later success cannot conceal an earlier error. */
+    if (strstr(s, "\"ok\":1") == NULL) {
+      fprintf(stderr, "timed repetition %d failed: %s\n", r, s);
+      free(samples);
+      return 1;
+    }
 #define FIELD(name)                                                                       \
   do {                                                                                    \
     const char* p = strstr(s, "\"" name "\":");                                           \
@@ -92,11 +96,10 @@ int main(int argc, char** argv) {
 #undef FIELD
   }
   printf(
-      "{\"ok\":%d,\"converged\":%d,\"iterations\":%d,\"scc_iterations_total\":%lld,"
+      "{\"ok\":1,\"converged\":%d,\"iterations\":%d,\"scc_iterations_total\":%lld,"
       "\"scc_warm_solves\":%d,\"scc_fresh_solves\":%d,\"scc_warm_fallbacks\":%d,"
       "\"energy_final_Eh\":%.12g,\"samples_ms\":[",
-      result_ok, converged, iterations, scc_total, warm_solves, fresh_solves, fallbacks,
-      energy_final);
+      converged, iterations, scc_total, warm_solves, fresh_solves, fallbacks, energy_final);
   for (int r = 0; r < reps; ++r) {
     if (r) printf(",");
     printf("%.6f", samples[r]);
