@@ -1251,17 +1251,21 @@ int test_independent_optional_configurations(cudaStream_t stream, std::int32_t d
     const char* name;
     std::int64_t batch_size;
     SmallSystemKind system;
-    bool d4;
+    bool fixture_d4;
+    bool expect_runtime_d4;
     bool points;
     bool periodic;
   };
+  /* The public runtime derives D4 applicability from topology: an all-singleton
+   * batch has exactly zero two-body/ATM contribution and keeps the D4 plan
+   * canonical-empty even when the richer internal fixture owns D4 sources. */
   constexpr std::array<Configuration, 6> configurations{{
-      {"single-atom base", 4, SmallSystemKind::kHe, false, false, false},
-      {"D4 singleton", 1, SmallSystemKind::kHe, true, false, false},
-      {"D4 all-singleton ragged batch", 8, SmallSystemKind::kHe, true, false, false},
-      {"D4 only", 4, SmallSystemKind::kH2, true, false, false},
-      {"point charge only", 4, SmallSystemKind::kHe, false, true, false},
-      {"periodic only", 4, SmallSystemKind::kHe, false, false, true},
+      {"single-atom base", 4, SmallSystemKind::kHe, false, false, false, false},
+      {"D4 singleton elision", 1, SmallSystemKind::kHe, true, false, false, false},
+      {"D4 all-singleton ragged elision", 8, SmallSystemKind::kHe, true, false, false, false},
+      {"D4 only", 4, SmallSystemKind::kH2, true, true, false, false},
+      {"point charge only", 4, SmallSystemKind::kHe, false, false, true, false},
+      {"periodic only", 4, SmallSystemKind::kHe, false, false, false, true},
   }};
 
   for (const Configuration& configuration : configurations) {
@@ -1269,11 +1273,10 @@ int test_independent_optional_configurations(cudaStream_t stream, std::int32_t d
     HostSccCase host;
     std::string error;
     CHECK(
-        HostSccCase::create(
-            homogeneous_case_options(configuration.batch_size, configuration.system,
-                                     configuration.d4, configuration.points,
-                                     configuration.periodic),
-            host, error) == XTBLOOM_STATUS_SUCCESS);
+        HostSccCase::create(homogeneous_case_options(configuration.batch_size, configuration.system,
+                                                     configuration.fixture_d4, configuration.points,
+                                                     configuration.periodic),
+                            host, error) == XTBLOOM_STATUS_SUCCESS);
     PublicHostBatch batch = PublicHostBatch::from_host(host, configuration.periodic);
     xtbloom_compute_options_t options = compute_options();
     bool reused = true;
@@ -1284,8 +1287,9 @@ int test_independent_optional_configurations(cudaStream_t stream, std::int32_t d
     }
     CHECK(status == XTBLOOM_STATUS_SUCCESS);
     CHECK(!reused);
-    CHECK(validate_identity(cache.identity(), configuration.batch_size, configuration.d4,
-                            configuration.points, configuration.periodic) == 0);
+    CHECK(validate_identity(cache.identity(), configuration.batch_size,
+                            configuration.expect_runtime_d4, configuration.points,
+                            configuration.periodic) == 0);
   }
   return 0;
 }
@@ -1364,6 +1368,13 @@ int test_fresh_warm_inference_and_post_scc_refresh(cudaStream_t stream, std::int
   CHECK(!reused);
   const Gfn2CudaExecutionIdentity initial = cache.identity();
   CHECK(validate_identity(initial, 1, true, false, false, false) == 0);
+  RefreshSnapshot initial_refresh;
+  CHECK(download_refresh_snapshot(cache.identity(), stream, initial_refresh) == 0);
+  CHECK(initial_refresh.epoch == 1u);
+  CHECK(initial_refresh.committed[0] == 1u);
+  CHECK(initial_refresh.eligible[0] == 1u);
+  CHECK(initial_refresh.factors[0] == 1u);
+  CHECK(initial_refresh.factor_statuses[0] == 0u);
 
   /* Warm is a real checkpoint mode, not an alias for the setup SAD image. */
   CHECK(cache.execute_inference_async(Gfn2CudaSccStartMode::kWarm, error) ==

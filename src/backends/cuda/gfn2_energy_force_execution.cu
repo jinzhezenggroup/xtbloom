@@ -690,6 +690,10 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
       diagnostics.classical_device_error == nullptr ||
       diagnostics.force_composition_system_errors == nullptr ||
       diagnostics.force_composition_plan_error == nullptr ||
+      /* D4 widens the physical builder to a 50-bohr superset while this CN
+       * consumer keeps its own 25-bohr role cutoff. The builder descriptor
+       * must therefore match the committed view's recorded builder cutoff,
+       * not the consumer cutoff. */
       ((plan.pairlist_committed.plan_token != 0u || plan.pairlist_batch.plan_token != 0u) &&
        (plan.pairlist_committed.plan_token != token || plan.pairlist_batch.plan_token != token ||
         plan.pairlist_batch.batch_size != batch_size ||
@@ -697,7 +701,7 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
         plan.pairlist_batch.atom_offsets != plan.integral_batch.atom_offsets ||
         plan.pairlist_batch.max_pairs_per_system <= 0 ||
         plan.pairlist_batch.max_neighbors_per_atom <= 0 ||
-        plan.pairlist_batch.cutoff != kDefaultPairlistCutoffBohr ||
+        plan.pairlist_batch.cutoff != plan.pairlist_committed.list_builder_cutoff_bohr ||
         plan.pairlist_committed.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
         plan.pairlist_committed.state != Gfn2PairListState::kCommitted ||
         plan.pairlist_committed.role != Gfn2PairListRole::kCoordination ||
