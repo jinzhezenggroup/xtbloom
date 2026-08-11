@@ -728,6 +728,18 @@ void TraceBatch::set_replay_context(std::int64_t system, std::uint64_t logical_i
   if (logical_index > 1u) {
     stage_->driver_state.iterations[system] = logical_index - 1u;
     stage_->driver_state.free_energies[system] = previous_energy;
+    /* Historical trace fixtures predate adaptive eigensolver provenance. A
+     * replayed prefix represents ordinary committed dense iterations, so
+     * reconstruct the new internal counters instead of leaving a state that
+     * could never have been produced by the driver. */
+    stage_->driver_state.eigensolver_geometry_generations[system] =
+        geometry_->geom.geometry_generation;
+    stage_->driver_state.full_eigensolves[system] = logical_index - 1u;
+    stage_->driver_state.recycled_eigensolves[system] = 0u;
+    stage_->driver_state.recycle_fallbacks[system] = 0u;
+    stage_->driver_state.last_eigensolver_modes[system] = EigensolverSolveMode::kFull;
+    stage_->driver_state.dense_confirmations_remaining[system] = 0u;
+    stage_->driver_state.recycle_cooldowns_remaining[system] = 0u;
   }
 }
 
