@@ -2,12 +2,15 @@
 
 Host: `node3`, AMD EPYC 7K62 48-Core Processor, locked to CPU 0 via
 `taskset -c 0`, one-threaded CPU backend to mirror the single-threaded wasm
-path. Library: `build/issue344-cpu/libxtbloom.so` built from commit
-`a95d1a4859f74d57bfb8b7784c36ab437de926f4` (dirty=false) with the host-isolated
-MKL 2026.0.0 LP64 shim provider. The EFI/CPU numbers below are native single-
-threaded CPU samples; the WebAssembly build is ~10-20x slower per operation,
-but the SCC-iteration reduction and relative speedup carry over because the
-web path runs the same CPU equations through the same public C ABI.
+path. The selected `libxtbloom.so` has SHA-256
+`8b430df1a56076bf2439dca8ba7609468c92de13e9628d87a05f98262f5d8829` and uses
+the host-isolated MKL 2026.0.0 LP64 shim provider. The `natoms` JSON records
+its original clean source revision `e1532f87c3448f44c65be10176a83df3f6906a6d`;
+the reviewed end-to-end rerun rebuilt byte-identical library bytes from clean
+commit `cd50f22e5d83d5da26b923b1101cf335f7269f25`. The numbers below are native
+single-threaded CPU samples; the WebAssembly build is ~10-20x slower per
+operation, but the SCC-iteration reduction and relative speedup carry over
+because the web path runs the same CPU equations through the same public C ABI.
 
 Warm-start policy measured: the browser optimizer's first evaluation starts
 SCC fresh; every successive evaluation with the same topology/charge/spin/
@@ -64,33 +67,60 @@ and eligibility are retained in `natoms-{fresh,warm}.json`.
 ## End-to-end browser optimizer before/after (host-compiled adapter)
 
 The real L-BFGS adapter (`web/xtbloom_web.c`) was compiled against the same
-`libxtbloom.so` twice: the "before" variant from the parent commit (every SCC
-solve FRESH) and the "after" variant from this commit (FRESH then WARM).
-Both process identical XYZ (angstrom) inputs, options (neutral singlet,
-electronic temperature default, etol `1e-8`, qtol `1e-5`, scc max 250,
-max move 0.4), 10 or 5 L-BFGS steps with gradient tolerance `1e-12`, 10
-warmups and 30 timed repetitions, `taskset -c 0`. Driver source and molecule
-inputs are in `driver/`.
+`libxtbloom.so` twice: the "before" variant uses `web/xtbloom_web.c` from
+`cbdf755f27ab02b548783bce3573ecb4385ed167` (every SCC solve FRESH), while the
+"after" variant uses reviewed commit
+`cd50f22e5d83d5da26b923b1101cf335f7269f25` (FRESH then WARM). Both process
+identical XYZ (angstrom) inputs, options (neutral singlet, electronic
+temperature default, etol `1e-8`, qtol `1e-5`, scc max 250, max move 0.4), 10
+or 5 L-BFGS steps with gradient tolerance `1e-12`, 10 warmups and 30 timed
+repetitions, `taskset -c 0`. The corrected driver rejects the complete sample
+set immediately if any timed repetition returns `ok:0`. Driver source and
+molecule inputs are in `driver/`.
 
-Build (replace `BEFORE` with the parent-commit `web/xtbloom_web.c`):
+Build and water commands (set `AFTER_SOURCE` and `BEFORE_SOURCE` to clean
+detached worktrees at the recorded revisions; the other molecules change only
+XYZ and use 10 requested optimization steps):
 
 ```bash
-gcc -O2 -std=gnu11 -I. -Iinclude -Ibuild/issue344-cpu/generated/include \
-  driver/optbench.c -o build/issue344-cpu/optbench_after \
-  -Lbuild/issue344-cpu -lxtbloom -lm
-LD_LIBRARY_PATH=build/issue344-cpu \
-  taskset -c 0 build/issue344-cpu/optbench_after \
-  driver/water.xyz 0 0 250 5 1e-12 10 30
+AFTER_SOURCE=/path/to/clean/xtbloom-after
+BEFORE_SOURCE=/path/to/clean/xtbloom-before
+cd "$AFTER_SOURCE"
+cmake -S . -B build/issue344-review-cpu -G Ninja \
+  -DXTBLOOM_ENABLE_CUDA=OFF -DBUILD_SHARED_LIBS=ON \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DXTBLOOM_CPU_LINALG_LIBRARY=/home/jzzeng/.cache/rattler/cache/bld/pkgs/mkl-2026.0.0-h0e700b2_915/lib/libmkl_rt.so
+cmake --build build/issue344-review-cpu \
+  --target xtbloom xtbloom_mkl_lp64_shim --parallel
+gcc -O2 -std=gnu11 -I. -Iinclude \
+  -Ibuild/issue344-review-cpu/generated/include \
+  benchmarks/evidence/issue-344/2026-08-11-node3/driver/optbench.c \
+  -o build/issue344-review-cpu/optbench_after \
+  -Lbuild/issue344-review-cpu -lxtbloom -lm
+gcc -O2 -std=gnu11 \
+  -I"$BEFORE_SOURCE" \
+  -I. -Iinclude -Ibuild/issue344-review-cpu/generated/include \
+  benchmarks/evidence/issue-344/2026-08-11-node3/driver/optbench.c \
+  -o build/issue344-review-cpu/optbench_before \
+  -Lbuild/issue344-review-cpu -lxtbloom -lm
+LD_LIBRARY_PATH=build/issue344-review-cpu taskset -c 0 \
+  build/issue344-review-cpu/optbench_after \
+  benchmarks/evidence/issue-344/2026-08-11-node3/driver/water.xyz \
+  0 0 250 5 1e-12 10 30
+LD_LIBRARY_PATH=build/issue344-review-cpu taskset -c 0 \
+  build/issue344-review-cpu/optbench_before \
+  benchmarks/evidence/issue-344/2026-08-11-node3/driver/water.xyz \
+  0 0 250 5 1e-12 10 30
 ```
 
 Median end-to-end optimization wall time (single-threaded native CPU):
 
 | molecule | natoms | before (ms) | after (ms) | speedup |
 | --- | --- | --- | --- | --- |
-| water (5 steps) | 3 | 1.834 | 1.395 | 1.31x |
-| ethanol | 9 | 15.640 | 13.676 | 1.14x |
-| C10H22 | 32 | 136.351 | 109.227 | 1.25x |
-| C20H42 | 62 | 451.292 | 347.870 | 1.30x |
+| water (5 steps) | 3 | 1.834 | 1.399 | 1.31x |
+| ethanol | 9 | 15.562 | 13.595 | 1.14x |
+| C10H22 | 32 | 135.954 | 108.567 | 1.25x |
+| C20H42 | 62 | 448.348 | 346.155 | 1.30x |
 
 "After" runs report `scc_iterations_total` (all solves, including the fresh
 first step and any line-search trials): water 41, ethanol 93, C10H22 64,
