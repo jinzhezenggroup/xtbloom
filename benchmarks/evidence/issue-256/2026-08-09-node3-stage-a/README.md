@@ -23,9 +23,13 @@ measured from `fa0513302a9b4e95c6dca6c57cd8e064b422d6a4`.
   `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, dynamic
   threading, MKL interface, or MKL threading-layer environment variable set.
 
-Each JSON artifact embeds the complete compiler, CMake cache, dependency,
+Each complete JSON artifact embeds the compiler, CMake cache, dependency,
 source revision, library hash, hardware, affinity, argv, and environment
-identity used for its run.
+identity used for its run. Issue #348 removed the over-1-MiB
+`xtbloom-warm.json` file from the current tree while retaining its compact CSV
+view. Its exact historical path, byte count, SHA-256, and retrieval revision
+are recorded in `benchmarks/evidence/legacy-large-artifacts.tsv`; the other
+under-limit JSON artifacts remain here.
 
 ## Protocol
 
@@ -40,8 +44,9 @@ Every retained row is `available`, has eligible clean-source provenance, and
 passes correctness. The within-engine gates are `1e-8` Hartree for energy and
 the manifest primary `5e-7` Hartree/bohr for force. WARM additionally validates
 every raw sample against `xtbloom-fresh.json` under the live cross-engine gates.
-The authoritative JSON retains every timing, iteration count, convergence
-state, energy, and complete force vector; CSV is the compact view.
+The complete JSON retains every timing, iteration count, convergence state,
+energy, and force vector; CSV is the compact view. The legacy artifact table
+pins the removed WARM JSON bytes.
 
 ## Results
 
@@ -87,13 +92,13 @@ instrumented public-call median was 1283.33 ms; the remaining time includes
 work outside these four SCC spans, notably pre-SCC setup and analytic forces.
 Because the selected source was intentionally dirty with the retained trace,
 this supplemental run is not claimed as eligible end-to-end evidence. The
-clean, uninstrumented JSONs above are authoritative for latency and
-correctness.
+complete clean, uninstrumented JSON artifacts are authoritative for latency
+and correctness; this includes the historically retained WARM artifact.
 
 ## Commands
 
-The exact benchmark argv is also embedded in each JSON artifact. The essential
-final-head commands were:
+The exact benchmark argv is embedded in each complete historical JSON
+artifact. The essential final-head commands are also retained below:
 
 ```bash
 python3 benchmarks/natoms_scaling.py \
