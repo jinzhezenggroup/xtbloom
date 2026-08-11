@@ -495,8 +495,8 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
         pairlist_capacity_products && pairlist.plan_token == binding.plan_token &&
         pairlist.batch_size == batch && pairlist.total_atoms == atoms &&
         pairlist.atom_offset_elements == batch + 1 &&
-        pairlist.atom_offsets == geometry.atom_offsets &&
-        pairlist.cutoff == kDefaultPairlistCutoffBohr && pairlist.max_cells_per_system > 0 &&
+        pairlist.atom_offsets == geometry.atom_offsets && std::isfinite(pairlist.cutoff) &&
+        pairlist.cutoff >= kDefaultPairlistCutoffBohr && pairlist.max_cells_per_system > 0 &&
         pairlist.max_neighbors_per_atom > 0 && pairlist.max_pairs_per_system > 0 &&
         (pairlist.mode == Gfn2PairListMode::kSparse || pairlist.mode == Gfn2PairListMode::kDense) &&
         (pairlist.flags & ~kGfn2PairListAllowDenseFallback) == 0u &&

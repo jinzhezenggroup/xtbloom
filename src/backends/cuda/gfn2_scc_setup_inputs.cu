@@ -249,7 +249,6 @@ struct Gfn2SccSetupInputs::Impl {
     Segment d4_elements;
     Segment d4_references;
     Segment d4_reference_c6;
-    Segment d4_pair_data;
     Segment d4_coordination;
     Segment point_charge_offsets;
     Segment point_shell_hardness;
@@ -362,9 +361,8 @@ struct Gfn2SccSetupInputs::Impl {
                                                      cursor, layout.d4_references) &&
            append_segment<double>(d4_enabled ? layout.d4_reference_c6.elements : 0, cursor,
                                   layout.d4_reference_c6) &&
-           append_segment<double>(d4_enabled ? layout.d4_pair_data.elements : 0, cursor,
-                                  layout.d4_pair_data) &&
-           append_segment<double>(d4_enabled ? total_atoms : 0, cursor, layout.d4_coordination) &&
+           append_segment<double>(d4_enabled ? total_atoms : 0, cursor,
+                                  layout.d4_coordination) &&
            append_segment<std::int64_t>(point_enabled ? batch_offsets : 0, cursor,
                                         layout.point_charge_offsets) &&
            append_segment<double>(point_enabled ? total_shells : 0, cursor,
@@ -548,12 +546,9 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
   }
   if (d4_enabled) {
     const auto& d4 = *sources.d4.plan;
-    std::int64_t d4_pair_elements = 0;
     if (!d4.sealed() || d4.batch_size() != batch || d4.total_atoms() != atoms ||
         d4.total_pairs() != aes2.total_pairs() || d4.pair_offsets() != aes2.pair_offsets() ||
         !d4.matches_atomic_numbers(sources.atomic_numbers.data) ||
-        !checked_multiply(d4.total_pairs(), kGfn2D4PairDataElements, d4_pair_elements) ||
-        !exact_array(sources.d4.pair_data, d4_pair_elements) ||
         !exact_array(sources.d4.coordination_numbers, atoms) || sources.d4.elements.elements <= 0 ||
         sources.d4.references.elements <= 0 ||
         !exact_array(sources.d4.elements, sources.d4.elements.elements) ||
@@ -570,7 +565,6 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
   } else if (sources.d4.elements.data != nullptr || sources.d4.elements.elements != 0 ||
              sources.d4.references.data != nullptr || sources.d4.references.elements != 0 ||
              sources.d4.reference_c6.data != nullptr || sources.d4.reference_c6.elements != 0 ||
-             sources.d4.pair_data.data != nullptr || sources.d4.pair_data.elements != 0 ||
              sources.d4.coordination_numbers.data != nullptr ||
              sources.d4.coordination_numbers.elements != 0) {
     return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kD4);
@@ -749,7 +743,6 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
       candidate->layout.d4_elements.elements = sources.d4.elements.elements;
       candidate->layout.d4_references.elements = sources.d4.references.elements;
       candidate->layout.d4_reference_c6.elements = sources.d4.reference_c6.elements;
-      candidate->layout.d4_pair_data.elements = sources.d4.pair_data.elements;
     }
     if (!candidate->make_layout()) {
       return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kArena);
@@ -845,7 +838,6 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
       pack_array(image, candidate->layout.d4_elements, sources.d4.elements);
       pack_array(image, candidate->layout.d4_references, sources.d4.references);
       pack_array(image, candidate->layout.d4_reference_c6, sources.d4.reference_c6);
-      pack_array(image, candidate->layout.d4_pair_data, sources.d4.pair_data);
       pack_array(image, candidate->layout.d4_coordination, sources.d4.coordination_numbers);
     }
     if (point_enabled) {
@@ -1153,12 +1145,24 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
         impl_->layout.d4_references.elements,
         cptr(impl_->layout.d4_reference_c6, static_cast<double*>(nullptr)),
         impl_->layout.d4_reference_c6.elements};
-    candidate.d4_cache = {cptr(impl_->layout.d4_pair_data, static_cast<double*>(nullptr)),
-                          impl_->layout.d4_pair_data.elements,
-                          cptr(impl_->layout.d4_coordination, static_cast<double*>(nullptr)),
-                          atoms,
-                          impl_->geometry_generation,
-                          token};
+    /* Setup owns the stable CN outlet address, while runtime supplies the
+     * final provenance and committed role projections after preprocessing has
+     * been bound. The setup positions support fixed-geometry standalone SCC
+     * composition tests; production runtime replaces them with the exact
+     * committed-position outlet before validation. */
+    candidate.d4_pairlist_cache = {
+        cptr(impl_->layout.positions, static_cast<double*>(nullptr)),
+        3 * atoms,
+        mptr(impl_->layout.d4_coordination, static_cast<double*>(nullptr)),
+        atoms,
+        nullptr,
+        0,
+        nullptr,
+        0,
+        {},
+        {},
+        {},
+        token};
   }
   if (impl_->point_enabled) {
     candidate.explicit_point_charge_batch = {
