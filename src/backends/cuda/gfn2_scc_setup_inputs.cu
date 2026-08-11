@@ -361,8 +361,7 @@ struct Gfn2SccSetupInputs::Impl {
                                                      cursor, layout.d4_references) &&
            append_segment<double>(d4_enabled ? layout.d4_reference_c6.elements : 0, cursor,
                                   layout.d4_reference_c6) &&
-           append_segment<double>(d4_enabled ? total_atoms : 0, cursor,
-                                  layout.d4_coordination) &&
+           append_segment<double>(d4_enabled ? total_atoms : 0, cursor, layout.d4_coordination) &&
            append_segment<std::int64_t>(point_enabled ? batch_offsets : 0, cursor,
                                         layout.point_charge_offsets) &&
            append_segment<double>(point_enabled ? total_shells : 0, cursor,

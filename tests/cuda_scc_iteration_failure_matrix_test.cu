@@ -441,11 +441,10 @@ struct ProductionFixture {
       return false;
     }
     if (host.d4_plan() != nullptr &&
-        !d4_pairlist.bind(host.atom_offsets(), host.positions(), device_topology,
-                          plan_seed.d4_pairlist_cache.positions,
-                          plan_seed.d4_pairlist_cache.coordination_numbers,
-                          host.options().geometry_generation, plan_seed.d4_pairlist_cache,
-                          handles.stream())) {
+        !d4_pairlist.bind(
+            host.atom_offsets(), host.positions(), device_topology,
+            plan_seed.d4_pairlist_cache.positions, plan_seed.d4_pairlist_cache.coordination_numbers,
+            host.options().geometry_generation, plan_seed.d4_pairlist_cache, handles.stream())) {
       std::fprintf(stderr, "failure-matrix D4 committed pair-list setup failed\n");
       return false;
     }

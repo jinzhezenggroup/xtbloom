@@ -33,12 +33,10 @@ class D4CommittedPairListFixture {
 
   ~D4CommittedPairListFixture() { reset(); }
 
-  bool bind(const std::vector<std::int64_t>& atom_offsets,
-            const std::vector<double>& positions,
-            const detail::Gfn2RaggedTopologyView& device_topology,
-            const double* device_positions, double* device_coordination,
-            std::uint64_t generation, detail::cuda::Gfn2D4PairListDeviceCache& cache,
-            cudaStream_t stream) noexcept {
+  bool bind(const std::vector<std::int64_t>& atom_offsets, const std::vector<double>& positions,
+            const detail::Gfn2RaggedTopologyView& device_topology, const double* device_positions,
+            double* device_coordination, std::uint64_t generation,
+            detail::cuda::Gfn2D4PairListDeviceCache& cache, cudaStream_t stream) noexcept {
     reset();
     const std::int64_t batch = device_topology.batch_size;
     const std::int64_t atoms = device_topology.total_atoms;
@@ -58,8 +56,7 @@ class D4CommittedPairListFixture {
       maximum_atoms = std::max(maximum_atoms, end - begin);
     }
     if (maximum_atoms > 3037000499LL) return false;
-    max_pairs_per_system_ =
-        std::max<std::int64_t>(1, maximum_atoms * (maximum_atoms - 1) / 2);
+    max_pairs_per_system_ = std::max<std::int64_t>(1, maximum_atoms * (maximum_atoms - 1) / 2);
     max_neighbors_per_atom_ = std::max<std::int64_t>(1, maximum_atoms);
     if (batch > std::numeric_limits<std::int64_t>::max() / max_pairs_per_system_ ||
         atoms > std::numeric_limits<std::int64_t>::max() / max_neighbors_per_atom_) {
@@ -71,8 +68,7 @@ class D4CommittedPairListFixture {
         static_cast<std::size_t>(batch * max_pairs_per_system_));
     std::vector<std::int64_t> pair_counts(static_cast<std::size_t>(batch), 0);
     std::vector<std::int64_t> neighbor_offsets(static_cast<std::size_t>(atoms + 1));
-    std::vector<std::int64_t> neighbors(
-        static_cast<std::size_t>(atoms * max_neighbors_per_atom_));
+    std::vector<std::int64_t> neighbors(static_cast<std::size_t>(atoms * max_neighbors_per_atom_));
     std::vector<std::int64_t> neighbor_counts(static_cast<std::size_t>(atoms), 0);
     std::vector<std::vector<std::int64_t>> neighbor_lists(static_cast<std::size_t>(atoms));
 
@@ -118,8 +114,7 @@ class D4CommittedPairListFixture {
       if (list.size() > static_cast<std::size_t>(max_neighbors_per_atom_)) return false;
       const std::int64_t begin = neighbor_offsets[static_cast<std::size_t>(atom)];
       std::copy(list.begin(), list.end(), neighbors.begin() + begin);
-      neighbor_counts[static_cast<std::size_t>(atom)] =
-          static_cast<std::int64_t>(list.size());
+      neighbor_counts[static_cast<std::size_t>(atom)] = static_cast<std::int64_t>(list.size());
     }
 
     const std::vector<std::uint64_t> generations(static_cast<std::size_t>(batch), generation);
@@ -173,9 +168,9 @@ class D4CommittedPairListFixture {
             device_topology, coordination, detail::Gfn2PairListRole::kD4TwoBody,
             detail::Gfn2PlanMemorySpace::kCudaDevice, two_body)
                 .error != detail::Gfn2PlanSchemaError::kSuccess ||
-        detail::project_gfn2_pair_list_role_binding(
-            device_topology, coordination, detail::Gfn2PairListRole::kD4Atm,
-            detail::Gfn2PlanMemorySpace::kCudaDevice, atm)
+        detail::project_gfn2_pair_list_role_binding(device_topology, coordination,
+                                                    detail::Gfn2PairListRole::kD4Atm,
+                                                    detail::Gfn2PlanMemorySpace::kCudaDevice, atm)
                 .error != detail::Gfn2PlanSchemaError::kSuccess) {
       reset();
       return false;
@@ -197,8 +192,7 @@ class D4CommittedPairListFixture {
 
  private:
   template <typename T>
-  static bool upload(T*& destination, const std::vector<T>& source,
-                     cudaStream_t stream) noexcept {
+  static bool upload(T*& destination, const std::vector<T>& source, cudaStream_t stream) noexcept {
     if (source.empty() || cudaMalloc(reinterpret_cast<void**>(&destination),
                                      source.size() * sizeof(T)) != cudaSuccess) {
       return false;
