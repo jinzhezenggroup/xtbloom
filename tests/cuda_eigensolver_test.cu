@@ -1895,6 +1895,73 @@ bool test_overlap_and_hamiltonian_validation() {
   return true;
 }
 
+bool test_parallel_overlap_tail_validation() {
+  constexpr std::int32_t kOrbitals = 33;
+  constexpr std::int64_t kHealthy = 0;
+  constexpr std::int64_t kNonfinite = 1;
+  constexpr std::int64_t kNonsymmetric = 2;
+  constexpr std::int64_t kNonfinitePrecedence = 3;
+  constexpr std::uint64_t kGeneration = 37u;
+  TestBatch batch = make_batch(4, false, -1, kOrbitals);
+  const auto element = [&](std::int64_t system, std::int64_t row, std::int64_t column) {
+    return static_cast<std::size_t>(batch.matrix_offsets[static_cast<std::size_t>(system)] +
+                                    row * kOrbitals + column);
+  };
+
+  /* All corruptions lie beyond one 128-thread stride. This catches a
+   * cooperative scan that accidentally validates only its first tile. */
+  batch.overlap[element(kNonfinite, kOrbitals - 1, kOrbitals - 2)] =
+      std::numeric_limits<double>::quiet_NaN();
+  batch.overlap[element(kNonsymmetric, kOrbitals - 2, kOrbitals - 4)] += 1.0e-3;
+  batch.overlap[element(kNonfinitePrecedence, kOrbitals - 1, 0)] =
+      std::numeric_limits<double>::infinity();
+  batch.overlap[element(kNonfinitePrecedence, kOrbitals - 3, kOrbitals - 4)] += 1.0e-3;
+
+  DeviceFixture fixture;
+  if (!fixture.create(std::move(batch)) || !factor(fixture, kGeneration)) {
+    return false;
+  }
+  std::vector<std::uint32_t> errors;
+  std::vector<std::uint32_t> statuses;
+  std::vector<std::uint64_t> generations;
+  if (!fixture.system_errors.download(errors) || !fixture.cache_statuses.download(statuses) ||
+      !fixture.cache_generations.download(generations)) {
+    return false;
+  }
+  const std::uint32_t nonfinite =
+      static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kNonfiniteOverlap);
+  const std::uint32_t nonsymmetric =
+      static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kNonsymmetricOverlap);
+  const std::vector<std::uint32_t> expected_factor_errors{0u, nonfinite, nonsymmetric, nonfinite};
+  if (errors != expected_factor_errors || statuses != expected_factor_errors ||
+      generations != std::vector<std::uint64_t>(4u, kGeneration)) {
+    return false;
+  }
+
+  if (!fixture.fill_outputs(kSentinel) || !solve(fixture, kGeneration)) {
+    return false;
+  }
+  std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
+  if (!fixture.system_errors.download(errors) || !fixture.eigenvalues.download(eigenvalues) ||
+      !fixture.coefficients.download(coefficients)) {
+    return false;
+  }
+  const std::uint32_t stale =
+      static_cast<std::uint32_t>(Gfn2EigensolverDeviceError::kStaleOverlapCache);
+  const std::vector<std::uint32_t> expected_solve_errors{0u, stale, stale, stale};
+  if (errors != expected_solve_errors ||
+      !validate_system(fixture.host, kHealthy, eigenvalues, coefficients)) {
+    return false;
+  }
+  for (const std::int64_t failed : {kNonfinite, kNonsymmetric, kNonfinitePrecedence}) {
+    if (!system_outputs_equal(fixture.host, failed, eigenvalues, coefficients, kSentinel)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool test_active_offset_and_singular_failures() {
   constexpr std::int64_t kFailedSystem = 4;
   TestBatch active_batch = make_batch(8, false);
@@ -3029,8 +3096,9 @@ int main(int argc, char** argv) {
       !test_compacted_graph_filters_failed_peer() ||
       !test_compacted_graph_device_epoch_and_transactional_rebuild() ||
       !test_cpu_literal_parity() || !test_inactive_poison_is_skipped() ||
-      !test_overlap_and_hamiltonian_validation() || !test_active_offset_and_singular_failures() ||
-      !test_ill_conditioned_peer_isolation() || !test_cache_generation_staleness() ||
+      !test_overlap_and_hamiltonian_validation() || !test_parallel_overlap_tail_validation() ||
+      !test_active_offset_and_singular_failures() || !test_ill_conditioned_peer_isolation() ||
+      !test_cache_generation_staleness() ||
       !test_single_cache_member_peer_isolation() ||
       !test_sticky_error_and_invalid_bucket_map_fail_closed() ||
       !test_host_validation_aliases_and_limits() || !test_graph_capture() ||

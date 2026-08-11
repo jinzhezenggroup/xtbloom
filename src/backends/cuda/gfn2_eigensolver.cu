@@ -691,10 +691,14 @@ __global__ void prepare_overlap_bucket_kernel(Gfn2EigensolverDeviceBatch batch,
 
   __shared__ std::int64_t system;
   __shared__ std::int64_t input_begin;
+  __shared__ unsigned int validation_flags;
+  __shared__ int scan_enabled;
   __shared__ int valid;
   if (threadIdx.x == 0) {
     system = batch.bucket_systems[bucket_slot];
     input_begin = 0;
+    validation_flags = 0u;
+    scan_enabled = 0;
     valid = 0;
     workspace.eligible[bucket_slot] = 0u;
     workspace.factor_pointers[bucket_slot] = workspace.matrix_scratch_a + scratch_begin;
@@ -720,37 +724,74 @@ __global__ void prepare_overlap_bucket_kernel(Gfn2EigensolverDeviceBatch batch,
           record_system_error(system_errors, system, device_error,
                               Gfn2EigensolverDeviceError::kInvalidOffsets);
         } else {
-          bool finite = true;
-          const bool symmetric = symmetric_input_is_valid(
-              overlap + matrix_begin, bucket.orbital_count, symmetry_tolerance, &finite);
-          if (!finite) {
-            record_system_error(system_errors, system, device_error,
-                                Gfn2EigensolverDeviceError::kNonfiniteOverlap);
-          } else if (!symmetric) {
-            record_system_error(system_errors, system, device_error,
-                                Gfn2EigensolverDeviceError::kNonsymmetricOverlap);
-          } else {
-            input_begin = matrix_begin;
-            valid = 1;
-            workspace.eligible[bucket_slot] = 1u;
-          }
+          input_begin = matrix_begin;
+          scan_enabled = 1;
         }
       }
     }
   }
   __syncthreads();
 
+  constexpr unsigned int kNonfinite = 1u;
+  constexpr unsigned int kNonsymmetric = 2u;
+  unsigned int local_flags = 0u;
   for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
     const std::int64_t row = index % bucket.orbital_count;
     const std::int64_t column = index / bucket.orbital_count;
     double value = row == column ? 1.0 : 0.0;
-    if (valid != 0) {
+    if (scan_enabled != 0) {
       const double first = overlap[input_begin + row * bucket.orbital_count + column];
       const double second = overlap[input_begin + column * bucket.orbital_count + row];
+      const bool first_finite = isfinite(first);
+      if (!first_finite) {
+        local_flags |= kNonfinite;
+      }
+      if (column < row) {
+        const bool second_finite = isfinite(second);
+        if (!second_finite) {
+          local_flags |= kNonfinite;
+        } else if (first_finite) {
+          const double scale = fmax(1.0, fmax(fabs(first), fabs(second)));
+          if (fabs(first - second) > symmetry_tolerance * scale) {
+            local_flags |= kNonsymmetric;
+          }
+        }
+      }
       value = row == column ? first : 0.5 * first + 0.5 * second;
     }
     workspace.matrix_scratch_a[scratch_begin + index] = value;
     workspace.matrix_scratch_b[scratch_begin + index] = value;
+  }
+  if (local_flags != 0u) {
+    atomicOr(&validation_flags, local_flags);
+  }
+  __syncthreads();
+
+  if (threadIdx.x == 0 && scan_enabled != 0) {
+    if ((validation_flags & kNonfinite) != 0u) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kNonfiniteOverlap);
+    } else if ((validation_flags & kNonsymmetric) != 0u) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2EigensolverDeviceError::kNonsymmetricOverlap);
+    } else {
+      valid = 1;
+      workspace.eligible[bucket_slot] = 1u;
+    }
+  }
+  __syncthreads();
+
+  /* cuSOLVER consumes every fixed bucket slot even when one peer is invalid.
+   * Replace a rejected speculative staging pass with a safe identity matrix;
+   * the valid common path keeps the single fused read/check/write pass above. */
+  if (scan_enabled != 0 && valid == 0) {
+    for (std::int64_t index = threadIdx.x; index < matrix_stride; index += blockDim.x) {
+      const std::int64_t row = index % bucket.orbital_count;
+      const std::int64_t column = index / bucket.orbital_count;
+      const double value = row == column ? 1.0 : 0.0;
+      workspace.matrix_scratch_a[scratch_begin + index] = value;
+      workspace.matrix_scratch_b[scratch_begin + index] = value;
+    }
   }
 }
 
