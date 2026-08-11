@@ -143,6 +143,7 @@ class SourceDistributionBoundaryTests(unittest.TestCase):
             "python/ci/resolve-pyodide-openblas.py",
             "python/ci/run-pyodide-wheel-test.py",
             "tests/runtime_test.cpp",
+            "tools/check_benchmark_evidence_size.py",
             "tools/eigen_vendor.py",
             "uv.lock",
             "web/app.js",
