@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Raw harness JSON retains every force vector but is omitted because each artifact exceeds the 1 MiB repository limit. Raw profiler captures are prohibited. All rows are reproducible from README commands.",
+  "note": "The four raw harness JSON artifacts retain every force vector but are omitted because each exceeds the 1 MiB repository limit. workspace.json is omitted as a redundant machine-local intermediate; its complete numerical rows and sanitized identities are retained under performance-summary.json.workspace and are reproducible with workspace-query.py. Raw profiler captures are prohibited.",
   "artifacts": [
     {
       "path": "$BASELINE_WT/build/issue220-measurements/baseline-b1.json",
@@ -28,14 +28,20 @@
     },
     {
       "path": "$CANDIDATE_WT/build/issue220-measurements/workspace.json",
-      "bytes": 6054,
-      "sha256": "a48c50340bbd253eed9ccae66101f8aada3be791dee29a950196ae3739441a45",
+      "bytes": 6496,
+      "sha256": "8b68c3394bf6c4912bcb5eca17d65024428e548602b2d5020a7e8f7361529078",
       "retained_in_repository": false
     },
     {
       "path": "workspace-query.py",
-      "bytes": 6535,
-      "sha256": "313ede587e561041003c7f5088d05d3aa0964280217070833f1f6905e186ed04",
+      "bytes": 6771,
+      "sha256": "da74005ab67dc8043a6f63cf81ef50c331f2575ebb836c7ab09007e09eceecc9",
+      "retained_in_repository": true
+    },
+    {
+      "path": "performance-summary.csv",
+      "bytes": 1157,
+      "sha256": "f99f665030e09928279a0f521b705b1ca8b79afade134a01b47035e613a14c19",
       "retained_in_repository": true
     },
     {

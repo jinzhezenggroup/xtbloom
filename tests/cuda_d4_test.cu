@@ -366,7 +366,8 @@ struct DeviceFixture {
     std::vector<std::int64_t> neighbors(static_cast<std::size_t>(atom_count * maximum_neighbors));
     std::vector<std::vector<std::int64_t>> neighbor_lists(static_cast<std::size_t>(atom_count));
 
-    constexpr double kBuilderCutoffSquared = 50.0 * 50.0;
+    constexpr double kBuilderCutoffSquared = xtbloom::detail::cuda::kGfn2D4TwoBodyCutoffBohr *
+                                             xtbloom::detail::cuda::kGfn2D4TwoBodyCutoffBohr;
     for (std::int64_t system = 0; system < batch_count; ++system) {
       const std::int64_t atom_begin = host_atom_offsets[static_cast<std::size_t>(system)];
       const std::int64_t atom_end = host_atom_offsets[static_cast<std::size_t>(system + 1)];

@@ -323,7 +323,7 @@ struct Fixture {
                           d4_error) != XTBLOOM_STATUS_SUCCESS) {
       return cudaErrorInvalidValue;
     }
-    d4_host_pair_data.resize(static_cast<std::size_t>(5 * count));
+    d4_host_pair_data.resize(static_cast<std::size_t>(kD4PairDataElements * count));
     d4_coordination.resize(static_cast<std::size_t>(atoms));
     D4GeometryCache d4_cache{};
     if (update_d4_geometry_cache_cpu(

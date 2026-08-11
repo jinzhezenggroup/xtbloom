@@ -13,6 +13,7 @@
     "note": "profiler-perturbed structural comparison; not a latency claim"
   },
   "classification": "D4 kernels are rows whose demangled Name contains Gfn2D4",
+  "execution_count_note": "The public harness issued one warmup and one measured FRESH xtbloom_compute call, with no unchanged-geometry reuse or CUDA Graph replay in the profiled host-memory path. During lazy runtime construction inside the first warmup, the baseline ran an internal energy/force validation smoke with dense D4 SCC/force components enabled. The candidate masks refresh-owned D4 SCC potential/energy, ATM energy, and classical-force components in that smoke until the first committed pair-list/CN refresh. Several baseline dense-D4 consumer rows therefore contain one setup-smoke launch plus the two public-call launches, while candidate pair-list consumers contain the two public-call launches.",
   "summary": {
     "baseline": {
       "total_kernel_time_ns": 271549083,
@@ -257,6 +258,7 @@
       ]
     },
     "change": {
+      "scope": "whole-process structural totals including a baseline-only lazy-runtime D4 validation smoke; not normalized steady-state per-public-call results",
       "total_kernel_time_percent": -1.1770170477799036,
       "total_kernel_instances_percent": -3.4322820037105752,
       "d4_kernel_time_percent": -13.56586937120321,
@@ -267,7 +269,7 @@
   "nsight_compute": {
     "version": "2025.2.1.0 build 35987062",
     "status": "unavailable",
-    "reason": "",
+    "reason": "ERR_NVGPUCTRPERM: the user cannot access GPU performance counters on device 0",
     "query_stdout": "Device NVIDIA GeForce RTX 5090 (GB202)\n==ERROR== ERR_NVGPUCTRPERM - The user does not have permission to access NVIDIA GPU Performance Counters on the target device 0. For instructions on enabling permissions and to get more information see https://developer.nvidia.com/ERR_NVGPUCTRPERM"
   }
 }

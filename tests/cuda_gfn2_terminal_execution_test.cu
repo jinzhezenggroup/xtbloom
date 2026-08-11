@@ -566,27 +566,41 @@ int test_terminal_base_d4_and_rollbacks() {
    * repulsion launch or diagnostic reset may precede their rejection. */
   const std::array<std::uint8_t, 2> valid_requested{1u, 1u};
   CUDA_CHECK(fixture.requested.upload(valid_requested, stream));
+  auto rejects_without_writes = [&](const Gfn2TerminalClassicalEnergyDevicePlan& rejected) -> int {
+    if (evaluate_gfn2_terminal_classical_energy_cuda(rejected, fixture.activity, fixture.results,
+                                                     fixture.workspace, fixture.diagnostics,
+                                                     stream) != cudaErrorInvalidValue ||
+        fixture.result_repulsion.download(repulsion.data(), repulsion.size(), stream) !=
+            cudaSuccess ||
+        fixture.result_atm.download(atm.data(), atm.size(), stream) != cudaSuccess ||
+        fixture.plan_error.download(&plan_error, 1, stream) != cudaSuccess ||
+        cudaStreamSynchronize(stream) != cudaSuccess) {
+      return __LINE__;
+    }
+    if (repulsion[0] != kSentinel || repulsion[1] != kSentinel || atm[0] != kSentinel ||
+        atm[1] != kSentinel ||
+        plan_error != static_cast<std::uint32_t>(
+                          Gfn2TerminalClassicalEnergyPlanError::kInvalidRequestedMask)) {
+      return __LINE__;
+    }
+    return 0;
+  };
   auto invalid_plan = fixture.plan;
+  invalid_plan.abi_version = 1u;
+  CHECK(rejects_without_writes(invalid_plan) == 0);
+  invalid_plan = fixture.plan;
   invalid_plan.d4_cache.atm_pairs.role = Gfn2PairListRole::kD4TwoBody;
-  CHECK(evaluate_gfn2_terminal_classical_energy_cuda(
-            invalid_plan, fixture.activity, fixture.results, fixture.workspace, fixture.diagnostics,
-            stream) == cudaErrorInvalidValue);
+  CHECK(rejects_without_writes(invalid_plan) == 0);
   invalid_plan = fixture.plan;
   invalid_plan.d4_cache.atm_pairs.plan_token ^= 1u;
-  CHECK(evaluate_gfn2_terminal_classical_energy_cuda(
-            invalid_plan, fixture.activity, fixture.results, fixture.workspace, fixture.diagnostics,
-            stream) == cudaErrorInvalidValue);
+  CHECK(rejects_without_writes(invalid_plan) == 0);
   invalid_plan = fixture.plan;
   invalid_plan.d4_cache.coordination_generations = fixture.pair_generations.get();
-  CHECK(evaluate_gfn2_terminal_classical_energy_cuda(
-            invalid_plan, fixture.activity, fixture.results, fixture.workspace, fixture.diagnostics,
-            stream) == cudaErrorInvalidValue);
+  CHECK(rejects_without_writes(invalid_plan) == 0);
   invalid_plan = fixture.plan;
   invalid_plan.d4_cache.atm_pairs.pairs =
       reinterpret_cast<const Gfn2AtomPair*>(fixture.result_repulsion.get());
-  CHECK(evaluate_gfn2_terminal_classical_energy_cuda(
-            invalid_plan, fixture.activity, fixture.results, fixture.workspace, fixture.diagnostics,
-            stream) == cudaErrorInvalidValue);
+  CHECK(rejects_without_writes(invalid_plan) == 0);
 
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;

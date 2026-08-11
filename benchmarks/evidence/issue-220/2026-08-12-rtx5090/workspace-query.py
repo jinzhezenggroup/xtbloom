@@ -110,9 +110,6 @@ def query(library_path: Path, natoms: int, batch_size: int, device_id: int) -> d
             "batch_size": batch_size,
             "total_atoms": natoms * batch_size,
             "packed_pairs": packed_pairs,
-            "dense_d4_pair_cache_bytes": 5
-            * packed_pairs
-            * ctypes.sizeof(ctypes.c_double),
             "host_required_bytes": int(workspace.host_required_bytes),
             "host_required_alignment": int(workspace.host_required_alignment),
             "device_required_bytes": int(workspace.device_required_bytes),
@@ -138,6 +135,12 @@ def main() -> int:
     for natoms, batch_size in cells:
         baseline = query(args.baseline.resolve(), natoms, batch_size, args.device_id)
         candidate = query(args.candidate.resolve(), natoms, batch_size, args.device_id)
+        dense_bytes_per_copy = (
+            5 * baseline["packed_pairs"] * ctypes.sizeof(ctypes.c_double)
+        )
+        baseline["dense_d4_pair_cache_bytes_per_copy"] = dense_bytes_per_copy
+        baseline["baseline_dense_d4_retained_copies"] = 3
+        baseline["baseline_dense_d4_retained_bytes"] = 3 * dense_bytes_per_copy
         before = baseline["device_required_bytes"]
         after = candidate["device_required_bytes"]
         delta = before - after
@@ -148,8 +151,8 @@ def main() -> int:
                 "candidate": candidate,
                 "device_bytes_saved": delta,
                 "device_percent_saved": 100.0 * delta / before,
-                "saved_minus_dense_d4_cache_bytes": (
-                    delta - baseline["dense_d4_pair_cache_bytes"]
+                "saved_minus_baseline_dense_d4_retained_bytes": (
+                    delta - baseline["baseline_dense_d4_retained_bytes"]
                 ),
             }
         )

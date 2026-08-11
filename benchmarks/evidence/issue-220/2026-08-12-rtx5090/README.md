@@ -23,12 +23,14 @@ large ATM traversal across CUDA blocks.
   272-atom rows improve by 2.49% and 2.26%; 62/122 atoms and 32 atoms at
   batch 128 remain within about 2% of baseline.  This supports "no material
   end-to-end regression" rather than a uniform speedup claim.
-- On the profiler-perturbed 272-atom public workload, D4-classified kernel
-  time falls 13.57%, D4 kernel instances fall 31.91%, total kernel time falls
-  1.18%, total kernel instances fall 3.43%, and `cudaLaunchKernel` calls fall
-  by 39.  D4 classification requires the demangled kernel name/signature to
-  contain `Gfn2D4`; it intentionally excludes unrelated cuSOLVER kernels such
-  as `sytrd4_gpu`.
+- On the profiler-perturbed 272-atom public workload, whole-process
+  D4-classified kernel time falls 13.57%, D4 kernel instances fall 31.91%,
+  total kernel time falls 1.18%, total kernel instances fall 3.43%, and
+  `cudaLaunchKernel` calls fall by 39.  These structural totals include a
+  baseline-only lazy-runtime D4 validation smoke and therefore are not a
+  steady-state or per-public-call claim.  D4 classification requires the
+  demangled kernel name/signature to contain `Gfn2D4`; it intentionally
+  excludes unrelated cuSOLVER kernels such as `sytrd4_gpu`.
 - Baseline and candidate energies are bitwise equal for every retained timing
   coordinate.  The largest cross-version force difference is
   `1.74e-16` Hartree/bohr, and every harness correctness row passes.
@@ -77,8 +79,10 @@ synchronization.
 Both source worktrees and selected library sources were clean.  Machine-local
 checkout roots are represented as `$BASELINE_WT` and `$CANDIDATE_WT` so the
 bundle follows the repository's retired-name text policy; revisions, relative
-paths, binary hashes, and build-input hashes remain exact.  The complete
-CMake cache/compiler/provider/source identities and hashes are retained in
+paths, binary hashes, and build-input hashes remain exact.  External
+interpreter and LP64-provider paths remain absolute because they are part of
+the reproducible run identity.  The complete CMake
+cache/compiler/provider/source identities and hashes are retained in
 `performance-summary.json` under each run identity.
 
 ## Public workspace results
@@ -183,9 +187,18 @@ The batch-128 process changed only these arguments:
 
 ## Nsight Systems evidence
 
-The profile is a structural comparison, not a latency headline.  One cold
-call, one warmup, and one measured FRESH call caused three production
-executions to appear in kernel totals.  Baseline and candidate used the same
+The profile is a structural comparison, not a latency headline.  The public
+harness issued one warmup and one measured FRESH `xtbloom_compute` call; this
+host-memory path used neither unchanged-geometry reuse nor CUDA Graph replay.
+During lazy runtime construction inside the first warmup, the baseline ran an
+internal energy/force validation smoke with dense D4 SCC/force components
+enabled.  The candidate masks refresh-owned D4 SCC potential/energy, ATM
+energy, and classical-force components in that smoke until the first committed
+pair-list/CN refresh.  Several baseline dense-D4 consumer rows therefore
+contain one setup-smoke launch plus the two public-call launches, while the
+candidate pair-list consumers contain the two public-call launches.  The
+reported aggregate deltas are whole-process structural totals, not normalized
+steady-state per-call results.  Baseline and candidate used the same
 272-atom/B1 public host-descriptor force workload.
 
 ```bash
@@ -282,6 +295,13 @@ omitted from Git rather than truncated or hand-edited.  Their byte counts,
 SHA-256 hashes, and local paths are in `artifact-manifest.json`; the compact
 summary retains all latency samples, SCC/correctness results, cross-version
 errors, complete run identity, and reproduction commands.
+
+The compact `performance-summary.csv` is a tabular projection of the public
+workspace, latency, and cross-version correctness rows in
+`performance-summary.json`.  The standalone machine-local `workspace.json` is
+omitted as a redundant intermediate; its complete numerical rows and sanitized
+checkout identities are retained under the JSON summary's `workspace` key and
+are reproducible with `workspace-query.py`.
 
 `SHA256SUMS` covers every retained artifact in this directory.  No raw
 `.nsys-rep`, `.sqlite`, `.qdstrm`, or Nsight Compute native report is present.

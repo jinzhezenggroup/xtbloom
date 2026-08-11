@@ -2904,8 +2904,9 @@ struct Gfn2CudaExecutionCache::Impl {
                                                : xtbloom::detail::cuda::kDefaultPairlistCutoffBohr;
     if (pairlist_enabled) {
       /* Capacities were provisioned once from fixed topology above. D4 makes
-       * the leaf mandatory and widens only the physical builder superset; the
-       * coordination consumer view remains role-canonical at 25 bohr. */
+       * the leaf mandatory and widens only the physical builder superset to
+       * 50 bohr. This source GFN2 coordination view remains canonical at 25
+       * bohr; the D4 binding later projects its 30/50/25-bohr role views. */
       binding.plan.pairlist = {
           static_cast<std::int64_t>(batch),
           static_cast<std::int64_t>(atoms),

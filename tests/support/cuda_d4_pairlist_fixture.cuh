@@ -175,24 +175,27 @@ class D4CommittedPairListFixture {
       reset();
       return false;
     }
-    cache = {device_positions,
-             atoms * 3,
-             device_coordination,
-             atoms,
-             coordination_generations_,
-             batch,
-             coordination_eligible_,
-             batch,
-             coordination,
-             two_body,
-             atm,
-             device_topology.plan_token};
+    cache = {};
+    cache.positions = device_positions;
+    cache.position_elements = atoms * 3;
+    cache.coordination_numbers = device_coordination;
+    cache.coordination_elements = atoms;
+    cache.coordination_generations = coordination_generations_;
+    cache.coordination_generation_elements = batch;
+    cache.coordination_eligible_mask = coordination_eligible_;
+    cache.coordination_eligible_elements = batch;
+    cache.coordination_pairs = coordination;
+    cache.two_body_pairs = two_body;
+    cache.atm_pairs = atm;
+    cache.plan_token = device_topology.plan_token;
     return true;
   }
 
  private:
   template <typename T>
   static bool upload(T*& destination, const std::vector<T>& source, cudaStream_t stream) noexcept {
+    /* bind() guarantees positive batch/atom capacities, so an empty structural
+     * array means the fixture invariant was violated and must not be hidden. */
     if (source.empty() || cudaMalloc(reinterpret_cast<void**>(&destination),
                                      source.size() * sizeof(T)) != cudaSuccess) {
       return false;

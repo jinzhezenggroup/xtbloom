@@ -541,7 +541,9 @@
           "batch_size": 1,
           "total_atoms": 32,
           "packed_pairs": 496,
-          "dense_d4_pair_cache_bytes": 19840,
+          "dense_d4_pair_cache_bytes_per_copy": 19840,
+          "baseline_dense_d4_retained_copies": 3,
+          "baseline_dense_d4_retained_bytes": 59520,
           "host_required_bytes": 1745396,
           "host_required_alignment": 64,
           "device_required_bytes": 6357624,
@@ -552,7 +554,6 @@
           "batch_size": 1,
           "total_atoms": 32,
           "packed_pairs": 496,
-          "dense_d4_pair_cache_bytes": 19840,
           "host_required_bytes": 1683372,
           "host_required_alignment": 64,
           "device_required_bytes": 6297848,
@@ -560,7 +561,7 @@
         },
         "device_bytes_saved": 59776,
         "device_percent_saved": 0.9402254678791951,
-        "saved_minus_dense_d4_cache_bytes": 39936
+        "saved_minus_baseline_dense_d4_retained_bytes": 256
       },
       {
         "workload": {
@@ -572,7 +573,9 @@
           "batch_size": 1,
           "total_atoms": 62,
           "packed_pairs": 1891,
-          "dense_d4_pair_cache_bytes": 75640,
+          "dense_d4_pair_cache_bytes_per_copy": 75640,
+          "baseline_dense_d4_retained_copies": 3,
+          "baseline_dense_d4_retained_bytes": 226920,
           "host_required_bytes": 4800104,
           "host_required_alignment": 64,
           "device_required_bytes": 17693464,
@@ -583,7 +586,6 @@
           "batch_size": 1,
           "total_atoms": 62,
           "packed_pairs": 1891,
-          "dense_d4_pair_cache_bytes": 75640,
           "host_required_bytes": 4564208,
           "host_required_alignment": 64,
           "device_required_bytes": 17466016,
@@ -591,7 +593,7 @@
         },
         "device_bytes_saved": 227448,
         "device_percent_saved": 1.2854916369117997,
-        "saved_minus_dense_d4_cache_bytes": 151808
+        "saved_minus_baseline_dense_d4_retained_bytes": 528
       },
       {
         "workload": {
@@ -603,7 +605,9 @@
           "batch_size": 1,
           "total_atoms": 122,
           "packed_pairs": 7381,
-          "dense_d4_pair_cache_bytes": 295240,
+          "dense_d4_pair_cache_bytes_per_copy": 295240,
+          "baseline_dense_d4_retained_copies": 3,
+          "baseline_dense_d4_retained_bytes": 885720,
           "host_required_bytes": 16789232,
           "host_required_alignment": 64,
           "device_required_bytes": 60352184,
@@ -614,7 +618,6 @@
           "batch_size": 1,
           "total_atoms": 122,
           "packed_pairs": 7381,
-          "dense_d4_pair_cache_bytes": 295240,
           "host_required_bytes": 15881624,
           "host_required_alignment": 64,
           "device_required_bytes": 59465328,
@@ -622,7 +625,7 @@
         },
         "device_bytes_saved": 886856,
         "device_percent_saved": 1.469467948334728,
-        "saved_minus_dense_d4_cache_bytes": 591616
+        "saved_minus_baseline_dense_d4_retained_bytes": 1136
       },
       {
         "workload": {
@@ -634,7 +637,9 @@
           "batch_size": 1,
           "total_atoms": 242,
           "packed_pairs": 29161,
-          "dense_d4_pair_cache_bytes": 1166440,
+          "dense_d4_pair_cache_bytes_per_copy": 1166440,
+          "baseline_dense_d4_retained_copies": 3,
+          "baseline_dense_d4_retained_bytes": 3499320,
           "host_required_bytes": 64287872,
           "host_required_alignment": 64,
           "device_required_bytes": 225627000,
@@ -645,7 +650,6 @@
           "batch_size": 1,
           "total_atoms": 242,
           "packed_pairs": 29161,
-          "dense_d4_pair_cache_bytes": 1166440,
           "host_required_bytes": 60740712,
           "host_required_alignment": 64,
           "device_required_bytes": 222125840,
@@ -653,7 +657,7 @@
         },
         "device_bytes_saved": 3501160,
         "device_percent_saved": 1.551746909722684,
-        "saved_minus_dense_d4_cache_bytes": 2334720
+        "saved_minus_baseline_dense_d4_retained_bytes": 1840
       },
       {
         "workload": {
@@ -665,7 +669,9 @@
           "batch_size": 1,
           "total_atoms": 272,
           "packed_pairs": 36856,
-          "dense_d4_pair_cache_bytes": 1474240,
+          "dense_d4_pair_cache_bytes_per_copy": 1474240,
+          "baseline_dense_d4_retained_copies": 3,
+          "baseline_dense_d4_retained_bytes": 4422720,
           "host_required_bytes": 81062612,
           "host_required_alignment": 64,
           "device_required_bytes": 283609336,
@@ -676,7 +682,6 @@
           "batch_size": 1,
           "total_atoms": 272,
           "packed_pairs": 36856,
-          "dense_d4_pair_cache_bytes": 1474240,
           "host_required_bytes": 76585548,
           "host_required_alignment": 64,
           "device_required_bytes": 279184440,
@@ -684,7 +689,7 @@
         },
         "device_bytes_saved": 4424896,
         "device_percent_saved": 1.5602081590149064,
-        "saved_minus_dense_d4_cache_bytes": 2950656
+        "saved_minus_baseline_dense_d4_retained_bytes": 2176
       },
       {
         "workload": {
@@ -696,7 +701,9 @@
           "batch_size": 128,
           "total_atoms": 4096,
           "packed_pairs": 63488,
-          "dense_d4_pair_cache_bytes": 2539520,
+          "dense_d4_pair_cache_bytes_per_copy": 2539520,
+          "baseline_dense_d4_retained_copies": 3,
+          "baseline_dense_d4_retained_bytes": 7618560,
           "host_required_bytes": 141388796,
           "host_required_alignment": 64,
           "device_required_bytes": 739852728,
@@ -707,7 +714,6 @@
           "batch_size": 128,
           "total_atoms": 4096,
           "packed_pairs": 63488,
-          "dense_d4_pair_cache_bytes": 2539520,
           "host_required_bytes": 132888948,
           "host_required_alignment": 64,
           "device_required_bytes": 732200376,
@@ -715,7 +721,7 @@
         },
         "device_bytes_saved": 7652352,
         "device_percent_saved": 1.0343074655798254,
-        "saved_minus_dense_d4_cache_bytes": 5112832
+        "saved_minus_baseline_dense_d4_retained_bytes": 33792
       }
     ]
   },

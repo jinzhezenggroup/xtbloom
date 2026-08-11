@@ -41,7 +41,8 @@ namespace xtbloom::detail::cuda {
  * v3 adds the sealed common topology projections (atom, shell ownership,
  * AO/matrix, packed all-pair, AO bucket, element identity) as the single
  * borrowing authority for every plan leaf; leaf identity is proven against
- * these projections in one place instead of re-deriving the master topology. */
+ * these projections in one place instead of re-deriving the master topology.
+ * ABI v4 replaces the dense D4 pair cache with Gfn2D4PairListDeviceCache. */
 inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 4u;
 
 /*
