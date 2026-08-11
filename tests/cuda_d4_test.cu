@@ -486,6 +486,27 @@ struct DeviceFixture {
   }
 };
 
+template <typename Offsets, typename AtomicNumbers, typename Positions>
+bool initialize_pairlist_case(const Offsets& atom_offsets, const AtomicNumbers& atomic_numbers,
+                              const Positions& positions, std::uint64_t generation,
+                              xtbloom::detail::gfn2::D4Plan& plan, DeviceFixture& device,
+                              cudaStream_t stream) {
+  std::string error;
+  if (xtbloom::detail::gfn2::make_d4_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
+                                          static_cast<std::int64_t>(atomic_numbers.size()),
+                                          atom_offsets.data(), atomic_numbers.data(), plan,
+                                          error) != XTBLOOM_STATUS_SUCCESS) {
+    return false;
+  }
+  const std::vector<double> pair_data(static_cast<std::size_t>(plan.total_pairs()) *
+                                      xtbloom::detail::gfn2::kD4PairDataElements);
+  const std::vector<double> coordination(atomic_numbers.size(), 0.0);
+  const std::vector<double> charges(atomic_numbers.size(), 0.0);
+  return device.initialize(plan, atom_offsets, atomic_numbers, pair_data, coordination, charges,
+                           stream) &&
+         device.initialize_pairlist(atom_offsets, positions, generation, stream);
+}
+
 int run_geometry_refresh_batch_case(std::size_t batch_count) {
   std::vector<std::int64_t> atom_offsets(batch_count + 1u, 0);
   for (std::size_t system = 0; system < batch_count; ++system) {
@@ -1293,6 +1314,100 @@ int test_atm_split_dispatch_gate() {
   return 0;
 }
 
+int test_pairlist_role_cutoff_boundaries() {
+  constexpr std::uint64_t generation = 53u;
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+
+  const auto run_coordination = [&](double distance, std::array<double, 2>& values) -> int {
+    constexpr std::array<std::int64_t, 2> offsets{0, 2};
+    constexpr std::array<std::int32_t, 2> numbers{1, 1};
+    const std::array<double, 6> positions{0.0, 0.0, 0.0, distance, 0.0, 0.0};
+    xtbloom::detail::gfn2::D4Plan plan;
+    DeviceFixture device;
+    CHECK(initialize_pairlist_case(offsets, numbers, positions, generation, plan, device, stream));
+
+    /* Real D4 covalent radii make the 30-bohr contribution round to zero.
+     * Widen only the test's device H radius so the production predicate is
+     * observable: exactly 30 contributes, nextafter(30,+inf) must not. */
+    std::vector<Gfn2D4DeviceElementData> elements;
+    elements.reserve(xtbloom::parameters::d4::kElements.size());
+    for (const auto& element : xtbloom::parameters::d4::kElements) {
+      elements.push_back({element.reference_offset, element.reference_count,
+                          element.covalent_radius, element.electronegativity,
+                          element.effective_charge, element.hardness, element.r4r2});
+    }
+    elements[0].covalent_radius = 15.0;
+    CUDA_CHECK(device.elements.copy_from(elements.data(), elements.size(), stream));
+    CUDA_CHECK(device.reset(stream));
+    CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_d4_pairlist_cache_cuda(
+        device.batch, device.parameters, generation, device.pairlist_cache, device.workspace,
+        device.error.get(), stream));
+    CUDA_CHECK(device.coordination_scratch.copy_to(values.data(), values.size(), stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    return 0;
+  };
+
+  std::array<double, 2> exact_coordination{};
+  std::array<double, 2> outside_coordination{};
+  CHECK(run_coordination(30.0, exact_coordination) == 0);
+  CHECK(run_coordination(std::nextafter(30.0, std::numeric_limits<double>::infinity()),
+                         outside_coordination) == 0);
+  CHECK(exact_coordination[0] > 0.0 && exact_coordination[1] > 0.0);
+  CHECK(outside_coordination[0] == 0.0 && outside_coordination[1] == 0.0);
+
+  const auto run_two_body = [&](double distance, double& energy) -> int {
+    constexpr std::array<std::int64_t, 2> offsets{0, 2};
+    constexpr std::array<std::int32_t, 2> numbers{1, 1};
+    const std::array<double, 6> positions{0.0, 0.0, 0.0, distance, 0.0, 0.0};
+    xtbloom::detail::gfn2::D4Plan plan;
+    DeviceFixture device;
+    CHECK(initialize_pairlist_case(offsets, numbers, positions, generation, plan, device, stream));
+    CUDA_CHECK(device.reset(stream));
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_two_body_pairlist_cuda(
+        device.batch, device.parameters, generation, device.pairlist_cache, device.charges.get(),
+        device.energies.get(), device.potentials.get(), device.workspace, device.error.get(),
+        stream));
+    CUDA_CHECK(device.energies.copy_to(&energy, 1, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    return 0;
+  };
+
+  double exact_two_body = 0.0;
+  double outside_two_body = 0.0;
+  CHECK(run_two_body(50.0, exact_two_body) == 0);
+  CHECK(run_two_body(std::nextafter(50.0, std::numeric_limits<double>::infinity()),
+                     outside_two_body) == 0);
+  CHECK(std::isfinite(exact_two_body) && exact_two_body != 0.0);
+  CHECK(outside_two_body == 0.0);
+
+  const auto run_atm = [&](double outer_distance, double& energy) -> int {
+    constexpr std::array<std::int64_t, 2> offsets{0, 3};
+    constexpr std::array<std::int32_t, 3> numbers{1, 1, 1};
+    const std::array<double, 9> positions{0.0, 0.0, 0.0, 12.5, 0.0, 0.0, outer_distance, 0.0, 0.0};
+    xtbloom::detail::gfn2::D4Plan plan;
+    DeviceFixture device;
+    CHECK(initialize_pairlist_case(offsets, numbers, positions, generation, plan, device, stream));
+    CUDA_CHECK(device.reset(stream));
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_d4_atm_pairlist_cuda(
+        device.batch, device.parameters, generation, device.pairlist_cache, device.energies.get(),
+        device.workspace, device.error.get(), stream));
+    CUDA_CHECK(device.energies.copy_to(&energy, 1, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    return 0;
+  };
+
+  double exact_atm = 0.0;
+  double outside_atm = 0.0;
+  CHECK(run_atm(25.0, exact_atm) == 0);
+  CHECK(run_atm(std::nextafter(25.0, std::numeric_limits<double>::infinity()), outside_atm) == 0);
+  CHECK(std::isfinite(exact_atm) && exact_atm != 0.0);
+  CHECK(outside_atm == 0.0);
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 int test_empty_and_singleton_systems() {
   constexpr std::array<std::int64_t, 5> atom_offsets{0, 0, 1, 1, 2};
   constexpr std::array<std::int32_t, 2> atomic_numbers{1, 8};
@@ -2034,6 +2149,10 @@ int main() {
   }
   if (const int status = test_atm_split_dispatch_gate(); status != 0) {
     std::cerr << "CUDA D4 ATM split dispatch-gate test failed at line " << status << '\n';
+    return status;
+  }
+  if (const int status = test_pairlist_role_cutoff_boundaries(); status != 0) {
+    std::cerr << "CUDA D4 pair-list role cutoff test failed at line " << status << '\n';
     return status;
   }
   if (const int status = test_empty_and_singleton_systems(); status != 0) {
