@@ -690,6 +690,10 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
       diagnostics.classical_device_error == nullptr ||
       diagnostics.force_composition_system_errors == nullptr ||
       diagnostics.force_composition_plan_error == nullptr ||
+      /* D4 widens the physical builder to a 50-bohr superset while this CN
+       * consumer keeps its own 25-bohr role cutoff. The builder descriptor
+       * must therefore match the committed view's recorded builder cutoff,
+       * not the consumer cutoff. */
       ((plan.pairlist_committed.plan_token != 0u || plan.pairlist_batch.plan_token != 0u) &&
        (plan.pairlist_committed.plan_token != token || plan.pairlist_batch.plan_token != token ||
         plan.pairlist_batch.batch_size != batch_size ||
@@ -697,7 +701,7 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
         plan.pairlist_batch.atom_offsets != plan.integral_batch.atom_offsets ||
         plan.pairlist_batch.max_pairs_per_system <= 0 ||
         plan.pairlist_batch.max_neighbors_per_atom <= 0 ||
-        plan.pairlist_batch.cutoff != kDefaultPairlistCutoffBohr ||
+        plan.pairlist_batch.cutoff != plan.pairlist_committed.list_builder_cutoff_bohr ||
         plan.pairlist_committed.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
         plan.pairlist_committed.state != Gfn2PairListState::kCommitted ||
         plan.pairlist_committed.role != Gfn2PairListRole::kCoordination ||
@@ -832,19 +836,18 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
     std::int64_t coordination_pair_elements = 0;
     std::int64_t classical_geometry_pair_elements = 0;
     std::int64_t classical_aes2_pair_elements = 0;
-    std::int64_t classical_d4_pair_elements = 0;
     if (!checked_product(plan.coordination_batch.total_pairs, kGfn2GeometryPairDataElements,
                          &coordination_pair_elements) ||
         (classical_aes2 &&
          (!checked_product(plan.classical_plan.geometry_batch.total_pairs,
                            kGfn2GeometryPairDataElements, &classical_geometry_pair_elements) ||
           !checked_product(plan.classical_plan.aes2_batch.total_pairs, kGfn2AES2PairDataElements,
-                           &classical_aes2_pair_elements))) ||
-        (classical_d4 && !checked_product(plan.classical_plan.d4_batch.total_pairs,
-                                          kGfn2D4PairDataElements, &classical_d4_pair_elements))) {
+                           &classical_aes2_pair_elements)))) {
       return cudaErrorInvalidValue;
     }
-    AddressRangeList<160> live_ranges;
+    const auto& d4_pairlist = plan.classical_plan.d4_pairlist_cache;
+    const auto& d4_pairs = d4_pairlist.coordination_pairs;
+    AddressRangeList<176> live_ranges;
     const bool live_ranges_valid =
         live_ranges.add(results.energy.total_energy, results.energy.elements) &&
         live_ranges.add(results.forces.qm_forces, results.forces.qm_force_elements) &&
@@ -923,8 +926,6 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
                         classical_aes2 ? plan.integral_batch.total_atoms : 0) &&
         live_ranges.add(plan.classical_plan.geometry_cache.geometry_generations,
                         classical_aes2 ? batch_size : 0) &&
-        live_ranges.add(plan.classical_plan.d4_batch.pair_offsets,
-                        classical_d4 ? batch_size + 1 : 0) &&
         live_ranges.add(plan.classical_plan.d4_parameters.elements,
                         classical_d4 ? plan.classical_plan.d4_parameters.element_count : 0) &&
         live_ranges.add(plan.classical_plan.d4_parameters.references,
@@ -932,10 +933,25 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
         live_ranges.add(
             plan.classical_plan.d4_parameters.reference_c6,
             classical_d4 ? plan.classical_plan.d4_parameters.reference_c6_elements : 0) &&
-        live_ranges.add(plan.classical_plan.d4_cache.pair_data,
-                        classical_d4 ? classical_d4_pair_elements : 0) &&
-        live_ranges.add(plan.classical_plan.d4_cache.coordination_numbers,
+        live_ranges.add(d4_pairlist.positions, classical_d4 ? d4_pairlist.position_elements : 0) &&
+        live_ranges.add(d4_pairlist.coordination_numbers,
                         classical_d4 ? plan.integral_batch.total_atoms : 0) &&
+        live_ranges.add(d4_pairlist.coordination_generations,
+                        classical_d4 ? plan.integral_batch.batch_size : 0) &&
+        live_ranges.add(d4_pairlist.coordination_eligible_mask,
+                        classical_d4 ? plan.integral_batch.batch_size : 0) &&
+        live_ranges.add(d4_pairs.pair_offsets, classical_d4 ? d4_pairs.pair_offset_count : 0) &&
+        live_ranges.add(d4_pairs.pairs, classical_d4 ? d4_pairs.pair_count : 0) &&
+        live_ranges.add(d4_pairs.pair_counts, classical_d4 ? d4_pairs.pair_count_elements : 0) &&
+        live_ranges.add(d4_pairs.neighbor_offsets,
+                        classical_d4 ? d4_pairs.neighbor_offset_count : 0) &&
+        live_ranges.add(d4_pairs.neighbor_counts,
+                        classical_d4 ? d4_pairs.neighbor_count_elements : 0) &&
+        live_ranges.add(d4_pairs.neighbors, classical_d4 ? d4_pairs.neighbor_count : 0) &&
+        live_ranges.add(d4_pairs.committed_generations,
+                        classical_d4 ? d4_pairs.committed_generation_count : 0) &&
+        live_ranges.add(d4_pairs.eligible_mask, classical_d4 ? d4_pairs.eligible_mask_count : 0) &&
+        live_ranges.add(d4_pairs.active_mask, classical_d4 ? d4_pairs.active_mask_count : 0) &&
         live_ranges.add(plan.external_point_charge_batch.atom_offsets,
                         explicit_point_force ? batch_size + 1 : 0) &&
         live_ranges.add(plan.external_point_charge_batch.batch_shell_offsets,

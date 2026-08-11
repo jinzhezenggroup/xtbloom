@@ -67,6 +67,11 @@ constexpr double kMixerDamping = 0.4;
 constexpr std::uint64_t kInitialGeometryGeneration = 1u;
 constexpr std::uint64_t kInitialStateGeneration = 1u;
 constexpr std::size_t kArenaAlignment = 256u;
+/* One committed physical superset serves every pair consumer.  D4 two-body
+ * reaches 50 bohr; narrower roles re-evaluate positions with their own
+ * inclusive 25/30-bohr predicates and never infer physical membership solely
+ * from list presence. */
+constexpr double kD4PairlistBuilderCutoffBohr = 50.0;
 
 Gfn2CudaSccStartMode public_scc_start_mode(const xtbloom_compute_options_t& options) noexcept {
   return options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
@@ -386,7 +391,6 @@ struct NumericalRefreshDeviceBinding {
   std::int64_t geometry_pair_elements = 0;
   std::int64_t es2_elements = 0;
   std::int64_t aes2_elements = 0;
-  std::int64_t d4_pair_elements = 0;
   std::uint8_t d4_enabled = 0u;
   std::uint8_t point_enabled = 0u;
   std::uint8_t periodic_enabled = 0u;
@@ -399,8 +403,6 @@ struct NumericalRefreshDeviceBinding {
   const std::int64_t* es2_offsets = nullptr;
   const std::int64_t* point_offsets = nullptr;
   const std::int64_t* response_offsets = nullptr;
-  const std::int64_t* d4_pair_offsets = nullptr;
-
   const std::uint8_t* requested = nullptr;
   const std::uint8_t* preprocessing_published = nullptr;
   std::uint8_t* eligible = nullptr;
@@ -447,9 +449,7 @@ struct NumericalRefreshDeviceBinding {
   double* public_es2 = nullptr;
   double* public_aes2 = nullptr;
 
-  const double* candidate_d4_pairs = nullptr;
   const double* candidate_d4_coordination = nullptr;
-  double* public_d4_pairs = nullptr;
   double* public_d4_coordination = nullptr;
   const double* candidate_point_shell = nullptr;
   double* public_point_shell = nullptr;
@@ -654,14 +654,6 @@ __global__ void commit_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBindi
     binding.public_es2[index] = binding.candidate_es2[index];
   }
 
-  if (binding.d4_enabled != 0u) {
-    const std::int64_t d4_begin = binding.d4_pair_offsets[system];
-    const std::int64_t d4_end = binding.d4_pair_offsets[system + 1];
-    for (std::int64_t index = d4_begin * kGfn2D4PairDataElements + threadIdx.x;
-         index < d4_end * kGfn2D4PairDataElements; index += blockDim.x) {
-      binding.public_d4_pairs[index] = binding.candidate_d4_pairs[index];
-    }
-  }
   if (binding.point_enabled != 0u) {
     const std::int64_t point_begin = binding.point_offsets[system];
     const std::int64_t point_end = binding.point_offsets[system + 1];
@@ -1593,13 +1585,9 @@ struct HostPlans {
   AES2Workspace aes2_workspace{};
   AES2GeometryCache aes2_cache{};
 
-  PinnedArena d4_workspace_storage;
-  D4Workspace d4_workspace{};
-  std::vector<double> d4_pair_data;
-  std::vector<double> d4_coordination;
-  D4GeometryCache d4_cache{};
   std::vector<Gfn2D4DeviceElementData> d4_elements;
   std::vector<Gfn2D4DeviceReferenceData> d4_references;
+  std::vector<double> d4_coordination;
 
   std::vector<double> explicit_point_shell_potential;
   PinnedArena wavefunction_storage;
@@ -1671,10 +1659,10 @@ struct HostPlans {
         vector_bytes(aes2_pairs) + vector_bytes(aes2_pair_scratch) +
         vector_bytes(aes2_potential_scratch) + vector_bytes(aes2_batch_scratch) +
         vector_bytes(aes2_gradient_scratch) + vector_bytes(aes2_coordination_scratch) +
-        vector_bytes(d4_pair_data) + vector_bytes(d4_coordination) + vector_bytes(d4_elements) +
-        vector_bytes(d4_references) + vector_bytes(explicit_point_shell_potential);
+        vector_bytes(d4_elements) + vector_bytes(d4_references) + vector_bytes(d4_coordination) +
+        vector_bytes(explicit_point_shell_potential);
     return direct_plan_vectors + model_plan_storage + numerical_vectors +
-           d4_workspace_storage.bytes() + wavefunction_storage.bytes();
+           wavefunction_storage.bytes();
   }
 
   xtbloom_status_t build(TopologyKey&& new_key, std::vector<double>&& new_positions,
@@ -1818,20 +1806,11 @@ struct HostPlans {
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
     if (d4_enabled) {
-      if (d4_workspace_storage.allocate(d4.workspace_size_bytes()) != cudaSuccess) {
-        error = "failed to allocate pinned host D4 setup workspace";
-        return XTBLOOM_STATUS_ALLOCATION_FAILED;
-      }
-      status = bind_d4_workspace(d4, d4_workspace_storage.get(), d4_workspace_storage.bytes(),
-                                 d4_workspace, error);
-      if (status != XTBLOOM_STATUS_SUCCESS) return status;
-      d4_pair_data.resize(static_cast<std::size_t>(d4.total_pairs()) * kD4PairDataElements);
-      d4_coordination.resize(atom_count);
-      status = update_d4_geometry_cache_cpu(
-          d4, positions.data(), geometry_generation, d4_pair_data.data(), d4_pair_data.size(),
-          d4_coordination.data(), d4_coordination.size(), d4_workspace, d4_cache, error);
-      if (status != XTBLOOM_STATUS_SUCCESS) return status;
-
+      /* The setup owner needs only a stable initial CN image. The first CUDA
+       * preprocessing transaction replaces these zeros before any D4
+       * consumer is eligible; dense CPU D4 pair evaluation is intentionally
+       * not part of cache construction anymore. */
+      d4_coordination.assign(atom_count, 0.0);
       d4_elements.reserve(parameters::d4::kElements.size());
       for (const auto& element : parameters::d4::kElements) {
         d4_elements.push_back({element.reference_offset, element.reference_count,
@@ -1896,7 +1875,6 @@ struct HostPlans {
       sources.d4.references = setup_array(d4_references);
       sources.d4.reference_c6 = {parameters::d4::kReferenceC6.data(),
                                  static_cast<std::int64_t>(parameters::d4::kReferenceC6.size())};
-      sources.d4.pair_data = setup_array(d4_pair_data);
       sources.d4.coordination_numbers = setup_array(d4_coordination);
     }
     if (!point_values.empty()) {
@@ -1954,7 +1932,10 @@ std::string setup_error_message(const char* operation, xtbloom_status_t status,
 struct NumericalRefreshState {
   Gfn2PreprocessingDeviceBinding preprocessing{};
   NumericalRefreshDeviceBinding device{};
-  Gfn2D4DeviceCache d4_candidate{};
+  /* Refresh reads preprocessing candidate positions; SCC/post/force/terminal
+   * consumers read d4_cache with the exact committed-position identity. */
+  Gfn2D4PairListDeviceCache d4_refresh_cache{};
+  Gfn2D4PairListDeviceCache d4_cache{};
   Gfn2D4DeviceWorkspace d4_workspace{};
   Gfn2ExternalPointChargeDeviceBatch point_batch{};
   Gfn2ExternalPointChargeDeviceCache point_candidate{};
@@ -2352,13 +2333,11 @@ struct Gfn2CudaExecutionCache::Impl {
     const std::int64_t geometry_pairs = candidate.plan_seed.geometry_batch.total_pairs;
     const std::int64_t es2_elements = candidate.plan_seed.es2_batch.total_matrix_elements;
     const std::int64_t aes2_pairs = candidate.plan_seed.aes2_batch.total_pairs;
-    const std::int64_t d4_pairs = candidate.plan_seed.d4_batch.total_pairs;
     const std::uint64_t token = candidate.host.plan_token;
     std::int64_t coordinates = 0;
     std::int64_t point_coordinates = 0;
     std::int64_t geometry_pair_elements = 0;
     std::int64_t aes2_elements = 0;
-    std::int64_t d4_pair_elements = 0;
     std::int64_t dipole_elements = 0;
     std::int64_t quadrupole_elements = 0;
     /* Fixed-topology capacities for the optional sparse pair-list gate.  The
@@ -2371,9 +2350,12 @@ struct Gfn2CudaExecutionCache::Impl {
                    candidate.host.basis.atom_offsets[static_cast<std::size_t>(system + 1)] -
                        candidate.host.basis.atom_offsets[static_cast<std::size_t>(system)]);
     }
-    /* Per-system sparse/dense dispatch decisions, uploaded once at setup.  Each
+    /* Per-system sparse/dense dispatch decisions, uploaded once at setup. Each
      * peer independently crosses the measured 40-atom crossover, so a
-     * heterogeneous batch no longer applies one strategy to every member. */
+     * heterogeneous batch no longer applies one strategy to every member. D4
+     * still forces the leaf to exist for small dense peers; dense mode then
+     * publishes the full triangle into the same committed fixed-capacity
+     * transaction used by sparse peers. */
     std::vector<std::int32_t> pairlist_system_modes(static_cast<std::size_t>(batch));
     for (std::int64_t system = 0; system < batch; ++system) {
       const std::int64_t atoms_per_system =
@@ -2396,6 +2378,11 @@ struct Gfn2CudaExecutionCache::Impl {
       error = "numerical refresh sparse pair capacity overflows int64_t";
       return XTBLOOM_STATUS_ALLOCATION_FAILED;
     }
+    /* The committed pair-list schema requires a positive fixed slot capacity
+     * even when every system is a singleton. Reserve one inert pair slot per
+     * peer; builders still publish pair_count=0, so no synthetic pair becomes
+     * visible to D4 or coordination consumers. */
+    sparse_pairs_per_system = std::max<std::int64_t>(1, sparse_pairs_per_system);
     std::int64_t sparse_cell_capacity = 0;
     std::int64_t sparse_neighbor_capacity = 0;
     std::int64_t sparse_pair_capacity = 0;
@@ -2410,7 +2397,6 @@ struct Gfn2CudaExecutionCache::Impl {
         !checked_elements(points, 3, point_coordinates) ||
         !checked_elements(geometry_pairs, kGfn2GeometryPairDataElements, geometry_pair_elements) ||
         !checked_elements(aes2_pairs, kGfn2AES2PairDataElements, aes2_elements) ||
-        !checked_elements(d4_pairs, kGfn2D4PairDataElements, d4_pair_elements) ||
         !checked_elements(matrices, 3, dipole_elements) ||
         !checked_elements(matrices, 6, quadrupole_elements)) {
       error = "numerical refresh element count overflows int64_t";
@@ -2529,12 +2515,7 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t committed_pair_generations = 0u;
       std::size_t committed_eligible_mask = 0u;
 
-      std::size_t d4_candidate_pairs = 0u;
-      std::size_t d4_candidate_coordination = 0u;
-      std::size_t d4_pair_scratch = 0u;
       std::size_t d4_coordination_scratch = 0u;
-      std::size_t d4_generations = 0u;
-      std::size_t d4_sequence = 0u;
       std::size_t d4_system_errors = 0u;
       std::size_t d4_device_error = 0u;
       std::size_t point_candidate_shell = 0u;
@@ -2678,12 +2659,7 @@ struct Gfn2CudaExecutionCache::Impl {
     offset.committed_eligible_mask = layout.append<std::uint8_t>(batch);
 
     if (candidate.host.d4_enabled) {
-      offset.d4_candidate_pairs = layout.append<double>(d4_pair_elements);
-      offset.d4_candidate_coordination = layout.append<double>(atoms);
-      offset.d4_pair_scratch = layout.append<double>(d4_pair_elements);
       offset.d4_coordination_scratch = layout.append<double>(atoms);
-      offset.d4_generations = layout.append<std::uint64_t>(batch);
-      offset.d4_sequence = layout.append<std::uint32_t>(1);
       offset.d4_system_errors = layout.append<std::uint32_t>(batch);
       offset.d4_device_error = layout.append<std::uint32_t>(1);
     }
@@ -2778,21 +2754,24 @@ struct Gfn2CudaExecutionCache::Impl {
     upload_vector(offset.committed_point_gammas, candidate.host.point_gammas);
     upload_vector(offset.committed_periodic_shifts, candidate.host.periodic_shifts);
     upload_vector(offset.committed_periodic_response, candidate.host.periodic_response);
-    std::vector<std::uint64_t> initial_generations(static_cast<std::size_t>(batch),
-                                                   candidate.host.geometry_generation);
+    /* Refresh-owned committed caches start unpublished. prepare_host performs
+     * the first real numerical transaction from the caller's geometry, while
+     * topology-only plans defer that transaction to their first compute. This
+     * prevents epoch 1 from advertising zero-initialized pair-list/D4 leaves. */
+    std::vector<std::uint64_t> initial_generations(static_cast<std::size_t>(batch), 0u);
     upload_vector(offset.committed_generations, initial_generations);
-    upload(offset.geometry_epoch, &candidate.host.geometry_generation,
-           sizeof(candidate.host.geometry_generation));
+    constexpr std::uint64_t kUnpublishedGeometryEpoch = 0u;
+    upload(offset.geometry_epoch, &kUnpublishedGeometryEpoch, sizeof(kUnpublishedGeometryEpoch));
     if (cuda_status == cudaSuccess) {
       cuda_status = cudaMemsetAsync(arena_pointer<std::uint8_t>(arena, offset.requested), 1,
                                     static_cast<std::size_t>(batch), stream);
     }
     if (cuda_status == cudaSuccess) {
-      /* Refresh eligibility must survive SCC activity derivation.  Keeping a
-       * dedicated byte vector lets terminal publication distinguish a peer
-       * rejected by numerical refresh after the SCC ledger becomes inactive
-       * through convergence or failure. */
-      cuda_status = cudaMemsetAsync(arena_pointer<std::uint8_t>(arena, offset.eligible), 1,
+      /* The dedicated eligibility vector begins unpublished and is set only
+       * by the final refresh gate. It then survives SCC activity derivation so
+       * terminal publication can distinguish a refresh-rejected peer after the
+       * SCC ledger becomes inactive through convergence or failure. */
+      cuda_status = cudaMemsetAsync(arena_pointer<std::uint8_t>(arena, offset.eligible), 0,
                                     static_cast<std::size_t>(batch), stream);
     }
     if (cuda_status == cudaSuccess) {
@@ -2917,18 +2896,22 @@ struct Gfn2CudaExecutionCache::Impl {
         arena_pointer<std::uint64_t>(arena, offset.output_operator_generations);
     binding.output.generation_elements = batch;
     binding.output.plan_token = token;
-    bool pairlist_enabled = false;
-    if (xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(maximum_system_atoms)) {
-      /* The sparse consistency gate is enabled for large fixed-topology
-       * batches.  Capacities were provisioned once from the fixed topology
-       * above (cells, neighbors, and pairs all use safe upper bounds), so the
-       * documented overflow detection never triggers for a valid system. */
-      pairlist_enabled = true;
+    const bool pairlist_enabled =
+        candidate.host.d4_enabled ||
+        xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(maximum_system_atoms);
+    const double pairlist_builder_cutoff = candidate.host.d4_enabled
+                                               ? kD4PairlistBuilderCutoffBohr
+                                               : xtbloom::detail::cuda::kDefaultPairlistCutoffBohr;
+    if (pairlist_enabled) {
+      /* Capacities were provisioned once from fixed topology above. D4 makes
+       * the leaf mandatory and widens only the physical builder superset to
+       * 50 bohr. This source GFN2 coordination view remains canonical at 25
+       * bohr; the D4 binding later projects its 30/50/25-bohr role views. */
       binding.plan.pairlist = {
           static_cast<std::int64_t>(batch),
           static_cast<std::int64_t>(atoms),
           static_cast<std::int64_t>(batch + 1),
-          xtbloom::detail::cuda::kDefaultPairlistCutoffBohr,
+          pairlist_builder_cutoff,
           sparse_cells_per_system,
           sparse_neighbors_per_atom,
           sparse_pairs_per_system,
@@ -3048,7 +3031,7 @@ struct Gfn2CudaExecutionCache::Impl {
                                            xtbloom::detail::Gfn2PairMapKind::kExplicit,
                                            token,
                                            xtbloom::detail::cuda::kDefaultPairlistCutoffBohr,
-                                           xtbloom::detail::cuda::kDefaultPairlistCutoffBohr,
+                                           pairlist_builder_cutoff,
                                            static_cast<std::int64_t>(batch),
                                            static_cast<std::int64_t>(atoms),
                                            sparse_pairs_per_system,
@@ -3146,7 +3129,6 @@ struct Gfn2CudaExecutionCache::Impl {
     device.geometry_pair_elements = geometry_pair_elements;
     device.es2_elements = es2_elements;
     device.aes2_elements = aes2_elements;
-    device.d4_pair_elements = d4_pair_elements;
     device.d4_enabled = candidate.host.d4_enabled ? 1u : 0u;
     device.point_enabled = points != 0 ? 1u : 0u;
     device.periodic_enabled = candidate.host.periodic_enabled ? 1u : 0u;
@@ -3158,7 +3140,6 @@ struct Gfn2CudaExecutionCache::Impl {
     device.es2_offsets = candidate.plan_seed.es2_batch.matrix_offsets;
     device.point_offsets = candidate.plan_seed.explicit_point_charge_batch.point_charge_offsets;
     device.response_offsets = candidate.plan_seed.periodic_batch.matrix_offsets;
-    device.d4_pair_offsets = candidate.plan_seed.d4_batch.pair_offsets;
     device.requested = binding.activity.requested_mask;
     device.preprocessing_published = binding.activity.published_mask;
     device.eligible = arena_pointer<std::uint8_t>(arena, offset.eligible);
@@ -3212,35 +3193,66 @@ struct Gfn2CudaExecutionCache::Impl {
     device.geometry_epoch = binding.geometry_epoch.value;
 
     if (candidate.host.d4_enabled) {
-      numerical.d4_candidate = {
-          arena_pointer_if<double>(arena, offset.d4_candidate_pairs, d4_pair_elements),
-          d4_pair_elements,
-          arena_pointer<double>(arena, offset.d4_candidate_coordination),
-          atoms,
-          candidate.host.geometry_generation,
-          token};
-      numerical.d4_workspace.pair_scratch =
-          arena_pointer_if<double>(arena, offset.d4_pair_scratch, d4_pair_elements);
-      numerical.d4_workspace.pair_scratch_elements = d4_pair_elements;
       numerical.d4_workspace.coordination_scratch =
           arena_pointer<double>(arena, offset.d4_coordination_scratch);
       numerical.d4_workspace.coordination_scratch_elements = atoms;
-      numerical.d4_workspace.geometry_generations =
-          arena_pointer<std::uint64_t>(arena, offset.d4_generations);
-      numerical.d4_workspace.geometry_generation_elements = batch;
-      numerical.d4_workspace.geometry_sequence_active =
-          arena_pointer<std::uint32_t>(arena, offset.d4_sequence);
-      numerical.d4_workspace.geometry_sequence_elements = 1;
       numerical.d4_workspace.system_errors =
           arena_pointer<std::uint32_t>(arena, offset.d4_system_errors);
       numerical.d4_workspace.system_error_elements = batch;
-      device.candidate_d4_pairs = numerical.d4_candidate.pair_data;
-      device.candidate_d4_coordination = numerical.d4_candidate.coordination_numbers;
-      device.public_d4_pairs = const_cast<double*>(candidate.plan_seed.d4_cache.pair_data);
-      device.public_d4_coordination =
-          const_cast<double*>(candidate.plan_seed.d4_cache.coordination_numbers);
+      device.candidate_d4_coordination = numerical.d4_workspace.coordination_scratch;
+      device.public_d4_coordination = candidate.plan_seed.d4_pairlist_cache.coordination_numbers;
       device.d4_system_errors = numerical.d4_workspace.system_errors;
       device.d4_device_error = arena_pointer<std::uint32_t>(arena, offset.d4_device_error);
+
+      Gfn2PairListConsumerView d4_coordination_pairs{};
+      Gfn2PairListConsumerView d4_two_body_pairs{};
+      Gfn2PairListConsumerView d4_atm_pairs{};
+      const auto d4_coordination_projection = project_gfn2_pair_list_role_binding(
+          candidate.device_topology, binding.output.pairlist, Gfn2PairListRole::kD4Coordination,
+          Gfn2PlanMemorySpace::kCudaDevice, d4_coordination_pairs);
+      const auto d4_two_body_projection = project_gfn2_pair_list_role_binding(
+          candidate.device_topology, binding.output.pairlist, Gfn2PairListRole::kD4TwoBody,
+          Gfn2PlanMemorySpace::kCudaDevice, d4_two_body_pairs);
+      const auto d4_atm_projection = project_gfn2_pair_list_role_binding(
+          candidate.device_topology, binding.output.pairlist, Gfn2PairListRole::kD4Atm,
+          Gfn2PlanMemorySpace::kCudaDevice, d4_atm_pairs);
+      if (d4_coordination_projection.error != Gfn2PlanSchemaError::kSuccess ||
+          d4_two_body_projection.error != Gfn2PlanSchemaError::kSuccess ||
+          d4_atm_projection.error != Gfn2PlanSchemaError::kSuccess) {
+        error = "CUDA runtime rejected a D4 role projection of the committed pair-list superset";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+
+      /* The role views borrow one committed structural transaction. D4 CN is
+       * built into scratch after that transaction commits, then the terminal
+       * numerical gate alone copies it to the public outlet and advances the
+       * common generation/eligibility authority. This keeps Graph replay on a
+       * device epoch and prevents a D4-local failure from publishing stale CN. */
+      numerical.d4_refresh_cache = {binding.workspace.positions_scratch,
+                                    coordinates,
+                                    device.public_d4_coordination,
+                                    atoms,
+                                    device.committed_generations,
+                                    batch,
+                                    device.eligible,
+                                    batch,
+                                    d4_coordination_pairs,
+                                    d4_two_body_pairs,
+                                    d4_atm_pairs,
+                                    token};
+      numerical.d4_cache = {device.committed_positions,
+                            coordinates,
+                            device.public_d4_coordination,
+                            atoms,
+                            device.committed_generations,
+                            batch,
+                            device.eligible,
+                            batch,
+                            d4_coordination_pairs,
+                            d4_two_body_pairs,
+                            d4_atm_pairs,
+                            token};
+      candidate.plan_seed.d4_pairlist_cache = numerical.d4_cache;
     }
     if (points != 0) {
       numerical.point_batch = candidate.plan_seed.explicit_point_charge_batch;
@@ -3894,7 +3906,7 @@ struct Gfn2CudaExecutionCache::Impl {
       post_plan.aes2_cache = candidate.plan_seed.aes2_cache;
       post_plan.d4_batch = candidate.plan_seed.d4_batch;
       post_plan.d4_parameters = candidate.plan_seed.d4_parameters;
-      post_plan.d4_cache = candidate.plan_seed.d4_cache;
+      post_plan.d4_cache = candidate.numerical.d4_cache;
       post_plan.external_point_charge_batch = external_batch;
       post_plan.external_point_charge_cache = candidate.plan_seed.explicit_point_charge_cache;
       post_plan.periodic_batch = periodic_batch;
@@ -3932,7 +3944,7 @@ struct Gfn2CudaExecutionCache::Impl {
                                      candidate.plan_seed.aes2_cache,
                                      classical_d4_batch,
                                      candidate.plan_seed.d4_parameters,
-                                     candidate.plan_seed.d4_cache};
+                                     candidate.numerical.d4_cache};
       std::uint32_t composition_components =
           static_cast<std::uint32_t>(Gfn2ForceCompositionComponent::kElectronicGradient) |
           static_cast<std::uint32_t>(Gfn2ForceCompositionComponent::kClassicalForce);
@@ -4464,17 +4476,33 @@ struct Gfn2CudaExecutionCache::Impl {
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     /* The binding is constructed before the first device numerical refresh, so
-     * the committed sparse pair-list consumer is not yet eligible (its arrays
-     * are still zero-initialized) and cannot be exercised by this preflight.
-     * Run the validation smoke on a plan copy without the sparse pair-list CN
-     * consumer; the dense coordination VJP still exercises every other leaf and
-     * the full public publication chain.  The committed sparse consumer is then
-     * parity-gated on the first real execution, after the numerical refresh has
-     * advanced the epoch and published an eligible pair list. */
+     * neither the general committed pair list nor the D4 committed pair-list/CN
+     * bundle is eligible yet. Run the validation smoke on a plan copy with those
+     * refresh-owned consumers disabled. The dense coordination VJP and non-D4
+     * leaves still exercise the complete publication chain; the production plan
+     * retains every D4 component and exercises it after the first real refresh
+     * has atomically published the pair lists, CN, generation, and eligibility. */
     Gfn2EnergyForceExecutionDevicePlan validation_plan = binding.plan;
     validation_plan.pairlist_committed.plan_token = 0u;
     validation_plan.pairlist_batch.plan_token = 0u;
-    cuda_status = execute_gfn2_energy_force_cuda(validation_plan, binding.input, binding.results,
+    constexpr std::uint32_t kD4SccPotential =
+        static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kD4TwoBody);
+    constexpr std::uint32_t kD4SccEnergy =
+        static_cast<std::uint32_t>(Gfn2SccClassicalEnergyComponent::kD4TwoBody);
+    constexpr std::uint32_t kD4AtmEnergy =
+        static_cast<std::uint32_t>(Gfn2TotalEnergyComponent::kD4Atm);
+    constexpr std::uint32_t kD4ClassicalForces =
+        static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4TwoBody) |
+        static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4ATM);
+    validation_plan.scc_potential_components &= ~kD4SccPotential;
+    validation_plan.scc_energy_components &= ~kD4SccEnergy;
+    validation_plan.post_scc_potential_plan.enabled_components &= ~kD4SccPotential;
+    validation_plan.total_energy_batch.enabled_components &= ~kD4AtmEnergy;
+    validation_plan.classical_plan.enabled_components &= ~kD4ClassicalForces;
+    Gfn2EnergyForceExecutionDeviceInput validation_input = binding.input;
+    validation_input.total_energy.d4_atm = nullptr;
+    validation_input.total_energy.d4_atm_elements = 0;
+    cuda_status = execute_gfn2_energy_force_cuda(validation_plan, validation_input, binding.results,
                                                  binding.intermediates, binding.workspace,
                                                  binding.diagnostics, stream);
     if (cuda_status != cudaSuccess) {
@@ -4644,7 +4672,7 @@ struct Gfn2CudaExecutionCache::Impl {
         repulsion,
         d4_enabled ? terminal_d4 : Gfn2D4DeviceBatch{},
         d4_enabled ? candidate.plan_seed.d4_parameters : Gfn2D4DeviceParameters{},
-        d4_enabled ? candidate.plan_seed.d4_cache : Gfn2D4DeviceCache{},
+        d4_enabled ? candidate.numerical.d4_cache : Gfn2D4PairListDeviceCache{},
         candidate.numerical.preprocessing.geometry_epoch,
         candidate.numerical.device.committed_generations,
         batch,
@@ -5320,6 +5348,21 @@ struct Gfn2CudaExecutionCache::Impl {
                  ? XTBLOOM_STATUS_INVALID_ARGUMENT
                  : XTBLOOM_STATUS_INTERNAL_ERROR;
     }
+    /* The setup owner factors its deterministic topology-only seed at
+     * generation 1 so setup and graph validation can exercise a usable
+     * overlap cache.  The externally visible numerical runtime, however,
+     * starts unpublished at epoch 0.  Invalidate only the seed provenance
+     * before publishing the candidate so the first real epoch-1 refresh must
+     * refactor the caller geometry instead of mistaking the seed factor for a
+     * cache hit. */
+    cuda_status = cudaMemsetAsync(
+        candidate->eigensolver_binding.cache.geometry_generations, 0,
+        static_cast<std::size_t>(candidate->host.basis.batch_size) * sizeof(std::uint64_t), stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA topology-only overlap cache invalidation", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    candidate->submitted = true;
     output = std::move(candidate);
     return XTBLOOM_STATUS_SUCCESS;
   }
@@ -5917,9 +5960,13 @@ struct Gfn2CudaExecutionCache::Impl {
           device.batch_size, const_cast<std::uint32_t*>(device.d4_system_errors),
           const_cast<std::uint32_t*>(device.d4_device_error), stream);
       if (cuda_status == cudaSuccess) {
-        cuda_status = update_gfn2_d4_geometry_cache_cuda(
-            current.plan_seed.d4_batch, current.plan_seed.d4_parameters, device.candidate_positions,
-            numerical.d4_candidate, numerical.d4_workspace,
+        /* compose_gfn2_preprocessing_epoch_cuda commits the physical pair
+         * superset earlier on this stream. The D4 refresh therefore observes
+         * current role views without host polling, and its epoch overload is
+         * safe under CUDA Graph replay. */
+        cuda_status = update_gfn2_d4_pairlist_cache_cuda(
+            current.plan_seed.d4_batch, current.plan_seed.d4_parameters,
+            preprocessing.geometry_epoch, numerical.d4_refresh_cache, numerical.d4_workspace,
             const_cast<std::uint32_t*>(device.d4_device_error), stream);
       }
       if (cuda_status != cudaSuccess) {
@@ -6626,8 +6673,10 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.committed_h0 = opaque_buffer(numerical.public_h0, numerical.total_matrices);
     identity.committed_es2 = opaque_buffer(numerical.public_es2, numerical.es2_elements);
     identity.committed_aes2 = opaque_buffer(numerical.public_aes2, numerical.aes2_elements);
-    identity.committed_d4_pairs = opaque_buffer(
-        numerical.public_d4_pairs, numerical.d4_enabled != 0u ? numerical.d4_pair_elements : 0);
+    /* Production D4 consumes the committed physical pair-list superset and no
+     * longer retains a dense five-double pair-value cache. Keep the diagnostic
+     * leaf canonically empty so memory evidence can detect a regression. */
+    identity.committed_d4_pairs = {};
     identity.committed_d4_coordination_numbers = opaque_buffer(
         numerical.public_d4_coordination, numerical.d4_enabled != 0u ? numerical.total_atoms : 0);
     identity.committed_point_charge_positions =
@@ -7452,6 +7501,20 @@ xtbloom_status_t Gfn2CudaExecutionCache::prepare_host(const xtbloom_batch_t& bat
     error = "unknown exception while constructing CUDA GFN2 runtime candidate";
     return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+  /* A direct host preparation promises an immediately executable numerical
+   * runtime. Publish the initial geometry through the same transaction used
+   * by reuse and public compute so pair-list/D4 leaves, overlap factors, the
+   * common generation, and eligibility all become epoch 1 together. */
+  Gfn2CudaNumericalInputView numerical{};
+  numerical.positions = batch.positions;
+  numerical.point_charge_positions = batch.point_charge_positions;
+  numerical.point_charge_values = batch.point_charge_values;
+  numerical.point_charge_gammas = batch.point_charge_gammas;
+  numerical.atomic_potential_shifts = batch.atomic_potential_shifts;
+  numerical.charge_response_matrix = batch.charge_response_matrix;
+  status = impl_->refresh_numerical_locked(*candidate, numerical, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   impl_->prepared = std::move(candidate);

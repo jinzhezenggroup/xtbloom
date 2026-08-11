@@ -113,6 +113,10 @@ struct Gfn2CudaExecutionIdentity {
   Gfn2CudaOpaqueBufferIdentity committed_h0{};
   Gfn2CudaOpaqueBufferIdentity committed_es2{};
   Gfn2CudaOpaqueBufferIdentity committed_aes2{};
+  /* committed_d4_pairs is canonical empty after #220: D4 rebuilds
+   * role-specific values directly from positions over the committed physical
+   * pair-list superset. The committed coordination-number outlet remains
+   * populated when D4 is enabled. */
   Gfn2CudaOpaqueBufferIdentity committed_d4_pairs{};
   Gfn2CudaOpaqueBufferIdentity committed_d4_coordination_numbers{};
   Gfn2CudaOpaqueBufferIdentity committed_point_charge_positions{};

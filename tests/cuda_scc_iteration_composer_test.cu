@@ -23,6 +23,7 @@
 #include "data/parameters/d4.hpp"
 #include "model/gfn2/coordination.hpp"
 #include "runtime/nvidia_host_api.h"
+#include "tests/support/cuda_d4_pairlist_fixture.cuh"
 #include "tests/support/gfn2_scc_test_case.hpp"
 
 /*
@@ -282,7 +283,6 @@ struct InputBacking {
       result.d4.reference_c6 = {
           xtbloom::parameters::d4::kReferenceC6.data(),
           static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
-      result.d4.pair_data = {host.d4_cache()->pair_data, host.d4_cache()->pair_data_elements};
       result.d4.coordination_numbers = {host.d4_cache()->coordination_numbers,
                                         host.d4_cache()->coordination_elements};
     }
@@ -334,6 +334,7 @@ Gfn2SccIterationHostInitialization fresh_initialization(const HostSccCase& host)
 struct ComposerFixture {
   HostSccCase host;
   InputBacking backing;
+  xtbloom::test::cuda::D4CommittedPairListFixture d4_pairlist;
   ProviderHandles handles;
   Gfn2SccSetupTopology topology_owner;
   Gfn2SccSetupInputs inputs_owner;
@@ -430,6 +431,14 @@ struct ComposerFixture {
       std::fprintf(stderr, "composer immutable-input upload failed: error=%u field=%u\n",
                    static_cast<unsigned>(input_diagnostic.error),
                    static_cast<unsigned>(input_diagnostic.field));
+      return false;
+    }
+    if (host.d4_plan() != nullptr &&
+        !d4_pairlist.bind(
+            host.atom_offsets(), host.positions(), device_topology,
+            plan_seed.d4_pairlist_cache.positions, plan_seed.d4_pairlist_cache.coordination_numbers,
+            host.options().geometry_generation, plan_seed.d4_pairlist_cache, handles.stream())) {
+      std::fprintf(stderr, "composer D4 committed pair-list setup failed\n");
       return false;
     }
 

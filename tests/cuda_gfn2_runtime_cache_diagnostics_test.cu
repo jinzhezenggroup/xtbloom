@@ -262,7 +262,6 @@ struct CacheSnapshot {
   std::vector<double> h0;
   std::vector<double> es2;
   std::vector<double> aes2;
-  std::vector<double> d4_pairs;
   std::vector<double> d4_coordination;
   std::vector<double> point_positions;
   std::vector<double> point_values;
@@ -318,7 +317,6 @@ int download_snapshot(const Gfn2CudaExecutionIdentity& identity, cudaStream_t st
   CUDA_CHECK(download_leaf(identity.committed_h0, snapshot.h0, stream));
   CUDA_CHECK(download_leaf(identity.committed_es2, snapshot.es2, stream));
   CUDA_CHECK(download_leaf(identity.committed_aes2, snapshot.aes2, stream));
-  CUDA_CHECK(download_leaf(identity.committed_d4_pairs, snapshot.d4_pairs, stream));
   CUDA_CHECK(
       download_leaf(identity.committed_d4_coordination_numbers, snapshot.d4_coordination, stream));
   CUDA_CHECK(
@@ -408,7 +406,6 @@ bool same_snapshot_values(const CacheSnapshot& first, const CacheSnapshot& secon
          vectors_close(first.dipole, second.dipole) &&
          vectors_close(first.quadrupole, second.quadrupole) && vectors_close(first.h0, second.h0) &&
          vectors_close(first.es2, second.es2) && vectors_close(first.aes2, second.aes2) &&
-         vectors_close(first.d4_pairs, second.d4_pairs) &&
          vectors_close(first.d4_coordination, second.d4_coordination) &&
          vectors_close(first.point_positions, second.point_positions) &&
          vectors_close(first.point_values, second.point_values) &&
@@ -432,7 +429,11 @@ int validate_element_counts(const Gfn2CudaExecutionIdentity& identity, const Hos
   CHECK(identity.committed_h0.elements == matrices);
   CHECK(identity.committed_es2.elements == fixture.es2_cache().matrix_elements);
   CHECK(identity.committed_aes2.elements == fixture.aes2_cache().pair_data_elements);
-  CHECK(identity.committed_d4_pairs.elements == (d4 ? fixture.d4_cache()->pair_data_elements : 0));
+  /* #220 removes the production dense 5*P D4 pair-value cache. The identity
+   * remains as a regression sentinel and must be canonical empty even when D4
+   * is enabled. */
+  CHECK(identity.committed_d4_pairs.address == 0u);
+  CHECK(identity.committed_d4_pairs.elements == 0);
   CHECK(identity.committed_d4_coordination_numbers.elements == (d4 ? atoms : 0));
   CHECK(identity.committed_point_charge_positions.elements ==
         (points ? static_cast<std::int64_t>(fixture.point_charge_positions().size()) : 0));
@@ -561,13 +562,6 @@ int verify_peer_unchanged(const CacheSnapshot& before, const CacheSnapshot& afte
     CHECK(exact_range(before.aes2, after.aes2, pair_begin * aes2_width, pair_end * aes2_width));
   }
   if (d4) {
-    const auto& d4_offsets = fixture.d4_plan()->pair_offsets();
-    const std::int64_t d4_width =
-        pair_width(identity.committed_d4_pairs.elements, fixture.d4_plan()->total_pairs());
-    CHECK(d4_width > 0);
-    CHECK(exact_range(before.d4_pairs, after.d4_pairs,
-                      d4_offsets[static_cast<std::size_t>(system)] * d4_width,
-                      d4_offsets[static_cast<std::size_t>(system + 1)] * d4_width));
     CHECK(exact_range(before.d4_coordination, after.d4_coordination, atom_begin, atom_end));
   }
   if (points) {
@@ -636,13 +630,6 @@ int verify_peer_matches_reference(const CacheSnapshot& actual, const CacheSnapsh
     CHECK(close_range(actual.aes2, reference.aes2, pair_begin * aes2_width, pair_end * aes2_width));
   }
   if (d4) {
-    const auto& d4_offsets = fixture.d4_plan()->pair_offsets();
-    const std::int64_t d4_width =
-        pair_width(identity.committed_d4_pairs.elements, fixture.d4_plan()->total_pairs());
-    CHECK(d4_width > 0);
-    CHECK(close_range(actual.d4_pairs, reference.d4_pairs,
-                      d4_offsets[static_cast<std::size_t>(system)] * d4_width,
-                      d4_offsets[static_cast<std::size_t>(system + 1)] * d4_width));
     CHECK(close_range(actual.d4_coordination, reference.d4_coordination, atom_begin, atom_end));
   }
   if (points) {
@@ -708,13 +695,6 @@ int verify_every_peer_leaf_changed(const CacheSnapshot& before, const CacheSnaps
   CHECK(aes2_width > 0);
   CHECK(changed_range(before.aes2, after.aes2, pair_begin * aes2_width, pair_end * aes2_width));
   if (d4) {
-    const auto& d4_offsets = fixture.d4_plan()->pair_offsets();
-    const std::int64_t d4_width =
-        pair_width(identity.committed_d4_pairs.elements, fixture.d4_plan()->total_pairs());
-    CHECK(d4_width > 0);
-    CHECK(changed_range(before.d4_pairs, after.d4_pairs,
-                        d4_offsets[static_cast<std::size_t>(system)] * d4_width,
-                        d4_offsets[static_cast<std::size_t>(system + 1)] * d4_width));
     CHECK(changed_range(before.d4_coordination, after.d4_coordination, atom_begin, atom_end));
   }
   if (points) {

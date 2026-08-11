@@ -70,7 +70,7 @@ struct Gfn2PostSccPotentialDevicePlan {
   Gfn2AES2DeviceCache aes2_cache{};
   Gfn2D4DeviceBatch d4_batch{};
   Gfn2D4DeviceParameters d4_parameters{};
-  Gfn2D4DeviceCache d4_cache{};
+  Gfn2D4PairListDeviceCache d4_cache{};
   Gfn2ExternalPointChargeDeviceBatch external_point_charge_batch{};
   Gfn2ExternalPointChargeDeviceCache external_point_charge_cache{};
   Gfn2PeriodicEmbeddingDeviceBatch periodic_batch{};

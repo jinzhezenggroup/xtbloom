@@ -41,8 +41,9 @@ namespace xtbloom::detail::cuda {
  * v3 adds the sealed common topology projections (atom, shell ownership,
  * AO/matrix, packed all-pair, AO bucket, element identity) as the single
  * borrowing authority for every plan leaf; leaf identity is proven against
- * these projections in one place instead of re-deriving the master topology. */
-inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 3u;
+ * these projections in one place instead of re-deriving the master topology.
+ * ABI v4 replaces the dense D4 pair cache with Gfn2D4PairListDeviceCache. */
+inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 4u;
 
 /*
  * Which numerical-body stages one launch runs. The production device-tail loop
@@ -284,7 +285,11 @@ struct Gfn2SccIterationDevicePlan {
   Gfn2AES2DeviceCache aes2_cache{};
   Gfn2D4DeviceBatch d4_batch{};
   Gfn2D4DeviceParameters d4_parameters{};
-  Gfn2D4DeviceCache d4_cache{};
+  /* D4 consumes the transactionally committed 50-bohr pair-list superset.
+   * Role-specific 30/50/25-bohr views share storage and keep their own
+   * inclusive physical predicates; no production dense five-value pair cache
+   * is retained. */
+  Gfn2D4PairListDeviceCache d4_pairlist_cache{};
   Gfn2ExternalPointChargeDeviceBatch explicit_point_charge_batch{};
   Gfn2ExternalPointChargeDeviceCache explicit_point_charge_cache{};
   Gfn2PeriodicEmbeddingDeviceBatch periodic_batch{};

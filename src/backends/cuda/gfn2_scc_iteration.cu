@@ -206,6 +206,52 @@ bool same_topology_view(const Gfn2RaggedTopologyView& first,
          first.bucket_orbital_counts == second.bucket_orbital_counts;
 }
 
+bool same_pairlist_view(const Gfn2PairListConsumerView& first,
+                        const Gfn2PairListConsumerView& second) noexcept {
+  return first.memory_space == second.memory_space && first.state == second.state &&
+         first.role == second.role && first.pair_map_kind == second.pair_map_kind &&
+         first.plan_token == second.plan_token && first.cutoff_bohr == second.cutoff_bohr &&
+         first.list_builder_cutoff_bohr == second.list_builder_cutoff_bohr &&
+         first.batch_size == second.batch_size && first.total_atoms == second.total_atoms &&
+         first.max_pairs_per_system == second.max_pairs_per_system &&
+         first.max_neighbors_per_atom == second.max_neighbors_per_atom &&
+         first.pair_offset_count == second.pair_offset_count &&
+         first.neighbor_offset_count == second.neighbor_offset_count &&
+         first.pair_count == second.pair_count && first.neighbor_count == second.neighbor_count &&
+         first.pair_offsets == second.pair_offsets && first.pairs == second.pairs &&
+         first.pair_count_elements == second.pair_count_elements &&
+         first.neighbor_count_elements == second.neighbor_count_elements &&
+         first.pair_counts == second.pair_counts &&
+         first.neighbor_counts == second.neighbor_counts &&
+         first.neighbor_offsets == second.neighbor_offsets && first.neighbors == second.neighbors &&
+         first.committed_generation_count == second.committed_generation_count &&
+         first.eligible_mask_count == second.eligible_mask_count &&
+         first.active_mask_count == second.active_mask_count &&
+         first.committed_generations == second.committed_generations &&
+         first.eligible_mask == second.eligible_mask && first.active_mask == second.active_mask;
+}
+
+bool valid_d4_pairlist_role_views(const Gfn2RaggedTopologyView& topology,
+                                  const Gfn2D4PairListDeviceCache& cache) noexcept {
+  Gfn2PairListConsumerView two_body{};
+  Gfn2PairListConsumerView atm{};
+  const auto coordination_status = validate_gfn2_pair_list_consumer_binding(
+      topology, cache.coordination_pairs, Gfn2PlanMemorySpace::kCudaDevice);
+  const auto two_body_status = project_gfn2_pair_list_role_binding(
+      topology, cache.coordination_pairs, Gfn2PairListRole::kD4TwoBody,
+      Gfn2PlanMemorySpace::kCudaDevice, two_body);
+  const auto atm_status = project_gfn2_pair_list_role_binding(
+      topology, cache.coordination_pairs, Gfn2PairListRole::kD4Atm,
+      Gfn2PlanMemorySpace::kCudaDevice, atm);
+  return coordination_status.error == Gfn2PlanSchemaError::kSuccess &&
+         cache.coordination_pairs.role == Gfn2PairListRole::kD4Coordination &&
+         cache.coordination_pairs.cutoff_bohr == kGfn2D4CoordinationCutoffBohr &&
+         two_body_status.error == Gfn2PlanSchemaError::kSuccess &&
+         atm_status.error == Gfn2PlanSchemaError::kSuccess &&
+         same_pairlist_view(cache.two_body_pairs, two_body) &&
+         same_pairlist_view(cache.atm_pairs, atm);
+}
+
 bool same_eigenpairs(const Gfn2EigensolverDeviceResults& first,
                      const Gfn2EigensolverDeviceResults& second) noexcept {
   return first.eigenvalues == second.eigenvalues &&
@@ -383,7 +429,7 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   XTBLOOM_CHECK_TOKEN(plan.aes2_cache.plan_token, BindingField::kAES2);
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
     XTBLOOM_CHECK_TOKEN(plan.d4_batch.plan_token, BindingField::kD4);
-    XTBLOOM_CHECK_TOKEN(plan.d4_cache.plan_token, BindingField::kD4);
+    XTBLOOM_CHECK_TOKEN(plan.d4_pairlist_cache.plan_token, BindingField::kD4);
   }
   if (component_enabled(plan, Gfn2SccPotentialComponent::kExplicitPointCharge)) {
     XTBLOOM_CHECK_TOKEN(plan.explicit_point_charge_batch.plan_token,
@@ -918,24 +964,37 @@ bool validate_plan_pointer_shapes(const Gfn2SccIterationDevicePlan& plan,
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
     const auto& d4 = plan.d4_batch;
     const auto& parameters = plan.d4_parameters;
+    const auto& cache = plan.d4_pairlist_cache;
     std::int64_t reference_square = 0;
+    std::int64_t coordinates = 0;
     if (!checked_multiply(parameters.reference_count, parameters.reference_count,
                           reference_square) ||
-        parameters.element_count <= 0 || parameters.reference_count <= 0 ||
-        parameters.reference_c6_elements < reference_square || d4.atomic_number_hash == 0u ||
+        !checked_multiply(atoms, 3, coordinates) || parameters.element_count <= 0 ||
+        parameters.reference_count <= 0 || parameters.reference_c6_elements < reference_square ||
+        d4.atomic_number_hash == 0u || d4.batch_size != batch || d4.total_atoms != atoms ||
+        cache.position_elements != coordinates || cache.coordination_elements != atoms ||
+        cache.coordination_generation_elements != batch ||
+        cache.coordination_eligible_elements != batch ||
+        !valid_d4_pairlist_role_views(plan.topology, cache) ||
         !aligned(d4.atom_offsets, batch + 1, sizeof(std::int64_t), alignof(std::int64_t),
                  BindingField::kD4, 0) ||
-        !aligned(d4.pair_offsets, batch + 1, sizeof(std::int64_t), alignof(std::int64_t),
-                 BindingField::kD4, 1) ||
         !aligned(d4.atomic_numbers, atoms, sizeof(std::int32_t), alignof(std::int32_t),
-                 BindingField::kD4, 2) ||
+                 BindingField::kD4, 1) ||
+        !aligned(cache.positions, coordinates, sizeof(double), alignof(double), BindingField::kD4,
+                 2) ||
+        !aligned(cache.coordination_numbers, atoms, sizeof(double), alignof(double),
+                 BindingField::kD4, 3) ||
+        !aligned(cache.coordination_generations, batch, sizeof(std::uint64_t),
+                 alignof(std::uint64_t), BindingField::kD4, 4) ||
+        !aligned(cache.coordination_eligible_mask, batch, sizeof(std::uint8_t),
+                 alignof(std::uint8_t), BindingField::kD4, 5) ||
         !aligned(parameters.elements, parameters.element_count, sizeof(Gfn2D4DeviceElementData),
-                 alignof(Gfn2D4DeviceElementData), BindingField::kD4, 3) ||
+                 alignof(Gfn2D4DeviceElementData), BindingField::kD4, 6) ||
         !aligned(parameters.references, parameters.reference_count,
                  sizeof(Gfn2D4DeviceReferenceData), alignof(Gfn2D4DeviceReferenceData),
-                 BindingField::kD4, 4) ||
+                 BindingField::kD4, 7) ||
         !aligned(parameters.reference_c6, parameters.reference_c6_elements, sizeof(double),
-                 alignof(double), BindingField::kD4, 5)) {
+                 alignof(double), BindingField::kD4, 8)) {
       return false;
     }
   }
@@ -1200,16 +1259,11 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
    * keep their setup-owned distinct pair offsets). */
   if (plan.topology.pair_map_kind == Gfn2PairMapKind::kPackedLowerTriangle) {
     if (!same(plan.geometry_batch.pair_offsets, pairs.pair_offsets, BindingField::kGeometry) ||
-        !same(plan.aes2_batch.pair_offsets, pairs.pair_offsets, BindingField::kAES2) ||
-        (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody) &&
-         !same(plan.d4_batch.pair_offsets, pairs.pair_offsets, BindingField::kD4))) {
+        !same(plan.aes2_batch.pair_offsets, pairs.pair_offsets, BindingField::kAES2)) {
       return false;
     }
   } else if (!same(plan.aes2_batch.pair_offsets, plan.geometry_batch.pair_offsets,
-                   BindingField::kAES2) ||
-             (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody) &&
-              !same(plan.d4_batch.pair_offsets, plan.geometry_batch.pair_offsets,
-                    BindingField::kD4))) {
+                   BindingField::kAES2)) {
     /* Production plans currently use kNone and a setup-owned dense pair
      * partition.  Geometry is the authority for that non-topology domain. */
     return false;
@@ -1222,16 +1276,21 @@ bool validate_optional_plan_canonicalization(const Gfn2SccIterationDevicePlan& p
   if (!component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
     const auto& batch = plan.d4_batch;
     const auto& parameters = plan.d4_parameters;
-    const auto& cache = plan.d4_cache;
+    const auto& cache = plan.d4_pairlist_cache;
     if (batch.batch_size != 0 || batch.total_atoms != 0 || batch.total_pairs != 0 ||
         batch.plan_token != 0u || batch.atomic_number_hash != 0u || batch.atom_offsets != nullptr ||
         batch.pair_offsets != nullptr || batch.atomic_numbers != nullptr ||
         parameters.elements != nullptr || parameters.element_count != 0 ||
         parameters.references != nullptr || parameters.reference_count != 0 ||
         parameters.reference_c6 != nullptr || parameters.reference_c6_elements != 0 ||
-        cache.pair_data != nullptr || cache.pair_data_elements != 0 ||
+        cache.positions != nullptr || cache.position_elements != 0 ||
         cache.coordination_numbers != nullptr || cache.coordination_elements != 0 ||
-        cache.geometry_generation != 0u || cache.plan_token != 0u) {
+        cache.coordination_generations != nullptr || cache.coordination_generation_elements != 0 ||
+        cache.coordination_eligible_mask != nullptr || cache.coordination_eligible_elements != 0 ||
+        !same_pairlist_view(cache.coordination_pairs, Gfn2PairListConsumerView{}) ||
+        !same_pairlist_view(cache.two_body_pairs, Gfn2PairListConsumerView{}) ||
+        !same_pairlist_view(cache.atm_pairs, Gfn2PairListConsumerView{}) ||
+        cache.plan_token != 0u) {
       return validator.fail(BindingError::kInvalidCount, BindingField::kD4);
     }
   }
@@ -2528,27 +2587,39 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
   }
 
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
-    std::int64_t d4_pairs = 0;
     std::int64_t weights = 0;
-    if (!checked_multiply(plan.d4_batch.total_pairs, kGfn2D4PairDataElements, d4_pairs) ||
-        !checked_multiply(atoms, kGfn2D4MaximumReferences, weights) ||
-        !exact(plan.d4_cache.pair_data_elements, d4_pairs, BindingField::kD4) ||
-        !exact(plan.d4_cache.coordination_elements, atoms, BindingField::kD4) ||
-        !read(plan.d4_cache.pair_data, d4_pairs, sizeof(double), alignof(double), BindingField::kD4,
-              0) ||
-        !read(plan.d4_cache.coordination_numbers, atoms, sizeof(double), alignof(double),
-              BindingField::kD4, 1) ||
+    const auto& cache = plan.d4_pairlist_cache;
+    const auto& pairs = cache.coordination_pairs;
+    if (!checked_multiply(atoms, kGfn2D4MaximumReferences, weights) ||
+        !read(pairs.pair_offsets, pairs.pair_offset_count, sizeof(std::int64_t),
+              alignof(std::int64_t), BindingField::kD4, 9) ||
+        !read(pairs.pairs, pairs.pair_count, sizeof(Gfn2AtomPair), alignof(Gfn2AtomPair),
+              BindingField::kD4, 10) ||
+        !read(pairs.pair_counts, pairs.pair_count_elements, sizeof(std::int64_t),
+              alignof(std::int64_t), BindingField::kD4, 11) ||
+        !read(pairs.neighbor_offsets, pairs.neighbor_offset_count, sizeof(std::int64_t),
+              alignof(std::int64_t), BindingField::kD4, 12) ||
+        !read(pairs.neighbor_counts, pairs.neighbor_count_elements, sizeof(std::int64_t),
+              alignof(std::int64_t), BindingField::kD4, 13) ||
+        !read(pairs.neighbors, pairs.neighbor_count, sizeof(std::int64_t), alignof(std::int64_t),
+              BindingField::kD4, 14) ||
+        !read(pairs.committed_generations, pairs.committed_generation_count, sizeof(std::uint64_t),
+              alignof(std::uint64_t), BindingField::kD4, 15) ||
+        !read(pairs.eligible_mask, pairs.eligible_mask_count, sizeof(std::uint8_t),
+              alignof(std::uint8_t), BindingField::kD4, 16) ||
+        !read(pairs.active_mask, pairs.active_mask_count, sizeof(std::uint8_t),
+              alignof(std::uint8_t), BindingField::kD4, 17) ||
         !scratch(workspace.d4_workspace.weights, workspace.d4_workspace.weight_elements, weights,
-                 sizeof(double), alignof(double), BindingField::kD4, 2) ||
+                 sizeof(double), alignof(double), BindingField::kD4, 18) ||
         !scratch(workspace.d4_workspace.weight_charge_derivatives,
                  workspace.d4_workspace.weight_elements, weights, sizeof(double), alignof(double),
-                 BindingField::kD4, 3) ||
+                 BindingField::kD4, 19) ||
         !scratch(workspace.d4_workspace.atom_scratch, workspace.d4_workspace.atom_elements, atoms,
-                 sizeof(double), alignof(double), BindingField::kD4, 4) ||
+                 sizeof(double), alignof(double), BindingField::kD4, 20) ||
         !scratch(workspace.d4_workspace.batch_scratch, workspace.d4_workspace.batch_elements, batch,
-                 sizeof(double), alignof(double), BindingField::kD4, 5) ||
+                 sizeof(double), alignof(double), BindingField::kD4, 21) ||
         !scratch(workspace.d4_workspace.system_errors, workspace.d4_workspace.system_error_elements,
-                 batch, sizeof(std::uint32_t), alignof(std::uint32_t), BindingField::kD4, 6)) {
+                 batch, sizeof(std::uint32_t), alignof(std::uint32_t), BindingField::kD4, 22)) {
       return false;
     }
   } else {
@@ -3247,12 +3318,19 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
                       reset_gfn2_d4_device_errors_cuda(
                           plan.topology.batch_size, workspace.d4_workspace.system_errors,
                           mutable_device_error(*stage_report), stream)) ||
-          !check_cuda(stage_report->stage,
-                      evaluate_gfn2_d4_scc_potential_cuda(
-                          plan.d4_batch, plan.d4_parameters, plan.d4_cache,
-                          plan.geometry_generation, workspace.physical_topology.atomic_charges,
-                          workspace.activity, workspace.components.d4_atomic_potential,
-                          workspace.d4_workspace, mutable_device_error(*stage_report), stream)) ||
+          !check_cuda(
+              stage_report->stage,
+              geometry == nullptr
+                  ? evaluate_gfn2_d4_scc_potential_pairlist_cuda(
+                        plan.d4_batch, plan.d4_parameters, plan.geometry_generation,
+                        plan.d4_pairlist_cache, workspace.physical_topology.atomic_charges,
+                        workspace.activity, workspace.components.d4_atomic_potential,
+                        workspace.d4_workspace, mutable_device_error(*stage_report), stream)
+                  : evaluate_gfn2_d4_scc_potential_pairlist_cuda(
+                        plan.d4_batch, plan.d4_parameters, geometry->epoch, plan.d4_pairlist_cache,
+                        workspace.physical_topology.atomic_charges, workspace.activity,
+                        workspace.components.d4_atomic_potential, workspace.d4_workspace,
+                        mutable_device_error(*stage_report), stream)) ||
           !finish_stage(*stage_report)) {
         return failure;
       }
@@ -3555,12 +3633,19 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
                     reset_gfn2_d4_device_errors_cuda(
                         plan.topology.batch_size, workspace.d4_workspace.system_errors,
                         mutable_device_error(*stage_report), stream)) ||
-        !check_cuda(stage_report->stage,
-                    evaluate_gfn2_d4_scc_energy_cuda(
-                        plan.d4_batch, plan.d4_parameters, plan.d4_cache, plan.geometry_generation,
-                        workspace.physical_topology.atomic_charges, workspace.activity,
-                        workspace.components.d4_two_body_energy, workspace.d4_workspace,
-                        mutable_device_error(*stage_report), stream)) ||
+        !check_cuda(
+            stage_report->stage,
+            geometry == nullptr
+                ? evaluate_gfn2_d4_scc_energy_pairlist_cuda(
+                      plan.d4_batch, plan.d4_parameters, plan.geometry_generation,
+                      plan.d4_pairlist_cache, workspace.physical_topology.atomic_charges,
+                      workspace.activity, workspace.components.d4_two_body_energy,
+                      workspace.d4_workspace, mutable_device_error(*stage_report), stream)
+                : evaluate_gfn2_d4_scc_energy_pairlist_cuda(
+                      plan.d4_batch, plan.d4_parameters, geometry->epoch, plan.d4_pairlist_cache,
+                      workspace.physical_topology.atomic_charges, workspace.activity,
+                      workspace.components.d4_two_body_energy, workspace.d4_workspace,
+                      mutable_device_error(*stage_report), stream)) ||
         !finish_stage(*stage_report)) {
       return failure;
     }

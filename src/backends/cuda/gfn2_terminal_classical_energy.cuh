@@ -14,7 +14,9 @@
 
 namespace xtbloom::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2TerminalClassicalEnergyAbiVersion = 1u;
+/* ABI v2 replaces the legacy dense D4 cache with the committed pair-list
+ * cache and its role-specific consumer views. */
+inline constexpr std::uint32_t kGfn2TerminalClassicalEnergyAbiVersion = 2u;
 
 enum class Gfn2TerminalClassicalEnergyComponent : std::uint32_t {
   kD4Atm = 1u << 0u,
@@ -57,7 +59,7 @@ struct Gfn2TerminalClassicalEnergyDevicePlan {
   Gfn2RepulsionDeviceBatch repulsion{};
   Gfn2D4DeviceBatch d4_batch{};
   Gfn2D4DeviceParameters d4_parameters{};
-  Gfn2D4DeviceCache d4_cache{};
+  Gfn2D4PairListDeviceCache d4_cache{};
 
   Gfn2GeometryEpochDevice geometry_epoch{};
   const std::uint64_t* committed_generations = nullptr;

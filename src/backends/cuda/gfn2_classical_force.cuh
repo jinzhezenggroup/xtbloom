@@ -77,7 +77,7 @@ struct Gfn2ClassicalForceDevicePlan {
   Gfn2AES2DeviceCache aes2_cache{};
   Gfn2D4DeviceBatch d4_batch{};
   Gfn2D4DeviceParameters d4_parameters{};
-  Gfn2D4DeviceCache d4_cache{};
+  Gfn2D4PairListDeviceCache d4_pairlist_cache{};
 };
 
 /* Converged raw SCC multipoles and their generation-bound geometry. */
