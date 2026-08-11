@@ -18,6 +18,8 @@ import {
   clampProgressPercent,
   comparableContentLength,
   copyFloat64FromMemory,
+  createDebouncedPublisher,
+  createRevisionOwner,
   delayWithSignal,
   fetchResourceBatch,
   downloadProgressPercent,
@@ -720,7 +722,7 @@ test("page bootstraps pinned SMILES loading and applies URL-optimized geometry",
   assert.match(appSource, /startSmilesWorker\(\);/);
   assert.match(appSource, /readSmilesQuery\(window\.location\.href\)/);
   assert.match(appSource, /applyFinalGeometry:\s*true/);
-  assert.match(appSource, /\$\("xyz"\)\.value = d\.geometry/);
+  assert.match(appSource, /setCoordinateInput\(d\.geometry, \{ preserveOptimization: true \}\)/);
   assert.doesNotMatch(appSource, /smiles-alert/);
   assert.match(indexSource, /id="smiles"/);
   assert.match(indexSource, /id="smiles-generate"/);
@@ -862,6 +864,61 @@ test("XYZ preview accepts extra trailing tokens the engine parser ignores", () =
   assert.equal(parsed.atomCount, 2);
 });
 
+test("XYZ preview canonicalizes whitespace the C parser rejects raw", () => {
+  const parsed = parseXyzCoordinates("  O 0 0 0\n \t \n\tH 0 0 0.9");
+  assert.equal(parsed.ok, true);
+  assert.equal(xyzAtomsToText(parsed.atoms), "O 0 0 0\nH 0 0 0.9");
+});
+
+test("revision ownership supersedes stale callbacks without clearing newer busy work", () => {
+  const owner = createRevisionOwner();
+  const oldToken = owner.capture();
+  assert.equal(owner.claim(oldToken), true);
+  assert.equal(owner.claim(oldToken), false);
+  assert.equal(owner.isBusy(), true);
+
+  owner.advance(); /* Reset or an XYZ edit supersedes the old operation. */
+  const newToken = owner.capture();
+  assert.equal(owner.claim(newToken), true);
+  assert.equal(owner.isCurrent(oldToken), false);
+  assert.equal(owner.release(oldToken), false);
+  assert.equal(owner.isBusy(), true);
+  assert.equal(owner.release(newToken), true);
+  assert.equal(owner.isBusy(), false);
+});
+
+test("debounced publication ignores cancelled and superseded callbacks", () => {
+  const callbacks = new Map();
+  const delays = [];
+  let nextTimer = 0;
+  const published = [];
+  const publisher = createDebouncedPublisher((value) => published.push(value), {
+    delayMs: 400,
+    setTimer: (callback, delay) => {
+      const id = ++nextTimer;
+      callbacks.set(id, callback);
+      delays.push(delay);
+      return id;
+    },
+    /* Keep callbacks callable to model a timer already queued by the event loop. */
+    clearTimer: () => {},
+  });
+
+  publisher.schedule("old-valid");
+  const oldCallback = callbacks.get(1);
+  publisher.cancel(); /* Invalid input retains the old viewer content. */
+  oldCallback();
+  assert.deepEqual(published, []);
+
+  publisher.schedule("valid-a");
+  const supersededCallback = callbacks.get(2);
+  publisher.schedule("valid-b");
+  supersededCallback();
+  callbacks.get(3)();
+  assert.deepEqual(published, ["valid-b"]);
+  assert.deepEqual(delays, [400, 400, 400]);
+});
+
 test("XYZ preview rejects malformed lines, bad numbers, and incomplete rows", () => {
   for (const bad of [
     "O 0 0",
@@ -906,6 +963,10 @@ test("live preview is debounced and gates calculate on the current structure", a
   /* Debounced auto-preview: editing XYZ updates the 3D view without compute. */
   assert.match(appSource, /PREVIEW_DEBOUNCE_MS = 400/);
   assert.match(appSource, /\$\("xyz"\)\.addEventListener\("input", schedulePreviewUpdate\)/);
+  assert.match(
+    appSource,
+    /function schedulePreviewUpdate\(\) \{[\s\S]*?const parsed = refreshPreview\(\{ renderViewer: false \}\);[\s\S]*?if \(!parsed\.ok\)[\s\S]*?previewPublisher\.schedule/,
+  );
   assert.match(appSource, /refreshPreview\(\)/);
   assert.match(
     appSource,
@@ -918,13 +979,50 @@ test("live preview is debounced and gates calculate on the current structure", a
   /* Calculate/optimize are gated on a valid structure. */
   assert.match(appSource, /!engineBusy && !smilesBusy && previewState\.status === "valid"/);
   assert.match(appSource, /parseXyzCoordinates\(\$\("xyz"\)\.value\)/);
+  assert.equal(
+    (appSource.match(/const xyz = xyzAtomsToText\(parsed\.atoms\);/g) || []).length,
+    2,
+  );
+  assert.doesNotMatch(appSource, /const xyz = \$\("xyz"\)\.value/);
   /* SMILES import renders immediately through the preview path. */
   assert.match(appSource, /function applyGeneratedGeometry\(result\)/);
   /* Reset clears SMILES and restores the documented water template. */
   assert.match(appSource, /\$\("smiles"\)\.value = ""/);
   assert.match(appSource, /clearSmilesStatus\(\)/);
-  assert.match(appSource, /\$\("xyz"\)\.value = PRESETS\.water\.xyz/);
+  assert.match(appSource, /setCoordinateInput\(PRESETS\.water\.xyz\)/);
   assert.match(indexSource, /id="xyz-hint"/);
+});
+
+test("stale calculations and SMILES workflows cannot overwrite newer input or Reset", async () => {
+  const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  /* Both streamed optimization frames and the final result are revision-gated. */
+  assert.match(
+    appSource,
+    /\(step\) => \{\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\)\) return;/,
+  );
+  assert.match(
+    appSource,
+    /const dt = performance\.now\(\) - t0;\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\)\) throw supersededCoordinateError\(\);/,
+  );
+  /* Reset invalidates in-flight generation and a URL workflow waiting on either worker. */
+  assert.match(
+    appSource,
+    /function invalidateSmilesWork\(\) \{[\s\S]*?smilesWorkflow\.advance\(\);[\s\S]*?urlSmiles = null;[\s\S]*?urlSmilesStarted = true;[\s\S]*?rejectSmilesPending/,
+  );
+  assert.match(
+    appSource,
+    /\$\("reset"\)\.addEventListener\("click", \(\) => \{[\s\S]*?invalidateSmilesWork\(\);[\s\S]*?setCoordinateInput\(PRESETS\.water\.xyz\)/,
+  );
+  assert.match(
+    appSource,
+    /const result = await requestSmilesGeometry\(smiles\);\s*requireCurrentSmilesWorkflow\(workflowRevision\);/,
+  );
+  assert.match(appSource, /if \(hasCurrentResult\("optimize"\)\) renderOptimize/);
+  assert.match(appSource, /if \(hasCurrentResult\("optimize"\) && d\.geometry\)/);
+  assert.match(
+    appSource,
+    /if \(!smilesWorkflow\.isCurrent\(workflowRevision\) \|\| error\?\.name === "AbortError"\) return;/,
+  );
 });
 
 test("UI copy describes the real-time preview and retains it on bad input", async () => {

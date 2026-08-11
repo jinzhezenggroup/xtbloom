@@ -31,6 +31,8 @@ const {
   angstromToBohr,
   canStartUrlSmiles,
   clampProgressPercent,
+  createDebouncedPublisher,
+  createRevisionOwner,
   fetchResourceBatch,
   initializeWorker,
   isRetryableLoadError,
@@ -343,8 +345,8 @@ $("lang-toggle").addEventListener("click", () => {
   try { localStorage.setItem("xtbloom-lang", lang); } catch { /* ignore */ }
   applyI18n();
   // re-render dynamic labels on the results panel
-  if (window.__lastMode === "compute" && window.__lastResult) renderCompute(window.__lastResult);
-  if (window.__lastMode === "optimize" && window.__lastResult) renderOptimize(window.__lastResult);
+  if (hasCurrentResult("compute")) renderCompute(window.__lastResult);
+  if (hasCurrentResult("optimize")) renderOptimize(window.__lastResult);
 });
 
 /* ------------------------------------------------------------------ */
@@ -372,6 +374,7 @@ let smilesStatusVars = null;
 let smilesStatusTone = "";
 let urlSmiles = null;
 let urlSmilesStarted = false;
+const smilesWorkflow = createRevisionOwner();
 
 function setSmilesStatus(key, vars = null, tone = "") {
   smilesStatusKey = key;
@@ -420,6 +423,26 @@ function syncSmilesControls() {
 function rejectSmilesPending(error) {
   for (const entry of smilesPending.values()) entry.reject(error);
   smilesPending.clear();
+}
+
+function supersededSmilesError() {
+  return new DOMException("SMILES workflow superseded", "AbortError");
+}
+
+function requireCurrentSmilesWorkflow(revision) {
+  if (!smilesWorkflow.isCurrent(revision)) throw supersededSmilesError();
+}
+
+/* Reset is a publication boundary: pending worker replies and a deferred URL
+ * workflow may finish, but neither may repopulate the restored form. Rejecting
+ * the local promises also frees the UI immediately without restarting the
+ * independently loaded OpenChemLib worker. */
+function invalidateSmilesWork() {
+  smilesWorkflow.advance();
+  urlSmiles = null;
+  urlSmilesStarted = true;
+  rejectSmilesPending(supersededSmilesError());
+  smilesBusy = false;
 }
 
 function failSmilesWorker(error) {
@@ -618,7 +641,7 @@ function publishReadyEngine(candidate, ready) {
   $("ver-badge").textContent = "v" + ready.version;
   /* Preserve coordinates entered or generated while the WASM worker was
    * loading; only supply the water example when the editor is still empty. */
-  if (!$("xyz").value.trim()) $("xyz").value = PRESETS.water.xyz;
+  if (!$("xyz").value.trim()) setCoordinateInput(PRESETS.water.xyz);
   initMoleculeViewer();
   refreshPreview();
   void maybeRunUrlSmiles();
@@ -786,7 +809,47 @@ function setLoaderRetrying({ nextAttempt, maxAttempts, waitMs }) {
  * are gated on the current structure being valid (see syncEngineControls). */
 const PREVIEW_DEBOUNCE_MS = 400;
 let previewState = { status: "empty", atomCount: 0, canonicalXyz: "", messageKey: null, messageVars: null };
-let previewDebounceTimer = null;
+const coordinateRevisions = createRevisionOwner();
+const previewPublisher = createDebouncedPublisher((canonicalXyz) => {
+  if (molViewer && !molUnavailable) updateMoleculeViewer(canonicalXyz);
+}, { delayMs: PREVIEW_DEBOUNCE_MS });
+
+function hasCurrentResult(mode = null) {
+  return Boolean(window.__lastResult) &&
+    window.__lastCoordinateRevision === coordinateRevisions.capture() &&
+    (mode === null || window.__lastMode === mode);
+}
+
+function invalidateRenderedResult() {
+  window.__lastResult = null;
+  window.__lastMode = null;
+  window.__lastCoordinateRevision = null;
+  $("output-tools").hidden = true;
+  $("opt-apply").hidden = true;
+}
+
+function supersededCoordinateError() {
+  return new DOMException("Coordinates superseded", "AbortError");
+}
+
+/* Every programmatic editor replacement must advance the same revision used
+ * by manual input. Async calculations capture this value and may publish UI
+ * state only while it still names the current coordinates. */
+function setCoordinateInput(xyz, { preserveOptimization = false } = {}) {
+  previewPublisher.cancel();
+  coordinateRevisions.advance();
+  $("xyz").value = xyz;
+  if (preserveOptimization && window.__lastResult) {
+    /* Applying the geometry owned by the visible optimization keeps that
+     * result current across the programmatic editor revision. */
+    window.__lastCoordinateRevision = coordinateRevisions.capture();
+  } else {
+    invalidateRenderedResult();
+    stopReplay();
+    optFrames = [];
+    $("replay").hidden = true;
+  }
+}
 
 function renderXyzHint() {
   const el = $("xyz-hint");
@@ -809,7 +872,7 @@ function updateXyzHint() {
   renderXyzHint();
 }
 
-function refreshPreview() {
+function refreshPreview({ renderViewer = true } = {}) {
   const parsed = parseXyzCoordinates($("xyz").value);
   if (parsed.ok) {
     previewState.status = "valid";
@@ -817,7 +880,9 @@ function refreshPreview() {
     previewState.canonicalXyz = xyzAtomsToText(parsed.atoms);
     previewState.messageKey = null;
     previewState.messageVars = null;
-    if (molViewer && !molUnavailable) updateMoleculeViewer(previewState.canonicalXyz);
+    if (renderViewer && molViewer && !molUnavailable) {
+      updateMoleculeViewer(previewState.canonicalXyz);
+    }
   } else {
     /* Malformed input never replaces the last valid preview. */
     previewState.status = parsed.errorCode === "no_xyz" ? "empty" : "error";
@@ -828,14 +893,24 @@ function refreshPreview() {
   }
   renderXyzHint();
   refreshBadge();
+  return parsed;
 }
 
 function schedulePreviewUpdate() {
-  if (previewDebounceTimer !== null) clearTimeout(previewDebounceTimer);
-  previewDebounceTimer = setTimeout(() => {
-    previewDebounceTimer = null;
-    refreshPreview();
-  }, PREVIEW_DEBOUNCE_MS);
+  coordinateRevisions.advance();
+  invalidateRenderedResult();
+  stopReplay();
+  optFrames = [];
+  $("replay").hidden = true;
+  $("opt-apply").hidden = true;
+  /* Parse synchronously so invalid input disables calculation immediately.
+   * Only the comparatively expensive 3D viewer publication is debounced. */
+  const parsed = refreshPreview({ renderViewer: false });
+  if (!parsed.ok) {
+    previewPublisher.cancel();
+    return;
+  }
+  previewPublisher.schedule(previewState.canonicalXyz);
 }
 
 function setError(msg) {
@@ -888,6 +963,7 @@ function renderCompute(d) {
   $("output-tools").hidden = false;
   window.__lastResult = d;
   window.__lastMode = "compute";
+  window.__lastCoordinateRevision = coordinateRevisions.capture();
 }
 
 function renderOptimize(d) {
@@ -928,6 +1004,7 @@ function renderOptimize(d) {
   renderTrajectory(d);
   window.__lastResult = d;
   window.__lastMode = "optimize";
+  window.__lastCoordinateRevision = coordinateRevisions.capture();
 }
 
 function renderTrajectory(d) {
@@ -1061,7 +1138,7 @@ Object.entries(PRESETS).forEach(([key, p]) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".chip").forEach((c) => c.classList.remove("active"));
     btn.classList.add("active");
-    $("xyz").value = p.xyz;
+    setCoordinateInput(p.xyz);
     $("charge").value = p.charge;
     $("unpaired").value = p.unpaired;
     refreshPreview();
@@ -1073,7 +1150,7 @@ $("xyz").addEventListener("input", schedulePreviewUpdate);
 
 function applyGeneratedGeometry(result) {
   document.querySelectorAll(".chip").forEach((chip) => chip.classList.remove("active"));
-  $("xyz").value = result.xyz;
+  setCoordinateInput(result.xyz);
   $("charge").value = String(result.formalCharge);
   /* Radical SMILES are rejected by the helper, so zero is the only supported
    * automatic spin state. Users retain the explicit XYZ route for radicals. */
@@ -1082,18 +1159,21 @@ function applyGeneratedGeometry(result) {
   setError(null);
 }
 
-async function generateSmilesGeometry() {
+async function generateSmilesGeometry(workflowRevision = smilesWorkflow.capture()) {
+  requireCurrentSmilesWorkflow(workflowRevision);
   const smiles = $("smiles").value.trim();
   if (!smiles) {
     const error = new Error("SMILES is empty");
     error.code = "smiles_err_empty";
     throw error;
   }
+  if (!smilesWorkflow.claim(workflowRevision)) throw supersededSmilesError();
   smilesBusy = true;
   setSmilesStatus("smiles_generate_status");
   syncEngineControls();
   try {
     const result = await requestSmilesGeometry(smiles);
+    requireCurrentSmilesWorkflow(workflowRevision);
     applyGeneratedGeometry(result);
     setSmilesStatus(
       "smiles_generated",
@@ -1102,10 +1182,14 @@ async function generateSmilesGeometry() {
     );
     return result;
   } finally {
-    smilesBusy = false;
-    syncSmilesControls();
-    syncEngineControls();
-    queueMicrotask(() => void maybeRunUrlSmiles());
+    /* An invalidated older request must not clear the busy state of a newer
+     * generation or revive the one-shot URL workflow after Reset. */
+    if (smilesWorkflow.release(workflowRevision)) {
+      smilesBusy = false;
+      syncSmilesControls();
+      syncEngineControls();
+      queueMicrotask(() => void maybeRunUrlSmiles());
+    }
   }
 }
 
@@ -1117,6 +1201,7 @@ async function handleManualSmiles() {
   try {
     await generateSmilesGeometry();
   } catch (error) {
+    if (error && error.name === "AbortError") return;
     setSmilesStatus(
       error && error.code ? error.code : "smiles_err_unknown",
       { e: error && error.message ? error.message : "" },
@@ -1136,19 +1221,23 @@ async function maybeRunUrlSmiles() {
   })) {
     return;
   }
+  const workflowRevision = smilesWorkflow.capture();
   urlSmilesStarted = true;
   $("smiles").value = urlSmiles;
   syncSmilesControls();
   try {
-    await generateSmilesGeometry();
+    await generateSmilesGeometry(workflowRevision);
+    requireCurrentSmilesWorkflow(workflowRevision);
     setSmilesStatus("smiles_url_optimizing");
     const optimized = await withPending(() => runOptimize({
       applyFinalGeometry: true,
       throwOnFailure: true,
     }));
+    requireCurrentSmilesWorkflow(workflowRevision);
     if (!optimized) throw new Error("xTBloom geometry optimization failed");
     setSmilesStatus("smiles_url_done", null, "ok");
   } catch (error) {
+    if (!smilesWorkflow.isCurrent(workflowRevision) || error?.name === "AbortError") return;
     const detail = smilesErrorText(error);
     setSmilesStatus("smiles_url_failed", { e: detail }, "err");
     setError(t("smiles_url_failed", { e: detail }));
@@ -1195,7 +1284,10 @@ async function runCompute() {
    * window can never reach the engine as an invalid structure. */
   const parsed = parseXyzCoordinates($("xyz").value);
   if (!parsed.ok) { setError(t(parsed.errorCode, parsed.messageVars || undefined)); return; }
-  const xyz = $("xyz").value;
+  const requestRevision = coordinateRevisions.capture();
+  /* Submit the canonical parsed form. The preview intentionally accepts
+   * surrounding whitespace that the C line scanner does not accept raw. */
+  const xyz = xyzAtomsToText(parsed.atoms);
   const o = collectOptions();
   showOverlay("overlay_compute");
   try {
@@ -1203,13 +1295,16 @@ async function runCompute() {
     const m = await callWorker("compute",
       [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, o.forces ? 1 : 0]);
     const dt = performance.now() - t0;
+    if (!coordinateRevisions.isCurrent(requestRevision)) return;
     const d = JSON.parse(m.raw);
     if (!d.ok) { setError(errorText(d)); return; }
     renderCompute(d);
     updateMoleculeViewer(xyzAtomsToText(parsed.atoms));
     $("stat-ms").textContent = fmt(dt, 1);
   } catch (e) {
-    setError(t("engine_call_fail") + e.message);
+    if (coordinateRevisions.isCurrent(requestRevision)) {
+      setError(t("engine_call_fail") + e.message);
+    }
   } finally {
     hideOverlay();
   }
@@ -1226,7 +1321,8 @@ async function runOptimize({
     setError(error.message);
     return null;
   }
-  const xyz = $("xyz").value;
+  const requestRevision = coordinateRevisions.capture();
+  const xyz = xyzAtomsToText(parsed.atoms);
   const o = collectOptions();
   const optMax = parseInt($("opt-maxiter").value, 10) || 200;
   const gradTol = parseFloat($("opt-gradtol").value) || 4.5e-4;
@@ -1247,6 +1343,7 @@ async function runOptimize({
     const m = await callWorker("optimize",
       [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, angstromToBohr(maxMoveAngstrom)],
       (step) => {
+        if (!coordinateRevisions.isCurrent(requestRevision)) return;
         $("mol-status").textContent = tf("opt_running", { n: step.iter, max: optMax, e: fmt(step.energy, 6) });
         const frame = { iter: step.iter, natoms: step.natoms, coords: step.coords, energy: step.energy, fmax: step.fmax, symbols };
         optFrames.push(frame);
@@ -1256,6 +1353,7 @@ async function runOptimize({
         renderOptFrame(frame);
       });
     const dt = performance.now() - t0;
+    if (!coordinateRevisions.isCurrent(requestRevision)) throw supersededCoordinateError();
     const d = JSON.parse(m.raw);
     if (!d.ok) {
       const error = new Error(errorText(d));
@@ -1272,12 +1370,16 @@ async function runOptimize({
     if (applyFinalGeometry) {
       /* URL-triggered optimization is a complete import operation: publish
        * the converged geometry back to the canonical XYZ editor immediately. */
-      $("xyz").value = d.geometry;
+      setCoordinateInput(d.geometry, { preserveOptimization: true });
       refreshPreview();
       $("opt-apply").hidden = true;
     }
     return d;
   } catch (e) {
+    if (e?.name === "AbortError" || !coordinateRevisions.isCurrent(requestRevision)) {
+      if (throwOnFailure) throw (e?.name === "AbortError" ? e : supersededCoordinateError());
+      return null;
+    }
     const error = e && e.code
       ? e
       : new Error(t("engine_call_fail") + (e && e.message ? e.message : String(e)));
@@ -1298,8 +1400,8 @@ $("run").addEventListener("click", () => withPending(runCompute));
 $("opt-run").addEventListener("click", () => withPending(runOptimize));
 $("opt-apply").addEventListener("click", () => {
   const d = window.__lastResult;
-  if (d && d.geometry) {
-    $("xyz").value = d.geometry;
+  if (hasCurrentResult("optimize") && d.geometry) {
+    setCoordinateInput(d.geometry, { preserveOptimization: true });
     refreshPreview();
     setError(t("opt_apply_done"));
     $("opt-apply").hidden = true;
@@ -1307,9 +1409,10 @@ $("opt-apply").addEventListener("click", () => {
 });
 $("reset").addEventListener("click", () => {
   document.querySelectorAll(".chip").forEach((c) => c.classList.remove("active"));
+  invalidateSmilesWork();
   $("smiles").value = "";
   clearSmilesStatus();
-  $("xyz").value = PRESETS.water.xyz;
+  setCoordinateInput(PRESETS.water.xyz);
   $("charge").value = 0;
   $("unpaired").value = 0;
   $("etemp").value = 0;
@@ -1322,6 +1425,7 @@ $("reset").addEventListener("click", () => {
   stopReplay();
   optFrames = [];
   $("replay").hidden = true;
+  $("mol-status").hidden = true;
   setError(null);
   $("energy").textContent = "—";
   $("energy-ev").textContent = "—";
@@ -1331,10 +1435,11 @@ $("reset").addEventListener("click", () => {
   $("opt-apply").hidden = true;
   window.__lastResult = null;
   window.__lastMode = null;
+  window.__lastCoordinateRevision = null;
 });
 
 $("copy-json").addEventListener("click", async () => {
-  if (!window.__lastResult) return;
+  if (!hasCurrentResult()) return;
   try {
     await navigator.clipboard.writeText(JSON.stringify(window.__lastResult, null, 2));
     $("copy-done").hidden = false;

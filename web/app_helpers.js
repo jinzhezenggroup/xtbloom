@@ -346,12 +346,77 @@ export function xyzAtomsToText(atoms) {
   ).join("\n");
 }
 
+/* A small ownership primitive for async UI work. Advancing the revision
+ * supersedes every captured token, while release() succeeds only for the task
+ * that still owns the current revision. This prevents an old finally block
+ * from clearing the busy state of work started after Reset. */
+export function createRevisionOwner() {
+  let revision = 0;
+  let activeOwner = null;
+  return {
+    capture: () => revision,
+    isCurrent: (token) => token === revision,
+    advance() {
+      revision += 1;
+      activeOwner = null;
+      return revision;
+    },
+    claim(token = revision) {
+      if (token !== revision || activeOwner !== null) return false;
+      activeOwner = token;
+      return true;
+    },
+    release(token) {
+      if (token !== revision || activeOwner !== token) return false;
+      activeOwner = null;
+      return true;
+    },
+    isBusy: () => activeOwner === revision,
+  };
+}
+
+/* Debounce only publication, not validation. cancel() invalidates the queued
+ * callback even if a test scheduler later invokes the cleared timer, matching
+ * browser races where an already-queued callback may still run. */
+export function createDebouncedPublisher(
+  publish,
+  {
+    delayMs = 0,
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+  } = {},
+) {
+  if (typeof publish !== "function") throw new TypeError("publish must be a function");
+  const delay = Math.max(0, Number(delayMs) || 0);
+  let generation = 0;
+  let timer = null;
+
+  function cancel() {
+    generation += 1;
+    if (timer !== null) clearTimer(timer);
+    timer = null;
+  }
+
+  return {
+    cancel,
+    schedule(value) {
+      cancel();
+      const owner = generation;
+      timer = setTimer(() => {
+        timer = null;
+        if (owner === generation) publish(value);
+      }, delay);
+    },
+  };
+}
+
 /* Input validation for the live 3D preview, independent of the compute path.
- * Mirrors parse_xyz in web/xtbloom_web.c: each non-empty line is "Symbol x y z"
- * (or "Z x y z") in angstrom; additional trailing tokens are ignored by the
- * engine so they are ignored here too. The front end is deliberately stricter
- * than the C parser: coordinates must be finite, so an input that parses but
- * could never produce a usable structure is rejected before it can be run.
+ * It accepts ordinary surrounding whitespace and blank lines, then callers
+ * submit xyzAtomsToText(atoms) rather than the raw editor text. That canonical
+ * form obeys parse_xyz in web/xtbloom_web.c even where its line scanner rejects
+ * leading or whitespace-only rows. Additional trailing tokens are ignored by
+ * both parsers. The front end is deliberately stricter about coordinates:
+ * they must be finite, so unusable structures are rejected before execution.
  *
  * Returns { ok: true, atoms, atomCount } or
  *         { ok: false, errorCode, messageVars } where errorCode is one of
