@@ -2298,13 +2298,18 @@ __global__ void atm_gradient_split_kernel(Gfn2D4DeviceBatch batch,
 
 /* Each canonical outer pair (j,i) intersects the two ascending neighbor
  * ranges.  A common k with k<j yields exactly one ordered triple k<j<i; no
- * triplet list or dense pair lookup is materialized. */
-__global__ void pairlist_atm_energy_kernel(Gfn2D4DeviceBatch batch,
-                                           Gfn2D4DeviceParameters parameters,
-                                           Gfn2D4PairListDeviceCache cache,
-                                           Gfn2D4DeviceWorkspace workspace,
-                                           std::uint32_t* device_error) {
-  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+ * triplet list or dense pair lookup is materialized.  Large systems use the
+ * same arithmetic through a two-dimensional launch: blockIdx.y selects the
+ * system while blockIdx.x owns one contiguous slice of its committed outer
+ * pairs.  The one-block path retains the historical blockIdx.x system map. */
+__global__ void pairlist_atm_energy_kernel(
+    Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters, Gfn2D4PairListDeviceCache cache,
+    Gfn2D4DeviceWorkspace workspace, std::int32_t blocks_per_system, std::uint32_t* device_error) {
+  const bool split = blocks_per_system > 1;
+  const std::int64_t system =
+      split ? static_cast<std::int64_t>(blockIdx.y) : static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t slice = split ? static_cast<std::int64_t>(blockIdx.x) : 0;
+  const std::int64_t slices = split ? static_cast<std::int64_t>(blocks_per_system) : 1;
   __shared__ double partial[kThreadsPerBlock];
   if (!sequence_is_valid(device_error) || !system_is_valid(workspace, system) ||
       !d4_pairlist_role_active(cache.atm_pairs, system)) {
@@ -2313,8 +2318,14 @@ __global__ void pairlist_atm_energy_kernel(Gfn2D4DeviceBatch batch,
   constexpr double exponent_third = kAtmExponent / 3.0;
   const std::int64_t pair_begin = cache.atm_pairs.pair_offsets[system];
   const std::int64_t pair_count = cache.atm_pairs.pair_counts[system];
+  /* Form floor(pair_count * slice / slices) without overflowing the signed
+   * product for a hostile but structurally representable capacity. */
+  const std::int64_t pairs_per_slice = pair_count / slices;
+  const std::int64_t remainder = pair_count % slices;
+  const std::int64_t slice_begin = pairs_per_slice * slice + remainder * slice / slices;
+  const std::int64_t slice_end = pairs_per_slice * (slice + 1) + remainder * (slice + 1) / slices;
   double energy = 0.0;
-  for (std::int64_t local = threadIdx.x; local < pair_count; local += blockDim.x) {
+  for (std::int64_t local = slice_begin + threadIdx.x; local < slice_end; local += blockDim.x) {
     const Gfn2AtomPair outer = cache.atm_pairs.pairs[pair_begin + local];
     const std::int64_t j = outer.first;
     const std::int64_t i = outer.second;
@@ -2394,16 +2405,24 @@ __global__ void pairlist_atm_energy_kernel(Gfn2D4DeviceBatch batch,
     __syncthreads();
   }
   if (threadIdx.x == 0) {
-    commit_energy_reduction(partial[0], workspace, system, device_error);
+    if (split) {
+      /* atom_scratch is sized to total_atoms.  The host split gate proves
+       * batch_size * blocks_per_system fits before selecting this path. */
+      workspace.atom_scratch[system * slices + slice] = partial[0];
+    } else {
+      commit_energy_reduction(partial[0], workspace, system, device_error);
+    }
   }
 }
 
-__global__ void pairlist_atm_gradient_kernel(Gfn2D4DeviceBatch batch,
-                                             Gfn2D4DeviceParameters parameters,
-                                             Gfn2D4PairListDeviceCache cache,
-                                             Gfn2D4DeviceWorkspace workspace,
-                                             std::uint32_t* device_error) {
-  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+__global__ void pairlist_atm_gradient_kernel(
+    Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters, Gfn2D4PairListDeviceCache cache,
+    Gfn2D4DeviceWorkspace workspace, std::int32_t blocks_per_system, std::uint32_t* device_error) {
+  const bool split = blocks_per_system > 1;
+  const std::int64_t system =
+      split ? static_cast<std::int64_t>(blockIdx.y) : static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t slice = split ? static_cast<std::int64_t>(blockIdx.x) : 0;
+  const std::int64_t slices = split ? static_cast<std::int64_t>(blocks_per_system) : 1;
   if (!sequence_is_valid(device_error) || !system_is_valid(workspace, system) ||
       !d4_pairlist_role_active(cache.atm_pairs, system)) {
     return;
@@ -2411,7 +2430,11 @@ __global__ void pairlist_atm_gradient_kernel(Gfn2D4DeviceBatch batch,
   constexpr double exponent_third = kAtmExponent / 3.0;
   const std::int64_t pair_begin = cache.atm_pairs.pair_offsets[system];
   const std::int64_t pair_count = cache.atm_pairs.pair_counts[system];
-  for (std::int64_t local = threadIdx.x; local < pair_count; local += blockDim.x) {
+  const std::int64_t pairs_per_slice = pair_count / slices;
+  const std::int64_t remainder = pair_count % slices;
+  const std::int64_t slice_begin = pairs_per_slice * slice + remainder * slice / slices;
+  const std::int64_t slice_end = pairs_per_slice * (slice + 1) + remainder * (slice + 1) / slices;
+  for (std::int64_t local = slice_begin + threadIdx.x; local < slice_end; local += blockDim.x) {
     const Gfn2AtomPair outer = cache.atm_pairs.pairs[pair_begin + local];
     const std::int64_t j = outer.first;
     const std::int64_t i = outer.second;
@@ -4530,10 +4553,25 @@ cudaError_t evaluate_d4_atm_pairlist_impl(const Gfn2D4DeviceBatch& batch,
       workspace.weight_charge_derivatives, workspace.system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) return status;
-  pairlist_atm_energy_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
-                               stream>>>(batch, parameters, cache, workspace, device_error);
-  status = check_launch();
-  if (status != cudaSuccess) return status;
+  const std::int32_t blocks_per_system = atm_split_blocks_per_system(batch, workspace);
+  if (blocks_per_system > 1) {
+    const dim3 grid(static_cast<unsigned int>(blocks_per_system),
+                    static_cast<unsigned int>(batch.batch_size));
+    pairlist_atm_energy_kernel<<<grid, kThreadsPerBlock, 0, stream>>>(
+        batch, parameters, cache, workspace, blocks_per_system, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+    atm_energy_split_reduce_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
+                                     0, stream>>>(batch, workspace, blocks_per_system,
+                                                  device_error);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+  } else {
+    pairlist_atm_energy_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                                 stream>>>(batch, parameters, cache, workspace, 1, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+  }
   unsigned int batch_blocks = 0;
   status = launch_grid(batch.batch_size, &batch_blocks);
   if (status != cudaSuccess) return status;
@@ -4581,10 +4619,20 @@ cudaError_t add_d4_atm_gradient_pairlist_impl(
       batch, batch.total_atoms * 3, 3, workspace.gradient_scratch, workspace, device_error);
   status = check_launch();
   if (status != cudaSuccess) return status;
-  pairlist_atm_gradient_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
-                                 stream>>>(batch, parameters, cache, workspace, device_error);
-  status = check_launch();
-  if (status != cudaSuccess) return status;
+  const std::int32_t blocks_per_system = atm_split_blocks_per_system(batch, workspace);
+  if (blocks_per_system > 1) {
+    const dim3 grid(static_cast<unsigned int>(blocks_per_system),
+                    static_cast<unsigned int>(batch.batch_size));
+    pairlist_atm_gradient_kernel<<<grid, kThreadsPerBlock, 0, stream>>>(
+        batch, parameters, cache, workspace, blocks_per_system, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+  } else {
+    pairlist_atm_gradient_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
+                                   stream>>>(batch, parameters, cache, workspace, 1, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+  }
   pairlist_d4_coordination_vjp_kernel<<<static_cast<unsigned int>(batch.batch_size),
                                         kThreadsPerBlock, 0, stream>>>(batch, parameters, cache,
                                                                        workspace, device_error);
