@@ -5347,6 +5347,21 @@ struct Gfn2CudaExecutionCache::Impl {
                  ? XTBLOOM_STATUS_INVALID_ARGUMENT
                  : XTBLOOM_STATUS_INTERNAL_ERROR;
     }
+    /* The setup owner factors its deterministic topology-only seed at
+     * generation 1 so setup and graph validation can exercise a usable
+     * overlap cache.  The externally visible numerical runtime, however,
+     * starts unpublished at epoch 0.  Invalidate only the seed provenance
+     * before publishing the candidate so the first real epoch-1 refresh must
+     * refactor the caller geometry instead of mistaking the seed factor for a
+     * cache hit. */
+    cuda_status = cudaMemsetAsync(
+        candidate->eigensolver_binding.cache.geometry_generations, 0,
+        static_cast<std::size_t>(candidate->host.basis.batch_size) * sizeof(std::uint64_t), stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA topology-only overlap cache invalidation", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    candidate->submitted = true;
     output = std::move(candidate);
     return XTBLOOM_STATUS_SUCCESS;
   }
