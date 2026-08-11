@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "note": "Raw harness JSON retains every force vector but is omitted because each artifact exceeds the 1 MiB repository limit. Raw profiler captures are prohibited. All rows are reproducible from README commands.",
+  "artifacts": [
+    {
+      "path": "$BASELINE_WT/build/issue220-measurements/baseline-b1.json",
+      "bytes": 2515472,
+      "sha256": "c482c19c8c50440311fc0588c5a736ee68ab85c7568bdb81557d7bc7b643a45d",
+      "retained_in_repository": false
+    },
+    {
+      "path": "$CANDIDATE_WT/build/issue220-measurements/candidate-b1.json",
+      "bytes": 2514738,
+      "sha256": "9968f7765092c3825e7fd2ac6814bf2337c4ea2ac8e569f6429d02fe3bc466b9",
+      "retained_in_repository": false
+    },
+    {
+      "path": "$BASELINE_WT/build/issue220-measurements/baseline-b128.json",
+      "bytes": 13751838,
+      "sha256": "2010be49f0437e647bc0ef884dd3d5068e798e111304c8a71f9ea3e94d7ca727",
+      "retained_in_repository": false
+    },
+    {
+      "path": "$CANDIDATE_WT/build/issue220-measurements/candidate-b128.json",
+      "bytes": 13756560,
+      "sha256": "b05b2270f2dff99868c50a5fa5f44dbd8ce25a0fb7c48f50a83fa37856711043",
+      "retained_in_repository": false
+    },
+    {
+      "path": "$CANDIDATE_WT/build/issue220-measurements/workspace.json",
+      "bytes": 6054,
+      "sha256": "a48c50340bbd253eed9ccae66101f8aada3be791dee29a950196ae3739441a45",
+      "retained_in_repository": false
+    },
+    {
+      "path": "workspace-query.py",
+      "bytes": 6535,
+      "sha256": "313ede587e561041003c7f5088d05d3aa0964280217070833f1f6905e186ed04",
+      "retained_in_repository": true
+    },
+    {
+      "path": "baseline_cuda_api_sum.csv",
+      "bytes": 2736,
+      "sha256": "29a2b1416d70d2e178b0e9a8a71c624e69817612e2ebe32d13eb97882bd9e94c",
+      "retained_in_repository": true
+    },
+    {
+      "path": "baseline_cuda_gpu_kern_sum.csv",
+      "bytes": 53418,
+      "sha256": "c318b7c920c65c2d35e417748223952dadad80f386a53f4d73723c661b700015",
+      "retained_in_repository": true
+    },
+    {
+      "path": "baseline_cuda_gpu_mem_time_sum.csv",
+      "bytes": 374,
+      "sha256": "8148a9de395b5908d2c87c81844f58ff44ad1c8a5a28934d822ee6f892dc6bb5",
+      "retained_in_repository": true
+    },
+    {
+      "path": "baseline_cuda_kern_exec_sum.csv",
+      "bytes": 87318,
+      "sha256": "67431d99e6f985d8471fa59929f435b14d83ca0b9e8de64df65089757bf7ee7b",
+      "retained_in_repository": true
+    },
+    {
+      "path": "candidate_cuda_api_sum.csv",
+      "bytes": 2743,
+      "sha256": "8f883e654be35232694c98429975bb66c679d6768f13b78e5bb253afbe7d8263",
+      "retained_in_repository": true
+    },
+    {
+      "path": "candidate_cuda_gpu_kern_sum.csv",
+      "bytes": 52078,
+      "sha256": "0e4b14b0c280d8546f2cc448ef241034367767327693d0a37077c60784b0ece0",
+      "retained_in_repository": true
+    },
+    {
+      "path": "candidate_cuda_gpu_mem_time_sum.csv",
+      "bytes": 374,
+      "sha256": "8ad23a8c8eb5855a568108e49ec0715965bc9b67d2ac9e3db1c7285ebb22ad94",
+      "retained_in_repository": true
+    },
+    {
+      "path": "candidate_cuda_kern_exec_sum.csv",
+      "bytes": 84715,
+      "sha256": "d0b9579dfcacfb8255d9245f7d388d5790d71b7dfad60ece54391693ce8e48f7",
+      "retained_in_repository": true
+    }
+  ]
+}

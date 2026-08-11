@@ -1,0 +1,1482 @@
+{
+  "schema_version": 1,
+  "claim": "issue #220 public CUDA host-descriptor FRESH force latency and retained plan workspace",
+  "protocol": {
+    "backend": "cuda",
+    "memory_mode": "host",
+    "property": "force",
+    "start_mode": "fresh",
+    "warmups": 10,
+    "repetitions": 30,
+    "cpu_threads": 1,
+    "process_affinity": [
+      0
+    ]
+  },
+  "baseline_run_identity": {
+    "runs": [
+      {
+        "argv": [
+          "/home/jzzeng/miniconda3/bin/python3",
+          "$BASELINE_WT/benchmarks/natoms_scaling.py",
+          "--engine",
+          "xtbloom",
+          "--library",
+          "$BASELINE_WT/build/issue220-main-cuda/libxtbloom.so",
+          "--backend",
+          "cuda",
+          "--device-id",
+          "0",
+          "--cpu-threads",
+          "1",
+          "--property",
+          "force",
+          "--start-mode",
+          "fresh",
+          "--natoms",
+          "32,62,122,242,272",
+          "--batch-sizes",
+          "1",
+          "--warmups",
+          "10",
+          "--repetitions",
+          "30",
+          "--output-json",
+          "build/issue220-measurements/baseline-b1.json",
+          "--output-csv",
+          "build/issue220-measurements/baseline-b1.csv"
+        ],
+        "evidence_eligibility": {
+          "allow_dirty_evidence": false,
+          "dirty_sources": [],
+          "status": "eligible"
+        },
+        "fresh_reference_artifact": null,
+        "generated_at_utc": "2026-08-11T21:16:37.820056+00:00",
+        "hardware": {
+          "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+          "logical_cpu_count": 48,
+          "process_affinity": [
+            0
+          ]
+        },
+        "library": {
+          "build": {
+            "build_directory": "$BASELINE_WT/build/issue220-main-cuda",
+            "build_system": "cmake",
+            "cache": {
+              "is_file": true,
+              "path": "$BASELINE_WT/build/issue220-main-cuda/CMakeCache.txt",
+              "sha256": "5e6aa916cdf95d2d10d9eb769cf932d414012b126160b792721440825c6b5c8a"
+            },
+            "cache_entries": {
+              "BUILD_SHARED_LIBS": "ON",
+              "CMAKE_BUILD_TYPE": "Release",
+              "CMAKE_CXX_COMPILER": "/usr/bin/c++",
+              "CMAKE_CXX_FLAGS": "",
+              "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+              "CMAKE_EXE_LINKER_FLAGS": "",
+              "CMAKE_GENERATOR": "Ninja",
+              "CMAKE_HOME_DIRECTORY": "$BASELINE_WT",
+              "CMAKE_SHARED_LINKER_FLAGS": "",
+              "XTBLOOM_CPU_LINALG_LIBRARY": "/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so",
+              "XTBLOOM_ENABLE_CUDA": "ON"
+            },
+            "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+            "compiler": {
+              "is_file": true,
+              "path": "/usr/bin/x86_64-linux-gnu-g++-11",
+              "sha256": "2360901d864cf10bfd6296e261cb2c14053552a80377761ab07146ec9ec9a2c0",
+              "version": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0\nCopyright (C) 2021 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+            },
+            "dependency_provider": {
+              "is_file": true,
+              "path": "/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so",
+              "role": "LP64 LAPACKE+CBLAS runtime",
+              "sha256": "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98"
+            },
+            "source": {
+              "git": {
+                "dirty": false,
+                "path": "$BASELINE_WT",
+                "revision": "21ec5463840092ac6b85a624fb151a8512f65fdd"
+              },
+              "inputs": [
+                {
+                  "is_file": true,
+                  "path": "$BASELINE_WT/CMakeLists.txt",
+                  "sha256": "1a1d8f836dac34af1e4ca240ad0aed3f8b61b72118c597a41cfcfa89f82b9e56"
+                },
+                {
+                  "is_file": true,
+                  "path": "$BASELINE_WT/cmake/xtbloom.map",
+                  "sha256": "49da028e94a998108e2bc39fd47d8ef68c3e6bd7d17c55b0163aa044ae72295e"
+                }
+              ],
+              "path": "$BASELINE_WT"
+            }
+          },
+          "engine": "xtbloom",
+          "path": "$BASELINE_WT/build/issue220-main-cuda/libxtbloom.so.0.1.1",
+          "sha256": "1fe58dd29ead68f20bee3cbfc21de9316af9178e8f1362c9ffd7dc71da0918f8"
+        },
+        "repository": {
+          "dirty": false,
+          "path": "$BASELINE_WT",
+          "revision": "21ec5463840092ac6b85a624fb151a8512f65fdd"
+        },
+        "runner": {
+          "hostname": "node3",
+          "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+          "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
+          "python_executable": "/home/jzzeng/miniconda3/bin/python3"
+        },
+        "thread_environment": {
+          "MKL_DYNAMIC": "FALSE",
+          "MKL_INTERFACE_LAYER": null,
+          "MKL_NUM_THREADS": "1",
+          "MKL_THREADING_LAYER": null,
+          "OMP_DYNAMIC": "FALSE",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1"
+        }
+      },
+      {
+        "argv": [
+          "/home/jzzeng/miniconda3/bin/python3",
+          "$BASELINE_WT/benchmarks/natoms_scaling.py",
+          "--engine",
+          "xtbloom",
+          "--library",
+          "$BASELINE_WT/build/issue220-main-cuda/libxtbloom.so",
+          "--backend",
+          "cuda",
+          "--device-id",
+          "0",
+          "--cpu-threads",
+          "1",
+          "--property",
+          "force",
+          "--start-mode",
+          "fresh",
+          "--natoms",
+          "32",
+          "--batch-sizes",
+          "128",
+          "--warmups",
+          "10",
+          "--repetitions",
+          "30",
+          "--output-json",
+          "build/issue220-measurements/baseline-b128.json",
+          "--output-csv",
+          "build/issue220-measurements/baseline-b128.csv"
+        ],
+        "evidence_eligibility": {
+          "allow_dirty_evidence": false,
+          "dirty_sources": [],
+          "status": "eligible"
+        },
+        "fresh_reference_artifact": null,
+        "generated_at_utc": "2026-08-11T21:24:59.875879+00:00",
+        "hardware": {
+          "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+          "logical_cpu_count": 48,
+          "process_affinity": [
+            0
+          ]
+        },
+        "library": {
+          "build": {
+            "build_directory": "$BASELINE_WT/build/issue220-main-cuda",
+            "build_system": "cmake",
+            "cache": {
+              "is_file": true,
+              "path": "$BASELINE_WT/build/issue220-main-cuda/CMakeCache.txt",
+              "sha256": "5e6aa916cdf95d2d10d9eb769cf932d414012b126160b792721440825c6b5c8a"
+            },
+            "cache_entries": {
+              "BUILD_SHARED_LIBS": "ON",
+              "CMAKE_BUILD_TYPE": "Release",
+              "CMAKE_CXX_COMPILER": "/usr/bin/c++",
+              "CMAKE_CXX_FLAGS": "",
+              "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+              "CMAKE_EXE_LINKER_FLAGS": "",
+              "CMAKE_GENERATOR": "Ninja",
+              "CMAKE_HOME_DIRECTORY": "$BASELINE_WT",
+              "CMAKE_SHARED_LINKER_FLAGS": "",
+              "XTBLOOM_CPU_LINALG_LIBRARY": "/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so",
+              "XTBLOOM_ENABLE_CUDA": "ON"
+            },
+            "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+            "compiler": {
+              "is_file": true,
+              "path": "/usr/bin/x86_64-linux-gnu-g++-11",
+              "sha256": "2360901d864cf10bfd6296e261cb2c14053552a80377761ab07146ec9ec9a2c0",
+              "version": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0\nCopyright (C) 2021 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+            },
+            "dependency_provider": {
+              "is_file": true,
+              "path": "/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so",
+              "role": "LP64 LAPACKE+CBLAS runtime",
+              "sha256": "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98"
+            },
+            "source": {
+              "git": {
+                "dirty": false,
+                "path": "$BASELINE_WT",
+                "revision": "21ec5463840092ac6b85a624fb151a8512f65fdd"
+              },
+              "inputs": [
+                {
+                  "is_file": true,
+                  "path": "$BASELINE_WT/CMakeLists.txt",
+                  "sha256": "1a1d8f836dac34af1e4ca240ad0aed3f8b61b72118c597a41cfcfa89f82b9e56"
+                },
+                {
+                  "is_file": true,
+                  "path": "$BASELINE_WT/cmake/xtbloom.map",
+                  "sha256": "49da028e94a998108e2bc39fd47d8ef68c3e6bd7d17c55b0163aa044ae72295e"
+                }
+              ],
+              "path": "$BASELINE_WT"
+            }
+          },
+          "engine": "xtbloom",
+          "path": "$BASELINE_WT/build/issue220-main-cuda/libxtbloom.so.0.1.1",
+          "sha256": "1fe58dd29ead68f20bee3cbfc21de9316af9178e8f1362c9ffd7dc71da0918f8"
+        },
+        "repository": {
+          "dirty": false,
+          "path": "$BASELINE_WT",
+          "revision": "21ec5463840092ac6b85a624fb151a8512f65fdd"
+        },
+        "runner": {
+          "hostname": "node3",
+          "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+          "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
+          "python_executable": "/home/jzzeng/miniconda3/bin/python3"
+        },
+        "thread_environment": {
+          "MKL_DYNAMIC": "FALSE",
+          "MKL_INTERFACE_LAYER": null,
+          "MKL_NUM_THREADS": "1",
+          "MKL_THREADING_LAYER": null,
+          "OMP_DYNAMIC": "FALSE",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1"
+        }
+      }
+    ]
+  },
+  "candidate_run_identity": {
+    "runs": [
+      {
+        "argv": [
+          "/home/jzzeng/miniconda3/bin/python3",
+          "$CANDIDATE_WT/benchmarks/natoms_scaling.py",
+          "--engine",
+          "xtbloom",
+          "--library",
+          "$CANDIDATE_WT/build/issue220-final-cuda/libxtbloom.so",
+          "--backend",
+          "cuda",
+          "--device-id",
+          "0",
+          "--cpu-threads",
+          "1",
+          "--property",
+          "force",
+          "--start-mode",
+          "fresh",
+          "--natoms",
+          "32,62,122,242,272",
+          "--batch-sizes",
+          "1",
+          "--warmups",
+          "10",
+          "--repetitions",
+          "30",
+          "--output-json",
+          "build/issue220-measurements/candidate-b1.json",
+          "--output-csv",
+          "build/issue220-measurements/candidate-b1.csv"
+        ],
+        "evidence_eligibility": {
+          "allow_dirty_evidence": false,
+          "dirty_sources": [],
+          "status": "eligible"
+        },
+        "fresh_reference_artifact": null,
+        "generated_at_utc": "2026-08-11T21:20:51.880319+00:00",
+        "hardware": {
+          "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+          "logical_cpu_count": 48,
+          "process_affinity": [
+            0
+          ]
+        },
+        "library": {
+          "build": {
+            "build_directory": "$CANDIDATE_WT/build/issue220-final-cuda",
+            "build_system": "cmake",
+            "cache": {
+              "is_file": true,
+              "path": "$CANDIDATE_WT/build/issue220-final-cuda/CMakeCache.txt",
+              "sha256": "eb822550a37f2a925abe8f887f66034100ceb5b7b86bf9e338a00d0bb7cadeab"
+            },
+            "cache_entries": {
+              "BUILD_SHARED_LIBS": "ON",
+              "CMAKE_BUILD_TYPE": "Release",
+              "CMAKE_CXX_COMPILER": "/usr/bin/c++",
+              "CMAKE_CXX_FLAGS": "",
+              "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+              "CMAKE_EXE_LINKER_FLAGS": "",
+              "CMAKE_GENERATOR": "Ninja",
+              "CMAKE_HOME_DIRECTORY": "$CANDIDATE_WT",
+              "CMAKE_SHARED_LINKER_FLAGS": "",
+              "XTBLOOM_CPU_LINALG_LIBRARY": "/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so",
+              "XTBLOOM_ENABLE_CUDA": "ON"
+            },
+            "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+            "compiler": {
+              "is_file": true,
+              "path": "/usr/bin/x86_64-linux-gnu-g++-11",
+              "sha256": "2360901d864cf10bfd6296e261cb2c14053552a80377761ab07146ec9ec9a2c0",
+              "version": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0\nCopyright (C) 2021 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+            },
+            "dependency_provider": {
+              "is_file": true,
+              "path": "/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so",
+              "role": "LP64 LAPACKE+CBLAS runtime",
+              "sha256": "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98"
+            },
+            "source": {
+              "git": {
+                "dirty": false,
+                "path": "$CANDIDATE_WT",
+                "revision": "a70acdb8f74c544e461070cfaa797b8bd495c2ef"
+              },
+              "inputs": [
+                {
+                  "is_file": true,
+                  "path": "$CANDIDATE_WT/CMakeLists.txt",
+                  "sha256": "1a1d8f836dac34af1e4ca240ad0aed3f8b61b72118c597a41cfcfa89f82b9e56"
+                },
+                {
+                  "is_file": true,
+                  "path": "$CANDIDATE_WT/cmake/xtbloom.map",
+                  "sha256": "49da028e94a998108e2bc39fd47d8ef68c3e6bd7d17c55b0163aa044ae72295e"
+                }
+              ],
+              "path": "$CANDIDATE_WT"
+            }
+          },
+          "engine": "xtbloom",
+          "path": "$CANDIDATE_WT/build/issue220-final-cuda/libxtbloom.so.0.1.1",
+          "sha256": "c5f59173b558d393d79966d064aa3435ffd14519954fd5ad614ebc1dc2c3e07b"
+        },
+        "repository": {
+          "dirty": false,
+          "path": "$CANDIDATE_WT",
+          "revision": "a70acdb8f74c544e461070cfaa797b8bd495c2ef"
+        },
+        "runner": {
+          "hostname": "node3",
+          "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+          "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
+          "python_executable": "/home/jzzeng/miniconda3/bin/python3"
+        },
+        "thread_environment": {
+          "MKL_DYNAMIC": "FALSE",
+          "MKL_INTERFACE_LAYER": null,
+          "MKL_NUM_THREADS": "1",
+          "MKL_THREADING_LAYER": null,
+          "OMP_DYNAMIC": "FALSE",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1"
+        }
+      },
+      {
+        "argv": [
+          "/home/jzzeng/miniconda3/bin/python3",
+          "$CANDIDATE_WT/benchmarks/natoms_scaling.py",
+          "--engine",
+          "xtbloom",
+          "--library",
+          "$CANDIDATE_WT/build/issue220-final-cuda/libxtbloom.so",
+          "--backend",
+          "cuda",
+          "--device-id",
+          "0",
+          "--cpu-threads",
+          "1",
+          "--property",
+          "force",
+          "--start-mode",
+          "fresh",
+          "--natoms",
+          "32",
+          "--batch-sizes",
+          "128",
+          "--warmups",
+          "10",
+          "--repetitions",
+          "30",
+          "--output-json",
+          "build/issue220-measurements/candidate-b128.json",
+          "--output-csv",
+          "build/issue220-measurements/candidate-b128.csv"
+        ],
+        "evidence_eligibility": {
+          "allow_dirty_evidence": false,
+          "dirty_sources": [],
+          "status": "eligible"
+        },
+        "fresh_reference_artifact": null,
+        "generated_at_utc": "2026-08-11T21:25:20.611081+00:00",
+        "hardware": {
+          "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+          "logical_cpu_count": 48,
+          "process_affinity": [
+            0
+          ]
+        },
+        "library": {
+          "build": {
+            "build_directory": "$CANDIDATE_WT/build/issue220-final-cuda",
+            "build_system": "cmake",
+            "cache": {
+              "is_file": true,
+              "path": "$CANDIDATE_WT/build/issue220-final-cuda/CMakeCache.txt",
+              "sha256": "eb822550a37f2a925abe8f887f66034100ceb5b7b86bf9e338a00d0bb7cadeab"
+            },
+            "cache_entries": {
+              "BUILD_SHARED_LIBS": "ON",
+              "CMAKE_BUILD_TYPE": "Release",
+              "CMAKE_CXX_COMPILER": "/usr/bin/c++",
+              "CMAKE_CXX_FLAGS": "",
+              "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+              "CMAKE_EXE_LINKER_FLAGS": "",
+              "CMAKE_GENERATOR": "Ninja",
+              "CMAKE_HOME_DIRECTORY": "$CANDIDATE_WT",
+              "CMAKE_SHARED_LINKER_FLAGS": "",
+              "XTBLOOM_CPU_LINALG_LIBRARY": "/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so",
+              "XTBLOOM_ENABLE_CUDA": "ON"
+            },
+            "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+            "compiler": {
+              "is_file": true,
+              "path": "/usr/bin/x86_64-linux-gnu-g++-11",
+              "sha256": "2360901d864cf10bfd6296e261cb2c14053552a80377761ab07146ec9ec9a2c0",
+              "version": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0\nCopyright (C) 2021 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+            },
+            "dependency_provider": {
+              "is_file": true,
+              "path": "/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so",
+              "role": "LP64 LAPACKE+CBLAS runtime",
+              "sha256": "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98"
+            },
+            "source": {
+              "git": {
+                "dirty": false,
+                "path": "$CANDIDATE_WT",
+                "revision": "a70acdb8f74c544e461070cfaa797b8bd495c2ef"
+              },
+              "inputs": [
+                {
+                  "is_file": true,
+                  "path": "$CANDIDATE_WT/CMakeLists.txt",
+                  "sha256": "1a1d8f836dac34af1e4ca240ad0aed3f8b61b72118c597a41cfcfa89f82b9e56"
+                },
+                {
+                  "is_file": true,
+                  "path": "$CANDIDATE_WT/cmake/xtbloom.map",
+                  "sha256": "49da028e94a998108e2bc39fd47d8ef68c3e6bd7d17c55b0163aa044ae72295e"
+                }
+              ],
+              "path": "$CANDIDATE_WT"
+            }
+          },
+          "engine": "xtbloom",
+          "path": "$CANDIDATE_WT/build/issue220-final-cuda/libxtbloom.so.0.1.1",
+          "sha256": "c5f59173b558d393d79966d064aa3435ffd14519954fd5ad614ebc1dc2c3e07b"
+        },
+        "repository": {
+          "dirty": false,
+          "path": "$CANDIDATE_WT",
+          "revision": "a70acdb8f74c544e461070cfaa797b8bd495c2ef"
+        },
+        "runner": {
+          "hostname": "node3",
+          "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+          "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
+          "python_executable": "/home/jzzeng/miniconda3/bin/python3"
+        },
+        "thread_environment": {
+          "MKL_DYNAMIC": "FALSE",
+          "MKL_INTERFACE_LAYER": null,
+          "MKL_NUM_THREADS": "1",
+          "MKL_THREADING_LAYER": null,
+          "OMP_DYNAMIC": "FALSE",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1"
+        }
+      }
+    ]
+  },
+  "workspace": {
+    "schema_version": 1,
+    "claim": "public CUDA force-plan retained workspace before/after issue #220",
+    "baseline_library": "$BASELINE_WT/build/issue220-main-cuda/libxtbloom.so.0.1.1",
+    "candidate_library": "$CANDIDATE_WT/build/issue220-final-cuda/libxtbloom.so.0.1.1",
+    "rows": [
+      {
+        "workload": {
+          "natoms_per_system": 32,
+          "batch_size": 1
+        },
+        "baseline": {
+          "natoms_per_system": 32,
+          "batch_size": 1,
+          "total_atoms": 32,
+          "packed_pairs": 496,
+          "dense_d4_pair_cache_bytes": 19840,
+          "host_required_bytes": 1745396,
+          "host_required_alignment": 64,
+          "device_required_bytes": 6357624,
+          "device_required_alignment": 256
+        },
+        "candidate": {
+          "natoms_per_system": 32,
+          "batch_size": 1,
+          "total_atoms": 32,
+          "packed_pairs": 496,
+          "dense_d4_pair_cache_bytes": 19840,
+          "host_required_bytes": 1683372,
+          "host_required_alignment": 64,
+          "device_required_bytes": 6297848,
+          "device_required_alignment": 256
+        },
+        "device_bytes_saved": 59776,
+        "device_percent_saved": 0.9402254678791951,
+        "saved_minus_dense_d4_cache_bytes": 39936
+      },
+      {
+        "workload": {
+          "natoms_per_system": 62,
+          "batch_size": 1
+        },
+        "baseline": {
+          "natoms_per_system": 62,
+          "batch_size": 1,
+          "total_atoms": 62,
+          "packed_pairs": 1891,
+          "dense_d4_pair_cache_bytes": 75640,
+          "host_required_bytes": 4800104,
+          "host_required_alignment": 64,
+          "device_required_bytes": 17693464,
+          "device_required_alignment": 256
+        },
+        "candidate": {
+          "natoms_per_system": 62,
+          "batch_size": 1,
+          "total_atoms": 62,
+          "packed_pairs": 1891,
+          "dense_d4_pair_cache_bytes": 75640,
+          "host_required_bytes": 4564208,
+          "host_required_alignment": 64,
+          "device_required_bytes": 17466016,
+          "device_required_alignment": 256
+        },
+        "device_bytes_saved": 227448,
+        "device_percent_saved": 1.2854916369117997,
+        "saved_minus_dense_d4_cache_bytes": 151808
+      },
+      {
+        "workload": {
+          "natoms_per_system": 122,
+          "batch_size": 1
+        },
+        "baseline": {
+          "natoms_per_system": 122,
+          "batch_size": 1,
+          "total_atoms": 122,
+          "packed_pairs": 7381,
+          "dense_d4_pair_cache_bytes": 295240,
+          "host_required_bytes": 16789232,
+          "host_required_alignment": 64,
+          "device_required_bytes": 60352184,
+          "device_required_alignment": 256
+        },
+        "candidate": {
+          "natoms_per_system": 122,
+          "batch_size": 1,
+          "total_atoms": 122,
+          "packed_pairs": 7381,
+          "dense_d4_pair_cache_bytes": 295240,
+          "host_required_bytes": 15881624,
+          "host_required_alignment": 64,
+          "device_required_bytes": 59465328,
+          "device_required_alignment": 256
+        },
+        "device_bytes_saved": 886856,
+        "device_percent_saved": 1.469467948334728,
+        "saved_minus_dense_d4_cache_bytes": 591616
+      },
+      {
+        "workload": {
+          "natoms_per_system": 242,
+          "batch_size": 1
+        },
+        "baseline": {
+          "natoms_per_system": 242,
+          "batch_size": 1,
+          "total_atoms": 242,
+          "packed_pairs": 29161,
+          "dense_d4_pair_cache_bytes": 1166440,
+          "host_required_bytes": 64287872,
+          "host_required_alignment": 64,
+          "device_required_bytes": 225627000,
+          "device_required_alignment": 256
+        },
+        "candidate": {
+          "natoms_per_system": 242,
+          "batch_size": 1,
+          "total_atoms": 242,
+          "packed_pairs": 29161,
+          "dense_d4_pair_cache_bytes": 1166440,
+          "host_required_bytes": 60740712,
+          "host_required_alignment": 64,
+          "device_required_bytes": 222125840,
+          "device_required_alignment": 256
+        },
+        "device_bytes_saved": 3501160,
+        "device_percent_saved": 1.551746909722684,
+        "saved_minus_dense_d4_cache_bytes": 2334720
+      },
+      {
+        "workload": {
+          "natoms_per_system": 272,
+          "batch_size": 1
+        },
+        "baseline": {
+          "natoms_per_system": 272,
+          "batch_size": 1,
+          "total_atoms": 272,
+          "packed_pairs": 36856,
+          "dense_d4_pair_cache_bytes": 1474240,
+          "host_required_bytes": 81062612,
+          "host_required_alignment": 64,
+          "device_required_bytes": 283609336,
+          "device_required_alignment": 256
+        },
+        "candidate": {
+          "natoms_per_system": 272,
+          "batch_size": 1,
+          "total_atoms": 272,
+          "packed_pairs": 36856,
+          "dense_d4_pair_cache_bytes": 1474240,
+          "host_required_bytes": 76585548,
+          "host_required_alignment": 64,
+          "device_required_bytes": 279184440,
+          "device_required_alignment": 256
+        },
+        "device_bytes_saved": 4424896,
+        "device_percent_saved": 1.5602081590149064,
+        "saved_minus_dense_d4_cache_bytes": 2950656
+      },
+      {
+        "workload": {
+          "natoms_per_system": 32,
+          "batch_size": 128
+        },
+        "baseline": {
+          "natoms_per_system": 32,
+          "batch_size": 128,
+          "total_atoms": 4096,
+          "packed_pairs": 63488,
+          "dense_d4_pair_cache_bytes": 2539520,
+          "host_required_bytes": 141388796,
+          "host_required_alignment": 64,
+          "device_required_bytes": 739852728,
+          "device_required_alignment": 256
+        },
+        "candidate": {
+          "natoms_per_system": 32,
+          "batch_size": 128,
+          "total_atoms": 4096,
+          "packed_pairs": 63488,
+          "dense_d4_pair_cache_bytes": 2539520,
+          "host_required_bytes": 132888948,
+          "host_required_alignment": 64,
+          "device_required_bytes": 732200376,
+          "device_required_alignment": 256
+        },
+        "device_bytes_saved": 7652352,
+        "device_percent_saved": 1.0343074655798254,
+        "saved_minus_dense_d4_cache_bytes": 5112832
+      }
+    ]
+  },
+  "latency_rows": [
+    {
+      "natoms_per_system": 32,
+      "batch_size": 1,
+      "baseline": {
+        "median_ms": 79.280394,
+        "mean_ms": 79.66311906666667,
+        "p95_ms": 84.56612299999999,
+        "min_ms": 79.256284,
+        "samples_ms": [
+          79.271362,
+          79.27813499999999,
+          79.272234,
+          79.256284,
+          79.266784,
+          79.293696,
+          79.28098,
+          79.275781,
+          79.272615,
+          79.279808,
+          79.271603,
+          79.27262499999999,
+          79.281392,
+          79.28838499999999,
+          79.260723,
+          79.263678,
+          79.29002799999999,
+          79.281382,
+          79.287915,
+          79.27202299999999,
+          79.292923,
+          79.29654099999999,
+          79.28724299999999,
+          79.29589,
+          79.288506,
+          79.271312,
+          79.266784,
+          79.284658,
+          84.56612299999999,
+          85.52615899999999
+        ],
+        "systems_per_second_at_median": 12.6134590098026
+      },
+      "candidate": {
+        "median_ms": 72.6924775,
+        "mean_ms": 72.67501976666667,
+        "p95_ms": 73.159872,
+        "min_ms": 72.137536,
+        "samples_ms": [
+          72.684783,
+          72.69774799999999,
+          72.693901,
+          72.179326,
+          72.156632,
+          72.595973,
+          73.11153999999999,
+          72.691926,
+          72.678401,
+          72.69879999999999,
+          73.161194,
+          72.671908,
+          72.693029,
+          72.720552,
+          72.465313,
+          72.563872,
+          73.107823,
+          72.456246,
+          72.137536,
+          72.13910899999999,
+          72.628506,
+          73.103123,
+          72.69446099999999,
+          73.15467199999999,
+          72.694091,
+          72.471125,
+          72.643535,
+          73.159872,
+          72.69318899999999,
+          72.702407
+        ],
+        "systems_per_second_at_median": 13.756581621530234
+      },
+      "median_latency_change_percent": -8.309641473275228,
+      "median_speedup_ratio": 1.090627211048076,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 8.326672684688674e-17,
+      "baseline_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 7.632783294297951e-17,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "candidate_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 8.326672684688674e-17,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "baseline_iteration_summary": {
+        "max": 17,
+        "median": 17.0,
+        "min": 17
+      },
+      "candidate_iteration_summary": {
+        "max": 17,
+        "median": 17.0,
+        "min": 17
+      }
+    },
+    {
+      "natoms_per_system": 32,
+      "batch_size": 128,
+      "baseline": {
+        "median_ms": 158.88618400000001,
+        "mean_ms": 158.8891595,
+        "p95_ms": 159.043636,
+        "min_ms": 158.733362,
+        "samples_ms": [
+          158.944395,
+          158.898308,
+          158.833383,
+          159.043636,
+          158.886775,
+          158.755014,
+          158.916302,
+          158.785211,
+          158.97248,
+          159.261462,
+          158.996736,
+          158.773639,
+          158.85224,
+          158.733362,
+          158.89173499999998,
+          158.86305099999998,
+          158.922023,
+          158.851508,
+          158.815009,
+          158.80583099999998,
+          158.885593,
+          158.82653,
+          158.841098,
+          158.799619,
+          158.945889,
+          158.803326,
+          158.961088,
+          158.89820699999999,
+          158.952211,
+          158.959124
+        ],
+        "systems_per_second_at_median": 805.6081200867659
+      },
+      "candidate": {
+        "median_ms": 160.7675605,
+        "mean_ms": 160.8548869,
+        "p95_ms": 161.240943,
+        "min_ms": 160.521075,
+        "samples_ms": [
+          160.533355,
+          160.824818,
+          160.608478,
+          160.614739,
+          160.63423699999998,
+          160.67559699999998,
+          160.530062,
+          160.644069,
+          160.67643999999999,
+          160.521075,
+          160.785978,
+          160.65020199999998,
+          160.791643,
+          160.948049,
+          160.522311,
+          160.65524299999998,
+          160.657477,
+          160.749143,
+          160.629448,
+          161.127835,
+          161.267891,
+          161.107306,
+          161.18311,
+          161.17987399999998,
+          161.105376,
+          161.240943,
+          161.16367599999998,
+          161.230704,
+          161.22835,
+          161.159178
+        ],
+        "systems_per_second_at_median": 796.1805205099197
+      },
+      "median_latency_change_percent": 1.184103269797195,
+      "median_speedup_ratio": 0.9882975365543349,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 1.3877787807814457e-16,
+      "baseline_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 1.1796119636642288e-16,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "candidate_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 1.3877787807814457e-16,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "baseline_iteration_summary": {
+        "max": 17,
+        "median": 17.0,
+        "min": 17
+      },
+      "candidate_iteration_summary": {
+        "max": 17,
+        "median": 17.0,
+        "min": 17
+      }
+    },
+    {
+      "natoms_per_system": 62,
+      "batch_size": 1,
+      "baseline": {
+        "median_ms": 148.95658500000002,
+        "mean_ms": 149.01315509999998,
+        "p95_ms": 149.949054,
+        "min_ms": 147.84658199999998,
+        "samples_ms": [
+          147.84658199999998,
+          150.335614,
+          149.349076,
+          148.980772,
+          148.967206,
+          148.95420099999998,
+          148.950514,
+          148.994167,
+          148.956725,
+          148.930716,
+          148.966704,
+          148.928251,
+          148.968038,
+          148.669206,
+          149.24218199999999,
+          148.977085,
+          148.9485,
+          148.955714,
+          148.956445,
+          148.95904,
+          148.97956,
+          148.935375,
+          149.949054,
+          148.98353699999998,
+          148.935686,
+          148.95155599999998,
+          148.93615699999998,
+          148.930636,
+          149.02169999999998,
+          148.934654
+        ],
+        "systems_per_second_at_median": 6.713365508480205
+      },
+      "candidate": {
+        "median_ms": 151.951119,
+        "mean_ms": 151.99989326666667,
+        "p95_ms": 152.389589,
+        "min_ms": 151.784721,
+        "samples_ms": [
+          152.387764,
+          151.964094,
+          151.952181,
+          151.95642999999998,
+          151.944637,
+          151.96508599999999,
+          151.948174,
+          151.949626,
+          151.945249,
+          151.946351,
+          151.95004799999998,
+          151.95743099999999,
+          151.946471,
+          151.95350399999998,
+          151.950057,
+          151.938365,
+          151.969114,
+          151.959716,
+          151.944928,
+          152.389589,
+          152.57886,
+          152.070799,
+          151.784721,
+          151.937895,
+          151.968583,
+          151.93621199999998,
+          151.94649099999998,
+          151.962402,
+          151.96435499999998,
+          151.927665
+        ],
+        "systems_per_second_at_median": 6.58106374326865
+      },
+      "median_latency_change_percent": 2.010340126957118,
+      "median_speedup_ratio": 0.9802927808646148,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 1.5959455978986625e-16,
+      "baseline_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 1.3877787807814457e-16,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "candidate_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 1.3183898417423734e-16,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "baseline_iteration_summary": {
+        "max": 18,
+        "median": 18.0,
+        "min": 18
+      },
+      "candidate_iteration_summary": {
+        "max": 18,
+        "median": 18.0,
+        "min": 18
+      }
+    },
+    {
+      "natoms_per_system": 122,
+      "batch_size": 1,
+      "baseline": {
+        "median_ms": 438.86718099999996,
+        "mean_ms": 439.8472392333333,
+        "p95_ms": 442.205556,
+        "min_ms": 438.381373,
+        "samples_ms": [
+          438.736068,
+          438.55695499999996,
+          438.68879799999996,
+          438.875294,
+          441.48738199999997,
+          442.30517699999996,
+          441.858553,
+          438.762228,
+          438.709407,
+          438.819208,
+          442.205556,
+          442.012678,
+          439.255674,
+          441.573468,
+          438.77743899999996,
+          441.89552399999997,
+          438.603216,
+          439.54961599999996,
+          439.066111,
+          441.867601,
+          441.692327,
+          441.90556499999997,
+          438.771148,
+          438.724128,
+          438.768623,
+          439.33255199999996,
+          438.715472,
+          438.66096799999997,
+          438.381373,
+          438.859068
+        ],
+        "systems_per_second_at_median": 2.2785937142107695
+      },
+      "candidate": {
+        "median_ms": 442.49946049999994,
+        "mean_ms": 442.48779709999997,
+        "p95_ms": 442.600844,
+        "min_ms": 442.341169,
+        "samples_ms": [
+          442.516051,
+          442.475604,
+          442.550638,
+          442.69311,
+          442.50197399999996,
+          442.40266399999996,
+          442.600844,
+          442.57739,
+          442.557101,
+          442.399068,
+          442.51408799999996,
+          442.41522899999995,
+          442.510852,
+          442.485955,
+          442.46502499999997,
+          442.367368,
+          442.50825699999996,
+          442.49251799999996,
+          442.484552,
+          442.553725,
+          442.53524999999996,
+          442.496947,
+          442.533737,
+          442.38264799999996,
+          442.394301,
+          442.39257699999996,
+          442.440098,
+          442.536583,
+          442.50858999999997,
+          442.341169
+        ],
+        "systems_per_second_at_median": 2.259889760927743
+      },
+      "median_latency_change_percent": 0.8276489236956595,
+      "median_speedup_ratio": 0.9917914487491223,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 1.734723475976807e-16,
+      "baseline_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 1.6653345369377348e-16,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "candidate_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 1.491862189340054e-16,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "baseline_iteration_summary": {
+        "max": 18,
+        "median": 18.0,
+        "min": 18
+      },
+      "candidate_iteration_summary": {
+        "max": 18,
+        "median": 18.0,
+        "min": 18
+      }
+    },
+    {
+      "natoms_per_system": 242,
+      "batch_size": 1,
+      "baseline": {
+        "median_ms": 2116.9176515,
+        "mean_ms": 2117.5262407666664,
+        "p95_ms": 2119.424983,
+        "min_ms": 2116.41642,
+        "samples_ms": [
+          2116.58212,
+          2116.447597,
+          2116.86602,
+          2116.647856,
+          2116.917425,
+          2116.724139,
+          2116.497699,
+          2116.4899769999997,
+          2116.41642,
+          2117.314822,
+          2116.64813,
+          2116.6900729999998,
+          2116.964431,
+          2116.934707,
+          2116.974627,
+          2117.745075,
+          2117.107708,
+          2116.9178779999997,
+          2132.141689,
+          2117.0651359999997,
+          2119.299925,
+          2116.5157019999997,
+          2117.046691,
+          2116.941111,
+          2117.255566,
+          2116.67056,
+          2119.424983,
+          2116.890657,
+          2116.6031,
+          2117.045399
+        ],
+        "systems_per_second_at_median": 0.47238493159685385
+      },
+      "candidate": {
+        "median_ms": 2064.2477595,
+        "mean_ms": 2064.270496333333,
+        "p95_ms": 2065.122258,
+        "min_ms": 2063.7144789999998,
+        "samples_ms": [
+          2064.1179549999997,
+          2063.985053,
+          2064.12383,
+          2063.7144789999998,
+          2064.402708,
+          2064.353004,
+          2065.122258,
+          2064.292031,
+          2064.525319,
+          2065.206685,
+          2064.395635,
+          2064.347154,
+          2063.996395,
+          2063.905383,
+          2064.180441,
+          2064.407728,
+          2064.1697449999997,
+          2064.237596,
+          2064.676407,
+          2064.36851,
+          2064.340308,
+          2064.4101539999997,
+          2064.483786,
+          2063.8067619999997,
+          2064.048066,
+          2064.046434,
+          2064.1588309999997,
+          2064.257923,
+          2064.013717,
+          2064.0205929999997
+        ],
+        "systems_per_second_at_median": 0.4844379728149585
+      },
+      "median_latency_change_percent": -2.488046332963363,
+      "median_speedup_ratio": 1.0255152957088627,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 1.3183898417423734e-16,
+      "baseline_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 1.5959455978986625e-16,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "candidate_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 1.5612511283791264e-16,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "baseline_iteration_summary": {
+        "max": 17,
+        "median": 17.0,
+        "min": 17
+      },
+      "candidate_iteration_summary": {
+        "max": 17,
+        "median": 17.0,
+        "min": 17
+      }
+    },
+    {
+      "natoms_per_system": 272,
+      "batch_size": 1,
+      "baseline": {
+        "median_ms": 3124.462525,
+        "mean_ms": 3124.4757134,
+        "p95_ms": 3124.982056,
+        "min_ms": 3123.712293,
+        "samples_ms": [
+          3124.373798,
+          3124.924418,
+          3124.4272029999997,
+          3124.986989,
+          3124.383841,
+          3124.2632169999997,
+          3124.8064919999997,
+          3124.6864579999997,
+          3124.1700969999997,
+          3124.39914,
+          3124.529575,
+          3124.098226,
+          3124.662622,
+          3124.803136,
+          3124.497367,
+          3124.3241909999997,
+          3124.451009,
+          3124.303282,
+          3124.982056,
+          3124.7206109999997,
+          3123.9509439999997,
+          3124.474041,
+          3124.1165619999997,
+          3123.712293,
+          3124.179142,
+          3123.995947,
+          3124.9209819999996,
+          3124.522175,
+          3124.759804,
+          3124.8457839999996
+        ],
+        "systems_per_second_at_median": 0.32005504690762776
+      },
+      "candidate": {
+        "median_ms": 3053.863919,
+        "mean_ms": 3053.9574727,
+        "p95_ms": 3055.666181,
+        "min_ms": 3053.297838,
+        "samples_ms": [
+          3053.476088,
+          3053.5601229999997,
+          3053.53055,
+          3053.8081549999997,
+          3053.679021,
+          3054.0209379999997,
+          3053.297838,
+          3053.964117,
+          3053.300911,
+          3053.805069,
+          3054.297896,
+          3054.175725,
+          3053.9725799999997,
+          3053.561236,
+          3054.004578,
+          3055.666181,
+          3056.305066,
+          3054.084139,
+          3054.028947,
+          3053.604919,
+          3053.8636269999997,
+          3053.39839,
+          3054.363339,
+          3053.799604,
+          3053.864211,
+          3053.722593,
+          3054.295272,
+          3053.865653,
+          3053.4790559999997,
+          3053.928359
+        ],
+        "systems_per_second_at_median": 0.3274540144956603
+      },
+      "median_latency_change_percent": -2.2595440154943134,
+      "median_speedup_ratio": 1.0231177969524974,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 1.5612511283791264e-16,
+      "baseline_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 1.457167719820518e-16,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "candidate_correctness": {
+        "status": "pass",
+        "energy_atol_hartree": 1e-08,
+        "force_atol_hartree_per_bohr": 5e-07,
+        "max_abs_energy_drift_hartree": 0.0,
+        "max_abs_force_drift_hartree_per_bohr": 1.3530843112619095e-16,
+        "fresh_reference_comparison_status": "not_requested"
+      },
+      "baseline_iteration_summary": {
+        "max": 17,
+        "median": 17.0,
+        "min": 17
+      },
+      "candidate_iteration_summary": {
+        "max": 17,
+        "median": 17.0,
+        "min": 17
+      }
+    }
+  ],
+  "headline_rows": [
+    {
+      "natoms_per_system": 32,
+      "batch_size": 1,
+      "baseline_device_bytes": 6357624,
+      "candidate_device_bytes": 6297848,
+      "device_bytes_saved": 59776,
+      "device_percent_saved": 0.9402254678791951,
+      "baseline_median_ms": 79.280394,
+      "candidate_median_ms": 72.6924775,
+      "median_latency_change_percent": -8.309641473275228,
+      "median_speedup_ratio": 1.090627211048076,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 8.326672684688674e-17
+    },
+    {
+      "natoms_per_system": 32,
+      "batch_size": 128,
+      "baseline_device_bytes": 739852728,
+      "candidate_device_bytes": 732200376,
+      "device_bytes_saved": 7652352,
+      "device_percent_saved": 1.0343074655798254,
+      "baseline_median_ms": 158.88618400000001,
+      "candidate_median_ms": 160.7675605,
+      "median_latency_change_percent": 1.184103269797195,
+      "median_speedup_ratio": 0.9882975365543349,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 1.3877787807814457e-16
+    },
+    {
+      "natoms_per_system": 62,
+      "batch_size": 1,
+      "baseline_device_bytes": 17693464,
+      "candidate_device_bytes": 17466016,
+      "device_bytes_saved": 227448,
+      "device_percent_saved": 1.2854916369117997,
+      "baseline_median_ms": 148.95658500000002,
+      "candidate_median_ms": 151.951119,
+      "median_latency_change_percent": 2.010340126957118,
+      "median_speedup_ratio": 0.9802927808646148,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 1.5959455978986625e-16
+    },
+    {
+      "natoms_per_system": 122,
+      "batch_size": 1,
+      "baseline_device_bytes": 60352184,
+      "candidate_device_bytes": 59465328,
+      "device_bytes_saved": 886856,
+      "device_percent_saved": 1.469467948334728,
+      "baseline_median_ms": 438.86718099999996,
+      "candidate_median_ms": 442.49946049999994,
+      "median_latency_change_percent": 0.8276489236956595,
+      "median_speedup_ratio": 0.9917914487491223,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 1.734723475976807e-16
+    },
+    {
+      "natoms_per_system": 242,
+      "batch_size": 1,
+      "baseline_device_bytes": 225627000,
+      "candidate_device_bytes": 222125840,
+      "device_bytes_saved": 3501160,
+      "device_percent_saved": 1.551746909722684,
+      "baseline_median_ms": 2116.9176515,
+      "candidate_median_ms": 2064.2477595,
+      "median_latency_change_percent": -2.488046332963363,
+      "median_speedup_ratio": 1.0255152957088627,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 1.3183898417423734e-16
+    },
+    {
+      "natoms_per_system": 272,
+      "batch_size": 1,
+      "baseline_device_bytes": 283609336,
+      "candidate_device_bytes": 279184440,
+      "device_bytes_saved": 4424896,
+      "device_percent_saved": 1.5602081590149064,
+      "baseline_median_ms": 3124.462525,
+      "candidate_median_ms": 3053.863919,
+      "median_latency_change_percent": -2.2595440154943134,
+      "median_speedup_ratio": 1.0231177969524974,
+      "cross_version_max_abs_energy_delta_hartree": 0.0,
+      "cross_version_max_abs_force_delta_hartree_per_bohr": 1.5612511283791264e-16
+    }
+  ]
+}
