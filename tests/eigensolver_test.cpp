@@ -108,6 +108,9 @@ using xtbloom::detail::gfn2::BasisPlan;
 using xtbloom::detail::gfn2::CpuLinearAlgebraBackend;
 using xtbloom::detail::gfn2::EigensolverOverlapCache;
 using xtbloom::detail::gfn2::EigensolverPlan;
+using xtbloom::detail::gfn2::EigensolverRecyclePolicy;
+using xtbloom::detail::gfn2::EigensolverSolveMode;
+using xtbloom::detail::gfn2::EigensolverSolveReport;
 using xtbloom::detail::gfn2::EigensolverThermodynamicsView;
 using xtbloom::detail::gfn2::EigensolverWorkspace;
 using xtbloom::detail::gfn2::LapackInt;
@@ -1486,6 +1489,162 @@ int test_second_spin_failure_is_atomic() {
   return 0;
 }
 
+int test_guarded_recycled_eigensolver_and_dense_fallback() {
+  std::string error;
+  constexpr std::size_t orbitals = 70u;
+  std::vector<std::int32_t> atomic_numbers(orbitals, 1);
+  std::vector<double> overlap(orbitals * orbitals, 0.0);
+  std::vector<double> initial_hamiltonian(orbitals * orbitals, 0.0);
+  for (std::size_t orbital = 0u; orbital < orbitals; ++orbital) {
+    overlap[orbital * orbitals + orbital] = 1.0;
+    initial_hamiltonian[orbital * orbitals + orbital] = -1.0 + 0.02 * static_cast<double>(orbital);
+  }
+
+  Evaluation recycled;
+  Evaluation dense;
+  CHECK(initialize_evaluation({0, static_cast<std::int64_t>(orbitals)}, atomic_numbers, {0.0}, {0},
+                              {1}, recycled, error));
+  CHECK(initialize_evaluation({0, static_cast<std::int64_t>(orbitals)}, atomic_numbers, {0.0}, {0},
+                              {1}, dense, error));
+  CHECK(factor(recycled, overlap, 101u, error));
+  CHECK(factor(dense, overlap, 101u, error));
+  CHECK(solve(recycled, initial_hamiltonian, 0.0, 101u, error));
+  CHECK(solve(dense, initial_hamiltonian, 0.0, 101u, error));
+
+  std::vector<double> block_hamiltonian = initial_hamiltonian;
+  block_hamiltonian[4u * orbitals + 5u] = 2.0e-4;
+  block_hamiltonian[5u * orbitals + 4u] = 2.0e-4;
+  CHECK(solve(dense, block_hamiltonian, 0.0, 101u, error));
+  EigensolverThermodynamicsView recycled_thermodynamics = recycled.thermodynamics();
+  EigensolverSolveReport report;
+  EigensolverRecyclePolicy recycle_policy;
+  recycle_policy.minimum_orbitals = 64;
+  reset_backend_spies();
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_adaptive_cpu(
+            recycled.plan, 0, recycled.cache, 101u, block_hamiltonian.data(), 0.0, backend(),
+            recycled.scratch, recycled.wavefunction, recycled_thermodynamics, recycle_policy, true,
+            report, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(error.empty());
+  CHECK(report.mode == EigensolverSolveMode::kRecycled);
+  CHECK(report.active_orbitals == 57);
+  CHECK(report.maximum_backward_error < 1.0e-13);
+  CHECK(report.rms_backward_error < 1.0e-13);
+  CHECK(report.boundary_gap > 1.0e-3);
+  CHECK(dsyevd_calls.load(std::memory_order_relaxed) == 2);
+  WavefunctionSystemView recycled_view;
+  WavefunctionSystemView dense_view;
+  CHECK(system_view(recycled, 0u, recycled_view, error));
+  CHECK(system_view(dense, 0u, dense_view, error));
+  CHECK(generalized_eigensystem_is_valid(block_hamiltonian.data(), overlap.data(),
+                                         recycled_view.coefficients, recycled_view.eigenvalues,
+                                         orbitals));
+  for (std::size_t element = 0u; element < orbitals * orbitals; ++element) {
+    CHECK(near(recycled_view.density[element], dense_view.density[element], 2.0e-10));
+    CHECK(near(recycled_view.energy_weighted_density[element],
+               dense_view.energy_weighted_density[element], 2.0e-10));
+  }
+  CHECK(near(recycled.band_energies[0], dense.band_energies[0], 2.0e-10));
+
+  /* Coupling the occupied block to an omitted virtual makes the exact
+   * cross-block residual fail. The same logical iteration must complete with
+   * the ordinary dense solve and must not publish an eigensolver failure. */
+  std::vector<double> coupled_hamiltonian = block_hamiltonian;
+  coupled_hamiltonian[34u * orbitals + 68u] = 0.05;
+  coupled_hamiltonian[68u * orbitals + 34u] = 0.05;
+  reset_backend_spies();
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_adaptive_cpu(
+            recycled.plan, 0, recycled.cache, 101u, coupled_hamiltonian.data(), 0.0, backend(),
+            recycled.scratch, recycled.wavefunction, recycled_thermodynamics, recycle_policy, true,
+            report, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(report.mode == EigensolverSolveMode::kRecycleFallback);
+  CHECK(recycled.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(dsyevd_calls.load(std::memory_order_relaxed) == 3);
+  CHECK(system_view(recycled, 0u, recycled_view, error));
+  CHECK(generalized_eigensystem_is_valid(coupled_hamiltonian.data(), overlap.data(),
+                                         recycled_view.coefficients, recycled_view.eigenvalues,
+                                         orbitals));
+
+  /* A previous frontier that is too close to the retained-complement
+   * boundary must reject before either partial solve. The ordinary dense
+   * solve still completes the same logical iteration. */
+  Evaluation near_degenerate;
+  CHECK(initialize_evaluation({0, static_cast<std::int64_t>(orbitals)}, atomic_numbers, {0.0}, {0},
+                              {1}, near_degenerate, error));
+  CHECK(factor(near_degenerate, overlap, 101u, error));
+  std::vector<double> near_degenerate_hamiltonian = initial_hamiltonian;
+  constexpr std::size_t boundary = 49u;
+  near_degenerate_hamiltonian[boundary * orbitals + boundary] =
+      near_degenerate_hamiltonian[(boundary - 1u) * orbitals + boundary - 1u] + 5.0e-7;
+  CHECK(solve(near_degenerate, near_degenerate_hamiltonian, 0.0, 101u, error));
+  EigensolverThermodynamicsView near_degenerate_thermodynamics = near_degenerate.thermodynamics();
+  reset_backend_spies();
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_adaptive_cpu(
+            near_degenerate.plan, 0, near_degenerate.cache, 101u,
+            near_degenerate_hamiltonian.data(), 0.0, backend(), near_degenerate.scratch,
+            near_degenerate.wavefunction, near_degenerate_thermodynamics, recycle_policy, true,
+            report, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(report.mode == EigensolverSolveMode::kRecycleFallback);
+  CHECK(dsyevd_calls.load(std::memory_order_relaxed) == 1);
+
+  /* A finite-temperature occupation tail extending into the omitted block
+   * invalidates the subspace truncation even when the Hamiltonian itself is
+   * unchanged. This guard is evaluated before any partial eigensolve. */
+  Evaluation finite_temperature;
+  CHECK(initialize_evaluation({0, static_cast<std::int64_t>(orbitals)}, atomic_numbers, {0.0}, {0},
+                              {1}, finite_temperature, error));
+  CHECK(factor(finite_temperature, overlap, 101u, error));
+  constexpr double broad_temperature = 5.0e-2;
+  CHECK(solve(finite_temperature, initial_hamiltonian, broad_temperature, 101u, error));
+  EigensolverThermodynamicsView finite_temperature_thermodynamics =
+      finite_temperature.thermodynamics();
+  reset_backend_spies();
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_adaptive_cpu(
+            finite_temperature.plan, 0, finite_temperature.cache, 101u, initial_hamiltonian.data(),
+            broad_temperature, backend(), finite_temperature.scratch,
+            finite_temperature.wavefunction, finite_temperature_thermodynamics, recycle_policy,
+            true, report, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(report.mode == EigensolverSolveMode::kRecycleFallback);
+  CHECK(dsyevd_calls.load(std::memory_order_relaxed) == 1);
+
+  /* Unrestricted systems retain the existing two-channel dense semantics. */
+  Evaluation unrestricted;
+  CHECK(initialize_evaluation({0, 4}, {1, 1, 1, 1}, {0.0}, {0}, {2}, unrestricted, error));
+  const std::vector<double> small_overlap{1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+                                          0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0};
+  const std::vector<double> small_hamiltonian{
+      -0.8, 0.0, 0.0, 0.0, 0.0, -0.4, 0.0, 0.0, 0.0, 0.0, 0.2,  0.0, 0.0, 0.0, 0.0, 0.6,
+      -0.7, 0.0, 0.0, 0.0, 0.0, -0.3, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.65};
+  CHECK(factor(unrestricted, small_overlap, 103u, error));
+  CHECK(solve(unrestricted, small_hamiltonian, 0.0, 103u, error));
+  EigensolverRecyclePolicy unrestricted_policy;
+  unrestricted_policy.minimum_orbitals = 1;
+  unrestricted_policy.minimum_virtual_buffer = 1;
+  unrestricted_policy.virtual_buffer_fraction = 0.0;
+  EigensolverThermodynamicsView unrestricted_thermodynamics = unrestricted.thermodynamics();
+  reset_backend_spies();
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_adaptive_cpu(
+            unrestricted.plan, 0, unrestricted.cache, 103u, small_hamiltonian.data(), 0.0,
+            backend(), unrestricted.scratch, unrestricted.wavefunction, unrestricted_thermodynamics,
+            unrestricted_policy, true, report, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(report.mode == EigensolverSolveMode::kRecycleFallback);
+  CHECK(dsyevd_calls.load(std::memory_order_relaxed) == 2);
+
+  EigensolverRecyclePolicy invalid_policy;
+  invalid_policy.minimum_orbitals = 0;
+  const EigensolverSolveReport saved_report = report;
+  CHECK(xtbloom::detail::gfn2::solve_eigensystem_adaptive_cpu(
+            unrestricted.plan, 0, unrestricted.cache, 103u, small_hamiltonian.data(), 0.0,
+            backend(), unrestricted.scratch, unrestricted.wavefunction, unrestricted_thermodynamics,
+            invalid_policy, true, report, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(report.mode == saved_report.mode &&
+        report.active_orbitals == saved_report.active_orbitals &&
+        report.maximum_backward_error == saved_report.maximum_backward_error &&
+        report.rms_backward_error == saved_report.rms_backward_error &&
+        report.boundary_gap == saved_report.boundary_gap &&
+        report.residual_gap_ratio == saved_report.residual_gap_ratio);
+  return 0;
+}
+
 int test_batch_matches_sequential() {
   std::string error;
   Evaluation batch;
@@ -1693,6 +1852,9 @@ int main(int argc, char** argv) {
     return status;
   }
   if (const int status = test_second_spin_failure_is_atomic(); status != 0) {
+    return status;
+  }
+  if (const int status = test_guarded_recycled_eigensolver_and_dense_fallback(); status != 0) {
     return status;
   }
   if (const int status = test_batch_matches_sequential(); status != 0) {

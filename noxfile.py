@@ -29,6 +29,7 @@ CPU_REQUIRED_TESTS = {
     "xtbloom.conformance.public_cpu",
     "xtbloom.cpu.public_inference",
     "xtbloom.gfn2.eigensolver",
+    "xtbloom.gfn2.scc_recycle",
     "xtbloom.runtime",
 }
 

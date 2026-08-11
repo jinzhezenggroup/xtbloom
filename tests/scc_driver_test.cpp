@@ -349,7 +349,14 @@ std::size_t expected_disabled_state_size(const Fixture& fixture) {
     cursor = append_test_segment(cursor, batch * sizeof(double), alignof(double));
   }
   cursor = append_test_segment(cursor, batch * sizeof(std::uint64_t), alignof(std::uint64_t));
+  for (int field = 0; field < 4; ++field) {
+    cursor = append_test_segment(cursor, batch * sizeof(std::uint64_t), alignof(std::uint64_t));
+  }
+  cursor = append_test_segment(cursor, batch * sizeof(EigensolverSolveMode),
+                               alignof(EigensolverSolveMode));
   cursor = append_test_segment(cursor, batch * sizeof(xtbloom_status_t), alignof(xtbloom_status_t));
+  cursor = append_test_segment(cursor, batch * sizeof(std::uint8_t), alignof(std::uint8_t));
+  cursor = append_test_segment(cursor, batch * sizeof(std::uint8_t), alignof(std::uint8_t));
   cursor = append_test_segment(cursor, batch * sizeof(std::uint8_t), alignof(std::uint8_t));
   cursor = append_test_segment(cursor, batch * sizeof(std::uint8_t), alignof(std::uint8_t));
   return append_test_segment(cursor, 0u, kSccDriverWorkspaceAlignment);
@@ -409,6 +416,8 @@ std::size_t expected_disabled_workspace_size(const Fixture& fixture) {
     cursor = append_test_segment(cursor, batch * sizeof(double), alignof(double));
   }
   cursor = append_test_segment(cursor, batch * sizeof(std::uint8_t), alignof(std::uint8_t));
+  cursor = append_test_segment(cursor, batch * sizeof(EigensolverSolveMode),
+                               alignof(EigensolverSolveMode));
   return append_test_segment(cursor, 0u, kSccDriverWorkspaceAlignment);
 }
 
@@ -932,10 +941,14 @@ int test_complete_energy_failure_isolated_from_ragged_peer() {
             error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.iterations[0] == 1u);
+  CHECK(fixture.driver_state.full_eigensolves[0] == 1u);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(std::isfinite(fixture.driver_state.internal_energies[0]));
   CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.driver_state.iterations[1] == 1u);
+  CHECK(fixture.driver_state.full_eigensolves[1] == 0u);
+  CHECK(fixture.driver_state.recycled_eigensolves[1] == 0u);
+  CHECK(fixture.driver_state.eigensolver_geometry_generations[1] == 0u);
   CHECK(std::isnan(fixture.driver_state.internal_energies[1]));
   CHECK(std::isnan(fixture.driver_state.free_energies[1]));
   CHECK(fixture.wavefunction.qsh[static_cast<std::size_t>(failed_qsh_base)] == failed_qsh_before);
@@ -965,9 +978,12 @@ int test_preparation_numerical_failure_isolated_from_ragged_peer() {
   CHECK(diagonalizations.load(std::memory_order_relaxed) == 1);
   CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.iterations[0] == 1u);
+  CHECK(fixture.driver_state.full_eigensolves[0] == 1u);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.driver_state.iterations[1] == 0u);
+  CHECK(fixture.driver_state.full_eigensolves[1] == 0u);
+  CHECK(fixture.driver_state.eigensolver_geometry_generations[1] == 0u);
   CHECK(fixture.wavefunction
             .qsh[static_cast<std::size_t>(fixture.wavefunction_layout.qsh.system_offsets[1])] ==
         failed_qsh_before);
@@ -987,8 +1003,11 @@ int test_preparation_numerical_failure_isolated_from_ragged_peer() {
   CHECK(diagonalizations.load(std::memory_order_relaxed) == 1);
   CHECK(h0_failure.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(h0_failure.driver_state.iterations[0] == 1u);
+  CHECK(h0_failure.driver_state.full_eigensolves[0] == 1u);
   CHECK(h0_failure.driver_state.system_statuses[1] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(h0_failure.driver_state.iterations[1] == 0u);
+  CHECK(h0_failure.driver_state.full_eigensolves[1] == 0u);
+  CHECK(h0_failure.driver_state.eigensolver_geometry_generations[1] == 0u);
   return 0;
 }
 
@@ -1006,8 +1025,12 @@ int test_ragged_failure_isolation_restart_and_skip() {
   CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.converged[0] == 1u);
   CHECK(fixture.driver_state.iterations[0] == 1u);
+  CHECK(fixture.driver_state.full_eigensolves[0] == 1u);
   CHECK(fixture.driver_state.system_statuses[1] == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   CHECK(fixture.driver_state.iterations[1] == 1u);
+  CHECK(fixture.driver_state.full_eigensolves[1] == 0u);
+  CHECK(fixture.driver_state.recycled_eigensolves[1] == 0u);
+  CHECK(fixture.driver_state.eigensolver_geometry_generations[1] == 0u);
   CHECK(std::isnan(fixture.driver_state.free_energies[1]));
 
   const double first_qsh = fixture.wavefunction.qsh[0];
@@ -1177,6 +1200,7 @@ int test_max_iteration_status_counts_attempts() {
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
             error) == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
   CHECK(fixture.driver_state.iterations[0] == 1u);
+  CHECK(fixture.driver_state.full_eigensolves[0] == 1u);
   CHECK(fixture.mixer_state.iterations[0] == 1u);
   CHECK(fixture.driver_state.converged[0] == 0u);
   CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
@@ -1196,6 +1220,9 @@ int test_mixer_failure_preserves_public_history_and_counts_attempt() {
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
             error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.driver_state.iterations[0] == 1u);
+  CHECK(fixture.driver_state.full_eigensolves[0] == 0u);
+  CHECK(fixture.driver_state.recycled_eigensolves[0] == 0u);
+  CHECK(fixture.driver_state.eigensolver_geometry_generations[0] == 0u);
   CHECK(fixture.driver_state.system_statuses[0] == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.mixer_state.iterations[0] == std::numeric_limits<std::uint64_t>::max());
   CHECK(fixture.mixer_state.current_inputs[0] == current_input_before);

@@ -31,6 +31,7 @@ struct SccDriverPlanData {
   std::uint64_t maximum_iterations = 0u;
   double electronic_temperature = 0.0;
   double energy_tolerance = 0.0;
+  EigensolverRecyclePolicy recycle_policy;
 
   std::size_t state_size_bytes = 0u;
   std::size_t state_free_energy_offset = 0u;
@@ -48,9 +49,16 @@ struct SccDriverPlanData {
   std::size_t state_periodic_energy_offset = 0u;
   std::size_t state_internal_energy_offset = 0u;
   std::size_t state_iteration_offset = 0u;
+  std::size_t state_eigensolver_generation_offset = 0u;
+  std::size_t state_full_eigensolve_offset = 0u;
+  std::size_t state_recycled_eigensolve_offset = 0u;
+  std::size_t state_recycle_fallback_offset = 0u;
+  std::size_t state_last_eigensolver_mode_offset = 0u;
   std::size_t state_status_offset = 0u;
   std::size_t state_initialized_offset = 0u;
   std::size_t state_converged_offset = 0u;
+  std::size_t state_dense_confirmation_offset = 0u;
+  std::size_t state_recycle_cooldown_offset = 0u;
 
   std::size_t workspace_size_bytes = 0u;
   std::size_t staged_wavefunction_offset = 0u;
@@ -99,9 +107,12 @@ struct SccDriverPlanData {
   std::size_t thermodynamic_band_energy_offset = 0u;
   std::size_t thermodynamic_free_energy_offset = 0u;
   std::size_t active_system_offset = 0u;
+  std::size_t eigensolver_mode_offset = 0u;
 };
 
 namespace {
+
+static_assert(sizeof(EigensolverSolveMode) == sizeof(std::uint32_t));
 
 struct AddressRange {
   std::uintptr_t begin = 0u;
@@ -462,12 +473,30 @@ bool exact_state_binding(const SccDriverPlanData& data, const SccDriverState& st
              offset_pointer<double>(state.workspace_base, data.state_internal_energy_offset) &&
          state.iterations ==
              offset_pointer<std::uint64_t>(state.workspace_base, data.state_iteration_offset) &&
+         state.eigensolver_geometry_generations ==
+             offset_pointer<std::uint64_t>(state.workspace_base,
+                                           data.state_eigensolver_generation_offset) &&
+         state.full_eigensolves == offset_pointer<std::uint64_t>(
+                                       state.workspace_base, data.state_full_eigensolve_offset) &&
+         state.recycled_eigensolves ==
+             offset_pointer<std::uint64_t>(state.workspace_base,
+                                           data.state_recycled_eigensolve_offset) &&
+         state.recycle_fallbacks == offset_pointer<std::uint64_t>(
+                                        state.workspace_base, data.state_recycle_fallback_offset) &&
+         state.last_eigensolver_modes ==
+             offset_pointer<EigensolverSolveMode>(state.workspace_base,
+                                                  data.state_last_eigensolver_mode_offset) &&
          state.system_statuses ==
              offset_pointer<xtbloom_status_t>(state.workspace_base, data.state_status_offset) &&
          state.initialized ==
              offset_pointer<std::uint8_t>(state.workspace_base, data.state_initialized_offset) &&
          state.converged ==
-             offset_pointer<std::uint8_t>(state.workspace_base, data.state_converged_offset);
+             offset_pointer<std::uint8_t>(state.workspace_base, data.state_converged_offset) &&
+         state.dense_confirmations_remaining ==
+             offset_pointer<std::uint8_t>(state.workspace_base,
+                                          data.state_dense_confirmation_offset) &&
+         state.recycle_cooldowns_remaining ==
+             offset_pointer<std::uint8_t>(state.workspace_base, data.state_recycle_cooldown_offset);
 }
 
 bool same_d4_workspace_binding(const D4Workspace& first, const D4Workspace& second) {
@@ -564,6 +593,9 @@ bool exact_workspace_binding(const SccDriverPlanData& data, const SccDriverWorks
            workspace.d4_workspace.plan_identity == data.d4.identity())) &&
          workspace.active_systems ==
              offset_pointer<std::uint8_t>(workspace.workspace_base, data.active_system_offset) &&
+         workspace.eigensolver_modes ==
+             offset_pointer<EigensolverSolveMode>(workspace.workspace_base,
+                                                  data.eigensolver_mode_offset) &&
          workspace.es2_workspace.shell_scratch ==
              offset_pointer<double>(workspace.workspace_base, data.es2_shell_scratch_offset) &&
          workspace.es2_workspace.shell_elements == data.wavefunction.total_shells &&
@@ -700,6 +732,35 @@ xtbloom_status_t evaluate_scc_energy_system(const SccDriverPlanData& data,
                                             std::size_t system, const SccDriverWorkspace& workspace,
                                             std::string& error);
 
+bool should_request_recycled_eigensolve(const SccDriverPlanData& data,
+                                        const SccDriverGeometryView& geometry,
+                                        const SccMixerState& mixer_state,
+                                        const SccDriverState& state, std::size_t system) {
+  const EigensolverRecyclePolicy& policy = data.recycle_policy;
+  const std::size_t orbitals =
+      static_cast<std::size_t>(data.wavefunction.batch_orbital_offsets[system + 1u] -
+                               data.wavefunction.batch_orbital_offsets[system]);
+  const std::uint64_t iteration = state.iterations[system];
+  const std::uint64_t confirmations =
+      static_cast<std::uint64_t>(policy.dense_confirmations_after_recycle);
+  if (data.wavefunction.spin_channels[system] != 1 ||
+      orbitals < static_cast<std::size_t>(policy.minimum_orbitals) ||
+      iteration < static_cast<std::uint64_t>(policy.minimum_full_iterations) ||
+      state.eigensolver_geometry_generations[system] != geometry.geometry_generation ||
+      state.dense_confirmations_remaining[system] != 0u ||
+      state.recycle_cooldowns_remaining[system] != 0u ||
+      state.last_eigensolver_modes[system] == EigensolverSolveMode::kRecycled ||
+      iteration > data.maximum_iterations ||
+      data.maximum_iterations - iteration < confirmations + 1u) {
+    return false;
+  }
+  const double energy_change = std::abs(state.free_energy_changes[system]);
+  const double residual = mixer_state.residual_rms[system];
+  return std::isfinite(energy_change) && std::isfinite(residual) &&
+         energy_change >= policy.convergence_guard_factor * data.energy_tolerance &&
+         residual >= policy.convergence_guard_factor * data.mixer.rms_tolerance();
+}
+
 }  // namespace
 
 xtbloom_status_t iterate_scc_driver_batch_cpu(
@@ -746,6 +807,7 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
   std::fill_n(workspace.thermodynamics.entropies, batch, nan);
   std::fill_n(workspace.thermodynamics.band_energies, batch, nan);
   std::fill_n(workspace.thermodynamics.free_energies, batch, nan);
+  std::fill_n(workspace.eigensolver_modes, batch, EigensolverSolveMode::kFull);
 
   {
     for (std::size_t system = 0u; system < batch; ++system) {
@@ -753,16 +815,29 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
         continue;
       }
       const std::int64_t hamiltonian_base = data.wavefunction.density.system_offsets[system];
-      status = solve_eigensystem_cpu(
-          data.eigensolver, static_cast<std::int64_t>(system), overlap_cache,
-          geometry.geometry_generation, workspace.hamiltonian + hamiltonian_base,
-          data.electronic_temperature, backend, workspace.eigensolver_workspace,
-          workspace.staged_wavefunction, workspace.thermodynamics, error);
+      EigensolverSolveReport solve_report;
+      const bool request_recycle =
+          should_request_recycled_eigensolve(data, geometry, mixer_state, state, system);
+      if (request_recycle) {
+        status = solve_eigensystem_adaptive_cpu(
+            data.eigensolver, static_cast<std::int64_t>(system), overlap_cache,
+            geometry.geometry_generation, workspace.hamiltonian + hamiltonian_base,
+            data.electronic_temperature, backend, workspace.eigensolver_workspace,
+            workspace.staged_wavefunction, workspace.thermodynamics, data.recycle_policy, true,
+            solve_report, error);
+      } else {
+        status = solve_eigensystem_cpu(
+            data.eigensolver, static_cast<std::int64_t>(system), overlap_cache,
+            geometry.geometry_generation, workspace.hamiltonian + hamiltonian_base,
+            data.electronic_temperature, backend, workspace.eigensolver_workspace,
+            workspace.staged_wavefunction, workspace.thermodynamics, error);
+      }
       if (status != XTBLOOM_STATUS_SUCCESS) {
         /* Binding/backend contract failures are whole-call failures; all solved
          * peers still live only in the staged wavefunction at this point. */
         return status;
       }
+      workspace.eigensolver_modes[system] = solve_report.mode;
       if (workspace.thermodynamics.system_statuses[system] != XTBLOOM_STATUS_SUCCESS) {
         workspace.active_systems[system] = 2u;
         const std::int64_t density_begin = data.wavefunction.density.system_offsets[system];
@@ -880,7 +955,10 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
     const bool residual_converged =
         workspace.staged_mixer_state.residual_rms[system] < data.mixer.rms_tolerance();
     const bool energy_converged = std::abs(energy_change) < data.energy_tolerance;
-    const bool converged = residual_converged && energy_converged;
+    const EigensolverSolveMode solve_mode = workspace.eigensolver_modes[system];
+    const bool dense_confirmation_ready = solve_mode != EigensolverSolveMode::kRecycled &&
+                                          state.dense_confirmations_remaining[system] <= 1u;
+    const bool converged = residual_converged && energy_converged && dense_confirmation_ready;
     workspace.staged_mixer_state.converged[system] = converged ? 1u : 0u;
     if (converged) {
       /* The mixer stores its next-round input, but a terminal converged
@@ -986,6 +1064,30 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
       state.periodic_embedding_energies[system] = workspace.periodic_embedding_energies[system];
     }
     state.internal_energies[system] = workspace.internal_energies[system];
+    const EigensolverSolveMode solve_mode = workspace.eigensolver_modes[system];
+    state.eigensolver_geometry_generations[system] = geometry.geometry_generation;
+    state.last_eigensolver_modes[system] = solve_mode;
+    if (solve_mode == EigensolverSolveMode::kRecycled) {
+      ++state.recycled_eigensolves[system];
+      state.recycle_cooldowns_remaining[system] = 0u;
+      state.dense_confirmations_remaining[system] =
+          static_cast<std::uint8_t>(data.recycle_policy.dense_confirmations_after_recycle);
+    } else {
+      ++state.full_eigensolves[system];
+      if (solve_mode == EigensolverSolveMode::kRecycleFallback) {
+        ++state.recycle_fallbacks[system];
+        state.recycle_cooldowns_remaining[system] =
+            static_cast<std::uint8_t>(data.recycle_policy.fallback_cooldown_iterations);
+      } else if (state.recycle_cooldowns_remaining[system] != 0u) {
+        --state.recycle_cooldowns_remaining[system];
+      }
+      if (state.dense_confirmations_remaining[system] != 0u) {
+        --state.dense_confirmations_remaining[system];
+      }
+    }
+    if (converged) {
+      state.recycle_cooldowns_remaining[system] = 0u;
+    }
     state.iterations[system] = old_iteration + 1u;
     state.converged[system] = converged ? 1u : 0u;
     if (!converged && state.iterations[system] >= data.maximum_iterations) {
@@ -1296,6 +1398,7 @@ xtbloom_status_t make_scc_driver_plan(
   std::size_t batch_u64_bytes = 0u;
   std::size_t batch_status_bytes = 0u;
   std::size_t batch_byte_bytes = 0u;
+  std::size_t batch_eigensolver_mode_bytes = 0u;
   std::size_t chemical_potential_bytes = 0u;
   std::size_t hamiltonian_bytes = 0u;
   std::size_t shell_bytes = 0u;
@@ -1316,6 +1419,8 @@ xtbloom_status_t make_scc_driver_plan(
       !bytes_for(wavefunction.batch_size, sizeof(std::uint64_t), batch_u64_bytes) ||
       !bytes_for(wavefunction.batch_size, sizeof(xtbloom_status_t), batch_status_bytes) ||
       !bytes_for(wavefunction.batch_size, sizeof(std::uint8_t), batch_byte_bytes) ||
+      !bytes_for(wavefunction.batch_size, sizeof(EigensolverSolveMode),
+                 batch_eigensolver_mode_bytes) ||
       !bytes_for(wavefunction.density.element_count, sizeof(double), hamiltonian_bytes) ||
       !bytes_for(wavefunction.total_shells, sizeof(double), shell_bytes) ||
       !bytes_for(wavefunction.total_atoms, sizeof(double), atom_bytes) ||
@@ -1392,12 +1497,26 @@ xtbloom_status_t make_scc_driver_plan(
                         created.state_internal_energy_offset) ||
         !append_segment(batch_u64_bytes, alignof(std::uint64_t), cursor,
                         created.state_iteration_offset) ||
+        !append_segment(batch_u64_bytes, alignof(std::uint64_t), cursor,
+                        created.state_eigensolver_generation_offset) ||
+        !append_segment(batch_u64_bytes, alignof(std::uint64_t), cursor,
+                        created.state_full_eigensolve_offset) ||
+        !append_segment(batch_u64_bytes, alignof(std::uint64_t), cursor,
+                        created.state_recycled_eigensolve_offset) ||
+        !append_segment(batch_u64_bytes, alignof(std::uint64_t), cursor,
+                        created.state_recycle_fallback_offset) ||
+        !append_segment(batch_eigensolver_mode_bytes, alignof(EigensolverSolveMode), cursor,
+                        created.state_last_eigensolver_mode_offset) ||
         !append_segment(batch_status_bytes, alignof(xtbloom_status_t), cursor,
                         created.state_status_offset) ||
         !append_segment(batch_byte_bytes, alignof(std::uint8_t), cursor,
                         created.state_initialized_offset) ||
         !append_segment(batch_byte_bytes, alignof(std::uint8_t), cursor,
                         created.state_converged_offset) ||
+        !append_segment(batch_byte_bytes, alignof(std::uint8_t), cursor,
+                        created.state_dense_confirmation_offset) ||
+        !append_segment(batch_byte_bytes, alignof(std::uint8_t), cursor,
+                        created.state_recycle_cooldown_offset) ||
         !align_up(cursor, kSccDriverWorkspaceAlignment, created.state_size_bytes)) {
       error = "SCC driver state layout overflows size_t";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -1480,6 +1599,8 @@ xtbloom_status_t make_scc_driver_plan(
                         created.thermodynamic_free_energy_offset) ||
         !append_segment(batch_byte_bytes, alignof(std::uint8_t), cursor,
                         created.active_system_offset) ||
+        !append_segment(batch_eigensolver_mode_bytes, alignof(EigensolverSolveMode), cursor,
+                        created.eigensolver_mode_offset) ||
         !align_up(cursor, kSccDriverWorkspaceAlignment, created.workspace_size_bytes)) {
       error = "SCC driver scratch layout overflows size_t";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -1543,9 +1664,23 @@ xtbloom_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspac
   }
   created.internal_energies = offset_pointer<double>(workspace, data.state_internal_energy_offset);
   created.iterations = offset_pointer<std::uint64_t>(workspace, data.state_iteration_offset);
+  created.eigensolver_geometry_generations =
+      offset_pointer<std::uint64_t>(workspace, data.state_eigensolver_generation_offset);
+  created.full_eigensolves =
+      offset_pointer<std::uint64_t>(workspace, data.state_full_eigensolve_offset);
+  created.recycled_eigensolves =
+      offset_pointer<std::uint64_t>(workspace, data.state_recycled_eigensolve_offset);
+  created.recycle_fallbacks =
+      offset_pointer<std::uint64_t>(workspace, data.state_recycle_fallback_offset);
+  created.last_eigensolver_modes =
+      offset_pointer<EigensolverSolveMode>(workspace, data.state_last_eigensolver_mode_offset);
   created.system_statuses = offset_pointer<xtbloom_status_t>(workspace, data.state_status_offset);
   created.initialized = offset_pointer<std::uint8_t>(workspace, data.state_initialized_offset);
   created.converged = offset_pointer<std::uint8_t>(workspace, data.state_converged_offset);
+  created.dense_confirmations_remaining =
+      offset_pointer<std::uint8_t>(workspace, data.state_dense_confirmation_offset);
+  created.recycle_cooldowns_remaining =
+      offset_pointer<std::uint8_t>(workspace, data.state_recycle_cooldown_offset);
   created.plan_identity = &data;
 
   std::memset(workspace, 0, data.state_size_bytes);
@@ -1643,6 +1778,8 @@ xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* work
   created.internal_energies = offset_pointer<double>(workspace, data.internal_energy_offset);
   created.free_energies = offset_pointer<double>(workspace, data.free_energy_offset);
   created.active_systems = offset_pointer<std::uint8_t>(workspace, data.active_system_offset);
+  created.eigensolver_modes =
+      offset_pointer<EigensolverSolveMode>(workspace, data.eigensolver_mode_offset);
 
   created.es2_workspace.shell_scratch =
       offset_pointer<double>(workspace, data.es2_shell_scratch_offset);
@@ -1849,8 +1986,15 @@ xtbloom_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::i
   }
   state.internal_energies[index] = nan;
   state.iterations[index] = 0u;
+  state.eigensolver_geometry_generations[index] = 0u;
+  state.full_eigensolves[index] = 0u;
+  state.recycled_eigensolves[index] = 0u;
+  state.recycle_fallbacks[index] = 0u;
+  state.last_eigensolver_modes[index] = EigensolverSolveMode::kFull;
   state.system_statuses[index] = XTBLOOM_STATUS_SUCCESS;
   state.converged[index] = 0u;
+  state.dense_confirmations_remaining[index] = 0u;
+  state.recycle_cooldowns_remaining[index] = 0u;
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }
@@ -2012,7 +2156,32 @@ xtbloom_status_t validate_iteration_bindings(
   }
   for (std::size_t system = 0u; system < batch; ++system) {
     if (state.initialized[system] != 1u || mixer_state.initialized[system] != 1u ||
-        state.converged[system] > 1u || mixer_state.converged[system] > 1u) {
+        state.converged[system] > 1u || mixer_state.converged[system] > 1u ||
+        static_cast<std::uint32_t>(state.last_eigensolver_modes[system]) >
+            static_cast<std::uint32_t>(EigensolverSolveMode::kRecycleFallback) ||
+        state.dense_confirmations_remaining[system] >
+            static_cast<std::uint8_t>(data.recycle_policy.dense_confirmations_after_recycle) ||
+        state.recycle_cooldowns_remaining[system] >
+            static_cast<std::uint8_t>(data.recycle_policy.fallback_cooldown_iterations) ||
+        state.recycle_fallbacks[system] > state.full_eigensolves[system] ||
+        state.full_eigensolves[system] > state.iterations[system] ||
+        state.recycled_eigensolves[system] >
+            state.iterations[system] - state.full_eigensolves[system] ||
+        (state.system_statuses[system] == XTBLOOM_STATUS_SUCCESS &&
+         state.full_eigensolves[system] + state.recycled_eigensolves[system] !=
+             state.iterations[system]) ||
+        ((state.last_eigensolver_modes[system] == EigensolverSolveMode::kRecycled) !=
+         (state.dense_confirmations_remaining[system] ==
+          static_cast<std::uint8_t>(data.recycle_policy.dense_confirmations_after_recycle))) ||
+        (state.converged[system] == 1u &&
+         (state.last_eigensolver_modes[system] == EigensolverSolveMode::kRecycled ||
+          state.dense_confirmations_remaining[system] != 0u ||
+          state.recycle_cooldowns_remaining[system] != 0u)) ||
+        (state.system_statuses[system] == XTBLOOM_STATUS_SUCCESS &&
+         ((state.iterations[system] == 0u &&
+           state.eigensolver_geometry_generations[system] != 0u) ||
+          (state.iterations[system] != 0u &&
+           state.eigensolver_geometry_generations[system] == 0u)))) {
       error = "SCC driver requires initialized canonical per-system state";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }

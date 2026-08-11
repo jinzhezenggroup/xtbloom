@@ -26,6 +26,9 @@ enum class SmallSystemKind {
    * default 300 K electronic temperature, producing genuinely fractional and
    * near-degenerate occupations through the composed SCC iteration. */
   kH2Stretched,
+  /* A validated all-trans C12H26 chain (74 orbitals) used by issue #343 as a
+   * below-break-even control that must retain the ordinary dense solve. */
+  kC12H26,
   /* A 62-atom C20H42 chain, the largest single system in this fixture.  It
    * crosses the sparse pair-list dense-fallback crossover so the production
    * runtime path exercises the bucketed consistency gate. */
@@ -61,6 +64,10 @@ struct HostSccCaseOptions {
   double energy_tolerance = 1.0e-8;
   double electronic_temperature = 0.0;
   std::uint64_t geometry_generation = 1u;
+  /* Large CPU fixtures exceed the deterministic 16-orbital Jacobi test
+   * backend. Opt into the configured verified LP64 production provider when
+   * the test must execute those systems on CPU. */
+  bool use_production_cpu_backend = false;
 };
 
 /*

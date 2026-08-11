@@ -173,9 +173,20 @@ struct SccDriverState {
   double* periodic_embedding_energies = nullptr;
   double* internal_energies = nullptr;
   std::uint64_t* iterations = nullptr;
+  /* Committed eigensolver provenance and diagnostics. A recycled SCC
+   * iteration is followed by dense correction/confirmation before terminal
+   * convergence may publish. Counts include only complete per-system SCC
+   * transactions, so they never advance ahead of the public wavefunction. */
+  std::uint64_t* eigensolver_geometry_generations = nullptr;
+  std::uint64_t* full_eigensolves = nullptr;
+  std::uint64_t* recycled_eigensolves = nullptr;
+  std::uint64_t* recycle_fallbacks = nullptr;
+  EigensolverSolveMode* last_eigensolver_modes = nullptr;
   xtbloom_status_t* system_statuses = nullptr;
   std::uint8_t* initialized = nullptr;
   std::uint8_t* converged = nullptr;
+  std::uint8_t* dense_confirmations_remaining = nullptr;
+  std::uint8_t* recycle_cooldowns_remaining = nullptr;
 
   const SccDriverPlanData* plan_identity = nullptr;
 };
@@ -225,6 +236,7 @@ struct SccDriverWorkspace {
   double* d4_atomic_potentials = nullptr;
   double* d4_two_body_energies = nullptr;
   std::uint8_t* active_systems = nullptr;
+  EigensolverSolveMode* eigensolver_modes = nullptr;
 
   ES2Workspace es2_workspace;
   AES2Workspace aes2_workspace;

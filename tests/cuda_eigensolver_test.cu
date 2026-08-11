@@ -2506,19 +2506,29 @@ int run_dispatch_policy_report() {
 
 int run_dispatch_benchmark(std::int32_t orbital_count, std::int64_t batch_size, int warmups,
                            int samples) {
-  if (orbital_count <= 0 || orbital_count > 32 || batch_size <= 0 || warmups < 0 || samples <= 0) {
+  /* This path is opt-in and is also used to locate production break-even
+   * points. Keep its dimension bound aligned with the provider's supported
+   * test range instead of the n=32 workload used by the compaction benchmark. */
+  if (orbital_count <= 0 || orbital_count > 1025 || batch_size <= 0 || warmups < 0 ||
+      samples <= 0) {
+    std::cerr << "dispatch benchmark requires 1 <= ao <= 1025, batch > 0, "
+                 "warmups >= 0, and samples > 0\n";
     return 1;
   }
   DeviceFixture fixture;
   if (!fixture.create(make_batch(batch_size, false, -1, orbital_count)) || !factor(fixture, 73u)) {
     return 1;
   }
+  const Gfn2EigensolverOptions automatic_options = eigensolver_options(fixture.providers);
   const Gfn2EigensolverOptions batched_options =
       eigensolver_options(fixture.providers, Gfn2EigensolverStrategy::kBatchedDivideAndConquer);
   const Gfn2EigensolverOptions jacobi_options =
       eigensolver_options(fixture.providers, Gfn2EigensolverStrategy::kBatchedJacobi);
+  Gfn2EigensolverCompactedSolveGraph automatic_graph;
   Gfn2EigensolverCompactedSolveGraph batched_graph;
   Gfn2EigensolverCompactedSolveGraph jacobi_graph;
+  const bool benchmark_batched = orbital_count <= 32;
+  const bool benchmark_jacobi = orbital_count <= 32;
   const auto build = [&](const Gfn2EigensolverOptions& options,
                          Gfn2EigensolverCompactedSolveGraph& graph) {
     return build_gfn2_compacted_eigensolver_graph_cuda(
@@ -2528,38 +2538,92 @@ int run_dispatch_benchmark(std::int32_t orbital_count, std::int64_t batch_size, 
         fixture.providers.blas, fixture.workspace, fixture.results, fixture.system_errors.get(),
         fixture.device_error.get(), graph);
   };
-  const Gfn2EigensolverLaunchResult batched_build = build(batched_options, batched_graph);
-  const Gfn2EigensolverLaunchResult jacobi_build = build(jacobi_options, jacobi_graph);
-  if (!batched_build.success() || !jacobi_build.success() || !batched_graph.valid() ||
-      !jacobi_graph.valid()) {
-    std::cerr << "dispatch benchmark graph build failed\n";
+  const Gfn2EigensolverLaunchResult automatic_build = build(automatic_options, automatic_graph);
+  Gfn2EigensolverLaunchResult batched_build;
+  if (benchmark_batched) {
+    batched_build = build(batched_options, batched_graph);
+  }
+  Gfn2EigensolverLaunchResult jacobi_build;
+  if (benchmark_jacobi) {
+    jacobi_build = build(jacobi_options, jacobi_graph);
+  }
+  if (!automatic_build.success() || !automatic_graph.valid() ||
+      (benchmark_batched && (!batched_build.success() || !batched_graph.valid())) ||
+      (benchmark_jacobi && (!jacobi_build.success() || !jacobi_graph.valid()))) {
+    std::cerr << "dispatch benchmark graph build failed: automatic status="
+              << static_cast<unsigned int>(automatic_build.status)
+              << " cuda=" << cudaGetErrorString(automatic_build.cuda_status)
+              << " cublas=" << static_cast<unsigned int>(automatic_build.cublas_status)
+              << " cusolver=" << static_cast<unsigned int>(automatic_build.cusolver_status)
+              << " valid=" << automatic_graph.valid()
+              << "; batched status=" << static_cast<unsigned int>(batched_build.status)
+              << " cuda=" << cudaGetErrorString(batched_build.cuda_status)
+              << " cublas=" << static_cast<unsigned int>(batched_build.cublas_status)
+              << " cusolver=" << static_cast<unsigned int>(batched_build.cusolver_status)
+              << " valid=" << batched_graph.valid()
+              << "; jacobi status=" << static_cast<unsigned int>(jacobi_build.status)
+              << " cuda=" << cudaGetErrorString(jacobi_build.cuda_status)
+              << " cublas=" << static_cast<unsigned int>(jacobi_build.cublas_status)
+              << " cusolver=" << static_cast<unsigned int>(jacobi_build.cusolver_status)
+              << " valid=" << jacobi_graph.valid() << '\n';
     return 1;
   }
 
-  if (!fixture.fill_outputs(kSentinel) || !launch_compacted(fixture, batched_graph) ||
+  if (!fixture.fill_outputs(kSentinel) || !launch_compacted(fixture, automatic_graph) ||
       !validate_compacted_launch(fixture)) {
     return 1;
   }
-  std::vector<double> batched_eigenvalues;
-  if (!fixture.eigenvalues.download(batched_eigenvalues) || !fixture.fill_outputs(kSentinel) ||
-      !launch_compacted(fixture, jacobi_graph) || !validate_compacted_launch(fixture)) {
+  std::vector<double> automatic_eigenvalues;
+  std::vector<double> automatic_coefficients;
+  if (!fixture.eigenvalues.download(automatic_eigenvalues) ||
+      !fixture.coefficients.download(automatic_coefficients)) {
     return 1;
   }
-  std::vector<double> jacobi_eigenvalues;
-  std::vector<double> jacobi_coefficients;
-  if (!fixture.eigenvalues.download(jacobi_eigenvalues) ||
-      !fixture.coefficients.download(jacobi_coefficients)) {
-    return 1;
-  }
-  for (std::size_t index = 0; index < batched_eigenvalues.size(); ++index) {
-    if (!near(batched_eigenvalues[index], jacobi_eigenvalues[index], 1.0e-11)) {
-      std::cerr << "dispatch benchmark eigenvalue mismatch at " << index << '\n';
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    if (!validate_system(fixture.host, system, automatic_eigenvalues, automatic_coefficients)) {
       return 1;
     }
   }
-  for (std::int64_t system = 0; system < batch_size; ++system) {
-    if (!validate_system(fixture.host, system, jacobi_eigenvalues, jacobi_coefficients)) {
+
+  std::vector<double> batched_eigenvalues;
+  std::vector<double> batched_coefficients;
+  if (benchmark_batched) {
+    if (!fixture.fill_outputs(kSentinel) || !launch_compacted(fixture, batched_graph) ||
+        !validate_compacted_launch(fixture) || !fixture.eigenvalues.download(batched_eigenvalues) ||
+        !fixture.coefficients.download(batched_coefficients)) {
       return 1;
+    }
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      if (!validate_system(fixture.host, system, batched_eigenvalues, batched_coefficients)) {
+        return 1;
+      }
+    }
+    for (std::size_t index = 0; index < batched_eigenvalues.size(); ++index) {
+      if (!near(automatic_eigenvalues[index], batched_eigenvalues[index], 2.0e-12)) {
+        std::cerr << "automatic dispatch eigenvalue mismatch at " << index << '\n';
+        return 1;
+      }
+    }
+  }
+
+  std::vector<double> jacobi_eigenvalues;
+  std::vector<double> jacobi_coefficients;
+  if (benchmark_jacobi) {
+    if (!fixture.fill_outputs(kSentinel) || !launch_compacted(fixture, jacobi_graph) ||
+        !validate_compacted_launch(fixture) || !fixture.eigenvalues.download(jacobi_eigenvalues) ||
+        !fixture.coefficients.download(jacobi_coefficients)) {
+      return 1;
+    }
+    for (std::size_t index = 0; index < batched_eigenvalues.size(); ++index) {
+      if (!near(batched_eigenvalues[index], jacobi_eigenvalues[index], 1.0e-11)) {
+        std::cerr << "dispatch benchmark eigenvalue mismatch at " << index << '\n';
+        return 1;
+      }
+    }
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      if (!validate_system(fixture.host, system, jacobi_eigenvalues, jacobi_coefficients)) {
+        return 1;
+      }
     }
   }
 
@@ -2569,21 +2633,46 @@ int run_dispatch_benchmark(std::int32_t orbital_count, std::int64_t batch_size, 
                        fixture.device_error.get(), fixture.providers.stream),
                    "reset dispatch timing errors");
   };
+  LatencyStats automatic;
   LatencyStats batched;
   LatencyStats jacobi;
   if (!measure_launch_latency(
           fixture, warmups, samples, prepare,
-          [&]() { return enqueue_compacted(fixture, batched_graph); }, batched) ||
-      !measure_launch_latency(
-          fixture, warmups, samples, prepare,
-          [&]() { return enqueue_compacted(fixture, jacobi_graph); }, jacobi)) {
+          [&]() { return enqueue_compacted(fixture, automatic_graph); }, automatic)) {
     return 1;
   }
-  std::printf("{\"record_type\":\"dispatch\",\"n\":%d,\"batch\":%lld", orbital_count,
-              static_cast<long long>(batch_size));
-  print_latency_stats("xsyev_batched", batched);
-  print_latency_stats("syevj_batched", jacobi);
-  std::printf(",\"p50_speedup\":%.6f,\"match\":true}\n", batched.p50_us / jacobi.p50_us);
+  if (benchmark_batched) {
+    if (!measure_launch_latency(
+            fixture, warmups, samples, prepare,
+            [&]() { return enqueue_compacted(fixture, batched_graph); }, batched)) {
+      return 1;
+    }
+  }
+  if (benchmark_jacobi && !measure_launch_latency(
+                              fixture, warmups, samples, prepare,
+                              [&]() { return enqueue_compacted(fixture, jacobi_graph); }, jacobi)) {
+    return 1;
+  }
+  const Gfn2EigensolverBucket& bucket = fixture.host.buckets.front();
+  const char* automatic_provider =
+      gfn2_eigensolver_uses_tridiagonal(automatic_options, bucket)
+          ? "sytrd_bisection_inverse_iteration"
+          : (gfn2_eigensolver_uses_jacobi(automatic_options, orbital_count) ? "syevj_batched"
+                                                                            : "xsyev_batched");
+  std::printf("{\"record_type\":\"dispatch\",\"n\":%d,\"batch\":%lld,\"automatic_provider\":\"%s\"",
+              orbital_count, static_cast<long long>(batch_size), automatic_provider);
+  print_latency_stats("automatic", automatic);
+  if (benchmark_batched) {
+    print_latency_stats("xsyev_batched", batched);
+  } else {
+    std::printf(",\"xsyev_batched\":null");
+  }
+  if (benchmark_jacobi) {
+    print_latency_stats("syevj_batched", jacobi);
+    std::printf(",\"p50_speedup\":%.6f,\"match\":true}\n", batched.p50_us / jacobi.p50_us);
+  } else {
+    std::printf(",\"syevj_batched\":null,\"match\":true}\n");
+  }
   return 0;
 }
 

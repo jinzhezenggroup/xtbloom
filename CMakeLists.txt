@@ -3213,6 +3213,18 @@ if(XTBLOOM_BUILD_TESTS)
       xtbloom_eigensolver_test xtbloom.gfn2.eigensolver
     )
 
+    add_executable(xtbloom_scc_recycle_test
+      tests/scc_recycle_test.cpp
+      tests/support/gfn2_scc_test_case.cpp
+    )
+    target_include_directories(xtbloom_scc_recycle_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    target_link_libraries(xtbloom_scc_recycle_test PRIVATE xtbloom_gfn2_cpu Threads::Threads)
+    target_compile_features(xtbloom_scc_recycle_test PRIVATE cxx_std_17)
+    add_test(NAME xtbloom.gfn2.scc_recycle COMMAND xtbloom_scc_recycle_test)
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_scc_recycle_test xtbloom.gfn2.scc_recycle
+    )
+
     if(XTBLOOM_CPU_LINALG_SHIM)
       # Host-isolated LP64 provider evidence (issue #30). This binary links only
       # xtbloom_gfn2_cpu, never a BLAS/MKL runtime, so it can prove that provider

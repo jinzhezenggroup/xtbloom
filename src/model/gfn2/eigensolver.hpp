@@ -233,6 +233,47 @@ struct EigensolverThermodynamicsView {
   std::size_t free_energy_capacity = 0u;
 };
 
+/*
+ * Internal adaptive-SCC recycle policy. This is deliberately not public ABI:
+ * production SCC owns the policy and may change its calibration without
+ * changing caller-visible descriptors. A recycle attempt always retains the
+ * previous complete S-orthonormal basis and falls back to the ordinary dense
+ * solve before publishing when any quality gate fails.
+ */
+struct EigensolverRecyclePolicy {
+  std::int64_t minimum_orbitals = 96;
+  std::int64_t minimum_full_iterations = 3;
+  std::int64_t dense_confirmations_after_recycle = 2;
+  std::int64_t fallback_cooldown_iterations = 1;
+  std::int64_t minimum_virtual_buffer = 12;
+  std::int64_t maximum_expansion_orbitals = 8;
+  double virtual_buffer_fraction = 0.20;
+  double maximum_active_fraction = 0.85;
+  double convergence_guard_factor = 8.0;
+  double occupation_tail_tolerance = 1.0e-10;
+  double metric_orthogonality_tolerance = 1.0e-8;
+  double maximum_residual_backward_error = 1.0e-4;
+  double rms_residual_backward_error = 4.0e-5;
+  double minimum_boundary_gap = 1.0e-6;
+  double maximum_residual_gap_ratio = 2.0e-2;
+};
+
+enum class EigensolverSolveMode : std::uint32_t {
+  kFull = 0u,
+  kRecycled = 1u,
+  kRecycleFallback = 2u,
+};
+
+/* One-system diagnostic returned without changing numerical semantics. */
+struct EigensolverSolveReport {
+  EigensolverSolveMode mode = EigensolverSolveMode::kFull;
+  std::int64_t active_orbitals = 0;
+  double maximum_backward_error = 0.0;
+  double rms_backward_error = 0.0;
+  double boundary_gap = 0.0;
+  double residual_gap_ratio = 0.0;
+};
+
 xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,
                                        std::string& error, double minimum_overlap_rcond = 1.0e-12);
 
@@ -284,6 +325,27 @@ xtbloom_status_t solve_eigensystem_cpu(
     std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
+    std::string& error);
+
+/*
+ * Allocation-free guarded Rayleigh--Ritz wrapper for one SCC system.
+ * request_recycle is only a hint: unsupported layouts, insufficient savings,
+ * ill-conditioned subspaces, poor residuals, or frontier ambiguity execute
+ * the existing dense solver in the same logical SCC iteration. Accepted
+ * updates diagonalize the omitted complement, absorb a bounded set of its
+ * lowest current Ritz vectors into the active space, and gate the remaining
+ * cross-block residual after the augmented solve. This preserves the current
+ * complete-array semantics. A recycle miss is reported through
+ * EigensolverSolveReport, never as a numerical system failure. Unrestricted
+ * systems intentionally stay on the dense path until spin-major recycle
+ * evidence is complete.
+ */
+xtbloom_status_t solve_eigensystem_adaptive_cpu(
+    const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
+    const EigensolverRecyclePolicy& policy, bool request_recycle, EigensolverSolveReport& report,
     std::string& error);
 
 /* Standalone tblite-compatible per-spin Aufbau/Fermi filling helper. */

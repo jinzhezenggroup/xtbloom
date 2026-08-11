@@ -445,6 +445,9 @@ bool HostSccCase::Impl::append_system(SmallSystemKind kind, std::int64_t system)
       atom(1, -4.0, 0.0, 0.0);
       atom(1, 4.0, 0.0, 0.0);
       break;
+    case SmallSystemKind::kC12H26:
+      append_benchmark_alkane(12);
+      break;
     case SmallSystemKind::kC20H42: {
       /* A 20-carbon n-alkane C20H42 (62 atoms).  Carbons form a straight
        * chain along z at 1.54 angstrom spacing; each interior carbon
@@ -703,8 +706,11 @@ xtbloom_status_t HostSccCase::Impl::build(std::string& error) {
     }
   }
 
-  status = make_internal_test_lp64_backend(&tiny_dpotrf, &tiny_dpocon, &tiny_dsyevd, &tiny_dtrsm,
-                                           &tiny_dgemm, nullptr, cpu_backend, error);
+  status =
+      options.use_production_cpu_backend
+          ? make_mkl_rt_lp64_backend(cpu_backend, error)
+          : make_internal_test_lp64_backend(&tiny_dpotrf, &tiny_dpocon, &tiny_dsyevd, &tiny_dtrsm,
+                                            &tiny_dgemm, nullptr, cpu_backend, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }

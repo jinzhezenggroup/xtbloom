@@ -807,6 +807,15 @@ void copy_symmetric_row_to_column(const double* input, std::size_t n, double* ou
   }
 }
 
+void copy_row_to_column(const double* input, std::size_t rows, std::size_t columns,
+                        double* output) {
+  for (std::size_t row = 0u; row < rows; ++row) {
+    for (std::size_t column = 0u; column < columns; ++column) {
+      output[row + column * rows] = input[row * columns + column];
+    }
+  }
+}
+
 void copy_column_to_row(const double* input, std::size_t rows, std::size_t columns,
                         double* output) {
   for (std::size_t row = 0u; row < rows; ++row) {
@@ -1101,6 +1110,13 @@ NumericalResult solve_one_spin(const CpuLinearAlgebraBackend& backend,
              : NumericalResult::kDataFailure;
 }
 
+struct SolutionScalars {
+  double chemical_potentials[2]{0.0, 0.0};
+  double entropy = 0.0;
+  double band_energy = 0.0;
+  double free_energy = 0.0;
+};
+
 void form_density_column_major(const CpuLinearAlgebraBackend& backend, LapackInt n,
                                const double* coefficients, const double* weights,
                                double* weighted_coefficients, double* density) {
@@ -1114,6 +1130,129 @@ void form_density_column_major(const CpuLinearAlgebraBackend& backend, LapackInt
   CpuLinearAlgebraAccess::dgemm(backend)(kCblasColMajor, kCblasNoTrans, kCblasTrans, n, n, n, 1.0,
                                          weighted_coefficients, n, coefficients, n, 0.0, density,
                                          n);
+}
+
+NumericalResult complete_solution_unchecked(const EigensolverPlanData& data, std::size_t system,
+                                            double temperature,
+                                            const CpuLinearAlgebraBackend& backend,
+                                            const EigensolverWorkspace& workspace,
+                                            SolutionScalars& scalars) {
+  const LapackInt n =
+      static_cast<LapackInt>(data.orbital_offsets[system + 1u] - data.orbital_offsets[system]);
+  const std::size_t orbital_count = static_cast<std::size_t>(n);
+  const std::size_t matrix_count = orbital_count * orbital_count;
+  const std::int32_t nspin = data.spin_channels[system];
+  std::fill_n(workspace.occupations, 2u * orbital_count, 0.0);
+  double spin_entropies[2]{0.0, 0.0};
+  for (std::int32_t spin = 0; spin < 2; ++spin) {
+    const std::size_t spin_index = static_cast<std::size_t>(spin);
+    const std::size_t eigenvalue_spin = nspin == 1 ? 0u : spin_index;
+    const double electron_count =
+        spin == 0 ? data.alpha_electron_counts[system] : data.beta_electron_counts[system];
+    if (!compute_occupations(workspace.eigenvalues + eigenvalue_spin * orbital_count, orbital_count,
+                             electron_count, temperature,
+                             workspace.occupations + spin_index * orbital_count,
+                             scalars.chemical_potentials[spin_index], spin_entropies[spin_index])) {
+      return NumericalResult::kDataFailure;
+    }
+  }
+
+  scalars.band_energy = 0.0;
+  double* weighted_coefficients = workspace.lapack_work;
+  double* weights = workspace.lapack_work + matrix_count;
+  if (nspin == 1) {
+    for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
+      weights[orbital] =
+          workspace.occupations[orbital] + workspace.occupations[orbital_count + orbital];
+      scalars.band_energy += weights[orbital] * workspace.eigenvalues[orbital];
+    }
+    form_density_column_major(backend, n, workspace.coefficients, weights, weighted_coefficients,
+                              workspace.densities);
+    for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
+      weights[orbital] *= workspace.eigenvalues[orbital];
+    }
+    form_density_column_major(backend, n, workspace.coefficients, weights, weighted_coefficients,
+                              workspace.energy_weighted_densities);
+  } else {
+    for (std::int32_t spin = 0; spin < 2; ++spin) {
+      const std::size_t spin_index = static_cast<std::size_t>(spin);
+      const std::size_t orbital_offset = spin_index * orbital_count;
+      const std::size_t spin_matrix_offset = spin_index * matrix_count;
+      const double* spin_occupations = workspace.occupations + orbital_offset;
+      const double* spin_eigenvalues = workspace.eigenvalues + orbital_offset;
+      for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
+        scalars.band_energy += spin_occupations[orbital] * spin_eigenvalues[orbital];
+      }
+      form_density_column_major(backend, n, workspace.coefficients + spin_matrix_offset,
+                                spin_occupations, weighted_coefficients,
+                                workspace.densities + spin_matrix_offset);
+      for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
+        weights[orbital] = spin_occupations[orbital] * spin_eigenvalues[orbital];
+      }
+      form_density_column_major(backend, n, workspace.coefficients + spin_matrix_offset, weights,
+                                weighted_coefficients,
+                                workspace.energy_weighted_densities + spin_matrix_offset);
+    }
+  }
+
+  const std::size_t spin_matrix_count = static_cast<std::size_t>(nspin) * matrix_count;
+  scalars.entropy = spin_entropies[0] + spin_entropies[1];
+  scalars.free_energy = scalars.band_energy - temperature * scalars.entropy;
+  for (std::int32_t spin = 0; spin < nspin; ++spin) {
+    const std::size_t spin_matrix_offset = static_cast<std::size_t>(spin) * matrix_count;
+    if (!symmetric_finite_column_major(workspace.densities + spin_matrix_offset, orbital_count) ||
+        !symmetric_finite_column_major(workspace.energy_weighted_densities + spin_matrix_offset,
+                                       orbital_count)) {
+      return NumericalResult::kDataFailure;
+    }
+  }
+  if (!finite_array(workspace.densities, spin_matrix_count) ||
+      !finite_array(workspace.energy_weighted_densities, spin_matrix_count) ||
+      !std::isfinite(scalars.chemical_potentials[0]) ||
+      !std::isfinite(scalars.chemical_potentials[1]) || !std::isfinite(scalars.entropy) ||
+      !std::isfinite(scalars.band_energy) || !std::isfinite(scalars.free_energy)) {
+    return NumericalResult::kDataFailure;
+  }
+  return NumericalResult::kSuccess;
+}
+
+void publish_solution_unchecked(const EigensolverPlanData& data, std::size_t system,
+                                const EigensolverWorkspace& workspace,
+                                const WavefunctionView& wavefunction,
+                                const EigensolverThermodynamicsView& thermodynamics,
+                                const SolutionScalars& scalars) {
+  const std::size_t orbital_count =
+      static_cast<std::size_t>(data.orbital_offsets[system + 1u] - data.orbital_offsets[system]);
+  const std::size_t matrix_count = orbital_count * orbital_count;
+  const std::int32_t nspin = data.spin_channels[system];
+  const auto& coefficient_field = data.wavefunction_fields[0];
+  const auto& eigenvalue_field = data.wavefunction_fields[1];
+  const auto& occupation_field = data.wavefunction_fields[2];
+  const auto& density_field = data.wavefunction_fields[3];
+  const auto& weighted_density_field = data.wavefunction_fields[4];
+  double* coefficient_output = wavefunction.coefficients + coefficient_field.system_offsets[system];
+  double* density_output = wavefunction.density + density_field.system_offsets[system];
+  double* weighted_density_output =
+      wavefunction.energy_weighted_density + weighted_density_field.system_offsets[system];
+  for (std::int32_t spin = 0; spin < nspin; ++spin) {
+    const std::size_t spin_matrix_offset = static_cast<std::size_t>(spin) * matrix_count;
+    copy_column_to_row(workspace.coefficients + spin_matrix_offset, orbital_count, orbital_count,
+                       coefficient_output + spin_matrix_offset);
+    copy_column_to_row(workspace.densities + spin_matrix_offset, orbital_count, orbital_count,
+                       density_output + spin_matrix_offset);
+    copy_column_to_row(workspace.energy_weighted_densities + spin_matrix_offset, orbital_count,
+                       orbital_count, weighted_density_output + spin_matrix_offset);
+  }
+  std::copy_n(workspace.eigenvalues, static_cast<std::size_t>(nspin) * orbital_count,
+              wavefunction.eigenvalues + eigenvalue_field.system_offsets[system]);
+  std::copy_n(workspace.occupations, 2u * orbital_count,
+              wavefunction.occupations + occupation_field.system_offsets[system]);
+  thermodynamics.chemical_potentials[2u * system] = scalars.chemical_potentials[0];
+  thermodynamics.chemical_potentials[2u * system + 1u] = scalars.chemical_potentials[1];
+  thermodynamics.entropies[system] = scalars.entropy;
+  thermodynamics.band_energies[system] = scalars.band_energy;
+  thermodynamics.free_energies[system] = scalars.free_energy;
+  thermodynamics.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
 }
 
 NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::size_t system,
@@ -1151,110 +1290,364 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
     }
   }
 
-  std::fill_n(workspace.occupations, 2u * orbital_count, 0.0);
-  double chemical_potentials[2]{0.0, 0.0};
-  double spin_entropies[2]{0.0, 0.0};
-  for (std::int32_t spin = 0; spin < 2; ++spin) {
-    const std::size_t spin_index = static_cast<std::size_t>(spin);
-    const std::size_t eigenvalue_spin = nspin == 1 ? 0u : spin_index;
-    const double electron_count =
-        spin == 0 ? data.alpha_electron_counts[system] : data.beta_electron_counts[system];
-    if (!compute_occupations(workspace.eigenvalues + eigenvalue_spin * orbital_count, orbital_count,
-                             electron_count, temperature,
-                             workspace.occupations + spin_index * orbital_count,
-                             chemical_potentials[spin_index], spin_entropies[spin_index])) {
-      thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
-      return NumericalResult::kDataFailure;
-    }
-  }
-
-  double band_energy = 0.0;
-  double* weighted_coefficients = workspace.lapack_work;
-  double* weights = workspace.lapack_work + matrix_count;
-  if (nspin == 1) {
-    for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
-      weights[orbital] =
-          workspace.occupations[orbital] + workspace.occupations[orbital_count + orbital];
-      band_energy += weights[orbital] * workspace.eigenvalues[orbital];
-    }
-    form_density_column_major(backend, n, workspace.coefficients, weights, weighted_coefficients,
-                              workspace.densities);
-    for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
-      weights[orbital] *= workspace.eigenvalues[orbital];
-    }
-    form_density_column_major(backend, n, workspace.coefficients, weights, weighted_coefficients,
-                              workspace.energy_weighted_densities);
-  } else {
-    for (std::int32_t spin = 0; spin < 2; ++spin) {
-      const std::size_t spin_index = static_cast<std::size_t>(spin);
-      const std::size_t orbital_offset = spin_index * orbital_count;
-      const std::size_t spin_matrix_offset = spin_index * matrix_count;
-      const double* spin_occupations = workspace.occupations + orbital_offset;
-      const double* spin_eigenvalues = workspace.eigenvalues + orbital_offset;
-      for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
-        band_energy += spin_occupations[orbital] * spin_eigenvalues[orbital];
-      }
-      form_density_column_major(backend, n, workspace.coefficients + spin_matrix_offset,
-                                spin_occupations, weighted_coefficients,
-                                workspace.densities + spin_matrix_offset);
-      for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
-        weights[orbital] = spin_occupations[orbital] * spin_eigenvalues[orbital];
-      }
-      form_density_column_major(backend, n, workspace.coefficients + spin_matrix_offset, weights,
-                                weighted_coefficients,
-                                workspace.energy_weighted_densities + spin_matrix_offset);
-    }
-  }
-
-  const std::size_t spin_matrix_count = static_cast<std::size_t>(nspin) * matrix_count;
-  const double entropy = spin_entropies[0] + spin_entropies[1];
-  const double free_energy = band_energy - temperature * entropy;
-  for (std::int32_t spin = 0; spin < nspin; ++spin) {
-    const std::size_t spin_matrix_offset = static_cast<std::size_t>(spin) * matrix_count;
-    if (!symmetric_finite_column_major(workspace.densities + spin_matrix_offset, orbital_count) ||
-        !symmetric_finite_column_major(workspace.energy_weighted_densities + spin_matrix_offset,
-                                       orbital_count)) {
-      thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
-      return NumericalResult::kDataFailure;
-    }
-  }
-  if (!finite_array(workspace.densities, spin_matrix_count) ||
-      !finite_array(workspace.energy_weighted_densities, spin_matrix_count) ||
-      !std::isfinite(chemical_potentials[0]) || !std::isfinite(chemical_potentials[1]) ||
-      !std::isfinite(entropy) || !std::isfinite(band_energy) || !std::isfinite(free_energy)) {
+  SolutionScalars scalars;
+  const NumericalResult completion =
+      complete_solution_unchecked(data, system, temperature, backend, workspace, scalars);
+  if (completion != NumericalResult::kSuccess) {
     thermodynamics.system_statuses[system] = XTBLOOM_STATUS_EIGENSOLVER_FAILED;
-    return NumericalResult::kDataFailure;
+    return completion;
+  }
+  publish_solution_unchecked(data, system, workspace, wavefunction, thermodynamics, scalars);
+  return NumericalResult::kSuccess;
+}
+
+enum class RecycleAttemptResult { kAccepted, kRejected, kBackendFailure };
+
+bool valid_recycle_policy(const EigensolverRecyclePolicy& policy) {
+  return policy.minimum_orbitals > 0 && policy.minimum_full_iterations >= 1 &&
+         policy.dense_confirmations_after_recycle >= 2 &&
+         policy.dense_confirmations_after_recycle <=
+             static_cast<std::int64_t>(std::numeric_limits<std::uint8_t>::max()) &&
+         policy.fallback_cooldown_iterations >= 0 &&
+         policy.fallback_cooldown_iterations <=
+             static_cast<std::int64_t>(std::numeric_limits<std::uint8_t>::max()) &&
+         policy.minimum_virtual_buffer >= 1 && policy.maximum_expansion_orbitals >= 1 &&
+         std::isfinite(policy.virtual_buffer_fraction) && policy.virtual_buffer_fraction >= 0.0 &&
+         policy.virtual_buffer_fraction < 1.0 && std::isfinite(policy.maximum_active_fraction) &&
+         policy.maximum_active_fraction > 0.0 && policy.maximum_active_fraction < 1.0 &&
+         std::isfinite(policy.convergence_guard_factor) && policy.convergence_guard_factor >= 1.0 &&
+         std::isfinite(policy.occupation_tail_tolerance) &&
+         policy.occupation_tail_tolerance >= 0.0 &&
+         std::isfinite(policy.metric_orthogonality_tolerance) &&
+         policy.metric_orthogonality_tolerance > 0.0 &&
+         std::isfinite(policy.maximum_residual_backward_error) &&
+         policy.maximum_residual_backward_error > 0.0 &&
+         std::isfinite(policy.rms_residual_backward_error) &&
+         policy.rms_residual_backward_error > 0.0 && std::isfinite(policy.minimum_boundary_gap) &&
+         policy.minimum_boundary_gap > 0.0 && std::isfinite(policy.maximum_residual_gap_ratio) &&
+         policy.maximum_residual_gap_ratio > 0.0;
+}
+
+/*
+ * Attempt one same-metric restricted Rayleigh--Ritz update without touching
+ * caller-visible output. The previous complete eigenbasis is SCC-owned and a
+ * recycle attempt is scheduled only after a committed dense solve, so it is
+ * already S-orthonormal. In that basis B=C^T H C is the new whitened
+ * Hamiltonian. The omitted complement is diagonalized first; a bounded set of
+ * its lowest current Ritz vectors augments the occupied-plus-buffer block.
+ * The coupling to the retained complement then gives the exact whitened
+ * residual norm used by the acceptance gate.
+ */
+RecycleAttemptResult try_recycled_system_unchecked(
+    const EigensolverPlanData& data, std::size_t system, const double* system_hamiltonian,
+    double temperature, const CpuLinearAlgebraBackend& backend,
+    const EigensolverWorkspace& workspace, const WavefunctionView& wavefunction,
+    const EigensolverRecyclePolicy& policy, EigensolverSolveReport& report,
+    SolutionScalars& scalars) {
+  const LapackInt n =
+      static_cast<LapackInt>(data.orbital_offsets[system + 1u] - data.orbital_offsets[system]);
+  const std::size_t orbital_count = static_cast<std::size_t>(n);
+  if (data.spin_channels[system] != 1 ||
+      orbital_count < static_cast<std::size_t>(policy.minimum_orbitals)) {
+    return RecycleAttemptResult::kRejected;
   }
 
+  const std::size_t matrix_count = orbital_count * orbital_count;
   const auto& coefficient_field = data.wavefunction_fields[0];
   const auto& eigenvalue_field = data.wavefunction_fields[1];
   const auto& occupation_field = data.wavefunction_fields[2];
-  const auto& density_field = data.wavefunction_fields[3];
-  const auto& weighted_density_field = data.wavefunction_fields[4];
-  double* coefficient_output = wavefunction.coefficients + coefficient_field.system_offsets[system];
-  double* density_output = wavefunction.density + density_field.system_offsets[system];
-  double* weighted_density_output =
-      wavefunction.energy_weighted_density + weighted_density_field.system_offsets[system];
-  for (std::int32_t spin = 0; spin < nspin; ++spin) {
-    const std::size_t spin_matrix_offset = static_cast<std::size_t>(spin) * matrix_count;
-    copy_column_to_row(workspace.coefficients + spin_matrix_offset, orbital_count, orbital_count,
-                       coefficient_output + spin_matrix_offset);
-    copy_column_to_row(workspace.densities + spin_matrix_offset, orbital_count, orbital_count,
-                       density_output + spin_matrix_offset);
-    copy_column_to_row(workspace.energy_weighted_densities + spin_matrix_offset, orbital_count,
-                       orbital_count, weighted_density_output + spin_matrix_offset);
+  const double* previous_coefficients =
+      wavefunction.coefficients + coefficient_field.system_offsets[system];
+  const double* previous_eigenvalues =
+      wavefunction.eigenvalues + eigenvalue_field.system_offsets[system];
+  const double* previous_occupations =
+      wavefunction.occupations + occupation_field.system_offsets[system];
+  if (!finite_array(previous_coefficients, matrix_count) ||
+      !finite_array(previous_eigenvalues, orbital_count) ||
+      !finite_array(previous_occupations, 2u * orbital_count)) {
+    return RecycleAttemptResult::kRejected;
   }
-  std::copy_n(workspace.eigenvalues, static_cast<std::size_t>(nspin) * orbital_count,
-              wavefunction.eigenvalues + eigenvalue_field.system_offsets[system]);
-  std::copy_n(workspace.occupations, 2u * orbital_count,
-              wavefunction.occupations + occupation_field.system_offsets[system]);
-  thermodynamics.chemical_potentials[2u * system] = chemical_potentials[0];
-  thermodynamics.chemical_potentials[2u * system + 1u] = chemical_potentials[1];
-  thermodynamics.entropies[system] = entropy;
-  thermodynamics.band_energies[system] = band_energy;
-  thermodynamics.free_energies[system] = free_energy;
-  thermodynamics.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
-  return NumericalResult::kSuccess;
+
+  std::size_t occupied_end = 0u;
+  for (std::size_t orbital = 0u; orbital < orbital_count; ++orbital) {
+    if ((orbital != 0u && previous_eigenvalues[orbital] < previous_eigenvalues[orbital - 1u]) ||
+        previous_occupations[orbital] < 0.0 || previous_occupations[orbital] > 1.0 ||
+        previous_occupations[orbital_count + orbital] < 0.0 ||
+        previous_occupations[orbital_count + orbital] > 1.0) {
+      return RecycleAttemptResult::kRejected;
+    }
+    const double total_occupation =
+        previous_occupations[orbital] + previous_occupations[orbital_count + orbital];
+    if (total_occupation > policy.occupation_tail_tolerance) {
+      occupied_end = orbital + 1u;
+    }
+  }
+  if (occupied_end == 0u || occupied_end >= orbital_count) {
+    return RecycleAttemptResult::kRejected;
+  }
+
+  const std::size_t fractional_buffer = static_cast<std::size_t>(
+      std::ceil(policy.virtual_buffer_fraction * static_cast<double>(orbital_count)));
+  const std::size_t buffer =
+      std::max(static_cast<std::size_t>(policy.minimum_virtual_buffer), fractional_buffer);
+  if (buffer >= orbital_count - occupied_end) {
+    return RecycleAttemptResult::kRejected;
+  }
+  const std::size_t base_active_orbitals = occupied_end + buffer;
+  const std::size_t maximum_active = static_cast<std::size_t>(
+      std::floor(policy.maximum_active_fraction * static_cast<double>(orbital_count)));
+  if (base_active_orbitals >= maximum_active || base_active_orbitals >= orbital_count) {
+    return RecycleAttemptResult::kRejected;
+  }
+  const std::size_t complement_orbitals = orbital_count - base_active_orbitals;
+  const std::size_t expansion_orbitals =
+      std::min({static_cast<std::size_t>(policy.maximum_expansion_orbitals),
+                maximum_active - base_active_orbitals, complement_orbitals - 1u});
+  if (expansion_orbitals == 0u) {
+    return RecycleAttemptResult::kRejected;
+  }
+  const std::size_t active_orbitals = base_active_orbitals + expansion_orbitals;
+  report.active_orbitals = static_cast<std::int64_t>(active_orbitals);
+
+  double previous_tail = 0.0;
+  for (std::size_t orbital = base_active_orbitals; orbital < orbital_count; ++orbital) {
+    previous_tail += previous_occupations[orbital] + previous_occupations[orbital_count + orbital];
+  }
+  const double previous_gap =
+      previous_eigenvalues[base_active_orbitals] - previous_eigenvalues[base_active_orbitals - 1u];
+  if (!std::isfinite(previous_tail) || previous_tail > policy.occupation_tail_tolerance ||
+      !std::isfinite(previous_gap) || previous_gap < policy.minimum_boundary_gap) {
+    return RecycleAttemptResult::kRejected;
+  }
+
+  double* coefficients = workspace.coefficients;
+  double* projected = workspace.coefficients + matrix_count;
+  double* hamiltonian = workspace.densities;
+  double* h_times_coefficients = workspace.energy_weighted_densities;
+  copy_row_to_column(previous_coefficients, orbital_count, orbital_count, coefficients);
+  copy_symmetric_row_to_column(system_hamiltonian, orbital_count, hamiltonian);
+  CpuLinearAlgebraAccess::dgemm(backend)(kCblasColMajor, kCblasNoTrans, kCblasNoTrans, n, n, n, 1.0,
+                                         hamiltonian, n, coefficients, n, 0.0, h_times_coefficients,
+                                         n);
+  CpuLinearAlgebraAccess::dgemm(backend)(kCblasColMajor, kCblasTrans, kCblasNoTrans, n, n, n, 1.0,
+                                         coefficients, n, h_times_coefficients, n, 0.0, projected,
+                                         n);
+  if (!finite_array(projected, matrix_count)) {
+    return RecycleAttemptResult::kRejected;
+  }
+
+  long double hamiltonian_norm_squared = 0.0L;
+  for (std::size_t column = 0u; column < orbital_count; ++column) {
+    for (std::size_t row = 0u; row <= column; ++row) {
+      const double value =
+          0.5 * (projected[row + column * orbital_count] + projected[column + row * orbital_count]);
+      projected[row + column * orbital_count] = value;
+      projected[column + row * orbital_count] = value;
+      const long double squared = static_cast<long double>(value) * value;
+      hamiltonian_norm_squared += row == column ? squared : 2.0L * squared;
+    }
+  }
+  const double hamiltonian_norm = std::sqrt(static_cast<double>(hamiltonian_norm_squared));
+  if (!std::isfinite(hamiltonian_norm) || hamiltonian_norm == 0.0) {
+    return RecycleAttemptResult::kRejected;
+  }
+
+  /* First diagonalize only the omitted complement. The lowest current
+   * complement Ritz vectors are then folded into the previous
+   * occupied-plus-buffer space before its solve. This Davidson-like expansion
+   * targets the directions most likely to cross the frontier without paying
+   * for a full n-by-n tridiagonalization. */
+  const LapackInt complement = static_cast<LapackInt>(complement_orbitals);
+  double* complement_vectors = projected + base_active_orbitals * (orbital_count + 1u);
+  LapackInt info = CpuLinearAlgebraAccess::dsyevd(backend)(
+      kCblasColMajor, kEigenvectors, kLower, complement, complement_vectors, n,
+      workspace.eigenvalues + base_active_orbitals, workspace.lapack_work, data.lapack_work_count,
+      workspace.lapack_integer_work, data.lapack_integer_work_count);
+  if (info < 0) {
+    return RecycleAttemptResult::kBackendFailure;
+  }
+  if (info > 0 ||
+      !finite_array(workspace.eigenvalues + base_active_orbitals, complement_orbitals)) {
+    return RecycleAttemptResult::kRejected;
+  }
+
+  double* rotated_couplings = workspace.energy_weighted_densities + matrix_count;
+  for (std::size_t active_basis = 0u; active_basis < base_active_orbitals; ++active_basis) {
+    for (std::size_t complement_ritz = 0u; complement_ritz < complement_orbitals;
+         ++complement_ritz) {
+      long double coupling = 0.0L;
+      for (std::size_t complement_basis = 0u; complement_basis < complement_orbitals;
+           ++complement_basis) {
+        coupling +=
+            static_cast<long double>(
+                complement_vectors[complement_basis + complement_ritz * orbital_count]) *
+            projected[base_active_orbitals + complement_basis + active_basis * orbital_count];
+      }
+      rotated_couplings[complement_ritz + active_basis * orbital_count] =
+          static_cast<double>(coupling);
+    }
+  }
+
+  std::fill_n(hamiltonian, matrix_count, 0.0);
+  for (std::size_t column = 0u; column < base_active_orbitals; ++column) {
+    for (std::size_t row = 0u; row < base_active_orbitals; ++row) {
+      hamiltonian[row + column * orbital_count] = projected[row + column * orbital_count];
+    }
+  }
+  for (std::size_t expansion = 0u; expansion < expansion_orbitals; ++expansion) {
+    const std::size_t column = base_active_orbitals + expansion;
+    hamiltonian[column + column * orbital_count] =
+        workspace.eigenvalues[base_active_orbitals + expansion];
+    for (std::size_t active_basis = 0u; active_basis < base_active_orbitals; ++active_basis) {
+      const double coupling = rotated_couplings[expansion + active_basis * orbital_count];
+      hamiltonian[column + active_basis * orbital_count] = coupling;
+      hamiltonian[active_basis + column * orbital_count] = coupling;
+    }
+  }
+
+  const LapackInt active = static_cast<LapackInt>(active_orbitals);
+  info = CpuLinearAlgebraAccess::dsyevd(backend)(
+      kCblasColMajor, kEigenvectors, kLower, active, hamiltonian, n, workspace.eigenvalues,
+      workspace.lapack_work, data.lapack_work_count, workspace.lapack_integer_work,
+      data.lapack_integer_work_count);
+  if (info < 0) {
+    return RecycleAttemptResult::kBackendFailure;
+  }
+  if (info > 0 || !finite_array(workspace.eigenvalues, orbital_count)) {
+    return RecycleAttemptResult::kRejected;
+  }
+
+  double maximum_metric_error = 0.0;
+  for (std::size_t left = 0u; left < active_orbitals; ++left) {
+    for (std::size_t right = 0u; right <= left; ++right) {
+      long double inner = 0.0L;
+      for (std::size_t row = 0u; row < active_orbitals; ++row) {
+        inner += static_cast<long double>(hamiltonian[row + left * orbital_count]) *
+                 hamiltonian[row + right * orbital_count];
+      }
+      const double target = left == right ? 1.0 : 0.0;
+      maximum_metric_error =
+          std::max(maximum_metric_error, std::abs(static_cast<double>(inner) - target));
+    }
+  }
+  for (std::size_t left = 0u; left < complement_orbitals; ++left) {
+    for (std::size_t right = 0u; right <= left; ++right) {
+      long double inner = 0.0L;
+      for (std::size_t row = 0u; row < complement_orbitals; ++row) {
+        inner += static_cast<long double>(complement_vectors[row + left * orbital_count]) *
+                 complement_vectors[row + right * orbital_count];
+      }
+      const double target = left == right ? 1.0 : 0.0;
+      maximum_metric_error =
+          std::max(maximum_metric_error, std::abs(static_cast<double>(inner) - target));
+    }
+  }
+  if (!std::isfinite(maximum_metric_error) ||
+      maximum_metric_error > policy.metric_orthogonality_tolerance) {
+    return RecycleAttemptResult::kRejected;
+  }
+
+  report.boundary_gap =
+      workspace.eigenvalues[active_orbitals] - workspace.eigenvalues[active_orbitals - 1u];
+  if (!std::isfinite(report.boundary_gap) || report.boundary_gap < policy.minimum_boundary_gap) {
+    return RecycleAttemptResult::kRejected;
+  }
+
+  long double residual_sum_squared = 0.0L;
+  double maximum_residual = 0.0;
+  double* remaining_residual_norms = workspace.occupations;
+  const std::size_t remaining_orbitals = complement_orbitals - expansion_orbitals;
+  std::fill_n(remaining_residual_norms, remaining_orbitals, 0.0);
+  /* The augmented block and retained complement are internally diagonal.
+   * Their transformed cross block is therefore the exact whitened residual
+   * of the complete expanded Ritz spectrum. */
+  for (std::size_t ritz = 0u; ritz < active_orbitals; ++ritz) {
+    long double column_norm_squared = 0.0L;
+    for (std::size_t complement_ritz = expansion_orbitals; complement_ritz < complement_orbitals;
+         ++complement_ritz) {
+      long double rotated_coupling = 0.0L;
+      for (std::size_t active_basis = 0u; active_basis < base_active_orbitals; ++active_basis) {
+        rotated_coupling += static_cast<long double>(
+                                rotated_couplings[complement_ritz + active_basis * orbital_count]) *
+                            hamiltonian[active_basis + ritz * orbital_count];
+      }
+      const double squared = static_cast<double>(rotated_coupling * rotated_coupling);
+      column_norm_squared += squared;
+      remaining_residual_norms[complement_ritz - expansion_orbitals] += squared;
+    }
+    const double column_norm = std::sqrt(static_cast<double>(column_norm_squared));
+    maximum_residual = std::max(maximum_residual, column_norm);
+    residual_sum_squared += column_norm_squared;
+  }
+  for (std::size_t complement_ritz = 0u; complement_ritz < remaining_orbitals; ++complement_ritz) {
+    const double column_norm = std::sqrt(remaining_residual_norms[complement_ritz]);
+    maximum_residual = std::max(maximum_residual, column_norm);
+    residual_sum_squared += remaining_residual_norms[complement_ritz];
+  }
+  report.maximum_backward_error = maximum_residual / hamiltonian_norm;
+  report.rms_backward_error =
+      std::sqrt(static_cast<double>(residual_sum_squared / orbital_count)) / hamiltonian_norm;
+  report.residual_gap_ratio = maximum_residual / report.boundary_gap;
+  if (!std::isfinite(report.maximum_backward_error) || !std::isfinite(report.rms_backward_error) ||
+      !std::isfinite(report.residual_gap_ratio) ||
+      report.maximum_backward_error > policy.maximum_residual_backward_error ||
+      report.rms_backward_error > policy.rms_residual_backward_error ||
+      report.residual_gap_ratio > policy.maximum_residual_gap_ratio) {
+    return RecycleAttemptResult::kRejected;
+  }
+
+  /* Assemble the complete orthogonal transform from the previous molecular
+   * orbitals to the expanded Ritz basis. The retained complement stays
+   * current-block diagonal and exactly orthogonal to every expanded vector. */
+  double* basis_transform = workspace.densities + matrix_count;
+  std::fill_n(basis_transform, matrix_count, 0.0);
+  for (std::size_t ritz = 0u; ritz < active_orbitals; ++ritz) {
+    for (std::size_t active_basis = 0u; active_basis < base_active_orbitals; ++active_basis) {
+      basis_transform[active_basis + ritz * orbital_count] =
+          hamiltonian[active_basis + ritz * orbital_count];
+    }
+    for (std::size_t complement_basis = 0u; complement_basis < complement_orbitals;
+         ++complement_basis) {
+      long double value = 0.0L;
+      for (std::size_t expansion = 0u; expansion < expansion_orbitals; ++expansion) {
+        value += static_cast<long double>(
+                     complement_vectors[complement_basis + expansion * orbital_count]) *
+                 hamiltonian[base_active_orbitals + expansion + ritz * orbital_count];
+      }
+      basis_transform[base_active_orbitals + complement_basis + ritz * orbital_count] =
+          static_cast<double>(value);
+    }
+  }
+  for (std::size_t complement_ritz = expansion_orbitals; complement_ritz < complement_orbitals;
+       ++complement_ritz) {
+    const std::size_t output_orbital = base_active_orbitals + complement_ritz;
+    for (std::size_t complement_basis = 0u; complement_basis < complement_orbitals;
+         ++complement_basis) {
+      basis_transform[base_active_orbitals + complement_basis + output_orbital * orbital_count] =
+          complement_vectors[complement_basis + complement_ritz * orbital_count];
+    }
+  }
+  CpuLinearAlgebraAccess::dgemm(backend)(kCblasColMajor, kCblasNoTrans, kCblasNoTrans, n, n, n, 1.0,
+                                         coefficients, n, basis_transform, n, 0.0,
+                                         h_times_coefficients, n);
+  if (!finite_array(h_times_coefficients, matrix_count)) {
+    return RecycleAttemptResult::kRejected;
+  }
+  std::copy_n(h_times_coefficients, matrix_count, coefficients);
+
+  const NumericalResult completion =
+      complete_solution_unchecked(data, system, temperature, backend, workspace, scalars);
+  if (completion != NumericalResult::kSuccess) {
+    return RecycleAttemptResult::kRejected;
+  }
+  double current_tail = 0.0;
+  for (std::size_t orbital = active_orbitals; orbital < orbital_count; ++orbital) {
+    current_tail += workspace.occupations[orbital] + workspace.occupations[orbital_count + orbital];
+  }
+  if (!std::isfinite(current_tail) || current_tail > policy.occupation_tail_tolerance) {
+    return RecycleAttemptResult::kRejected;
+  }
+  return RecycleAttemptResult::kAccepted;
 }
 
 WavefunctionView make_batch_staging_wavefunction(const EigensolverWorkspace& workspace) {
@@ -1327,6 +1720,85 @@ xtbloom_status_t validate_solve_bindings(
   }
   if (!validate_result_view(plan, thermodynamics, result_ranges, error)) {
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+struct OneSystemSolveContext {
+  std::size_t system = 0u;
+  std::size_t orbitals = 0u;
+  std::size_t matrix_elements = 0u;
+};
+
+xtbloom_status_t validate_one_system_solve_inputs(
+    const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
+    OneSystemSolveContext& context, std::string& error) {
+  std::array<AddressRange, 5> result_ranges{};
+  xtbloom_status_t status =
+      validate_solve_bindings(plan, overlap_cache, backend, workspace, wavefunction, thermodynamics,
+                              false, result_ranges, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  const EigensolverPlanData& data = *plan.identity();
+  if (system < 0 || system >= data.batch_size || geometry_generation == 0u ||
+      !is_aligned(system_hamiltonians, alignof(double)) || !std::isfinite(temperature) ||
+      temperature < 0.0) {
+    error = "one-system eigensolver inputs are invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  context.system = static_cast<std::size_t>(system);
+  context.orbitals = static_cast<std::size_t>(data.orbital_offsets[context.system + 1u] -
+                                              data.orbital_offsets[context.system]);
+  context.matrix_elements = context.orbitals * context.orbitals;
+  const std::size_t hamiltonian_count =
+      static_cast<std::size_t>(data.spin_channels[context.system]) * context.matrix_elements;
+  std::array<AddressRange, 4> principal{};
+  std::array<AddressRange, 7> controls{};
+  if (!make_range(system_hamiltonians, hamiltonian_count * sizeof(double), principal[0]) ||
+      !make_range(overlap_cache.workspace_base, data.overlap_cache_size_bytes, principal[1]) ||
+      !make_range(workspace.workspace_base, data.worker_workspace_size_bytes, principal[2]) ||
+      !make_range(wavefunction.workspace_base, data.wavefunction_workspace_size_bytes,
+                  principal[3]) ||
+      !make_range(&plan, sizeof(plan), controls[0]) ||
+      !make_range(&overlap_cache, sizeof(overlap_cache), controls[1]) ||
+      !make_range(&backend, sizeof(backend), controls[2]) ||
+      !make_range(&workspace, sizeof(workspace), controls[3]) ||
+      !make_range(&wavefunction, sizeof(wavefunction), controls[4]) ||
+      !make_range(&thermodynamics, sizeof(thermodynamics), controls[5]) ||
+      !make_range(&error, sizeof(error), controls[6]) || !pairwise_disjoint(principal) ||
+      !disjoint_from_control(plan, principal, controls)) {
+    error = "one-system eigensolver arrays and control storage must not overlap";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  for (const AddressRange& result : result_ranges) {
+    if (overlaps_plan_storage(plan, result)) {
+      error = "one-system scalar outputs must not overlap immutable plan storage";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    for (const AddressRange& range : principal) {
+      if (ranges_overlap(result, range)) {
+        error = "one-system scalar outputs must not overlap numerical arrays";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+    }
+    for (const AddressRange& control : controls) {
+      if (ranges_overlap(result, control)) {
+        error = "one-system scalar outputs must not overlap descriptors";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+    }
+  }
+  for (std::int32_t spin = 0; spin < data.spin_channels[context.system]; ++spin) {
+    if (!symmetric_finite_row_major(
+            system_hamiltonians + static_cast<std::size_t>(spin) * context.matrix_elements,
+            context.orbitals)) {
+      error = "one-system Hamiltonians must be finite and symmetric";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
   }
   return XTBLOOM_STATUS_SUCCESS;
 }
@@ -2319,77 +2791,127 @@ xtbloom_status_t solve_eigensystem_cpu(
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     std::string& error) {
-  std::array<AddressRange, 5> result_ranges{};
-  xtbloom_status_t status =
-      validate_solve_bindings(plan, overlap_cache, backend, workspace, wavefunction, thermodynamics,
-                              false, result_ranges, error);
+  OneSystemSolveContext context;
+  const xtbloom_status_t status = validate_one_system_solve_inputs(
+      plan, system, overlap_cache, geometry_generation, system_hamiltonians, temperature, backend,
+      workspace, wavefunction, thermodynamics, context, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
   const EigensolverPlanData& data = *plan.identity();
-  if (system < 0 || system >= data.batch_size || geometry_generation == 0u ||
-      !is_aligned(system_hamiltonians, alignof(double)) || !std::isfinite(temperature) ||
-      temperature < 0.0) {
-    error = "one-system eigensolver inputs are invalid";
-    return XTBLOOM_STATUS_INVALID_ARGUMENT;
-  }
-  const std::size_t system_index = static_cast<std::size_t>(system);
-  const std::size_t n = static_cast<std::size_t>(data.orbital_offsets[system_index + 1u] -
-                                                 data.orbital_offsets[system_index]);
-  const std::size_t matrix_count = n * n;
-  const std::size_t hamiltonian_count =
-      static_cast<std::size_t>(data.spin_channels[system_index]) * matrix_count;
-  std::array<AddressRange, 4> principal{};
-  std::array<AddressRange, 7> controls{};
-  if (!make_range(system_hamiltonians, hamiltonian_count * sizeof(double), principal[0]) ||
-      !make_range(overlap_cache.workspace_base, data.overlap_cache_size_bytes, principal[1]) ||
-      !make_range(workspace.workspace_base, data.worker_workspace_size_bytes, principal[2]) ||
-      !make_range(wavefunction.workspace_base, data.wavefunction_workspace_size_bytes,
-                  principal[3]) ||
-      !make_range(&plan, sizeof(plan), controls[0]) ||
-      !make_range(&overlap_cache, sizeof(overlap_cache), controls[1]) ||
-      !make_range(&backend, sizeof(backend), controls[2]) ||
-      !make_range(&workspace, sizeof(workspace), controls[3]) ||
-      !make_range(&wavefunction, sizeof(wavefunction), controls[4]) ||
-      !make_range(&thermodynamics, sizeof(thermodynamics), controls[5]) ||
-      !make_range(&error, sizeof(error), controls[6]) || !pairwise_disjoint(principal) ||
-      !disjoint_from_control(plan, principal, controls)) {
-    error = "one-system eigensolver arrays and control storage must not overlap";
-    return XTBLOOM_STATUS_INVALID_ARGUMENT;
-  }
-  for (const AddressRange& result : result_ranges) {
-    if (overlaps_plan_storage(plan, result)) {
-      error = "one-system scalar outputs must not overlap immutable plan storage";
-      return XTBLOOM_STATUS_INVALID_ARGUMENT;
-    }
-    for (const AddressRange& range : principal) {
-      if (ranges_overlap(result, range)) {
-        error = "one-system scalar outputs must not overlap numerical arrays";
-        return XTBLOOM_STATUS_INVALID_ARGUMENT;
-      }
-    }
-    for (const AddressRange& control : controls) {
-      if (ranges_overlap(result, control)) {
-        error = "one-system scalar outputs must not overlap descriptors";
-        return XTBLOOM_STATUS_INVALID_ARGUMENT;
-      }
-    }
-  }
-  for (std::int32_t spin = 0; spin < data.spin_channels[system_index]; ++spin) {
-    if (!symmetric_finite_row_major(
-            system_hamiltonians + static_cast<std::size_t>(spin) * matrix_count, n)) {
-      error = "one-system Hamiltonians must be finite and symmetric";
-      return XTBLOOM_STATUS_INVALID_ARGUMENT;
-    }
-  }
   ScopedSequentialBlas sequential_blas(backend);
   const NumericalResult result = solve_system_unchecked(
-      data, system_index, overlap_cache, geometry_generation, system_hamiltonians, temperature,
+      data, context.system, overlap_cache, geometry_generation, system_hamiltonians, temperature,
       backend, workspace, wavefunction, thermodynamics);
   if (result == NumericalResult::kBackendFailure) {
     error = "LP64 LAPACK rejected an internal one-system eigensolver argument";
     return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t solve_eigensystem_adaptive_cpu(
+    const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
+    const EigensolverRecyclePolicy& policy, bool request_recycle, EigensolverSolveReport& report,
+    std::string& error) {
+  if (!valid_recycle_policy(policy)) {
+    error = "adaptive eigensolver recycle policy is invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  OneSystemSolveContext context;
+  xtbloom_status_t status = validate_one_system_solve_inputs(
+      plan, system, overlap_cache, geometry_generation, system_hamiltonians, temperature, backend,
+      workspace, wavefunction, thermodynamics, context, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  const EigensolverPlanData& data = *plan.identity();
+  const std::size_t hamiltonian_count =
+      static_cast<std::size_t>(data.spin_channels[context.system]) * context.matrix_elements;
+  AddressRange policy_range;
+  AddressRange report_range;
+  AddressRange hamiltonian_range;
+  AddressRange cache_range;
+  AddressRange workspace_range;
+  AddressRange wavefunction_range;
+  std::array<AddressRange, 5> result_ranges{};
+  std::array<AddressRange, 7> control_ranges{};
+  if (!make_range(&policy, sizeof(policy), policy_range) ||
+      !make_range(&report, sizeof(report), report_range) ||
+      !make_range(system_hamiltonians, hamiltonian_count * sizeof(double), hamiltonian_range) ||
+      !make_range(overlap_cache.workspace_base, data.overlap_cache_size_bytes, cache_range) ||
+      !make_range(workspace.workspace_base, data.worker_workspace_size_bytes, workspace_range) ||
+      !make_range(wavefunction.workspace_base, data.wavefunction_workspace_size_bytes,
+                  wavefunction_range) ||
+      !make_range(&plan, sizeof(plan), control_ranges[0]) ||
+      !make_range(&overlap_cache, sizeof(overlap_cache), control_ranges[1]) ||
+      !make_range(&backend, sizeof(backend), control_ranges[2]) ||
+      !make_range(&workspace, sizeof(workspace), control_ranges[3]) ||
+      !make_range(&wavefunction, sizeof(wavefunction), control_ranges[4]) ||
+      !make_range(&thermodynamics, sizeof(thermodynamics), control_ranges[5]) ||
+      !make_range(&error, sizeof(error), control_ranges[6]) ||
+      !validate_result_view(plan, thermodynamics, result_ranges, error) ||
+      overlaps_plan_storage(plan, policy_range) || overlaps_plan_storage(plan, report_range) ||
+      ranges_overlap(policy_range, report_range) ||
+      ranges_overlap(policy_range, hamiltonian_range) ||
+      ranges_overlap(policy_range, cache_range) || ranges_overlap(policy_range, workspace_range) ||
+      ranges_overlap(policy_range, wavefunction_range) ||
+      ranges_overlap(report_range, hamiltonian_range) ||
+      ranges_overlap(report_range, cache_range) || ranges_overlap(report_range, workspace_range) ||
+      ranges_overlap(report_range, wavefunction_range)) {
+    error = "adaptive eigensolver policy and report must not overlap numerical storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  for (const AddressRange& control_range : control_ranges) {
+    if (ranges_overlap(policy_range, control_range) ||
+        ranges_overlap(report_range, control_range)) {
+      error = "adaptive eigensolver policy and report must not overlap descriptors";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  for (const AddressRange& result_range : result_ranges) {
+    if (ranges_overlap(policy_range, result_range) || ranges_overlap(report_range, result_range)) {
+      error = "adaptive eigensolver policy and report must not overlap scalar outputs";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  EigensolverSolveReport candidate_report;
+  ScopedSequentialBlas sequential_blas(backend);
+  if (request_recycle &&
+      overlap_cache.geometry_generations[context.system] == geometry_generation &&
+      overlap_cache.system_statuses[context.system] == XTBLOOM_STATUS_SUCCESS) {
+    SolutionScalars scalars;
+    const RecycleAttemptResult attempt = try_recycled_system_unchecked(
+        data, context.system, system_hamiltonians, temperature, backend, workspace, wavefunction,
+        policy, candidate_report, scalars);
+    if (attempt == RecycleAttemptResult::kBackendFailure) {
+      error = "LP64 LAPACK rejected an internal recycled eigensolver argument";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    if (attempt == RecycleAttemptResult::kAccepted) {
+      candidate_report.mode = EigensolverSolveMode::kRecycled;
+      publish_solution_unchecked(data, context.system, workspace, wavefunction, thermodynamics,
+                                 scalars);
+      report = candidate_report;
+      error.clear();
+      return XTBLOOM_STATUS_SUCCESS;
+    }
+    candidate_report.mode = EigensolverSolveMode::kRecycleFallback;
+  }
+
+  const NumericalResult dense = solve_system_unchecked(
+      data, context.system, overlap_cache, geometry_generation, system_hamiltonians, temperature,
+      backend, workspace, wavefunction, thermodynamics);
+  if (dense == NumericalResult::kBackendFailure) {
+    error = "LP64 LAPACK rejected an internal adaptive eigensolver argument";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  report = candidate_report;
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }
