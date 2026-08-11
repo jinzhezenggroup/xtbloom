@@ -57,7 +57,7 @@ struct Gfn2TerminalClassicalEnergyDevicePlan {
   Gfn2RepulsionDeviceBatch repulsion{};
   Gfn2D4DeviceBatch d4_batch{};
   Gfn2D4DeviceParameters d4_parameters{};
-  Gfn2D4DeviceCache d4_cache{};
+  Gfn2D4PairListDeviceCache d4_cache{};
 
   Gfn2GeometryEpochDevice geometry_epoch{};
   const std::uint64_t* committed_generations = nullptr;

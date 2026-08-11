@@ -1,14 +1,18 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <string>
 #include <vector>
 
 #include "backends/cuda/gfn2_post_scc_potential.cuh"
+#include "data/parameters/d4.hpp"
+#include "model/gfn2/d4.hpp"
 
 #define CHECK(condition)                                                                 \
   do {                                                                                   \
@@ -25,6 +29,7 @@ namespace {
 
 using namespace xtbloom::detail;
 using namespace xtbloom::detail::cuda;
+using namespace xtbloom::detail::gfn2;
 
 constexpr std::uint64_t kPlanToken = 0x109109109ULL;
 constexpr std::uint64_t kGeometryGeneration = 109u;
@@ -94,6 +99,8 @@ struct Fixture {
   std::vector<std::int64_t> dipole_offsets;
   std::vector<std::int64_t> quadrupole_offsets;
   std::vector<std::int64_t> shell_to_atom;
+  std::vector<std::int32_t> atomic_numbers;
+  std::vector<double> positions;
   std::vector<double> shell_hardness;
   std::vector<double> es2_matrix;
   std::vector<double> gamma3;
@@ -109,6 +116,18 @@ struct Fixture {
   std::vector<double> raw_atomic;
   std::vector<double> raw_dipole;
   std::vector<double> raw_quadrupole;
+  std::vector<Gfn2AtomPair> d4_pairs;
+  std::vector<std::int64_t> d4_pair_counts;
+  std::vector<std::int64_t> d4_pairlist_offsets;
+  std::vector<std::int64_t> d4_neighbor_offsets;
+  std::vector<std::int64_t> d4_neighbor_counts;
+  std::vector<std::int64_t> d4_neighbors;
+  D4Plan d4_plan;
+  std::vector<std::byte> d4_workspace_storage;
+  D4Workspace d4_host_workspace;
+  std::vector<double> d4_host_pair_data;
+  std::vector<double> d4_coordination;
+  std::vector<double> expected_d4_atomic;
   std::vector<std::uint8_t> requested;
   std::vector<xtbloom_status_t> statuses;
 
@@ -121,6 +140,8 @@ struct Fixture {
   DeviceBuffer<std::int64_t> d_dipole_offsets;
   DeviceBuffer<std::int64_t> d_quadrupole_offsets;
   DeviceBuffer<std::int64_t> d_shell_to_atom;
+  DeviceBuffer<std::int32_t> d_atomic_numbers;
+  DeviceBuffer<double> d_positions;
   DeviceBuffer<double> d_shell_hardness;
   DeviceBuffer<double> d_es2_matrix;
   DeviceBuffer<double> d_gamma3;
@@ -129,6 +150,16 @@ struct Fixture {
   DeviceBuffer<double> d_multipole_radius;
   DeviceBuffer<double> d_multipole_valence;
   DeviceBuffer<double> d_pair_data;
+  DeviceBuffer<Gfn2AtomPair> d_d4_pairs;
+  DeviceBuffer<std::int64_t> d_d4_pair_counts;
+  DeviceBuffer<std::int64_t> d_d4_pairlist_offsets;
+  DeviceBuffer<std::int64_t> d_d4_neighbor_offsets;
+  DeviceBuffer<std::int64_t> d_d4_neighbor_counts;
+  DeviceBuffer<std::int64_t> d_d4_neighbors;
+  DeviceBuffer<Gfn2D4DeviceElementData> d_d4_elements;
+  DeviceBuffer<Gfn2D4DeviceReferenceData> d_d4_references;
+  DeviceBuffer<double> d_d4_reference_c6;
+  DeviceBuffer<double> d_d4_coordination;
   DeviceBuffer<double> d_explicit_shell_potential;
   DeviceBuffer<double> d_periodic_shifts;
   DeviceBuffer<double> d_periodic_response;
@@ -141,6 +172,8 @@ struct Fixture {
   DeviceBuffer<std::uint64_t> d_geometry_epoch;
   DeviceBuffer<std::uint64_t> d_committed_generations;
   DeviceBuffer<std::uint8_t> d_eligible;
+  DeviceBuffer<std::uint64_t> d_d4_pair_generations;
+  DeviceBuffer<std::uint8_t> d_d4_pair_eligible;
 
   DeviceBuffer<double> d_es2_shell;
   DeviceBuffer<double> d_es3_shell;
@@ -148,6 +181,7 @@ struct Fixture {
   DeviceBuffer<double> d_aes2_dipole;
   DeviceBuffer<double> d_aes2_quadrupole;
   DeviceBuffer<double> d_periodic_atomic;
+  DeviceBuffer<double> d_d4_atomic;
   DeviceBuffer<double> d_staged_shell;
   DeviceBuffer<double> d_staged_atomic;
   DeviceBuffer<double> d_staged_dipole;
@@ -162,6 +196,9 @@ struct Fixture {
   DeviceBuffer<double> d_es2_shell_scratch;
   DeviceBuffer<double> d_aes2_potential_scratch;
   DeviceBuffer<std::uint32_t> d_aes2_peer_scratch;
+  DeviceBuffer<double> d_d4_weights;
+  DeviceBuffer<double> d_d4_weight_charge_derivatives;
+  DeviceBuffer<double> d_d4_atom_scratch;
   DeviceBuffer<double> d_periodic_scratch;
   DeviceBuffer<std::uint32_t> d_periodic_sequence;
   DeviceBuffer<double> d_compose_shell_scratch;
@@ -190,6 +227,8 @@ struct Fixture {
     quadrupole_offsets.resize(static_cast<std::size_t>(count + 1));
     atom_shell_offsets.resize(static_cast<std::size_t>(atoms + 1));
     shell_to_atom.resize(static_cast<std::size_t>(shells));
+    atomic_numbers.resize(static_cast<std::size_t>(atoms));
+    positions.resize(static_cast<std::size_t>(3 * atoms));
     shell_hardness.resize(static_cast<std::size_t>(shells));
     es2_matrix.resize(static_cast<std::size_t>(4 * count));
     gamma3.resize(static_cast<std::size_t>(shells));
@@ -205,6 +244,12 @@ struct Fixture {
     raw_atomic.resize(static_cast<std::size_t>(atoms));
     raw_dipole.assign(static_cast<std::size_t>(3 * atoms), 0.0);
     raw_quadrupole.assign(static_cast<std::size_t>(6 * atoms), 0.0);
+    d4_pairs.resize(static_cast<std::size_t>(count));
+    d4_pair_counts.assign(static_cast<std::size_t>(count), 1);
+    d4_pairlist_offsets.resize(static_cast<std::size_t>(count + 1));
+    d4_neighbor_offsets.resize(static_cast<std::size_t>(atoms + 1));
+    d4_neighbor_counts.assign(static_cast<std::size_t>(atoms), 1);
+    d4_neighbors.resize(static_cast<std::size_t>(atoms));
     requested.assign(static_cast<std::size_t>(count), 1u);
     statuses.assign(static_cast<std::size_t>(count), XTBLOOM_STATUS_SUCCESS);
 
@@ -213,6 +258,7 @@ struct Fixture {
       shell_offsets[static_cast<std::size_t>(system)] = 2 * system;
       matrix_offsets[static_cast<std::size_t>(system)] = 4 * system;
       pair_offsets[static_cast<std::size_t>(system)] = system;
+      d4_pairlist_offsets[static_cast<std::size_t>(system)] = system;
       dipole_offsets[static_cast<std::size_t>(system)] = 6 * system;
       quadrupole_offsets[static_cast<std::size_t>(system)] = 12 * system;
       const std::size_t matrix = static_cast<std::size_t>(4 * system);
@@ -235,6 +281,12 @@ struct Fixture {
         const std::size_t index = static_cast<std::size_t>(atom);
         atom_shell_offsets[index] = atom;
         shell_to_atom[index] = atom;
+        atomic_numbers[index] = local == 0 ? 6 : 8;
+        positions[static_cast<std::size_t>(3 * atom)] = local == 0 ? 0.0 : 2.2;
+        positions[static_cast<std::size_t>(3 * atom + 1)] = 0.0;
+        positions[static_cast<std::size_t>(3 * atom + 2)] = 0.0;
+        d4_neighbor_offsets[index] = atom;
+        d4_neighbors[index] = local == 0 ? atom + 1 : atom - 1;
         shell_hardness[index] = local == 0 ? 1.2 : 1.8;
         gamma3[index] = local == 0 ? 0.10 : 0.15;
         explicit_shell_potential[index] = 0.006 * static_cast<double>(atom + 1);
@@ -244,14 +296,63 @@ struct Fixture {
         raw_dipole[static_cast<std::size_t>(3 * atom)] = 0.01 * static_cast<double>(atom + 1);
         raw_quadrupole[static_cast<std::size_t>(6 * atom)] = 0.003 * static_cast<double>(atom + 1);
       }
+      d4_pairs[static_cast<std::size_t>(system)] = {2 * system, 2 * system + 1};
     }
     atom_offsets.back() = atoms;
     shell_offsets.back() = shells;
     matrix_offsets.back() = 4 * count;
     pair_offsets.back() = count;
+    d4_pairlist_offsets.back() = count;
+    d4_neighbor_offsets.back() = atoms;
     dipole_offsets.back() = 3 * atoms;
     quadrupole_offsets.back() = 6 * atoms;
     atom_shell_offsets.back() = shells;
+
+    std::string d4_error;
+    if (make_d4_plan(batch_size, atoms, atom_offsets.data(), atomic_numbers.data(), d4_plan,
+                     d4_error) != XTBLOOM_STATUS_SUCCESS) {
+      return cudaErrorInvalidValue;
+    }
+    d4_workspace_storage.resize(d4_plan.workspace_size_bytes() + kD4WorkspaceAlignment - 1u);
+    const std::uintptr_t d4_workspace_address =
+        reinterpret_cast<std::uintptr_t>(d4_workspace_storage.data());
+    const std::uintptr_t d4_workspace_aligned =
+        (d4_workspace_address + kD4WorkspaceAlignment - 1u) & ~(kD4WorkspaceAlignment - 1u);
+    if (bind_d4_workspace(d4_plan, reinterpret_cast<void*>(d4_workspace_aligned),
+                          d4_plan.workspace_size_bytes(), d4_host_workspace,
+                          d4_error) != XTBLOOM_STATUS_SUCCESS) {
+      return cudaErrorInvalidValue;
+    }
+    d4_host_pair_data.resize(static_cast<std::size_t>(5 * count));
+    d4_coordination.resize(static_cast<std::size_t>(atoms));
+    D4GeometryCache d4_cache{};
+    if (update_d4_geometry_cache_cpu(
+            d4_plan, positions.data(), kGeometryGeneration, d4_host_pair_data.data(),
+            d4_host_pair_data.size(), d4_coordination.data(), d4_coordination.size(),
+            d4_host_workspace, d4_cache, d4_error) != XTBLOOM_STATUS_SUCCESS) {
+      return cudaErrorInvalidValue;
+    }
+    std::vector<double> d4_energies(static_cast<std::size_t>(batch_size));
+    expected_d4_atomic.resize(static_cast<std::size_t>(atoms));
+    if (evaluate_d4_two_body_cpu(d4_plan, d4_cache, raw_atomic.data(), d4_energies.data(),
+                                 expected_d4_atomic.data(), d4_host_workspace,
+                                 d4_error) != XTBLOOM_STATUS_SUCCESS) {
+      return cudaErrorInvalidValue;
+    }
+
+    std::vector<Gfn2D4DeviceElementData> d4_elements;
+    d4_elements.reserve(xtbloom::parameters::d4::kElements.size());
+    for (const auto& element : xtbloom::parameters::d4::kElements) {
+      d4_elements.push_back({element.reference_offset, element.reference_count,
+                             element.covalent_radius, element.electronegativity,
+                             element.effective_charge, element.hardness, element.r4r2});
+    }
+    std::vector<Gfn2D4DeviceReferenceData> d4_references;
+    d4_references.reserve(xtbloom::parameters::d4::kReferences.size());
+    for (const auto& reference : xtbloom::parameters::d4::kReferences) {
+      d4_references.push_back(
+          {reference.coordination_number, reference.charge, reference.gaussian_count});
+    }
 
     cudaError_t status = cudaSuccess;
 #define UPLOAD(name)                        \
@@ -269,6 +370,8 @@ struct Fixture {
     UPLOAD(dipole_offsets)
     UPLOAD(quadrupole_offsets)
     UPLOAD(shell_to_atom)
+    UPLOAD(atomic_numbers)
+    UPLOAD(positions)
     UPLOAD(shell_hardness)
     UPLOAD(es2_matrix)
     UPLOAD(gamma3)
@@ -277,6 +380,21 @@ struct Fixture {
     UPLOAD(multipole_radius)
     UPLOAD(multipole_valence)
     UPLOAD(pair_data)
+    if (status == cudaSuccess) status = d_d4_pairs.upload(d4_pairs, stream);
+    if (status == cudaSuccess) status = d_d4_pair_counts.upload(d4_pair_counts, stream);
+    if (status == cudaSuccess) status = d_d4_pairlist_offsets.upload(d4_pairlist_offsets, stream);
+    if (status == cudaSuccess) status = d_d4_neighbor_offsets.upload(d4_neighbor_offsets, stream);
+    if (status == cudaSuccess) status = d_d4_neighbor_counts.upload(d4_neighbor_counts, stream);
+    if (status == cudaSuccess) status = d_d4_neighbors.upload(d4_neighbors, stream);
+    if (status == cudaSuccess) status = d_d4_elements.upload(d4_elements, stream);
+    if (status == cudaSuccess) status = d_d4_references.upload(d4_references, stream);
+    if (status == cudaSuccess) {
+      status = d_d4_reference_c6.upload(
+          std::vector<double>(xtbloom::parameters::d4::kReferenceC6.begin(),
+                              xtbloom::parameters::d4::kReferenceC6.end()),
+          stream);
+    }
+    if (status == cudaSuccess) status = d_d4_coordination.upload(d4_coordination, stream);
     UPLOAD(explicit_shell_potential)
     UPLOAD(periodic_shifts)
     UPLOAD(periodic_response)
@@ -298,6 +416,14 @@ struct Fixture {
       status =
           d_eligible.upload(std::vector<std::uint8_t>(static_cast<std::size_t>(count), 1u), stream);
     }
+    if (status == cudaSuccess) {
+      status = d_d4_pair_generations.upload(
+          std::vector<std::uint64_t>(static_cast<std::size_t>(count), kGeometryGeneration), stream);
+    }
+    if (status == cudaSuccess) {
+      status = d_d4_pair_eligible.upload(
+          std::vector<std::uint8_t>(static_cast<std::size_t>(count), 1u), stream);
+    }
     const auto doubles = [&](DeviceBuffer<double>& buffer, std::int64_t elements,
                              double value = 0.0) {
       return status == cudaSuccess
@@ -311,6 +437,7 @@ struct Fixture {
     status = doubles(d_aes2_dipole, 3 * atoms);
     status = doubles(d_aes2_quadrupole, 6 * atoms);
     status = doubles(d_periodic_atomic, atoms);
+    status = doubles(d_d4_atomic, atoms);
     status = doubles(d_staged_shell, shells);
     status = doubles(d_staged_atomic, atoms);
     status = doubles(d_staged_dipole, 3 * atoms);
@@ -323,6 +450,9 @@ struct Fixture {
     status = doubles(d_result_shell_scalar, shells, kSentinel);
     status = doubles(d_es2_shell_scratch, shells);
     status = doubles(d_aes2_potential_scratch, 10 * atoms);
+    status = doubles(d_d4_weights, atoms * kGfn2D4MaximumReferences);
+    status = doubles(d_d4_weight_charge_derivatives, atoms * kGfn2D4MaximumReferences);
+    status = doubles(d_d4_atom_scratch, atoms);
     status = doubles(d_periodic_scratch, atoms);
     status = doubles(d_compose_shell_scratch, shells);
     status = doubles(d_compose_atom_scratch, atoms);
@@ -370,6 +500,7 @@ struct Fixture {
         static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
         static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
         static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2) |
+        static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kD4TwoBody) |
         static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kExplicitPointCharge) |
         static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kPeriodicEmbedding);
     value.geometry_generation = kGeometryGeneration;
@@ -455,6 +586,64 @@ struct Fixture {
     value.aes2_cache = {const_cast<double*>(d_pair_data.get()), 5 * batch_size, kGeometryGeneration,
                         kPlanToken};
 
+    value.d4_batch = {batch_size,
+                      atoms,
+                      batch_size,
+                      kPlanToken,
+                      gfn2_d4_atomic_number_hash(atomic_numbers.data(), atoms),
+                      d_atom_offsets.get(),
+                      d_pair_offsets.get(),
+                      d_atomic_numbers.get()};
+    value.d4_parameters = {
+        d_d4_elements.get(),     static_cast<std::int64_t>(d_d4_elements.size()),
+        d_d4_references.get(),   static_cast<std::int64_t>(d_d4_references.size()),
+        d_d4_reference_c6.get(), static_cast<std::int64_t>(d_d4_reference_c6.size())};
+    value.d4_cache.positions = d_positions.get();
+    value.d4_cache.position_elements = 3 * atoms;
+    value.d4_cache.coordination_numbers = const_cast<double*>(d_d4_coordination.get());
+    value.d4_cache.coordination_elements = atoms;
+    value.d4_cache.coordination_generations = d_committed_generations.get();
+    value.d4_cache.coordination_generation_elements = batch_size;
+    value.d4_cache.coordination_eligible_mask = d_eligible.get();
+    value.d4_cache.coordination_eligible_elements = batch_size;
+    const auto d4_pair_view = [&](Gfn2PairListRole role, double cutoff) {
+      Gfn2PairListConsumerView view{};
+      view.memory_space = Gfn2PlanMemorySpace::kCudaDevice;
+      view.state = Gfn2PairListState::kCommitted;
+      view.role = role;
+      view.pair_map_kind = Gfn2PairMapKind::kExplicit;
+      view.plan_token = kPlanToken;
+      view.cutoff_bohr = cutoff;
+      view.list_builder_cutoff_bohr = kGfn2D4TwoBodyCutoffBohr;
+      view.batch_size = batch_size;
+      view.total_atoms = atoms;
+      view.max_pairs_per_system = 1;
+      view.max_neighbors_per_atom = 1;
+      view.pair_offset_count = batch_size + 1;
+      view.neighbor_offset_count = atoms + 1;
+      view.pair_count = batch_size;
+      view.neighbor_count = atoms;
+      view.pair_offsets = d_d4_pairlist_offsets.get();
+      view.pairs = d_d4_pairs.get();
+      view.pair_count_elements = batch_size;
+      view.neighbor_count_elements = atoms;
+      view.pair_counts = d_d4_pair_counts.get();
+      view.neighbor_counts = d_d4_neighbor_counts.get();
+      view.neighbor_offsets = d_d4_neighbor_offsets.get();
+      view.neighbors = d_d4_neighbors.get();
+      view.committed_generation_count = batch_size;
+      view.eligible_mask_count = batch_size;
+      view.committed_generations = d_d4_pair_generations.get();
+      view.eligible_mask = d_d4_pair_eligible.get();
+      return view;
+    };
+    value.d4_cache.coordination_pairs =
+        d4_pair_view(Gfn2PairListRole::kD4Coordination, kGfn2D4CoordinationCutoffBohr);
+    value.d4_cache.two_body_pairs =
+        d4_pair_view(Gfn2PairListRole::kD4TwoBody, kGfn2D4TwoBodyCutoffBohr);
+    value.d4_cache.atm_pairs = d4_pair_view(Gfn2PairListRole::kD4Atm, kGfn2D4AtmCutoffBohr);
+    value.d4_cache.plan_token = kPlanToken;
+
     value.external_point_charge_batch.batch_size = batch_size;
     value.external_point_charge_batch.total_atoms = atoms;
     value.external_point_charge_batch.total_shells = shells;
@@ -526,6 +715,8 @@ struct Fixture {
     value.aes2_dipole_elements = 3 * atoms;
     value.aes2_quadrupole = d_aes2_quadrupole.get();
     value.aes2_quadrupole_elements = 6 * atoms;
+    value.d4_atomic = d_d4_atomic.get();
+    value.d4_atomic_elements = atoms;
     value.periodic_atomic = d_periodic_atomic.get();
     value.periodic_atomic_elements = atoms;
     value.complete = {d_staged_shell.get(),
@@ -551,6 +742,13 @@ struct Fixture {
     value.aes2.potential_elements = 10 * atoms;
     value.aes2.scc_peer_error_scratch = d_aes2_peer_scratch.get();
     value.aes2.scc_peer_error_elements = 1;
+    value.d4.weights = d_d4_weights.get();
+    value.d4.weight_charge_derivatives = d_d4_weight_charge_derivatives.get();
+    value.d4.weight_elements = atoms * kGfn2D4MaximumReferences;
+    value.d4.atom_scratch = d_d4_atom_scratch.get();
+    value.d4.atom_elements = atoms;
+    value.d4.system_errors = d_stage_system_errors.get();
+    value.d4.system_error_elements = batch_size;
     value.periodic.potential_scratch = d_periodic_scratch.get();
     value.periodic.sequence_active = d_periodic_sequence.get();
     value.periodic.atom_elements = atoms;
@@ -643,11 +841,13 @@ int run_batch(std::int64_t batch_size) {
 
   std::vector<double> shell;
   std::vector<double> atomic;
+  std::vector<double> d4_atomic;
   std::vector<double> shell_scalar;
   std::vector<std::uint32_t> system_errors;
   std::vector<std::uint32_t> device_error;
   CUDA_CHECK(fixture.d_result_shell.download(shell, stream));
   CUDA_CHECK(fixture.d_result_atomic.download(atomic, stream));
+  CUDA_CHECK(fixture.d_d4_atomic.download(d4_atomic, stream));
   CUDA_CHECK(fixture.d_result_shell_scalar.download(shell_scalar, stream));
   CUDA_CHECK(fixture.d_system_errors.download(system_errors, stream));
   CUDA_CHECK(fixture.d_device_error.download(device_error, stream));
@@ -667,6 +867,7 @@ int run_batch(std::int64_t batch_size) {
         CHECK(close(shell[index], expected));
         CHECK(!close(shell[index], fixture.expected_shell(system, local, last_mixed), 1.0e-10));
         CHECK(std::isfinite(atomic[index]));
+        CHECK(close(d4_atomic[index], fixture.expected_d4_atomic[index], 2.0e-12));
         CHECK(close(shell_scalar[index], shell[index] + atomic[index]));
       }
     }
@@ -691,12 +892,31 @@ int run_batch(std::int64_t batch_size) {
     CHECK(refresh_gfn2_post_scc_potentials_cuda(plan, input, aliased, intermediates, workspace,
                                                 diagnostics, stream) == cudaErrorInvalidValue);
 
-    /* D4 is disabled in this fixture. Its plan, intermediate, and workspace
+    Gfn2PostSccPotentialDevicePlan invalid_d4_plan = plan;
+    invalid_d4_plan.d4_cache.two_body_pairs.role = Gfn2PairListRole::kD4Atm;
+    CHECK(refresh_gfn2_post_scc_potentials_cuda(invalid_d4_plan, input, results, intermediates,
+                                                workspace, diagnostics,
+                                                stream) == cudaErrorInvalidValue);
+    invalid_d4_plan = plan;
+    invalid_d4_plan.d4_cache.coordination_pairs.plan_token ^= 1u;
+    CHECK(refresh_gfn2_post_scc_potentials_cuda(invalid_d4_plan, input, results, intermediates,
+                                                workspace, diagnostics,
+                                                stream) == cudaErrorInvalidValue);
+    invalid_d4_plan = plan;
+    invalid_d4_plan.d4_cache.two_body_pairs.pairs =
+        reinterpret_cast<const Gfn2AtomPair*>(results.complete.atomic);
+    CHECK(refresh_gfn2_post_scc_potentials_cuda(invalid_d4_plan, input, results, intermediates,
+                                                workspace, diagnostics,
+                                                stream) == cudaErrorInvalidValue);
+
+    /* D4 is disabled in this derived plan. Its plan, intermediate, and workspace
      * descriptors must remain completely uninspected, even when they contain
      * values that would be invalid or alias public output if D4 were active. */
     Gfn2PostSccPotentialDevicePlan ignored_d4_plan = plan;
+    ignored_d4_plan.enabled_components &=
+        ~static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kD4TwoBody);
     ignored_d4_plan.d4_batch.plan_token = 0u;
-    ignored_d4_plan.d4_cache.geometry_generation = 0u;
+    ignored_d4_plan.d4_cache.coordination_pairs.plan_token = 0u;
     Gfn2PostSccPotentialDeviceIntermediates ignored_d4_intermediates = intermediates;
     ignored_d4_intermediates.d4_atomic = results.complete.atomic;
     ignored_d4_intermediates.d4_atomic_elements = results.complete.atom_elements;
@@ -782,6 +1002,44 @@ int run_batch(std::int64_t batch_size) {
   return 0;
 }
 
+int test_zero_published_d4_pairs() {
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  Fixture fixture;
+  CUDA_CHECK(fixture.initialize(1, stream));
+
+  /* Keep one fixed backing slot but publish no live pair or neighbor entry.
+   * The composed post-SCC path must return a finite zero D4 potential without
+   * treating an empty live prefix as an invalid cache. */
+  CUDA_CHECK(fixture.d_d4_pair_counts.overwrite({0}, stream));
+  CUDA_CHECK(fixture.d_d4_neighbor_counts.overwrite({0, 0}, stream));
+  CUDA_CHECK(fixture.d_d4_coordination.overwrite({0.0, 0.0}, stream));
+  auto plan = fixture.plan();
+  auto input = fixture.input();
+  auto results = fixture.results();
+  auto intermediates = fixture.intermediates();
+  auto workspace = fixture.workspace();
+  auto diagnostics = fixture.diagnostics();
+  CUDA_CHECK(refresh_gfn2_post_scc_potentials_cuda(plan, input, results, intermediates, workspace,
+                                                   diagnostics, stream));
+
+  std::vector<double> d4_atomic;
+  std::vector<double> atomic;
+  std::vector<std::uint32_t> system_errors;
+  std::vector<std::uint32_t> device_error;
+  CUDA_CHECK(fixture.d_d4_atomic.download(d4_atomic, stream));
+  CUDA_CHECK(fixture.d_result_atomic.download(atomic, stream));
+  CUDA_CHECK(fixture.d_system_errors.download(system_errors, stream));
+  CUDA_CHECK(fixture.d_device_error.download(device_error, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(device_error[0] == 0u && system_errors[0] == 0u);
+  CHECK(d4_atomic[0] == 0.0 && d4_atomic[1] == 0.0);
+  CHECK(std::isfinite(atomic[0]) && std::isfinite(atomic[1]));
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 int test_device_epoch_graph_replay() {
   constexpr std::int64_t batch_size = 8;
   cudaStream_t stream = nullptr;
@@ -858,11 +1116,15 @@ int test_device_epoch_graph_replay() {
   const std::uint64_t next_epoch = kGeometryGeneration + 1u;
   std::vector<std::uint64_t> committed(static_cast<std::size_t>(batch_size), next_epoch);
   std::vector<std::uint8_t> eligible(static_cast<std::size_t>(batch_size), 1u);
+  std::vector<std::uint64_t> pair_committed(static_cast<std::size_t>(batch_size), next_epoch);
+  std::vector<std::uint8_t> pair_eligible(static_cast<std::size_t>(batch_size), 1u);
   committed[1] = kGeometryGeneration;
   eligible[2] = 0u;
   CUDA_CHECK(fixture.d_geometry_epoch.overwrite({next_epoch}, stream));
   CUDA_CHECK(fixture.d_committed_generations.overwrite(committed, stream));
   CUDA_CHECK(fixture.d_eligible.overwrite(eligible, stream));
+  CUDA_CHECK(fixture.d_d4_pair_generations.overwrite(pair_committed, stream));
+  CUDA_CHECK(fixture.d_d4_pair_eligible.overwrite(pair_eligible, stream));
   CUDA_CHECK(reset_public());
   CUDA_CHECK(cudaGraphLaunch(executable, stream));
   CUDA_CHECK(download_public(shell, atomic, scalar, system_errors, device_error));
@@ -904,6 +1166,19 @@ int test_device_epoch_graph_replay() {
   CHECK(close(shell[0], fixture.expected_shell(0, 0, fixture.raw_shell)));
   CHECK(close(shell[1], fixture.expected_shell(0, 1, fixture.raw_shell)));
 
+  pair_committed[3] = kGeometryGeneration;
+  CUDA_CHECK(fixture.d_d4_pair_generations.overwrite(pair_committed, stream));
+  CUDA_CHECK(reset_public());
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  CUDA_CHECK(download_public(shell, atomic, scalar, system_errors, device_error));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(device_error[0] == 0u);
+  CHECK(gfn2_post_scc_potential_error_stage(system_errors[3]) == Gfn2PostSccPotentialStage::kD4);
+  CHECK(shell[6] == kSentinel && shell[7] == kSentinel);
+  CHECK(atomic[6] == kSentinel && atomic[7] == kSentinel);
+  pair_committed[3] = next_epoch;
+  CUDA_CHECK(fixture.d_d4_pair_generations.overwrite(pair_committed, stream));
+
   eligible[3] = 2u;
   CUDA_CHECK(fixture.d_eligible.overwrite(eligible, stream));
   CUDA_CHECK(reset_public());
@@ -920,6 +1195,12 @@ int test_device_epoch_graph_replay() {
                                               diagnostics, cross_plan,
                                               stream) == cudaErrorInvalidValue);
 
+  Gfn2PostSccPotentialDevicePlan cross_provenance = plan;
+  cross_provenance.d4_cache.coordination_generations = nullptr;
+  CHECK(refresh_gfn2_post_scc_potentials_cuda(cross_provenance, input, results, intermediates,
+                                              workspace, diagnostics, consumer,
+                                              stream) == cudaErrorInvalidValue);
+
   CUDA_CHECK(cudaGraphExecDestroy(executable));
   CUDA_CHECK(cudaGraphDestroy(graph));
   CUDA_CHECK(cudaStreamDestroy(stream));
@@ -933,6 +1214,9 @@ int main() {
     if (const int line = run_batch(batch_size); line != 0) {
       return line;
     }
+  }
+  if (const int line = test_zero_published_d4_pairs(); line != 0) {
+    return line;
   }
   return test_device_epoch_graph_replay();
 }
