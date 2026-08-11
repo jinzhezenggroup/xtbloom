@@ -8,19 +8,26 @@ artifact archive. The repository enforces both limits against the Git index:
   (16,777,216 bytes).
 
 Do not add path-specific exceptions to either limit. Large local measurements
-may remain untracked while they are being reviewed. Before using an oversized
-raw artifact as final evidence, place the exact bytes in durable external
-storage and retain an `EXTERNAL_ARTIFACTS.tsv` file in the issue bundle with at
+may remain untracked while they are being reviewed. Prefer not to publish an
+oversized raw artifact when the repository runner, exact command, clean source
+and binary identities, input hashes, and compact result are sufficient to
+reproduce and audit the claim. In that case, omit the raw bytes and keep the
+README, compact CSV/JSON result, unavailable coordinates, correctness
+qualification, and limitations in Git.
+
+External archival is optional and should be used only when the exact raw bytes
+are themselves necessary evidence or the result cannot be reproduced. When it
+is used, retain an `EXTERNAL_ARTIFACTS.tsv` file in the issue bundle with at
 least these fields:
 
 ```text
 sha256<TAB>bytes<TAB>url<TAB>producing_revision<TAB>retrieval_command
 ```
 
-The compact README, CSV/JSON summaries, unavailable coordinates, correctness
-qualification, and external metadata stay in Git. If the external artifact is
-not durably retrievable and hash-verifiable, its acceptance row is
-`UNVERIFIED`, not `PASS`.
+Do not mark otherwise qualified evidence unverified merely because a
+reproducible oversized raw artifact was intentionally omitted. If a claim
+specifically depends on externally archived bytes, however, those bytes must be
+durably retrievable and hash-verifiable for that acceptance row to pass.
 
 ## Legacy oversized artifacts
 

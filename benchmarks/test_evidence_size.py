@@ -74,6 +74,7 @@ class EvidenceSizePolicyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("exceed 8 bytes", result.stderr)
         self.assertIn(path, result.stderr)
+        self.assertIn("omit reproducible oversized raw samples", result.stderr)
 
     def test_aggregate_budget_fails(self) -> None:
         """Splitting evidence cannot bypass the tracked-directory cap."""

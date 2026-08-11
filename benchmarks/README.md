@@ -26,21 +26,22 @@ A publishable result must retain:
 - compiler, build configuration, runtime providers, hardware, affinity, and
   thread environment;
 - workload identity, requested outputs, memory mode, start policy, warmups,
-  repetitions, synchronization boundary, and every raw sample;
+  repetitions, synchronization boundary, sample count, and distribution
+  summary;
 - convergence and correctness results for every available coordinate;
 - explicit `unavailable` or failed rows rather than a silently reduced
   matrix; and
 - a README with exact commands, limitations, and SHA-256 coverage.
 
-Raw JSON is authoritative, but Git retains only compact evidence. A tracked
-file under `benchmarks/evidence/` may not exceed 1 MiB, and the complete tracked
-directory may not exceed 16 MiB. If authoritative raw samples exceed that
-budget, publish the exact artifact in durable external storage and commit an
-`EXTERNAL_ARTIFACTS.tsv` entry with its immutable URL, exact byte count,
-SHA-256, producing revision, and retrieval command. Without a durable artifact,
-the corresponding evidence is `unverified`, not a pass. Final compact bundles
-belong under `benchmarks/evidence/issue-<N>/<date>-<machine>/` and must not be
-edited after generation.
+Git retains compact evidence only. A tracked file under `benchmarks/evidence/`
+may not exceed 1 MiB, and the complete tracked directory may not exceed 16 MiB.
+When a reproducible raw harness artifact exceeds either budget, omit it rather
+than uploading it by default; retain the generated compact result, exact
+command, clean source and binary identities, inputs, correctness qualification,
+and limitations needed to reproduce the claim. External archival is optional
+only when the exact raw bytes are themselves necessary evidence. Final compact
+bundles belong under `benchmarks/evidence/issue-<N>/<date>-<machine>/` and must
+not be edited after generation.
 
 ## Self-tests
 
