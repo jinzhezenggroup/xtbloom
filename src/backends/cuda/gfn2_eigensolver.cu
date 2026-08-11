@@ -16,6 +16,9 @@ namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerSystem = 128;
+/* The spin preflight walks matrix entries with a block-wide strided loop. Keep
+ * this launch width explicit so tail-validation tests pin the same contract. */
+constexpr int kSpinPrepareThreads = 256;
 constexpr std::int64_t kMaximumInt64 = 9223372036854775807LL;
 constexpr double kOne = 1.0;
 
@@ -3557,8 +3560,8 @@ static Gfn2EigensolverLaunchResult prepare_spin_solve_bucket(
     const double* hamiltonians, const Gfn2EigensolverOptions& options,
     const Gfn2EigensolverDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
-  prepare_spin_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count), 256, 0,
-                                     stream>>>(
+  prepare_spin_solve_bucket_kernel<<<static_cast<unsigned int>(bucket.solve_count),
+                                     kSpinPrepareThreads, 0, stream>>>(
       batch, layout, bucket, cache, scalar_generation, device_generation, hamiltonians,
       options.symmetry_tolerance, workspace, system_errors, device_error);
   return check_kernel_launch();
@@ -3584,6 +3587,15 @@ Gfn2EigensolverLaunchResult prepare_gfn2_spin_solve_buckets_cuda(
       prepare_launch_sequence(batch, workspace, device_error, stream);
   if (!result.success()) {
     return result;
+  }
+  /* prepare_launch_sequence clears only the physical-system prefix used for
+   * bucket-map validation. The standalone spin preflight must also reset the
+   * unrestricted tail so provider stages cannot consume stale info values. */
+  const cudaError_t clear_status = cudaMemsetAsync(
+      workspace.info_a, 0,
+      static_cast<std::size_t>(layout.total_spin_channels) * sizeof(*workspace.info_a), stream);
+  if (clear_status != cudaSuccess) {
+    return cuda_failure(clear_status);
   }
   result = validate_spin_solve_buckets(batch, layout, buckets, bucket_count, workspace,
                                        device_error, stream);

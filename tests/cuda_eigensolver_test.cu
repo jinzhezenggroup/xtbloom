@@ -1079,6 +1079,66 @@ bool test_parallel_spin_solve_tail_validation_and_cache_borrow() {
   return true;
 }
 
+bool test_unrestricted_spin_preflight_clears_info_and_borrows_shared_factor() {
+  constexpr std::int32_t kOrbitals = 3;
+  constexpr std::uint64_t kGeneration = 73u;
+  const std::int64_t matrix_stride = static_cast<std::int64_t>(kOrbitals) * kOrbitals;
+
+  DeviceFixture physical;
+  if (!physical.create(make_batch(1, false, -1, kOrbitals)) || !factor(physical, kGeneration)) {
+    return false;
+  }
+  SpinSolveFixture spin;
+  if (!spin.create(physical) || spin.spin_channels != std::vector<std::int32_t>{2} ||
+      spin.buckets.size() != 1u || spin.buckets[0].solve_count != 2 || spin.info_a.size() != 2u) {
+    return false;
+  }
+
+  std::vector<double> factors_before;
+  const std::vector<int> stale_info(spin.info_a.size(), 29);
+  const std::vector<double> scratch_sentinel(spin.matrix_a.size(), kSentinel);
+  if (!physical.cache_factors.download(factors_before) || !spin.info_a.upload(stale_info) ||
+      !spin.matrix_a.upload(scratch_sentinel) || !spin.matrix_b.upload(scratch_sentinel) ||
+      !cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
+                   physical.host.batch_size, physical.system_errors.get(),
+                   physical.device_error.get(), physical.providers.stream),
+               "reset unrestricted spin preflight errors")) {
+    return false;
+  }
+  const auto preflight = prepare_gfn2_spin_solve_buckets_cuda(
+      physical.batch, spin.layout, spin.buckets.data(),
+      static_cast<std::int64_t>(spin.buckets.size()), physical.cache, kGeneration,
+      spin.device_hamiltonian.get(), Gfn2EigensolverOptions{}, spin.workspace,
+      physical.system_errors.get(), physical.device_error.get(), physical.providers.stream);
+  if (!preflight.success() || !cuda_ok(cudaStreamSynchronize(physical.providers.stream),
+                                       "unrestricted spin preflight synchronize")) {
+    return false;
+  }
+
+  std::vector<int> info;
+  std::vector<std::uint8_t> eligible;
+  std::vector<double*> factor_pointers;
+  std::vector<double*> matrix_pointers;
+  std::vector<double> factor_scratch;
+  std::vector<double> factors_after;
+  if (!spin.info_a.download(info) || !spin.eligible.download(eligible) ||
+      !spin.factor_pointers.download(factor_pointers) ||
+      !spin.matrix_pointers.download(matrix_pointers) || !spin.matrix_a.download(factor_scratch) ||
+      !physical.cache_factors.download(factors_after)) {
+    return false;
+  }
+
+  const Gfn2EigensolverBucket& bucket = spin.buckets[0];
+  double* expected_factor = physical.cache_factors.get() + bucket.matrix_scratch_offset;
+  return info == std::vector<int>{0, 0} && eligible == std::vector<std::uint8_t>{1u, 1u} &&
+         factor_pointers == std::vector<double*>{expected_factor, expected_factor} &&
+         matrix_pointers ==
+             std::vector<double*>{
+                 spin.matrix_b.get() + bucket.spin_matrix_scratch_offset,
+                 spin.matrix_b.get() + bucket.spin_matrix_scratch_offset + matrix_stride} &&
+         factor_scratch == scratch_sentinel && factors_after == factors_before;
+}
+
 bool launch_compacted(DeviceFixture& fixture, const Gfn2EigensolverCompactedSolveGraph& graph) {
   if (!cuda_ok(reset_gfn2_eigensolver_device_errors_cuda(
                    fixture.host.batch_size, fixture.system_errors.get(), fixture.device_error.get(),
@@ -3222,6 +3282,10 @@ int main(int argc, char** argv) {
   }
   if (!test_parallel_spin_solve_tail_validation_and_cache_borrow()) {
     std::cerr << "parallel spin solve/cache-borrow test failed\n";
+    return 1;
+  }
+  if (!test_unrestricted_spin_preflight_clears_info_and_borrows_shared_factor()) {
+    std::cerr << "unrestricted spin preflight state/cache-borrow test failed\n";
     return 1;
   }
   if (!test_spin_eigensolver_tridiagonal_singleton()) {
