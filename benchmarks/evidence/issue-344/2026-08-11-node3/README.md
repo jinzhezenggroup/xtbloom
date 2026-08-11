@@ -8,9 +8,9 @@ the host-isolated MKL 2026.0.0 LP64 shim provider. The `natoms` JSON records
 its original clean source revision `e1532f87c3448f44c65be10176a83df3f6906a6d`;
 the reviewed end-to-end rerun rebuilt byte-identical library bytes from clean
 commit `cd50f22e5d83d5da26b923b1101cf335f7269f25`. The numbers below are native
-single-threaded CPU samples; the WebAssembly build is ~10-20x slower per
-operation, but the SCC-iteration reduction and relative speedup carry over
-because the web path runs the same CPU equations through the same public C ABI.
+single-threaded CPU samples. The wasm smoke test confirms the same warm-start
+control flow and accepted-solve accounting through the public C ABI, but this
+bundle does not measure or claim a WebAssembly wall-time speedup.
 
 Warm-start policy measured: the browser optimizer's first evaluation starts
 SCC fresh; every successive evaluation with the same topology/charge/spin/
@@ -23,9 +23,9 @@ rejects WARM (changed identity or no converged predecessor).
 `benchmarks/natoms_scaling.py` FRESH vs WARM per-call latency and SCC
 iteration counts on deterministic alkanes (identical geometry per cell,
 single thread, 10 warmups, 30 repetitions; WARM derives its checkpoint from
-one untimed FRESH seed). `natoms-warm.json` is validated against
-`natoms-fresh.json` with the conformance cross-engine energy (`5e-7 Eh`) and
-force (`5e-6 Eh/bohr`) gates and is marked `eligible`.
+one untimed FRESH seed). The authoritative external `natoms-warm.json` is
+validated against `natoms-fresh.json` with the conformance cross-engine energy
+(`5e-7 Eh`) and force (`5e-6 Eh/bohr`) gates and is marked `eligible`.
 
 Commands:
 
@@ -62,7 +62,18 @@ Median latency (ms):
 | C40H82 | 122 | 314.561 | 73.866 | 4.26x |
 
 Raw samples, energy, force vectors, convergence flags, per-solve SCC counts,
-and eligibility are retained in `natoms-{fresh,warm}.json`.
+and eligibility are retained in the external `natoms-{fresh,warm}.json`
+assets. The compact CSV views remain in this repository. Exact URLs, byte
+counts, producing revision, and one-file retrieval commands are recorded in
+`EXTERNAL_ARTIFACTS.tsv`. Retrieve and verify both authoritative artifacts with:
+
+```bash
+gh release download evidence-issue-344-2026-08-11-node3 \
+  --repo jinzhezenggroup/xtbloom --pattern 'natoms-*.json'
+sha256sum -c <(awk -F '\t' \
+  'NR > 1 {count = split($3, path, "/"); print $1 "  " path[count]}' \
+  EXTERNAL_ARTIFACTS.tsv)
+```
 
 ## End-to-end browser optimizer before/after (host-compiled adapter)
 

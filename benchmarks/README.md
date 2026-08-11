@@ -32,9 +32,15 @@ A publishable result must retain:
   matrix; and
 - a README with exact commands, limitations, and SHA-256 coverage.
 
-JSON is authoritative; CSV is a compact view. Final bundles belong under
-`benchmarks/evidence/issue-<N>/<date>-<machine>/` and must not be edited after
-generation.
+Raw JSON is authoritative, but Git retains only compact evidence. A tracked
+file under `benchmarks/evidence/` may not exceed 1 MiB, and the complete tracked
+directory may not exceed 16 MiB. If authoritative raw samples exceed that
+budget, publish the exact artifact in durable external storage and commit an
+`EXTERNAL_ARTIFACTS.tsv` entry with its immutable URL, exact byte count,
+SHA-256, producing revision, and retrieval command. Without a durable artifact,
+the corresponding evidence is `unverified`, not a pass. Final compact bundles
+belong under `benchmarks/evidence/issue-<N>/<date>-<machine>/` and must not be
+edited after generation.
 
 ## Self-tests
 
@@ -47,6 +53,7 @@ python3 -m unittest -v benchmarks.test_dxtb_adapter
 python3 -m unittest -v benchmarks.test_natoms_cross_engine
 python3 -m unittest -v benchmarks.test_natoms_scaling
 python3 -m unittest -v benchmarks.test_dlpack_result_memory
+python3 -m unittest -v benchmarks.test_evidence_size
 ```
 
 The plotting test is opt-in because Matplotlib is a publication-only

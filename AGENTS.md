@@ -204,6 +204,11 @@ Do not hand-edit generated or hash-pinned artifacts to make a check pass.
   `tools/conformance/README.md`; never rewrite a golden to match current code.
 - SCC trace schemas, fixtures, and comparator inputs are versioned contracts.
   Preserve canonical serialization and provenance hashes.
+- Tracked benchmark evidence is limited to 1 MiB per file and 16 MiB total.
+  Never add a benchmark path to the large-file exclusion. Store oversized raw
+  samples in durable external storage and retain the URL, exact byte count,
+  SHA-256, producing revision, and retrieval command in the issue bundle. If
+  that durable artifact is unavailable, report the evidence as unverified.
 - A new dependency, copied source, generated dataset, wheel payload, or install
   artifact requires a licensing/provenance review. Update
   `THIRD_PARTY_NOTICES.md`, `LICENSES/`, manifests, and packaging checks as
@@ -330,6 +335,7 @@ For benchmark harness changes, run:
 python3 -m unittest -v benchmarks.test_run
 # Requires PyTorch but uses a fake differentiable dxtb runtime.
 python3 -m unittest -v benchmarks.test_dxtb_adapter
+python3 -m unittest -v benchmarks.test_evidence_size
 ```
 
 ### CUDA

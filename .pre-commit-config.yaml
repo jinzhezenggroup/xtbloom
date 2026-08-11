@@ -15,9 +15,10 @@ repos:
       - id: check-json
       - id: check-added-large-files
         args: ["--maxkb=1024", "--enforce-all"]
-        # Canonical generated or raw evidence artifacts; each exact file is
-        # tracked with a committed SHA-256 manifest.
-        exclude: ^(?:data/parameters/d4\.hpp|benchmarks/evidence/issue-168/2026-08-06-epyc7k62/(?:xtbloom-fresh|xtbloom-warm|tblite-persistent)\.json|benchmarks/evidence/issue-256/2026-08-09-node3-stage-a/xtbloom-warm\.json|benchmarks/evidence/issue-13/2026-08-09-node3-pr231/(?:dxtb-cpu-b512|xtbloom-(?:cpu|cuda)-b(?:128|512)|ref-tblite-b512|xtb-b512)\.json|benchmarks/evidence/issue-344/2026-08-11-node3/(?:natoms-fresh|natoms-warm)\.json)$
+        # This generated table is canonical and covered by its manifest.
+        # Benchmark evidence has no exception: oversized raw samples belong
+        # in durable external storage with repository metadata and hashes.
+        exclude: ^data/parameters/d4\.hpp$
       - id: check-merge-conflict
       - id: check-symlinks
       - id: check-toml
@@ -74,6 +75,12 @@ repos:
         # *.sqlite / *.sqlite.dbb / *.csv.db / *.qdstrm / *.prof block in
         # .gitignore.
         files: '\.(nsys-rep|qdstrm|sqlite|ncu-rep|sqlite\.dbb|csv\.db|prof)$'
+      - id: check-benchmark-evidence-size
+        name: Enforce the tracked benchmark evidence budget
+        entry: python3 tools/check_benchmark_evidence_size.py
+        language: system
+        pass_filenames: false
+        always_run: true
 
 # pre-commit.ci blocks network access for hooks, but ty-pre-commit needs to
 # resolve dependencies, so it must be skipped there. The repository's own
