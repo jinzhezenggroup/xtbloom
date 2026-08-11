@@ -15,10 +15,20 @@ browser; the site does not upload a calculation to a server.
    its energy trajectory.
 
 Each optimization step after the first is seeded from the previous step's
-converged electronic state (native SCC warm start), so closely related
-successive geometries reconverge faster; a new optimization or a standalone
-single-point calculation always starts fresh and never inherits another run's
-electronic state.
+converged electronic state (native SCC warm start), reusing electronic state
+across successive geometries. A new optimization or a standalone single-point
+calculation always starts fresh and never inherits another run's electronic
+state.
+
+The 3D view is an input-validation preview, independent of the calculation
+path. Valid XYZ coordinates render automatically about 400 ms after you stop
+typing, and a generated SMILES structure renders immediately. Malformed input
+(invalid element symbols, missing or non-numeric coordinates, more than 512
+atoms) is flagged inline beside the coordinates box while the last valid
+structure stays on screen, and **Compute energy** / **Optimize geometry**
+remain disabled until a valid structure is present. **Reset** clears the
+SMILES box, coordinates, settings, preview, results, and errors, then restores
+the water template.
 
 The URL
 [`?smiles=CCO`](https://xtbloom.jinzhezeng.group/?smiles=CCO) waits for the

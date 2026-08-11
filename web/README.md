@@ -27,7 +27,10 @@ The deployment runs entirely in the browser:
   pre-relaxation;
 - `3dmol` renders the current geometry; and
 - `app.js` provides single-point calculation and an adapter-local L-BFGS
-  optimization loop.
+  optimization loop. It validates the coordinates box independently of the
+  compute path: valid input is previewed live (debounced while typing),
+  malformed input keeps the last valid preview and is flagged inline, and the
+  calculate actions stay disabled until a valid structure is present.
 
 The optional SMILES worker never gates ordinary XYZ calculations. The
 optimizer repeatedly calls the same single-point adapter and is not part of the
