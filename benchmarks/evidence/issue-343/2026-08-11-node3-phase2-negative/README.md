@@ -75,10 +75,13 @@ Correctness remains strong:
 
 The focused strict internal C20H42+D4 control also converged in 34 iterations
 for both adaptive and forced-dense schedules. The adaptive run used 29 full
-solves, five accepted recycled solves, and two recycle fallbacks. Final
-adaptive-versus-dense differences were at most `3.58e-10` in charge-like
-state, `1.09e-10` in energy-weighted density, and `5.68e-14 Eh` in SCC free
-energy. Reduced full-solve count therefore did not imply reduced latency.
+solves and five accepted recycled solves. The two recycle fallbacks are
+included in the 29 full solves because a rejected recycle attempt immediately
+uses the dense solver in the same SCC iteration, preserving the 34-iteration
+total. Final adaptive-versus-dense differences were at most `3.58e-10` in
+charge-like state, `1.09e-10` in energy-weighted density, and `5.68e-14 Eh` in
+SCC free energy. Reduced full-solve count therefore did not imply reduced
+latency.
 
 ## GPU provider lower bound
 
@@ -91,8 +94,8 @@ with CUDA-event timing. It used 50 warmups and 100 samples per dimension.
 | 95 | `xsyev_batched` | 5642.079935 us | 5641.823769 us | 5637.631893 us | 5652.383804 us |
 | 35 | `xsyev_batched` | 1256.907849 us | 1256.960034 us | 1255.807996 us | 1258.272052 us |
 
-The two partial provider calls sum to `6898.783803 us`, or **83.8494%** of the
-full `n=122` provider call. Only 16.1506% remains before accounting for the
+The `n=95` and `n=35` p50 medians sum to `6898.783803 us`, or **83.8494%** of
+the full `n=122` p50 median. Only 16.1506% remains before accounting for the
 prototype's three full-size GEMMs, residual analysis, state handling, and any
 failed attempt followed by a full solve. The observed two fallback attempts
 already make that cost model negative.
@@ -173,11 +176,13 @@ counts with:
 GPU provider timings:
 
 ```bash
-srun --partition=main --nodes=1 --ntasks=1 --cpus-per-task=4 \
-  --gres=gpu:5090:1 --time=00:10:00 \
-  env LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib \
-  ./build/issue343-cuda/xtbloom_cuda_eigensolver_test \
-  --dispatch-benchmark <122-or-95-or-35> 1 50 100
+for issue343_dimension in 122 95 35; do
+  srun --partition=main --nodes=1 --ntasks=1 --cpus-per-task=4 \
+    --gres=gpu:5090:1 --time=00:10:00 \
+    env LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib \
+    ./build/issue343-cuda/xtbloom_cuda_eigensolver_test \
+    --dispatch-benchmark "$issue343_dimension" 1 50 100
+done
 ```
 
 ## Files
