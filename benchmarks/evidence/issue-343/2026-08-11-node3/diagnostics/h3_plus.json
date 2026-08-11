@@ -1,0 +1,85 @@
+{
+  "document": "/tmp/opencode/diag/h3_plus.diag",
+  "sha256": "04c4262d97d96c40598543013a83dd9fd59c69e9e4633601323c0f317577dfab",
+  "case": [
+    {
+      "case": "h3_plus",
+      "nat": 3,
+      "atomic_numbers": [
+        1,
+        1,
+        1
+      ],
+      "positions": [
+        -0.47073898552969,
+        0.81534384004086,
+        0.0,
+        -0.47073898552969,
+        -0.81534384004086,
+        0.0,
+        0.94147797105939,
+        0.0,
+        0.0
+      ],
+      "molecular_charge": 1.0,
+      "unpaired_electrons": 0,
+      "temperature_kelvin": 300.0,
+      "maximum_iterations": 100
+    }
+  ],
+  "geometries": [
+    {
+      "generation": 1,
+      "nao": 3,
+      "iterations": [
+        {
+          "k": 1,
+          "step_micros": 261,
+          "eigensolve_micros": 10,
+          "validation_ctsc_max": 4.440892098500626e-16,
+          "validation_he_max": 1.8171344827218248e-16
+        },
+        {
+          "k": 2,
+          "step_micros": 21,
+          "eigensolve_micros": 6,
+          "validation_ctsc_max": 4.440892098500626e-16,
+          "validation_he_max": 7.432548793958162e-17,
+          "rel_dH": 0.23114427722209324,
+          "rel_dP": 1.2732906302037635e-15,
+          "density_overlap": 1.0,
+          "subspace_min_cos": 1.0,
+          "subspace_max_angle_deg": 0.0,
+          "subspace_capture_fraction": 1.0,
+          "subspace_chordal_distance": 0.0,
+          "rel_residual_full": 0.14755197052193622,
+          "rel_residual_occupied": 0.12339269685058789,
+          "rr_eigenvalue_max_err": 1.1102230246251565e-16,
+          "rr_eigenvalue_rms_err": 1.1102230246251565e-16
+        },
+        {
+          "k": 3,
+          "step_micros": 25,
+          "eigensolve_micros": 6,
+          "validation_ctsc_max": 3.3306690738754696e-16,
+          "validation_he_max": 1.15686102378458e-16,
+          "rel_dH": 0.2918943590448006,
+          "rel_dP": 6.486385800401992e-16,
+          "density_overlap": 1.0,
+          "subspace_min_cos": 1.0,
+          "subspace_max_angle_deg": 0.0,
+          "subspace_capture_fraction": 1.0,
+          "subspace_chordal_distance": 0.0,
+          "rel_residual_full": 0.17719968516057136,
+          "rel_residual_occupied": 0.1482579336723381,
+          "rr_eigenvalue_max_err": 2.220446049250313e-16,
+          "rr_eigenvalue_rms_err": 2.220446049250313e-16
+        }
+      ],
+      "converged_state": true,
+      "eigensolve_total_micros": 22,
+      "step_total_micros": 307,
+      "eigensolve_share": 0.07166123778501629
+    }
+  ]
+}

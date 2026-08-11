@@ -1,0 +1,10 @@
+xtbloom SCC subspace-reuse Phase-1 evidence build
+source revision: cbdf755f27ab02b548783bce3573ecb4385ed167 (branch perf/343-scc-subspace-reuse)
+host: node3 Ubuntu 22.04.5 LTS Linux 6.8.0-110-generic
+cpu: AMD EPYC 7K62 48-Core Processor, 48 threads
+compiler: GCC 11.4.0
+build: CMake Release, Ninja, XTBLOOM_ENABLE_CUDA=OFF
+linalg: /home/jzzeng/miniconda3/lib/libmkl_rt.so.3 (sha256-prefix b2ff0e31d7cd18c9), host-isolated MKL shim
+python: 3.13.9 + numpy 2.5.1
+capture binary: build/issue343-cpu/xtbloom_scc_reuse_capture
+validated: ctest --test-dir build/issue343-cpu -> 51/51 passed (includes xtbloom.gfn2.scc_reuse_smoke)
