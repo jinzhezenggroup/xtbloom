@@ -11,6 +11,7 @@ import {
 
 import {
   BOHR_PER_ANGSTROM,
+  ELEMENT_SYMBOLS,
   aggregateResourceProgress,
   angstromToBohr,
   canStartUrlSmiles,
@@ -23,11 +24,13 @@ import {
   initializeDownloadedEngineModule,
   initializeWorker,
   isRetryableLoadError,
+  parseXyzCoordinates,
   postToReadyWorker,
   readSmilesQuery,
   runWithRetries,
   validateEngineManifest,
   withTimeout,
+  xyzAtomsToText,
 } from "../app_helpers.js";
 
 class FakeWorker {
@@ -815,4 +818,124 @@ test("timeout covers a worker that never becomes ready", async () => {
     /TIME_OUT/,
   );
   assert.equal(worker.terminated, true);
+});
+
+test("element symbols cover the same period-1..103 table as the C adapter", () => {
+  assert.equal(ELEMENT_SYMBOLS.length, 104);
+  assert.equal(ELEMENT_SYMBOLS[0], "");
+  assert.equal(ELEMENT_SYMBOLS[6], "C");
+  assert.equal(ELEMENT_SYMBOLS[17], "Cl");
+  assert.equal(ELEMENT_SYMBOLS[103], "Lr");
+});
+
+const WATER_XYZ =
+  "O  0.00000000  0.00000000  0.00000000\n" +
+  "H  0.00000000  0.00000000  0.95720000\n" +
+  "H  0.00000000  0.75718000 -0.58552000";
+
+test("valid XYZ preview parsing keeps canonical symbols and coordinates", () => {
+  const parsed = parseXyzCoordinates(WATER_XYZ);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.atomCount, 3);
+  assert.deepEqual(parsed.atoms.map((atom) => atom.symbol), ["O", "H", "H"]);
+  assert.deepEqual(parsed.atoms.map((atom) => atom.z), [0, 0.9572, -0.58552]);
+  assert.equal(parsed.atoms[2].y, 0.75718);
+  assert.equal(parsed.atoms[2].z, -0.58552);
+
+  const text = xyzAtomsToText(parsed.atoms);
+  assert.match(text, /^O 0 0 0\nH 0 0 0\.9572\nH 0 0\.75718 -0\.58552$/);
+  assert.deepEqual(parseXyzCoordinates(text), parsed);
+});
+
+test("XYZ preview accepts atomic numbers and case-insensitive symbols like the engine", () => {
+  const numeric = parseXyzCoordinates("8 0 0 0\n1 0 0 0.9572");
+  assert.equal(numeric.ok, true);
+  assert.deepEqual(numeric.atoms.map((atom) => atom.symbol), ["O", "H"]);
+  const mixedCase = parseXyzCoordinates("o 0 0 0\ncl 0 0 1\nNA 0 0 2\nmg 0 0 3");
+  assert.equal(mixedCase.ok, true);
+  assert.deepEqual(mixedCase.atoms.map((atom) => atom.symbol), ["O", "Cl", "Na", "Mg"]);
+});
+
+test("XYZ preview accepts extra trailing tokens the engine parser ignores", () => {
+  const parsed = parseXyzCoordinates("O 0 0 0 trailing\nH 0 0 0.9 x");
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.atomCount, 2);
+});
+
+test("XYZ preview rejects malformed lines, bad numbers, and incomplete rows", () => {
+  for (const bad of [
+    "O 0 0",
+    "O  0  0  0\nH  0  0", /* missing z */
+    "O a 0 0",
+    "O 0 0 x",
+    "O 1e999 0 0", /* overflows to Infinity */
+    "O nan 0 0",
+  ]) {
+    assert.equal(parseXyzCoordinates(bad).ok, false, `should reject: ${bad}`);
+    assert.equal(parseXyzCoordinates(bad).errorCode, "err_xyz_parse");
+  }
+});
+
+test("XYZ preview rejects unknown or out-of-range element symbols", () => {
+  for (const bad of ["Xx 0 0 0", "Hx 0 0 0", "104 0 0 0", "-1 0 0 0", "0 0 0 0"]) {
+    const parsed = parseXyzCoordinates(bad);
+    assert.equal(parsed.ok, false, `should reject: ${bad}`);
+    assert.equal(parsed.errorCode, "err_xyz_element");
+  }
+});
+
+test("XYZ preview enforces the 512-atom engine limit with the same boundary", () => {
+  const block = "C 0 0 0\n";
+  assert.equal(parseXyzCoordinates(block.repeat(512)).ok, true);
+  const tooMany = parseXyzCoordinates(block.repeat(513));
+  assert.equal(tooMany.ok, false);
+  assert.equal(tooMany.errorCode, "err_xyz_too_many");
+});
+
+test("XYZ preview treats whitespace-only input as absent structure", () => {
+  const parsed = parseXyzCoordinates("  \n\t\n");
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.errorCode, "no_xyz");
+});
+
+test("live preview is debounced and gates calculate on the current structure", async () => {
+  const [appSource, indexSource] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+  ]);
+  /* Debounced auto-preview: editing XYZ updates the 3D view without compute. */
+  assert.match(appSource, /PREVIEW_DEBOUNCE_MS = 400/);
+  assert.match(appSource, /\$\("xyz"\)\.addEventListener\("input", schedulePreviewUpdate\)/);
+  assert.match(appSource, /refreshPreview\(\)/);
+  assert.match(
+    appSource,
+    /parsed\.errorCode === "no_xyz" \? "empty" : "error"/,
+  );
+  /* Malformed input keeps the last valid preview. */
+  assert.match(appSource, /Malformed input never replaces the last valid preview/);
+  assert.match(appSource, /updateMoleculeViewer\(previewState\.canonicalXyz\)/);
+  assert.match(appSource, /if \(molViewer && !molUnavailable\) updateMoleculeViewer/);
+  /* Calculate/optimize are gated on a valid structure. */
+  assert.match(appSource, /!engineBusy && !smilesBusy && previewState\.status === "valid"/);
+  assert.match(appSource, /parseXyzCoordinates\(\$\("xyz"\)\.value\)/);
+  /* SMILES import renders immediately through the preview path. */
+  assert.match(appSource, /function applyGeneratedGeometry\(result\)/);
+  /* Reset clears SMILES and restores the documented water template. */
+  assert.match(appSource, /\$\("smiles"\)\.value = ""/);
+  assert.match(appSource, /clearSmilesStatus\(\)/);
+  assert.match(appSource, /\$\("xyz"\)\.value = PRESETS\.water\.xyz/);
+  assert.match(indexSource, /id="xyz-hint"/);
+});
+
+test("UI copy describes the real-time preview and retains it on bad input", async () => {
+  const [appSource, indexSource] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /有效坐标实时预览/);
+  assert.match(appSource, /Valid coordinates preview live as you type/);
+  assert.match(appSource, /err_xyz_element: "含无法识别的元素符号/);
+  assert.match(appSource, /err_xyz_element: "Unknown element symbol/);
+  /* The static HTML hint must match the zh dictionary text. */
+  assert.match(indexSource, /有效坐标实时预览/);
 });

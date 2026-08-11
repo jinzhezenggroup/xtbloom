@@ -27,17 +27,20 @@ currentAppImportOrAbort();
 const { C60_XYZ } = await import(c60CaseUrl.href);
 currentAppImportOrAbort();
 const {
+  ELEMENT_SYMBOLS,
   angstromToBohr,
   canStartUrlSmiles,
   clampProgressPercent,
   fetchResourceBatch,
   initializeWorker,
   isRetryableLoadError,
+  parseXyzCoordinates,
   postToReadyWorker,
   readSmilesQuery,
   runWithRetries,
   validateEngineManifest,
   withTimeout,
+  xyzAtomsToText,
 } = await import(appHelpersUrl.href);
 currentAppImportOrAbort();
 
@@ -45,15 +48,6 @@ const EH2EV = 27.211386245988;
 const EH2KCAL = 627.509474063;
 const EHB2EVA = EH2EV / 0.529177210903;
 const K2EH = 3.166811563e-6;
-
-const ELEMENT_SYMBOLS = [
-  "", "H","He","Li","Be","B","C","N","O","F","Ne","Na","Mg","Al","Si","P","S","Cl","Ar",
-  "K","Ca","Sc","Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br","Kr",
-  "Rb","Sr","Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te","I","Xe",
-  "Cs","Ba","La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu",
-  "Hf","Ta","W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi","Po","At","Rn","Fr","Ra","Ac",
-  "Th","Pa","U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr"
-];
 
 const PRESETS = {
   water: { xyz: "O  0.00000000  0.00000000  0.00000000\nH  0.00000000  0.00000000  0.95720000\nH  0.00000000  0.75718000 -0.58552000", charge: 0, unpaired: 0 },
@@ -90,7 +84,7 @@ const I18N = {
     smiles_url_failed: "地址中的 SMILES 自动生成/优化失败：{{e}}",
     smiles_go: "去生成",
     mol_title: "分子可视化",
-    mol_hint: "实时显示当前坐标；计算、优化、应用优化坐标后自动更新。",
+    mol_hint: "有效坐标实时预览；输入无效时保留上一次有效结构，并在输入框旁提示错误。",
     mol_unavailable: "当前浏览器不支持 WebGL 分子可视化。",
     opt_running: "优化中… {{n}}/{{max}} 步 · E = {{e}} Eh",
     opt_done: "完成 ✓",
@@ -156,6 +150,7 @@ const I18N = {
     engine_call_fail: "引擎调用失败：",
     err_xyz_parse: "无法解析坐标：每行请提供「元素符号 x y z」，单位 Å",
     err_xyz_too_many: "原子数超过 512 上限",
+    err_xyz_element: "含无法识别的元素符号：{{sym}}",
     err_ctx: "计算上下文创建失败：{{e}}",
     err_alloc: "内存分配失败",
     err_init: "内部初始化失败",
@@ -208,7 +203,7 @@ const I18N = {
     smiles_url_failed: "Automatic URL SMILES generation/optimization failed: {{e}}",
     smiles_go: "Generate",
     mol_title: "Molecule",
-    mol_hint: "Live view of the current coordinates; refreshes after compute, optimize, or applying optimized coordinates.",
+    mol_hint: "Valid coordinates preview live as you type; invalid input is flagged inline and the last valid structure stays.",
     mol_unavailable: "WebGL molecular visualization is not available in this browser.",
     opt_running: "Optimizing… step {{n}}/{{max}} · E = {{e}} Eh",
     opt_done: "done ✓",
@@ -274,6 +269,7 @@ const I18N = {
     engine_call_fail: "Engine call failed: ",
     err_xyz_parse: "Cannot parse coordinates: each line must be “Symbol x y z” in A",
     err_xyz_too_many: "More than 512 atoms",
+    err_xyz_element: "Unknown element symbol: {{sym}}",
     err_ctx: "Context creation failed: {{e}}",
     err_alloc: "Out of memory",
     err_init: "Internal initialization failed",
@@ -382,6 +378,17 @@ function setSmilesStatus(key, vars = null, tone = "") {
   smilesStatusVars = vars;
   smilesStatusTone = tone;
   syncSmilesControls();
+}
+
+function clearSmilesStatus() {
+  smilesStatusKey = null;
+  smilesStatusVars = null;
+  smilesStatusTone = "";
+  const status = $("smiles-status");
+  if (status) {
+    status.textContent = "";
+    status.classList.remove("ok", "err");
+  }
 }
 
 function syncSmilesControls() {
@@ -524,8 +531,10 @@ function smilesErrorText(error) {
 }
 
 function syncEngineControls() {
+  /* Calculate/optimize require a currently valid structure: the live preview
+   * is the input-validation gate, independent of the compute path. */
   const enabled = engineState === "ready" && worker !== null &&
-    !engineBusy && !smilesBusy;
+    !engineBusy && !smilesBusy && previewState.status === "valid";
   $("run").disabled = !enabled;
   $("opt-run").disabled = !enabled;
 }
@@ -610,9 +619,8 @@ function publishReadyEngine(candidate, ready) {
   /* Preserve coordinates entered or generated while the WASM worker was
    * loading; only supply the water example when the editor is still empty. */
   if (!$("xyz").value.trim()) $("xyz").value = PRESETS.water.xyz;
-  updateXyzHint();
   initMoleculeViewer();
-  updateMoleculeViewer($("xyz").value);
+  refreshPreview();
   void maybeRunUrlSmiles();
 }
 
@@ -636,18 +644,6 @@ function handleStepMessage(m) {
   }
 }
 
-function getElementSymbols(xyz) {
-  const symbols = [];
-  for (const line of xyz.split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t) continue;
-    const tok = t.split(/\s+/)[0];
-    const n = Number(tok);
-    symbols.push(Number.isInteger(n) && n >= 1 && n <= 103 ? (ELEMENT_SYMBOLS[n] || "?") : tok);
-  }
-  return symbols;
-}
-
 const overlayText = $("overlay-text");
 const overlay = $("overlay");
 function showOverlay(key) { overlayText.textContent = t(key); overlay.hidden = false; }
@@ -657,14 +653,6 @@ $("retry").addEventListener("click", () => { void startEngineLoad({ forceReload:
 function fmt(x, digits = 6) {
   if (x === null || x === undefined || Number.isNaN(x)) return "NaN";
   return Number(x).toFixed(digits);
-}
-
-function countAtoms(xyz) {
-  let n = 0;
-  for (const line of xyz.split(/\r?\n/)) {
-    if (line.trim()) n++;
-  }
-  return n;
 }
 
 let __loadingPct = 0;
@@ -791,11 +779,63 @@ function setLoaderRetrying({ nextAttempt, maxAttempts, waitMs }) {
   });
 }
 
+/* ---- input validation and live 3D preview ---- */
+/* The preview is input validation and must stay independent of the compute
+ * path: a valid structure renders before any xTB calculation starts, an
+ * invalid edit keeps the last valid viewer content, and the calculate actions
+ * are gated on the current structure being valid (see syncEngineControls). */
+const PREVIEW_DEBOUNCE_MS = 400;
+let previewState = { status: "empty", atomCount: 0, canonicalXyz: "", messageKey: null, messageVars: null };
+let previewDebounceTimer = null;
+
+function renderXyzHint() {
+  const el = $("xyz-hint");
+  el.classList.remove("ok", "err");
+  if (previewState.status === "valid") {
+    el.textContent = lang === "zh"
+      ? `已识别的原子数：${previewState.atomCount}`
+      : `Recognized atoms: ${previewState.atomCount}`;
+    el.classList.add("ok");
+  } else if (previewState.status === "empty") {
+    /* Nothing entered yet: a muted nudge, not an error. */
+    el.textContent = t("no_xyz");
+  } else {
+    el.textContent = t(previewState.messageKey || "err_xyz_parse", previewState.messageVars || undefined);
+    el.classList.add("err");
+  }
+}
+
 function updateXyzHint() {
-  $("xyz-hint").textContent =
-    lang === "zh"
-      ? `已识别的原子数：${countAtoms($("xyz").value)}`
-      : `Recognized atoms: ${countAtoms($("xyz").value)}`;
+  renderXyzHint();
+}
+
+function refreshPreview() {
+  const parsed = parseXyzCoordinates($("xyz").value);
+  if (parsed.ok) {
+    previewState.status = "valid";
+    previewState.atomCount = parsed.atomCount;
+    previewState.canonicalXyz = xyzAtomsToText(parsed.atoms);
+    previewState.messageKey = null;
+    previewState.messageVars = null;
+    if (molViewer && !molUnavailable) updateMoleculeViewer(previewState.canonicalXyz);
+  } else {
+    /* Malformed input never replaces the last valid preview. */
+    previewState.status = parsed.errorCode === "no_xyz" ? "empty" : "error";
+    previewState.atomCount = 0;
+    previewState.canonicalXyz = "";
+    previewState.messageKey = parsed.errorCode;
+    previewState.messageVars = parsed.messageVars || null;
+  }
+  renderXyzHint();
+  refreshBadge();
+}
+
+function schedulePreviewUpdate() {
+  if (previewDebounceTimer !== null) clearTimeout(previewDebounceTimer);
+  previewDebounceTimer = setTimeout(() => {
+    previewDebounceTimer = null;
+    refreshPreview();
+  }, PREVIEW_DEBOUNCE_MS);
 }
 
 function setError(msg) {
@@ -1024,13 +1064,12 @@ Object.entries(PRESETS).forEach(([key, p]) => {
     $("xyz").value = p.xyz;
     $("charge").value = p.charge;
     $("unpaired").value = p.unpaired;
-    updateXyzHint();
-    updateMoleculeViewer(p.xyz);
+    refreshPreview();
     setError(null);
   });
 });
 
-$("xyz").addEventListener("input", updateXyzHint);
+$("xyz").addEventListener("input", schedulePreviewUpdate);
 
 function applyGeneratedGeometry(result) {
   document.querySelectorAll(".chip").forEach((chip) => chip.classList.remove("active"));
@@ -1039,8 +1078,7 @@ function applyGeneratedGeometry(result) {
   /* Radical SMILES are rejected by the helper, so zero is the only supported
    * automatic spin state. Users retain the explicit XYZ route for radicals. */
   $("unpaired").value = "0";
-  updateXyzHint();
-  updateMoleculeViewer(result.xyz);
+  refreshPreview();
   setError(null);
 }
 
@@ -1153,8 +1191,11 @@ async function withPending(fn) {
 }
 
 async function runCompute() {
+  /* Re-validate at call time so a change made inside the preview debounce
+   * window can never reach the engine as an invalid structure. */
+  const parsed = parseXyzCoordinates($("xyz").value);
+  if (!parsed.ok) { setError(t(parsed.errorCode, parsed.messageVars || undefined)); return; }
   const xyz = $("xyz").value;
-  if (!xyz.trim()) { setError(t("no_xyz")); return; }
   const o = collectOptions();
   showOverlay("overlay_compute");
   try {
@@ -1165,7 +1206,7 @@ async function runCompute() {
     const d = JSON.parse(m.raw);
     if (!d.ok) { setError(errorText(d)); return; }
     renderCompute(d);
-    updateMoleculeViewer(xyz);
+    updateMoleculeViewer(xyzAtomsToText(parsed.atoms));
     $("stat-ms").textContent = fmt(dt, 1);
   } catch (e) {
     setError(t("engine_call_fail") + e.message);
@@ -1178,20 +1219,21 @@ async function runOptimize({
   applyFinalGeometry = false,
   throwOnFailure = false,
 } = {}) {
-  const xyz = $("xyz").value;
-  if (!xyz.trim()) {
-    const error = new Error(t("no_xyz"));
+  const parsed = parseXyzCoordinates($("xyz").value);
+  if (!parsed.ok) {
+    const error = new Error(t(parsed.errorCode, parsed.messageVars || undefined));
     if (throwOnFailure) throw error;
     setError(error.message);
     return null;
   }
+  const xyz = $("xyz").value;
   const o = collectOptions();
   const optMax = parseInt($("opt-maxiter").value, 10) || 200;
   const gradTol = parseFloat($("opt-gradtol").value) || 4.5e-4;
   const maxMoveAngstrom = parseFloat($("opt-maxmove").value) || 0.4;
   /* No blocking overlay: the engine runs in the worker, so the page stays
    * responsive and the 3Dmol viewer animates each accepted step. */
-  const symbols = getElementSymbols(xyz);
+  const symbols = parsed.atoms.map((atom) => atom.symbol);
   optFrames = [];
   optSymbols = symbols;
   stopReplay();
@@ -1231,8 +1273,7 @@ async function runOptimize({
       /* URL-triggered optimization is a complete import operation: publish
        * the converged geometry back to the canonical XYZ editor immediately. */
       $("xyz").value = d.geometry;
-      updateXyzHint();
-      updateMoleculeViewer(d.geometry);
+      refreshPreview();
       $("opt-apply").hidden = true;
     }
     return d;
@@ -1259,14 +1300,15 @@ $("opt-apply").addEventListener("click", () => {
   const d = window.__lastResult;
   if (d && d.geometry) {
     $("xyz").value = d.geometry;
-    updateXyzHint();
-    updateMoleculeViewer(d.geometry);
+    refreshPreview();
     setError(t("opt_apply_done"));
     $("opt-apply").hidden = true;
   }
 });
 $("reset").addEventListener("click", () => {
   document.querySelectorAll(".chip").forEach((c) => c.classList.remove("active"));
+  $("smiles").value = "";
+  clearSmilesStatus();
   $("xyz").value = PRESETS.water.xyz;
   $("charge").value = 0;
   $("unpaired").value = 0;
@@ -1275,8 +1317,8 @@ $("reset").addEventListener("click", () => {
   $("etol").value = "1e-8";
   $("qtol").value = "1e-5";
   $("forces").checked = true;
-  updateXyzHint();
-  updateMoleculeViewer(PRESETS.water.xyz);
+  refreshPreview();
+  syncSmilesControls();
   stopReplay();
   optFrames = [];
   $("replay").hidden = true;
