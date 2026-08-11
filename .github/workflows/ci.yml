@@ -356,7 +356,7 @@ jobs:
         # may change optional local-thread-control symbols independently of
         # xtbloom, which would turn this gate into an unreviewed moving target.
         run: |
-          uv sync --locked --no-install-project --only-group wheel-build
+          uv sync --locked --no-install-project --no-default-groups --group wheel-build
           openblas="$(
             uv run --no-sync python python/ci/resolve-openblas-wheel.py \
               --manifest cmake/3rdparty/scipy_openblas32_manifest.json | \
@@ -367,6 +367,7 @@ jobs:
           cmake -S . -B build-public -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
             -DXTBLOOM_CPU_LINALG_LIBRARY="${openblas}" \
+            -DPython3_EXECUTABLE="${PWD}/.venv/bin/python" \
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
