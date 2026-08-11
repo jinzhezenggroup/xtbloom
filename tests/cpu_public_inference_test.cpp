@@ -1592,6 +1592,61 @@ int test_public_warm_start_transactions() {
   return 0;
 }
 
+/* Browser geometry optimizer warm-start policy: the first evaluation of an
+ * optimization run starts FRESH and every successive evaluation with the same
+ * topology/charge/spin/options starts WARM from the previous fully converged
+ * electronic state. Prove on a geometry sequence (successive water bond
+ * stretches, like adjacent L-BFGS steps on one shared context) that the warm
+ * trajectory publishes the same converged energies/forces/charges as an
+ * isolated all-FRESH trajectory and never costs more total SCC iterations. */
+int test_geometry_sequence_warm_policy_matches_fresh() {
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  ContextHandle warm_context = make_cpu_context(2);
+  ContextHandle fresh_context = make_cpu_context(2);
+  CHECK(warm_context != nullptr);
+  CHECK(fresh_context != nullptr);
+
+  PublicBatch warm;
+  warm.atom_offsets = {0, 3};
+  warm.atomic_numbers = {8, 1, 1};
+  warm.positions = {0.0, 0.0, 0.0, 1.2, 0.0, 0.0, 0.5, 0.9, 0.3};
+  warm.molecular_charges = {0.0};
+  warm.unpaired_electrons = {0};
+
+  std::int64_t warm_total_iterations = 0;
+  std::int64_t fresh_total_iterations = 0;
+  for (int frame = 0; frame < 8; ++frame) {
+    warm.positions[3] = 1.2 + 0.1 * frame; /* successive O-H stretch (bohr) */
+    warm.bind(flags);
+    warm.options.scc_start_mode = frame == 0 ? XTBLOOM_SCC_START_FRESH : XTBLOOM_SCC_START_WARM;
+    CHECK(xtbloom_compute(warm_context.get(), &warm.batch, &warm.options, &warm.result) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(warm.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+    CHECK(warm.converged[0] == 1u);
+    warm_total_iterations += warm.iterations[0];
+
+    PublicBatch fresh = warm;
+    fresh.bind(flags); /* bind resets start mode to the fresh default */
+    CHECK(xtbloom_compute(fresh_context.get(), &fresh.batch, &fresh.options, &fresh.result) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(fresh.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+    CHECK(fresh.converged[0] == 1u);
+    fresh_total_iterations += fresh.iterations[0];
+
+    CHECK(std::abs(warm.energies[0] - fresh.energies[0]) <= warm.options.energy_tolerance);
+    CHECK(warm.iterations[0] <= fresh.iterations[0]);
+    for (std::size_t atom = 0u; atom < 3u; ++atom) {
+      CHECK(near(warm.atomic_charges[atom], fresh.atomic_charges[atom], 1.0e-5));
+      for (std::size_t axis = 0u; axis < 3u; ++axis) {
+        CHECK(near(warm.forces[3u * atom + axis], fresh.forces[3u * atom + axis], 1.0e-3));
+      }
+    }
+  }
+  CHECK(warm_total_iterations <= fresh_total_iterations);
+  return 0;
+}
+
 int test_one_member_numerical_failure_isolated() {
   ContextHandle context = make_cpu_context(4);
   CHECK(context != nullptr);
@@ -2095,6 +2150,9 @@ int main() {
     return line;
   }
   if (const int line = test_public_warm_start_transactions(); line != 0) {
+    return line;
+  }
+  if (const int line = test_geometry_sequence_warm_policy_matches_fresh(); line != 0) {
     return line;
   }
   if (const int line = test_point_charges_and_periodic_operator(); line != 0) {

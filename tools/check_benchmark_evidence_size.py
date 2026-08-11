@@ -141,8 +141,8 @@ def check_repository(
         )
     if failures:
         failures.append(
-            "Keep compact summaries in Git and archive oversized raw samples "
-            "externally with an immutable URL, byte count, and SHA-256."
+            "Keep compact results and reproduction provenance in Git; omit "
+            "reproducible oversized raw samples instead of adding an exception."
         )
         raise EvidencePolicyError("\n".join(failures))
     return entries, total

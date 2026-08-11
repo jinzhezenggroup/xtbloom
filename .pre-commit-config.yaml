@@ -16,8 +16,8 @@ repos:
       - id: check-added-large-files
         args: ["--maxkb=1024", "--enforce-all"]
         # This generated table is canonical and covered by its manifest.
-        # Benchmark evidence has no exception: oversized raw samples belong
-        # in durable external storage with repository metadata and hashes.
+        # Benchmark evidence has no exception: keep reproducible oversized raw
+        # samples untracked and commit compact results plus provenance.
         exclude: ^data/parameters/d4\.hpp$
       - id: check-merge-conflict
       - id: check-symlinks

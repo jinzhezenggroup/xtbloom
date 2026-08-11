@@ -14,6 +14,12 @@ browser; the site does not upload a calculation to a server.
 4. Select **Optimize geometry** to run the demo's L-BFGS adapter and inspect
    its energy trajectory.
 
+Each optimization step after the first is seeded from the previous step's
+converged electronic state (native SCC warm start), reusing electronic state
+across successive geometries. A new optimization or a standalone single-point
+calculation always starts fresh and never inherits another run's electronic
+state.
+
 The 3D view is an input-validation preview, independent of the calculation
 path. Valid XYZ coordinates render automatically about 400 ms after you stop
 typing, and a generated SMILES structure renders immediately. Malformed input
