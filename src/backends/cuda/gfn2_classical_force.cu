@@ -122,16 +122,22 @@ bool same_pairlist_storage(const Gfn2PairListConsumerView& first,
 
 bool valid_pairlist_role(const Gfn2PairListConsumerView& view, Gfn2PairListRole role, double cutoff,
                          std::int64_t batch, std::int64_t atoms, std::uint64_t token) noexcept {
+  if (batch <= 0 || atoms <= 0 || view.max_pairs_per_system <= 0 ||
+      view.max_neighbors_per_atom <= 0 ||
+      view.max_pairs_per_system > std::numeric_limits<std::int64_t>::max() / batch ||
+      view.max_neighbors_per_atom > std::numeric_limits<std::int64_t>::max() / atoms) {
+    return false;
+  }
   return view.memory_space == Gfn2PlanMemorySpace::kCudaDevice &&
          view.state == Gfn2PairListState::kCommitted && view.role == role &&
          view.pair_map_kind == Gfn2PairMapKind::kExplicit && view.plan_token == token &&
-         view.cutoff_bohr == cutoff && std::isfinite(view.list_builder_cutoff_bohr) &&
-         view.list_builder_cutoff_bohr >= kGfn2D4TwoBodyCutoffBohr && view.batch_size == batch &&
-         view.total_atoms == atoms && view.max_pairs_per_system > 0 &&
-         view.max_neighbors_per_atom > 0 && view.pair_offset_count == batch + 1 &&
-         view.neighbor_offset_count == atoms + 1 && view.pair_count_elements == batch &&
-         view.neighbor_count_elements == atoms && view.committed_generation_count == batch &&
-         view.eligible_mask_count == batch &&
+         view.cutoff_bohr == cutoff && view.list_builder_cutoff_bohr == kGfn2D4TwoBodyCutoffBohr &&
+         view.batch_size == batch && view.total_atoms == atoms &&
+         view.pair_count == batch * view.max_pairs_per_system &&
+         view.neighbor_count == atoms * view.max_neighbors_per_atom &&
+         view.pair_offset_count == batch + 1 && view.neighbor_offset_count == atoms + 1 &&
+         view.pair_count_elements == batch && view.neighbor_count_elements == atoms &&
+         view.committed_generation_count == batch && view.eligible_mask_count == batch &&
          (view.active_mask_count == 0 || view.active_mask_count == batch) &&
          aligned_pointer(view.pair_offsets) && aligned_pointer(view.pairs) &&
          aligned_pointer(view.pair_counts) && aligned_pointer(view.neighbor_counts) &&

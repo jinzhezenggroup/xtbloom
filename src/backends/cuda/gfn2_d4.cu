@@ -1136,25 +1136,32 @@ __global__ void scc_prepare_weights_kernel(
 }
 
 __global__ void pairlist_prepare_weights_kernel(
-    Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters, Gfn2D4PairListDeviceCache cache,
-    const double* atomic_charges, bool zero_charges, bool write_cn_derivatives,
-    bool write_charge_derivatives, const std::uint8_t* external_active_mask,
-    const std::uint32_t* external_sequence_active, Gfn2D4DeviceWorkspace workspace,
-    std::uint32_t* device_error) {
+    Gfn2D4DeviceBatch batch, Gfn2D4DeviceParameters parameters, const double* coordination_numbers,
+    const std::uint8_t* role_active_mask, const double* atomic_charges, bool zero_charges,
+    bool write_cn_derivatives, bool write_charge_derivatives,
+    const std::uint8_t* external_active_mask, const std::uint32_t* external_sequence_active,
+    double* weights, double* weight_cn_derivatives, double* weight_charge_derivatives,
+    std::uint32_t* system_errors, std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if ((external_sequence_active != nullptr &&
        atomicAdd(const_cast<std::uint32_t*>(external_sequence_active), 0u) != 1u) ||
       (external_active_mask != nullptr && external_active_mask[system] != 1u) ||
-      !sequence_is_valid(device_error) || !system_is_valid(workspace, system) ||
-      !d4_pairlist_role_active(cache.coordination_pairs, system)) {
+      !sequence_is_valid(device_error) ||
+      atomicAdd(const_cast<std::uint32_t*>(system_errors) + system, 0u) != 0u ||
+      (role_active_mask != nullptr && role_active_mask[system] != 1u)) {
     return;
   }
+  Gfn2D4DeviceWorkspace workspace{};
+  workspace.weights = weights;
+  workspace.weight_cn_derivatives = weight_cn_derivatives;
+  workspace.weight_charge_derivatives = weight_charge_derivatives;
+  workspace.system_errors = system_errors;
   const std::int64_t atom_begin = batch.atom_offsets[system];
   const std::int64_t atom_end = batch.atom_offsets[system + 1];
   for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
-    prepare_atom_weights(batch, parameters, cache.coordination_numbers, atomic_charges,
-                         zero_charges, write_cn_derivatives, write_charge_derivatives, system, atom,
-                         workspace, device_error);
+    prepare_atom_weights(batch, parameters, coordination_numbers, atomic_charges, zero_charges,
+                         write_cn_derivatives, write_charge_derivatives, system, atom, workspace,
+                         device_error);
   }
 }
 
@@ -4216,9 +4223,11 @@ cudaError_t evaluate_d4_two_body_pairlist_impl(
     return status;
   }
   pairlist_prepare_weights_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                    0, stream>>>(batch, parameters, cache, atomic_charges, false,
-                                                 true, true, nullptr, nullptr, workspace,
-                                                 device_error);
+                                    0, stream>>>(
+      batch, parameters, cache.coordination_numbers, cache.coordination_pairs.active_mask,
+      atomic_charges, false, true, true, nullptr, nullptr, workspace.weights,
+      workspace.weight_cn_derivatives, workspace.weight_charge_derivatives, workspace.system_errors,
+      device_error);
   status = check_launch();
   if (status != cudaSuccess) return status;
   pairlist_two_body_potential_kernel<<<static_cast<unsigned int>(batch.batch_size),
@@ -4274,9 +4283,11 @@ cudaError_t evaluate_d4_scc_potential_pairlist_impl(
                                          device_error, stream);
   if (status != cudaSuccess) return status;
   pairlist_prepare_weights_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                    0, stream>>>(batch, parameters, cache, charges, false, false,
-                                                 true, activity.active_mask,
-                                                 activity.sequence_active, workspace, device_error);
+                                    0, stream>>>(
+      batch, parameters, cache.coordination_numbers, cache.coordination_pairs.active_mask, charges,
+      false, false, true, activity.active_mask, activity.sequence_active, workspace.weights,
+      workspace.weight_cn_derivatives, workspace.weight_charge_derivatives, workspace.system_errors,
+      device_error);
   status = check_launch();
   if (status != cudaSuccess) return status;
   pairlist_two_body_potential_kernel<<<static_cast<unsigned int>(batch.batch_size),
@@ -4308,9 +4319,11 @@ cudaError_t evaluate_d4_scc_energy_pairlist_impl(
                                          device_error, stream);
   if (status != cudaSuccess) return status;
   pairlist_prepare_weights_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                    0, stream>>>(batch, parameters, cache, charges, false, false,
-                                                 false, activity.active_mask,
-                                                 activity.sequence_active, workspace, device_error);
+                                    0, stream>>>(
+      batch, parameters, cache.coordination_numbers, cache.coordination_pairs.active_mask, charges,
+      false, false, false, activity.active_mask, activity.sequence_active, workspace.weights,
+      workspace.weight_cn_derivatives, workspace.weight_charge_derivatives, workspace.system_errors,
+      device_error);
   status = check_launch();
   if (status != cudaSuccess) return status;
   pairlist_two_body_energy_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
@@ -4455,8 +4468,10 @@ cudaError_t add_d4_two_body_gradient_pairlist_impl(
   status = check_launch();
   if (status != cudaSuccess) return status;
   pairlist_prepare_weights_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                    0, stream>>>(batch, parameters, cache, charges, false, true,
-                                                 true, nullptr, nullptr, workspace, device_error);
+                                    0, stream>>>(
+      batch, parameters, cache.coordination_numbers, cache.coordination_pairs.active_mask, charges,
+      false, true, true, nullptr, nullptr, workspace.weights, workspace.weight_cn_derivatives,
+      workspace.weight_charge_derivatives, workspace.system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) return status;
   pairlist_two_body_cn_adjoint_kernel<<<static_cast<unsigned int>(batch.batch_size),
@@ -4509,8 +4524,10 @@ cudaError_t evaluate_d4_atm_pairlist_impl(const Gfn2D4DeviceBatch& batch,
                                                 true, workspace, device_error, stream);
   if (status != cudaSuccess) return status;
   pairlist_prepare_weights_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                    0, stream>>>(batch, parameters, cache, nullptr, true, true,
-                                                 true, nullptr, nullptr, workspace, device_error);
+                                    0, stream>>>(
+      batch, parameters, cache.coordination_numbers, cache.coordination_pairs.active_mask, nullptr,
+      true, true, true, nullptr, nullptr, workspace.weights, workspace.weight_cn_derivatives,
+      workspace.weight_charge_derivatives, workspace.system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) return status;
   pairlist_atm_energy_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
@@ -4550,8 +4567,10 @@ cudaError_t add_d4_atm_gradient_pairlist_impl(
   status = check_launch();
   if (status != cudaSuccess) return status;
   pairlist_prepare_weights_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                    0, stream>>>(batch, parameters, cache, nullptr, true, true,
-                                                 true, nullptr, nullptr, workspace, device_error);
+                                    0, stream>>>(
+      batch, parameters, cache.coordination_numbers, cache.coordination_pairs.active_mask, nullptr,
+      true, true, true, nullptr, nullptr, workspace.weights, workspace.weight_cn_derivatives,
+      workspace.weight_charge_derivatives, workspace.system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) return status;
   clear_atom_kernel<<<atom_blocks, kThreadsPerBlock, 0, stream>>>(
