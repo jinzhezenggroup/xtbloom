@@ -1,8 +1,8 @@
 # GFN2-xTB conformance tools
 
-The corpus is deliberately independent of the xTBloom implementation. Four
-closed-shell gas-phase cases use a pinned live tblite calculation as their
-primary oracle; the open-shell OH case and three QM/MM cases use pinned xTB
+The corpus is deliberately independent of the xTBloom implementation. Eight
+closed-shell gas, atomic, and field cases use a pinned live tblite calculation
+as their primary oracle; the open-shell OH case and five QM/MM cases use pinned xTB
 6.7.1. Both command lines explicitly set `--acc 0.0001`: the looser CLI
 defaults can leave SCC charge and force residuals larger than xTBloom's primary
 `5e-7` acceptance threshold. Coordinates, energies, gradients, and forces use
@@ -23,7 +23,7 @@ python3 tools/conformance/xtbloom_conformance.py import-tblite-snapshot \
   --source-root /path/to/tblite
 ```
 
-Regenerate the four tblite-primary gas cases with a built executable from the
+Regenerate the tblite-primary cases with a built executable from the
 pinned revision. The generator verifies tblite 0.7.0, records the resolved
 `libtblite` hash, forces a deterministic single-threaded environment, and
 stores the reviewed accuracy in provenance. Output goes to a separate
@@ -77,18 +77,29 @@ and parameter-file hashes. Other environment variables remain inherited; that
 boundary is stated explicitly in each golden rather than implying a fully
 hermetic operating-system environment.
 
-The initial QM/MM set contains a minimal water plus one point charge and the
+The QM/MM set contains a minimal water plus one point charge, finite-hardness
+sites 0.25 bohr from and exactly coincident with the oxygen atom, and the
 official xTB water-tetramer PCEM regression represented as 6 QM atoms plus 6
-point charges.  The latter is stored with both element-derived H/O hardnesses
-and the `gamma=999` point-charge limit.  Regenerate only these cases with:
+point charges. The latter is stored with both element-derived H/O hardnesses
+and the `gamma=999` point-charge limit. The close/coincident cases use oxygen's
+pinned GFN2 hardness (`0.451896` Ha); screening keeps their energy and force
+outputs finite at zero separation. Regenerate these cases with:
 
 ```bash
 python3 tools/conformance/xtbloom_conformance.py generate-xtb \
   --executable /path/to/xtb --output-dir build/conformance/xtb-qmmm \
   --case water_one_pc_gamma999 \
+  --case water_one_pc_close_hardness \
+  --case water_one_pc_coincident_hardness \
   --case water_dimer_6pc_hardness \
   --case water_dimer_6pc_gamma999
 ```
+
+The element-range audit adds neutral Zn, I-, and neutral Rn atom rows. They
+isolate a transition-metal parameter path (Z=30), a heavy-halogen anion
+(Z=53), and the released GFN2 upper boundary (Z=86) without adding an
+unreviewed bonding model. Their primary energies and zero isolated-atom forces
+come from the same pinned live tblite 0.7.0 workflow.
 
 When a generated result and committed golden explicitly identify different
 reference engines, `compare` uses the manifest's separate cross-engine force
@@ -172,7 +183,7 @@ oracle state rather than public conformance outputs.
 Case-level `xtbloom_backends` metadata keeps interactions on only the released
 public backends. The `water_efield` pilot is CPU-only until #237 P3 implements
 CUDA interaction execution, so CUDA host/device/mixed batches continue to run
-the eight previously supported cases instead of failing the whole ragged call
+the thirteen otherwise supported cases instead of failing the whole ragged call
 with `NOT_IMPLEMENTED`. Its pinned tblite 0.7.0 energy remains an independent
 oracle. The tblite analytic field gradient uses `+E` per atom instead of the
 energy derivative `+q_i E`; that force array remains in the canonical golden
