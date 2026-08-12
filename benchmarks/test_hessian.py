@@ -217,6 +217,22 @@ class HessianBenchmarkTest(unittest.TestCase):
             self.assertNotIn("correctness", row)
             self.assertNotIn("final_hessian_binary64_le_zlib_base64", row)
 
+    def test_isolated_coordinate_retains_timeout_as_unavailable(self) -> None:
+        """Bound impractical engines without losing the requested matrix row."""
+        expired = hb.subprocess.TimeoutExpired(
+            ["python", "coordinate"], 120.0, stderr="partial diagnostic"
+        )
+        with mock.patch.object(hb.subprocess, "run", side_effect=expired):
+            row = hb.run_isolated_coordinate(
+                ["python", "coordinate"],
+                output_json=Path("unused.json"),
+                timeout_seconds=120.0,
+            )
+        self.assertEqual(row["availability"], "unavailable")
+        self.assertIn("timeout of 120 seconds", row["unavailable_reason"])
+        self.assertIn("partial diagnostic", row["unavailable_reason"])
+        self.assertEqual(row["completed_samples_ms"], [])
+
     def test_validate_args_refuses_existing_artifact(self) -> None:
         """Never replace a prior raw timing artifact implicitly."""
         with tempfile.TemporaryDirectory() as directory:
@@ -245,6 +261,27 @@ class HessianBenchmarkTest(unittest.TestCase):
                 xtb_library=Path(__file__),
             )
             with self.assertRaisesRegex(hb.BenchmarkError, "refusing to overwrite"):
+                hb.validate_args(args)
+
+    def test_validate_args_rejects_negative_coordinate_timeout(self) -> None:
+        """A disabled timeout is zero; negative or non-finite values are invalid."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = hb.build_parser().parse_args(
+                [
+                    "--engines",
+                    "xtb",
+                    "--xtb-library",
+                    str(Path(__file__)),
+                    "--coordinate-timeout-seconds",
+                    "-1",
+                    "--output-json",
+                    str(root / "result.json"),
+                    "--output-csv",
+                    str(root / "result.csv"),
+                ]
+            )
+            with self.assertRaisesRegex(hb.BenchmarkError, "finite and nonnegative"):
                 hb.validate_args(args)
 
 

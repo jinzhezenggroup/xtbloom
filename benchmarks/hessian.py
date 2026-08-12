@@ -266,6 +266,7 @@ def run_isolated_coordinate(
     command: Sequence[str],
     *,
     output_json: Path,
+    timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Run one engine coordinate in a subprocess and retain hard failures.
 
@@ -276,7 +277,27 @@ def run_isolated_coordinate(
     nonzero status remains explicit evidence instead of losing the rest of the
     requested matrix.
     """
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        diagnostic = exc.stderr or exc.stdout or ""
+        if isinstance(diagnostic, bytes):
+            diagnostic = diagnostic.decode("utf-8", errors="replace")
+        reason = f"coordinate exceeded timeout of {timeout_seconds:g} seconds"
+        if diagnostic.strip():
+            reason += f": {diagnostic.strip()[-4000:]}"
+        return {
+            "availability": "unavailable",
+            "unavailable_reason": reason,
+            "completed_samples_ms": [],
+            "isolated_command": list(command),
+        }
     child_row: dict[str, Any] | None = None
     if output_json.is_file():
         document = json.loads(output_json.read_text(encoding="utf-8"))
@@ -349,6 +370,8 @@ def coordinate_command(
         repr(args.acoustic_atol),
         "--repeatability-atol",
         repr(args.repeatability_atol),
+        "--coordinate-timeout-seconds",
+        repr(args.coordinate_timeout_seconds),
         "--output-json",
         str(output_json),
         "--output-csv",
@@ -957,6 +980,7 @@ def runner_metadata(
             "symmetry_atol_hartree_per_bohr2": args.symmetry_atol,
             "acoustic_atol_hartree_per_bohr2": args.acoustic_atol,
             "repeatability_atol_hartree_per_bohr2": args.repeatability_atol,
+            "coordinate_timeout_seconds": args.coordinate_timeout_seconds,
             "reference": reference_identity,
         },
     }
@@ -1086,6 +1110,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symmetry-atol", type=float, default=2.0e-3)
     parser.add_argument("--acoustic-atol", type=float, default=2.0e-3)
     parser.add_argument("--repeatability-atol", type=float, default=1.0e-8)
+    parser.add_argument(
+        "--coordinate-timeout-seconds",
+        type=float,
+        default=0.0,
+        help="parent timeout per engine coordinate; zero disables the limit",
+    )
     parser.add_argument("--reference-json", type=Path)
     parser.add_argument("--make-reference", action="store_true")
     parser.add_argument("--allow-dirty-evidence", action="store_true")
@@ -1133,6 +1163,11 @@ def validate_args(args: argparse.Namespace) -> None:
         value = getattr(args, name)
         if not math.isfinite(value) or value <= 0.0:
             raise BenchmarkError(f"--{name.replace('_', '-')} must be positive")
+    if (
+        not math.isfinite(args.coordinate_timeout_seconds)
+        or args.coordinate_timeout_seconds < 0.0
+    ):
+        raise BenchmarkError("--coordinate-timeout-seconds must be finite and nonnegative")
     if any(engine.startswith("xtbloom-") for engine in args.engines) and (
         args.library is None or not args.library.is_file()
     ):
@@ -1185,6 +1220,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         row = run_isolated_coordinate(
                             command,
                             output_json=child_json,
+                            timeout_seconds=(
+                                args.coordinate_timeout_seconds
+                                if args.coordinate_timeout_seconds > 0.0
+                                else None
+                            ),
                         )
                         row.setdefault("engine", engine)
                         row.setdefault("natoms", NATOMS)
