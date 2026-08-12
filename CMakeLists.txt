@@ -3431,8 +3431,8 @@ if(XTBLOOM_BUILD_TESTS)
       xtbloom_scc_temperature_continuation_test xtbloom.gfn2.scc_temperature_continuation
     )
 
-    # Issues #49/#50: harnesses that drive the production CPU GFN2 SCC driver
-    # through the pinned restricted corpus and compare against the goldens.
+    # Issues #49/#50/#51: harnesses that drive the production CPU GFN2 SCC
+    # driver through the pinned restricted and unrestricted corpora.
     # These are now passing acceptance gates:
     #   * xtbloom_scc_trace_capture drives one case sequentially and compares the
     #     complete closed-loop trajectory with the cpu_closed_loop_v1 profile;
@@ -3508,8 +3508,8 @@ if(XTBLOOM_BUILD_TESTS)
       xtbloom_scc_trace_harness_native_test xtbloom.gfn2.scc_trace_ragged_batch_native
     )
 
-    # Sequential closed-loop gate: all five restricted goldens must match the
-    # full per-iteration trajectory within the cpu_closed_loop_v1 profile.
+    # Sequential closed-loop gates keep the versioned restricted and
+    # unrestricted contracts independently visible in CTest output.
     add_test(
       NAME xtbloom.gfn2.scc_trace_cpu_closed_loop
       COMMAND ${Python3_EXECUTABLE}
@@ -3520,6 +3520,18 @@ if(XTBLOOM_BUILD_TESTS)
     )
     xtbloom_configure_linalg_runtime_test(
       xtbloom_scc_trace_capture xtbloom.gfn2.scc_trace_cpu_closed_loop
+    )
+    add_test(
+      NAME xtbloom.gfn2.scc_trace_unrestricted_cpu_closed_loop
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/xtbloom_scc_cpu_trace.py
+              --capture $<TARGET_FILE:xtbloom_scc_trace_capture>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-unrestricted-capture
+              --cases oh_radical
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_scc_trace_capture xtbloom.gfn2.scc_trace_unrestricted_cpu_closed_loop
     )
 
     # Ragged batch gate: h3_plus (converges early), nenacl (slowest), and the
@@ -3538,6 +3550,18 @@ if(XTBLOOM_BUILD_TESTS)
     xtbloom_configure_linalg_runtime_test(
       xtbloom_scc_trace_batch_capture xtbloom.gfn2.scc_trace_ragged_batch
     )
+    add_test(
+      NAME xtbloom.gfn2.scc_trace_mixed_spin_ragged_batch
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/xtbloom_scc_cpu_trace.py
+              --batch-capture $<TARGET_FILE:xtbloom_scc_trace_batch_capture>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-mixed-spin-batch
+              --batch-cases h3_plus oh_radical nenacl
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_scc_trace_batch_capture xtbloom.gfn2.scc_trace_mixed_spin_ragged_batch
+    )
 
     # Single-iteration replay gate: every golden iteration replayed from its
     # injected mixed state must equal the pinned iteration snapshot.
@@ -3552,6 +3576,18 @@ if(XTBLOOM_BUILD_TESTS)
     )
     xtbloom_configure_linalg_runtime_test(
       xtbloom_scc_trace_replay xtbloom.gfn2.scc_trace_cpu_replay
+    )
+    add_test(
+      NAME xtbloom.gfn2.scc_trace_unrestricted_cpu_replay
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/xtbloom_scc_cpu_trace.py
+              --replay $<TARGET_FILE:xtbloom_scc_trace_replay>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-unrestricted-replay
+              --replay-cases oh_radical
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_scc_trace_replay xtbloom.gfn2.scc_trace_unrestricted_cpu_replay
     )
 
     # Independent Broyden mixer gate: replay the pinned golden residual
@@ -3568,6 +3604,18 @@ if(XTBLOOM_BUILD_TESTS)
     )
     xtbloom_configure_linalg_runtime_test(
       xtbloom_scc_trace_mixer xtbloom.gfn2.scc_trace_mixer_replay
+    )
+    add_test(
+      NAME xtbloom.gfn2.scc_trace_unrestricted_mixer_replay
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/xtbloom_scc_cpu_trace.py
+              --mixer $<TARGET_FILE:xtbloom_scc_trace_mixer>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-unrestricted-mixer
+              --mixer-cases oh_radical
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_scc_trace_mixer xtbloom.gfn2.scc_trace_unrestricted_mixer_replay
     )
 
     # Issue #343 Phase 1: experimental SCC subspace-reuse diagnostic. Builds
@@ -3754,6 +3802,18 @@ if(XTBLOOM_BUILD_TESTS)
             --check
   )
   set_tests_properties(xtbloom.oracle.scc_corpus PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    LABELS "conformance;oracle"
+  )
+  add_test(
+    NAME xtbloom.oracle.scc_corpus_v2
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/generate_unrestricted_scc_corpus.py
+            --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+            --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+            --check
+  )
+  set_tests_properties(xtbloom.oracle.scc_corpus_v2 PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     LABELS "conformance;oracle"
   )
