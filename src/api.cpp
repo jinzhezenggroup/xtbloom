@@ -382,6 +382,8 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
     return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
                 "asynchronous compute enqueue is not supported by the CPU backend");
   }
+
+#if defined(XTBLOOM_HAS_CUDA)
   if (batch == nullptr || options == nullptr || result == nullptr) {
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "batch, compute options, or batch result is NULL");
   }
@@ -417,7 +419,6 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
                   "asynchronous CUDA context enqueue does not support strict WARM SCC start yet");
     }
 
-#if defined(XTBLOOM_HAS_CUDA)
     const std::shared_ptr<xtbloom::detail::Gfn2CudaExecutionCache>& cache =
         context->implementation->gfn2_cuda_execution_cache;
     if (cache == nullptr) {
@@ -447,11 +448,6 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
     reserved = false;
     last_error.clear();
     return XTBLOOM_STATUS_SUCCESS;
-#else
-    request->implementation->rollback_submission();
-    return fail(XTBLOOM_STATUS_BACKEND_UNAVAILABLE,
-                "the xtbloom library was built without CUDA support");
-#endif
   } catch (const std::bad_alloc&) {
     if (reserved) request->implementation->rollback_submission();
     return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
@@ -464,6 +460,13 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
     return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
                 "unknown exception while enqueueing CUDA GFN2 inference");
   }
+#else
+  (void)batch;
+  (void)options;
+  (void)result;
+  return fail(XTBLOOM_STATUS_BACKEND_UNAVAILABLE,
+              "the xtbloom library was built without CUDA support");
+#endif
 }
 
 xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch_t* batch,
