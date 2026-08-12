@@ -2913,6 +2913,9 @@ if(XTBLOOM_BUILD_TESTS)
     add_test(NAME xtbloom.cuda.scc_iteration_large_singleton
       COMMAND xtbloom_cuda_scc_iteration_production_test --large-singleton-tridiagonal
     )
+    add_test(NAME xtbloom.cuda.scc_iteration_deterministic_debug
+      COMMAND xtbloom_cuda_scc_iteration_production_test --deterministic-debug
+    )
 
     # Focused #130 benchmark. It reuses the production SCC fixture but runs a
     # one-remaining-iteration state so the conditional WHILE body count and
