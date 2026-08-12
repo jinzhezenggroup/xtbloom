@@ -45,6 +45,10 @@ class XTBloom(ase.calculators.calculator.Calculator):
      max_scc_iterations       250               SCC iteration ceiling
      charge_tolerance         1e-6              SCC charge tolerance (e)
      energy_tolerance         1e-8              SCC energy tolerance (Hartree)
+     scc_mixer               "modified_broyden" SCC mixing algorithm
+     scc_mixer_history        8                 Broyden history vectors (1..64)
+     scc_mixer_damping        0.4               Broyden damping in (0, 1]
+     determinism             "default"          default/reproducible execution policy
      backend                  "auto"            Execution backend: auto/cpu/cuda
      device_id                None              CUDA device id
      cpu_threads              1                 CPU batch-parallelism ceiling
@@ -76,6 +80,10 @@ class XTBloom(ase.calculators.calculator.Calculator):
         "max_scc_iterations": 250,
         "charge_tolerance": 1.0e-6,
         "energy_tolerance": 1.0e-8,
+        "scc_mixer": "modified_broyden",
+        "scc_mixer_history": 8,
+        "scc_mixer_damping": 0.4,
+        "determinism": "default",
         "backend": "auto",
         "device_id": None,
         "cpu_threads": 1,
@@ -116,6 +124,10 @@ class XTBloom(ase.calculators.calculator.Calculator):
             "charge_tolerance",
             "energy_tolerance",
             "electronic_temperature",
+            "scc_mixer",
+            "scc_mixer_history",
+            "scc_mixer_damping",
+            "determinism",
         ):
             if attribute in kwargs:
                 _validated_compute_setting(attribute, kwargs[attribute])
@@ -145,6 +157,14 @@ class XTBloom(ase.calculators.calculator.Calculator):
                 self._xtb.set("charge_tolerance", parameters.charge_tolerance)
             if "energy_tolerance" in changed:
                 self._xtb.set("energy_tolerance", parameters.energy_tolerance)
+            if "scc_mixer" in changed:
+                self._xtb.set("scc_mixer", parameters.scc_mixer)
+            if "scc_mixer_history" in changed:
+                self._xtb.set("scc_mixer_history", parameters.scc_mixer_history)
+            if "scc_mixer_damping" in changed:
+                self._xtb.set("scc_mixer_damping", parameters.scc_mixer_damping)
+            if "determinism" in changed:
+                self._xtb.set("determinism", parameters.determinism)
         else:
             self._close_api_calculator()
             self._res = None
@@ -244,6 +264,10 @@ def _create_api_calculator(
             charge_tolerance=parameters.charge_tolerance,
             energy_tolerance=parameters.energy_tolerance,
             electronic_temperature=parameters.electronic_temperature,
+            scc_mixer=parameters.scc_mixer,
+            scc_mixer_history=parameters.scc_mixer_history,
+            scc_mixer_damping=parameters.scc_mixer_damping,
+            determinism=parameters.determinism,
             warm_start=bool(parameters.warm_start),
         )
     except XTBloomValueError as e:

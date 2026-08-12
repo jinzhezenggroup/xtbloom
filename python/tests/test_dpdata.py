@@ -67,6 +67,49 @@ def test_driver_registered() -> None:
     assert driver_class.__module__ == "xtbloom.dpdata"
 
 
+def test_driver_forwards_scc_policy_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep dpdata's generic keyword bridge aligned with BatchCalculator."""
+    from xtbloom.dpdata import XTBloomDriver
+
+    captured: dict[str, object] = {}
+
+    class FakeBatchCalculator:
+        """Record constructor settings without requiring a numerical runtime."""
+
+        def __init__(
+            self, structures: list[Structure], method: str, **kwargs: object
+        ) -> None:
+            captured["structures"] = structures
+            captured["method"] = method
+            captured.update(kwargs)
+
+        def compute(self, *, raise_on_failure: bool) -> SimpleNamespace:
+            assert raise_on_failure
+            structures = captured["structures"]
+            assert isinstance(structures, list)
+            return SimpleNamespace(
+                energies=np.zeros(len(structures), dtype=np.float64),
+                forces=np.concatenate(
+                    [np.zeros_like(structure.positions) for structure in structures]
+                ),
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("xtbloom.dpdata.BatchCalculator", FakeBatchCalculator)
+    XTBloomDriver(
+        scc_mixer="modified_broyden",
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    ).label(_case_data_dict("ketene"))
+    assert captured["scc_mixer"] == "modified_broyden"
+    assert captured["scc_mixer_history"] == 16
+    assert captured["scc_mixer_damping"] == 0.25
+    assert captured["determinism"] == "reproducible"
+
+
 def test_label_energies_match_golden() -> None:
     """Match dpdata labels to golden energies and forces in dpdata units."""
     _ensure_driver_registered()

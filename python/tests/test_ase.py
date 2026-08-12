@@ -124,6 +124,20 @@ def test_ase_set_rejects_invalid_settings_transactionally(
     assert calculator.parameters.max_scc_iterations == 250
 
 
+def test_ase_scc_policy_parameters_are_validated() -> None:
+    """Expose the frozen ABI-v3 controls through ASE's parameter mapping."""
+    calculator = XTBloom(
+        method="GFN2-xTB",
+        scc_mixer="modified_broyden",
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    )
+    assert calculator.parameters.scc_mixer_history == 16
+    with pytest.raises(XTBloomValueError, match="scc_mixer_history"):
+        calculator.set(scc_mixer_history=65)
+
+
 def test_ase_rejects_fractional_multiplicity() -> None:
     """Reject nonintegral spin multiplicities through the ASE interface."""
     with pytest.raises(XTBloomValueError):

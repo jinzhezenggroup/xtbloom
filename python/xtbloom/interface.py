@@ -104,6 +104,14 @@ ELEMENT_SYMBOLS = [
 
 SYMBOL_TO_NUMBER = {symbol: number + 1 for number, symbol in enumerate(ELEMENT_SYMBOLS)}
 
+_SCC_MIXER_ALIASES = {
+    "modified_broyden": library.SCC_MIXER_MODIFIED_BROYDEN,
+}
+_DETERMINISM_ALIASES = {
+    "default": library.DETERMINISM_DEFAULT,
+    "reproducible": library.DETERMINISM_REPRODUCIBLE,
+}
+
 
 def _as_integer(name: str, value: object) -> int:
     """Return an exact integer without silently truncating floats."""
@@ -1070,6 +1078,10 @@ def _compute_numerical_hessians(
                     charge_tolerance=settings.charge_tolerance,
                     energy_tolerance=settings.energy_tolerance,
                     electronic_temperature=settings.electronic_temperature,
+                    scc_mixer=settings.scc_mixer,
+                    scc_mixer_history=settings.scc_mixer_history,
+                    scc_mixer_damping=settings.scc_mixer_damping,
+                    determinism=settings.determinism,
                     flags=flags,
                     warm_start=False,
                 )
@@ -1111,6 +1123,10 @@ def _compute_batch(
     charge_tolerance: float,
     energy_tolerance: float,
     electronic_temperature: float,
+    scc_mixer: int,
+    scc_mixer_history: int,
+    scc_mixer_damping: float,
+    determinism: int,
     flags: int,
     warm_start: bool = False,
 ) -> _ComputedBatch:
@@ -1270,6 +1286,17 @@ def _compute_batch(
     options.energy_tolerance = float(energy_tolerance)
     options.electronic_temperature = (
         float(electronic_temperature) * library.KELVIN_TO_HARTREE
+    )
+    options.scc_mixer = int(scc_mixer)
+    options.scc_mixer_history = int(scc_mixer_history)
+    options.scc_mixer_damping = float(scc_mixer_damping)
+    options.determinism = int(determinism)
+    library.require_compute_options_v3(
+        options.scc_mixer,
+        options.scc_mixer_history,
+        options.scc_mixer_damping,
+        options.determinism,
+        library_instance,
     )
 
     # --- result buffers --------------------------------------------------------
@@ -1599,16 +1626,70 @@ def _validated_compute_setting(attribute: str, value: object) -> int | float:
                 "electronic_temperature must be finite and nonnegative"
             )
         return candidate
+    if attribute == "scc_mixer":
+        if isinstance(value, str):
+            try:
+                candidate = _SCC_MIXER_ALIASES[value]
+            except KeyError:
+                raise XTBloomValueError(
+                    "scc_mixer must be 'modified_broyden' or SCC_MIXER_MODIFIED_BROYDEN"
+                ) from None
+        else:
+            candidate = _as_integer(attribute, value)
+        if candidate != library.SCC_MIXER_MODIFIED_BROYDEN:
+            raise XTBloomValueError(
+                "scc_mixer must be 'modified_broyden' or SCC_MIXER_MODIFIED_BROYDEN"
+            )
+        return candidate
+    if attribute == "scc_mixer_history":
+        candidate = _as_integer(attribute, value)
+        if not 1 <= candidate <= library.MAX_SCC_MIXER_HISTORY:
+            raise XTBloomValueError(
+                f"scc_mixer_history must lie between 1 and "
+                f"{library.MAX_SCC_MIXER_HISTORY}"
+            )
+        return candidate
+    if attribute == "scc_mixer_damping":
+        candidate = float(typing.cast("SupportsFloat | SupportsIndex", value))
+        if not math.isfinite(candidate) or not 0.0 < candidate <= 1.0:
+            raise XTBloomValueError(
+                "scc_mixer_damping must be finite and lie in (0, 1]"
+            )
+        return candidate
+    if attribute == "determinism":
+        if isinstance(value, str):
+            try:
+                candidate = _DETERMINISM_ALIASES[value]
+            except KeyError:
+                raise XTBloomValueError(
+                    "determinism must be 'default', 'reproducible', "
+                    "DETERMINISM_DEFAULT, or DETERMINISM_REPRODUCIBLE"
+                ) from None
+        else:
+            candidate = _as_integer(attribute, value)
+        if candidate not in (
+            library.DETERMINISM_DEFAULT,
+            library.DETERMINISM_REPRODUCIBLE,
+        ):
+            raise XTBloomValueError(
+                "determinism must be 'default', 'reproducible', "
+                "DETERMINISM_DEFAULT, or DETERMINISM_REPRODUCIBLE"
+            )
+        return candidate
     raise XTBloomValueError(f"unsupported calculator setting {attribute!r}")
 
 
 class _ComputeSettings:
     __slots__ = (
         "charge_tolerance",
+        "determinism",
         "electronic_temperature",
         "energy_tolerance",
         "max_scc_iterations",
         "model",
+        "scc_mixer",
+        "scc_mixer_damping",
+        "scc_mixer_history",
     )
 
     model: int
@@ -1616,6 +1697,10 @@ class _ComputeSettings:
     charge_tolerance: float
     energy_tolerance: float
     electronic_temperature: float
+    scc_mixer: int
+    scc_mixer_history: int
+    scc_mixer_damping: float
+    determinism: int
 
     def __init__(
         self,
@@ -1624,16 +1709,44 @@ class _ComputeSettings:
         charge_tolerance: float,
         energy_tolerance: float,
         electronic_temperature: float,
+        scc_mixer: str | int,
+        scc_mixer_history: int,
+        scc_mixer_damping: float,
+        determinism: str | int,
     ) -> None:
         self.model = model
         self.set("max_scc_iterations", max_scc_iterations)
         self.set("charge_tolerance", charge_tolerance)
         self.set("energy_tolerance", energy_tolerance)
         self.set("electronic_temperature", electronic_temperature)
+        self.set("scc_mixer", scc_mixer)
+        self.set("scc_mixer_history", scc_mixer_history)
+        self.set("scc_mixer_damping", scc_mixer_damping)
+        self.set("determinism", determinism)
 
     def set(self, attribute: str, value: object) -> None:
         """Validate and transactionally update one public compute option."""
-        setattr(self, attribute, _validated_compute_setting(attribute, value))
+        normalized = _validated_compute_setting(attribute, value)
+        policy_names = {
+            "scc_mixer",
+            "scc_mixer_history",
+            "scc_mixer_damping",
+            "determinism",
+        }
+        if attribute in policy_names and all(
+            hasattr(self, name) or name == attribute for name in policy_names
+        ):
+            policy = {
+                name: normalized if name == attribute else getattr(self, name)
+                for name in policy_names
+            }
+            library.require_compute_options_v3(
+                int(policy["scc_mixer"]),
+                int(policy["scc_mixer_history"]),
+                float(policy["scc_mixer_damping"]),
+                int(policy["determinism"]),
+            )
+        setattr(self, attribute, normalized)
 
 
 def _resolve_method(method: str) -> int:
@@ -1699,6 +1812,10 @@ class Calculator(Structure):
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
+        scc_mixer: str | int = "modified_broyden",
+        scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+        scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
+        determinism: str | int = "default",
         warm_start: bool = False,
     ) -> None:
         Structure.__init__(
@@ -1720,6 +1837,10 @@ class Calculator(Structure):
             charge_tolerance,
             energy_tolerance,
             electronic_temperature,
+            scc_mixer,
+            scc_mixer_history,
+            scc_mixer_damping,
+            determinism,
         )
         self._context = Context(backend, device_id, cpu_threads)
         self._method = method
@@ -1757,7 +1878,9 @@ class Calculator(Structure):
         """Update a compute setting by name.
 
         Supported settings are ``max_scc_iterations``, ``charge_tolerance``,
-        ``energy_tolerance``, and ``electronic_temperature`` (kelvin).
+        ``energy_tolerance``, ``electronic_temperature`` (kelvin),
+        ``scc_mixer``, ``scc_mixer_history``, ``scc_mixer_damping``, and
+        ``determinism``.
         """
         self._settings.set(attribute, value)
 
@@ -1780,6 +1903,10 @@ class Calculator(Structure):
             charge_tolerance=self._settings.charge_tolerance,
             energy_tolerance=self._settings.energy_tolerance,
             electronic_temperature=self._settings.electronic_temperature,
+            scc_mixer=self._settings.scc_mixer,
+            scc_mixer_history=self._settings.scc_mixer_history,
+            scc_mixer_damping=self._settings.scc_mixer_damping,
+            determinism=self._settings.determinism,
             flags=flags,
             warm_start=self._warm_start,
         )
@@ -1891,6 +2018,10 @@ class BatchCalculator:
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
+        scc_mixer: str | int = "modified_broyden",
+        scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+        scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
+        determinism: str | int = "default",
         warm_start: bool = False,
     ) -> None:
         if not structures:
@@ -1902,6 +2033,10 @@ class BatchCalculator:
             charge_tolerance,
             energy_tolerance,
             electronic_temperature,
+            scc_mixer,
+            scc_mixer_history,
+            scc_mixer_damping,
+            determinism,
         )
         self._context = Context(backend, device_id, cpu_threads)
         self._warm_start = bool(warm_start)
@@ -1984,6 +2119,10 @@ class BatchCalculator:
                 charge_tolerance=self._settings.charge_tolerance,
                 energy_tolerance=self._settings.energy_tolerance,
                 electronic_temperature=self._settings.electronic_temperature,
+                scc_mixer=self._settings.scc_mixer,
+                scc_mixer_history=self._settings.scc_mixer_history,
+                scc_mixer_damping=self._settings.scc_mixer_damping,
+                determinism=self._settings.determinism,
                 flags=flags,
                 warm_start=self._warm_start,
             )
@@ -2255,6 +2394,10 @@ class ArrayBatch:
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
+        scc_mixer: str | int = "modified_broyden",
+        scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+        scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
+        determinism: str | int = "default",
         compute_energy: bool = True,
         compute_forces: bool = True,
         compute_charges: bool = True,
@@ -2296,6 +2439,10 @@ class ArrayBatch:
             charge_tolerance=charge_tolerance,
             energy_tolerance=energy_tolerance,
             electronic_temperature=electronic_temperature,
+            scc_mixer=scc_mixer,
+            scc_mixer_history=scc_mixer_history,
+            scc_mixer_damping=scc_mixer_damping,
+            determinism=determinism,
             compute_energy=compute_energy,
             compute_forces=compute_forces,
             compute_charges=compute_charges,
@@ -2350,6 +2497,10 @@ def _compute_array_batch(
     charge_tolerance: float,
     energy_tolerance: float,
     electronic_temperature: float,
+    scc_mixer: str | int,
+    scc_mixer_history: int,
+    scc_mixer_damping: float,
+    determinism: str | int,
     compute_energy: bool,
     compute_forces: bool,
     compute_charges: bool,
@@ -2447,6 +2598,10 @@ def _compute_array_batch(
             charge_tolerance=charge_tolerance,
             energy_tolerance=energy_tolerance,
             electronic_temperature=electronic_temperature,
+            scc_mixer=scc_mixer,
+            scc_mixer_history=scc_mixer_history,
+            scc_mixer_damping=scc_mixer_damping,
+            determinism=determinism,
             compute_energy=compute_energy,
             compute_forces=compute_forces,
             compute_charges=compute_charges,
@@ -2602,6 +2757,10 @@ def _build_compute_options(
     charge_tolerance: float,
     energy_tolerance: float,
     electronic_temperature: float,
+    scc_mixer: str | int,
+    scc_mixer_history: int,
+    scc_mixer_damping: float,
+    determinism: str | int,
     compute_energy: bool,
     compute_forces: bool,
     compute_charges: bool,
@@ -2632,6 +2791,20 @@ def _build_compute_options(
     options.energy_tolerance = float(energy_tolerance)
     options.electronic_temperature = (
         float(electronic_temperature) * library.KELVIN_TO_HARTREE
+    )
+    options.scc_mixer = int(_validated_compute_setting("scc_mixer", scc_mixer))
+    options.scc_mixer_history = int(
+        _validated_compute_setting("scc_mixer_history", scc_mixer_history)
+    )
+    options.scc_mixer_damping = float(
+        _validated_compute_setting("scc_mixer_damping", scc_mixer_damping)
+    )
+    options.determinism = int(_validated_compute_setting("determinism", determinism))
+    library.require_compute_options_v3(
+        options.scc_mixer,
+        options.scc_mixer_history,
+        options.scc_mixer_damping,
+        options.determinism,
     )
     return options
 
@@ -3073,6 +3246,10 @@ def compute_arrays(
     charge_tolerance: float = 1.0e-6,
     energy_tolerance: float = 1.0e-8,
     electronic_temperature: float = 300.0,
+    scc_mixer: str | int = "modified_broyden",
+    scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+    scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
+    determinism: str | int = "default",
     out: object | None = None,
     result_memory: str = "host",
 ) -> ArrayBatchResult:
@@ -3108,6 +3285,10 @@ def compute_arrays(
             charge_tolerance=charge_tolerance,
             energy_tolerance=energy_tolerance,
             electronic_temperature=electronic_temperature,
+            scc_mixer=scc_mixer,
+            scc_mixer_history=scc_mixer_history,
+            scc_mixer_damping=scc_mixer_damping,
+            determinism=determinism,
             out=out,
             result_memory=result_memory,
         )

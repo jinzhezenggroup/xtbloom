@@ -64,6 +64,15 @@ MODEL_GFN2_XTB = 2
 SCC_START_FRESH = 1
 SCC_START_WARM = 2
 
+SCC_MIXER_MODIFIED_BROYDEN = 1
+
+DETERMINISM_DEFAULT = 0
+DETERMINISM_REPRODUCIBLE = 1
+
+DEFAULT_SCC_MIXER_HISTORY = 8
+DEFAULT_SCC_MIXER_DAMPING = 0.4
+MAX_SCC_MIXER_HISTORY = 64
+
 COMPUTE_ENERGY = 1 << 0
 COMPUTE_FORCES = 1 << 1
 COMPUTE_ATOMIC_CHARGES = 1 << 2
@@ -186,7 +195,7 @@ class Interaction(ctypes.Structure):
 
 
 class ComputeOptions(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_compute_options_t`` through ABI version 2."""
+    """ctypes mirror of ``xtbloom_compute_options_t`` through ABI version 3."""
 
     _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
@@ -200,6 +209,11 @@ class ComputeOptions(ctypes.Structure):
         ("electronic_temperature", ctypes.c_double),
         ("scc_start_mode", ctypes.c_int32),
         ("reserved_v2", ctypes.c_uint32),
+        ("scc_mixer", ctypes.c_int32),
+        ("scc_mixer_history", ctypes.c_int32),
+        ("scc_mixer_damping", ctypes.c_double),
+        ("determinism", ctypes.c_int32),
+        ("reserved_v3", ctypes.c_uint32),
     ]
 
 
@@ -501,6 +515,68 @@ _REQUEST_API_SYMBOLS = (
 _REQUEST_API_AVAILABILITY: weakref.WeakKeyDictionary[object, bool] = (
     weakref.WeakKeyDictionary()
 )
+_COMPUTE_OPTIONS_V3_AVAILABILITY: weakref.WeakKeyDictionary[object, bool] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _probe_compute_options_v3(library: ctypes.CDLL) -> bool:
+    """Detect whether the selected core initializes the complete ABI-v3 suffix.
+
+    Future-larger structures are accepted by older cores, so a successful init
+    does not itself prove support. A sentinel-filled suffix distinguishes an
+    older 56-byte initializer from the frozen V3 defaults without requiring a
+    new public symbol.
+    """
+    options = ComputeOptions()
+    ctypes.memset(ctypes.byref(options), 0xA5, ctypes.sizeof(options))
+    status = library.xtbloom_compute_options_init(
+        ctypes.byref(options), ctypes.sizeof(options)
+    )
+    if status != STATUS_SUCCESS:
+        raise XTBloomRuntimeError(
+            "xtbloom_compute_options_init failed while probing ABI-v3 support",
+            status,
+        )
+    available = (
+        options.scc_mixer == SCC_MIXER_MODIFIED_BROYDEN
+        and options.scc_mixer_history == DEFAULT_SCC_MIXER_HISTORY
+        and options.scc_mixer_damping == DEFAULT_SCC_MIXER_DAMPING
+        and options.determinism == DETERMINISM_DEFAULT
+        and options.reserved_v3 == 0
+    )
+    _COMPUTE_OPTIONS_V3_AVAILABILITY[library] = available
+    return available
+
+
+def compute_options_v3_available(library: ctypes.CDLL | None = None) -> bool:
+    """Return whether the resolved core supports the complete options V3 suffix."""
+    handle = load_library() if library is None else library
+    return _COMPUTE_OPTIONS_V3_AVAILABILITY.get(handle, False)
+
+
+def require_compute_options_v3(
+    scc_mixer: int,
+    scc_mixer_history: int,
+    scc_mixer_damping: float,
+    determinism: int,
+    library: ctypes.CDLL | None = None,
+) -> None:
+    """Fail closed when an older core would ignore a nondefault V3 policy."""
+    if (
+        scc_mixer == SCC_MIXER_MODIFIED_BROYDEN
+        and scc_mixer_history == DEFAULT_SCC_MIXER_HISTORY
+        and scc_mixer_damping == DEFAULT_SCC_MIXER_DAMPING
+        and determinism == DETERMINISM_DEFAULT
+    ):
+        return
+    handle = load_library() if library is None else library
+    if not compute_options_v3_available(handle):
+        raise XTBloomRuntimeError(
+            "the loaded xTBloom core does not support compute-options ABI v3; "
+            "nondefault scc_mixer_history, scc_mixer_damping, or determinism "
+            "would be ignored"
+        )
 
 
 def _configure_request_api(library: ctypes.CDLL) -> bool:
@@ -714,6 +790,7 @@ def load_library() -> ctypes.CDLL:
                 f"cannot load xTBloom shared library {path}: {exc}"
             ) from exc
         _configure_library(library)
+        _probe_compute_options_v3(library)
         _lib = library
     return _lib
 
@@ -1031,6 +1108,10 @@ __all__ = [
     "COMPUTE_FORCES",
     "COMPUTE_POINT_CHARGE_FORCES",
     "DEFAULT_ELECTRONIC_TEMPERATURE",
+    "DEFAULT_SCC_MIXER_DAMPING",
+    "DEFAULT_SCC_MIXER_HISTORY",
+    "DETERMINISM_DEFAULT",
+    "DETERMINISM_REPRODUCIBLE",
     "DLPACK_DEVICE_CPU",
     "DLPACK_DEVICE_CUDA",
     "DLPACK_DTYPE_BFLOAT",
@@ -1053,6 +1134,7 @@ __all__ = [
     "INTERACTION_NONE",
     "INTERACTION_POINT_CHARGES_MULTIPOLE",
     "KELVIN_TO_HARTREE",
+    "MAX_SCC_MIXER_HISTORY",
     "MEMORY_CUDA_DEVICE",
     "MEMORY_HOST",
     "MEMORY_ROCM_DEVICE",
@@ -1063,6 +1145,7 @@ __all__ = [
     "REQUEST_PENDING",
     "RESULT_DIPOLE_MOMENTS",
     "RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES",
+    "SCC_MIXER_MODIFIED_BROYDEN",
     "SCC_START_FRESH",
     "SCC_START_WARM",
     "STATUS_ALLOCATION_FAILED",
@@ -1087,6 +1170,7 @@ __all__ = [
     "ResultOwnerOptions",
     "WorkspaceQuery",
     "compute_checked",
+    "compute_options_v3_available",
     "device_memory_info",
     "empty_result_shape",
     "get_last_error",
@@ -1095,5 +1179,6 @@ __all__ = [
     "host_const",
     "library_path",
     "load_library",
+    "require_compute_options_v3",
     "status_string",
 ]
