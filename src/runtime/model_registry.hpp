@@ -21,6 +21,17 @@ enum class ModelFamily : std::uint8_t {
 };
 
 /*
+ * Concrete backend execution route. Capability is derived from this route,
+ * rather than stored as an independent boolean that could be enabled while a
+ * caller still falls through to another model's executor.
+ */
+enum class ModelBackendRoute : std::uint8_t {
+  kUnavailable,
+  kGfn1,
+  kGfn2,
+};
+
+/*
  * Internal model registration record.
  *
  * The stable ABI reserves model tags independently of implementation state.
@@ -33,11 +44,15 @@ struct ModelDescriptor {
   xtbloom_model_t tag;
   ModelFamily family;
   const char* canonical_name;
-  bool cpu_implemented;
-  bool cuda_implemented;
+  ModelBackendRoute cpu_route;
+  ModelBackendRoute cuda_route;
 };
 
 [[nodiscard]] const ModelDescriptor* find_model_descriptor(xtbloom_model_t model) noexcept;
+
+/* Return the concrete executor route for one resolved backend. */
+[[nodiscard]] ModelBackendRoute model_backend_route(const ModelDescriptor& descriptor,
+                                                    xtbloom_backend_t backend) noexcept;
 
 /*
  * Validate only the model-to-backend dispatch boundary. Descriptor validation
@@ -47,7 +62,8 @@ struct ModelDescriptor {
  */
 [[nodiscard]] xtbloom_status_t validate_model_dispatch(xtbloom_model_t model,
                                                        xtbloom_backend_t backend,
-                                                       std::string& error);
+                                                       std::string& error,
+                                                       ModelBackendRoute* route = nullptr);
 
 }  // namespace xtbloom::detail
 

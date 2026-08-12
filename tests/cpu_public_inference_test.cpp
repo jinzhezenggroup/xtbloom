@@ -198,6 +198,7 @@ struct PublicOutputImage {
         forces(request.forces),
         atomic_charges(request.atomic_charges),
         point_forces(request.point_forces),
+        dipole_moments(request.dipole_moments),
         iterations(request.iterations),
         converged(request.converged),
         statuses(request.statuses),
@@ -207,6 +208,7 @@ struct PublicOutputImage {
     return same_bytes(energies, request.energies) && same_bytes(forces, request.forces) &&
            same_bytes(atomic_charges, request.atomic_charges) &&
            same_bytes(point_forces, request.point_forces) &&
+           same_bytes(dipole_moments, request.dipole_moments) &&
            same_bytes(iterations, request.iterations) && same_bytes(converged, request.converged) &&
            same_bytes(statuses, request.statuses) && flags == request.result.flags;
   }
@@ -215,6 +217,7 @@ struct PublicOutputImage {
   std::vector<double> forces;
   std::vector<double> atomic_charges;
   std::vector<double> point_forces;
+  std::vector<double> dipole_moments;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> statuses;
@@ -1891,6 +1894,64 @@ struct PlanDeleter {
 
 using PlanHandle = std::unique_ptr<xtbloom_plan_t, PlanDeleter>;
 
+int test_gfn1_status_precedes_cpu_interaction_availability() {
+  ContextHandle context = make_cpu_context(1);
+  CHECK(context != nullptr);
+
+  PublicBatch request = make_h2_he_batch();
+  request.bind(XTBLOOM_COMPUTE_ENERGY);
+
+  /* ALPB is a known, structurally valid attachment whose CPU executor is not
+   * released. The reserved GFN1 model must win dispatch after descriptor
+   * validity is proven, without publishing into any caller-owned result. */
+  std::vector<std::uint8_t> payload(32u, 0u);
+  std::int32_t block_version = 1;
+  std::memcpy(payload.data(), &block_version, sizeof(block_version));
+  std::vector<xtbloom_interaction_t> interactions(1);
+  interactions[0].type = XTBLOOM_INTERACTION_ALPB_SOLVATION;
+  interactions[0].system_index = 0;
+  interactions[0].payload_size = payload.size();
+  request.batch.total_interactions = 1;
+  request.batch.interaction_descriptors = input_buffer(interactions);
+  request.batch.interaction_payload = input_buffer(payload);
+  request.options.model = XTBLOOM_MODEL_GFN1_XTB;
+
+  const PublicOutputImage before(request);
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_NOT_SUPPORTED);
+  CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
+  CHECK(before.matches(request));
+
+  xtbloom_plan_t* raw_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
+  CHECK(xtbloom_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
+        XTBLOOM_STATUS_NOT_SUPPORTED);
+  CHECK(raw_plan == nullptr);
+
+  /* The split must not change GFN2's established feature-availability status. */
+  request.options.model = XTBLOOM_MODEL_GFN2_XTB;
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(before.matches(request));
+  raw_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
+  CHECK(xtbloom_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
+        XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(raw_plan == nullptr);
+
+  /* Malformed attachment metadata remains INVALID_ARGUMENT before dispatch,
+   * even when the requested model itself is unavailable. */
+  request.options.model = XTBLOOM_MODEL_GFN1_XTB;
+  interactions[0].flags = 1u;
+  CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(std::strstr(xtbloom_get_last_error(), "flags must be zero") != nullptr);
+  CHECK(before.matches(request));
+  raw_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
+  CHECK(xtbloom_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(raw_plan == nullptr);
+  return 0;
+}
+
 int test_plan_creation_model_and_abi_prefix_contracts() {
   const std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES;
   ContextHandle context = make_cpu_context(1);
@@ -1898,6 +1959,30 @@ int test_plan_creation_model_and_abi_prefix_contracts() {
 
   PublicBatch request = make_repeated_h2_he_batch(2u);
   request.bind(flags);
+
+  /* A hostile caller may provide only the common extensible-structure header.
+   * Plan dispatch must reject that prefix before reading the model field at
+   * byte 8.  Fill the following canary bytes with the reserved GFN1 tag so an
+   * out-of-prefix read would be observably misclassified as NOT_SUPPORTED. */
+  constexpr std::size_t kHeaderBytes = 2u * sizeof(std::uint32_t);
+  constexpr std::size_t kCanaryBytes = 16u;
+  alignas(xtbloom_compute_options_t) std::array<unsigned char, kHeaderBytes + kCanaryBytes>
+      undersized_storage{};
+  std::uint32_t undersized_size = static_cast<std::uint32_t>(kHeaderBytes);
+  std::uint32_t api_version = XTBLOOM_API_VERSION;
+  std::int32_t canary_model = XTBLOOM_MODEL_GFN1_XTB;
+  std::memcpy(undersized_storage.data(), &undersized_size, sizeof(undersized_size));
+  std::memcpy(undersized_storage.data() + sizeof(undersized_size), &api_version,
+              sizeof(api_version));
+  std::memcpy(undersized_storage.data() + kHeaderBytes, &canary_model, sizeof(canary_model));
+  const auto canary_before = undersized_storage;
+  const auto* undersized_options =
+      reinterpret_cast<const xtbloom_compute_options_t*>(undersized_storage.data());
+  xtbloom_plan_t* raw_undersized_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
+  CHECK(xtbloom_plan_create(context.get(), &request.batch, undersized_options,
+                            &raw_undersized_plan) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(raw_undersized_plan == nullptr);
+  CHECK(undersized_storage == canary_before);
 
   /* This storage contains only the ABI-v1 prefix. Plan normalization must
    * not copy/read the ABI-v2 suffix that an older caller does not own. */
@@ -2372,6 +2457,9 @@ int main() {
   }
   if (const int line = test_degenerate_occupation_representability_is_publicly_successful();
       line != 0) {
+    return line;
+  }
+  if (const int line = test_gfn1_status_precedes_cpu_interaction_availability(); line != 0) {
     return line;
   }
   if (const int line = test_plan_creation_model_and_abi_prefix_contracts(); line != 0) {

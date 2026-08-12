@@ -1,19 +1,20 @@
 # GFN1-xTB implementation contract
 
 GFN1-xTB is a distinct tight-binding model, not a second parameter table for
-the GFN2 equations. xTBloom reserves its public model tag, but keeps execution
-disabled until the complete CPU and CUDA implementations and their independent
-evidence are available. This page records the contract those implementations
-must satisfy.
+the GFN2 equations. xTBloom reserves its public model tag and enables each
+backend independently only after that backend's complete implementation and
+independent evidence are available. This page records the contract those
+implementations must satisfy.
 
 ## Pinned references
 
-The initial model audit uses three clean owner-requested local checkouts:
+The initial model audit uses three clean owner-requested local checkouts for
+readable implementation inspection:
 
-- tblite `133f91efb94b47f05848e1f86832f40a1accc385` as the structured parameter
-  and readable calculator contract;
-- xTB `b31754bf3c7cccf8c242c469b03ae675e04bd608` as the canonical production
-  behavior and analytic-gradient reference; and
+- tblite `133f91efb94b47f05848e1f86832f40a1accc385` as a readable calculator and
+  exporter inspection revision;
+- xTB `b31754bf3c7cccf8c242c469b03ae675e04bd608` as a readable production and
+  analytic-gradient inspection revision; and
 - dxtb `b529b5ddb75c0554274955082a189f9f88437cb2` as an independently structured
   implementation cross-check.
 
@@ -21,34 +22,91 @@ Canonical redistributed GFN1 parameter material is pinned to tblite 0.7.0
 commit `fa8a4416e8fe093d0075bc10ac875494c2a449a9`. It is an ancestor of the local
 tblite checkout; the intervening GFN1/export-source changes are formatting and
 workflow maintenance rather than parameter changes. Primary closed-shell
-goldens use tblite 0.7.0 with explicit `--method gfn1 --acc 0.0001 --grad
---json`; pinned xTB 6.7.1 supplies unrestricted, point-charge, and
-halogen-specific reference cases.
+goldens use the separately pinned live tblite revision
+`e9abc395b122018ed688aecb1c3a65cecaf97beb` with explicit `--method gfn1
+--acc 0.0001 --grad --json`. xTB 6.7.1 revision
+`edcfbbe39d411edc225e27315fbda3a204ddb023` supplies unrestricted,
+point-charge, and halogen-specific reference cases. The source, inspection,
+and live-oracle roles are intentionally distinct.
 
 Redistributed parameter bytes are generated from the reviewed tblite source
 and covered by its LGPL-3.0-or-later grant. xTB and dxtb are oracle and review
 inputs unless a later provenance manifest explicitly identifies redistributed
 material from them.
 
-## Differences from GFN2
+## Basis, coordination, and zeroth-order Hamiltonian
 
-The GFN1 implementation requires its own scientific composition:
+The canonical tables cover elements H through Rn (`Z = 1..86`), 237 shells,
+and 869 non-default symmetric element-pair scales. Unsupported atomic numbers
+are invalid requests; there is no fallback element or GFN2 parameter lookup.
 
-- the exponential coordination-number model rather than the GFN2
-  double-exponential model;
-- the GFN1 basis, including orthogonalization of repeated angular-momentum
-  shells and a first-shell valence mask;
-- GFN1 zeroth-order Hamiltonian shell scales and element-pair overrides;
-- harmonic averaging in the isotropic second-order Coulomb kernel;
-- atom-resolved third-order charge electrostatics rather than GFN2's
-  shell-resolved third-order term;
+For each atom, the first shell encountered at each angular momentum is the
+valence shell. A later shell with the same angular momentum is non-valence,
+has zero reference occupation, and is orthogonalized against that first
+matching shell—not against the immediately preceding shell and not through a
+sequential Gram--Schmidt chain. The resulting first-shell valence mask is used
+by both reference occupations and H0 scaling.
+
+GFN1 uses the exponential coordination-number model selected by the canonical
+export, rather than GFN2's double-exponential convention. Its analytic
+coordinate derivative must feed every CN-dependent term, including H0 and D3.
+
+For shells `i` and `j`, the H0 off-diagonal scale has four branches:
+
+- valence/valence uses the angular-momentum shell scale, the symmetric element
+  pair scale (default or override), and the electronegativity factor
+  `1 + enscale * (EN_A - EN_B)^2`;
+- valence/non-valence uses half the sum of the valence shell's diagonal scale
+  and `kpol`;
+- non-valence/valence uses the corresponding scale of the other shell; and
+- non-valence/non-valence uses `kpol` directly.
+
+Pair overrides and the electronegativity factor apply only to the
+valence/valence branch. Shell levels, shell polynomials, and shell CN shifts
+come from the exact GFN1 shell table; they must not be interpreted through a
+GFN2 shell layout.
+
+## Electrostatics, spin, and classical terms
+
+The remaining GFN1 scientific composition is:
+
+- isotropic ES2 uses shell hardnesses and the harmonic pair average
+  `g_ij = 2 / (1/g_i + 1/g_j)` with the canonical GFN1 exponent;
+- ES3 is atom-resolved: for atomic charge `q_A` and Hubbard derivative
+  `Gamma_A`, `E_ES3,A = Gamma_A q_A^3 / 3` and
+  `V_ES3,A = Gamma_A q_A^2`; it is not GFN2's shell-resolved ES3;
+- unrestricted spin retains the element and angular-momentum coupling table.
+  Repeated shells participate by their angular momentum, so both hydrogen s
+  shells receive the s--s coupling; restricted systems have zero spin energy;
+- effective nuclear repulsion uses the GFN1 `zeff`, `arep`, `kexp`, and light
+  element exponent policy from the canonical table;
 - charge-independent D3(BJ) dispersion with the reviewed GFN1 parameters;
 - the GFN1 halogen-bond correction; and
 - no GFN2 anisotropic AES2/multipole SCC term and no self-consistent D4 term.
 
+D3 uses the pinned simple-dftd3 reference coordination numbers, Gaussian
+reference weights, packed reference C6 coefficients, r4/r2 values, and pair
+van-der-Waals radii. It includes the two-body C6 and C8 energy, the direct
+pair-coordinate derivative, and the `dE/dCN` chain through exponential CN.
+The canonical damping constants are `s6`, `s8`, `a1`, and `a2`; `s9 = 0`, so
+GFN1 has no Axilrod--Teller--Muto term.
+
+The halogen correction treats Cl, Br, I, and At as donors and N, O, P, and S
+as acceptors. The closest non-coincident atom to each donor defines the donor
+axis. Candidate donor--acceptor pairs use a 20 bohr cutoff, scaled atomic
+radii, the canonical Lennard-Jones-like radial factor, and the sixth-power
+angular damping. Its analytic derivative acts on donor, acceptor, and axis
+neighbor and must conserve the isolated-system net force.
+
 Shared numerical utilities such as generalized eigensolution, occupations,
 density construction, mixing, and failure publication may be reused only when
 their equations and state layouts are genuinely model-independent.
+
+The scalar Mulliken charge channel is the active GFN1 SCC variable. GFN2
+atomic dipole/quadrupole SCC fields, AES2, and D4 charge state must not be
+allocated, mixed, or silently included. Public energy components and forces
+must identify GFN1 D3 and halogen contributions separately from GFN2 D4/AES2
+semantics.
 
 ## Energy, SCC, and forces
 

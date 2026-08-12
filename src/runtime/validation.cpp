@@ -1010,7 +1010,7 @@ DescriptorValidationResult validate_interaction_execution_availability(const xtb
 
 }  // namespace
 
-DescriptorValidationResult validate_compute_descriptor_structure(
+DescriptorValidationResult validate_compute_descriptor_structure_for_dispatch(
     xtbloom_backend_t backend, const xtbloom_batch_t* batch,
     const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result) {
   if (result == nullptr) {
@@ -1027,15 +1027,21 @@ DescriptorValidationResult validate_compute_descriptor_structure(
   if (!aliases.ok()) {
     return aliases;
   }
-  DescriptorValidationResult output_availability =
-      validate_output_execution_availability(*options, backend);
-  if (!output_availability.ok()) {
-    return output_availability;
-  }
-  return validate_interaction_execution_availability(*batch, backend);
+  return {};
 }
 
-DescriptorValidationResult validate_plan_descriptor_structure(
+DescriptorValidationResult validate_compute_descriptor_structure(
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result) {
+  DescriptorValidationResult validation =
+      validate_compute_descriptor_structure_for_dispatch(backend, batch, options, result);
+  if (!validation.ok()) {
+    return validation;
+  }
+  return validate_compute_execution_availability(backend, *batch, *options);
+}
+
+DescriptorValidationResult validate_plan_descriptor_structure_for_dispatch(
     xtbloom_backend_t backend, const xtbloom_batch_t* batch,
     const xtbloom_compute_options_t* options) {
   /* Plan creation has no result descriptor yet; the batch plus the compute
@@ -1065,12 +1071,20 @@ DescriptorValidationResult validate_plan_descriptor_structure(
   if (!aliases.ok()) {
     return aliases;
   }
-  DescriptorValidationResult output_availability =
-      validate_output_execution_availability(*options, backend);
-  if (!output_availability.ok()) {
-    return output_availability;
+  return semantics;
+}
+
+DescriptorValidationResult validate_plan_descriptor_structure(
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options) {
+  DescriptorValidationResult validation =
+      validate_plan_descriptor_structure_for_dispatch(backend, batch, options);
+  if (!validation.ok()) {
+    return validation;
   }
-  return validate_interaction_execution_availability(*batch, backend);
+  DescriptorValidationResult availability =
+      validate_compute_execution_availability(backend, *batch, *options);
+  return availability.ok() ? validation : availability;
 }
 
 DescriptorValidationResult validate_host_topology_semantics(const xtbloom_batch_t& batch) {
@@ -1188,10 +1202,9 @@ DescriptorValidationResult validate_host_topology_semantics(const xtbloom_batch_
   return validation;
 }
 
-DescriptorValidationResult validate_compute_descriptors(xtbloom_backend_t backend,
-                                                        const xtbloom_batch_t* batch,
-                                                        const xtbloom_compute_options_t* options,
-                                                        const xtbloom_batch_result_t* result) {
+DescriptorValidationResult validate_compute_descriptors_for_dispatch(
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result) {
   if (result == nullptr) {
     return invalid("batch result is NULL");
   }
@@ -1215,17 +1228,35 @@ DescriptorValidationResult validate_compute_descriptors(xtbloom_backend_t backen
   if (!aliases.ok()) {
     return aliases;
   }
-  DescriptorValidationResult output_availability =
-      validate_output_execution_availability(*options, backend);
-  if (!output_availability.ok()) {
-    return output_availability;
+  return semantics;
+}
+
+DescriptorValidationResult validate_compute_descriptors(xtbloom_backend_t backend,
+                                                        const xtbloom_batch_t* batch,
+                                                        const xtbloom_compute_options_t* options,
+                                                        const xtbloom_batch_result_t* result) {
+  DescriptorValidationResult validation =
+      validate_compute_descriptors_for_dispatch(backend, batch, options, result);
+  if (!validation.ok()) {
+    return validation;
   }
   DescriptorValidationResult availability =
-      validate_interaction_execution_availability(*batch, backend);
+      validate_compute_execution_availability(backend, *batch, *options);
   if (!availability.ok()) {
     return availability;
   }
-  return semantics;
+  return validation;
+}
+
+DescriptorValidationResult validate_compute_execution_availability(
+    xtbloom_backend_t backend, const xtbloom_batch_t& batch,
+    const xtbloom_compute_options_t& options) {
+  DescriptorValidationResult output_availability =
+      validate_output_execution_availability(options, backend);
+  if (!output_availability.ok()) {
+    return output_availability;
+  }
+  return validate_interaction_execution_availability(batch, backend);
 }
 
 }  // namespace xtbloom::detail

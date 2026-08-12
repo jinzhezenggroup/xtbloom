@@ -279,10 +279,15 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
     error = std::move(validation.error);
     return validation.status;
   }
+  ModelBackendRoute model_route = ModelBackendRoute::kUnavailable;
   const xtbloom_status_t model_status =
-      validate_model_dispatch(options.model, context.backend, error);
+      validate_model_dispatch(options.model, context.backend, error, &model_route);
   if (model_status != XTBLOOM_STATUS_SUCCESS) {
     return model_status;
+  }
+  if (model_route != ModelBackendRoute::kGfn2) {
+    error = "a GFN2 plan cannot be constructed for another registered model route";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
 
   impl_->backend = context.backend;

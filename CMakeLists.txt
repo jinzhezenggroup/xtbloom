@@ -940,6 +940,7 @@ add_library(xtbloom
   src/runtime/backend.cpp
   src/runtime/gfn2_cpu_execution.cpp
   src/runtime/gfn2_plan.cpp
+  src/runtime/model_plan.cpp
   src/runtime/model_registry.cpp
   src/runtime/request.cpp
   src/runtime/result_owner.cpp
@@ -1651,6 +1652,7 @@ if(XTBLOOM_BUILD_TESTS)
       src/runtime/backend.cpp
       src/runtime/gfn2_cpu_execution.cpp
       src/runtime/gfn2_plan.cpp
+      src/runtime/model_plan.cpp
       src/runtime/model_registry.cpp
       src/runtime/request.cpp
       src/runtime/result_owner.cpp

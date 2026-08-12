@@ -14,6 +14,8 @@
 
 int main() {
   using xtbloom::detail::find_model_descriptor;
+  using xtbloom::detail::model_backend_route;
+  using xtbloom::detail::ModelBackendRoute;
   using xtbloom::detail::ModelFamily;
   using xtbloom::detail::validate_model_dispatch;
 
@@ -21,20 +23,26 @@ int main() {
   CHECK(gfn1 != nullptr);
   CHECK(gfn1->family == ModelFamily::kGfn1);
   CHECK(std::strcmp(gfn1->canonical_name, "GFN1-xTB") == 0);
-  CHECK(!gfn1->cpu_implemented);
-  CHECK(!gfn1->cuda_implemented);
+  CHECK(gfn1->cpu_route == ModelBackendRoute::kUnavailable);
+  CHECK(gfn1->cuda_route == ModelBackendRoute::kUnavailable);
+  CHECK(model_backend_route(*gfn1, XTBLOOM_BACKEND_CPU) ==
+        ModelBackendRoute::kUnavailable);
 
   const auto* gfn2 = find_model_descriptor(XTBLOOM_MODEL_GFN2_XTB);
   CHECK(gfn2 != nullptr);
   CHECK(gfn2->family == ModelFamily::kGfn2);
   CHECK(std::strcmp(gfn2->canonical_name, "GFN2-xTB") == 0);
-  CHECK(gfn2->cpu_implemented);
-  CHECK(gfn2->cuda_implemented);
+  CHECK(gfn2->cpu_route == ModelBackendRoute::kGfn2);
+  CHECK(gfn2->cuda_route == ModelBackendRoute::kGfn2);
+  CHECK(model_backend_route(*gfn2, XTBLOOM_BACKEND_ROCM) ==
+        ModelBackendRoute::kUnavailable);
   CHECK(find_model_descriptor(static_cast<xtbloom_model_t>(99)) == nullptr);
 
   std::string error;
-  CHECK(validate_model_dispatch(XTBLOOM_MODEL_GFN2_XTB, XTBLOOM_BACKEND_CPU, error) ==
+  ModelBackendRoute route = ModelBackendRoute::kUnavailable;
+  CHECK(validate_model_dispatch(XTBLOOM_MODEL_GFN2_XTB, XTBLOOM_BACKEND_CPU, error, &route) ==
         XTBLOOM_STATUS_SUCCESS);
+  CHECK(route == ModelBackendRoute::kGfn2);
   CHECK(error.empty());
   CHECK(validate_model_dispatch(XTBLOOM_MODEL_GFN2_XTB, XTBLOOM_BACKEND_CUDA, error) ==
         XTBLOOM_STATUS_SUCCESS);

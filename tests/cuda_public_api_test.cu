@@ -3238,34 +3238,161 @@ int test_gfn1_rejected_transactionally(std::int32_t device, PublicBatch& batch,
 
   xtbloom_compute_options_t gfn1_options = options;
   gfn1_options.model = XTBLOOM_MODEL_GFN1_XTB;
-  for (const ResultLayout layout :
-       {ResultLayout::kHost, ResultLayout::kDevice, ResultLayout::kMixed}) {
-    ResultOwner result;
-    CUDA_CHECK(result.bind(batch, layout, gfn1_options.flags));
-    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn1_options, &result.descriptor) ==
-          XTBLOOM_STATUS_NOT_SUPPORTED);
-    CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
-    bool unchanged = false;
-    CUDA_CHECK(result.unchanged(unchanged));
-    CHECK(unchanged);
-    bool guards = false;
-    CUDA_CHECK(result.guards_intact(guards));
-    CHECK(guards);
+  DeviceBatchInputs device_inputs;
+  CUDA_CHECK(device_inputs.upload_all(batch));
+  for (const InputLayout input_layout :
+       {InputLayout::kHost, InputLayout::kDevice, InputLayout::kMixed}) {
+    bind_inputs(batch, &device_inputs, input_layout);
+    for (const ResultLayout result_layout :
+         {ResultLayout::kHost, ResultLayout::kDevice, ResultLayout::kMixed}) {
+      ResultOwner result;
+      CUDA_CHECK(result.bind(batch, result_layout, gfn1_options.flags));
+      CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn1_options, &result.descriptor) ==
+            XTBLOOM_STATUS_NOT_SUPPORTED);
+      CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
+      bool unchanged = false;
+      CUDA_CHECK(result.unchanged(unchanged));
+      CHECK(unchanged);
+      bool guards = false;
+      CUDA_CHECK(result.guards_intact(guards));
+      CHECK(guards);
 
-    CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn1_options,
-                                  &result.descriptor,
-                                  request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
+      CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn1_options,
+                                    &result.descriptor,
+                                    request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
+      CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
+      CUDA_CHECK(result.unchanged(unchanged));
+      CHECK(unchanged);
+      CUDA_CHECK(result.guards_intact(guards));
+      CHECK(guards);
+      CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+      CHECK(info.state == XTBLOOM_REQUEST_IDLE);
+      CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+      CHECK(info.result_flags == 0u);
+      CHECK(std::strcmp(xtbloom_request_get_error(request.get()), "") == 0);
+    }
+
+    xtbloom_plan_t* raw_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
+    CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn1_options, &raw_plan) ==
+          XTBLOOM_STATUS_NOT_SUPPORTED);
+    CHECK(raw_plan == nullptr);
     CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
-    CUDA_CHECK(result.unchanged(unchanged));
-    CHECK(unchanged);
-    CUDA_CHECK(result.guards_intact(guards));
-    CHECK(guards);
-    CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
-    CHECK(info.state == XTBLOOM_REQUEST_IDLE);
-    CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
-    CHECK(info.result_flags == 0u);
-    CHECK(std::strcmp(xtbloom_request_get_error(request.get()), "") == 0);
   }
+
+  /* CUDA dipole publication is not released for GFN2. Once descriptor shape
+   * is valid, unavailable GFN1 model dispatch must take precedence and remain
+   * transactional for both synchronous and asynchronous public calls. */
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  xtbloom_compute_options_t dipole_options = gfn1_options;
+  dipole_options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+  ResultOwner dipole_result;
+  CUDA_CHECK(dipole_result.bind(batch, ResultLayout::kMixed, dipole_options.flags));
+  GuardedOutput<double> dipoles;
+  CUDA_CHECK(dipoles.initialize(3u * static_cast<std::size_t>(batch.descriptor.batch_size),
+                                Placement::kDevice));
+  dipole_result.descriptor.dipole_moments = dipoles.descriptor();
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &dipole_options,
+                        &dipole_result.descriptor) == XTBLOOM_STATUS_NOT_SUPPORTED);
+  CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
+  bool unchanged = false;
+  CUDA_CHECK(dipole_result.unchanged(unchanged));
+  CHECK(unchanged);
+  CUDA_CHECK(dipoles.unchanged(unchanged));
+  CHECK(unchanged);
+  bool guards = false;
+  CUDA_CHECK(dipoles.guards_intact(guards));
+  CHECK(guards);
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &dipole_options,
+                                &dipole_result.descriptor,
+                                request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
+  CUDA_CHECK(dipole_result.unchanged(unchanged));
+  CHECK(unchanged);
+  CUDA_CHECK(dipoles.unchanged(unchanged));
+  CHECK(unchanged);
+  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
+  xtbloom_plan_t* raw_dipole_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &dipole_options, &raw_dipole_plan) ==
+        XTBLOOM_STATUS_NOT_SUPPORTED);
+  CHECK(raw_dipole_plan == nullptr);
+
+  dipole_options.model = XTBLOOM_MODEL_GFN2_XTB;
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &dipole_options,
+                        &dipole_result.descriptor) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CUDA_CHECK(dipole_result.unchanged(unchanged));
+  CHECK(unchanged);
+  CUDA_CHECK(dipoles.unchanged(unchanged));
+  CHECK(unchanged);
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &dipole_options,
+                                &dipole_result.descriptor,
+                                request.get()) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
+  raw_dipole_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &dipole_options, &raw_dipole_plan) ==
+        XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(raw_dipole_plan == nullptr);
+
+  /* A valid reserved interaction has the same precedence. A structurally
+   * malformed attachment (missing payload) remains INVALID_ARGUMENT before
+   * model dispatch for sync, enqueue, and plan creation. */
+  xtbloom_interaction_t interaction{};
+  interaction.type = XTBLOOM_INTERACTION_ALPB_SOLVATION;
+  interaction.system_index = 0;
+  interaction.payload_size = 32u;
+  std::vector<xtbloom_interaction_t> interactions{interaction};
+  std::vector<std::uint8_t> interaction_payload(32u, 0u);
+  std::int32_t block_version = 1;
+  std::memcpy(interaction_payload.data(), &block_version, sizeof(block_version));
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  batch.descriptor.total_interactions = 1;
+  batch.descriptor.interaction_descriptors = host_input(interactions);
+  batch.descriptor.interaction_payload = host_input(interaction_payload);
+  ResultOwner interaction_result;
+  CUDA_CHECK(interaction_result.bind(batch, ResultLayout::kMixed, gfn1_options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn1_options,
+                        &interaction_result.descriptor) == XTBLOOM_STATUS_NOT_SUPPORTED);
+  CUDA_CHECK(interaction_result.unchanged(unchanged));
+  CHECK(unchanged);
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn1_options,
+                                &interaction_result.descriptor,
+                                request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
+  CUDA_CHECK(interaction_result.unchanged(unchanged));
+  CHECK(unchanged);
+  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
+  xtbloom_plan_t* raw_interaction_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn1_options,
+                            &raw_interaction_plan) == XTBLOOM_STATUS_NOT_SUPPORTED);
+  CHECK(raw_interaction_plan == nullptr);
+
+  xtbloom_compute_options_t gfn2_interaction_options = gfn1_options;
+  gfn2_interaction_options.model = XTBLOOM_MODEL_GFN2_XTB;
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn2_interaction_options,
+                        &interaction_result.descriptor) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn2_interaction_options,
+                                &interaction_result.descriptor,
+                                request.get()) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  raw_interaction_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn2_interaction_options,
+                            &raw_interaction_plan) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(raw_interaction_plan == nullptr);
+
+  batch.descriptor.interaction_payload = {};
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn1_options,
+                        &interaction_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CUDA_CHECK(interaction_result.unchanged(unchanged));
+  CHECK(unchanged);
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn1_options,
+                                &interaction_result.descriptor,
+                                request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
+  raw_interaction_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn1_options,
+                            &raw_interaction_plan) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(raw_interaction_plan == nullptr);
+  batch.bind();
   return 0;
 }
 

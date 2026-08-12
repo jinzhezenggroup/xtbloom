@@ -53,6 +53,17 @@ struct DescriptorValidationResult {
 };
 
 /*
+ * Validate the pointer-safe descriptor structure and aliases that must be
+ * proven before reading the model tag for dispatch. This intentionally omits
+ * backend feature availability: a structurally valid reserved model must be
+ * reported as unsupported by model dispatch, rather than as an unavailable
+ * output or interaction of some other model's executor.
+ */
+[[nodiscard]] DescriptorValidationResult validate_compute_descriptor_structure_for_dispatch(
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result);
+
+/*
  * Validate ABI headers, inline fields, buffer extents/tags, and address ranges
  * without reading any buffer's pointed-to storage. `backend` must be the
  * resolved context backend (CPU or CUDA), never XTBLOOM_BACKEND_AUTO.
@@ -88,6 +99,10 @@ struct DescriptorValidationResult {
  * checks. Call it directly only for CPU requests or after a CUDA bridge has
  * verified that every HOST-tagged topology pointer is CPU-accessible.
  */
+[[nodiscard]] DescriptorValidationResult validate_compute_descriptors_for_dispatch(
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result);
+
 [[nodiscard]] DescriptorValidationResult validate_compute_descriptors(
     xtbloom_backend_t backend, const xtbloom_batch_t* batch,
     const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result);
@@ -98,9 +113,23 @@ struct DescriptorValidationResult {
  * the compute policy are checked with the same prefix, host-topology, and
  * alias rules as xtbloom_compute; result buffers are simply not required.
  */
+[[nodiscard]] DescriptorValidationResult validate_plan_descriptor_structure_for_dispatch(
+    xtbloom_backend_t backend, const xtbloom_batch_t* batch,
+    const xtbloom_compute_options_t* options);
+
 [[nodiscard]] DescriptorValidationResult validate_plan_descriptor_structure(
     xtbloom_backend_t backend, const xtbloom_batch_t* batch,
     const xtbloom_compute_options_t* options);
+
+/*
+ * Validate output and interaction execution availability after model dispatch
+ * selected an implemented backend route. Keeping this phase separate prevents
+ * a partial/reserved model from inheriting GFN2-specific NOT_IMPLEMENTED
+ * diagnostics while preserving the established GFN2 error order.
+ */
+[[nodiscard]] DescriptorValidationResult validate_compute_execution_availability(
+    xtbloom_backend_t backend, const xtbloom_batch_t& batch,
+    const xtbloom_compute_options_t& options);
 
 }  // namespace xtbloom::detail
 

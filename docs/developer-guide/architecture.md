@@ -5,8 +5,10 @@ The implemented physics is restricted and unrestricted GFN2-xTB energy,
 charges, and analytic forces, including external point charges and periodic
 caller-supplied response inside SCC. GFN1-xTB and ROCm remain explicit,
 unimplemented extension points. The internal model registry records reserved
-model identity separately from backend capability, so foundation work can add
-reviewed metadata without accidentally publishing a partial numerical path.
+model identity together with a concrete per-backend executor route. Capability
+is derived from that route, and the public compute and plan boundaries switch
+on it before touching a GFN2 cache, so foundation work can add reviewed
+metadata without accidentally publishing or substituting a partial model.
 The [GFN1 contract](../theory/gfn1.md) defines the model-specific terms and
 evidence required before that capability is enabled.
 
