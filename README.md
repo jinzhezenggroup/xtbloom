@@ -1,3 +1,14 @@
+<!--
+README design principles:
+- Keep this page a concise project entry point: identity, differentiating
+  capabilities, minimal installation and quickstart, measured headline
+  evidence, supported scope, and navigation.
+- Keep examples runnable and centered on the primary workflow. Do not
+  accumulate feature tutorials, implementation notes, or exhaustive options.
+- Put detailed behavior, caveats, theory, validation, and workflow-specific
+  guidance in the linked documentation.
+-->
+
 # xTBloom
 
 <img src="docs/assets/xtbloom-logo.svg" alt="xTBloom logo" width="440">
@@ -84,19 +95,11 @@ positions = np.array(
 backend = "cuda"  # Use "cpu" to require CPU execution instead.
 with Calculator("GFN2-xTB", numbers, positions, backend=backend) as calc:
     result = calc.singlepoint()
-    hessian = calc.hessian(step=0.005, symmetrize=True)  # Hartree/bohr^2
 
 print(result["energy"])
 print(result["forces"])
 print(result["charges"])
 ```
-
-For one molecule, `Calculator.hessian()` returns a dense numerical QM
-Cartesian Hessian by batching central differences of the analytic forces:
-
-This Python convenience method costs `6 * natoms` force evaluations and
-automatically chunks the displaced geometries. It does not add a native C ABI
-Hessian, analytic response Hessian, or vibrational-analysis workflow.
 
 See the [Python guide](docs/user-guide/python.md) for ragged batches, direct
 device arrays, point charges, ASE, dpdata, and PyTorch integration.
@@ -138,7 +141,7 @@ before reusing the numbers.
 | Caller-supplied periodic charge response | Supported; no lattice descriptor |
 | Uniform electric field and molecular dipoles | CPU; CUDA ABI slots reserved |
 | ASE and dpdata integrations | Supported |
-| Numerical QM Cartesian Hessian | Python `Calculator`; batched analytic-force differences |
+| Numerical QM Cartesian Hessian | [Python `Calculator`](docs/user-guide/python.md#numerical-cartesian-hessians); batched analytic-force differences |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side adapter |
 | Native GFN1-xTB, ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, lattice/PBC | Not implemented |
 
