@@ -405,6 +405,19 @@ NOTICE_TOKENS = (
     "unsupported/",
     EXCEPTION_FILE,
 )
+
+GFN1_PROVENANCE_SHA256 = (
+    "9d181b35830f2c42ea57058c41e1277c25e29110560b8df8a0483b5521599674"
+)
+GFN1_D3_PROVENANCE_SHA256 = (
+    "2aa688be0fd1cb8609abaa3802a616178e1abe504d8b3c1dd56fcc37140005a0"
+)
+GFN1_D3_MCTC_LICENSE_RECORD = {
+    "bytes": 11358,
+    "git_blob": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+    "path": "LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+}
 EXCEPTION_TOKENS = (
     "Copyright (C) 2026 Jinzhe Zeng",
     "section 7",
@@ -1578,6 +1591,74 @@ def _check_pyodide_openblas_provenance(root: Path) -> None:
         )
 
 
+def _canonical_json_sha256(value: object) -> str:
+    """Hash one provenance object with the generators' canonical encoding."""
+    return hashlib.sha256(
+        (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def _check_gfn1_parameter_provenance(gfn1: dict[str, object]) -> None:
+    """Require every reviewed tblite/dxtb/exporter provenance field."""
+    try:
+        retained = {
+            key: gfn1[key]
+            for key in ("source", "inspection", "exporter", "cross_check")
+        }
+    except KeyError as exc:
+        raise LicenseCheckError("GFN1 parameter manifest is incomplete") from exc
+    retained_digest = hashlib.sha256(
+        (
+            json.dumps(
+                retained,
+                ensure_ascii=False,
+                allow_nan=False,
+                indent=2,
+                sort_keys=True,
+                separators=(",", ": "),
+            )
+            + "\n"
+        ).encode("utf-8")
+    ).hexdigest()
+    if retained_digest != GFN1_PROVENANCE_SHA256:
+        raise LicenseCheckError("GFN1 parameter manifest has unreviewed provenance")
+
+
+def _check_gfn1_d3_provenance(
+    gfn1_d3: dict[str, object], apache_license: bytes
+) -> None:
+    """Require complete D3 source/conversion/legal provenance and local text."""
+    try:
+        retained = {
+            key: gfn1_d3[key]
+            for key in (
+                "schema_version",
+                "method",
+                "source",
+                "unit_conversion",
+                "representation",
+            )
+        }
+    except KeyError as exc:
+        raise LicenseCheckError("GFN1-D3 manifest is incomplete") from exc
+    if _canonical_json_sha256(retained) != GFN1_D3_PROVENANCE_SHA256:
+        raise LicenseCheckError("GFN1-D3 manifest has unreviewed provenance")
+    unit_conversion = gfn1_d3.get("unit_conversion", {})
+    if (
+        not isinstance(unit_conversion, dict)
+        or unit_conversion.get("legal_files") != [GFN1_D3_MCTC_LICENSE_RECORD]
+    ):
+        raise LicenseCheckError("GFN1-D3 manifest has incomplete mctc legal provenance")
+    if (
+        len(apache_license) != GFN1_D3_MCTC_LICENSE_RECORD["bytes"]
+        or hashlib.sha256(apache_license).hexdigest()
+        != GFN1_D3_MCTC_LICENSE_RECORD["sha256"]
+    ):
+        raise LicenseCheckError("retained mctc Apache license differs from provenance")
+
+
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
     _require_files(root, SOURCE_FILES, "source tree")
@@ -1805,6 +1886,11 @@ def check_source(root: Path) -> None:
     )
     mctc = json.loads(
         (root / "data/parameters/mctc_manifest.json").read_text(encoding="utf-8")
+    )
+
+    _check_gfn1_parameter_provenance(gfn1)
+    _check_gfn1_d3_provenance(
+        gfn1_d3, (root / "LICENSES/Apache-2.0.txt").read_bytes()
     )
     if gfn2["source"]["license"]["spdx"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("GFN2 parameter manifest has the wrong SPDX license")

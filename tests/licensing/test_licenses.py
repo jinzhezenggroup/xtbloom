@@ -1219,6 +1219,62 @@ class LinkingExceptionTests(unittest.TestCase):
                 CHECKER._require_exception_policy(root)
 
 
+class Gfn1ParameterProvenanceTests(unittest.TestCase):
+    """Pin every nested GFN1 source, diagnostic, and legal record."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.gfn1 = json.loads(
+            (REPOSITORY / "data/parameters/gfn1_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        cls.gfn1_d3 = json.loads(
+            (REPOSITORY / "data/parameters/gfn1_d3_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        cls.apache = (REPOSITORY / "LICENSES/Apache-2.0.txt").read_bytes()
+
+    def test_current_gfn1_provenance_is_accepted(self) -> None:
+        CHECKER._check_gfn1_parameter_provenance(copy.deepcopy(self.gfn1))
+        CHECKER._check_gfn1_d3_provenance(
+            copy.deepcopy(self.gfn1_d3), self.apache
+        )
+
+    def test_gfn1_source_digest_mutation_is_rejected(self) -> None:
+        manifest = copy.deepcopy(self.gfn1)
+        manifest["source"]["parameter_sources_sha256"] = "0" * 64
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError, "unreviewed provenance"
+        ):
+            CHECKER._check_gfn1_parameter_provenance(manifest)
+
+    def test_gfn1_cross_check_blob_mutation_is_rejected(self) -> None:
+        manifest = copy.deepcopy(self.gfn1)
+        manifest["cross_check"]["git_blob"] = "0" * 40
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError, "unreviewed provenance"
+        ):
+            CHECKER._check_gfn1_parameter_provenance(manifest)
+
+    def test_gfn1_d3_mctc_source_mutation_is_rejected(self) -> None:
+        manifest = copy.deepcopy(self.gfn1_d3)
+        manifest["unit_conversion"]["sources"][0]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError, "unreviewed provenance"
+        ):
+            CHECKER._check_gfn1_d3_provenance(manifest, self.apache)
+
+    def test_gfn1_d3_mctc_license_text_mutation_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError, "Apache license differs"
+        ):
+            CHECKER._check_gfn1_d3_provenance(
+                copy.deepcopy(self.gfn1_d3), self.apache + b"changed\n"
+            )
+
+
 class ImplibProvenanceTests(unittest.TestCase):
     """Verify vendored implib content against its pinned provenance."""
 

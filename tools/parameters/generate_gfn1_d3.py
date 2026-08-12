@@ -51,6 +51,14 @@ MCTC_SOURCE_PATHS = (
     "src/mctc/io/codata2018.f90",
     "src/mctc/io/convert.f90",
 )
+MCTC_LEGAL_PATHS = ("LICENSE",)
+
+# Bind every source, legal, conversion, and representation field retained by
+# offline regeneration.  Generated-output and generator hashes are refreshed
+# separately and therefore are intentionally excluded from this digest.
+PINNED_PROVENANCE_SHA256 = (
+    "2aa688be0fd1cb8609abaa3802a616178e1abe504d8b3c1dd56fcc37140005a0"
+)
 
 
 class D3DataError(ValueError):
@@ -635,6 +643,9 @@ def build_artifacts(
     mctc_sources, mctc_records = _source_records(
         mctc_source, mctc_revision, MCTC_SOURCE_PATHS
     )
+    _mctc_legal_sources, mctc_legal_records = _source_records(
+        mctc_source, mctc_revision, MCTC_LEGAL_PATHS
+    )
     tables = validate_tables(build_tables(d3_sources, mctc_sources))
     d3_digest = _source_digest(d3_sources)
     mctc_digest = _source_digest(mctc_sources)
@@ -667,6 +678,7 @@ def build_artifacts(
             "license": MCTC_LICENSE,
             "source_digest": mctc_digest,
             "sources": mctc_records,
+            "legal_files": mctc_legal_records,
             "angstrom_to_bohr": tables["angstrom_to_bohr"],
             "contract": "Evaluate mctc-lib aatoau from CODATA 2018 constants.",
         },
@@ -699,6 +711,41 @@ def build_artifacts(
     }
 
 
+def _provenance_fields(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract and validate the complete reviewed retained manifest schema."""
+    expected = {
+        "schema_version",
+        "method",
+        "generator",
+        "source",
+        "unit_conversion",
+        "representation",
+        "outputs",
+    }
+    if set(manifest) != expected:
+        raise D3DataError("GFN1-D3 manifest has unexpected provenance fields")
+    retained = {
+        key: manifest[key]
+        for key in (
+            "schema_version",
+            "method",
+            "source",
+            "unit_conversion",
+            "representation",
+        )
+    }
+    observed = _sha256(
+        (json.dumps(retained, sort_keys=True, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        )
+    )
+    if observed != PINNED_PROVENANCE_SHA256:
+        raise D3DataError(
+            "GFN1-D3 retained provenance differs from the reviewed source records"
+        )
+    return retained
+
+
 def build_offline_artifacts(output_dir: Path) -> dict[str, bytes]:
     """Re-render generated files from retained normalized data and provenance."""
     try:
@@ -708,6 +755,7 @@ def build_offline_artifacts(output_dir: Path) -> dict[str, bytes]:
         manifest = json.loads(
             (output_dir / MANIFEST_FILENAME).read_text(encoding="utf-8")
         )
+        _provenance_fields(manifest)
         source_digest = manifest["source"]["source_digest"]
         mctc_digest = manifest["unit_conversion"]["source_digest"]
     except (KeyError, json.JSONDecodeError, OSError, TypeError) as exc:

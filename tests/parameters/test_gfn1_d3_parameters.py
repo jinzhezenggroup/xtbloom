@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.util
 import json
@@ -106,6 +107,19 @@ class Gfn1D3ParameterTests(unittest.TestCase):
                 ),
             },
         )
+        self.assertEqual(
+            self.manifest["unit_conversion"]["legal_files"],
+            [
+                {
+                    "bytes": 11358,
+                    "git_blob": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+                    "path": "LICENSE",
+                    "sha256": (
+                        "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+                    ),
+                }
+            ],
+        )
         output = (DATA_DIR / GENERATOR.HEADER_FILENAME).read_bytes()
         self.assertEqual(
             hashlib.sha256(output).hexdigest(),
@@ -122,6 +136,24 @@ class Gfn1D3ParameterTests(unittest.TestCase):
             (output / GENERATOR.HEADER_FILENAME).write_bytes(b"stale\n")
             with self.assertRaisesRegex(GENERATOR.D3DataError, "gfn1_d3.hpp"):
                 GENERATOR.write_or_check(output, artifacts, check=True)
+
+    def test_offline_regeneration_rejects_modified_nested_provenance(self) -> None:
+        """Reject a retained mctc source digest before regenerating outputs."""
+        manifest = copy.deepcopy(self.manifest)
+        manifest["unit_conversion"]["sources"][0]["sha256"] = "0" * 64
+        with tempfile.TemporaryDirectory(
+            prefix="xtbloom-gfn1-d3-provenance-"
+        ) as directory:
+            output = Path(directory)
+            shutil.copy2(DATA_DIR / GENERATOR.JSON_FILENAME, output)
+            (output / GENERATOR.MANIFEST_FILENAME).write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                GENERATOR.D3DataError, "retained provenance differs"
+            ):
+                GENERATOR.build_offline_artifacts(output)
 
     def test_optional_upstream_refresh_matches_retained_bundle(self) -> None:
         """Recheck the pinned Git blobs when explicit local sources are supplied."""

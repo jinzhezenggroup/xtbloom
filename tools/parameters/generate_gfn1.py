@@ -74,6 +74,14 @@ SOURCE_PATHS = (
 )
 DEFAULT_DXTB_PATH = "src/dxtb/_src/param/gfn1/gfn1-xtb.toml"
 
+# This digest binds every retained offline provenance field.  It is intentionally
+# independent of the generated manifest's output hashes so a manual edit to a
+# source, inspection, exporter, or cross-check record cannot bless itself during
+# ``--check`` regeneration.
+PINNED_PROVENANCE_SHA256 = (
+    "9d181b35830f2c42ea57058c41e1277c25e29110560b8df8a0483b5521599674"
+)
+
 
 def _shell_scale(shell: Mapping[str, Any], first: int, second: int) -> float:
     names = "spd"
@@ -526,6 +534,7 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
 
 def _source_provenance(source_dir: Path, revision_spec: str) -> dict[str, Any]:
     revision = _git(source_dir, "rev-parse", f"{revision_spec}^{{commit}}")
+    tree = _git(source_dir, "rev-parse", f"{revision}^{{tree}}")
     paths = sorted(
         filter(
             None,
@@ -543,6 +552,7 @@ def _source_provenance(source_dir: Path, revision_spec: str) -> dict[str, Any]:
     if not paths:
         raise ParameterError(f"no tblite GFN1 parameter sources found in {source_dir}")
     digest = hashlib.sha256()
+    records = []
     for path in paths:
         content = subprocess.run(
             ("git", "-C", str(source_dir), "show", f"{revision}:{path}"),
@@ -554,6 +564,14 @@ def _source_provenance(source_dir: Path, revision_spec: str) -> dict[str, Any]:
         digest.update(encoded)
         digest.update(len(content).to_bytes(8, "little"))
         digest.update(content)
+        records.append(
+            {
+                "bytes": len(content),
+                "git_blob": _git(source_dir, "rev-parse", f"{revision}:{path}"),
+                "path": path,
+                "sha256": sha256_bytes(content),
+            }
+        )
     license_content = subprocess.run(
         ("git", "-C", str(source_dir), "show", f"{revision}:COPYING.LESSER"),
         check=True,
@@ -562,11 +580,16 @@ def _source_provenance(source_dir: Path, revision_spec: str) -> dict[str, Any]:
     return {
         "repository": UPSTREAM_REPOSITORY,
         "revision": revision,
+        "tree": tree,
         "parameter_sources_sha256": digest.hexdigest(),
-        "parameter_source_paths": paths,
+        "parameter_sources": records,
         "license": {
             "spdx": UPSTREAM_LICENSE,
-            "file": "COPYING.LESSER",
+            "path": "COPYING.LESSER",
+            "bytes": len(license_content),
+            "git_blob": _git(
+                source_dir, "rev-parse", f"{revision}:COPYING.LESSER"
+            ),
             "sha256": sha256_bytes(license_content),
         },
     }
@@ -634,6 +657,7 @@ def _dxtb_provenance(
     source_dir: Path, revision_spec: str, path: str, authoritative: bytes
 ) -> dict[str, Any]:
     revision = _git(source_dir, "rev-parse", f"{revision_spec}^{{commit}}")
+    tree = _git(source_dir, "rev-parse", f"{revision}^{{tree}}")
     content = subprocess.run(
         ("git", "-C", str(source_dir), "show", f"{revision}:{path}"),
         check=True,
@@ -643,8 +667,10 @@ def _dxtb_provenance(
         "role": "non-authoritative semantic cross-check",
         "repository": DXTB_REPOSITORY,
         "revision": revision,
+        "tree": tree,
         "path": path,
         "bytes": len(content),
+        "git_blob": _git(source_dir, "rev-parse", f"{revision}:{path}"),
         "sha256": sha256_bytes(content),
     }
     result.update(_semantic_cross_check(authoritative, content))
@@ -724,8 +750,25 @@ def _generator_metadata() -> dict[str, Any]:
     }
 
 
+def _validate_provenance(provenance: Mapping[str, Any]) -> dict[str, Any]:
+    """Require the complete reviewed provenance contract in offline mode."""
+    _expect_keys(
+        provenance,
+        "manifest provenance",
+        ("source", "inspection", "exporter", "cross_check"),
+    )
+    normalized = copy.deepcopy(dict(provenance))
+    observed = sha256_bytes(canonical_json_bytes(normalized))
+    if observed != PINNED_PROVENANCE_SHA256:
+        raise ParameterError(
+            "GFN1 retained provenance differs from the reviewed source records"
+        )
+    return normalized
+
+
 def build_artifacts(raw_toml: bytes, provenance: Mapping[str, Any]) -> dict[str, bytes]:
     """Build deterministic GFN1 artifacts from an export and its provenance."""
+    provenance = _validate_provenance(provenance)
     parameters = parse_and_normalize(raw_toml)
     source = _mapping(provenance.get("source"), "manifest.source")
     revision = _string(source.get("revision"), "manifest.source.revision")
@@ -780,12 +823,13 @@ def _existing_provenance(output_dir: Path) -> dict[str, Any]:
             "outputs",
         ),
     )
-    return {
+    provenance = {
         "source": manifest["source"],
         "inspection": manifest["inspection"],
         "exporter": manifest["exporter"],
         "cross_check": manifest["cross_check"],
     }
+    return _validate_provenance(provenance)
 
 
 def write_or_check(

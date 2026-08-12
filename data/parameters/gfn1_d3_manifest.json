@@ -1,7 +1,7 @@
 {
   "generator": {
     "path": "tools/parameters/generate_gfn1_d3.py",
-    "sha256": "62468225d3ba3be52b133a75646aaed82ea72f46cabcf138d11df62c9b835224"
+    "sha256": "40e299754032c28b804852596fc985849a8052b56c1c4bdaa1cf1e675d4e6a12"
   },
   "method": "gfn1-d3",
   "outputs": {
@@ -69,6 +69,14 @@
   "unit_conversion": {
     "angstrom_to_bohr": 1.8897261246204404,
     "contract": "Evaluate mctc-lib aatoau from CODATA 2018 constants.",
+    "legal_files": [
+      {
+        "bytes": 11358,
+        "git_blob": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+        "path": "LICENSE",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      }
+    ],
     "license": "Apache-2.0",
     "repository": "https://github.com/grimme-lab/mctc-lib",
     "revision": "aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5",

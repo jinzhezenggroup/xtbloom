@@ -121,6 +121,23 @@ class Gfn1ParameterTests(unittest.TestCase):
             "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
         )
         self.assertEqual(
+            self.manifest["source"]["tree"],
+            "2cfe9e53c6413bd022e36346d62ba110c1c42f57",
+        )
+        source_records = self.manifest["source"]["parameter_sources"]
+        self.assertEqual(len(source_records), 21)
+        self.assertEqual(
+            source_records[0],
+            {
+                "bytes": 3340,
+                "git_blob": "e64bc8554699d29605ff96ffb81228fd1cb816d6",
+                "path": "app/driver_param.f90",
+                "sha256": (
+                    "1eac18001d504affeb43e97f20b636f7d8b359a7e635dc455fa49a22f4be7c5d"
+                ),
+            },
+        )
+        self.assertEqual(
             self.manifest["inspection"]["revision"],
             "133f91efb94b47f05848e1f86832f40a1accc385",
         )
@@ -130,6 +147,12 @@ class Gfn1ParameterTests(unittest.TestCase):
         )
         cross_check = self.manifest["cross_check"]
         self.assertEqual(cross_check["role"], "non-authoritative semantic cross-check")
+        self.assertEqual(
+            cross_check["tree"], "502d629acb0a9b1f93e829ec6f467f0beeb129eb"
+        )
+        self.assertEqual(
+            cross_check["git_blob"], "917f562cba5bca5f02924d1d17d8946c7e64bc57"
+        )
         self.assertEqual(cross_check["maximum_ulp_difference"], 2)
         self.assertEqual(cross_check["differing_binary64_values"], 157)
         for filename, metadata in self.manifest["outputs"].items():
@@ -158,6 +181,23 @@ class Gfn1ParameterTests(unittest.TestCase):
             (output / GENERATOR.HEADER_FILENAME).write_bytes(b"stale\n")
             with self.assertRaisesRegex(GENERATOR.ParameterError, "gfn1.hpp"):
                 GENERATOR.write_or_check(output, generated, check=True)
+
+    def test_offline_regeneration_rejects_modified_nested_provenance(self) -> None:
+        """Do not let retained source or cross-check hashes bless themselves."""
+        for section, field in (
+            ("source", "parameter_sources_sha256"),
+            ("cross_check", "sha256"),
+        ):
+            with self.subTest(section=section, field=field):
+                provenance = {
+                    key: copy.deepcopy(self.manifest[key])
+                    for key in ("source", "inspection", "exporter", "cross_check")
+                }
+                provenance[section][field] = "0" * 64
+                with self.assertRaisesRegex(
+                    GENERATOR.ParameterError, "retained provenance differs"
+                ):
+                    GENERATOR.build_artifacts(self.raw_bytes, provenance)
 
     def test_generated_header_compiles(self) -> None:
         compiler = shutil.which("c++")

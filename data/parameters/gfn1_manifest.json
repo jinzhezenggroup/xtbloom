@@ -3,12 +3,14 @@
     "bytes": 99635,
     "comparison": "parsed TOML equality with binary64 tolerance",
     "differing_binary64_values": 157,
+    "git_blob": "917f562cba5bca5f02924d1d17d8946c7e64bc57",
     "maximum_ulp_difference": 2.0,
     "path": "src/dxtb/_src/param/gfn1/gfn1-xtb.toml",
     "repository": "https://github.com/grimme-lab/dxtb",
     "revision": "b529b5ddb75c0554274955082a189f9f88437cb2",
     "role": "non-authoritative semantic cross-check",
-    "sha256": "308c24a646a12a42e5646166dcad0daf589e0da42d1b9e25e297f0ecf17b6ad6"
+    "sha256": "308c24a646a12a42e5646166dcad0daf589e0da42d1b9e25e297f0ecf17b6ad6",
+    "tree": "502d629acb0a9b1f93e829ec6f467f0beeb129eb"
   },
   "exporter": {
     "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
@@ -16,7 +18,7 @@
   },
   "generator": {
     "path": "tools/parameters/generate_gfn1.py",
-    "sha256": "55cf4048b05707ba5d6f665196b6761cc810de33e23f19661518fc1078ca4f4a",
+    "sha256": "78b529bb799aac28f636f036c9bca45d72644b205cb89f6c9339d8f1f202ae67",
     "shared_helper": {
       "path": "tools/parameters/generate_gfn2.py",
       "sha256": "4d05555ef2772878ec5cc472d73656312e4b3d6491061f029c8563b0d1327a93"
@@ -64,35 +66,143 @@
   "schema_version": 1,
   "source": {
     "license": {
-      "file": "COPYING.LESSER",
+      "bytes": 7652,
+      "git_blob": "0a041280bd00a9d068f503b8ee7ce35214bd24a1",
+      "path": "COPYING.LESSER",
       "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
       "spdx": "LGPL-3.0-or-later"
     },
-    "parameter_source_paths": [
-      "app/driver_param.f90",
-      "src/tblite/param.f90",
-      "src/tblite/param/CMakeLists.txt",
-      "src/tblite/param/charge.f90",
-      "src/tblite/param/dispersion.f90",
-      "src/tblite/param/element.f90",
-      "src/tblite/param/halogen.f90",
-      "src/tblite/param/hamiltonian.f90",
-      "src/tblite/param/mask.f90",
-      "src/tblite/param/meson.build",
-      "src/tblite/param/multipole.f90",
-      "src/tblite/param/post_processing.f90",
-      "src/tblite/param/post_processing/CMakeLists.txt",
-      "src/tblite/param/post_processing/meson.build",
-      "src/tblite/param/post_processing/molmom.f90",
-      "src/tblite/param/post_processing/type.f90",
-      "src/tblite/param/post_processing/xtbml.f90",
-      "src/tblite/param/repulsion.f90",
-      "src/tblite/param/serde.f90",
-      "src/tblite/param/thirdorder.f90",
-      "src/tblite/xtb/gfn1.f90"
+    "parameter_sources": [
+      {
+        "bytes": 3340,
+        "git_blob": "e64bc8554699d29605ff96ffb81228fd1cb816d6",
+        "path": "app/driver_param.f90",
+        "sha256": "1eac18001d504affeb43e97f20b636f7d8b359a7e635dc455fa49a22f4be7c5d"
+      },
+      {
+        "bytes": 15491,
+        "git_blob": "941f51eb975b9d940948ab800665d3b2bdceb406",
+        "path": "src/tblite/param.f90",
+        "sha256": "aed26895f7729a377899fc60d0801ef92911a93bb58869a615df9e0f0c3e3a63"
+      },
+      {
+        "bytes": 1111,
+        "git_blob": "5a396820c355fae2f5a467acbc87ab032f9b6034",
+        "path": "src/tblite/param/CMakeLists.txt",
+        "sha256": "7005978dd0f5e74805f5494286533c6f43acdbce79dffd3ad212f8f99cadac4d"
+      },
+      {
+        "bytes": 5574,
+        "git_blob": "7b6b4fd9b112ea7104011c6408222a933fec7f13",
+        "path": "src/tblite/param/charge.f90",
+        "sha256": "7f85976288e26d92487289f328fa165908e967ac42472ab46e2c3a4625dfa3f9"
+      },
+      {
+        "bytes": 6863,
+        "git_blob": "2548c35d538d0817ae1fdbb864a26df60606a38c",
+        "path": "src/tblite/param/dispersion.f90",
+        "sha256": "c593dd66840d6e4bdda36cf38ba2ca712b8d1704cbcd60789d5f13d102838ca5"
+      },
+      {
+        "bytes": 23115,
+        "git_blob": "2363a493b457c305e61947b043094e90dacd163e",
+        "path": "src/tblite/param/element.f90",
+        "sha256": "a93201cb603e57d95247b11703227fa145dbef10c36e451604971453bcc5e8af"
+      },
+      {
+        "bytes": 4630,
+        "git_blob": "461d6e0b37418fb6cf681fa94071ec6968af6d06",
+        "path": "src/tblite/param/halogen.f90",
+        "sha256": "dc571467fb5a372a5da8aa25b02d41197a96f0c951f4c41893b31fcfa33ad235"
+      },
+      {
+        "bytes": 9242,
+        "git_blob": "72337510786f1b46e317d3ecbd4242826e049568",
+        "path": "src/tblite/param/hamiltonian.f90",
+        "sha256": "5240313ab47ecc8c26eff2bbb4ff67a81f39f827ff92a49cf1de3ab79949cb51"
+      },
+      {
+        "bytes": 14349,
+        "git_blob": "beb27b8f95764cd0ea233ba18a337412adc617f2",
+        "path": "src/tblite/param/mask.f90",
+        "sha256": "c1c90ad7ad85167e5b3fd9a069fcaa9d8e291b3b375773aafbcb37cb771311ed"
+      },
+      {
+        "bytes": 956,
+        "git_blob": "55cdd2c815e79e78e9324893067ac0177d7383d9",
+        "path": "src/tblite/param/meson.build",
+        "sha256": "8dc4fd6ba8f42a15f76e02e06f8a53deaec50b96e158e59fd0916353183eb294"
+      },
+      {
+        "bytes": 5671,
+        "git_blob": "69ece4cc3d48c0991cc906701b2fef8e137be57a",
+        "path": "src/tblite/param/multipole.f90",
+        "sha256": "24ffd445c5a9b319b656c3aa69b18533b64578155b9d25fdbcb5e5b073f79217"
+      },
+      {
+        "bytes": 5751,
+        "git_blob": "f53cef912bda3249fa3334e9c5e6629700ce1c0d",
+        "path": "src/tblite/param/post_processing.f90",
+        "sha256": "b622de9718601caf5f5407e01fa71ac87cf3436e1896a409cf3608acb3e7ef00"
+      },
+      {
+        "bytes": 868,
+        "git_blob": "81ff9f9dfbf737bb451d2400a8c642b45b809353",
+        "path": "src/tblite/param/post_processing/CMakeLists.txt",
+        "sha256": "d2c39b2eb9ae612dc2fd326b80d993639f9bd602637989dbd3ec5c2a97f513a8"
+      },
+      {
+        "bytes": 771,
+        "git_blob": "df63f1b0c075b1811cd0a48dbfe4717dda14b120",
+        "path": "src/tblite/param/post_processing/meson.build",
+        "sha256": "c6e118faed9837823900222d8fc48281aa902edbd10e900507fd1f9c0b2ea3b9"
+      },
+      {
+        "bytes": 3869,
+        "git_blob": "87661f05bcaf11377a49cae364d680a440d29252",
+        "path": "src/tblite/param/post_processing/molmom.f90",
+        "sha256": "65be643509738aa8bdef3a285e89b8011f0e357be2888d382e223adc9a005f78"
+      },
+      {
+        "bytes": 1101,
+        "git_blob": "6c7c7d20a36c62e0e4b779440a4bb4032eab2436",
+        "path": "src/tblite/param/post_processing/type.f90",
+        "sha256": "508d0bd0d659f9d80b8bc8a973f788611a84ba268e66234a03193e5d5c022a05"
+      },
+      {
+        "bytes": 8125,
+        "git_blob": "71411eaeff43b85107bea2d553eea51c673f93f0",
+        "path": "src/tblite/param/post_processing/xtbml.f90",
+        "sha256": "a514d3f0c467c9efa3039613c9a02b430b2321ac94a78e8bcc1a1c0342ea8926"
+      },
+      {
+        "bytes": 4717,
+        "git_blob": "c20dc5c189e371ed2ad51603fed1904c6e654b16",
+        "path": "src/tblite/param/repulsion.f90",
+        "sha256": "001e5f21a104b2dc432a0a726bf66ec88a879242a3b4fbe2d3324f878229a7f7"
+      },
+      {
+        "bytes": 5418,
+        "git_blob": "7c73c3557ff1b182b2c1c87e86d812929504f19b",
+        "path": "src/tblite/param/serde.f90",
+        "sha256": "74b44c369ae6a93b9cd73045c3440e63168128c48635c3756e0f6c20c5e315a0"
+      },
+      {
+        "bytes": 5085,
+        "git_blob": "7b24f344ee8aadb0310dba2734e63ce1fe3a73ac",
+        "path": "src/tblite/param/thirdorder.f90",
+        "sha256": "76d73c7f1ea04fb8fb40b72b63057bb0a9782d18426ae56694ef5d5d589f063d"
+      },
+      {
+        "bytes": 53424,
+        "git_blob": "dc96235fa5bd0ece28f9a7e3672716cfea3633b6",
+        "path": "src/tblite/xtb/gfn1.f90",
+        "sha256": "0df0d3eca4b69efa445733a2fda269220cb203fb325acf0f6f06c21c55feb630"
+      }
     ],
     "parameter_sources_sha256": "b2d0a2794665745c90008a088e4f4baa9ef30282dc7132e0029c7095987f1113",
     "repository": "https://github.com/tblite/tblite",
-    "revision": "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
+    "revision": "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
+    "tree": "2cfe9e53c6413bd022e36346d62ba110c1c42f57"
   }
 }
