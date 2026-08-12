@@ -70,7 +70,7 @@ class HessianBenchmarkTest(unittest.TestCase):
             hb.timing_summary([1.0], 0)
 
     def test_child_coordinates_keep_nthreads_independent_of_batch_size(self) -> None:
-        """Batch 1 and 128 differ only in work count, not worker budget."""
+        """Batch size changes sampling cost, never the worker budget."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             args = hb.build_parser().parse_args(
@@ -103,6 +103,31 @@ class HessianBenchmarkTest(unittest.TestCase):
                 command[command.index("--batch-sizes") + 1], str(batch_size)
             )
             self.assertEqual(command[command.index("--nthreads") + 1], "16")
+        self.assertEqual(commands[0][commands[0].index("--warmups") + 1], "1")
+        self.assertEqual(commands[0][commands[0].index("--repetitions") + 1], "3")
+        self.assertEqual(commands[1][commands[1].index("--warmups") + 1], "0")
+        self.assertEqual(commands[1][commands[1].index("--repetitions") + 1], "1")
+
+    def test_explicit_sampling_policy_overrides_bounded_defaults(self) -> None:
+        """Publication runs can deliberately request larger distributions."""
+        args = fake_args()
+        args.warmups = 2
+        args.repetitions = 5
+        self.assertEqual(hb.coordinate_sample_policy(args, 128), (2, 5))
+
+    def test_default_coordinate_timeout_bounds_slow_engines(self) -> None:
+        """A forgotten timeout must not recreate a tens-of-minutes run."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = hb.build_parser().parse_args(
+                [
+                    "--output-json",
+                    str(root / "result.json"),
+                    "--output-csv",
+                    str(root / "result.csv"),
+                ]
+            )
+        self.assertEqual(args.coordinate_timeout_seconds, 300.0)
 
     def test_run_row_rejects_mismatched_effective_nthreads(self) -> None:
         """Do not time a row whose engine changed the fixed worker budget."""

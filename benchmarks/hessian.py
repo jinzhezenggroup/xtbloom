@@ -75,6 +75,10 @@ PERTURB_SIGMA_BOHR = 0.02
 DEFAULT_BATCH_SIZES = (1, 128)
 DEFAULT_DISPLACEMENT_CHUNK_SIZE = 128
 DEFAULT_MAX_SERIAL_HESSIAN_BATCH_SIZE = 1
+DEFAULT_SINGLETON_WARMUPS = 1
+DEFAULT_SINGLETON_REPETITIONS = 3
+DEFAULT_LARGE_BATCH_WARMUPS = 0
+DEFAULT_LARGE_BATCH_REPETITIONS = 1
 DEFAULT_ENGINES = ("xtbloom-cpu", "xtbloom-cuda", "xtb")
 SUPPORTED_ENGINES = (
     "xtbloom-cpu",
@@ -142,6 +146,33 @@ def timing_summary(
         "amortized_ms_per_hessian_at_median": median / hessian_batch_size,
         "hessians_per_hour_at_median": (3_600_000.0 * hessian_batch_size / median),
     }
+
+
+def coordinate_sample_policy(
+    args: argparse.Namespace, hessian_batch_size: int
+) -> tuple[int, int]:
+    """Resolve a bounded default sampling policy for one complete batch.
+
+    A retained batch-128 sample already computes 128 dense Hessians. Repeating
+    that workload five times by default turns a quick throughput diagnostic
+    into a tens-of-minutes run. Explicit CLI values still opt into a larger
+    publication-quality distribution when its cost is intentional.
+    """
+    warmups = args.warmups
+    repetitions = args.repetitions
+    if warmups is None:
+        warmups = (
+            DEFAULT_SINGLETON_WARMUPS
+            if hessian_batch_size == 1
+            else DEFAULT_LARGE_BATCH_WARMUPS
+        )
+    if repetitions is None:
+        repetitions = (
+            DEFAULT_SINGLETON_REPETITIONS
+            if hessian_batch_size == 1
+            else DEFAULT_LARGE_BATCH_REPETITIONS
+        )
+    return int(warmups), int(repetitions)
 
 
 def encode_hessian(matrix: np.ndarray) -> dict[str, Any]:
@@ -437,6 +468,7 @@ def coordinate_command(
     output_csv: Path,
 ) -> list[str]:
     """Reconstruct one exact child command from validated public options."""
+    warmups, repetitions = coordinate_sample_policy(args, hessian_batch_size)
     command = [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -453,9 +485,9 @@ def coordinate_command(
         "--max-serial-hessian-batch-size",
         str(args.max_serial_hessian_batch_size),
         "--warmups",
-        str(args.warmups),
+        str(warmups),
         "--repetitions",
-        str(args.repetitions),
+        str(repetitions),
         "--step",
         repr(args.step),
         "--scc-max-iterations",
@@ -1067,6 +1099,9 @@ def run_row(
     sample_batches: list[list[np.ndarray]] = []
     samples_ms: list[float] = []
     engine_metadata: dict[str, Any] = {}
+    warmups, repetitions = coordinate_sample_policy(args, hessian_batch_size)
+    row["warmups"] = warmups
+    row["repetitions"] = repetitions
     if (
         engine_name == "xtb" or engine_name.startswith("dxtb-")
     ) and hessian_batch_size > args.max_serial_hessian_batch_size:
@@ -1093,10 +1128,10 @@ def run_row(
                     "engine nthreads does not match the fixed benchmark budget: "
                     f"requested {args.cpu_threads}, effective {effective_nthreads}"
                 )
-            for _ in range(args.warmups):
+            for _ in range(warmups):
                 engine.prepare_sample()
                 engine.invoke()
-            for _ in range(args.repetitions):
+            for _ in range(repetitions):
                 engine.prepare_sample()
                 start = time.perf_counter_ns()
                 result = engine.invoke()
@@ -1252,8 +1287,15 @@ def runner_metadata(
             "position_units": "bohr",
             "hessian_units": "Hartree/bohr^2",
             "step_bohr": args.step,
-            "warmups": args.warmups,
-            "repetitions": args.repetitions,
+            "requested_warmups": args.warmups,
+            "requested_repetitions": args.repetitions,
+            "sampling_policy_by_hessian_batch_size": {
+                str(batch_size): {
+                    "warmups": coordinate_sample_policy(args, batch_size)[0],
+                    "repetitions": coordinate_sample_policy(args, batch_size)[1],
+                }
+                for batch_size in args.batch_sizes
+            },
             "timing_boundary": (
                 "complete public workload through all host-visible dense Hessians"
             ),
@@ -1431,8 +1473,24 @@ def build_parser() -> argparse.ArgumentParser:
             "provide a single-system Hessian API"
         ),
     )
-    parser.add_argument("--warmups", type=int, default=1)
-    parser.add_argument("--repetitions", type=int, default=5)
+    parser.add_argument(
+        "--warmups",
+        type=int,
+        default=None,
+        help=(
+            "warmups per coordinate; default is 1 for batch 1 and 0 for larger "
+            "complete-Hessian batches"
+        ),
+    )
+    parser.add_argument(
+        "--repetitions",
+        type=int,
+        default=None,
+        help=(
+            "retained samples per coordinate; default is 3 for batch 1 and 1 "
+            "for larger complete-Hessian batches"
+        ),
+    )
     parser.add_argument("--step", type=float, default=0.005)
     parser.add_argument("--scc-max-iterations", type=int, default=500)
     parser.add_argument("--scc-charge-tolerance", type=float, default=1.0e-4)
@@ -1444,8 +1502,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--coordinate-timeout-seconds",
         type=float,
-        default=0.0,
-        help="parent timeout per engine coordinate; zero disables the limit",
+        default=300.0,
+        help=(
+            "parent timeout per engine coordinate; defaults to 300 seconds, "
+            "while zero explicitly disables the limit"
+        ),
     )
     parser.add_argument("--reference-json", type=Path)
     parser.add_argument("--make-reference", action="store_true")
@@ -1486,6 +1547,8 @@ def validate_args(args: argparse.Namespace) -> None:
         "scc_max_iterations",
     ):
         value = getattr(args, name)
+        if value is None and name in ("warmups", "repetitions"):
+            continue
         if value < (0 if name == "warmups" else 1):
             raise BenchmarkError(f"--{name.replace('_', '-')} has invalid value")
     for name in (
