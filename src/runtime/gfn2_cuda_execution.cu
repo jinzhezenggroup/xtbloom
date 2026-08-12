@@ -7187,43 +7187,41 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
           return XTBLOOM_STATUS_INTERNAL_ERROR;
         }
 
-        const bool reuse_runtime =
-            working != nullptr && topology_snapshot_matches(*topology, options, working->host.key);
-        if (!reuse_runtime) {
-          TopologyKey key;
-          std::vector<double> seed_positions;
-          std::vector<double> seed_point_positions;
-          std::vector<double> seed_point_values;
-          std::vector<double> seed_point_gammas;
-          std::vector<double> seed_periodic_shifts;
-          std::vector<double> seed_periodic_response;
-          status = make_topology_only_seed(
-              *topology, options, key, seed_positions, seed_point_positions, seed_point_values,
-              seed_point_gammas, seed_periodic_shifts, seed_periodic_response, error);
-          if (status == XTBLOOM_STATUS_SUCCESS) {
-            try {
-              status = implementation.build_candidate(
-                  std::move(key), std::move(seed_positions), std::move(seed_point_positions),
-                  std::move(seed_point_values), std::move(seed_point_gammas),
-                  std::move(seed_periodic_shifts), std::move(seed_periodic_response), candidate,
-                  error);
-            } catch (const std::bad_alloc&) {
-              error = "failed to allocate a CUDA context-enqueue runtime candidate";
-              status = XTBLOOM_STATUS_ALLOCATION_FAILED;
-            } catch (const std::exception& exception) {
-              error = exception.what();
-              status = XTBLOOM_STATUS_INTERNAL_ERROR;
-            } catch (...) {
-              error = "unknown exception while constructing a CUDA context-enqueue runtime";
-              status = XTBLOOM_STATUS_INTERNAL_ERROR;
-            }
+        /* Reaching this block means every reuse path above rejected and cleared
+         * `working`, so the staged topology always needs a new candidate. */
+        TopologyKey key;
+        std::vector<double> seed_positions;
+        std::vector<double> seed_point_positions;
+        std::vector<double> seed_point_values;
+        std::vector<double> seed_point_gammas;
+        std::vector<double> seed_periodic_shifts;
+        std::vector<double> seed_periodic_response;
+        status = make_topology_only_seed(*topology, options, key, seed_positions,
+                                         seed_point_positions, seed_point_values, seed_point_gammas,
+                                         seed_periodic_shifts, seed_periodic_response, error);
+        if (status == XTBLOOM_STATUS_SUCCESS) {
+          try {
+            status = implementation.build_candidate(
+                std::move(key), std::move(seed_positions), std::move(seed_point_positions),
+                std::move(seed_point_values), std::move(seed_point_gammas),
+                std::move(seed_periodic_shifts), std::move(seed_periodic_response), candidate,
+                error);
+          } catch (const std::bad_alloc&) {
+            error = "failed to allocate a CUDA context-enqueue runtime candidate";
+            status = XTBLOOM_STATUS_ALLOCATION_FAILED;
+          } catch (const std::exception& exception) {
+            error = exception.what();
+            status = XTBLOOM_STATUS_INTERNAL_ERROR;
+          } catch (...) {
+            error = "unknown exception while constructing a CUDA context-enqueue runtime";
+            status = XTBLOOM_STATUS_INTERNAL_ERROR;
           }
-          if (status != XTBLOOM_STATUS_SUCCESS) {
-            abort_topology_candidate();
-            return status;
-          }
-          working = candidate.get();
         }
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          abort_topology_candidate();
+          return status;
+        }
+        working = candidate.get();
         if (topology_candidate_pending) {
           /* Seal the canonical topology before numerical inference is queued.
            * The bounded wait here belongs to topology/setup admission; placing

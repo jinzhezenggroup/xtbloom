@@ -36,17 +36,21 @@ iterations between `cudaProfilerStart()` and `cudaProfilerStop()`. Final output
 is compared against the public CPU path, and the caller result descriptor must
 retain its canary.
 
-The profile command was:
+The original raw-capture directory was deleted with the prohibited raw files.
+This sanitized replay template uses the same binary, provider, and profiler
+identity recorded in `build-metadata.txt`:
 
 ```bash
+SCIPY_LP64_DIR=/home/jzzeng/.cache/uv/archive-v0/JTBX01uN95SOnUjXCxQcm/lib/python3.13/site-packages/scipy.libs
+PROFILE_DIR="$(mktemp -d /tmp/xtbloom-issue371-profile-replay.XXXXXX)"
 srun --job-name=codex-371-final-nsys --gres=gpu:5090:1 \
   --cpus-per-task=4 --mem=16G --time=00:20:00 \
-  env LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib:<scipy-lp64-dir> \
+  env LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib:"$SCIPY_LP64_DIR" \
   /group/software/cuda-12.9.1/bin/nsys profile \
     --trace=cuda --sample=none --cpuctxsw=none \
     --capture-range=cudaProfilerApi --capture-range-end=stop \
     --cuda-event-trace=false --force-overwrite=true \
-    --output=/tmp/<issue371-profile>/context-request-profile \
+    --output="$PROFILE_DIR/context-request-profile" \
     build/cuda-dev/xtbloom_cuda_public_api_test --context-request-profile
 ```
 
@@ -56,8 +60,8 @@ Derived reports were extracted with:
 /group/software/cuda-12.9.1/bin/nsys stats \
   --force-export=true --force-overwrite=true \
   --report cuda_api_sum,cuda_gpu_mem_time_sum --format csv \
-  --output /tmp/<issue371-profile>/nsys-derived \
-  /tmp/<issue371-profile>/context-request-profile.nsys-rep
+  --output "$PROFILE_DIR/nsys-derived" \
+  "$PROFILE_DIR/context-request-profile.nsys-rep"
 ```
 
 Only sanitized derived summaries are retained. The raw `.nsys-rep` and
@@ -68,8 +72,11 @@ are reproducible and may contain process-environment metadata.
 
 The ten captured iterations contain exactly ten `cudaEventSynchronize` calls
 and ten `cudaGraphLaunch_v10000` calls. They contain zero calls to
-`cudaDeviceSynchronize`, `cudaStreamSynchronize`, event/stream query APIs,
-allocation/free APIs, or event/stream/Graph construction/destruction APIs.
+`cudaDeviceSynchronize`, `cudaStreamSynchronize`, `cudaEventQuery`,
+`cudaStreamQuery`, allocation/free APIs, or event/stream/Graph
+construction/destruction APIs. The 40 `cudaStreamIsCapturing` calls and ten
+`cudaStreamGetDevice` calls are expected capture-state and device-inspection
+checks, not host progress polling.
 
 Expected execution traffic remains visible: numerical device-to-device
 staging, small host/device diagnostics and publication copies, stream waits,

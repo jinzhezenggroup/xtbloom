@@ -1743,11 +1743,11 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
   CHECK(short_result->flags == kResultFlagsCanary);
 
   if (mode != PlanTestMode::kSanitizer) {
+    ResultOwner busy_result;
+    CUDA_CHECK(busy_result.bind(batch, ResultLayout::kHost, options.flags));
     xtbloom_request_t* raw_busy_request = nullptr;
     CHECK(xtbloom_request_create(context.get(), &raw_busy_request) == XTBLOOM_STATUS_SUCCESS);
     RequestHandle busy_request(raw_busy_request);
-    ResultOwner busy_result;
-    CUDA_CHECK(busy_result.bind(batch, ResultLayout::kHost, options.flags));
     CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &options,
                                   &busy_result.descriptor,
                                   busy_request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
@@ -1802,11 +1802,18 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
   CHECK(run_cpu_reference(cpu_context, changed, base_options, changed_reference) == 0);
   ResultOwner changed_result;
   CUDA_CHECK(changed_result.bind(changed, ResultLayout::kMixed, base_options.flags));
-  CHECK(xtbloom_compute_enqueue(context.get(), &changed.descriptor, &base_options,
-                                &changed_result.descriptor,
-                                request.get()) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  {
+    /* Keep the request inside the result owner's lifetime so every early
+     * return settles native work before the borrowed output storage dies. */
+    xtbloom_request_t* raw_changed_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_changed_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle changed_request(raw_changed_request);
+    CHECK(xtbloom_compute_enqueue(context.get(), &changed.descriptor, &base_options,
+                                  &changed_result.descriptor,
+                                  changed_request.get()) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(changed_request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  }
   MaterializedResult changed_actual;
   CUDA_CHECK(changed_result.materialize(changed_actual));
   changed_actual.flags = info.result_flags;

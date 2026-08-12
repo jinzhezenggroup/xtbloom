@@ -2,6 +2,8 @@ source_revision=9499b6d9db02622db34ef51a9bf32f7103feab00
 source_branch=feat/18-context-compute-enqueue
 source_clean_before_measurement=true
 source_clean_after_measurement=true
+capture_timestamp=2026-08-13T02:32:50+08:00
+capture_timezone=Asia/Shanghai
 host=node3
 cpu_model=AMD EPYC 7K62 48-Core Processor
 gpu=NVIDIA GeForce RTX 5090
@@ -12,7 +14,10 @@ cuda_architecture=120
 host_compiler=GCC 11.4.0
 cmake=4.2.1
 nsight_systems=2025.1.3.140-251335620677v0
-cmake_config=XTBLOOM_ENABLE_CUDA=ON;CMAKE_CUDA_COMPILER=/group/software/cuda-12.9.1/bin/nvcc;CMAKE_CUDA_ARCHITECTURES=120;BUILD_SHARED_LIBS=ON;CMAKE_BUILD_TYPE=Release;XTBLOOM_CPU_LINALG_LIBRARY=LP64_SciPy_OpenBLAS
+cmake_config=XTBLOOM_ENABLE_CUDA=ON;CMAKE_CUDA_COMPILER=/group/software/cuda-12.9.1/bin/nvcc;CMAKE_CUDA_ARCHITECTURES=120;BUILD_SHARED_LIBS=ON;CMAKE_BUILD_TYPE=Release;XTBLOOM_CPU_LINALG_LIBRARY=/home/jzzeng/.cache/uv/archive-v0/JTBX01uN95SOnUjXCxQcm/lib/python3.13/site-packages/scipy.libs/libscipy_openblas-5f890258.so
+lp64_provider_path=/home/jzzeng/.cache/uv/archive-v0/JTBX01uN95SOnUjXCxQcm/lib/python3.13/site-packages/scipy.libs/libscipy_openblas-5f890258.so
+lp64_provider_sha256=2a5b4c1a6311873c59132b2ceaaf3c26258a17350b7cd27ea8782a47e3322981
+profile_dir_status=original_temporary_capture_directory_deleted;commands_are_sanitized_replay_template
 profile_binary_sha256=2b9a29b5b8eb06683e83419cfa407677f1a5a1c81318012b60de10edcdd3bfaf
 profile_library_sha256=7e652d60f20929dfa89f50b59b78107e88843d26a26686b2e07e858b6c3b22dc
 nsys_raw_status=omitted_and_deleted_after_derived_extraction
