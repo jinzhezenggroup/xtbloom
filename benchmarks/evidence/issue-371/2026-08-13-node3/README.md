@@ -13,7 +13,7 @@ Compute counters were not required.
 
 ## Source and environment
 
-- Source revision: `81168b42adf5b12192970811e49fc11ca9d291c5`.
+- Source revision: `9499b6d9db02622db34ef51a9bf32f7103feab00`.
 - Source branch: `feat/18-context-compute-enqueue`.
 - Source state before and after measurement: clean.
 - Host: `node3`, AMD EPYC 7K62 48-Core Processor.
@@ -39,7 +39,7 @@ retain its canary.
 The profile command was:
 
 ```bash
-srun --job-name=codex-371-clean-nsys --gres=gpu:5090:1 \
+srun --job-name=codex-371-final-nsys --gres=gpu:5090:1 \
   --cpus-per-task=4 --mem=16G --time=00:20:00 \
   env LD_LIBRARY_PATH=/group/software/cuda-12.9.1/targets/x86_64-linux/lib:<scipy-lp64-dir> \
   /group/software/cuda-12.9.1/bin/nsys profile \
