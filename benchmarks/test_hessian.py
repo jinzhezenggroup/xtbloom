@@ -53,6 +53,7 @@ def fake_args() -> argparse.Namespace:
         repeatability_atol=1.0e-12,
         make_reference=False,
         cpu_threads=16,
+        max_serial_hessian_batch_size=1,
     )
 
 
@@ -116,6 +117,22 @@ class HessianBenchmarkTest(unittest.TestCase):
         self.assertEqual(row["availability"], "unavailable")
         self.assertIn("requested 16, effective 1", row["unavailable_reason"])
 
+    def test_serial_only_engine_skips_impractical_complete_batch(self) -> None:
+        """Do not spend tens of minutes repeating a single-system Hessian API."""
+        factory = mock.Mock(side_effect=AssertionError("engine must not be created"))
+        row = hb.run_row(
+            "xtb",
+            args=fake_args(),
+            molecule=make_alkane(62),
+            hessian_batch_size=128,
+            references=None,
+            factory=factory,
+        )
+        factory.assert_not_called()
+        self.assertEqual(row["availability"], "unavailable")
+        self.assertIn("no complete-Hessian batch API", row["unavailable_reason"])
+        self.assertEqual(row["nthreads"], 16)
+
     def test_hessian_round_trip_authenticates_exact_binary64_payload(self) -> None:
         """Retain every Hessian element and reject a forged payload digest."""
         matrix = np.arange(hb.COORDINATE_COUNT**2, dtype=np.float64).reshape(
@@ -153,6 +170,23 @@ class HessianBenchmarkTest(unittest.TestCase):
         )
         comparison = hb.compare_hessians(actual, reference)
         self.assertLess(comparison["max_abs_delta_hartree_per_bohr2"], 1.0e-15)
+
+    def test_single_reference_qualifies_slot_zero_of_complete_batch(self) -> None:
+        """Avoid a 128-call xTB loop while retaining independent correctness."""
+        matrix = np.zeros((hb.COORDINATE_COUNT, hb.COORDINATE_COUNT))
+        correctness = hb.evaluate_correctness(
+            [[matrix, matrix]],
+            references=[matrix],
+            hessian_atol=1.0e-12,
+            symmetry_atol=1.0e-12,
+            acoustic_atol=1.0e-12,
+            repeatability_atol=1.0e-12,
+            is_reference=False,
+        )
+        comparison = correctness["cross_engine"]
+        self.assertEqual(comparison["status"], "pass")
+        self.assertEqual(comparison["reference_scope"], "slot_zero")
+        self.assertEqual(comparison["compared_hessian_indices"], [0])
 
     def test_run_row_retains_all_samples_and_correctness(self) -> None:
         """Time every requested sample and publish one qualified Hessian."""

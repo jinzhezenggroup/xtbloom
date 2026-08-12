@@ -74,6 +74,7 @@ WORKLOAD_SEED = 358
 PERTURB_SIGMA_BOHR = 0.02
 DEFAULT_BATCH_SIZES = (1, 128)
 DEFAULT_DISPLACEMENT_CHUNK_SIZE = 128
+DEFAULT_MAX_SERIAL_HESSIAN_BATCH_SIZE = 1
 DEFAULT_ENGINES = ("xtbloom-cpu", "xtbloom-cuda", "xtb")
 SUPPORTED_ENGINES = (
     "xtbloom-cpu",
@@ -388,6 +389,18 @@ def run_isolated_coordinate(
         child_row["isolated_command"] = list(command)
         return child_row
 
+    # ``--fail-on-correctness`` returns 2 after publishing an unavailable or
+    # failed row. Preserve that scientific result instead of replacing its
+    # actionable reason with a generic child-process diagnostic.
+    if completed.returncode == 2 and child_row is not None:
+        correctness_status = (child_row.get("correctness") or {}).get("status")
+        if child_row.get("availability") == "unavailable" or (
+            correctness_status == "fail"
+        ):
+            child_row["child_exit_status"] = completed.returncode
+            child_row["isolated_command"] = list(command)
+            return child_row
+
     if completed.returncode < 0:
         signal_number = -completed.returncode
         try:
@@ -437,6 +450,8 @@ def coordinate_command(
         str(args.cpu_threads),
         "--displacement-chunk-size",
         str(args.displacement_chunk_size),
+        "--max-serial-hessian-batch-size",
+        str(args.max_serial_hessian_batch_size),
         "--warmups",
         str(args.warmups),
         "--repetitions",
@@ -965,13 +980,23 @@ def evaluate_correctness(
     ):
         comparison = {"status": "not_comparable_non_finite"}
     else:
-        if len(references) != len(final_batch):
+        if len(references) == len(final_batch):
+            comparison_pairs = list(zip(final_batch, references, strict=True))
+            reference_scope = "full_batch"
+            compared_indices = list(range(len(final_batch)))
+        elif len(references) == 1:
+            comparison_pairs = [(final_batch[0], references[0])]
+            reference_scope = "slot_zero"
+            compared_indices = [0]
+        else:
             raise BenchmarkError("reference Hessian batch size does not match result")
         per_comparison = [
             compare_hessians(actual, reference)
-            for actual, reference in zip(final_batch, references, strict=True)
+            for actual, reference in comparison_pairs
         ]
         comparison = {
+            "reference_scope": reference_scope,
+            "compared_hessian_indices": compared_indices,
             "max_abs_delta_hartree_per_bohr2": max(
                 item["max_abs_delta_hartree_per_bohr2"] for item in per_comparison
             ),
@@ -1042,6 +1067,19 @@ def run_row(
     sample_batches: list[list[np.ndarray]] = []
     samples_ms: list[float] = []
     engine_metadata: dict[str, Any] = {}
+    if (
+        engine_name == "xtb" or engine_name.startswith("dxtb-")
+    ) and hessian_batch_size > args.max_serial_hessian_batch_size:
+        row["unavailable_reason"] = (
+            f"{engine_name} has no complete-Hessian batch API; batch "
+            f"{hessian_batch_size} would require that many sequential full-Hessian "
+            "calls and exceeds --max-serial-hessian-batch-size="
+            f"{args.max_serial_hessian_batch_size}"
+        )
+        row["serial_loop_hessian_limit"] = args.max_serial_hessian_batch_size
+        row["complete_hessian_batch_api"] = False
+        row["completed_samples_ms"] = []
+        return row
     try:
         with factory(
             engine_name,
@@ -1206,6 +1244,7 @@ def runner_metadata(
             "perturb_sigma_bohr": PERTURB_SIGMA_BOHR,
             "fixed_nthreads_for_every_batch_size": args.cpu_threads,
             "fixed_cpu_threads_for_every_batch_size": args.cpu_threads,
+            "max_serial_hessian_batch_size": args.max_serial_hessian_batch_size,
             "internal_displacement_chunk_size": args.displacement_chunk_size,
             "internal_displacement_chunk_policy": (
                 "same explicit size for every xTBloom Hessian batch"
@@ -1383,6 +1422,15 @@ def build_parser() -> argparse.ArgumentParser:
             "of the complete-Hessian batch size"
         ),
     )
+    parser.add_argument(
+        "--max-serial-hessian-batch-size",
+        type=int,
+        default=DEFAULT_MAX_SERIAL_HESSIAN_BATCH_SIZE,
+        help=(
+            "largest complete-Hessian batch allowed for engines that only "
+            "provide a single-system Hessian API"
+        ),
+    )
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--step", type=float, default=0.005)
@@ -1432,6 +1480,7 @@ def validate_args(args: argparse.Namespace) -> None:
     for name in (
         "cpu_threads",
         "displacement_chunk_size",
+        "max_serial_hessian_batch_size",
         "warmups",
         "repetitions",
         "scc_max_iterations",
@@ -1481,13 +1530,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         rows = []
         for engine in args.engines:
             for batch_size in args.batch_sizes:
+                references = references_by_batch.get(batch_size)
+                if references is None:
+                    # Slot zero is identical across complete-Hessian batch
+                    # sizes, so one independent xTB Hessian qualifies it.
+                    references = references_by_batch.get(1)
                 if args.coordinate_child:
                     row = run_row(
                         engine,
                         args=args,
                         molecule=molecule,
                         hessian_batch_size=batch_size,
-                        references=references_by_batch.get(batch_size),
+                        references=references,
                     )
                 else:
                     with tempfile.TemporaryDirectory(
