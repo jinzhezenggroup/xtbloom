@@ -153,6 +153,17 @@ def test_compute_options_v3_capability_probe(supports_v3: bool) -> None:
     assert library.compute_options_v3_available(fake) is supports_v3
 
 
+def test_compute_options_v3_capability_probe_reports_initializer_failure() -> None:
+    """Surface a failed native initializer instead of guessing V3 support."""
+    fake = _FakeLibrary()
+    fake.xtbloom_compute_options_init = lambda pointer, struct_size: (
+        library.STATUS_INTERNAL_ERROR
+    )
+
+    with pytest.raises(XTBloomRuntimeError, match="probing ABI-v3 support"):
+        library._probe_compute_options_v3(fake)
+
+
 def test_legacy_core_accepts_defaults_but_rejects_nondefault_v3_policy() -> None:
     """Never silently ignore a user-requested mixer or determinism policy."""
     fake = _FakeLibrary()

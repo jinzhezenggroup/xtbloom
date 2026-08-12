@@ -114,6 +114,24 @@ int main() {
     CHECK(std::isfinite(forces[2]));
   }
 
+  /* The always-registered runtime smoke also carries the complete V3 policy
+   * through fixed-plan normalization. Provider-free builds may stop at the
+   * same explicit LP64 availability boundary as convenience compute. */
+  xtbloom_plan_t* raw_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
+  const xtbloom_status_t plan_status =
+      xtbloom_plan_create(context.get(), &batch, &compute_options, &raw_plan);
+  if (valid_compute_status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE) {
+    CHECK(plan_status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE);
+    CHECK(raw_plan == nullptr);
+    CHECK(std::strstr(xtbloom_get_last_error(), "LP64") != nullptr);
+  } else {
+    CHECK(plan_status == XTBLOOM_STATUS_SUCCESS);
+    CHECK(raw_plan != nullptr);
+    CHECK(xtbloom_plan_compute(raw_plan, &batch, &compute_options, &result) ==
+          XTBLOOM_STATUS_SUCCESS);
+    xtbloom_plan_destroy(raw_plan);
+  }
+
   /* ABI-v1 callers do not expose the suffix and therefore retain strict FRESH
    * behavior even if adjacent bytes contain invalid V2 values. */
   compute_options.struct_size = XTBLOOM_COMPUTE_OPTIONS_V1_SIZE;

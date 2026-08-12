@@ -2,7 +2,6 @@
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -189,29 +188,6 @@ bool plan_policy_matches(const xtbloom_compute_options_t& policy,
          mixer_damping == policy.scc_mixer_damping && determinism == policy.determinism;
 }
 
-xtbloom_status_t validate_normalized_plan_policy(const xtbloom_compute_options_t& policy,
-                                                 std::string& error) {
-  if (policy.scc_mixer != XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN) {
-    error = "fixed plans support only modified-Broyden SCC mixing";
-    return XTBLOOM_STATUS_INVALID_ARGUMENT;
-  }
-  if (policy.scc_mixer_history < 1 || policy.scc_mixer_history > 64) {
-    error = "fixed-plan SCC mixer history must be between 1 and 64";
-    return XTBLOOM_STATUS_INVALID_ARGUMENT;
-  }
-  if (!std::isfinite(policy.scc_mixer_damping) || policy.scc_mixer_damping <= 0.0 ||
-      policy.scc_mixer_damping > 1.0) {
-    error = "fixed-plan SCC mixer damping must be finite and in (0, 1]";
-    return XTBLOOM_STATUS_INVALID_ARGUMENT;
-  }
-  if (policy.determinism != XTBLOOM_DETERMINISM_DEFAULT &&
-      policy.determinism != XTBLOOM_DETERMINISM_REPRODUCIBLE) {
-    error = "fixed-plan determinism policy is unknown";
-    return XTBLOOM_STATUS_INVALID_ARGUMENT;
-  }
-  return XTBLOOM_STATUS_SUCCESS;
-}
-
 /* CPU plan identity compares host-readable topology bytes on every compute.
  * CUDA plans use the backend's canonical mixed-memory topology staging, which
  * validates pointer ownership before it snapshots or compares caller bytes. */
@@ -309,14 +285,10 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
 
   impl_->backend = context.backend;
   impl_->context = &context;
+  /* validate_plan_descriptor_structure above owns the complete public policy
+   * validation. Normalization below only replaces an absent/incomplete V3
+   * suffix with historical defaults; it cannot create an invalid policy. */
   impl_->policy = normalize_plan_policy(options);
-  {
-    const xtbloom_status_t status = validate_normalized_plan_policy(impl_->policy, error);
-    if (status != XTBLOOM_STATUS_SUCCESS) {
-      impl_->context = nullptr;
-      return status;
-    }
-  }
   impl_->topology.batch_size = batch.batch_size;
   impl_->topology.total_atoms = batch.total_atoms;
   impl_->topology.total_point_charges = batch.total_point_charges;

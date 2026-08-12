@@ -90,6 +90,23 @@ def test_torch_scc_policy_resolver_does_not_require_torch() -> None:
         _resolve_scc_policy("modified_broyden", 8, 0.4, "portable")
 
 
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ((True, 8, 0.4, "default"), "scc_mixer"),
+        ((1.5, 8, 0.4, "default"), "scc_mixer"),
+        ((2, 8, 0.4, "default"), "scc_mixer"),
+        (("modified_broyden", 8, 0.4, 2), "determinism"),
+    ],
+)
+def test_torch_scc_policy_resolver_rejects_nonexact_or_unknown_tags(
+    args: tuple[object, object, object, object], message: str
+) -> None:
+    """Reject booleans, fractional values, and unknown numeric policy tags."""
+    with pytest.raises(XTBloomValueError, match=message):
+        _resolve_scc_policy(*args)  # type: ignore[arg-type]
+
+
 def test_torch_policy_resolver_fails_closed_on_legacy_core(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -600,6 +617,18 @@ def test_energy_backward_does_not_scan_unused_force_grad(
     monkeypatch.setattr(torch.Tensor, "any", reject_any)
     energies.sum().backward()
     assert positions.grad is not None
+
+
+def test_backward_without_an_energy_gradient_is_a_noop() -> None:
+    """Return no input gradients when autograd supplies neither output gradient."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+    import xtbloom.torch as torch_module
+
+    with torch.no_grad():
+        assert torch_module._function().backward(object(), None, None) == (None,) * 17
 
 
 def test_numpy_auxiliary_arrays_dispatch_as_tensors() -> None:

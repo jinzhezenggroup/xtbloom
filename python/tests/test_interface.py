@@ -128,11 +128,13 @@ def test_structure_update_is_transactional() -> None:
         ("energy_tolerance", -1.0),
         ("electronic_temperature", float("inf")),
         ("scc_mixer", "linear"),
+        ("scc_mixer", 2),
         ("scc_mixer_history", 0),
         ("scc_mixer_history", 65),
         ("scc_mixer_damping", 0.0),
         ("scc_mixer_damping", float("nan")),
         ("determinism", "portable"),
+        ("determinism", 2),
     ],
 )
 def test_invalid_compute_settings_are_rejected(setting: str, value: object) -> None:
