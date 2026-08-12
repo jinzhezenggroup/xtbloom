@@ -20,14 +20,14 @@ namespace {
 
 template <typename T>
 xtbloom_const_buffer_t input_buffer(const std::vector<T>& values) {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T),
-          XTBLOOM_MEMORY_HOST, 0};
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
+          0};
 }
 
 template <typename T>
 xtbloom_buffer_t output_buffer(std::vector<T>& values) {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T),
-          XTBLOOM_MEMORY_HOST, 0};
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
+          0};
 }
 
 struct ContextDeleter {
@@ -52,8 +52,7 @@ ContextHandle make_cpu_context(std::int32_t cpu_threads) {
 struct TwoSystemBatch {
   std::vector<std::int64_t> atom_offsets{0, 2, 4};
   std::vector<std::int32_t> atomic_numbers{1, 1, 1, 1};
-  std::vector<double> positions{-0.70, 0.0, 0.0, 0.70, 0.0, 0.0,
-                                -0.72, 0.1, 0.0, 0.72, 0.1, 0.0};
+  std::vector<double> positions{-0.70, 0.0, 0.0, 0.70, 0.0, 0.0, -0.72, 0.1, 0.0, 0.72, 0.1, 0.0};
   std::vector<double> charges{0.0, 0.0};
   std::vector<std::int32_t> unpaired{0, 0};
   std::vector<double> energies{-1.0, -1.0};
@@ -96,8 +95,7 @@ int run_context(std::int32_t cpu_threads, bool expect_background_worker) {
 
   const bool provider_needs_cleanup =
       xtbloom::detail::gfn2_cpu_test_provider_requires_thread_cleanup();
-  const std::size_t background_runs =
-      xtbloom::detail::gfn2_cpu_test_background_eigensolver_runs();
+  const std::size_t background_runs = xtbloom::detail::gfn2_cpu_test_background_eigensolver_runs();
   if (expect_background_worker) {
     /* The testing worker pool hands one system to a persistent worker before
      * the caller may drain work, so this is a deterministic production-path
@@ -108,8 +106,7 @@ int run_context(std::int32_t cpu_threads, bool expect_background_worker) {
   }
 
   context.reset();
-  const std::size_t cleanup_calls =
-      xtbloom::detail::gfn2_cpu_test_background_thread_cleanups();
+  const std::size_t cleanup_calls = xtbloom::detail::gfn2_cpu_test_background_thread_cleanups();
   CHECK(cleanup_calls == (provider_needs_cleanup && expect_background_worker ? 1u : 0u));
   return 0;
 }
