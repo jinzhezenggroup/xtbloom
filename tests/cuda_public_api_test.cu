@@ -3350,11 +3350,13 @@ int main(int argc, char** argv) {
       argc == 2 && std::strcmp(argv[1], "--context-request-sanitizer") == 0;
   const bool context_request_profile =
       argc == 2 && std::strcmp(argv[1], "--context-request-profile") == 0;
+  const bool mixer_sanitizer = argc == 2 && std::strcmp(argv[1], "--mixer-sanitizer") == 0;
   if (argc != 1 && !request_only && !request_sanitizer && !request_profile &&
-      !context_request_sanitizer && !context_request_profile) {
+      !context_request_sanitizer && !context_request_profile && !mixer_sanitizer) {
     std::fprintf(stderr,
                  "usage: %s [--request-only|--request-sanitizer|--request-profile|"
-                 "--context-request-sanitizer|--context-request-profile]\n",
+                 "--context-request-sanitizer|--context-request-profile|"
+                 "--mixer-sanitizer]\n",
                  argv[0]);
     return 2;
   }
@@ -3390,11 +3392,10 @@ int main(int argc, char** argv) {
     return line;
   }
 
-  /* Compute Sanitizer can make the unrelated batch-128 conformance matrix
-   * prohibitively slow. These opt-in entry points keep default CTest coverage
-   * unchanged and give context and fixed-plan request paths independent narrow
-   * sanitizer/profile coordinates. The request-only mode retains both paths'
-   * blocked-stream ordering checks. */
+  /* Compute Sanitizer can make unrelated public matrices prohibitively slow
+   * or invalidate real-time blocked-stream watchdogs through instrumentation
+   * overhead. These opt-in entry points preserve default CTest coverage while
+   * keeping each production path independently sanitizable. */
   if (request_only) {
     if (const int line = test_cuda_context_enqueue(device, cpu_context.get(), options); line != 0) {
       return line;
@@ -3414,6 +3415,9 @@ int main(int argc, char** argv) {
   if (context_request_profile) {
     return test_cuda_context_enqueue(device, cpu_context.get(), options,
                                      PlanTestMode::kProfileSteadyState);
+  }
+  if (mixer_sanitizer) {
+    return test_public_mixer_controls_and_reproducibility(device, cpu_context.get());
   }
 
   if (const int line = test_host_device_mixed_and_streams(device, batch, options, reference);
