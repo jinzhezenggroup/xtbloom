@@ -1,5 +1,6 @@
 # Preserve the canonical tblite exporter byte stream, including its final blank line.
 data/parameters/gfn2.toml whitespace=-blank-at-eof
+data/parameters/gfn1.toml whitespace=-blank-at-eof
 
 # Preserve exact upstream scipy-openblas32 packaged-license bytes. The Windows
 # artifacts contain canonical CRLF or mixed line endings verified by SHA-256.

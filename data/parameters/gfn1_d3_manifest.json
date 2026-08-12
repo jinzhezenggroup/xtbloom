@@ -1,0 +1,99 @@
+{
+  "generator": {
+    "path": "tools/parameters/generate_gfn1_d3.py",
+    "sha256": "62468225d3ba3be52b133a75646aaed82ea72f46cabcf138d11df62c9b835224"
+  },
+  "method": "gfn1-d3",
+  "outputs": {
+    "gfn1_d3.hpp": {
+      "bytes": 743567,
+      "sha256": "4819db4a0c2e3d7f55cc26eb4fd742761da87c0b14ae92d89da62f6e7d6a4127"
+    },
+    "gfn1_d3.json": {
+      "bytes": 598154,
+      "sha256": "9ff932ea598f690c1fb599a67762060ba1907102d5ec132164f2a7e8886cd22e"
+    }
+  },
+  "representation": {
+    "c6_pair_layout": "packed first<=second; row-major (second reference, first reference)",
+    "element_count": 86,
+    "element_pair_count": 3741,
+    "r4r2_expression": "sqrt(0.5 * upstream_r4_over_r2[Z] * sqrt(Z))",
+    "reference_c6_count": 28455,
+    "reference_count": 237,
+    "vdw_radius_unit": "bohr"
+  },
+  "schema_version": 1,
+  "source": {
+    "legal_files": [
+      {
+        "bytes": 35149,
+        "git_blob": "f288702d2fa16d3cdf0035b15a9fcbc552cd88e7",
+        "path": "COPYING",
+        "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      },
+      {
+        "bytes": 7652,
+        "git_blob": "0a041280bd00a9d068f503b8ee7ce35214bd24a1",
+        "path": "COPYING.LESSER",
+        "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+      }
+    ],
+    "license": "LGPL-3.0-or-later",
+    "parsed_sources": [
+      {
+        "bytes": 3130859,
+        "git_blob": "08dc42be7e1269fa4d1c99d3bc53863521f0a04d",
+        "path": "src/dftd3/reference.f90",
+        "sha256": "76368b2d3aa682216e82292b4170edf704b8e88838b32d033722f18710217c0b"
+      },
+      {
+        "bytes": 4472,
+        "git_blob": "f5798fb8ecea4d54ad439d2cd61c0e374bfa4e76",
+        "path": "src/dftd3/data/r4r2.f90",
+        "sha256": "c339eec5d337fed885fbb3bff521f9c972bedcf368a435e24e58c110f6dd1925"
+      },
+      {
+        "bytes": 76336,
+        "git_blob": "405002bcf6dc7a5ba745ea791a4c112d6176076b",
+        "path": "src/dftd3/data/vdwrad.f90",
+        "sha256": "f794fb68cc44690ac72cc00a2cbeff6cf50e3ec75221e028988b40cfd80d25f2"
+      }
+    ],
+    "repository": "https://github.com/dftd3/simple-dftd3",
+    "revision": "6f0b06fbfa8653a23ca55c453772ce3af4420706",
+    "source_digest": "f8361df66c1cc657e1a55323f68a9b783c58dd61f904b0fff906782094e3f9e4",
+    "tag": "v1.4.0",
+    "tree": "4022a91c9a72260efa96aba379b7061dc295d7b1"
+  },
+  "unit_conversion": {
+    "angstrom_to_bohr": 1.8897261246204404,
+    "contract": "Evaluate mctc-lib aatoau from CODATA 2018 constants.",
+    "license": "Apache-2.0",
+    "repository": "https://github.com/grimme-lab/mctc-lib",
+    "revision": "aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5",
+    "source_digest": "269010f4df60c765f329c9db3a5ab9521120da7775472abb237921399deda24f",
+    "sources": [
+      {
+        "bytes": 1799,
+        "git_blob": "2fd35c66ce80a47aa88d12952f0cce2886cd753f",
+        "path": "src/mctc/io/constants.f90",
+        "sha256": "6ee2b599fc2d338f1a7e07b5b46e984e2612b4cfc58110d1203ecf19ebde2385"
+      },
+      {
+        "bytes": 43030,
+        "git_blob": "48a2d555dfd7d09c6f86a4059ca92de3cc6f1c00",
+        "path": "src/mctc/io/codata2018.f90",
+        "sha256": "84b2d2583079abacb944117dc29b9c0d339717a305693d37f2cb4a59792a3f25"
+      },
+      {
+        "bytes": 3523,
+        "git_blob": "6915f0708c4eb7f18b10773777280f941e3578c7",
+        "path": "src/mctc/io/convert.f90",
+        "sha256": "437d0855d89829a0787bbcc69e78c0556454180a4f15efae02eb264f55d3931d"
+      }
+    ],
+    "tag": "v0.5.1",
+    "tree": "c64c3f6936121d2445459b57f7904a94b276d0b5"
+  }
+}

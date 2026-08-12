@@ -208,6 +208,8 @@ SOURCE_FILES = (
     "data/parameters/sto_manifest.json",
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
+    "data/parameters/gfn1_manifest.json",
+    "data/parameters/gfn1_d3_manifest.json",
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
@@ -242,6 +244,8 @@ SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/sto_manifest.json",
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
+    "data/parameters/gfn1_manifest.json",
+    "data/parameters/gfn1_d3_manifest.json",
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
@@ -258,6 +262,8 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/provenance/sto_manifest.json",
     "share/licenses/xtbloom/provenance/spin_manifest.json",
     "share/licenses/xtbloom/provenance/d4_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json",
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
@@ -335,6 +341,8 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/provenance/sto_manifest.json",
     "share/licenses/xtbloom/provenance/spin_manifest.json",
     "share/licenses/xtbloom/provenance/d4_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json",
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
@@ -346,6 +354,8 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE",
 )
 SPDX_FILES = {
+    "data/parameters/gfn1.hpp": "LGPL-3.0-or-later",
+    "data/parameters/gfn1_d3.hpp": "LGPL-3.0-or-later",
     "data/parameters/gfn2.hpp": "LGPL-3.0-or-later",
     "data/parameters/d4.hpp": "LGPL-3.0-or-later",
     "data/parameters/tblite_sto.hpp": "LGPL-3.0-or-later",
@@ -357,6 +367,8 @@ SPDX_FILES = {
 }
 NOTICE_TOKENS = (
     "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
+    "6f0b06fbfa8653a23ca55c453772ce3af4420706",
+    "aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5",
     "6e1f59c3f39d919a2dbef0601d2576727c8b30e8",
     "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
     "edcfbbe39d411edc225e27315fbda3a204ddb023",
@@ -1785,6 +1797,12 @@ def check_source(root: Path) -> None:
     d4 = json.loads(
         (root / "data/parameters/d4_manifest.json").read_text(encoding="utf-8")
     )
+    gfn1 = json.loads(
+        (root / "data/parameters/gfn1_manifest.json").read_text(encoding="utf-8")
+    )
+    gfn1_d3 = json.loads(
+        (root / "data/parameters/gfn1_d3_manifest.json").read_text(encoding="utf-8")
+    )
     mctc = json.loads(
         (root / "data/parameters/mctc_manifest.json").read_text(encoding="utf-8")
     )
@@ -1804,6 +1822,36 @@ def check_source(root: Path) -> None:
         raise LicenseCheckError("spin manifest must identify the LGPL data header")
     if d4["license"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("D4 manifest has the wrong SPDX license")
+    if (
+        gfn1.get("source", {}).get("license", {}).get("spdx") != "LGPL-3.0-or-later"
+        or gfn1.get("source", {}).get("revision")
+        != "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
+        or gfn1.get("cross_check", {}).get("repository")
+        != "https://github.com/grimme-lab/dxtb"
+        or gfn1.get("cross_check", {}).get("role")
+        != "non-authoritative semantic cross-check"
+    ):
+        raise LicenseCheckError("GFN1 parameter manifest has incorrect provenance")
+    if (
+        gfn1_d3.get("source", {}).get("license") != "LGPL-3.0-or-later"
+        or gfn1_d3.get("source", {}).get("revision")
+        != "6f0b06fbfa8653a23ca55c453772ce3af4420706"
+        or gfn1_d3.get("unit_conversion", {}).get("license") != "Apache-2.0"
+        or gfn1_d3.get("unit_conversion", {}).get("revision")
+        != "aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5"
+    ):
+        raise LicenseCheckError("GFN1-D3 manifest has incorrect provenance")
+    expected_gfn1_d3_sources = {
+        "src/dftd3/reference.f90": "08dc42be7e1269fa4d1c99d3bc53863521f0a04d",
+        "src/dftd3/data/r4r2.f90": "f5798fb8ecea4d54ad439d2cd61c0e374bfa4e76",
+        "src/dftd3/data/vdwrad.f90": "405002bcf6dc7a5ba745ea791a4c112d6176076b",
+    }
+    observed_gfn1_d3_sources = {
+        entry.get("path"): entry.get("git_blob")
+        for entry in gfn1_d3.get("source", {}).get("parsed_sources", ())
+    }
+    if observed_gfn1_d3_sources != expected_gfn1_d3_sources:
+        raise LicenseCheckError("GFN1-D3 manifest has incomplete source coverage")
     if (
         mctc["license"] != "Apache-2.0"
         or mctc["revision"] != "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d"

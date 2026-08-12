@@ -312,6 +312,24 @@ def _run_canonical(session: nox.Session) -> None:
         "run",
         "--no-sync",
         "python",
+        "tools/parameters/generate_gfn1_d3.py",
+        "--check",
+    )
+    _run(
+        session,
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "tools/parameters/generate_gfn1.py",
+        "--check",
+    )
+    _run(
+        session,
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
         "tools/conformance/xtbloom_conformance.py",
         "check",
     )

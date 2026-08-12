@@ -1,0 +1,98 @@
+{
+  "cross_check": {
+    "bytes": 99635,
+    "comparison": "parsed TOML equality with binary64 tolerance",
+    "differing_binary64_values": 157,
+    "maximum_ulp_difference": 2.0,
+    "path": "src/dxtb/_src/param/gfn1/gfn1-xtb.toml",
+    "repository": "https://github.com/grimme-lab/dxtb",
+    "revision": "b529b5ddb75c0554274955082a189f9f88437cb2",
+    "role": "non-authoritative semantic cross-check",
+    "sha256": "308c24a646a12a42e5646166dcad0daf589e0da42d1b9e25e297f0ecf17b6ad6"
+  },
+  "exporter": {
+    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled"
+  },
+  "generator": {
+    "path": "tools/parameters/generate_gfn1.py",
+    "sha256": "55cf4048b05707ba5d6f665196b6761cc810de33e23f19661518fc1078ca4f4a",
+    "shared_helper": {
+      "path": "tools/parameters/generate_gfn2.py",
+      "sha256": "4d05555ef2772878ec5cc472d73656312e4b3d6491061f029c8563b0d1327a93"
+    }
+  },
+  "inspection": {
+    "authoritative_revision_is_ancestor": true,
+    "changed_parameter_source_paths": [
+      "app/driver_param.f90",
+      "src/tblite/param.f90",
+      "src/tblite/param/charge.f90",
+      "src/tblite/param/dispersion.f90",
+      "src/tblite/param/element.f90",
+      "src/tblite/param/halogen.f90",
+      "src/tblite/param/hamiltonian.f90",
+      "src/tblite/param/multipole.f90",
+      "src/tblite/param/post_processing.f90",
+      "src/tblite/param/post_processing/molmom.f90",
+      "src/tblite/param/post_processing/type.f90",
+      "src/tblite/param/post_processing/xtbml.f90",
+      "src/tblite/param/repulsion.f90",
+      "src/tblite/param/thirdorder.f90",
+      "src/tblite/xtb/gfn1.f90"
+    ],
+    "reviewed_classification": "formatting/style only; the tblite 0.7.0 release revision remains the scientific source",
+    "revision": "133f91efb94b47f05848e1f86832f40a1accc385",
+    "role": "owner-requested clean-checkout inspection only",
+    "source_diff_sha256": "615f99520cfb6bec88f9607c753a5e46ca28912274e903de5d9e7f0819ccb8ce"
+  },
+  "method": "gfn1-xtb",
+  "outputs": {
+    "gfn1.hpp": {
+      "bytes": 60737,
+      "sha256": "ee024a9ddda84e56dfe45d4e3a577e6b0d2d765d3efc13b49a0fd315ca024f72"
+    },
+    "gfn1.json": {
+      "bytes": 212382,
+      "sha256": "34a655b0dee2524541271533b11fa92963a7f0cce5828d080a3b829a08b7081a"
+    },
+    "gfn1.toml": {
+      "bytes": 87105,
+      "sha256": "38572810c111e118d03a27137dfbc3363ce5247a400bb25ee83e15e712dcb389"
+    }
+  },
+  "schema_version": 1,
+  "source": {
+    "license": {
+      "file": "COPYING.LESSER",
+      "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+      "spdx": "LGPL-3.0-or-later"
+    },
+    "parameter_source_paths": [
+      "app/driver_param.f90",
+      "src/tblite/param.f90",
+      "src/tblite/param/CMakeLists.txt",
+      "src/tblite/param/charge.f90",
+      "src/tblite/param/dispersion.f90",
+      "src/tblite/param/element.f90",
+      "src/tblite/param/halogen.f90",
+      "src/tblite/param/hamiltonian.f90",
+      "src/tblite/param/mask.f90",
+      "src/tblite/param/meson.build",
+      "src/tblite/param/multipole.f90",
+      "src/tblite/param/post_processing.f90",
+      "src/tblite/param/post_processing/CMakeLists.txt",
+      "src/tblite/param/post_processing/meson.build",
+      "src/tblite/param/post_processing/molmom.f90",
+      "src/tblite/param/post_processing/type.f90",
+      "src/tblite/param/post_processing/xtbml.f90",
+      "src/tblite/param/repulsion.f90",
+      "src/tblite/param/serde.f90",
+      "src/tblite/param/thirdorder.f90",
+      "src/tblite/xtb/gfn1.f90"
+    ],
+    "parameter_sources_sha256": "b2d0a2794665745c90008a088e4f4baa9ef30282dc7132e0029c7095987f1113",
+    "repository": "https://github.com/tblite/tblite",
+    "revision": "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
+  }
+}

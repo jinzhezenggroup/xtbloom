@@ -3679,9 +3679,39 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_parameters_header_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.parameters.header COMMAND xtbloom_parameters_header_test)
 
+  add_executable(xtbloom_gfn1_parameters_header_test
+    tests/parameters/gfn1_header_test.cpp
+  )
+  target_include_directories(xtbloom_gfn1_parameters_header_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  target_compile_features(xtbloom_gfn1_parameters_header_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.parameters.gfn1_header
+    COMMAND xtbloom_gfn1_parameters_header_test
+  )
+
+  add_executable(xtbloom_gfn1_d3_parameters_header_test
+    tests/parameters/gfn1_d3_header_test.cpp
+  )
+  target_include_directories(xtbloom_gfn1_d3_parameters_header_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  target_compile_features(xtbloom_gfn1_d3_parameters_header_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.parameters.gfn1_d3_header
+    COMMAND xtbloom_gfn1_d3_parameters_header_test
+  )
+
   add_test(
     NAME xtbloom.parameters.generated
     COMMAND ${Python3_EXECUTABLE} tools/parameters/generate_gfn2.py --check
+  )
+  add_test(
+    NAME xtbloom.parameters.gfn1_generated
+    COMMAND ${Python3_EXECUTABLE} tools/parameters/generate_gfn1.py --check
+  )
+  add_test(
+    NAME xtbloom.parameters.gfn1_d3_generated
+    COMMAND ${Python3_EXECUTABLE} tools/parameters/generate_gfn1_d3.py --check
   )
   add_test(
     NAME xtbloom.parameters.python
@@ -3833,6 +3863,8 @@ if(XTBLOOM_BUILD_TESTS)
   )
   set_tests_properties(
     xtbloom.parameters.generated
+    xtbloom.parameters.gfn1_generated
+    xtbloom.parameters.gfn1_d3_generated
     xtbloom.parameters.python
     xtbloom.licensing
     xtbloom.licensing_unit
@@ -3867,6 +3899,8 @@ install(FILES
   data/parameters/sto_manifest.json
   data/parameters/spin_manifest.json
   data/parameters/d4_manifest.json
+  data/parameters/gfn1_manifest.json
+  data/parameters/gfn1_d3_manifest.json
   data/parameters/mctc_manifest.json
   cmake/3rdparty/implib_manifest.json
   cmake/3rdparty/scipy_openblas32_manifest.json

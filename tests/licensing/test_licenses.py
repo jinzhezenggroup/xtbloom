@@ -129,6 +129,8 @@ class SourceDistributionBoundaryTests(unittest.TestCase):
             "cmake/3rdparty/pyodide_openblas_manifest.json",
             "cmake/3rdparty/pyodide-openblas/recipe/libopenblas/meta.yaml",
             "data/parameters/d4.hpp",
+            "data/parameters/gfn1.hpp",
+            "data/parameters/gfn1_d3.hpp",
             "data/parameters/gfn2.hpp",
             "LICENSES/pyodide-MPL-2.0.txt",
             "src/backends/cuda/gfn2_scc_loop.cu",
@@ -259,6 +261,7 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
         """Prevent Windows autocrlf from invalidating provenance digests."""
         attributes = (REPOSITORY / ".gitattributes").read_text(encoding="utf-8")
         for expected in (
+            "data/parameters/gfn1.toml whitespace=-blank-at-eof",
             "LICENSES/scipy-openblas32-0.3.34.0.0.txt -text",
             "LICENSES/openchemlib-BSD-3-Clause.txt -text",
             "LICENSES/pyodide-MPL-2.0.txt -text "
@@ -388,14 +391,24 @@ class LicenseArchiveTests(unittest.TestCase):
 
     def test_wheel_must_retain_every_provenance_manifest(self) -> None:
         """Require all provenance manifests in wheel payloads."""
-        names = self._valid_wheel_names()
-        missing = "xtbloom/share/licenses/xtbloom/provenance/mctc_manifest.json"
-        names.remove(missing)
-        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
-            self._write_wheel(wheel, names)
-            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "mctc_manifest"):
-                CHECKER.check_archive(wheel)
+        for filename in (
+            "gfn1_manifest.json",
+            "gfn1_d3_manifest.json",
+            "mctc_manifest.json",
+        ):
+            with self.subTest(filename=filename):
+                names = self._valid_wheel_names()
+                missing = f"xtbloom/share/licenses/xtbloom/provenance/{filename}"
+                names.remove(missing)
+                with tempfile.TemporaryDirectory(
+                    prefix="xtbloom-license-test-"
+                ) as directory:
+                    wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+                    self._write_wheel(wheel, names)
+                    with self.assertRaisesRegex(
+                        CHECKER.LicenseCheckError, filename.split(".")[0]
+                    ):
+                        CHECKER.check_archive(wheel)
 
     def test_wheel_must_retain_implib_provenance_manifest(self) -> None:
         """Require the vendored implib provenance manifest in wheels."""
