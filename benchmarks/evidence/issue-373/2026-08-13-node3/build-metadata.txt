@@ -1,4 +1,4 @@
-source_revision=887ed845d0108fa80a0ee551ba4aef1cc13f5579
+source_revision=c10027ed4de30da39bc26448436caa589be0151f
 source_branch=feat/373-async-strict-warm
 source_state_before_measurement=clean
 source_state_after_measurement=clean
@@ -18,6 +18,6 @@ nsight_systems=2025.1.3.140
 cmake=4.2.1
 host_compiler=GCC 11.4.0
 binary=build/cuda-dev/xtbloom_cuda_public_api_test
-binary_sha256=dd9b18e259b7397fc65a41fc34dbe58be13b7a839fa44f68dba94f2f74946b1b
+binary_sha256=3da092054a7c0d5143c7e5b4ea39c6019b635d7c6230646e7c4d5b348acc806e
 library=build/cuda-dev/libxtbloom.so.0.1.1
 library_sha256=69dfdb6d34d4bcc8462f73e44861e7cd1aa25bd3e8474ce3493a59798acd7057

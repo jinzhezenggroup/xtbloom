@@ -30,8 +30,8 @@ cudaMemsetAsync: 820
 cudaLaunchKernel: 2660
 
 Raw identities before deletion:
-context-warm.nsys-rep sha256: c62fb060e38b66563e1c39b3d2be5f1858bc3cc7f51c39c791900400dc8db750
-context-warm.sqlite sha256: 0568c2745a91302ac10b67fcdd85281a9da9e881480056e86c32e233e559660a
+context-warm.nsys-rep sha256: cbdaa48c19a820069af4c1adc99c6c859ff51cbcf2d7ef0d2494837e7a39c87e
+context-warm.sqlite sha256: 455621074690a14a751f720988eeb1ba594d0bef39a2f6bb3715aa4ddfabe483
 
 topology_resource_rebuild: 0
 host_progress_polling: 0
