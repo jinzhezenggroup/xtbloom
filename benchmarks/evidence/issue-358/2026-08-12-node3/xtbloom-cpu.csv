@@ -1,3 +1,0 @@
-engine,natoms,displacement_batch_size,availability,median_ms,mean_ms,p95_ms,min_ms,max_ms,hessians_per_hour_at_median,correctness_status,max_abs_delta_hartree_per_bohr2,rms_delta_hartree_per_bohr2,max_abs_antisymmetry_hartree_per_bohr2,max_abs_acoustic_residual_hartree_per_bohr2,unavailable_reason
-xtbloom-cpu,62,1,available,12814.534952,12821.6533294,12847.0428908,12800.904504,12848.487911,280.93099074486025,pass,4.2183135649853654e-05,2.976118137091868e-06,2.4381567931053283e-05,7.561684544077352e-07,
-xtbloom-cpu,62,128,available,1363.217874,1395.4222234,1504.3612651999997,1344.540384,1536.3208009999998,2640.8104446553057,pass,4.2183135649853654e-05,2.976118137091868e-06,2.4381567931053283e-05,7.561684544077352e-07,

@@ -12,7 +12,7 @@ the scripts and method pages here define how evidence is produced and audited.
 | Cross-engine molecule-size scaling and the public README figure | `natoms_cross_engine.py` | [Cross-engine scaling](cross-engine.md) | `benchmarks.test_natoms_cross_engine` |
 | CPU FRESH/WARM scaling against explicit references | `natoms_scaling.py` | [FRESH/WARM scaling](fresh-warm.md) | `benchmarks.test_natoms_scaling` |
 | Cost of xTBloom-owned CUDA DLPack result arenas | `dlpack_result_memory.py` | [DLPack result memory](dlpack-result-memory.md) | `benchmarks.test_dlpack_result_memory` |
-| Dense 62-atom numerical Hessian displacement batching | `hessian.py` | Script module documentation and issue evidence README | `benchmarks.test_hessian` |
+| Dense 62-atom complete-Hessian batch throughput | `hessian.py` | Script module documentation and issue evidence README | `benchmarks.test_hessian` |
 
 These protocols answer different questions. In particular, the public
 cross-engine figure and the FRESH/WARM study use different SCC settings,

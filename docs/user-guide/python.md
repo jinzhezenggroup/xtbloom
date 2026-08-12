@@ -35,7 +35,7 @@ Updating only positions reuses the context and immutable topology setup.
 
 ```python
 import numpy as np
-from xtbloom import Calculator
+from xtbloom import BatchCalculator, Calculator, Structure
 
 numbers = np.array([1, 1])
 positions = np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]])
@@ -84,7 +84,8 @@ default.
 
 ## Numerical Cartesian Hessians
 
-`Calculator.hessian()` returns the dense QM-coordinate energy Hessian as a
+`Calculator.hessian()` returns one dense QM-coordinate energy Hessian, while
+`BatchCalculator.hessian()` returns one matrix per input structure. Both use a
 central difference of analytic forces,
 
 \[
@@ -92,19 +93,27 @@ H_{:,j} = -\frac{F(R + h e_j) - F(R - h e_j)}{2h}.
 \]
 
 ```python
+systems = [Structure(numbers, positions), Structure(numbers, positions * 1.01)]
 with Calculator("GFN2-xTB", numbers, positions, backend="cuda") as calc:
     raw = calc.hessian(step=0.005)
     symmetric = calc.hessian(step=0.005, symmetrize=True)
+
+with BatchCalculator(systems, backend="cuda", cpu_threads=16) as calc:
+    hessians = calc.hessian(step=0.005)
 ```
 
-The output is a C-contiguous NumPy `float64` matrix with shape
-`(3 * natoms, 3 * natoms)` and units Hartree/bohr². The default step is `0.005`
-bohr. The default `symmetrize=False` preserves the raw antisymmetric residual
-as a finite-difference/SCC convergence diagnostic; `symmetrize=True` returns
-exactly `0.5 * (H + H.T)`.
+The single-system output is a C-contiguous NumPy `float64` matrix with shape
+`(3 * natoms, 3 * natoms)` and units Hartree/bohr². The batch output is an
+input-ordered list of such matrices, so ragged atom counts need no padding.
+Batch size does not alter the calculator's `cpu_threads` budget. The default
+step is `0.005` bohr. The default `symmetrize=False` preserves the raw
+antisymmetric residual as a finite-difference/SCC convergence diagnostic;
+`symmetrize=True` applies `0.5 * (H + H.T)` independently to every matrix.
 
-One dense Hessian requires `6 * natoms` independent force calculations. They
-are submitted as native ragged batches rather than a Python serial loop.
+One dense Hessian requires `6 * natoms` independent force calculations. For a
+batch, displacement tasks from different Hessians are interleaved in the same
+native ragged force calls rather than evaluating one complete Hessian at a
+time.
 `auto_batch_size=True` is the default: it chooses a conservative atom limit,
 creates only one displacement chunk at a time, and retries recoverable native
 allocation failures at smaller automatic chunks. A positive integer sets an
@@ -117,15 +126,15 @@ point-charge values/gammas, the uniform electric field, and caller-owned
 charge-response `b/A` operators stay fixed. The returned matrix is therefore
 only the QM–QM block at that external environment: it excludes QM–point-charge
 and point-charge–point-charge blocks, and still excludes `db/dR` and `dA/dR`.
-Any displacement SCC/eigensolver failure aborts the Hessian with its atom,
-axis, sign, status, and iteration count. A temporary fresh-SCC context leaves
-the calculator geometry and any original warm checkpoint unchanged.
+Any displacement SCC/eigensolver failure aborts the call with its batch member,
+atom, axis, sign, status, and iteration count. A temporary fresh-SCC context
+leaves every calculator geometry and any original warm checkpoint unchanged.
 
-This is an explicit numerical Python method, not an analytic coupled-response
-Hessian or a native C ABI output. xTBloom does not yet perform mass weighting,
+These are explicit numerical Python methods, not analytic coupled-response
+Hessians or native C ABI outputs. xTBloom does not yet perform mass weighting,
 translation/rotation projection, normal-mode analysis, or thermochemistry.
-PyTorch higher-order autograd remains unsupported because
-`Calculator.hessian()` does not change the compiled autograd operator.
+They do not change the compiled autograd operator, so PyTorch higher-order
+autograd remains unsupported.
 
 ## Ragged batches
 

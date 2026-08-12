@@ -7,9 +7,17 @@ from typing import TYPE_CHECKING, NoReturn
 import _cases
 import numpy as np
 import pytest
-from xtbloom import Calculator, ChargeResponse, Context, PointCharge, Structure, library
+from xtbloom import (
+    BatchCalculator,
+    Calculator,
+    ChargeResponse,
+    Context,
+    PointCharge,
+    Structure,
+    library,
+)
 from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
-from xtbloom.interface import _ComputedBatch
+from xtbloom.interface import _ComputedBatch, _hessian_displacement_chunks
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -139,6 +147,112 @@ def test_hessian_sign_layout_displacement_order_and_forces_only(
         plus[coordinate] = 0.01
         expected.extend([plus, -plus])
     np.testing.assert_allclose(deltas, expected, atol=1.0e-15, rtol=0.0)
+
+
+def test_batch_hessian_shares_chunks_without_changing_thread_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compute independent Hessians in one task stream under one context."""
+    matrix = (np.arange(36, dtype=np.float64).reshape(6, 6) + 1.0) / 7.0
+    structures = [
+        Structure([1, 1], np.array([[-0.71, 0.1, -0.2], [0.71, -0.3, 0.4]])),
+        Structure([1, 1], np.array([[-0.69, -0.2, 0.3], [0.73, 0.4, -0.1]])),
+    ]
+    calls: list[int] = []
+    contexts: list[Context] = []
+
+    def compute(
+        context: Context,
+        displaced: Sequence[Structure],
+        **_kwargs: object,
+    ) -> _ComputedBatch:
+        calls.append(len(displaced))
+        contexts.append(context)
+        return _fake_computed(
+            displaced,
+            lambda positions: -(matrix @ positions.reshape(-1)),
+        )
+
+    monkeypatch.setattr("xtbloom.interface._compute_batch", compute)
+    with BatchCalculator(structures, backend="cpu", cpu_threads=7) as calculator:
+        actual = calculator.hessian(step=0.01, auto_batch_size=10)
+
+    assert calls == [5, 5, 5, 5, 4]
+    assert len(actual) == 2
+    for hessian in actual:
+        np.testing.assert_allclose(hessian, matrix, atol=4.0e-14, rtol=0.0)
+    assert contexts
+    assert len({id(context) for context in contexts}) == 1
+    assert contexts[0]._cpu_threads == 7
+
+
+def test_batch_hessian_tasks_interleave_complete_hessians() -> None:
+    """Place peer Hessians in the same native displacement chunk."""
+    structures = [
+        Structure([1, 1], np.array([[-0.71, 0.0, 0.0], [0.71, 0.0, 0.0]])),
+        Structure([1, 1], np.array([[-0.69, 0.0, 0.0], [0.73, 0.0, 0.0]])),
+    ]
+    chunks = _hessian_displacement_chunks(
+        Context("cpu", cpu_threads=7), structures, auto_batch_size=4
+    )
+    assert chunks[:3] == [
+        [(0, 0), (1, 0)],
+        [(0, 1), (1, 1)],
+        [(0, 2), (1, 2)],
+    ]
+
+
+def test_single_and_one_member_batch_hessian_use_the_same_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep the one-system API as a view of the true batched implementation."""
+    matrix = np.eye(6)
+
+    def compute(
+        _context: Context,
+        displaced: Sequence[Structure],
+        **_kwargs: object,
+    ) -> _ComputedBatch:
+        return _fake_computed(
+            displaced,
+            lambda positions: -(matrix @ positions.reshape(-1)),
+        )
+
+    monkeypatch.setattr("xtbloom.interface._compute_batch", compute)
+    structure = Structure([1, 1], np.array([[-0.71, 0.0, 0.0], [0.71, 0.0, 0.0]]))
+    with Calculator(
+        "GFN2-xTB", structure.numbers, structure.positions, backend="cpu"
+    ) as single:
+        single_hessian = single.hessian(auto_batch_size=8)
+    with BatchCalculator([structure], backend="cpu") as batch:
+        batch_hessian = batch.hessian(auto_batch_size=8)[0]
+    np.testing.assert_array_equal(batch_hessian, single_hessian)
+
+
+def test_batch_hessian_failure_identifies_system_and_displacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Map a failed native row back to its complete-Hessian batch member."""
+    structures = [
+        Structure([1, 1], np.array([[-0.71, 0.0, 0.0], [0.71, 0.0, 0.0]])),
+        Structure([1, 1], np.array([[-0.69, 0.0, 0.0], [0.73, 0.0, 0.0]])),
+    ]
+
+    def compute(
+        _context: Context,
+        displaced: Sequence[Structure],
+        **_kwargs: object,
+    ) -> _ComputedBatch:
+        return _fake_computed(displaced, failed_index=3)
+
+    monkeypatch.setattr("xtbloom.interface._compute_batch", compute)
+    with (
+        BatchCalculator(structures, backend="cpu") as calculator,
+        pytest.raises(XTBloomRuntimeError) as caught,
+    ):
+        calculator.hessian(auto_batch_size=None)
+    assert caught.value.status == library.STATUS_SCC_NOT_CONVERGED
+    assert "system 1, atom 0, axis x, displacement -step" in str(caught.value)
 
 
 def test_hessian_displacements_preserve_fixed_external_attachments(
@@ -339,6 +453,40 @@ def test_h2_hessian_is_finite_symmetric_and_translationally_invariant() -> None:
     np.testing.assert_allclose(blocks.sum(axis=2), 0.0, atol=1.0e-11, rtol=0.0)
 
 
+def test_real_batch_hessians_match_independent_single_system_calls() -> None:
+    """Validate true CPU batching against separately constructed calculators."""
+    positions = [
+        np.array([[-0.71, 0.0, 0.0], [0.71, 0.0, 0.0]]),
+        np.array([[-0.69, 0.02, -0.01], [0.73, -0.03, 0.01]]),
+    ]
+    structures = [Structure([1, 1], value) for value in positions]
+    with BatchCalculator(structures, backend="cpu", cpu_threads=2) as calculator:
+        batched = calculator.hessian(step=0.005, auto_batch_size=4)
+
+    independent = []
+    for value in positions:
+        with Calculator(
+            "GFN2-xTB", [1, 1], value, backend="cpu", cpu_threads=2
+        ) as calculator:
+            independent.append(calculator.hessian(step=0.005, auto_batch_size=4))
+
+    assert len(batched) == 2
+    for actual, reference in zip(batched, independent, strict=True):
+        np.testing.assert_array_equal(actual, reference)
+
+
+def test_real_ragged_batch_hessian_shapes_follow_each_member() -> None:
+    """Return one dense matrix per ragged member without padding."""
+    structures = [
+        Structure([1], np.array([[0.0, 0.0, 0.0]]), charge=-1.0),
+        Structure([1, 1], np.array([[-0.71, 0.0, 0.0], [0.71, 0.0, 0.0]])),
+    ]
+    with BatchCalculator(structures, backend="cpu", cpu_threads=2) as calculator:
+        hessians = calculator.hessian(step=0.005, auto_batch_size=4)
+    assert [matrix.shape for matrix in hessians] == [(3, 3), (6, 6)]
+    assert all(np.isfinite(matrix).all() for matrix in hessians)
+
+
 def test_h2_hessian_directional_curvature_matches_energy_second_difference() -> None:
     """Validate a Hessian projection against independent energy differences."""
     reference = np.array([[-0.71, 0.0, 0.0], [0.71, 0.0, 0.0]])
@@ -492,6 +640,24 @@ def test_cuda_hessian_matches_cpu_and_explicit_chunking() -> None:
         chunked = calculator.hessian(auto_batch_size=2)
     np.testing.assert_allclose(cuda, cpu, atol=1.0e-8, rtol=1.0e-8)
     np.testing.assert_allclose(chunked, cuda, atol=1.0e-10, rtol=1.0e-10)
+
+
+@pytest.mark.cuda
+def test_cuda_complete_hessian_batch_matches_cpu() -> None:
+    """Require true cross-Hessian CUDA batching to preserve input order."""
+    if not _library_has_cuda():
+        pytest.skip("xTBloom CUDA backend is unavailable")
+    structures = [
+        Structure([1, 1], np.array([[-0.71, 0.0, 0.0], [0.71, 0.0, 0.0]])),
+        Structure([1, 1], np.array([[-0.69, 0.02, -0.01], [0.73, -0.03, 0.01]])),
+    ]
+    with BatchCalculator(structures, backend="cpu", cpu_threads=2) as calculator:
+        cpu = calculator.hessian(auto_batch_size=4)
+    with BatchCalculator(structures, backend="cuda", cpu_threads=2) as calculator:
+        cuda = calculator.hessian(auto_batch_size=4)
+    assert len(cuda) == len(cpu) == 2
+    for actual, reference in zip(cuda, cpu, strict=True):
+        np.testing.assert_allclose(actual, reference, atol=1.0e-8, rtol=1.0e-8)
 
 
 @pytest.mark.cuda

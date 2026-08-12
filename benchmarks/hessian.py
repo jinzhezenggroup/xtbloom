@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Correctness-qualified 62-atom GFN2-xTB Hessian benchmark.
+"""Correctness-qualified batched 62-atom GFN2-xTB Hessian benchmark.
 
-The xTBloom batch coordinate is the number of finite-difference displacement
-systems submitted per native force call.  It is deliberately not a batch of
-independent Hessians: the current public API computes one Hessian for one
-``Calculator``.  A 62-atom Hessian contains 372 displaced force systems, so a
-displacement batch of 128 is executed as native chunks of 128, 128, and 116.
+Batch size is the number of complete, distinct 62-atom Hessians in one logical
+workload. Batch 1 and batch 128 use the same requested ``cpu_threads`` value;
+internal finite-difference displacement chunking is an independent automatic
+implementation detail. A 62-atom Hessian contains 372 displaced force systems.
 
-Every timed interval ends with a complete host-visible dense Hessian.  Engine
-and calculator construction is outside timing; reset operations required by a
-public call remain inside timing unless the protocol explicitly identifies a
-fresh result object prepared before the interval.
+Every timed interval ends with all requested host-visible dense Hessians.
+Engine and calculator construction is outside timing; reset operations required
+by a public call remain inside timing unless the protocol explicitly identifies
+a fresh result object prepared before the interval.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import csv
 import ctypes
 import hashlib
@@ -66,10 +66,14 @@ if TYPE_CHECKING:
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 NATOMS = 62
 COORDINATE_COUNT = 3 * NATOMS
 DISPLACEMENT_COUNT = 2 * COORDINATE_COUNT
+WORKLOAD_SEED = 358
+PERTURB_SIGMA_BOHR = 0.02
+DEFAULT_BATCH_SIZES = (1, 128)
+DEFAULT_DISPLACEMENT_CHUNK_SIZE = 128
 DEFAULT_ENGINES = ("xtbloom-cpu", "xtbloom-cuda", "xtb")
 SUPPORTED_ENGINES = (
     "xtbloom-cpu",
@@ -119,8 +123,12 @@ def percentile(values: Sequence[float], fraction: float) -> float:
     return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
-def timing_summary(samples_ms: Sequence[float]) -> dict[str, Any]:
-    """Summarize all retained end-to-end timing samples."""
+def timing_summary(
+    samples_ms: Sequence[float], hessian_batch_size: int = 1
+) -> dict[str, Any]:
+    """Summarize retained whole-batch samples and amortized throughput."""
+    if hessian_batch_size <= 0:
+        raise BenchmarkError("Hessian batch size must be positive")
     median = statistics.median(samples_ms)
     return {
         "samples_ms": [float(value) for value in samples_ms],
@@ -130,7 +138,8 @@ def timing_summary(samples_ms: Sequence[float]) -> dict[str, Any]:
         "p95_ms": percentile(samples_ms, 0.95),
         "min_ms": min(samples_ms),
         "max_ms": max(samples_ms),
-        "hessians_per_hour_at_median": 3_600_000.0 / median,
+        "amortized_ms_per_hessian_at_median": median / hessian_batch_size,
+        "hessians_per_hour_at_median": (3_600_000.0 * hessian_batch_size / median),
     }
 
 
@@ -163,6 +172,84 @@ def decode_hessian(encoded: dict[str, Any]) -> np.ndarray:
     if len(raw) != expected:
         raise BenchmarkError("reference Hessian byte count is invalid")
     return np.frombuffer(raw, dtype="<f8").reshape(shape).astype(np.float64, copy=True)
+
+
+def encode_hessian_batch(matrices: Sequence[np.ndarray]) -> list[dict[str, Any]]:
+    """Encode every complete Hessian in input order."""
+    return [encode_hessian(matrix) for matrix in matrices]
+
+
+def decode_hessian_batch(encoded: object) -> list[np.ndarray]:
+    """Decode and authenticate a nonempty batch of exact Hessians."""
+    if not isinstance(encoded, list) or not encoded:
+        raise BenchmarkError("reference artifact has no Hessian batch")
+    if not all(isinstance(item, dict) for item in encoded):
+        raise BenchmarkError("reference Hessian batch is malformed")
+    return [decode_hessian(item) for item in encoded]
+
+
+def compact_hessian_document(
+    document: dict[str, Any],
+    *,
+    raw_filename: str,
+    raw_byte_count: int,
+    raw_sha256: str,
+    path_replacements: Sequence[tuple[str, str]],
+) -> dict[str, Any]:
+    """Return an authenticated, path-sanitized projection without dense payloads."""
+    compact = copy.deepcopy(document)
+    payload_count = 0
+    for row in compact.get("rows", []):
+        encoded_batch = row.get("final_hessians_binary64_le_zlib_base64")
+        if not isinstance(encoded_batch, list):
+            continue
+        identities = []
+        for encoded in encoded_batch:
+            if not isinstance(encoded, dict):
+                raise BenchmarkError("Hessian payload entry is malformed")
+            matrix = decode_hessian(encoded)
+            identities.append(
+                {
+                    "shape": list(matrix.shape),
+                    "dtype": "float64-le",
+                    "byte_count": int(matrix.astype("<f8", copy=False).nbytes),
+                    "sha256": encoded["sha256"],
+                    "payload_retention": "omitted_reproducible_dense_matrix",
+                }
+            )
+            payload_count += 1
+        row.pop("final_hessians_binary64_le_zlib_base64")
+        row["final_hessian_identities"] = identities
+
+    def sanitize(value: object) -> object:
+        if isinstance(value, str):
+            result = value
+            for source, token in path_replacements:
+                result = result.replace(source, token)
+            return result
+        if isinstance(value, list):
+            return [sanitize(item) for item in value]
+        if isinstance(value, dict):
+            return {key: sanitize(item) for key, item in value.items()}
+        return value
+
+    compact = sanitize(compact)
+    metadata = compact.setdefault("metadata", {})
+    metadata["compact_projection"] = {
+        "raw_artifact_filename": raw_filename,
+        "raw_artifact_byte_count": raw_byte_count,
+        "raw_artifact_sha256": raw_sha256,
+        "omitted_hessian_payload_count": payload_count,
+        "transformations": [
+            "replace each compressed dense Hessian with shape, dtype, byte count, "
+            "and matrix SHA-256",
+            *[
+                f"sanitize one source-root path to stable token {token!r}"
+                for _source, token in path_replacements
+            ],
+        ],
+    }
+    return compact
 
 
 def hessian_diagnostics(matrix: np.ndarray) -> dict[str, Any]:
@@ -208,29 +295,11 @@ def compare_hessians(actual: np.ndarray, reference: np.ndarray) -> dict[str, flo
     }
 
 
-def displacement_atom_limit(displacement_batch_size: int) -> int:
-    """Translate user-facing displacement systems to xTBloom's atom limit."""
-    if displacement_batch_size <= 0:
-        raise BenchmarkError("displacement batch size must be positive")
-    return NATOMS * displacement_batch_size
-
-
-def displacement_chunks(displacement_batch_size: int) -> list[int]:
-    """Return the exact native system counts for one xTBloom Hessian."""
-    chunks = []
-    remaining = DISPLACEMENT_COUNT
-    while remaining:
-        chunk = min(displacement_batch_size, remaining)
-        chunks.append(chunk)
-        remaining -= chunk
-    return chunks
-
-
 @dataclass
 class EngineResult:
-    """One completed Hessian and engine-specific timing metadata."""
+    """One completed Hessian batch and engine-specific timing metadata."""
 
-    hessian: np.ndarray
+    hessians: list[np.ndarray]
     metadata: dict[str, Any]
 
 
@@ -241,7 +310,7 @@ class HessianEngine:
         """Prepare fresh state outside the measured interval."""
 
     def invoke(self) -> EngineResult:
-        """Return one complete host-visible Hessian."""
+        """Return one complete host-visible Hessian batch."""
         raise NotImplementedError
 
     def close(self) -> None:
@@ -299,12 +368,22 @@ def run_isolated_coordinate(
             "isolated_command": list(command),
         }
     child_row: dict[str, Any] | None = None
+    artifact_error: str | None = None
     if output_json.is_file():
-        document = json.loads(output_json.read_text(encoding="utf-8"))
-        rows = document.get("rows") or []
-        if len(rows) != 1:
-            raise BenchmarkError("isolated coordinate produced an invalid row count")
-        child_row = rows[0]
+        try:
+            document = json.loads(output_json.read_text(encoding="utf-8"))
+            if not isinstance(document, dict):
+                raise BenchmarkError("isolated coordinate document is not an object")
+            rows = document.get("rows") or []
+            if not isinstance(rows, list) or len(rows) != 1:
+                raise BenchmarkError(
+                    "isolated coordinate produced an invalid row count"
+                )
+            if not isinstance(rows[0], dict):
+                raise BenchmarkError("isolated coordinate row is not an object")
+            child_row = rows[0]
+        except (OSError, json.JSONDecodeError, BenchmarkError) as exc:
+            artifact_error = f"{type(exc).__name__}: {exc}"
     if completed.returncode == 0 and child_row is not None:
         child_row["isolated_command"] = list(command)
         return child_row
@@ -316,15 +395,19 @@ def run_isolated_coordinate(
         except ValueError:
             signal_name = f"signal_{signal_number}"
         reason = f"child terminated by {signal_name} ({signal_number})"
-    else:
+    elif completed.returncode != 0:
         reason = f"child exited with status {completed.returncode}"
+    else:
+        reason = "successful child produced no usable coordinate row"
+        if artifact_error:
+            reason += f": {artifact_error}"
     diagnostic = completed.stderr.strip() or completed.stdout.strip()
     if diagnostic:
         reason += f": {diagnostic[-4000:]}"
     row = dict(child_row or {})
     timing = row.pop("timing", None) or {}
     row.pop("correctness", None)
-    row.pop("final_hessian_binary64_le_zlib_base64", None)
+    row.pop("final_hessians_binary64_le_zlib_base64", None)
     row["availability"] = "unavailable"
     row["unavailable_reason"] = reason
     row["completed_samples_ms"] = timing.get("samples_ms", [])
@@ -336,7 +419,7 @@ def coordinate_command(
     args: argparse.Namespace,
     *,
     engine: str,
-    displacement_batch_size: int | None,
+    hessian_batch_size: int,
     output_json: Path,
     output_csv: Path,
 ) -> list[str]:
@@ -346,10 +429,14 @@ def coordinate_command(
         str(Path(__file__).resolve()),
         "--engines",
         engine,
+        "--batch-sizes",
+        str(hessian_batch_size),
         "--device-id",
         str(args.device_id),
         "--cpu-threads",
         str(args.cpu_threads),
+        "--displacement-chunk-size",
+        str(args.displacement_chunk_size),
         "--warmups",
         str(args.warmups),
         "--repetitions",
@@ -378,8 +465,6 @@ def coordinate_command(
         str(output_csv),
         "--coordinate-child",
     ]
-    if displacement_batch_size is not None:
-        command.extend(["--displacement-batch-sizes", str(displacement_batch_size)])
     for option, value in (
         ("--library", args.library),
         ("--xtb-library", args.xtb_library),
@@ -397,7 +482,7 @@ def coordinate_command(
 
 
 class XTBloomHessianEngine(HessianEngine):
-    """Use the public Python Hessian convenience method and native C ABI."""
+    """Use the public true-batch Hessian method and native C ABI."""
 
     def __init__(
         self,
@@ -405,8 +490,8 @@ class XTBloomHessianEngine(HessianEngine):
         backend: str,
         library_path: Path,
         numbers: np.ndarray,
-        positions: np.ndarray,
-        displacement_batch_size: int,
+        positions_batch: np.ndarray,
+        displacement_chunk_size: int,
         step: float,
         cpu_threads: int,
         device_id: int,
@@ -416,10 +501,12 @@ class XTBloomHessianEngine(HessianEngine):
     ) -> None:
         os.environ["XTBLOOM_LIBRARY"] = str(library_path.resolve())
         xtbloom = importlib.import_module("xtbloom")
-        self.calculator = xtbloom.Calculator(
+        structures = [
+            xtbloom.Structure(numbers, positions) for positions in positions_batch
+        ]
+        self.calculator = xtbloom.BatchCalculator(
+            structures,
             "GFN2-xTB",
-            numbers,
-            positions,
             backend=backend,
             device_id=device_id if backend == "cuda" else None,
             cpu_threads=cpu_threads,
@@ -430,26 +517,29 @@ class XTBloomHessianEngine(HessianEngine):
             warm_start=False,
         )
         self.backend = backend
-        self.displacement_batch_size = displacement_batch_size
-        self.atom_limit = displacement_atom_limit(displacement_batch_size)
+        self.hessian_batch_size = len(structures)
+        self.displacement_chunk_size = displacement_chunk_size
+        self.atom_limit = NATOMS * displacement_chunk_size
         self.step = step
 
     def invoke(self) -> EngineResult:
-        """Compute one raw xTBloom Hessian through the public Python API."""
-        hessian = self.calculator.hessian(
+        """Compute all raw xTBloom Hessians through one public batch call."""
+        hessians = self.calculator.hessian(
             step=self.step,
             symmetrize=False,
             auto_batch_size=self.atom_limit,
         )
         return EngineResult(
-            np.asarray(hessian, dtype=np.float64),
+            [np.asarray(hessian, dtype=np.float64) for hessian in hessians],
             {
                 "raw_symmetrize": False,
+                "public_hessian_batch_size": self.hessian_batch_size,
                 "public_auto_batch_size_atom_limit": self.atom_limit,
-                "native_displacement_chunks": displacement_chunks(
-                    self.displacement_batch_size
+                "internal_displacement_chunk_size": self.displacement_chunk_size,
+                "internal_displacement_chunk_policy": (
+                    "same explicit chunk size for every complete-Hessian batch"
                 ),
-                "fresh_temporary_context_per_hessian": True,
+                "fresh_temporary_context_per_hessian_batch": True,
             },
         )
 
@@ -459,13 +549,14 @@ class XTBloomHessianEngine(HessianEngine):
 
 
 class XtbHessianEngine(HessianEngine):
-    """Call xTB 6.7.1's native, OpenMP-parallel ``xtb_hessian`` C API."""
+    """Loop xTB's OpenMP-parallel Hessian API under one thread budget."""
 
     def __init__(
         self,
         *,
         library_path: Path,
         molecule: Molecule,
+        hessian_batch_size: int,
         step: float,
         cpu_threads: int,
         max_iterations: int,
@@ -474,7 +565,12 @@ class XtbHessianEngine(HessianEngine):
             raise BenchmarkError(
                 "xTB adapter currently requires its C API default 0.005 bohr step"
             )
-        storage = nce.build_batch(molecule, 1, seed=0)
+        storage = nce.build_batch(
+            molecule,
+            hessian_batch_size,
+            seed=WORKLOAD_SEED,
+            perturb_sigma_bohr=PERTURB_SIGMA_BOHR,
+        )
         self.adapter = XtbAdapter(
             library_path,
             storage,
@@ -502,45 +598,52 @@ class XtbHessianEngine(HessianEngine):
             ctypes.c_void_p,
         ]
         self.library.xtb_hessian.restype = None
-        self.hessian = (ctypes.c_double * (COORDINATE_COUNT**2))()
+        self.hessians = [
+            (ctypes.c_double * (COORDINATE_COUNT**2))()
+            for _ in range(hessian_batch_size)
+        ]
 
     def prepare_sample(self) -> None:
         """Replace xTB's result checkpoint so every Hessian starts fresh."""
-        state = self.adapter.states[0]
-        old_result = state.result
-        state.result = ctypes.c_void_p(self.library.xtb_newResults())
-        _delete(self.library, "xtb_delResults", old_result)
-        if not state.result:
-            raise XtbError("xtb_newResults returned NULL before Hessian")
-        self.adapter._check(state.environment, "xtb_newResults")
+        for state in self.adapter.states:
+            old_result = state.result
+            state.result = ctypes.c_void_p(self.library.xtb_newResults())
+            _delete(self.library, "xtb_delResults", old_result)
+            if not state.result:
+                raise XtbError("xtb_newResults returned NULL before Hessian")
+            self.adapter._check(state.environment, "xtb_newResults")
 
     def invoke(self) -> EngineResult:
-        """Compute one native xTB Hessian and publish its host matrix."""
-        state = self.adapter.states[0]
-        ctypes.memset(ctypes.addressof(self.hessian), 0, ctypes.sizeof(self.hessian))
-        self.library.xtb_hessian(
-            state.environment,
-            state.molecule,
-            state.calculator,
-            state.result,
-            self.hessian,
-            None,
-            None,
-            None,
-            None,
-        )
-        self.adapter._check(state.environment, "xtb_hessian")
-        matrix = np.ctypeslib.as_array(self.hessian).reshape(
-            (COORDINATE_COUNT, COORDINATE_COUNT), order="F"
-        )
+        """Compute the requested xTB Hessians sequentially at fixed threads."""
+        matrices = []
+        for state, hessian in zip(self.adapter.states, self.hessians, strict=True):
+            ctypes.memset(ctypes.addressof(hessian), 0, ctypes.sizeof(hessian))
+            self.library.xtb_hessian(
+                state.environment,
+                state.molecule,
+                state.calculator,
+                state.result,
+                hessian,
+                None,
+                None,
+                None,
+                None,
+            )
+            self.adapter._check(state.environment, "xtb_hessian")
+            matrix = np.ctypeslib.as_array(hessian).reshape(
+                (COORDINATE_COUNT, COORDINATE_COUNT), order="F"
+            )
+            matrices.append(np.array(matrix, copy=True))
         return EngineResult(
-            np.array(matrix, copy=True),
+            matrices,
             {
                 "raw_symmetrize": True,
                 "fresh_result_checkpoint_prepared_outside_timing": True,
                 "accuracy_factor": 1.0,
                 "optional_step_and_atom_list": "NULL/default 0.005 bohr/all atoms",
                 "native_openmp_displacement_parallelism": True,
+                "complete_hessian_batch_api": False,
+                "batch_execution": "public xtb_hessian loop at fixed threads",
                 "unavoidable_auxiliary_dipole_gradient": True,
             },
         )
@@ -551,7 +654,7 @@ class XtbHessianEngine(HessianEngine):
 
 
 class DxtbHessianEngine(HessianEngine):
-    """Use dxtb's public AD or numerical single-system Hessian method."""
+    """Loop dxtb's single-system Hessian method under one thread budget."""
 
     def __init__(
         self,
@@ -560,7 +663,7 @@ class DxtbHessianEngine(HessianEngine):
         mode: str,
         source_root: Path,
         numbers: np.ndarray,
-        positions: np.ndarray,
+        positions_batch: np.ndarray,
         step: float,
         cpu_threads: int,
         device_id: int,
@@ -584,10 +687,13 @@ class DxtbHessianEngine(HessianEngine):
         self.numbers = self.torch.tensor(
             numbers, dtype=self.torch.long, device=self.device
         )
-        self.positions = self.torch.tensor(
-            positions, dtype=self.torch.float64, device=self.device
-        )
-        self.positions.requires_grad_(True)
+        self.positions = []
+        for positions in positions_batch:
+            tensor = self.torch.tensor(
+                positions, dtype=self.torch.float64, device=self.device
+            )
+            tensor.requires_grad_(True)
+            self.positions.append(tensor)
         self.charge = self.torch.tensor(
             0.0, dtype=self.torch.float64, device=self.device
         )
@@ -616,37 +722,46 @@ class DxtbHessianEngine(HessianEngine):
         return self.calculator
 
     def invoke(self) -> EngineResult:
-        """Compute one dxtb AD or numerical Hessian and publish it to host."""
+        """Compute requested dxtb Hessians sequentially at fixed threads."""
         # dxtb caches derivative results by tensor identity, so reset is part
         # of every timed public-call workflow rather than a setup exclusion.
         calculator = self.live_calculator
-        calculator.reset()
-        if self.mode == "ad":
-            result = calculator.hessian(
-                self.positions,
-                self.charge,
-                use_functorch=False,
-                derived_quantity="forces",
-                matrix=True,
+        matrices = []
+        for positions in self.positions:
+            calculator.reset()
+            if self.mode == "ad":
+                result = calculator.hessian(
+                    positions,
+                    self.charge,
+                    use_functorch=False,
+                    derived_quantity="forces",
+                    matrix=True,
+                )
+            else:
+                result = calculator.hessian_numerical(
+                    positions,
+                    self.charge,
+                    step_size=self.step,
+                    matrix=True,
+                )
+            if self.backend == "cuda":
+                self.torch.cuda.synchronize(self.device)
+            matrices.append(
+                np.asarray(
+                    result.detach().to(device="cpu").contiguous().numpy().copy(),
+                    dtype=np.float64,
+                )
             )
-        else:
-            result = calculator.hessian_numerical(
-                self.positions,
-                self.charge,
-                step_size=self.step,
-                matrix=True,
-            )
-        if self.backend == "cuda":
-            self.torch.cuda.synchronize(self.device)
-        host = result.detach().to(device="cpu").contiguous().numpy().copy()
         return EngineResult(
-            np.asarray(host, dtype=np.float64),
+            matrices,
             {
                 "raw_symmetrize": False,
                 "mode": self.mode,
                 "calculator_reset_inside_timing": True,
+                "hessian_batch_size": len(self.positions),
                 "batch_mode": 0,
                 "batch_hessian_supported": False,
+                "batch_execution": "public single-system Hessian loop at fixed threads",
                 "host_publication_inside_timing": True,
                 "torch_version": getattr(self.torch, "__version__", None),
                 "dxtb_version": getattr(self.dxtb, "__version__", None),
@@ -666,20 +781,28 @@ def create_engine(
     *,
     args: argparse.Namespace,
     molecule: Molecule,
-    displacement_batch_size: int | None,
+    hessian_batch_size: int,
 ) -> HessianEngine:
     """Construct one selected public Hessian engine outside timing."""
     numbers = np.asarray(molecule.atomic_numbers, dtype=np.int64)
-    positions = np.asarray(molecule.positions_bohr, dtype=np.float64).reshape(-1, 3)
+    storage = nce.build_batch(
+        molecule,
+        hessian_batch_size,
+        seed=WORKLOAD_SEED,
+        perturb_sigma_bohr=PERTURB_SIGMA_BOHR,
+    )
+    positions_batch = np.asarray(storage.positions, dtype=np.float64).reshape(
+        hessian_batch_size, NATOMS, 3
+    )
     if engine.startswith("xtbloom-"):
-        if args.library is None or displacement_batch_size is None:
-            raise BenchmarkError("xTBloom engine requires a library and batch size")
+        if args.library is None:
+            raise BenchmarkError("xTBloom engine requires a library")
         return XTBloomHessianEngine(
             backend=engine.removeprefix("xtbloom-"),
             library_path=args.library,
             numbers=numbers,
-            positions=positions,
-            displacement_batch_size=displacement_batch_size,
+            positions_batch=positions_batch,
+            displacement_chunk_size=args.displacement_chunk_size,
             step=args.step,
             cpu_threads=args.cpu_threads,
             device_id=args.device_id,
@@ -693,6 +816,7 @@ def create_engine(
         return XtbHessianEngine(
             library_path=args.xtb_library,
             molecule=molecule,
+            hessian_batch_size=hessian_batch_size,
             step=args.step,
             cpu_threads=args.cpu_threads,
             max_iterations=args.scc_max_iterations,
@@ -706,7 +830,7 @@ def create_engine(
             mode=mode,
             source_root=args.dxtb_source,
             numbers=numbers,
-            positions=positions,
+            positions_batch=positions_batch,
             step=args.step,
             cpu_threads=args.cpu_threads,
             device_id=args.device_id,
@@ -715,10 +839,12 @@ def create_engine(
     raise BenchmarkError(f"unsupported engine {engine!r}")
 
 
-def load_reference(path: Path | None) -> tuple[np.ndarray | None, dict[str, Any]]:
-    """Load the one reference Hessian and its authenticated artifact identity."""
+def load_references(
+    path: Path | None,
+) -> tuple[dict[int, list[np.ndarray]], dict[str, Any]]:
+    """Load reference Hessian batches keyed by complete-Hessian batch size."""
     if path is None:
-        return None, {"designation": "none"}
+        return {}, {"designation": "none"}
     raw = path.read_bytes()
     document = json.loads(raw.decode("utf-8"))
     rows = [
@@ -726,62 +852,96 @@ def load_reference(path: Path | None) -> tuple[np.ndarray | None, dict[str, Any]
         for row in document.get("rows", [])
         if row.get("availability") == "available"
     ]
-    if len(rows) != 1:
-        raise BenchmarkError("reference artifact must contain one available row")
-    encoded = rows[0].get("final_hessian_binary64_le_zlib_base64")
-    if not isinstance(encoded, dict):
-        raise BenchmarkError("reference artifact has no final Hessian")
-    return decode_hessian(encoded), {
+    if not rows:
+        raise BenchmarkError("reference artifact has no available rows")
+    references: dict[int, list[np.ndarray]] = {}
+    for row in rows:
+        batch_size = int(row.get("hessian_batch_size", 0))
+        if batch_size <= 0 or batch_size in references:
+            raise BenchmarkError("reference artifact has invalid batch coordinates")
+        matrices = decode_hessian_batch(
+            row.get("final_hessians_binary64_le_zlib_base64")
+        )
+        if len(matrices) != batch_size:
+            raise BenchmarkError("reference Hessian count does not match batch size")
+        references[batch_size] = matrices
+    return references, {
         "designation": "independent_baseline",
         "path": str(path.resolve()),
         "sha256": hashlib.sha256(raw).hexdigest(),
         "engine": rows[0].get("engine"),
+        "hessian_batch_sizes": sorted(references),
     }
 
 
 def evaluate_correctness(
-    matrices: Sequence[np.ndarray],
+    sample_batches: Sequence[Sequence[np.ndarray]],
     *,
-    reference: np.ndarray | None,
+    references: Sequence[np.ndarray] | None,
     hessian_atol: float,
     symmetry_atol: float,
     acoustic_atol: float,
     repeatability_atol: float,
     is_reference: bool,
 ) -> dict[str, Any]:
-    """Apply finite, diagnostic, repeatability, and cross-engine gates."""
-    diagnostics = hessian_diagnostics(matrices[-1])
-    repeatability = (
-        max(float(np.max(np.abs(matrix - matrices[0]))) for matrix in matrices[1:])
-        if len(matrices) > 1
-        else 0.0
-    )
+    """Apply gates to every Hessian and aggregate the worst batch member."""
+    final_batch = list(sample_batches[-1])
+    per_hessian = [hessian_diagnostics(matrix) for matrix in final_batch]
+    repeatability_by_hessian = []
+    for index, baseline in enumerate(sample_batches[0]):
+        repeatability_by_hessian.append(
+            max(
+                (
+                    float(np.max(np.abs(batch[index] - baseline)))
+                    for batch in sample_batches[1:]
+                ),
+                default=0.0,
+            )
+        )
+    repeatability = max(repeatability_by_hessian, default=0.0)
     reasons = []
-    if not diagnostics["finite"]:
+    if not all(diagnostic["finite"] for diagnostic in per_hessian):
         reasons.append("non_finite_hessian")
-    if (
-        diagnostics["max_abs_antisymmetry_hartree_per_bohr2"] is not None
-        and diagnostics["max_abs_antisymmetry_hartree_per_bohr2"] > symmetry_atol
-    ):
+    antisymmetry_values = [
+        diagnostic["max_abs_antisymmetry_hartree_per_bohr2"]
+        for diagnostic in per_hessian
+        if diagnostic["max_abs_antisymmetry_hartree_per_bohr2"] is not None
+    ]
+    if antisymmetry_values and max(antisymmetry_values) > symmetry_atol:
         reasons.append("antisymmetry_exceeds_tolerance")
-    acoustic = max(
+    acoustic_values = [
         value
+        for diagnostic in per_hessian
         for value in (
-            diagnostics["max_abs_acoustic_row_residual_hartree_per_bohr2"],
-            diagnostics["max_abs_acoustic_column_residual_hartree_per_bohr2"],
+            diagnostic["max_abs_acoustic_row_residual_hartree_per_bohr2"],
+            diagnostic["max_abs_acoustic_column_residual_hartree_per_bohr2"],
         )
         if value is not None
-    )
-    if acoustic > acoustic_atol:
+    ]
+    if acoustic_values and max(acoustic_values) > acoustic_atol:
         reasons.append("acoustic_residual_exceeds_tolerance")
     if repeatability > repeatability_atol:
         reasons.append("repeatability_exceeds_tolerance")
     if is_reference:
         comparison: dict[str, Any] = {"status": "reference"}
-    elif reference is None:
+    elif references is None:
         comparison = {"status": "not_requested"}
     else:
-        comparison = dict(compare_hessians(matrices[-1], reference))
+        if len(references) != len(final_batch):
+            raise BenchmarkError("reference Hessian batch size does not match result")
+        per_comparison = [
+            compare_hessians(actual, reference)
+            for actual, reference in zip(final_batch, references, strict=True)
+        ]
+        comparison = {
+            "max_abs_delta_hartree_per_bohr2": max(
+                item["max_abs_delta_hartree_per_bohr2"] for item in per_comparison
+            ),
+            "max_rms_delta_hartree_per_bohr2": max(
+                item["rms_delta_hartree_per_bohr2"] for item in per_comparison
+            ),
+            "per_hessian": per_comparison,
+        }
         comparison["status"] = (
             "pass"
             if comparison["max_abs_delta_hartree_per_bohr2"] <= hessian_atol
@@ -792,8 +952,19 @@ def evaluate_correctness(
     return {
         "status": "pass" if not reasons else "fail",
         "reasons": reasons,
-        "diagnostics": diagnostics,
+        "diagnostics": {
+            "hessian_count": len(per_hessian),
+            "all_finite": all(item["finite"] for item in per_hessian),
+            "max_abs_antisymmetry_hartree_per_bohr2": (
+                max(antisymmetry_values) if antisymmetry_values else None
+            ),
+            "max_abs_acoustic_residual_hartree_per_bohr2": (
+                max(acoustic_values) if acoustic_values else None
+            ),
+            "per_hessian": per_hessian,
+        },
         "max_abs_repeatability_delta_hartree_per_bohr2": repeatability,
+        "per_hessian_repeatability_delta_hartree_per_bohr2": (repeatability_by_hessian),
         "cross_engine": comparison,
     }
 
@@ -803,8 +974,8 @@ def run_row(
     *,
     args: argparse.Namespace,
     molecule: Molecule,
-    displacement_batch_size: int | None,
-    reference: np.ndarray | None,
+    hessian_batch_size: int,
+    references: Sequence[np.ndarray] | None,
     factory: Callable[..., HessianEngine] = create_engine,
 ) -> dict[str, Any]:
     """Run one engine coordinate while preserving actionable failures."""
@@ -813,16 +984,20 @@ def run_row(
         "natoms": NATOMS,
         "molecule": molecule.name,
         "coordinate_count": COORDINATE_COUNT,
-        "displacement_count": DISPLACEMENT_COUNT,
-        "displacement_batch_size": displacement_batch_size,
-        "public_batch_semantics": (
-            "finite_difference_displacement_systems_per_native_force_call"
-            if engine_name.startswith("xtbloom-")
-            else "single_system_hessian; xTBloom displacement batch not applicable"
+        "displacement_count_per_hessian": (
+            None if engine_name.endswith("-ad") else DISPLACEMENT_COUNT
         ),
+        "hessian_batch_size": hessian_batch_size,
+        "total_displacement_systems": (
+            None
+            if engine_name.endswith("-ad")
+            else hessian_batch_size * DISPLACEMENT_COUNT
+        ),
+        "public_batch_semantics": "complete independent Hessians",
+        "requested_cpu_threads": args.cpu_threads,
         "availability": "unavailable",
     }
-    matrices: list[np.ndarray] = []
+    sample_batches: list[list[np.ndarray]] = []
     samples_ms: list[float] = []
     engine_metadata: dict[str, Any] = {}
     try:
@@ -830,7 +1005,7 @@ def run_row(
             engine_name,
             args=args,
             molecule=molecule,
-            displacement_batch_size=displacement_batch_size,
+            hessian_batch_size=hessian_batch_size,
         ) as engine:
             for _ in range(args.warmups):
                 engine.prepare_sample()
@@ -840,7 +1015,13 @@ def run_row(
                 start = time.perf_counter_ns()
                 result = engine.invoke()
                 elapsed_ms = (time.perf_counter_ns() - start) * 1.0e-6
-                matrices.append(np.array(result.hessian, copy=True))
+                if len(result.hessians) != hessian_batch_size:
+                    raise BenchmarkError(
+                        "engine returned a Hessian count that does not match batch size"
+                    )
+                sample_batches.append(
+                    [np.array(matrix, copy=True) for matrix in result.hessians]
+                )
                 samples_ms.append(elapsed_ms)
                 engine_metadata = result.metadata
     except Exception as exc:  # noqa: BLE001 - unavailable rows retain engine errors.
@@ -850,8 +1031,8 @@ def run_row(
 
     is_reference = bool(args.make_reference)
     correctness = evaluate_correctness(
-        matrices,
-        reference=reference,
+        sample_batches,
+        references=references,
         hessian_atol=args.hessian_atol,
         symmetry_atol=args.symmetry_atol,
         acoustic_atol=args.acoustic_atol,
@@ -861,10 +1042,12 @@ def run_row(
     row.update(
         {
             "availability": "available",
-            "timing": timing_summary(samples_ms),
+            "timing": timing_summary(samples_ms, hessian_batch_size),
             "correctness": correctness,
             "engine_metadata": engine_metadata,
-            "final_hessian_binary64_le_zlib_base64": encode_hessian(matrices[-1]),
+            "final_hessians_binary64_le_zlib_base64": encode_hessian_batch(
+                sample_batches[-1]
+            ),
         }
     )
     return row
@@ -964,14 +1147,26 @@ def runner_metadata(
             )
         },
         "protocol": {
-            "workload": "neutral singlet C20H42 generated by make_alkane(62)",
+            "workload": (
+                "distinct neutral-singlet C20H42 conformers generated from "
+                "make_alkane(62)"
+            ),
+            "hessian_batch_sizes": list(args.batch_sizes),
+            "batch_semantics": "complete independent Hessians",
+            "workload_seed": WORKLOAD_SEED,
+            "perturb_sigma_bohr": PERTURB_SIGMA_BOHR,
+            "fixed_cpu_threads_for_every_batch_size": args.cpu_threads,
+            "internal_displacement_chunk_size": args.displacement_chunk_size,
+            "internal_displacement_chunk_policy": (
+                "same explicit size for every xTBloom Hessian batch"
+            ),
             "position_units": "bohr",
             "hessian_units": "Hartree/bohr^2",
             "step_bohr": args.step,
             "warmups": args.warmups,
             "repetitions": args.repetitions,
             "timing_boundary": (
-                "complete public Hessian call through host-visible dense matrix"
+                "complete public workload through all host-visible dense Hessians"
             ),
             "scc_max_iterations": args.scc_max_iterations,
             "scc_charge_tolerance": args.scc_charge_tolerance,
@@ -1020,14 +1215,35 @@ def write_json(path: Path, document: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def write_compact_json(
+    raw_path: Path,
+    compact_path: Path,
+    document: dict[str, Any],
+    *,
+    path_replacements: Sequence[tuple[str, str]],
+) -> None:
+    """Write one authenticated compact projection of a raw harness artifact."""
+    raw = raw_path.read_bytes()
+    compact = compact_hessian_document(
+        document,
+        raw_filename=raw_path.name,
+        raw_byte_count=len(raw),
+        raw_sha256=hashlib.sha256(raw).hexdigest(),
+        path_replacements=path_replacements,
+    )
+    write_json(compact_path, compact)
+
+
 def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
     """Write a compact human-readable row summary."""
     columns = [
         "engine",
         "natoms",
-        "displacement_batch_size",
+        "hessian_batch_size",
+        "requested_cpu_threads",
         "availability",
         "median_ms",
+        "amortized_ms_per_hessian_at_median",
         "mean_ms",
         "p95_ms",
         "min_ms",
@@ -1048,22 +1264,17 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
             correctness = row.get("correctness") or {}
             diagnostics = correctness.get("diagnostics") or {}
             comparison = correctness.get("cross_engine") or {}
-            acoustic_values = [
-                diagnostics.get("max_abs_acoustic_row_residual_hartree_per_bohr2"),
-                diagnostics.get("max_abs_acoustic_column_residual_hartree_per_bohr2"),
-            ]
-            acoustic = (
-                max(value for value in acoustic_values if value is not None)
-                if any(value is not None for value in acoustic_values)
-                else None
-            )
             writer.writerow(
                 {
                     "engine": row.get("engine"),
                     "natoms": row.get("natoms"),
-                    "displacement_batch_size": row.get("displacement_batch_size"),
+                    "hessian_batch_size": row.get("hessian_batch_size"),
+                    "requested_cpu_threads": row.get("requested_cpu_threads"),
                     "availability": row.get("availability"),
                     "median_ms": timing.get("median_ms"),
+                    "amortized_ms_per_hessian_at_median": timing.get(
+                        "amortized_ms_per_hessian_at_median"
+                    ),
                     "mean_ms": timing.get("mean_ms"),
                     "p95_ms": timing.get("p95_ms"),
                     "min_ms": timing.get("min_ms"),
@@ -1076,12 +1287,14 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                         "max_abs_delta_hartree_per_bohr2"
                     ),
                     "rms_delta_hartree_per_bohr2": comparison.get(
-                        "rms_delta_hartree_per_bohr2"
+                        "max_rms_delta_hartree_per_bohr2"
                     ),
                     "max_abs_antisymmetry_hartree_per_bohr2": diagnostics.get(
                         "max_abs_antisymmetry_hartree_per_bohr2"
                     ),
-                    "max_abs_acoustic_residual_hartree_per_bohr2": acoustic,
+                    "max_abs_acoustic_residual_hartree_per_bohr2": diagnostics.get(
+                        "max_abs_acoustic_residual_hartree_per_bohr2"
+                    ),
                     "unavailable_reason": row.get("unavailable_reason"),
                 }
             )
@@ -1092,7 +1305,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engines", type=parse_csv_values, default=DEFAULT_ENGINES)
     parser.add_argument(
-        "--displacement-batch-sizes", type=parse_csv_ints, default=(1, 128)
+        "--batch-sizes", type=parse_csv_ints, default=DEFAULT_BATCH_SIZES
     )
     parser.add_argument("--library", type=Path)
     parser.add_argument("--xtb-library", type=Path)
@@ -1100,6 +1313,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dxtb-source", type=Path, default=Path.home() / "codes/dxtb")
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--cpu-threads", type=int, default=16)
+    parser.add_argument(
+        "--displacement-chunk-size",
+        type=int,
+        default=DEFAULT_DISPLACEMENT_CHUNK_SIZE,
+        help=(
+            "xTBloom displacement systems per native force call; independent "
+            "of the complete-Hessian batch size"
+        ),
+    )
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--step", type=float, default=0.005)
@@ -1124,6 +1346,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--coordinate-child", action="store_true", help=argparse.SUPPRESS
     )
     parser.add_argument("--output-json", type=Path, required=True)
+    parser.add_argument("--compact-output-json", type=Path)
     parser.add_argument("--output-csv", type=Path, required=True)
     return parser
 
@@ -1135,15 +1358,19 @@ def validate_args(args: argparse.Namespace) -> None:
         raise BenchmarkError(f"unsupported engines: {', '.join(unknown)}")
     if args.make_reference and (args.engines != ("xtb",) or args.reference_json):
         raise BenchmarkError("--make-reference requires only --engines xtb")
-    if args.output_json.resolve() == args.output_csv.resolve():
-        raise BenchmarkError("JSON and CSV outputs must be distinct")
-    if args.output_json.parent.resolve() != args.output_csv.parent.resolve():
-        raise BenchmarkError("JSON and CSV outputs must share a directory")
-    for output in (args.output_json, args.output_csv):
+    outputs = [args.output_json, args.output_csv]
+    if args.compact_output_json is not None:
+        outputs.append(args.compact_output_json)
+    if len({output.resolve() for output in outputs}) != len(outputs):
+        raise BenchmarkError("raw JSON, compact JSON, and CSV outputs must be distinct")
+    if len({output.parent.resolve() for output in outputs}) != 1:
+        raise BenchmarkError("all output artifacts must share a directory")
+    for output in outputs:
         if output.exists():
             raise BenchmarkError(f"refusing to overwrite existing artifact: {output}")
     for name in (
         "cpu_threads",
+        "displacement_chunk_size",
         "warmups",
         "repetitions",
         "scc_max_iterations",
@@ -1188,23 +1415,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         validate_args(args)
         validate_clean_sources(args)
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
-        reference, reference_identity = load_reference(args.reference_json)
+        references_by_batch, reference_identity = load_references(args.reference_json)
         molecule = make_alkane(NATOMS)
         rows = []
         for engine in args.engines:
-            batches: Sequence[int | None] = (
-                args.displacement_batch_sizes
-                if engine.startswith("xtbloom-")
-                else (None,)
-            )
-            for batch_size in batches:
+            for batch_size in args.batch_sizes:
                 if args.coordinate_child:
                     row = run_row(
                         engine,
                         args=args,
                         molecule=molecule,
-                        displacement_batch_size=batch_size,
-                        reference=reference,
+                        hessian_batch_size=batch_size,
+                        references=references_by_batch.get(batch_size),
                     )
                 else:
                     with tempfile.TemporaryDirectory(
@@ -1215,7 +1437,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         command = coordinate_command(
                             args,
                             engine=engine,
-                            displacement_batch_size=batch_size,
+                            hessian_batch_size=batch_size,
                             output_json=child_json,
                             output_csv=child_csv,
                         )
@@ -1232,13 +1454,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         row.setdefault("natoms", NATOMS)
                         row.setdefault("molecule", molecule.name)
                         row.setdefault("coordinate_count", COORDINATE_COUNT)
-                        row.setdefault("displacement_count", DISPLACEMENT_COUNT)
-                        row.setdefault("displacement_batch_size", batch_size)
+                        row.setdefault(
+                            "displacement_count_per_hessian",
+                            None if engine.endswith("-ad") else DISPLACEMENT_COUNT,
+                        )
+                        row.setdefault("hessian_batch_size", batch_size)
+                        row.setdefault("requested_cpu_threads", args.cpu_threads)
                 rows.append(row)
                 availability = row["availability"]
                 timing = row.get("timing") or {}
                 print(  # noqa: T201 - benchmark progress belongs on stdout.
-                    f"{engine} displacement_batch={batch_size}: {availability} "
+                    f"{engine} hessian_batch={batch_size}: {availability} "
                     f"median_ms={timing.get('median_ms')}"
                 )
         positions = np.asarray(molecule.positions_bohr, dtype=np.float64)
@@ -1254,6 +1480,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "positions_bohr_sha256": hashlib.sha256(
                     positions.astype("<f8").tobytes()
                 ).hexdigest(),
+                "batch_generation": {
+                    "seed": WORKLOAD_SEED,
+                    "perturb_sigma_bohr": PERTURB_SIGMA_BOHR,
+                    "slot_zero_is_base_geometry": True,
+                    "later_slots_are_distinct_seeded_perturbations": True,
+                },
                 "molecular_charge_e": 0.0,
                 "unpaired_electrons": 0,
             },
@@ -1261,6 +1493,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         write_json(args.output_json, document)
         write_csv(args.output_csv, rows)
+        if args.compact_output_json is not None:
+            replacements = [
+                (str(REPOSITORY_ROOT), "${XTBLOOM_SOURCE_ROOT}"),
+                (str(args.xtb_source.resolve()), "${XTB_SOURCE_ROOT}"),
+                (str(args.dxtb_source.resolve()), "${DXTB_SOURCE_ROOT}"),
+            ]
+            write_compact_json(
+                args.output_json,
+                args.compact_output_json,
+                document,
+                path_replacements=replacements,
+            )
         print(f"wrote {args.output_json} and {args.output_csv}")  # noqa: T201
         if args.fail_on_correctness and any(
             row.get("availability") != "available"
