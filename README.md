@@ -84,6 +84,7 @@ positions = np.array(
 backend = "cuda"  # Use "cpu" to require CPU execution instead.
 with Calculator("GFN2-xTB", numbers, positions, backend=backend) as calc:
     result = calc.singlepoint()
+    hessian = calc.hessian(step=0.005, symmetrize=True)  # Hartree/bohr^2
 
 print(result["energy"])
 print(result["forces"])
@@ -92,10 +93,6 @@ print(result["charges"])
 
 For one molecule, `Calculator.hessian()` returns a dense numerical QM
 Cartesian Hessian by batching central differences of the analytic forces:
-
-```python
-hessian = calc.hessian(step=0.005, symmetrize=True)  # Hartree/bohr^2
-```
 
 This Python convenience method costs `6 * natoms` force evaluations and
 automatically chunks the displaced geometries. It does not add a native C ABI

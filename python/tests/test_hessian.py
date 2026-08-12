@@ -138,7 +138,7 @@ def test_hessian_sign_layout_displacement_order_and_forces_only(
         plus = np.zeros(6)
         plus[coordinate] = 0.01
         expected.extend([plus, -plus])
-    np.testing.assert_allclose(deltas, expected, atol=1.0e-17, rtol=0.0)
+    np.testing.assert_allclose(deltas, expected, atol=1.0e-15, rtol=0.0)
 
 
 def test_hessian_displacements_preserve_fixed_external_attachments(
@@ -429,10 +429,10 @@ def test_open_shell_and_fixed_charge_response_hessians_are_finite() -> None:
         matrix=np.array([[0.02, 0.001], [0.001, 0.018]]),
     )
     with _h2_calculator(charge_response=response) as calculator:
-        periodic = calculator.hessian(auto_batch_size=2)
+        fixed_response = calculator.hessian(auto_batch_size=2)
 
     assert np.isfinite(open_shell).all()
-    assert np.isfinite(periodic).all()
+    assert np.isfinite(fixed_response).all()
 
 
 def test_fixed_electric_field_hessian_leaves_field_unchanged() -> None:

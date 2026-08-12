@@ -113,9 +113,10 @@ with Calculator("GFN2-xTB", numbers, positions, backend="cuda") as calc:
 ```
 
 The result is a NumPy `float64` array with shape `(3 * natoms, 3 * natoms)` and
-units Hartree/bohr². The method batches and automatically chunks its
-`6 * natoms` displaced geometries; `auto_batch_size` accepts the same atom-count
-limit as `BatchCalculator.compute()`. The raw finite-difference matrix is
+units Hartree/bohr². By default, the method batches and automatically chunks its
+`6 * natoms` displaced geometries; a positive `auto_batch_size` sets the same
+atom-count limit accepted by `BatchCalculator.compute()`, while `False` or
+`None` submits all displacements at once. The raw finite-difference matrix is
 returned by default so antisymmetric numerical error remains visible, while
 `symmetrize=True` returns `0.5 * (H + H.T)`.
 

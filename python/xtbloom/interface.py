@@ -899,6 +899,7 @@ def _hessian_displacement_chunks(
     range's displaced structures are constructed immediately before its native
     call so automatic sizing also bounds Python-side coordinate storage.
     """
+    auto_batch_size = _validated_auto_batch_size(auto_batch_size)
     if auto_batch_size is None or auto_batch_size is False:
         systems_per_chunk = displacement_count
     elif auto_batch_size is True:
@@ -906,10 +907,7 @@ def _hessian_displacement_chunks(
         limit = _resolve_auto_batch_limit_for_total_atoms(context, total_atoms)
         systems_per_chunk = max(1, limit // atom_count)
     else:
-        limit = _as_integer("auto_batch_size", auto_batch_size)
-        if limit <= 0:
-            raise XTBloomValueError("auto_batch_size must be a positive integer")
-        systems_per_chunk = max(1, limit // atom_count)
+        systems_per_chunk = max(1, auto_batch_size // atom_count)
     return [
         range(begin, min(begin + systems_per_chunk, displacement_count))
         for begin in range(0, displacement_count, systems_per_chunk)
@@ -1714,11 +1712,14 @@ class Calculator(Structure):
             """Validate one chunk and accumulate its force rows as columns."""
             axes = ("x", "y", "z")
             failed = []
+            first_local: int | None = None
             for local_index, displacement_index in enumerate(indices):
                 status = int(computed.per_system_status[local_index])
                 converged = int(computed.scc_converged[local_index])
                 if status == library.STATUS_SUCCESS and converged == 1:
                     continue
+                if first_local is None:
+                    first_local = local_index
                 index = int(displacement_index)
                 coordinate = index // 2
                 atom, axis = divmod(coordinate, 3)
@@ -1729,18 +1730,7 @@ class Calculator(Structure):
                     f"scc_converged={converged}, "
                     f"iterations={int(computed.scc_iterations[local_index])}"
                 )
-            if failed:
-                first_local = next(
-                    local_index
-                    for local_index, (status, converged) in enumerate(
-                        zip(
-                            computed.per_system_status,
-                            computed.scc_converged,
-                            strict=True,
-                        )
-                    )
-                    if int(status) != library.STATUS_SUCCESS or int(converged) != 1
-                )
+            if first_local is not None:
                 raise XTBloomRuntimeError(
                     "xTBloom Hessian displacement calculations failed: "
                     + "; ".join(failed),
@@ -1769,7 +1759,6 @@ class Calculator(Structure):
 
             def run_chunk(indices: Sequence[int]) -> None:
                 """Evaluate a chunk, bisecting automatic allocation failures."""
-                retry_smaller = False
                 try:
                     flags = library.COMPUTE_FORCES
                     if self.point_charges is not None:
@@ -1795,19 +1784,17 @@ class Calculator(Structure):
                         or len(indices) == 1
                     ):
                         raise
-                    retry_smaller = True
-
-                if retry_smaller:
-                    # Leave the exception handler before rebuilding either
-                    # half. Its traceback owns the failed chunk's structures;
-                    # retaining it during recursion would defeat the memory-
-                    # pressure recovery that this retry is meant to provide.
-                    midpoint = len(indices) // 2
-                    run_chunk(indices[:midpoint])
-                    run_chunk(indices[midpoint:])
+                else:
+                    publish_forces(computed, indices)
                     return
-                assert computed is not None
-                publish_forces(computed, indices)
+
+                # Leave the exception handler before rebuilding either half.
+                # Its traceback owns the failed chunk's structures; retaining
+                # it during recursion would defeat the memory-pressure
+                # recovery that this retry is meant to provide.
+                midpoint = len(indices) // 2
+                run_chunk(indices[:midpoint])
+                run_chunk(indices[midpoint:])
 
             for chunk in chunks:
                 run_chunk(chunk)
