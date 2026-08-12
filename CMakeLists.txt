@@ -1628,6 +1628,45 @@ if(XTBLOOM_BUILD_TESTS)
     xtbloom_configure_linalg_runtime_test(
       xtbloom_cpu_public_inference_test xtbloom.cpu.public_inference
     )
+
+    # Issue #360 regression: compile the public CPU runtime into a standalone
+    # test binary with deterministic worker observability. The production
+    # shared library remains free of test hooks, while this binary still calls
+    # the real public C API and the configured production LP64 provider.
+    add_executable(xtbloom_cpu_worker_teardown_test
+      tests/cpu_worker_teardown_test.cpp
+      src/api.cpp
+      src/runtime/backend.cpp
+      src/runtime/gfn2_cpu_execution.cpp
+      src/runtime/gfn2_plan.cpp
+      src/runtime/request.cpp
+      src/runtime/result_owner.cpp
+      src/runtime/validation.cpp
+      $<TARGET_OBJECTS:xtbloom_gfn2_cpu>
+    )
+    target_include_directories(xtbloom_cpu_worker_teardown_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${XTBLOOM_GENERATED_INCLUDE_DIR}
+    )
+    target_compile_definitions(xtbloom_cpu_worker_teardown_test PRIVATE
+      XTBLOOM_BUILDING_LIBRARY
+      XTBLOOM_CPU_WORKER_TEARDOWN_TESTING=1
+    )
+    target_compile_features(xtbloom_cpu_worker_teardown_test PRIVATE cxx_std_17)
+    target_link_libraries(xtbloom_cpu_worker_teardown_test PRIVATE
+      Threads::Threads
+      ${CMAKE_DL_LIBS}
+    )
+    add_test(NAME xtbloom.cpu.worker_teardown COMMAND xtbloom_cpu_worker_teardown_test)
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_cpu_worker_teardown_test xtbloom.cpu.worker_teardown
+    )
+    set_property(TEST xtbloom.cpu.worker_teardown APPEND PROPERTY ENVIRONMENT
+      "MALLOC_CHECK_=3"
+      "GLIBC_TUNABLES=glibc.malloc.tcache_count=0"
+    )
   endif()
 
   if(BUILD_SHARED_LIBS AND UNIX AND NOT APPLE)
