@@ -198,7 +198,8 @@ xTBloom has no lattice input. Its periodic charge-response API consumes fields
 computed by another electrostatics program; it does not make the QM
 calculation periodic by itself. Native geometry optimization, molecular
 dynamics, solvation, vibrational analysis, and native/analytic Hessians are not
-implemented. Python `Calculator.hessian()` provides only a dense numerical
-QM-coordinate Hessian from batched analytic-force differences. The Hessian and
+implemented. Python `Calculator.hessian()` and `BatchCalculator.hessian()`
+provide dense numerical QM-coordinate Hessians from batched analytic-force
+differences. The Hessian and
 the browser/dpdata optimizers are higher-level adapters built on repeated
 xTBloom calculations.

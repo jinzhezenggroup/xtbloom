@@ -141,7 +141,7 @@ before reusing the numbers.
 | Caller-supplied periodic charge response | Supported; no lattice descriptor |
 | Uniform electric field and molecular dipoles | CPU; CUDA ABI slots reserved |
 | ASE and dpdata integrations | Supported |
-| Numerical QM Cartesian Hessian | [Python `Calculator`](docs/user-guide/python.md#numerical-cartesian-hessians); batched analytic-force differences |
+| Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side adapter |
 | Native GFN1-xTB, ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, lattice/PBC | Not implemented |
 

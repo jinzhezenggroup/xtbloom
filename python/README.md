@@ -80,7 +80,7 @@ Hartree, forces in Hartree/bohr, and charges in elementary-charge units.
 
 ```python
 import numpy as np
-from xtbloom import Calculator
+from xtbloom import BatchCalculator, Calculator, Structure
 
 numbers = np.array([8, 1, 1])
 positions = np.array(
@@ -104,21 +104,28 @@ print(result["charges"])
 electronic temperature, the reported variational energy is the electronic
 Helmholtz free energy.
 
-`Calculator.hessian()` evaluates the dense numerical QM-coordinate energy
-Hessian as central differences of analytic forces:
+`Calculator.hessian()` evaluates one dense numerical QM-coordinate energy
+Hessian as central differences of analytic forces. `BatchCalculator.hessian()`
+returns one matrix per structure and interleaves their displacement tasks in
+native ragged force calls under one fixed thread/device budget:
 
 ```python
 with Calculator("GFN2-xTB", numbers, positions, backend="cuda") as calc:
     hessian = calc.hessian(step=0.005, symmetrize=True)
+
+structures = [Structure(numbers, positions), Structure(numbers, positions * 1.01)]
+with BatchCalculator(structures, backend="cuda", cpu_threads=16) as calc:
+    hessians = calc.hessian(step=0.005, symmetrize=True)
 ```
 
-The result is a NumPy `float64` array with shape `(3 * natoms, 3 * natoms)` and
-units Hartree/bohr². By default, the method batches and automatically chunks its
-`6 * natoms` displaced geometries; a positive `auto_batch_size` sets the same
-atom-count limit accepted by `BatchCalculator.compute()`, while `False` or
-`None` submits all displacements at once. The raw finite-difference matrix is
-returned by default so antisymmetric numerical error remains visible, while
-`symmetrize=True` returns `0.5 * (H + H.T)`.
+Each result is a NumPy `float64` array with shape `(3 * natoms, 3 * natoms)` and
+units Hartree/bohr²; the batch method returns an input-ordered list for ragged
+atom counts. By default, the methods automatically chunk the displaced
+geometries; a positive `auto_batch_size` sets the same atom-count limit accepted
+by `BatchCalculator.compute()`, while `False` or `None` submits all
+displacements at once. The raw finite-difference matrices are returned by
+default so antisymmetric numerical error remains visible, while
+`symmetrize=True` applies `0.5 * (H + H.T)` to each matrix.
 
 Only QM coordinates are displaced. Point-charge coordinates and values,
 electric fields, and caller-supplied charge-response `b/A` operators remain
@@ -245,7 +252,7 @@ geometry optimization in the C ABI.
 GFN1-xTB, ROCm, lattice/PBC inputs, solvation, native geometry optimization,
 molecular dynamics, native/analytic Hessians, vibrational analysis, and
 higher-order autograd are not implemented. A numerical QM Cartesian Hessian is
-available only through Python `Calculator.hessian()`.
+available through Python `Calculator.hessian()` and `BatchCalculator.hessian()`.
 The high-level `Calculator` and `BatchCalculator` APIs use host NumPy arrays;
 direct device and mixed descriptors are exposed through `ArrayBatch` and the
 low-level C ABI.
