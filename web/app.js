@@ -1186,10 +1186,12 @@ async function maybeRunUrlSmiles() {
 }
 
 $("smiles").addEventListener("input", () => {
-  if (smilesBusy) {
-    invalidateSmilesWork();
-    syncEngineControls();
-  }
+  /* User edits supersede both conformer generation and the longer URL-driven
+   * workflow, including an xTBloom optimization that starts after generation
+   * has released smilesBusy. cancel() is intentionally a no-op when no
+   * OpenChemLib request is pending. */
+  invalidateSmilesWork();
+  syncEngineControls();
   syncSmilesControls();
 });
 $("smiles").addEventListener("keydown", (event) => {

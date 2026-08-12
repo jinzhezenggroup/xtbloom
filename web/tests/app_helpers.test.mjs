@@ -1146,7 +1146,7 @@ test("stale calculations and SMILES workflows cannot overwrite newer input or Re
   );
   assert.match(
     appSource,
-    /\$\("smiles"\)\.addEventListener\("input", \(\) => \{[\s\S]*?if \(smilesBusy\) \{[\s\S]*?invalidateSmilesWork\(\);/,
+    /\$\("smiles"\)\.addEventListener\("input", \(\) => \{[\s\S]*?invalidateSmilesWork\(\);[\s\S]*?syncEngineControls\(\);/,
   );
   assert.match(appSource, /if \(hasCurrentResult\("optimize"\)\) renderOptimize/);
   assert.match(appSource, /if \(hasCurrentResult\("optimize"\) && d\.geometry\)/);
