@@ -1121,11 +1121,11 @@ test("stale calculations and SMILES workflows cannot overwrite newer input or Re
   /* Both streamed optimization frames and the final result are revision-gated. */
   assert.match(
     appSource,
-    /\(step\) => \{\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\)\) return;/,
+    /\(step\) => \{\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) return;/,
   );
   assert.match(
     appSource,
-    /const dt = performance\.now\(\) - t0;\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\)\) throw supersededCoordinateError\(\);/,
+    /const dt = performance\.now\(\) - t0;\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) \{\s*throw supersededCoordinateError\(\);/,
   );
   /* Reset invalidates in-flight generation and a URL workflow waiting on either worker. */
   assert.match(
@@ -1147,6 +1147,20 @@ test("stale calculations and SMILES workflows cannot overwrite newer input or Re
   assert.match(
     appSource,
     /\$\("smiles"\)\.addEventListener\("input", \(\) => \{[\s\S]*?invalidateSmilesWork\(\);[\s\S]*?syncEngineControls\(\);/,
+  );
+  /* URL optimization must share the SMILES workflow's publication token, not
+   * merely check it after runOptimize has already rendered final geometry. */
+  assert.match(
+    appSource,
+    /runOptimize\(\{[\s\S]*?canPublish: \(\) => smilesWorkflow\.isCurrent\(workflowRevision\)/,
+  );
+  assert.match(
+    appSource,
+    /if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) return;/,
+  );
+  assert.match(
+    appSource,
+    /if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) \{\s*throw supersededCoordinateError\(\);/,
   );
   assert.match(appSource, /if \(hasCurrentResult\("optimize"\)\) renderOptimize/);
   assert.match(appSource, /if \(hasCurrentResult\("optimize"\) && d\.geometry\)/);

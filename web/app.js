@@ -1173,6 +1173,7 @@ async function maybeRunUrlSmiles() {
     const optimized = await withPending(() => runOptimize({
       applyFinalGeometry: true,
       throwOnFailure: true,
+      canPublish: () => smilesWorkflow.isCurrent(workflowRevision),
     }));
     requireCurrentSmilesWorkflow(workflowRevision);
     if (!optimized) throw new Error("xTBloom geometry optimization failed");
@@ -1262,6 +1263,7 @@ async function runCompute() {
 async function runOptimize({
   applyFinalGeometry = false,
   throwOnFailure = false,
+  canPublish = () => true,
 } = {}) {
   const parsed = parseXyzCoordinates($("xyz").value);
   if (!parsed.ok) {
@@ -1292,7 +1294,7 @@ async function runOptimize({
     const m = await callWorker("optimize",
       [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, angstromToBohr(maxMoveAngstrom)],
       (step) => {
-        if (!coordinateRevisions.isCurrent(requestRevision)) return;
+        if (!coordinateRevisions.isCurrent(requestRevision) || !canPublish()) return;
         $("mol-status").textContent = tf("opt_running", { n: step.iter, max: optMax, e: fmt(step.energy, 6) });
         const frame = { iter: step.iter, natoms: step.natoms, coords: step.coords, energy: step.energy, fmax: step.fmax, symbols };
         optFrames.push(frame);
@@ -1302,7 +1304,9 @@ async function runOptimize({
         renderOptFrame(frame);
       });
     const dt = performance.now() - t0;
-    if (!coordinateRevisions.isCurrent(requestRevision)) throw supersededCoordinateError();
+    if (!coordinateRevisions.isCurrent(requestRevision) || !canPublish()) {
+      throw supersededCoordinateError();
+    }
     const d = JSON.parse(m.raw);
     if (!d.ok) {
       const error = new Error(errorText(d));
@@ -1325,7 +1329,10 @@ async function runOptimize({
     }
     return d;
   } catch (e) {
-    if (e?.name === "AbortError" || !coordinateRevisions.isCurrent(requestRevision)) {
+    if (
+      e?.name === "AbortError" || !coordinateRevisions.isCurrent(requestRevision) ||
+      !canPublish()
+    ) {
       if (throwOnFailure) throw (e?.name === "AbortError" ? e : supersededCoordinateError());
       return null;
     }
