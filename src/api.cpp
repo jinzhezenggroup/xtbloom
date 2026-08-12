@@ -382,11 +382,88 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
     return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
                 "asynchronous compute enqueue is not supported by the CPU backend");
   }
-  (void)batch;
-  (void)options;
-  (void)result;
-  return fail(XTBLOOM_STATUS_NOT_IMPLEMENTED,
-              "CUDA asynchronous compute enqueue is not connected in this build");
+  if (batch == nullptr || options == nullptr || result == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "batch, compute options, or batch result is NULL");
+  }
+
+  bool reserved = false;
+  try {
+    std::string error;
+    const xtbloom_status_t reserve_status =
+        request->implementation->reserve_submission(*context->implementation, error);
+    if (reserve_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(reserve_status, std::move(error));
+    }
+    reserved = true;
+    const xtbloom::detail::DescriptorValidationResult validation =
+        xtbloom::detail::validate_compute_descriptor_structure(context->implementation->backend,
+                                                               batch, options, result);
+    if (!validation.ok()) {
+      request->implementation->rollback_submission();
+      reserved = false;
+      return fail(validation.status, validation.error);
+    }
+    if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
+      request->implementation->rollback_submission();
+      reserved = false;
+      return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+                  "GFN1-xTB is reserved by the ABI but is not implemented yet");
+    }
+    if (options->struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
+        options->scc_start_mode == XTBLOOM_SCC_START_WARM) {
+      request->implementation->rollback_submission();
+      reserved = false;
+      return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+                  "asynchronous CUDA context enqueue does not support strict WARM SCC start yet");
+    }
+
+#if defined(XTBLOOM_HAS_CUDA)
+    const std::shared_ptr<xtbloom::detail::Gfn2CudaExecutionCache>& cache =
+        context->implementation->gfn2_cuda_execution_cache;
+    if (cache == nullptr) {
+      request->implementation->rollback_submission();
+      return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                  "CUDA context does not own a GFN2 execution cache");
+    }
+    xtbloom::detail::RequestSubmission submission;
+    const xtbloom_status_t enqueue_status = xtbloom::detail::enqueue_restricted_gfn2_cuda(
+        cache, *batch, *options, *result, submission, error);
+    if (enqueue_status != XTBLOOM_STATUS_SUCCESS) {
+      request->implementation->rollback_submission();
+      return fail(enqueue_status, std::move(error));
+    }
+    /* Publication is the ownership handoff from the API stack to the request.
+     * If an invariant or mutex operation fails here, settle the already
+     * accepted CUDA transaction instead of leaving borrowed buffers in use. */
+    CompletionSettlementGuard completion_guard(submission.pending);
+    const xtbloom_status_t publish_status =
+        request->implementation->publish_submission(std::move(submission), error);
+    if (publish_status != XTBLOOM_STATUS_SUCCESS) {
+      request->implementation->rollback_submission();
+      reserved = false;
+      return fail(publish_status, std::move(error));
+    }
+    completion_guard.dismiss();
+    reserved = false;
+    last_error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+#else
+    request->implementation->rollback_submission();
+    return fail(XTBLOOM_STATUS_BACKEND_UNAVAILABLE,
+                "the xtbloom library was built without CUDA support");
+#endif
+  } catch (const std::bad_alloc&) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
+                "failed to allocate temporary storage while enqueueing CUDA GFN2 inference");
+  } catch (const std::exception& exception) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                "unknown exception while enqueueing CUDA GFN2 inference");
+  }
 }
 
 xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch_t* batch,

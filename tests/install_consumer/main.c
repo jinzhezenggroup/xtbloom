@@ -246,6 +246,33 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
     return 11;
   }
 
+  if (xtbloom_context_get_backend(context) == XTBLOOM_BACKEND_CUDA) {
+    const uint32_t result_flags_canary = UINT32_C(0xa55a39c6);
+    xtbloom_request_t* request = NULL;
+    xtbloom_request_info_t info;
+    energy = NAN;
+    iterations = -1;
+    converged = 0;
+    system_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    result.flags = result_flags_canary;
+    if (xtbloom_request_info_init(&info, sizeof(info)) != XTBLOOM_STATUS_SUCCESS ||
+        xtbloom_request_create(context, &request) != XTBLOOM_STATUS_SUCCESS || request == NULL ||
+        xtbloom_compute_enqueue(context, &batch, &options, &result, request) !=
+            XTBLOOM_STATUS_SUCCESS ||
+        xtbloom_request_wait(request, &info) != XTBLOOM_STATUS_SUCCESS ||
+        info.state != XTBLOOM_REQUEST_COMPLETE ||
+        info.completion_status != XTBLOOM_STATUS_SUCCESS || info.result_flags != 0u ||
+        result.flags != result_flags_canary || system_status != XTBLOOM_STATUS_SUCCESS ||
+        converged != 1 || iterations <= 0 || !isfinite(energy)) {
+      fprintf(stderr, "installed %s context enqueue failed: call_error=%s request_error=%s\n",
+              mode_name, xtbloom_get_last_error(),
+              request == NULL ? "request is NULL" : xtbloom_request_get_error(request));
+      xtbloom_request_destroy(request);
+      return 18;
+    }
+    xtbloom_request_destroy(request);
+  }
+
   /* Exercise the CPU-released ABI-v3 electric-field attachment and ABI-v2
    * dipole-moment outlet end to end. CUDA deliberately returns NOT_IMPLEMENTED
    * for both until #237 P3, so its installed consumer retains the field-free

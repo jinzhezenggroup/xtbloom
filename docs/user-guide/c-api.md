@@ -278,6 +278,19 @@ valid. Pointer ownership and the selected device are validated.
 stream is supplied. Active CUDA stream capture is rejected. xTBloom attempts to
 restore the caller's current device on every exit.
 
+For native asynchronous CUDA submission, create a reusable
+`xtbloom_request_t` and call either `xtbloom_compute_enqueue` or the
+fixed-topology `xtbloom_plan_compute_enqueue`. A successful enqueue copies the
+descriptor images and every host input needed after return; CUDA inputs and all
+outputs must remain alive until the request is `COMPLETE`. Query is
+nonblocking, while wait and request destruction settle that exact submission.
+Completion flags are returned by `xtbloom_request_info_t.result_flags`; the
+copied `xtbloom_batch_result_t.flags` field is deliberately not modified.
+Context enqueue may do bounded setup work for a first or changed topology,
+whereas a prepared same-topology path leaves inference and result publication
+ordered only on the context stream. CPU enqueue is a capability probe that
+returns `NOT_SUPPORTED` before inspecting descriptors.
+
 ## xTBloom-owned result arenas and DLPack export
 
 `xtbloom_result_owner_t` is an additive, ref-counted result-allocation owner:

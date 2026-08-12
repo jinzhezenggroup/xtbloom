@@ -1179,6 +1179,12 @@ int test_host_device_mixed_and_streams(std::int32_t device, PublicBatch& batch,
   return 0;
 }
 
+struct RequestDeleter {
+  void operator()(xtbloom_request_t* request) const noexcept { xtbloom_request_destroy(request); }
+};
+
+using RequestHandle = std::unique_ptr<xtbloom_request_t, RequestDeleter>;
+
 /* A data-level numerical failure belongs to one ragged member, not the whole
  * public call. Use geometries from the pinned H3+ and OH trace corpus, then
  * establish the mixed terminal outcome independently through the public CPU
@@ -1340,6 +1346,42 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
       }
     }
   }
+
+  /* The context request path preserves the same data-level failure contract:
+   * completion succeeds as a call, diagnostics identify the failed peer, and
+   * every requested floating-point slice for that peer is a complete qNaN. */
+  g_scenario = "peer-failure/context-enqueue-mixed";
+  bind_inputs(batch, &device_inputs, InputLayout::kMixed);
+  ResultOwner async_owner;
+  CUDA_CHECK(async_owner.bind(batch, ResultLayout::kMixed, failure_options.flags));
+  xtbloom_request_t* raw_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle request(raw_request);
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &failure_options,
+                                &async_owner.descriptor, request.get()) == XTBLOOM_STATUS_SUCCESS);
+  xtbloom_request_info_t info{};
+  CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.result_flags == failure_reference.flags);
+  MaterializedResult async_actual;
+  CUDA_CHECK(async_owner.materialize(async_actual));
+  CHECK(async_actual.statuses == failure_reference.statuses);
+  CHECK(async_actual.converged == failure_reference.converged);
+  CHECK(async_actual.iterations == failure_reference.iterations);
+  CHECK(near(async_actual.energies[0], failure_reference.energies[0], kEnergyAbsoluteTolerance,
+             kEnergyRelativeTolerance));
+  CHECK(is_quiet_nan(async_actual.energies[1]));
+  for (std::size_t atom = 3u; atom < 5u; ++atom) {
+    CHECK(is_quiet_nan(async_actual.atomic_charges[atom]));
+    for (std::size_t axis = 0u; axis < 3u; ++axis) {
+      CHECK(is_quiet_nan(async_actual.forces[3u * atom + axis]));
+    }
+  }
+  bool async_guards = false;
+  CUDA_CHECK(async_owner.guards_intact(async_guards));
+  CHECK(async_guards);
+  CHECK(async_owner.descriptor.flags == kResultFlagsCanary);
   return 0;
 }
 
@@ -1357,13 +1399,441 @@ struct PlanDeleter {
 
 using PlanHandle = std::unique_ptr<xtbloom_plan_t, PlanDeleter>;
 
-struct RequestDeleter {
-  void operator()(xtbloom_request_t* request) const noexcept { xtbloom_request_destroy(request); }
-};
-
-using RequestHandle = std::unique_ptr<xtbloom_request_t, RequestDeleter>;
-
 enum class PlanTestMode { kFull, kRequestOnly, kSanitizer, kProfileSteadyState };
+
+/* The context convenience entry point owns the same request/publication
+ * protocol as fixed plans, but may build a topology runtime on its first call.
+ * Prewarm synchronously so the blocked-stream check isolates steady-state
+ * enqueue rather than setup admission. */
+int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_context,
+                              const xtbloom_compute_options_t& base_options,
+                              PlanTestMode mode = PlanTestMode::kFull) {
+  g_scenario = "context-enqueue";
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+
+  PublicBatch batch;
+  CHECK(make_fixture_batch(4u, true, batch) == 0);
+  batch.spin_channels.back() = 2;
+  batch.unpaired_electrons.back() = 2;
+  batch.bind();
+  xtbloom_compute_options_t options = base_options;
+  options.flags |= XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+  MaterializedResult reference;
+  CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
+
+  if (mode == PlanTestMode::kProfileSteadyState) {
+    DeviceBatchInputs inputs;
+    CUDA_CHECK(inputs.upload_all(batch));
+    bind_inputs(batch, &inputs, InputLayout::kMixed);
+    const auto input_identity = inputs.identity();
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, ResultLayout::kTorchRequest, options.flags));
+    xtbloom_request_t* raw_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle request(raw_request);
+    xtbloom_request_info_t info{};
+    CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+
+    /* Prepare the context cache and consume one asynchronous warmup before the
+     * profiler range. The measured iterations therefore isolate reusable
+     * same-topology admission, request completion, and caller publication. */
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &result.descriptor) ==
+          XTBLOOM_STATUS_SUCCESS);
+    /* Synchronous compute publishes through the descriptor. Restore the
+     * canary before profiling asynchronous calls so this mode specifically
+     * proves that enqueue completion uses request_info.result_flags instead. */
+    result.descriptor.flags = kResultFlagsCanary;
+    CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &options, &result.descriptor,
+                                  request.get()) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+
+    constexpr int kProfileIterations = 10;
+    CUDA_CHECK(cudaProfilerStart());
+    for (int iteration = 0; iteration < kProfileIterations; ++iteration) {
+      CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &options, &result.descriptor,
+                                    request.get()) == XTBLOOM_STATUS_SUCCESS);
+      CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+      CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+      CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+      CHECK(info.result_flags == reference.flags);
+    }
+    CUDA_CHECK(cudaProfilerStop());
+    CHECK(inputs.identity() == input_identity);
+    MaterializedResult actual;
+    CUDA_CHECK(result.materialize(actual));
+    actual.flags = info.result_flags;
+    CHECK(compare_result(result, actual, reference, options) == 0);
+    CHECK(result.descriptor.flags == kResultFlagsCanary);
+    std::printf("context_request_profile_iterations=%d\n", kProfileIterations);
+    return 0;
+  }
+
+  /* A fresh context may allocate and perform bounded setup admission, but the
+   * accepted request still owns completion and publishes flags separately. */
+  {
+    StreamOwner first_stream;
+    CUDA_CHECK(first_stream.create());
+    xtbloom_status_t first_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    ContextHandle first_context =
+        make_context(XTBLOOM_BACKEND_CUDA, device, first_stream.get(), first_status);
+    CHECK(first_status == XTBLOOM_STATUS_SUCCESS);
+    ResultOwner first_result;
+    CUDA_CHECK(first_result.bind(batch, ResultLayout::kHost, options.flags));
+    xtbloom_batch_result_t first_submitted_result = first_result.descriptor;
+    xtbloom_request_t* raw_first_request = nullptr;
+    CHECK(xtbloom_request_create(first_context.get(), &raw_first_request) ==
+          XTBLOOM_STATUS_SUCCESS);
+    RequestHandle first_request(raw_first_request);
+    CHECK(xtbloom_compute_enqueue(first_context.get(), &batch.descriptor, &options,
+                                  &first_submitted_result,
+                                  first_request.get()) == XTBLOOM_STATUS_SUCCESS);
+    xtbloom_request_info_t first_info{};
+    CHECK(xtbloom_request_info_init(&first_info, sizeof(first_info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(first_request.get(), &first_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(first_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult first_actual;
+    CUDA_CHECK(first_result.materialize(first_actual));
+    first_actual.flags = first_info.result_flags;
+    CHECK(compare_result(first_result, first_actual, reference, options) == 0);
+    CHECK(first_submitted_result.flags == kResultFlagsCanary);
+  }
+
+  ResultOwner prewarm_result;
+  CUDA_CHECK(prewarm_result.bind(batch, ResultLayout::kDevice, options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &prewarm_result.descriptor) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  for (const auto [layout, name] :
+       {std::pair{InputLayout::kDevice, "device"}, std::pair{InputLayout::kMixed, "mixed"}}) {
+    std::string scenario = std::string("context-enqueue/") + name;
+    g_scenario = scenario.c_str();
+    PublicBatch placed = batch;
+    DeviceBatchInputs placed_inputs;
+    CUDA_CHECK(placed_inputs.upload_all(placed));
+    bind_inputs(placed, &placed_inputs, layout);
+    ResultOwner placed_result;
+    CUDA_CHECK(placed_result.bind(placed, ResultLayout::kDevice, options.flags));
+    xtbloom_request_t* raw_placed_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_placed_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle placed_request(raw_placed_request);
+    CHECK(xtbloom_compute_enqueue(context.get(), &placed.descriptor, &options,
+                                  &placed_result.descriptor,
+                                  placed_request.get()) == XTBLOOM_STATUS_SUCCESS);
+    xtbloom_request_info_t placed_info{};
+    CHECK(xtbloom_request_info_init(&placed_info, sizeof(placed_info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(placed_request.get(), &placed_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(placed_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult placed_actual;
+    CUDA_CHECK(placed_result.materialize(placed_actual));
+    placed_actual.flags = placed_info.result_flags;
+    CHECK(compare_result(placed_result, placed_actual, reference, options) == 0);
+  }
+  g_scenario = "context-enqueue";
+
+  /* Topology ownership and numerical placement are independent. A changed
+   * host topology with device numerical leaves must build a new context
+   * runtime instead of being mistaken for an invalid fixed-topology reuse. */
+  if (mode != PlanTestMode::kSanitizer) {
+    PublicBatch hybrid = batch;
+    /* Keep every declared extent and compute-policy field unchanged so the
+     * old numerical-placement-sensitive probe would incorrectly select the
+     * fixed-topology path instead of rebuilding this legitimate topology. */
+    hybrid.molecular_charges.front() += 2.0;
+    hybrid.bind();
+    xtbloom_compute_options_t hybrid_options = options;
+    MaterializedResult hybrid_reference;
+    CHECK(run_cpu_reference(cpu_context, hybrid, hybrid_options, hybrid_reference) == 0);
+    DeviceBatchInputs hybrid_inputs;
+    CUDA_CHECK(hybrid_inputs.upload_all(hybrid));
+    bind_inputs(hybrid, &hybrid_inputs, InputLayout::kMixed);
+    /* Mixed placement already leaves some numerical fields on host. Force the
+     * principal geometry leaf to device while restoring every topology leaf
+     * to its host descriptor image. */
+    hybrid.descriptor.atom_offsets = host_input(hybrid.atom_offsets);
+    hybrid.descriptor.atomic_numbers = host_input(hybrid.atomic_numbers);
+    hybrid.descriptor.molecular_charges = host_input(hybrid.molecular_charges);
+    hybrid.descriptor.unpaired_electrons = host_input(hybrid.unpaired_electrons);
+    hybrid.descriptor.spin_channels = host_input(hybrid.spin_channels);
+    hybrid.descriptor.point_charge_offsets = host_input(hybrid.point_charge_offsets);
+    hybrid.descriptor.charge_response_offsets = host_input(hybrid.charge_response_offsets);
+    ResultOwner hybrid_result;
+    CUDA_CHECK(hybrid_result.bind(hybrid, ResultLayout::kMixed, hybrid_options.flags));
+    xtbloom_request_t* raw_hybrid_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_hybrid_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle hybrid_request(raw_hybrid_request);
+    CHECK(xtbloom_compute_enqueue(context.get(), &hybrid.descriptor, &hybrid_options,
+                                  &hybrid_result.descriptor,
+                                  hybrid_request.get()) == XTBLOOM_STATUS_SUCCESS);
+    xtbloom_request_info_t hybrid_info{};
+    CHECK(xtbloom_request_info_init(&hybrid_info, sizeof(hybrid_info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(hybrid_request.get(), &hybrid_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(hybrid_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult hybrid_actual;
+    CUDA_CHECK(hybrid_result.materialize(hybrid_actual));
+    hybrid_actual.flags = hybrid_info.result_flags;
+    CHECK(compare_result(hybrid_result, hybrid_actual, hybrid_reference, hybrid_options) == 0);
+
+    /* Restore the original topology for the same-shape device comparison and
+     * blocked-stream steady-state cases below. */
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &prewarm_result.descriptor) ==
+          XTBLOOM_STATUS_SUCCESS);
+  }
+
+  if (mode != PlanTestMode::kSanitizer) {
+    /* A device descriptor with a declared response extent that differs from
+     * the prepared dense topology must enter bounded staging validation, not
+     * the deferred same-shape comparison. Rejection remains pre-admission and
+     * preserves the reusable request's public snapshot and every output. */
+    PublicBatch response_changed = batch;
+    CHECK(response_changed.descriptor.total_charge_response_elements > 1);
+    --response_changed.descriptor.total_charge_response_elements;
+    response_changed.charge_response_matrix.pop_back();
+    response_changed.charge_response_offsets.back() =
+        response_changed.descriptor.total_charge_response_elements;
+    response_changed.bind();
+    DeviceBatchInputs response_inputs;
+    CUDA_CHECK(response_inputs.upload_all(response_changed));
+    bind_inputs(response_changed, &response_inputs, InputLayout::kDevice);
+    ResultOwner response_result;
+    CUDA_CHECK(response_result.bind(response_changed, ResultLayout::kDevice, options.flags));
+    xtbloom_request_t* raw_response_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_response_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle response_request(raw_response_request);
+    CHECK(xtbloom_compute_enqueue(context.get(), &response_changed.descriptor, &options,
+                                  &response_result.descriptor,
+                                  response_request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    xtbloom_request_info_t response_info{};
+    CHECK(xtbloom_request_info_init(&response_info, sizeof(response_info)) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_query(response_request.get(), &response_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(response_info.state == XTBLOOM_REQUEST_IDLE);
+    bool response_unchanged = false;
+    CUDA_CHECK(response_result.unchanged(response_unchanged));
+    CHECK(response_unchanged);
+  }
+
+  /* Same-shape device topology is compared on the owner stream. Mutating one
+   * immutable field therefore admits successfully and completes with a
+   * deferred INVALID_ARGUMENT while every result sentinel remains untouched. */
+  {
+    PublicBatch mismatch_batch = batch;
+    DeviceBatchInputs mismatch_inputs;
+    CUDA_CHECK(mismatch_inputs.upload_all(mismatch_batch));
+    bind_inputs(mismatch_batch, &mismatch_inputs, InputLayout::kDevice);
+    ResultOwner mismatch_result;
+    CUDA_CHECK(mismatch_result.bind(mismatch_batch, ResultLayout::kDevice, options.flags));
+    xtbloom_request_t* raw_mismatch_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_mismatch_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle mismatch_request(raw_mismatch_request);
+    CUDA_CHECK(cudaMemsetAsync(const_cast<void*>(mismatch_batch.descriptor.spin_channels.data), 0,
+                               mismatch_batch.descriptor.spin_channels.size_bytes, stream.get()));
+    CHECK(xtbloom_compute_enqueue(context.get(), &mismatch_batch.descriptor, &options,
+                                  &mismatch_result.descriptor,
+                                  mismatch_request.get()) == XTBLOOM_STATUS_SUCCESS);
+    xtbloom_request_info_t mismatch_info{};
+    CHECK(xtbloom_request_info_init(&mismatch_info, sizeof(mismatch_info)) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(mismatch_request.get(), &mismatch_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(mismatch_info.completion_status == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(std::strstr(xtbloom_request_get_error(mismatch_request.get()),
+                      "does not match the fixed CUDA plan topology") != nullptr);
+    bool mismatch_unchanged = false;
+    CUDA_CHECK(mismatch_result.unchanged(mismatch_unchanged));
+    CHECK(mismatch_unchanged);
+  }
+
+  batch.perturb(0.003);
+  CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
+  ResultOwner result;
+  CUDA_CHECK(result.bind(batch, ResultLayout::kDevice, options.flags));
+  xtbloom_batch_result_t submitted_result = result.descriptor;
+  xtbloom_request_t* raw_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle request(raw_request);
+
+  /* A request is permanently bound to its creating context. Rejection occurs
+   * before either request or output state changes. */
+  {
+    StreamOwner other_stream;
+    CUDA_CHECK(other_stream.create());
+    xtbloom_status_t other_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    ContextHandle other_context =
+        make_context(XTBLOOM_BACKEND_CUDA, device, other_stream.get(), other_status);
+    CHECK(other_status == XTBLOOM_STATUS_SUCCESS);
+    xtbloom_request_t* raw_other_request = nullptr;
+    CHECK(xtbloom_request_create(other_context.get(), &raw_other_request) ==
+          XTBLOOM_STATUS_SUCCESS);
+    RequestHandle other_request(raw_other_request);
+    CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &options, &submitted_result,
+                                  other_request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    xtbloom_request_info_t other_info{};
+    CHECK(xtbloom_request_info_init(&other_info, sizeof(other_info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_query(other_request.get(), &other_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(other_info.state == XTBLOOM_REQUEST_IDLE);
+  }
+
+  xtbloom_compute_options_t warm_options = options;
+  warm_options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &warm_options, &submitted_result,
+                                request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
+  xtbloom_request_info_t info{};
+  CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
+  CHECK(submitted_result.flags == kResultFlagsCanary);
+
+  /* Exact ABI-v1 storage ensures asynchronous settlement cannot read the
+   * optional suffixes after enqueue has returned. */
+  alignas(xtbloom_compute_options_t) std::array<unsigned char, XTBLOOM_COMPUTE_OPTIONS_V1_SIZE>
+      short_options_storage{};
+  std::memcpy(short_options_storage.data(), &options, short_options_storage.size());
+  auto* const short_options =
+      reinterpret_cast<xtbloom_compute_options_t*>(short_options_storage.data());
+  short_options->struct_size = XTBLOOM_COMPUTE_OPTIONS_V1_SIZE;
+  alignas(xtbloom_batch_result_t) std::array<unsigned char, XTBLOOM_BATCH_RESULT_V1_SIZE>
+      short_result_storage{};
+  std::memcpy(short_result_storage.data(), &submitted_result, short_result_storage.size());
+  auto* const short_result = reinterpret_cast<xtbloom_batch_result_t*>(short_result_storage.data());
+  short_result->struct_size = XTBLOOM_BATCH_RESULT_V1_SIZE;
+
+  BlockingStreamGate gate;
+  if (mode != PlanTestMode::kSanitizer) CUDA_CHECK(gate.arm(stream.get()));
+  xtbloom_status_t enqueue_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  if (mode == PlanTestMode::kSanitizer) {
+    enqueue_status = xtbloom_compute_enqueue(context.get(), &batch.descriptor, short_options,
+                                             short_result, request.get());
+  } else {
+    bool enqueue_returned = false;
+    std::mutex enqueue_mutex;
+    std::condition_variable enqueue_changed;
+    std::thread submitter([&] {
+      enqueue_status = xtbloom_compute_enqueue(context.get(), &batch.descriptor, short_options,
+                                               short_result, request.get());
+      {
+        std::lock_guard<std::mutex> lock(enqueue_mutex);
+        enqueue_returned = true;
+      }
+      enqueue_changed.notify_one();
+    });
+    bool returned_while_blocked = false;
+    {
+      std::unique_lock<std::mutex> lock(enqueue_mutex);
+      returned_while_blocked =
+          enqueue_changed.wait_for(lock, kBlockedEnqueueWatchdog, [&] { return enqueue_returned; });
+    }
+    if (!returned_while_blocked) gate.release();
+    submitter.join();
+    CHECK(returned_while_blocked);
+  }
+  CHECK(enqueue_status == XTBLOOM_STATUS_SUCCESS);
+  short_options->flags = 0u;
+  short_result->energies.data = nullptr;
+  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  if (mode == PlanTestMode::kSanitizer) {
+    CHECK(info.state == XTBLOOM_REQUEST_PENDING || info.state == XTBLOOM_REQUEST_COMPLETE);
+  } else {
+    CHECK(info.state == XTBLOOM_REQUEST_PENDING);
+  }
+  CHECK(short_result->flags == kResultFlagsCanary);
+
+  if (mode != PlanTestMode::kSanitizer) {
+    xtbloom_request_t* raw_busy_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_busy_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle busy_request(raw_busy_request);
+    ResultOwner busy_result;
+    CUDA_CHECK(busy_result.bind(batch, ResultLayout::kHost, options.flags));
+    CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &options,
+                                  &busy_result.descriptor,
+                                  busy_request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    xtbloom_request_info_t busy_info{};
+    CHECK(xtbloom_request_info_init(&busy_info, sizeof(busy_info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_query(busy_request.get(), &busy_info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(busy_info.state == XTBLOOM_REQUEST_IDLE);
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &busy_result.descriptor) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
+    bool busy_unchanged = false;
+    CUDA_CHECK(busy_result.unchanged(busy_unchanged));
+    CHECK(busy_unchanged);
+  }
+
+  if (mode != PlanTestMode::kSanitizer) gate.release();
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.result_flags == reference.flags);
+  MaterializedResult actual;
+  CUDA_CHECK(result.materialize(actual));
+  actual.flags = info.result_flags;
+  CHECK(compare_result(result, actual, reference, options) == 0);
+  CHECK(short_result->flags == kResultFlagsCanary);
+
+  /* A host-side call-level validation failure rolls the reusable request back
+   * to its preceding COMPLETE snapshot and preserves every caller byte. */
+  PublicBatch invalid = batch;
+  invalid.bind();
+  invalid.descriptor.atom_offsets.size_bytes = 0u;
+  ResultOwner invalid_result;
+  CUDA_CHECK(invalid_result.bind(invalid, ResultLayout::kHost, options.flags));
+  CHECK(xtbloom_compute_enqueue(context.get(), &invalid.descriptor, &options,
+                                &invalid_result.descriptor,
+                                request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  xtbloom_request_info_t preserved_info{};
+  CHECK(xtbloom_request_info_init(&preserved_info, sizeof(preserved_info)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_query(request.get(), &preserved_info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(preserved_info.state == XTBLOOM_REQUEST_COMPLETE);
+  CHECK(preserved_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(preserved_info.result_flags == reference.flags);
+  bool invalid_unchanged = false;
+  CUDA_CHECK(invalid_result.unchanged(invalid_unchanged));
+  CHECK(invalid_unchanged);
+
+  /* A host topology change is synchronously canonicalized and replaces the
+   * context convenience runtime before the accepted request is published. */
+  PublicBatch changed;
+  CHECK(make_fixture_batch(2u, false, changed) == 0);
+  MaterializedResult changed_reference;
+  CHECK(run_cpu_reference(cpu_context, changed, base_options, changed_reference) == 0);
+  ResultOwner changed_result;
+  CUDA_CHECK(changed_result.bind(changed, ResultLayout::kMixed, base_options.flags));
+  CHECK(xtbloom_compute_enqueue(context.get(), &changed.descriptor, &base_options,
+                                &changed_result.descriptor,
+                                request.get()) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult changed_actual;
+  CUDA_CHECK(changed_result.materialize(changed_actual));
+  changed_actual.flags = info.result_flags;
+  CHECK(compare_result(changed_result, changed_actual, changed_reference, base_options) == 0);
+
+  if (mode != PlanTestMode::kSanitizer) {
+    /* Request destruction is a completion boundary for this submission only.
+     * The result descriptor remains a borrowed immutable image. */
+    changed.perturb(0.002);
+    CHECK(run_cpu_reference(cpu_context, changed, base_options, changed_reference) == 0);
+    ResultOwner destroy_result;
+    CUDA_CHECK(destroy_result.bind(changed, ResultLayout::kDevice, base_options.flags));
+    xtbloom_request_t* raw_destroy_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_destroy_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle destroy_request(raw_destroy_request);
+    CHECK(xtbloom_compute_enqueue(context.get(), &changed.descriptor, &base_options,
+                                  &destroy_result.descriptor,
+                                  destroy_request.get()) == XTBLOOM_STATUS_SUCCESS);
+    destroy_request.reset();
+    MaterializedResult destroy_actual;
+    CUDA_CHECK(destroy_result.materialize(destroy_actual));
+    destroy_actual.flags = changed_reference.flags;
+    CHECK(compare_result(destroy_result, destroy_actual, changed_reference, base_options) == 0);
+    CHECK(destroy_result.descriptor.flags == kResultFlagsCanary);
+  }
+  return 0;
+}
 
 /* Fixed-topology CUDA plans reuse the prepared runtime, expose host/device
  * workspace queries that differ by requested properties, and reject topology
@@ -2249,12 +2719,15 @@ int test_stream_capture_transactionality(std::int32_t device, PublicBatch& batch
       xtbloom_compute(context.get(), &batch.descriptor, &options, &result.descriptor);
   const xtbloom_status_t enqueue_status = xtbloom_plan_compute_enqueue(
       plan.get(), &batch.descriptor, &options, &result.descriptor, request.get());
+  const xtbloom_status_t context_enqueue_status = xtbloom_compute_enqueue(
+      context.get(), &batch.descriptor, &options, &result.descriptor, request.get());
   cudaGraph_t graph = nullptr;
   const cudaError_t end_status = cudaStreamEndCapture(stream.get(), &graph);
   if (graph != nullptr) (void)cudaGraphDestroy(graph);
   CUDA_CHECK(end_status);
   CHECK(compute_status == XTBLOOM_STATUS_NOT_SUPPORTED);
   CHECK(enqueue_status == XTBLOOM_STATUS_NOT_SUPPORTED);
+  CHECK(context_enqueue_status == XTBLOOM_STATUS_NOT_SUPPORTED);
   bool unchanged = false;
   CUDA_CHECK(result.unchanged(unchanged));
   CHECK(unchanged);
@@ -2391,8 +2864,15 @@ int main(int argc, char** argv) {
   const bool request_only = argc == 2 && std::strcmp(argv[1], "--request-only") == 0;
   const bool request_sanitizer = argc == 2 && std::strcmp(argv[1], "--request-sanitizer") == 0;
   const bool request_profile = argc == 2 && std::strcmp(argv[1], "--request-profile") == 0;
-  if (argc != 1 && !request_only && !request_sanitizer && !request_profile) {
-    std::fprintf(stderr, "usage: %s [--request-only|--request-sanitizer|--request-profile]\n",
+  const bool context_request_sanitizer =
+      argc == 2 && std::strcmp(argv[1], "--context-request-sanitizer") == 0;
+  const bool context_request_profile =
+      argc == 2 && std::strcmp(argv[1], "--context-request-profile") == 0;
+  if (argc != 1 && !request_only && !request_sanitizer && !request_profile &&
+      !context_request_sanitizer && !context_request_profile) {
+    std::fprintf(stderr,
+                 "usage: %s [--request-only|--request-sanitizer|--request-profile|"
+                 "--context-request-sanitizer|--context-request-profile]\n",
                  argv[0]);
     return 2;
   }
@@ -2429,11 +2909,14 @@ int main(int argc, char** argv) {
   }
 
   /* Compute Sanitizer can make the unrelated batch-128 conformance matrix
-   * prohibitively slow. This opt-in entry point keeps default CTest coverage
-   * unchanged while exercising fixed-plan request production without the
-   * blocked-stream watchdog, plus topology mismatch, publication, reuse, and
-   * teardown. The default/request-only modes retain blocked-stream ordering. */
+   * prohibitively slow. These opt-in entry points keep default CTest coverage
+   * unchanged and give context and fixed-plan request paths independent narrow
+   * sanitizer/profile coordinates. The request-only mode retains both paths'
+   * blocked-stream ordering checks. */
   if (request_only) {
+    if (const int line = test_cuda_context_enqueue(device, cpu_context.get(), options); line != 0) {
+      return line;
+    }
     return test_cuda_plan_api(device, cpu_context.get(), options, PlanTestMode::kRequestOnly);
   }
   if (request_sanitizer) {
@@ -2442,6 +2925,13 @@ int main(int argc, char** argv) {
   if (request_profile) {
     return test_cuda_plan_api(device, cpu_context.get(), options,
                               PlanTestMode::kProfileSteadyState);
+  }
+  if (context_request_sanitizer) {
+    return test_cuda_context_enqueue(device, cpu_context.get(), options, PlanTestMode::kSanitizer);
+  }
+  if (context_request_profile) {
+    return test_cuda_context_enqueue(device, cpu_context.get(), options,
+                                     PlanTestMode::kProfileSteadyState);
   }
 
   if (const int line = test_host_device_mixed_and_streams(device, batch, options, reference);
@@ -2453,6 +2943,9 @@ int main(int argc, char** argv) {
     return line;
   }
   if (const int line = test_cuda_plan_api(device, cpu_context.get(), options); line != 0) {
+    return line;
+  }
+  if (const int line = test_cuda_context_enqueue(device, cpu_context.get(), options); line != 0) {
     return line;
   }
   if (const int line = test_public_representability_matrix(device, cpu_context.get(), options);

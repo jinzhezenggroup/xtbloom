@@ -254,6 +254,17 @@ context, and a batch whose immutable topology differs from the plan fails with
 for reused handles. The plan handle and workspace query are ABI-versioned in `xtbloom.h` and are
 mirrored by the Python `Plan` binding and the installed consumer.
 
+`xtbloom_compute_enqueue` is the asynchronous context convenience counterpart.
+It reuses the same context-owned topology/runtime cache as `xtbloom_compute`
+and the same request-owned completion/publication protocol as fixed plans. A
+first or changed topology may perform bounded validation, allocation, provider,
+and Graph setup before admission returns; once a topology is prepared, host
+same-topology admission does not fence the owner stream. Device same-shape
+topology is compared in stream order and a mismatch completes the request with
+`INVALID_ARGUMENT` instead of rebuilding the runtime. Accepted inference and
+caller-output publication remain asynchronous, and the caller's result
+descriptor is never used as an asynchronous flags channel.
+
 ## Layering
 
 1. The C API validates ABI versions, pointer locations, shapes, and requested outputs.
