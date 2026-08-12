@@ -376,6 +376,15 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
   if (request->implementation->context() != context->implementation) {
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "request was created by a different context");
   }
+#if !defined(XTBLOOM_HAS_CUDA)
+  (void)batch;
+  (void)options;
+  (void)result;
+  /* A CPU-only library can create only CPU contexts, so this is the complete
+   * public behavior rather than a fallback after an unreachable CUDA path. */
+  return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+              "asynchronous compute enqueue is not supported by the CPU backend");
+#else
   if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
     /* Do not inspect descriptors or touch request/result state: callers may
      * probe capability with sentinels and then fall back to xtbloom_compute. */
@@ -383,7 +392,6 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
                 "asynchronous compute enqueue is not supported by the CPU backend");
   }
 
-#if defined(XTBLOOM_HAS_CUDA)
   if (batch == nullptr || options == nullptr || result == nullptr) {
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "batch, compute options, or batch result is NULL");
   }
@@ -460,12 +468,6 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
     return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
                 "unknown exception while enqueueing CUDA GFN2 inference");
   }
-#else
-  (void)batch;
-  (void)options;
-  (void)result;
-  return fail(XTBLOOM_STATUS_BACKEND_UNAVAILABLE,
-              "the xtbloom library was built without CUDA support");
 #endif
 }
 
