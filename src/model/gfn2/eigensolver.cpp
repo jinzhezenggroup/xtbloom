@@ -96,7 +96,8 @@ struct CpuLinearAlgebraAccess {
                                       LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work,
                                       LapackDsyevdWork dsyevd_work, CblasDtrsm dtrsm,
                                       CblasDgemm dgemm,
-                                      BlasSetNumThreadsLocal set_num_threads_local) noexcept {
+                                      BlasSetNumThreadsLocal set_num_threads_local,
+                                      BlasThreadCleanup thread_cleanup = nullptr) noexcept {
     CpuLinearAlgebraBackend backend;
     backend.origin_ = origin;
     backend.dpotrf_work_ = dpotrf_work;
@@ -105,6 +106,7 @@ struct CpuLinearAlgebraAccess {
     backend.dtrsm_ = dtrsm;
     backend.dgemm_ = dgemm;
     backend.set_num_threads_local_ = set_num_threads_local;
+    backend.thread_cleanup_ = thread_cleanup;
     return backend;
   }
 
@@ -1355,6 +1357,12 @@ bool CpuLinearAlgebraBackend::production_openblas_isolated() const noexcept {
   return origin_ == Origin::kOpenBlasIsolatedLp64;
 }
 
+void CpuLinearAlgebraBackend::release_thread_resources() const noexcept {
+  if (thread_cleanup_ != nullptr) {
+    thread_cleanup_();
+  }
+}
+
 xtbloom_status_t make_internal_test_lp64_backend(
     LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
     CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
@@ -1561,12 +1569,14 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
         CblasDtrsm dtrsm = nullptr;
         CblasDgemm dgemm = nullptr;
         BlasSetNumThreadsLocal set_threads = nullptr;
+        BlasThreadCleanup thread_cleanup = nullptr;
         if (load_lapacke_cblas_symbols(handle, false, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
                                        dgemm) &&
-            load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads)) {
+            load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads) &&
+            load_symbol(handle, "MKL_Thread_Free_Buffers", thread_cleanup)) {
           CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
               CpuLinearAlgebraBackend::Origin::kMklShimLp64, dpotrf_work, dpocon_work, dsyevd_work,
-              dtrsm, dgemm, set_threads);
+              dtrsm, dgemm, set_threads, thread_cleanup);
           if (backend_self_test(created)) {
             /* Retain one process-lifetime loader reference so all dispatch
              * pointers and the private namespace stay valid. */

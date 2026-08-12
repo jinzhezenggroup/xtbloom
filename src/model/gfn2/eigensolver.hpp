@@ -36,6 +36,7 @@ using CblasDgemm = void (*)(int layout, int transpose_left, int transpose_right,
                             LapackInt leading_left, const double* right, LapackInt leading_right,
                             double beta, double* result, LapackInt leading_result);
 using BlasSetNumThreadsLocal = int (*)(int threads);
+using BlasThreadCleanup = void (*)();
 
 /*
  * Verified LP64 linear-algebra dispatch.
@@ -90,6 +91,11 @@ class CpuLinearAlgebraBackend {
    * loaded in its own glibc link-map namespace. Desktop private providers do
    * not claim this stronger isolation property. */
   [[nodiscard]] bool production_openblas_isolated() const noexcept;
+  /* Release provider-owned state for the calling thread. Only the isolated
+   * MKL backend supplies this hook; persistent runtime workers invoke it
+   * before pthread teardown so oneMKL never leaves cleanup to glibc TSD
+   * destruction after the worker has returned. */
+  void release_thread_resources() const noexcept;
 
  private:
   enum class Origin : std::uint8_t {
@@ -108,6 +114,7 @@ class CpuLinearAlgebraBackend {
   CblasDtrsm dtrsm_ = nullptr;
   CblasDgemm dgemm_ = nullptr;
   BlasSetNumThreadsLocal set_num_threads_local_ = nullptr;
+  BlasThreadCleanup thread_cleanup_ = nullptr;
 
   friend xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend,
                                                    std::string& error);

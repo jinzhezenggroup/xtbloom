@@ -51,6 +51,13 @@
 namespace xtbloom::detail {
 namespace {
 
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+thread_local bool g_test_background_worker = false;
+std::atomic<std::size_t> g_test_background_eigensolver_runs{0u};
+std::atomic<std::size_t> g_test_background_thread_cleanups{0u};
+std::atomic<bool> g_test_provider_requires_thread_cleanup{false};
+#endif
+
 using namespace xtbloom::detail::gfn2;
 
 constexpr std::size_t kHostAlignment = 64u;
@@ -116,6 +123,7 @@ std::size_t resolve_cpu_threads(std::int32_t requested) noexcept {
 class CpuWorkerPool final {
  public:
   using Task = void (*)(void*, std::size_t) noexcept;
+  using ThreadCleanup = void (*)(void*) noexcept;
 
   explicit CpuWorkerPool(std::size_t concurrency)
       : concurrency_(std::max<std::size_t>(1u, concurrency)) {
@@ -161,6 +169,17 @@ class CpuWorkerPool final {
     }
     work_available_.notify_all();
 
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+    /* The dedicated teardown regression must not depend on OS scheduling.
+     * Wait until a persistent worker has claimed one public batch member
+     * before allowing the caller thread to participate. */
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      test_background_claimed_.wait(
+          lock, [this] { return test_background_claimed_generation_ == generation_; });
+    }
+#endif
+
     drain_tasks(task, context, task_count);
 
     std::unique_lock<std::mutex> lock(mutex_);
@@ -179,6 +198,16 @@ class CpuWorkerPool final {
     return workers_.capacity() * sizeof(std::thread);
   }
 
+  /* Configure provider cleanup after lazy backend initialization. The
+   * callback remains valid through stop_and_join because the backend member
+   * outlives the worker pool, and each worker copies it before releasing the
+   * pool mutex and cleaning its own provider TLS. */
+  void set_thread_cleanup(void* context, ThreadCleanup cleanup) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    thread_cleanup_context_ = context;
+    thread_cleanup_ = cleanup;
+  }
+
  private:
   void drain_tasks(Task task, void* context, std::size_t task_count) noexcept {
     for (;;) {
@@ -191,6 +220,9 @@ class CpuWorkerPool final {
   }
 
   void worker_loop() noexcept {
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+    g_test_background_worker = true;
+#endif
     std::uint64_t observed_generation = 0u;
     for (;;) {
       Task task = nullptr;
@@ -202,6 +234,12 @@ class CpuWorkerPool final {
           return stopping_ || generation_ != observed_generation;
         });
         if (stopping_) {
+          void* cleanup_context = thread_cleanup_context_;
+          ThreadCleanup cleanup = thread_cleanup_;
+          lock.unlock();
+          if (cleanup != nullptr) {
+            cleanup(cleanup_context);
+          }
           return;
         }
         observed_generation = generation_;
@@ -210,6 +248,17 @@ class CpuWorkerPool final {
         task_count = task_count_;
       }
 
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+      const std::size_t claimed_task = next_task_.fetch_add(1u, std::memory_order_relaxed);
+      if (claimed_task < task_count) {
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          test_background_claimed_generation_ = observed_generation;
+        }
+        test_background_claimed_.notify_one();
+        task(context, claimed_task);
+      }
+#endif
       drain_tasks(task, context, task_count);
 
       {
@@ -238,6 +287,9 @@ class CpuWorkerPool final {
   std::mutex mutex_;
   std::condition_variable work_available_;
   std::condition_variable work_complete_;
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+  std::condition_variable test_background_claimed_;
+#endif
   std::atomic<std::size_t> next_task_{0u};
   Task task_ = nullptr;
   void* task_context_ = nullptr;
@@ -245,6 +297,11 @@ class CpuWorkerPool final {
   std::size_t completed_workers_ = 0u;
   std::uint64_t generation_ = 0u;
   bool stopping_ = false;
+  void* thread_cleanup_context_ = nullptr;
+  ThreadCleanup thread_cleanup_ = nullptr;
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+  std::uint64_t test_background_claimed_generation_ = 0u;
+#endif
 };
 
 class AlignedBuffer {
@@ -1509,6 +1566,15 @@ struct Gfn2CpuExecutionCache::Impl {
   explicit Impl(std::int32_t requested_threads)
       : cpu_threads(resolve_cpu_threads(requested_threads)), workers(cpu_threads) {}
 
+  ~Impl() {
+    /* backend_self_test and serial/batch participation may initialize MKL
+     * state on the context owner thread. Release that state while the
+     * provider namespace and worker pool are both still alive; each worker
+     * performs the matching cleanup in worker_loop immediately before its
+     * pthread exits. */
+    backend.release_thread_resources();
+  }
+
   std::mutex mutex;
   CpuLinearAlgebraBackend backend;
   bool backend_initialized = false;
@@ -1547,12 +1613,26 @@ struct Gfn2CpuExecutionCache::Impl {
     static_cast<CpuWorkerPool*>(pool_context)->parallel_for(chunk_count, body_context, body);
   }
 
+  static void release_backend_thread_resources(void* backend_context) noexcept {
+    static_cast<CpuLinearAlgebraBackend*>(backend_context)->release_thread_resources();
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+    g_test_background_thread_cleanups.fetch_add(1u, std::memory_order_relaxed);
+#endif
+  }
+
   xtbloom_status_t ensure_backend(std::string& error) {
     if (backend_initialized) {
       return XTBLOOM_STATUS_SUCCESS;
     }
     const xtbloom_status_t status = make_mkl_rt_lp64_backend(backend, error);
     if (status == XTBLOOM_STATUS_SUCCESS) {
+      if (backend.production_mkl_isolated()) {
+        workers.set_thread_cleanup(&backend, &release_backend_thread_resources);
+      }
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+      g_test_provider_requires_thread_cleanup.store(backend.production_mkl_isolated(),
+                                                    std::memory_order_relaxed);
+#endif
       backend_initialized = true;
     }
     return status;
@@ -1694,6 +1774,13 @@ struct Gfn2CpuExecutionCache::Impl {
           points == 0 ? nullptr : request.point_charges.data() + point_begin,
           points == 0 ? nullptr : request.point_hardnesses.data() + point_begin, shifts, response,
           job.options.flags, warm_start, output, system_error);
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+      /* Every valid SystemExecution::infer reaches the production generalized
+       * eigensolver before returning success or a data-level SCC terminal. */
+      if (g_test_background_worker && owner.backend.production()) {
+        g_test_background_eigensolver_runs.fetch_add(1u, std::memory_order_relaxed);
+      }
+#endif
     } catch (const std::bad_alloc&) {
       owner.inference_statuses[index] = XTBLOOM_STATUS_ALLOCATION_FAILED;
       owner.task_failures[index] = TaskFailure::kAllocation;
@@ -1957,5 +2044,25 @@ std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache
            vector_bytes(request.field_attached_by_system);
   return total;
 }
+
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+void reset_gfn2_cpu_worker_teardown_test_counters() noexcept {
+  g_test_background_eigensolver_runs.store(0u, std::memory_order_relaxed);
+  g_test_background_thread_cleanups.store(0u, std::memory_order_relaxed);
+  g_test_provider_requires_thread_cleanup.store(false, std::memory_order_relaxed);
+}
+
+std::size_t gfn2_cpu_test_background_eigensolver_runs() noexcept {
+  return g_test_background_eigensolver_runs.load(std::memory_order_relaxed);
+}
+
+std::size_t gfn2_cpu_test_background_thread_cleanups() noexcept {
+  return g_test_background_thread_cleanups.load(std::memory_order_relaxed);
+}
+
+bool gfn2_cpu_test_provider_requires_thread_cleanup() noexcept {
+  return g_test_provider_requires_thread_cleanup.load(std::memory_order_relaxed);
+}
+#endif
 
 }  // namespace xtbloom::detail
