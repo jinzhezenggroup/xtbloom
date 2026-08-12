@@ -104,6 +104,27 @@ print(result["charges"])
 electronic temperature, the reported variational energy is the electronic
 Helmholtz free energy.
 
+`Calculator.hessian()` evaluates the dense numerical QM-coordinate energy
+Hessian as central differences of analytic forces:
+
+```python
+with Calculator("GFN2-xTB", numbers, positions, backend="cuda") as calc:
+    hessian = calc.hessian(step=0.005, symmetrize=True)
+```
+
+The result is a NumPy `float64` array with shape `(3 * natoms, 3 * natoms)` and
+units Hartree/bohr². The method batches and automatically chunks its
+`6 * natoms` displaced geometries; `auto_batch_size` accepts the same atom-count
+limit as `BatchCalculator.compute()`. The raw finite-difference matrix is
+returned by default so antisymmetric numerical error remains visible, while
+`symmetrize=True` returns `0.5 * (H + H.T)`.
+
+Only QM coordinates are displaced. Point-charge coordinates and values,
+electric fields, and caller-supplied charge-response `b/A` operators remain
+fixed, so no QM–point-charge or point-charge–point-charge blocks are included
+and derivatives of `b/A` remain caller-owned. This explicit numerical method
+does not change the narrower PyTorch autograd contract described below.
+
 Set `backend="cpu"` or `backend="cuda"` to require one backend. The CUDA
 quickstart above deliberately uses `"cuda"` so an unavailable GPU fails clearly
 instead of running on CPU. `"auto"` prefers CUDA but falls back to CPU.
@@ -221,7 +242,9 @@ geometry optimization in the C ABI.
 ## Scope
 
 GFN1-xTB, ROCm, lattice/PBC inputs, solvation, native geometry optimization,
-molecular dynamics, Hessians, and higher-order autograd are not implemented.
+molecular dynamics, native/analytic Hessians, vibrational analysis, and
+higher-order autograd are not implemented. A numerical QM Cartesian Hessian is
+available only through Python `Calculator.hessian()`.
 The high-level `Calculator` and `BatchCalculator` APIs use host NumPy arrays;
 direct device and mixed descriptors are exposed through `ArrayBatch` and the
 low-level C ABI.

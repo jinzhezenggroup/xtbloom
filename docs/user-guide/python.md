@@ -82,6 +82,51 @@ Single-system `Calculator.singlepoint()` raises when its one system does not
 converge or its eigensolver fails. A batch preserves successful peers by
 default.
 
+## Numerical Cartesian Hessians
+
+`Calculator.hessian()` returns the dense QM-coordinate energy Hessian as a
+central difference of analytic forces,
+
+\[
+H_{:,j} = -\frac{F(R + h e_j) - F(R - h e_j)}{2h}.
+\]
+
+```python
+with Calculator("GFN2-xTB", numbers, positions, backend="cuda") as calc:
+    raw = calc.hessian(step=0.005)
+    symmetric = calc.hessian(step=0.005, symmetrize=True)
+```
+
+The output is a C-contiguous NumPy `float64` matrix with shape
+`(3 * natoms, 3 * natoms)` and units Hartree/bohr². The default step is `0.005`
+bohr. The default `symmetrize=False` preserves the raw antisymmetric residual
+as a finite-difference/SCC convergence diagnostic; `symmetrize=True` returns
+exactly `0.5 * (H + H.T)`.
+
+One dense Hessian requires `6 * natoms` independent force calculations. They
+are submitted as native ragged batches rather than a Python serial loop.
+`auto_batch_size=True` is the default: it chooses a conservative atom limit,
+creates only one displacement chunk at a time, and retries recoverable native
+allocation failures at smaller automatic chunks. A positive integer sets an
+explicit maximum atom count per native call; `False` or `None` submits every
+displacement at once. For CUDA, these high-level descriptors are host NumPy
+inputs and the Hessian returns to host as NumPy.
+
+The method displaces only QM atoms. Explicit point-charge coordinates,
+point-charge values/gammas, the uniform electric field, and caller-owned
+charge-response `b/A` operators stay fixed. The returned matrix is therefore
+only the QM–QM block at that external environment: it excludes QM–point-charge
+and point-charge–point-charge blocks, and still excludes `db/dR` and `dA/dR`.
+Any displacement SCC/eigensolver failure aborts the Hessian with its atom,
+axis, sign, status, and iteration count. A temporary fresh-SCC context leaves
+the calculator geometry and any original warm checkpoint unchanged.
+
+This is an explicit numerical Python method, not an analytic coupled-response
+Hessian or a native C ABI output. xTBloom does not yet perform mass weighting,
+translation/rotation projection, normal-mode analysis, or thermochemistry.
+PyTorch higher-order autograd remains unsupported because
+`Calculator.hessian()` does not change the compiled autograd operator.
+
 ## Ragged batches
 
 Each `Structure` can have a different atom count, charge, spin state, and
