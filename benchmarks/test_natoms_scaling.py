@@ -241,6 +241,33 @@ class NatomsScalingTest(unittest.TestCase):
                     ),
                     25.0,
                 )
+                open_points = [
+                    opened.positions_bohr[3 * index : 3 * index + 3]
+                    for index in range(natoms)
+                ]
+                if natoms > 1:
+                    self.assertTrue(
+                        all(
+                            min(
+                                math.dist(point, other)
+                                for other_index, other in enumerate(open_points)
+                                if other_index != index
+                            )
+                            <= 2.5
+                            for index, point in enumerate(open_points)
+                        )
+                    )
+                self.assertLessEqual(
+                    max(
+                        sum(
+                            math.dist(point, other) <= 50.0
+                            for other_index, other in enumerate(open_points)
+                            if other_index != index
+                        )
+                        for index, point in enumerate(open_points)
+                    ),
+                    20,
+                )
 
     def test_parser_accepts_exact_size_topology_selection(self) -> None:
         """Keep alkane as default while exposing compact/open exact-N workloads."""

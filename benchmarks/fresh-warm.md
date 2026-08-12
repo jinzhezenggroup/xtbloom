@@ -23,10 +23,12 @@ the label does not claim pair-list no-refresh reuse or isolate list-cache cost.
 
 The exact-size classes contain only carbon. `compact-carbon` uses a centered
 radial prefix of a 2.5-bohr cubic lattice whose complete 256-atom extent remains
-inside the 25-bohr cutoff. `open-carbon` uses a deterministic 12-bohr-spaced,
-slightly staggered chain with sparse O(N) cutoff connectivity. Workload
-identity records the topology name plus SHA-256 hashes of the exact
-atomic-number and position vectors.
+inside the 25-bohr cutoff. `open-carbon` uses deterministic bonded C2 fragments
+(plus one C3 fragment for odd sizes) whose centers form a slightly staggered
+12-bohr-spaced chain with sparse O(N) cutoff connectivity. This preserves a
+publicly convergent restricted-SCC workload instead of treating every neutral
+carbon as an isolated closed-shell atom. Workload identity records the topology
+name plus SHA-256 hashes of the exact atomic-number and position vectors.
 
 JSON is authoritative and retains every latency, energy, requested force
 vector, SCC iteration count, convergence flag, and per-system status. CSV is a

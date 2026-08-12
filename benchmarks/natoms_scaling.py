@@ -859,26 +859,34 @@ def make_compact_carbon(natoms: int) -> Molecule:
 
 
 def make_open_carbon(natoms: int) -> Molecule:
-    """Build an exact-size sparse carbon chain with bounded cutoff connectivity.
+    """Build exact-size bonded carbon fragments with bounded cutoff connectivity.
 
-    Twelve-bohr spacing leaves only O(N) neighbors inside the 25/30/50-bohr
-    D4 cutoffs, rather than the O(N^2) connectivity of the compact topology.
+    A chain of C2 fragments (plus one C3 fragment for odd sizes) keeps every
+    nontrivial atom in a short carbon bond while fragment centers remain 12
+    bohr apart.  This avoids the nonphysical restricted-SCC workload created by
+    a chain of isolated neutral carbon atoms, while retaining only O(N)
+    neighbors inside the 25/30/50-bohr D4 cutoffs.
     """
     _positive_carbon_count(natoms)
-    midpoint = 0.5 * (natoms - 1)
-    positions = tuple(
-        coordinate
-        for index in range(natoms)
-        for coordinate in (
-            12.0 * (index - midpoint),
-            0.75 if index % 2 else -0.75,
-            0.5 * ((index % 3) - 1),
-        )
-    )
+    fragment_sizes = [2] * (natoms // 2)
+    if natoms % 2:
+        if natoms == 1:
+            fragment_sizes = [1]
+        else:
+            fragment_sizes[0] = 3
+    midpoint = 0.5 * (len(fragment_sizes) - 1)
+    positions: list[float] = []
+    for fragment, size in enumerate(fragment_sizes):
+        center = 12.0 * (fragment - midpoint)
+        y = 0.75 if fragment % 2 else -0.75
+        z = 0.5 * ((fragment % 3) - 1)
+        offsets = (0.0,) if size == 1 else ((-1.25, 1.25) if size == 2 else (-2.5, 0.0, 2.5))
+        for offset in offsets:
+            positions.extend((center + offset, y, z))
     return Molecule(
         f"open-carbon-{natoms}",
         (6,) * natoms,
-        positions,
+        tuple(positions),
         "open-carbon",
     )
 
