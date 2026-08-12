@@ -13,6 +13,9 @@ import sys
 import time
 from pathlib import Path
 
+ENERGY_ATOL_HARTREE = 5.0e-7
+FORCE_ATOL_HARTREE_PER_BOHR = 5.0e-7
+
 
 def parse_args() -> argparse.Namespace:
     """Return the explicit source, library, and output identities."""
@@ -43,15 +46,95 @@ def git_text(source_root: Path, *arguments: str) -> str:
     ).stdout.strip()
 
 
+def require_clean_source(source_root: Path) -> str:
+    """Return the measured revision or reject a dirty source worktree."""
+    revision = git_text(source_root, "rev-parse", "HEAD")
+    if git_text(source_root, "status", "--porcelain"):
+        raise RuntimeError("measured source worktree must be clean")
+    return revision
+
+
+def changed_positions(
+    original_positions: list[float], atoms: int, step: int
+) -> list[float]:
+    """Return one deterministic, topology-preserving changed geometry."""
+    if atoms <= 0 or len(original_positions) != 3 * atoms:
+        raise ValueError("positions must contain exactly three values per atom")
+    values = list(original_positions)
+    atom = step % atoms
+    axis = (step // atoms) % 3
+    direction = -1.0 if step % 2 else 1.0
+    values[3 * atom + axis] += direction * (0.0005 + 0.00001 * step)
+    return values
+
+
+def compare_sample(
+    cuda_output: dict[str, object], cpu_output: object, atoms: int
+) -> dict[str, float | str]:
+    """Compare one changed-geometry CUDA result with its public CPU result."""
+    cuda_energies = cuda_output["energies_hartree"]
+    cuda_forces = cuda_output["forces_hartree_per_bohr"]
+    if not isinstance(cuda_energies, list) or not isinstance(cuda_forces, list):
+        raise TypeError("CUDA output must contain materialized energy and force lists")
+    cpu_energies = cpu_output.energies
+    cpu_forces = cpu_output.forces
+    energy_errors = [
+        abs(float(cuda_energies[index]) - float(cpu_energies[index]))
+        for index in range(len(cuda_energies))
+    ]
+    force_errors = [
+        abs(float(cuda_forces[index]) - float(cpu_forces[index]))
+        for index in range(3 * atoms)
+    ]
+    max_energy_error = max(energy_errors)
+    max_force_error = max(force_errors)
+    passed = (
+        max_energy_error <= ENERGY_ATOL_HARTREE
+        and max_force_error <= FORCE_ATOL_HARTREE_PER_BOHR
+    )
+    return {
+        "status": "pass" if passed else "fail",
+        "max_abs_energy_error_hartree": max_energy_error,
+        "max_abs_force_error_hartree_per_bohr": max_force_error,
+    }
+
+
+def summarize_correctness(
+    samples: list[dict[str, int | float | str]],
+) -> dict[str, int | float | str]:
+    """Aggregate per-geometry correctness without hiding a failed sample."""
+    if not samples:
+        raise ValueError("at least one changed-geometry sample is required")
+    passed = all(sample["correctness_status"] == "pass" for sample in samples)
+    return {
+        "reference": "same-library public CPU execution at every changed geometry",
+        "validated_samples": len(samples),
+        "max_abs_energy_error_hartree": max(
+            float(sample["max_abs_energy_error_hartree"]) for sample in samples
+        ),
+        "max_abs_force_error_hartree_per_bohr": max(
+            float(sample["max_abs_force_error_hartree_per_bohr"]) for sample in samples
+        ),
+        "energy_atol_hartree": ENERGY_ATOL_HARTREE,
+        "force_atol_hartree_per_bohr": FORCE_ATOL_HARTREE_PER_BOHR,
+        "status": "pass" if passed else "fail",
+    }
+
+
+def result_exit_status(document: dict[str, object]) -> int:
+    """Return nonzero when the published correctness aggregate failed."""
+    correctness = document.get("correctness")
+    if not isinstance(correctness, dict):
+        raise TypeError("result document is missing a correctness object")
+    return 0 if correctness.get("status") == "pass" else 1
+
+
 def main() -> int:
-    """Measure 20 changed geometries and compare the final one with public CPU."""
+    """Measure and CPU-qualify 20 changed geometries on one fixed CUDA plan."""
     args = parse_args()
     source_root = args.source_root.resolve()
     library_path = args.library.resolve()
-    source_revision = git_text(source_root, "rev-parse", "HEAD")
-    source_status = git_text(source_root, "status", "--porcelain")
-    if source_status:
-        raise RuntimeError("measured source worktree must be clean")
+    source_revision = require_clean_source(source_root)
 
     sys.path.insert(0, str(source_root))
     from benchmarks import run as benchmark
@@ -133,11 +216,7 @@ def main() -> int:
         position_pointer = ctypes.c_void_p(adapter.batch.positions.data)
 
         def upload_geometry(step: int) -> list[float]:
-            values = list(original_positions)
-            atom = step % adapter.atoms
-            axis = (step // adapter.atoms) % 3
-            direction = -1.0 if step % 2 else 1.0
-            values[3 * atom + axis] += direction * (0.0005 + 0.00001 * step)
+            values = changed_positions(original_positions, adapter.atoms, step)
             owner = (ctypes.c_double * len(values))(*values)
             # The public descriptor already names device memory. The caller's
             # geometry update therefore precedes, and is excluded from, the
@@ -157,13 +236,13 @@ def main() -> int:
             upload_geometry(step)
             plan_timing()
 
-        samples: list[dict[str, int | float]] = []
-        final_positions: list[float] = []
+        samples: list[dict[str, int | float | str]] = []
+        cpu_storage = public_api.assemble_batch(manifest_path, manifest, case_sequence)
         for sample in range(20):
             step = sample + 3
-            final_positions = upload_geometry(step)
+            positions = upload_geometry(step)
             latency_ms = plan_timing()
-            adapter.memory.download_outputs()
+            cuda_output = adapter.results()
             statuses = [int(value) for value in adapter.statuses]
             converged = [int(value) for value in adapter.converged]
             iterations = [int(value) for value in adapter.iterations]
@@ -171,6 +250,21 @@ def main() -> int:
                 raise RuntimeError(f"failed statuses at sample {sample}: {statuses}")
             if converged != [1] * adapter.systems:
                 raise RuntimeError(f"non-converged sample {sample}: {converged}")
+
+            # CPU qualification deliberately follows the synchronized timed
+            # interval. Every retained geometry is checked independently so a
+            # geometry-specific CUDA error cannot hide behind the final sample.
+            cpu_storage.positions[:] = positions
+            cpu_output = public_api.run_compute(
+                library,
+                cpu_storage,
+                adapter.options,
+                "cpu",
+                args.device_id,
+                1,
+                "host",
+            )
+            correctness = compare_sample(cuda_output, cpu_output, adapter.atoms)
             samples.append(
                 {
                     "sample": sample,
@@ -178,38 +272,18 @@ def main() -> int:
                     "latency_ms": latency_ms,
                     "scc_iterations_min": min(iterations),
                     "scc_iterations_max": max(iterations),
+                    "correctness_status": correctness["status"],
+                    "max_abs_energy_error_hartree": correctness[
+                        "max_abs_energy_error_hartree"
+                    ],
+                    "max_abs_force_error_hartree_per_bohr": correctness[
+                        "max_abs_force_error_hartree_per_bohr"
+                    ],
                 }
             )
 
-        cuda_output = adapter.results()
-        cpu_storage = public_api.assemble_batch(manifest_path, manifest, case_sequence)
-        cpu_storage.positions[:] = final_positions
-        cpu_output = public_api.run_compute(
-            library,
-            cpu_storage,
-            adapter.options,
-            "cpu",
-            args.device_id,
-            1,
-            "host",
-        )
-        energy_errors = [
-            abs(
-                float(cuda_output["energies_hartree"][index])
-                - float(cpu_output.energies[index])
-            )
-            for index in range(adapter.systems)
-        ]
-        force_errors = [
-            abs(
-                float(cuda_output["forces_hartree_per_bohr"][index])
-                - float(cpu_output.forces[index])
-            )
-            for index in range(3 * adapter.atoms)
-        ]
         latencies = [float(sample["latency_ms"]) for sample in samples]
-        energy_atol = 5.0e-7
-        force_atol = 5.0e-7
+        correctness = summarize_correctness(samples)
         document = {
             "schema_version": 1,
             "source_revision": source_revision,
@@ -252,21 +326,7 @@ def main() -> int:
                     int(sample["scc_iterations_max"]) for sample in samples
                 ),
             },
-            "correctness": {
-                "reference": (
-                    "same-library public CPU execution at the final changed geometry"
-                ),
-                "max_abs_energy_error_hartree": max(energy_errors),
-                "max_abs_force_error_hartree_per_bohr": max(force_errors),
-                "energy_atol_hartree": energy_atol,
-                "force_atol_hartree_per_bohr": force_atol,
-                "status": (
-                    "pass"
-                    if max(energy_errors) <= energy_atol
-                    and max(force_errors) <= force_atol
-                    else "fail"
-                ),
-            },
+            "correctness": correctness,
         }
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
         args.output_json.write_text(
@@ -277,7 +337,7 @@ def main() -> int:
         if plan.value:
             adapter.library.xtbloom_plan_destroy(plan)
         adapter.close()
-    return 0
+    return result_exit_status(document)
 
 
 if __name__ == "__main__":

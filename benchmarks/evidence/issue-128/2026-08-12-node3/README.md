@@ -116,25 +116,27 @@ three changed-geometry warmups, twenty distinct position updates produced:
 
 | Scope | Result |
 | --- | ---: |
-| Adapter/context/descriptor setup | 344.518457 ms |
-| Plan creation | 44.023809 ms |
-| First original-geometry plan compute | 17.090005 ms |
-| Changed-geometry warm median | 16.421544 ms |
-| Changed-geometry warm p95 | 19.337331 ms |
-| Throughput at median | 243.582 systems/s |
+| Adapter/context/descriptor setup | 337.896144 ms |
+| Plan creation | 43.643739 ms |
+| First original-geometry plan compute | 17.064328 ms |
+| Changed-geometry warm median | 16.221129 ms |
+| Changed-geometry warm p95 | 19.216233 ms |
+| Throughput at median | 246.592 systems/s |
 
 Every sample reported `SUCCESS`, converged in 12 SCC iterations, and retained
-the same device position-descriptor address. The final changed geometry was
-independently recomputed through the public CPU path: maximum CUDA/CPU energy
-error was `2.4868995751603507e-14` Hartree and maximum force error was
-`4.288236432614667e-15` Hartree/bohr.
+the same device position-descriptor address. All twenty changed geometries were
+independently recomputed through the public CPU path outside the timed interval:
+the maximum CUDA/CPU energy error was `2.842170943040401e-14` Hartree and the
+maximum force error was `9.804657086220914e-15` Hartree/bohr.
 
 The synchronous H2D position update occurs before and is excluded from each
 timed interval; each interval is `xtbloom_plan_compute` plus explicit
 `cudaDeviceSynchronize`. `changed-geometry.json` retains the twenty raw
-samples and correctness record. `changed-geometry-plan.py` is the exact
-reproducer; it requires a separately supplied clean source root so running the
-script from this evidence-bearing branch cannot make the measured source dirty.
+samples and per-sample correctness records. A correctness failure is still
+written to JSON but returns a nonzero process status. `changed-geometry-plan.py`
+is the exact reproducer; it requires a separately supplied clean source root so
+running the script from this evidence-bearing branch cannot make the measured
+source dirty.
 
 The reproduction command was:
 
@@ -250,7 +252,8 @@ and diagnostic without retaining a native `.ncu-rep`.
   These tests cover same-identity reuse across batch sizes 1/8/32/128,
   public/runtime parity, changed numerical values with the same Graph
   executable, and stable Graph-bound addresses.
-- Benchmark harness and evidence-size unit tests: 23/23 PASS.
+- Benchmark harness, changed-geometry helper, and evidence-size unit tests:
+  27/27 PASS.
 - Raw profiler captures are absent from the bundle.
 - The latency matrix is one representative homogeneous gas workload with
   direct-device descriptors. It does not claim every workload, memory mode,
