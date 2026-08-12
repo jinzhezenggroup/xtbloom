@@ -842,6 +842,19 @@ def _resolve_auto_batch_limit(
     are handled by splitting multi-system chunks in :meth:`BatchCalculator.compute`.
     """
     total_atoms = sum(len(structure) for structure in structures)
+    return _resolve_auto_batch_limit_for_total_atoms(context, total_atoms)
+
+
+def _resolve_auto_batch_limit_for_total_atoms(
+    context: Context,
+    total_atoms: int,
+) -> int:
+    """Choose an automatic atom limit without materializing input structures.
+
+    Hessian displacements all have the same atom count. Accepting their total
+    atom count directly lets that path decide a safe chunk size before it
+    creates any of the ``6 * natoms`` temporary geometries.
+    """
     if int(context.backend) != library.BACKEND_CUDA:
         return min(total_atoms, _AUTO_BATCH_FALLBACK_MAX_ATOMS)
 
@@ -856,6 +869,49 @@ def _resolve_auto_batch_limit(
     )
     estimated_limit = max(1, budget // _AUTO_BATCH_BYTES_PER_ATOM)
     return min(total_atoms, estimated_limit, _AUTO_BATCH_MAX_ATOMS)
+
+
+def _validated_auto_batch_size(
+    auto_batch_size: bool | int | None,
+) -> bool | int | None:
+    """Validate and normalize one public automatic batch-size request."""
+    if auto_batch_size is None or auto_batch_size is False:
+        return auto_batch_size
+    if auto_batch_size is True:
+        return True
+    limit = _as_integer("auto_batch_size", auto_batch_size)
+    if limit <= 0:
+        raise XTBloomValueError("auto_batch_size must be a positive integer")
+    return limit
+
+
+def _hessian_displacement_chunks(
+    context: Context,
+    *,
+    atom_count: int,
+    displacement_count: int,
+    auto_batch_size: bool | int | None,
+) -> list[range]:
+    """Return contiguous displacement-index chunks for one numerical Hessian.
+
+    The atom-count limit has the same meaning as
+    :meth:`BatchCalculator.compute`. Only ranges are materialized here; each
+    range's displaced structures are constructed immediately before its native
+    call so automatic sizing also bounds Python-side coordinate storage.
+    """
+    auto_batch_size = _validated_auto_batch_size(auto_batch_size)
+    if auto_batch_size is None or auto_batch_size is False:
+        systems_per_chunk = displacement_count
+    elif auto_batch_size is True:
+        total_atoms = atom_count * displacement_count
+        limit = _resolve_auto_batch_limit_for_total_atoms(context, total_atoms)
+        systems_per_chunk = max(1, limit // atom_count)
+    else:
+        systems_per_chunk = max(1, auto_batch_size // atom_count)
+    return [
+        range(begin, min(begin + systems_per_chunk, displacement_count))
+        for begin in range(0, displacement_count, systems_per_chunk)
+    ]
 
 
 def _compute_batch(
@@ -1541,6 +1597,212 @@ class Calculator(Structure):
         )
         _raise_on_failure(computed)
         return Result(computed, index=0)
+
+    def hessian(
+        self,
+        step: float = 5.0e-3,
+        *,
+        symmetrize: bool = False,
+        auto_batch_size: bool | int | None = True,
+    ) -> np.ndarray:
+        """Return the numerical QM-coordinate energy Hessian.
+
+        The Hessian is a central finite difference of xTBloom's analytic QM
+        forces,
+
+        ``H[:, j] = -(F(R + step * e_j) - F(R - step * e_j)) / (2 * step)``.
+
+        The ``6 * natoms`` displaced geometries are submitted through native
+        ragged batches. ``auto_batch_size`` has the same atom-count chunking
+        semantics as :meth:`BatchCalculator.compute`; displacement structures
+        are created lazily per chunk so its default bounds both native and
+        Python-side working memory.
+
+        Parameters
+        ----------
+        step : float, optional
+            Positive Cartesian displacement in bohr. The default is 0.005
+            bohr, matching the mature xTB numerical-Hessian convention.
+        symmetrize : bool, optional
+            Return ``0.5 * (H + H.T)``. The default returns the raw finite-
+            difference matrix so its antisymmetric numerical residual remains
+            available as a convergence diagnostic.
+        auto_batch_size : bool | int | None, optional
+            ``True`` chooses a conservative chunk atom count, a positive
+            integer supplies that count explicitly, and ``False`` or ``None``
+            submits the complete displacement set in one native call.
+
+        Returns
+        -------
+        numpy.ndarray
+            Float64 array with shape ``(3 * natoms, 3 * natoms)`` and units
+            Hartree/bohr\N{SUPERSCRIPT TWO}.
+
+        Notes
+        -----
+        Only QM atoms are displaced. Explicit point-charge coordinates and
+        values, the uniform electric field, and caller-supplied periodic
+        ``b/A`` operators remain fixed. The result is therefore the QM--QM
+        block at that fixed external environment; it does not contain
+        QM--point-charge or point-charge--point-charge blocks. As for analytic
+        forces, derivatives of caller-owned ``b/A`` operators are excluded.
+
+        A separate temporary context evaluates the displacement batches, so
+        this method neither changes :attr:`positions` nor consumes or replaces
+        a warm-start checkpoint held by this calculator. Every displacement
+        uses an independent fresh SCC solve. Any SCC or eigensolver failure
+        aborts the complete Hessian and identifies its atom, axis, and sign.
+        """
+        if isinstance(step, bool | np.bool_):
+            raise XTBloomValueError("Hessian step must be a finite positive number")
+        try:
+            displacement = float(step)
+        except (TypeError, ValueError, OverflowError):
+            raise XTBloomValueError(
+                "Hessian step must be a finite positive number"
+            ) from None
+        if not math.isfinite(displacement) or displacement <= 0.0:
+            raise XTBloomValueError("Hessian step must be a finite positive number")
+        # Validate before resolving the calculator backend or entering the
+        # temporary context. Invalid public inputs must not create a native
+        # context or otherwise execute native code.
+        resolved_auto_batch_size = _validated_auto_batch_size(auto_batch_size)
+
+        # A Hessian batch has a different topology from this single-system
+        # calculator. Keep it on an independent context so the original warm
+        # checkpoint remains valid for later geometry optimization or dynamics.
+        reference = np.array(self.positions, copy=True)
+        coordinate_count = reference.size
+        displacement_count = 2 * coordinate_count
+        resolved_backend = self.backend
+        device_id = (
+            self._context.device_id
+            if resolved_backend == library.BACKEND_CUDA
+            else None
+        )
+        hessian = np.zeros((coordinate_count, coordinate_count), dtype=np.float64)
+
+        def make_structures(indices: Sequence[int]) -> list[Structure]:
+            """Materialize only the displacement geometries for one native call."""
+            structures = []
+            for displacement_index in indices:
+                coordinate, direction_index = divmod(displacement_index, 2)
+                positions = reference.copy().reshape(-1)
+                positions[coordinate] += (
+                    displacement if direction_index == 0 else -displacement
+                )
+                structures.append(
+                    Structure(
+                        self.numbers,
+                        positions.reshape(reference.shape),
+                        charge=self.charge,
+                        uhf=self.uhf,
+                        spin_channels=self.spin_channels,
+                        point_charges=self.point_charges,
+                        charge_response=self.charge_response,
+                        efield=self.efield,
+                    )
+                )
+            return structures
+
+        def publish_forces(
+            computed: _ComputedBatch,
+            indices: Sequence[int],
+        ) -> None:
+            """Validate one chunk and accumulate its force rows as columns."""
+            axes = ("x", "y", "z")
+            failed = []
+            first_local: int | None = None
+            for local_index, displacement_index in enumerate(indices):
+                status = int(computed.per_system_status[local_index])
+                converged = int(computed.scc_converged[local_index])
+                if status == library.STATUS_SUCCESS and converged == 1:
+                    continue
+                if first_local is None:
+                    first_local = local_index
+                index = int(displacement_index)
+                coordinate = index // 2
+                atom, axis = divmod(coordinate, 3)
+                sign = "+" if index % 2 == 0 else "-"
+                failed.append(
+                    f"atom {atom}, axis {axes[axis]}, displacement {sign}step: "
+                    f"{library.status_string(status)}, "
+                    f"scc_converged={converged}, "
+                    f"iterations={int(computed.scc_iterations[local_index])}"
+                )
+            if first_local is not None:
+                raise XTBloomRuntimeError(
+                    "xTBloom Hessian displacement calculations failed: "
+                    + "; ".join(failed),
+                    int(computed.per_system_status[first_local]),
+                )
+
+            force_rows = computed.forces.reshape(len(indices), coordinate_count)
+            scale = 1.0 / (2.0 * displacement)
+            for local_index, displacement_index in enumerate(indices):
+                coordinate, direction_index = divmod(displacement_index, 2)
+                # H[:, j] = (F(R-h e_j) - F(R+h e_j)) / (2h).
+                sign = -scale if direction_index == 0 else scale
+                hessian[:, coordinate] += sign * force_rows[local_index]
+
+        with Context(
+            resolved_backend,
+            device_id=device_id,
+            cpu_threads=self._context._cpu_threads,
+        ) as context:
+            chunks = _hessian_displacement_chunks(
+                context,
+                atom_count=len(self),
+                displacement_count=displacement_count,
+                auto_batch_size=resolved_auto_batch_size,
+            )
+
+            def run_chunk(indices: Sequence[int]) -> None:
+                """Evaluate a chunk, bisecting automatic allocation failures."""
+                try:
+                    flags = library.COMPUTE_FORCES
+                    if self.point_charges is not None:
+                        # The native force plan publishes QM and point-charge
+                        # forces together for embedded systems. The latter is
+                        # an internal auxiliary output for this QM-only Hessian.
+                        flags |= library.COMPUTE_POINT_CHARGE_FORCES
+                    computed = _compute_batch(
+                        context,
+                        make_structures(indices),
+                        model=self._settings.model,
+                        max_scc_iterations=self._settings.max_scc_iterations,
+                        charge_tolerance=self._settings.charge_tolerance,
+                        energy_tolerance=self._settings.energy_tolerance,
+                        electronic_temperature=self._settings.electronic_temperature,
+                        flags=flags,
+                        warm_start=False,
+                    )
+                except XTBloomRuntimeError as error:
+                    if (
+                        resolved_auto_batch_size is not True
+                        or error.status != library.STATUS_ALLOCATION_FAILED
+                        or len(indices) == 1
+                    ):
+                        raise
+                else:
+                    publish_forces(computed, indices)
+                    return
+
+                # Leave the exception handler before rebuilding either half.
+                # Its traceback owns the failed chunk's structures; retaining
+                # it during recursion would defeat the memory-pressure
+                # recovery that this retry is meant to provide.
+                midpoint = len(indices) // 2
+                run_chunk(indices[:midpoint])
+                run_chunk(indices[midpoint:])
+
+            for chunk in chunks:
+                run_chunk(chunk)
+
+        hessian = np.ascontiguousarray(hessian)
+        if symmetrize:
+            hessian = np.ascontiguousarray(0.5 * (hessian + hessian.T))
+        return hessian
 
     def close(self) -> None:
         """Release this calculator's native context."""

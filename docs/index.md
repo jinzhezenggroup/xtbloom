@@ -62,10 +62,11 @@ Repository contributors and coding agents must also follow
 
 xTBloom currently implements restricted and unrestricted GFN2-xTB on CPU and
 CUDA, native ragged batches, analytic forces and charges, explicit point
-charges, caller-supplied periodic charge response, ASE, and dpdata. The
-low-level CUDA ABI accepts host, device, and mixed descriptors.
+charges, caller-supplied periodic charge response, a Python batched numerical
+QM Hessian, ASE, and dpdata. The low-level CUDA ABI accepts host, device, and
+mixed descriptors.
 
 GFN1-xTB, ROCm, native geometry optimization, molecular dynamics, solvation,
-Hessians, and lattice/PBC descriptors are not implemented. The browser and
-dpdata optimizers are higher-level adapters built on repeated single-point
-calls.
+native/analytic Hessians, vibrational analysis, and lattice/PBC descriptors are
+not implemented. The Python Hessian and the browser/dpdata optimizers are
+higher-level adapters built on repeated native calculations.

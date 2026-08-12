@@ -84,11 +84,19 @@ positions = np.array(
 backend = "cuda"  # Use "cpu" to require CPU execution instead.
 with Calculator("GFN2-xTB", numbers, positions, backend=backend) as calc:
     result = calc.singlepoint()
+    hessian = calc.hessian(step=0.005, symmetrize=True)  # Hartree/bohr^2
 
 print(result["energy"])
 print(result["forces"])
 print(result["charges"])
 ```
+
+For one molecule, `Calculator.hessian()` returns a dense numerical QM
+Cartesian Hessian by batching central differences of the analytic forces:
+
+This Python convenience method costs `6 * natoms` force evaluations and
+automatically chunks the displaced geometries. It does not add a native C ABI
+Hessian, analytic response Hessian, or vibrational-analysis workflow.
 
 See the [Python guide](docs/user-guide/python.md) for ragged batches, direct
 device arrays, point charges, ASE, dpdata, and PyTorch integration.
@@ -130,8 +138,9 @@ before reusing the numbers.
 | Caller-supplied periodic charge response | Supported; no lattice descriptor |
 | Uniform electric field and molecular dipoles | CPU; CUDA ABI slots reserved |
 | ASE and dpdata integrations | Supported |
+| Numerical QM Cartesian Hessian | Python `Calculator`; batched analytic-force differences |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side adapter |
-| Native GFN1-xTB, ROCm, solvation, optimization, MD, Hessians, lattice/PBC | Not implemented |
+| Native GFN1-xTB, ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, lattice/PBC | Not implemented |
 
 Reserved ABI values are not reported as supported features. At finite
 electronic temperature, the reported variational energy is the electronic
