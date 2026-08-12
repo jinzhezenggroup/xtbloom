@@ -66,10 +66,13 @@ class FakeRunner:
 
 
 def make_reference_document(
-    natoms: int = 32, batch_size: int = 1, property_name: str = "force"
+    natoms: int = 32,
+    batch_size: int = 1,
+    property_name: str = "force",
+    topology: str = "alkane",
 ) -> dict[str, Any]:
     """Create one fully valid in-memory xtbloom FRESH reference artifact."""
-    molecule = natoms_scaling.make_alkane(natoms)
+    molecule = natoms_scaling.make_molecule(topology, natoms)
     cell = natoms_scaling.Cell("xtbloom", molecule, batch_size, "cpu", property_name)
     flags = natoms_scaling.public_api.XTBLOOM_COMPUTE_ENERGY
     if property_name == "force":
@@ -208,11 +211,116 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(arguments.start_mode, "fresh")
         self.assertEqual(arguments.natoms, (32, 62))
         self.assertEqual(arguments.batch_sizes, (1, 8))
+        self.assertEqual(arguments.topology, "alkane")
         self.assertEqual(arguments.force_atol, 5.0e-7)
         self.assertEqual(arguments.cross_engine_energy_atol, 5.0e-7)
         self.assertEqual(arguments.cross_engine_force_atol, 5.0e-6)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             parser.parse_args(["--library", "libxtbloom.so"])
+
+    def test_exact_size_carbon_topologies_are_deterministic_and_distinct(self) -> None:
+        """Construct every requested exact N with carbon-only stable coordinates."""
+        for natoms in (16, 32, 48, 64, 96, 128, 256):
+            with self.subTest(natoms=natoms):
+                compact = natoms_scaling.make_compact_carbon(natoms)
+                opened = natoms_scaling.make_open_carbon(natoms)
+                self.assertEqual(compact.atomic_numbers, (6,) * natoms)
+                self.assertEqual(opened.atomic_numbers, (6,) * natoms)
+                self.assertEqual(compact, natoms_scaling.make_compact_carbon(natoms))
+                self.assertEqual(opened, natoms_scaling.make_open_carbon(natoms))
+                self.assertNotEqual(compact.positions_bohr, opened.positions_bohr)
+                compact_points = [
+                    compact.positions_bohr[3 * index : 3 * index + 3]
+                    for index in range(natoms)
+                ]
+                self.assertLessEqual(
+                    max(
+                        math.dist(left, right)
+                        for index, left in enumerate(compact_points)
+                        for right in compact_points[index + 1 :]
+                    ),
+                    25.0,
+                )
+                open_points = [
+                    opened.positions_bohr[3 * index : 3 * index + 3]
+                    for index in range(natoms)
+                ]
+                if natoms > 1:
+                    self.assertTrue(
+                        all(
+                            min(
+                                math.dist(point, other)
+                                for other_index, other in enumerate(open_points)
+                                if other_index != index
+                            )
+                            <= 2.5
+                            for index, point in enumerate(open_points)
+                        )
+                    )
+                self.assertLessEqual(
+                    max(
+                        sum(
+                            math.dist(point, other) <= 50.0
+                            for other_index, other in enumerate(open_points)
+                            if other_index != index
+                        )
+                        for index, point in enumerate(open_points)
+                    ),
+                    20,
+                )
+
+    def test_parser_accepts_exact_size_topology_selection(self) -> None:
+        """Keep alkane as default while exposing compact/open exact-N workloads."""
+        parser = natoms_scaling.build_parser()
+        for topology in ("compact-carbon", "open-carbon"):
+            args = parser.parse_args(
+                [
+                    "--library",
+                    "lib.so",
+                    "--output-json",
+                    "out.json",
+                    "--output-csv",
+                    "out.csv",
+                    "--start-mode",
+                    "fresh",
+                    "--topology",
+                    topology,
+                    "--natoms",
+                    "16,256",
+                ]
+            )
+            self.assertEqual(args.topology, topology)
+            self.assertEqual(args.natoms, (16, 256))
+
+    def test_workload_identity_hashes_and_labels_topology(self) -> None:
+        """Separate topology classes even when atom count and element set match."""
+        identities = []
+        for topology in ("compact-carbon", "open-carbon"):
+            molecule = natoms_scaling.make_molecule(topology, 16)
+            identities.append(
+                natoms_scaling.workload_identity(
+                    natoms_scaling.Cell("xtbloom", molecule, 1, "cuda", "force")
+                )
+            )
+        self.assertEqual(
+            identities[0]["atomic_numbers_sha256"],
+            identities[1]["atomic_numbers_sha256"],
+        )
+        self.assertNotEqual(
+            identities[0]["positions_bohr_sha256"],
+            identities[1]["positions_bohr_sha256"],
+        )
+        self.assertEqual(identities[0]["topology"], "compact-carbon")
+        self.assertEqual(identities[1]["topology"], "open-carbon")
+
+    def test_repeated_call_semantics_are_explicit_not_list_reuse(self) -> None:
+        """Describe unchanged-coordinate calls without claiming cache reuse."""
+        document = make_reference_document()
+        self.assertEqual(
+            document["protocol"]["repeated_call_semantics"],
+            "same_geometry_repeated_compute",
+        )
+        self.assertNotIn("list reuse", document["protocol"]["repeated_call_semantics"])
 
     def test_xtbloom_benchmark_pins_conformance_scc_and_retains_300k(self) -> None:
         """Pin SCC tolerances while retaining the initialized temperature."""
@@ -870,6 +978,22 @@ class NatomsScalingTest(unittest.TestCase):
             path.write_text('{"corrupted": true}', encoding="utf-8")
             self.assertEqual(artifact.sha256, hashlib.sha256(original).hexdigest())
             self.assertEqual(len(artifact.rows), 1)
+
+    def test_reference_artifact_reconstructs_nonalkane_topology(self) -> None:
+        """Use the recorded topology tag when validating exact-N FRESH rows."""
+        document = make_reference_document(natoms=16, topology="compact-carbon")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fresh.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            artifact = natoms_scaling.load_reference_artifact(path)
+            self.assertEqual(len(artifact.rows), 1)
+
+            document["rows"][0]["workload_identity"]["topology"] = "open-carbon"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(
+                natoms_scaling.BenchmarkError, "identity|inconsistent"
+            ):
+                natoms_scaling.load_reference_artifact(path)
 
     def test_reference_artifact_rejects_schema_identity_and_duplicate_rows(
         self,

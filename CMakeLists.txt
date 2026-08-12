@@ -2034,6 +2034,7 @@ if(XTBLOOM_BUILD_TESTS)
       xtbloom::xtbloom
       xtbloom_cuda_backend
       xtbloom_gfn2_cpu
+      CUDA::cudart
     )
     target_include_directories(xtbloom_cuda_pairlist_benchmark PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
@@ -2511,6 +2512,30 @@ if(XTBLOOM_BUILD_TESTS)
     )
     add_test(NAME xtbloom.cuda.aes2 COMMAND xtbloom_cuda_aes2_test)
 
+    # Focused #220 benchmark-only executable.  It reuses the scientific AES2
+    # fixture but times individual production leaves with CUDA events; it is
+    # intentionally not registered as a CTest and never changes the test main.
+    add_executable(xtbloom_cuda_aes2_term_benchmark tests/cuda_aes2_test.cu)
+    target_link_libraries(xtbloom_cuda_aes2_term_benchmark PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+      CUDA::cudart
+    )
+    target_include_directories(xtbloom_cuda_aes2_term_benchmark PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_aes2_term_benchmark PRIVATE
+      XTBLOOM_HAS_CUDA=1
+      XTBLOOM_AES2_TERM_BENCHMARK_ONLY=1
+    )
+    set_target_properties(xtbloom_cuda_aes2_term_benchmark PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+
     add_executable(xtbloom_cuda_d4_test tests/cuda_d4_test.cu)
     target_link_libraries(xtbloom_cuda_d4_test PRIVATE
       xtbloom::xtbloom
@@ -2528,6 +2553,30 @@ if(XTBLOOM_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME xtbloom.cuda.d4 COMMAND xtbloom_cuda_d4_test)
+
+    # Focused #220 committed-pair-list D4 term benchmark. Compact and open
+    # topologies share the production entry points; error reset, output seeds,
+    # and CPU-parity downloads stay outside every measured event range.
+    add_executable(xtbloom_cuda_d4_term_benchmark tests/cuda_d4_test.cu)
+    target_link_libraries(xtbloom_cuda_d4_term_benchmark PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+      CUDA::cudart
+    )
+    target_include_directories(xtbloom_cuda_d4_term_benchmark PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_d4_term_benchmark PRIVATE
+      XTBLOOM_HAS_CUDA=1
+      XTBLOOM_D4_TERM_BENCHMARK_ONLY=1
+    )
+    set_target_properties(xtbloom_cuda_d4_term_benchmark PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
 
     add_executable(xtbloom_cuda_periodic_embedding_test
       tests/cuda_periodic_embedding_test.cu

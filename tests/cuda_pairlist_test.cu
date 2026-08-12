@@ -10,6 +10,7 @@
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -224,8 +225,17 @@ struct DeviceFixture {
   DeviceBuffer<std::uint32_t> sequence_active;
   DeviceBuffer<std::uint32_t> system_errors;
   DeviceBuffer<std::uint32_t> device_error;
+  std::int64_t max_cells_per_system = kMaxCells;
+  std::int64_t max_neighbors_per_atom = kMaxNeighbors;
+  std::int64_t max_pairs_per_system = kMaxPairs;
 
-  cudaError_t initialize(const HostCase& host, Gfn2PairListMode mode, cudaStream_t stream) {
+  cudaError_t initialize(const HostCase& host, Gfn2PairListMode mode, cudaStream_t stream,
+                         std::int64_t max_cells = kMaxCells,
+                         std::int64_t max_neighbors = kMaxNeighbors,
+                         std::int64_t max_pairs = kMaxPairs) {
+    max_cells_per_system = max_cells;
+    max_neighbors_per_atom = max_neighbors;
+    max_pairs_per_system = max_pairs;
     std::int64_t cache_pairs = 0;
     std::int64_t cache_neighbor_offsets = 0;
     std::int64_t cache_neighbors = 0;
@@ -242,11 +252,11 @@ struct DeviceFixture {
     std::int64_t ws_pair_cursor = 0;
     if (!xtbloom::detail::cuda::query_gfn2_pairlist_requirements_cuda(
             static_cast<std::int64_t>(host.batch_size()),
-            static_cast<std::int64_t>(host.total_atoms()), kMaxCells, kMaxNeighbors, kMaxPairs,
-            &cache_pairs, &cache_neighbor_offsets, &cache_neighbors, &cache_pair_offsets,
-            &cache_generations, &ws_meta, &ws_atom_cells, &ws_cell_arrays, &ws_cell_atoms,
-            &ws_neighbor_cursor, &ws_neighbor_scratch, &ws_pair_cursor, &cache_pair_counts,
-            &cache_neighbor_counts)) {
+            static_cast<std::int64_t>(host.total_atoms()), max_cells_per_system,
+            max_neighbors_per_atom, max_pairs_per_system, &cache_pairs, &cache_neighbor_offsets,
+            &cache_neighbors, &cache_pair_offsets, &cache_generations, &ws_meta, &ws_atom_cells,
+            &ws_cell_arrays, &ws_cell_atoms, &ws_neighbor_cursor, &ws_neighbor_scratch,
+            &ws_pair_cursor, &cache_pair_counts, &cache_neighbor_counts)) {
       return cudaErrorInvalidValue;
     }
     const std::vector<Gfn2AtomPair> pair_seed(static_cast<std::size_t>(cache_pairs),
@@ -333,15 +343,16 @@ struct DeviceFixture {
     return status;
   }
 
-  Gfn2PairListDeviceBatch batch(const HostCase& host, Gfn2PairListMode mode) const {
+  Gfn2PairListDeviceBatch batch(const HostCase& host, Gfn2PairListMode mode,
+                                double cutoff_bohr = 25.0) const {
     return Gfn2PairListDeviceBatch{
         static_cast<std::int64_t>(host.batch_size()),
         static_cast<std::int64_t>(host.total_atoms()),
         static_cast<std::int64_t>(host.atom_offsets.size()),
-        25.0,
-        kMaxCells,
-        kMaxNeighbors,
-        kMaxPairs,
+        cutoff_bohr,
+        max_cells_per_system,
+        max_neighbors_per_atom,
+        max_pairs_per_system,
         mode,
         kPlanToken,
         atom_offsets.get(),
@@ -1795,26 +1806,420 @@ int test_bitwise_dense_sparse_parity() {
   return 0;
 }
 /*
- * Focused #70 benchmark: separate list-build cost from reuse cost across the
- * batch 1/8/32/128 grid and a per-system atom count sweep, so the dense-fallback
- * dispatch crossover is anchored by reproducible profiling.  Each system holds
- * atoms in a sparse crystal-like layout (12 bohr spacing) where only nearby
- * pairs are retained and the bucketed path avoids the all-pairs work of the
- * dense fallback.  With --json and --csv, emits one audit JSON containing every
- * raw sample plus a compact median CSV from the same measurement.
+ * Focused #70/#220 benchmark: separate production bucket construction, forced
+ * dense construction, and unchanged-generation coordination reuse.  The
+ * configurable sparse/compact geometry classes make the dispatch comparison
+ * explicit instead of deriving a crossover from one topology.  Downloads and
+ * correctness checks occur after each timed interval, never inside it.
  */
 struct BenchmarkSamples {
   std::vector<float> values;
   float median = 0.0F;
 };
 
+enum class BenchmarkTopology : std::uint32_t {
+  kSparse = 0u,
+  kCompact = 1u,
+};
+
+struct BenchmarkOptions {
+  std::vector<std::int64_t> atom_counts{16, 32, 48, 64, 96, 128, 256};
+  std::vector<std::size_t> batch_sizes{1u, 8u, 32u, 128u};
+  std::vector<BenchmarkTopology> topologies{BenchmarkTopology::kSparse,
+                                            BenchmarkTopology::kCompact};
+  double cutoff_bohr = 50.0;
+  int warmups = 3;
+  int samples = 20;
+  std::string json_path;
+  std::string csv_path;
+  std::string source_revision;
+  std::string executable_sha256;
+  std::string build_identity_sha256;
+};
+
+struct BenchmarkValidation {
+  std::int64_t retained_pairs = 0;
+  double max_abs_coordination_error = 0.0;
+};
+
 struct BenchmarkRow {
+  BenchmarkTopology topology = BenchmarkTopology::kSparse;
   std::size_t batch_size = 0u;
   std::int64_t atoms_per_system = 0;
+  double cutoff_bohr = 0.0;
+  BenchmarkValidation validation;
+  std::int64_t dense_pairs = 0;
   BenchmarkSamples sparse_build;
   BenchmarkSamples dense_build;
   BenchmarkSamples reuse;
 };
+
+const char* benchmark_topology_name(BenchmarkTopology topology) {
+  return topology == BenchmarkTopology::kSparse ? "sparse" : "compact";
+}
+
+std::string trim_ascii(std::string value) {
+  const std::size_t begin = value.find_first_not_of(" \t\r\n");
+  if (begin == std::string::npos) {
+    return {};
+  }
+  const std::size_t end = value.find_last_not_of(" \t\r\n");
+  return value.substr(begin, end - begin + 1u);
+}
+
+bool parse_positive_int64_list(const std::string& text, std::vector<std::int64_t>* values,
+                               std::string* error) {
+  values->clear();
+  std::size_t begin = 0u;
+  while (begin <= text.size()) {
+    const std::size_t comma = text.find(',', begin);
+    const std::string item =
+        trim_ascii(text.substr(begin, comma == std::string::npos ? comma : comma - begin));
+    if (item.empty()) {
+      *error = "integer lists must not contain empty items";
+      return false;
+    }
+    try {
+      std::size_t consumed = 0u;
+      const long long parsed = std::stoll(item, &consumed, 10);
+      if (consumed != item.size() || parsed <= 0) {
+        *error = "integer lists require positive decimal values";
+        return false;
+      }
+      const auto value = static_cast<std::int64_t>(parsed);
+      if (std::find(values->begin(), values->end(), value) != values->end()) {
+        *error = "integer lists must not contain duplicates";
+        return false;
+      }
+      values->push_back(value);
+    } catch (const std::exception&) {
+      *error = "integer lists require representable positive decimal values";
+      return false;
+    }
+    if (comma == std::string::npos) {
+      break;
+    }
+    begin = comma + 1u;
+  }
+  return !values->empty();
+}
+
+bool parse_benchmark_options(int argc, char** argv, BenchmarkOptions* options) {
+  std::string error;
+  for (int index = 1; index < argc; ++index) {
+    const std::string argument = argv[index];
+    if (argument == "--help") {
+      std::cout << "usage: xtbloom_cuda_pairlist_benchmark [options]\n"
+                << "  --atoms N,...              default 16,32,48,64,96,128,256\n"
+                << "  --batch-sizes B,...        default 1,8,32,128\n"
+                << "  --topology sparse|compact|both (default both)\n"
+                << "  --cutoff BOHR              default 50\n"
+                << "  --warmups N                minimum 3, default 3\n"
+                << "  --samples N                minimum 20, default 20\n"
+                << "  --json PATH --csv PATH\n"
+                << "  --source-revision SHA --executable-sha256 SHA\n"
+                << "  --build-identity-sha256 SHA\n";
+      return false;
+    }
+    const bool takes_value =
+        argument == "--atoms" || argument == "--batch-sizes" || argument == "--topology" ||
+        argument == "--cutoff" || argument == "--warmups" || argument == "--samples" ||
+        argument == "--json" || argument == "--csv" || argument == "--source-revision" ||
+        argument == "--executable-sha256" || argument == "--build-identity-sha256";
+    if (!takes_value) {
+      fprintf(stderr, "unknown benchmark option: %s\n", argument.c_str());
+      return false;
+    }
+    if (index + 1 >= argc) {
+      fprintf(stderr, "%s requires a value\n", argument.c_str());
+      return false;
+    }
+    const std::string value = argv[++index];
+    if (argument == "--atoms") {
+      if (!parse_positive_int64_list(value, &options->atom_counts, &error)) {
+        fprintf(stderr, "invalid --atoms: %s\n", error.c_str());
+        return false;
+      }
+    } else if (argument == "--batch-sizes") {
+      std::vector<std::int64_t> parsed;
+      if (!parse_positive_int64_list(value, &parsed, &error)) {
+        fprintf(stderr, "invalid --batch-sizes: %s\n", error.c_str());
+        return false;
+      }
+      options->batch_sizes.clear();
+      for (const std::int64_t batch_size : parsed) {
+        if (static_cast<std::uint64_t>(batch_size) >
+            static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+          fprintf(stderr, "batch sizes must fit the CUDA grid dimension\n");
+          return false;
+        }
+        options->batch_sizes.push_back(static_cast<std::size_t>(batch_size));
+      }
+    } else if (argument == "--topology") {
+      if (value == "sparse") {
+        options->topologies = {BenchmarkTopology::kSparse};
+      } else if (value == "compact") {
+        options->topologies = {BenchmarkTopology::kCompact};
+      } else if (value == "both") {
+        options->topologies = {BenchmarkTopology::kSparse, BenchmarkTopology::kCompact};
+      } else {
+        fprintf(stderr, "--topology must be sparse, compact, or both\n");
+        return false;
+      }
+    } else if (argument == "--cutoff") {
+      try {
+        std::size_t consumed = 0u;
+        options->cutoff_bohr = std::stod(value, &consumed);
+        if (consumed != value.size() || !std::isfinite(options->cutoff_bohr) ||
+            options->cutoff_bohr < 25.0) {
+          fprintf(stderr, "--cutoff must be finite and at least 25 bohr\n");
+          return false;
+        }
+      } catch (const std::exception&) {
+        fprintf(stderr, "--cutoff requires a finite decimal value\n");
+        return false;
+      }
+    } else if (argument == "--warmups" || argument == "--samples") {
+      try {
+        std::size_t consumed = 0u;
+        const long long parsed = std::stoll(value, &consumed, 10);
+        if (consumed != value.size() || parsed > std::numeric_limits<int>::max()) {
+          throw std::out_of_range("benchmark repetition count");
+        }
+        if (argument == "--warmups") {
+          options->warmups = static_cast<int>(parsed);
+        } else {
+          options->samples = static_cast<int>(parsed);
+        }
+      } catch (const std::exception&) {
+        fprintf(stderr, "%s requires a representable decimal integer\n", argument.c_str());
+        return false;
+      }
+    } else if (argument == "--json") {
+      options->json_path = value;
+    } else if (argument == "--csv") {
+      options->csv_path = value;
+    } else if (argument == "--source-revision") {
+      options->source_revision = value;
+    } else if (argument == "--executable-sha256") {
+      options->executable_sha256 = value;
+    } else if (argument == "--build-identity-sha256") {
+      options->build_identity_sha256 = value;
+    }
+  }
+  if (options->warmups < 3 || options->samples < 20) {
+    fprintf(stderr, "benchmark evidence requires at least 3 warmups and 20 samples\n");
+    return false;
+  }
+  if (!options->json_path.empty() &&
+      (options->source_revision.empty() || options->executable_sha256.empty() ||
+       options->build_identity_sha256.empty())) {
+    fprintf(stderr,
+            "JSON evidence requires --source-revision, --executable-sha256, and "
+            "--build-identity-sha256\n");
+    return false;
+  }
+  if (options->json_path.empty() != options->csv_path.empty()) {
+    fprintf(stderr,
+            "file evidence requires paired --json and --csv outputs; JSON is authoritative\n");
+    return false;
+  }
+  const auto is_hex_identity = [](const std::string& identity, std::size_t expected_size) {
+    return identity.size() == expected_size &&
+           std::all_of(identity.begin(), identity.end(), [](unsigned char character) {
+             return (character >= '0' && character <= '9') ||
+                    (character >= 'a' && character <= 'f') ||
+                    (character >= 'A' && character <= 'F');
+           });
+  };
+  if (!options->json_path.empty() && (!is_hex_identity(options->source_revision, 40u) ||
+                                      !is_hex_identity(options->executable_sha256, 64u) ||
+                                      !is_hex_identity(options->build_identity_sha256, 64u))) {
+    fprintf(stderr,
+            "file evidence requires a 40-hex source revision and 64-hex "
+            "executable/build SHA-256 identities\n");
+    return false;
+  }
+  return true;
+}
+
+bool make_benchmark_case(std::size_t batch_size, std::int64_t atoms_per_system,
+                         BenchmarkTopology topology, double cutoff_bohr, HostCase& host,
+                         std::string& error) {
+  if (batch_size == 0u || atoms_per_system <= 0 ||
+      static_cast<std::uint64_t>(batch_size) >
+          static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) /
+              static_cast<std::uint64_t>(atoms_per_system)) {
+    error = "benchmark batch extent overflows int64";
+    return false;
+  }
+  const std::int64_t total_atoms = atoms_per_system * static_cast<std::int64_t>(batch_size);
+  host.atom_offsets.assign(batch_size + 1u, 0);
+  for (std::size_t system = 0u; system <= batch_size; ++system) {
+    host.atom_offsets[system] = atoms_per_system * static_cast<std::int64_t>(system);
+  }
+  host.atomic_numbers.assign(static_cast<std::size_t>(total_atoms), 6);
+  host.positions.resize(static_cast<std::size_t>(total_atoms * 3));
+  const std::int64_t side =
+      static_cast<std::int64_t>(std::ceil(std::cbrt(static_cast<double>(atoms_per_system))));
+  const double spacing =
+      topology == BenchmarkTopology::kSparse
+          ? cutoff_bohr * 0.75
+          : cutoff_bohr /
+                (4.0 * std::sqrt(3.0) * static_cast<double>(std::max<std::int64_t>(1, side - 1)));
+  for (std::int64_t atom = 0; atom < total_atoms; ++atom) {
+    const std::int64_t local = atom % atoms_per_system;
+    host.positions[static_cast<std::size_t>(atom * 3)] =
+        spacing * static_cast<double>(local % side);
+    host.positions[static_cast<std::size_t>(atom * 3 + 1)] =
+        spacing * static_cast<double>((local / side) % side);
+    host.positions[static_cast<std::size_t>(atom * 3 + 2)] =
+        spacing * static_cast<double>(local / (side * side));
+  }
+  if (xtbloom::detail::gfn2::make_coordination_plan(
+          static_cast<std::int64_t>(batch_size), total_atoms, host.atom_offsets.data(),
+          host.atomic_numbers.data(), host.plan, error) != XTBLOOM_STATUS_SUCCESS) {
+    return false;
+  }
+  host.expected_coordination.assign(static_cast<std::size_t>(total_atoms), 0.0);
+  return true;
+}
+
+double benchmark_logistic(double argument) {
+  if (argument >= 0.0) {
+    const double exponential = std::exp(-argument);
+    return 1.0 / (1.0 + exponential);
+  }
+  const double exponential = std::exp(argument);
+  return exponential / (1.0 + exponential);
+}
+
+std::vector<double> benchmark_expected_coordination(const HostCase& host, double cutoff_bohr) {
+  std::vector<double> expected(host.total_atoms(), 0.0);
+  const double cutoff_squared = cutoff_bohr * cutoff_bohr;
+  for (std::size_t system = 0u; system < host.batch_size(); ++system) {
+    const std::int64_t begin = host.atom_offsets[system];
+    const std::int64_t end = host.atom_offsets[system + 1u];
+    for (std::int64_t second = begin + 1; second < end; ++second) {
+      for (std::int64_t first = begin; first < second; ++first) {
+        const double dx = host.positions[static_cast<std::size_t>(second * 3)] -
+                          host.positions[static_cast<std::size_t>(first * 3)];
+        const double dy = host.positions[static_cast<std::size_t>(second * 3 + 1)] -
+                          host.positions[static_cast<std::size_t>(first * 3 + 1)];
+        const double dz = host.positions[static_cast<std::size_t>(second * 3 + 2)] -
+                          host.positions[static_cast<std::size_t>(first * 3 + 2)];
+        const double distance_squared = dx * dx + dy * dy + dz * dz;
+        if (distance_squared > cutoff_squared) {
+          continue;
+        }
+        const double distance = std::sqrt(distance_squared);
+        const double radius = host.plan.covalent_radius[static_cast<std::size_t>(first)] +
+                              host.plan.covalent_radius[static_cast<std::size_t>(second)];
+        const double inverse_distance = 1.0 / distance;
+        const double first_count = benchmark_logistic(10.0 * (radius * inverse_distance - 1.0));
+        const double second_count =
+            benchmark_logistic(20.0 * ((radius + 2.0) * inverse_distance - 1.0));
+        const double count = first_count * second_count;
+        expected[static_cast<std::size_t>(first)] += count;
+        expected[static_cast<std::size_t>(second)] += count;
+      }
+    }
+  }
+  return expected;
+}
+
+int validate_benchmark_results(const HostCase& host, const Results& results, bool sparse,
+                               bool validate_coordination, double cutoff_bohr,
+                               BenchmarkValidation* validation) {
+  if (results.device_error != static_cast<std::uint32_t>(Gfn2PairListDeviceError::kSuccess) ||
+      !std::all_of(results.system_errors.begin(), results.system_errors.end(),
+                   [](std::uint32_t value) { return value == 0u; }) ||
+      !std::all_of(results.pair_generations.begin(), results.pair_generations.end(),
+                   [](std::uint64_t value) { return value == kGeneration; })) {
+    fprintf(stderr,
+            "benchmark device validation failed: device_error=%u system_error=%u "
+            "generation=%llu expected=%llu\n",
+            results.device_error, results.system_errors.empty() ? 0u : results.system_errors[0],
+            static_cast<unsigned long long>(
+                results.pair_generations.empty() ? 0u : results.pair_generations[0]),
+            static_cast<unsigned long long>(kGeneration));
+    return __LINE__;
+  }
+  const double retained_cutoff = sparse ? cutoff_bohr : std::numeric_limits<double>::max();
+  const std::vector<std::int64_t> expected_pairs = expected_retained_pairs(host, retained_cutoff);
+  std::size_t expected_cursor = 0u;
+  for (std::size_t system = 0u; system < host.batch_size(); ++system) {
+    const std::int64_t result_begin = results.pair_offsets[system];
+    const std::int64_t result_end = results.pair_offsets[system + 1u];
+    const std::int64_t system_end = host.atom_offsets[system + 1u];
+    const std::size_t expected_begin = expected_cursor;
+    while (expected_cursor < expected_pairs.size() &&
+           expected_pairs[expected_cursor + 1u] < system_end) {
+      expected_cursor += 2u;
+    }
+    const std::size_t expected_count = (expected_cursor - expected_begin) / 2u;
+    if (result_begin < 0 || result_end < result_begin ||
+        static_cast<std::size_t>(result_end - result_begin) != expected_count) {
+      fprintf(stderr,
+              "benchmark pair-count mismatch: system=%zu actual=%lld expected=%zu sparse=%d\n",
+              system, static_cast<long long>(result_end - result_begin), expected_count,
+              sparse ? 1 : 0);
+      return __LINE__;
+    }
+    for (std::size_t pair = 0u; pair < expected_count; ++pair) {
+      const Gfn2AtomPair actual = results.pairs[static_cast<std::size_t>(result_begin) + pair];
+      if (actual.first != expected_pairs[expected_begin + pair * 2u] ||
+          actual.second != expected_pairs[expected_begin + pair * 2u + 1u]) {
+        fprintf(stderr, "benchmark pair-order mismatch: system=%zu pair=%zu\n", system, pair);
+        return __LINE__;
+      }
+    }
+  }
+  CHECK(expected_cursor == expected_pairs.size());
+  CHECK(results.neighbor_offsets.front() == 0);
+  CHECK(std::is_sorted(results.neighbor_offsets.begin(), results.neighbor_offsets.end()));
+  CHECK(results.neighbor_offsets.back() == 2 * results.pair_offsets.back());
+  double max_abs_error = 0.0;
+  if (validate_coordination) {
+    /* The physical list may be the D4 50-bohr superset, while the ordinary
+     * GFN2 coordination consumer deliberately keeps its independent inclusive
+     * 25-bohr role predicate. */
+    const std::vector<double> expected_coordination = benchmark_expected_coordination(host, 25.0);
+    for (std::size_t atom = 0u; atom < host.total_atoms(); ++atom) {
+      const double error = std::abs(results.coordination[atom] - expected_coordination[atom]);
+      max_abs_error = std::max(max_abs_error, error);
+      if (!near(results.coordination[atom], expected_coordination[atom], 5.0e-13)) {
+        fprintf(stderr,
+                "benchmark coordination mismatch: atom=%zu actual=%.17g expected=%.17g "
+                "error=%.3g\n",
+                atom, results.coordination[atom], expected_coordination[atom], error);
+        return __LINE__;
+      }
+    }
+  }
+  validation->retained_pairs = static_cast<std::int64_t>(expected_pairs.size() / 2u);
+  validation->max_abs_coordination_error = max_abs_error;
+  return 0;
+}
+
+int check_benchmark_device_errors(const HostCase& host, const DeviceFixture& device,
+                                  cudaStream_t stream) {
+  std::vector<std::uint32_t> system_errors(host.batch_size(), 99u);
+  std::uint32_t device_error = 99u;
+  CUDA_CHECK(device.system_errors.copy_to(system_errors.data(), system_errors.size(), stream));
+  CUDA_CHECK(device.device_error.copy_to(&device_error, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(device_error == static_cast<std::uint32_t>(Gfn2PairListDeviceError::kSuccess));
+  CHECK(std::all_of(system_errors.begin(), system_errors.end(),
+                    [](std::uint32_t value) { return value == 0u; }));
+  return 0;
+}
+
+float benchmark_median(std::vector<float> values) {
+  std::sort(values.begin(), values.end());
+  const std::size_t middle = values.size() / 2u;
+  return values.size() % 2u == 0u ? 0.5F * (values[middle - 1u] + values[middle]) : values[middle];
+}
 
 std::string json_escape(const std::string& value) {
   std::string escaped;
@@ -1844,20 +2249,29 @@ std::string json_escape(const std::string& value) {
   return escaped;
 }
 
-void write_samples_json(std::ostream& output, const std::vector<BenchmarkRow>& rows, int argc,
-                        char** argv, int device_id, int runtime_version,
-                        const std::string& source_revision, const std::string& executable_sha256,
-                        const std::string& build_identity_sha256) {
+void write_samples_json(std::ostream& output, const std::vector<BenchmarkRow>& rows,
+                        const BenchmarkOptions& options, int argc, char** argv, int device_id,
+                        int runtime_version, int driver_version,
+                        const cudaDeviceProp& device_properties) {
   output << std::setprecision(9);
-  output << "{\n  \"schema_version\": 1,\n"
+  output << "{\n  \"schema_version\": 2,\n"
          << "  \"benchmark\": \"xtbloom_cuda_pairlist_benchmark\",\n"
-         << "  \"warmups\": 3,\n  \"samples_per_cell\": 20,\n"
+         << "  \"protocol\": {\"warmups\": " << options.warmups
+         << ", \"samples_per_cell\": " << options.samples
+         << ", \"cutoff_bohr\": " << options.cutoff_bohr
+         << ", \"timing\": \"CUDA events; validation downloads excluded\"},\n"
          << "  \"cuda_runtime_version\": " << runtime_version << ",\n"
+         << "  \"cuda_driver_version\": " << driver_version << ",\n"
          << "  \"device_id\": " << device_id << ",\n"
+         << "  \"device_name\": \"" << json_escape(device_properties.name) << "\",\n"
+         << "  \"compute_capability\": \"" << device_properties.major << '.'
+         << device_properties.minor << "\",\n"
          << "  \"cuda_header_version\": " << CUDART_VERSION << ",\n"
-         << "  \"source_revision\": \"" << json_escape(source_revision) << "\",\n"
-         << "  \"executable_sha256\": \"" << json_escape(executable_sha256) << "\",\n"
-         << "  \"build_identity_sha256\": \"" << json_escape(build_identity_sha256) << "\",\n"
+         << "  \"source_revision\": \"" << json_escape(options.source_revision) << "\",\n"
+         << "  \"executable_sha256\": \"" << json_escape(options.executable_sha256) << "\",\n"
+         << "  \"build_identity_sha256\": \"" << json_escape(options.build_identity_sha256)
+         << "\",\n"
+         << "  \"identity_source\": \"caller_supplied_and_archiver_verified\",\n"
          << "  \"argv\": [";
   for (int index = 0; index < argc; ++index) {
     if (index != 0) output << ", ";
@@ -1867,7 +2281,13 @@ void write_samples_json(std::ostream& output, const std::vector<BenchmarkRow>& r
   for (std::size_t row_index = 0u; row_index < rows.size(); ++row_index) {
     const BenchmarkRow& row = rows[row_index];
     if (row_index != 0u) output << ",\n";
-    output << "    {\"batch\": " << row.batch_size << ", \"atoms\": " << row.atoms_per_system;
+    output << "    {\"topology\": \"" << benchmark_topology_name(row.topology)
+           << "\", \"batch\": " << row.batch_size << ", \"atoms\": " << row.atoms_per_system
+           << ", \"cutoff_bohr\": " << row.cutoff_bohr
+           << ", \"validation\": {\"status\": \"pass\", \"retained_pairs\": "
+           << row.validation.retained_pairs << ", \"dense_pairs\": " << row.dense_pairs
+           << ", \"max_abs_coordination_error\": " << row.validation.max_abs_coordination_error
+           << "}";
     const auto write_samples = [&](const char* name, const BenchmarkSamples& samples) {
       output << ", \"" << name << "\": {\"median_ms\": " << samples.median << ", \"samples_ms\": [";
       for (std::size_t sample = 0u; sample < samples.values.size(); ++sample) {
@@ -1885,197 +2305,201 @@ void write_samples_json(std::ostream& output, const std::vector<BenchmarkRow>& r
 }
 
 void write_samples_csv(std::ostream& output, const std::vector<BenchmarkRow>& rows) {
-  output << "batch,atoms,sparse_build_ms,dense_build_ms,reuse_ms\n";
+  output << "topology,batch,atoms,cutoff_bohr,retained_pairs,dense_pairs,sparse_build_ms,"
+            "dense_build_ms,reuse_ms,validation_status,max_abs_coordination_error\n";
   output << std::setprecision(9);
   for (const BenchmarkRow& row : rows) {
-    output << row.batch_size << ',' << row.atoms_per_system << ',' << row.sparse_build.median << ','
-           << row.dense_build.median << ',' << row.reuse.median << '\n';
+    output << benchmark_topology_name(row.topology) << ',' << row.batch_size << ','
+           << row.atoms_per_system << ',' << row.cutoff_bohr << ',' << row.validation.retained_pairs
+           << ',' << row.dense_pairs << ',' << row.sparse_build.median << ','
+           << row.dense_build.median << ',' << row.reuse.median << ",pass,"
+           << row.validation.max_abs_coordination_error << '\n';
   }
 }
 
 int benchmark_build_vs_reuse(int argc, char** argv) {
-  constexpr int kWarmup = 3;
-  constexpr int kSamples = 20;
-  constexpr double kBenchSpacing = 12.0;
-  std::string json_path;
-  std::string csv_path;
-  std::string source_revision;
-  std::string executable_sha256;
-  std::string build_identity_sha256;
-  for (int index = 1; index < argc; ++index) {
-    const std::string argument = argv[index];
-    if ((argument == "--json" || argument == "--csv" || argument == "--source-revision" ||
-         argument == "--executable-sha256" || argument == "--build-identity-sha256") &&
-        index + 1 >= argc) {
-      fprintf(stderr, "%s requires a value\n", argument.c_str());
-      return 2;
-    }
-    if (argument == "--json") {
-      json_path = argv[++index];
-    } else if (argument == "--csv") {
-      csv_path = argv[++index];
-    } else if (argument == "--source-revision") {
-      source_revision = argv[++index];
-    } else if (argument == "--executable-sha256") {
-      executable_sha256 = argv[++index];
-    } else if (argument == "--build-identity-sha256") {
-      build_identity_sha256 = argv[++index];
-    } else {
-      fprintf(stderr, "unknown benchmark option: %s\n", argument.c_str());
-      return 2;
-    }
-  }
-  if (!json_path.empty() &&
-      (source_revision.empty() || executable_sha256.empty() || build_identity_sha256.empty())) {
-    fprintf(stderr,
-            "JSON evidence requires --source-revision, --executable-sha256, and "
-            "--build-identity-sha256\n");
+  BenchmarkOptions options;
+  if (!parse_benchmark_options(argc, argv, &options)) {
     return 2;
   }
   std::vector<BenchmarkRow> rows;
-  rows.reserve(24u);
-  for (const std::int64_t atoms_per_system : {16, 32, 48, 64, 96, 128}) {
-    for (const std::size_t batch_size : {1u, 8u, 32u, 128u}) {
-      const std::int64_t total_atoms = atoms_per_system * static_cast<std::int64_t>(batch_size);
-      HostCase host;
-      std::string error;
-      host.atom_offsets.assign(batch_size + 1u, 0);
-      for (std::size_t system = 0u; system < batch_size; ++system) {
-        host.atom_offsets[system] = atoms_per_system * static_cast<std::int64_t>(system);
-      }
-      host.atom_offsets[batch_size] = total_atoms;
-      host.atomic_numbers.resize(static_cast<std::size_t>(total_atoms));
-      host.positions.resize(static_cast<std::size_t>(total_atoms * 3));
-      for (std::int64_t atom = 0; atom < total_atoms; ++atom) {
-        host.atomic_numbers[static_cast<std::size_t>(atom)] = 6;
-        const std::int64_t local = atom % atoms_per_system;
-        const std::int64_t side = static_cast<std::int64_t>(
-            std::ceil(std::pow(static_cast<double>(atoms_per_system), 1.0 / 3.0)));
-        host.positions[static_cast<std::size_t>(atom * 3)] =
-            kBenchSpacing * static_cast<double>(local % side);
-        host.positions[static_cast<std::size_t>(atom * 3 + 1)] =
-            kBenchSpacing * static_cast<double>((local / side) % side);
-        host.positions[static_cast<std::size_t>(atom * 3 + 2)] =
-            kBenchSpacing * static_cast<double>(local / (side * side));
-      }
-      std::vector<std::int64_t> atom_offsets(host.atom_offsets.begin(), host.atom_offsets.end());
-      CHECK(xtbloom::detail::gfn2::make_coordination_plan(
-                static_cast<std::int64_t>(batch_size), total_atoms, atom_offsets.data(),
-                host.atomic_numbers.data(), host.plan, error) == XTBLOOM_STATUS_SUCCESS);
-      host.expected_coordination.resize(static_cast<std::size_t>(total_atoms), 0.0);
-
-      cudaStream_t stream = nullptr;
-      CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
-      DeviceFixture device;
-      CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
-      CUDA_CHECK(cudaStreamSynchronize(stream));
-
-      cudaEvent_t start = nullptr;
-      cudaEvent_t stop = nullptr;
-      CUDA_CHECK(cudaEventCreate(&start));
-      CUDA_CHECK(cudaEventCreate(&stop));
-
-      const auto reset_errors = [&]() {
-        return xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
-                   static_cast<std::int64_t>(batch_size), device.system_errors.get(),
-                   device.device_error.get(), stream) == cudaSuccess;
-      };
-
-      const auto measure_build = [&](Gfn2PairListMode mode, BenchmarkSamples* result) -> int {
-        std::vector<float> samples;
-        for (int sample = -kWarmup; sample < kSamples; ++sample) {
-          CHECK(reset_errors());
-          CUDA_CHECK(cudaEventRecord(start, stream));
-          CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
-              device.batch(host, mode), device.positions.get(), kGeneration, device.cache(),
-              device.workspace(), device.system_errors.get(), device.device_error.get(), stream));
-          CUDA_CHECK(cudaEventRecord(stop, stream));
-          CUDA_CHECK(cudaEventSynchronize(stop));
-          float elapsed_ms = 0.0F;
-          CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
-          if (sample >= 0) {
-            samples.push_back(elapsed_ms);
-          }
+  rows.reserve(options.atom_counts.size() * options.batch_sizes.size() * options.topologies.size());
+  for (const BenchmarkTopology topology : options.topologies) {
+    for (const std::int64_t atoms_per_system : options.atom_counts) {
+      for (const std::size_t batch_size : options.batch_sizes) {
+        HostCase host;
+        std::string error;
+        if (!make_benchmark_case(batch_size, atoms_per_system, topology, options.cutoff_bohr, host,
+                                 error)) {
+          fprintf(stderr, "failed to build benchmark case: %s\n", error.c_str());
+          return 2;
         }
-        std::vector<float> ordered = samples;
-        std::sort(ordered.begin(), ordered.end());
-        result->values = std::move(samples);
-        result->median = ordered[kSamples / 2];
-        return 0;
-      };
-
-      const auto measure_reuse = [&](BenchmarkSamples* result) -> int {
-        std::vector<float> samples;
-        for (int sample = -kWarmup; sample < kSamples; ++sample) {
-          CHECK(reset_errors());
-          CUDA_CHECK(cudaEventRecord(start, stream));
-          CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
-              device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(),
-              device.radii.get(), kGeneration, device.cache(), device.coordination.get(),
-              device.workspace(), device.system_errors.get(), device.device_error.get(), stream));
-          CUDA_CHECK(cudaEventRecord(stop, stream));
-          CUDA_CHECK(cudaEventSynchronize(stop));
-          float elapsed_ms = 0.0F;
-          CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
-          if (sample >= 0) {
-            samples.push_back(elapsed_ms);
-          }
+        if (atoms_per_system > std::numeric_limits<std::int64_t>::max() / atoms_per_system) {
+          fprintf(stderr, "atom count is too large for pair capacity\n");
+          return 2;
         }
-        std::vector<float> ordered = samples;
-        std::sort(ordered.begin(), ordered.end());
-        result->values = std::move(samples);
-        result->median = ordered[kSamples / 2];
-        return 0;
-      };
+        const std::int64_t max_pairs = atoms_per_system * (atoms_per_system - 1) / 2;
+        const std::int64_t max_neighbors = std::max<std::int64_t>(1, atoms_per_system - 1);
+        const std::int64_t side =
+            static_cast<std::int64_t>(std::ceil(std::cbrt(static_cast<double>(atoms_per_system))));
+        const std::int64_t max_cells = std::max<std::int64_t>(1, side * side * side);
 
-      BenchmarkRow row;
-      row.batch_size = batch_size;
-      row.atoms_per_system = atoms_per_system;
-      /* First build once in sparse so the coordination reuse path is valid. */
-      CHECK(reset_errors());
-      CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
-          device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
-          device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
-          stream));
-      CUDA_CHECK(cudaStreamSynchronize(stream));
-      CHECK(measure_build(Gfn2PairListMode::kSparse, &row.sparse_build) == 0);
-      CHECK(measure_build(Gfn2PairListMode::kDense, &row.dense_build) == 0);
-      /* The dense timing overwrites the reusable cache.  Rebuild sparse once
-       * outside the timed interval so reuse_ms measures the advertised sparse
-       * list rather than an all-pairs cache. */
-      CHECK(reset_errors());
-      CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
-          device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
-          device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
-          stream));
-      CUDA_CHECK(cudaStreamSynchronize(stream));
-      CHECK(measure_reuse(&row.reuse) == 0);
-      rows.push_back(std::move(row));
-      CUDA_CHECK(cudaEventDestroy(stop));
-      CUDA_CHECK(cudaEventDestroy(start));
-      CUDA_CHECK(cudaStreamDestroy(stream));
+        cudaStream_t stream = nullptr;
+        CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+        DeviceFixture device;
+        CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream, max_cells,
+                                     max_neighbors, std::max<std::int64_t>(1, max_pairs)));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        const Gfn2PairListDeviceBatch sparse_batch =
+            device.batch(host, Gfn2PairListMode::kSparse, options.cutoff_bohr);
+        const Gfn2PairListDeviceBatch dense_batch =
+            device.batch(host, Gfn2PairListMode::kDense, options.cutoff_bohr);
+
+        cudaEvent_t start = nullptr;
+        cudaEvent_t stop = nullptr;
+        CUDA_CHECK(cudaEventCreate(&start));
+        CUDA_CHECK(cudaEventCreate(&stop));
+
+        const auto reset_errors = [&]() {
+          return xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+                     static_cast<std::int64_t>(batch_size), device.system_errors.get(),
+                     device.device_error.get(), stream) == cudaSuccess;
+        };
+
+        const auto measure_build = [&](const Gfn2PairListDeviceBatch& batch,
+                                       BenchmarkSamples* result) -> int {
+          std::vector<float> samples;
+          samples.reserve(static_cast<std::size_t>(options.samples));
+          for (int sample = -options.warmups; sample < options.samples; ++sample) {
+            CHECK(reset_errors());
+            CUDA_CHECK(cudaEventRecord(start, stream));
+            CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
+                batch, device.positions.get(), kGeneration, device.cache(), device.workspace(),
+                device.system_errors.get(), device.device_error.get(), stream));
+            CUDA_CHECK(cudaEventRecord(stop, stream));
+            CUDA_CHECK(cudaEventSynchronize(stop));
+            CHECK(check_benchmark_device_errors(host, device, stream) == 0);
+            float elapsed_ms = 0.0F;
+            CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+            if (sample >= 0) {
+              samples.push_back(elapsed_ms);
+            }
+          }
+          result->values = std::move(samples);
+          result->median = benchmark_median(result->values);
+          return 0;
+        };
+
+        const auto measure_reuse = [&](BenchmarkSamples* result) -> int {
+          std::vector<float> samples;
+          samples.reserve(static_cast<std::size_t>(options.samples));
+          for (int sample = -options.warmups; sample < options.samples; ++sample) {
+            CHECK(reset_errors());
+            CUDA_CHECK(cudaEventRecord(start, stream));
+            CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+                sparse_batch, device.positions.get(), device.radii.get(), kGeneration,
+                device.cache(), device.coordination.get(), device.workspace(),
+                device.system_errors.get(), device.device_error.get(), stream));
+            CUDA_CHECK(cudaEventRecord(stop, stream));
+            CUDA_CHECK(cudaEventSynchronize(stop));
+            CHECK(check_benchmark_device_errors(host, device, stream) == 0);
+            float elapsed_ms = 0.0F;
+            CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+            if (sample >= 0) {
+              samples.push_back(elapsed_ms);
+            }
+          }
+          result->values = std::move(samples);
+          result->median = benchmark_median(result->values);
+          return 0;
+        };
+
+        BenchmarkRow row;
+        row.topology = topology;
+        row.batch_size = batch_size;
+        row.atoms_per_system = atoms_per_system;
+        row.cutoff_bohr = options.cutoff_bohr;
+        CHECK(measure_build(sparse_batch, &row.sparse_build) == 0);
+        CHECK(reset_errors());
+        CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+            sparse_batch, device.positions.get(), device.radii.get(), kGeneration, device.cache(),
+            device.coordination.get(), device.workspace(), device.system_errors.get(),
+            device.device_error.get(), stream));
+        Results sparse_results;
+        CUDA_CHECK(copy_results(host, device, sparse_results, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        BenchmarkValidation sparse_validation;
+        CHECK(validate_benchmark_results(host, sparse_results, true, true, options.cutoff_bohr,
+                                         &sparse_validation) == 0);
+
+        CHECK(measure_build(dense_batch, &row.dense_build) == 0);
+        /* Forced dense evidence is construction-only. Validate its complete
+         * triangle, generations, and error state directly; evaluating CN here
+         * would measure a consumer outside the dense-build claim. */
+        Results dense_results;
+        CUDA_CHECK(copy_results(host, device, dense_results, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        BenchmarkValidation dense_validation;
+        CHECK(validate_benchmark_results(host, dense_results, false, false, options.cutoff_bohr,
+                                         &dense_validation) == 0);
+        row.dense_pairs = dense_validation.retained_pairs;
+
+        /* Dense construction overwrites the list. Rebuild the sparse candidate
+         * outside timing, then measure only consumers of that unchanged
+         * generation. */
+        CHECK(reset_errors());
+        CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
+            sparse_batch, device.positions.get(), kGeneration, device.cache(), device.workspace(),
+            device.system_errors.get(), device.device_error.get(), stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        CHECK(check_benchmark_device_errors(host, device, stream) == 0);
+        CHECK(measure_reuse(&row.reuse) == 0);
+        Results reuse_results;
+        CUDA_CHECK(copy_results(host, device, reuse_results, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        BenchmarkValidation reuse_validation;
+        CHECK(validate_benchmark_results(host, reuse_results, true, true, options.cutoff_bohr,
+                                         &reuse_validation) == 0);
+        CHECK(sparse_validation.retained_pairs == reuse_validation.retained_pairs);
+        row.validation = reuse_validation;
+        rows.push_back(std::move(row));
+        CUDA_CHECK(cudaEventDestroy(stop));
+        CUDA_CHECK(cudaEventDestroy(start));
+        CUDA_CHECK(cudaStreamDestroy(stream));
+      }
     }
   }
-  if (json_path.empty() && csv_path.empty()) {
+  if (options.json_path.empty() && options.csv_path.empty()) {
     write_samples_csv(std::cout, rows);
   } else {
     int runtime_version = 0;
+    int driver_version = 0;
     int device_id = 0;
+    cudaDeviceProp device_properties{};
     CUDA_CHECK(cudaGetDevice(&device_id));
     CUDA_CHECK(cudaRuntimeGetVersion(&runtime_version));
-    if (!json_path.empty()) {
-      std::ofstream output(json_path);
+#ifdef XTBLOOM_PAIRLIST_BENCHMARK_ONLY
+    /* These provenance queries are confined to the benchmark-only target,
+     * which links cudart explicitly.  The normal CUDA test keeps exercising
+     * xTBloom's optional runtime-loader boundary without acquiring a hard
+     * CUDA runtime dependency merely because the benchmark helper shares this
+     * translation unit. */
+    CUDA_CHECK(cudaDriverGetVersion(&driver_version));
+    CUDA_CHECK(cudaGetDeviceProperties(&device_properties, device_id));
+#endif
+    if (!options.json_path.empty()) {
+      std::ofstream output(options.json_path);
       if (!output) {
-        fprintf(stderr, "failed to open JSON output: %s\n", json_path.c_str());
+        fprintf(stderr, "failed to open JSON output: %s\n", options.json_path.c_str());
         return 2;
       }
-      write_samples_json(output, rows, argc, argv, device_id, runtime_version, source_revision,
-                         executable_sha256, build_identity_sha256);
+      write_samples_json(output, rows, options, argc, argv, device_id, runtime_version,
+                         driver_version, device_properties);
     }
-    if (!csv_path.empty()) {
-      std::ofstream output(csv_path);
+    if (!options.csv_path.empty()) {
+      std::ofstream output(options.csv_path);
       if (!output) {
-        fprintf(stderr, "failed to open CSV output: %s\n", csv_path.c_str());
+        fprintf(stderr, "failed to open CSV output: %s\n", options.csv_path.c_str());
         return 2;
       }
       write_samples_csv(output, rows);

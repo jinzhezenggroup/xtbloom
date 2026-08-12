@@ -7,12 +7,16 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <string>
 #include <vector>
 
 #include "backends/cuda/gfn2_d4.cuh"
 #include "data/parameters/d4.hpp"
 #include "model/gfn2/d4.hpp"
+#ifdef XTBLOOM_D4_TERM_BENCHMARK_ONLY
+#include "tests/support/cuda_term_benchmark.hpp"
+#endif
 
 #define CHECK(condition) \
   do {                   \
@@ -184,6 +188,7 @@ struct DeviceFixture {
   Gfn2D4DeviceCache cache;
   Gfn2D4PairListDeviceCache pairlist_cache;
   Gfn2D4DeviceWorkspace workspace;
+  std::int64_t committed_retained_pair_count = 0;
 
   bool initialize(const HostFixture& host, cudaStream_t stream) {
     return initialize(host.plan, HostFixture::atom_offsets, HostFixture::atomic_numbers,
@@ -393,6 +398,7 @@ struct DeviceFixture {
       }
       pair_counts[static_cast<std::size_t>(system)] = count;
     }
+    committed_retained_pair_count = std::accumulate(pair_counts.begin(), pair_counts.end(), 0LL);
     pair_offsets[static_cast<std::size_t>(batch_count)] = batch_count * maximum_pairs;
     for (std::int64_t atom = 0; atom < atom_count; ++atom) {
       auto& list = neighbor_lists[static_cast<std::size_t>(atom)];
@@ -2164,8 +2170,317 @@ int test_graph_capture_and_replay() {
   return 0;
 }
 
+#ifdef XTBLOOM_D4_TERM_BENCHMARK_ONLY
+
+using BenchmarkOptions = xtbloom::test::cuda_term_benchmark::Options;
+using BenchmarkRow = xtbloom::test::cuda_term_benchmark::Row;
+using BenchmarkSamples = xtbloom::test::cuda_term_benchmark::Samples;
+using BenchmarkTopology = xtbloom::test::cuda_term_benchmark::Topology;
+
+struct D4BenchmarkCase {
+  std::vector<std::int64_t> atom_offsets;
+  std::vector<std::int32_t> atomic_numbers;
+  std::vector<double> positions;
+  std::vector<double> charges;
+  xtbloom::detail::gfn2::D4Plan plan;
+  std::vector<std::byte> workspace_storage;
+  xtbloom::detail::gfn2::D4Workspace workspace;
+  std::vector<double> pair_data;
+  std::vector<double> coordination;
+  xtbloom::detail::gfn2::D4GeometryCache cache;
+};
+
+bool make_d4_benchmark_case(const BenchmarkOptions& options, D4BenchmarkCase* host,
+                            std::string* error) {
+  if (host == nullptr || error == nullptr || options.batch_size <= 0 ||
+      options.atoms_per_system < 3 ||
+      options.batch_size > std::numeric_limits<std::int64_t>::max() / options.atoms_per_system ||
+      options.batch_size * options.atoms_per_system >
+          std::numeric_limits<std::int64_t>::max() / 6) {
+    if (error != nullptr) *error = "D4 benchmark requires at least three atoms per system";
+    return false;
+  }
+  const std::int64_t total_atoms = options.batch_size * options.atoms_per_system;
+  host->atom_offsets.resize(static_cast<std::size_t>(options.batch_size + 1));
+  host->atomic_numbers.resize(static_cast<std::size_t>(total_atoms));
+  host->positions.resize(static_cast<std::size_t>(total_atoms * 3));
+  host->charges.resize(static_cast<std::size_t>(total_atoms));
+  constexpr std::array<std::int32_t, 5> kElements{6, 1, 8, 7, 16};
+  constexpr double kCompactSpacing = 2.4;
+  constexpr double kOpenSpacing = 12.0;
+  for (std::int64_t system = 0; system < options.batch_size; ++system) {
+    host->atom_offsets[static_cast<std::size_t>(system)] = system * options.atoms_per_system;
+    const std::int64_t side = static_cast<std::int64_t>(
+        std::ceil(std::cbrt(static_cast<double>(options.atoms_per_system))));
+    for (std::int64_t local = 0; local < options.atoms_per_system; ++local) {
+      const std::int64_t atom = system * options.atoms_per_system + local;
+      host->atomic_numbers[static_cast<std::size_t>(atom)] =
+          kElements[static_cast<std::size_t>((local + system) % kElements.size())];
+      if (options.topology == BenchmarkTopology::kCompact) {
+        host->positions[static_cast<std::size_t>(atom * 3)] =
+            kCompactSpacing * static_cast<double>(local % side);
+        host->positions[static_cast<std::size_t>(atom * 3 + 1)] =
+            kCompactSpacing * static_cast<double>((local / side) % side);
+        host->positions[static_cast<std::size_t>(atom * 3 + 2)] =
+            kCompactSpacing * static_cast<double>(local / (side * side));
+      } else {
+        /* The staggered chain retains O(N) neighbors inside the 50-bohr list
+         * while avoiding a degenerate collinear ATM fixture. */
+        host->positions[static_cast<std::size_t>(atom * 3)] =
+            kOpenSpacing * static_cast<double>(local);
+        host->positions[static_cast<std::size_t>(atom * 3 + 1)] =
+            0.25 * static_cast<double>(local % 3);
+        host->positions[static_cast<std::size_t>(atom * 3 + 2)] =
+            0.125 * static_cast<double>(local % 5);
+      }
+      host->charges[static_cast<std::size_t>(atom)] =
+          0.04 * static_cast<double>(static_cast<int>(local % 5) - 2);
+    }
+  }
+  host->atom_offsets.back() = total_atoms;
+  if (xtbloom::detail::gfn2::make_d4_plan(options.batch_size, total_atoms,
+                                          host->atom_offsets.data(), host->atomic_numbers.data(),
+                                          host->plan, *error) != XTBLOOM_STATUS_SUCCESS) {
+    return false;
+  }
+  host->workspace_storage.resize(host->plan.workspace_size_bytes() +
+                                 xtbloom::detail::gfn2::kD4WorkspaceAlignment - 1u);
+  const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(host->workspace_storage.data());
+  const std::uintptr_t aligned = (address + xtbloom::detail::gfn2::kD4WorkspaceAlignment - 1u) &
+                                 ~(xtbloom::detail::gfn2::kD4WorkspaceAlignment - 1u);
+  if (xtbloom::detail::gfn2::bind_d4_workspace(host->plan, reinterpret_cast<void*>(aligned),
+                                               host->plan.workspace_size_bytes(), host->workspace,
+                                               *error) != XTBLOOM_STATUS_SUCCESS) {
+    return false;
+  }
+  host->pair_data.resize(static_cast<std::size_t>(host->plan.total_pairs()) *
+                         xtbloom::detail::gfn2::kD4PairDataElements);
+  host->coordination.resize(static_cast<std::size_t>(total_atoms));
+  return xtbloom::detail::gfn2::update_d4_geometry_cache_cpu(
+             host->plan, host->positions.data(), 71u, host->pair_data.data(),
+             host->pair_data.size(), host->coordination.data(), host->coordination.size(),
+             host->workspace, host->cache, *error) == XTBLOOM_STATUS_SUCCESS;
+}
+
+int benchmark_d4_terms(int argc, char** argv) {
+  BenchmarkOptions options;
+  std::string error;
+  if (!xtbloom::test::cuda_term_benchmark::parse_options(argc, argv, &options, &error)) {
+    xtbloom::test::cuda_term_benchmark::print_usage(argv[0]);
+    if (error != "help") std::cerr << error << '\n';
+    return error == "help" ? 0 : 2;
+  }
+  D4BenchmarkCase host;
+  if (!make_d4_benchmark_case(options, &host, &error)) {
+    std::cerr << "failed to construct D4 benchmark: " << error << '\n';
+    return 1;
+  }
+
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CHECK(device.initialize(host.plan, host.atom_offsets, host.atomic_numbers, host.pair_data,
+                          host.coordination, host.charges, stream));
+  CHECK(device.initialize_pairlist(host.atom_offsets, host.positions, 71u, stream));
+
+  std::vector<double> expected_two_body(static_cast<std::size_t>(options.batch_size));
+  std::vector<double> expected_potentials(static_cast<std::size_t>(host.plan.total_atoms()));
+  std::vector<double> expected_atm(static_cast<std::size_t>(options.batch_size));
+  std::vector<double> expected_two_body_gradient(
+      static_cast<std::size_t>(host.plan.total_atoms() * 3));
+  std::vector<double> expected_atm_gradient(static_cast<std::size_t>(host.plan.total_atoms() * 3));
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_two_body_cpu(
+            host.plan, host.cache, host.charges.data(), expected_two_body.data(),
+            expected_potentials.data(), host.workspace, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::evaluate_d4_atm_cpu(host.plan, host.cache, expected_atm.data(),
+                                                   host.workspace,
+                                                   error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_d4_two_body_gradient_cpu(
+            host.plan, host.cache, host.charges.data(), expected_two_body_gradient.data(),
+            host.workspace, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::add_d4_atm_gradient_cpu(host.plan, host.cache,
+                                                       expected_atm_gradient.data(), host.workspace,
+                                                       error) == XTBLOOM_STATUS_SUCCESS);
+
+  const auto reset_errors = [&]() { return device.reset(stream) == cudaSuccess; };
+  const auto validate_errors = [&]() {
+    std::vector<std::uint32_t> system_errors(static_cast<std::size_t>(options.batch_size), 99u);
+    std::uint32_t device_error = 99u;
+    if (device.system_errors.copy_to(system_errors.data(), system_errors.size(), stream) !=
+            cudaSuccess ||
+        device.error.copy_to(&device_error, 1u, stream) != cudaSuccess ||
+        cudaStreamSynchronize(stream) != cudaSuccess) {
+      return false;
+    }
+    return device_error == 0u && std::all_of(system_errors.begin(), system_errors.end(),
+                                             [](std::uint32_t value) { return value == 0u; });
+  };
+  const auto near_vectors = [](const std::vector<double>& actual,
+                               const std::vector<double>& expected, double absolute,
+                               double relative) {
+    if (actual.size() != expected.size()) return false;
+    for (std::size_t index = 0; index < actual.size(); ++index) {
+      if (!near(actual[index], expected[index], absolute, relative)) return false;
+    }
+    return true;
+  };
+  const auto make_row = [&](const char* term, BenchmarkSamples timing) {
+    return BenchmarkRow{term,
+                        options.topology == BenchmarkTopology::kCompact
+                            ? "compact_all_within_cutoff"
+                            : "open_sparse_pairlist",
+                        options.batch_size,
+                        options.atoms_per_system,
+                        host.plan.total_atoms(),
+                        device.committed_retained_pair_count,
+                        "committed_50_bohr_retained_pairs",
+                        host.plan.total_pairs(),
+                        std::move(timing)};
+  };
+  std::vector<BenchmarkRow> rows;
+  rows.reserve(5u);
+  BenchmarkSamples timing;
+
+  if (!xtbloom::test::cuda_term_benchmark::measure_term(
+          options, "d4_cn_cache_update", stream, reset_errors,
+          [&]() {
+            return xtbloom::detail::cuda::update_gfn2_d4_pairlist_cache_cuda(
+                       device.batch, device.parameters, 71u, device.pairlist_cache,
+                       device.workspace, device.error.get(), stream) == cudaSuccess;
+          },
+          [&]() {
+            std::vector<double> actual(host.coordination.size());
+            return validate_errors() &&
+                   device.coordination_scratch.copy_to(actual.data(), actual.size(), stream) ==
+                       cudaSuccess &&
+                   cudaStreamSynchronize(stream) == cudaSuccess &&
+                   near_vectors(actual, host.coordination, 3.0e-14, 4.0e-14);
+          },
+          &timing, &error)) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  rows.push_back(make_row("d4_cn_cache_update", std::move(timing)));
+
+  const std::size_t batch_count = static_cast<std::size_t>(options.batch_size);
+  const std::size_t atom_count = static_cast<std::size_t>(host.plan.total_atoms());
+  const auto prepare_two_body = [&]() {
+    return reset_errors() &&
+           cudaMemsetAsync(device.energies.get(), 0, batch_count * sizeof(double), stream) ==
+               cudaSuccess &&
+           cudaMemsetAsync(device.potentials.get(), 0, atom_count * sizeof(double), stream) ==
+               cudaSuccess;
+  };
+  if (!xtbloom::test::cuda_term_benchmark::measure_term(
+          options, "d4_two_body_energy_potential", stream, prepare_two_body,
+          [&]() {
+            return xtbloom::detail::cuda::evaluate_gfn2_d4_two_body_pairlist_cuda(
+                       device.batch, device.parameters, 71u, device.pairlist_cache,
+                       device.charges.get(), device.energies.get(), device.potentials.get(),
+                       device.workspace, device.error.get(), stream) == cudaSuccess;
+          },
+          [&]() {
+            std::vector<double> energies(batch_count);
+            std::vector<double> potentials(atom_count);
+            return validate_errors() &&
+                   device.energies.copy_to(energies.data(), energies.size(), stream) ==
+                       cudaSuccess &&
+                   device.potentials.copy_to(potentials.data(), potentials.size(), stream) ==
+                       cudaSuccess &&
+                   cudaStreamSynchronize(stream) == cudaSuccess &&
+                   near_vectors(energies, expected_two_body, 2.0e-11, 2.0e-12) &&
+                   near_vectors(potentials, expected_potentials, 2.0e-11, 2.0e-12);
+          },
+          &timing, &error)) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  rows.push_back(make_row("d4_two_body_energy_potential", std::move(timing)));
+
+  const auto prepare_atm = [&]() {
+    return reset_errors() && cudaMemsetAsync(device.energies.get(), 0, batch_count * sizeof(double),
+                                             stream) == cudaSuccess;
+  };
+  if (!xtbloom::test::cuda_term_benchmark::measure_term(
+          options, "d4_atm_energy", stream, prepare_atm,
+          [&]() {
+            return xtbloom::detail::cuda::evaluate_gfn2_d4_atm_pairlist_cuda(
+                       device.batch, device.parameters, 71u, device.pairlist_cache,
+                       device.energies.get(), device.workspace, device.error.get(),
+                       stream) == cudaSuccess;
+          },
+          [&]() {
+            std::vector<double> energies(batch_count);
+            return validate_errors() &&
+                   device.energies.copy_to(energies.data(), energies.size(), stream) ==
+                       cudaSuccess &&
+                   cudaStreamSynchronize(stream) == cudaSuccess &&
+                   near_vectors(energies, expected_atm, 3.0e-10, 3.0e-11);
+          },
+          &timing, &error)) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  rows.push_back(make_row("d4_atm_energy", std::move(timing)));
+
+  const auto prepare_gradient = [&]() {
+    return reset_errors() &&
+           cudaMemsetAsync(device.gradients.get(), 0, atom_count * 3u * sizeof(double), stream) ==
+               cudaSuccess;
+  };
+  const auto measure_gradient = [&](const char* term, const std::vector<double>& expected,
+                                    auto&& enqueue) {
+    BenchmarkSamples samples;
+    const bool ok = xtbloom::test::cuda_term_benchmark::measure_term(
+        options, term, stream, prepare_gradient, std::forward<decltype(enqueue)>(enqueue),
+        [&]() {
+          std::vector<double> gradients(atom_count * 3u);
+          return validate_errors() &&
+                 device.gradients.copy_to(gradients.data(), gradients.size(), stream) ==
+                     cudaSuccess &&
+                 cudaStreamSynchronize(stream) == cudaSuccess &&
+                 near_vectors(gradients, expected, 5.0e-10, 5.0e-9);
+        },
+        &samples, &error);
+    if (ok) rows.push_back(make_row(term, std::move(samples)));
+    return ok;
+  };
+  if (!measure_gradient("d4_two_body_gradient", expected_two_body_gradient,
+                        [&]() {
+                          return xtbloom::detail::cuda::add_gfn2_d4_two_body_gradient_pairlist_cuda(
+                                     device.batch, device.parameters, 71u, device.pairlist_cache,
+                                     device.charges.get(), device.gradients.get(), device.workspace,
+                                     device.error.get(), stream) == cudaSuccess;
+                        }) ||
+      !measure_gradient("d4_atm_gradient", expected_atm_gradient, [&]() {
+        return xtbloom::detail::cuda::add_gfn2_d4_atm_gradient_pairlist_cuda(
+                   device.batch, device.parameters, 71u, device.pairlist_cache,
+                   device.gradients.get(), device.workspace, device.error.get(),
+                   stream) == cudaSuccess;
+      })) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  if (!xtbloom::test::cuda_term_benchmark::write_results("xtbloom_cuda_d4_term_benchmark", options,
+                                                         argc, argv, rows, &error)) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+#endif  // XTBLOOM_D4_TERM_BENCHMARK_ONLY
+
 }  // namespace
 
+#ifdef XTBLOOM_D4_TERM_BENCHMARK_ONLY
+int main(int argc, char** argv) {
+  int device_count = 0;
+  if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) return 77;
+  return benchmark_d4_terms(argc, argv);
+}
+#else
 int main() {
   if (const int status = test_geometry_refresh_cpu_parity_ragged_batches(); status != 0) {
     std::cerr << "CUDA D4 geometry-refresh parity test failed at line " << status << '\n';
@@ -2233,3 +2548,4 @@ int main() {
   }
   return 0;
 }
+#endif  // XTBLOOM_D4_TERM_BENCHMARK_ONLY
