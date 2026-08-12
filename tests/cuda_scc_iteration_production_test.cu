@@ -1834,11 +1834,13 @@ int run_host_until_globally_terminal(HostSccCase& host, std::uint64_t& body_coun
 }
 
 int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIterationBinding& binding,
-                                  cudaStream_t observation_stream) {
+                                  cudaStream_t observation_stream,
+                                  bool compare_eigenvectors = false) {
   constexpr double kTolerance = 1.0e-8;
   const auto& layout = host.wavefunction_layout();
   const auto& state = binding.state;
   std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
   std::vector<double> occupations;
   std::vector<double> density;
   std::vector<double> weighted_density;
@@ -1852,6 +1854,10 @@ int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIteratio
 
   CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, eigenvalues,
                  observation_stream));
+  if (compare_eigenvectors) {
+    CHECK(download(state.eigenpairs.coefficients, state.eigenpairs.coefficient_elements,
+                   coefficients, observation_stream));
+  }
   CHECK(download(state.occupations.occupations, state.occupations.occupation_elements, occupations,
                  observation_stream));
   CHECK(
@@ -1874,6 +1880,9 @@ int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIteratio
 
   CHECK(compare_doubles("Graph eigenvalues", eigenvalues, host.wavefunction().eigenvalues,
                         layout.eigenvalues.element_count, kTolerance));
+  if (compare_eigenvectors) {
+    CHECK(compare_coefficients(host, eigenvalues, coefficients, kTolerance, 3.0e-8));
+  }
   CHECK(compare_doubles("Graph occupations", occupations, host.wavefunction().occupations,
                         layout.occupations.element_count, kTolerance));
   CHECK(compare_doubles("Graph density", density, host.wavefunction().density,
@@ -2058,8 +2067,8 @@ int test_deterministic_debug_restricted_scc_gate() {
                         [](xtbloom_status_t status) { return status == XTBLOOM_STATUS_SUCCESS; }));
       CHECK(std::all_of(snapshot.converged.begin(), snapshot.converged.end(),
                         [](std::uint8_t converged) { return converged == 1u; }));
-      CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding,
-                                          fixture.handles.stream()) == 0);
+      CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream(),
+                                          true) == 0);
       return 0;
     };
 
