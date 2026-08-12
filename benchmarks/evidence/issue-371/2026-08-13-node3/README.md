@@ -13,7 +13,7 @@ Compute counters were not required.
 
 ## Source and environment
 
-- Source revision: `e52ec1d42707ae699396824d2a3b979f5d76c3a8`.
+- Source revision: `e7358cbabdafc8902275a43569ac220db8c4ae76`.
 - Source branch: `feat/18-context-compute-enqueue`.
 - Source state before and after measurement: clean.
 - Host: `node3`, AMD EPYC 7K62 48-Core Processor.
