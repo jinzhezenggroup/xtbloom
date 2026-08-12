@@ -85,6 +85,13 @@ python3 benchmarks/natoms_scaling.py \
   --output-csv build/benchmarks/compact-carbon.csv
 ```
 
+For issue-scoped internal CUDA term evidence, the D4 and AES2 benchmark-only
+targets accept the same `--topology compact|open` distinction.  D4 open rows
+exercise the committed sparse 50-bohr pair-list superset, while AES2 remains an
+all-pair operator and uses the topology only to vary the distance distribution.
+These internal CUDA-event measurements complement, but do not replace, the
+complete public-call rows above.
+
 Pin process affinity and keep BLAS one-threaded in final CPU evidence. The JSON
 records the exact argv, environment, build/runtime identity, and hashes.
 

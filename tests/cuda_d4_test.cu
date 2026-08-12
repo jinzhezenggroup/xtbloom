@@ -2172,6 +2172,7 @@ int test_graph_capture_and_replay() {
 using BenchmarkOptions = xtbloom::test::cuda_term_benchmark::Options;
 using BenchmarkRow = xtbloom::test::cuda_term_benchmark::Row;
 using BenchmarkSamples = xtbloom::test::cuda_term_benchmark::Samples;
+using BenchmarkTopology = xtbloom::test::cuda_term_benchmark::Topology;
 
 struct D4BenchmarkCase {
   std::vector<std::int64_t> atom_offsets;
@@ -2202,7 +2203,8 @@ bool make_d4_benchmark_case(const BenchmarkOptions& options, D4BenchmarkCase* ho
   host->positions.resize(static_cast<std::size_t>(total_atoms * 3));
   host->charges.resize(static_cast<std::size_t>(total_atoms));
   constexpr std::array<std::int32_t, 5> kElements{6, 1, 8, 7, 16};
-  constexpr double kSpacing = 2.4;
+  constexpr double kCompactSpacing = 2.4;
+  constexpr double kOpenSpacing = 12.0;
   for (std::int64_t system = 0; system < options.batch_size; ++system) {
     host->atom_offsets[static_cast<std::size_t>(system)] = system * options.atoms_per_system;
     const std::int64_t side = static_cast<std::int64_t>(
@@ -2211,12 +2213,23 @@ bool make_d4_benchmark_case(const BenchmarkOptions& options, D4BenchmarkCase* ho
       const std::int64_t atom = system * options.atoms_per_system + local;
       host->atomic_numbers[static_cast<std::size_t>(atom)] =
           kElements[static_cast<std::size_t>((local + system) % kElements.size())];
-      host->positions[static_cast<std::size_t>(atom * 3)] =
-          kSpacing * static_cast<double>(local % side);
-      host->positions[static_cast<std::size_t>(atom * 3 + 1)] =
-          kSpacing * static_cast<double>((local / side) % side);
-      host->positions[static_cast<std::size_t>(atom * 3 + 2)] =
-          kSpacing * static_cast<double>(local / (side * side));
+      if (options.topology == BenchmarkTopology::kCompact) {
+        host->positions[static_cast<std::size_t>(atom * 3)] =
+            kCompactSpacing * static_cast<double>(local % side);
+        host->positions[static_cast<std::size_t>(atom * 3 + 1)] =
+            kCompactSpacing * static_cast<double>((local / side) % side);
+        host->positions[static_cast<std::size_t>(atom * 3 + 2)] =
+            kCompactSpacing * static_cast<double>(local / (side * side));
+      } else {
+        /* The staggered chain retains O(N) neighbors inside the 50-bohr list
+         * while avoiding a degenerate collinear ATM fixture. */
+        host->positions[static_cast<std::size_t>(atom * 3)] =
+            kOpenSpacing * static_cast<double>(local);
+        host->positions[static_cast<std::size_t>(atom * 3 + 1)] =
+            0.25 * static_cast<double>(local % 3);
+        host->positions[static_cast<std::size_t>(atom * 3 + 2)] =
+            0.125 * static_cast<double>(local % 5);
+      }
       host->charges[static_cast<std::size_t>(atom)] =
           0.04 * static_cast<double>(static_cast<int>(local % 5) - 2);
     }
@@ -2310,7 +2323,9 @@ int benchmark_d4_terms(int argc, char** argv) {
   };
   const auto make_row = [&](const char* term, BenchmarkSamples timing) {
     return BenchmarkRow{term,
-                        "compact_all_within_cutoff",
+                        options.topology == BenchmarkTopology::kCompact
+                            ? "compact_all_within_cutoff"
+                            : "open_sparse_pairlist",
                         options.batch_size,
                         options.atoms_per_system,
                         host.plan.total_atoms(),

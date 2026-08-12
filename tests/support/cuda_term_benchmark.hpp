@@ -27,11 +27,21 @@ namespace xtbloom::test::cuda_term_benchmark {
 inline constexpr int kMinimumWarmups = 3;
 inline constexpr int kMinimumSamples = 20;
 
+enum class Topology {
+  kCompact,
+  kOpen,
+};
+
+inline const char* topology_name(Topology topology) {
+  return topology == Topology::kCompact ? "compact" : "open";
+}
+
 struct Options {
   int warmups = kMinimumWarmups;
   int samples = kMinimumSamples;
   std::int64_t batch_size = 1;
   std::int64_t atoms_per_system = 32;
+  Topology topology = Topology::kCompact;
   std::string json_path;
   std::string csv_path;
   std::string source_revision;
@@ -93,6 +103,15 @@ inline bool parse_options(int argc, char** argv, Options* options, std::string* 
       options->build_identity_sha256 = value;
     } else if (argument == "--profile-term") {
       options->profile_term = value;
+    } else if (argument == "--topology") {
+      if (value == "compact") {
+        options->topology = Topology::kCompact;
+      } else if (value == "open") {
+        options->topology = Topology::kOpen;
+      } else {
+        *error = "--topology must be compact or open";
+        return false;
+      }
     } else if (argument == "--warmups" && parse_positive_integer(value.c_str(), &parsed) &&
                parsed <= INT_MAX) {
       options->warmups = static_cast<int>(parsed);
@@ -130,7 +149,8 @@ inline bool parse_options(int argc, char** argv, Options* options, std::string* 
 
 inline void print_usage(const char* executable) {
   std::cerr << "usage: " << executable
-            << " [--batch N] [--atoms-per-system N] [--warmups N>=3] [--samples N>=20]\n"
+            << " [--batch N] [--atoms-per-system N] [--topology compact|open]\n"
+               "       [--warmups N>=3] [--samples N>=20]\n"
                "       [--json PATH] [--csv PATH] --source-revision SHA\n"
                "       --executable-sha256 SHA256 --build-identity-sha256 SHA256\n"
                "       [--profile-term TERM]\n";
@@ -297,6 +317,7 @@ inline bool write_results(const char* benchmark, const Options& options, int arg
               "prepare/download/validation excluded\",\n"
            << "  \"warmups\": " << options.warmups << ",\n"
            << "  \"samples_per_term\": " << options.samples << ",\n"
+           << "  \"topology\": \"" << topology_name(options.topology) << "\",\n"
            << "  \"profile_term\": \"" << json_escape(options.profile_term) << "\",\n"
            << "  \"profile_range_scope\": \"one prepared production-term launch; setup, "
               "warmups, resets, seeds, downloads, and validation excluded\",\n"

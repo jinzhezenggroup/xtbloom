@@ -2553,8 +2553,9 @@ if(XTBLOOM_BUILD_TESTS)
     )
     add_test(NAME xtbloom.cuda.d4 COMMAND xtbloom_cuda_d4_test)
 
-    # Focused #220 committed-pair-list D4 term benchmark.  Error reset, output
-    # seeds, and CPU-parity downloads stay outside every measured event range.
+    # Focused #220 committed-pair-list D4 term benchmark. Compact and open
+    # topologies share the production entry points; error reset, output seeds,
+    # and CPU-parity downloads stay outside every measured event range.
     add_executable(xtbloom_cuda_d4_term_benchmark tests/cuda_d4_test.cu)
     target_link_libraries(xtbloom_cuda_d4_term_benchmark PRIVATE
       xtbloom::xtbloom

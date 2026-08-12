@@ -834,6 +834,7 @@ int test_graph_capture_and_structural_guards() {
 using BenchmarkOptions = xtbloom::test::cuda_term_benchmark::Options;
 using BenchmarkRow = xtbloom::test::cuda_term_benchmark::Row;
 using BenchmarkSamples = xtbloom::test::cuda_term_benchmark::Samples;
+using BenchmarkTopology = xtbloom::test::cuda_term_benchmark::Topology;
 
 bool make_aes2_benchmark_case(const BenchmarkOptions& options, HostEvaluation* host,
                               std::string* error) {
@@ -854,7 +855,8 @@ bool make_aes2_benchmark_case(const BenchmarkOptions& options, HostEvaluation* h
   std::vector<double> dipoles(static_cast<std::size_t>(total_atoms * 3));
   std::vector<double> quadrupoles(static_cast<std::size_t>(total_atoms * 6));
   constexpr std::array<std::int32_t, 5> kElements{6, 1, 8, 7, 16};
-  constexpr double kSpacing = 2.4;
+  constexpr double kCompactSpacing = 2.4;
+  constexpr double kOpenSpacing = 12.0;
   for (std::int64_t system = 0; system < options.batch_size; ++system) {
     offsets[static_cast<std::size_t>(system)] = system * options.atoms_per_system;
     const std::int64_t side = static_cast<std::int64_t>(
@@ -863,11 +865,23 @@ bool make_aes2_benchmark_case(const BenchmarkOptions& options, HostEvaluation* h
       const std::int64_t atom = system * options.atoms_per_system + local;
       atomic_numbers[static_cast<std::size_t>(atom)] =
           kElements[static_cast<std::size_t>((local + system) % kElements.size())];
-      positions[static_cast<std::size_t>(atom * 3)] = kSpacing * static_cast<double>(local % side);
-      positions[static_cast<std::size_t>(atom * 3 + 1)] =
-          kSpacing * static_cast<double>((local / side) % side);
-      positions[static_cast<std::size_t>(atom * 3 + 2)] =
-          kSpacing * static_cast<double>(local / (side * side));
+      if (options.topology == BenchmarkTopology::kCompact) {
+        positions[static_cast<std::size_t>(atom * 3)] =
+            kCompactSpacing * static_cast<double>(local % side);
+        positions[static_cast<std::size_t>(atom * 3 + 1)] =
+            kCompactSpacing * static_cast<double>((local / side) % side);
+        positions[static_cast<std::size_t>(atom * 3 + 2)] =
+            kCompactSpacing * static_cast<double>(local / (side * side));
+      } else {
+        /* AES2 has no cutoff: this open fixture keeps all-pair execution but
+         * separates its distance distribution from the compact cube. */
+        positions[static_cast<std::size_t>(atom * 3)] =
+            kOpenSpacing * static_cast<double>(local);
+        positions[static_cast<std::size_t>(atom * 3 + 1)] =
+            0.25 * static_cast<double>(local % 3);
+        positions[static_cast<std::size_t>(atom * 3 + 2)] =
+            0.125 * static_cast<double>(local % 5);
+      }
       coordination[static_cast<std::size_t>(atom)] = 0.8 + 0.03 * (local % 7);
       charges[static_cast<std::size_t>(atom)] =
           0.03 * static_cast<double>(static_cast<int>(local % 5) - 2);
@@ -934,7 +948,8 @@ int benchmark_aes2_terms(int argc, char** argv) {
   };
   const auto make_row = [&](const char* term, BenchmarkSamples timing) {
     return BenchmarkRow{term,
-                        "compact_all_pairs",
+                        options.topology == BenchmarkTopology::kCompact ? "compact_all_pairs"
+                                                                        : "open_all_pairs",
                         options.batch_size,
                         options.atoms_per_system,
                         expected.plan.total_atoms(),
