@@ -14,6 +14,14 @@ browser; the site does not upload a calculation to a server.
 4. Select **Optimize geometry** to run the demo's L-BFGS adapter and inspect
    its energy trajectory.
 
+SMILES conformer generation is bounded to two minutes. Flexible drug-sized
+molecules can take substantially longer than small examples such as ethanol,
+especially on phones. If that limit is reached, the page terminates the
+uninterruptible OpenChemLib task and restores a clean generator automatically;
+retry after the generator reports that it is ready. Editing the SMILES or
+selecting **Reset** also cancels the old task, so its coordinates cannot replace
+newer input.
+
 Each optimization step after the first is seeded from the previous step's
 converged electronic state (native SCC warm start), reusing electronic state
 across successive geometries. A new optimization or a standalone single-point

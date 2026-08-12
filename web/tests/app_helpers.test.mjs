@@ -20,6 +20,7 @@ import {
   copyFloat64FromMemory,
   createDebouncedPublisher,
   createRevisionOwner,
+  createSmilesWorkerClient,
   delayWithSignal,
   fetchResourceBatch,
   downloadProgressPercent,
@@ -54,6 +55,28 @@ class FakeWorker {
   terminate() {
     this.terminated = true;
   }
+}
+
+function createManualTimers() {
+  let sequence = 0;
+  const callbacks = new Map();
+  return {
+    setTimer(callback, delayMs) {
+      const id = ++sequence;
+      callbacks.set(id, { callback, delayMs });
+      return id;
+    },
+    clearTimer(id) { callbacks.delete(id); },
+    delayOf: (id) => callbacks.get(id)?.delayMs,
+    run(id) {
+      const entry = callbacks.get(id);
+      assert.equal(typeof entry?.callback, "function", `missing timer ${id}`);
+      callbacks.delete(id);
+      entry.callback();
+    },
+    ids: () => Array.from(callbacks.keys()),
+    get size() { return callbacks.size; },
+  };
 }
 
 function createBootstrapDocument() {
@@ -618,6 +641,144 @@ test("URL SMILES starts once only when both workers are ready and idle", () => {
   }
 });
 
+test("SMILES generation timeout restarts the worker and permits a one-click retry", async () => {
+  const timers = createManualTimers();
+  const workers = [];
+  const states = [];
+  const client = createSmilesWorkerClient({
+    createWorker: () => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    },
+    onStateChange: (event) => states.push(event),
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    loadTimeoutMs: 60,
+    generationTimeoutMs: 120,
+  });
+
+  client.start();
+  assert.equal(workers.length, 1);
+  workers[0].emit({ type: "ready", version: "9.21.0" });
+  const first = client.request("complex");
+  assert.deepEqual(workers[0].messages[0].message, {
+    type: "generate",
+    id: 1,
+    smiles: "complex",
+  });
+  const generationTimer = timers.ids()[0];
+  assert.equal(timers.delayOf(generationTimer), 120);
+  timers.run(generationTimer);
+  await assert.rejects(first, (error) => error.code === "smiles_err_timeout");
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+  assert.equal(client.getState(), "loading");
+  assert.equal(states.at(-1).reason, "generation-timeout");
+  assert.deepEqual(states.at(-1).recoveryStatus, {
+    key: "smiles_err_timeout",
+    tone: "err",
+  });
+
+  /* A queued event from the terminated instance must not publish readiness for
+   * or otherwise alter the replacement Worker. */
+  workers[0].emit({ type: "ready", version: "stale" });
+  workers[0].onerror({ message: "stale failure" });
+  assert.equal(client.getState(), "loading");
+  assert.equal(workers[1].terminated, false);
+
+  workers[1].emit({ type: "ready", version: "9.21.0" });
+  assert.deepEqual(states.at(-1).recoveryStatus, {
+    key: "smiles_err_timeout",
+    tone: "err",
+  });
+  const retry = client.request("complex");
+  workers[1].emit({ type: "result", id: 2, ok: true, result: { atomCount: 77 } });
+  assert.deepEqual(await retry, { atomCount: 77 });
+  assert.equal(client.getState(), "ready");
+  client.dispose();
+});
+
+test("cancelling SMILES work terminates abandoned synchronous work", async () => {
+  const timers = createManualTimers();
+  const workers = [];
+  const client = createSmilesWorkerClient({
+    createWorker: () => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  client.start();
+  workers[0].emit({ type: "ready", version: "9.21.0" });
+  const abandoned = client.request("old-smiles");
+  const cancelled = client.cancel(new DOMException("superseded", "AbortError"));
+  assert.equal(cancelled, true);
+  await assert.rejects(abandoned, (error) => error.name === "AbortError");
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+
+  workers[0].emit({
+    type: "result",
+    id: 1,
+    ok: true,
+    result: { atomCount: 1 },
+  });
+  assert.equal(client.getState(), "loading");
+  workers[1].emit({ type: "ready", version: "9.21.0" });
+  assert.equal(client.getState(), "ready");
+  assert.equal(client.cancel(), false);
+
+  const replacement = client.request("new-smiles");
+  workers[1].emit({
+    type: "result",
+    id: 2,
+    ok: true,
+    result: { atomCount: 2 },
+  });
+  assert.deepEqual(await replacement, { atomCount: 2 });
+  assert.equal(timers.size, 0, "cancelled work must not leave a timer ahead of the retry");
+  client.dispose();
+});
+
+test("SMILES postMessage failure rejects locally and rebuilds the worker", async () => {
+  const timers = createManualTimers();
+  const workers = [];
+  const client = createSmilesWorkerClient({
+    createWorker: () => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  client.start();
+  workers[0].emit({ type: "ready", version: "9.21.0" });
+  const cause = new DOMException("clone failed", "DataCloneError");
+  workers[0].postMessage = () => { throw cause; };
+
+  await assert.rejects(client.request("CCO"), (error) => {
+    assert.equal(error.code, "smiles_err_library");
+    assert.equal(error.cause, cause);
+    return true;
+  });
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+  assert.equal(client.getState(), "loading");
+  assert.equal(timers.size, 1, "only the replacement load timer should remain");
+
+  workers[1].emit({ type: "ready", version: "9.21.0" });
+  const retry = client.request("CCO");
+  workers[1].emit({ type: "result", id: 2, ok: true, result: { atomCount: 9 } });
+  assert.deepEqual(await retry, { atomCount: 9 });
+  client.dispose();
+});
+
 test("worker initialization remains pending until ready", async () => {
   const worker = new FakeWorker();
   const wasmBinary = new Uint8Array([0, 1, 2]);
@@ -998,16 +1159,16 @@ test("stale calculations and SMILES workflows cannot overwrite newer input or Re
   /* Both streamed optimization frames and the final result are revision-gated. */
   assert.match(
     appSource,
-    /\(step\) => \{\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\)\) return;/,
+    /\(step\) => \{\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) return;/,
   );
   assert.match(
     appSource,
-    /const dt = performance\.now\(\) - t0;\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\)\) throw supersededCoordinateError\(\);/,
+    /const dt = performance\.now\(\) - t0;\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) \{\s*throw supersededCoordinateError\(\);/,
   );
   /* Reset invalidates in-flight generation and a URL workflow waiting on either worker. */
   assert.match(
     appSource,
-    /function invalidateSmilesWork\(\) \{[\s\S]*?smilesWorkflow\.advance\(\);[\s\S]*?urlSmiles = null;[\s\S]*?urlSmilesStarted = true;[\s\S]*?rejectSmilesPending/,
+    /function invalidateSmilesWork\(\) \{[\s\S]*?smilesWorkflow\.advance\(\);[\s\S]*?urlSmiles = null;[\s\S]*?urlSmilesStarted = true;[\s\S]*?smilesClient\.cancel/,
   );
   assert.match(
     appSource,
@@ -1016,6 +1177,28 @@ test("stale calculations and SMILES workflows cannot overwrite newer input or Re
   assert.match(
     appSource,
     /const result = await requestSmilesGeometry\(smiles\);\s*requireCurrentSmilesWorkflow\(workflowRevision\);/,
+  );
+  assert.match(
+    appSource,
+    /if \(\$\("smiles"\)\.value\.trim\(\) !== smiles\) throw supersededSmilesError\(\);/,
+  );
+  assert.match(
+    appSource,
+    /\$\("smiles"\)\.addEventListener\("input", \(\) => \{[\s\S]*?invalidateSmilesWork\(\);[\s\S]*?syncEngineControls\(\);/,
+  );
+  /* URL optimization must share the SMILES workflow's publication token, not
+   * merely check it after runOptimize has already rendered final geometry. */
+  assert.match(
+    appSource,
+    /runOptimize\(\{[\s\S]*?canPublish: \(\) => smilesWorkflow\.isCurrent\(workflowRevision\)/,
+  );
+  assert.match(
+    appSource,
+    /if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) return;/,
+  );
+  assert.match(
+    appSource,
+    /if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) \{\s*throw supersededCoordinateError\(\);/,
   );
   assert.match(appSource, /if \(hasCurrentResult\("optimize"\)\) renderOptimize/);
   assert.match(appSource, /if \(hasCurrentResult\("optimize"\) && d\.geometry\)/);
