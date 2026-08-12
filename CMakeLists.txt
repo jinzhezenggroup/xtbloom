@@ -861,6 +861,7 @@ endif()
 add_library(xtbloom_gfn2_cpu OBJECT
   src/backends/common/gfn2_plan_schema.cpp
   src/model/gfn2/aes2.cpp
+  src/model/gfn2/alpb.cpp
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
   src/model/gfn2/d4.cpp
@@ -3100,6 +3101,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_repulsion_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_repulsion_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.repulsion COMMAND xtbloom_repulsion_test)
+
+  add_executable(xtbloom_alpb_test tests/alpb_test.cpp)
+  target_link_libraries(xtbloom_alpb_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_alpb_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.alpb COMMAND xtbloom_alpb_test)
 
   add_executable(xtbloom_coordination_test tests/coordination_test.cpp)
   target_link_libraries(xtbloom_coordination_test PRIVATE xtbloom_gfn2_cpu)
