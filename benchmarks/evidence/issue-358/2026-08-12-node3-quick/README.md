@@ -74,7 +74,8 @@ artifact authenticates its omitted raw JSON and matrices by SHA-256.
 ## Commands
 
 All commands ran from the xTBloom source root using the Python 3.11 benchmark
-environment. Common CPU commands used:
+environment. `${XTB_SOURCE_ROOT}` and `${DXTB_SOURCE_ROOT}` denote the clean
+checkouts whose exact revisions are listed above. Common CPU commands used:
 
 ```bash
 CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=16 OPENBLAS_NUM_THREADS=1 \
@@ -82,8 +83,8 @@ MKL_NUM_THREADS=1 taskset -c 0-15 \
   /tmp/xtbloom-issue358-py311/bin/python benchmarks/hessian.py \
   --engines xtb --batch-sizes 1,128 \
   --xtb-library /tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1 \
-  --xtb-source /home/jzzeng/codes/xtb \
-  --dxtb-source /home/jzzeng/codes/dxtb --nthreads 16 \
+  --xtb-source "${XTB_SOURCE_ROOT}" \
+  --dxtb-source "${DXTB_SOURCE_ROOT}" --nthreads 16 \
   --max-serial-hessian-batch-size 1 --warmups 1 --repetitions 3 \
   --coordinate-timeout-seconds 60 --make-reference \
   --output-json /tmp/xtbloom-issue358-fast-2388c9e/xtb-reference.json \
@@ -96,8 +97,8 @@ MKL_NUM_THREADS=1 taskset -c 0-15 \
   --engines xtbloom-cpu --batch-sizes 1 \
   --library build/issue-358-corrected-cpu/libxtbloom.so \
   --reference-json /tmp/xtbloom-issue358-fast-2388c9e/xtb-reference.json \
-  --xtb-source /home/jzzeng/codes/xtb \
-  --dxtb-source /home/jzzeng/codes/dxtb --nthreads 16 \
+  --xtb-source "${XTB_SOURCE_ROOT}" \
+  --dxtb-source "${DXTB_SOURCE_ROOT}" --nthreads 16 \
   --displacement-chunk-size 128 --warmups 1 --repetitions 3 \
   --coordinate-timeout-seconds 60 --fail-on-correctness \
   --output-json /tmp/xtbloom-issue358-fast-2388c9e/xtbloom-cpu-b1.json \
@@ -110,8 +111,8 @@ MKL_NUM_THREADS=1 taskset -c 0-15 \
   --engines xtbloom-cpu --batch-sizes 128 \
   --library build/issue-358-corrected-cpu/libxtbloom.so \
   --reference-json /tmp/xtbloom-issue358-fast-2388c9e/xtb-reference.json \
-  --xtb-source /home/jzzeng/codes/xtb \
-  --dxtb-source /home/jzzeng/codes/dxtb --nthreads 16 \
+  --xtb-source "${XTB_SOURCE_ROOT}" \
+  --dxtb-source "${DXTB_SOURCE_ROOT}" --nthreads 16 \
   --displacement-chunk-size 128 --warmups 0 --repetitions 1 \
   --coordinate-timeout-seconds 300 --fail-on-correctness \
   --output-json /tmp/xtbloom-issue358-fast-2388c9e/xtbloom-cpu-b128.json \
@@ -129,8 +130,8 @@ taskset -c 0-15 /tmp/xtbloom-issue358-py311/bin/python \
   benchmarks/hessian.py --engines xtbloom-cuda --batch-sizes 1 \
   --library build/issue-358-corrected-cuda/libxtbloom.so \
   --reference-json /tmp/xtbloom-issue358-fast-2388c9e/xtb-reference.json \
-  --xtb-source /home/jzzeng/codes/xtb \
-  --dxtb-source /home/jzzeng/codes/dxtb --nthreads 16 \
+  --xtb-source "${XTB_SOURCE_ROOT}" \
+  --dxtb-source "${DXTB_SOURCE_ROOT}" --nthreads 16 \
   --displacement-chunk-size 128 --warmups 1 --repetitions 3 \
   --coordinate-timeout-seconds 300 --fail-on-correctness \
   --output-json /tmp/xtbloom-issue358-fast-2388c9e/xtbloom-cuda-b1-v2.json \
