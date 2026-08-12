@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -187,6 +188,7 @@ struct DeviceFixture {
   Gfn2D4DeviceCache cache;
   Gfn2D4PairListDeviceCache pairlist_cache;
   Gfn2D4DeviceWorkspace workspace;
+  std::int64_t committed_retained_pair_count = 0;
 
   bool initialize(const HostFixture& host, cudaStream_t stream) {
     return initialize(host.plan, HostFixture::atom_offsets, HostFixture::atomic_numbers,
@@ -396,6 +398,7 @@ struct DeviceFixture {
       }
       pair_counts[static_cast<std::size_t>(system)] = count;
     }
+    committed_retained_pair_count = std::accumulate(pair_counts.begin(), pair_counts.end(), 0LL);
     pair_offsets[static_cast<std::size_t>(batch_count)] = batch_count * maximum_pairs;
     for (std::int64_t atom = 0; atom < atom_count; ++atom) {
       auto& list = neighbor_lists[static_cast<std::size_t>(atom)];
@@ -2329,6 +2332,8 @@ int benchmark_d4_terms(int argc, char** argv) {
                         options.batch_size,
                         options.atoms_per_system,
                         host.plan.total_atoms(),
+                        device.committed_retained_pair_count,
+                        "committed_50_bohr_retained_pairs",
                         host.plan.total_pairs(),
                         std::move(timing)};
   };

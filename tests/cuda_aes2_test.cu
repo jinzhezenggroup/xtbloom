@@ -954,6 +954,8 @@ int benchmark_aes2_terms(int argc, char** argv) {
                         options.atoms_per_system,
                         expected.plan.total_atoms(),
                         expected.plan.total_pairs(),
+                        "packed_all_pairs",
+                        expected.plan.total_pairs(),
                         std::move(timing)};
   };
   std::vector<BenchmarkRow> rows;

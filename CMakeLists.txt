@@ -2034,6 +2034,7 @@ if(XTBLOOM_BUILD_TESTS)
       xtbloom::xtbloom
       xtbloom_cuda_backend
       xtbloom_gfn2_cpu
+      CUDA::cudart
     )
     target_include_directories(xtbloom_cuda_pairlist_benchmark PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}

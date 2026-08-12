@@ -63,9 +63,20 @@ struct Row {
   std::int64_t batch_size = 0;
   std::int64_t atoms_per_system = 0;
   std::int64_t total_atoms = 0;
-  std::int64_t total_pairs = 0;
+  std::int64_t pair_count = 0;
+  std::string pair_count_semantics;
+  std::int64_t dense_pair_count = 0;
   Samples timing;
 };
+
+inline bool is_hex_identity(const std::string& value, std::size_t expected_size) {
+  return value.size() == expected_size &&
+         std::all_of(value.begin(), value.end(), [](unsigned char character) {
+           return (character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f') ||
+                  (character >= 'A' && character <= 'F');
+         });
+}
 
 inline bool parse_positive_integer(const char* text, std::int64_t* value) {
   if (text == nullptr || value == nullptr || *text == '\0') return false;
@@ -142,6 +153,19 @@ inline bool parse_options(int argc, char** argv, Options* options, std::string* 
     *error =
         "file evidence requires --source-revision, --executable-sha256, and "
         "--build-identity-sha256";
+    return false;
+  }
+  if (options->json_path.empty() != options->csv_path.empty()) {
+    *error = "file evidence requires paired --json and --csv outputs; JSON is authoritative";
+    return false;
+  }
+  if ((!options->json_path.empty() || !options->csv_path.empty()) &&
+      (!is_hex_identity(options->source_revision, 40u) ||
+       !is_hex_identity(options->executable_sha256, 64u) ||
+       !is_hex_identity(options->build_identity_sha256, 64u))) {
+    *error =
+        "file evidence requires a 40-hex source revision and 64-hex executable/build "
+        "SHA-256 identities";
     return false;
   }
   return true;
@@ -325,6 +349,7 @@ inline bool write_results(const char* benchmark, const Options& options, int arg
            << "  \"executable_sha256\": \"" << json_escape(options.executable_sha256) << "\",\n"
            << "  \"build_identity_sha256\": \"" << json_escape(options.build_identity_sha256)
            << "\",\n"
+           << "  \"identity_source\": \"caller_supplied_and_archiver_verified\",\n"
            << "  \"cuda_header_version\": " << CUDART_VERSION << ",\n"
            << "  \"cuda_runtime_version\": " << runtime_version << ",\n"
            << "  \"cuda_driver_version\": " << driver_version << ",\n"
@@ -344,7 +369,9 @@ inline bool write_results(const char* benchmark, const Options& options, int arg
       output << "    {\"term\": \"" << json_escape(row.term) << "\", \"workload\": \""
              << json_escape(row.workload) << "\", \"batch\": " << row.batch_size
              << ", \"atoms_per_system\": " << row.atoms_per_system
-             << ", \"total_atoms\": " << row.total_atoms << ", \"total_pairs\": " << row.total_pairs
+             << ", \"total_atoms\": " << row.total_atoms << ", \"pair_count\": " << row.pair_count
+             << ", \"pair_count_semantics\": \"" << json_escape(row.pair_count_semantics)
+             << "\", \"dense_pair_count\": " << row.dense_pair_count
              << ", \"minimum_ms\": " << row.timing.minimum_ms
              << ", \"median_ms\": " << row.timing.median_ms
              << ", \"maximum_ms\": " << row.timing.maximum_ms << ", \"samples_ms\": [";
@@ -357,14 +384,15 @@ inline bool write_results(const char* benchmark, const Options& options, int arg
     output << "\n  ]\n}\n";
   };
   const auto write_csv = [&](std::ostream& output) {
-    output << "term,workload,batch,atoms_per_system,total_atoms,total_pairs,minimum_ms,median_ms,"
-              "maximum_ms,samples\n";
+    output << "term,workload,batch,atoms_per_system,total_atoms,pair_count,pair_count_semantics,"
+              "dense_pair_count,minimum_ms,median_ms,maximum_ms,samples\n";
     output << std::setprecision(9);
     for (const Row& row : rows) {
       output << row.term << ',' << row.workload << ',' << row.batch_size << ','
-             << row.atoms_per_system << ',' << row.total_atoms << ',' << row.total_pairs << ','
-             << row.timing.minimum_ms << ',' << row.timing.median_ms << ',' << row.timing.maximum_ms
-             << ',' << row.timing.values_ms.size() << '\n';
+             << row.atoms_per_system << ',' << row.total_atoms << ',' << row.pair_count << ','
+             << row.pair_count_semantics << ',' << row.dense_pair_count << ','
+             << row.timing.minimum_ms << ',' << row.timing.median_ms << ','
+             << row.timing.maximum_ms << ',' << row.timing.values_ms.size() << '\n';
     }
   };
 

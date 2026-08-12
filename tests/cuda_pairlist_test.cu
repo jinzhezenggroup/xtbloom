@@ -2019,6 +2019,28 @@ bool parse_benchmark_options(int argc, char** argv, BenchmarkOptions* options) {
             "--build-identity-sha256\n");
     return false;
   }
+  if (options->json_path.empty() != options->csv_path.empty()) {
+    fprintf(stderr,
+            "file evidence requires paired --json and --csv outputs; JSON is authoritative\n");
+    return false;
+  }
+  const auto is_hex_identity = [](const std::string& identity, std::size_t expected_size) {
+    return identity.size() == expected_size &&
+           std::all_of(identity.begin(), identity.end(), [](unsigned char character) {
+             return (character >= '0' && character <= '9') ||
+                    (character >= 'a' && character <= 'f') ||
+                    (character >= 'A' && character <= 'F');
+           });
+  };
+  if (!options->json_path.empty() &&
+      (!is_hex_identity(options->source_revision, 40u) ||
+       !is_hex_identity(options->executable_sha256, 64u) ||
+       !is_hex_identity(options->build_identity_sha256, 64u))) {
+    fprintf(stderr,
+            "file evidence requires a 40-hex source revision and 64-hex "
+            "executable/build SHA-256 identities\n");
+    return false;
+  }
   return true;
 }
 
@@ -2230,7 +2252,8 @@ std::string json_escape(const std::string& value) {
 
 void write_samples_json(std::ostream& output, const std::vector<BenchmarkRow>& rows,
                         const BenchmarkOptions& options, int argc, char** argv, int device_id,
-                        int runtime_version) {
+                        int runtime_version, int driver_version,
+                        const cudaDeviceProp& device_properties) {
   output << std::setprecision(9);
   output << "{\n  \"schema_version\": 2,\n"
          << "  \"benchmark\": \"xtbloom_cuda_pairlist_benchmark\",\n"
@@ -2239,12 +2262,17 @@ void write_samples_json(std::ostream& output, const std::vector<BenchmarkRow>& r
          << ", \"cutoff_bohr\": " << options.cutoff_bohr
          << ", \"timing\": \"CUDA events; validation downloads excluded\"},\n"
          << "  \"cuda_runtime_version\": " << runtime_version << ",\n"
+         << "  \"cuda_driver_version\": " << driver_version << ",\n"
          << "  \"device_id\": " << device_id << ",\n"
+         << "  \"device_name\": \"" << json_escape(device_properties.name) << "\",\n"
+         << "  \"compute_capability\": \"" << device_properties.major << '.'
+         << device_properties.minor << "\",\n"
          << "  \"cuda_header_version\": " << CUDART_VERSION << ",\n"
          << "  \"source_revision\": \"" << json_escape(options.source_revision) << "\",\n"
          << "  \"executable_sha256\": \"" << json_escape(options.executable_sha256) << "\",\n"
          << "  \"build_identity_sha256\": \"" << json_escape(options.build_identity_sha256)
          << "\",\n"
+         << "  \"identity_source\": \"caller_supplied_and_archiver_verified\",\n"
          << "  \"argv\": [";
   for (int index = 0; index < argc; ++index) {
     if (index != 0) output << ", ";
@@ -2446,16 +2474,28 @@ int benchmark_build_vs_reuse(int argc, char** argv) {
     write_samples_csv(std::cout, rows);
   } else {
     int runtime_version = 0;
+    int driver_version = 0;
     int device_id = 0;
+    cudaDeviceProp device_properties{};
     CUDA_CHECK(cudaGetDevice(&device_id));
     CUDA_CHECK(cudaRuntimeGetVersion(&runtime_version));
+#ifdef XTBLOOM_PAIRLIST_BENCHMARK_ONLY
+    /* These provenance queries are confined to the benchmark-only target,
+     * which links cudart explicitly.  The normal CUDA test keeps exercising
+     * xTBloom's optional runtime-loader boundary without acquiring a hard
+     * CUDA runtime dependency merely because the benchmark helper shares this
+     * translation unit. */
+    CUDA_CHECK(cudaDriverGetVersion(&driver_version));
+    CUDA_CHECK(cudaGetDeviceProperties(&device_properties, device_id));
+#endif
     if (!options.json_path.empty()) {
       std::ofstream output(options.json_path);
       if (!output) {
         fprintf(stderr, "failed to open JSON output: %s\n", options.json_path.c_str());
         return 2;
       }
-      write_samples_json(output, rows, options, argc, argv, device_id, runtime_version);
+      write_samples_json(output, rows, options, argc, argv, device_id, runtime_version,
+                         driver_version, device_properties);
     }
     if (!options.csv_path.empty()) {
       std::ofstream output(options.csv_path);
