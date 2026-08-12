@@ -288,8 +288,10 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
         info.completion_status != XTBLOOM_STATUS_SUCCESS || info.result_flags != 0u ||
         result.flags != result_flags_canary || system_status != XTBLOOM_STATUS_SUCCESS ||
         converged != 1 || iterations <= 0 || !isfinite(energy)) {
-      fprintf(stderr, "installed %s context async WARM failed: call_error=%s request_error=%s\n",
-              mode_name, xtbloom_get_last_error(), xtbloom_request_get_error(request));
+      fprintf(stderr, "installed %s context async WARM failed: call_error=%s\n", mode_name,
+              xtbloom_get_last_error());
+      fprintf(stderr, "installed %s context async WARM request_error=%s\n", mode_name,
+              xtbloom_request_get_error(request));
       xtbloom_request_destroy(request);
       return 25;
     }

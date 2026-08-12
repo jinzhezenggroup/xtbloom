@@ -6634,6 +6634,20 @@ struct Gfn2CudaExecutionCache::Impl {
    * keeping the host bit false makes every later strict WARM reject safely. */
   void finalize_active_request_after_commit_locked(Prepared& current) {
     auto& active = active_request;
+    if (active.deferred_status != XTBLOOM_STATUS_SUCCESS) {
+      active.completion_status = active.deferred_status;
+      active.result_flags = 0u;
+      /* The device-gated commit is already ordered, so caller CUDA buffers may
+       * have changed. Host publication remains controllable: close readiness
+       * before diagnostic composition and do not copy staged host bytes for a
+       * request whose accepted transaction already has a deferred failure. */
+      current.inference.warm_checkpoint_ready = false;
+      if (!active.completion_error.empty()) active.completion_error += "; additionally, ";
+      active.completion_error += active.deferred_error;
+      active.completion_ready = true;
+      return;
+    }
+
     xtbloom_status_t status = accept_public_result_after_commit_locked(current, active.transaction,
                                                                        active.completion_error);
     if (status == XTBLOOM_STATUS_SUCCESS) {
@@ -6641,22 +6655,12 @@ struct Gfn2CudaExecutionCache::Impl {
           publish_public_results_locked(current, active.options, active.result, active.transaction,
                                         true, false, active.result_flags, active.completion_error);
     }
-    active.completion_ready = true;
     active.completion_status = status;
-    if (status != XTBLOOM_STATUS_SUCCESS) active.result_flags = 0u;
-    if (active.deferred_status != XTBLOOM_STATUS_SUCCESS) {
-      active.completion_status = active.deferred_status;
+    if (status != XTBLOOM_STATUS_SUCCESS) {
       active.result_flags = 0u;
-      /* Close the host gate before diagnostic composition, which may allocate
-       * and throw. A failed request must remain unable to resurrect the
-       * candidate checkpoint even if error-string construction is interrupted. */
-      current.inference.warm_checkpoint_ready = false;
-      if (!active.completion_error.empty()) active.completion_error += "; additionally, ";
-      active.completion_error += active.deferred_error;
-    }
-    if (active.completion_status != XTBLOOM_STATUS_SUCCESS) {
       current.inference.warm_checkpoint_ready = false;
     }
+    active.completion_ready = true;
   }
 
   Gfn2CudaExecutionIdentity snapshot() const noexcept {

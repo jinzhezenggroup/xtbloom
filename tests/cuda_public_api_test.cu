@@ -1702,6 +1702,12 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
   ResultOwner result;
   CUDA_CHECK(result.bind(batch, ResultLayout::kDevice, options.flags));
   xtbloom_batch_result_t submitted_result = result.descriptor;
+  /* These owners must outlive the reusable request because an early test
+   * return after enqueue is settled by the request destructor. */
+  ResultOwner warm_result;
+  ResultOwner second_warm_result;
+  ResultOwner post_destroy_warm_result;
+  xtbloom_batch_result_t submitted_warm_result{};
   xtbloom_request_t* raw_request = nullptr;
   CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
   RequestHandle request(raw_request);
@@ -1869,9 +1875,9 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
                         &independent_fresh_result.descriptor) == XTBLOOM_STATUS_SUCCESS);
   MaterializedResult independent_fresh;
   CUDA_CHECK(independent_fresh_result.materialize(independent_fresh));
-  ResultOwner warm_result;
+  CHECK(compare_result(independent_fresh_result, independent_fresh, reference, options) == 0);
   CUDA_CHECK(warm_result.bind(batch, ResultLayout::kTorchRequest, warm_options.flags));
-  xtbloom_batch_result_t submitted_warm_result = warm_result.descriptor;
+  submitted_warm_result = warm_result.descriptor;
   BlockingStreamGate warm_gate;
   if (mode != PlanTestMode::kSanitizer) CUDA_CHECK(warm_gate.arm(stream.get()));
   CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &warm_options,
@@ -1905,7 +1911,6 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
    * consume a second changed-geometry checkpoint without a FRESH reseed. */
   batch.perturb(0.0005);
   CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
-  ResultOwner second_warm_result;
   CUDA_CHECK(second_warm_result.bind(batch, ResultLayout::kDevice, warm_options.flags));
   CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &warm_options,
                                 &second_warm_result.descriptor,
@@ -1989,7 +1994,6 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
 
     changed.perturb(0.0005);
     CHECK(run_cpu_reference(cpu_context, changed, base_options, changed_reference) == 0);
-    ResultOwner post_destroy_warm_result;
     CUDA_CHECK(
         post_destroy_warm_result.bind(changed, ResultLayout::kMixed, changed_warm_options.flags));
     CHECK(xtbloom_compute_enqueue(context.get(), &changed.descriptor, &changed_warm_options,
@@ -2296,13 +2300,19 @@ int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
     CHECK(xtbloom_plan_create(context.get(), &warm_batch.descriptor, &warm_fresh_options,
                               &raw_warm_plan) == XTBLOOM_STATUS_SUCCESS);
     PlanHandle warm_plan(raw_warm_plan);
+    /* Keep every borrowed result owner alive until after the reusable request
+     * has settled any pending submission during unwinding. */
+    ResultOwner first_warm_result;
+    ResultOwner seed_result;
+    ResultOwner changed_fresh_result;
+    ResultOwner changed_warm_result;
+    ResultOwner next_warm_result;
     xtbloom_request_t* raw_warm_request = nullptr;
     CHECK(xtbloom_request_create(context.get(), &raw_warm_request) == XTBLOOM_STATUS_SUCCESS);
     RequestHandle warm_request(raw_warm_request);
     xtbloom_request_info_t warm_info{};
     CHECK(xtbloom_request_info_init(&warm_info, sizeof(warm_info)) == XTBLOOM_STATUS_SUCCESS);
 
-    ResultOwner first_warm_result;
     CUDA_CHECK(first_warm_result.bind(warm_batch, ResultLayout::kHost, warm_options.flags));
     CHECK(xtbloom_plan_compute_enqueue(warm_plan.get(), &warm_batch.descriptor, &warm_options,
                                        &first_warm_result.descriptor,
@@ -2315,7 +2325,6 @@ int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
     CUDA_CHECK(first_warm_result.unchanged(first_warm_unchanged));
     CHECK(first_warm_unchanged);
 
-    ResultOwner seed_result;
     CUDA_CHECK(seed_result.bind(warm_batch, ResultLayout::kMixed, warm_fresh_options.flags));
     CHECK(xtbloom_plan_compute_enqueue(warm_plan.get(), &warm_batch.descriptor, &warm_fresh_options,
                                        &seed_result.descriptor,
@@ -2330,7 +2339,14 @@ int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
     warm_batch.perturb(0.00175);
     MaterializedResult changed_reference;
     CHECK(run_cpu_reference(cpu_context, warm_batch, warm_fresh_options, changed_reference) == 0);
-    ResultOwner changed_warm_result;
+    CUDA_CHECK(
+        changed_fresh_result.bind(warm_batch, ResultLayout::kMixed, warm_fresh_options.flags));
+    CHECK(xtbloom_compute(context.get(), &warm_batch.descriptor, &warm_fresh_options,
+                          &changed_fresh_result.descriptor) == XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult changed_fresh_actual;
+    CUDA_CHECK(changed_fresh_result.materialize(changed_fresh_actual));
+    CHECK(compare_result(changed_fresh_result, changed_fresh_actual, changed_reference,
+                         warm_fresh_options) == 0);
     CUDA_CHECK(
         changed_warm_result.bind(warm_batch, ResultLayout::kTorchRequest, warm_options.flags));
     CHECK(xtbloom_plan_compute_enqueue(warm_plan.get(), &warm_batch.descriptor, &warm_options,
@@ -2344,13 +2360,12 @@ int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
     CHECK(compare_result(changed_warm_result, changed_warm_actual, changed_reference,
                          warm_options) == 0);
     for (std::size_t system = 0; system < changed_warm_actual.iterations.size(); ++system) {
-      CHECK(changed_warm_actual.iterations[system] <= changed_reference.iterations[system]);
+      CHECK(changed_warm_actual.iterations[system] <= changed_fresh_actual.iterations[system]);
     }
 
     /* The successful WARM result publishes the next one-shot token. */
     warm_batch.perturb(0.00025);
     CHECK(run_cpu_reference(cpu_context, warm_batch, warm_fresh_options, changed_reference) == 0);
-    ResultOwner next_warm_result;
     CUDA_CHECK(next_warm_result.bind(warm_batch, ResultLayout::kDevice, warm_options.flags));
     CHECK(xtbloom_plan_compute_enqueue(warm_plan.get(), &warm_batch.descriptor, &warm_options,
                                        &next_warm_result.descriptor,
