@@ -14,7 +14,7 @@ counter claim is made.
 
 ## Source and environment
 
-- Source revision: `c10027ed4de30da39bc26448436caa589be0151f`.
+- Source revision: `05c6d723860e24e157e7e939e773ede3f586d26d`.
 - Source branch: `feat/373-async-strict-warm`.
 - Source state before and after measurement: clean.
 - Host: `node3`, AMD EPYC 7K62 48-Core Processor.
