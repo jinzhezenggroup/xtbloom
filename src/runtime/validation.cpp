@@ -11,6 +11,8 @@
 #include <string>
 #include <utility>
 
+#include "runtime/model_registry.hpp"
+
 namespace xtbloom::detail {
 namespace {
 
@@ -385,8 +387,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   constexpr std::uint32_t kKnownComputeFlags =
       XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
       XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
-  const std::uint32_t model_value = raw_enum(options->model);
-  if (model_value != XTBLOOM_MODEL_GFN1_XTB && model_value != XTBLOOM_MODEL_GFN2_XTB) {
+  if (find_model_descriptor(options->model) == nullptr) {
     return invalid("compute options contain an unknown model value");
   }
   if (options->flags == 0 || (options->flags & ~kKnownComputeFlags) != 0) {

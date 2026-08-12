@@ -13,6 +13,7 @@
 #include "runtime/backend.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
 #include "runtime/gfn2_plan.hpp"
+#include "runtime/model_registry.hpp"
 #include "xtbloom/xtbloom.h"
 #if defined(XTBLOOM_HAS_CUDA)
 #include "runtime/gfn2_cuda_execution.hpp"
@@ -411,9 +412,10 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
     if (!validation.ok()) {
       return fail(validation.status, validation.error);
     }
-    if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
-      return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
-                  "GFN1-xTB is reserved by the ABI but is not implemented yet");
+    const xtbloom_status_t model_status = xtbloom::detail::validate_model_dispatch(
+        options->model, context->implementation->backend, error);
+    if (model_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(model_status, std::move(error));
     }
     const xtbloom_status_t reserve_status =
         request->implementation->reserve_submission(*context->implementation, error);
@@ -497,9 +499,13 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
                 "unknown exception while validating a compute request");
   }
 
-  if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
-    return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
-                "GFN1-xTB is reserved by the ABI but is not implemented yet");
+  {
+    std::string error;
+    const xtbloom_status_t model_status = xtbloom::detail::validate_model_dispatch(
+        options->model, context->implementation->backend, error);
+    if (model_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(model_status, std::move(error));
+    }
   }
 
   if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {

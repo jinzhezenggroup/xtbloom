@@ -1,4 +1,10 @@
-# GFN2-xTB parameter generation
+# GFN-xTB parameter generation
+
+GFN1 and GFN2 use separate canonical exports, schemas, generated headers, and
+manifests. They share provenance rules but not an assumption that the same
+parameter families or algorithms are present.
+
+## GFN2-xTB
 
 `generate_gfn2.py` treats tblite's structured parameter export as the source
 of truth. It records the tblite Git revision, a digest of the relevant source

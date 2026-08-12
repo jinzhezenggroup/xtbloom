@@ -4,7 +4,11 @@ xTBloom is organized around one stable C ABI and replaceable compute backends.
 The implemented physics is restricted and unrestricted GFN2-xTB energy,
 charges, and analytic forces, including external point charges and periodic
 caller-supplied response inside SCC. GFN1-xTB and ROCm remain explicit,
-unimplemented extension points.
+unimplemented extension points. The internal model registry records reserved
+model identity separately from backend capability, so foundation work can add
+reviewed metadata without accidentally publishing a partial numerical path.
+The [GFN1 contract](../theory/gfn1.md) defines the model-specific terms and
+evidence required before that capability is enabled.
 
 ## Data model
 

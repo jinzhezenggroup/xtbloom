@@ -3220,6 +3220,55 @@ int test_stream_capture_transactionality(std::int32_t device, PublicBatch& batch
   return 0;
 }
 
+int test_gfn1_rejected_transactionally(std::int32_t device, PublicBatch& batch,
+                                       const xtbloom_compute_options_t& options) {
+  g_scenario = "GFN1-rejection-transactionality";
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+
+  xtbloom_request_t* raw_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle request(raw_request);
+  xtbloom_request_info_t info{};
+  CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+
+  xtbloom_compute_options_t gfn1_options = options;
+  gfn1_options.model = XTBLOOM_MODEL_GFN1_XTB;
+  for (const ResultLayout layout :
+       {ResultLayout::kHost, ResultLayout::kDevice, ResultLayout::kMixed}) {
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, layout, gfn1_options.flags));
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn1_options, &result.descriptor) ==
+          XTBLOOM_STATUS_NOT_SUPPORTED);
+    CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
+    bool unchanged = false;
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    bool guards = false;
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
+
+    CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn1_options,
+                                  &result.descriptor,
+                                  request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
+    CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
+    CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.state == XTBLOOM_REQUEST_IDLE);
+    CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.result_flags == 0u);
+    CHECK(std::strcmp(xtbloom_request_get_error(request.get()), "") == 0);
+  }
+  return 0;
+}
+
 struct ThreadCall {
   xtbloom_context_t* context = nullptr;
   PublicBatch* batch = nullptr;
@@ -3458,6 +3507,9 @@ int main(int argc, char** argv) {
   }
   if (const int line = test_public_mislabeled_rejection(device, batch, options, reference);
       line != 0) {
+    return line;
+  }
+  if (const int line = test_gfn1_rejected_transactionally(device, batch, options); line != 0) {
     return line;
   }
   if (const int line = test_stream_capture_transactionality(device, batch, options); line != 0) {

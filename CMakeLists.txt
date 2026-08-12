@@ -940,6 +940,7 @@ add_library(xtbloom
   src/runtime/backend.cpp
   src/runtime/gfn2_cpu_execution.cpp
   src/runtime/gfn2_plan.cpp
+  src/runtime/model_registry.cpp
   src/runtime/request.cpp
   src/runtime/result_owner.cpp
   src/runtime/validation.cpp
@@ -1599,6 +1600,17 @@ if(XTBLOOM_BUILD_TESTS)
     xtbloom_configure_linalg_runtime_test(xtbloom_runtime_test xtbloom.runtime)
   endif()
 
+  add_executable(xtbloom_model_registry_test
+    tests/model_registry_test.cpp
+    src/runtime/model_registry.cpp
+  )
+  target_include_directories(xtbloom_model_registry_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_features(xtbloom_model_registry_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.model_registry COMMAND xtbloom_model_registry_test)
+
   if(XTBLOOM_HAS_CUDA)
     # This host-only test must compile in the provider-free configuration. It
     # verifies that provider status returns remain fixed-width integer domains
@@ -1639,6 +1651,7 @@ if(XTBLOOM_BUILD_TESTS)
       src/runtime/backend.cpp
       src/runtime/gfn2_cpu_execution.cpp
       src/runtime/gfn2_plan.cpp
+      src/runtime/model_registry.cpp
       src/runtime/request.cpp
       src/runtime/result_owner.cpp
       src/runtime/validation.cpp
@@ -1732,6 +1745,7 @@ if(XTBLOOM_BUILD_TESTS)
 
   add_executable(xtbloom_batch_validation_test
     tests/batch_validation_test.cpp
+    src/runtime/model_registry.cpp
     src/runtime/validation.cpp
   )
   target_include_directories(xtbloom_batch_validation_test PRIVATE
