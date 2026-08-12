@@ -261,17 +261,11 @@ def canonicalize(raw: str, spec: dict[str, object], command_line: str) -> dict:
         }
         for prefix in ("mixed",):
             expect(f"{prefix}_qsh")
-            failed_attempt[f"{prefix}_qsh"] = _spectra(
-                floats, channels, nsh
-            )
+            failed_attempt[f"{prefix}_qsh"] = _spectra(floats, channels, nsh)
             expect(f"{prefix}_qat")
-            failed_attempt[f"{prefix}_qat"] = _spectra(
-                floats, channels, nat
-            )
+            failed_attempt[f"{prefix}_qat"] = _spectra(floats, channels, nat)
             expect(f"{prefix}_dipoles")
-            failed_attempt[f"{prefix}_dipoles"] = _multipoles(
-                floats, channels, nat, 3
-            )
+            failed_attempt[f"{prefix}_dipoles"] = _multipoles(floats, channels, nat, 3)
             expect(f"{prefix}_quadrupoles")
             failed_attempt[f"{prefix}_quadrupoles"] = _multipoles(
                 floats, channels, nat, 6
