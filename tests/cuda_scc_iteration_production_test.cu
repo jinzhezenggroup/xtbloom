@@ -2041,6 +2041,13 @@ bool same_deterministic_debug_snapshot(const DeterministicDebugSnapshot& first,
  * batch size. */
 int test_deterministic_debug_restricted_scc_gate() {
   for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+#if CUDART_VERSION >= 12080
+    const bool expected_dispatch_chain = batch_size > 1;
+#else
+    /* Device-dispatched Graph executables require CUDA 12.8; older supported
+     * toolkits use the monolithic device-tail Graph for every batch size. */
+    constexpr bool expected_dispatch_chain = false;
+#endif
     ProductionFixture fixture;
     CHECK(fixture.create(false, batch_size, false, false, {SmallSystemKind::kCH2}, 0.0, {}, 64u,
                          1.0e-8, 1.0e-8, true));
@@ -2052,16 +2059,17 @@ int test_deterministic_debug_restricted_scc_gate() {
     const Gfn2SccLoopGraphBuildResult build = graph.build(fixture.binding);
     CHECK(build.success());
     CHECK(build.conditional_graph_ready());
-    CHECK(batch_size == 1 ? build.device_tail_graph_ready() : build.device_dispatch_chain_ready());
-    CHECK(batch_size == 1 ? !build.device_dispatch_chain_ready()
-                          : !build.device_tail_graph_ready());
+    CHECK(expected_dispatch_chain ? build.device_dispatch_chain_ready()
+                                  : build.device_tail_graph_ready());
+    CHECK(expected_dispatch_chain ? !build.device_tail_graph_ready()
+                                  : !build.device_dispatch_chain_ready());
 
     const auto run_and_compare = [&](DeterministicDebugSnapshot& snapshot) -> int {
       const Gfn2SccLoopLaunchResult launch = graph.launch(fixture.handles.stream());
       CHECK(launch.success());
-      CHECK(launch.execution_mode == (batch_size == 1
-                                          ? Gfn2SccLoopExecutionMode::kDeviceTailGraph
-                                          : Gfn2SccLoopExecutionMode::kDeviceDispatchChain));
+      CHECK(launch.execution_mode == (expected_dispatch_chain
+                                          ? Gfn2SccLoopExecutionMode::kDeviceDispatchChain
+                                          : Gfn2SccLoopExecutionMode::kDeviceTailGraph));
       CHECK(launch.submitted_graphs == 1u);
       CHECK(launch.submitted_iterations == 0u);
       CHECK(download_deterministic_debug_snapshot(fixture.binding, fixture.handles.stream(),
