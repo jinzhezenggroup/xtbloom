@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import itertools
 import json
 import math
 import struct
@@ -75,7 +76,7 @@ class ConformanceToolTest(unittest.TestCase):
     def test_manifest_and_committed_corpus_are_internally_consistent(self) -> None:
         """Hashes, units, array shapes, and the force sign convention are checked."""
         completed = self.run_tool("check")
-        self.assertIn("9 cases", completed.stdout)
+        self.assertIn("14 cases", completed.stdout)
 
     def test_primary_oracles_pin_the_reviewed_accuracy(self) -> None:
         """Neither live reference command may regress to its loose CLI default."""
@@ -220,7 +221,7 @@ class ConformanceToolTest(unittest.TestCase):
         qmmm_cases = [
             case for case in manifest["cases"] if case.get("input_schema") == "qmmm-v1"
         ]
-        self.assertEqual(len(qmmm_cases), 3)
+        self.assertEqual(len(qmmm_cases), 5)
         for case in qmmm_cases:
             qmmm_input = json.loads(
                 (REPOSITORY_ROOT / case["input"]).read_text(encoding="utf-8")
@@ -320,6 +321,114 @@ class ConformanceToolTest(unittest.TestCase):
             )
         )["properties"]
         self.assertAlmostEqual(gamma999["energy_hartree"], -10.16878826896, delta=1e-11)
+
+    def test_public_ragged_batch_covers_changing_point_charge_counts(self) -> None:
+        """The expected-data batch must retain gas, one-PC, and six-PC members."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        cases = PUBLIC_API.supported_cases(manifest, None, "cpu")
+        storage = PUBLIC_API.assemble_batch(MANIFEST, manifest, cases)
+        counts = [
+            storage.point_charge_offsets[index + 1]
+            - storage.point_charge_offsets[index]
+            for index in range(len(cases))
+        ]
+        self.assertEqual(set(counts), {0, 1, 6})
+        self.assertTrue(
+            any(left != right for left, right in itertools.pairwise(counts))
+        )
+        for case_slice, count in zip(storage.slices, counts, strict=True):
+            self.assertEqual(case_slice.point_end - case_slice.point_begin, count)
+
+    def test_close_and_coincident_finite_hardness_sites_are_pinned(self) -> None:
+        """Short-range QMMM rows use finite O hardness and exact reviewed geometry."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        cases = {case["id"]: case for case in manifest["cases"]}
+        expected_separations = {
+            "water_one_pc_close_hardness": 0.25,
+            "water_one_pc_coincident_hardness": 0.0,
+        }
+        for case_id, expected_separation in expected_separations.items():
+            with self.subTest(case_id=case_id):
+                case = cases[case_id]
+                document = CONFORMANCE.load_qmmm_input(
+                    REPOSITORY_ROOT / case["input"],
+                    case,
+                    manifest["reference_engines"]["xtb"][
+                        "point_charge_hardness_hartree"
+                    ],
+                )
+                points = document["external_point_charges"]
+                self.assertEqual(points["gamma_mode"], "element_hardness")
+                self.assertEqual(points["source_atomic_numbers"], [8])
+                self.assertEqual(points["gammas_hartree"], [0.451896])
+                oxygen = document["qm"]["positions_bohr"][0]
+                point = points["positions_bohr"][0]
+                separation = math.sqrt(
+                    sum(
+                        (left - right) ** 2
+                        for left, right in zip(oxygen, point, strict=True)
+                    )
+                )
+                self.assertAlmostEqual(separation, expected_separation, places=14)
+                golden = json.loads(
+                    (REPOSITORY_ROOT / case["golden"]).read_text(encoding="utf-8")
+                )
+                properties = golden["properties"]
+                self.assertTrue(math.isfinite(properties["energy_hartree"]))
+                self.assertTrue(
+                    all(
+                        math.isfinite(value)
+                        for value in properties["point_charge_forces_hartree_per_bohr"]
+                    )
+                )
+
+    def test_minimal_element_and_ion_rows_cover_transition_heavy_and_boundary(
+        self,
+    ) -> None:
+        """Independent atom/ion rows isolate Z=30, Z=53 anion, and Z=86."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        cases = {case["id"]: case for case in manifest["cases"]}
+        expected = {
+            "zn_atom": ([30], 0),
+            "i_anion": ([53], -1),
+            "rn_atom": ([86], 0),
+        }
+        for case_id, (atomic_numbers, molecular_charge) in expected.items():
+            with self.subTest(case_id=case_id):
+                case = cases[case_id]
+                parsed = CONFORMANCE.load_turbomole_coord(
+                    REPOSITORY_ROOT / case["input"], case
+                )
+                self.assertEqual(parsed["atomic_numbers"], atomic_numbers)
+                self.assertEqual(case["molecular_charge"], molecular_charge)
+                self.assertEqual(case["reference_engine"], "tblite")
+                golden = json.loads(
+                    (REPOSITORY_ROOT / case["golden"]).read_text(encoding="utf-8")
+                )
+                self.assertTrue(math.isfinite(golden["properties"]["energy_hartree"]))
+
+    def test_difficult_scc_status_ledger_retains_default_nonconvergence(self) -> None:
+        """The conformance ledger records status evidence without choosing a policy."""
+        evidence_root = (
+            REPOSITORY_ROOT / "data/conformance/evidence/tmacl-temperature-continuation"
+        )
+        manifest = json.loads(
+            (evidence_root / "manifest.json").read_text(encoding="utf-8")
+        )
+        trace_lines = (
+            (evidence_root / "tmacl_trace_300K.txt")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        terminal = next(line for line in reversed(trace_lines) if line.strip())
+        readme = (evidence_root / "README.md").read_text(encoding="utf-8")
+        self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual(terminal.split()[-2:], ["7", "0"])
+        self.assertIn(
+            "does not select temperature\ncontinuation over a deterministic "
+            "mixer-policy change",
+            readme,
+        )
 
     def test_qmmm_input_rejects_element_and_gamma_semantic_mismatches(self) -> None:
         """The oracle cannot calculate a different element/gamma model than declared."""
