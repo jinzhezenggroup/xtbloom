@@ -81,7 +81,7 @@
       "atom_count": 6,
       "description": "The xTB GFN1 PCEM water-tetramer fixture represented as six QM atoms and six sites with GFN1 H/O hardnesses.",
       "golden": "data/conformance/gfn1/golden/gfn1_water_dimer_6pc_hardness.json",
-      "golden_sha256": "627efd204ea372c4b643b5a8dce4e35a24ac980d60b211216936640aa647b1dd",
+      "golden_sha256": "a8fcbb7af5243fba52729b1279f2e3cc5adc8fdb1f981202fb42b37f84796403",
       "id": "gfn1_water_dimer_6pc_hardness",
       "input": "data/conformance/gfn1/inputs/gfn1_water_dimer_6pc_hardness.qmmm.json",
       "input_schema": "qmmm-v1",
@@ -90,14 +90,19 @@
       "point_charge_count": 6,
       "reference_engine": "xtb",
       "reference_output_sha256": "a0526acc38c1ae9192e09de891b04475192883a5892dab39e966de4d10d421df",
-      "scientific_source": "xTB test/unit/test_gfn1.f90 test_gfn1_pcem_api at the pinned source revision.",
+      "scientific_source": {
+        "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+        "path": "test/unit/test_gfn1.f90",
+        "section": "test_gfn1_pcem_api",
+        "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99"
+      },
       "unpaired_electrons": 0
     },
     {
       "atom_count": 6,
       "description": "The same PCEM geometry with gamma=999 isolates the near-point-charge limit as an independent diagnostic.",
       "golden": "data/conformance/gfn1/golden/gfn1_water_dimer_6pc_gamma999.json",
-      "golden_sha256": "9de5d22568285031b5b24952ac416d2d39cf0b26461f7dfa23f7c09475b0bc7f",
+      "golden_sha256": "f9c33d1ac1d9b05d4d7de590b2acccd8460d3266e6734bd04ba55a2bd946b353",
       "id": "gfn1_water_dimer_6pc_gamma999",
       "input": "data/conformance/gfn1/inputs/gfn1_water_dimer_6pc_gamma999.qmmm.json",
       "input_schema": "qmmm-v1",
@@ -106,21 +111,31 @@
       "point_charge_count": 6,
       "reference_engine": "xtb",
       "reference_output_sha256": "d0f2533150a6287e7f1509df5da6bbb4db70fb5d12339132dddbfd9391b058b2",
-      "scientific_source": "xTB test/unit/test_gfn1.f90 test_gfn1_pcem_api at the pinned source revision.",
+      "scientific_source": {
+        "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+        "path": "test/unit/test_gfn1.f90",
+        "section": "test_gfn1_pcem_api",
+        "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99"
+      },
       "unpaired_electrons": 0
     },
     {
       "atom_count": 6,
       "description": "The pinned Br/Br/O/C/H/H fixture exercises the GFN1 classical halogen-bond correction and its analytic force.",
       "golden": "data/conformance/gfn1/golden/gfn1_halogen_bond.json",
-      "golden_sha256": "2c0f953bba1eca3039d12e4481165e849f8f6933a64e92c8994ddbb48a7daf79",
+      "golden_sha256": "2b77cf40e1f4723818ac1327ebb525488a8087c61a749910623e3d24b43b3d58",
       "id": "gfn1_halogen_bond",
       "input": "data/conformance/gfn1/inputs/gfn1_halogen_bond.coord",
       "input_sha256": "2b101e953c285b850c6affe6602bddd9ffeba6a8dbc62f3f1b26987b4cce26bf",
       "molecular_charge": 0,
       "reference_engine": "xtb",
       "reference_output_sha256": "ccb70541e5354d4193535b4dfcedc98a99776cdd17b1da4eb63e291f58adfb56",
-      "scientific_source": "xTB test/unit/test_gfn1.f90 test_gfn1_xb at the pinned source revision.",
+      "scientific_source": {
+        "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+        "path": "test/unit/test_gfn1.f90",
+        "section": "test_gfn1_xb",
+        "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99"
+      },
       "unpaired_electrons": 0
     }
   ],
@@ -170,6 +185,11 @@
         "-P",
         "1"
       ],
+      "gfn1_test_source": {
+        "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+        "path": "test/unit/test_gfn1.f90",
+        "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99"
+      },
       "point_charge_hardness_hartree": {
         "1": 0.470099,
         "8": 0.583349

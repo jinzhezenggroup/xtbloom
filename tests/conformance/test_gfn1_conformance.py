@@ -114,27 +114,27 @@ class Gfn1ConformanceTest(unittest.TestCase):
             completed = self.run_tool(
                 "compare", "--actual-dir", temporary, "--case", case_id, status=1
             )
-            self.assertIn("missing point_charge_forces", completed.stderr)
+            self.assertIn("incomplete or unexpected property set", completed.stderr)
 
     def test_compare_rejects_mismatched_oracle_identity_before_numbers(self) -> None:
         """Numerically identical output cannot be credited to another oracle."""
         case_id = "gfn1_h3_plus"
         source = ROOT / f"data/conformance/gfn1/golden/{case_id}.json"
         mutations = (
-            (("case_id",), "gfn1_ketene", "case_id"),
-            (("method",), "GFN2-xTB", "method"),
-            (("provenance", "engine"), "xtb", "reference engine"),
-            (("provenance", "source_revision"), "0" * 40, "source revision"),
-            (("provenance", "input"), "unrelated.coord", "provenance input"),
+            (("case_id",), "gfn1_ketene", "wrong case or method identity"),
+            (("method",), "GFN2-xTB", "wrong case or method identity"),
+            (("provenance", "engine"), "xtb", "wrong oracle provenance"),
+            (("provenance", "source_revision"), "0" * 40, "wrong oracle provenance"),
+            (("provenance", "input"), "unrelated.coord", "wrong oracle provenance"),
             (
                 ("provenance", "executable_sha256"),
                 "0" * 64,
-                "provenance identity",
+                "wrong tblite runtime provenance",
             ),
             (
                 ("provenance", "source_output_sha256"),
                 "0" * 64,
-                "does not bind the actual properties",
+                "normalized output hash mismatch",
             ),
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -155,7 +155,6 @@ class Gfn1ConformanceTest(unittest.TestCase):
                         case_id,
                         status=1,
                     )
-                    self.assertIn("identity mismatch", completed.stderr)
                     self.assertIn(message, completed.stderr)
 
     def test_qmmm_rejects_invalid_units_elements_shapes_and_numbers(self) -> None:
@@ -252,6 +251,132 @@ class Gfn1ConformanceTest(unittest.TestCase):
                 TOOL.ConformanceError, "upstream input Git blob mismatch"
             ):
                 TOOL.check_manifest(invalid)
+
+    def test_xtb_fixture_source_is_exactly_bound_everywhere(self) -> None:
+        """Derived xTB fixtures retain the exact source path, blob, and section."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        source = manifest["reference_engines"]["xtb"]["gfn1_test_source"]
+        self.assertEqual(source, TOOL.XTB_GFN1_TEST_SOURCE)
+        expected_sections = {
+            "gfn1_water_dimer_6pc_hardness": "test_gfn1_pcem_api",
+            "gfn1_water_dimer_6pc_gamma999": "test_gfn1_pcem_api",
+            "gfn1_halogen_bond": "test_gfn1_xb",
+        }
+        for case in manifest["cases"]:
+            section = expected_sections.get(case["id"])
+            if section is None:
+                continue
+            with self.subTest(case=case["id"]):
+                expected = {**source, "section": section}
+                self.assertEqual(case["scientific_source"], expected)
+                golden = json.loads((ROOT / case["golden"]).read_text(encoding="utf-8"))
+                self.assertEqual(golden["provenance"]["scientific_source"], expected)
+
+    def test_source_provenance_mutations_are_rejected(self) -> None:
+        """A prose label or another plausible blob cannot claim fixture identity."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        mutations = (
+            ("path", "test/unit/test_gfn2.f90"),
+            ("git_blob_sha1", "0" * 40),
+            ("sha256", "0" * 64),
+            ("section", "test_gfn1_api"),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, (key, replacement) in enumerate(mutations):
+                with self.subTest(field=key):
+                    invalid_data = json.loads(json.dumps(manifest))
+                    invalid_data["cases"][5]["scientific_source"][key] = replacement
+                    invalid = Path(temporary, f"manifest-{index}.json")
+                    invalid.write_text(json.dumps(invalid_data), encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        TOOL.ConformanceError, "pinned xTB GFN1 source record"
+                    ):
+                        TOOL.check_manifest(invalid)
+
+    def test_tolerance_schema_rejects_false_pass_values(self) -> None:
+        """Absolute gates cannot be disabled with coercions or non-finite limits."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        mutations = (
+            ("atol", "5e-7"),
+            ("atol", True),
+            ("atol", math.nan),
+            ("atol", math.inf),
+            ("atol", 0.0),
+            ("atol", -1.0),
+            ("atol", TOOL.MAX_PRIMARY_ATOL * 2.0),
+            ("rtol", 1.0e-12),
+            ("rtol", "0.0"),
+            ("unit", "electronvolt"),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, (key, replacement) in enumerate(mutations):
+                with self.subTest(field=key, replacement=replacement):
+                    invalid_data = json.loads(json.dumps(manifest))
+                    invalid_data["tolerances"]["energy"][key] = replacement
+                    invalid = Path(temporary, f"manifest-{index}.json")
+                    invalid.write_text(json.dumps(invalid_data), encoding="utf-8")
+                    with self.assertRaises(TOOL.ConformanceError):
+                        TOOL.check_manifest(invalid)
+
+    def test_compare_rejects_nonfinite_coerced_and_misshaped_properties(self) -> None:
+        """One invalid scalar cannot be hidden by the maximum-error reduction."""
+        case_id = "gfn1_h3_plus"
+        source = ROOT / f"data/conformance/gfn1/golden/{case_id}.json"
+        mutations = (
+            (("energy_hartree",), "-1.0"),
+            (("energy_hartree",), True),
+            (("energy_hartree",), math.nan),
+            (("forces_hartree_per_bohr", 1), "NaN"),
+            (("forces_hartree_per_bohr", 1), math.inf),
+            (("forces_hartree_per_bohr", 1), False),
+            (("forces_hartree_per_bohr",), [0.0]),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            actual_path = Path(temporary, f"{case_id}.json")
+            for keys, replacement in mutations:
+                with self.subTest(field=".".join(str(key) for key in keys)):
+                    actual = json.loads(source.read_text(encoding="utf-8"))
+                    target = actual["properties"]
+                    for key in keys[:-1]:
+                        target = target[key]
+                    target[keys[-1]] = replacement
+                    actual_path.write_text(json.dumps(actual), encoding="utf-8")
+                    completed = self.run_tool(
+                        "compare",
+                        "--actual-dir",
+                        temporary,
+                        "--case",
+                        case_id,
+                        status=1,
+                    )
+                    self.assertIn("invalid actual result", completed.stderr)
+
+    def test_golden_identity_and_template_drift_are_rejected(self) -> None:
+        """The finalized manifest binds case identity and all reviewed template data."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as temporary:
+            invalid = Path(temporary, "manifest.json")
+            changed_charge = json.loads(json.dumps(manifest))
+            changed_charge["cases"][0]["molecular_charge"] = 0
+            invalid.write_text(json.dumps(changed_charge), encoding="utf-8")
+            with self.assertRaisesRegex(TOOL.ConformanceError, "molecular charge"):
+                TOOL.check_manifest(invalid)
+
+            changed_description = json.loads(json.dumps(manifest))
+            changed_description["cases"][0]["description"] += " Unreviewed drift."
+            invalid.write_text(json.dumps(changed_description), encoding="utf-8")
+            with self.assertRaisesRegex(
+                TOOL.ConformanceError, "deterministic template"
+            ):
+                TOOL.check_manifest(invalid)
+
+    def test_parameter_file_requires_xtb_fixed_basename(self) -> None:
+        """The file whose bytes are hashed must be the file xTB selects."""
+        with tempfile.TemporaryDirectory() as temporary:
+            wrong = Path(temporary, "reviewed-gfn1-parameters.txt")
+            wrong.write_text("test", encoding="utf-8")
+            with self.assertRaisesRegex(TOOL.ConformanceError, "named exactly"):
+                TOOL.find_gfn1_parameter(Path("/unused/xtb"), wrong)
 
 
 if __name__ == "__main__":

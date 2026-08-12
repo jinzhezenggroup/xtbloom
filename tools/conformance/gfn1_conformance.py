@@ -26,14 +26,23 @@ if TYPE_CHECKING:
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "data/conformance/gfn1/manifest.json"
+DEFAULT_TEMPLATE = REPOSITORY_ROOT / "data/conformance/gfn1/manifest.template.json"
 ACCURACY = 1.0e-4
 ACCURACY_TEXT = "0.0001"
+MAX_PRIMARY_ATOL = ACCURACY
 QMMM_SCHEMA = "xtbloom-gfn1-xtb-pcem-cli-v1"
 QMMM_INPUT_UNITS = {
     "point_charge_gammas": "hartree",
     "point_charge_positions": "bohr",
     "point_charges": "elementary_charge",
     "qm_positions": "bohr",
+}
+GOLDEN_UNITS = {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge",
 }
 ELEMENT_SYMBOLS = (
     "",
@@ -124,6 +133,17 @@ ELEMENT_SYMBOLS = (
     "At",
     "Rn",
 )
+TOLERANCE_UNITS = {
+    "charges": "elementary_charge",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "point_charge_forces": "hartree/bohr",
+}
+XTB_GFN1_TEST_SOURCE = {
+    "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+    "path": "test/unit/test_gfn1.f90",
+    "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99",
+}
 
 
 class ConformanceError(RuntimeError):
@@ -144,6 +164,34 @@ def load_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ConformanceError(f"expected a JSON object in {path}")
     return value
+
+
+def finite_number(value: object, name: str) -> float:
+    """Return one exact JSON number while rejecting booleans and coercions."""
+    if type(value) not in (int, float) or not math.isfinite(float(value)):
+        raise ConformanceError(f"{name} must be a finite JSON number")
+    return float(value)
+
+
+def finite_vector(value: object, count: int, name: str) -> list[float]:
+    """Validate a flat finite numeric vector with one exact expected extent."""
+    if not isinstance(value, list) or len(value) != count:
+        raise ConformanceError(f"{name} must contain exactly {count} values")
+    return [finite_number(item, f"{name}[{index}]") for index, item in enumerate(value)]
+
+
+def exact_integer(value: object, name: str) -> int:
+    """Return one exact JSON integer, excluding the bool subclass."""
+    if type(value) is not int:
+        raise ConformanceError(f"{name} must be a JSON integer")
+    return value
+
+
+def validate_scientific_source(value: object, section: str, name: str) -> None:
+    """Bind a derived fixture to one exact upstream source blob and section."""
+    expected = {**XTB_GFN1_TEST_SOURCE, "section": section}
+    if value != expected:
+        raise ConformanceError(f"{name} must equal the pinned xTB GFN1 source record")
 
 
 def write_json(path: Path, value: object) -> None:
@@ -392,6 +440,180 @@ def materialization_record(document: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_tolerances(manifest: Mapping[str, Any]) -> None:
+    """Require strict absolute scientific thresholds with explicit units."""
+    tolerances = manifest.get("tolerances")
+    if not isinstance(tolerances, dict) or set(tolerances) != set(TOLERANCE_UNITS):
+        raise ConformanceError("manifest tolerance set is incomplete or unexpected")
+    for name, unit in TOLERANCE_UNITS.items():
+        tolerance = tolerances[name]
+        if not isinstance(tolerance, dict):
+            raise ConformanceError(f"manifest {name} tolerance must be an object")
+        atol = finite_number(tolerance.get("atol"), f"manifest {name} atol")
+        rtol = finite_number(tolerance.get("rtol"), f"manifest {name} rtol")
+        justification = tolerance.get("justification")
+        if not 0.0 < atol <= MAX_PRIMARY_ATOL:
+            raise ConformanceError(
+                f"manifest {name} atol must be in (0, {MAX_PRIMARY_ATOL:g}]"
+            )
+        if rtol != 0.0:
+            raise ConformanceError(f"manifest {name} rtol must be exactly zero")
+        if tolerance.get("unit") != unit:
+            raise ConformanceError(f"manifest {name} tolerance has the wrong unit")
+        if not isinstance(justification, str) or not justification.strip():
+            raise ConformanceError(
+                f"manifest {name} tolerance needs a nonempty justification"
+            )
+
+
+def validate_golden_document(
+    manifest: Mapping[str, Any],
+    case: Mapping[str, Any],
+    result: Mapping[str, Any],
+    qmmm: Mapping[str, Any] | None,
+    name: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Validate one golden before its numbers can participate in comparison."""
+    if result.get("schema_version") != manifest["golden_schema_version"]:
+        raise ConformanceError(f"{name} has the wrong golden schema version")
+    if (
+        result.get("case_id") != case["id"]
+        or result.get("method") != manifest["method"]
+    ):
+        raise ConformanceError(f"{name} has the wrong case or method identity")
+    if result.get("units") != manifest["units"]:
+        raise ConformanceError(f"{name} has inconsistent units")
+    if exact_integer(
+        result.get("molecular_charge"), f"{name} molecular_charge"
+    ) != exact_integer(
+        case.get("molecular_charge"), f"case {case['id']} molecular_charge"
+    ):
+        raise ConformanceError(f"{name} has inconsistent molecular charge")
+    if exact_integer(
+        result.get("unpaired_electrons"), f"{name} unpaired_electrons"
+    ) != exact_integer(
+        case.get("unpaired_electrons"), f"case {case['id']} unpaired_electrons"
+    ):
+        raise ConformanceError(f"{name} has inconsistent unpaired electrons")
+    if qmmm is None:
+        if "qmmm_input" in result:
+            raise ConformanceError(f"{name} unexpectedly embeds a QMMM input")
+    elif result.get("qmmm_input") != qmmm:
+        raise ConformanceError(f"{name} does not embed the exact QMMM input")
+
+    properties = result.get("properties")
+    if not isinstance(properties, dict):
+        raise ConformanceError(f"{name} properties must be an object")
+    atoms = exact_integer(case.get("atom_count"), f"case {case['id']} atom_count")
+    engine = case.get("reference_engine")
+    expected_properties = {
+        "energy_hartree",
+        "forces_hartree_per_bohr",
+        "gradient_hartree_per_bohr",
+    }
+    if engine == "xtb":
+        expected_properties.add("partial_charges_e")
+    if qmmm is not None:
+        expected_properties.update(
+            {
+                "point_charge_forces_hartree_per_bohr",
+                "point_charge_gradient_hartree_per_bohr",
+            }
+        )
+    if set(properties) != expected_properties:
+        raise ConformanceError(f"{name} has an incomplete or unexpected property set")
+    finite_number(properties["energy_hartree"], f"{name} energy_hartree")
+    forces = finite_vector(
+        properties["forces_hartree_per_bohr"], 3 * atoms, f"{name} forces"
+    )
+    gradient = finite_vector(
+        properties["gradient_hartree_per_bohr"], 3 * atoms, f"{name} gradient"
+    )
+    if any(
+        force != -component for force, component in zip(forces, gradient, strict=True)
+    ):
+        raise ConformanceError(f"{name} violates force = -gradient")
+    if engine == "xtb":
+        finite_vector(properties["partial_charges_e"], atoms, f"{name} charges")
+    if qmmm is not None:
+        points = exact_integer(
+            case.get("point_charge_count"), f"case {case['id']} point_charge_count"
+        )
+        pc_forces = finite_vector(
+            properties["point_charge_forces_hartree_per_bohr"],
+            3 * points,
+            f"{name} point-charge forces",
+        )
+        pc_gradient = finite_vector(
+            properties["point_charge_gradient_hartree_per_bohr"],
+            3 * points,
+            f"{name} point-charge gradient",
+        )
+        if any(
+            force != -component
+            for force, component in zip(pc_forces, pc_gradient, strict=True)
+        ):
+            raise ConformanceError(f"{name} violates PC force = -gradient")
+
+    provenance = result.get("provenance")
+    if not isinstance(provenance, dict):
+        raise ConformanceError(f"{name} provenance must be an object")
+    references = manifest["reference_engines"]
+    reference = references[engine]
+    if (
+        provenance.get("engine") != engine
+        or provenance.get("source_revision") != reference["revision"]
+        or provenance.get("input") != case["input"]
+        or finite_number(provenance.get("accuracy"), f"{name} accuracy") != ACCURACY
+        or provenance.get("generation_mode") != "live-cli"
+    ):
+        raise ConformanceError(f"{name} has wrong oracle provenance")
+    if provenance.get("source_output_sha256") != sha256_json(properties):
+        raise ConformanceError(f"{name} normalized output hash mismatch")
+    scientific_source = case.get("scientific_source")
+    if scientific_source is None:
+        if "scientific_source" in provenance:
+            raise ConformanceError(f"{name} has unexpected scientific-source metadata")
+    elif provenance.get("scientific_source") != scientific_source:
+        raise ConformanceError(f"{name} has wrong scientific-source provenance")
+    if engine == "tblite":
+        if (
+            provenance.get("command") != reference["cli_command_template"]
+            or provenance.get("command_template") != reference["cli_command_template"]
+            or provenance.get("executable_sha256")
+            != reference["runtime_artifacts"]["executable_sha256"]
+            or provenance.get("runtime", {}).get("libtblite", {}).get("sha256")
+            != reference["runtime_artifacts"]["libtblite_sha256"]
+        ):
+            raise ConformanceError(f"{name} has wrong tblite runtime provenance")
+    elif engine == "xtb":
+        expected_command = xtb_command(Path("{executable}"), case)
+        expected_template = reference[
+            "qmmm_cli_command_template" if qmmm is not None else "cli_command_template"
+        ]
+        runtime = provenance.get("runtime", {})
+        if (
+            provenance.get("command") != expected_command
+            or provenance.get("command_template") != expected_template
+            or provenance.get("executable_sha256")
+            != reference["runtime_artifacts"]["executable_sha256"]
+            or runtime.get("libxtb", {}).get("sha256")
+            != reference["runtime_artifacts"]["libxtb_sha256"]
+            or runtime.get("gfn1_parameter", {}).get("sha256")
+            != reference["runtime_artifacts"]["gfn1_parameter_sha256"]
+        ):
+            raise ConformanceError(f"{name} has wrong xTB runtime provenance")
+    else:
+        raise ConformanceError(f"case {case['id']} has unsupported reference engine")
+    if qmmm is not None:
+        input_path = resolve_path(str(case["input"]))
+        if provenance.get("materialized_input") != materialization_record(
+            qmmm
+        ) or provenance.get("qmmm_input_sha256") != sha256_file(input_path):
+            raise ConformanceError(f"{name} has stale QMMM input provenance")
+    return properties, provenance
+
+
 def parse_gradient(text: str, atom_count: int) -> tuple[float, list[float]]:
     """Read high-precision energy and Cartesian gradient from xTB's artifact."""
     lines = text.splitlines()
@@ -401,7 +623,10 @@ def parse_gradient(text: str, atom_count: int) -> tuple[float, list[float]]:
     match = re.search(r"SCF\s+energy\s*=\s*([+\-0-9.EeDd]+)", lines[index])
     if match is None:
         raise ConformanceError("cannot parse xTB gradient energy")
-    energy = float(match.group(1).replace("D", "E").replace("d", "e"))
+    energy = finite_number(
+        float(match.group(1).replace("D", "E").replace("d", "e")),
+        "xTB gradient energy",
+    )
     rows = lines[index + 1 + atom_count : index + 1 + 2 * atom_count]
     if len(rows) != atom_count:
         raise ConformanceError("xTB gradient artifact has the wrong row count")
@@ -410,7 +635,10 @@ def parse_gradient(text: str, atom_count: int) -> tuple[float, list[float]]:
         fields = row.split()
         if len(fields) < 3:
             raise ConformanceError(f"malformed xTB gradient row: {row!r}")
-        gradient.extend(float(value.replace("D", "E")) for value in fields[:3])
+        gradient.extend(
+            finite_number(float(value.replace("D", "E")), "xTB gradient component")
+            for value in fields[:3]
+        )
     return energy, gradient
 
 
@@ -419,20 +647,22 @@ def parse_pcgradient(text: str, point_count: int) -> list[float]:
     rows = [line.split() for line in text.splitlines() if line.strip()]
     if len(rows) != point_count or any(len(row) != 3 for row in rows):
         raise ConformanceError("xTB pcgrad artifact has the wrong shape")
-    return [float(value.replace("D", "E")) for row in rows for value in row]
+    return [
+        finite_number(float(value.replace("D", "E")), "xTB PC gradient component")
+        for row in rows
+        for value in row
+    ]
 
 
 def normalize_tblite(raw: Mapping[str, Any], atom_count: int) -> dict[str, Any]:
     """Normalize tblite energy/gradient output to force-bearing atomic units."""
     try:
-        energy = float(raw["energy"])
-        gradient = [float(value) for value in raw["gradient"]]
-    except (KeyError, TypeError, ValueError) as exc:
+        energy = finite_number(raw["energy"], "tblite energy")
+        gradient = finite_vector(raw["gradient"], 3 * atom_count, "tblite gradient")
+    except KeyError as exc:
         raise ConformanceError(
             "tblite output lacks numeric energy or gradient"
         ) from exc
-    if len(gradient) != 3 * atom_count:
-        raise ConformanceError("tblite gradient has the wrong shape")
     return {
         "energy_hartree": energy,
         "forces_hartree_per_bohr": [-value for value in gradient],
@@ -450,11 +680,13 @@ def normalize_xtb(
     atoms = int(case["atom_count"])
     energy, gradient = parse_gradient(gradient_text, atoms)
     try:
-        charges = [float(value) for value in raw["partial charges"]]
-        unpaired = int(raw["number of unpaired electrons"])
-    except (KeyError, TypeError, ValueError) as exc:
+        charges = finite_vector(raw["partial charges"], atoms, "xTB partial charges")
+        unpaired = exact_integer(
+            raw["number of unpaired electrons"], "xTB number of unpaired electrons"
+        )
+    except KeyError as exc:
         raise ConformanceError("xTB JSON lacks charges or spin metadata") from exc
-    if len(charges) != atoms or unpaired != int(case["unpaired_electrons"]):
+    if unpaired != int(case["unpaired_electrons"]):
         raise ConformanceError("xTB JSON has inconsistent charge or spin shape")
     properties: dict[str, Any] = {
         "energy_hartree": energy,
@@ -684,6 +916,11 @@ def generate_tblite(
 
 def find_gfn1_parameter(executable: Path, explicit: Path | None) -> Path:
     """Resolve the exact GFN1 parameter file rather than trusting ambient XTBPATH."""
+    if explicit is not None and explicit.name != "param_gfn1-xtb.txt":
+        raise ConformanceError(
+            "--parameter-file must be named exactly param_gfn1-xtb.txt because xTB "
+            "selects that fixed basename from XTBPATH"
+        )
     candidates = [explicit] if explicit is not None else []
     candidates.extend(
         [
@@ -797,12 +1034,14 @@ def generate_xtb(
                 "source_output_sha256": sha256_json(properties),
                 "source_revision": reference["revision"],
             }
+            scientific_source = case.get("scientific_source")
+            if scientific_source is not None:
+                provenance["scientific_source"] = scientific_source
             if qmmm:
                 provenance.update(
                     {
                         "materialized_input": materialization_record(qmmm),
                         "qmmm_input_sha256": sha256_file(input_path),
-                        "scientific_source": case["scientific_source"],
                     }
                 )
             write_json(
@@ -823,16 +1062,13 @@ def check_manifest(manifest_path: Path) -> None:
         )
     if manifest.get("method") != "GFN1-xTB":
         raise ConformanceError("GFN1 corpus manifest must use method GFN1-xTB")
-    for name in ("energy", "forces", "charges", "point_charge_forces"):
-        tolerance = manifest.get("tolerances", {}).get(name)
-        if not isinstance(tolerance, dict) or not isinstance(
-            tolerance.get("justification"), str
-        ):
-            raise ConformanceError(f"manifest lacks a justified {name} tolerance")
+    if manifest.get("units") != GOLDEN_UNITS:
+        raise ConformanceError("GFN1 corpus manifest has inconsistent units")
+    validate_tolerances(manifest)
     references = manifest.get("reference_engines", {})
     for engine in ("tblite", "xtb"):
         reference = references.get(engine, {})
-        if float(reference.get("accuracy", -1.0)) != ACCURACY:
+        if finite_number(reference.get("accuracy"), f"{engine} accuracy") != ACCURACY:
             raise ConformanceError(f"{engine} accuracy must be {ACCURACY_TEXT}")
         runtime = reference.get("runtime_artifacts", {})
         for name in (
@@ -844,19 +1080,37 @@ def check_manifest(manifest_path: Path) -> None:
                 raise ConformanceError(
                     f"{engine} runtime artifact {name} is not pinned"
                 )
+    if references.get("xtb", {}).get("gfn1_test_source") != XTB_GFN1_TEST_SOURCE:
+        raise ConformanceError("xTB reference lacks the exact GFN1 unit-test source")
     for case in selected_cases(manifest, None):
+        atoms = exact_integer(case.get("atom_count"), f"case {case['id']} atom_count")
+        exact_integer(
+            case.get("molecular_charge"), f"case {case['id']} molecular_charge"
+        )
+        exact_integer(
+            case.get("unpaired_electrons"), f"case {case['id']} unpaired_electrons"
+        )
+        engine = case.get("reference_engine")
+        if engine not in ("tblite", "xtb"):
+            raise ConformanceError(
+                f"case {case['id']} has unsupported reference engine"
+            )
         input_path = resolve_path(case["input"])
         golden_path = resolve_path(case["golden"])
         for label, path in (("input", input_path), ("golden", golden_path)):
             if not path.is_file() or sha256_file(path) != case[f"{label}_sha256"]:
                 raise ConformanceError(f"case {case['id']} {label} hash mismatch")
         if case.get("input_schema") == "qmmm-v1":
+            exact_integer(
+                case.get("point_charge_count"),
+                f"case {case['id']} point_charge_count",
+            )
             qmmm = load_qmmm(
                 input_path, case, references["xtb"]["point_charge_hardness_hartree"]
             )
         else:
             qmmm = None
-            load_coord(input_path, int(case["atom_count"]))
+            load_coord(input_path, atoms)
             if case.get("upstream_validation_case"):
                 declared_blob = str(case.get("upstream_input_git_blob", ""))
                 if not re.fullmatch(r"[0-9a-f]{40}", declared_blob):
@@ -874,91 +1128,36 @@ def check_manifest(manifest_path: Path) -> None:
                     raise ConformanceError(
                         f"case {case['id']} copied input differs from its upstream hash"
                     )
-        result = load_json(golden_path)
-        if result.get("method") != "GFN1-xTB" or result.get("case_id") != case["id"]:
-            raise ConformanceError(f"case {case['id']} golden identity mismatch")
-        if qmmm is not None and result.get("qmmm_input") != qmmm:
-            raise ConformanceError(
-                f"case {case['id']} golden does not embed exact QMMM input"
+        scientific_source = case.get("scientific_source")
+        if engine == "xtb" and case["id"] != "gfn1_oh_radical":
+            expected_section = (
+                "test_gfn1_pcem_api"
+                if case.get("input_schema") == "qmmm-v1"
+                else "test_gfn1_xb"
             )
-        properties = result.get("properties", {})
-        forces = properties.get("forces_hartree_per_bohr")
-        gradient = properties.get("gradient_hartree_per_bohr")
-        if (
-            not isinstance(forces, list)
-            or not isinstance(gradient, list)
-            or len(forces) != 3 * int(case["atom_count"])
-        ):
-            raise ConformanceError(f"case {case['id']} has invalid force shape")
-        if any(float(f) != -float(g) for f, g in zip(forces, gradient, strict=True)):
-            raise ConformanceError(f"case {case['id']} violates force = -gradient")
-        provenance = result.get("provenance", {})
-        engine = case["reference_engine"]
-        reference = references[engine]
-        if (
-            provenance.get("engine") != engine
-            or provenance.get("source_revision") != reference["revision"]
-        ):
-            raise ConformanceError(f"case {case['id']} has wrong oracle provenance")
-        if provenance.get("source_output_sha256") != sha256_json(properties):
-            raise ConformanceError(f"case {case['id']} normalized output hash mismatch")
+            validate_scientific_source(
+                scientific_source,
+                expected_section,
+                f"case {case['id']} scientific_source",
+            )
+        elif scientific_source is not None:
+            raise ConformanceError(
+                f"case {case['id']} has unexpected scientific-source metadata"
+            )
+        result = load_json(golden_path)
+        _properties, provenance = validate_golden_document(
+            manifest, case, result, qmmm, f"case {case['id']} golden"
+        )
         if case.get("reference_output_sha256") != provenance.get(
             "source_output_sha256"
         ):
             raise ConformanceError(f"case {case['id']} manifest output hash mismatch")
-        if engine == "tblite":
-            if provenance.get("command_template") != reference["cli_command_template"]:
-                raise ConformanceError(f"case {case['id']} has wrong tblite command")
-            if (
-                provenance.get("executable_sha256")
-                != reference["runtime_artifacts"]["executable_sha256"]
-            ):
-                raise ConformanceError(f"case {case['id']} has wrong tblite executable")
-            if (
-                provenance.get("runtime", {}).get("libtblite", {}).get("sha256")
-                != reference["runtime_artifacts"]["libtblite_sha256"]
-            ):
-                raise ConformanceError(f"case {case['id']} has wrong libtblite")
-        else:
-            expected = xtb_command(Path("{executable}"), case)
-            if provenance.get("command") != expected:
-                raise ConformanceError(f"case {case['id']} has wrong xTB command")
-            runtime = provenance.get("runtime", {})
-            if (
-                provenance.get("executable_sha256")
-                != reference["runtime_artifacts"]["executable_sha256"]
-            ):
-                raise ConformanceError(f"case {case['id']} has wrong xTB executable")
-            if (
-                runtime.get("libxtb", {}).get("sha256")
-                != reference["runtime_artifacts"]["libxtb_sha256"]
-            ):
-                raise ConformanceError(f"case {case['id']} has wrong libxtb")
-            if (
-                runtime.get("gfn1_parameter", {}).get("sha256")
-                != reference["runtime_artifacts"]["gfn1_parameter_sha256"]
-            ):
-                raise ConformanceError(f"case {case['id']} has wrong GFN1 parameter")
-            if len(properties.get("partial_charges_e", [])) != int(case["atom_count"]):
-                raise ConformanceError(f"case {case['id']} lacks xTB atomic charges")
-        if qmmm is not None:
-            pc_forces = properties.get("point_charge_forces_hartree_per_bohr")
-            pc_gradient = properties.get("point_charge_gradient_hartree_per_bohr")
-            if not isinstance(pc_forces, list) or len(pc_forces) != 3 * int(
-                case["point_charge_count"]
-            ):
-                raise ConformanceError(f"case {case['id']} has invalid PC force shape")
-            if any(
-                float(f) != -float(g)
-                for f, g in zip(pc_forces, pc_gradient, strict=True)
-            ):
-                raise ConformanceError(
-                    f"case {case['id']} violates PC force = -gradient"
-                )
-            if provenance.get("materialized_input") != materialization_record(qmmm):
-                raise ConformanceError(
-                    f"case {case['id']} has stale PCEM materialization"
-                )
+    expected_manifest = finalized_manifest(DEFAULT_TEMPLATE)
+    if manifest != expected_manifest:
+        raise ConformanceError(
+            "finalized manifest differs from the deterministic template and current "
+            "input/golden hashes"
+        )
     print(  # noqa: T201 - CLI validation report
         f"GFN1 conformance manifest OK: {len(selected_cases(manifest, None))} cases"
     )
@@ -970,63 +1169,36 @@ def compare(manifest_path: Path, actual_dir: Path, names: Sequence[str] | None) 
     failures: list[str] = []
     for case in selected_cases(manifest, names):
         expected = load_json(resolve_path(case["golden"]))
+        input_path = resolve_path(str(case["input"]))
+        qmmm = (
+            load_qmmm(
+                input_path,
+                case,
+                manifest["reference_engines"]["xtb"]["point_charge_hardness_hartree"],
+            )
+            if case.get("input_schema") == "qmmm-v1"
+            else None
+        )
+        try:
+            expected_properties, expected_provenance = validate_golden_document(
+                manifest, case, expected, qmmm, f"case {case['id']} committed golden"
+            )
+        except ConformanceError as exc:
+            failures.append(f"{case['id']}: invalid committed golden: {exc}")
+            continue
         actual_path = actual_dir / f"{case['id']}.json"
         if not actual_path.is_file():
             failures.append(f"{case['id']}: missing {actual_path}")
             continue
         actual = load_json(actual_path)
-        expected_provenance = expected.get("provenance", {})
-        actual_provenance = actual.get("provenance", {})
+        try:
+            actual_properties, actual_provenance = validate_golden_document(
+                manifest, case, actual, qmmm, f"case {case['id']} actual result"
+            )
+        except ConformanceError as exc:
+            failures.append(f"{case['id']}: invalid actual result: {exc}")
+            continue
         identity_errors = []
-        for field, expected_value, actual_value in (
-            ("case_id", case["id"], actual.get("case_id")),
-            ("method", manifest["method"], actual.get("method")),
-            (
-                "reference engine",
-                case["reference_engine"],
-                actual_provenance.get("engine"),
-            ),
-            (
-                "source revision",
-                expected_provenance.get("source_revision"),
-                actual_provenance.get("source_revision"),
-            ),
-            (
-                "schema_version",
-                expected.get("schema_version"),
-                actual.get("schema_version"),
-            ),
-            ("units", expected.get("units"), actual.get("units")),
-            (
-                "molecular_charge",
-                expected.get("molecular_charge"),
-                actual.get("molecular_charge"),
-            ),
-            (
-                "unpaired_electrons",
-                expected.get("unpaired_electrons"),
-                actual.get("unpaired_electrons"),
-            ),
-            ("qmmm_input", expected.get("qmmm_input"), actual.get("qmmm_input")),
-        ):
-            if actual_value != expected_value:
-                identity_errors.append(
-                    f"{field} expected {expected_value!r}, got {actual_value!r}"
-                )
-        if actual_provenance.get("input") != case["input"]:
-            identity_errors.append(
-                f"provenance input expected {case['input']!r}, "
-                f"got {actual_provenance.get('input')!r}"
-            )
-        actual_properties = actual.get("properties")
-        if not isinstance(actual_properties, dict):
-            identity_errors.append("properties must be an object")
-        elif actual_provenance.get("source_output_sha256") != sha256_json(
-            actual_properties
-        ):
-            identity_errors.append(
-                "source_output_sha256 does not bind the actual properties"
-            )
         expected_identity = {
             key: value
             for key, value in expected_provenance.items()
@@ -1052,22 +1224,26 @@ def compare(manifest_path: Path, actual_dir: Path, names: Sequence[str] | None) 
             ("partial_charges_e", "charges"),
             ("point_charge_forces_hartree_per_bohr", "point_charge_forces"),
         ):
-            expected_value = expected["properties"].get(property_name)
+            expected_value = expected_properties.get(property_name)
             if expected_value is None:
                 continue
-            actual_value = actual.get("properties", {}).get(property_name)
+            actual_value = actual_properties.get(property_name)
             if actual_value is None:
                 failures.append(f"{case['id']}: missing {property_name}")
                 continue
             expected_flat = (
-                [float(expected_value)]
+                [
+                    finite_number(
+                        expected_value, f"{case['id']} expected {property_name}"
+                    )
+                ]
                 if not isinstance(expected_value, list)
-                else _flatten(expected_value)
+                else _flatten(expected_value, f"{case['id']} expected {property_name}")
             )
             actual_flat = (
-                [float(actual_value)]
+                [finite_number(actual_value, f"{case['id']} actual {property_name}")]
                 if not isinstance(actual_value, list)
-                else _flatten(actual_value)
+                else _flatten(actual_value, f"{case['id']} actual {property_name}")
             )
             if len(expected_flat) != len(actual_flat):
                 failures.append(f"{case['id']}: {property_name} shape mismatch")
@@ -1088,14 +1264,14 @@ def compare(manifest_path: Path, actual_dir: Path, names: Sequence[str] | None) 
     )
 
 
-def _flatten(value: list[Any]) -> list[float]:
+def _flatten(value: list[Any], name: str) -> list[float]:
     """Flatten nested numeric reference properties without accepting objects."""
     result: list[float] = []
-    for item in value:
+    for index, item in enumerate(value):
         if isinstance(item, list):
-            result.extend(_flatten(item))
+            result.extend(_flatten(item, f"{name}[{index}]"))
         else:
-            result.append(float(item))
+            result.append(finite_number(item, f"{name}[{index}]"))
     return result
 
 
@@ -1129,8 +1305,8 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
-def finalize_manifest(template: Path, output: Path) -> None:
-    """Build the hash-pinned manifest from reviewed inputs and live goldens."""
+def finalized_manifest(template: Path) -> dict[str, Any]:
+    """Return the deterministic manifest derived from reviewed artifacts."""
     manifest = load_json(template)
     for case in selected_cases(manifest, None):
         input_path = resolve_path(case["input"])
@@ -1143,6 +1319,12 @@ def finalize_manifest(template: Path, output: Path) -> None:
         case["reference_output_sha256"] = result["provenance"]["source_output_sha256"]
         if case.get("upstream_validation_case"):
             case["upstream_input_sha256"] = case["input_sha256"]
+    return manifest
+
+
+def finalize_manifest(template: Path, output: Path) -> None:
+    """Build the hash-pinned manifest from reviewed inputs and live goldens."""
+    manifest = finalized_manifest(template)
     write_json(output, manifest)
 
 

@@ -171,7 +171,12 @@
         "sha256": "c405797f34ed96470f23158406e6d8a8e102681d3c3cbbaea16692f514f22853"
       }
     },
-    "scientific_source": "xTB test/unit/test_gfn1.f90 test_gfn1_pcem_api at the pinned source revision.",
+    "scientific_source": {
+      "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+      "path": "test/unit/test_gfn1.f90",
+      "section": "test_gfn1_pcem_api",
+      "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99"
+    },
     "source_output_sha256": "d0f2533150a6287e7f1509df5da6bbb4db70fb5d12339132dddbfd9391b058b2",
     "source_revision": "edcfbbe39d411edc225e27315fbda3a204ddb023"
   },
