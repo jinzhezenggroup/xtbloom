@@ -460,14 +460,6 @@ xtbloom_status_t Gfn2Plan::enqueue(const xtbloom_batch_t& batch,
     error = "the compute options do not match the fixed plan policy";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  if (options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
-      options.scc_start_mode == XTBLOOM_SCC_START_WARM) {
-    /* WARM publication changes a persistent epoch. Keep V1 request semantics
-     * explicit until that epoch transition is stream ordered and reusable. */
-    error = "asynchronous CUDA plan enqueue does not support strict WARM SCC start yet";
-    return XTBLOOM_STATUS_NOT_SUPPORTED;
-  }
-
 #if defined(XTBLOOM_HAS_CUDA)
   if (impl_->cuda_cache == nullptr) {
     error = "plan does not own a CUDA GFN2 execution cache";

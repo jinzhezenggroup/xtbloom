@@ -802,7 +802,11 @@ XTBLOOM_API xtbloom_status_t xtbloom_compute(xtbloom_context_t* context,
  * INVALID_ARGUMENT rather than rebuilding it. Use a changed shape/policy or a
  * synchronous convenience call to establish a new device topology. Use
  * xtbloom_plan_compute_enqueue when topology is fixed and allocation-free
- * admission is required.
+ * admission is required. ABI-v2 strict WARM consumes the latest compatible
+ * fully converged checkpoint on the same context cache and never falls back to
+ * FRESH. Missing or host-visible incompatible state is rejected before
+ * admission; a stream-ordered device-topology mismatch completes the accepted
+ * request with INVALID_ARGUMENT and invalidates the consumed checkpoint.
  */
 XTBLOOM_API xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context,
                                                      const xtbloom_batch_t* batch,
@@ -868,12 +872,13 @@ XTBLOOM_API xtbloom_status_t xtbloom_plan_compute(xtbloom_plan_t* plan,
  * topology is compared before return; CUDA-device topology is compared in
  * stream order, and a mismatch completes with INVALID_ARGUMENT without
  * modifying caller outputs. Accepted inference and publication remain
- * stream-asynchronous. The V1 CUDA path accepts FRESH only; strict WARM returns
- * NOT_SUPPORTED without changing request or result state. Once enqueue is
- * accepted, FRESH consumes any preceding plan checkpoint even if completion
- * later reports a deferred topology or execution failure. The request retains
- * the plan's execution cache and the plan handle may be destroyed before
- * completion (the creating context must still outlive the request). */
+ * stream-asynchronous. ABI-v2 strict WARM consumes the latest compatible fully
+ * converged checkpoint and never falls back to FRESH. Once enqueue is accepted,
+ * either FRESH or WARM consumes any preceding plan checkpoint even if
+ * completion later reports a deferred topology or execution failure. The
+ * request retains the plan's execution cache and the plan handle may be
+ * destroyed before completion (the creating context must still outlive the
+ * request). */
 XTBLOOM_API xtbloom_status_t xtbloom_plan_compute_enqueue(xtbloom_plan_t* plan,
                                                           const xtbloom_batch_t* batch,
                                                           const xtbloom_compute_options_t* options,

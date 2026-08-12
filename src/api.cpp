@@ -409,11 +409,6 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
       return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
                   "GFN1-xTB is reserved by the ABI but is not implemented yet");
     }
-    if (options->struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
-        options->scc_start_mode == XTBLOOM_SCC_START_WARM) {
-      return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
-                  "asynchronous CUDA context enqueue does not support strict WARM SCC start yet");
-    }
     const xtbloom_status_t reserve_status =
         request->implementation->reserve_submission(*context->implementation, error);
     if (reserve_status != XTBLOOM_STATUS_SUCCESS) {
