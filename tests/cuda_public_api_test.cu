@@ -1382,6 +1382,29 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
   CUDA_CHECK(async_owner.guards_intact(async_guards));
   CHECK(async_guards);
   CHECK(async_owner.descriptor.flags == kResultFlagsCanary);
+
+  /* A call-level successful request with one nonconverged peer cannot publish
+   * a complete-batch checkpoint. Reusing the same request for strict WARM
+   * therefore rejects at admission, preserves the completed request snapshot,
+   * and leaves every new result byte untouched. */
+  xtbloom_compute_options_t warm_failure_options = failure_options;
+  warm_failure_options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  ResultOwner rejected_warm_owner;
+  CUDA_CHECK(rejected_warm_owner.bind(batch, ResultLayout::kDevice, warm_failure_options.flags));
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &warm_failure_options,
+                                &rejected_warm_owner.descriptor,
+                                request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(std::strstr(xtbloom_get_last_error(), "preceding successful public checkpoint") != nullptr);
+  xtbloom_request_info_t preserved_info{};
+  CHECK(xtbloom_request_info_init(&preserved_info, sizeof(preserved_info)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_query(request.get(), &preserved_info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(preserved_info.state == XTBLOOM_REQUEST_COMPLETE);
+  CHECK(preserved_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(preserved_info.result_flags == failure_reference.flags);
+  bool rejected_warm_unchanged = false;
+  CUDA_CHECK(rejected_warm_owner.unchanged(rejected_warm_unchanged));
+  CHECK(rejected_warm_unchanged);
   return 0;
 }
 
@@ -1941,24 +1964,44 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
   CHECK(compare_result(changed_result, changed_actual, changed_reference, base_options) == 0);
 
   if (mode != PlanTestMode::kSanitizer) {
-    /* Request destruction is a completion boundary for this submission only.
-     * The result descriptor remains a borrowed immutable image. */
+    /* Request destruction is an exact completion boundary for a pending WARM
+     * submission. Its successful settlement publishes the next checkpoint,
+     * which a different reusable request can consume immediately. */
+    xtbloom_compute_options_t changed_warm_options = base_options;
+    changed_warm_options.scc_start_mode = XTBLOOM_SCC_START_WARM;
     changed.perturb(0.002);
     CHECK(run_cpu_reference(cpu_context, changed, base_options, changed_reference) == 0);
     ResultOwner destroy_result;
-    CUDA_CHECK(destroy_result.bind(changed, ResultLayout::kDevice, base_options.flags));
+    CUDA_CHECK(destroy_result.bind(changed, ResultLayout::kDevice, changed_warm_options.flags));
     xtbloom_request_t* raw_destroy_request = nullptr;
     CHECK(xtbloom_request_create(context.get(), &raw_destroy_request) == XTBLOOM_STATUS_SUCCESS);
     RequestHandle destroy_request(raw_destroy_request);
-    CHECK(xtbloom_compute_enqueue(context.get(), &changed.descriptor, &base_options,
+    CHECK(xtbloom_compute_enqueue(context.get(), &changed.descriptor, &changed_warm_options,
                                   &destroy_result.descriptor,
                                   destroy_request.get()) == XTBLOOM_STATUS_SUCCESS);
     destroy_request.reset();
     MaterializedResult destroy_actual;
     CUDA_CHECK(destroy_result.materialize(destroy_actual));
     destroy_actual.flags = changed_reference.flags;
-    CHECK(compare_result(destroy_result, destroy_actual, changed_reference, base_options) == 0);
+    CHECK(compare_result(destroy_result, destroy_actual, changed_reference, changed_warm_options) ==
+          0);
     CHECK(destroy_result.descriptor.flags == kResultFlagsCanary);
+
+    changed.perturb(0.0005);
+    CHECK(run_cpu_reference(cpu_context, changed, base_options, changed_reference) == 0);
+    ResultOwner post_destroy_warm_result;
+    CUDA_CHECK(
+        post_destroy_warm_result.bind(changed, ResultLayout::kMixed, changed_warm_options.flags));
+    CHECK(xtbloom_compute_enqueue(context.get(), &changed.descriptor, &changed_warm_options,
+                                  &post_destroy_warm_result.descriptor,
+                                  request.get()) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult post_destroy_warm_actual;
+    CUDA_CHECK(post_destroy_warm_result.materialize(post_destroy_warm_actual));
+    post_destroy_warm_actual.flags = info.result_flags;
+    CHECK(compare_result(post_destroy_warm_result, post_destroy_warm_actual, changed_reference,
+                         changed_warm_options) == 0);
   }
   return 0;
 }
