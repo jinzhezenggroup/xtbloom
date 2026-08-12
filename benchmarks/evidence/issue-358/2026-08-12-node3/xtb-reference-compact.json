@@ -1,0 +1,368 @@
+{
+  "metadata": {
+    "schema_version": 1,
+    "runner": {
+      "script": {
+        "path": "${XTBLOOM_SOURCE_ROOT}/benchmarks/hessian.py",
+        "sha256": "fa628dbeda175ef45f95ec4949abe6ef8b4e5ffbf6ef458784ffdba04a4fe4f1"
+      },
+      "python": "3.11.14 (main, Feb 12 2026, 00:42:50) [Clang 21.1.4 ]",
+      "argv": [
+        "${XTBLOOM_SOURCE_ROOT}/benchmarks/hessian.py",
+        "--engines",
+        "xtb",
+        "--xtb-library",
+        "/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1",
+        "--xtb-source",
+        "/home/jzzeng/codes/xtb",
+        "--dxtb-source",
+        "/home/jzzeng/codes/dxtb",
+        "--cpu-threads",
+        "16",
+        "--warmups",
+        "1",
+        "--repetitions",
+        "5",
+        "--coordinate-timeout-seconds",
+        "600",
+        "--make-reference",
+        "--fail-on-correctness",
+        "--output-json",
+        "/tmp/xtbloom-issue358-evidence/xtb-reference.json",
+        "--output-csv",
+        "/tmp/xtbloom-issue358-evidence/xtb-reference.csv"
+      ],
+      "xtbloom_library": null,
+      "xtbloom_native_identity": null,
+      "xtbloom_build": null,
+      "xtb_library": "/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1",
+      "xtb_native_identity": {
+        "path": "/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1",
+        "sha256": "959ed711f85f3c84e5e9dffd15e1b49dfae1bd46783f544ce8756b5e148094dd",
+        "readelf_dynamic": "Dynamic section at offset 0x686190 contains 34 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libopenblas.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libmctc-lib.so.0]\n 0x0000000000000001 (NEEDED)             Shared library: [libgfortran.so.5]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libmvec.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libgomp.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x000000000000000e (SONAME)             Library soname: [libxtb.so.6]\n 0x000000000000000f (RPATH)              Library rpath: [/tmp/lammps-qmmm-xtb-env/lib]\n 0x000000000000000c (INIT)               0x4a000\n 0x000000000000000d (FINI)               0x47809c\n 0x0000000000000019 (INIT_ARRAY)         0x67d030\n 0x000000000000001b (INIT_ARRAYSZ)       8 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0x67d038\n 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)\n 0x0000000000000004 (HASH)               0x200\n 0x000000006ffffef5 (GNU_HASH)           0x3da0\n 0x0000000000000005 (STRTAB)             0x184d8\n 0x0000000000000006 (SYMTAB)             0x7db0\n 0x000000000000000a (STRSZ)              99157 (bytes)\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000003 (PLTGOT)             0x686fe8\n 0x0000000000000002 (PLTRELSZ)           30264 (bytes)\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000017 (JMPREL)             0x42520\n 0x0000000000000007 (RELA)               0x31f60\n 0x0000000000000008 (RELASZ)             67008 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffffe (VERNEED)            0x31e20\n 0x000000006fffffff (VERNEEDNUM)         6\n 0x000000006ffffff0 (VERSYM)             0x3082e\n 0x000000006ffffff9 (RELACOUNT)          1663\n 0x0000000000000000 (NULL)               0x0",
+        "ldd": "linux-vdso.so.1 (0x00007ffc5c026000)\n\tlibopenblas.so.0 => /tmp/lammps-qmmm-xtb-env/lib/libopenblas.so.0 (0x000078cd73ba0000)\n\tlibmctc-lib.so.0 => /tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so.0 (0x000078cd76dec000)\n\tlibgfortran.so.5 => /tmp/lammps-qmmm-xtb-env/lib/libgfortran.so.5 (0x000078cd73800000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x000078cd73719000)\n\tlibmvec.so.1 => /lib/x86_64-linux-gnu/libmvec.so.1 (0x000078cd7361c000)\n\tlibgomp.so.1 => /tmp/lammps-qmmm-xtb-env/lib/libgomp.so.1 (0x000078cd735c1000)\n\tlibgcc_s.so.1 => /tmp/lammps-qmmm-xtb-env/lib/libgcc_s.so.1 (0x000078cd73b72000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000078cd73200000)\n\tlibpthread.so.0 => /lib/x86_64-linux-gnu/libpthread.so.0 (0x000078cd76dd5000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000078cd76e67000)\n\tlibjonquil.so.0 => /tmp/lammps-qmmm-xtb-env/lib/./libjonquil.so.0 (0x000078cd73b64000)\n\tlibtoml-f.so.0 => /tmp/lammps-qmmm-xtb-env/lib/./libtoml-f.so.0 (0x000078cd7357a000)\n\tlibquadmath.so.0 => /tmp/lammps-qmmm-xtb-env/lib/./libquadmath.so.0 (0x000078cd73531000)\n\tlibdl.so.2 => /lib/x86_64-linux-gnu/libdl.so.2 (0x000078cd76dce000)",
+        "unresolved_dependencies": [],
+        "resolved_dependencies": [
+          {
+            "soname": "/lib64/ld-linux-x86-64.so.2",
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "8d06f393f4a93bcf9b81145a259524d66a95522a646bf8d7e05b6ffdf2e63dcc"
+          },
+          {
+            "soname": "libc.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "e01b1ce7be2987f3b8560e26d0df2623f9dd5cec17be923ae28a785bc0d32d50"
+          },
+          {
+            "soname": "libdl.so.2",
+            "path": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+            "sha256": "d255ba9c9e3a7c35115e578c898147edaba1a2bcf742cc3a76995ceed9d5ac4f"
+          },
+          {
+            "soname": "libgcc_s.so.1",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libgcc_s.so.1",
+            "sha256": "518553cb760166496a9844a8fdd8acaffed9229a581992a424e0ffd36098df52"
+          },
+          {
+            "soname": "libgfortran.so.5",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libgfortran.so.5.0.0",
+            "sha256": "59383967f5892b20ae2831d9dcc1b84ac4e34a14329793005e90e5ef541f68be"
+          },
+          {
+            "soname": "libgomp.so.1",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libgomp.so.1.0.0",
+            "sha256": "f30347f1b859a2992abea295d90dfc7a27e25cc6b99c43b7e93b50e4a1bb552b"
+          },
+          {
+            "soname": "libjonquil.so.0",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libjonquil.so.0.3.2",
+            "sha256": "ce2762627ed5c51ccdcf7c87b7a158a17b644163e78caaeb7cfa2a9fb1dc40a2"
+          },
+          {
+            "soname": "libm.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "df621c68dbfed7e843434ef2faedb9f4d4b0543ad161e9a55eaf4d4ce2443176"
+          },
+          {
+            "soname": "libmctc-lib.so.0",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libmctc-lib.so.0.5.2",
+            "sha256": "114eb96417b0ce0409fe03920c19cecd412dbad8c8bf89c3cf3b686bd0052c38"
+          },
+          {
+            "soname": "libmvec.so.1",
+            "path": "/usr/lib/x86_64-linux-gnu/libmvec.so.1",
+            "sha256": "8229cc941666c9f8152440b708cd620e037939a1bd8d22f7fc0543edc956fc9f"
+          },
+          {
+            "soname": "libopenblas.so.0",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libopenblasp-r0.3.33.so",
+            "sha256": "60ddaebfbdae101e9325efa24360c3bd639abb77ef569b35becd6bbcbed6605e"
+          },
+          {
+            "soname": "libpthread.so.0",
+            "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+            "sha256": "fbed9505adacada2abb37c6b43be2df6de81e742712c6025694ba48de62c7e78"
+          },
+          {
+            "soname": "libquadmath.so.0",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libquadmath.so.0.0.0",
+            "sha256": "0fec3a68aff4c1b10c08559d88b830a1fac30abdfb31f390edee7a8a3473ab1a"
+          },
+          {
+            "soname": "libtoml-f.so.0",
+            "path": "/tmp/lammps-qmmm-xtb-env/lib/libtoml-f.so.0.5.2",
+            "sha256": "00a8ef2feff63d7939d6717a7588a40d219e3c9c14c33105ebdd5bd449a5663b"
+          }
+        ]
+      },
+      "xtb_source": {
+        "head": "b31754bf3c7cccf8c242c469b03ae675e04bd608",
+        "dirty": false
+      },
+      "dxtb_source": {
+        "head": "b529b5ddb75c0554274955082a189f9f88437cb2",
+        "dirty": false
+      },
+      "python_distributions": {
+        "dxtb": {
+          "name": "dxtb",
+          "version": "0.4.0",
+          "record_sha256": "9266e0f98b5f0e41f72a3c240bf843c965efc81932d0dcff1888a00c20288fd3",
+          "direct_url_sha256": "828c3db63c8aa5caba85de20fc237816ff847f1a9706dbe8a10bf07d66701ab8",
+          "direct_url_identity": {
+            "scheme": "file",
+            "local_source_path": "/home/jzzeng/codes/dxtb",
+            "editable": false
+          },
+          "payload_verification": {
+            "status": "verified",
+            "record_entries": 291,
+            "verified_hashes": 290,
+            "payload_sha256": "8bbc9529410b226364a821e6e165de0273a7f449cad808d60590c8a3bbcafdf5",
+            "errors": []
+          }
+        },
+        "torch": {
+          "name": "torch",
+          "version": "2.13.0",
+          "record_sha256": "4a54d71068559ad34aae5c9d8dfff80823a6b1dcb9ea71facf38810b2e0317a2",
+          "direct_url_sha256": null,
+          "direct_url_identity": null,
+          "payload_verification": {
+            "status": "verified",
+            "record_entries": 12122,
+            "verified_hashes": 12121,
+            "payload_sha256": "bc9ddcbb9f3cd0cadf6b01a70b46b034d3b4a69ca590551a2c323553bfe45ebe",
+            "errors": []
+          }
+        },
+        "tad-libcint": {
+          "name": "tad_libcint",
+          "version": "0.3.0",
+          "record_sha256": "07e231d27b942cd3185a0427f6c5e8bfb9c0235be5d10cad57e9ecdf0a524ab5",
+          "direct_url_sha256": null,
+          "direct_url_identity": null,
+          "payload_verification": {
+            "status": "verified",
+            "record_entries": 43,
+            "verified_hashes": 42,
+            "payload_sha256": "49302444c940082a57aab0749077ab336dea1ffe05163ef9cf002d215fe5a81e",
+            "errors": []
+          }
+        }
+      }
+    },
+    "commit": {
+      "head": "2cafafdb619dda75b96cf740b000dbf460e2df1f",
+      "dirty": false
+    },
+    "evidence_eligibility": {
+      "allow_dirty_evidence": false,
+      "status": "eligible_clean_head"
+    },
+    "hardware": {
+      "hostname": "node3",
+      "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+      "logical_cpu_count": 48,
+      "process_cpu_affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "nvidia_smi": "GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8)",
+      "nvidia_smi_runtime": "0, GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8, NVIDIA GeForce RTX 5090, 580.95.05, 32607 MiB, P8, 575.00 W, 180 MHz, 405 MHz",
+      "peak_process_rss_bytes": 963543040
+    },
+    "threads": {
+      "cpu_threads": 16,
+      "OMP_NUM_THREADS": "16",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1"
+    },
+    "environment": {
+      "CUDA_VISIBLE_DEVICES": "0",
+      "LD_LIBRARY_PATH": null,
+      "MKL_INTERFACE_LAYER": null,
+      "MKL_THREADING_LAYER": null
+    },
+    "protocol": {
+      "workload": "neutral singlet C20H42 generated by make_alkane(62)",
+      "position_units": "bohr",
+      "hessian_units": "Hartree/bohr^2",
+      "step_bohr": 0.005,
+      "warmups": 1,
+      "repetitions": 5,
+      "timing_boundary": "complete public Hessian call through host-visible dense matrix",
+      "scc_max_iterations": 500,
+      "scc_charge_tolerance": 0.0001,
+      "scc_energy_tolerance": 1e-06,
+      "hessian_atol_hartree_per_bohr2": 0.002,
+      "symmetry_atol_hartree_per_bohr2": 0.002,
+      "acoustic_atol_hartree_per_bohr2": 0.002,
+      "repeatability_atol_hartree_per_bohr2": 1e-08,
+      "coordinate_timeout_seconds": 600.0,
+      "reference": {
+        "designation": "none"
+      }
+    },
+    "retention_projection": {
+      "kind": "compact_hessian_identity",
+      "source_artifact": {
+        "filename": "xtb-reference.json",
+        "byte_count": 309295,
+        "sha256": "4a83a56509caa955266a939b982aa00b0afcb9c626d70231c7ac5eb72ea6b8e7"
+      },
+      "transformations": [
+        "replace the local xTBloom checkout root with ${XTBLOOM_SOURCE_ROOT}",
+        "replace each compressed Hessian byte payload with shape, dtype, byte count, and SHA-256 identity"
+      ],
+      "removed_hessian_payload_count": 1
+    }
+  },
+  "workload": {
+    "name": "C20H42",
+    "natoms": 62,
+    "atomic_numbers_sha256": "1170a8db08143fba4eefc41292b79ea5288d5ba96abc714cea428f37f1ae726c",
+    "positions_bohr_sha256": "dfd11c4857e2d02e4250dcfd1534e4136de275289b64d6c4f792ddbfc7ba768d",
+    "molecular_charge_e": 0.0,
+    "unpaired_electrons": 0
+  },
+  "rows": [
+    {
+      "engine": "xtb",
+      "natoms": 62,
+      "molecule": "C20H42",
+      "coordinate_count": 186,
+      "displacement_count": 372,
+      "displacement_batch_size": null,
+      "public_batch_semantics": "single_system_hessian; xTBloom displacement batch not applicable",
+      "availability": "available",
+      "timing": {
+        "samples_ms": [
+          2461.007284,
+          2568.317795,
+          2493.2624809999998,
+          2457.10277,
+          2530.371853
+        ],
+        "sample_count": 5,
+        "median_ms": 2493.2624809999998,
+        "mean_ms": 2502.0124366,
+        "p95_ms": 2560.7286065999997,
+        "min_ms": 2457.10277,
+        "max_ms": 2568.317795,
+        "hessians_per_hour_at_median": 1443.8912980217426
+      },
+      "correctness": {
+        "status": "pass",
+        "reasons": [],
+        "diagnostics": {
+          "finite": true,
+          "max_abs_element_hartree_per_bohr2": 0.55594555138799,
+          "frobenius_norm_hartree_per_bohr2": 5.266401803709894,
+          "max_abs_antisymmetry_hartree_per_bohr2": 0.0,
+          "max_abs_acoustic_row_residual_hartree_per_bohr2": 3.836949515334531e-07,
+          "max_abs_acoustic_column_residual_hartree_per_bohr2": 3.836949515334531e-07
+        },
+        "max_abs_repeatability_delta_hartree_per_bohr2": 0.0,
+        "cross_engine": {
+          "status": "reference"
+        }
+      },
+      "engine_metadata": {
+        "raw_symmetrize": true,
+        "fresh_result_checkpoint_prepared_outside_timing": true,
+        "accuracy_factor": 1.0,
+        "optional_step_and_atom_list": "NULL/default 0.005 bohr/all atoms",
+        "native_openmp_displacement_parallelism": true,
+        "unavoidable_auxiliary_dipole_gradient": true
+      },
+      "isolated_command": [
+        "/tmp/xtbloom-issue358-py311/bin/python",
+        "${XTBLOOM_SOURCE_ROOT}/benchmarks/hessian.py",
+        "--engines",
+        "xtb",
+        "--device-id",
+        "0",
+        "--cpu-threads",
+        "16",
+        "--warmups",
+        "1",
+        "--repetitions",
+        "5",
+        "--step",
+        "0.005",
+        "--scc-max-iterations",
+        "500",
+        "--scc-charge-tolerance",
+        "0.0001",
+        "--scc-energy-tolerance",
+        "1e-06",
+        "--hessian-atol",
+        "0.002",
+        "--symmetry-atol",
+        "0.002",
+        "--acoustic-atol",
+        "0.002",
+        "--repeatability-atol",
+        "1e-08",
+        "--coordinate-timeout-seconds",
+        "600.0",
+        "--output-json",
+        "/tmp/xtbloom-hessian-coordinate-o38ic9ux/coordinate.json",
+        "--output-csv",
+        "/tmp/xtbloom-hessian-coordinate-o38ic9ux/coordinate.csv",
+        "--coordinate-child",
+        "--xtb-library",
+        "/tmp/pr231-1fc8698-xtb-final/libxtb.so.6.7.1",
+        "--xtb-source",
+        "/home/jzzeng/codes/xtb",
+        "--dxtb-source",
+        "/home/jzzeng/codes/dxtb",
+        "--make-reference"
+      ],
+      "final_hessian_binary64_le_identity": {
+        "shape": [
+          186,
+          186
+        ],
+        "dtype": "float64-le",
+        "sha256": "04b920d219719036603fee5b3aae4da729f17fd498f953ea0a7cda108f13d73d",
+        "binary64_le_byte_count": 276768
+      }
+    }
+  ]
+}

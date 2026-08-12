@@ -160,6 +160,19 @@
         "sha256": "4a83a56509caa955266a939b982aa00b0afcb9c626d70231c7ac5eb72ea6b8e7",
         "engine": "xtb"
       }
+    },
+    "retention_projection": {
+      "kind": "compact_hessian_identity",
+      "source_artifact": {
+        "filename": "dxtb-unavailable-final.json",
+        "byte_count": 11273,
+        "sha256": "f22a250bf88b9bb2a1bf95b1a527f6c7bfa7c39e64248b3ba8f35d536fc637d1"
+      },
+      "transformations": [
+        "replace the local xTBloom checkout root with ${XTBLOOM_SOURCE_ROOT}",
+        "replace each compressed Hessian byte payload with shape, dtype, byte count, and SHA-256 identity"
+      ],
+      "removed_hessian_payload_count": 0
     }
   },
   "workload": {

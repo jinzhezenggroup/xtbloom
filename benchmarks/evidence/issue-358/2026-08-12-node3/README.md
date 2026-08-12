@@ -49,8 +49,8 @@ symmetry, acoustic, and cross-engine gates. Against xTB:
 | xTBloom CUDA, both batches | 4.2183e-5 | 2.9761e-6 | 2.4382e-5 | 7.5617e-7 |
 | dxtb CPU AD | 2.0133e-5 | 8.0746e-7 | 5.6332e-8 | 8.2419e-13 |
 
-Values are in `Eh/bohr^2`. The JSON files retain the exact compressed
-little-endian binary64 Hessian for every available row and all raw samples.
+Values are in `Eh/bohr^2`. The compact JSON files retain every raw timing
+sample and each Hessian's shape, dtype, byte count, and SHA-256 identity.
 
 ## Unavailable coordinates
 
@@ -90,13 +90,21 @@ little-endian binary64 Hessian for every available row and all raw samples.
   NumPy 1.26.4, CPython 3.11.14. The dxtb CUDA coordinate therefore used its
   packaged CUDA 13.0 PyTorch runtime, while xTBloom used CUDA 12.9.1.
 
-The JSON metadata contains the CMake cache hashes, compiler identities,
+The compact JSON metadata contains the CMake cache hashes, compiler identities,
 resolved native dependencies and hashes, Python RECORD verification, exact
 argv, workload hashes, runtime environment, and hardware snapshots.
-Before archiving, every occurrence of the local xTBloom checkout root in the
-JSON metadata was mechanically replaced by the literal
-`${XTBLOOM_SOURCE_ROOT}` token to comply with repository naming policy. No
-timing, Hessian, hash, revision, option, or non-xTBloom path was changed.
+
+The original harness JSON files totaled 1,834,877 bytes and are omitted from
+Git because newer independent evidence on `main` made retaining both complete
+dense Hessian payloads and the requested matrix exceed the repository's 16 MiB
+aggregate evidence budget. The compact files are mechanical projections of
+those raw artifacts: every local xTBloom checkout root is replaced by the
+literal `${XTBLOOM_SOURCE_ROOT}` token, and each compressed Hessian byte string
+is replaced by its shape, dtype, exact byte count, and SHA-256 identity. Every
+timing sample, correctness result, diagnostic, revision, binary hash, option,
+command, unavailable reason, and non-xTBloom path is retained. Each compact
+file records the source raw filename, byte count, SHA-256, transformation list,
+and number of omitted matrix payloads in `metadata.retention_projection`.
 
 ## Reproduction
 
@@ -190,6 +198,6 @@ per-coordinate bound. The authoritative exact argv is retained in each JSON.
   focused Hessian, dxtb-adapter, and evidence-size subset passed 26/26.
 
 `summary.csv` is the compact derived view. Engine-specific CSVs are summaries;
-their paired JSON files are authoritative and retain raw samples, exact
-Hessians, diagnostics, and provenance. `SHA256SUMS` covers every retained file
-except the manifest itself.
+their paired compact JSON files are authoritative for retained raw samples,
+Hessian identities, diagnostics, provenance, and the omitted raw-artifact
+identities. `SHA256SUMS` covers every retained file except the manifest itself.
