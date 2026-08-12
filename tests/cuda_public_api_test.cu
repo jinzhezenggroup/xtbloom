@@ -1745,6 +1745,31 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
   if (mode != PlanTestMode::kSanitizer) {
     ResultOwner busy_result;
     CUDA_CHECK(busy_result.bind(batch, ResultLayout::kHost, options.flags));
+    /* Static request validation precedes reservation. Even while this request
+     * is pending, malformed descriptors and unsupported WARM policy retain
+     * their own diagnostics instead of being masked by the busy state. */
+    PublicBatch pending_invalid = batch;
+    pending_invalid.bind();
+    pending_invalid.descriptor.atom_offsets.size_bytes = 0u;
+    ResultOwner pending_invalid_result;
+    CUDA_CHECK(pending_invalid_result.bind(pending_invalid, ResultLayout::kHost, options.flags));
+    CHECK(xtbloom_compute_enqueue(context.get(), &pending_invalid.descriptor, &options,
+                                  &pending_invalid_result.descriptor,
+                                  request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(std::strstr(xtbloom_get_last_error(), "atom_offsets") != nullptr);
+    bool pending_invalid_unchanged = false;
+    CUDA_CHECK(pending_invalid_result.unchanged(pending_invalid_unchanged));
+    CHECK(pending_invalid_unchanged);
+    CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &warm_options,
+                                  &busy_result.descriptor,
+                                  request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
+    CHECK(std::strstr(xtbloom_get_last_error(), "strict WARM") != nullptr);
+    bool pending_warm_unchanged = false;
+    CUDA_CHECK(busy_result.unchanged(pending_warm_unchanged));
+    CHECK(pending_warm_unchanged);
+    CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.state == XTBLOOM_REQUEST_PENDING);
+
     xtbloom_request_t* raw_busy_request = nullptr;
     CHECK(xtbloom_request_create(context.get(), &raw_busy_request) == XTBLOOM_STATUS_SUCCESS);
     RequestHandle busy_request(raw_busy_request);

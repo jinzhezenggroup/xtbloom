@@ -399,33 +399,27 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
   bool reserved = false;
   try {
     std::string error;
+    const xtbloom::detail::DescriptorValidationResult validation =
+        xtbloom::detail::validate_compute_descriptor_structure(context->implementation->backend,
+                                                               batch, options, result);
+    if (!validation.ok()) {
+      return fail(validation.status, validation.error);
+    }
+    if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
+      return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+                  "GFN1-xTB is reserved by the ABI but is not implemented yet");
+    }
+    if (options->struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
+        options->scc_start_mode == XTBLOOM_SCC_START_WARM) {
+      return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+                  "asynchronous CUDA context enqueue does not support strict WARM SCC start yet");
+    }
     const xtbloom_status_t reserve_status =
         request->implementation->reserve_submission(*context->implementation, error);
     if (reserve_status != XTBLOOM_STATUS_SUCCESS) {
       return fail(reserve_status, std::move(error));
     }
     reserved = true;
-    const xtbloom::detail::DescriptorValidationResult validation =
-        xtbloom::detail::validate_compute_descriptor_structure(context->implementation->backend,
-                                                               batch, options, result);
-    if (!validation.ok()) {
-      request->implementation->rollback_submission();
-      reserved = false;
-      return fail(validation.status, validation.error);
-    }
-    if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
-      request->implementation->rollback_submission();
-      reserved = false;
-      return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
-                  "GFN1-xTB is reserved by the ABI but is not implemented yet");
-    }
-    if (options->struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
-        options->scc_start_mode == XTBLOOM_SCC_START_WARM) {
-      request->implementation->rollback_submission();
-      reserved = false;
-      return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
-                  "asynchronous CUDA context enqueue does not support strict WARM SCC start yet");
-    }
 
     const std::shared_ptr<xtbloom::detail::Gfn2CudaExecutionCache>& cache =
         context->implementation->gfn2_cuda_execution_cache;
