@@ -1,0 +1,2 @@
+engine,natoms,displacement_batch_size,availability,median_ms,mean_ms,p95_ms,min_ms,max_ms,hessians_per_hour_at_median,correctness_status,max_abs_delta_hartree_per_bohr2,rms_delta_hartree_per_bohr2,max_abs_antisymmetry_hartree_per_bohr2,max_abs_acoustic_residual_hartree_per_bohr2,unavailable_reason
+xtb,62,,available,2493.2624809999998,2502.0124366,2560.7286065999997,2457.10277,2568.317795,1443.8912980217426,pass,,,0.0,3.836949515334531e-07,

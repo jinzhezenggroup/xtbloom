@@ -1,0 +1,10 @@
+engine,displacement_batch_size,sample_count,median_ms,min_ms,p95_ms,max_ms,correctness,max_abs_delta_hartree_per_bohr2,rms_delta_hartree_per_bohr2,availability
+xtb,,5,2493.262481,2457.102770,2560.728607,2568.317795,pass,,,available
+xtbloom-cpu,1,5,12814.534952,12800.904504,12847.042891,12848.487911,pass,4.2183135649853654e-05,2.976118137091868e-06,available
+xtbloom-cpu,128,5,1363.217874,1344.540384,1504.361265,1536.320801,pass,4.2183135649853654e-05,2.976118137091868e-06,available
+xtbloom-cuda,1,5,25284.025889,24815.993095,25291.128856,25291.893477,pass,4.2183135631090884e-05,2.976118137364581e-06,available
+xtbloom-cuda,128,5,2316.165560,2311.128046,2353.889063,2362.552967,pass,4.2183135637419156e-05,2.9761181379055174e-06,available
+dxtb-cpu-ad,,5,88614.586081,88417.463240,89161.833649,89232.416042,pass,2.013293117264503e-05,8.074567596040189e-07,available
+dxtb-cuda-ad,,,,,,,,,,unavailable: CUDA OOM at approximately 31.09 GiB process usage
+dxtb-cpu-numerical,,,,,,,,,,unavailable: dxtb 0.4.0 GFN2 analytical forces not implemented
+dxtb-cuda-numerical,,,,,,,,,,unavailable: dxtb 0.4.0 GFN2 analytical forces not implemented

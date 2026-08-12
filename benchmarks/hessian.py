@@ -1167,7 +1167,9 @@ def validate_args(args: argparse.Namespace) -> None:
         not math.isfinite(args.coordinate_timeout_seconds)
         or args.coordinate_timeout_seconds < 0.0
     ):
-        raise BenchmarkError("--coordinate-timeout-seconds must be finite and nonnegative")
+        raise BenchmarkError(
+            "--coordinate-timeout-seconds must be finite and nonnegative"
+        )
     if any(engine.startswith("xtbloom-") for engine in args.engines) and (
         args.library is None or not args.library.is_file()
     ):
