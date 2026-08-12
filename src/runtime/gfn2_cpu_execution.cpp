@@ -594,10 +594,8 @@ struct SystemKey {
            lhs.charge_tolerance == rhs.charge_tolerance &&
            lhs.energy_tolerance == rhs.energy_tolerance &&
            lhs.electronic_temperature == rhs.electronic_temperature &&
-           lhs.scc_mixer == rhs.scc_mixer &&
-           lhs.scc_mixer_history == rhs.scc_mixer_history &&
-           lhs.scc_mixer_damping == rhs.scc_mixer_damping &&
-           lhs.determinism == rhs.determinism;
+           lhs.scc_mixer == rhs.scc_mixer && lhs.scc_mixer_history == rhs.scc_mixer_history &&
+           lhs.scc_mixer_damping == rhs.scc_mixer_damping && lhs.determinism == rhs.determinism;
   }
 };
 
@@ -668,10 +666,8 @@ bool same_prepared_layout(const SystemKey& lhs, const SystemKey& rhs) {
          lhs.charge_tolerance == rhs.charge_tolerance &&
          lhs.energy_tolerance == rhs.energy_tolerance &&
          lhs.electronic_temperature == rhs.electronic_temperature &&
-         lhs.scc_mixer == rhs.scc_mixer &&
-         lhs.scc_mixer_history == rhs.scc_mixer_history &&
-         lhs.scc_mixer_damping == rhs.scc_mixer_damping &&
-         lhs.determinism == rhs.determinism;
+         lhs.scc_mixer == rhs.scc_mixer && lhs.scc_mixer_history == rhs.scc_mixer_history &&
+         lhs.scc_mixer_damping == rhs.scc_mixer_damping && lhs.determinism == rhs.determinism;
 }
 
 struct SystemOutput {
@@ -911,8 +907,7 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_eigensolver_plan(wavefunction_layout, eigensolver, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = make_scc_mixer_plan(wavefunction_layout, key.scc_mixer_history,
-                               key.scc_mixer_damping,
+  status = make_scc_mixer_plan(wavefunction_layout, key.scc_mixer_history, key.scc_mixer_damping,
                                key.charge_tolerance, key.charge_tolerance, mixer, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_spin_polarization_plan(basis, wavefunction_layout, spin, error);

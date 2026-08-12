@@ -88,8 +88,7 @@ bool has_compute_options_v3(const xtbloom_compute_options_t& options) noexcept {
 }
 
 xtbloom_scc_mixer_t public_scc_mixer(const xtbloom_compute_options_t& options) noexcept {
-  return has_compute_options_v3(options) ? options.scc_mixer
-                                         : XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  return has_compute_options_v3(options) ? options.scc_mixer : XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
 }
 
 std::int32_t public_scc_mixer_history(const xtbloom_compute_options_t& options) noexcept {
@@ -104,8 +103,8 @@ xtbloom_determinism_t public_determinism(const xtbloom_compute_options_t& option
   return has_compute_options_v3(options) ? options.determinism : XTBLOOM_DETERMINISM_DEFAULT;
 }
 
-xtbloom_status_t validate_public_execution_policy(
-    const xtbloom_compute_options_t& options, std::string& error) {
+xtbloom_status_t validate_public_execution_policy(const xtbloom_compute_options_t& options,
+                                                  std::string& error) {
   if (!has_compute_options_v3(options)) return XTBLOOM_STATUS_SUCCESS;
   if (options.scc_mixer != XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN) {
     error = "CUDA GFN2 setup supports only modified-Broyden SCC mixing";
@@ -1227,8 +1226,7 @@ TopologyMatch match_existing_topology(const xtbloom_batch_t& batch,
       public_scc_mixer(options) != key.scc_mixer ||
       public_scc_mixer_history(options) != key.scc_mixer_history ||
       public_scc_mixer_damping(options) != key.scc_mixer_damping ||
-      public_determinism(options) != key.determinism ||
-      periodic_enabled != key.periodic_enabled) {
+      public_determinism(options) != key.determinism || periodic_enabled != key.periodic_enabled) {
     return TopologyMatch::kMismatch;
   }
 
@@ -1351,8 +1349,7 @@ bool context_enqueue_shape_policy_matches(const xtbloom_batch_t& batch,
          public_scc_mixer(options) == key.scc_mixer &&
          public_scc_mixer_history(options) == key.scc_mixer_history &&
          public_scc_mixer_damping(options) == key.scc_mixer_damping &&
-         public_determinism(options) == key.determinism &&
-         periodic_enabled == key.periodic_enabled;
+         public_determinism(options) == key.determinism && periodic_enabled == key.periodic_enabled;
 }
 
 xtbloom_status_t validate_offsets(const char* name, const std::vector<std::int64_t>& offsets,
@@ -1394,8 +1391,8 @@ xtbloom_status_t make_topology_key(const xtbloom_batch_t& batch,
 
   xtbloom_status_t status = validate_public_execution_policy(options, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = copy_host_buffer("atom_offsets", batch.atom_offsets,
-                                             batch.batch_size + 1, key.atom_offsets, error);
+  status = copy_host_buffer("atom_offsets", batch.atom_offsets, batch.batch_size + 1,
+                            key.atom_offsets, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = validate_offsets("atom_offsets", key.atom_offsets, batch.batch_size, batch.total_atoms,
                             true, error);
@@ -1836,8 +1833,7 @@ struct HostPlans {
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = make_eigensolver_plan(wavefunction_layout, eigensolver, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
-    status = make_scc_mixer_plan(wavefunction_layout, key.scc_mixer_history,
-                                 key.scc_mixer_damping,
+    status = make_scc_mixer_plan(wavefunction_layout, key.scc_mixer_history, key.scc_mixer_damping,
                                  key.charge_tolerance, key.charge_tolerance, mixer, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
