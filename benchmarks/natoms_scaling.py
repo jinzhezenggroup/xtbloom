@@ -880,7 +880,9 @@ def make_open_carbon(natoms: int) -> Molecule:
         center = 12.0 * (fragment - midpoint)
         y = 0.75 if fragment % 2 else -0.75
         z = 0.5 * ((fragment % 3) - 1)
-        offsets = (0.0,) if size == 1 else ((-1.25, 1.25) if size == 2 else (-2.5, 0.0, 2.5))
+        offsets = (
+            (0.0,) if size == 1 else ((-1.25, 1.25) if size == 2 else (-2.5, 0.0, 2.5))
+        )
         for offset in offsets:
             positions.extend((center + offset, y, z))
     return Molecule(

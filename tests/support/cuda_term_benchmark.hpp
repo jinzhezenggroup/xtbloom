@@ -73,8 +73,7 @@ inline bool is_hex_identity(const std::string& value, std::size_t expected_size)
   return value.size() == expected_size &&
          std::all_of(value.begin(), value.end(), [](unsigned char character) {
            return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f') ||
-                  (character >= 'A' && character <= 'F');
+                  (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F');
          });
 }
 
@@ -215,7 +214,9 @@ inline Samples summarize(std::vector<float> values) {
   std::sort(ordered.begin(), ordered.end());
   if (!ordered.empty()) {
     result.minimum_ms = ordered.front();
-    result.median_ms = ordered[ordered.size() / 2u];
+    const std::size_t middle = ordered.size() / 2u;
+    result.median_ms = ordered.size() % 2u == 0u ? 0.5F * (ordered[middle - 1u] + ordered[middle])
+                                                 : ordered[middle];
     result.maximum_ms = ordered.back();
   }
   return result;
@@ -391,8 +392,8 @@ inline bool write_results(const char* benchmark, const Options& options, int arg
       output << row.term << ',' << row.workload << ',' << row.batch_size << ','
              << row.atoms_per_system << ',' << row.total_atoms << ',' << row.pair_count << ','
              << row.pair_count_semantics << ',' << row.dense_pair_count << ','
-             << row.timing.minimum_ms << ',' << row.timing.median_ms << ','
-             << row.timing.maximum_ms << ',' << row.timing.values_ms.size() << '\n';
+             << row.timing.minimum_ms << ',' << row.timing.median_ms << ',' << row.timing.maximum_ms
+             << ',' << row.timing.values_ms.size() << '\n';
     }
   };
 

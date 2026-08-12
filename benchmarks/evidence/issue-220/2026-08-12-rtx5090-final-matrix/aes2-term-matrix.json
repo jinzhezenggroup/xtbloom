@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "benchmark": "xtbloom_cuda_aes2_term_matrix",
-  "derivation": "Lossless row/sample aggregation of successful per-cell benchmark artifacts; each source executable writes results only after post-timing validation passes.",
+  "derivation": "Lossless row/sample aggregation of successful per-cell benchmark artifacts; each source executable writes results only after post-timing validation passes. Medians are recomputed from raw samples using the conventional mean of two middle values.",
   "matrix": {
     "topologies": [
       "compact",
@@ -84,7 +84,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.0138560003,
-          "median_ms": 0.0150720002,
+          "median_ms": 0.0150560001,
           "maximum_ms": 0.0190079994,
           "samples_ms": [
             0.0148799997,
@@ -119,7 +119,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.0399039984,
-          "median_ms": 0.0412480012,
+          "median_ms": 0.0412000008,
           "maximum_ms": 0.0423359983,
           "samples_ms": [
             0.0400319993,
@@ -154,7 +154,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.013696,
-          "median_ms": 0.0143360002,
+          "median_ms": 0.0143200001,
           "maximum_ms": 0.015168,
           "samples_ms": [
             0.014304,
@@ -189,7 +189,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.168768004,
-          "median_ms": 0.169696003,
+          "median_ms": 0.1696799995,
           "maximum_ms": 0.170944005,
           "samples_ms": [
             0.168768004,
@@ -224,7 +224,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.227487996,
-          "median_ms": 0.228192002,
+          "median_ms": 0.228175998,
           "maximum_ms": 0.228992,
           "samples_ms": [
             0.227487996,
@@ -290,7 +290,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.0162560008,
-          "median_ms": 0.0173439998,
+          "median_ms": 0.0173279997,
           "maximum_ms": 0.0179839991,
           "samples_ms": [
             0.0165119991,
@@ -325,7 +325,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.040959999,
-          "median_ms": 0.0432320014,
+          "median_ms": 0.043120000549999996,
           "maximum_ms": 0.0436160006,
           "samples_ms": [
             0.0430079997,
@@ -360,7 +360,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.0136639997,
-          "median_ms": 0.015168,
+          "median_ms": 0.0150080002,
           "maximum_ms": 0.0156800002,
           "samples_ms": [
             0.0145279998,
@@ -531,7 +531,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.0430079997,
-          "median_ms": 0.0453759991,
+          "median_ms": 0.04531200045,
           "maximum_ms": 0.0461760014,
           "samples_ms": [
             0.0452480018,
@@ -566,7 +566,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.0135679999,
-          "median_ms": 0.0151040005,
+          "median_ms": 0.01508800035,
           "maximum_ms": 0.0158719998,
           "samples_ms": [
             0.0155199999,
@@ -601,7 +601,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.172736004,
-          "median_ms": 0.174784005,
+          "median_ms": 0.1747520045,
           "maximum_ms": 0.175040007,
           "samples_ms": [
             0.175040007,
@@ -702,7 +702,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.02128,
-          "median_ms": 0.0241599996,
+          "median_ms": 0.02377599945,
           "maximum_ms": 0.0255679991,
           "samples_ms": [
             0.0244479999,
@@ -737,7 +737,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.047104001,
-          "median_ms": 0.0498559996,
+          "median_ms": 0.0498239994,
           "maximum_ms": 0.0519680008,
           "samples_ms": [
             0.0519680008,
@@ -772,7 +772,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.0136639997,
-          "median_ms": 0.0149440002,
+          "median_ms": 0.014911999950000001,
           "maximum_ms": 0.0156479999,
           "samples_ms": [
             0.0148799997,
@@ -807,7 +807,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.176896006,
-          "median_ms": 0.178719997,
+          "median_ms": 0.178704001,
           "maximum_ms": 0.181152001,
           "samples_ms": [
             0.176896006,
@@ -842,7 +842,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.251199991,
-          "median_ms": 0.255807996,
+          "median_ms": 0.25553600499999995,
           "maximum_ms": 0.258527994,
           "samples_ms": [
             0.254592001,
@@ -908,7 +908,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.026912,
-          "median_ms": 0.0274240002,
+          "median_ms": 0.0274080001,
           "maximum_ms": 0.0283840001,
           "samples_ms": [
             0.027392,
@@ -943,7 +943,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.0696960017,
-          "median_ms": 0.071039997,
+          "median_ms": 0.07099199665,
           "maximum_ms": 0.0720319971,
           "samples_ms": [
             0.0718080029,
@@ -978,7 +978,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.0180799998,
-          "median_ms": 0.019328,
+          "median_ms": 0.0193119999,
           "maximum_ms": 0.0203840006,
           "samples_ms": [
             0.0188800003,
@@ -1013,7 +1013,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.326719999,
-          "median_ms": 0.327648014,
+          "median_ms": 0.3275840135,
           "maximum_ms": 0.328704,
           "samples_ms": [
             0.328512013,
@@ -1048,7 +1048,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.432895988,
-          "median_ms": 0.433919996,
+          "median_ms": 0.43382400249999997,
           "maximum_ms": 0.435743988,
           "samples_ms": [
             0.433919996,
@@ -1114,7 +1114,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.0271359999,
-          "median_ms": 0.0274880007,
+          "median_ms": 0.02747200055,
           "maximum_ms": 0.0293119997,
           "samples_ms": [
             0.0282559991,
@@ -1184,7 +1184,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.0181120001,
-          "median_ms": 0.0201600008,
+          "median_ms": 0.0200960003,
           "maximum_ms": 0.0211520009,
           "samples_ms": [
             0.0194559991,
@@ -1219,7 +1219,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.326400012,
-          "median_ms": 0.328512013,
+          "median_ms": 0.3284640015,
           "maximum_ms": 0.330688,
           "samples_ms": [
             0.330271989,
@@ -1254,7 +1254,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.434911996,
-          "median_ms": 0.43699199,
+          "median_ms": 0.4369279895,
           "maximum_ms": 0.438879997,
           "samples_ms": [
             0.435360014,
@@ -1425,7 +1425,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.329728007,
-          "median_ms": 0.331840008,
+          "median_ms": 0.33182400450000005,
           "maximum_ms": 0.332863986,
           "samples_ms": [
             0.332863986,
@@ -1460,7 +1460,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.443392009,
-          "median_ms": 0.44550401,
+          "median_ms": 0.4454559985,
           "maximum_ms": 0.447071999,
           "samples_ms": [
             0.445663989,
@@ -1526,7 +1526,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.0354879983,
-          "median_ms": 0.0364480019,
+          "median_ms": 0.03643200175,
           "maximum_ms": 0.0380159989,
           "samples_ms": [
             0.0380159989,
@@ -1561,7 +1561,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.0778239965,
-          "median_ms": 0.0788799971,
+          "median_ms": 0.07886399699999999,
           "maximum_ms": 0.081087999,
           "samples_ms": [
             0.0778239965,
@@ -1596,7 +1596,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.0190719999,
-          "median_ms": 0.0203840006,
+          "median_ms": 0.0202879999,
           "maximum_ms": 0.0263359994,
           "samples_ms": [
             0.0205760002,
@@ -1631,7 +1631,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.334816009,
-          "median_ms": 0.336479992,
+          "median_ms": 0.3364000025,
           "maximum_ms": 0.339264005,
           "samples_ms": [
             0.336576015,
@@ -1666,7 +1666,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.457760006,
-          "median_ms": 0.459903985,
+          "median_ms": 0.4598719925,
           "maximum_ms": 0.462175995,
           "samples_ms": [
             0.45984,
@@ -1732,7 +1732,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.045855999,
-          "median_ms": 0.0460480005,
+          "median_ms": 0.04603200035,
           "maximum_ms": 0.0482559986,
           "samples_ms": [
             0.0460480005,
@@ -1767,7 +1767,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.102880001,
-          "median_ms": 0.103231996,
+          "median_ms": 0.103216,
           "maximum_ms": 0.104960002,
           "samples_ms": [
             0.103359997,
@@ -1802,7 +1802,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.0282879993,
-          "median_ms": 0.0294720009,
+          "median_ms": 0.029232,
           "maximum_ms": 0.0300479997,
           "samples_ms": [
             0.0282879993,
@@ -1837,7 +1837,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.48665601,
-          "median_ms": 0.48793599,
+          "median_ms": 0.487920001,
           "maximum_ms": 0.488512009,
           "samples_ms": [
             0.488512009,
@@ -1872,7 +1872,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.65427202,
-          "median_ms": 0.655776024,
+          "median_ms": 0.655680001,
           "maximum_ms": 0.656704009,
           "samples_ms": [
             0.655776024,
@@ -1938,7 +1938,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.0480960011,
-          "median_ms": 0.0491520017,
+          "median_ms": 0.04913600160000001,
           "maximum_ms": 0.0501759984,
           "samples_ms": [
             0.0500800014,
@@ -1973,7 +1973,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.10176,
-          "median_ms": 0.103104003,
+          "median_ms": 0.1030240025,
           "maximum_ms": 0.104672,
           "samples_ms": [
             0.103647999,
@@ -2008,7 +2008,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.0285439994,
-          "median_ms": 0.0300159995,
+          "median_ms": 0.029984000150000002,
           "maximum_ms": 0.0311999992,
           "samples_ms": [
             0.0285439994,
@@ -2043,7 +2043,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.487583995,
-          "median_ms": 0.489823997,
+          "median_ms": 0.48963199550000003,
           "maximum_ms": 0.491519988,
           "samples_ms": [
             0.489823997,
@@ -2078,7 +2078,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.656639993,
-          "median_ms": 0.658783972,
+          "median_ms": 0.6586079895000001,
           "maximum_ms": 0.660896003,
           "samples_ms": [
             0.660063982,
@@ -2144,7 +2144,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.0518720001,
-          "median_ms": 0.0537599996,
+          "median_ms": 0.0536959991,
           "maximum_ms": 0.0542079993,
           "samples_ms": [
             0.0542079993,
@@ -2179,7 +2179,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.103423998,
-          "median_ms": 0.105503999,
+          "median_ms": 0.1054719985,
           "maximum_ms": 0.106944002,
           "samples_ms": [
             0.106720001,
@@ -2214,7 +2214,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.0287040006,
-          "median_ms": 0.0296,
+          "median_ms": 0.02956799975,
           "maximum_ms": 0.0315520018,
           "samples_ms": [
             0.0297279991,
@@ -2249,7 +2249,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.495296001,
-          "median_ms": 0.496192008,
+          "median_ms": 0.4961760045,
           "maximum_ms": 0.497280002,
           "samples_ms": [
             0.496192008,
@@ -2284,7 +2284,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.671104014,
-          "median_ms": 0.674304008,
+          "median_ms": 0.6742720005,
           "maximum_ms": 0.675776005,
           "samples_ms": [
             0.674239993,
@@ -2350,7 +2350,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.0591039993,
-          "median_ms": 0.0620479994,
+          "median_ms": 0.06163199995,
           "maximum_ms": 0.0625919998,
           "samples_ms": [
             0.0620479994,
@@ -2385,7 +2385,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.108543999,
-          "median_ms": 0.110976003,
+          "median_ms": 0.110960003,
           "maximum_ms": 0.113279998,
           "samples_ms": [
             0.110624,
@@ -2420,7 +2420,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.0288960002,
-          "median_ms": 0.0305279996,
+          "median_ms": 0.03049599935,
           "maximum_ms": 0.0315200016,
           "samples_ms": [
             0.0311040003,
@@ -2455,7 +2455,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.498144001,
-          "median_ms": 0.498879999,
+          "median_ms": 0.4988159985,
           "maximum_ms": 0.501951993,
           "samples_ms": [
             0.499487996,
@@ -2490,7 +2490,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.686496019,
-          "median_ms": 0.689279974,
+          "median_ms": 0.689215988,
           "maximum_ms": 0.692831993,
           "samples_ms": [
             0.690047979,
@@ -2591,7 +2591,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.133151993,
-          "median_ms": 0.134432003,
+          "median_ms": 0.1343680025,
           "maximum_ms": 0.135391995,
           "samples_ms": [
             0.134271994,
@@ -2626,7 +2626,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.0428799987,
-          "median_ms": 0.0437760018,
+          "median_ms": 0.04376000165,
           "maximum_ms": 0.0469439998,
           "samples_ms": [
             0.0430720001,
@@ -2696,7 +2696,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.884127975,
-          "median_ms": 0.885375977,
+          "median_ms": 0.8853600025,
           "maximum_ms": 0.88617599,
           "samples_ms": [
             0.88617599,
@@ -2762,7 +2762,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.0769279972,
-          "median_ms": 0.0786880031,
+          "median_ms": 0.07867200299999999,
           "maximum_ms": 0.0789759979,
           "samples_ms": [
             0.0783040002,
@@ -2797,7 +2797,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.133343995,
-          "median_ms": 0.134463996,
+          "median_ms": 0.1344319955,
           "maximum_ms": 0.138623998,
           "samples_ms": [
             0.134496003,
@@ -2832,7 +2832,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.0420479998,
-          "median_ms": 0.0425920002,
+          "median_ms": 0.0425279997,
           "maximum_ms": 0.0441280007,
           "samples_ms": [
             0.0436160006,
@@ -2867,7 +2867,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.655456007,
-          "median_ms": 0.657952011,
+          "median_ms": 0.657664001,
           "maximum_ms": 0.659680009,
           "samples_ms": [
             0.658272028,
@@ -2902,7 +2902,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.899200022,
-          "median_ms": 0.900448024,
+          "median_ms": 0.9002560079999999,
           "maximum_ms": 0.90249598,
           "samples_ms": [
             0.901664019,
@@ -2968,7 +2968,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.0787520036,
-          "median_ms": 0.0803200006,
+          "median_ms": 0.0799200013,
           "maximum_ms": 0.0811839998,
           "samples_ms": [
             0.0811839998,
@@ -3003,7 +3003,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.139136001,
-          "median_ms": 0.140832007,
+          "median_ms": 0.1407520025,
           "maximum_ms": 0.142368004,
           "samples_ms": [
             0.142368004,
@@ -3038,7 +3038,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.0426880009,
-          "median_ms": 0.0438399985,
+          "median_ms": 0.0437759999,
           "maximum_ms": 0.0449599996,
           "samples_ms": [
             0.0449599996,
@@ -3108,7 +3108,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.923648,
-          "median_ms": 0.926400006,
+          "median_ms": 0.926384002,
           "maximum_ms": 0.927583992,
           "samples_ms": [
             0.925279975,
@@ -3174,7 +3174,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.0900800005,
-          "median_ms": 0.093088001,
+          "median_ms": 0.09259200095,
           "maximum_ms": 0.0964479968,
           "samples_ms": [
             0.0931840017,
@@ -3209,7 +3209,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.145408005,
-          "median_ms": 0.148415998,
+          "median_ms": 0.14830400049999998,
           "maximum_ms": 0.150815994,
           "samples_ms": [
             0.147423998,
@@ -3279,7 +3279,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.680832028,
-          "median_ms": 0.682879984,
+          "median_ms": 0.6828639805000001,
           "maximum_ms": 0.685087979,
           "samples_ms": [
             0.682784021,
@@ -3314,7 +3314,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.95302403,
-          "median_ms": 0.957120001,
+          "median_ms": 0.9570400115,
           "maximum_ms": 0.962912023,
           "samples_ms": [
             0.953791976,
@@ -3380,7 +3380,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 0.154144004,
-          "median_ms": 0.154400006,
+          "median_ms": 0.15438400200000002,
           "maximum_ms": 0.156256005,
           "samples_ms": [
             0.154336005,
@@ -3450,7 +3450,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 0.0813760012,
-          "median_ms": 0.0828799978,
+          "median_ms": 0.08286399765,
           "maximum_ms": 0.0842880011,
           "samples_ms": [
             0.0827519968,
@@ -3485,7 +3485,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 1.03014398,
-          "median_ms": 1.03139198,
+          "median_ms": 1.0313439949999998,
           "maximum_ms": 1.03248,
           "samples_ms": [
             1.03113604,
@@ -3621,7 +3621,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.214016005,
-          "median_ms": 0.215680003,
+          "median_ms": 0.215648003,
           "maximum_ms": 0.217664003,
           "samples_ms": [
             0.215424001,
@@ -3656,7 +3656,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.0815680027,
-          "median_ms": 0.0832640007,
+          "median_ms": 0.0832480006,
           "maximum_ms": 0.0842240006,
           "samples_ms": [
             0.0830719993,
@@ -3691,7 +3691,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 1.03526402,
-          "median_ms": 1.03737605,
+          "median_ms": 1.037360015,
           "maximum_ms": 1.03856003,
           "samples_ms": [
             1.03727996,
@@ -3726,7 +3726,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 1.48275197,
-          "median_ms": 1.48550403,
+          "median_ms": 1.4854240399999998,
           "maximum_ms": 1.48767996,
           "samples_ms": [
             1.48681605,
@@ -3827,7 +3827,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 0.217087999,
-          "median_ms": 0.218272001,
+          "median_ms": 0.21825599699999998,
           "maximum_ms": 0.219551995,
           "samples_ms": [
             0.217087999,
@@ -3862,7 +3862,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 0.0813760012,
-          "median_ms": 0.0836480036,
+          "median_ms": 0.0836320035,
           "maximum_ms": 0.084735997,
           "samples_ms": [
             0.0824960023,
@@ -3897,7 +3897,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 1.04092801,
-          "median_ms": 1.04211199,
+          "median_ms": 1.042047975,
           "maximum_ms": 1.04326403,
           "samples_ms": [
             1.04300797,
@@ -3932,7 +3932,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 1.49542403,
-          "median_ms": 1.49763203,
+          "median_ms": 1.49755204,
           "maximum_ms": 1.50006402,
           "samples_ms": [
             1.49747205,
@@ -3998,7 +3998,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 0.181216002,
-          "median_ms": 0.183359995,
+          "median_ms": 0.18327999849999999,
           "maximum_ms": 0.187455997,
           "samples_ms": [
             0.183008,
@@ -4033,7 +4033,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 0.221184,
-          "median_ms": 0.224575996,
+          "median_ms": 0.22455999999999998,
           "maximum_ms": 0.225759998,
           "samples_ms": [
             0.223744005,
@@ -4068,7 +4068,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 0.0822400004,
-          "median_ms": 0.0840959996,
+          "median_ms": 0.0839679986,
           "maximum_ms": 0.0852480009,
           "samples_ms": [
             0.0837759972,
@@ -4103,7 +4103,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 1.04611194,
-          "median_ms": 1.04768002,
+          "median_ms": 1.04764801,
           "maximum_ms": 1.05062401,
           "samples_ms": [
             1.04822397,
@@ -4204,7 +4204,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.263936013,
-          "median_ms": 0.264863998,
+          "median_ms": 0.26484799400000003,
           "maximum_ms": 0.266784012,
           "samples_ms": [
             0.265792012,
@@ -4239,7 +4239,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.30003199,
-          "median_ms": 0.301984012,
+          "median_ms": 0.30192001150000003,
           "maximum_ms": 0.306400001,
           "samples_ms": [
             0.301696002,
@@ -4274,7 +4274,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.134752005,
-          "median_ms": 0.136767998,
+          "median_ms": 0.136639997,
           "maximum_ms": 0.138080001,
           "samples_ms": [
             0.135488003,
@@ -4309,7 +4309,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 1.44582403,
-          "median_ms": 1.44931197,
+          "median_ms": 1.44910401,
           "maximum_ms": 1.45372796,
           "samples_ms": [
             1.449664,
@@ -4344,7 +4344,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 2.13715196,
-          "median_ms": 2.13977599,
+          "median_ms": 2.13956797,
           "maximum_ms": 2.14102411,
           "samples_ms": [
             2.13919997,
@@ -4480,7 +4480,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 0.136928007,
-          "median_ms": 0.137823999,
+          "median_ms": 0.1377760025,
           "maximum_ms": 0.142176002,
           "samples_ms": [
             0.137823999,
@@ -4515,7 +4515,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 1.45603204,
-          "median_ms": 1.45881605,
+          "median_ms": 1.458752035,
           "maximum_ms": 1.46076798,
           "samples_ms": [
             1.45913601,
@@ -4550,7 +4550,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 2.16720009,
-          "median_ms": 2.17014408,
+          "median_ms": 2.1700320250000003,
           "maximum_ms": 2.17299199,
           "samples_ms": [
             2.1711359,
@@ -4616,7 +4616,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 0.28115201,
-          "median_ms": 0.282240003,
+          "median_ms": 0.2822239995,
           "maximum_ms": 0.283392012,
           "samples_ms": [
             0.282528013,
@@ -4651,7 +4651,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 0.308223993,
-          "median_ms": 0.310048014,
+          "median_ms": 0.31003201,
           "maximum_ms": 0.314240009,
           "samples_ms": [
             0.310463995,
@@ -4686,7 +4686,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 0.136544004,
-          "median_ms": 0.137439996,
+          "median_ms": 0.13737599550000001,
           "maximum_ms": 0.138912007,
           "samples_ms": [
             0.137311995,
@@ -4721,7 +4721,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 1.46921599,
-          "median_ms": 1.47196805,
+          "median_ms": 1.471855995,
           "maximum_ms": 1.47254395,
           "samples_ms": [
             1.47203195,
@@ -4756,7 +4756,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 2.18419194,
-          "median_ms": 2.18803191,
+          "median_ms": 2.188015935,
           "maximum_ms": 2.19215989,
           "samples_ms": [
             2.18799996,
@@ -4822,7 +4822,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.308416009,
-          "median_ms": 0.309920013,
+          "median_ms": 0.3098560125,
           "maximum_ms": 0.313760012,
           "samples_ms": [
             0.31251201,
@@ -4857,7 +4857,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.313279986,
-          "median_ms": 0.316192001,
+          "median_ms": 0.3161440045,
           "maximum_ms": 0.317503989,
           "samples_ms": [
             0.31436801,
@@ -4892,7 +4892,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.138175994,
-          "median_ms": 0.139456004,
+          "median_ms": 0.139408,
           "maximum_ms": 0.140192002,
           "samples_ms": [
             0.139456004,
@@ -4927,7 +4927,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 1.46755195,
-          "median_ms": 1.46969604,
+          "median_ms": 1.46948802,
           "maximum_ms": 1.47231996,
           "samples_ms": [
             1.46841598,
@@ -4962,7 +4962,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 2.21763206,
-          "median_ms": 2.22057605,
+          "median_ms": 2.2205280099999998,
           "maximum_ms": 2.22656012,
           "samples_ms": [
             2.22656012,
@@ -5028,7 +5028,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 1.028512,
-          "median_ms": 1.02976,
+          "median_ms": 1.029727995,
           "maximum_ms": 1.03167999,
           "samples_ms": [
             1.03167999,
@@ -5063,7 +5063,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 0.942848027,
-          "median_ms": 0.951103985,
+          "median_ms": 0.9510720075000001,
           "maximum_ms": 0.952960014,
           "samples_ms": [
             0.942848027,
@@ -5098,7 +5098,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 0.507871985,
-          "median_ms": 0.509984016,
+          "median_ms": 0.509903997,
           "maximum_ms": 0.511712015,
           "samples_ms": [
             0.51078397,
@@ -5133,7 +5133,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 5.14595222,
-          "median_ms": 5.15033579,
+          "median_ms": 5.150255919999999,
           "maximum_ms": 5.15334415,
           "samples_ms": [
             5.148736,
@@ -5168,7 +5168,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 7.62195206,
-          "median_ms": 7.62726402,
+          "median_ms": 7.626735925,
           "maximum_ms": 7.6328001,
           "samples_ms": [
             7.62915182,
@@ -5234,7 +5234,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 1.07987201,
-          "median_ms": 1.08220804,
+          "median_ms": 1.08217603,
           "maximum_ms": 1.08425605,
           "samples_ms": [
             1.08227205,
@@ -5269,7 +5269,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 0.957408011,
-          "median_ms": 0.960608006,
+          "median_ms": 0.960336,
           "maximum_ms": 0.963999987,
           "samples_ms": [
             0.960608006,
@@ -5339,7 +5339,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 5.15555191,
-          "median_ms": 5.15984011,
+          "median_ms": 5.1597759750000005,
           "maximum_ms": 5.16374397,
           "samples_ms": [
             5.16153622,
@@ -5374,7 +5374,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 7.69795179,
-          "median_ms": 7.70249605,
+          "median_ms": 7.702336069999999,
           "maximum_ms": 7.70768023,
           "samples_ms": [
             7.70025587,
@@ -5440,7 +5440,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 1.08595204,
-          "median_ms": 1.08636796,
+          "median_ms": 1.08635199,
           "maximum_ms": 1.08832002,
           "samples_ms": [
             1.08614397,
@@ -5475,7 +5475,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 0.961759984,
-          "median_ms": 0.965759993,
+          "median_ms": 0.965712011,
           "maximum_ms": 0.967679977,
           "samples_ms": [
             0.965664029,
@@ -5545,7 +5545,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 5.15881586,
-          "median_ms": 5.16099215,
+          "median_ms": 5.16095996,
           "maximum_ms": 5.16604805,
           "samples_ms": [
             5.16099215,
@@ -5580,7 +5580,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 7.71110392,
-          "median_ms": 7.71478415,
+          "median_ms": 7.71449614,
           "maximum_ms": 7.7217598,
           "samples_ms": [
             7.71785593,
@@ -5646,7 +5646,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 1.21094406,
-          "median_ms": 1.21398401,
+          "median_ms": 1.213696,
           "maximum_ms": 1.21737599,
           "samples_ms": [
             1.21596801,
@@ -5681,7 +5681,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 1.04345596,
-          "median_ms": 1.04844797,
+          "median_ms": 1.0482719550000001,
           "maximum_ms": 1.05232,
           "samples_ms": [
             1.04956806,
@@ -5716,7 +5716,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 0.59552002,
-          "median_ms": 0.599135995,
+          "median_ms": 0.598960012,
           "maximum_ms": 0.606335998,
           "samples_ms": [
             0.601216018,
@@ -5751,7 +5751,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 5.2670722,
-          "median_ms": 5.27331209,
+          "median_ms": 5.273280145,
           "maximum_ms": 5.27807999,
           "samples_ms": [
             5.27625608,
@@ -5786,7 +5786,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 8.13926411,
-          "median_ms": 8.14675236,
+          "median_ms": 8.146640300000001,
           "maximum_ms": 8.15331173,
           "samples_ms": [
             8.13926411,
@@ -5852,7 +5852,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.014304,
-          "median_ms": 0.0152639998,
+          "median_ms": 0.0152479997,
           "maximum_ms": 0.0154879997,
           "samples_ms": [
             0.0151359998,
@@ -5887,7 +5887,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.0395839997,
-          "median_ms": 0.0412480012,
+          "median_ms": 0.041104000099999996,
           "maximum_ms": 0.0417600013,
           "samples_ms": [
             0.0416320004,
@@ -5922,7 +5922,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.0126400003,
-          "median_ms": 0.014304,
+          "median_ms": 0.014208000200000001,
           "maximum_ms": 0.0190399997,
           "samples_ms": [
             0.0140800001,
@@ -5957,7 +5957,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.168448001,
-          "median_ms": 0.169440001,
+          "median_ms": 0.1694239975,
           "maximum_ms": 0.170527995,
           "samples_ms": [
             0.170047998,
@@ -5992,7 +5992,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.227295995,
-          "median_ms": 0.228031993,
+          "median_ms": 0.22799999999999998,
           "maximum_ms": 0.228863999,
           "samples_ms": [
             0.227968007,
@@ -6058,7 +6058,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.016384,
-          "median_ms": 0.0174080003,
+          "median_ms": 0.01737600005,
           "maximum_ms": 0.0195199996,
           "samples_ms": [
             0.0173119996,
@@ -6093,7 +6093,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.040959999,
-          "median_ms": 0.0425920002,
+          "median_ms": 0.042559999949999996,
           "maximum_ms": 0.0435520001,
           "samples_ms": [
             0.0419839993,
@@ -6128,7 +6128,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.0131200003,
-          "median_ms": 0.0143360002,
+          "median_ms": 0.0143200001,
           "maximum_ms": 0.0160639994,
           "samples_ms": [
             0.0143360002,
@@ -6163,7 +6163,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.168543994,
-          "median_ms": 0.170463994,
+          "median_ms": 0.1704479975,
           "maximum_ms": 0.172736004,
           "samples_ms": [
             0.172736004,
@@ -6198,7 +6198,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.231424004,
-          "median_ms": 0.232511997,
+          "median_ms": 0.2324479965,
           "maximum_ms": 0.234656006,
           "samples_ms": [
             0.232063994,
@@ -6264,7 +6264,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.0183680002,
-          "median_ms": 0.0193600003,
+          "median_ms": 0.01934400015,
           "maximum_ms": 0.0196160004,
           "samples_ms": [
             0.0192319993,
@@ -6299,7 +6299,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.0430079997,
-          "median_ms": 0.0453439988,
+          "median_ms": 0.0453279987,
           "maximum_ms": 0.0457280017,
           "samples_ms": [
             0.0445119999,
@@ -6334,7 +6334,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.0128640002,
-          "median_ms": 0.0145920003,
+          "median_ms": 0.01457600015,
           "maximum_ms": 0.0157760009,
           "samples_ms": [
             0.0151359998,
@@ -6369,7 +6369,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.172959998,
-          "median_ms": 0.173536003,
+          "median_ms": 0.1734879985,
           "maximum_ms": 0.175136,
           "samples_ms": [
             0.173536003,
@@ -6404,7 +6404,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.239327997,
-          "median_ms": 0.240480006,
+          "median_ms": 0.2404480055,
           "maximum_ms": 0.241791993,
           "samples_ms": [
             0.240575999,
@@ -6470,7 +6470,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.0232319999,
-          "median_ms": 0.0251839999,
+          "median_ms": 0.02513599955,
           "maximum_ms": 0.0256319996,
           "samples_ms": [
             0.0234239995,
@@ -6505,7 +6505,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.0481280014,
-          "median_ms": 0.0496000014,
+          "median_ms": 0.04937600155000001,
           "maximum_ms": 0.0504320003,
           "samples_ms": [
             0.0504320003,
@@ -6575,7 +6575,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.176064,
-          "median_ms": 0.178080007,
+          "median_ms": 0.177664004,
           "maximum_ms": 0.180127993,
           "samples_ms": [
             0.180127993,
@@ -6610,7 +6610,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.252223998,
-          "median_ms": 0.254815996,
+          "median_ms": 0.25479999200000003,
           "maximum_ms": 0.258848011,
           "samples_ms": [
             0.254016012,
@@ -6711,7 +6711,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.0696320012,
-          "median_ms": 0.0706240013,
+          "median_ms": 0.07060800119999999,
           "maximum_ms": 0.0711999983,
           "samples_ms": [
             0.0707200021,
@@ -6746,7 +6746,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.0179839991,
-          "median_ms": 0.0196160004,
+          "median_ms": 0.01960000025,
           "maximum_ms": 0.0204799995,
           "samples_ms": [
             0.0185599998,
@@ -6816,7 +6816,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.432448,
-          "median_ms": 0.433631986,
+          "median_ms": 0.433535993,
           "maximum_ms": 0.435328007,
           "samples_ms": [
             0.432895988,
@@ -6882,7 +6882,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.0271680001,
-          "median_ms": 0.027648,
+          "median_ms": 0.0276159998,
           "maximum_ms": 0.0287679993,
           "samples_ms": [
             0.0287679993,
@@ -6987,7 +6987,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.326624006,
-          "median_ms": 0.328447998,
+          "median_ms": 0.328288004,
           "maximum_ms": 0.330783993,
           "samples_ms": [
             0.330783993,
@@ -7022,7 +7022,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.434688002,
-          "median_ms": 0.435167998,
+          "median_ms": 0.435151994,
           "maximum_ms": 0.438432008,
           "samples_ms": [
             0.434688002,
@@ -7123,7 +7123,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.0727040023,
-          "median_ms": 0.0748799965,
+          "median_ms": 0.0748640001,
           "maximum_ms": 0.0764160007,
           "samples_ms": [
             0.074752003,
@@ -7193,7 +7193,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.330240011,
-          "median_ms": 0.331039995,
+          "median_ms": 0.331008002,
           "maximum_ms": 0.332767993,
           "samples_ms": [
             0.332639992,
@@ -7294,7 +7294,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.0354240015,
-          "median_ms": 0.0378240012,
+          "median_ms": 0.037744000550000004,
           "maximum_ms": 0.0395839997,
           "samples_ms": [
             0.0376639999,
@@ -7329,7 +7329,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.0768000036,
-          "median_ms": 0.0791359991,
+          "median_ms": 0.07911999895,
           "maximum_ms": 0.0811519995,
           "samples_ms": [
             0.0785600021,
@@ -7399,7 +7399,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.335040003,
-          "median_ms": 0.336896002,
+          "median_ms": 0.33684800550000005,
           "maximum_ms": 0.339679986,
           "samples_ms": [
             0.335904002,
@@ -7434,7 +7434,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.455680013,
-          "median_ms": 0.460352004,
+          "median_ms": 0.46031999599999995,
           "maximum_ms": 0.463647991,
           "samples_ms": [
             0.461055994,
@@ -7500,7 +7500,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.0457919985,
-          "median_ms": 0.0461760014,
+          "median_ms": 0.0461600013,
           "maximum_ms": 0.0480320007,
           "samples_ms": [
             0.0479680002,
@@ -7535,7 +7535,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.102655999,
-          "median_ms": 0.103136003,
+          "median_ms": 0.103120003,
           "maximum_ms": 0.104192004,
           "samples_ms": [
             0.103168003,
@@ -7640,7 +7640,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.654496014,
-          "median_ms": 0.655744016,
+          "median_ms": 0.6556960045,
           "maximum_ms": 0.656319976,
           "samples_ms": [
             0.655744016,
@@ -7706,7 +7706,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.0479039997,
-          "median_ms": 0.0482879989,
+          "median_ms": 0.04827199875,
           "maximum_ms": 0.0501440018,
           "samples_ms": [
             0.0500800014,
@@ -7741,7 +7741,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.102495998,
-          "median_ms": 0.103008002,
+          "median_ms": 0.102992002,
           "maximum_ms": 0.104960002,
           "samples_ms": [
             0.103776,
@@ -7776,7 +7776,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.0287040006,
-          "median_ms": 0.0307839997,
+          "median_ms": 0.0306879999,
           "maximum_ms": 0.0332159996,
           "samples_ms": [
             0.0293119997,
@@ -7811,7 +7811,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.487488002,
-          "median_ms": 0.489695996,
+          "median_ms": 0.48964799950000004,
           "maximum_ms": 0.491872013,
           "samples_ms": [
             0.490687996,
@@ -7846,7 +7846,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.656448007,
-          "median_ms": 0.658559978,
+          "median_ms": 0.6585119964999999,
           "maximum_ms": 0.660672009,
           "samples_ms": [
             0.660416007,
@@ -7912,7 +7912,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.0518720001,
-          "median_ms": 0.0521599986,
+          "median_ms": 0.05214399845,
           "maximum_ms": 0.054175999,
           "samples_ms": [
             0.0529920012,
@@ -7947,7 +7947,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.103423998,
-          "median_ms": 0.105599999,
+          "median_ms": 0.1055039985,
           "maximum_ms": 0.106848001,
           "samples_ms": [
             0.105599999,
@@ -7982,7 +7982,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.0285439994,
-          "median_ms": 0.0299200006,
+          "median_ms": 0.02988800035,
           "maximum_ms": 0.0314880013,
           "samples_ms": [
             0.0298560001,
@@ -8153,7 +8153,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.108543999,
-          "median_ms": 0.110976003,
+          "median_ms": 0.11092800250000001,
           "maximum_ms": 0.113279998,
           "samples_ms": [
             0.108576,
@@ -8188,7 +8188,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.0296640005,
-          "median_ms": 0.0306560006,
+          "median_ms": 0.03060800025,
           "maximum_ms": 0.0316799991,
           "samples_ms": [
             0.0311999992,
@@ -8223,7 +8223,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.497312009,
-          "median_ms": 0.499168009,
+          "median_ms": 0.49904000800000003,
           "maximum_ms": 0.500832021,
           "samples_ms": [
             0.499327987,
@@ -8258,7 +8258,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.686720014,
-          "median_ms": 0.689599991,
+          "median_ms": 0.689424008,
           "maximum_ms": 0.695263982,
           "samples_ms": [
             0.686720014,
@@ -8359,7 +8359,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.133471996,
-          "median_ms": 0.134016007,
+          "median_ms": 0.13398400700000002,
           "maximum_ms": 0.134911999,
           "samples_ms": [
             0.133471996,
@@ -8394,7 +8394,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.0414079987,
-          "median_ms": 0.0430399999,
+          "median_ms": 0.04299199955,
           "maximum_ms": 0.0442560017,
           "samples_ms": [
             0.0426880009,
@@ -8429,7 +8429,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.646336019,
-          "median_ms": 0.647679985,
+          "median_ms": 0.647663981,
           "maximum_ms": 0.648576021,
           "samples_ms": [
             0.648479998,
@@ -8464,7 +8464,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.884096026,
-          "median_ms": 0.885280013,
+          "median_ms": 0.8852159975,
           "maximum_ms": 0.886048019,
           "samples_ms": [
             0.885407984,
@@ -8565,7 +8565,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.132095993,
-          "median_ms": 0.133983999,
+          "median_ms": 0.133919999,
           "maximum_ms": 0.136063993,
           "samples_ms": [
             0.135296002,
@@ -8600,7 +8600,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.0427520014,
-          "median_ms": 0.0434879996,
+          "median_ms": 0.04347199945,
           "maximum_ms": 0.0442879982,
           "samples_ms": [
             0.0439999998,
@@ -8635,7 +8635,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.655871987,
-          "median_ms": 0.657952011,
+          "median_ms": 0.6576000155,
           "maximum_ms": 0.65923202,
           "samples_ms": [
             0.658752024,
@@ -8670,7 +8670,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.898591995,
-          "median_ms": 0.900640011,
+          "median_ms": 0.9005919995,
           "maximum_ms": 0.902624011,
           "samples_ms": [
             0.90249598,
@@ -8736,7 +8736,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.0785920024,
-          "median_ms": 0.0806080028,
+          "median_ms": 0.08054400235,
           "maximum_ms": 0.0809599981,
           "samples_ms": [
             0.0809599981,
@@ -8771,7 +8771,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.138239995,
-          "median_ms": 0.140768006,
+          "median_ms": 0.1407520025,
           "maximum_ms": 0.142048001,
           "samples_ms": [
             0.141184002,
@@ -8806,7 +8806,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.042208001,
-          "median_ms": 0.0437120013,
+          "median_ms": 0.04361600055,
           "maximum_ms": 0.0453759991,
           "samples_ms": [
             0.0440640002,
@@ -8841,7 +8841,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.67286402,
-          "median_ms": 0.674015999,
+          "median_ms": 0.673999995,
           "maximum_ms": 0.675072014,
           "samples_ms": [
             0.674880028,
@@ -8876,7 +8876,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.924672008,
-          "median_ms": 0.926527977,
+          "median_ms": 0.926512003,
           "maximum_ms": 0.928224027,
           "samples_ms": [
             0.925023973,
@@ -8942,7 +8942,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.0901440009,
-          "median_ms": 0.0921280012,
+          "median_ms": 0.09211200105,
           "maximum_ms": 0.0951360017,
           "samples_ms": [
             0.0951360017,
@@ -9012,7 +9012,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.0431360006,
-          "median_ms": 0.0440640002,
+          "median_ms": 0.0440480001,
           "maximum_ms": 0.0446400009,
           "samples_ms": [
             0.0446400009,
@@ -9082,7 +9082,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.950879991,
-          "median_ms": 0.954783976,
+          "median_ms": 0.954751998,
           "maximum_ms": 0.959487975,
           "samples_ms": [
             0.952992022,
@@ -9218,7 +9218,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 0.0816640034,
-          "median_ms": 0.0823360011,
+          "median_ms": 0.08224000035000001,
           "maximum_ms": 0.0835200027,
           "samples_ms": [
             0.0824000016,
@@ -9288,7 +9288,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 1.46691203,
-          "median_ms": 1.46771204,
+          "median_ms": 1.46769601,
           "maximum_ms": 1.47139204,
           "samples_ms": [
             1.46902394,
@@ -9354,7 +9354,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.159615993,
-          "median_ms": 0.160576001,
+          "median_ms": 0.160351999,
           "maximum_ms": 0.161696002,
           "samples_ms": [
             0.161632001,
@@ -9389,7 +9389,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.213983998,
-          "median_ms": 0.215839997,
+          "median_ms": 0.2158079965,
           "maximum_ms": 0.217503995,
           "samples_ms": [
             0.215775996,
@@ -9424,7 +9424,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.081791997,
-          "median_ms": 0.0833280012,
+          "median_ms": 0.08328000085000001,
           "maximum_ms": 0.0854080021,
           "samples_ms": [
             0.0826879963,
@@ -9459,7 +9459,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 1.03558397,
-          "median_ms": 1.03705597,
+          "median_ms": 1.03697598,
           "maximum_ms": 1.03836799,
           "samples_ms": [
             1.03760004,
@@ -9494,7 +9494,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 1.480672,
-          "median_ms": 1.48556805,
+          "median_ms": 1.485520005,
           "maximum_ms": 1.48707199,
           "samples_ms": [
             1.48707199,
@@ -9630,7 +9630,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 0.0821759999,
-          "median_ms": 0.0832000002,
+          "median_ms": 0.0831840001,
           "maximum_ms": 0.0851199999,
           "samples_ms": [
             0.0845760033,
@@ -9665,7 +9665,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 1.03936005,
-          "median_ms": 1.04217601,
+          "median_ms": 1.04209602,
           "maximum_ms": 1.04335999,
           "samples_ms": [
             1.04217601,
@@ -9766,7 +9766,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 0.181024,
-          "median_ms": 0.182815999,
+          "median_ms": 0.1828000025,
           "maximum_ms": 0.185471997,
           "samples_ms": [
             0.183423996,
@@ -9836,7 +9836,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 0.0834560022,
-          "median_ms": 0.0847039968,
+          "median_ms": 0.08451199905000001,
           "maximum_ms": 0.0853440017,
           "samples_ms": [
             0.0840319991,
@@ -9871,7 +9871,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 1.04716802,
-          "median_ms": 1.04950404,
+          "median_ms": 1.049311995,
           "maximum_ms": 1.05158401,
           "samples_ms": [
             1.05148804,
@@ -9906,7 +9906,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 1.52227199,
-          "median_ms": 1.52704,
+          "median_ms": 1.52694398,
           "maximum_ms": 1.531968,
           "samples_ms": [
             1.52854395,
@@ -9972,7 +9972,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.264032006,
-          "median_ms": 0.265024006,
+          "median_ms": 0.2650080025,
           "maximum_ms": 0.266303986,
           "samples_ms": [
             0.265024006,
@@ -10007,7 +10007,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.299008012,
-          "median_ms": 0.301472008,
+          "median_ms": 0.30144000049999997,
           "maximum_ms": 0.303296,
           "samples_ms": [
             0.30102399,
@@ -10042,7 +10042,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.134591997,
-          "median_ms": 0.136416003,
+          "median_ms": 0.13636799900000002,
           "maximum_ms": 0.137983993,
           "samples_ms": [
             0.136800006,
@@ -10112,7 +10112,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 2.13484812,
-          "median_ms": 2.13913608,
+          "median_ms": 2.13910401,
           "maximum_ms": 2.14246392,
           "samples_ms": [
             2.14057589,
@@ -10213,7 +10213,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 0.305151999,
-          "median_ms": 0.307808012,
+          "median_ms": 0.307792008,
           "maximum_ms": 0.320544004,
           "samples_ms": [
             0.307776004,
@@ -10248,7 +10248,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 0.136575997,
-          "median_ms": 0.138175994,
+          "median_ms": 0.1381599975,
           "maximum_ms": 0.139423996,
           "samples_ms": [
             0.137536004,
@@ -10283,7 +10283,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 1.45558405,
-          "median_ms": 1.45836794,
+          "median_ms": 1.4582719800000001,
           "maximum_ms": 1.46057606,
           "samples_ms": [
             1.45775998,
@@ -10384,7 +10384,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 0.281024009,
-          "median_ms": 0.281567991,
+          "median_ms": 0.28155200199999997,
           "maximum_ms": 0.283775985,
           "samples_ms": [
             0.282047987,
@@ -10419,7 +10419,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 0.307168007,
-          "median_ms": 0.309248,
+          "median_ms": 0.3091839995,
           "maximum_ms": 0.310400009,
           "samples_ms": [
             0.309760004,
@@ -10489,7 +10489,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 1.46943998,
-          "median_ms": 1.47171199,
+          "median_ms": 1.471520005,
           "maximum_ms": 1.47350395,
           "samples_ms": [
             1.46988797,
@@ -10524,7 +10524,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 2.18499207,
-          "median_ms": 2.18812799,
+          "median_ms": 2.188096045,
           "maximum_ms": 2.19196796,
           "samples_ms": [
             2.1880641,
@@ -10590,7 +10590,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.30783999,
-          "median_ms": 0.310016006,
+          "median_ms": 0.3099839985,
           "maximum_ms": 0.313407987,
           "samples_ms": [
             0.310016006,
@@ -10625,7 +10625,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.312319994,
-          "median_ms": 0.315840006,
+          "median_ms": 0.31580799800000003,
           "maximum_ms": 0.317919999,
           "samples_ms": [
             0.312319994,
@@ -10660,7 +10660,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.138047993,
-          "median_ms": 0.139136001,
+          "median_ms": 0.1391199975,
           "maximum_ms": 0.140768006,
           "samples_ms": [
             0.138208002,
@@ -10730,7 +10730,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 2.2191999,
-          "median_ms": 2.22166395,
+          "median_ms": 2.2215039699999997,
           "maximum_ms": 2.22518396,
           "samples_ms": [
             2.22518396,
@@ -10796,7 +10796,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 1.02880001,
-          "median_ms": 1.02988803,
+          "median_ms": 1.029824015,
           "maximum_ms": 1.03113604,
           "samples_ms": [
             1.03014398,
@@ -10831,7 +10831,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 0.948863983,
-          "median_ms": 0.950911999,
+          "median_ms": 0.950895995,
           "maximum_ms": 0.952704012,
           "samples_ms": [
             0.950911999,
@@ -10866,7 +10866,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 0.507871985,
-          "median_ms": 0.509663999,
+          "median_ms": 0.5094879864999999,
           "maximum_ms": 0.510912001,
           "samples_ms": [
             0.509248018,
@@ -10901,7 +10901,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 5.14639997,
-          "median_ms": 5.14860821,
+          "median_ms": 5.14857602,
           "maximum_ms": 5.15257597,
           "samples_ms": [
             5.14854383,
@@ -10936,7 +10936,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 7.61859179,
-          "median_ms": 7.62777615,
+          "median_ms": 7.627760175000001,
           "maximum_ms": 7.63190413,
           "samples_ms": [
             7.63161612,
@@ -11002,7 +11002,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 1.08089602,
-          "median_ms": 1.08217597,
+          "median_ms": 1.082159995,
           "maximum_ms": 1.08419204,
           "samples_ms": [
             1.08220804,
@@ -11037,7 +11037,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 0.957408011,
-          "median_ms": 0.960287988,
+          "median_ms": 0.9599840045000001,
           "maximum_ms": 0.96351999,
           "samples_ms": [
             0.959327996,
@@ -11072,7 +11072,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 0.511168003,
-          "median_ms": 0.512736022,
+          "median_ms": 0.5126880105,
           "maximum_ms": 0.513216019,
           "samples_ms": [
             0.512896001,
@@ -11107,7 +11107,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 5.15782404,
-          "median_ms": 5.16070414,
+          "median_ms": 5.160671949999999,
           "maximum_ms": 5.16457605,
           "samples_ms": [
             5.15862417,
@@ -11142,7 +11142,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 7.69536018,
-          "median_ms": 7.70150423,
+          "median_ms": 7.701472045,
           "maximum_ms": 7.70867205,
           "samples_ms": [
             7.70143986,
@@ -11243,7 +11243,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 0.960479975,
-          "median_ms": 0.964447975,
+          "median_ms": 0.9643839894999999,
           "maximum_ms": 0.966656029,
           "samples_ms": [
             0.964896023,
@@ -11278,7 +11278,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 0.511551976,
-          "median_ms": 0.512992024,
+          "median_ms": 0.5129600165,
           "maximum_ms": 0.514912009,
           "samples_ms": [
             0.514367998,
@@ -11313,7 +11313,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 5.15891218,
-          "median_ms": 5.1614399,
+          "median_ms": 5.161376000000001,
           "maximum_ms": 5.16489601,
           "samples_ms": [
             5.1613121,
@@ -11414,7 +11414,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 1.21104002,
-          "median_ms": 1.21423995,
+          "median_ms": 1.21409595,
           "maximum_ms": 1.21734405,
           "samples_ms": [
             1.21302402,
@@ -11484,7 +11484,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 0.596671999,
-          "median_ms": 0.598752022,
+          "median_ms": 0.5986720025000001,
           "maximum_ms": 0.604991972,
           "samples_ms": [
             0.60147202,
@@ -11519,7 +11519,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 5.2671361,
-          "median_ms": 5.27414417,
+          "median_ms": 5.27388811,
           "maximum_ms": 5.27945614,
           "samples_ms": [
             5.27494383,
@@ -11554,7 +11554,7 @@
           "pair_count_semantics": "packed_all_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 8.1356802,
-          "median_ms": 8.14726353,
+          "median_ms": 8.147167685,
           "maximum_ms": 8.15382385,
           "samples_ms": [
             8.14726353,

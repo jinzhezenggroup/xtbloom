@@ -34,11 +34,11 @@ Compute counters are also removed from closure scope because this host returns
 - D4 rows now distinguish the actual committed 50-bohr retained pair count
   from the dense full-triangle extent. For the largest open cell, the committed
   list contains 129,792 pairs versus a 4,177,920-pair dense extent. The sum of
-  isolated term medians is 3.154 ms open versus 687.712 ms compact; these
+  isolated term medians is 3.154 ms open versus 687.309 ms compact; these
   independently timed terms must not be added to claim public end-to-end
   latency.
 - AES2 intentionally traverses packed all-pairs. The largest-cell summed
-  isolated medians are 16.282 ms for both open and compact topology, supporting
+  isolated medians are 16.281 ms for both open and compact topology, supporting
   the topology-independent design.
 
 This bundle complements the merged migration evidence in the sibling
@@ -95,6 +95,11 @@ records byte count and SHA-256 for every paired per-cell JSON and CSV input.
 `aggregate.py` fails closed on missing coordinates, missing JSON/CSV peers,
 inconsistent provenance, incorrect pair-count semantics, fewer than three
 warmups or 20 samples, or incomplete distributions.
+
+The measured term executables used the upper middle sample as their summary
+field for even-sized distributions. The retained raw CUDA-event samples are
+authoritative: `aggregate.py` recomputes conventional medians as the mean of
+the two middle values, and the harness is corrected for future measurements.
 
 ## Reproduction commands
 

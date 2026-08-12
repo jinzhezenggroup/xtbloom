@@ -2032,10 +2032,9 @@ bool parse_benchmark_options(int argc, char** argv, BenchmarkOptions* options) {
                     (character >= 'A' && character <= 'F');
            });
   };
-  if (!options->json_path.empty() &&
-      (!is_hex_identity(options->source_revision, 40u) ||
-       !is_hex_identity(options->executable_sha256, 64u) ||
-       !is_hex_identity(options->build_identity_sha256, 64u))) {
+  if (!options->json_path.empty() && (!is_hex_identity(options->source_revision, 40u) ||
+                                      !is_hex_identity(options->executable_sha256, 64u) ||
+                                      !is_hex_identity(options->build_identity_sha256, 64u))) {
     fprintf(stderr,
             "file evidence requires a 40-hex source revision and 64-hex "
             "executable/build SHA-256 identities\n");

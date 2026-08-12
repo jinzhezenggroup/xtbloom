@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "benchmark": "xtbloom_cuda_d4_term_matrix",
-  "derivation": "Lossless row/sample aggregation of successful per-cell benchmark artifacts; each source executable writes results only after post-timing validation passes.",
+  "derivation": "Lossless row/sample aggregation of successful per-cell benchmark artifacts; each source executable writes results only after post-timing validation passes. Medians are recomputed from raw samples using the conventional mean of two middle values.",
   "matrix": {
     "topologies": [
       "compact",
@@ -154,7 +154,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.242528006,
-          "median_ms": 0.244639993,
+          "median_ms": 0.2446239965,
           "maximum_ms": 0.245920002,
           "samples_ms": [
             0.244672,
@@ -224,7 +224,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.444543988,
-          "median_ms": 0.445600003,
+          "median_ms": 0.445583999,
           "maximum_ms": 0.449568003,
           "samples_ms": [
             0.446624011,
@@ -325,7 +325,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.187680006,
-          "median_ms": 0.189375997,
+          "median_ms": 0.18936000050000001,
           "maximum_ms": 0.192031994,
           "samples_ms": [
             0.188191995,
@@ -430,7 +430,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.448063999,
-          "median_ms": 0.449952006,
+          "median_ms": 0.4499360025,
           "maximum_ms": 0.451296002,
           "samples_ms": [
             0.449023992,
@@ -496,7 +496,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.0791999996,
-          "median_ms": 0.0813120008,
+          "median_ms": 0.0810399987,
           "maximum_ms": 0.0824960023,
           "samples_ms": [
             0.0816960037,
@@ -531,7 +531,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.200800002,
-          "median_ms": 0.202335998,
+          "median_ms": 0.202320002,
           "maximum_ms": 0.203999996,
           "samples_ms": [
             0.202304006,
@@ -566,7 +566,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.25673601,
-          "median_ms": 0.25801599,
+          "median_ms": 0.258000001,
           "maximum_ms": 0.259359986,
           "samples_ms": [
             0.256799996,
@@ -601,7 +601,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.303456008,
-          "median_ms": 0.305440009,
+          "median_ms": 0.305296004,
           "maximum_ms": 0.307392001,
           "samples_ms": [
             0.306015998,
@@ -636,7 +636,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.466944009,
-          "median_ms": 0.469695985,
+          "median_ms": 0.4696639925,
           "maximum_ms": 0.471487999,
           "samples_ms": [
             0.471487999,
@@ -702,7 +702,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.105184004,
-          "median_ms": 0.106720001,
+          "median_ms": 0.10657599949999999,
           "maximum_ms": 0.109247997,
           "samples_ms": [
             0.108928002,
@@ -737,7 +737,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.249855995,
-          "median_ms": 0.253600001,
+          "median_ms": 0.25358399750000005,
           "maximum_ms": 0.256511986,
           "samples_ms": [
             0.252543986,
@@ -772,7 +772,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.292320013,
-          "median_ms": 0.296640009,
+          "median_ms": 0.29662400499999997,
           "maximum_ms": 0.298687994,
           "samples_ms": [
             0.29676801,
@@ -807,7 +807,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.359968007,
-          "median_ms": 0.363584012,
+          "median_ms": 0.363552004,
           "maximum_ms": 0.365824014,
           "samples_ms": [
             0.362464011,
@@ -842,7 +842,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.526880026,
-          "median_ms": 0.531967998,
+          "median_ms": 0.5318399970000001,
           "maximum_ms": 0.532895982,
           "samples_ms": [
             0.531967998,
@@ -908,7 +908,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.133535996,
-          "median_ms": 0.134688005,
+          "median_ms": 0.1346080005,
           "maximum_ms": 0.135808006,
           "samples_ms": [
             0.133535996,
@@ -943,7 +943,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.301952004,
-          "median_ms": 0.303615987,
+          "median_ms": 0.30329599949999997,
           "maximum_ms": 0.304320008,
           "samples_ms": [
             0.303743988,
@@ -978,7 +978,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.951168001,
-          "median_ms": 0.954879999,
+          "median_ms": 0.9544799925,
           "maximum_ms": 0.955359995,
           "samples_ms": [
             0.955359995,
@@ -1013,7 +1013,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.496416003,
-          "median_ms": 0.498207986,
+          "median_ms": 0.49817599349999997,
           "maximum_ms": 0.499424011,
           "samples_ms": [
             0.496416003,
@@ -1048,7 +1048,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 1.88278401,
-          "median_ms": 1.88479996,
+          "median_ms": 1.8847839849999999,
           "maximum_ms": 1.88873601,
           "samples_ms": [
             1.88508797,
@@ -1114,7 +1114,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.137823999,
-          "median_ms": 0.138144001,
+          "median_ms": 0.1381279975,
           "maximum_ms": 0.140223995,
           "samples_ms": [
             0.138144001,
@@ -1149,7 +1149,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.302944005,
-          "median_ms": 0.304672003,
+          "median_ms": 0.30463999500000005,
           "maximum_ms": 0.307455987,
           "samples_ms": [
             0.304960012,
@@ -1219,7 +1219,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.508960009,
-          "median_ms": 0.512799978,
+          "median_ms": 0.5127519965,
           "maximum_ms": 0.515839994,
           "samples_ms": [
             0.509984016,
@@ -1254,7 +1254,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 1.96096003,
-          "median_ms": 1.96460795,
+          "median_ms": 1.96451199,
           "maximum_ms": 1.96713603,
           "samples_ms": [
             1.96566403,
@@ -1320,7 +1320,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.142207995,
-          "median_ms": 0.144096002,
+          "median_ms": 0.144079998,
           "maximum_ms": 0.14576,
           "samples_ms": [
             0.144160002,
@@ -1355,7 +1355,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.319487989,
-          "median_ms": 0.321920007,
+          "median_ms": 0.3217760025,
           "maximum_ms": 0.324384004,
           "samples_ms": [
             0.321408004,
@@ -1390,7 +1390,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.997407973,
-          "median_ms": 0.998463988,
+          "median_ms": 0.9984479845,
           "maximum_ms": 1.00044799,
           "samples_ms": [
             1.00044799,
@@ -1425,7 +1425,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.522239983,
-          "median_ms": 0.524896026,
+          "median_ms": 0.5248480145,
           "maximum_ms": 0.529407978,
           "samples_ms": [
             0.527167976,
@@ -1460,7 +1460,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 1.98246396,
-          "median_ms": 1.98489594,
+          "median_ms": 1.98487997,
           "maximum_ms": 1.98771203,
           "samples_ms": [
             1.98332798,
@@ -1526,7 +1526,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.169504002,
-          "median_ms": 0.171711996,
+          "median_ms": 0.1716959995,
           "maximum_ms": 0.174303994,
           "samples_ms": [
             0.172544003,
@@ -1561,7 +1561,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.370656013,
-          "median_ms": 0.373760015,
+          "median_ms": 0.373744011,
           "maximum_ms": 0.377279997,
           "samples_ms": [
             0.373760015,
@@ -1596,7 +1596,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 1.03651202,
-          "median_ms": 1.03875196,
+          "median_ms": 1.038735985,
           "maximum_ms": 1.04153597,
           "samples_ms": [
             1.03971195,
@@ -1631,7 +1631,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.587743998,
-          "median_ms": 0.592320025,
+          "median_ms": 0.592304021,
           "maximum_ms": 0.605247974,
           "samples_ms": [
             0.596000016,
@@ -1666,7 +1666,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 2.05315208,
-          "median_ms": 2.05644798,
+          "median_ms": 2.0563520200000003,
           "maximum_ms": 2.05955195,
           "samples_ms": [
             2.05315208,
@@ -1732,7 +1732,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.199136004,
-          "median_ms": 0.199936002,
+          "median_ms": 0.19979199749999998,
           "maximum_ms": 0.200512007,
           "samples_ms": [
             0.199936002,
@@ -1767,7 +1767,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.400063992,
-          "median_ms": 0.402559996,
+          "median_ms": 0.40246400250000003,
           "maximum_ms": 0.405056,
           "samples_ms": [
             0.400447994,
@@ -1802,7 +1802,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.737568021,
-          "median_ms": 0.741472006,
+          "median_ms": 0.7411519885,
           "maximum_ms": 0.742847979,
           "samples_ms": [
             0.742847979,
@@ -1837,7 +1837,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.669983983,
-          "median_ms": 0.673247993,
+          "median_ms": 0.6732159855,
           "maximum_ms": 0.676288009,
           "samples_ms": [
             0.669983983,
@@ -1872,7 +1872,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 1.49571204,
-          "median_ms": 1.498752,
+          "median_ms": 1.4987199900000001,
           "maximum_ms": 1.50204802,
           "samples_ms": [
             1.49862397,
@@ -1938,7 +1938,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.200159997,
-          "median_ms": 0.202335998,
+          "median_ms": 0.20228800149999998,
           "maximum_ms": 0.203968003,
           "samples_ms": [
             0.202240005,
@@ -2008,7 +2008,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.789279997,
-          "median_ms": 0.790495992,
+          "median_ms": 0.7904160025,
           "maximum_ms": 0.793727994,
           "samples_ms": [
             0.789312005,
@@ -2043,7 +2043,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.694271982,
-          "median_ms": 0.696448028,
+          "median_ms": 0.6963840125,
           "maximum_ms": 0.700608015,
           "samples_ms": [
             0.694271982,
@@ -2078,7 +2078,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 1.62537599,
-          "median_ms": 1.62841594,
+          "median_ms": 1.6283999649999998,
           "maximum_ms": 1.628896,
           "samples_ms": [
             1.62841594,
@@ -2144,7 +2144,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.209215999,
-          "median_ms": 0.210495993,
+          "median_ms": 0.21046399300000002,
           "maximum_ms": 0.210848004,
           "samples_ms": [
             0.209503993,
@@ -2179,7 +2179,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.430079997,
-          "median_ms": 0.432511985,
+          "median_ms": 0.4324799925,
           "maximum_ms": 0.436544001,
           "samples_ms": [
             0.432511985,
@@ -2214,7 +2214,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 1.44227195,
-          "median_ms": 1.44451201,
+          "median_ms": 1.4444320199999998,
           "maximum_ms": 1.44783998,
           "samples_ms": [
             1.44451201,
@@ -2249,7 +2249,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.715776026,
-          "median_ms": 0.717440009,
+          "median_ms": 0.717424005,
           "maximum_ms": 0.71983999,
           "samples_ms": [
             0.715776026,
@@ -2284,7 +2284,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 2.90326405,
-          "median_ms": 2.90831995,
+          "median_ms": 2.90827203,
           "maximum_ms": 2.91334391,
           "samples_ms": [
             2.90585589,
@@ -2350,7 +2350,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.237663999,
-          "median_ms": 0.239807993,
+          "median_ms": 0.239744,
           "maximum_ms": 0.242144004,
           "samples_ms": [
             0.237920001,
@@ -2385,7 +2385,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.480255991,
-          "median_ms": 0.482304007,
+          "median_ms": 0.482048005,
           "maximum_ms": 0.484896004,
           "samples_ms": [
             0.482304007,
@@ -2420,7 +2420,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 2.74236798,
-          "median_ms": 2.8491199,
+          "median_ms": 2.847199915,
           "maximum_ms": 2.93926406,
           "samples_ms": [
             2.76694393,
@@ -2490,7 +2490,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 5.34425592,
-          "median_ms": 5.59609604,
+          "median_ms": 5.596048115,
           "maximum_ms": 5.89929581,
           "samples_ms": [
             5.44854403,
@@ -2556,7 +2556,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.262335986,
-          "median_ms": 0.263103992,
+          "median_ms": 0.263088003,
           "maximum_ms": 0.264128,
           "samples_ms": [
             0.262751997,
@@ -2626,7 +2626,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 1.17529595,
-          "median_ms": 1.17721605,
+          "median_ms": 1.17720002,
           "maximum_ms": 1.17872,
           "samples_ms": [
             1.17843199,
@@ -2661,7 +2661,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.858208001,
-          "median_ms": 0.859456003,
+          "median_ms": 0.859439999,
           "maximum_ms": 0.861792028,
           "samples_ms": [
             0.860927999,
@@ -2762,7 +2762,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.263680011,
-          "median_ms": 0.266656011,
+          "median_ms": 0.26633600850000005,
           "maximum_ms": 0.267711997,
           "samples_ms": [
             0.266016006,
@@ -2797,7 +2797,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.516704023,
-          "median_ms": 0.518719971,
+          "median_ms": 0.518559992,
           "maximum_ms": 0.519711971,
           "samples_ms": [
             0.517823994,
@@ -2832,7 +2832,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 1.22086406,
-          "median_ms": 1.22268796,
+          "median_ms": 1.2225919950000002,
           "maximum_ms": 1.22544003,
           "samples_ms": [
             1.22211206,
@@ -2867,7 +2867,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.878592014,
-          "median_ms": 0.881247997,
+          "median_ms": 0.8810719845,
           "maximum_ms": 0.884832025,
           "samples_ms": [
             0.878592014,
@@ -2902,7 +2902,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 2.51596808,
-          "median_ms": 2.51814389,
+          "median_ms": 2.518031955,
           "maximum_ms": 2.52012801,
           "samples_ms": [
             2.51814389,
@@ -2968,7 +2968,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.274048001,
-          "median_ms": 0.276192009,
+          "median_ms": 0.2761600015,
           "maximum_ms": 0.277375996,
           "samples_ms": [
             0.276928008,
@@ -3003,7 +3003,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.534496009,
-          "median_ms": 0.536351979,
+          "median_ms": 0.536303997,
           "maximum_ms": 0.538847983,
           "samples_ms": [
             0.536448002,
@@ -3073,7 +3073,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.901120007,
-          "median_ms": 0.90348798,
+          "median_ms": 0.9034079905,
           "maximum_ms": 0.905568004,
           "samples_ms": [
             0.901120007,
@@ -3108,7 +3108,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 4.54537582,
-          "median_ms": 4.54752016,
+          "median_ms": 4.547504185,
           "maximum_ms": 4.54960012,
           "samples_ms": [
             4.5477438,
@@ -3174,7 +3174,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.306463987,
-          "median_ms": 0.30755201,
+          "median_ms": 0.30745600149999996,
           "maximum_ms": 0.309599996,
           "samples_ms": [
             0.307711989,
@@ -3209,7 +3209,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.593919992,
-          "median_ms": 0.598272026,
+          "median_ms": 0.598240018,
           "maximum_ms": 0.60147202,
           "samples_ms": [
             0.59820801,
@@ -3244,7 +3244,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 5.88223982,
-          "median_ms": 6.01616001,
+          "median_ms": 6.00974393,
           "maximum_ms": 6.40992022,
           "samples_ms": [
             5.88223982,
@@ -3314,7 +3314,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 11.1041279,
-          "median_ms": 11.5672321,
+          "median_ms": 11.54568005,
           "maximum_ms": 11.8328323,
           "samples_ms": [
             11.3949442,
@@ -3380,7 +3380,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 0.400000006,
-          "median_ms": 0.402047992,
+          "median_ms": 0.40203200299999997,
           "maximum_ms": 0.406208009,
           "samples_ms": [
             0.400256008,
@@ -3415,7 +3415,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 0.752640009,
-          "median_ms": 0.754688025,
+          "median_ms": 0.754672021,
           "maximum_ms": 0.757088006,
           "samples_ms": [
             0.754719973,
@@ -3450,7 +3450,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 2.74431992,
-          "median_ms": 2.74742389,
+          "median_ms": 2.74739194,
           "maximum_ms": 2.75142407,
           "samples_ms": [
             2.74716806,
@@ -3485,7 +3485,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 1.24870396,
-          "median_ms": 1.25027204,
+          "median_ms": 1.250256005,
           "maximum_ms": 1.25113595,
           "samples_ms": [
             1.25017595,
@@ -3621,7 +3621,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.770048022,
-          "median_ms": 0.773087978,
+          "median_ms": 0.772944003,
           "maximum_ms": 0.774720013,
           "samples_ms": [
             0.773375988,
@@ -3656,7 +3656,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 2.76735997,
-          "median_ms": 2.77033591,
+          "median_ms": 2.770319935,
           "maximum_ms": 2.77852798,
           "samples_ms": [
             2.77033591,
@@ -3792,7 +3792,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 0.416224003,
-          "median_ms": 0.419360012,
+          "median_ms": 0.4188160005,
           "maximum_ms": 0.420863986,
           "samples_ms": [
             0.41753599,
@@ -3827,7 +3827,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 0.820800006,
-          "median_ms": 0.825056016,
+          "median_ms": 0.8247680065,
           "maximum_ms": 0.827647984,
           "samples_ms": [
             0.827647984,
@@ -3862,7 +3862,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 6.30339193,
-          "median_ms": 6.32412815,
+          "median_ms": 6.32404804,
           "maximum_ms": 6.32819223,
           "samples_ms": [
             6.30348778,
@@ -3932,7 +3932,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 10.6895361,
-          "median_ms": 10.6967039,
+          "median_ms": 10.69646405,
           "maximum_ms": 10.702816,
           "samples_ms": [
             10.6926079,
@@ -3998,7 +3998,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 0.456416011,
-          "median_ms": 0.45855999,
+          "median_ms": 0.4584800005,
           "maximum_ms": 0.461504012,
           "samples_ms": [
             0.458400011,
@@ -4033,7 +4033,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 0.861184001,
-          "median_ms": 0.867327988,
+          "median_ms": 0.8672800064999999,
           "maximum_ms": 0.868384004,
           "samples_ms": [
             0.863232017,
@@ -4068,7 +4068,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 16.8825607,
-          "median_ms": 17.5072002,
+          "median_ms": 17.476351700000002,
           "maximum_ms": 18.410368,
           "samples_ms": [
             18.410368,
@@ -4103,7 +4103,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 1.47161603,
-          "median_ms": 1.477952,
+          "median_ms": 1.477840005,
           "maximum_ms": 1.48127997,
           "samples_ms": [
             1.47407997,
@@ -4138,7 +4138,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 32.3126717,
-          "median_ms": 32.758976,
+          "median_ms": 32.746799499999995,
           "maximum_ms": 33.2532158,
           "samples_ms": [
             32.4738235,
@@ -4204,7 +4204,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.596863985,
-          "median_ms": 0.598879993,
+          "median_ms": 0.598863989,
           "maximum_ms": 0.601664007,
           "samples_ms": [
             0.599680007,
@@ -4239,7 +4239,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 1.04592001,
-          "median_ms": 1.04864001,
+          "median_ms": 1.04827201,
           "maximum_ms": 1.05193603,
           "samples_ms": [
             1.04895997,
@@ -4274,7 +4274,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 4.19680023,
-          "median_ms": 4.19843197,
+          "median_ms": 4.198384044999999,
           "maximum_ms": 4.20153618,
           "samples_ms": [
             4.19987202,
@@ -4309,7 +4309,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 1.72329605,
-          "median_ms": 1.727584,
+          "median_ms": 1.72756803,
           "maximum_ms": 1.73145604,
           "samples_ms": [
             1.72755206,
@@ -4344,7 +4344,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 8.36652756,
-          "median_ms": 8.3709116,
+          "median_ms": 8.370751859999999,
           "maximum_ms": 8.37545586,
           "samples_ms": [
             8.3709116,
@@ -4410,7 +4410,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 0.605055988,
-          "median_ms": 0.606688023,
+          "median_ms": 0.606672019,
           "maximum_ms": 0.608735979,
           "samples_ms": [
             0.605759978,
@@ -4445,7 +4445,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 1.06188798,
-          "median_ms": 1.06496,
+          "median_ms": 1.064944025,
           "maximum_ms": 1.06822395,
           "samples_ms": [
             1.06377602,
@@ -4480,7 +4480,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 4.26988792,
-          "median_ms": 4.27388811,
+          "median_ms": 4.273312089999999,
           "maximum_ms": 4.28684807,
           "samples_ms": [
             4.27526379,
@@ -4515,7 +4515,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 1.76636803,
-          "median_ms": 1.77081597,
+          "median_ms": 1.7706879999999998,
           "maximum_ms": 1.774912,
           "samples_ms": [
             1.772416,
@@ -4550,7 +4550,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 8.54227161,
-          "median_ms": 8.54895973,
+          "median_ms": 8.548687935,
           "maximum_ms": 8.55440044,
           "samples_ms": [
             8.54652786,
@@ -4616,7 +4616,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 0.613919973,
-          "median_ms": 0.616703987,
+          "median_ms": 0.616687983,
           "maximum_ms": 0.618848026,
           "samples_ms": [
             0.616576016,
@@ -4651,7 +4651,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 1.11718404,
-          "median_ms": 1.12214398,
+          "median_ms": 1.12185597,
           "maximum_ms": 1.12684798,
           "samples_ms": [
             1.12236798,
@@ -4686,7 +4686,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 10.3906565,
-          "median_ms": 10.4293756,
+          "median_ms": 10.42862365,
           "maximum_ms": 10.4307518,
           "samples_ms": [
             10.3906565,
@@ -4756,7 +4756,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 24.854496,
-          "median_ms": 25.3022728,
+          "median_ms": 25.302144050000003,
           "maximum_ms": 25.4599991,
           "samples_ms": [
             25.4599991,
@@ -4822,7 +4822,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.65526402,
-          "median_ms": 0.657984018,
+          "median_ms": 0.6579360065,
           "maximum_ms": 0.659904003,
           "samples_ms": [
             0.659456015,
@@ -4857,7 +4857,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 1.16975999,
-          "median_ms": 1.17507195,
+          "median_ms": 1.174799975,
           "maximum_ms": 1.17776,
           "samples_ms": [
             1.17359996,
@@ -4892,7 +4892,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 35.2351341,
-          "median_ms": 36.448288,
+          "median_ms": 36.330383299999994,
           "maximum_ms": 37.3087044,
           "samples_ms": [
             36.1303673,
@@ -4962,7 +4962,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 67.3313904,
-          "median_ms": 68.8920288,
+          "median_ms": 68.82864000000001,
           "maximum_ms": 69.8476181,
           "samples_ms": [
             68.9960938,
@@ -5028,7 +5028,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 2.17446399,
-          "median_ms": 2.17961597,
+          "median_ms": 2.17902398,
           "maximum_ms": 2.18662405,
           "samples_ms": [
             2.18662405,
@@ -5063,7 +5063,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 3.35718393,
-          "median_ms": 3.36374402,
+          "median_ms": 3.362895965,
           "maximum_ms": 3.3685441,
           "samples_ms": [
             3.36204791,
@@ -5098,7 +5098,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 15.435008,
-          "median_ms": 15.4412165,
+          "median_ms": 15.44120025,
           "maximum_ms": 15.44944,
           "samples_ms": [
             15.443264,
@@ -5133,7 +5133,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 5.59001589,
-          "median_ms": 5.59737587,
+          "median_ms": 5.59732795,
           "maximum_ms": 5.60844803,
           "samples_ms": [
             5.59843206,
@@ -5168,7 +5168,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 31.0126724,
-          "median_ms": 31.0230408,
+          "median_ms": 31.0221281,
           "maximum_ms": 31.0428162,
           "samples_ms": [
             31.0167999,
@@ -5234,7 +5234,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 2.20515203,
-          "median_ms": 2.20953608,
+          "median_ms": 2.2094880349999997,
           "maximum_ms": 2.21350408,
           "samples_ms": [
             2.210464,
@@ -5269,7 +5269,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 3.40479994,
-          "median_ms": 3.40991998,
+          "median_ms": 3.409871935,
           "maximum_ms": 3.420192,
           "samples_ms": [
             3.40863991,
@@ -5304,7 +5304,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 26.8453445,
-          "median_ms": 26.8542728,
+          "median_ms": 26.8542242,
           "maximum_ms": 26.8600311,
           "samples_ms": [
             26.8580799,
@@ -5374,7 +5374,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 53.5586548,
-          "median_ms": 53.5706253,
+          "median_ms": 53.5700798,
           "maximum_ms": 53.5936966,
           "samples_ms": [
             53.5674896,
@@ -5440,7 +5440,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 2.21257591,
-          "median_ms": 2.21686411,
+          "median_ms": 2.21681607,
           "maximum_ms": 2.22281599,
           "samples_ms": [
             2.21564794,
@@ -5475,7 +5475,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 3.4263041,
-          "median_ms": 3.43747211,
+          "median_ms": 3.437008025,
           "maximum_ms": 3.45254397,
           "samples_ms": [
             3.43171191,
@@ -5510,7 +5510,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 67.1961899,
-          "median_ms": 69.3395233,
+          "median_ms": 69.3364029,
           "maximum_ms": 70.6601257,
           "samples_ms": [
             70.3800354,
@@ -5545,7 +5545,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 5.70879984,
-          "median_ms": 5.7141118,
+          "median_ms": 5.71406388,
           "maximum_ms": 5.71833611,
           "samples_ms": [
             5.71414423,
@@ -5580,7 +5580,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 127.129852,
-          "median_ms": 133.25705,
+          "median_ms": 133.1197435,
           "maximum_ms": 137.087234,
           "samples_ms": [
             134.875137,
@@ -5681,7 +5681,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 3.7396481,
-          "median_ms": 3.74796796,
+          "median_ms": 3.7478719949999997,
           "maximum_ms": 3.7541759,
           "samples_ms": [
             3.7396481,
@@ -5716,7 +5716,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 226.545959,
-          "median_ms": 231.012421,
+          "median_ms": 230.900307,
           "maximum_ms": 234.811707,
           "samples_ms": [
             231.395966,
@@ -5786,7 +5786,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 439.359497,
-          "median_ms": 444.513489,
+          "median_ms": 444.2231295,
           "maximum_ms": 446.301727,
           "samples_ms": [
             443.838837,
@@ -5852,7 +5852,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.04208,
-          "median_ms": 0.0440640002,
+          "median_ms": 0.0440480001,
           "maximum_ms": 0.0457599983,
           "samples_ms": [
             0.0438399985,
@@ -5922,7 +5922,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.115936004,
-          "median_ms": 0.117888004,
+          "median_ms": 0.1178720035,
           "maximum_ms": 0.119456001,
           "samples_ms": [
             0.118720002,
@@ -5957,7 +5957,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 120,
           "minimum_ms": 0.189247996,
-          "median_ms": 0.191808,
+          "median_ms": 0.1917920035,
           "maximum_ms": 0.192928001,
           "samples_ms": [
             0.191776007,
@@ -6058,7 +6058,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.0435840003,
-          "median_ms": 0.0445440002,
+          "median_ms": 0.04452800005,
           "maximum_ms": 0.045984,
           "samples_ms": [
             0.044383999,
@@ -6093,7 +6093,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.141984001,
-          "median_ms": 0.143232003,
+          "median_ms": 0.14305599800000002,
           "maximum_ms": 0.144416004,
           "samples_ms": [
             0.144160002,
@@ -6128,7 +6128,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.121376,
-          "median_ms": 0.123392001,
+          "median_ms": 0.122944001,
           "maximum_ms": 0.124672003,
           "samples_ms": [
             0.121696003,
@@ -6163,7 +6163,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.194879994,
-          "median_ms": 0.196255997,
+          "median_ms": 0.19598399849999998,
           "maximum_ms": 0.199392006,
           "samples_ms": [
             0.197952002,
@@ -6198,7 +6198,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 960,
           "minimum_ms": 0.199487999,
-          "median_ms": 0.201440006,
+          "median_ms": 0.2014240025,
           "maximum_ms": 0.202784002,
           "samples_ms": [
             0.201343998,
@@ -6264,7 +6264,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.0479680002,
-          "median_ms": 0.0501120016,
+          "median_ms": 0.050032001,
           "maximum_ms": 0.0531199984,
           "samples_ms": [
             0.0499520004,
@@ -6299,7 +6299,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.156928003,
-          "median_ms": 0.158399999,
+          "median_ms": 0.1583520025,
           "maximum_ms": 0.160319999,
           "samples_ms": [
             0.158143997,
@@ -6334,7 +6334,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.130144,
-          "median_ms": 0.132448003,
+          "median_ms": 0.13243199900000002,
           "maximum_ms": 0.134176001,
           "samples_ms": [
             0.131328002,
@@ -6369,7 +6369,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.216064006,
-          "median_ms": 0.217600003,
+          "median_ms": 0.21758399899999997,
           "maximum_ms": 0.219071999,
           "samples_ms": [
             0.217759997,
@@ -6404,7 +6404,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3840,
           "minimum_ms": 0.222080007,
-          "median_ms": 0.225311995,
+          "median_ms": 0.2252479945,
           "maximum_ms": 0.227904007,
           "samples_ms": [
             0.223775998,
@@ -6470,7 +6470,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.0724480003,
-          "median_ms": 0.0758399963,
+          "median_ms": 0.0758239999,
           "maximum_ms": 0.0837439969,
           "samples_ms": [
             0.0779199973,
@@ -6505,7 +6505,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.205824003,
-          "median_ms": 0.209887996,
+          "median_ms": 0.209855996,
           "maximum_ms": 0.213119999,
           "samples_ms": [
             0.210943997,
@@ -6540,7 +6540,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.167935997,
-          "median_ms": 0.171680003,
+          "median_ms": 0.17136000099999998,
           "maximum_ms": 0.174144,
           "samples_ms": [
             0.168063998,
@@ -6575,7 +6575,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15360,
           "minimum_ms": 0.273663998,
-          "median_ms": 0.275424004,
+          "median_ms": 0.2749280035,
           "maximum_ms": 0.277087986,
           "samples_ms": [
             0.277087986,
@@ -6676,7 +6676,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.0436800011,
-          "median_ms": 0.0439359993,
+          "median_ms": 0.04391999915,
           "maximum_ms": 0.0458879992,
           "samples_ms": [
             0.0436800011,
@@ -6711,7 +6711,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.138144001,
-          "median_ms": 0.138656005,
+          "median_ms": 0.1386400015,
           "maximum_ms": 0.141632006,
           "samples_ms": [
             0.138400003,
@@ -6746,7 +6746,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.119552001,
-          "median_ms": 0.119935997,
+          "median_ms": 0.119919997,
           "maximum_ms": 0.122815996,
           "samples_ms": [
             0.121887997,
@@ -6781,7 +6781,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 496,
           "minimum_ms": 0.191264004,
-          "median_ms": 0.191648006,
+          "median_ms": 0.191616006,
           "maximum_ms": 0.193759993,
           "samples_ms": [
             0.191264004,
@@ -6882,7 +6882,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.0436800011,
-          "median_ms": 0.0455360003,
+          "median_ms": 0.045215999699999995,
           "maximum_ms": 0.0513279997,
           "samples_ms": [
             0.0448959991,
@@ -6917,7 +6917,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.144575998,
-          "median_ms": 0.145919994,
+          "median_ms": 0.14588799349999998,
           "maximum_ms": 0.148351997,
           "samples_ms": [
             0.144768,
@@ -6952,7 +6952,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.123135999,
-          "median_ms": 0.124672003,
+          "median_ms": 0.12449600150000001,
           "maximum_ms": 0.126080006,
           "samples_ms": [
             0.124959998,
@@ -6987,7 +6987,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.198655993,
-          "median_ms": 0.20352,
+          "median_ms": 0.20348799950000002,
           "maximum_ms": 0.207616001,
           "samples_ms": [
             0.198655993,
@@ -7022,7 +7022,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 3968,
           "minimum_ms": 0.207872003,
-          "median_ms": 0.209567994,
+          "median_ms": 0.2095519975,
           "maximum_ms": 0.210559994,
           "samples_ms": [
             0.210559994,
@@ -7088,7 +7088,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.0513599999,
-          "median_ms": 0.0520000011,
+          "median_ms": 0.0519520007,
           "maximum_ms": 0.0538880005,
           "samples_ms": [
             0.0538560003,
@@ -7193,7 +7193,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.217056006,
-          "median_ms": 0.219456002,
+          "median_ms": 0.21943999800000002,
           "maximum_ms": 0.222207993,
           "samples_ms": [
             0.219456002,
@@ -7228,7 +7228,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 15872,
           "minimum_ms": 0.228351995,
-          "median_ms": 0.229824007,
+          "median_ms": 0.22980800299999998,
           "maximum_ms": 0.233119994,
           "samples_ms": [
             0.229023993,
@@ -7294,7 +7294,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.0774400011,
-          "median_ms": 0.0805440024,
+          "median_ms": 0.08015999944999999,
           "maximum_ms": 0.0828479975,
           "samples_ms": [
             0.0824640021,
@@ -7364,7 +7364,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.171424001,
-          "median_ms": 0.175136,
+          "median_ms": 0.175039999,
           "maximum_ms": 0.177184001,
           "samples_ms": [
             0.176896006,
@@ -7399,7 +7399,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.280544013,
-          "median_ms": 0.284256011,
+          "median_ms": 0.28355200599999997,
           "maximum_ms": 0.288415998,
           "samples_ms": [
             0.282624006,
@@ -7434,7 +7434,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 63488,
           "minimum_ms": 0.294367999,
-          "median_ms": 0.298624009,
+          "median_ms": 0.2985920015,
           "maximum_ms": 0.301631987,
           "samples_ms": [
             0.299488008,
@@ -7500,7 +7500,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.0437440015,
-          "median_ms": 0.0439679995,
+          "median_ms": 0.043935999249999996,
           "maximum_ms": 0.0469760001,
           "samples_ms": [
             0.0445440002,
@@ -7535,7 +7535,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.137983993,
-          "median_ms": 0.139743999,
+          "median_ms": 0.139647998,
           "maximum_ms": 0.140735999,
           "samples_ms": [
             0.138464004,
@@ -7570,7 +7570,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.121728003,
-          "median_ms": 0.123167999,
+          "median_ms": 0.123151999,
           "maximum_ms": 0.124191999,
           "samples_ms": [
             0.124191999,
@@ -7605,7 +7605,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.185824007,
-          "median_ms": 0.187616006,
+          "median_ms": 0.1875360015,
           "maximum_ms": 0.189536005,
           "samples_ms": [
             0.187424004,
@@ -7640,7 +7640,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1128,
           "minimum_ms": 0.195616007,
-          "median_ms": 0.196863994,
+          "median_ms": 0.196831994,
           "maximum_ms": 0.198847994,
           "samples_ms": [
             0.197536007,
@@ -7706,7 +7706,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.0456960015,
-          "median_ms": 0.0467200018,
+          "median_ms": 0.0467040017,
           "maximum_ms": 0.0480320007,
           "samples_ms": [
             0.0467839986,
@@ -7776,7 +7776,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.131328002,
-          "median_ms": 0.133087993,
+          "median_ms": 0.133056,
           "maximum_ms": 0.134304002,
           "samples_ms": [
             0.133760005,
@@ -7811,7 +7811,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.200703993,
-          "median_ms": 0.203263998,
+          "median_ms": 0.2032480015,
           "maximum_ms": 0.205119997,
           "samples_ms": [
             0.200703993,
@@ -7846,7 +7846,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 9024,
           "minimum_ms": 0.213824004,
-          "median_ms": 0.214847997,
+          "median_ms": 0.2148320005,
           "maximum_ms": 0.217984006,
           "samples_ms": [
             0.215775996,
@@ -7912,7 +7912,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.0532159992,
-          "median_ms": 0.0543360002,
+          "median_ms": 0.0543200001,
           "maximum_ms": 0.0554880016,
           "samples_ms": [
             0.0551039986,
@@ -7947,7 +7947,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.161696002,
-          "median_ms": 0.162847996,
+          "median_ms": 0.1628319995,
           "maximum_ms": 0.163936004,
           "samples_ms": [
             0.163775995,
@@ -7982,7 +7982,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.163872004,
-          "median_ms": 0.166048005,
+          "median_ms": 0.1660320015,
           "maximum_ms": 0.170016006,
           "samples_ms": [
             0.165023997,
@@ -8017,7 +8017,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36096,
           "minimum_ms": 0.222207993,
-          "median_ms": 0.224992007,
+          "median_ms": 0.22497600299999998,
           "maximum_ms": 0.228223994,
           "samples_ms": [
             0.225247994,
@@ -8118,7 +8118,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.0820479989,
-          "median_ms": 0.083039999,
+          "median_ms": 0.0830239989,
           "maximum_ms": 0.0870079994,
           "samples_ms": [
             0.0835840032,
@@ -8153,7 +8153,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.217087999,
-          "median_ms": 0.219904006,
+          "median_ms": 0.21952000300000002,
           "maximum_ms": 0.223135993,
           "samples_ms": [
             0.219104007,
@@ -8188,7 +8188,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.300927997,
-          "median_ms": 0.304383993,
+          "median_ms": 0.304271996,
           "maximum_ms": 0.306432009,
           "samples_ms": [
             0.300927997,
@@ -8223,7 +8223,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 144384,
           "minimum_ms": 0.292863995,
-          "median_ms": 0.298431993,
+          "median_ms": 0.2982079985,
           "maximum_ms": 0.303104013,
           "samples_ms": [
             0.299519986,
@@ -8324,7 +8324,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.0437760018,
-          "median_ms": 0.0447360016,
+          "median_ms": 0.044720001499999995,
           "maximum_ms": 0.0460480005,
           "samples_ms": [
             0.0447999984,
@@ -8359,7 +8359,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.139231995,
-          "median_ms": 0.140320003,
+          "median_ms": 0.1402560025,
           "maximum_ms": 0.141056001,
           "samples_ms": [
             0.140064001,
@@ -8394,7 +8394,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.123296,
-          "median_ms": 0.123903997,
+          "median_ms": 0.123824,
           "maximum_ms": 0.124672003,
           "samples_ms": [
             0.123744003,
@@ -8429,7 +8429,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.188032001,
-          "median_ms": 0.189183995,
+          "median_ms": 0.18915199500000002,
           "maximum_ms": 0.190080002,
           "samples_ms": [
             0.189472005,
@@ -8464,7 +8464,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 2016,
           "minimum_ms": 0.196352005,
-          "median_ms": 0.197760001,
+          "median_ms": 0.1977280005,
           "maximum_ms": 0.199295998,
           "samples_ms": [
             0.197344005,
@@ -8530,7 +8530,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.045504,
-          "median_ms": 0.0471680015,
+          "median_ms": 0.04697600005,
           "maximum_ms": 0.0483199991,
           "samples_ms": [
             0.0467839986,
@@ -8565,7 +8565,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.148159996,
-          "median_ms": 0.150015995,
+          "median_ms": 0.14985600100000002,
           "maximum_ms": 0.151807994,
           "samples_ms": [
             0.148479998,
@@ -8600,7 +8600,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 16128,
           "minimum_ms": 0.137759998,
-          "median_ms": 0.139967993,
+          "median_ms": 0.139936,
           "maximum_ms": 0.142719999,
           "samples_ms": [
             0.140031993,
@@ -8736,7 +8736,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.0540799983,
-          "median_ms": 0.0564480014,
+          "median_ms": 0.056432001300000006,
           "maximum_ms": 0.0592,
           "samples_ms": [
             0.0551999994,
@@ -8771,7 +8771,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.165439993,
-          "median_ms": 0.167199999,
+          "median_ms": 0.1670560015,
           "maximum_ms": 0.168096006,
           "samples_ms": [
             0.167679995,
@@ -8806,7 +8806,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 64512,
           "minimum_ms": 0.173311993,
-          "median_ms": 0.175295994,
+          "median_ms": 0.1752639935,
           "maximum_ms": 0.178847998,
           "samples_ms": [
             0.176128,
@@ -8942,7 +8942,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.0847039968,
-          "median_ms": 0.0878399983,
+          "median_ms": 0.0878239982,
           "maximum_ms": 0.0899199992,
           "samples_ms": [
             0.0858239979,
@@ -9012,7 +9012,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.353599995,
-          "median_ms": 0.356287986,
+          "median_ms": 0.356271997,
           "maximum_ms": 0.35849601,
           "samples_ms": [
             0.354079992,
@@ -9047,7 +9047,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.313344002,
-          "median_ms": 0.316415995,
+          "median_ms": 0.315919995,
           "maximum_ms": 0.320928007,
           "samples_ms": [
             0.313344002,
@@ -9082,7 +9082,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 258048,
           "minimum_ms": 0.509952009,
-          "median_ms": 0.515519977,
+          "median_ms": 0.515471995,
           "maximum_ms": 0.521664023,
           "samples_ms": [
             0.515424013,
@@ -9148,7 +9148,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 0.0446080007,
-          "median_ms": 0.0467200018,
+          "median_ms": 0.0467040017,
           "maximum_ms": 0.0480320007,
           "samples_ms": [
             0.0462399982,
@@ -9183,7 +9183,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 0.148351997,
-          "median_ms": 0.150112003,
+          "median_ms": 0.15003199849999999,
           "maximum_ms": 0.151583999,
           "samples_ms": [
             0.150176004,
@@ -9218,7 +9218,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 0.125599995,
-          "median_ms": 0.127903998,
+          "median_ms": 0.1278719975,
           "maximum_ms": 0.129792005,
           "samples_ms": [
             0.127903998,
@@ -9253,7 +9253,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 0.189088002,
-          "median_ms": 0.191264004,
+          "median_ms": 0.191151999,
           "maximum_ms": 0.192256004,
           "samples_ms": [
             0.190016001,
@@ -9288,7 +9288,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4560,
           "minimum_ms": 0.197247997,
-          "median_ms": 0.199359998,
+          "median_ms": 0.1993440015,
           "maximum_ms": 0.2016,
           "samples_ms": [
             0.199264005,
@@ -9354,7 +9354,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.0472319983,
-          "median_ms": 0.0488319993,
+          "median_ms": 0.0488159992,
           "maximum_ms": 0.0501759984,
           "samples_ms": [
             0.0486720018,
@@ -9389,7 +9389,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.153600007,
-          "median_ms": 0.156703994,
+          "median_ms": 0.1566879975,
           "maximum_ms": 0.158720002,
           "samples_ms": [
             0.155839995,
@@ -9424,7 +9424,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.145280004,
-          "median_ms": 0.145824,
+          "median_ms": 0.145712003,
           "maximum_ms": 0.147392005,
           "samples_ms": [
             0.146208003,
@@ -9459,7 +9459,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.203776002,
-          "median_ms": 0.206496,
+          "median_ms": 0.20643199950000002,
           "maximum_ms": 0.207616001,
           "samples_ms": [
             0.204832003,
@@ -9494,7 +9494,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 36480,
           "minimum_ms": 0.225280002,
-          "median_ms": 0.227776006,
+          "median_ms": 0.2274399995,
           "maximum_ms": 0.229951993,
           "samples_ms": [
             0.227936,
@@ -9560,7 +9560,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 0.0580799989,
-          "median_ms": 0.0592960007,
+          "median_ms": 0.0592640005,
           "maximum_ms": 0.0612480007,
           "samples_ms": [
             0.059071999,
@@ -9595,7 +9595,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 0.174079999,
-          "median_ms": 0.175999999,
+          "median_ms": 0.17598400250000001,
           "maximum_ms": 0.178016007,
           "samples_ms": [
             0.174079999,
@@ -9665,7 +9665,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 145920,
           "minimum_ms": 0.234495997,
-          "median_ms": 0.237440005,
+          "median_ms": 0.2374080045,
           "maximum_ms": 0.239199996,
           "samples_ms": [
             0.239168003,
@@ -9801,7 +9801,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 0.24064,
-          "median_ms": 0.244031996,
+          "median_ms": 0.2439999955,
           "maximum_ms": 0.246463999,
           "samples_ms": [
             0.242656007,
@@ -9871,7 +9871,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 0.339935988,
-          "median_ms": 0.344543993,
+          "median_ms": 0.34452798949999996,
           "maximum_ms": 0.350656003,
           "samples_ms": [
             0.342720002,
@@ -9906,7 +9906,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 583680,
           "minimum_ms": 0.604160011,
-          "median_ms": 0.60927999,
+          "median_ms": 0.6089439985,
           "maximum_ms": 0.614400029,
           "samples_ms": [
             0.608223975,
@@ -9972,7 +9972,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.0457599983,
-          "median_ms": 0.0478399992,
+          "median_ms": 0.0478239991,
           "maximum_ms": 0.0481600016,
           "samples_ms": [
             0.0459199995,
@@ -10007,7 +10007,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.153983995,
-          "median_ms": 0.156095996,
+          "median_ms": 0.15608,
           "maximum_ms": 0.162239999,
           "samples_ms": [
             0.156064004,
@@ -10042,7 +10042,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.129887998,
-          "median_ms": 0.132095993,
+          "median_ms": 0.13206400000000001,
           "maximum_ms": 0.135263994,
           "samples_ms": [
             0.134112,
@@ -10077,7 +10077,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 8128,
           "minimum_ms": 0.197344005,
-          "median_ms": 0.199552,
+          "median_ms": 0.19950400299999999,
           "maximum_ms": 0.201792002,
           "samples_ms": [
             0.199744001,
@@ -10213,7 +10213,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 0.167168006,
-          "median_ms": 0.169983998,
+          "median_ms": 0.16977599999999998,
           "maximum_ms": 0.171744004,
           "samples_ms": [
             0.171647996,
@@ -10248,7 +10248,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 0.154239997,
-          "median_ms": 0.156544,
+          "median_ms": 0.15649600349999998,
           "maximum_ms": 0.159551993,
           "samples_ms": [
             0.158335999,
@@ -10283,7 +10283,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 0.214304,
-          "median_ms": 0.217087999,
+          "median_ms": 0.21672,
           "maximum_ms": 0.218592003,
           "samples_ms": [
             0.215072006,
@@ -10318,7 +10318,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 65024,
           "minimum_ms": 0.242208004,
-          "median_ms": 0.246015996,
+          "median_ms": 0.2458719985,
           "maximum_ms": 0.247232005,
           "samples_ms": [
             0.247071996,
@@ -10384,7 +10384,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 0.0607680008,
-          "median_ms": 0.0619199984,
+          "median_ms": 0.06190400015,
           "maximum_ms": 0.0631999969,
           "samples_ms": [
             0.0610559992,
@@ -10419,7 +10419,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 0.186399996,
-          "median_ms": 0.188863993,
+          "median_ms": 0.1888479965,
           "maximum_ms": 0.190784007,
           "samples_ms": [
             0.187391996,
@@ -10454,7 +10454,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 260096,
           "minimum_ms": 0.245312005,
-          "median_ms": 0.246432006,
+          "median_ms": 0.2464160025,
           "maximum_ms": 0.247840002,
           "samples_ms": [
             0.246143997,
@@ -10625,7 +10625,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.260096014,
-          "median_ms": 0.262015998,
+          "median_ms": 0.2618239965,
           "maximum_ms": 0.264191985,
           "samples_ms": [
             0.263135999,
@@ -10660,7 +10660,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.475199997,
-          "median_ms": 0.481216013,
+          "median_ms": 0.481104001,
           "maximum_ms": 0.485376,
           "samples_ms": [
             0.485376,
@@ -10695,7 +10695,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.368416011,
-          "median_ms": 0.371679991,
+          "median_ms": 0.37143999299999997,
           "maximum_ms": 0.375360012,
           "samples_ms": [
             0.374271989,
@@ -10730,7 +10730,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1040384,
           "minimum_ms": 0.702048004,
-          "median_ms": 0.710240006,
+          "median_ms": 0.709632009,
           "maximum_ms": 0.720448017,
           "samples_ms": [
             0.712960005,
@@ -10796,7 +10796,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 0.0663679987,
-          "median_ms": 0.0701439977,
+          "median_ms": 0.06982399895,
           "maximum_ms": 0.0735040009,
           "samples_ms": [
             0.0692479983,
@@ -10831,7 +10831,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 0.242464006,
-          "median_ms": 0.244703993,
+          "median_ms": 0.244671993,
           "maximum_ms": 0.245759994,
           "samples_ms": [
             0.244992003,
@@ -10901,7 +10901,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 0.29491201,
-          "median_ms": 0.298079997,
+          "median_ms": 0.2979039995,
           "maximum_ms": 0.299712002,
           "samples_ms": [
             0.298175991,
@@ -10936,7 +10936,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 32640,
           "minimum_ms": 0.263648003,
-          "median_ms": 0.265408009,
+          "median_ms": 0.2653920055,
           "maximum_ms": 0.267008007,
           "samples_ms": [
             0.264896005,
@@ -11037,7 +11037,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 0.253632009,
-          "median_ms": 0.25574401,
+          "median_ms": 0.25571200250000004,
           "maximum_ms": 0.256543994,
           "samples_ms": [
             0.255488008,
@@ -11072,7 +11072,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 261120,
           "minimum_ms": 0.213919997,
-          "median_ms": 0.216992006,
+          "median_ms": 0.216896005,
           "maximum_ms": 0.218015999,
           "samples_ms": [
             0.217056006,
@@ -11208,7 +11208,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 0.0852800012,
-          "median_ms": 0.0878399983,
+          "median_ms": 0.08775999770000001,
           "maximum_ms": 0.0908479989,
           "samples_ms": [
             0.0876799971,
@@ -11243,7 +11243,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 0.278528005,
-          "median_ms": 0.284159988,
+          "median_ms": 0.284143999,
           "maximum_ms": 0.285567999,
           "samples_ms": [
             0.28412801,
@@ -11278,7 +11278,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 0.368351996,
-          "median_ms": 0.371104002,
+          "median_ms": 0.37102399750000004,
           "maximum_ms": 0.374687999,
           "samples_ms": [
             0.370848,
@@ -11313,7 +11313,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 0.380896002,
-          "median_ms": 0.383008003,
+          "median_ms": 0.38299199949999996,
           "maximum_ms": 0.386496007,
           "samples_ms": [
             0.380896002,
@@ -11348,7 +11348,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 1044480,
           "minimum_ms": 0.543168008,
-          "median_ms": 0.548896015,
+          "median_ms": 0.5488800110000001,
           "maximum_ms": 0.55251199,
           "samples_ms": [
             0.54499203,
@@ -11414,7 +11414,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 0.145952001,
-          "median_ms": 0.149087995,
+          "median_ms": 0.1490719985,
           "maximum_ms": 0.150240004,
           "samples_ms": [
             0.149856001,
@@ -11449,7 +11449,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 0.384512007,
-          "median_ms": 0.387295991,
+          "median_ms": 0.38726399850000004,
           "maximum_ms": 0.391487986,
           "samples_ms": [
             0.387232006,
@@ -11484,7 +11484,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 0.781728029,
-          "median_ms": 0.792895973,
+          "median_ms": 0.7925439775,
           "maximum_ms": 0.797024012,
           "samples_ms": [
             0.794943988,
@@ -11519,7 +11519,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 0.598176003,
-          "median_ms": 0.602367997,
+          "median_ms": 0.6023359895,
           "maximum_ms": 0.610687971,
           "samples_ms": [
             0.610687971,
@@ -11554,7 +11554,7 @@
           "pair_count_semantics": "committed_50_bohr_retained_pairs",
           "dense_pair_count": 4177920,
           "minimum_ms": 1.20412803,
-          "median_ms": 1.22278404,
+          "median_ms": 1.222720025,
           "maximum_ms": 1.23097599,
           "samples_ms": [
             1.22687995,

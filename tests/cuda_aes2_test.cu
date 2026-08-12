@@ -875,12 +875,9 @@ bool make_aes2_benchmark_case(const BenchmarkOptions& options, HostEvaluation* h
       } else {
         /* AES2 has no cutoff: this open fixture keeps all-pair execution but
          * separates its distance distribution from the compact cube. */
-        positions[static_cast<std::size_t>(atom * 3)] =
-            kOpenSpacing * static_cast<double>(local);
-        positions[static_cast<std::size_t>(atom * 3 + 1)] =
-            0.25 * static_cast<double>(local % 3);
-        positions[static_cast<std::size_t>(atom * 3 + 2)] =
-            0.125 * static_cast<double>(local % 5);
+        positions[static_cast<std::size_t>(atom * 3)] = kOpenSpacing * static_cast<double>(local);
+        positions[static_cast<std::size_t>(atom * 3 + 1)] = 0.25 * static_cast<double>(local % 3);
+        positions[static_cast<std::size_t>(atom * 3 + 2)] = 0.125 * static_cast<double>(local % 5);
       }
       coordination[static_cast<std::size_t>(atom)] = 0.8 + 0.03 * (local % 7);
       charges[static_cast<std::size_t>(atom)] =
@@ -947,16 +944,16 @@ int benchmark_aes2_terms(int argc, char** argv) {
     return true;
   };
   const auto make_row = [&](const char* term, BenchmarkSamples timing) {
-    return BenchmarkRow{term,
-                        options.topology == BenchmarkTopology::kCompact ? "compact_all_pairs"
-                                                                        : "open_all_pairs",
-                        options.batch_size,
-                        options.atoms_per_system,
-                        expected.plan.total_atoms(),
-                        expected.plan.total_pairs(),
-                        "packed_all_pairs",
-                        expected.plan.total_pairs(),
-                        std::move(timing)};
+    return BenchmarkRow{
+        term,
+        options.topology == BenchmarkTopology::kCompact ? "compact_all_pairs" : "open_all_pairs",
+        options.batch_size,
+        options.atoms_per_system,
+        expected.plan.total_atoms(),
+        expected.plan.total_pairs(),
+        "packed_all_pairs",
+        expected.plan.total_pairs(),
+        std::move(timing)};
   };
   std::vector<BenchmarkRow> rows;
   rows.reserve(5u);

@@ -21,7 +21,6 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-
 ATOM_COUNTS = (16, 32, 48, 64, 96, 128, 256)
 BATCH_SIZES = (1, 8, 32, 128)
 TOPOLOGIES = ("compact", "open")
@@ -43,7 +42,9 @@ EXPECTED_TERMS = {
     ),
 }
 PAIRLIST_MODES = ("sparse_build", "dense_build", "reuse")
-CELL_PATTERN = re.compile(r"^(compact|open)-b(1|8|32|128)-n(16|32|48|64|96|128|256)\.json$")
+CELL_PATTERN = re.compile(
+    r"^(compact|open)-b(1|8|32|128)-n(16|32|48|64|96|128|256)\.json$"
+)
 HEX40_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 HEX64_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -85,9 +86,10 @@ def validate_provenance(document: dict[str, Any], context: str) -> None:
         raise EvidenceError(f"{context} has no CUDA driver version")
     if not isinstance(document.get("device_name"), str) or not document["device_name"]:
         raise EvidenceError(f"{context} has no GPU model")
-    if not isinstance(document.get("compute_capability"), str) or not document[
-        "compute_capability"
-    ]:
+    if (
+        not isinstance(document.get("compute_capability"), str)
+        or not document["compute_capability"]
+    ):
         raise EvidenceError(f"{context} has no compute capability")
 
 
@@ -117,7 +119,7 @@ def linear_quantile(values: list[float], probability: float) -> float:
     return ordered[lower] + fraction * (ordered[upper] - ordered[lower])
 
 
-def distribution(values: Any, context: str) -> dict[str, float | int]:
+def distribution(values: object, context: str) -> dict[str, float | int]:
     """Validate one raw distribution and return compact robust statistics."""
     if not isinstance(values, list) or not values:
         raise EvidenceError(f"{context} has no raw samples")
@@ -169,13 +171,16 @@ def derived_term_row(kind: str, topology: str, row: dict[str, Any]) -> dict[str,
     }
 
 
-def aggregate_term_kind(input_root: Path, output_dir: Path, kind: str) -> dict[str, Any]:
+def aggregate_term_kind(
+    input_root: Path, output_dir: Path, kind: str
+) -> dict[str, Any]:
     """Validate and combine one complete D4 or AES2 term matrix."""
     source_dir = input_root / "terms" / kind
     paths = sorted(source_dir.glob("*.json"))
     if len(paths) != len(expected_coordinates()):
+        expected_cells = len(expected_coordinates())
         raise EvidenceError(
-            f"{kind} matrix has {len(paths)} JSON cells; expected {len(expected_coordinates())}"
+            f"{kind} matrix has {len(paths)} JSON cells; expected {expected_cells}"
         )
 
     cells: list[dict[str, Any]] = []
@@ -224,23 +229,38 @@ def aggregate_term_kind(input_root: Path, output_dir: Path, kind: str) -> dict[s
         if document.get("topology") != topology:
             raise EvidenceError(f"{kind} topology does not match filename: {path}")
         if document.get("warmups", 0) < 3 or document.get("samples_per_term", 0) < 20:
-            raise EvidenceError(f"{kind} protocol is below 3 warmups/20 samples: {path}")
+            raise EvidenceError(
+                f"{kind} protocol is below 3 warmups/20 samples: {path}"
+            )
 
         rows = document.get("rows")
         if not isinstance(rows, list) or len(rows) != 5:
-            raise EvidenceError(f"{kind} cell must contain exactly five term rows: {path}")
-        if tuple(row.get("term") for row in rows if isinstance(row, dict)) != EXPECTED_TERMS[kind]:
-            raise EvidenceError(f"{kind} cell has an unexpected term set or order: {path}")
+            raise EvidenceError(
+                f"{kind} cell must contain exactly five term rows: {path}"
+            )
+        if (
+            tuple(row.get("term") for row in rows if isinstance(row, dict))
+            != EXPECTED_TERMS[kind]
+        ):
+            raise EvidenceError(
+                f"{kind} cell has an unexpected term set or order: {path}"
+            )
         for row in rows:
             if not isinstance(row, dict):
                 raise EvidenceError(f"{kind} term row is not an object: {path}")
             if row.get("batch") != batch or row.get("atoms_per_system") != atoms:
-                raise EvidenceError(f"{kind} row coordinate does not match filename: {path}")
+                raise EvidenceError(
+                    f"{kind} row coordinate does not match filename: {path}"
+                )
             expected_semantics = (
-                "committed_50_bohr_retained_pairs" if kind == "d4" else "packed_all_pairs"
+                "committed_50_bohr_retained_pairs"
+                if kind == "d4"
+                else "packed_all_pairs"
             )
             if row.get("pair_count_semantics") != expected_semantics:
-                raise EvidenceError(f"{kind} row has incorrect pair-count semantics: {path}")
+                raise EvidenceError(
+                    f"{kind} row has incorrect pair-count semantics: {path}"
+                )
             pair_count = row.get("pair_count")
             dense_pair_count = row.get("dense_pair_count")
             if (
@@ -252,11 +272,25 @@ def aggregate_term_kind(input_root: Path, output_dir: Path, kind: str) -> dict[s
             ):
                 raise EvidenceError(f"{kind} row has invalid pair counts: {path}")
             samples = row.get("samples_ms")
-            if not isinstance(samples, list) or len(samples) != document["samples_per_term"]:
-                raise EvidenceError(f"{kind} row has an incomplete sample distribution: {path}")
+            if (
+                not isinstance(samples, list)
+                or len(samples) != document["samples_per_term"]
+            ):
+                raise EvidenceError(
+                    f"{kind} row has an incomplete sample distribution: {path}"
+                )
             stats = distribution(samples, f"{kind} row in {path}")
-            if row.get("minimum_ms") != stats["minimum_ms"] or row.get("maximum_ms") != stats["maximum_ms"]:
-                raise EvidenceError(f"{kind} row min/max does not match raw samples: {path}")
+            if (
+                row.get("minimum_ms") != stats["minimum_ms"]
+                or row.get("maximum_ms") != stats["maximum_ms"]
+            ):
+                raise EvidenceError(
+                    f"{kind} row min/max does not match raw samples: {path}"
+                )
+            # The measured source revision used the upper middle sample for
+            # even distributions. Raw samples are authoritative, so normalize
+            # the retained median to the repository's conventional definition.
+            row["median_ms"] = stats["median_ms"]
 
         cells.append(
             {
@@ -289,15 +323,22 @@ def aggregate_term_kind(input_root: Path, output_dir: Path, kind: str) -> dict[s
     missing = expected_coordinates() - coordinates
     extra = coordinates - expected_coordinates()
     if missing or extra:
-        raise EvidenceError(f"{kind} coordinate mismatch: missing={sorted(missing)} extra={sorted(extra)}")
+        raise EvidenceError(
+            f"{kind} coordinate mismatch: missing={sorted(missing)} "
+            f"extra={sorted(extra)}"
+        )
     assert provenance is not None
-    cells.sort(key=lambda cell: (cell["topology"], cell["atoms_per_system"], cell["batch"]))
+    cells.sort(
+        key=lambda cell: (cell["topology"], cell["atoms_per_system"], cell["batch"])
+    )
     combined = {
         "schema_version": 1,
         "benchmark": f"xtbloom_cuda_{kind}_term_matrix",
         "derivation": (
-            "Lossless row/sample aggregation of successful per-cell benchmark artifacts; "
-            "each source executable writes results only after post-timing validation passes."
+            "Lossless row/sample aggregation of successful per-cell benchmark "
+            "artifacts; each source executable writes results only after "
+            "post-timing validation passes. Medians are recomputed from raw "
+            "samples using the conventional mean of two middle values."
         ),
         "matrix": {
             "topologies": list(TOPOLOGIES),
@@ -390,19 +431,27 @@ def copy_pairlist(input_root: Path, output_dir: Path) -> dict[str, Any]:
         raise EvidenceError("pair-list protocol is below 3 warmups/20 samples")
     rows = document.get("rows")
     if not isinstance(rows, list) or len(rows) != len(expected_coordinates()):
-        raise EvidenceError("pair-list JSON does not contain the complete 56-cell matrix")
+        raise EvidenceError(
+            "pair-list JSON does not contain the complete 56-cell matrix"
+        )
     coordinates = {
         (row.get("topology"), row.get("batch"), row.get("atoms")) for row in rows
     }
-    if coordinates != {("sparse" if t == "open" else t, b, n) for t, b, n in expected_coordinates()}:
+    if coordinates != {
+        ("sparse" if t == "open" else t, b, n) for t, b, n in expected_coordinates()
+    }:
         raise EvidenceError("pair-list JSON coordinate set is incomplete or duplicated")
     if any(row.get("validation", {}).get("status") != "pass" for row in rows):
         raise EvidenceError("pair-list matrix contains a non-passing validation row")
     for row in rows:
         for mode in PAIRLIST_MODES:
-            stats = distribution(row.get(mode, {}).get("samples_ms"), f"pair-list {mode}")
+            stats = distribution(
+                row.get(mode, {}).get("samples_ms"), f"pair-list {mode}"
+            )
             if stats["sample_count"] != protocol["samples_per_cell"]:
-                raise EvidenceError("pair-list matrix contains an incomplete raw distribution")
+                raise EvidenceError(
+                    "pair-list matrix contains an incomplete raw distribution"
+                )
     return {"kind": "pairlist", "inputs": inputs, "outputs": outputs}
 
 
@@ -455,7 +504,8 @@ def pairlist_distribution_rows(document: dict[str, Any]) -> list[dict[str, Any]]
                     "selected_by_40_atom_policy": (
                         mode == ("dense_build" if atoms <= 40 else "sparse_build")
                     ),
-                    "policy_regret_percent": 100.0 * (selected_median / best_median - 1.0),
+                    "policy_regret_percent": 100.0
+                    * (selected_median / best_median - 1.0),
                     "validation_status": source["validation"]["status"],
                     "max_abs_error": source["validation"]["max_abs_coordination_error"],
                 }
@@ -467,7 +517,12 @@ def paired_topology_ratios(rows: list[dict[str, Any]], family: str) -> dict[str,
     """Summarize compact/open ratios for every term in one family."""
     selected = [row for row in rows if row["family"] == family]
     by_key = {
-        (row["topology"], row["batch"], row["atoms_per_system"], row["term_or_mode"]): row
+        (
+            row["topology"],
+            row["batch"],
+            row["atoms_per_system"],
+            row["term_or_mode"],
+        ): row
         for row in selected
     }
     summary: dict[str, Any] = {}
@@ -506,7 +561,9 @@ def write_distribution_summary(
     rows = pairlist_distribution_rows(pairlist)
     for kind, document in term_documents.items():
         for cell in document["cells"]:
-            rows.extend(derived_term_row(kind, cell["topology"], row) for row in cell["rows"])
+            rows.extend(
+                derived_term_row(kind, cell["topology"], row) for row in cell["rows"]
+            )
     rows.sort(
         key=lambda row: (
             row["family"],
@@ -520,7 +577,12 @@ def write_distribution_summary(
     boundary = []
     pair_rows = [row for row in rows if row["family"] == "pairlist"]
     pair_index = {
-        (row["topology"], row["batch"], row["atoms_per_system"], row["term_or_mode"]): row
+        (
+            row["topology"],
+            row["batch"],
+            row["atoms_per_system"],
+            row["term_or_mode"],
+        ): row
         for row in pair_rows
     }
     for topology in TOPOLOGIES:
@@ -575,9 +637,10 @@ def write_distribution_summary(
         "dispatch_40_atoms": {
             "decision": "retain",
             "reason": (
-                "Open topology already favors sparse at N=32, while compact topology still "
-                "favors dense at N=48 for every measured batch. A topology-agnostic atom-only "
-                "threshold cannot improve both distributions, and no N=40 neighborhood was run."
+                "Open topology already favors sparse at N=32, while compact "
+                "topology still favors dense at N=48 for every measured batch. "
+                "A topology-agnostic atom-only threshold cannot improve both "
+                "distributions, and no N=40 neighborhood was run."
             ),
             "boundary_rows": boundary,
             "nonoptimal_cells_under_current_policy": len(nonoptimal),
@@ -590,8 +653,8 @@ def write_distribution_summary(
         },
         "reuse_distribution": {
             "warning": (
-                "Several open/sparse reuse cells are multimodal or contain periodic spikes; "
-                "min/median/max alone is not a sufficient archive."
+                "Several open/sparse reuse cells are multimodal or contain "
+                "periodic spikes; min/median/max alone is not a sufficient archive."
             ),
             "largest_max_over_median": [
                 {
@@ -613,29 +676,45 @@ def write_distribution_summary(
             "aes2": paired_topology_ratios(rows, "aes2"),
         },
         "limitations": [
-            "No N=40 or dense neighborhood at N=36/44 was measured, so the exact crossover cannot be refit.",
-            "The isolated matrices are homogeneous open/compact fixtures; heterogeneous term timing was not run.",
-            "D4 rows record committed 50-bohr retained pairs and dense pair extents, but not per-role active CN/two-body pairs or ATM-triple counts; no ns/active-interaction normalization is claimed.",
-            "Term rows are prepared internal production entry points, not complete public SCC/inference calls.",
-            "Nsight Compute DRAM/occupancy counters are unavailable with ERR_NVGPUCTRPERM.",
-            "The cancelled long public N/B/topology/QM-MM Cartesian sweep remains not run and outside revised closure scope.",
+            (
+                "No N=40 or dense neighborhood at N=36/44 was measured, so the "
+                "exact crossover cannot be refit."
+            ),
+            (
+                "The isolated matrices are homogeneous open/compact fixtures; "
+                "heterogeneous term timing was not run."
+            ),
+            (
+                "D4 rows record committed 50-bohr retained pairs and dense pair "
+                "extents, but not per-role active CN/two-body pairs or ATM-triple "
+                "counts; no ns/active-interaction normalization is claimed."
+            ),
+            (
+                "Term rows are prepared internal production entry points, not "
+                "complete public SCC/inference calls."
+            ),
+            (
+                "Nsight Compute DRAM/occupancy counters are unavailable with "
+                "ERR_NVGPUCTRPERM."
+            ),
+            (
+                "The cancelled long public N/B/topology/QM-MM Cartesian sweep "
+                "remains not run and outside revised closure scope."
+            ),
         ],
     }
     json_path = output_dir / "distribution-summary.json"
     json_path.write_text(
-        json.dumps({"schema_version": 1, "decisions": decisions, "rows": rows}, indent=2)
+        json.dumps(
+            {"schema_version": 1, "decisions": decisions, "rows": rows}, indent=2
+        )
         + "\n",
         encoding="utf-8",
     )
 
     csv_path = output_dir / "distribution-summary.csv"
     fieldnames = tuple(
-        dict.fromkeys(
-            key
-            for row in rows
-            for key in row
-            if key not in {"samples_ms"}
-        )
+        dict.fromkeys(key for row in rows for key in row if key not in {"samples_ms"})
     )
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
@@ -659,7 +738,9 @@ def main() -> int:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     artifacts = [copy_pairlist(input_root, output_dir)]
-    artifacts.extend(aggregate_term_kind(input_root, output_dir, kind) for kind in TERM_KINDS)
+    artifacts.extend(
+        aggregate_term_kind(input_root, output_dir, kind) for kind in TERM_KINDS
+    )
     term_documents = {
         kind: load_json(output_dir / f"{kind}-term-matrix.json") for kind in TERM_KINDS
     }
