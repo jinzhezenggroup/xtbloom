@@ -538,7 +538,16 @@ export function createSmilesWorkerClient({
       } catch (cause) {
         pending.delete(id);
         clearTimer(timer);
-        reject(cause);
+        const error = codedError(
+          "smiles_err_library",
+          "SMILES worker rejected the request",
+        );
+        error.cause = cause;
+        reject(error);
+        /* A synchronous postMessage failure means this Worker can no longer
+         * be trusted for the retry. Rebuild it just as we do after a timeout,
+         * while preserving the localized failure for the current request. */
+        start("post-failed", error);
       }
     });
   }

@@ -61,17 +61,18 @@ function createManualTimers() {
   let sequence = 0;
   const callbacks = new Map();
   return {
-    setTimer(callback) {
+    setTimer(callback, delayMs) {
       const id = ++sequence;
-      callbacks.set(id, callback);
+      callbacks.set(id, { callback, delayMs });
       return id;
     },
     clearTimer(id) { callbacks.delete(id); },
+    delayOf: (id) => callbacks.get(id)?.delayMs,
     run(id) {
-      const callback = callbacks.get(id);
-      assert.equal(typeof callback, "function", `missing timer ${id}`);
+      const entry = callbacks.get(id);
+      assert.equal(typeof entry?.callback, "function", `missing timer ${id}`);
       callbacks.delete(id);
-      callback();
+      entry.callback();
     },
     ids: () => Array.from(callbacks.keys()),
     get size() { return callbacks.size; },
@@ -666,7 +667,9 @@ test("SMILES generation timeout restarts the worker and permits a one-click retr
     id: 1,
     smiles: "complex",
   });
-  timers.run(timers.ids()[0]);
+  const generationTimer = timers.ids()[0];
+  assert.equal(timers.delayOf(generationTimer), 120);
+  timers.run(generationTimer);
   await assert.rejects(first, (error) => error.code === "smiles_err_timeout");
   assert.equal(workers[0].terminated, true);
   assert.equal(workers.length, 2);
@@ -738,6 +741,41 @@ test("cancelling SMILES work terminates abandoned synchronous work", async () =>
   });
   assert.deepEqual(await replacement, { atomCount: 2 });
   assert.equal(timers.size, 0, "cancelled work must not leave a timer ahead of the retry");
+  client.dispose();
+});
+
+test("SMILES postMessage failure rejects locally and rebuilds the worker", async () => {
+  const timers = createManualTimers();
+  const workers = [];
+  const client = createSmilesWorkerClient({
+    createWorker: () => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  client.start();
+  workers[0].emit({ type: "ready", version: "9.21.0" });
+  const cause = new DOMException("clone failed", "DataCloneError");
+  workers[0].postMessage = () => { throw cause; };
+
+  await assert.rejects(client.request("CCO"), (error) => {
+    assert.equal(error.code, "smiles_err_library");
+    assert.equal(error.cause, cause);
+    return true;
+  });
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+  assert.equal(client.getState(), "loading");
+  assert.equal(timers.size, 1, "only the replacement load timer should remain");
+
+  workers[1].emit({ type: "ready", version: "9.21.0" });
+  const retry = client.request("CCO");
+  workers[1].emit({ type: "result", id: 2, ok: true, result: { atomCount: 9 } });
+  assert.deepEqual(await retry, { atomCount: 9 });
   client.dispose();
 });
 
