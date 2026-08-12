@@ -609,8 +609,8 @@ class XtbHessianEngine(HessianEngine):
             for _ in range(hessian_batch_size)
         ]
 
-    def prepare_sample(self) -> None:
-        """Replace xTB's result checkpoint so every Hessian starts fresh."""
+    def _refresh_result_checkpoints(self) -> None:
+        """Replace xTB result handles as part of each timed public workflow."""
         for state in self.adapter.states:
             old_result = state.result
             state.result = ctypes.c_void_p(self.library.xtb_newResults())
@@ -621,6 +621,7 @@ class XtbHessianEngine(HessianEngine):
 
     def invoke(self) -> EngineResult:
         """Compute the requested xTB Hessians sequentially at fixed threads."""
+        self._refresh_result_checkpoints()
         matrices = []
         for state, hessian in zip(self.adapter.states, self.hessians, strict=True):
             ctypes.memset(ctypes.addressof(hessian), 0, ctypes.sizeof(hessian))
@@ -644,7 +645,7 @@ class XtbHessianEngine(HessianEngine):
             matrices,
             {
                 "raw_symmetrize": True,
-                "fresh_result_checkpoint_prepared_outside_timing": True,
+                "fresh_result_checkpoint_prepared_inside_timing": True,
                 "accuracy_factor": 1.0,
                 "optional_step_and_atom_list": "NULL/default 0.005 bohr/all atoms",
                 "native_openmp_displacement_parallelism": True,
@@ -897,20 +898,43 @@ def evaluate_correctness(
     """Apply gates to every Hessian and aggregate the worst batch member."""
     final_batch = list(sample_batches[-1])
     per_hessian = [hessian_diagnostics(matrix) for matrix in final_batch]
-    repeatability_by_hessian = []
+    nonfinite_samples = []
+    sample_finite = []
+    for sample_index, batch in enumerate(sample_batches):
+        failing_indices = [
+            hessian_index
+            for hessian_index, matrix in enumerate(batch)
+            if not np.isfinite(matrix).all()
+        ]
+        sample_finite.append(not failing_indices)
+        if failing_indices:
+            nonfinite_samples.append(
+                {
+                    "sample_index": sample_index,
+                    "hessian_indices": failing_indices,
+                }
+            )
+
+    repeatability_by_hessian: list[float | None] = []
     for index, baseline in enumerate(sample_batches[0]):
+        compared = [baseline, *(batch[index] for batch in sample_batches[1:])]
+        if not all(np.isfinite(matrix).all() for matrix in compared):
+            repeatability_by_hessian.append(None)
+            continue
         repeatability_by_hessian.append(
             max(
-                (
-                    float(np.max(np.abs(batch[index] - baseline)))
-                    for batch in sample_batches[1:]
-                ),
+                (float(np.max(np.abs(matrix - baseline))) for matrix in compared[1:]),
                 default=0.0,
             )
         )
-    repeatability = max(repeatability_by_hessian, default=0.0)
+    finite_repeatability = [
+        value for value in repeatability_by_hessian if value is not None
+    ]
+    repeatability = (
+        max(finite_repeatability, default=0.0) if all(sample_finite) else None
+    )
     reasons = []
-    if not all(diagnostic["finite"] for diagnostic in per_hessian):
+    if not all(sample_finite):
         reasons.append("non_finite_hessian")
     antisymmetry_values = [
         diagnostic["max_abs_antisymmetry_hartree_per_bohr2"]
@@ -930,12 +954,16 @@ def evaluate_correctness(
     ]
     if acoustic_values and max(acoustic_values) > acoustic_atol:
         reasons.append("acoustic_residual_exceeds_tolerance")
-    if repeatability > repeatability_atol:
+    if repeatability is not None and repeatability > repeatability_atol:
         reasons.append("repeatability_exceeds_tolerance")
     if is_reference:
         comparison: dict[str, Any] = {"status": "reference"}
     elif references is None:
         comparison = {"status": "not_requested"}
+    elif not all(diagnostic["finite"] for diagnostic in per_hessian) or not all(
+        np.isfinite(reference).all() for reference in references
+    ):
+        comparison = {"status": "not_comparable_non_finite"}
     else:
         if len(references) != len(final_batch):
             raise BenchmarkError("reference Hessian batch size does not match result")
@@ -964,7 +992,10 @@ def evaluate_correctness(
         "reasons": reasons,
         "diagnostics": {
             "hessian_count": len(per_hessian),
-            "all_finite": all(item["finite"] for item in per_hessian),
+            "all_finite": all(sample_finite),
+            "retained_sample_count": len(sample_batches),
+            "per_sample_finite": sample_finite,
+            "nonfinite_samples": nonfinite_samples,
             "max_abs_antisymmetry_hartree_per_bohr2": (
                 max(antisymmetry_values) if antisymmetry_values else None
             ),

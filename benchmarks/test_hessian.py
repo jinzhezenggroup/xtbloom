@@ -419,6 +419,47 @@ class HessianBenchmarkTest(unittest.TestCase):
         self.assertEqual(correctness["status"], "fail")
         self.assertIn("non_finite_hessian", correctness["reasons"])
 
+    def test_nonfinite_reference_comparison_stays_json_serializable(self) -> None:
+        """Skip deltas that would otherwise publish forbidden JSON NaN values."""
+        matrix = np.zeros((hb.COORDINATE_COUNT, hb.COORDINATE_COUNT))
+        matrix[0, 0] = np.nan
+        correctness = hb.evaluate_correctness(
+            [[matrix]],
+            references=[np.zeros_like(matrix)],
+            hessian_atol=1.0e-3,
+            symmetry_atol=1.0e-3,
+            acoustic_atol=1.0e-3,
+            repeatability_atol=1.0e-8,
+            is_reference=False,
+        )
+        self.assertEqual(
+            correctness["cross_engine"]["status"],
+            "not_comparable_non_finite",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            hb.write_json(Path(directory) / "result.json", correctness)
+
+    def test_nonfinite_earlier_sample_cannot_pass_on_finite_final_sample(self) -> None:
+        """Every retained sample, not only the final payload, must be finite."""
+        nonfinite = np.zeros((hb.COORDINATE_COUNT, hb.COORDINATE_COUNT))
+        nonfinite[0, 0] = np.nan
+        finite = np.zeros_like(nonfinite)
+        correctness = hb.evaluate_correctness(
+            [[nonfinite], [finite]],
+            references=None,
+            hessian_atol=1.0e-3,
+            symmetry_atol=1.0e-3,
+            acoustic_atol=1.0e-3,
+            repeatability_atol=1.0e-8,
+            is_reference=False,
+        )
+        self.assertEqual(correctness["status"], "fail")
+        self.assertIsNone(correctness["max_abs_repeatability_delta_hartree_per_bohr2"])
+        self.assertEqual(
+            correctness["diagnostics"]["nonfinite_samples"],
+            [{"sample_index": 0, "hessian_indices": [0]}],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
