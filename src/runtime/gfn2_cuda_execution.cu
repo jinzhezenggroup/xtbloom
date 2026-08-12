@@ -6647,6 +6647,10 @@ struct Gfn2CudaExecutionCache::Impl {
     if (active.deferred_status != XTBLOOM_STATUS_SUCCESS) {
       active.completion_status = active.deferred_status;
       active.result_flags = 0u;
+      /* Close the host gate before diagnostic composition, which may allocate
+       * and throw. A failed request must remain unable to resurrect the
+       * candidate checkpoint even if error-string construction is interrupted. */
+      current.inference.warm_checkpoint_ready = false;
       if (!active.completion_error.empty()) active.completion_error += "; additionally, ";
       active.completion_error += active.deferred_error;
     }
@@ -7391,14 +7395,16 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
       if (transaction_status == XTBLOOM_STATUS_SUCCESS) {
         auto& active = implementation.active_request;
         active.deferred_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+        /* Device restoration is part of the accepted request contract. Close
+         * readiness before any potentially-throwing diagnostic allocation. */
+        if (implementation.prepared != nullptr) {
+          implementation.prepared->inference.warm_checkpoint_ready = false;
+        }
         if (!active.deferred_error.empty()) active.deferred_error += "; additionally, ";
         active.deferred_error += restore_error;
         if (active.completion_ready) {
           active.completion_status = XTBLOOM_STATUS_INTERNAL_ERROR;
           active.result_flags = 0u;
-          if (implementation.prepared != nullptr) {
-            implementation.prepared->inference.warm_checkpoint_ready = false;
-          }
           if (!active.completion_error.empty()) active.completion_error += "; additionally, ";
           active.completion_error += active.deferred_error;
         }
