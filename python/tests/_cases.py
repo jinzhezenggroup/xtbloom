@@ -11,7 +11,10 @@ import json
 from pathlib import Path
 
 import numpy as np
-from xtbloom import numbers_to_symbols  # noqa: F401 - re-exported test helper
+from xtbloom import (  # noqa: F401 - re-exported test helper
+    numbers_to_symbols,
+    symbols_to_numbers,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
@@ -50,30 +53,6 @@ def _parse_coord(path: Path) -> tuple[list[int], np.ndarray]:
     """Parse a Turbomole ``$coord`` file into numbers and bohr positions."""
     numbers: list[int] = []
     positions: list[float] = []
-    elements = {
-        "h": 1,
-        "he": 2,
-        "li": 3,
-        "be": 4,
-        "b": 5,
-        "c": 6,
-        "n": 7,
-        "o": 8,
-        "f": 9,
-        "ne": 10,
-        "na": 11,
-        "mg": 12,
-        "al": 13,
-        "si": 14,
-        "p": 15,
-        "s": 16,
-        "cl": 17,
-        "ar": 18,
-        "k": 19,
-        "ca": 20,
-        "br": 35,
-        "i": 53,
-    }
     in_coord = False
     for raw in path.read_text().splitlines():
         line = raw.strip()
@@ -88,7 +67,9 @@ def _parse_coord(path: Path) -> tuple[list[int], np.ndarray]:
         parts = line.split()
         if len(parts) != 4:
             continue
-        numbers.append(elements[parts[3].lower()])
+        # Turbomole writes element labels in lowercase, while the public
+        # helper intentionally accepts canonical chemical symbols.
+        numbers.append(symbols_to_numbers([parts[3].capitalize()])[0])
         positions.append(float(parts[0]))
         positions.append(float(parts[1]))
         positions.append(float(parts[2]))
