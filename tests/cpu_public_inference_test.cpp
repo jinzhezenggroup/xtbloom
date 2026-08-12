@@ -439,8 +439,8 @@ int test_public_mixer_defaults_nondefault_and_reproducible_policy() {
   CHECK(xtbloom_compute(partial_context.get(), &partial.batch, &partial.options, &partial.result) ==
         XTBLOOM_STATUS_SUCCESS);
   CHECK(xtbloom_compute(explicit_context.get(), &explicit_defaults.batch,
-                        &explicit_defaults.options, &explicit_defaults.result) ==
-        XTBLOOM_STATUS_SUCCESS);
+                        &explicit_defaults.options,
+                        &explicit_defaults.result) == XTBLOOM_STATUS_SUCCESS);
   CHECK(legacy.energies == explicit_defaults.energies);
   CHECK(legacy.forces == explicit_defaults.forces);
   CHECK(legacy.atomic_charges == explicit_defaults.atomic_charges);
@@ -470,8 +470,8 @@ int test_public_mixer_defaults_nondefault_and_reproducible_policy() {
   for (std::size_t atom = 0u; atom < nondefault.atomic_charges.size(); ++atom) {
     CHECK(near(nondefault.atomic_charges[atom], explicit_defaults.atomic_charges[atom], 2.0e-6));
     for (std::size_t axis = 0u; axis < 3u; ++axis) {
-      CHECK(near(nondefault.forces[3u * atom + axis],
-                 explicit_defaults.forces[3u * atom + axis], 2.0e-6));
+      CHECK(near(nondefault.forces[3u * atom + axis], explicit_defaults.forces[3u * atom + axis],
+                 2.0e-6));
     }
   }
 
@@ -482,18 +482,16 @@ int test_public_mixer_defaults_nondefault_and_reproducible_policy() {
   reproducible.options.scc_mixer_history = 8;
   reproducible.options.scc_mixer_damping = 0.4;
   reproducible.options.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
-  CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch,
-                        &reproducible.options, &reproducible.result) ==
-        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch, &reproducible.options,
+                        &reproducible.result) == XTBLOOM_STATUS_SUCCESS);
   CHECK(reproducible.energies == legacy.energies);
   CHECK(reproducible.forces == legacy.forces);
   CHECK(reproducible.atomic_charges == legacy.atomic_charges);
   CHECK(reproducible.iterations == legacy.iterations);
   const PublicBatch reference = reproducible;
   for (int repetition = 0; repetition < 3; ++repetition) {
-    CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch,
-                          &reproducible.options, &reproducible.result) ==
-          XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch, &reproducible.options,
+                          &reproducible.result) == XTBLOOM_STATUS_SUCCESS);
     CHECK(reproducible.energies == reference.energies);
     CHECK(reproducible.forces == reference.forces);
     CHECK(reproducible.atomic_charges == reference.atomic_charges);
@@ -501,6 +499,40 @@ int test_public_mixer_defaults_nondefault_and_reproducible_policy() {
     CHECK(reproducible.converged == reference.converged);
     CHECK(reproducible.statuses == reference.statuses);
   }
+
+  /* Reproducibility covers the stateful start-mode sequence as well as an
+   * isolated FRESH call. Resetting with the identical FRESH frame must make
+   * the following perturbed WARM frame replay byte-for-byte. */
+  const std::vector<double> base_positions = reproducible.positions;
+  reproducible.positions[0] -= 0.002;
+  reproducible.positions[3] += 0.002;
+  reproducible.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch, &reproducible.options,
+                        &reproducible.result) == XTBLOOM_STATUS_SUCCESS);
+  const PublicBatch warm_reference = reproducible;
+
+  std::copy(base_positions.begin(), base_positions.end(), reproducible.positions.begin());
+  reproducible.options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+  CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch, &reproducible.options,
+                        &reproducible.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(reproducible.energies == reference.energies);
+  CHECK(reproducible.forces == reference.forces);
+  CHECK(reproducible.atomic_charges == reference.atomic_charges);
+  CHECK(reproducible.iterations == reference.iterations);
+  CHECK(reproducible.converged == reference.converged);
+  CHECK(reproducible.statuses == reference.statuses);
+
+  reproducible.positions[0] -= 0.002;
+  reproducible.positions[3] += 0.002;
+  reproducible.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch, &reproducible.options,
+                        &reproducible.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(reproducible.energies == warm_reference.energies);
+  CHECK(reproducible.forces == warm_reference.forces);
+  CHECK(reproducible.atomic_charges == warm_reference.atomic_charges);
+  CHECK(reproducible.iterations == warm_reference.iterations);
+  CHECK(reproducible.converged == warm_reference.converged);
+  CHECK(reproducible.statuses == warm_reference.statuses);
   return 0;
 }
 

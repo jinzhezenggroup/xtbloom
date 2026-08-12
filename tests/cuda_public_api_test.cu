@@ -893,11 +893,11 @@ int test_public_mixer_controls_and_reproducibility(std::int32_t device,
   g_scenario = "mixer-controls/CPU-default-reference";
   CHECK(run_cpu_reference(cpu_context, batch, explicit_defaults, reference) == 0);
 
-  const std::array<std::size_t, 3> legacy_sizes{
-      XTBLOOM_COMPUTE_OPTIONS_V1_SIZE, XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
-      XTBLOOM_COMPUTE_OPTIONS_V3_SIZE - 1u};
-  const std::array<ResultLayout, 3> legacy_layouts{
-      ResultLayout::kHost, ResultLayout::kDevice, ResultLayout::kMixed};
+  const std::array<std::size_t, 3> legacy_sizes{XTBLOOM_COMPUTE_OPTIONS_V1_SIZE,
+                                                XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
+                                                XTBLOOM_COMPUTE_OPTIONS_V3_SIZE - 1u};
+  const std::array<ResultLayout, 3> legacy_layouts{ResultLayout::kHost, ResultLayout::kDevice,
+                                                   ResultLayout::kMixed};
   StreamOwner stream;
   CUDA_CHECK(stream.create());
   xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
@@ -909,8 +909,8 @@ int test_public_mixer_controls_and_reproducibility(std::int32_t device,
     g_scenario = scenario.c_str();
     xtbloom_compute_options_t legacy = explicit_defaults;
     legacy.struct_size = static_cast<std::uint32_t>(legacy_sizes[index]);
-    CHECK(execute_cuda_and_compare(context.get(), batch, legacy, legacy_layouts[index], reference) ==
-          0);
+    CHECK(execute_cuda_and_compare(context.get(), batch, legacy, legacy_layouts[index],
+                                   reference) == 0);
   }
 
   xtbloom_compute_options_t nondefault = explicit_defaults;
@@ -924,8 +924,8 @@ int test_public_mixer_controls_and_reproducibility(std::int32_t device,
         std::pair{ResultLayout::kMixed, "mixed"}}) {
     std::string scenario = std::string("mixer-controls/nondefault/") + name;
     g_scenario = scenario.c_str();
-    CHECK(execute_cuda_and_compare(context.get(), batch, nondefault, layout, nondefault_reference) ==
-          0);
+    CHECK(execute_cuda_and_compare(context.get(), batch, nondefault, layout,
+                                   nondefault_reference) == 0);
   }
 
   xtbloom_compute_options_t reproducible = explicit_defaults;
@@ -952,6 +952,51 @@ int test_public_mixer_controls_and_reproducibility(std::int32_t device,
     CHECK(replay.statuses == first.statuses);
   }
 
+  /* The exact-replay contract includes the FRESH/WARM sequence. Re-seeding
+   * the same cache with an identical FRESH frame must reproduce both that
+   * frame and the following perturbed strict-WARM frame byte-for-byte. */
+  const std::vector<double> base_positions = batch.positions;
+  batch.positions[0] -= 0.002;
+  batch.positions[3] += 0.002;
+  reproducible.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  g_scenario = "mixer-controls/reproducible-warm-first";
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &reproducible,
+                        &replay_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult warm_first;
+  CUDA_CHECK(replay_owner.materialize(warm_first));
+
+  std::copy(base_positions.begin(), base_positions.end(), batch.positions.begin());
+  reproducible.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+  g_scenario = "mixer-controls/reproducible-sequence-reset";
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &reproducible,
+                        &replay_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult fresh_replay;
+  CUDA_CHECK(replay_owner.materialize(fresh_replay));
+  CHECK(fresh_replay.flags == first.flags);
+  CHECK(fresh_replay.energies == first.energies);
+  CHECK(fresh_replay.forces == first.forces);
+  CHECK(fresh_replay.atomic_charges == first.atomic_charges);
+  CHECK(fresh_replay.iterations == first.iterations);
+  CHECK(fresh_replay.converged == first.converged);
+  CHECK(fresh_replay.statuses == first.statuses);
+
+  batch.positions[0] -= 0.002;
+  batch.positions[3] += 0.002;
+  reproducible.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  g_scenario = "mixer-controls/reproducible-warm-replay";
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &reproducible,
+                        &replay_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult warm_replay;
+  CUDA_CHECK(replay_owner.materialize(warm_replay));
+  CHECK(warm_replay.flags == warm_first.flags);
+  CHECK(warm_replay.energies == warm_first.energies);
+  CHECK(warm_replay.forces == warm_first.forces);
+  CHECK(warm_replay.atomic_charges == warm_first.atomic_charges);
+  CHECK(warm_replay.iterations == warm_first.iterations);
+  CHECK(warm_replay.converged == warm_first.converged);
+  CHECK(warm_replay.statuses == warm_first.statuses);
+  std::copy(base_positions.begin(), base_positions.end(), batch.positions.begin());
+
   xtbloom_request_t* raw_request = nullptr;
   CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
   const std::unique_ptr<xtbloom_request_t, void (*)(xtbloom_request_t*)> request(
@@ -975,7 +1020,7 @@ int test_public_mixer_controls_and_reproducibility(std::int32_t device,
   CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &nondefault, &raw_plan) ==
         XTBLOOM_STATUS_SUCCESS);
   const std::unique_ptr<xtbloom_plan_t, void (*)(xtbloom_plan_t*)> plan(raw_plan,
-                                                                       xtbloom_plan_destroy);
+                                                                        xtbloom_plan_destroy);
   ResultOwner plan_sync_owner;
   CUDA_CHECK(plan_sync_owner.bind(batch, ResultLayout::kHost, nondefault.flags));
   g_scenario = "mixer-controls/plan-sync";
