@@ -291,6 +291,14 @@ class Gfn2CudaExecutionCache : public RequestCompletion {
       const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const xtbloom_batch_t& batch,
       const xtbloom_compute_options_t& options, const xtbloom_batch_result_t& result,
       RequestSubmission& submission, std::string& error);
+  friend xtbloom_status_t enqueue_restricted_gfn2_cuda(
+      const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const xtbloom_batch_t& batch,
+      const xtbloom_compute_options_t& options, const xtbloom_batch_result_t& result,
+      RequestSubmission& submission, std::string& error);
+  friend xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
+      const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const xtbloom_batch_t& batch,
+      const xtbloom_compute_options_t& options, const xtbloom_batch_result_t& result,
+      bool require_prepared_topology, RequestSubmission& submission, std::string& error);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;
@@ -327,6 +335,15 @@ class Gfn2CudaExecutionCache : public RequestCompletion {
  * return, and device topology is compared in owner-stream order before the
  * transactional result gate can commit any caller output. */
 [[nodiscard]] xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
+    const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const xtbloom_batch_t& batch,
+    const xtbloom_compute_options_t& options, const xtbloom_batch_result_t& result,
+    RequestSubmission& submission, std::string& error);
+
+/* Context-owned counterpart that transactionally prepares or reuses the
+ * current topology before submitting the same asynchronous inference/result
+ * protocol. Topology construction may perform bounded setup waits, but an
+ * already prepared topology never waits for inference or caller publication. */
+[[nodiscard]] xtbloom_status_t enqueue_restricted_gfn2_cuda(
     const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const xtbloom_batch_t& batch,
     const xtbloom_compute_options_t& options, const xtbloom_batch_result_t& result,
     RequestSubmission& submission, std::string& error);

@@ -792,10 +792,17 @@ XTBLOOM_API xtbloom_status_t xtbloom_compute(xtbloom_context_t* context,
  * modified. In particular, result->flags is not an asynchronous publication
  * channel; completed flags are returned in xtbloom_request_info_t.result_flags.
  * CPU contexts return XTBLOOM_STATUS_NOT_SUPPORTED before descriptor validation
- * and leave all result bytes and the request state unchanged. The initial V1
- * implementation reserves this context-convenience symbol but returns
- * XTBLOOM_STATUS_NOT_IMPLEMENTED for CUDA; use xtbloom_plan_compute_enqueue for
- * the connected fixed-topology CUDA path.
+ * and leave all result bytes and the request state unchanged. CUDA context
+ * enqueue prepares or reuses the context-owned topology cache. A new or changed
+ * topology may perform bounded setup and topology-validation waits before the
+ * request is accepted, but accepted numerical inference and result publication
+ * remain stream-asynchronous. Once a device-resident topology has established a
+ * prepared shape/policy, later same-shape device submissions compare its exact
+ * immutable bytes in stream order; a mismatch completes the request with
+ * INVALID_ARGUMENT rather than rebuilding it. Use a changed shape/policy or a
+ * synchronous convenience call to establish a new device topology. Use
+ * xtbloom_plan_compute_enqueue when topology is fixed and allocation-free
+ * admission is required.
  */
 XTBLOOM_API xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context,
                                                      const xtbloom_batch_t* batch,

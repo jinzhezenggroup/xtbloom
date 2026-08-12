@@ -1147,7 +1147,8 @@ bool finite_double_buffer(const xtbloom_const_buffer_t& buffer, std::int64_t ele
  * fail-closed and ensure a reused call never hides malformed numerical views. */
 TopologyMatch match_existing_topology(const xtbloom_batch_t& batch,
                                       const xtbloom_compute_options_t& options,
-                                      const TopologyKey& key, std::string& error) {
+                                      const TopologyKey& key, std::string& error,
+                                      bool validate_host_numerical = true) {
   const std::int64_t expected_batch = static_cast<std::int64_t>(key.molecular_charges.size());
   const std::int64_t expected_atoms = static_cast<std::int64_t>(key.atomic_numbers.size());
   const std::int64_t expected_points = key.point_offsets.empty() ? 0 : key.point_offsets.back();
@@ -1229,23 +1230,61 @@ TopologyMatch match_existing_topology(const xtbloom_batch_t& batch,
         batch.charge_response_offsets.data == nullptr ||
         batch.charge_response_matrix.data == nullptr ||
         !buffer_equals(batch.charge_response_offsets, key.response_offsets) ||
-        !finite_double_buffer(batch.charge_response_matrix, expected_response_elements)) {
+        (validate_host_numerical &&
+         !finite_double_buffer(batch.charge_response_matrix, expected_response_elements))) {
       error = "fixed-topology reuse received incomplete or malformed dense charge-response data";
       return TopologyMatch::kInvalid;
     }
   }
 
-  if (!finite_double_buffer(batch.positions, expected_atoms * 3) ||
-      !finite_double_buffer(batch.point_charge_positions, expected_points * 3, false, true) ||
-      !finite_double_buffer(batch.point_charge_values, expected_points, false, true) ||
-      !finite_double_buffer(batch.point_charge_gammas, expected_points, true, true) ||
-      (batch.atomic_potential_shifts.data != nullptr &&
-       !finite_double_buffer(batch.atomic_potential_shifts, expected_atoms))) {
+  if (validate_host_numerical &&
+      (!finite_double_buffer(batch.positions, expected_atoms * 3) ||
+       !finite_double_buffer(batch.point_charge_positions, expected_points * 3, false, true) ||
+       !finite_double_buffer(batch.point_charge_values, expected_points, false, true) ||
+       !finite_double_buffer(batch.point_charge_gammas, expected_points, true, true) ||
+       (batch.atomic_potential_shifts.data != nullptr &&
+        !finite_double_buffer(batch.atomic_potential_shifts, expected_atoms)))) {
     error = "fixed-topology reuse received a malformed or nonfinite numerical host buffer";
     return TopologyMatch::kInvalid;
   }
   error.clear();
   return TopologyMatch::kMatch;
+}
+
+bool context_enqueue_host_topology_probe_available(const xtbloom_batch_t& batch) noexcept {
+  const auto host_or_absent = [](const xtbloom_const_buffer_t& buffer) {
+    return buffer.data == nullptr || buffer.memory_space == XTBLOOM_MEMORY_HOST;
+  };
+  return host_or_absent(batch.atom_offsets) && host_or_absent(batch.atomic_numbers) &&
+         host_or_absent(batch.molecular_charges) && host_or_absent(batch.unpaired_electrons) &&
+         (batch.struct_size < XTBLOOM_BATCH_V2_SIZE || host_or_absent(batch.spin_channels)) &&
+         host_or_absent(batch.point_charge_offsets) &&
+         host_or_absent(batch.charge_response_offsets);
+}
+
+bool context_enqueue_shape_policy_matches(const xtbloom_batch_t& batch,
+                                          const xtbloom_compute_options_t& options,
+                                          const TopologyKey& key) noexcept {
+  const std::int64_t expected_batch = static_cast<std::int64_t>(key.molecular_charges.size());
+  const std::int64_t expected_atoms = static_cast<std::int64_t>(key.atomic_numbers.size());
+  const std::int64_t expected_points = key.point_offsets.empty() ? 0 : key.point_offsets.back();
+  const std::int64_t expected_response =
+      key.response_offsets.empty() ? 0 : key.response_offsets.back();
+  const bool response_active =
+      batch.total_charge_response_elements != 0 || batch.charge_response_offsets.data != nullptr ||
+      batch.charge_response_offsets.size_bytes != 0u ||
+      batch.charge_response_matrix.data != nullptr || batch.charge_response_matrix.size_bytes != 0u;
+  const bool periodic_enabled = batch.atomic_potential_shifts.data != nullptr ||
+                                batch.atomic_potential_shifts.size_bytes != 0u || response_active;
+  return batch.batch_size == expected_batch && batch.total_atoms == expected_atoms &&
+         batch.total_point_charges == expected_points &&
+         (!response_active || batch.total_charge_response_elements == expected_response) &&
+         options.model == XTBLOOM_MODEL_GFN2_XTB && options.flags == key.flags &&
+         options.max_scc_iterations == key.maximum_iterations &&
+         options.charge_tolerance == key.charge_tolerance &&
+         options.energy_tolerance == key.energy_tolerance &&
+         options.electronic_temperature == key.electronic_temperature &&
+         periodic_enabled == key.periodic_enabled;
 }
 
 xtbloom_status_t validate_offsets(const char* name, const std::vector<std::int64_t>& offsets,
@@ -7026,10 +7065,10 @@ xtbloom_status_t execute_restricted_gfn2_cuda_plan(Gfn2CudaExecutionCache& cache
   return execute_restricted_gfn2_cuda_impl(cache, batch, options, result, true, error);
 }
 
-xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
+xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
     const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const xtbloom_batch_t& batch,
     const xtbloom_compute_options_t& options, const xtbloom_batch_result_t& result,
-    RequestSubmission& submission, std::string& error) {
+    bool require_prepared_topology, RequestSubmission& submission, std::string& error) {
   submission = {};
   if (cache == nullptr || cache->impl_ == nullptr) {
     error = "CUDA GFN2 execution cache has no implementation";
@@ -7082,18 +7121,133 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
       status = implementation.ensure_handles(error);
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
-      if (implementation.prepared == nullptr) {
-        error = "CUDA plan request has no prepared fixed-topology runtime";
-        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      std::unique_ptr<Gfn2CudaExecutionCache::Impl::Prepared> candidate;
+      bool topology_candidate_pending = false;
+      const auto abort_topology_candidate = [&]() noexcept {
+        if (topology_candidate_pending) {
+          implementation.topology_staging.abort_candidate();
+          topology_candidate_pending = false;
+        }
+      };
+      Gfn2CudaExecutionCache::Impl::Prepared* working = implementation.prepared.get();
+      if (require_prepared_topology) {
+        if (working == nullptr) {
+          error = "CUDA plan request has no prepared fixed-topology runtime";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+        status = implementation.enqueue_fixed_topology_validation_locked(*working, batch, options,
+                                                                         error);
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          return implementation.settle_public_submissions_locked(*working, status, error);
+        }
+      } else if (working != nullptr && context_enqueue_host_topology_probe_available(batch)) {
+        /* Host topology can prove reuse or a legitimate topology replacement
+         * without waiting on the owner stream, even when numerical leaves are
+         * device-resident. Device topology still uses stream-ordered compare
+         * or the bounded staging/setup admission below. */
+        const TopologyMatch match =
+            match_existing_topology(batch, options, working->host.key, error, false);
+        if (match == TopologyMatch::kInvalid) return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        if (match == TopologyMatch::kMatch) {
+          status = implementation.enqueue_fixed_topology_validation_locked(*working, batch, options,
+                                                                           error);
+          if (status != XTBLOOM_STATUS_SUCCESS) {
+            return implementation.settle_public_submissions_locked(*working, status, error);
+          }
+        } else {
+          working = nullptr;
+        }
+      } else if (working != nullptr &&
+                 context_enqueue_shape_policy_matches(batch, options, working->host.key)) {
+        /* Device-resident topology bytes cannot be dereferenced at admission.
+         * Reuse the prepared shape and compare the immutable key in stream
+         * order. A mutation completes this request with INVALID_ARGUMENT; a
+         * caller that intentionally changes device topology can use a changed
+         * shape/policy or the synchronous convenience path to rebuild it. */
+        status = implementation.enqueue_fixed_topology_validation_locked(*working, batch, options,
+                                                                         error);
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          return implementation.settle_public_submissions_locked(*working, status, error);
+        }
+      } else {
+        working = nullptr;
       }
-      auto& working = *implementation.prepared;
+      if (!require_prepared_topology && working == nullptr) {
+        const Gfn2CudaTopologyStagingDiagnostic staged =
+            implementation.topology_staging.stage_and_validate(batch, error);
+        if (!staged.success()) return staged.status;
+        topology_candidate_pending =
+            staged.disposition == Gfn2CudaTopologyStageDisposition::kCandidate;
+        const Gfn2CudaTopologyHostSnapshot* topology =
+            topology_candidate_pending ? implementation.topology_staging.candidate_snapshot()
+                                       : implementation.topology_staging.committed_snapshot();
+        if (topology == nullptr) {
+          abort_topology_candidate();
+          error = "CUDA context enqueue did not expose a canonical topology snapshot";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+
+        /* Reaching this block means every reuse path above rejected and cleared
+         * `working`, so the staged topology always needs a new candidate. */
+        TopologyKey key;
+        std::vector<double> seed_positions;
+        std::vector<double> seed_point_positions;
+        std::vector<double> seed_point_values;
+        std::vector<double> seed_point_gammas;
+        std::vector<double> seed_periodic_shifts;
+        std::vector<double> seed_periodic_response;
+        status = make_topology_only_seed(*topology, options, key, seed_positions,
+                                         seed_point_positions, seed_point_values, seed_point_gammas,
+                                         seed_periodic_shifts, seed_periodic_response, error);
+        if (status == XTBLOOM_STATUS_SUCCESS) {
+          try {
+            status = implementation.build_candidate(
+                std::move(key), std::move(seed_positions), std::move(seed_point_positions),
+                std::move(seed_point_values), std::move(seed_point_gammas),
+                std::move(seed_periodic_shifts), std::move(seed_periodic_response), candidate,
+                error);
+          } catch (const std::bad_alloc&) {
+            error = "failed to allocate a CUDA context-enqueue runtime candidate";
+            status = XTBLOOM_STATUS_ALLOCATION_FAILED;
+          } catch (const std::exception& exception) {
+            error = exception.what();
+            status = XTBLOOM_STATUS_INTERNAL_ERROR;
+          } catch (...) {
+            error = "unknown exception while constructing a CUDA context-enqueue runtime";
+            status = XTBLOOM_STATUS_INTERNAL_ERROR;
+          }
+        }
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          abort_topology_candidate();
+          return status;
+        }
+        working = candidate.get();
+        if (topology_candidate_pending) {
+          /* Seal the canonical topology before numerical inference is queued.
+           * The bounded wait here belongs to topology/setup admission; placing
+           * it after inference would accidentally turn a new-topology enqueue
+           * into a synchronous compute. Ownership is still published only
+           * after the caller-output commit has been accepted. */
+          const Gfn2CudaTopologyStagingDiagnostic prepared_commit =
+              implementation.topology_staging.prepare_candidate_commit(error);
+          if (!prepared_commit.success()) {
+            abort_topology_candidate();
+            return prepared_commit.status;
+          }
+          if (!implementation.topology_staging.candidate_publishable()) {
+            abort_topology_candidate();
+            error = "prepared CUDA context-enqueue topology candidate is not publishable";
+            return XTBLOOM_STATUS_INTERNAL_ERROR;
+          }
+        }
+      }
 
       const auto fail_submitted = [&](xtbloom_status_t failure) {
-        return implementation.settle_public_submissions_locked(working, failure, error);
+        const xtbloom_status_t settled =
+            implementation.settle_public_submissions_locked(*working, failure, error);
+        abort_topology_candidate();
+        return settled;
       };
-      status =
-          implementation.enqueue_fixed_topology_validation_locked(working, batch, options, error);
-      if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
       Gfn2CudaNumericalInputView numerical{};
       numerical.positions = batch.positions;
       numerical.point_charge_positions = batch.point_charge_positions;
@@ -7101,27 +7255,43 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
       numerical.point_charge_gammas = batch.point_charge_gammas;
       numerical.atomic_potential_shifts = batch.atomic_potential_shifts;
       numerical.charge_response_matrix = batch.charge_response_matrix;
-      status = implementation.refresh_numerical_locked(working, numerical, error);
+      status = implementation.refresh_numerical_locked(*working, numerical, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
       status =
-          implementation.execute_inference_locked(working, Gfn2CudaSccStartMode::kFresh, error);
+          implementation.execute_inference_locked(*working, Gfn2CudaSccStartMode::kFresh, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
-      working.inference.warm_checkpoint_ready = false;
+      working->inference.warm_checkpoint_ready = false;
 
       auto& active = implementation.active_request;
       status = implementation.enqueue_public_result_prepare_locked(
-          working, batch, options, active.result, active.transaction, error);
+          *working, batch, options, active.result, active.transaction, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
       /* Commit is device-gated by the control record produced by prepare. It
        * is submitted now so downstream work on the same CUDA stream observes
        * real outputs without requiring a host query to advance execution. */
-      status = implementation.enqueue_public_result_commit_locked(working, active.transaction, true,
-                                                                  error);
+      status = implementation.enqueue_public_result_commit_locked(*working, active.transaction,
+                                                                  true, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
+      if (candidate != nullptr) implementation.prepared = std::move(candidate);
+      if (topology_candidate_pending) {
+        if (!implementation.topology_staging.publish_candidate()) {
+          /* Prepared ownership has already moved and caller-output commit is
+           * accepted, so rollback is impossible. Poison the cache as well as
+           * reporting deferred failure: a later call must never combine the
+           * new runtime key with the old committed staging owner. */
+          implementation.request_poisoned = true;
+          working->numerical.host_staging_poisoned = true;
+          active.deferred_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+          active.deferred_error =
+              "CUDA context-enqueue topology publication invariant failed after caller-output "
+              "commit acceptance";
+        }
+        topology_candidate_pending = false;
+      }
       ++implementation.request_submissions;
-      if (working.numerical_host_upload_completion.pending.load(std::memory_order_acquire)) {
+      if (working->numerical_host_upload_completion.pending.load(std::memory_order_acquire)) {
         const cudaError_t release_status = cudaStreamWaitEvent(
-            implementation.stream, working.numerical_host_release_complete.get(), 0u);
+            implementation.stream, working->numerical_host_release_complete.get(), 0u);
         if (release_status != cudaSuccess) {
           /* The commit is already accepted. Preserve a PENDING request and
            * let its exceptional settlement fence the two exact streams. */
@@ -7133,7 +7303,7 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
         active.host_upload_release_ordered = true;
       }
       status = implementation.record_public_result_completion_locked(
-          working, active.transaction, PublicResultTransactionPhase::kCommitSubmitted,
+          *working, active.transaction, PublicResultTransactionPhase::kCommitSubmitted,
           PublicResultTransactionPhase::kCommitCompletionRecorded,
           PublicResultTransactionPhase::kCommitCompleted, true,
           "CUDA asynchronous caller-output completion", error);
@@ -7148,7 +7318,7 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
       }
       if (active.transaction.phase == PublicResultTransactionPhase::kCommitCompleted) {
         const bool host_release_pending =
-            working.numerical_host_upload_completion.pending.load(std::memory_order_acquire);
+            working->numerical_host_upload_completion.pending.load(std::memory_order_acquire);
         if (host_release_pending && active.host_upload_release_ordered) {
           active.deferred_status = XTBLOOM_STATUS_INTERNAL_ERROR;
           active.deferred_error =
@@ -7158,7 +7328,7 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
         }
         cudaError_t host_status = cudaSuccess;
         if (host_release_pending) {
-          host_status = cudaStreamSynchronize(working.numerical_host_completion_stream.get());
+          host_status = cudaStreamSynchronize(working->numerical_host_completion_stream.get());
         }
         if (host_status != cudaSuccess) {
           active.deferred_status = XTBLOOM_STATUS_INTERNAL_ERROR;
@@ -7166,12 +7336,12 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
               "CUDA numerical host snapshot settlement after event-record fallback", host_status);
           return XTBLOOM_STATUS_SUCCESS;
         }
-        working.numerical_host_upload_completion.pending.store(false, std::memory_order_release);
+        working->numerical_host_upload_completion.pending.store(false, std::memory_order_release);
         status = implementation.accept_public_result_after_commit_locked(
-            working, active.transaction, active.completion_error);
+            *working, active.transaction, active.completion_error);
         if (status == XTBLOOM_STATUS_SUCCESS) {
           status = implementation.publish_public_results_locked(
-              working, active.options, active.result, active.transaction, true, false,
+              *working, active.options, active.result, active.transaction, true, false,
               active.result_flags, active.completion_error);
         }
         active.completion_ready = true;
@@ -7225,6 +7395,21 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
   }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t enqueue_restricted_gfn2_cuda_plan(
+    const std::shared_ptr<Gfn2CudaExecutionCache>& cache, const xtbloom_batch_t& batch,
+    const xtbloom_compute_options_t& options, const xtbloom_batch_result_t& result,
+    RequestSubmission& submission, std::string& error) {
+  return enqueue_restricted_gfn2_cuda_impl(cache, batch, options, result, true, submission, error);
+}
+
+xtbloom_status_t enqueue_restricted_gfn2_cuda(const std::shared_ptr<Gfn2CudaExecutionCache>& cache,
+                                              const xtbloom_batch_t& batch,
+                                              const xtbloom_compute_options_t& options,
+                                              const xtbloom_batch_result_t& result,
+                                              RequestSubmission& submission, std::string& error) {
+  return enqueue_restricted_gfn2_cuda_impl(cache, batch, options, result, false, submission, error);
 }
 
 xtbloom_status_t Gfn2CudaExecutionCache::probe(bool wait,
