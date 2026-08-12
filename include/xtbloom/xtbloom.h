@@ -125,7 +125,12 @@ typedef int32_t xtbloom_determinism_t;
 enum xtbloom_determinism_value {
   /* Use the production execution policy selected by the backend. */
   XTBLOOM_DETERMINISM_DEFAULT = 0,
-  /* Request the backend's reproducible execution policy. */
+  /*
+   * Request exact replay for an unchanged build, backend, numerical provider
+   * or CUDA toolkit, device architecture, complete descriptors/options,
+   * launch/bucket geometry, and FRESH/WARM sequence. This is not a bitwise
+   * CPU/CUDA, cross-provider, cross-toolkit, or cross-architecture promise.
+   */
   XTBLOOM_DETERMINISM_REPRODUCIBLE = 1
 };
 

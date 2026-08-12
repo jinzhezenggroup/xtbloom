@@ -169,12 +169,25 @@ caller outputs unchanged. An accepted `FRESH` attempt consumes the preceding com
 before execution; if that attempt later fails, including a stream-ordered CUDA failure discovered
 after enqueue, the older checkpoint does not survive and the next strict `WARM` call rejects. CPU
 and CUDA use the same compute-options identity, including
-requested-property/output flags. High-level Python calculators select `FRESH` by default;
+requested-property/output flags, SCC mixer algorithm/history/damping, and the
+determinism policy. High-level Python calculators select `FRESH` by default;
 `Calculator` and `BatchCalculator` also expose opt-in transparent warm start, which retries one
 `FRESH` solve when the strict native gate rejects an incompatible checkpoint. The ASE calculator
 enables that policy by default for dynamics-like geometry sequences. Automatic batch slicing
 remains incompatible with warm start because one native context retains only its latest whole-batch
 checkpoint, not one checkpoint per logical chunk.
+
+The ABI-v3 compute-options suffix exposes the currently implemented Johnson
+modified-Broyden policy with a history depth from 1 through 64 and a finite
+damping factor in `(0, 1]`; the established defaults are history 8 and damping
+0.4. `XTBLOOM_DETERMINISM_REPRODUCIBLE` requests exact replay only within one
+fixed environment: the same xTBloom build, backend, CPU provider or CUDA
+toolkit, device architecture, descriptors and options, launch/bucket geometry,
+and `FRESH`/`WARM` sequence. It does not promise bitwise CPU-to-CUDA,
+cross-provider, cross-toolkit, or cross-architecture identity. CPU reproducible
+mode disables the optional single-system inner chunk executor, and CUDA seals
+pedantic cuBLAS math into the setup/Graph owner. Changing any ABI-v3 policy is
+a plan/cache/Graph identity change and invalidates strict `WARM` atomically.
 
 ## External interaction attachments
 

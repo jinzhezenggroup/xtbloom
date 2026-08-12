@@ -2,6 +2,7 @@
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -140,10 +141,12 @@ struct FixedTopology {
 };
 
 xtbloom_compute_options_t normalize_plan_policy(const xtbloom_compute_options_t& options) noexcept {
-  /* ABI-v1 callers own only the first 48 bytes. Copy the validated prefix
-   * field-by-field so plan creation never reads the optional v2 suffix. */
+  /* Short callers may own only the ABI-v1 or ABI-v2 prefix. Copy the
+   * validated policy field-by-field and read the ABI-v3 numerical suffix only
+   * when the complete suffix is present. A partial future suffix is ignored
+   * as a unit so no field access can cross the caller's allocation. */
   xtbloom_compute_options_t policy{};
-  policy.struct_size = XTBLOOM_COMPUTE_OPTIONS_V2_SIZE;
+  policy.struct_size = XTBLOOM_COMPUTE_OPTIONS_V3_SIZE;
   policy.api_version = XTBLOOM_API_VERSION;
   policy.model = options.model;
   policy.flags = options.flags;
@@ -154,16 +157,59 @@ xtbloom_compute_options_t normalize_plan_policy(const xtbloom_compute_options_t&
   policy.electronic_temperature = options.electronic_temperature;
   policy.scc_start_mode = XTBLOOM_SCC_START_FRESH;
   policy.reserved_v2 = 0u;
+  policy.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  policy.scc_mixer_history = 8;
+  policy.scc_mixer_damping = 0.4;
+  policy.determinism = XTBLOOM_DETERMINISM_DEFAULT;
+  policy.reserved_v3 = 0u;
+  if (options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE) {
+    policy.scc_mixer = options.scc_mixer;
+    policy.scc_mixer_history = options.scc_mixer_history;
+    policy.scc_mixer_damping = options.scc_mixer_damping;
+    policy.determinism = options.determinism;
+  }
   return policy;
 }
 
 bool plan_policy_matches(const xtbloom_compute_options_t& policy,
                          const xtbloom_compute_options_t& options) noexcept {
+  const bool has_v3 = options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE;
+  const xtbloom_scc_mixer_t scc_mixer =
+      has_v3 ? options.scc_mixer : XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  const std::int32_t mixer_history = has_v3 ? options.scc_mixer_history : 8;
+  const double mixer_damping = has_v3 ? options.scc_mixer_damping : 0.4;
+  const xtbloom_determinism_t determinism =
+      has_v3 ? options.determinism : XTBLOOM_DETERMINISM_DEFAULT;
   return options.model == policy.model && options.flags == policy.flags &&
          options.max_scc_iterations == policy.max_scc_iterations &&
          options.charge_tolerance == policy.charge_tolerance &&
          options.energy_tolerance == policy.energy_tolerance &&
-         options.electronic_temperature == policy.electronic_temperature;
+         options.electronic_temperature == policy.electronic_temperature &&
+         scc_mixer == policy.scc_mixer && mixer_history == policy.scc_mixer_history &&
+         mixer_damping == policy.scc_mixer_damping && determinism == policy.determinism;
+}
+
+xtbloom_status_t validate_normalized_plan_policy(const xtbloom_compute_options_t& policy,
+                                                 std::string& error) {
+  if (policy.scc_mixer != XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN) {
+    error = "fixed plans support only modified-Broyden SCC mixing";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (policy.scc_mixer_history < 1 || policy.scc_mixer_history > 64) {
+    error = "fixed-plan SCC mixer history must be between 1 and 64";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (!std::isfinite(policy.scc_mixer_damping) || policy.scc_mixer_damping <= 0.0 ||
+      policy.scc_mixer_damping > 1.0) {
+    error = "fixed-plan SCC mixer damping must be finite and in (0, 1]";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (policy.determinism != XTBLOOM_DETERMINISM_DEFAULT &&
+      policy.determinism != XTBLOOM_DETERMINISM_REPRODUCIBLE) {
+    error = "fixed-plan determinism policy is unknown";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 /* CPU plan identity compares host-readable topology bytes on every compute.
@@ -264,6 +310,13 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
   impl_->backend = context.backend;
   impl_->context = &context;
   impl_->policy = normalize_plan_policy(options);
+  {
+    const xtbloom_status_t status = validate_normalized_plan_policy(impl_->policy, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      impl_->context = nullptr;
+      return status;
+    }
+  }
   impl_->topology.batch_size = batch.batch_size;
   impl_->topology.total_atoms = batch.total_atoms;
   impl_->topology.total_point_charges = batch.total_point_charges;

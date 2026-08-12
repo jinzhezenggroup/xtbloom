@@ -63,8 +63,14 @@ back to a fresh solve. Geometry is not part of the native identity, so a
 dynamics or optimization loop that reuses one `Calculator` reconverges from
 each previous step's state.
 
-`Calculator.set()` updates `max_scc_iterations`, `charge_tolerance`,
-`energy_tolerance`, or `electronic_temperature` in kelvin.
+`Calculator.set()` also accepts `scc_mixer="modified_broyden"`,
+`scc_mixer_history` in `1..64`, `scc_mixer_damping` in `(0, 1]`, and
+`determinism="default"` or `"reproducible"`, in addition to
+`max_scc_iterations`, `charge_tolerance`, `energy_tolerance`, and
+`electronic_temperature` in kelvin. Reproducible mode is an exact-repeat
+contract only for an unchanged build/backend/provider-or-toolkit/device,
+descriptor/options, launch geometry, and FRESH/WARM sequence; it does not
+promise cross-backend or cross-machine bitwise identity.
 
 ## Results
 

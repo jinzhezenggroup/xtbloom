@@ -55,6 +55,16 @@ INVARIANTS_SPEC.loader.exec_module(INVARIANTS)
 class ConformanceToolTest(unittest.TestCase):
     """Exercise integrity checks, supported result schemas, and live generation."""
 
+    def test_public_compute_options_mirror_includes_abi_v3_policy(self) -> None:
+        """The standalone conformance runner must pass the complete native ABI image."""
+        self.assertEqual(PUBLIC_API.ctypes.sizeof(PUBLIC_API.ComputeOptions), 80)
+        self.assertEqual(PUBLIC_API.ComputeOptions.scc_start_mode.offset, 48)
+        self.assertEqual(PUBLIC_API.ComputeOptions.scc_mixer.offset, 56)
+        self.assertEqual(PUBLIC_API.ComputeOptions.scc_mixer_history.offset, 60)
+        self.assertEqual(PUBLIC_API.ComputeOptions.scc_mixer_damping.offset, 64)
+        self.assertEqual(PUBLIC_API.ComputeOptions.determinism.offset, 72)
+        self.assertEqual(PUBLIC_API.ComputeOptions.reserved_v3.offset, 76)
+
     def run_tool(
         self, *arguments: str, expected_status: int = 0
     ) -> subprocess.CompletedProcess[str]:

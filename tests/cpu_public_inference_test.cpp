@@ -1881,6 +1881,24 @@ int test_plan_creation_model_and_abi_prefix_contracts() {
   CHECK(raw_short_plan != nullptr);
   xtbloom_plan_destroy(raw_short_plan);
 
+  /* An incomplete ABI-v3 suffix is ignored as one unit for both plan creation
+   * and later policy matching, even when its owned bytes contain hostile
+   * values that would be invalid in a complete suffix. */
+  xtbloom_compute_options_t partial_options = request.options;
+  partial_options.struct_size = XTBLOOM_COMPUTE_OPTIONS_V3_SIZE - 1u;
+  partial_options.scc_mixer = -1;
+  partial_options.scc_mixer_history = -1;
+  partial_options.scc_mixer_damping = -1.0;
+  partial_options.determinism = -1;
+  xtbloom_plan_t* raw_partial_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &request.batch, &partial_options, &raw_partial_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(raw_partial_plan != nullptr);
+  PlanHandle partial_plan(raw_partial_plan);
+  request.options.struct_size = XTBLOOM_COMPUTE_OPTIONS_V2_SIZE;
+  CHECK(xtbloom_plan_compute(partial_plan.get(), &request.batch, &request.options,
+                             &request.result) == XTBLOOM_STATUS_SUCCESS);
+
   /* GFN1 is a reserved ABI value. Plan setup rejects it consistently on CPU
    * before it creates a GFN2 cache that would fail only at execution time. */
   xtbloom_compute_options_t gfn1 = request.options;
@@ -2200,6 +2218,28 @@ int test_plan_topology_mismatch_fails_before_output_mutation() {
   CHECK(xtbloom_plan_compute(plan.get(), &mismatched_policy.batch, &mismatched_policy.options,
                              &mismatched_policy.result) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(mismatched_policy.result.flags == UINT32_C(0x87654321));
+
+  for (const auto& mutate_policy : {
+           +[](xtbloom_compute_options_t& options) { options.scc_mixer_history = 4; },
+           +[](xtbloom_compute_options_t& options) { options.scc_mixer_damping = 0.2; },
+           +[](xtbloom_compute_options_t& options) {
+             options.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
+           },
+       }) {
+    PublicBatch changed_policy = request;
+    changed_policy.bind(flags);
+    mutate_policy(changed_policy.options);
+    changed_policy.result.flags = UINT32_C(0x87654321);
+    const std::vector<double> policy_energies = changed_policy.energies;
+    const std::vector<double> policy_forces = changed_policy.forces;
+    const std::vector<double> policy_charges = changed_policy.atomic_charges;
+    CHECK(xtbloom_plan_compute(plan.get(), &changed_policy.batch, &changed_policy.options,
+                               &changed_policy.result) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(changed_policy.result.flags == UINT32_C(0x87654321));
+    CHECK(changed_policy.energies == policy_energies);
+    CHECK(changed_policy.forces == policy_forces);
+    CHECK(changed_policy.atomic_charges == policy_charges);
+  }
   return 0;
 }
 
