@@ -13,6 +13,9 @@
 #include "backends/cuda/gfn2_aes2.cuh"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
+#ifdef XTBLOOM_AES2_TERM_BENCHMARK_ONLY
+#include "tests/support/cuda_term_benchmark.hpp"
+#endif
 
 #define CHECK(condition) \
   do {                   \
@@ -826,8 +829,309 @@ int test_graph_capture_and_structural_guards() {
   return 0;
 }
 
+#ifdef XTBLOOM_AES2_TERM_BENCHMARK_ONLY
+
+using BenchmarkOptions = xtbloom::test::cuda_term_benchmark::Options;
+using BenchmarkRow = xtbloom::test::cuda_term_benchmark::Row;
+using BenchmarkSamples = xtbloom::test::cuda_term_benchmark::Samples;
+using BenchmarkTopology = xtbloom::test::cuda_term_benchmark::Topology;
+
+bool make_aes2_benchmark_case(const BenchmarkOptions& options, HostEvaluation* host,
+                              std::string* error) {
+  if (host == nullptr || error == nullptr || options.batch_size <= 0 ||
+      options.atoms_per_system < 2 ||
+      options.batch_size > std::numeric_limits<std::int64_t>::max() / options.atoms_per_system ||
+      options.batch_size * options.atoms_per_system >
+          std::numeric_limits<std::int64_t>::max() / 6) {
+    if (error != nullptr) *error = "AES2 benchmark requires at least two atoms per system";
+    return false;
+  }
+  const std::int64_t total_atoms = options.batch_size * options.atoms_per_system;
+  std::vector<std::int64_t> offsets(static_cast<std::size_t>(options.batch_size + 1));
+  std::vector<std::int32_t> atomic_numbers(static_cast<std::size_t>(total_atoms));
+  std::vector<double> positions(static_cast<std::size_t>(total_atoms * 3));
+  std::vector<double> coordination(static_cast<std::size_t>(total_atoms));
+  std::vector<double> charges(static_cast<std::size_t>(total_atoms));
+  std::vector<double> dipoles(static_cast<std::size_t>(total_atoms * 3));
+  std::vector<double> quadrupoles(static_cast<std::size_t>(total_atoms * 6));
+  constexpr std::array<std::int32_t, 5> kElements{6, 1, 8, 7, 16};
+  constexpr double kCompactSpacing = 2.4;
+  constexpr double kOpenSpacing = 12.0;
+  for (std::int64_t system = 0; system < options.batch_size; ++system) {
+    offsets[static_cast<std::size_t>(system)] = system * options.atoms_per_system;
+    const std::int64_t side = static_cast<std::int64_t>(
+        std::ceil(std::cbrt(static_cast<double>(options.atoms_per_system))));
+    for (std::int64_t local = 0; local < options.atoms_per_system; ++local) {
+      const std::int64_t atom = system * options.atoms_per_system + local;
+      atomic_numbers[static_cast<std::size_t>(atom)] =
+          kElements[static_cast<std::size_t>((local + system) % kElements.size())];
+      if (options.topology == BenchmarkTopology::kCompact) {
+        positions[static_cast<std::size_t>(atom * 3)] =
+            kCompactSpacing * static_cast<double>(local % side);
+        positions[static_cast<std::size_t>(atom * 3 + 1)] =
+            kCompactSpacing * static_cast<double>((local / side) % side);
+        positions[static_cast<std::size_t>(atom * 3 + 2)] =
+            kCompactSpacing * static_cast<double>(local / (side * side));
+      } else {
+        /* AES2 has no cutoff: this open fixture keeps all-pair execution but
+         * separates its distance distribution from the compact cube. */
+        positions[static_cast<std::size_t>(atom * 3)] = kOpenSpacing * static_cast<double>(local);
+        positions[static_cast<std::size_t>(atom * 3 + 1)] = 0.25 * static_cast<double>(local % 3);
+        positions[static_cast<std::size_t>(atom * 3 + 2)] = 0.125 * static_cast<double>(local % 5);
+      }
+      coordination[static_cast<std::size_t>(atom)] = 0.8 + 0.03 * (local % 7);
+      charges[static_cast<std::size_t>(atom)] =
+          0.03 * static_cast<double>(static_cast<int>(local % 5) - 2);
+      for (std::int64_t component = 0; component < 3; ++component) {
+        dipoles[static_cast<std::size_t>(atom * 3 + component)] =
+            0.002 * static_cast<double>(static_cast<int>((atom + component) % 7) - 3);
+      }
+      for (std::int64_t component = 0; component < 6; ++component) {
+        quadrupoles[static_cast<std::size_t>(atom * 6 + component)] =
+            0.0005 * static_cast<double>(static_cast<int>((atom + component) % 11) - 5);
+      }
+    }
+  }
+  offsets.back() = total_atoms;
+  return make_host_evaluation(offsets, atomic_numbers, positions, coordination, charges, dipoles,
+                              quadrupoles, *host, *error);
+}
+
+int benchmark_aes2_terms(int argc, char** argv) {
+  BenchmarkOptions options;
+  std::string error;
+  if (!xtbloom::test::cuda_term_benchmark::parse_options(argc, argv, &options, &error)) {
+    xtbloom::test::cuda_term_benchmark::print_usage(argv[0]);
+    if (error != "help") std::cerr << error << '\n';
+    return error == "help" ? 0 : 2;
+  }
+  HostEvaluation expected;
+  if (!make_aes2_benchmark_case(options, &expected, &error)) {
+    std::cerr << "failed to construct AES2 benchmark: " << error << '\n';
+    return 1;
+  }
+  CHECK(evaluate_cpu(expected, kGeneration, error));
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceEvaluation device;
+  CHECK(device.initialize(expected, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  const std::size_t batch_count = static_cast<std::size_t>(expected.plan.batch_size());
+  const std::size_t atom_count = static_cast<std::size_t>(expected.plan.total_atoms());
+  const auto reset_errors = [&]() {
+    return xtbloom::detail::cuda::reset_gfn2_aes2_device_errors_cuda(
+               device.batch.batch_size, device.system_errors.get(), device.device_error.get(),
+               stream) == cudaSuccess;
+  };
+  const auto validate_errors = [&]() {
+    std::vector<std::uint32_t> system_errors(batch_count, 99u);
+    std::uint32_t device_error = 99u;
+    if (!device.system_errors.copy_to(system_errors.data(), system_errors.size(), stream) ||
+        !device.device_error.copy_to(&device_error, 1u, stream) ||
+        cudaStreamSynchronize(stream) != cudaSuccess) {
+      return false;
+    }
+    return device_error == 0u && std::all_of(system_errors.begin(), system_errors.end(),
+                                             [](std::uint32_t value) { return value == 0u; });
+  };
+  const auto near_vectors = [](const std::vector<double>& actual,
+                               const std::vector<double>& reference, double tolerance) {
+    if (actual.size() != reference.size()) return false;
+    for (std::size_t index = 0; index < actual.size(); ++index) {
+      if (!near(actual[index], reference[index], tolerance)) return false;
+    }
+    return true;
+  };
+  const auto make_row = [&](const char* term, BenchmarkSamples timing) {
+    return BenchmarkRow{
+        term,
+        options.topology == BenchmarkTopology::kCompact ? "compact_all_pairs" : "open_all_pairs",
+        options.batch_size,
+        options.atoms_per_system,
+        expected.plan.total_atoms(),
+        expected.plan.total_pairs(),
+        "packed_all_pairs",
+        expected.plan.total_pairs(),
+        std::move(timing)};
+  };
+  std::vector<BenchmarkRow> rows;
+  rows.reserve(5u);
+  BenchmarkSamples timing;
+
+  if (!xtbloom::test::cuda_term_benchmark::measure_term(
+          options, "aes2_geometry", stream, reset_errors,
+          [&]() {
+            return xtbloom::detail::cuda::update_gfn2_aes2_geometry_cache_cuda(
+                       device.batch, device.positions.get(), device.coordination.get(),
+                       device.cache, device.workspace, device.system_errors.get(),
+                       device.device_error.get(), stream) == cudaSuccess;
+          },
+          [&]() {
+            std::vector<double> pair_data(expected.pair_data.size());
+            return validate_errors() &&
+                   device.pair_data.copy_to(pair_data.data(), pair_data.size(), stream) &&
+                   cudaStreamSynchronize(stream) == cudaSuccess &&
+                   near_vectors(pair_data, expected.pair_data, 8.0e-13);
+          },
+          &timing, &error)) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  rows.push_back(make_row("aes2_geometry", std::move(timing)));
+
+  const auto prepare_potential = [&]() {
+    return reset_errors() && device.charge_potentials.zero(stream) &&
+           device.dipole_potentials.zero(stream) && device.quadrupole_potentials.zero(stream);
+  };
+  if (!xtbloom::test::cuda_term_benchmark::measure_term(
+          options, "aes2_potential", stream, prepare_potential,
+          [&]() {
+            return xtbloom::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
+                       device.batch, device.cache, device.charges.get(), device.dipoles.get(),
+                       device.quadrupoles.get(), device.charge_potentials.get(),
+                       device.dipole_potentials.get(), device.quadrupole_potentials.get(),
+                       device.workspace, device.system_errors.get(), device.device_error.get(),
+                       stream) == cudaSuccess;
+          },
+          [&]() {
+            std::vector<double> charge(atom_count);
+            std::vector<double> dipole(atom_count * 3u);
+            std::vector<double> quadrupole(atom_count * 6u);
+            return validate_errors() &&
+                   device.charge_potentials.copy_to(charge.data(), charge.size(), stream) &&
+                   device.dipole_potentials.copy_to(dipole.data(), dipole.size(), stream) &&
+                   device.quadrupole_potentials.copy_to(quadrupole.data(), quadrupole.size(),
+                                                        stream) &&
+                   cudaStreamSynchronize(stream) == cudaSuccess &&
+                   near_vectors(charge, expected.charge_potentials, 2.0e-11) &&
+                   near_vectors(dipole, expected.dipole_potentials, 2.0e-11) &&
+                   near_vectors(quadrupole, expected.quadrupole_potentials, 2.0e-11);
+          },
+          &timing, &error)) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  rows.push_back(make_row("aes2_potential", std::move(timing)));
+
+  const auto prepare_energy = [&]() { return reset_errors() && device.energies.zero(stream); };
+  if (!xtbloom::test::cuda_term_benchmark::measure_term(
+          options, "aes2_energy", stream, prepare_energy,
+          [&]() {
+            return xtbloom::detail::cuda::add_gfn2_aes2_energy_cuda(
+                       device.batch, device.cache, device.charges.get(), device.dipoles.get(),
+                       device.quadrupoles.get(), device.energies.get(), device.workspace,
+                       device.system_errors.get(), device.device_error.get(),
+                       stream) == cudaSuccess;
+          },
+          [&]() {
+            std::vector<double> energies(batch_count);
+            return validate_errors() &&
+                   device.energies.copy_to(energies.data(), energies.size(), stream) &&
+                   cudaStreamSynchronize(stream) == cudaSuccess &&
+                   near_vectors(energies, expected.energies, 2.0e-11);
+          },
+          &timing, &error)) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  rows.push_back(make_row("aes2_energy", std::move(timing)));
+
+  const auto prepare_vjp = [&]() {
+    return reset_errors() && device.gradients.zero(stream) &&
+           device.coordination_adjoints.zero(stream);
+  };
+  if (!xtbloom::test::cuda_term_benchmark::measure_term(
+          options, "aes2_vjp", stream, prepare_vjp,
+          [&]() {
+            return xtbloom::detail::cuda::add_gfn2_aes2_vjp_cuda(
+                       device.batch, device.cache, device.positions.get(),
+                       device.coordination.get(), kGeneration, device.charges.get(),
+                       device.dipoles.get(), device.quadrupoles.get(), device.gradients.get(),
+                       device.coordination_adjoints.get(), device.workspace,
+                       device.system_errors.get(), device.device_error.get(),
+                       stream) == cudaSuccess;
+          },
+          [&]() {
+            std::vector<double> gradients(atom_count * 3u);
+            std::vector<double> coordination(atom_count);
+            return validate_errors() &&
+                   device.gradients.copy_to(gradients.data(), gradients.size(), stream) &&
+                   device.coordination_adjoints.copy_to(coordination.data(), coordination.size(),
+                                                        stream) &&
+                   cudaStreamSynchronize(stream) == cudaSuccess &&
+                   near_vectors(gradients, expected.gradients, 2.0e-10) &&
+                   near_vectors(coordination, expected.coordination_adjoints, 2.0e-10);
+          },
+          &timing, &error)) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  rows.push_back(make_row("aes2_vjp", std::move(timing)));
+
+  const auto prepare_full = [&]() {
+    return reset_errors() && device.charge_potentials.zero(stream) &&
+           device.dipole_potentials.zero(stream) && device.quadrupole_potentials.zero(stream) &&
+           device.energies.zero(stream) && device.gradients.zero(stream) &&
+           device.coordination_adjoints.zero(stream);
+  };
+  if (!xtbloom::test::cuda_term_benchmark::measure_term(
+          options, "aes2_full", stream, prepare_full,
+          [&]() {
+            return xtbloom::detail::cuda::update_gfn2_aes2_geometry_cache_cuda(
+                       device.batch, device.positions.get(), device.coordination.get(),
+                       device.cache, device.workspace, device.system_errors.get(),
+                       device.device_error.get(), stream) == cudaSuccess &&
+                   xtbloom::detail::cuda::evaluate_gfn2_aes2_potential_cuda(
+                       device.batch, device.cache, device.charges.get(), device.dipoles.get(),
+                       device.quadrupoles.get(), device.charge_potentials.get(),
+                       device.dipole_potentials.get(), device.quadrupole_potentials.get(),
+                       device.workspace, device.system_errors.get(), device.device_error.get(),
+                       stream) == cudaSuccess &&
+                   xtbloom::detail::cuda::add_gfn2_aes2_energy_cuda(
+                       device.batch, device.cache, device.charges.get(), device.dipoles.get(),
+                       device.quadrupoles.get(), device.energies.get(), device.workspace,
+                       device.system_errors.get(), device.device_error.get(),
+                       stream) == cudaSuccess &&
+                   xtbloom::detail::cuda::add_gfn2_aes2_vjp_cuda(
+                       device.batch, device.cache, device.positions.get(),
+                       device.coordination.get(), kGeneration, device.charges.get(),
+                       device.dipoles.get(), device.quadrupoles.get(), device.gradients.get(),
+                       device.coordination_adjoints.get(), device.workspace,
+                       device.system_errors.get(), device.device_error.get(),
+                       stream) == cudaSuccess;
+          },
+          [&]() {
+            /* The individual term gates above prove every numerical output;
+             * the full-chain row additionally proves the composed sequence
+             * reaches a clean terminal status after repeated timing calls. */
+            return validate_errors();
+          },
+          &timing, &error)) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  rows.push_back(make_row("aes2_full", std::move(timing)));
+  if (!xtbloom::test::cuda_term_benchmark::write_results("xtbloom_cuda_aes2_term_benchmark",
+                                                         options, argc, argv, rows, &error)) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+#endif  // XTBLOOM_AES2_TERM_BENCHMARK_ONLY
+
 }  // namespace
 
+#ifdef XTBLOOM_AES2_TERM_BENCHMARK_ONLY
+int main(int argc, char** argv) {
+  int device_count = 0;
+  if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) return 77;
+  return benchmark_aes2_terms(argc, argv);
+}
+#else
 int main() {
   if (const int line = test_ragged_cpu_parity_and_custom_stream(); line != 0) {
     return line;
@@ -846,3 +1150,4 @@ int main() {
   }
   return 0;
 }
+#endif  // XTBLOOM_AES2_TERM_BENCHMARK_ONLY

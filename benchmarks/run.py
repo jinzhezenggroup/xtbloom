@@ -36,11 +36,12 @@ sys.path.insert(0, str(CONFORMANCE_TOOLS))
 
 import xtbloom_conformance as conformance
 import xtbloom_public_api as public_api
+from xtbloom_public_api import PublicBatchStorage
 
 try:
-    from .xtb_adapter import XtbAdapter, XtbError
+    from .xtb_adapter import XtbAdapter, XtbError, XtbState
 except ImportError:  # Direct ``python benchmarks/run.py`` execution.
-    from xtb_adapter import XtbAdapter, XtbError
+    from xtb_adapter import XtbAdapter, XtbError, XtbState
 
 try:
     from .tblite_adapter import TbliteAdapter, TbliteError
@@ -59,9 +60,23 @@ DEFAULT_BATCH_SIZES = (1, 8, 32, 128)
 DEFAULT_PROPERTIES = ("energy", "force")
 DEFAULT_WORKLOADS = ("gas", "qmmm")
 DEFAULT_REFERENCE_ENV = Path("/tmp/xtbloom-reference-env.E0KcEA")
+REPEATED_CALL_SEMANTICS = "same_geometry_repeated_compute"
 WORKLOAD_CASES = {
     "gas": "ketene",
     "qmmm": "water_dimer_6pc_hardness",
+}
+HETEROGENEOUS_WORKLOAD_CASES = {
+    "heterogeneous-gas": (
+        "h3_plus",
+        "ketene",
+        "nenacl",
+        "sif5_minus",
+    ),
+    "heterogeneous-qmmm": (
+        "water_one_pc_gamma999",
+        "water_dimer_6pc_hardness",
+        "water_dimer_6pc_gamma999",
+    ),
 }
 REFERENCE_REPOSITORIES = {
     "tblite": Path.home() / "codes" / "tblite",
@@ -122,6 +137,10 @@ REFERENCE_COMMANDS = {
 
 class BenchmarkError(RuntimeError):
     """An actionable adapter, timing, or result-publication failure."""
+
+
+class ReferenceUnavailable(BenchmarkError):
+    """A requested reference coordinate the selected public API cannot express."""
 
 
 def parse_csv_values(value: str, converter: type = str) -> tuple[Any, ...]:
@@ -254,6 +273,34 @@ class Cell:
     batch_size: int
 
 
+def workload_case_ids(workload: str, batch_size: int) -> tuple[str, ...]:
+    """Return the exact deterministic corpus sequence for one matrix row."""
+    if batch_size <= 0:
+        raise BenchmarkError("batch size must be positive")
+    if workload in WORKLOAD_CASES:
+        return (WORKLOAD_CASES[workload],) * batch_size
+    try:
+        candidates = HETEROGENEOUS_WORKLOAD_CASES[workload]
+    except KeyError as exc:
+        raise BenchmarkError(f"unknown workload: {workload}") from exc
+    return tuple(candidates[index % len(candidates)] for index in range(batch_size))
+
+
+def workload_case_sequence(
+    workload: str,
+    batch_size: int,
+    cases: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    """Resolve one row's exact case IDs without silently dropping a coordinate."""
+    identifiers = workload_case_ids(workload, batch_size)
+    missing = sorted(set(identifiers) - cases.keys())
+    if missing:
+        raise BenchmarkError(
+            "workload references missing conformance cases: " + ", ".join(missing)
+        )
+    return tuple(cases[identifier] for identifier in identifiers)
+
+
 class XTBloomAdapter:
     """Persistent public-C-API adapter for one matrix cell."""
 
@@ -262,7 +309,7 @@ class XTBloomAdapter:
         library_path: Path,
         manifest_path: Path,
         manifest: dict[str, Any],
-        case: dict[str, Any],
+        case_sequence: Sequence[dict[str, Any]],
         cell: Cell,
         device_id: int,
         cpu_threads: int,
@@ -270,9 +317,9 @@ class XTBloomAdapter:
         self.cell = cell
         self.library_path = library_path
         self.library = public_api._configure_library(library_path)
-        self.storage = public_api.assemble_batch(
-            manifest_path, manifest, [case] * cell.batch_size
-        )
+        if len(case_sequence) != cell.batch_size:
+            raise BenchmarkError("case sequence length must equal the requested batch")
+        self.storage = public_api.assemble_batch(manifest_path, manifest, case_sequence)
         self.context = public_api._make_context(
             self.library, cell.backend, device_id, cpu_threads
         )
@@ -496,7 +543,7 @@ def benchmark_xtbloom_cell(
     cell: Cell,
     args: argparse.Namespace,
     manifest: dict[str, Any],
-    case: dict[str, Any],
+    case_sequence: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
     """Construct, cold-run, warm up, sample, validate, and destroy one cell."""
     setup_start = time.perf_counter_ns()
@@ -507,7 +554,7 @@ def benchmark_xtbloom_cell(
             args.library,
             args.manifest,
             manifest,
-            case,
+            case_sequence,
             cell,
             args.device_id,
             args.cpu_threads,
@@ -545,6 +592,11 @@ def benchmark_xtbloom_cell(
                     ),
                     "cold": "first xtbloom_compute plus explicit CUDA synchronize",
                     "warm": "xtbloom_compute plus explicit CUDA synchronize",
+                    "repeated_call_semantics": REPEATED_CALL_SEMANTICS,
+                    "repeated_call_note": (
+                        "unchanged coordinates still execute the full public compute "
+                        "path; this is not proof of pair-list no-refresh reuse"
+                    ),
                     "excluded": (
                         "post-timing device-to-host download and correctness comparison"
                     ),
@@ -577,21 +629,63 @@ def benchmark_xtbloom_cell(
 def point_source_atomic_numbers(
     manifest_path: Path,
     manifest: dict[str, Any],
-    case: dict[str, Any],
-) -> list[int] | None:
-    """Read xTB's element-hardness identifiers for a QM/MM corpus case."""
-    if case.get("input_schema") != "qmmm-v1":
-        return None
-    input_path = conformance.resolve_manifest_path(manifest_path, case["input"])
-    hardness = manifest["reference_engines"]["xtb"]["point_charge_hardness_hartree"]
-    document = conformance.load_qmmm_input(input_path, case, hardness)
-    points = document["external_point_charges"]
-    if points["gamma_mode"] != "element_hardness":
-        raise BenchmarkError(
-            "xTB C API baseline supports the selected QM/MM workload only when "
-            "gammas are represented by source atomic numbers"
+    case_sequence: Sequence[dict[str, Any]],
+) -> list[list[int] | None] | None:
+    """Read per-system xTB element-hardness identifiers for a ragged batch."""
+    per_system: list[list[int] | None] = []
+    for case in case_sequence:
+        if case.get("input_schema") != "qmmm-v1":
+            per_system.append(None)
+            continue
+        input_path = conformance.resolve_manifest_path(manifest_path, case["input"])
+        hardness = manifest["reference_engines"]["xtb"]["point_charge_hardness_hartree"]
+        document = conformance.load_qmmm_input(input_path, case, hardness)
+        points = document["external_point_charges"]
+        if points["gamma_mode"] != "element_hardness":
+            raise ReferenceUnavailable(
+                "xTB C API baseline supports the selected QM/MM workload only when "
+                "gammas are represented by source atomic numbers"
+            )
+        per_system.append([int(value) for value in points["source_atomic_numbers"]])
+    return per_system if any(numbers is not None for numbers in per_system) else None
+
+
+class RaggedXtbAdapter(XtbAdapter):
+    """Supply xTB's per-calculator point-source numbers for ragged QM/MM rows.
+
+    The upstream adapter builds all calculator states through ``_create_state``
+    and historically accepted one homogeneous source-number vector. This
+    benchmark-only specialization selects the vector belonging to each storage
+    slice while retaining the same persistent library and serial execution path.
+    """
+
+    def __init__(
+        self,
+        library_path: Path,
+        storage: PublicBatchStorage,
+        property_name: str,
+        per_system_source_numbers: list[list[int] | None] | None,
+        *,
+        accuracy: float,
+        max_iterations: int,
+        electronic_temperature_kelvin: float,
+    ) -> None:
+        self._per_system_source_numbers = per_system_source_numbers or [None] * len(
+            storage.slices
         )
-    return [int(value) for value in points["source_atomic_numbers"]]
+        super().__init__(
+            library_path,
+            storage,
+            property_name,
+            None,
+            accuracy=accuracy,
+            max_iterations=max_iterations,
+            electronic_temperature_kelvin=electronic_temperature_kelvin,
+        )
+
+    def _create_state(self, index: int) -> XtbState:
+        self.point_source_atomic_numbers = self._per_system_source_numbers[index]
+        return super()._create_state(index)
 
 
 def timed_xtb_invoke(adapter: XtbAdapter) -> float:
@@ -605,7 +699,7 @@ def benchmark_xtb_cell(
     cell: Cell,
     args: argparse.Namespace,
     manifest: dict[str, Any],
-    case: dict[str, Any],
+    case_sequence: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
     """Measure a persistent xTB 6.7.1 C API baseline without process startup."""
     if args.xtb_library is None or not args.xtb_library.is_file():
@@ -616,11 +710,11 @@ def benchmark_xtb_cell(
     rss_before = current_rss_bytes()
     adapter: XtbAdapter | None = None
     try:
-        storage = public_api.assemble_batch(
-            args.manifest, manifest, [case] * cell.batch_size
+        storage = public_api.assemble_batch(args.manifest, manifest, case_sequence)
+        source_numbers = point_source_atomic_numbers(
+            args.manifest, manifest, case_sequence
         )
-        source_numbers = point_source_atomic_numbers(args.manifest, manifest, case)
-        adapter = XtbAdapter(
+        adapter = RaggedXtbAdapter(
             args.xtb_library,
             storage,
             cell.property,
@@ -676,6 +770,7 @@ def benchmark_xtb_cell(
                         "same in-process serial C API loop; no process startup or "
                         "handle allocation"
                     ),
+                    "repeated_call_semantics": REPEATED_CALL_SEMANTICS,
                     "excluded": "setup, cleanup, and correctness comparison",
                 },
                 "engine_options": {
@@ -697,6 +792,8 @@ def benchmark_xtb_cell(
             }
         )
         return row
+    except ReferenceUnavailable as exc:
+        return unavailable_row(cell, str(exc))
     except (XtbError, BenchmarkError, conformance.ConformanceError, OSError) as exc:
         row = base_row(cell)
         row.update({"availability": "error", "error": str(exc)})
@@ -725,7 +822,7 @@ def benchmark_tblite_cell(
     cell: Cell,
     args: argparse.Namespace,
     manifest: dict[str, Any],
-    case: dict[str, Any],
+    case_sequence: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
     """Measure a persistent tblite public-C-API baseline without startup cost."""
     if args.tblite_library is None or not args.tblite_library.is_file():
@@ -736,9 +833,7 @@ def benchmark_tblite_cell(
     rss_before = current_rss_bytes()
     adapter: TbliteAdapter | None = None
     try:
-        storage = public_api.assemble_batch(
-            args.manifest, manifest, [case] * cell.batch_size
-        )
+        storage = public_api.assemble_batch(args.manifest, manifest, case_sequence)
         if storage.point_charge_values:
             return unavailable_row(cell, TbliteAdapter.external_point_charge_reason)
         adapter = TbliteAdapter(
@@ -789,6 +884,7 @@ def benchmark_tblite_cell(
                         "same in-process serial public C API loop; no process startup "
                         "or handle allocation"
                     ),
+                    "repeated_call_semantics": REPEATED_CALL_SEMANTICS,
                     "excluded": "setup, cleanup, and correctness comparison",
                 },
                 "engine_options": {
@@ -831,16 +927,14 @@ def benchmark_dxtb_cell(
     cell: Cell,
     args: argparse.Namespace,
     manifest: dict[str, Any],
-    case: dict[str, Any],
+    case_sequence: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
     """Measure persistent in-process dxtb without calculator reconstruction."""
     setup_start = time.perf_counter_ns()
     rss_before = current_rss_bytes()
     adapter: DxtbAdapter | None = None
     try:
-        storage = public_api.assemble_batch(
-            args.manifest, manifest, [case] * cell.batch_size
-        )
+        storage = public_api.assemble_batch(args.manifest, manifest, case_sequence)
         if storage.point_charge_values:
             return unavailable_row(cell, DxtbAdapter.external_point_charge_reason)
         adapter = DxtbAdapter(
@@ -895,6 +989,7 @@ def benchmark_dxtb_cell(
                         "same persistent Calculator path; identity-keyed dxtb caches "
                         "are reset inside every measured call"
                     ),
+                    "repeated_call_semantics": REPEATED_CALL_SEMANTICS,
                     "excluded": "setup, cleanup, host result download, and correctness",
                 },
                 "engine_options": {
@@ -947,15 +1042,20 @@ def dxtb_cells(args: argparse.Namespace) -> Iterable[Cell]:
 
 def base_row(cell: Cell) -> dict[str, Any]:
     """Create stable identity fields shared by available and unavailable rows."""
-    return {
+    identifiers = workload_case_ids(cell.workload, cell.batch_size)
+    row = {
         "engine": cell.engine,
         "backend": cell.backend,
         "memory_mode": cell.memory_mode,
         "workload": cell.workload,
-        "case_id": WORKLOAD_CASES[cell.workload],
         "property": cell.property,
         "batch_size": cell.batch_size,
     }
+    if cell.workload in WORKLOAD_CASES:
+        row["case_id"] = identifiers[0]
+    else:
+        row["case_ids"] = list(identifiers)
+    return row
 
 
 def unavailable_row(cell: Cell, reason: str) -> dict[str, Any]:
@@ -1163,6 +1263,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "memory_mode",
         "workload",
         "case_id",
+        "case_ids",
         "property",
         "batch_size",
         "availability",
@@ -1194,7 +1295,10 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     "backend": row["backend"],
                     "memory_mode": row["memory_mode"],
                     "workload": row["workload"],
-                    "case_id": row["case_id"],
+                    "case_id": row.get("case_id"),
+                    "case_ids": (
+                        json.dumps(row["case_ids"]) if "case_ids" in row else None
+                    ),
                     "property": row["property"],
                     "batch_size": row["batch_size"],
                     "availability": row["availability"],
@@ -1333,7 +1437,10 @@ def validate_args(args: argparse.Namespace) -> None:
         "engines": ({"xtbloom", "tblite", "xtb", "dxtb"}, args.engines),
         "backends": ({"cpu", "cuda"}, args.backends),
         "CUDA memory modes": ({"host", "device", "mixed"}, args.cuda_memory_modes),
-        "workloads": (set(WORKLOAD_CASES), args.workloads),
+        "workloads": (
+            set(WORKLOAD_CASES) | set(HETEROGENEOUS_WORKLOAD_CASES),
+            args.workloads,
+        ),
         "properties": ({"energy", "force"}, args.properties),
         "dxtb backends": ({"cpu", "cuda"}, args.dxtb_backends),
     }
@@ -1368,7 +1475,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     flush=True,
                 )
                 row = benchmark_xtbloom_cell(
-                    cell, args, manifest, cases[WORKLOAD_CASES[cell.workload]]
+                    cell,
+                    args,
+                    manifest,
+                    workload_case_sequence(cell.workload, cell.batch_size, cases),
                 )
                 rows.append(row)
                 print(  # noqa: T201 - preserve benchmark CLI progress output
@@ -1382,7 +1492,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     flush=True,
                 )
                 row = benchmark_xtb_cell(
-                    cell, args, manifest, cases[WORKLOAD_CASES[cell.workload]]
+                    cell,
+                    args,
+                    manifest,
+                    workload_case_sequence(cell.workload, cell.batch_size, cases),
                 )
                 rows.append(row)
                 print(  # noqa: T201 - preserve benchmark CLI progress output
@@ -1396,7 +1509,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     flush=True,
                 )
                 row = benchmark_tblite_cell(
-                    cell, args, manifest, cases[WORKLOAD_CASES[cell.workload]]
+                    cell,
+                    args,
+                    manifest,
+                    workload_case_sequence(cell.workload, cell.batch_size, cases),
                 )
                 rows.append(row)
                 print(  # noqa: T201 - preserve benchmark CLI progress output
@@ -1410,7 +1526,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     flush=True,
                 )
                 row = benchmark_dxtb_cell(
-                    cell, args, manifest, cases[WORKLOAD_CASES[cell.workload]]
+                    cell,
+                    args,
+                    manifest,
+                    workload_case_sequence(cell.workload, cell.batch_size, cases),
                 )
                 rows.append(row)
                 print(  # noqa: T201 - preserve benchmark CLI progress output
@@ -1422,7 +1541,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             "protocol": {
                 "batch_sizes": list(args.batch_sizes),
                 "properties": list(args.properties),
-                "workloads": {name: WORKLOAD_CASES[name] for name in args.workloads},
+                "workloads": {
+                    name: (
+                        WORKLOAD_CASES[name]
+                        if name in WORKLOAD_CASES
+                        else list(HETEROGENEOUS_WORKLOAD_CASES[name])
+                    )
+                    for name in args.workloads
+                },
+                "repeated_call_semantics": REPEATED_CALL_SEMANTICS,
                 "warmups": args.warmups,
                 "repetitions": args.repetitions,
                 "units": {"latency": "ms", "throughput": "systems/s"},
