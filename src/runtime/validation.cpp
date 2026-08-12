@@ -114,6 +114,12 @@ bool has_scc_start_mode_suffix(const xtbloom_compute_options_t& options) {
   return options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE;
 }
 
+bool has_compute_policy_suffix(const xtbloom_compute_options_t& options) {
+  /* The ABI-v3 controls form one atomic suffix. Never interpret a field from
+   * a partial caller allocation, even when that individual member is present. */
+  return options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE;
+}
+
 BufferView spin_channel_view(const xtbloom_batch_t& batch) {
   /* Do not read beyond an ABI-v1 caller's allocation. */
   return has_spin_channel_suffix(batch) ? view(batch.spin_channels)
@@ -408,6 +414,29 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
     }
     if (options->reserved_v2 != 0u) {
       return invalid("compute options reserved_v2 field must be zero");
+    }
+  }
+  if (has_compute_policy_suffix(*options)) {
+    const std::uint32_t mixer = raw_enum(options->scc_mixer);
+    if (mixer != XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN) {
+      return invalid("scc_mixer must be XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN");
+    }
+    if (options->scc_mixer_history < 1 || options->scc_mixer_history > 64) {
+      return invalid("scc_mixer_history must be between 1 and 64");
+    }
+    if (!std::isfinite(options->scc_mixer_damping) || options->scc_mixer_damping <= 0.0 ||
+        options->scc_mixer_damping > 1.0) {
+      return invalid("scc_mixer_damping must be finite and in the interval (0, 1]");
+    }
+    const std::uint32_t determinism = raw_enum(options->determinism);
+    if (determinism != XTBLOOM_DETERMINISM_DEFAULT &&
+        determinism != XTBLOOM_DETERMINISM_REPRODUCIBLE) {
+      return invalid(
+          "determinism must be XTBLOOM_DETERMINISM_DEFAULT or "
+          "XTBLOOM_DETERMINISM_REPRODUCIBLE");
+    }
+    if (options->reserved_v3 != 0u) {
+      return invalid("compute options reserved_v3 field must be zero");
     }
   }
   if (result != nullptr && result->reserved != 0) {

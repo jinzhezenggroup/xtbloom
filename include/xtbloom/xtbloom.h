@@ -115,6 +115,20 @@ enum xtbloom_scc_start_mode_value {
   XTBLOOM_SCC_START_WARM = 2
 };
 
+typedef int32_t xtbloom_scc_mixer_t;
+enum xtbloom_scc_mixer_value {
+  /* Johnson modified-Broyden mixing used by the GFN2 CPU and CUDA backends. */
+  XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN = 1
+};
+
+typedef int32_t xtbloom_determinism_t;
+enum xtbloom_determinism_value {
+  /* Use the production execution policy selected by the backend. */
+  XTBLOOM_DETERMINISM_DEFAULT = 0,
+  /* Request the backend's reproducible execution policy. */
+  XTBLOOM_DETERMINISM_REPRODUCIBLE = 1
+};
+
 typedef int32_t xtbloom_compute_flag_t;
 enum xtbloom_compute_flag_value {
   XTBLOOM_COMPUTE_ENERGY = 1 << 0,
@@ -204,6 +218,9 @@ static_assert(sizeof(xtbloom_memory_space_t) == sizeof(int32_t),
 static_assert(sizeof(xtbloom_model_t) == sizeof(int32_t), "xtbloom_model_t must be 32-bit");
 static_assert(sizeof(xtbloom_scc_start_mode_t) == sizeof(int32_t),
               "xtbloom_scc_start_mode_t must be 32-bit");
+static_assert(sizeof(xtbloom_scc_mixer_t) == sizeof(int32_t), "xtbloom_scc_mixer_t must be 32-bit");
+static_assert(sizeof(xtbloom_determinism_t) == sizeof(int32_t),
+              "xtbloom_determinism_t must be 32-bit");
 static_assert(sizeof(xtbloom_compute_flag_t) == sizeof(int32_t),
               "xtbloom_compute_flag_t must be 32-bit");
 static_assert(sizeof(xtbloom_result_flag_t) == sizeof(int32_t),
@@ -220,6 +237,10 @@ _Static_assert(sizeof(xtbloom_memory_space_t) == sizeof(int32_t),
 _Static_assert(sizeof(xtbloom_model_t) == sizeof(int32_t), "xtbloom_model_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_scc_start_mode_t) == sizeof(int32_t),
                "xtbloom_scc_start_mode_t must be 32-bit");
+_Static_assert(sizeof(xtbloom_scc_mixer_t) == sizeof(int32_t),
+               "xtbloom_scc_mixer_t must be 32-bit");
+_Static_assert(sizeof(xtbloom_determinism_t) == sizeof(int32_t),
+               "xtbloom_determinism_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_compute_flag_t) == sizeof(int32_t),
                "xtbloom_compute_flag_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_result_flag_t) == sizeof(int32_t),
@@ -461,12 +482,28 @@ typedef struct xtbloom_compute_options {
   /* ABI v2 optional suffix; absent suffix preserves strict FRESH semantics. */
   xtbloom_scc_start_mode_t scc_start_mode;
   uint32_t reserved_v2;
+  /*
+   * ABI v3 optional suffix. A caller must provide the complete suffix or the
+   * library uses modified-Broyden history 8, damping 0.4, and default
+   * execution. Partial v3 suffixes are ignored as a unit.
+   */
+  /* Currently only XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN is accepted. */
+  xtbloom_scc_mixer_t scc_mixer;
+  /* Modified-Broyden history depth in [1, 64]. */
+  int32_t scc_mixer_history;
+  /* Linear damping factor, finite and in (0, 1]. */
+  double scc_mixer_damping;
+  /* XTBLOOM_DETERMINISM_DEFAULT or XTBLOOM_DETERMINISM_REPRODUCIBLE. */
+  xtbloom_determinism_t determinism;
+  uint32_t reserved_v3;
 } xtbloom_compute_options_t;
 
 #define XTBLOOM_COMPUTE_OPTIONS_V1_SIZE \
   (offsetof(xtbloom_compute_options_t, electronic_temperature) + sizeof(double))
 #define XTBLOOM_COMPUTE_OPTIONS_V2_SIZE \
   (offsetof(xtbloom_compute_options_t, reserved_v2) + sizeof(uint32_t))
+#define XTBLOOM_COMPUTE_OPTIONS_V3_SIZE \
+  (offsetof(xtbloom_compute_options_t, reserved_v3) + sizeof(uint32_t))
 
 #if defined(__cplusplus)
 static_assert(offsetof(xtbloom_compute_options_t, scc_start_mode) == 48u,
@@ -475,7 +512,19 @@ static_assert(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE == 48u,
               "xtbloom_compute_options_t ABI-v1 prefix must remain 48 bytes");
 static_assert(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE == 56u,
               "xtbloom_compute_options_t ABI-v2 image must remain 56 bytes");
-static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
+static_assert(offsetof(xtbloom_compute_options_t, scc_mixer) == 56u,
+              "xtbloom_compute_options_t ABI-v3 mixer must start at byte 56");
+static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_history) == 60u,
+              "xtbloom_compute_options_t ABI-v3 history must start at byte 60");
+static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_damping) == 64u,
+              "xtbloom_compute_options_t ABI-v3 damping must start at byte 64");
+static_assert(offsetof(xtbloom_compute_options_t, determinism) == 72u,
+              "xtbloom_compute_options_t ABI-v3 determinism must start at byte 72");
+static_assert(offsetof(xtbloom_compute_options_t, reserved_v3) == 76u,
+              "xtbloom_compute_options_t ABI-v3 reserved field must start at byte 76");
+static_assert(XTBLOOM_COMPUTE_OPTIONS_V3_SIZE == 80u,
+              "xtbloom_compute_options_t ABI-v3 image must remain 80 bytes");
+static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V3_SIZE,
               "xtbloom_compute_options_t must not add trailing ABI padding");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(offsetof(xtbloom_compute_options_t, scc_start_mode) == 48u,
@@ -484,7 +533,19 @@ _Static_assert(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE == 48u,
                "xtbloom_compute_options_t ABI-v1 prefix must remain 48 bytes");
 _Static_assert(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE == 56u,
                "xtbloom_compute_options_t ABI-v2 image must remain 56 bytes");
-_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer) == 56u,
+               "xtbloom_compute_options_t ABI-v3 mixer must start at byte 56");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_history) == 60u,
+               "xtbloom_compute_options_t ABI-v3 history must start at byte 60");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_damping) == 64u,
+               "xtbloom_compute_options_t ABI-v3 damping must start at byte 64");
+_Static_assert(offsetof(xtbloom_compute_options_t, determinism) == 72u,
+               "xtbloom_compute_options_t ABI-v3 determinism must start at byte 72");
+_Static_assert(offsetof(xtbloom_compute_options_t, reserved_v3) == 76u,
+               "xtbloom_compute_options_t ABI-v3 reserved field must start at byte 76");
+_Static_assert(XTBLOOM_COMPUTE_OPTIONS_V3_SIZE == 80u,
+               "xtbloom_compute_options_t ABI-v3 image must remain 80 bytes");
+_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V3_SIZE,
                "xtbloom_compute_options_t must not add trailing ABI padding");
 #endif
 

@@ -48,12 +48,24 @@ _Static_assert(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE == 48,
                "compute-options ABI-v1 prefix must remain 48 bytes");
 _Static_assert(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE == 56,
                "compute-options ABI-v2 prefix must remain 56 bytes");
+_Static_assert(XTBLOOM_COMPUTE_OPTIONS_V3_SIZE == 80,
+               "compute-options ABI-v3 image must remain 80 bytes");
 _Static_assert(offsetof(xtbloom_compute_options_t, scc_start_mode) == 48,
                "compute-options ABI-v2 mode must begin after the 48-byte prefix");
 _Static_assert(offsetof(xtbloom_compute_options_t, reserved_v2) == 52,
                "compute-options ABI-v2 reserved field must follow the mode");
-_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
-               "compute-options public layout must end at the ABI-v2 suffix");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer) == 56,
+               "compute-options ABI-v3 mixer must begin after the ABI-v2 suffix");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_history) == 60,
+               "compute-options ABI-v3 history offset must remain stable");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_damping) == 64,
+               "compute-options ABI-v3 damping offset must remain stable");
+_Static_assert(offsetof(xtbloom_compute_options_t, determinism) == 72,
+               "compute-options ABI-v3 determinism offset must remain stable");
+_Static_assert(offsetof(xtbloom_compute_options_t, reserved_v3) == 76,
+               "compute-options ABI-v3 reserved offset must remain stable");
+_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V3_SIZE,
+               "compute-options public layout must end at the ABI-v3 suffix");
 _Static_assert(sizeof(xtbloom_result_owner_options_t) >= XTBLOOM_RESULT_OWNER_OPTIONS_V1_SIZE,
                "result-owner options prefix must fit the public layout");
 _Static_assert(offsetof(xtbloom_result_owner_options_t, memory_space) == 8,
@@ -134,7 +146,7 @@ _Static_assert(offsetof(xtbloom_request_info_t, completion_status) == 12,
 _Static_assert(offsetof(xtbloom_request_info_t, result_flags) == 16,
                "request-info result flags offset must remain stable");
 
-static int check_short_compute_options_init(size_t caller_size) {
+static int check_compute_options_init(size_t caller_size) {
   enum { CANARY_BYTES = 16 };
   unsigned char* storage = (unsigned char*)malloc(caller_size + CANARY_BYTES);
   if (storage == NULL) {
@@ -150,11 +162,23 @@ static int check_short_compute_options_init(size_t caller_size) {
                         options->max_scc_iterations == 250 &&
                         options->electronic_temperature == XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
 
-  int short_suffix_ok = 1;
-  for (size_t index = XTBLOOM_COMPUTE_OPTIONS_V1_SIZE; index < caller_size; ++index) {
-    if (storage[index] != 0) {
-      short_suffix_ok = 0;
-      break;
+  int suffix_ok = 1;
+  if (caller_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE) {
+    suffix_ok = options->scc_start_mode == XTBLOOM_SCC_START_FRESH && options->reserved_v2 == 0u;
+  }
+  if (caller_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE) {
+    suffix_ok = suffix_ok && options->scc_mixer == XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN &&
+                options->scc_mixer_history == 8 && options->scc_mixer_damping == 0.4 &&
+                options->determinism == XTBLOOM_DETERMINISM_DEFAULT && options->reserved_v3 == 0u;
+    for (size_t index = XTBLOOM_COMPUTE_OPTIONS_V3_SIZE; index < caller_size; ++index) {
+      if (storage[index] != 0xa5) suffix_ok = 0;
+    }
+  } else {
+    const size_t initialized_prefix = caller_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE
+                                          ? XTBLOOM_COMPUTE_OPTIONS_V2_SIZE
+                                          : XTBLOOM_COMPUTE_OPTIONS_V1_SIZE;
+    for (size_t index = initialized_prefix; index < caller_size; ++index) {
+      if (storage[index] != 0) suffix_ok = 0;
     }
   }
   int canary_ok = 1;
@@ -165,7 +189,7 @@ static int check_short_compute_options_init(size_t caller_size) {
     }
   }
   free(storage);
-  return prefix_ok && short_suffix_ok && canary_ok;
+  return prefix_ok && suffix_ok && canary_ok;
 }
 
 static int check_short_batch_init(size_t caller_size) {
@@ -404,6 +428,8 @@ int main(void) {
       sizeof(xtbloom_memory_space_t) != sizeof(int32_t) ||
       sizeof(xtbloom_model_t) != sizeof(int32_t) ||
       sizeof(xtbloom_scc_start_mode_t) != sizeof(int32_t) ||
+      sizeof(xtbloom_scc_mixer_t) != sizeof(int32_t) ||
+      sizeof(xtbloom_determinism_t) != sizeof(int32_t) ||
       sizeof(xtbloom_compute_flag_t) != sizeof(int32_t) ||
       sizeof(xtbloom_result_flag_t) != sizeof(int32_t) ||
       sizeof(xtbloom_request_state_t) != sizeof(int32_t) ||
@@ -415,15 +441,37 @@ int main(void) {
   xtbloom_compute_options_t compute_options;
   if (xtbloom_compute_options_init(&compute_options, sizeof(compute_options)) !=
           XTBLOOM_STATUS_SUCCESS ||
-      compute_options.struct_size != XTBLOOM_COMPUTE_OPTIONS_V2_SIZE ||
+      compute_options.struct_size != XTBLOOM_COMPUTE_OPTIONS_V3_SIZE ||
       compute_options.electronic_temperature != XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE ||
       compute_options.scc_start_mode != XTBLOOM_SCC_START_FRESH ||
-      compute_options.reserved_v2 != 0) {
-    fprintf(stderr, "ABI-v2 compute-options defaults are incorrect\n");
+      compute_options.reserved_v2 != 0 ||
+      compute_options.scc_mixer != XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN ||
+      compute_options.scc_mixer_history != 8 || compute_options.scc_mixer_damping != 0.4 ||
+      compute_options.determinism != XTBLOOM_DETERMINISM_DEFAULT ||
+      compute_options.reserved_v3 != 0) {
+    fprintf(stderr, "ABI-v3 compute-options defaults are incorrect\n");
     return 2;
   }
-  if (!check_short_compute_options_init(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE) ||
-      !check_short_compute_options_init(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE - 1)) {
+  const size_t compute_option_sizes[] = {XTBLOOM_COMPUTE_OPTIONS_V1_SIZE,
+                                         XTBLOOM_COMPUTE_OPTIONS_V2_SIZE - 1,
+                                         XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
+                                         XTBLOOM_COMPUTE_OPTIONS_V2_SIZE + 1,
+                                         63u,
+                                         64u,
+                                         71u,
+                                         72u,
+                                         XTBLOOM_COMPUTE_OPTIONS_V3_SIZE - 1,
+                                         XTBLOOM_COMPUTE_OPTIONS_V3_SIZE,
+                                         XTBLOOM_COMPUTE_OPTIONS_V3_SIZE + 16};
+  for (size_t index = 0; index < sizeof(compute_option_sizes) / sizeof(compute_option_sizes[0]);
+       ++index) {
+    if (!check_compute_options_init(compute_option_sizes[index])) {
+      fprintf(stderr, "compute-options initialization violated a suffix boundary\n");
+      return 3;
+    }
+  }
+  if (xtbloom_compute_options_init(&compute_options, XTBLOOM_COMPUTE_OPTIONS_V1_SIZE - 1) !=
+      XTBLOOM_STATUS_INVALID_ARGUMENT) {
     fprintf(stderr, "short compute-options initialization wrote beyond the caller allocation\n");
     return 3;
   }

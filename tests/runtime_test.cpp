@@ -50,9 +50,14 @@ int main() {
   CHECK(xtbloom_compute_options_init(&compute_options, sizeof(compute_options)) ==
         XTBLOOM_STATUS_SUCCESS);
   CHECK(compute_options.electronic_temperature == XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE);
-  CHECK(compute_options.struct_size == XTBLOOM_COMPUTE_OPTIONS_V2_SIZE);
+  CHECK(compute_options.struct_size == XTBLOOM_COMPUTE_OPTIONS_V3_SIZE);
   CHECK(compute_options.scc_start_mode == XTBLOOM_SCC_START_FRESH);
   CHECK(compute_options.reserved_v2 == 0u);
+  CHECK(compute_options.scc_mixer == XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN);
+  CHECK(compute_options.scc_mixer_history == 8);
+  CHECK(compute_options.scc_mixer_damping == 0.4);
+  CHECK(compute_options.determinism == XTBLOOM_DETERMINISM_DEFAULT);
+  CHECK(compute_options.reserved_v3 == 0u);
   CHECK(xtbloom_batch_result_init(&result, sizeof(result)) == XTBLOOM_STATUS_SUCCESS);
 
   /* Descriptor errors are reported before entering numerical execution. */

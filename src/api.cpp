@@ -160,6 +160,12 @@ xtbloom_status_t xtbloom_compute_options_init(xtbloom_compute_options_t* options
   if (struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE) {
     options->scc_start_mode = XTBLOOM_SCC_START_FRESH;
   }
+  if (struct_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE) {
+    options->scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+    options->scc_mixer_history = 8;
+    options->scc_mixer_damping = 0.4;
+    options->determinism = XTBLOOM_DETERMINISM_DEFAULT;
+  }
   return XTBLOOM_STATUS_SUCCESS;
 }
 
