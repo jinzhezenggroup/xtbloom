@@ -319,6 +319,7 @@ def aggregate_term_kind(input_root: Path, output_dir: Path, kind: str) -> dict[s
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
+            lineterminator="\n",
             fieldnames=(
                 "topology",
                 "batch",
@@ -637,7 +638,7 @@ def write_distribution_summary(
         )
     )
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
     return [json_path.name, csv_path.name]
