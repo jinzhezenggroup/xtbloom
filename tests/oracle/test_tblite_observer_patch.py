@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import re
@@ -118,6 +119,70 @@ class TbliteObserverPatchTest(unittest.TestCase):
             ):
                 VALIDATOR.validate_output_location(source_root, nested_checkout)
             self.assertFalse(nested_checkout.exists())
+
+    def test_v2_bundle_adds_solver_hamiltonian_without_weakening_v1(self) -> None:
+        """Pin the unrestricted solver callback and its scaling order separately."""
+        metadata_path = TOOL_DIR / "metadata-v2.json"
+        metadata = VALIDATOR.load_metadata(metadata_path)
+        digest = VALIDATOR.validate_bundle(metadata)
+        patch = metadata["patch"]
+        observer = metadata["observer"]
+        assert isinstance(patch, dict) and isinstance(observer, dict)
+        self.assertEqual(digest, patch["sha256"])
+        self.assertEqual(
+            observer["callbacks"],
+            ["before_solve", "solver_hamiltonian", "after_iteration", "finished"],
+        )
+        text = (TOOL_DIR / patch["file"]).read_text(encoding="utf-8")
+        unrestricted = text.index("hmat(:, :, :) = 2*hmat")
+        callback = text.index("call observer%solver_hamiltonian", unrestricted)
+        solve = text.index("call self%solve", callback)
+        self.assertLess(unrestricted, callback)
+        self.assertLess(callback, solve)
+        self.assertEqual(
+            metadata["oracle_sources"],
+            {
+                "scc_trace_main_v2.f90": VALIDATOR.sha256_file(
+                    TOOL_DIR / "scc_trace_main_v2.f90"
+                ),
+                "scc_trace_recorder_v2.f90": VALIDATOR.sha256_file(
+                    TOOL_DIR / "scc_trace_recorder_v2.f90"
+                ),
+            },
+        )
+        recorder = (TOOL_DIR / "scc_trace_recorder_v2.f90").read_text(encoding="utf-8")
+        self.assertIn("call new_spin_polarization", recorder)
+        self.assertLess(
+            recorder.index("call new_spin_polarization"),
+            recorder.index("call xtb_singlepoint"),
+        )
+
+    def test_v2_bundle_rejects_oracle_source_metadata_drift(self) -> None:
+        """Require the exact recorder/main set and hashes before patch use."""
+        metadata = VALIDATOR.load_metadata(TOOL_DIR / "metadata-v2.json")
+        mutations = {
+            "missing": lambda value: value["oracle_sources"].pop(
+                "scc_trace_main_v2.f90"
+            ),
+            "extra": lambda value: value["oracle_sources"].__setitem__(
+                "extra.f90", "0" * 64
+            ),
+            "stale": lambda value: value["oracle_sources"].__setitem__(
+                "scc_trace_recorder_v2.f90", "0" * 64
+            ),
+        }
+        for label, mutation in mutations.items():
+            with self.subTest(label=label):
+                drifted = copy.deepcopy(metadata)
+                mutation(drifted)
+                with self.assertRaises(VALIDATOR.ObserverPatchError):
+                    VALIDATOR.validate_bundle(drifted)
+
+    def test_validator_cli_selects_metadata_bundle(self) -> None:
+        """Expose an explicit CLI selector instead of changing the v1 default."""
+        text = VALIDATOR_PATH.read_text(encoding="utf-8")
+        self.assertIn('"--metadata"', text)
+        self.assertIn("load_metadata(arguments.metadata)", text)
 
 
 if __name__ == "__main__":

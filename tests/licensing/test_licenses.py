@@ -277,6 +277,13 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
             "whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab",
             "LICENSES/eigen/** -text",
             "LICENSES/eigen/** -whitespace",
+            "tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer-v2.patch -text",
+            "tools/oracle/tblite_scc_trace/scc_trace_main_v2.f90 -text",
+            "tools/oracle/tblite_scc_trace/scc_trace_recorder_v2.f90 -text",
+            "tools/oracle/tblite_scc_trace/xtbloom-scc-trace-v2.schema.json -text",
+            "data/conformance/scc-traces/manifest-v2.json -text",
+            "data/conformance/scc-traces/oh_radical.json -text",
+            "data/conformance/scc-traces/specs/oh_radical.spec -text",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, attributes.splitlines())

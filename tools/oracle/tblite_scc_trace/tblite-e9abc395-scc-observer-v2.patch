@@ -1,0 +1,441 @@
+diff --git a/src/tblite/scf.f90 b/src/tblite/scf.f90
+index 2954393..6245167 100644
+--- a/src/tblite/scf.f90
++++ b/src/tblite/scf.f90
+@@ -25,11 +25,16 @@ module tblite_scf
+    use tblite_scf_info, only : scf_info
+    use tblite_scf_iterator, only : next_scf, get_mixer_dimension
+    use tblite_scf_mixer, only : mixer_type, new_mixer
++   use tblite_scf_observer, only : scf_observer, &
++      & scf_observer_status_converged, scf_observer_status_max_iterations, &
++      & scf_observer_status_failed
+    use tblite_scf_potential, only : potential_type, new_potential
+    implicit none
+    private
+ 
+    public :: mixer_type, new_mixer, scf_info, next_scf, get_mixer_dimension, &
+-      & potential_type, new_potential
++      & potential_type, new_potential, scf_observer, &
++      & scf_observer_status_converged, scf_observer_status_max_iterations, &
++      & scf_observer_status_failed
+ 
+ end module tblite_scf
+diff --git a/src/tblite/scf/CMakeLists.txt b/src/tblite/scf/CMakeLists.txt
+index 117f914..f1b8087 100644
+--- a/src/tblite/scf/CMakeLists.txt
++++ b/src/tblite/scf/CMakeLists.txt
+@@ -24,6 +24,7 @@ list(
+   "${dir}/info.f90"
+   "${dir}/iterator.f90"
+   "${dir}/mixer.f90"
++  "${dir}/observer.f90"
+   "${dir}/potential.f90"
+   "${dir}/solver.f90"
+ )
+diff --git a/src/tblite/scf/diag.f90 b/src/tblite/scf/diag.f90
+index 23b80f7..f7239df 100644
+--- a/src/tblite/scf/diag.f90
++++ b/src/tblite/scf/diag.f90
+@@ -21,6 +21,7 @@
+ module tblite_scf_diag
+    use mctc_env, only : sp, dp, wp, error_type
+    use tblite_blas, only : gemm
++   use tblite_scf_observer, only : scf_observer
+    use tblite_scf_solver, only : solver_type
+    use tblite_wavefunction_fermi, only : get_fermi_filling
+    implicit none
+@@ -59,7 +60,7 @@ module tblite_scf_diag
+ 
+ contains
+ 
+-subroutine get_density(self, hmat, smat, eval, focc, density, error)
++subroutine get_density(self, hmat, smat, eval, focc, density, error, observer, iteration)
+    !> Solver for the general eigenvalue problem
+    class(diag_solver_type), intent(inout) :: self
+    !> Overlap matrix
+@@ -74,6 +75,9 @@ subroutine get_density(self, hmat, smat, eval, focc, density, error)
+    real(wp), contiguous, intent(inout) :: density(:, :, :)
+    !> Error handling
+    type(error_type), allocatable, intent(out) :: error
++   !> Optional read-only observer and matching outer SCC attempt
++   class(scf_observer), intent(inout), optional :: observer
++   integer, intent(in), optional :: iteration
+ 
+    real(wp) :: e_fermi
+    integer :: nspin, spin, homo
+@@ -82,6 +86,9 @@ subroutine get_density(self, hmat, smat, eval, focc, density, error)
+ 
+    select case(nspin)
+    case default
++      if (present(observer) .and. present(iteration)) then
++         call observer%solver_hamiltonian(iteration, hmat)
++      end if
+       call self%solve(hmat(:, :, 1), smat, eval(:, 1), error)
+       if (allocated(error)) return
+ 
+@@ -96,6 +103,9 @@ subroutine get_density(self, hmat, smat, eval, focc, density, error)
+       focc(:, 1) = focc(:, 1) - focc(:, 2)
+    case(2)
+       hmat(:, :, :) = 2*hmat
++      if (present(observer) .and. present(iteration)) then
++         call observer%solver_hamiltonian(iteration, hmat)
++      end if
+       do spin = 1, 2
+          call self%solve(hmat(:, :, spin), smat, eval(:, spin), error)
+          if (allocated(error)) return
+@@ -107,7 +117,7 @@ subroutine get_density(self, hmat, smat, eval, focc, density, error)
+    end select
+ end subroutine get_density
+ 
+-subroutine get_wdensity(self, hmat, smat, eval, focc, density, error)
++subroutine get_wdensity(self, hmat, smat, eval, focc, density, error, observer, iteration)
+    !> Solver for the general eigenvalue problem
+    class(diag_solver_type), intent(inout) :: self
+    !> Overlap matrix
+@@ -122,6 +132,9 @@ subroutine get_wdensity(self, hmat, smat, eval, focc, density, error)
+    real(wp), contiguous, intent(inout) :: density(:, :, :)
+    !> Error handling
+    type(error_type), allocatable, intent(out) :: error
++   !> Unused optional observer arguments required by the common solver interface
++   class(scf_observer), intent(inout), optional :: observer
++   integer, intent(in), optional :: iteration
+ 
+    integer :: spin, nspin
+    real(wp), allocatable :: tmp(:)
+diff --git a/src/tblite/scf/iterator.f90 b/src/tblite/scf/iterator.f90
+index 4f87fa3..fb7f3b1 100644
+--- a/src/tblite/scf/iterator.f90
++++ b/src/tblite/scf/iterator.f90
+@@ -27,6 +27,7 @@ module tblite_scf_iterator
+    use tblite_integral_type, only : integral_type
+    use tblite_scf_info, only : scf_info
+    use tblite_scf_mixer, only : mixer_type
++   use tblite_scf_observer, only : scf_observer
+    use tblite_scf_potential, only : potential_type, add_pot_to_h1
+    use tblite_scf_solver, only : solver_type
+    use tblite_wavefunction_fermi, only : get_fermi_filling
+@@ -45,7 +46,7 @@ contains
+ !> Evaluate self-consistent iteration for the density-dependent Hamiltonian
+ subroutine next_scf(iscf, mol, bas, wfn, solver, mixer, info, coulomb, dispersion, &
+       & interactions, ints, pot, ccache, dcache, icache, &
+-      & energies, error)
++      & energies, error, observer)
+    !> Current iteration count
+    integer, intent(inout) :: iscf
+    !> Molecular structure data
+@@ -84,6 +85,9 @@ subroutine next_scf(iscf, mol, bas, wfn, solver, mixer, info, coulomb, dispersio
+    !> Error handling
+    type(error_type), allocatable, intent(out) :: error
+ 
++   !> Optional read-only observer for the assembled and mixed pre-solve state
++   class(scf_observer), intent(inout), optional :: observer
++
+    real(wp), allocatable :: eao(:)
+    real(wp) :: ts
+ 
+@@ -110,7 +114,12 @@ subroutine next_scf(iscf, mol, bas, wfn, solver, mixer, info, coulomb, dispersio
+ 
+    call set_mixer(mixer, wfn, info)
+ 
+-   call next_density(wfn, solver, ints, ts, error)
++   ! At this point coeff contains the effective Hamiltonian and q/d/Q still
++   ! contain the mixed input state.  next_density overwrites coeff with the
++   ! eigenvectors and then replaces q/d/Q with the raw output state below.
++   if (present(observer)) call observer%before_solve(iscf, wfn, pot)
++
++   call next_density(wfn, solver, ints, ts, error, observer, iscf)
+    if (allocated(error)) return
+ 
+    call get_mulliken_shell_charges(bas, ints%overlap, wfn%density, wfn%n0sh, &
+@@ -321,7 +330,7 @@ subroutine get_mixer(mixer, bas, wfn, info)
+ end subroutine get_mixer
+ 
+ 
+-subroutine next_density(wfn, solver, ints, ts, error)
++subroutine next_density(wfn, solver, ints, ts, error, observer, iteration)
+    !> Tight-binding wavefunction data
+    type(wavefunction_type), intent(inout) :: wfn
+    !> Solver for the general eigenvalue problem
+@@ -332,12 +341,16 @@ subroutine next_density(wfn, solver, ints, ts, error)
+    real(wp), intent(out) :: ts
+    !> Error handling
+    type(error_type), allocatable, intent(out) :: error
++   !> Optional observer and one-based outer SCC attempt
++   class(scf_observer), intent(inout), optional :: observer
++   integer, intent(in), optional :: iteration
+ 
+    real(wp) :: e_fermi, stmp(2)
+    real(wp), allocatable :: focc(:)
+    integer :: spin
+ 
+-   call solver%get_density(wfn%coeff, ints%overlap, wfn%emo, wfn%focc, wfn%density, error)
++   call solver%get_density(wfn%coeff, ints%overlap, wfn%emo, wfn%focc, wfn%density, error, &
++      & observer, iteration)
+    do spin = 1, 2
+       call get_electronic_entropy(wfn%focc(:, spin), wfn%kt, stmp(spin))
+    end do
+diff --git a/src/tblite/scf/meson.build b/src/tblite/scf/meson.build
+index ed649e3..75c807c 100644
+--- a/src/tblite/scf/meson.build
++++ b/src/tblite/scf/meson.build
+@@ -21,6 +21,7 @@ srcs += files(
+   'info.f90',
+   'iterator.f90',
+   'mixer.f90',
++  'observer.f90',
+   'potential.f90',
+   'solver.f90',
+ )
+diff --git a/src/tblite/scf/observer.f90 b/src/tblite/scf/observer.f90
+new file mode 100644
+index 0000000..ab38443
+--- /dev/null
++++ b/src/tblite/scf/observer.f90
+@@ -0,0 +1,121 @@
++! This file is part of tblite.
++! SPDX-Identifier: LGPL-3.0-or-later
++!
++! tblite is free software: you can redistribute it and/or modify it under
++! the terms of the GNU Lesser General Public License as published by
++! the Free Software Foundation, either version 3 of the License, or
++! (at your option) any later version.
++!
++! tblite is distributed in the hope that it will be useful,
++! but WITHOUT ANY WARRANTY; without even the implied warranty of
++! MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++! GNU Lesser General Public License for more details.
++!
++! You should have received a copy of the GNU Lesser General Public License
++! along with tblite.  If not, see <https://www.gnu.org/licenses/>.
++
++!> @file tblite/scf/observer.f90
++!> Defines the optional observer used by the xtbloom SCC trace oracle.
++
++!> Read-only callbacks around one self-consistent iteration.
++module tblite_scf_observer
++   use mctc_env, only : wp
++   use tblite_scf_potential, only : potential_type
++   use tblite_wavefunction_type, only : wavefunction_type
++   implicit none
++   private
++
++   !> The current iteration satisfied all convergence criteria.
++   integer, parameter, public :: scf_observer_status_converged = 1
++   !> The iteration limit was reached without convergence.
++   integer, parameter, public :: scf_observer_status_max_iterations = 2
++   !> SCC setup or an outer-loop attempt failed.
++   integer, parameter, public :: scf_observer_status_failed = 3
++
++   !> Concrete no-op observer.  Oracle recorders extend this type and
++   !> override one or both callbacks; normal tblite callers omit it.
++   type, public :: scf_observer
++   contains
++      procedure :: before_solve => no_op_before_solve
++      procedure :: solver_hamiltonian => no_op_solver_hamiltonian
++      procedure :: after_iteration => no_op_after_iteration
++      procedure :: finished => no_op_finished
++   end type scf_observer
++
++contains
++
++!> Observe the assembled effective Hamiltonian and mixed SCC input.
++!
++! The wavefunction and potential are borrowed only for this callback.  An
++! implementation which needs them later must make a deep copy.  coeff is the
++! assembled Hamiltonian, while qsh/qat/dpat/qpat are the mixed input state.
++subroutine no_op_before_solve(self, iteration, wfn, pot)
++   !> Observer instance
++   class(scf_observer), intent(inout) :: self
++   !> One-based outer-loop attempt number
++   integer, intent(in) :: iteration
++   !> Borrowed pre-solve wavefunction state
++   type(wavefunction_type), intent(in) :: wfn
++   !> Borrowed assembled density-dependent potential
++   type(potential_type), intent(in) :: pot
++end subroutine no_op_before_solve
++
++!> Observe the exact matrix passed to the electronic solver.
++!
++! For unrestricted calculations the diagonalization implementation scales the
++! assembled alpha/beta Hamiltonians before solving.  This callback is emitted
++! after that transformation and immediately before the first eigensolve, so a
++! recorder does not have to infer solver semantics from the assembled matrix.
++subroutine no_op_solver_hamiltonian(self, iteration, hamiltonian)
++   !> Observer instance
++   class(scf_observer), intent(inout) :: self
++   !> One-based outer-loop attempt number
++   integer, intent(in) :: iteration
++   !> Borrowed solver input in alpha/beta channel order
++   real(wp), intent(in) :: hamiltonian(:, :, :)
++end subroutine no_op_solver_hamiltonian
++
++!> Observe the complete post-solve state and convergence decision.
++!
++! This callback is issued only when next_scf completed without error.  coeff
++! contains orbital coefficients and qsh/qat/dpat/qpat contain the raw Mulliken
++! output.  All objects are borrowed only for the duration of the callback.
++subroutine no_op_after_iteration(self, iteration, wfn, eelec, elast, pnorm, &
++      & econverged, pconverged, tconverged, converged)
++   !> Observer instance
++   class(scf_observer), intent(inout) :: self
++   !> One-based outer-loop attempt number
++   integer, intent(in) :: iteration
++   !> Borrowed post-solve wavefunction state
++   type(wavefunction_type), intent(in) :: wfn
++   !> Per-atom electronic SCC energy for the current state, in Hartree
++   real(wp), intent(in) :: eelec(:)
++   !> Electronic SCC energy from before this attempt, in Hartree
++   real(wp), intent(in) :: elast
++   !> Mixer residual RMS reported by tblite
++   real(wp), intent(in) :: pnorm
++   !> Energy convergence flag
++   logical, intent(in) :: econverged
++   !> Population convergence flag
++   logical, intent(in) :: pconverged
++   !> Electronic-temperature convergence flag
++   logical, intent(in) :: tconverged
++   !> Combined convergence flag
++   logical, intent(in) :: converged
++end subroutine no_op_after_iteration
++
++!> Report the terminal SCC status exactly once after mixer construction.
++!
++! iterations is tblite's final SCC counter.  A mixer failure can report zero;
++! an eigensolver failure can report an iteration for which before_solve ran but
++! after_iteration did not.  No wavefunction payload is exposed on failure.
++subroutine no_op_finished(self, iterations, status)
++   !> Observer instance
++   class(scf_observer), intent(inout) :: self
++   !> Final tblite SCC iteration counter
++   integer, intent(in) :: iterations
++   !> One of the terminal scf_observer_status_* constants
++   integer, intent(in) :: status
++end subroutine no_op_finished
++
++end module tblite_scf_observer
+diff --git a/src/tblite/scf/solver.f90 b/src/tblite/scf/solver.f90
+index 8e3a324..0248914 100644
+--- a/src/tblite/scf/solver.f90
++++ b/src/tblite/scf/solver.f90
+@@ -21,6 +21,7 @@
+ module tblite_scf_solver
+    use mctc_env, only : sp, dp, wp, error_type
+    use tblite_blas, only : gemm
++   use tblite_scf_observer, only : scf_observer
+    implicit none
+    private
+ 
+@@ -37,8 +38,8 @@ module tblite_scf_solver
+    end type solver_type
+ 
+    abstract interface
+-      subroutine get_density(self, hmat, smat, eval, focc, density, error)
+-         import :: wp, solver_type, error_type
++      subroutine get_density(self, hmat, smat, eval, focc, density, error, observer, iteration)
++         import :: wp, solver_type, error_type, scf_observer
+          !> Solver for the general eigenvalue problem
+          class(solver_type), intent(inout) :: self
+          !> Overlap matrix
+@@ -53,6 +54,9 @@ module tblite_scf_solver
+          real(wp), contiguous, intent(inout) :: density(:, :, :)
+          !> Error handling
+          type(error_type), allocatable, intent(out) :: error
++         !> Optional read-only observer and matching outer SCC attempt
++         class(scf_observer), intent(inout), optional :: observer
++         integer, intent(in), optional :: iteration
+       end subroutine get_density
+ 
+       subroutine delete(self)
+diff --git a/src/tblite/xtb/singlepoint.f90 b/src/tblite/xtb/singlepoint.f90
+index ff47c53..b688e2e 100644
+--- a/src/tblite/xtb/singlepoint.f90
++++ b/src/tblite/xtb/singlepoint.f90
+@@ -37,7 +37,9 @@ module tblite_xtb_singlepoint
+    use tblite_post_processing_type, only : collect_containers_caches
+    use tblite_results, only : results_type
+    use tblite_scf, only : mixer_type, new_mixer, scf_info, next_scf, &
+-      & get_mixer_dimension, potential_type, new_potential
++      & get_mixer_dimension, potential_type, new_potential, scf_observer, &
++      & scf_observer_status_converged, scf_observer_status_max_iterations, &
++      & scf_observer_status_failed
+    use tblite_scf_mixer_input, only : scf_version_to_string
+    use tblite_scf_solver, only : solver_type
+    use tblite_timer, only : timer_type, format_time
+@@ -71,7 +73,7 @@ contains
+ 
+ !> Entry point for performing single point calculation using the xTB calculator
+ subroutine xtb_singlepoint(ctx, mol, calc, wfn, accuracy, energy, gradient, sigma, &
+-   & verbosity, results, post_process)
++   & verbosity, results, post_process, observer)
+    !> Calculation context
+    type(context_type), intent(inout) :: ctx
+    !> Molecular structure data
+@@ -95,6 +97,9 @@ subroutine xtb_singlepoint(ctx, mol, calc, wfn, accuracy, energy, gradient, sigm
+    !> List of post-processing methods
+    type(post_processing_list), intent(inout), optional :: post_process
+ 
++   !> Optional observer for read-only SCC iteration tracing
++   class(scf_observer), intent(inout), optional :: observer
++
+    logical :: grad, converged, econverged, pconverged, tconverged
+    integer :: prlevel
+    real(wp) :: econv, pconv, cutoff, elast, nel, target_kt, elevated_kt, anneal_fraction
+@@ -115,7 +120,7 @@ subroutine xtb_singlepoint(ctx, mol, calc, wfn, accuracy, energy, gradient, sigm
+    type(adjacency_list) :: list
+    type(cache_list), allocatable :: caches
+ 
+-   integer :: iscf, spin
++   integer :: iscf, spin, observer_iteration
+ 
+    call timer%push("total")
+ 
+@@ -272,6 +277,7 @@ subroutine xtb_singlepoint(ctx, mol, calc, wfn, accuracy, energy, gradient, sigm
+    call new_mixer(mixer, calc%mixer_input, &
+       & wfn%nspin*get_mixer_dimension(mol, calc%bas, info), error)
+    if (allocated(error)) then
++      if (present(observer)) call observer%finished(iscf, scf_observer_status_failed)
+       call ctx%set_error(error)
+       return
+    end if
+@@ -283,6 +289,7 @@ subroutine xtb_singlepoint(ctx, mol, calc, wfn, accuracy, energy, gradient, sigm
+    end if
+    do while(.not.converged .and. iscf < calc%max_iter)
+       elast = sum(eelec)
++      observer_iteration = iscf + 1
+       if (elevated_kt > target_kt) then
+          if (iscf < anneal_hold) then
+             wfn%kt = elevated_kt
+@@ -296,12 +303,16 @@ subroutine xtb_singlepoint(ctx, mol, calc, wfn, accuracy, energy, gradient, sigm
+       end if
+       call next_scf(iscf, mol, calc%bas, wfn, solver, mixer, info, &
+          & calc%coulomb, calc%dispersion, calc%interactions, ints, pot, &
+-         & ccache, dcache, icache, eelec, error)
++         & ccache, dcache, icache, eelec, error, observer)
+       econverged = abs(sum(eelec) - elast) < econv
+       pnorm = mixer%get_error()
+       pconverged = pnorm < pconv
+       tconverged = wfn%kt <= target_kt
+       converged = econverged .and. pconverged .and. tconverged
++      if (.not.allocated(error) .and. present(observer)) then
++         call observer%after_iteration(observer_iteration, wfn, eelec, elast, &
++            & pnorm, econverged, pconverged, tconverged, converged)
++      end if
+       if (prlevel > 0) then
+          call ctx%message(format_string(iscf, "(i7)") // &
+             & format_string(sum(eelec + energies), "(g24.13)") // &
+@@ -316,6 +327,15 @@ subroutine xtb_singlepoint(ctx, mol, calc, wfn, accuracy, energy, gradient, sigm
+          exit
+       end if
+    end do
++   if (present(observer)) then
++      if (allocated(error)) then
++         call observer%finished(iscf, scf_observer_status_failed)
++      else if (converged) then
++         call observer%finished(iscf, scf_observer_status_converged)
++      else
++         call observer%finished(iscf, scf_observer_status_max_iterations)
++      end if
++   end if
+    wfn%kt = target_kt
+    solver%kt = target_kt
+    if (prlevel > 0) then
