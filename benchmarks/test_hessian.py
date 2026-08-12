@@ -18,10 +18,11 @@ from benchmarks.natoms_scaling import make_alkane
 class FakeEngine(hb.HessianEngine):
     """Return a deterministic translationally invariant quadratic Hessian."""
 
-    def __init__(self, batch_size: int = 1) -> None:
+    def __init__(self, batch_size: int = 1, nthreads: int = 16) -> None:
         self.preparations = 0
         self.invocations = 0
         self.batch_size = batch_size
+        self.nthreads = nthreads
 
     def prepare_sample(self) -> None:
         """Count one untimed fresh-state preparation."""
@@ -66,6 +67,54 @@ class HessianBenchmarkTest(unittest.TestCase):
         self.assertEqual(summary["hessians_per_hour_at_median"], 384000.0)
         with self.assertRaises(hb.BenchmarkError):
             hb.timing_summary([1.0], 0)
+
+    def test_child_coordinates_keep_nthreads_independent_of_batch_size(self) -> None:
+        """Batch 1 and 128 differ only in work count, not worker budget."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = hb.build_parser().parse_args(
+                [
+                    "--engines",
+                    "xtb",
+                    "--xtb-library",
+                    str(Path(__file__)),
+                    "--nthreads",
+                    "16",
+                    "--output-json",
+                    str(root / "parent.json"),
+                    "--output-csv",
+                    str(root / "parent.csv"),
+                ]
+            )
+            commands = [
+                hb.coordinate_command(
+                    args,
+                    engine="xtb",
+                    hessian_batch_size=batch_size,
+                    output_json=root / f"child-{batch_size}.json",
+                    output_csv=root / f"child-{batch_size}.csv",
+                )
+                for batch_size in (1, 128)
+            ]
+
+        for batch_size, command in zip((1, 128), commands, strict=True):
+            self.assertEqual(
+                command[command.index("--batch-sizes") + 1], str(batch_size)
+            )
+            self.assertEqual(command[command.index("--nthreads") + 1], "16")
+
+    def test_run_row_rejects_mismatched_effective_nthreads(self) -> None:
+        """Do not time a row whose engine changed the fixed worker budget."""
+        row = hb.run_row(
+            "xtbloom-cpu",
+            args=fake_args(),
+            molecule=make_alkane(62),
+            hessian_batch_size=1,
+            references=None,
+            factory=lambda *_args, **_kwargs: FakeEngine(nthreads=1),
+        )
+        self.assertEqual(row["availability"], "unavailable")
+        self.assertIn("requested 16, effective 1", row["unavailable_reason"])
 
     def test_hessian_round_trip_authenticates_exact_binary64_payload(self) -> None:
         """Retain every Hessian element and reject a forged payload digest."""
@@ -127,6 +176,7 @@ class HessianBenchmarkTest(unittest.TestCase):
         self.assertEqual(fake.preparations, 4)
         self.assertEqual(fake.invocations, 4)
         self.assertEqual(row["hessian_batch_size"], 128)
+        self.assertEqual(row["nthreads"], 16)
         self.assertEqual(row["requested_cpu_threads"], 16)
         self.assertEqual(
             row["timing"]["amortized_ms_per_hessian_at_median"],

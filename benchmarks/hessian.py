@@ -433,7 +433,7 @@ def coordinate_command(
         str(hessian_batch_size),
         "--device-id",
         str(args.device_id),
-        "--cpu-threads",
+        "--nthreads",
         str(args.cpu_threads),
         "--displacement-chunk-size",
         str(args.displacement_chunk_size),
@@ -516,6 +516,10 @@ class XTBloomHessianEngine(HessianEngine):
             electronic_temperature=300.0,
             warm_start=False,
         )
+        # Complete-Hessian batch size changes only the amount of work. Keep
+        # the caller's fixed worker budget visible so the runner can reject a
+        # coordinate before timing if an adapter silently changes it.
+        self.nthreads = int(self.calculator._context._cpu_threads)
         self.backend = backend
         self.hessian_batch_size = len(structures)
         self.displacement_chunk_size = displacement_chunk_size
@@ -539,6 +543,7 @@ class XTBloomHessianEngine(HessianEngine):
                 "internal_displacement_chunk_policy": (
                     "same explicit chunk size for every complete-Hessian batch"
                 ),
+                "nthreads": self.nthreads,
                 "fresh_temporary_context_per_hessian_batch": True,
             },
         )
@@ -581,6 +586,7 @@ class XtbHessianEngine(HessianEngine):
             electronic_temperature_kelvin=300.0,
             threads=cpu_threads,
         )
+        self.nthreads = int(self.adapter.threads)
         self.library = self.adapter.library
         # The released xTB header names the two optional pointers in the
         # opposite order/types from the Fortran bind(C) implementation.  NULL
@@ -642,6 +648,8 @@ class XtbHessianEngine(HessianEngine):
                 "accuracy_factor": 1.0,
                 "optional_step_and_atom_list": "NULL/default 0.005 bohr/all atoms",
                 "native_openmp_displacement_parallelism": True,
+                "nthreads": self.nthreads,
+                "thread_control": self.adapter.thread_control,
                 "complete_hessian_batch_api": False,
                 "batch_execution": "public xtb_hessian loop at fixed threads",
                 "unavoidable_auxiliary_dipole_gradient": True,
@@ -679,6 +687,7 @@ class DxtbHessianEngine(HessianEngine):
         self.step = step
         self.previous_threads = int(self.torch.get_num_threads())
         self.torch.set_num_threads(cpu_threads)
+        self.nthreads = int(self.torch.get_num_threads())
         self.device = self.torch.device(
             f"cuda:{device_id}" if backend == "cuda" else "cpu"
         )
@@ -762,6 +771,7 @@ class DxtbHessianEngine(HessianEngine):
                 "batch_mode": 0,
                 "batch_hessian_supported": False,
                 "batch_execution": "public single-system Hessian loop at fixed threads",
+                "nthreads": self.nthreads,
                 "host_publication_inside_timing": True,
                 "torch_version": getattr(self.torch, "__version__", None),
                 "dxtb_version": getattr(self.dxtb, "__version__", None),
@@ -994,6 +1004,7 @@ def run_row(
             else hessian_batch_size * DISPLACEMENT_COUNT
         ),
         "public_batch_semantics": "complete independent Hessians",
+        "nthreads": args.cpu_threads,
         "requested_cpu_threads": args.cpu_threads,
         "availability": "unavailable",
     }
@@ -1007,6 +1018,12 @@ def run_row(
             molecule=molecule,
             hessian_batch_size=hessian_batch_size,
         ) as engine:
+            effective_nthreads = getattr(engine, "nthreads", None)
+            if effective_nthreads != args.cpu_threads:
+                raise BenchmarkError(
+                    "engine nthreads does not match the fixed benchmark budget: "
+                    f"requested {args.cpu_threads}, effective {effective_nthreads}"
+                )
             for _ in range(args.warmups):
                 engine.prepare_sample()
                 engine.invoke()
@@ -1132,6 +1149,7 @@ def runner_metadata(
             * 1024,
         },
         "threads": {
+            "nthreads": args.cpu_threads,
             "cpu_threads": args.cpu_threads,
             "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS"),
             "OPENBLAS_NUM_THREADS": os.environ.get("OPENBLAS_NUM_THREADS"),
@@ -1155,6 +1173,7 @@ def runner_metadata(
             "batch_semantics": "complete independent Hessians",
             "workload_seed": WORKLOAD_SEED,
             "perturb_sigma_bohr": PERTURB_SIGMA_BOHR,
+            "fixed_nthreads_for_every_batch_size": args.cpu_threads,
             "fixed_cpu_threads_for_every_batch_size": args.cpu_threads,
             "internal_displacement_chunk_size": args.displacement_chunk_size,
             "internal_displacement_chunk_policy": (
@@ -1240,6 +1259,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "engine",
         "natoms",
         "hessian_batch_size",
+        "nthreads",
         "requested_cpu_threads",
         "availability",
         "median_ms",
@@ -1269,6 +1289,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
                     "engine": row.get("engine"),
                     "natoms": row.get("natoms"),
                     "hessian_batch_size": row.get("hessian_batch_size"),
+                    "nthreads": row.get("nthreads"),
                     "requested_cpu_threads": row.get("requested_cpu_threads"),
                     "availability": row.get("availability"),
                     "median_ms": timing.get("median_ms"),
@@ -1312,7 +1333,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--xtb-source", type=Path, default=Path.home() / "codes/xtb")
     parser.add_argument("--dxtb-source", type=Path, default=Path.home() / "codes/dxtb")
     parser.add_argument("--device-id", type=int, default=0)
-    parser.add_argument("--cpu-threads", type=int, default=16)
+    parser.add_argument(
+        "--nthreads",
+        "--cpu-threads",
+        dest="cpu_threads",
+        type=int,
+        default=16,
+        help=(
+            "fixed cross-engine CPU worker budget for every complete-Hessian batch size"
+        ),
+    )
     parser.add_argument(
         "--displacement-chunk-size",
         type=int,
