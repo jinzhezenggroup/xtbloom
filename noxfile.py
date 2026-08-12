@@ -339,6 +339,15 @@ def _run_canonical(session: nox.Session) -> None:
         "run",
         "--no-sync",
         "python",
+        "tools/conformance/gfn1_conformance.py",
+        "check",
+    )
+    _run(
+        session,
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
         "tools/licensing/check_licenses.py",
         "--source-root",
         ".",

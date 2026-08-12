@@ -1,5 +1,70 @@
 # GFN2-xTB conformance tools
 
+## Independent GFN1 foundation corpus
+
+GFN1 remains unimplemented in xTBloom. The separate corpus under
+`data/conformance/gfn1/` therefore records only independent reference-engine
+results; it is not wired to the public C API runner and does not claim CPU or
+CUDA support.
+
+Four closed-shell cases use the pinned tblite 0.7.0 GFN1 implementation.
+The canonical GFN1 parameter export is independently pinned to the tblite
+0.7.0 release commit `fa8a4416...`; the live oracle binaries were built from
+the reviewed descendant `e9abc395...`, which includes later occupation and
+convergence fixes. The manifest records the exact role and hash of each
+artifact so the parameter-source and oracle revisions are not conflated.
+Pinned xTB 6.7.1 supplies the OH open-shell case, the exact GFN1 water-PCEM
+fixture with H/O hardnesses `0.470099`/`0.583349` Hartree, a `gamma=999`
+diagnostic, and the Br/Br/O/C/H/H halogen-bond fixture. Every live command uses
+`--acc 0.0001`, one thread, cleared `XTB*` variables, and hashed executables,
+shared libraries, GFN1 parameters, source inputs, materialized PCEM files, and
+normalized outputs.
+
+Verify the committed foundation offline:
+
+```sh
+python3 tools/conformance/gfn1_conformance.py check
+```
+
+The offline check recomputes each retained tblite input's Git blob object ID
+directly from its bytes, so a well-formed but unrelated upstream SHA-1 cannot
+assert copied-source identity. QMMM documents are validated for exact units,
+element identities, array shapes, numeric types, and finite values before any
+xTB input is materialized. `compare` likewise verifies the case, method, pinned
+reference engine, source revision, and complete oracle provenance identity
+before applying numerical tolerances.
+
+Regenerate only into a separate build directory, then compare:
+
+```sh
+LD_LIBRARY_PATH=/path/to/oracle/lib \
+python3 tools/conformance/gfn1_conformance.py generate-tblite \
+  --executable /path/to/tblite \
+  --output-dir build/conformance/gfn1-tblite
+
+LD_LIBRARY_PATH=/path/to/oracle/lib \
+python3 tools/conformance/gfn1_conformance.py generate-xtb \
+  --executable /path/to/xtb \
+  --parameter-file /path/to/param_gfn1-xtb.txt \
+  --output-dir build/conformance/gfn1-xtb
+```
+
+Use `compare` with the relevant `--case` selections for each output directory.
+The finalizer is intentionally explicit and should be used only after reviewing
+fresh live results:
+
+```sh
+python3 tools/conformance/gfn1_conformance.py finalize-manifest \
+  --template data/conformance/gfn1/manifest.template.json \
+  --output data/conformance/gfn1/manifest.json
+```
+
+The primary thresholds remain property-specific absolute tolerances. They are
+future xTBloom acceptance targets, not evidence that the current GFN2-only
+runtime meets them.
+
+## GFN2 production conformance corpus
+
 The corpus is deliberately independent of the xTBloom implementation. Eight
 closed-shell gas, atomic, and field cases use a pinned live tblite calculation
 as their primary oracle; the open-shell OH case and five QM/MM cases use pinned xTB

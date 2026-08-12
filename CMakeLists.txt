@@ -3725,6 +3725,10 @@ if(XTBLOOM_BUILD_TESTS)
     COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_conformance.py check
   )
   add_test(
+    NAME xtbloom.conformance.gfn1_manifest
+    COMMAND ${Python3_EXECUTABLE} tools/conformance/gfn1_conformance.py check
+  )
+  add_test(
     NAME xtbloom.conformance.tmacl_evidence
     COMMAND ${Python3_EXECUTABLE} tools/conformance/tmacl_evidence.py
   )
@@ -3871,6 +3875,7 @@ if(XTBLOOM_BUILD_TESTS)
     xtbloom.licensing
     xtbloom.licensing_unit
     xtbloom.conformance.manifest
+    xtbloom.conformance.gfn1_manifest
     xtbloom.conformance.tmacl_evidence
     xtbloom.conformance.python
     xtbloom.oracle.tblite_observer_patch
