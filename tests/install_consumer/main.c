@@ -201,7 +201,7 @@ static xtbloom_buffer_t output_buffer(void* data, size_t size_bytes) {
 static int run_installed_inference(xtbloom_context_t* context, const char* mode_name) {
   const int64_t atom_offsets[] = {0, 2};
   const int32_t atomic_numbers[] = {1, 1};
-  const double positions[] = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
+  double positions[] = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
   const double molecular_charges[] = {0.0};
   const int32_t unpaired_electrons[] = {0};
 
@@ -270,7 +270,35 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
       xtbloom_request_destroy(request);
       return 18;
     }
+
+    /* A successful async FRESH publishes the strict checkpoint consumed by
+     * the next changed-geometry WARM request. Keep the C-only installed
+     * consumer independent of CUDA headers while exercising the public ABI. */
+    positions[0] -= 0.01;
+    positions[3] += 0.0075;
+    energy = NAN;
+    iterations = -1;
+    converged = 0;
+    system_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+    if (xtbloom_compute_enqueue(context, &batch, &options, &result, request) !=
+            XTBLOOM_STATUS_SUCCESS ||
+        xtbloom_request_wait(request, &info) != XTBLOOM_STATUS_SUCCESS ||
+        info.state != XTBLOOM_REQUEST_COMPLETE ||
+        info.completion_status != XTBLOOM_STATUS_SUCCESS || info.result_flags != 0u ||
+        result.flags != result_flags_canary || system_status != XTBLOOM_STATUS_SUCCESS ||
+        converged != 1 || iterations <= 0 || !isfinite(energy)) {
+      fprintf(stderr, "installed %s context async WARM failed: call_error=%s\n", mode_name,
+              xtbloom_get_last_error());
+      fprintf(stderr, "installed %s context async WARM request_error=%s\n", mode_name,
+              xtbloom_request_get_error(request));
+      xtbloom_request_destroy(request);
+      return 25;
+    }
     xtbloom_request_destroy(request);
+    /* Plan creation below owns an independent cache. Reset the per-call
+     * policy so its first compute establishes that cache with FRESH. */
+    options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
   }
 
   /* Exercise the CPU-released ABI-v3 electric-field attachment and ABI-v2

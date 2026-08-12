@@ -6627,6 +6627,42 @@ struct Gfn2CudaExecutionCache::Impl {
     return XTBLOOM_STATUS_SUCCESS;
   }
 
+  /* Complete the one request-owned publication transaction in a single place.
+   * In particular, a deferred stream-ordered failure must not leave the host
+   * checkpoint-ready bit resurrected by an otherwise successful D2H result
+   * bridge. The device token was already consumed by FRESH/WARM admission, so
+   * keeping the host bit false makes every later strict WARM reject safely. */
+  void finalize_active_request_after_commit_locked(Prepared& current) {
+    auto& active = active_request;
+    if (active.deferred_status != XTBLOOM_STATUS_SUCCESS) {
+      active.completion_status = active.deferred_status;
+      active.result_flags = 0u;
+      /* The device-gated commit is already ordered, so caller CUDA buffers may
+       * have changed. Host publication remains controllable: close readiness
+       * before diagnostic composition and do not copy staged host bytes for a
+       * request whose accepted transaction already has a deferred failure. */
+      current.inference.warm_checkpoint_ready = false;
+      if (!active.completion_error.empty()) active.completion_error += "; additionally, ";
+      active.completion_error += active.deferred_error;
+      active.completion_ready = true;
+      return;
+    }
+
+    xtbloom_status_t status = accept_public_result_after_commit_locked(current, active.transaction,
+                                                                       active.completion_error);
+    if (status == XTBLOOM_STATUS_SUCCESS) {
+      status =
+          publish_public_results_locked(current, active.options, active.result, active.transaction,
+                                        true, false, active.result_flags, active.completion_error);
+    }
+    active.completion_status = status;
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      active.result_flags = 0u;
+      current.inference.warm_checkpoint_ready = false;
+    }
+    active.completion_ready = true;
+  }
+
   Gfn2CudaExecutionIdentity snapshot() const noexcept {
     Gfn2CudaExecutionIdentity identity{};
     if (prepared == nullptr) return identity;
@@ -7121,6 +7157,7 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
       status = implementation.ensure_handles(error);
       if (status != XTBLOOM_STATUS_SUCCESS) return status;
+      const Gfn2CudaSccStartMode start_mode = public_scc_start_mode(options);
       std::unique_ptr<Gfn2CudaExecutionCache::Impl::Prepared> candidate;
       bool topology_candidate_pending = false;
       const auto abort_topology_candidate = [&]() noexcept {
@@ -7130,6 +7167,16 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
         }
       };
       Gfn2CudaExecutionCache::Impl::Prepared* working = implementation.prepared.get();
+      if (start_mode == Gfn2CudaSccStartMode::kWarm) {
+        if (working == nullptr) {
+          error = "CUDA strict WARM SCC start requires an existing compatible prepared runtime";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
+        if (!working->inference.warm_checkpoint_ready) {
+          error = "CUDA strict WARM SCC start requires a preceding successful public checkpoint";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
+      }
       if (require_prepared_topology) {
         if (working == nullptr) {
           error = "CUDA plan request has no prepared fixed-topology runtime";
@@ -7171,6 +7218,10 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
         }
       } else {
         working = nullptr;
+      }
+      if (start_mode == Gfn2CudaSccStartMode::kWarm && working == nullptr) {
+        error = "CUDA strict WARM SCC start requires the existing compatible topology and policy";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       if (!require_prepared_topology && working == nullptr) {
         const Gfn2CudaTopologyStagingDiagnostic staged =
@@ -7257,8 +7308,7 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
       numerical.charge_response_matrix = batch.charge_response_matrix;
       status = implementation.refresh_numerical_locked(*working, numerical, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
-      status =
-          implementation.execute_inference_locked(*working, Gfn2CudaSccStartMode::kFresh, error);
+      status = implementation.execute_inference_locked(*working, start_mode, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
       working->inference.warm_checkpoint_ready = false;
 
@@ -7337,16 +7387,7 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
           return XTBLOOM_STATUS_SUCCESS;
         }
         working->numerical_host_upload_completion.pending.store(false, std::memory_order_release);
-        status = implementation.accept_public_result_after_commit_locked(
-            *working, active.transaction, active.completion_error);
-        if (status == XTBLOOM_STATUS_SUCCESS) {
-          status = implementation.publish_public_results_locked(
-              *working, active.options, active.result, active.transaction, true, false,
-              active.result_flags, active.completion_error);
-        }
-        active.completion_ready = true;
-        active.completion_status = status;
-        if (status != XTBLOOM_STATUS_SUCCESS) active.result_flags = 0u;
+        implementation.finalize_active_request_after_commit_locked(*working);
       }
       return XTBLOOM_STATUS_SUCCESS;
     }();
@@ -7358,10 +7399,16 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
       if (transaction_status == XTBLOOM_STATUS_SUCCESS) {
         auto& active = implementation.active_request;
         active.deferred_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+        /* Device restoration is part of the accepted request contract. Close
+         * readiness before any potentially-throwing diagnostic allocation. */
+        if (implementation.prepared != nullptr) {
+          implementation.prepared->inference.warm_checkpoint_ready = false;
+        }
         if (!active.deferred_error.empty()) active.deferred_error += "; additionally, ";
         active.deferred_error += restore_error;
         if (active.completion_ready) {
           active.completion_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+          active.result_flags = 0u;
           if (!active.completion_error.empty()) active.completion_error += "; additionally, ";
           active.completion_error += active.deferred_error;
         }
@@ -7528,21 +7575,7 @@ xtbloom_status_t Gfn2CudaExecutionCache::probe(bool wait,
       }
     }
     if (!incomplete) {
-      status = impl_->accept_public_result_after_commit_locked(current, transaction,
-                                                               active.completion_error);
-      if (status == XTBLOOM_STATUS_SUCCESS) {
-        status = impl_->publish_public_results_locked(current, active.options, active.result,
-                                                      transaction, true, false, active.result_flags,
-                                                      active.completion_error);
-      }
-      active.completion_ready = true;
-      active.completion_status = status;
-      if (status != XTBLOOM_STATUS_SUCCESS) active.result_flags = 0u;
-      if (active.deferred_status != XTBLOOM_STATUS_SUCCESS) {
-        active.completion_status = active.deferred_status;
-        if (!active.completion_error.empty()) active.completion_error += "; additionally, ";
-        active.completion_error += active.deferred_error;
-      }
+      impl_->finalize_active_request_after_commit_locked(current);
     }
 
     std::string restore_error;

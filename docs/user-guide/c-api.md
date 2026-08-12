@@ -289,7 +289,13 @@ copied `xtbloom_batch_result_t.flags` field is deliberately not modified.
 Context enqueue may do bounded setup work for a first or changed topology,
 whereas a prepared same-topology path leaves inference and result publication
 ordered only on the context stream. CPU enqueue is a capability probe that
-returns `NOT_SUPPORTED` before inspecting descriptors.
+returns `NOT_SUPPORTED` before inspecting descriptors. ABI-v2 strict `WARM` is
+available on both CUDA enqueue entry points and obeys the same one-checkpoint
+contract as synchronous compute: it never falls back to `FRESH`, consumes the
+checkpoint in stream order, and publishes a replacement only after the complete
+batch succeeds. A deferred topology or execution failure invalidates the
+consumed checkpoint while preserving caller outputs under the normal
+transactional publication rules.
 
 ## xTBloom-owned result arenas and DLPack export
 

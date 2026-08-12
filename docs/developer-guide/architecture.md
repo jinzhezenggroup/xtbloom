@@ -263,7 +263,13 @@ same-topology admission does not fence the owner stream. Device same-shape
 topology is compared in stream order and a mismatch completes the request with
 `INVALID_ARGUMENT` instead of rebuilding the runtime. Accepted inference and
 caller-output publication remain asynchronous, and the caller's result
-descriptor is never used as an asynchronous flags channel.
+descriptor is never used as an asynchronous flags channel. Context and
+fixed-plan enqueue both support strict `WARM`: host-visible missing or
+incompatible state is rejected before admission, while device-resident
+topology comparison, checkpoint consumption, failure invalidation, and the next
+checkpoint publication remain ordered on the context stream. Any failed
+accepted request leaves the host checkpoint gate closed even if device work had
+already produced a candidate checkpoint.
 
 ## Layering
 
