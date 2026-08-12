@@ -2052,10 +2052,18 @@ int test_deterministic_debug_restricted_scc_gate() {
     const Gfn2SccLoopGraphBuildResult build = graph.build(fixture.binding);
     CHECK(build.success());
     CHECK(build.conditional_graph_ready());
+    CHECK(batch_size == 1 ? build.device_tail_graph_ready() : build.device_dispatch_chain_ready());
+    CHECK(batch_size == 1 ? !build.device_dispatch_chain_ready()
+                          : !build.device_tail_graph_ready());
 
     const auto run_and_compare = [&](DeterministicDebugSnapshot& snapshot) -> int {
       const Gfn2SccLoopLaunchResult launch = graph.launch(fixture.handles.stream());
       CHECK(launch.success());
+      CHECK(launch.execution_mode == (batch_size == 1
+                                          ? Gfn2SccLoopExecutionMode::kDeviceTailGraph
+                                          : Gfn2SccLoopExecutionMode::kDeviceDispatchChain));
+      CHECK(launch.submitted_graphs == 1u);
+      CHECK(launch.submitted_iterations == 0u);
       CHECK(download_deterministic_debug_snapshot(fixture.binding, fixture.handles.stream(),
                                                   snapshot));
       CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
