@@ -253,7 +253,7 @@ and diagnostic without retaining a native `.ncu-rep`.
   public/runtime parity, changed numerical values with the same Graph
   executable, and stable Graph-bound addresses.
 - Benchmark harness, changed-geometry helper, and evidence-size unit tests:
-  27/27 PASS.
+  28/28 PASS.
 - Raw profiler captures are absent from the bundle.
 - The latency matrix is one representative homogeneous gas workload with
   direct-device descriptors. It does not claim every workload, memory mode,

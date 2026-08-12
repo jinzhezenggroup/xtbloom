@@ -61,6 +61,24 @@ class ChangedGeometryPlanTest(unittest.TestCase):
         self.assertEqual(correctness["status"], "fail")
         self.assertEqual(MODULE.result_exit_status(document), 1)
 
+    def test_force_only_mismatch_is_reported(self) -> None:
+        """A force error fails even when every energy value agrees."""
+        cuda_output = {
+            "energies_hartree": [0.0],
+            "forces_hartree_per_bohr": [0.0, 0.0, 0.0],
+        }
+        cpu_output = SimpleNamespace(
+            energies=[0.0],
+            forces=[2.0 * MODULE.FORCE_ATOL_HARTREE_PER_BOHR, 0.0, 0.0],
+        )
+        comparison = MODULE.compare_sample(cuda_output, cpu_output, 1)
+        self.assertEqual(comparison["status"], "fail")
+        self.assertEqual(comparison["max_abs_energy_error_hartree"], 0.0)
+        self.assertGreater(
+            comparison["max_abs_force_error_hartree_per_bohr"],
+            MODULE.FORCE_ATOL_HARTREE_PER_BOHR,
+        )
+
     def test_successful_samples_return_zero(self) -> None:
         """A completely qualified sample set remains a successful command."""
         sample = {
