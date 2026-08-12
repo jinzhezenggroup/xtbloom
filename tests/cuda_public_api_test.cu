@@ -752,6 +752,17 @@ bool near(double actual, double expected, double absolute_tolerance, double rela
          absolute_tolerance + relative_tolerance * std::max(std::abs(actual), std::abs(expected));
 }
 
+bool is_quiet_nan(double value) noexcept {
+  std::uint64_t bits = 0u;
+  static_assert(sizeof(bits) == sizeof(value));
+  std::memcpy(&bits, &value, sizeof(bits));
+  constexpr std::uint64_t kExponentMask = UINT64_C(0x7ff0000000000000);
+  constexpr std::uint64_t kFractionMask = UINT64_C(0x000fffffffffffff);
+  constexpr std::uint64_t kQuietBit = UINT64_C(0x0008000000000000);
+  return (bits & kExponentMask) == kExponentMask && (bits & kFractionMask) != 0u &&
+         (bits & kQuietBit) != 0u;
+}
+
 int compare_values(const char* name, const std::vector<double>& actual,
                    const std::vector<double>& expected, double absolute_tolerance,
                    double relative_tolerance) {
@@ -1165,6 +1176,170 @@ int test_host_device_mixed_and_streams(std::int32_t device, PublicBatch& batch,
   g_scenario = "mixed-output/custom-stream";
   CHECK(execute_cuda_and_compare(custom_context.get(), batch, options, ResultLayout::kMixed,
                                  reference) == 0);
+  return 0;
+}
+
+/* A data-level numerical failure belongs to one ragged member, not the whole
+ * public call. Use geometries from the pinned H3+ and OH trace corpus, then
+ * establish the mixed terminal outcome independently through the public CPU
+ * path under the exact public options used below. Exercise the caller-visible
+ * transaction for every supported input/output placement: the healthy peer
+ * must retain CPU-reference values, while the nonconverged peer publishes its
+ * terminal status and complete quiet-NaN floating-point slices. Guard bytes
+ * around every caller allocation must remain intact. */
+int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cpu_context,
+                                      const xtbloom_compute_options_t& options) {
+  xtbloom_compute_options_t failure_options = options;
+  failure_options.max_scc_iterations = 3;
+  failure_options.charge_tolerance = 2.0e-5;
+  failure_options.energy_tolerance = 1.0e-6;
+  failure_options.electronic_temperature = XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
+
+  PublicBatch healthy;
+  healthy.atom_offsets = {0, 3};
+  healthy.atomic_numbers = {1, 1, 1};
+  healthy.positions = {
+      -0.47073898552969,
+      0.81534384004086,
+      0.0,
+      -0.47073898552969,
+      -0.81534384004086,
+      0.0,
+      0.94147797105939,
+      0.0,
+      0.0,
+  };
+  healthy.molecular_charges = {1.0};
+  healthy.unpaired_electrons = {0};
+  healthy.spin_channels = {1};
+  healthy.bind();
+  MaterializedResult healthy_reference;
+  g_scenario = "peer-failure/CPU-reference";
+  CHECK(run_cpu_reference(cpu_context, healthy, failure_options, healthy_reference) == 0);
+  CHECK(healthy_reference.iterations[0] == failure_options.max_scc_iterations);
+
+  PublicBatch batch;
+  batch.atom_offsets = {0, 3, 5};
+  batch.atomic_numbers = {1, 1, 1, 8, 1};
+  batch.positions = {
+      healthy.positions[0],
+      healthy.positions[1],
+      healthy.positions[2],
+      healthy.positions[3],
+      healthy.positions[4],
+      healthy.positions[5],
+      healthy.positions[6],
+      healthy.positions[7],
+      healthy.positions[8],
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.834,
+  };
+  batch.molecular_charges = {1.0, 0.0};
+  batch.unpaired_electrons = {0, 1};
+  batch.spin_channels = {1, 2};
+  batch.bind();
+
+  MaterializedResult failure_reference;
+  {
+    g_scenario = "peer-failure/CPU-mixed-reference";
+    ResultOwner result;
+    bind_inputs(batch, nullptr, InputLayout::kHost);
+    CUDA_CHECK(result.bind(batch, ResultLayout::kHost, failure_options.flags));
+    CHECK(xtbloom_compute(cpu_context, &batch.descriptor, &failure_options, &result.descriptor) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CUDA_CHECK(result.materialize(failure_reference));
+    bool guards = false;
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
+  }
+  CHECK(failure_reference.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(failure_reference.converged[0] == 1u);
+  CHECK(failure_reference.iterations[0] == healthy_reference.iterations[0]);
+  CHECK(near(failure_reference.energies[0], healthy_reference.energies[0], kEnergyAbsoluteTolerance,
+             kEnergyRelativeTolerance));
+  for (std::size_t atom = 0u; atom < 3u; ++atom) {
+    CHECK(near(failure_reference.atomic_charges[atom], healthy_reference.atomic_charges[atom],
+               kChargeAbsoluteTolerance, kChargeRelativeTolerance));
+    for (std::size_t axis = 0u; axis < 3u; ++axis) {
+      const std::size_t coordinate = 3u * atom + axis;
+      CHECK(near(failure_reference.forces[coordinate], healthy_reference.forces[coordinate],
+                 kForceAbsoluteTolerance, kForceRelativeTolerance));
+    }
+  }
+  CHECK(failure_reference.statuses[1] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
+  CHECK(failure_reference.converged[1] == 0u);
+  CHECK(failure_reference.iterations[1] == failure_options.max_scc_iterations);
+  CHECK(is_quiet_nan(failure_reference.energies[1]));
+  for (std::size_t atom = 3u; atom < 5u; ++atom) {
+    CHECK(is_quiet_nan(failure_reference.atomic_charges[atom]));
+    for (std::size_t axis = 0u; axis < 3u; ++axis) {
+      CHECK(is_quiet_nan(failure_reference.forces[3u * atom + axis]));
+    }
+  }
+
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+
+  DeviceBatchInputs device_inputs;
+  CUDA_CHECK(device_inputs.upload_all(batch));
+  const std::array<std::pair<InputLayout, ResultLayout>, 3> layouts{{
+      {InputLayout::kHost, ResultLayout::kHost},
+      {InputLayout::kDevice, ResultLayout::kDevice},
+      {InputLayout::kMixed, ResultLayout::kMixed},
+  }};
+  const std::array<const char*, 3> names{{"host", "device", "mixed"}};
+  std::string scenario;
+  for (std::size_t layout_index = 0u; layout_index < layouts.size(); ++layout_index) {
+    scenario = std::string("peer-failure/") + names[layout_index];
+    g_scenario = scenario.c_str();
+    const auto [input_layout, result_layout] = layouts[layout_index];
+    bind_inputs(batch, input_layout == InputLayout::kHost ? nullptr : &device_inputs, input_layout);
+    if (input_layout != InputLayout::kHost) {
+      CHECK(verify_input_layout(batch, input_layout, false) == 0);
+    }
+
+    ResultOwner owner;
+    CUDA_CHECK(owner.bind(batch, result_layout, failure_options.flags));
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &failure_options, &owner.descriptor) ==
+          XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult actual;
+    CUDA_CHECK(owner.materialize(actual));
+    bool guards = false;
+    CUDA_CHECK(owner.guards_intact(guards));
+    CHECK(guards);
+
+    CHECK(actual.flags == failure_reference.flags);
+    CHECK(actual.statuses == failure_reference.statuses);
+    CHECK(actual.converged == failure_reference.converged);
+    CHECK(actual.iterations == failure_reference.iterations);
+    CHECK(near(actual.energies[0], failure_reference.energies[0], kEnergyAbsoluteTolerance,
+               kEnergyRelativeTolerance));
+    for (std::size_t atom = 0u; atom < 3u; ++atom) {
+      CHECK(near(actual.atomic_charges[atom], failure_reference.atomic_charges[atom],
+                 kChargeAbsoluteTolerance, kChargeRelativeTolerance));
+      for (std::size_t axis = 0u; axis < 3u; ++axis) {
+        const std::size_t coordinate = 3u * atom + axis;
+        CHECK(near(actual.forces[coordinate], failure_reference.forces[coordinate],
+                   kForceAbsoluteTolerance, kForceRelativeTolerance));
+      }
+    }
+
+    CHECK(is_quiet_nan(actual.energies[1]));
+    for (std::size_t atom = 3u; atom < 5u; ++atom) {
+      CHECK(is_quiet_nan(actual.atomic_charges[atom]));
+      for (std::size_t axis = 0u; axis < 3u; ++axis) {
+        CHECK(is_quiet_nan(actual.forces[3u * atom + axis]));
+      }
+    }
+  }
   return 0;
 }
 
@@ -2270,6 +2445,10 @@ int main(int argc, char** argv) {
   }
 
   if (const int line = test_host_device_mixed_and_streams(device, batch, options, reference);
+      line != 0) {
+    return line;
+  }
+  if (const int line = test_public_peer_failure_isolated(device, cpu_context.get(), options);
       line != 0) {
     return line;
   }
