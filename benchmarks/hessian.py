@@ -26,8 +26,11 @@ import math
 import os
 import platform
 import resource
+import signal
 import statistics
+import subprocess
 import sys
+import tempfile
 import time
 import zlib
 from dataclasses import dataclass
@@ -257,6 +260,117 @@ class HessianEngine:
         """Release resources and propagate any benchmark exception."""
         self.close()
         return False
+
+
+def run_isolated_coordinate(
+    command: Sequence[str],
+    *,
+    output_json: Path,
+) -> dict[str, Any]:
+    """Run one engine coordinate in a subprocess and retain hard failures.
+
+    Native numerical backends may abort the interpreter during teardown or on
+    device OOM, which cannot be converted into an unavailable row from inside
+    that process.  The parent therefore owns the final artifact and imports a
+    completed child row only after the child exits successfully.  A signal or
+    nonzero status remains explicit evidence instead of losing the rest of the
+    requested matrix.
+    """
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    child_row: dict[str, Any] | None = None
+    if output_json.is_file():
+        document = json.loads(output_json.read_text(encoding="utf-8"))
+        rows = document.get("rows") or []
+        if len(rows) != 1:
+            raise BenchmarkError("isolated coordinate produced an invalid row count")
+        child_row = rows[0]
+    if completed.returncode == 0 and child_row is not None:
+        child_row["isolated_command"] = list(command)
+        return child_row
+
+    if completed.returncode < 0:
+        signal_number = -completed.returncode
+        try:
+            signal_name = signal.Signals(signal_number).name
+        except ValueError:
+            signal_name = f"signal_{signal_number}"
+        reason = f"child terminated by {signal_name} ({signal_number})"
+    else:
+        reason = f"child exited with status {completed.returncode}"
+    diagnostic = completed.stderr.strip() or completed.stdout.strip()
+    if diagnostic:
+        reason += f": {diagnostic[-4000:]}"
+    row = dict(child_row or {})
+    timing = row.pop("timing", None) or {}
+    row.pop("correctness", None)
+    row.pop("final_hessian_binary64_le_zlib_base64", None)
+    row["availability"] = "unavailable"
+    row["unavailable_reason"] = reason
+    row["completed_samples_ms"] = timing.get("samples_ms", [])
+    row["isolated_command"] = list(command)
+    return row
+
+
+def coordinate_command(
+    args: argparse.Namespace,
+    *,
+    engine: str,
+    displacement_batch_size: int | None,
+    output_json: Path,
+    output_csv: Path,
+) -> list[str]:
+    """Reconstruct one exact child command from validated public options."""
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--engines",
+        engine,
+        "--device-id",
+        str(args.device_id),
+        "--cpu-threads",
+        str(args.cpu_threads),
+        "--warmups",
+        str(args.warmups),
+        "--repetitions",
+        str(args.repetitions),
+        "--step",
+        repr(args.step),
+        "--scc-max-iterations",
+        str(args.scc_max_iterations),
+        "--scc-charge-tolerance",
+        repr(args.scc_charge_tolerance),
+        "--scc-energy-tolerance",
+        repr(args.scc_energy_tolerance),
+        "--hessian-atol",
+        repr(args.hessian_atol),
+        "--symmetry-atol",
+        repr(args.symmetry_atol),
+        "--acoustic-atol",
+        repr(args.acoustic_atol),
+        "--repeatability-atol",
+        repr(args.repeatability_atol),
+        "--output-json",
+        str(output_json),
+        "--output-csv",
+        str(output_csv),
+        "--coordinate-child",
+    ]
+    if displacement_batch_size is not None:
+        command.extend(["--displacement-batch-sizes", str(displacement_batch_size)])
+    for option, value in (
+        ("--library", args.library),
+        ("--xtb-library", args.xtb_library),
+        ("--xtb-source", args.xtb_source),
+        ("--dxtb-source", args.dxtb_source),
+        ("--reference-json", args.reference_json),
+    ):
+        if value is not None:
+            command.extend([option, str(value.resolve())])
+    if args.make_reference:
+        command.append("--make-reference")
+    if args.allow_dirty_evidence:
+        command.append("--allow-dirty-evidence")
+    return command
 
 
 class XTBloomHessianEngine(HessianEngine):
@@ -976,6 +1090,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--make-reference", action="store_true")
     parser.add_argument("--allow-dirty-evidence", action="store_true")
     parser.add_argument("--fail-on-correctness", action="store_true")
+    parser.add_argument(
+        "--coordinate-child", action="store_true", help=argparse.SUPPRESS
+    )
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-csv", type=Path, required=True)
     return parser
@@ -1044,13 +1161,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else (None,)
             )
             for batch_size in batches:
-                row = run_row(
-                    engine,
-                    args=args,
-                    molecule=molecule,
-                    displacement_batch_size=batch_size,
-                    reference=reference,
-                )
+                if args.coordinate_child:
+                    row = run_row(
+                        engine,
+                        args=args,
+                        molecule=molecule,
+                        displacement_batch_size=batch_size,
+                        reference=reference,
+                    )
+                else:
+                    with tempfile.TemporaryDirectory(
+                        prefix="xtbloom-hessian-coordinate-"
+                    ) as directory:
+                        child_json = Path(directory) / "coordinate.json"
+                        child_csv = Path(directory) / "coordinate.csv"
+                        command = coordinate_command(
+                            args,
+                            engine=engine,
+                            displacement_batch_size=batch_size,
+                            output_json=child_json,
+                            output_csv=child_csv,
+                        )
+                        row = run_isolated_coordinate(
+                            command,
+                            output_json=child_json,
+                        )
+                        row.setdefault("engine", engine)
+                        row.setdefault("natoms", NATOMS)
+                        row.setdefault("molecule", molecule.name)
+                        row.setdefault("coordinate_count", COORDINATE_COUNT)
+                        row.setdefault("displacement_count", DISPLACEMENT_COUNT)
+                        row.setdefault("displacement_batch_size", batch_size)
                 rows.append(row)
                 availability = row["availability"]
                 timing = row.get("timing") or {}

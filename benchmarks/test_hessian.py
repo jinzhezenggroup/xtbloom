@@ -7,6 +7,7 @@ import hashlib
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -184,6 +185,37 @@ class HessianBenchmarkTest(unittest.TestCase):
             csv_text = csv_path.read_text()
             self.assertIn("dxtb-cuda-ad", csv_text)
             self.assertIn("RuntimeError: OOM", csv_text)
+
+    def test_isolated_coordinate_rejects_artifact_from_crashed_child(self) -> None:
+        """Do not publish timings when native teardown terminates the process."""
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "coordinate.json"
+            hb.write_json(
+                output,
+                {
+                    "rows": [
+                        {
+                            "engine": "xtbloom-cpu",
+                            "availability": "available",
+                            "timing": hb.timing_summary([12.0]),
+                            "correctness": {"status": "pass"},
+                            "final_hessian_binary64_le_zlib_base64": {"payload": True},
+                        }
+                    ]
+                },
+            )
+            completed = mock.Mock(returncode=-11, stdout="", stderr="native crash")
+            with mock.patch.object(hb.subprocess, "run", return_value=completed):
+                row = hb.run_isolated_coordinate(
+                    ["python", "coordinate"],
+                    output_json=output,
+                )
+            self.assertEqual(row["availability"], "unavailable")
+            self.assertIn("SIGSEGV", row["unavailable_reason"])
+            self.assertEqual(row["completed_samples_ms"], [12.0])
+            self.assertNotIn("timing", row)
+            self.assertNotIn("correctness", row)
+            self.assertNotIn("final_hessian_binary64_le_zlib_base64", row)
 
     def test_validate_args_refuses_existing_artifact(self) -> None:
         """Never replace a prior raw timing artifact implicitly."""
