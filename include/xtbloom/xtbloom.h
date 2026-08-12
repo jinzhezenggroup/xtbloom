@@ -460,9 +460,10 @@ typedef struct xtbloom_batch {
  * A compatible identity is a batch whose topology and compute policy
  * (requested-property flags, molecular charges, unpaired electrons, spin
  * channels, point-charge and periodic structure, SCC tolerances, maximum
- * iterations, and electronic temperature) exactly match the previous fully
- * converged call on the same context. This is the same compute-options
- * identity used by CPU and CUDA. Geometry is not part of the identity: a WARM
+ * iterations, electronic temperature, mixer algorithm/history/damping, and
+ * determinism policy) exactly match the previous fully converged call on the
+ * same context. This is the same compute-options identity used by CPU and
+ * CUDA. Geometry is not part of the identity: a WARM
  * call reuses the previous converged electronic state as the initial SCC guess
  * for the new coordinates and reconverges. A WARM request with no such
  * compatible fully converged predecessor (first call, changed topology or
@@ -885,8 +886,9 @@ XTBLOOM_API xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context,
  * descriptor and a compute policy. The plan binds the immutable topology (atom
  * offsets, element numbers, spin channels, point-charge and response structure)
  * and the numerical policy (model, requested properties, SCC tolerances,
- * iteration limit, and electronic temperature) to the context backend and
- * reserves its reusable host/device workspace. Geometry (positions and
+ * iteration limit, electronic temperature, mixer algorithm/history/damping,
+ * and determinism) to the context backend and reserves its reusable
+ * host/device workspace. Geometry (positions and
  * point-charge positions/values) is intentionally not part of the plan and
  * may change per xtbloom_plan_compute call.
  *

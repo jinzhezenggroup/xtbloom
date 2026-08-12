@@ -159,7 +159,8 @@ prefix. CPU and CUDA both support strict `WARM`: it consumes the checkpoint from
 converged compatible batch call on the same context and never falls back to a fresh solve. A
 compatible identity covers the complete topology and compute policy (requested-property flags;
 molecular charge, spin, and unpaired electrons; point-charge and periodic structure; SCC tolerances;
-iteration limit; and electronic temperature). Geometry is not part of the identity, so a WARM call
+iteration limit; electronic temperature; mixer algorithm, history, and damping; and determinism).
+Geometry is not part of the identity, so a WARM call
 reuses the previous converged electronic state as the initial SCC guess for the new coordinates and
 reconverges;
 CUDA additionally keys its checkpoint to a geometry epoch and keeps modifying-Broyden history only
@@ -243,7 +244,8 @@ per-system plans, runs the batch, and publishes outputs on one context transacti
 that reuse one ragged topology and compute policy across many geometries, `xtbloom_plan_create`
 binds the immutable topology (atom offsets, element numbers, molecular charges, unpaired electrons,
 spin channels, and point-charge/response structure) plus the model, requested properties, SCC
-tolerances, iteration limit, and electronic temperature at creation time. `FRESH` versus `WARM`
+tolerances, iteration limit, electronic temperature, mixer algorithm/history/damping, and
+determinism at creation time. `FRESH` versus `WARM`
 remains a per-call choice. Geometry is not part of the plan, so repeated `xtbloom_plan_compute`
 calls can change positions, point-charge positions and values, periodic `b/A`
 values, and CPU electric-field attachment values/presence freely on `FRESH`
