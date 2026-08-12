@@ -33,6 +33,7 @@ const {
   clampProgressPercent,
   createDebouncedPublisher,
   createRevisionOwner,
+  createSmilesWorkerClient,
   fetchResourceBatch,
   initializeWorker,
   isRetryableLoadError,
@@ -78,7 +79,7 @@ const I18N = {
     smiles_ready_status: "结构生成器已就绪。将补全显式氢并执行 MMFF94 预优化。",
     smiles_retry_button: "重试下载",
     smiles_generate_button: "正在生成…",
-    smiles_generate_status: "正在生成显式氢三维构象并进行 MMFF94 预优化…",
+    smiles_generate_status: "正在生成显式氢三维构象并进行 MMFF94 预优化（复杂分子最长约两分钟）…",
     smiles_generated: "已生成 {{n}} 个原子的三维结构；形式电荷 {{q}}。",
     smiles_load_failed: "SMILES 结构生成资源加载失败：{{e}}",
     smiles_url_optimizing: "已从地址读取 SMILES，正在自动执行 xTBloom 几何优化…",
@@ -176,7 +177,7 @@ const I18N = {
     smiles_err_mmff: "MMFF94 预优化失败。",
     smiles_err_coords: "结构生成器返回了非有限坐标。",
     smiles_err_library: "SMILES 结构生成器尚未就绪。",
-    smiles_err_timeout: "SMILES 三维结构生成超时，请缩短分子或重试。",
+    smiles_err_timeout: "SMILES 三维结构生成超过两分钟；生成器正在自动恢复，请稍后重试。",
     smiles_err_unknown: "SMILES 三维结构生成失败。",
     err_unknown: "未知错误",
   },
@@ -197,7 +198,7 @@ const I18N = {
     smiles_ready_status: "Structure generator ready. Explicit hydrogens and an MMFF94 pre-relaxation will be applied.",
     smiles_retry_button: "Retry download",
     smiles_generate_button: "Generating…",
-    smiles_generate_status: "Generating an explicit-hydrogen 3D conformer and running MMFF94 pre-relaxation…",
+    smiles_generate_status: "Generating an explicit-hydrogen 3D conformer and running MMFF94 pre-relaxation (up to about two minutes for complex molecules)…",
     smiles_generated: "Generated a {{n}}-atom 3D structure with formal charge {{q}}.",
     smiles_load_failed: "Could not load the SMILES structure generator: {{e}}",
     smiles_url_optimizing: "SMILES read from the URL; running automatic xTBloom geometry optimization…",
@@ -295,7 +296,7 @@ const I18N = {
     smiles_err_mmff: "MMFF94 pre-optimization failed.",
     smiles_err_coords: "The structure generator returned non-finite coordinates.",
     smiles_err_library: "The SMILES structure generator is not ready.",
-    smiles_err_timeout: "SMILES 3D generation timed out; use a smaller molecule or retry.",
+    smiles_err_timeout: "SMILES 3D generation exceeded two minutes; the generator is recovering automatically, so retry shortly.",
     smiles_err_unknown: "SMILES 3D generation failed.",
     err_unknown: "Unknown error",
   },
@@ -363,12 +364,9 @@ let engineLoadController = null;
 
 /* The optional OpenChemLib worker has an independent lifecycle: its CDN
  * download or conformer search must never gate ordinary XYZ/xTBloom controls. */
-let smilesWorker = null;
+let smilesClient = null;
 let smilesResourceState = "loading"; /* loading | ready | error */
 let smilesBusy = false;
-let smilesMsgSeq = 0;
-const smilesPending = new Map();
-let smilesLoadTimer = null;
 let smilesStatusKey = "smiles_download_status";
 let smilesStatusVars = null;
 let smilesStatusTone = "";
@@ -420,11 +418,6 @@ function syncSmilesControls() {
   status.classList.toggle("err", smilesStatusTone === "err");
 }
 
-function rejectSmilesPending(error) {
-  for (const entry of smilesPending.values()) entry.reject(error);
-  smilesPending.clear();
-}
-
 function supersededSmilesError() {
   return new DOMException("SMILES workflow superseded", "AbortError");
 }
@@ -433,117 +426,64 @@ function requireCurrentSmilesWorkflow(revision) {
   if (!smilesWorkflow.isCurrent(revision)) throw supersededSmilesError();
 }
 
-/* Reset is a publication boundary: pending worker replies and a deferred URL
- * workflow may finish, but neither may repopulate the restored form. Rejecting
- * the local promises also frees the UI immediately without restarting the
- * independently loaded OpenChemLib worker. */
+/* Reset and input edits are publication boundaries. OpenChemLib performs one
+ * synchronous task per Worker, so cancelling also restarts the Worker to keep
+ * abandoned work from delaying the next request. */
 function invalidateSmilesWork() {
   smilesWorkflow.advance();
   urlSmiles = null;
   urlSmilesStarted = true;
-  rejectSmilesPending(supersededSmilesError());
+  if (smilesClient) smilesClient.cancel(supersededSmilesError());
   smilesBusy = false;
 }
 
-function failSmilesWorker(error) {
-  if (smilesLoadTimer !== null) {
-    clearTimeout(smilesLoadTimer);
-    smilesLoadTimer = null;
-  }
-  if (smilesWorker) smilesWorker.terminate();
-  smilesWorker = null;
-  smilesResourceState = "error";
-  smilesBusy = false;
-  rejectSmilesPending(error);
-  setSmilesStatus("smiles_load_failed", { e: error.message }, "err");
-}
-
-function handleSmilesWorkerMessage(message) {
-  if (message.type === "ready") {
-    if (smilesLoadTimer !== null) {
-      clearTimeout(smilesLoadTimer);
-      smilesLoadTimer = null;
-    }
+function handleSmilesClientState(event) {
+  if (event.state === "ready") {
     smilesResourceState = "ready";
-    setSmilesStatus("smiles_ready_status", null, "ok");
+    if (event.recoveryStatus) {
+      setSmilesStatus(
+        event.recoveryStatus.key,
+        event.recoveryStatus.vars || null,
+        event.recoveryStatus.tone || "",
+      );
+    } else {
+      setSmilesStatus("smiles_ready_status", null, "ok");
+    }
     void maybeRunUrlSmiles();
     return;
   }
-  if (message.type === "load-error") {
-    failSmilesWorker(new Error(String(message.error || "OpenChemLib load failed")));
+  if (event.state === "loading") {
+    smilesResourceState = "loading";
+    smilesBusy = false;
+    setSmilesStatus("smiles_download_status");
     return;
   }
-  if (message.type !== "result") return;
-  const entry = smilesPending.get(message.id);
-  if (!entry) return;
-  smilesPending.delete(message.id);
-  if (message.ok) {
-    entry.resolve(message.result);
-  } else {
-    const error = new Error(String(message.error || "SMILES generation failed"));
-    error.code = message.errorCode || "smiles_err_unknown";
-    entry.reject(error);
+  if (event.state === "error") {
+    smilesResourceState = "error";
+    smilesBusy = false;
+    setSmilesStatus("smiles_load_failed", { e: event.error.message }, "err");
   }
 }
 
 function startSmilesWorker() {
-  if (smilesLoadTimer !== null) clearTimeout(smilesLoadTimer);
-  if (smilesWorker) smilesWorker.terminate();
-  rejectSmilesPending(new Error("SMILES worker restarted"));
-  smilesResourceState = "loading";
-  smilesBusy = false;
-  setSmilesStatus("smiles_download_status");
-  try {
-    smilesWorker = new Worker(new URL("./smiles_worker.js", import.meta.url), { type: "module" });
-  } catch (error) {
-    failSmilesWorker(error instanceof Error ? error : new Error(String(error)));
-    return;
-  }
-  smilesWorker.onmessage = (event) => handleSmilesWorkerMessage(event.data);
-  smilesWorker.onerror = (event) => {
-    failSmilesWorker(new Error((event && event.message) || "SMILES worker error"));
-  };
-  smilesLoadTimer = setTimeout(() => {
-    failSmilesWorker(new Error("OpenChemLib resource download timed out"));
-  }, 60000);
-}
-
-function callSmilesWorker(smiles) {
-  return new Promise((resolve, reject) => {
-    if (
-      smilesResourceState !== "ready" || !smilesWorker ||
-      typeof smilesWorker.postMessage !== "function"
-    ) {
-      const error = new Error("OpenChemLib is not ready");
-      error.code = "smiles_err_library";
-      reject(error);
-      return;
-    }
-    const id = ++smilesMsgSeq;
-    smilesPending.set(id, { resolve, reject });
-    try {
-      smilesWorker.postMessage({ type: "generate", id, smiles });
-    } catch (error) {
-      smilesPending.delete(id);
-      reject(error);
-    }
-  });
-}
-
-async function requestSmilesGeometry(smiles) {
-  const GENERATION_TIMEOUT_MS = 30000;
-  try {
-    return await withTimeout(callSmilesWorker(smiles), GENERATION_TIMEOUT_MS, () => {
-      const error = new Error("SMILES generation timed out");
-      error.code = "smiles_err_timeout";
-      failSmilesWorker(error);
+  if (!smilesClient) {
+    smilesClient = createSmilesWorkerClient({
+      createWorker: () => new Worker(
+        new URL("./smiles_worker.js", import.meta.url),
+        { type: "module" },
+      ),
+      onStateChange: handleSmilesClientState,
+      /* The adapter accepts up to 512 explicit-H atoms. Flexible molecules can
+       * legitimately exceed 30 seconds on phones, while two minutes still
+       * bounds a pathological conformer search. */
+      generationTimeoutMs: 120000,
     });
-  } catch (error) {
-    if (error instanceof Error && error.message === "TIME_OUT") {
-      error.code = "smiles_err_timeout";
-    }
-    throw error;
   }
+  smilesClient.start();
+}
+
+function requestSmilesGeometry(smiles) {
+  return smilesClient.request(smiles);
 }
 
 function smilesErrorText(error) {
@@ -1174,6 +1114,7 @@ async function generateSmilesGeometry(workflowRevision = smilesWorkflow.capture(
   try {
     const result = await requestSmilesGeometry(smiles);
     requireCurrentSmilesWorkflow(workflowRevision);
+    if ($("smiles").value.trim() !== smiles) throw supersededSmilesError();
     applyGeneratedGeometry(result);
     setSmilesStatus(
       "smiles_generated",
@@ -1244,7 +1185,13 @@ async function maybeRunUrlSmiles() {
   }
 }
 
-$("smiles").addEventListener("input", syncSmilesControls);
+$("smiles").addEventListener("input", () => {
+  if (smilesBusy) {
+    invalidateSmilesWork();
+    syncEngineControls();
+  }
+  syncSmilesControls();
+});
 $("smiles").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !$("smiles-generate").disabled) {
     event.preventDefault();

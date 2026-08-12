@@ -79,6 +79,15 @@ try {
   const acetate = smilesToGeometry(OCL, "CC(=O)[O-]");
   assert.equal(inspectGeometry(acetate, 7, -1).filter((x) => x === "H").length, 3);
 
+  /* Regression for issue #369: this flexible drug-sized molecule is valid and
+   * must not be treated as a parse/conformer failure merely because slower
+   * browsers need longer than the old fixed 30-second page budget. */
+  const remdesivir = smilesToGeometry(
+    OCL,
+    "Nc3ncnn2c3ccc2C(C#N)(C1O)OC(C1O)CO[P](=O)(NC(C)C(=O)OCC(CC)CC)Oc4ccccc4",
+  );
+  assert.equal(inspectGeometry(remdesivir, 77, 0).filter((x) => x === "H").length, 35);
+
   assert.throws(
     () => smilesToGeometry(OCL, "not-a-smiles"),
     (error) => error && error.code === "smiles_err_parse",

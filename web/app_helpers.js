@@ -375,6 +375,198 @@ export function createRevisionOwner() {
   };
 }
 
+/* Own the optional OpenChemLib Worker as one restartable generation. SMILES
+ * conversion is synchronous inside the Worker, so cancellation must terminate
+ * that Worker rather than merely abandon the page-side Promise. Capturing both
+ * the Worker object and its generation prevents queued events from an older
+ * instance from changing the replacement's state. */
+export function createSmilesWorkerClient({
+  createWorker,
+  onStateChange = () => {},
+  loadTimeoutMs = 60000,
+  generationTimeoutMs = 120000,
+  setTimer = (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimer = (timer) => clearTimeout(timer),
+} = {}) {
+  if (typeof createWorker !== "function") {
+    throw new TypeError("createWorker must be a function");
+  }
+
+  let worker = null;
+  let state = "idle";
+  let generation = 0;
+  let loadTimer = null;
+  let requestSequence = 0;
+  let disposed = false;
+  let recoveryStatus = null;
+  const pending = new Map();
+
+  function codedError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+
+  function clearLoadTimer() {
+    if (loadTimer !== null) {
+      clearTimer(loadTimer);
+      loadTimer = null;
+    }
+  }
+
+  function publishState(nextState, detail = {}) {
+    state = nextState;
+    onStateChange({ state: nextState, recoveryStatus, ...detail });
+  }
+
+  function rejectPending(error) {
+    for (const entry of pending.values()) {
+      clearTimer(entry.timer);
+      entry.reject(error);
+    }
+    pending.clear();
+  }
+
+  function terminateCurrent(error) {
+    clearLoadTimer();
+    if (worker) worker.terminate();
+    worker = null;
+    rejectPending(error);
+  }
+
+  function failWorker(candidate, workerGeneration, error) {
+    if (candidate !== worker || workerGeneration !== generation || disposed) return;
+    terminateCurrent(error);
+    publishState("error", { error });
+  }
+
+  function start(
+    reason = "start",
+    pendingError = new DOMException("SMILES worker restarted", "AbortError"),
+    statusToRestore = null,
+  ) {
+    if (disposed) throw new Error("SMILES worker client is disposed");
+    generation += 1;
+    terminateCurrent(pendingError);
+    recoveryStatus = statusToRestore;
+    publishState("loading", { reason });
+
+    let candidate;
+    try {
+      candidate = createWorker();
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      publishState("error", { error });
+      return;
+    }
+    worker = candidate;
+    const workerGeneration = generation;
+
+    candidate.onmessage = (event) => {
+      if (candidate !== worker || workerGeneration !== generation || disposed) return;
+      const message = event.data;
+      if (!message || typeof message !== "object") return;
+      if (message.type === "ready") {
+        clearLoadTimer();
+        publishState("ready", { version: message.version });
+        recoveryStatus = null;
+        return;
+      }
+      if (message.type === "load-error") {
+        failWorker(
+          candidate,
+          workerGeneration,
+          new Error(String(message.error || "OpenChemLib load failed")),
+        );
+        return;
+      }
+      if (message.type !== "result") return;
+      const entry = pending.get(message.id);
+      if (!entry) return;
+      pending.delete(message.id);
+      clearTimer(entry.timer);
+      if (message.ok) {
+        entry.resolve(message.result);
+      } else {
+        entry.reject(codedError(
+          message.errorCode || "smiles_err_unknown",
+          String(message.error || "SMILES generation failed"),
+        ));
+      }
+    };
+    candidate.onerror = (event) => {
+      failWorker(
+        candidate,
+        workerGeneration,
+        new Error((event && event.message) || "SMILES worker error"),
+      );
+    };
+    loadTimer = setTimer(() => {
+      failWorker(
+        candidate,
+        workerGeneration,
+        new Error("OpenChemLib resource download timed out"),
+      );
+    }, loadTimeoutMs);
+  }
+
+  function request(smiles) {
+    if (state !== "ready" || !worker || typeof worker.postMessage !== "function") {
+      return Promise.reject(codedError("smiles_err_library", "OpenChemLib is not ready"));
+    }
+    const id = ++requestSequence;
+    const candidate = worker;
+    const workerGeneration = generation;
+    return new Promise((resolve, reject) => {
+      const timer = setTimer(() => {
+        const entry = pending.get(id);
+        if (!entry || candidate !== worker || workerGeneration !== generation) return;
+        pending.delete(id);
+        const error = codedError("smiles_err_timeout", "SMILES generation timed out");
+        entry.reject(error);
+        /* OpenChemLib cannot interrupt its synchronous conformer search. Kill
+         * the abandoned computation and transparently prepare a clean Worker
+         * so the next click is a real generation retry. */
+        start("generation-timeout", error, {
+          key: "smiles_err_timeout",
+          tone: "err",
+        });
+      }, generationTimeoutMs);
+      pending.set(id, { resolve, reject, timer });
+      try {
+        candidate.postMessage({ type: "generate", id, smiles });
+      } catch (cause) {
+        pending.delete(id);
+        clearTimer(timer);
+        reject(cause);
+      }
+    });
+  }
+
+  function cancel(error = new DOMException("SMILES generation cancelled", "AbortError")) {
+    if (pending.size === 0) return false;
+    start("cancelled", error);
+    return true;
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    generation += 1;
+    terminateCurrent(new DOMException("SMILES worker disposed", "AbortError"));
+    state = "disposed";
+  }
+
+  return {
+    start,
+    request,
+    cancel,
+    dispose,
+    getState: () => state,
+    hasPending: () => pending.size !== 0,
+  };
+}
+
 /* Debounce only publication, not validation. cancel() invalidates the queued
  * callback even if a test scheduler later invokes the cleared timer, matching
  * browser races where an already-queued callback may still run. */
