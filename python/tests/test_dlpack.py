@@ -11,11 +11,13 @@ deterministic fakes in :mod:`_dlpack_fakes`.
 from __future__ import annotations
 
 import ctypes
+import gc
+import weakref
 
 import numpy as np
 import pytest
 import xtbloom._dlpack as dlpack
-from _dlpack_fakes import FakeArray
+from _dlpack_fakes import DELETED, FakeArray
 from xtbloom import library
 from xtbloom.exceptions import XTBloomNotSupportedError, XTBloomValueError
 
@@ -141,14 +143,49 @@ def test_numpy_writable_required_accepts_writable() -> None:
 
 
 def test_fake_deleter_runs_exactly_once_on_release() -> None:
-    """Releasing a committed view invokes the producer deleter once."""
+    """Release invokes the deleter once and drops managed metadata storage."""
     fake = FakeArray(np.arange(3.0))
     view = _consume(fake, shape=(3,))
     assert view.pointer == int(fake._data.ctypes.data)
+    assert fake.active_export_count() == 1
     view.release()
     assert fake.deleted_count() == 1
+    assert fake.active_export_count() == 0
     view.release()  # idempotent
     assert fake.deleted_count() == 1
+
+
+def test_fake_multiple_exports_release_their_own_metadata() -> None:
+    """Concurrent managed tensors retain and release independent metadata."""
+    fake = FakeArray(np.arange(3.0))
+    first = _consume(fake, shape=(3,))
+    second = _consume(fake, shape=(3,))
+    assert fake.active_export_count() == 2
+    second.release()
+    assert fake.active_export_count() == 1
+    first.release()
+    assert fake.active_export_count() == 0
+    assert fake.deleted_count() == 2
+
+
+def test_fake_raw_capsule_outlives_producer_and_cleans_up() -> None:
+    """An unconsumed managed tensor owns its data and metadata without producer."""
+    fake = FakeArray(np.arange(3.0))
+    producer_id = fake._id
+    export_owners = fake._export_owners
+    producer_ref = weakref.ref(fake)
+    capsule = fake.__dlpack__()
+    assert len(export_owners) == 1
+
+    del fake
+    gc.collect()
+    assert producer_ref() is None
+    assert len(export_owners) == 1
+
+    del capsule
+    gc.collect()
+    assert len(export_owners) == 0
+    assert DELETED[producer_id] == 1
 
 
 def test_fake_producer_stays_alive_until_release() -> None:
@@ -170,7 +207,8 @@ def test_fake_legacy_capsule_is_consumed_as_readonly() -> None:
     with pytest.raises(BufferError, match="read-only"):
         _consume(fake, shape=(3,), writable_required=True)
     view.release()
-    assert fake.deleted_count() == 1
+    assert fake.deleted_count() == 2
+    assert fake.active_export_count() == 0
 
 
 def test_fake_legacy_writable_hint_allows_mutable_output() -> None:
@@ -191,7 +229,8 @@ def test_fake_versioned_readonly_flag() -> None:
     fake = FakeArray(np.arange(3.0), readonly=True)
     with pytest.raises(BufferError, match="read-only"):
         _consume(fake, shape=(3,), writable_required=True)
-    assert fake.deleted_count() == 0  # never committed
+    assert fake.deleted_count() == 1
+    assert fake.active_export_count() == 0
 
 
 def test_fake_unsupported_major_version_is_rejected() -> None:
@@ -199,7 +238,8 @@ def test_fake_unsupported_major_version_is_rejected() -> None:
     fake = FakeArray(np.arange(3.0), major_version=2)
     with pytest.raises(BufferError, match="major version"):
         _consume(fake, shape=(3,))
-    assert fake.deleted_count() == 0
+    assert fake.deleted_count() == 1
+    assert fake.active_export_count() == 0
 
 
 def test_fake_copy_false_rejects_copied_flag() -> None:
@@ -356,7 +396,8 @@ def test_fake_unaligned_byte_offset_is_rejected() -> None:
     fake = FakeArray(np.arange(8.0), byte_offset=4)
     with pytest.raises(BufferError, match="aligned"):
         _consume(fake, shape=(8,))
-    assert fake.deleted_count() == 0
+    assert fake.deleted_count() == 1
+    assert fake.active_export_count() == 0
 
 
 def test_naturally_aligned_int32_slice_is_accepted() -> None:

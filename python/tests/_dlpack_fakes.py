@@ -87,22 +87,86 @@ def _setup_pyapi() -> None:
 
 _setup_pyapi()
 
+_CAPSULE_NAME = b"dltensor"
+_CAPSULE_NAME_VERSIONED = b"dltensor_versioned"
+
+
+def _raw_pyapi_function(
+    name: str, restype: object, *argtypes: object
+) -> ctypes._CFuncPtr:
+    """Build a raw-address CPython API call without changing shared prototypes."""
+    address = ctypes.cast(getattr(ctypes.pythonapi, name), ctypes.c_void_p).value
+    assert address is not None
+    return ctypes.CFUNCTYPE(restype, *argtypes)(address)
+
+
+_RAW_CAPSULE_GET_NAME = _raw_pyapi_function(
+    "PyCapsule_GetName", ctypes.c_char_p, ctypes.c_void_p
+)
+_RAW_CAPSULE_GET_POINTER = _raw_pyapi_function(
+    "PyCapsule_GetPointer", ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p
+)
+
 # Unique producer id -> deleter invocation count.
 DELETED: dict[int, int] = {}
 
 _CALLBACKS: list[Callable[[int], None]] = []
 
 
-def _deleter_for(producer_id: int) -> Callable[[int], None]:
-    """Build (and keep alive) the C deleter callback for one producer."""
+def _deleter_for(
+    producer_id: int, export_owners: dict[int, tuple[object, ...]]
+) -> Callable[[int], None]:
+    """Build a deleter that owns each export's data and tensor metadata."""
 
     @ctypes.CFUNCTYPE(None, ctypes.c_void_p)
     def deleter(managed_pointer: int) -> None:
         DELETED[producer_id] = DELETED.get(producer_id, 0) + 1
+        # A DLPack managed tensor must remain self-contained even when its
+        # Python producer has already died. The callback strongly owns this
+        # registry and releases the backing array plus shape/stride storage at
+        # exactly the same point as the managed struct.
+        export_owners.pop(int(managed_pointer), None)
         ctypes.pythonapi.PyMem_Free(managed_pointer)
 
     _CALLBACKS.append(deleter)
     return deleter
+
+
+def _capsule_destructor_for(versioned: bool) -> object:
+    """Forward an unconsumed fake capsule to its managed-tensor deleter."""
+    expected_name = _CAPSULE_NAME_VERSIONED if versioned else _CAPSULE_NAME
+    struct_class = _DLManagedTensorVersioned if versioned else _DLManagedTensor
+
+    @ctypes.CFUNCTYPE(None, ctypes.c_void_p)
+    def destructor(capsule_pointer: int) -> None:
+        # The capsule is already being destroyed, so raw ``PyObject*`` calls
+        # avoid the refcount recursion caused by wrapping it as ``py_object``.
+        if _RAW_CAPSULE_GET_NAME(capsule_pointer) != expected_name:
+            return
+        managed_pointer = int(
+            _RAW_CAPSULE_GET_POINTER(capsule_pointer, expected_name) or 0
+        )
+        if not managed_pointer:
+            return
+        try:
+            managed = ctypes.cast(
+                managed_pointer, ctypes.POINTER(struct_class)
+            ).contents
+            deleter_address = int(managed.deleter or 0)
+        except (ValueError, OSError):
+            return
+        if deleter_address:
+            ctypes.CFUNCTYPE(None, ctypes.c_void_p)(deleter_address)(managed_pointer)
+
+    return destructor
+
+
+# Unconsumed capsules may outlive their FakeArray, so these callbacks must stay
+# alive for the process lifetime just like the per-producer managed deleters.
+_CAPSULE_DESTRUCTORS = (
+    _capsule_destructor_for(versioned=False),
+    _capsule_destructor_for(versioned=True),
+)
 
 
 def _dtype_fields(dtype: np.dtype) -> tuple[int, int]:
@@ -195,7 +259,8 @@ class FakeArray:
         self._force_error = force_error
         self._major_version = major_version
         self._id = id(self)
-        self._deleter = _deleter_for(self._id)
+        self._export_owners: dict[int, tuple[object, ...]] = {}
+        self._deleter = _deleter_for(self._id, self._export_owners)
         DELETED[self._id] = 0
 
     # --- Array-API-like metadata ------------------------------------------------
@@ -246,7 +311,7 @@ class FakeArray:
         struct_class = (
             _DLManagedTensorVersioned if self._versioned else _DLManagedTensor
         )
-        capsule_name = b"dltensor_versioned" if self._versioned else b"dltensor"
+        capsule_name = _CAPSULE_NAME_VERSIONED if self._versioned else _CAPSULE_NAME
         pyt_exact = ctypes.pythonapi.PyMem_Malloc
         pointer = pyt_exact(ctypes.sizeof(struct_class))
         struct = ctypes.cast(pointer, ctypes.POINTER(struct_class)).contents
@@ -272,16 +337,30 @@ class FakeArray:
             strides = (ctypes.c_int64 * ndim)(*element_strides)
             tensor.shape = ctypes.cast(shape, ctypes.POINTER(ctypes.c_int64))
             tensor.strides = ctypes.cast(strides, ctypes.POINTER(ctypes.c_int64))
+            owners: tuple[object, ...] = (data, shape, strides)
         else:
             tensor.shape = None
             tensor.strides = None
+            owners = (data,)
         tensor.byte_offset = self._byte_offset
         struct.manager_ctx = None
         struct.deleter = ctypes.cast(self._deleter, ctypes.c_void_p).value
-        return ctypes.pythonapi.PyCapsule_New(pointer, capsule_name, None)
+        # Retain every allocation borrowed by DLTensor until either a consumer
+        # or the unconsumed-capsule destructor invokes the managed deleter.
+        self._export_owners[int(pointer)] = owners
+        destructor = _CAPSULE_DESTRUCTORS[1 if self._versioned else 0]
+        return ctypes.pythonapi.PyCapsule_New(
+            pointer,
+            capsule_name,
+            ctypes.cast(destructor, ctypes.c_void_p).value,
+        )
 
     # --- test bookkeeping ---------------------------------------------------------
 
     def deleted_count(self) -> int:
         """Return how many times this producer's deleter was invoked."""
         return DELETED.get(self._id, 0)
+
+    def active_export_count(self) -> int:
+        """Return managed exports whose borrowed allocations are still live."""
+        return len(self._export_owners)
