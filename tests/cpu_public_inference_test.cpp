@@ -397,6 +397,145 @@ int test_explicit_thread_counts_are_deterministic() {
   return 0;
 }
 
+int test_public_mixer_defaults_nondefault_and_reproducible_policy() {
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  ContextHandle legacy_context = make_cpu_context(1);
+  ContextHandle partial_context = make_cpu_context(4);
+  ContextHandle explicit_context = make_cpu_context(4);
+  ContextHandle nondefault_context = make_cpu_context(4);
+  ContextHandle reproducible_context = make_cpu_context(4);
+  CHECK(legacy_context != nullptr);
+  CHECK(partial_context != nullptr);
+  CHECK(explicit_context != nullptr);
+  CHECK(nondefault_context != nullptr);
+  CHECK(reproducible_context != nullptr);
+
+  const PublicBatch pair = make_repeated_h2_he_batch(1u);
+  PublicBatch legacy = slice_system(pair, 0u);
+  PublicBatch partial = slice_system(pair, 0u);
+  PublicBatch explicit_defaults = slice_system(pair, 0u);
+  PublicBatch nondefault = slice_system(pair, 0u);
+  PublicBatch reproducible = slice_system(pair, 0u);
+  legacy.bind(flags);
+  partial.bind(flags);
+  explicit_defaults.bind(flags);
+  nondefault.bind(flags);
+  reproducible.bind(flags);
+
+  /* A V2 caller owns no mixer suffix and must remain bit-identical to an
+   * explicit V3 caller selecting the historical production defaults. */
+  legacy.options.struct_size = XTBLOOM_COMPUTE_OPTIONS_V2_SIZE;
+  partial.options.scc_mixer_history = 4;
+  partial.options.scc_mixer_damping = 0.2;
+  partial.options.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
+  partial.options.struct_size = XTBLOOM_COMPUTE_OPTIONS_V3_SIZE - 1u;
+  explicit_defaults.options.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  explicit_defaults.options.scc_mixer_history = 8;
+  explicit_defaults.options.scc_mixer_damping = 0.4;
+  explicit_defaults.options.determinism = XTBLOOM_DETERMINISM_DEFAULT;
+  CHECK(xtbloom_compute(legacy_context.get(), &legacy.batch, &legacy.options, &legacy.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(partial_context.get(), &partial.batch, &partial.options, &partial.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(explicit_context.get(), &explicit_defaults.batch,
+                        &explicit_defaults.options,
+                        &explicit_defaults.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(legacy.energies == explicit_defaults.energies);
+  CHECK(legacy.forces == explicit_defaults.forces);
+  CHECK(legacy.atomic_charges == explicit_defaults.atomic_charges);
+  CHECK(legacy.iterations == explicit_defaults.iterations);
+  CHECK(legacy.converged == explicit_defaults.converged);
+  CHECK(legacy.statuses == explicit_defaults.statuses);
+  CHECK(partial.energies == legacy.energies);
+  CHECK(partial.forces == legacy.forces);
+  CHECK(partial.atomic_charges == legacy.atomic_charges);
+  CHECK(partial.iterations == legacy.iterations);
+  CHECK(partial.converged == legacy.converged);
+  CHECK(partial.statuses == legacy.statuses);
+
+  /* Exercise the public non-default plan rather than only validating fields:
+   * history changes persistent mixer storage and damping changes its first
+   * transition. This small ordinary system must still converge and publish a
+   * physically equivalent stationary result. */
+  nondefault.options.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  nondefault.options.scc_mixer_history = 4;
+  nondefault.options.scc_mixer_damping = 0.2;
+  nondefault.options.determinism = XTBLOOM_DETERMINISM_DEFAULT;
+  CHECK(xtbloom_compute(nondefault_context.get(), &nondefault.batch, &nondefault.options,
+                        &nondefault.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(nondefault.statuses == explicit_defaults.statuses);
+  CHECK(nondefault.converged == explicit_defaults.converged);
+  CHECK(near(nondefault.energies[0], explicit_defaults.energies[0], 2.0e-8));
+  for (std::size_t atom = 0u; atom < nondefault.atomic_charges.size(); ++atom) {
+    CHECK(near(nondefault.atomic_charges[atom], explicit_defaults.atomic_charges[atom], 2.0e-6));
+    for (std::size_t axis = 0u; axis < 3u; ++axis) {
+      CHECK(near(nondefault.forces[3u * atom + axis], explicit_defaults.forces[3u * atom + axis],
+                 2.0e-6));
+    }
+  }
+
+  /* REPRODUCIBLE disables only batch-one intra-system chunking. It must be
+   * byte-exact across repeated FRESH calls and match the one-thread serial
+   * arithmetic order on this build/provider/hardware. */
+  reproducible.options.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  reproducible.options.scc_mixer_history = 8;
+  reproducible.options.scc_mixer_damping = 0.4;
+  reproducible.options.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
+  CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch, &reproducible.options,
+                        &reproducible.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(reproducible.energies == legacy.energies);
+  CHECK(reproducible.forces == legacy.forces);
+  CHECK(reproducible.atomic_charges == legacy.atomic_charges);
+  CHECK(reproducible.iterations == legacy.iterations);
+  const PublicBatch reference = reproducible;
+  for (int repetition = 0; repetition < 3; ++repetition) {
+    CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch, &reproducible.options,
+                          &reproducible.result) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(reproducible.energies == reference.energies);
+    CHECK(reproducible.forces == reference.forces);
+    CHECK(reproducible.atomic_charges == reference.atomic_charges);
+    CHECK(reproducible.iterations == reference.iterations);
+    CHECK(reproducible.converged == reference.converged);
+    CHECK(reproducible.statuses == reference.statuses);
+  }
+
+  /* Reproducibility covers the stateful start-mode sequence as well as an
+   * isolated FRESH call. Resetting with the identical FRESH frame must make
+   * the following perturbed WARM frame replay byte-for-byte. */
+  const std::vector<double> base_positions = reproducible.positions;
+  reproducible.positions[0] -= 0.002;
+  reproducible.positions[3] += 0.002;
+  reproducible.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch, &reproducible.options,
+                        &reproducible.result) == XTBLOOM_STATUS_SUCCESS);
+  const PublicBatch warm_reference = reproducible;
+
+  std::copy(base_positions.begin(), base_positions.end(), reproducible.positions.begin());
+  reproducible.options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+  CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch, &reproducible.options,
+                        &reproducible.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(reproducible.energies == reference.energies);
+  CHECK(reproducible.forces == reference.forces);
+  CHECK(reproducible.atomic_charges == reference.atomic_charges);
+  CHECK(reproducible.iterations == reference.iterations);
+  CHECK(reproducible.converged == reference.converged);
+  CHECK(reproducible.statuses == reference.statuses);
+
+  reproducible.positions[0] -= 0.002;
+  reproducible.positions[3] += 0.002;
+  reproducible.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute(reproducible_context.get(), &reproducible.batch, &reproducible.options,
+                        &reproducible.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(reproducible.energies == warm_reference.energies);
+  CHECK(reproducible.forces == warm_reference.forces);
+  CHECK(reproducible.atomic_charges == warm_reference.atomic_charges);
+  CHECK(reproducible.iterations == warm_reference.iterations);
+  CHECK(reproducible.converged == warm_reference.converged);
+  CHECK(reproducible.statuses == warm_reference.statuses);
+  return 0;
+}
+
 int test_parallel_qmmm_matches_serial() {
   const std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
                               XTBLOOM_COMPUTE_ATOMIC_CHARGES | XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
@@ -1424,6 +1563,33 @@ int test_public_warm_start_transactions() {
   changed_temperature.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
   CHECK(warm_rejection_is_atomic(context.get(), changed_temperature));
 
+  PublicBatch changed_mixer = h2;
+  changed_mixer.bind(flags);
+  changed_mixer.options.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  changed_mixer.options.scc_mixer_history = 4;
+  changed_mixer.options.scc_mixer_damping = 0.4;
+  changed_mixer.options.determinism = XTBLOOM_DETERMINISM_DEFAULT;
+  changed_mixer.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_mixer));
+
+  PublicBatch changed_damping = h2;
+  changed_damping.bind(flags);
+  changed_damping.options.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  changed_damping.options.scc_mixer_history = 8;
+  changed_damping.options.scc_mixer_damping = 0.2;
+  changed_damping.options.determinism = XTBLOOM_DETERMINISM_DEFAULT;
+  changed_damping.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_damping));
+
+  PublicBatch changed_determinism = h2;
+  changed_determinism.bind(flags);
+  changed_determinism.options.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  changed_determinism.options.scc_mixer_history = 8;
+  changed_determinism.options.scc_mixer_damping = 0.4;
+  changed_determinism.options.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
+  changed_determinism.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(context.get(), changed_determinism));
+
   h2.bind(flags);
   h2.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
   CHECK(xtbloom_compute(context.get(), &h2.batch, &h2.options, &h2.result) ==
@@ -1747,6 +1913,24 @@ int test_plan_creation_model_and_abi_prefix_contracts() {
   CHECK(raw_short_plan != nullptr);
   xtbloom_plan_destroy(raw_short_plan);
 
+  /* An incomplete ABI-v3 suffix is ignored as one unit for both plan creation
+   * and later policy matching, even when its owned bytes contain hostile
+   * values that would be invalid in a complete suffix. */
+  xtbloom_compute_options_t partial_options = request.options;
+  partial_options.struct_size = XTBLOOM_COMPUTE_OPTIONS_V3_SIZE - 1u;
+  partial_options.scc_mixer = -1;
+  partial_options.scc_mixer_history = -1;
+  partial_options.scc_mixer_damping = -1.0;
+  partial_options.determinism = -1;
+  xtbloom_plan_t* raw_partial_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &request.batch, &partial_options, &raw_partial_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(raw_partial_plan != nullptr);
+  PlanHandle partial_plan(raw_partial_plan);
+  request.options.struct_size = XTBLOOM_COMPUTE_OPTIONS_V2_SIZE;
+  CHECK(xtbloom_plan_compute(partial_plan.get(), &request.batch, &request.options,
+                             &request.result) == XTBLOOM_STATUS_SUCCESS);
+
   /* GFN1 is a reserved ABI value. Plan setup rejects it consistently on CPU
    * before it creates a GFN2 cache that would fail only at execution time. */
   xtbloom_compute_options_t gfn1 = request.options;
@@ -2066,6 +2250,28 @@ int test_plan_topology_mismatch_fails_before_output_mutation() {
   CHECK(xtbloom_plan_compute(plan.get(), &mismatched_policy.batch, &mismatched_policy.options,
                              &mismatched_policy.result) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(mismatched_policy.result.flags == UINT32_C(0x87654321));
+
+  for (const auto& mutate_policy : {
+           +[](xtbloom_compute_options_t& options) { options.scc_mixer_history = 4; },
+           +[](xtbloom_compute_options_t& options) { options.scc_mixer_damping = 0.2; },
+           +[](xtbloom_compute_options_t& options) {
+             options.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
+           },
+       }) {
+    PublicBatch changed_policy = request;
+    changed_policy.bind(flags);
+    mutate_policy(changed_policy.options);
+    changed_policy.result.flags = UINT32_C(0x87654321);
+    const std::vector<double> policy_energies = changed_policy.energies;
+    const std::vector<double> policy_forces = changed_policy.forces;
+    const std::vector<double> policy_charges = changed_policy.atomic_charges;
+    CHECK(xtbloom_plan_compute(plan.get(), &changed_policy.batch, &changed_policy.options,
+                               &changed_policy.result) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(changed_policy.result.flags == UINT32_C(0x87654321));
+    CHECK(changed_policy.energies == policy_energies);
+    CHECK(changed_policy.forces == policy_forces);
+    CHECK(changed_policy.atomic_charges == policy_charges);
+  }
   return 0;
 }
 
@@ -2115,6 +2321,9 @@ int test_plan_multi_threaded_reuse() {
 
 int main() {
   if (const int line = test_explicit_thread_counts_are_deterministic(); line != 0) {
+    return line;
+  }
+  if (const int line = test_public_mixer_defaults_nondefault_and_reproducible_policy(); line != 0) {
     return line;
   }
   if (const int line = test_parallel_qmmm_matches_serial(); line != 0) {

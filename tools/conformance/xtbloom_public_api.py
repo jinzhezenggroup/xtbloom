@@ -128,7 +128,7 @@ class Interaction(ctypes.Structure):
 
 
 class ComputeOptions(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_compute_options_t`` through ABI version 2."""
+    """ctypes mirror of ``xtbloom_compute_options_t`` through ABI version 3."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -142,6 +142,11 @@ class ComputeOptions(ctypes.Structure):
         ("electronic_temperature", ctypes.c_double),
         ("scc_start_mode", ctypes.c_int32),
         ("reserved_v2", ctypes.c_uint32),
+        ("scc_mixer", ctypes.c_int32),
+        ("scc_mixer_history", ctypes.c_int32),
+        ("scc_mixer_damping", ctypes.c_double),
+        ("determinism", ctypes.c_int32),
+        ("reserved_v3", ctypes.c_uint32),
     ]
 
 

@@ -883,6 +883,180 @@ int execute_cuda_and_compare(xtbloom_context_t* cuda_context, PublicBatch& batch
   return compare_result(result, actual, reference, options);
 }
 
+int test_public_mixer_controls_and_reproducibility(std::int32_t device,
+                                                   xtbloom_context_t* cpu_context) {
+  PublicBatch batch;
+  /* One H2/He/LiH/CH2 cycle covers both restricted and unrestricted SCC. */
+  CHECK(make_fixture_batch(4u, false, batch) == 0);
+  xtbloom_compute_options_t explicit_defaults = make_compute_options();
+  MaterializedResult reference;
+  g_scenario = "mixer-controls/CPU-default-reference";
+  CHECK(run_cpu_reference(cpu_context, batch, explicit_defaults, reference) == 0);
+
+  const std::array<std::size_t, 3> legacy_sizes{XTBLOOM_COMPUTE_OPTIONS_V1_SIZE,
+                                                XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
+                                                XTBLOOM_COMPUTE_OPTIONS_V3_SIZE - 1u};
+  const std::array<ResultLayout, 3> legacy_layouts{ResultLayout::kHost, ResultLayout::kDevice,
+                                                   ResultLayout::kMixed};
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+  for (std::size_t index = 0; index < legacy_sizes.size(); ++index) {
+    std::string scenario = "mixer-controls/legacy-prefix/" + std::to_string(legacy_sizes[index]);
+    g_scenario = scenario.c_str();
+    xtbloom_compute_options_t legacy = explicit_defaults;
+    legacy.struct_size = static_cast<std::uint32_t>(legacy_sizes[index]);
+    CHECK(execute_cuda_and_compare(context.get(), batch, legacy, legacy_layouts[index],
+                                   reference) == 0);
+  }
+
+  xtbloom_compute_options_t nondefault = explicit_defaults;
+  nondefault.scc_mixer_history = 4;
+  nondefault.scc_mixer_damping = 0.2;
+  MaterializedResult nondefault_reference;
+  g_scenario = "mixer-controls/CPU-nondefault-reference";
+  CHECK(run_cpu_reference(cpu_context, batch, nondefault, nondefault_reference) == 0);
+  for (const auto& [layout, name] :
+       {std::pair{ResultLayout::kHost, "host"}, std::pair{ResultLayout::kDevice, "device"},
+        std::pair{ResultLayout::kMixed, "mixed"}}) {
+    std::string scenario = std::string("mixer-controls/nondefault/") + name;
+    g_scenario = scenario.c_str();
+    CHECK(execute_cuda_and_compare(context.get(), batch, nondefault, layout,
+                                   nondefault_reference) == 0);
+  }
+
+  xtbloom_compute_options_t reproducible = explicit_defaults;
+  reproducible.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
+  ResultOwner replay_owner;
+  CUDA_CHECK(replay_owner.bind(batch, ResultLayout::kMixed, reproducible.flags));
+  g_scenario = "mixer-controls/reproducible-first";
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &reproducible,
+                        &replay_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult first;
+  CUDA_CHECK(replay_owner.materialize(first));
+  for (int repetition = 0; repetition < 3; ++repetition) {
+    g_scenario = "mixer-controls/reproducible-replay";
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &reproducible,
+                          &replay_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult replay;
+    CUDA_CHECK(replay_owner.materialize(replay));
+    CHECK(replay.flags == first.flags);
+    CHECK(replay.energies == first.energies);
+    CHECK(replay.forces == first.forces);
+    CHECK(replay.atomic_charges == first.atomic_charges);
+    CHECK(replay.iterations == first.iterations);
+    CHECK(replay.converged == first.converged);
+    CHECK(replay.statuses == first.statuses);
+  }
+
+  /* The exact-replay contract includes the FRESH/WARM sequence. Re-seeding
+   * the same cache with an identical FRESH frame must reproduce both that
+   * frame and the following perturbed strict-WARM frame byte-for-byte. */
+  const std::vector<double> base_positions = batch.positions;
+  batch.positions[0] -= 0.002;
+  batch.positions[3] += 0.002;
+  reproducible.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  g_scenario = "mixer-controls/reproducible-warm-first";
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &reproducible,
+                        &replay_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult warm_first;
+  CUDA_CHECK(replay_owner.materialize(warm_first));
+
+  std::copy(base_positions.begin(), base_positions.end(), batch.positions.begin());
+  reproducible.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+  g_scenario = "mixer-controls/reproducible-sequence-reset";
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &reproducible,
+                        &replay_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult fresh_replay;
+  CUDA_CHECK(replay_owner.materialize(fresh_replay));
+  CHECK(fresh_replay.flags == first.flags);
+  CHECK(fresh_replay.energies == first.energies);
+  CHECK(fresh_replay.forces == first.forces);
+  CHECK(fresh_replay.atomic_charges == first.atomic_charges);
+  CHECK(fresh_replay.iterations == first.iterations);
+  CHECK(fresh_replay.converged == first.converged);
+  CHECK(fresh_replay.statuses == first.statuses);
+
+  batch.positions[0] -= 0.002;
+  batch.positions[3] += 0.002;
+  reproducible.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  g_scenario = "mixer-controls/reproducible-warm-replay";
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &reproducible,
+                        &replay_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult warm_replay;
+  CUDA_CHECK(replay_owner.materialize(warm_replay));
+  CHECK(warm_replay.flags == warm_first.flags);
+  CHECK(warm_replay.energies == warm_first.energies);
+  CHECK(warm_replay.forces == warm_first.forces);
+  CHECK(warm_replay.atomic_charges == warm_first.atomic_charges);
+  CHECK(warm_replay.iterations == warm_first.iterations);
+  CHECK(warm_replay.converged == warm_first.converged);
+  CHECK(warm_replay.statuses == warm_first.statuses);
+  std::copy(base_positions.begin(), base_positions.end(), batch.positions.begin());
+
+  xtbloom_request_t* raw_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+  const std::unique_ptr<xtbloom_request_t, void (*)(xtbloom_request_t*)> request(
+      raw_request, xtbloom_request_destroy);
+  ResultOwner context_async_owner;
+  CUDA_CHECK(context_async_owner.bind(batch, ResultLayout::kMixed, nondefault.flags));
+  g_scenario = "mixer-controls/context-async";
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &nondefault,
+                                &context_async_owner.descriptor,
+                                request.get()) == XTBLOOM_STATUS_SUCCESS);
+  xtbloom_request_info_t info{};
+  CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult context_async;
+  CUDA_CHECK(context_async_owner.materialize(context_async));
+  context_async.flags = info.result_flags;
+  CHECK(compare_result(context_async_owner, context_async, nondefault_reference, nondefault) == 0);
+
+  xtbloom_plan_t* raw_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &nondefault, &raw_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const std::unique_ptr<xtbloom_plan_t, void (*)(xtbloom_plan_t*)> plan(raw_plan,
+                                                                        xtbloom_plan_destroy);
+  ResultOwner plan_sync_owner;
+  CUDA_CHECK(plan_sync_owner.bind(batch, ResultLayout::kHost, nondefault.flags));
+  g_scenario = "mixer-controls/plan-sync";
+  CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &nondefault,
+                             &plan_sync_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult plan_sync;
+  CUDA_CHECK(plan_sync_owner.materialize(plan_sync));
+  CHECK(compare_result(plan_sync_owner, plan_sync, nondefault_reference, nondefault) == 0);
+
+  ResultOwner plan_async_owner;
+  CUDA_CHECK(plan_async_owner.bind(batch, ResultLayout::kDevice, nondefault.flags));
+  g_scenario = "mixer-controls/plan-async";
+  CHECK(xtbloom_plan_compute_enqueue(plan.get(), &batch.descriptor, &nondefault,
+                                     &plan_async_owner.descriptor,
+                                     request.get()) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult plan_async;
+  CUDA_CHECK(plan_async_owner.materialize(plan_async));
+  plan_async.flags = info.result_flags;
+  CHECK(compare_result(plan_async_owner, plan_async, nondefault_reference, nondefault) == 0);
+
+  xtbloom_compute_options_t changed_plan_policy = nondefault;
+  changed_plan_policy.scc_mixer_history = 8;
+  changed_plan_policy.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  ResultOwner rejected_plan_owner;
+  CUDA_CHECK(rejected_plan_owner.bind(batch, ResultLayout::kMixed, changed_plan_policy.flags));
+  CHECK(xtbloom_plan_compute_enqueue(plan.get(), &batch.descriptor, &changed_plan_policy,
+                                     &rejected_plan_owner.descriptor,
+                                     request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  bool rejected_unchanged = false;
+  CUDA_CHECK(rejected_plan_owner.unchanged(rejected_unchanged));
+  CHECK(rejected_unchanged);
+  return 0;
+}
+
 int verify_input_layout(const PublicBatch& batch, InputLayout layout, bool qmmm);
 
 int test_public_representability_matrix(std::int32_t device, xtbloom_context_t* cpu_context,
@@ -1123,6 +1297,24 @@ int test_public_warm_start_transactions(std::int32_t device) {
   g_scenario = "warm/reject-policy";
   CHECK(expect_strict_warm_rejection(context.get(), batch_b, policy_changed,
                                      ResultLayout::kDevice) == 0);
+
+  xtbloom_compute_options_t mixer_history_changed = warm_options;
+  mixer_history_changed.scc_mixer_history = 4;
+  g_scenario = "warm/reject-mixer-history";
+  CHECK(expect_strict_warm_rejection(context.get(), batch_b, mixer_history_changed,
+                                     ResultLayout::kHost) == 0);
+
+  xtbloom_compute_options_t mixer_damping_changed = warm_options;
+  mixer_damping_changed.scc_mixer_damping = 0.2;
+  g_scenario = "warm/reject-mixer-damping";
+  CHECK(expect_strict_warm_rejection(context.get(), batch_b, mixer_damping_changed,
+                                     ResultLayout::kDevice) == 0);
+
+  xtbloom_compute_options_t determinism_changed = warm_options;
+  determinism_changed.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
+  g_scenario = "warm/reject-determinism";
+  CHECK(expect_strict_warm_rejection(context.get(), batch_b, determinism_changed,
+                                     ResultLayout::kMixed) == 0);
 
   g_scenario = "warm/checkpoint-survives-rejections";
   ResultOwner preserved_owner;
@@ -3158,11 +3350,13 @@ int main(int argc, char** argv) {
       argc == 2 && std::strcmp(argv[1], "--context-request-sanitizer") == 0;
   const bool context_request_profile =
       argc == 2 && std::strcmp(argv[1], "--context-request-profile") == 0;
+  const bool mixer_sanitizer = argc == 2 && std::strcmp(argv[1], "--mixer-sanitizer") == 0;
   if (argc != 1 && !request_only && !request_sanitizer && !request_profile &&
-      !context_request_sanitizer && !context_request_profile) {
+      !context_request_sanitizer && !context_request_profile && !mixer_sanitizer) {
     std::fprintf(stderr,
                  "usage: %s [--request-only|--request-sanitizer|--request-profile|"
-                 "--context-request-sanitizer|--context-request-profile]\n",
+                 "--context-request-sanitizer|--context-request-profile|"
+                 "--mixer-sanitizer]\n",
                  argv[0]);
     return 2;
   }
@@ -3198,11 +3392,10 @@ int main(int argc, char** argv) {
     return line;
   }
 
-  /* Compute Sanitizer can make the unrelated batch-128 conformance matrix
-   * prohibitively slow. These opt-in entry points keep default CTest coverage
-   * unchanged and give context and fixed-plan request paths independent narrow
-   * sanitizer/profile coordinates. The request-only mode retains both paths'
-   * blocked-stream ordering checks. */
+  /* Compute Sanitizer can make unrelated public matrices prohibitively slow
+   * or invalidate real-time blocked-stream watchdogs through instrumentation
+   * overhead. These opt-in entry points preserve default CTest coverage while
+   * keeping each production path independently sanitizable. */
   if (request_only) {
     if (const int line = test_cuda_context_enqueue(device, cpu_context.get(), options); line != 0) {
       return line;
@@ -3223,6 +3416,9 @@ int main(int argc, char** argv) {
     return test_cuda_context_enqueue(device, cpu_context.get(), options,
                                      PlanTestMode::kProfileSteadyState);
   }
+  if (mixer_sanitizer) {
+    return test_public_mixer_controls_and_reproducibility(device, cpu_context.get());
+  }
 
   if (const int line = test_host_device_mixed_and_streams(device, batch, options, reference);
       line != 0) {
@@ -3239,6 +3435,10 @@ int main(int argc, char** argv) {
     return line;
   }
   if (const int line = test_public_representability_matrix(device, cpu_context.get(), options);
+      line != 0) {
+    return line;
+  }
+  if (const int line = test_public_mixer_controls_and_reproducibility(device, cpu_context.get());
       line != 0) {
     return line;
   }

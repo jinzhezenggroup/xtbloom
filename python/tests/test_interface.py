@@ -127,6 +127,14 @@ def test_structure_update_is_transactional() -> None:
         ("charge_tolerance", float("nan")),
         ("energy_tolerance", -1.0),
         ("electronic_temperature", float("inf")),
+        ("scc_mixer", "linear"),
+        ("scc_mixer", 2),
+        ("scc_mixer_history", 0),
+        ("scc_mixer_history", 65),
+        ("scc_mixer_damping", 0.0),
+        ("scc_mixer_damping", float("nan")),
+        ("determinism", "portable"),
+        ("determinism", 2),
     ],
 )
 def test_invalid_compute_settings_are_rejected(setting: str, value: object) -> None:
@@ -134,6 +142,40 @@ def test_invalid_compute_settings_are_rejected(setting: str, value: object) -> N
     calc = Calculator("GFN2-xTB", np.array([1, 1]), np.zeros((2, 3)))
     with pytest.raises(XTBloomValueError):
         calc.set(setting, value)
+
+
+def test_compute_policy_aliases_and_tags_are_normalized() -> None:
+    """Accept frozen names or int32 tags and retain their exact ABI values."""
+    calc = Calculator(
+        "GFN2-xTB",
+        np.array([1, 1]),
+        np.zeros((2, 3)),
+        scc_mixer="modified_broyden",
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    )
+    assert calc._settings.scc_mixer == _library.SCC_MIXER_MODIFIED_BROYDEN
+    assert calc._settings.scc_mixer_history == 16
+    assert calc._settings.scc_mixer_damping == 0.25
+    assert calc._settings.determinism == _library.DETERMINISM_REPRODUCIBLE
+
+    calc.set("scc_mixer", _library.SCC_MIXER_MODIFIED_BROYDEN)
+    calc.set("determinism", _library.DETERMINISM_DEFAULT)
+    assert calc._settings.determinism == _library.DETERMINISM_DEFAULT
+
+
+def test_high_level_policy_updates_fail_closed_on_legacy_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calculator and BatchCalculator reject policies an old core would ignore."""
+    monkeypatch.setattr(
+        _library, "compute_options_v3_available", lambda _lib=None: False
+    )
+    calc = Calculator("GFN2-xTB", np.array([1, 1]), np.zeros((2, 3)))
+    calc.set("scc_mixer_history", 8)
+    with pytest.raises(XTBloomRuntimeError, match=r"does not support.*ABI v3"):
+        calc.set("scc_mixer_history", 16)
 
 
 def test_open_shell_spin_polarized_differs_from_restricted() -> None:

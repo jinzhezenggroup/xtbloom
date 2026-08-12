@@ -6,11 +6,14 @@ import ctypes
 import os
 import re
 import site
+import subprocess
+import sys
 from importlib.metadata import version as distribution_version
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
+from _legacy_core import build_legacy_core
 from xtbloom import __version__, library
 from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
@@ -52,6 +55,28 @@ class _FakeSymbol:
 
 class _FakeLibrary:
     """Weak-referenceable fake shared-library handle for symbol probing."""
+
+
+class _FakeComputeOptionsInit:
+    """Initialize either the frozen V3 image or only the legacy V2 prefix."""
+
+    def __init__(self, supports_v3: bool) -> None:
+        self.supports_v3 = supports_v3
+
+    def __call__(self, pointer: object, struct_size: int) -> int:
+        options = ctypes.cast(pointer, ctypes.POINTER(library.ComputeOptions)).contents
+        ctypes.memset(pointer, 0, min(struct_size, 56))
+        options.struct_size = struct_size
+        options.api_version = library.API_VERSION
+        if self.supports_v3:
+            ctypes.memset(pointer, 0, min(struct_size, ctypes.sizeof(options)))
+            options.struct_size = struct_size
+            options.api_version = library.API_VERSION
+            options.scc_mixer = library.SCC_MIXER_MODIFIED_BROYDEN
+            options.scc_mixer_history = library.DEFAULT_SCC_MIXER_HISTORY
+            options.scc_mixer_damping = library.DEFAULT_SCC_MIXER_DAMPING
+            options.determinism = library.DETERMINISM_DEFAULT
+        return library.STATUS_SUCCESS
 
 
 def _fake_request_library(*, omit: str | None = None) -> _FakeLibrary:
@@ -118,6 +143,96 @@ def test_partial_request_api_is_incompatible() -> None:
         library._configure_request_api(fake)
 
 
+@pytest.mark.parametrize("supports_v3", [False, True])
+def test_compute_options_v3_capability_probe(supports_v3: bool) -> None:
+    """Distinguish a legacy future-size initializer from a complete V3 one."""
+    fake = _FakeLibrary()
+    fake.xtbloom_compute_options_init = _FakeComputeOptionsInit(supports_v3)
+
+    assert library._probe_compute_options_v3(fake) is supports_v3
+    assert library.compute_options_v3_available(fake) is supports_v3
+
+
+def test_compute_options_v3_capability_probe_reports_initializer_failure() -> None:
+    """Surface a failed native initializer instead of guessing V3 support."""
+    fake = _FakeLibrary()
+    fake.xtbloom_compute_options_init = lambda pointer, struct_size: (
+        library.STATUS_INTERNAL_ERROR
+    )
+
+    with pytest.raises(XTBloomRuntimeError, match="probing ABI-v3 support"):
+        library._probe_compute_options_v3(fake)
+
+
+def test_legacy_core_accepts_defaults_but_rejects_nondefault_v3_policy() -> None:
+    """Never silently ignore a user-requested mixer or determinism policy."""
+    fake = _FakeLibrary()
+    fake.xtbloom_compute_options_init = _FakeComputeOptionsInit(False)
+    assert not library._probe_compute_options_v3(fake)
+
+    library.require_compute_options_v3(1, 8, 0.4, 0, fake)
+    with pytest.raises(XTBloomRuntimeError, match=r"does not support.*ABI v3"):
+        library.require_compute_options_v3(1, 16, 0.25, 1, fake)
+
+
+def test_library_override_fails_closed_for_legacy_core_policy(tmp_path: Path) -> None:
+    """Exercise the real loader handshake against a V2-only override library."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("the legacy shared-library fixture currently targets ELF")
+    legacy = build_legacy_core(tmp_path)
+    script = r"""
+import numpy as np
+import xtbloom.library as library
+from xtbloom import BatchCalculator, Calculator, Structure, compute_arrays
+from xtbloom.exceptions import XTBloomRuntimeError
+
+assert not library.compute_options_v3_available()
+library.require_compute_options_v3(1, 8, 0.4, 0)
+Calculator("GFN2-xTB", np.array([1]), np.zeros((1, 3)))
+BatchCalculator([Structure(np.array([1]), np.zeros((1, 3)))])
+
+for factory in (
+    lambda: Calculator(
+        "GFN2-xTB", np.array([1]), np.zeros((1, 3)), scc_mixer_history=16
+    ),
+    lambda: BatchCalculator(
+        [Structure(np.array([1]), np.zeros((1, 3)))], determinism="reproducible"
+    ),
+):
+    try:
+        factory()
+    except XTBloomRuntimeError as exc:
+        assert "ABI v3" in str(exc)
+    else:
+        raise AssertionError("legacy core silently accepted nondefault V3 policy")
+
+arrays = dict(
+    atom_offsets=np.array([0, 1], dtype=np.int64),
+    atomic_numbers=np.array([1], dtype=np.int32),
+    positions=np.zeros((1, 3), dtype=np.float64),
+    molecular_charges=np.zeros(1, dtype=np.float64),
+    unpaired_electrons=np.zeros(1, dtype=np.int32),
+)
+compute_arrays(**arrays)
+try:
+    compute_arrays(**arrays, scc_mixer_damping=0.25)
+except XTBloomRuntimeError as exc:
+    assert "ABI v3" in str(exc)
+else:
+    raise AssertionError("legacy core silently accepted Array V3 policy")
+"""
+    env = os.environ.copy()
+    env["XTBLOOM_LIBRARY"] = str(legacy)
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_runtime_search_includes_user_site_packages(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -173,9 +288,14 @@ def test_abi_struct_sizes() -> None:
     assert library.Batch.total_interactions.offset == 352
     assert library.Batch.interaction_descriptors.offset == 360
     assert library.Batch.interaction_payload.offset == 384
-    assert ctypes.sizeof(library.ComputeOptions) == 56
+    assert ctypes.sizeof(library.ComputeOptions) == 80
     assert library.ComputeOptions.scc_start_mode.offset == 48
     assert library.ComputeOptions.reserved_v2.offset == 52
+    assert library.ComputeOptions.scc_mixer.offset == 56
+    assert library.ComputeOptions.scc_mixer_history.offset == 60
+    assert library.ComputeOptions.scc_mixer_damping.offset == 64
+    assert library.ComputeOptions.determinism.offset == 72
+    assert library.ComputeOptions.reserved_v3.offset == 76
     assert ctypes.sizeof(library.BatchResult) == 280
     assert library.BatchResult.dipole_moments.offset == 184
     assert library.BatchResult.quadrupole_moments.offset == 208
@@ -206,6 +326,11 @@ def test_abi_struct_sizes() -> None:
     assert options.max_scc_iterations == 250
     assert options.scc_start_mode == library.SCC_START_FRESH
     assert options.reserved_v2 == 0
+    assert options.scc_mixer == library.SCC_MIXER_MODIFIED_BROYDEN
+    assert options.scc_mixer_history == library.DEFAULT_SCC_MIXER_HISTORY
+    assert options.scc_mixer_damping == library.DEFAULT_SCC_MIXER_DAMPING
+    assert options.determinism == library.DETERMINISM_DEFAULT
+    assert options.reserved_v3 == 0
     assert library.SCC_START_WARM == 2
     # xtbloom_workspace_query_t: struct_size/api_version/flags/reserved (16) +
     # host bytes (8) + host alignment (4) + device bytes (8) + device alignment

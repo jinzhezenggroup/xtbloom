@@ -152,7 +152,9 @@ class XTBloomDriver(Driver):
     **kwargs
         Forwarded to :class:`xtbloom.interface.BatchCalculator`: ``backend``,
         ``device_id``, ``cpu_threads``, ``max_scc_iterations``,
-        ``charge_tolerance``, ``energy_tolerance``, ``electronic_temperature``.
+        ``charge_tolerance``, ``energy_tolerance``, ``electronic_temperature``,
+        ``scc_mixer``, ``scc_mixer_history``, ``scc_mixer_damping``, and
+        ``determinism``.
     """
 
     def __init__(

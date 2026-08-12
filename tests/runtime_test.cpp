@@ -50,9 +50,14 @@ int main() {
   CHECK(xtbloom_compute_options_init(&compute_options, sizeof(compute_options)) ==
         XTBLOOM_STATUS_SUCCESS);
   CHECK(compute_options.electronic_temperature == XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE);
-  CHECK(compute_options.struct_size == XTBLOOM_COMPUTE_OPTIONS_V2_SIZE);
+  CHECK(compute_options.struct_size == XTBLOOM_COMPUTE_OPTIONS_V3_SIZE);
   CHECK(compute_options.scc_start_mode == XTBLOOM_SCC_START_FRESH);
   CHECK(compute_options.reserved_v2 == 0u);
+  CHECK(compute_options.scc_mixer == XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN);
+  CHECK(compute_options.scc_mixer_history == 8);
+  CHECK(compute_options.scc_mixer_damping == 0.4);
+  CHECK(compute_options.determinism == XTBLOOM_DETERMINISM_DEFAULT);
+  CHECK(compute_options.reserved_v3 == 0u);
   CHECK(xtbloom_batch_result_init(&result, sizeof(result)) == XTBLOOM_STATUS_SUCCESS);
 
   /* Descriptor errors are reported before entering numerical execution. */
@@ -107,6 +112,24 @@ int main() {
     CHECK(std::isfinite(forces[0]));
     CHECK(std::isfinite(forces[1]));
     CHECK(std::isfinite(forces[2]));
+  }
+
+  /* The always-registered runtime smoke also carries the complete V3 policy
+   * through fixed-plan normalization. Provider-free builds may stop at the
+   * same explicit LP64 availability boundary as convenience compute. */
+  xtbloom_plan_t* raw_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
+  const xtbloom_status_t plan_status =
+      xtbloom_plan_create(context.get(), &batch, &compute_options, &raw_plan);
+  if (valid_compute_status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE) {
+    CHECK(plan_status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE);
+    CHECK(raw_plan == nullptr);
+    CHECK(std::strstr(xtbloom_get_last_error(), "LP64") != nullptr);
+  } else {
+    CHECK(plan_status == XTBLOOM_STATUS_SUCCESS);
+    CHECK(raw_plan != nullptr);
+    CHECK(xtbloom_plan_compute(raw_plan, &batch, &compute_options, &result) ==
+          XTBLOOM_STATUS_SUCCESS);
+    xtbloom_plan_destroy(raw_plan);
   }
 
   /* ABI-v1 callers do not expose the suffix and therefore retain strict FRESH

@@ -197,8 +197,8 @@ jobs:
           retention-days: 1
 
   upload-coverage:
-    needs: [cpu, python]
-    if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
+    needs: [cpu, python, public-cpu-release]
+    if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' && needs['public-cpu-release'].result == 'success' }}
     # Coverage reporting is observability rather than a correctness gate. A
     # Codecov or artifact-service outage must not fail the workflow.
     continue-on-error: true
@@ -206,12 +206,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - artifact: coverage-report-cpp
-            file: coverage-cpp.xml
+          - artifact: coverage-report-cpp*
+            files: coverage/coverage-cpp.xml,coverage/coverage-cpp-public.xml
             flag: cpp
             name: code-coverage/cpp
           - artifact: coverage-report-python
-            file: coverage-python.xml
+            files: coverage/coverage-python.xml
             flag: python
             name: code-coverage/python
     runs-on: ubuntu-24.04
@@ -228,14 +228,16 @@ jobs:
       - name: Download coverage report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ matrix.artifact }}
+          pattern: ${{ matrix.artifact }}
+          path: coverage
+          merge-multiple: true
       - name: Upload coverage to Codecov
         # fail_ci_if_error covers CLI upload errors; continue-on-error also
         # covers action setup, integrity-check, and OIDC failures.
         continue-on-error: true
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
-          files: ${{ matrix.file }}
+          files: ${{ matrix.files }}
           flags: ${{ matrix.flag }}
           name: ${{ matrix.name }}
           disable_search: true
@@ -371,6 +373,9 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_FLAGS=--coverage \
+            -DCMAKE_CXX_FLAGS=--coverage \
+            -DCMAKE_EXE_LINKER_FLAGS=--coverage \
             -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build-public --parallel
@@ -378,6 +383,24 @@ jobs:
         run: ccache -s
       - name: Test public inference and conformance
         run: ctest --test-dir build-public --output-on-failure
+      - name: Collect public C++ coverage
+        env:
+          COVERAGE_XML: coverage-cpp-public.xml
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lcov
+          lcov --capture --directory build-public --output-file coverage-public.info \
+            --exclude '/usr/*' --exclude '*/tests/*' \
+            --ignore-errors mismatch,unused
+          uvx --from 'lcov_cobertura==2.1.1' lcov_cobertura coverage-public.info \
+            --output "${COVERAGE_XML}"
+      - name: Preserve public C++ coverage for the upload-only job
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-report-cpp-public
+          path: coverage-cpp-public.xml
+          retention-days: 1
       - name: Install and consume exported CMake package
         run: |
           cmake --install build-public --prefix "${RUNNER_TEMP}/xtbloom-install"

@@ -731,6 +731,61 @@ int test_reuse_and_transactions(cudaStream_t stream, std::int32_t device_id) {
       cache.prepare_host(batch.descriptor, options, reused, error);
   CHECK(invalid_physics != XTBLOOM_STATUS_SUCCESS);
   CHECK(same_identity(replaced, cache.identity()));
+  batch.molecular_charges[0] = host.molecular_charges()[0];
+  batch.bind();
+
+  /* ABI-v3 policies are setup/arena/Graph identity, not merely public tags.
+   * Direct runtime entry points fail closed on hostile complete suffixes, and
+   * every valid policy change replaces the topology-scoped owners atomically. */
+  xtbloom_compute_options_t hostile = options;
+  hostile.struct_size = XTBLOOM_COMPUTE_OPTIONS_V3_SIZE;
+  hostile.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  hostile.scc_mixer_history = 8;
+  hostile.scc_mixer_damping = 0.4;
+  hostile.determinism = XTBLOOM_DETERMINISM_DEFAULT;
+  hostile.scc_mixer_history = 65;
+  CHECK(cache.prepare_host(batch.descriptor, hostile, reused, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(same_identity(replaced, cache.identity()));
+
+  xtbloom_compute_options_t short_history = hostile;
+  short_history.scc_mixer_history = 4;
+  CHECK(cache.prepare_host(batch.descriptor, short_history, reused, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(!reused);
+  const Gfn2CudaExecutionIdentity history_replaced = cache.identity();
+  CHECK(history_replaced.plan_token != replaced.plan_token);
+  CHECK(history_replaced.topology_fingerprint != replaced.topology_fingerprint);
+  CHECK(history_replaced.iteration_layout_fingerprint != replaced.iteration_layout_fingerprint);
+  CHECK(history_replaced.iteration_arena != replaced.iteration_arena);
+  CHECK(history_replaced.scc_loop_owner != replaced.scc_loop_owner);
+  CHECK(history_replaced.solver_handle == replaced.solver_handle);
+  CHECK(history_replaced.blas_handle == replaced.blas_handle);
+  CHECK(cache.prepare_host(batch.descriptor, short_history, reused, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(reused);
+  CHECK(same_identity(history_replaced, cache.identity()));
+
+  xtbloom_compute_options_t changed_damping = short_history;
+  changed_damping.scc_mixer_damping = 0.2;
+  CHECK(cache.prepare_host(batch.descriptor, changed_damping, reused, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(!reused);
+  const Gfn2CudaExecutionIdentity damping_replaced = cache.identity();
+  CHECK(damping_replaced.plan_token != history_replaced.plan_token);
+  CHECK(damping_replaced.topology_fingerprint != history_replaced.topology_fingerprint);
+  CHECK(damping_replaced.scc_loop_owner != history_replaced.scc_loop_owner);
+
+  xtbloom_compute_options_t reproducible = changed_damping;
+  reproducible.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
+  CHECK(cache.prepare_host(batch.descriptor, reproducible, reused, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(!reused);
+  const Gfn2CudaExecutionIdentity deterministic_replaced = cache.identity();
+  CHECK(deterministic_replaced.plan_token != damping_replaced.plan_token);
+  CHECK(deterministic_replaced.topology_fingerprint != damping_replaced.topology_fingerprint);
+  CHECK(deterministic_replaced.eigensolver_owner != damping_replaced.eigensolver_owner);
+  CHECK(deterministic_replaced.scc_loop_owner != damping_replaced.scc_loop_owner);
   return 0;
 }
 

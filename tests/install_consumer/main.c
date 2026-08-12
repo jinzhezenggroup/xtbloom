@@ -48,10 +48,20 @@ _Static_assert(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE == 48,
                "installed ABI-v1 compute-options prefix must remain 48 bytes");
 _Static_assert(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE == 56,
                "installed ABI-v2 compute-options prefix must remain 56 bytes");
+_Static_assert(XTBLOOM_COMPUTE_OPTIONS_V3_SIZE == 80,
+               "installed ABI-v3 compute-options image must remain 80 bytes");
 _Static_assert(offsetof(xtbloom_compute_options_t, scc_start_mode) == 48,
                "installed ABI-v2 start mode offset must remain stable");
-_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
-               "installed compute-options layout must include the ABI-v2 suffix");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer) == 56,
+               "installed ABI-v3 mixer offset must remain stable");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_history) == 60,
+               "installed ABI-v3 mixer-history offset must remain stable");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_damping) == 64,
+               "installed ABI-v3 mixer-damping offset must remain stable");
+_Static_assert(offsetof(xtbloom_compute_options_t, determinism) == 72,
+               "installed ABI-v3 determinism offset must remain stable");
+_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V3_SIZE,
+               "installed compute-options layout must include the ABI-v3 suffix");
 
 _Static_assert(XTBLOOM_BATCH_V1_SIZE == 328, "installed ABI-v1 batch prefix must remain 328 bytes");
 _Static_assert(XTBLOOM_BATCH_V2_SIZE == 352, "installed ABI-v2 batch prefix must remain 352 bytes");
@@ -452,8 +462,12 @@ int main(int argc, char** argv) {
   if (xtbloom_compute_options_init(&compute_options, sizeof(compute_options)) !=
           XTBLOOM_STATUS_SUCCESS ||
       compute_options.scc_start_mode != XTBLOOM_SCC_START_FRESH ||
-      compute_options.reserved_v2 != 0) {
-    fprintf(stderr, "installed compute-options ABI-v2 defaults are incorrect\n");
+      compute_options.reserved_v2 != 0 ||
+      compute_options.scc_mixer != XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN ||
+      compute_options.scc_mixer_history != 8 || compute_options.scc_mixer_damping != 0.4 ||
+      compute_options.determinism != XTBLOOM_DETERMINISM_DEFAULT ||
+      compute_options.reserved_v3 != 0) {
+    fprintf(stderr, "installed compute-options ABI-v3 defaults are incorrect\n");
     return 1;
   }
 

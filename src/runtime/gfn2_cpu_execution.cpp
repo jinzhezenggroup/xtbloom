@@ -61,8 +61,8 @@ std::atomic<bool> g_test_provider_requires_thread_cleanup{false};
 using namespace xtbloom::detail::gfn2;
 
 constexpr std::size_t kHostAlignment = 64u;
-constexpr std::int64_t kMixerHistory = 8;
-constexpr double kMixerDamping = 0.4;
+constexpr std::int32_t kDefaultMixerHistory = 8;
+constexpr double kDefaultMixerDamping = 0.4;
 constexpr std::size_t kMaximumAutomaticCpuThreads = 64u;
 
 /* ``std::aligned_alloc`` is not provided by MSVC; wrap the platform primitive
@@ -577,6 +577,10 @@ struct SystemKey {
   double charge_tolerance = 0.0;
   double energy_tolerance = 0.0;
   double electronic_temperature = 0.0;
+  xtbloom_scc_mixer_t scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  std::int32_t scc_mixer_history = kDefaultMixerHistory;
+  double scc_mixer_damping = kDefaultMixerDamping;
+  xtbloom_determinism_t determinism = XTBLOOM_DETERMINISM_DEFAULT;
 
   friend bool operator==(const SystemKey& lhs, const SystemKey& rhs) {
     return lhs.atomic_numbers == rhs.atomic_numbers &&
@@ -589,14 +593,38 @@ struct SystemKey {
            lhs.maximum_iterations == rhs.maximum_iterations &&
            lhs.charge_tolerance == rhs.charge_tolerance &&
            lhs.energy_tolerance == rhs.energy_tolerance &&
-           lhs.electronic_temperature == rhs.electronic_temperature;
+           lhs.electronic_temperature == rhs.electronic_temperature &&
+           lhs.scc_mixer == rhs.scc_mixer && lhs.scc_mixer_history == rhs.scc_mixer_history &&
+           lhs.scc_mixer_damping == rhs.scc_mixer_damping && lhs.determinism == rhs.determinism;
   }
 };
+
+struct NormalizedExecutionPolicy {
+  xtbloom_scc_mixer_t scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  std::int32_t scc_mixer_history = kDefaultMixerHistory;
+  double scc_mixer_damping = kDefaultMixerDamping;
+  xtbloom_determinism_t determinism = XTBLOOM_DETERMINISM_DEFAULT;
+};
+
+NormalizedExecutionPolicy normalize_execution_policy(
+    const xtbloom_compute_options_t& options) noexcept {
+  NormalizedExecutionPolicy policy;
+  /* V1, V2, and incomplete V3 callers do not own the new suffix. Preserve
+   * the historical production policy without reading beyond struct_size. */
+  if (options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE) {
+    policy.scc_mixer = options.scc_mixer;
+    policy.scc_mixer_history = options.scc_mixer_history;
+    policy.scc_mixer_damping = options.scc_mixer_damping;
+    policy.determinism = options.determinism;
+  }
+  return policy;
+}
 
 void make_system_keys(const HostRequest& request, const xtbloom_compute_options_t& options,
                       std::vector<SystemKey>& keys) {
   keys.resize(static_cast<std::size_t>(request.batch_size));
   const bool periodic_enabled = request.shifts_enabled || request.response_enabled;
+  const NormalizedExecutionPolicy policy = normalize_execution_policy(options);
   for (std::int64_t system = 0; system < request.batch_size; ++system) {
     const std::size_t index = static_cast<std::size_t>(system);
     const std::int64_t atom_begin = request.atom_offsets[index];
@@ -618,6 +646,10 @@ void make_system_keys(const HostRequest& request, const xtbloom_compute_options_
     key.charge_tolerance = options.charge_tolerance;
     key.energy_tolerance = options.energy_tolerance;
     key.electronic_temperature = options.electronic_temperature;
+    key.scc_mixer = policy.scc_mixer;
+    key.scc_mixer_history = policy.scc_mixer_history;
+    key.scc_mixer_damping = policy.scc_mixer_damping;
+    key.determinism = policy.determinism;
   }
 }
 
@@ -633,7 +665,9 @@ bool same_prepared_layout(const SystemKey& lhs, const SystemKey& rhs) {
          lhs.maximum_iterations == rhs.maximum_iterations &&
          lhs.charge_tolerance == rhs.charge_tolerance &&
          lhs.energy_tolerance == rhs.energy_tolerance &&
-         lhs.electronic_temperature == rhs.electronic_temperature;
+         lhs.electronic_temperature == rhs.electronic_temperature &&
+         lhs.scc_mixer == rhs.scc_mixer && lhs.scc_mixer_history == rhs.scc_mixer_history &&
+         lhs.scc_mixer_damping == rhs.scc_mixer_damping && lhs.determinism == rhs.determinism;
 }
 
 struct SystemOutput {
@@ -873,7 +907,7 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_eigensolver_plan(wavefunction_layout, eigensolver, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = make_scc_mixer_plan(wavefunction_layout, kMixerHistory, kMixerDamping,
+  status = make_scc_mixer_plan(wavefunction_layout, key.scc_mixer_history, key.scc_mixer_damping,
                                key.charge_tolerance, key.charge_tolerance, mixer, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_spin_polarization_plan(basis, wavefunction_layout, spin, error);
@@ -1667,7 +1701,9 @@ struct Gfn2CpuExecutionCache::Impl {
      * per-system tasks and must not be re-entered from inside them. A pool that
      * ended up with a single worker (including cpu_threads=1 and truncated
      * thread creation) gets no executor, preserving the exact serial path. */
-    const bool intra_system_parallel = requested.size() == 1u && workers.concurrency() > 1u;
+    const bool intra_system_parallel =
+        requested.size() == 1u && workers.concurrency() > 1u &&
+        requested.front().determinism != XTBLOOM_DETERMINISM_REPRODUCIBLE;
     for (const SystemKey& key : requested) {
       auto system = std::make_unique<SystemExecution>(key);
       if (intra_system_parallel) {

@@ -124,6 +124,52 @@ def test_ase_set_rejects_invalid_settings_transactionally(
     assert calculator.parameters.max_scc_iterations == 250
 
 
+def test_ase_scc_policy_parameters_are_validated() -> None:
+    """Expose the frozen ABI-v3 controls through ASE's parameter mapping."""
+    calculator = XTBloom(
+        method="GFN2-xTB",
+        scc_mixer="modified_broyden",
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    )
+    assert calculator.parameters.scc_mixer_history == 16
+    with pytest.raises(XTBloomValueError, match="scc_mixer_history"):
+        calculator.set(scc_mixer_history=65)
+
+
+def test_ase_updates_cached_scc_policy_in_place() -> None:
+    """Push all numerical V3 policy changes into an existing API calculator."""
+
+    class FakeCalculator:
+        def __init__(self) -> None:
+            self.updates: list[tuple[str, object]] = []
+
+        def set(self, name: str, value: object) -> None:
+            self.updates.append((name, value))
+
+        def close(self) -> None:
+            pass
+
+    calculator = XTBloom(method="GFN2-xTB")
+    fake = FakeCalculator()
+    calculator._xtb = fake  # type: ignore[assignment]
+    calculator.set(
+        scc_mixer=_library.SCC_MIXER_MODIFIED_BROYDEN,
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    )
+
+    assert fake.updates == [
+        ("scc_mixer", _library.SCC_MIXER_MODIFIED_BROYDEN),
+        ("scc_mixer_history", 16),
+        ("scc_mixer_damping", 0.25),
+        ("determinism", "reproducible"),
+    ]
+    calculator.close()
+
+
 def test_ase_rejects_fractional_multiplicity() -> None:
     """Reject nonintegral spin multiplicities through the ASE interface."""
     with pytest.raises(XTBloomValueError):

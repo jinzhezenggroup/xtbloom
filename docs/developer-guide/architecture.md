@@ -159,7 +159,8 @@ prefix. CPU and CUDA both support strict `WARM`: it consumes the checkpoint from
 converged compatible batch call on the same context and never falls back to a fresh solve. A
 compatible identity covers the complete topology and compute policy (requested-property flags;
 molecular charge, spin, and unpaired electrons; point-charge and periodic structure; SCC tolerances;
-iteration limit; and electronic temperature). Geometry is not part of the identity, so a WARM call
+iteration limit; electronic temperature; mixer algorithm, history, and damping; and determinism).
+Geometry is not part of the identity, so a WARM call
 reuses the previous converged electronic state as the initial SCC guess for the new coordinates and
 reconverges;
 CUDA additionally keys its checkpoint to a geometry epoch and keeps modifying-Broyden history only
@@ -169,12 +170,25 @@ caller outputs unchanged. An accepted `FRESH` attempt consumes the preceding com
 before execution; if that attempt later fails, including a stream-ordered CUDA failure discovered
 after enqueue, the older checkpoint does not survive and the next strict `WARM` call rejects. CPU
 and CUDA use the same compute-options identity, including
-requested-property/output flags. High-level Python calculators select `FRESH` by default;
+requested-property/output flags, SCC mixer algorithm/history/damping, and the
+determinism policy. High-level Python calculators select `FRESH` by default;
 `Calculator` and `BatchCalculator` also expose opt-in transparent warm start, which retries one
 `FRESH` solve when the strict native gate rejects an incompatible checkpoint. The ASE calculator
 enables that policy by default for dynamics-like geometry sequences. Automatic batch slicing
 remains incompatible with warm start because one native context retains only its latest whole-batch
 checkpoint, not one checkpoint per logical chunk.
+
+The ABI-v3 compute-options suffix exposes the currently implemented Johnson
+modified-Broyden policy with a history depth from 1 through 64 and a finite
+damping factor in `(0, 1]`; the established defaults are history 8 and damping
+0.4. `XTBLOOM_DETERMINISM_REPRODUCIBLE` requests exact replay only within one
+fixed environment: the same xTBloom build, backend, CPU provider or CUDA
+toolkit, device architecture, descriptors and options, launch/bucket geometry,
+and `FRESH`/`WARM` sequence. It does not promise bitwise CPU-to-CUDA,
+cross-provider, cross-toolkit, or cross-architecture identity. CPU reproducible
+mode disables the optional single-system inner chunk executor, and CUDA seals
+pedantic cuBLAS math into the setup/Graph owner. Changing any ABI-v3 policy is
+a plan/cache/Graph identity change and invalidates strict `WARM` atomically.
 
 ## External interaction attachments
 
@@ -230,7 +244,8 @@ per-system plans, runs the batch, and publishes outputs on one context transacti
 that reuse one ragged topology and compute policy across many geometries, `xtbloom_plan_create`
 binds the immutable topology (atom offsets, element numbers, molecular charges, unpaired electrons,
 spin channels, and point-charge/response structure) plus the model, requested properties, SCC
-tolerances, iteration limit, and electronic temperature at creation time. `FRESH` versus `WARM`
+tolerances, iteration limit, electronic temperature, mixer algorithm/history/damping, and
+determinism at creation time. `FRESH` versus `WARM`
 remains a per-call choice. Geometry is not part of the plan, so repeated `xtbloom_plan_compute`
 calls can change positions, point-charge positions and values, periodic `b/A`
 values, and CPU electric-field attachment values/presence freely on `FRESH`

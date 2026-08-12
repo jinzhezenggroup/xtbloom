@@ -102,6 +102,10 @@ struct Fixture {
     options.energy_tolerance = 1.0e-8;
     options.electronic_temperature = XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
     options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+    options.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+    options.scc_mixer_history = 8;
+    options.scc_mixer_damping = 0.4;
+    options.determinism = XTBLOOM_DETERMINISM_DEFAULT;
 
     result.struct_size = sizeof(result);
     result.api_version = XTBLOOM_API_VERSION;
@@ -439,6 +443,29 @@ bool test_compute_options() {
        [](Fixture& f) { f.options.scc_start_mode = std::numeric_limits<std::int32_t>::max(); },
        "scc_start_mode"},
       {"options ABI-v2 reserved", [](Fixture& f) { f.options.reserved_v2 = 1; }, "reserved_v2"},
+      {"zero SCC mixer", [](Fixture& f) { f.options.scc_mixer = 0; }, "scc_mixer"},
+      {"unknown SCC mixer", [](Fixture& f) { f.options.scc_mixer = 2; }, "scc_mixer"},
+      {"zero SCC mixer history", [](Fixture& f) { f.options.scc_mixer_history = 0; },
+       "scc_mixer_history"},
+      {"negative SCC mixer history", [](Fixture& f) { f.options.scc_mixer_history = -1; },
+       "scc_mixer_history"},
+      {"oversized SCC mixer history", [](Fixture& f) { f.options.scc_mixer_history = 65; },
+       "scc_mixer_history"},
+      {"zero SCC mixer damping", [](Fixture& f) { f.options.scc_mixer_damping = 0.0; },
+       "scc_mixer_damping"},
+      {"negative SCC mixer damping", [](Fixture& f) { f.options.scc_mixer_damping = -0.1; },
+       "scc_mixer_damping"},
+      {"oversized SCC mixer damping", [](Fixture& f) { f.options.scc_mixer_damping = 1.01; },
+       "scc_mixer_damping"},
+      {"infinite SCC mixer damping",
+       [](Fixture& f) { f.options.scc_mixer_damping = std::numeric_limits<double>::infinity(); },
+       "scc_mixer_damping"},
+      {"NaN SCC mixer damping",
+       [](Fixture& f) { f.options.scc_mixer_damping = std::numeric_limits<double>::quiet_NaN(); },
+       "scc_mixer_damping"},
+      {"negative determinism", [](Fixture& f) { f.options.determinism = -1; }, "determinism"},
+      {"unknown determinism", [](Fixture& f) { f.options.determinism = 2; }, "determinism"},
+      {"options ABI-v3 reserved", [](Fixture& f) { f.options.reserved_v3 = 1; }, "reserved_v3"},
       {"result reserved", [](Fixture& f) { f.result.reserved = 1; }, "reserved"},
   };
   for (const InvalidCase& test : cases) {
@@ -454,6 +481,9 @@ bool test_compute_options() {
 
   fixture.options.model = XTBLOOM_MODEL_GFN2_XTB;
   fixture.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  fixture.options.scc_mixer_history = 64;
+  fixture.options.scc_mixer_damping = 1.0;
+  fixture.options.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
   CHECK(validate_compute_descriptors(XTBLOOM_BACKEND_CUDA, &fixture.batch, &fixture.options,
                                      &fixture.result)
             .ok());
@@ -468,12 +498,22 @@ bool test_compute_options_short_prefixes() {
   constexpr std::size_t kCanaryBytes = 16;
   for (const std::size_t caller_size :
        {static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE),
-        static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE - 1)}) {
+        static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE - 1),
+        static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE),
+        static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE + 1), std::size_t{63},
+        std::size_t{64}, std::size_t{71}, std::size_t{72},
+        static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V3_SIZE - 1)}) {
     std::unique_ptr<unsigned char, decltype(&std::free)> storage(
         static_cast<unsigned char*>(std::malloc(caller_size + kCanaryBytes)), &std::free);
     CHECK(storage != nullptr);
     std::memset(storage.get(), 0xa5, caller_size + kCanaryBytes);
     std::memcpy(storage.get(), &fixture.options, caller_size);
+    /* Make every byte in an incomplete suffix hostile. Validation must gate
+     * the suffix by its complete size rather than by individual field offsets. */
+    const std::size_t complete_prefix = caller_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE
+                                            ? XTBLOOM_COMPUTE_OPTIONS_V2_SIZE
+                                            : XTBLOOM_COMPUTE_OPTIONS_V1_SIZE;
+    std::memset(storage.get() + complete_prefix, 0xa5, caller_size - complete_prefix);
     const std::uint32_t encoded_size = static_cast<std::uint32_t>(caller_size);
     std::memcpy(storage.get(), &encoded_size, sizeof(encoded_size));
 

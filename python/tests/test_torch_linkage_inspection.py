@@ -172,9 +172,10 @@ def test_pe_parser_returns_named_stable_imports(tmp_path: Path) -> None:
 def test_pe_checker_accepts_exact_reviewed_dependencies(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Accept the hosted MSVC runtime closure and stable Torch imports."""
+    """Accept the hosted MSVC/UCRT runtime closure and stable Torch imports."""
     library = tmp_path / "xtbloom_torch_ext.dll"
     symbols = {"aoti_torch_get_data_ptr", "torch_library_impl"}
+    assert "api-ms-win-crt-math-l1-1-0.dll" in _CHECKER.PE_DEPENDENCIES_EXPECTED
     imports = {name: set() for name in _CHECKER.PE_DEPENDENCIES_EXPECTED}
     imports["torch_cpu.dll"] = symbols
     monkeypatch.setattr(_CHECKER, "_pe_machine", lambda path: 0x8664)
