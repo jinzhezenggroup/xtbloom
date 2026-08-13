@@ -489,13 +489,15 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "context is NULL");
   }
   std::unique_lock<std::mutex> cpu_transaction;
-  if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
-    /* Validation, model dispatch, cache mutation, and publication are one
-     * context transaction even when concurrent callers select different
-     * model caches. */
-    cpu_transaction = std::unique_lock<std::mutex>(context->implementation->cpu_transaction_mutex);
-  }
   try {
+    if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
+      /* Validation, model dispatch, cache mutation, and publication are one
+       * context transaction even when concurrent callers select different
+       * model caches. Keep acquisition inside the C ABI exception boundary:
+       * std::mutex::lock may report an operating-system failure by throwing. */
+      cpu_transaction =
+          std::unique_lock<std::mutex>(context->implementation->cpu_transaction_mutex);
+    }
     const bool cuda_backend = context->implementation->backend == XTBLOOM_BACKEND_CUDA;
     xtbloom::detail::DescriptorValidationResult validation =
         cuda_backend ? xtbloom::detail::validate_compute_descriptor_structure_for_dispatch(
