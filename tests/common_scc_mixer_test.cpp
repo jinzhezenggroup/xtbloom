@@ -52,6 +52,10 @@ struct Fixture {
   static constexpr std::size_t kVectorBytes = 128u;
   static constexpr std::size_t kQshOffset = 64u;
   static constexpr std::size_t kQshElements = 6u;
+  /* Keep byte-address arithmetic explicit: this is the first guard byte after
+   * the double-valued qsh field, not an element offset on a typed pointer. */
+  static constexpr std::size_t kQshEndOffset = kQshOffset + kQshElements * sizeof(double);
+  static constexpr std::size_t kSuffixBytes = kVectorBytes - kQshEndOffset;
 
   std::int64_t qsh_offsets[3]{0, 2, 6};
   SccMixerVectorLayoutView layout;
@@ -119,10 +123,8 @@ int test_qsh_only_ragged_mix_restart_and_transaction() {
 
   /* Guard bytes prove a qsh-only plan never assumes adjacent D/Q fields. */
   std::memset(fixture.vector_storage.data(), 0x5a, Fixture::kQshOffset);
-  std::memset(static_cast<std::byte*>(fixture.vector_storage.data()) + Fixture::kQshOffset +
-                  Fixture::kQshElements * sizeof(double),
-              0x5a,
-              Fixture::kVectorBytes - Fixture::kQshOffset - Fixture::kQshElements * sizeof(double));
+  std::memset(static_cast<std::byte*>(fixture.vector_storage.data()) + Fixture::kQshEndOffset, 0x5a,
+              Fixture::kSuffixBytes);
   const double initial[6]{0.10, -0.20, 0.30, -0.40, 0.05, -0.06};
   std::copy(std::begin(initial), std::end(initial), fixture.vector.fields[0]);
   CHECK(xtbloom::detail::common::initialize_scc_mixer_state_cpu(
@@ -134,8 +136,7 @@ int test_qsh_only_ragged_mix_restart_and_transaction() {
       static_cast<const std::byte*>(fixture.vector_storage.data()),
       static_cast<const std::byte*>(fixture.vector_storage.data()) + Fixture::kQshOffset);
   const std::vector<std::byte> suffix_before(
-      static_cast<const std::byte*>(fixture.vector_storage.data()) + Fixture::kQshOffset +
-          Fixture::kQshElements * sizeof(double),
+      static_cast<const std::byte*>(fixture.vector_storage.data()) + Fixture::kQshEndOffset,
       static_cast<const std::byte*>(fixture.vector_storage.data()) + Fixture::kVectorBytes);
 
   fixture.vector.fields[0][0] = initial[0] + 0.02;
@@ -148,9 +149,9 @@ int test_qsh_only_ragged_mix_restart_and_transaction() {
   CHECK(fixture.state.iterations[0] == 1u && fixture.state.iterations[1] == 0u);
   CHECK(std::equal(prefix_before.begin(), prefix_before.end(),
                    static_cast<const std::byte*>(fixture.vector_storage.data())));
-  CHECK(std::equal(suffix_before.begin(), suffix_before.end(),
-                   static_cast<const std::byte*>(fixture.vector_storage.data()) +
-                       Fixture::kQshOffset + Fixture::kQshElements * sizeof(double)));
+  CHECK(std::equal(
+      suffix_before.begin(), suffix_before.end(),
+      static_cast<const std::byte*>(fixture.vector_storage.data()) + Fixture::kQshEndOffset));
 
   AlignedBuffer staged_storage(fixture.plan.state_size_bytes());
   SccMixerState staged;
