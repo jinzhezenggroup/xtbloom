@@ -147,6 +147,7 @@ OPENBLAS_MANIFEST_CANONICAL_SHA256 = (
     "738b14d01a73ae38bce1cc36b47b7034e1932bc35a9a508e86c8dfc8deb02d1b"
 )
 PYODIDE_OPENBLAS_MANIFEST_PATH = "cmake/3rdparty/pyodide_openblas_manifest.json"
+GFN1_FIXTURE_MANIFEST_PATH = "tests/gfn1_fixture_manifest.json"
 PYODIDE_OPENBLAS_RECIPE_PATH = "cmake/3rdparty/pyodide-openblas/recipe"
 PYODIDE_OPENBLAS_MANIFEST_CANONICAL_SHA256 = (
     "b0418710cc44b9d59a1dc90ddc489c46036e4f12c4594356e9878861706dbe69"
@@ -210,6 +211,7 @@ SOURCE_FILES = (
     "data/parameters/d4_manifest.json",
     "data/parameters/gfn1_manifest.json",
     "data/parameters/gfn1_d3_manifest.json",
+    GFN1_FIXTURE_MANIFEST_PATH,
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
@@ -371,6 +373,9 @@ NOTICE_TOKENS = (
     "aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5",
     "6e1f59c3f39d919a2dbef0601d2576727c8b30e8",
     "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
+    "b529b5ddb75c0554274955082a189f9f88437cb2",
+    "663245d739be0123da61c917e55116b0c3db4c74",
+    "133f91efb94b47f05848e1f86832f40a1accc385",
     "edcfbbe39d411edc225e27315fbda3a204ddb023",
     "9ab8ca565e0f71d967587e0bca2015f7d689f19f",
     "6f4fc02ae058ef11848046af01a1a756f3229c29",
@@ -1670,6 +1675,171 @@ def _check_gfn1_d3_provenance(
         raise LicenseCheckError("retained mctc Apache license differs from provenance")
 
 
+def _check_gfn1_fixture_provenance(root: Path) -> None:
+    """Pin repository-only copied GFN1 scientific fixture provenance."""
+    expected = {
+        "dxtb": {
+            "repository": "https://github.com/grimme-lab/dxtb",
+            "license": "Apache-2.0",
+            "revision": "b529b5ddb75c0554274955082a189f9f88437cb2",
+            "tree": "502d629acb0a9b1f93e829ec6f467f0beeb129eb",
+            "files": {
+                "test/test_hamiltonian/test_gfn1.py": (
+                    "0bd768b42e5cecee4f014d9063832a1e864aa751",
+                    "306eca70943447fa6b0972ed9af5667128064d5a8b3bacac2a0fb47adf15da13",
+                ),
+                "test/test_overlap/overlap.npz": (
+                    "8fd0e1ad61a2961e9242dc9c799cf2e180f5a2e2",
+                    "f2be66d19693cc932f2fb8d1b5b4ad8a6fe47bea4e999b401bb77115d71aa292",
+                ),
+                "test/test_singlepoint/mols/H2/coord": (
+                    "1638f7ade742d9fe16156ec22c6cbad51b525546",
+                    "d4b2168eae99a8bb51a580693d9766506c17728a4ee42cdc093d9de88f540058",
+                ),
+            },
+        },
+        "mstore": {
+            "repository": "https://github.com/grimme-lab/mstore",
+            "license": "Apache-2.0",
+            "revision": "663245d739be0123da61c917e55116b0c3db4c74",
+            "tree": "d141de6b486140e3a236286d642610627d0136f2",
+            "files": {
+                "src/mstore/mb16_43.f90": (
+                    "ab4c27ce49fdd53003a1aff50e527354fafae64b",
+                    "4281f4e7f39c514ed449de49ee255b698b1a7d410f0625553e9b70c0893228a6",
+                )
+            },
+        },
+        "tblite": {
+            "repository": "https://github.com/tblite/tblite",
+            "license": "LGPL-3.0-or-later",
+            "revision": "133f91efb94b47f05848e1f86832f40a1accc385",
+            "tree": "008603bbf877b414f68208d3fe8393265f72b108",
+            "files": {
+                "src/tblite/coulomb/charge/effective.f90": (
+                    "67b91d63e13803e5bc297597e7312404bb1e576c",
+                    "1d66415c1046e3b83bde1434f6e1ea5697a95362332c70a8db08b2668a07214a",
+                ),
+                "test/unit/test_repulsion.f90": (
+                    "9cb9671606ccb3081ba798247791f088eb1ffa40",
+                    "a208f0847342ede9c68e5b54c5765ef421d844f9f94268334b7fcee15aa298a2",
+                ),
+            },
+        },
+    }
+    reviewed_extraction = {
+        "dxtb": {
+            "test/test_hamiltonian/test_gfn1.py": (
+                "Literal H2 GFN1 Hamiltonian matrix from test_no_cn; dxtb "
+                "identifies tblite 0.3.0 as the numerical generator.",
+                ("tests/gfn1_h0_test.cpp",),
+            ),
+            "test/test_overlap/overlap.npz": (
+                "H2 float32 overlap matrix extracted by array key; raw extracted "
+                "array SHA-256 874375eb64c283f9c4061c56c40baf5b4f54dc936c44"
+                "bfedf0f7296aaca0a98e.",
+                ("tests/gfn1_integrals_test.cpp",),
+            ),
+            "test/test_singlepoint/mols/H2/coord": (
+                "H2 bohr geometry used by the H0 and overlap fixtures.",
+                ("tests/gfn1_h0_test.cpp", "tests/gfn1_integrals_test.cpp"),
+            ),
+        },
+        "mstore": {
+            "src/mstore/mb16_43.f90": (
+                "MB16-43 structure 01 atomic numbers and Cartesian coordinates, "
+                "transcribed from the first structure entry.",
+                (
+                    "tests/gfn1_coordination_test.cpp",
+                    "tests/gfn1_repulsion_test.cpp",
+                ),
+            ),
+        },
+        "tblite": {
+            "src/tblite/coulomb/charge/effective.f90": (
+                "GFN1 harmonic pair-averaging and effective Coulomb equations "
+                "independently expanded in the ES2 fixture; shell hardness "
+                "parameters come from the separately pinned canonical GFN1 tables.",
+                ("tests/gfn1_es_spin_test.cpp",),
+            ),
+            "test/unit/test_repulsion.f90": (
+                "Literal GFN1 effective-repulsion energy golden for mstore "
+                "MB16-43 structure 01.",
+                ("tests/gfn1_repulsion_test.cpp",),
+            ),
+        },
+    }
+    manifest = json.loads(
+        (root / GFN1_FIXTURE_MANIFEST_PATH).read_text(encoding="utf-8")
+    )
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 1
+        or manifest.get("scope") != "repository-only GFN1 CPU scientific fixtures"
+        or not isinstance(manifest.get("distribution"), str)
+        or "excluded from native installs, PyPI sdists, and wheels"
+        not in manifest.get("distribution", "")
+    ):
+        raise LicenseCheckError("GFN1 fixture manifest has unreviewed scope")
+    sources = manifest.get("sources")
+    if (
+        not isinstance(sources, list)
+        or len(sources) != len(expected)
+        or not all(
+            isinstance(source, dict) and isinstance(source.get("project"), str)
+            for source in sources
+        )
+        or {source["project"] for source in sources} != set(expected)
+    ):
+        raise LicenseCheckError("GFN1 fixture manifest has incomplete sources")
+    for source in sources:
+        if not isinstance(source, dict) or source.get("project") not in expected:
+            raise LicenseCheckError("GFN1 fixture manifest has an unknown source")
+        reviewed = expected[source["project"]]
+        for key in ("repository", "license", "revision", "tree"):
+            if source.get(key) != reviewed[key]:
+                raise LicenseCheckError(
+                    "GFN1 fixture manifest has unreviewed provenance"
+                )
+        source_files = source.get("files")
+        if not isinstance(source_files, list) or not all(
+            isinstance(item, dict) and isinstance(item.get("path"), str)
+            for item in source_files
+        ):
+            raise LicenseCheckError("GFN1 fixture manifest has incomplete source files")
+        source_paths = [item.get("path") for item in source_files]
+        if len(source_paths) != len(set(source_paths)):
+            raise LicenseCheckError(
+                "GFN1 fixture manifest has duplicate source file paths"
+            )
+        observed_files = {
+            item.get("path"): (item.get("git_blob"), item.get("sha256"))
+            for item in source_files
+        }
+        if observed_files != reviewed["files"]:
+            raise LicenseCheckError("GFN1 fixture manifest has incomplete source files")
+        for item in source_files:
+            consumers = item.get("consumers")
+            reviewed_use, reviewed_consumers = reviewed_extraction[source["project"]][
+                item["path"]
+            ]
+            if (
+                item.get("use") != reviewed_use
+                or not isinstance(consumers, list)
+                or not all(isinstance(consumer, str) for consumer in consumers)
+                or tuple(consumers) != reviewed_consumers
+                or len(consumers) != len(set(consumers))
+            ):
+                raise LicenseCheckError(
+                    "GFN1 fixture manifest has incomplete extraction roles"
+                )
+            for consumer in consumers:
+                if not (root / consumer).is_file():
+                    raise LicenseCheckError(
+                        "GFN1 fixture manifest names a missing consumer"
+                    )
+
+
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
     _require_files(root, SOURCE_FILES, "source tree")
@@ -1901,16 +2071,34 @@ def check_source(root: Path) -> None:
 
     _check_gfn1_parameter_provenance(gfn1)
     _check_gfn1_d3_provenance(gfn1_d3, (root / "LICENSES/Apache-2.0.txt").read_bytes())
+    _check_gfn1_fixture_provenance(root)
     if gfn2["source"]["license"]["spdx"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("GFN2 parameter manifest has the wrong SPDX license")
     if spin["source"]["license"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("spin manifest has the wrong SPDX license")
+    sto_validation = (
+        "tools/licensing/check_licenses.py hashes the complete consumer header "
+        "and verifies this manifest"
+    )
+    sto_consumer = {
+        "path": "data/parameters/tblite_sto.hpp",
+        "bytes": 8920,
+        "sha256": ("338e16ddbf4be2d115959f3c779c295c106a0426768c55e1b9f0b7a250481c26"),
+    }
     if (
         sto["source"]["license"] != "LGPL-3.0-or-later"
         or sto["source"]["revision"] != "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
         or sto["source"]["sha256"]
         != "8a3df2db076469b0e22c02af9dfadf9880932fc241b82d5802ebb268d002773c"
-        or sto["consumer"] != "data/parameters/tblite_sto.hpp"
+        or sto.get("schema_version") != 2
+        or sto.get("extraction", {}).get("validation") != sto_validation
+        or sto.get("consumer") != sto_consumer
+        or len((root / "data/parameters/tblite_sto.hpp").read_bytes())
+        != sto["consumer"]["bytes"]
+        or hashlib.sha256(
+            (root / "data/parameters/tblite_sto.hpp").read_bytes()
+        ).hexdigest()
+        != sto["consumer"]["sha256"]
     ):
         raise LicenseCheckError("STO manifest has incorrect LGPL provenance")
     if spin["consumer"] != "data/parameters/tblite_spin.hpp":

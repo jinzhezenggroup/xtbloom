@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#include "model/gfn2/basis.hpp"
+#include "model/gfn1/basis.hpp"
 
 #include <algorithm>
 #include <array>
@@ -12,10 +12,10 @@
 #include <stdexcept>
 #include <utility>
 
-#include "data/parameters/gfn2.hpp"
+#include "data/parameters/gfn1.hpp"
 #include "model/common/sto.hpp"
 
-namespace xtbloom::detail::gfn2 {
+namespace xtbloom::detail::gfn1 {
 namespace {
 
 bool count_fits_vector(std::int64_t count, std::size_t element_size, bool add_sentinel = false) {
@@ -41,18 +41,18 @@ bool checked_add(std::int64_t increment, std::int64_t& total) {
   return true;
 }
 
-const parameters::gfn2::ShellParameters* element_shells(
-    const parameters::gfn2::ElementParameters& element) {
+const parameters::gfn1::ShellParameters* element_shells(
+    const parameters::gfn1::ElementParameters& element) {
   const std::size_t begin = element.shell_offset;
   const std::size_t count = element.shell_count;
-  if (begin > parameters::gfn2::kShells.size() ||
-      count > parameters::gfn2::kShells.size() - begin) {
+  if (begin > parameters::gfn1::kShells.size() ||
+      count > parameters::gfn1::kShells.size() - begin) {
     return nullptr;
   }
-  return parameters::gfn2::kShells.data() + begin;
+  return parameters::gfn1::kShells.data() + begin;
 }
 
-bool validate_shell(const parameters::gfn2::ShellParameters& shell) {
+bool validate_shell(const parameters::gfn1::ShellParameters& shell) {
   const double* alpha = nullptr;
   const double* coeff = nullptr;
   return shell.angular_momentum <= 4u && shell.gaussian_count >= 1u && shell.gaussian_count <= 6u &&
@@ -108,7 +108,7 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
 
       const std::int32_t atomic_number = atomic_numbers[atom];
       const auto* element =
-          parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_number));
+          parameters::gfn1::find_element(static_cast<std::uint32_t>(atomic_number));
       if (element == nullptr || element->atomic_number != atomic_number) {
         error = "basis plan contains an unsupported atomic number";
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -182,7 +182,7 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
     double minimum_alpha = std::numeric_limits<double>::infinity();
     for (std::int64_t atom = 0; atom < total_atoms; ++atom) {
       const auto* element =
-          parameters::gfn2::find_element(static_cast<std::uint32_t>(atomic_numbers[atom]));
+          parameters::gfn1::find_element(static_cast<std::uint32_t>(atomic_numbers[atom]));
       const auto* shells = element_shells(*element);
       std::array<std::int64_t, 5> first_shell;
       first_shell.fill(-1);
@@ -197,14 +197,14 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
         created.shell_to_atom[current_shell] = atom;
         created.principal_quantum_numbers[current_shell] = shell.principal_quantum_number;
         created.angular_momenta[current_shell] = shell.angular_momentum;
-        created.shell_is_valence[current_shell] = 1u;
+        created.shell_is_valence[current_shell] = shell.is_valence ? 1u : 0u;
         created.slater_exponents[current_shell] = shell.slater;
 
         double* alpha = created.primitive_exponents.data() + current_primitive;
         double* coeff = created.primitive_coefficients.data() + current_primitive;
         if (!common::expand_sto_shell(shell.principal_quantum_number, shell.angular_momentum,
                                       shell.gaussian_count, shell.slater, alpha, coeff)) {
-          error = "GFN2 basis references an unavailable pinned STO table row";
+          error = "GFN1 basis references an unavailable pinned STO table row";
           return XTBLOOM_STATUS_INTERNAL_ERROR;
         }
         std::size_t actual_count = shell.gaussian_count;
@@ -259,12 +259,12 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
-    error = "failed to allocate the GFN2 basis plan";
+    error = "failed to allocate the GFN1 basis plan";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;
   } catch (const std::length_error&) {
-    error = "GFN2 basis plan dimensions exceed host container limits";
+    error = "GFN1 basis plan dimensions exceed host container limits";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
-}  // namespace xtbloom::detail::gfn2
+}  // namespace xtbloom::detail::gfn1
