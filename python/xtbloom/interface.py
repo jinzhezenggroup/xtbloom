@@ -2855,7 +2855,11 @@ def _build_compute_options(
 
 
 def _normalize_out_spec(out: object | None) -> dict[str, object]:
-    """Validate and normalize the ``out=`` output-policy mapping."""
+    """Validate and normalize the ``out=`` output-policy mapping.
+
+    A known output mapped to ``None`` is equivalent to omitting that entry,
+    so the selected ``result_memory`` policy still owns its allocation.
+    """
     if out is None:
         return {}
     if not isinstance(out, dict):
@@ -2866,6 +2870,8 @@ def _normalize_out_spec(out: object | None) -> dict[str, object]:
         canonical = aliases.get(name, name)
         if canonical not in _dlpack.EXPECTED_OUTPUT_DTYPES:
             raise XTBloomValueError(f"unknown output name {name!r}")
+        if array is None:
+            continue
         if canonical in normalized:
             raise XTBloomValueError(f"output {name!r} was supplied more than once")
         if _array_adapter.is_lazy(array):
