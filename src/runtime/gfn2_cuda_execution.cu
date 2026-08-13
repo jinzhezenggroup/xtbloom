@@ -6634,12 +6634,25 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     cuda_status =
         candidate->iteration_arena.allocate(candidate->iteration_requirements.total_bytes);
-    if (cuda_status == cudaSuccess) {
-      cuda_status = candidate->provider_host_workspace.allocate(
-          eigensolver_requirements.provider.solver_host_workspace_bytes);
-    }
     if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA SCC iteration/provider workspace allocation", cuda_status);
+      error = cuda_error_message("CUDA SCC iteration arena allocation", cuda_status);
+      return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    }
+    if (candidate->iteration_arena.bytes() != 0u) {
+      /* The arena is also exposed as one test-only transactional state image.
+       * Initialize padding and currently unused capacity so a complete
+       * device-to-host snapshot never reads indeterminate allocation bytes. */
+      cuda_status = cudaMemsetAsync(candidate->iteration_arena.get(), 0,
+                                    candidate->iteration_arena.bytes(), stream);
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA SCC iteration arena initialization", cuda_status);
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+    }
+    cuda_status = candidate->provider_host_workspace.allocate(
+        eigensolver_requirements.provider.solver_host_workspace_bytes);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA SCC provider workspace allocation", cuda_status);
       return XTBLOOM_STATUS_ALLOCATION_FAILED;
     }
     const auto bind_diagnostic = bind_gfn2_scc_iteration_arena_cuda(
@@ -6685,6 +6698,16 @@ struct Gfn2CudaExecutionCache::Impl {
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA eigensolver setup arena allocation", cuda_status);
       return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    }
+    if (candidate->eigensolver_setup_arena.bytes() != 0u) {
+      /* Keep the test-only workspace image fully initialized for transactional
+       * comparisons and Compute Sanitizer host-copy validation. */
+      cuda_status = cudaMemsetAsync(candidate->eigensolver_setup_arena.get(), 0,
+                                    candidate->eigensolver_setup_arena.bytes(), stream);
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA eigensolver setup arena initialization", cuda_status);
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
     }
     eigensolver_diagnostic = candidate->eigensolver_owner.bind_and_factor_overlap_async(
         candidate->device_topology, candidate->plan_seed, candidate->iteration_requirements,

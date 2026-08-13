@@ -139,12 +139,13 @@ before reusing the numbers.
 | Host input/output descriptors | CPU and CUDA |
 | CUDA-device and mixed descriptors | Low-level C ABI |
 | Explicit point charges in SCC and point-charge forces | Supported |
-| Caller-supplied periodic charge response | Supported; no lattice descriptor |
+| Caller-supplied periodic charge response | Supported; separate from the native-cell ABI |
+| Native-cell descriptors | ABI-v4 validates `NONE`/`XYZ`; periodic execution returns `NOT_IMPLEMENTED` |
 | Uniform electric field and molecular dipoles | CPU and CUDA |
 | ASE and dpdata integrations | Supported |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side adapter |
-| Native GFN1-xTB, ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, lattice/PBC | Not implemented |
+| Native GFN1-xTB, ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN2 execution | Not implemented |
 
 Reserved ABI values are not reported as supported features. At finite
 electronic temperature, the reported variational energy is the electronic

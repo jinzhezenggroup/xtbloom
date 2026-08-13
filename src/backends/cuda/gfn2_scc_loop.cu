@@ -538,6 +538,11 @@ Gfn2SccLoopGraphBuildResult build_device_tail_graph(
     return fallback_graph_build(state, Gfn2SccLoopGraphFallbackReason::kControlAllocationFailed,
                                 status);
   }
+  status = cudaMemset(state.control, 0, sizeof(Gfn2SccDeviceLoopControl));
+  if (status != cudaSuccess) {
+    return fallback_graph_build(state, Gfn2SccLoopGraphFallbackReason::kControlAllocationFailed,
+                                status);
+  }
 
   cudaStream_t capture_stream = nullptr;
   status = cudaStreamCreateWithFlags(&capture_stream, cudaStreamNonBlocking);
@@ -785,6 +790,12 @@ Gfn2SccLoopGraphBuildResult build_dispatch_chain(Gfn2SccLoopCudaGraphOwner::Stat
   cudaError_t status =
       cudaMalloc(reinterpret_cast<void**>(&state.control), sizeof(Gfn2SccDeviceLoopControl));
   if (status != cudaSuccess) {
+    return fallback_graph_build(state, Gfn2SccLoopGraphFallbackReason::kControlAllocationFailed,
+                                status);
+  }
+  status = cudaMemset(state.control, 0, sizeof(Gfn2SccDeviceLoopControl));
+  if (status != cudaSuccess) {
+    destroy_dispatch_chain_resources(state);
     return fallback_graph_build(state, Gfn2SccLoopGraphFallbackReason::kControlAllocationFailed,
                                 status);
   }
