@@ -1126,6 +1126,20 @@ xtbloom_status_t bind_scc_mixer_workspace(const SccMixerPlan& plan, void* worksp
   return XTBLOOM_STATUS_SUCCESS;
 }
 
+xtbloom_status_t validate_scc_mixer_state_binding(const SccMixerPlan& plan,
+                                                  const SccMixerState& state,
+                                                  std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  return status == XTBLOOM_STATUS_SUCCESS ? validate_state(plan, state, error) : status;
+}
+
+xtbloom_status_t validate_scc_mixer_workspace_binding(const SccMixerPlan& plan,
+                                                      const SccMixerWorkspace& workspace,
+                                                      std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  return status == XTBLOOM_STATUS_SUCCESS ? validate_workspace(plan, workspace, error) : status;
+}
+
 xtbloom_status_t initialize_scc_mixer_state_cpu(const SccMixerPlan& plan,
                                                 const SccMixerVectorView& wavefunction,
                                                 const SccMixerState& state, std::string& error) {

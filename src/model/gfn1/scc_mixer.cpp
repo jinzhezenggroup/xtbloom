@@ -90,6 +90,18 @@ xtbloom_status_t bind_scc_mixer_workspace(const SccMixerPlan& plan, void* worksp
                                           error);
 }
 
+xtbloom_status_t validate_scc_mixer_state_binding(const SccMixerPlan& plan,
+                                                  const SccMixerState& state,
+                                                  std::string& error) {
+  return common::validate_scc_mixer_state_binding(common_plan(plan), state, error);
+}
+
+xtbloom_status_t validate_scc_mixer_workspace_binding(const SccMixerPlan& plan,
+                                                      const SccMixerWorkspace& workspace,
+                                                      std::string& error) {
+  return common::validate_scc_mixer_workspace_binding(common_plan(plan), workspace, error);
+}
+
 xtbloom_status_t initialize_scc_mixer_state_cpu(const SccMixerPlan& plan,
                                                 const WavefunctionView& wavefunction,
                                                 const SccMixerState& state,

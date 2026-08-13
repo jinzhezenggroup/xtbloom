@@ -12,7 +12,7 @@
 
 #include "model/gfn2/eigensolver.hpp"
 
-#if defined(XTBLOOM_TEST_SCIPY_PREFIXED_BLAS)
+#if defined(XTBLOOM_TEST_HAS_CPU_LINALG) && defined(XTBLOOM_TEST_SCIPY_PREFIXED_BLAS)
 #define LAPACKE_dpotrf_work scipy_LAPACKE_dpotrf_work
 #define LAPACKE_dpocon_work scipy_LAPACKE_dpocon_work
 #define LAPACKE_dsyevd_work scipy_LAPACKE_dsyevd_work
@@ -20,6 +20,7 @@
 #define cblas_dgemm scipy_cblas_dgemm
 #endif
 
+#if defined(XTBLOOM_TEST_HAS_CPU_LINALG)
 extern "C" {
 std::int32_t LAPACKE_dpotrf_work(std::int32_t, char, std::int32_t, double*, std::int32_t);
 std::int32_t LAPACKE_dpocon_work(std::int32_t, char, std::int32_t, const double*, std::int32_t,
@@ -31,6 +32,7 @@ void cblas_dtrsm(int, int, int, int, int, std::int32_t, std::int32_t, double, co
 void cblas_dgemm(int, int, int, std::int32_t, std::int32_t, std::int32_t, double, const double*,
                  std::int32_t, const double*, std::int32_t, double, double*, std::int32_t);
 }
+#endif
 
 #define CHECK(condition) \
   do {                   \
@@ -292,6 +294,7 @@ int test_model_neutral_eigensolver_projection() {
   CHECK(eigensolver_view.coefficients == view.coefficients);
   CHECK(eigensolver_view.energy_weighted_density == view.energy_weighted_density);
 
+#if defined(XTBLOOM_TEST_HAS_CPU_LINALG)
   xtbloom::detail::gfn2::CpuLinearAlgebraBackend backend;
   CHECK(xtbloom::detail::gfn2::make_internal_test_lp64_backend(
             &LAPACKE_dpotrf_work, &LAPACKE_dpocon_work, &LAPACKE_dsyevd_work, &cblas_dtrsm,
@@ -329,6 +332,7 @@ int test_model_neutral_eigensolver_projection() {
   CHECK(view.occupations[2] == 0.0 && view.occupations[3] == 0.0);
   CHECK(std::abs(view.density[0] - 1.0) < 1.0e-14);
   CHECK(std::abs(view.energy_weighted_density[0] + 0.5) < 1.0e-14);
+#endif
 
   auto forged = projection;
   forged.fields[4].system_offset_count = 1u;

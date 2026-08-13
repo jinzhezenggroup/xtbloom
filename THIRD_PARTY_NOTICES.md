@@ -104,6 +104,20 @@ Redistributed or derived material:
   Exact input, executable, shared-library, command, and output hashes are
   recorded in the separate GFN1 manifest. No tblite binary is redistributed.
 
+## xTB GFN1 legacy STO expansion
+
+Repository: <https://github.com/grimme-lab/xtb>
+
+License: `LGPL-3.0-or-later` (`LICENSES/LGPL-3.0-or-later.txt`; the
+incorporated GPLv3 terms are in the project `LICENSE`).
+
+The GFN1-scoped STO-6G 4s/4p rows in
+`data/parameters/gfn1_legacy_sto.hpp` reproduce the active legacy expansion in
+xTB 6.7.1 revision `edcfbbe39d411edc225e27315fbda3a204ddb023`. The exact
+source blob, file digest, extraction scope, and consumer digest are recorded in
+`data/parameters/gfn1_legacy_sto_manifest.json`. The shared/GFN2 tblite
+Stewart tables remain unchanged.
+
 ## simple-dftd3 GFN1 reference data
 
 Repository: <https://github.com/dftd3/simple-dftd3>
@@ -141,8 +155,11 @@ They also retain MB16-43 structure 01 coordinates from mstore v0.3.0
 revision `663245d739be0123da61c917e55116b0c3db4c74` (`Apache-2.0`) and the
 corresponding GFN1 effective-repulsion energy, Br2-NH3/Br2-OCH2/FI-NCH
 halogen geometries and energies, and halogen derivative contract from tblite
-inspection revision `133f91efb94b47f05848e1f86832f40a1accc385`
-(`LGPL-3.0-or-later`). Exact
+inspection revision `133f91efb94b47f05848e1f86832f40a1accc385`. The hidden
+CPU composition test additionally retains tblite's unrestricted RSE43 P10
+geometry, one-unpaired-electron state, GFN1 energy, and analytic gradient from
+the primary parameter/oracle release revision
+`fa8a4416e8fe093d0075bc10ac875494c2a449a9` (`LGPL-3.0-or-later`). Exact
 source paths, Git blobs, SHA-256 digests, extraction roles, and local consumers
 are recorded in `tests/gfn1_fixture_manifest.json`.
 

@@ -122,7 +122,7 @@ class CpuLinearAlgebraBackend {
   friend xtbloom_status_t make_internal_test_lp64_backend(
       LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
       CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
-      CpuLinearAlgebraBackend& backend, std::string& error);
+      CpuLinearAlgebraBackend& backend, std::string& error, BlasThreadCleanup thread_cleanup);
   friend struct CpuLinearAlgebraAccess;
 };
 
@@ -132,7 +132,8 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
 xtbloom_status_t make_internal_test_lp64_backend(
     LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
     CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
-    CpuLinearAlgebraBackend& backend, std::string& error);
+    CpuLinearAlgebraBackend& backend, std::string& error,
+    BlasThreadCleanup thread_cleanup = nullptr);
 
 struct EigensolverPlanData;
 
@@ -294,6 +295,12 @@ xtbloom_status_t bind_eigensolver_workspace(const EigensolverPlan& plan, void* w
 xtbloom_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, void* workspace,
                                                    std::size_t workspace_size,
                                                    EigensolverWorkspace& view, std::string& error);
+
+/* Read-only canonical-binding checks used by model-owned SCC orchestrators. */
+xtbloom_status_t validate_eigensolver_overlap_cache_binding(
+    const EigensolverPlan& plan, const EigensolverOverlapCache& cache, std::string& error);
+xtbloom_status_t validate_eigensolver_worker_workspace_binding(
+    const EigensolverPlan& plan, const EigensolverWorkspace& workspace, std::string& error);
 
 /*
  * Factor packed symmetric overlaps into persistent column-major Cholesky

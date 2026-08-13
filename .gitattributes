@@ -19,6 +19,7 @@ LICENSES/LGPL-3.0-or-later.txt -text
 # The copied tblite STO table is licensed and checked against its exact
 # upstream SHA-256. Force LF checkouts so Windows wheels retain those bytes.
 data/parameters/tblite_sto.hpp text eol=lf
+data/parameters/gfn1_legacy_sto.hpp text eol=lf
 
 # These upstream license and vendored-source trees are checked byte-for-byte
 # against provenance manifests. Disable checkout newline conversion so a

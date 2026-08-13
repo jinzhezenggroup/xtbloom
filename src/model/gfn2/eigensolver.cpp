@@ -1404,10 +1404,11 @@ void CpuLinearAlgebraBackend::release_thread_resources() const noexcept {
 xtbloom_status_t make_internal_test_lp64_backend(
     LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
     CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
-    CpuLinearAlgebraBackend& backend, std::string& error) {
+    CpuLinearAlgebraBackend& backend, std::string& error, BlasThreadCleanup thread_cleanup) {
   CpuLinearAlgebraBackend created =
       CpuLinearAlgebraAccess::make(CpuLinearAlgebraBackend::Origin::kInternalTestLp64, dpotrf_work,
-                                   dpocon_work, dsyevd_work, dtrsm, dgemm, set_num_threads_local);
+                                   dpocon_work, dsyevd_work, dtrsm, dgemm,
+                                   set_num_threads_local, thread_cleanup);
   if (!created.ready() || !backend_self_test(created)) {
     error = "internal LP64 test backend failed its column-major preflight";
     return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
@@ -1803,12 +1804,9 @@ const EigensolverPlanData* EigensolverPlan::identity() const noexcept { return d
 
 xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,
                                        std::string& error, double minimum_overlap_rcond) {
-  WavefunctionWarmStartIdentity validated_layout;
-  xtbloom_status_t status =
-      make_wavefunction_warm_start_identity(layout, 1u, validated_layout, error);
-  if (status != XTBLOOM_STATUS_SUCCESS) {
-    return status;
-  }
+  /* The projection overload below performs the complete layout validation
+   * needed by eigensolution. Keeping this wrapper free of a GFN2 wavefunction
+   * symbol lets the shared eigensolver link into a GFN1-only internal target. */
   return make_eigensolver_plan(make_eigensolver_wavefunction_layout(layout), plan, error,
                                minimum_overlap_rcond);
 }
@@ -2198,6 +2196,19 @@ xtbloom_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, 
   view = created;
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t validate_eigensolver_overlap_cache_binding(
+    const EigensolverPlan& plan, const EigensolverOverlapCache& cache, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  return status == XTBLOOM_STATUS_SUCCESS ? validate_cache(plan, cache, error) : status;
+}
+
+xtbloom_status_t validate_eigensolver_worker_workspace_binding(
+    const EigensolverPlan& plan, const EigensolverWorkspace& workspace, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  return status == XTBLOOM_STATUS_SUCCESS ? validate_worker_workspace(plan, workspace, error)
+                                          : status;
 }
 
 xtbloom_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* overlap,

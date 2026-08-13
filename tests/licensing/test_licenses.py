@@ -263,6 +263,7 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
         for expected in (
             "data/parameters/gfn1.toml whitespace=-blank-at-eof",
             "data/parameters/tblite_sto.hpp text eol=lf",
+            "data/parameters/gfn1_legacy_sto.hpp text eol=lf",
             "LICENSES/Apache-2.0.txt -text",
             "LICENSES/LGPL-3.0-or-later.txt -text",
             "LICENSES/scipy-openblas32-0.3.34.0.0.txt -text",
@@ -309,6 +310,11 @@ class LicenseArchiveTests(unittest.TestCase):
                 elif name.endswith("/provenance/gfn1_d3_manifest.json"):
                     payload = (
                         REPOSITORY / "data/parameters/gfn1_d3_manifest.json"
+                    ).read_bytes()
+                elif name.endswith("/provenance/gfn1_legacy_sto_manifest.json"):
+                    payload = (
+                        REPOSITORY
+                        / "data/parameters/gfn1_legacy_sto_manifest.json"
                     ).read_bytes()
                 elif name.endswith("/provenance/implib_manifest.json"):
                     payload = (REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH).read_bytes()
@@ -411,6 +417,7 @@ class LicenseArchiveTests(unittest.TestCase):
         for filename in (
             "gfn1_manifest.json",
             "gfn1_d3_manifest.json",
+            "gfn1_legacy_sto_manifest.json",
             "mctc_manifest.json",
         ):
             with self.subTest(filename=filename):
@@ -789,6 +796,13 @@ class InstallPayloadTests(unittest.TestCase):
             if relative.endswith("provenance/gfn1_d3_manifest.json"):
                 destination.write_bytes(
                     (REPOSITORY / "data/parameters/gfn1_d3_manifest.json").read_bytes()
+                )
+            elif relative.endswith("provenance/gfn1_legacy_sto_manifest.json"):
+                destination.write_bytes(
+                    (
+                        REPOSITORY
+                        / "data/parameters/gfn1_legacy_sto_manifest.json"
+                    ).read_bytes()
                 )
             elif relative.endswith("third-party/Apache-2.0.txt"):
                 destination.write_bytes(
@@ -1356,6 +1370,14 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        cls.gfn1_legacy_sto = json.loads(
+            (
+                REPOSITORY / "data/parameters/gfn1_legacy_sto_manifest.json"
+            ).read_text(encoding="utf-8")
+        )
+        cls.gfn1_legacy_sto_header = (
+            REPOSITORY / "data/parameters/gfn1_legacy_sto.hpp"
+        ).read_bytes()
         cls.apache = (REPOSITORY / "LICENSES/Apache-2.0.txt").read_bytes()
         cls.lgpl = (REPOSITORY / "LICENSES/LGPL-3.0-or-later.txt").read_bytes()
 
@@ -1365,6 +1387,30 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
         CHECKER._check_gfn1_d3_provenance(
             copy.deepcopy(self.gfn1_d3), self.apache, self.lgpl
         )
+        CHECKER._check_gfn1_legacy_sto_provenance(
+            copy.deepcopy(self.gfn1_legacy_sto),
+            self.lgpl,
+            self.gfn1_legacy_sto_header,
+        )
+
+    def test_gfn1_legacy_sto_source_and_consumer_mutations_are_rejected(self) -> None:
+        """The GFN1-only xTB rows and retained header remain exact."""
+        manifest = copy.deepcopy(self.gfn1_legacy_sto)
+        manifest["source"]["git_blob"] = "0" * 40
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError, "legacy STO manifest"
+        ):
+            CHECKER._check_gfn1_legacy_sto_provenance(
+                manifest, self.lgpl, self.gfn1_legacy_sto_header
+            )
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError, "legacy STO consumer"
+        ):
+            CHECKER._check_gfn1_legacy_sto_provenance(
+                copy.deepcopy(self.gfn1_legacy_sto),
+                self.lgpl,
+                self.gfn1_legacy_sto_header + b"changed\n",
+            )
 
     def test_gfn1_source_digest_mutation_is_rejected(self) -> None:
         """Reject a modified aggregate digest for the tblite source set."""
@@ -1469,10 +1515,29 @@ class Gfn1FixtureProvenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
             root = Path(directory)
             shutil.copytree(REPOSITORY / "tests", root / "tests")
-            for relative in ("tests/gfn1_d3_test.cpp", "tests/gfn1_halogen_test.cpp"):
+            for relative in (
+                "tests/gfn1_d3_test.cpp",
+                "tests/gfn1_halogen_test.cpp",
+                "tests/gfn1_cpu_conformance.py",
+            ):
                 consumer = root / relative
                 consumer.write_bytes(consumer.read_bytes().replace(b"\n", b"\r\n"))
             CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_spin2_fixture_literal_mutation_is_rejected(self) -> None:
+        """Bind the unrestricted P10 oracle literals and Python marker syntax."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            consumer = root / "tests/gfn1_cpu_conformance.py"
+            consumer.write_text(
+                consumer.read_text(encoding="utf-8").replace(
+                    "-11.539671328635730", "-11.539671328635731", 1
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "fixture bytes"):
+                CHECKER._check_gfn1_fixture_provenance(root)
 
     def test_fixture_source_digest_mutation_is_rejected(self) -> None:
         """Reject a changed upstream digest even when the local tests remain."""
