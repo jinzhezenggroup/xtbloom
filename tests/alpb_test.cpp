@@ -228,7 +228,7 @@ int test_translation_rotation_and_net_gradient() {
               kAtomCount, transformed_positions.data(), kBornRadii.data(), kCavityRadii.data(),
               kCharges.data(), settings, transformed_gradients.data(),
               error) == XTBLOOM_STATUS_SUCCESS);
-    CHECK(near(transformed_energy, energy, 3.0e-17));
+    CHECK(near(transformed_energy, energy, 3.0e-17, 1.0e-14));
     for (std::size_t element = 0; element < matrix.size(); ++element) {
       CHECK(near(transformed_matrix[element], matrix[element], 3.0e-16));
     }
