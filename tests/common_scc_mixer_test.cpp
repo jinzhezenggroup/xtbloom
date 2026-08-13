@@ -29,7 +29,9 @@ using xtbloom::detail::common::SccMixerWorkspace;
 
 class AlignedBuffer {
  public:
-  explicit AlignedBuffer(std::size_t bytes) : bytes_(bytes) {
+  explicit AlignedBuffer(std::size_t bytes) {
+    constexpr std::size_t alignment = xtbloom::detail::common::kSccMixerWorkspaceAlignment;
+    bytes_ = (std::max<std::size_t>(bytes, 1u) + alignment - 1u) & ~(alignment - 1u);
     data_ = std::aligned_alloc(xtbloom::detail::common::kSccMixerWorkspaceAlignment, bytes_);
     if (data_ != nullptr) {
       std::memset(data_, 0, bytes_);
@@ -158,6 +160,14 @@ int test_qsh_only_ragged_mix_restart_and_transaction() {
   CHECK(xtbloom::detail::common::bind_scc_mixer_state(fixture.plan, staged_storage.data(),
                                                       staged_storage.size(), staged,
                                                       error) == XTBLOOM_STATUS_SUCCESS);
+  const std::vector<std::byte> state_before(
+      static_cast<const std::byte*>(fixture.state.workspace_base),
+      static_cast<const std::byte*>(fixture.state.workspace_base) +
+          fixture.state.workspace_size_bytes);
+  CHECK(xtbloom::detail::common::commit_scc_mixer_system_transaction_cpu(
+            fixture.plan, 1, staged, fixture.state, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(std::equal(state_before.begin(), state_before.end(),
+                   static_cast<const std::byte*>(fixture.state.workspace_base)));
   std::memset(staged_storage.data(), 0x3c, staged_storage.size());
   CHECK(xtbloom::detail::common::prepare_scc_mixer_system_transaction_cpu(
             fixture.plan, 1, fixture.state, staged, error) == XTBLOOM_STATUS_SUCCESS);

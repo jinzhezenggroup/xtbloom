@@ -402,6 +402,21 @@ int test_external_diagnostic_requires_external_plan() {
   return 0;
 }
 
+int test_force_diagnostic_requires_qm_force_output() {
+  Fixture fixture;
+  std::string error;
+  CHECK(fixture.initialize(false, false, error));
+  std::array<double, 1> energy{33.0};
+  std::array<double, 6> diagnostic{};
+  ComponentGradients components;
+  components.electronic = diagnostic.data();
+  CHECK(fixture.evaluate(fixture.input(false, false), energy.data(), nullptr, nullptr, components,
+                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(error == "GFN1 force composition requires the qm_forces output");
+  CHECK(energy[0] == 33.0);
+  return 0;
+}
+
 int test_foreign_same_extent_plan_is_rejected() {
   Fixture fixture;
   std::string error;
@@ -455,6 +470,7 @@ int main() {
   if (const int status = test_qm_only_point_charge_force_and_conservation()) return status;
   if (const int status = test_alias_and_late_failure_leave_all_outputs_unchanged()) return status;
   if (const int status = test_external_diagnostic_requires_external_plan()) return status;
+  if (const int status = test_force_diagnostic_requires_qm_force_output()) return status;
   if (const int status = test_foreign_same_extent_plan_is_rejected()) return status;
   return test_mixed_batch_ignores_restricted_spin_slices();
 }

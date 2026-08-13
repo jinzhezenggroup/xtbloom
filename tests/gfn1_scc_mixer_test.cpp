@@ -21,7 +21,9 @@ namespace {
 
 class AlignedBuffer {
  public:
-  explicit AlignedBuffer(std::size_t bytes) : bytes_(bytes) {
+  explicit AlignedBuffer(std::size_t bytes) {
+    constexpr std::size_t alignment = xtbloom::detail::gfn1::kSccMixerWorkspaceAlignment;
+    bytes_ = (std::max<std::size_t>(bytes, 1u) + alignment - 1u) & ~(alignment - 1u);
     data_ = std::aligned_alloc(xtbloom::detail::gfn1::kSccMixerWorkspaceAlignment, bytes_);
     if (data_ != nullptr) {
       std::memset(data_, 0, bytes_);

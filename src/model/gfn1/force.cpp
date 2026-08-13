@@ -724,6 +724,10 @@ xtbloom_status_t evaluate_gfn1_energy_forces_cpu(
     error = "GFN1 energy composition requires finite positions, SCC energy, and energy scratch";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
+  if (force_requested && qm_forces == nullptr) {
+    error = "GFN1 force composition requires the qm_forces output";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
   if ((external == nullptr && (input.point_positions != nullptr || input.point_charges != nullptr ||
                                input.point_hardnesses != nullptr || point_forces != nullptr ||
                                components.external_point_charge != nullptr)) ||
@@ -790,7 +794,7 @@ xtbloom_status_t evaluate_gfn1_energy_forces_cpu(
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
   }
-  if (qm_forces == nullptr || input.coordination_numbers == nullptr || input.overlap == nullptr ||
+  if (input.coordination_numbers == nullptr || input.overlap == nullptr ||
       input.density == nullptr || input.energy_weighted_density == nullptr ||
       input.shell_charges == nullptr || input.scalar_shell_potentials == nullptr ||
       !valid_scratch(workspace.total_gradient, workspace.coordinate_elements, coordinates) ||

@@ -164,46 +164,71 @@ LapackInt tiny_dsyevd(LapackInt, char, char, LapackInt n, double* matrix, Lapack
   return 0;
 }
 
-void tiny_dtrsm(int, int side, int, int transpose, int, LapackInt rows, LapackInt columns,
-                double alpha, const double* triangular, LapackInt, double* rhs, LapackInt) {
+void tiny_dtrsm(int layout, int side, int triangle, int transpose, int diagonal, LapackInt rows,
+                LapackInt columns, double alpha, const double* triangular,
+                LapackInt leading_triangular, double* rhs, LapackInt leading_rhs) {
+  constexpr int kColMajor = 102;
   constexpr int kLeft = 141;
+  constexpr int kRight = 142;
+  constexpr int kLower = 122;
   constexpr int kNoTrans = 111;
+  constexpr int kTrans = 112;
+  constexpr int kNonUnit = 131;
+  if (layout != kColMajor || (side != kLeft && side != kRight) || triangle != kLower ||
+      (transpose != kNoTrans && transpose != kTrans) || diagonal != kNonUnit || rows < 0 ||
+      columns < 0 || leading_rhs < std::max<LapackInt>(1, rows) ||
+      leading_triangular < std::max<LapackInt>(1, side == kLeft ? rows : columns)) {
+    std::abort();
+  }
   if (side == kLeft) {
     for (LapackInt column = 0; column < columns; ++column) {
       if (transpose == kNoTrans) {
         for (LapackInt row = 0; row < rows; ++row) {
-          double value = alpha * rhs[column * rows + row];
+          double value = alpha * rhs[column * leading_rhs + row];
           for (LapackInt inner = 0; inner < row; ++inner) {
-            value -= triangular[inner * rows + row] * rhs[column * rows + inner];
+            value -=
+                triangular[inner * leading_triangular + row] * rhs[column * leading_rhs + inner];
           }
-          rhs[column * rows + row] = value / triangular[row * rows + row];
+          rhs[column * leading_rhs + row] = value / triangular[row * leading_triangular + row];
         }
       } else {
         for (LapackInt row = rows; row-- > 0;) {
-          double value = alpha * rhs[column * rows + row];
+          double value = alpha * rhs[column * leading_rhs + row];
           for (LapackInt inner = row + 1; inner < rows; ++inner) {
-            value -= triangular[row * rows + inner] * rhs[column * rows + inner];
+            value -=
+                triangular[row * leading_triangular + inner] * rhs[column * leading_rhs + inner];
           }
-          rhs[column * rows + row] = value / triangular[row * rows + row];
+          rhs[column * leading_rhs + row] = value / triangular[row * leading_triangular + row];
         }
       }
     }
   } else {
+    if (transpose != kTrans) std::abort();
     for (LapackInt row = 0; row < rows; ++row) {
       for (LapackInt column = 0; column < columns; ++column) {
-        double value = alpha * rhs[column * rows + row];
+        double value = alpha * rhs[column * leading_rhs + row];
         for (LapackInt inner = 0; inner < column; ++inner) {
-          value -= rhs[inner * rows + row] * triangular[inner * columns + column];
+          value -= rhs[inner * leading_rhs + row] * triangular[inner * leading_triangular + column];
         }
-        rhs[column * rows + row] = value / triangular[column * columns + column];
+        rhs[column * leading_rhs + row] = value / triangular[column * leading_triangular + column];
       }
     }
   }
 }
 
-void tiny_dgemm(int, int, int, LapackInt rows, LapackInt columns, LapackInt inner, double alpha,
-                const double* left, LapackInt leading_left, const double* right,
-                LapackInt leading_right, double beta, double* result, LapackInt leading_result) {
+void tiny_dgemm(int layout, int transpose_left, int transpose_right, LapackInt rows,
+                LapackInt columns, LapackInt inner, double alpha, const double* left,
+                LapackInt leading_left, const double* right, LapackInt leading_right, double beta,
+                double* result, LapackInt leading_result) {
+  constexpr int kColMajor = 102;
+  constexpr int kNoTrans = 111;
+  constexpr int kTrans = 112;
+  if (layout != kColMajor || transpose_left != kNoTrans || transpose_right != kTrans || rows < 0 ||
+      columns < 0 || inner < 0 || leading_left < std::max<LapackInt>(1, rows) ||
+      leading_right < std::max<LapackInt>(1, columns) ||
+      leading_result < std::max<LapackInt>(1, rows)) {
+    std::abort();
+  }
   for (LapackInt column = 0; column < columns; ++column) {
     for (LapackInt row = 0; row < rows; ++row) {
       double value = 0.0;
@@ -444,8 +469,12 @@ int test_restricted_unrestricted_free_energy_periodic_and_point_potential() {
   fixture.geometry.explicit_point_charge_shell_potential = fixture.point_potential.data();
   fixture.geometry.explicit_point_charge_shell_elements =
       static_cast<std::int64_t>(fixture.point_potential.size());
-  fixture.periodic_shifts = {0.02, -0.01, 0.03};
-  fixture.periodic_response = {0.04, 0.01, 0.01, -0.02, 0.05};
+  constexpr std::array<double, 3> shifts{0.02, -0.01, 0.03};
+  constexpr std::array<double, 5> response{0.04, 0.01, 0.01, -0.02, 0.05};
+  CHECK(fixture.periodic_shifts.size() == shifts.size());
+  CHECK(fixture.periodic_response.size() == response.size());
+  std::copy(shifts.begin(), shifts.end(), fixture.periodic_shifts.begin());
+  std::copy(response.begin(), response.end(), fixture.periodic_response.begin());
 
   diagonalization_calls.store(0, std::memory_order_relaxed);
   failed_diagonalization_call.store(-1, std::memory_order_relaxed);

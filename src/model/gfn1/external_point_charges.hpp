@@ -29,7 +29,10 @@ struct ExternalPointChargePlan {
 
   std::vector<std::int64_t> atom_offsets;
   std::vector<std::int64_t> batch_shell_offsets;
+  std::vector<std::int64_t> atom_shell_offsets;
   std::vector<std::int64_t> point_charge_offsets;
+  std::vector<std::int64_t> atom_to_batch;
+  std::vector<std::int64_t> point_to_batch;
   std::vector<std::int64_t> shell_to_atom;
   std::vector<double> shell_hardness;
 };

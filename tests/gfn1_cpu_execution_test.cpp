@@ -592,6 +592,27 @@ int test_strict_warm_and_call_failure_are_atomic() {
   return 0;
 }
 
+int test_malformed_charge_response_is_rejected_atomically() {
+  using xtbloom::detail::execute_gfn1_cpu;
+  using xtbloom::detail::Gfn1CpuExecutionCache;
+  constexpr std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES;
+  Request request = mixed_request(flags);
+  request.shifts = {0.01, -0.02, 0.03};
+  request.response_offsets = {0, 1, 5};
+  request.response = {0.02, 0.004, 0.004, -0.01, 0.03};
+  request.bind(flags);
+  Result result;
+  result.bind(request);
+  const ResultImage before(result);
+  Gfn1CpuExecutionCache cache;
+  std::string error;
+  CHECK(execute_gfn1_cpu(cache, request.batch, request.options, result.result, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(before.matches(result));
+  CHECK(error.find("atoms*atoms") != std::string::npos);
+  return 0;
+}
+
 int test_nonconvergence_is_data_level_and_nan_filled() {
   using xtbloom::detail::execute_gfn1_cpu;
   using xtbloom::detail::Gfn1CpuExecutionCache;
@@ -802,6 +823,8 @@ int test_failed_peer_isolated_nan_filled_and_consumes_warm_checkpoint() {
 int main() {
   if (const int result = test_mixed_ragged_warm_and_periodic(); result != 0) return result;
   if (const int result = test_strict_warm_and_call_failure_are_atomic(); result != 0) return result;
+  if (const int result = test_malformed_charge_response_is_rejected_atomically(); result != 0)
+    return result;
   if (const int result = test_nonconvergence_is_data_level_and_nan_filled(); result != 0)
     return result;
   if (const int result = test_successful_peer_survives_scc_nonconvergence(); result != 0)

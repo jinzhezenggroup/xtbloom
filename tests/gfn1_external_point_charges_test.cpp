@@ -105,6 +105,9 @@ int test_xtb_671_water_dimer_pcem_golden() {
   std::string error;
   CHECK(make_plan(atom_offsets, numbers, &point_offsets, basis, es2, plan, error));
   CHECK(plan.total_shells == 12);
+  CHECK(plan.atom_shell_offsets == basis.atom_shell_offsets);
+  CHECK(plan.atom_to_batch == std::vector<std::int64_t>(6u, 0));
+  CHECK(plan.point_to_batch == std::vector<std::int64_t>(6u, 0));
   constexpr std::array<double, 12> expected_hardness{
       0.583349, 0.6052017202192, 0.470099, 0.470099, 0.470099, 0.470099,
       0.583349, 0.6052017202192, 0.470099, 0.470099, 0.470099, 0.470099,
@@ -391,6 +394,18 @@ int test_validation_transactionality_and_no_allocations() {
             corrupt, qm_positions.data(), point_positions.data(), point_charges.data(),
             point_hardnesses.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   constexpr std::array<double, 2> expected_potentials{8.0, 9.0};
+  CHECK(potentials == expected_potentials);
+  corrupt = plan;
+  corrupt.atom_to_batch[0] = 1;
+  CHECK(xtbloom::detail::gfn1::evaluate_external_point_charge_potential_cpu(
+            corrupt, qm_positions.data(), point_positions.data(), point_charges.data(),
+            point_hardnesses.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(potentials == expected_potentials);
+  corrupt = plan;
+  corrupt.point_to_batch[0] = 1;
+  CHECK(xtbloom::detail::gfn1::evaluate_external_point_charge_potential_cpu(
+            corrupt, qm_positions.data(), point_positions.data(), point_charges.data(),
+            point_hardnesses.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(potentials == expected_potentials);
   for (double bad : {0.0, -1.0, std::numeric_limits<double>::infinity()}) {
     const std::array<double, 1> hardness{bad};

@@ -1406,6 +1406,15 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
                 self.gfn1_legacy_sto_header + b"changed\n",
             )
 
+    def test_gfn1_legacy_sto_extra_fields_are_rejected(self) -> None:
+        """Reject unreviewed schema extensions at every distribution boundary."""
+        manifest = copy.deepcopy(self.gfn1_legacy_sto)
+        manifest["unexpected"] = True
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unexpected fields"):
+            CHECKER._check_gfn1_legacy_sto_provenance(
+                manifest, self.lgpl, self.gfn1_legacy_sto_header
+            )
+
     def test_gfn1_source_digest_mutation_is_rejected(self) -> None:
         """Reject a modified aggregate digest for the tblite source set."""
         manifest = copy.deepcopy(self.gfn1)

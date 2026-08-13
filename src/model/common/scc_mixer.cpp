@@ -1302,6 +1302,10 @@ xtbloom_status_t commit_scc_mixer_system_transaction_cpu(const SccMixerPlan& pla
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t index = system_index(system);
+  if (staged.initialized[index] != 1u) {
+    error = "SCC mixer transaction staged system must be initialized";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
   copy_mixer_system_state(data, index, staged, destination);
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;

@@ -250,10 +250,25 @@ xtbloom_status_t validate_hidden_request(const xtbloom_batch_t& batch,
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (request.response_enabled) {
+    if (request.response_offsets.size() != static_cast<std::size_t>(request.batch_size) + 1u ||
+        request.response_offsets.front() != 0 ||
+        request.response_offsets.back() !=
+            static_cast<std::int64_t>(request.response_matrices.size())) {
+      error = "internal CPU GFN1 charge-response offsets are malformed";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
     for (std::int64_t system = 0; system < request.batch_size; ++system) {
       const std::size_t index = static_cast<std::size_t>(system);
       const std::int64_t atoms = request.atom_offsets[index + 1u] - request.atom_offsets[index];
       const std::int64_t begin = request.response_offsets[index];
+      const std::int64_t end = request.response_offsets[index + 1u];
+      if (atoms < 0 || (atoms != 0 && atoms > std::numeric_limits<std::int64_t>::max() / atoms) ||
+          begin < 0 || end < begin || end - begin != atoms * atoms ||
+          end > static_cast<std::int64_t>(request.response_matrices.size())) {
+        error =
+            "internal CPU GFN1 charge-response segments must contain exactly atoms*atoms values";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
       for (std::int64_t row = 0; row < atoms; ++row) {
         for (std::int64_t column = row + 1; column < atoms; ++column) {
           if (request.response_matrices[static_cast<std::size_t>(begin + row * atoms + column)] !=
@@ -819,8 +834,9 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       vector_bytes(spin.shell_population_offsets) + vector_bytes(spin.spin_channels) +
       vector_bytes(spin.coupling_offsets) + vector_bytes(spin.coupling_matrices) +
       vector_bytes(external.atom_offsets) + vector_bytes(external.batch_shell_offsets) +
-      vector_bytes(external.point_charge_offsets) + vector_bytes(external.shell_to_atom) +
-      vector_bytes(external.shell_hardness);
+      vector_bytes(external.atom_shell_offsets) + vector_bytes(external.point_charge_offsets) +
+      vector_bytes(external.atom_to_batch) + vector_bytes(external.point_to_batch) +
+      vector_bytes(external.shell_to_atom) + vector_bytes(external.shell_hardness);
   const std::size_t wavefunction_plan_vectors =
       vector_bytes(wavefunction_layout.atom_offsets) +
       vector_bytes(wavefunction_layout.batch_shell_offsets) +

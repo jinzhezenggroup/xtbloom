@@ -115,7 +115,10 @@ bool overlaps_plan_storage(const ExternalPointChargePlan& plan, const AddressRan
   }
   return ranges_overlap(range, descriptor) || overlaps_vector(range, plan.atom_offsets) ||
          overlaps_vector(range, plan.batch_shell_offsets) ||
+         overlaps_vector(range, plan.atom_shell_offsets) ||
          overlaps_vector(range, plan.point_charge_offsets) ||
+         overlaps_vector(range, plan.atom_to_batch) ||
+         overlaps_vector(range, plan.point_to_batch) ||
          overlaps_vector(range, plan.shell_to_atom) || overlaps_vector(range, plan.shell_hardness);
 }
 
@@ -134,12 +137,17 @@ xtbloom_status_t validate_plan(const ExternalPointChargePlan& plan, std::string&
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const auto batches = static_cast<std::size_t>(plan.batch_size);
+  const auto atoms = static_cast<std::size_t>(plan.total_atoms);
   const auto shells = static_cast<std::size_t>(plan.total_shells);
+  const auto points = static_cast<std::size_t>(plan.total_point_charges);
   if (plan.atom_offsets.size() != batches + 1u || plan.batch_shell_offsets.size() != batches + 1u ||
-      plan.point_charge_offsets.size() != batches + 1u || plan.shell_to_atom.size() != shells ||
+      plan.atom_shell_offsets.size() != atoms + 1u ||
+      plan.point_charge_offsets.size() != batches + 1u || plan.atom_to_batch.size() != atoms ||
+      plan.point_to_batch.size() != points || plan.shell_to_atom.size() != shells ||
       plan.shell_hardness.size() != shells || plan.atom_offsets.front() != 0 ||
       plan.atom_offsets.back() != plan.total_atoms || plan.batch_shell_offsets.front() != 0 ||
       plan.batch_shell_offsets.back() != plan.total_shells ||
+      plan.atom_shell_offsets.front() != 0 || plan.atom_shell_offsets.back() != plan.total_shells ||
       plan.point_charge_offsets.front() != 0 ||
       plan.point_charge_offsets.back() != plan.total_point_charges) {
     error = "GFN1 external point-charge plan storage is incomplete or inconsistent";
@@ -157,6 +165,30 @@ xtbloom_status_t validate_plan(const ExternalPointChargePlan& plan, std::string&
         point_begin > point_end || point_end > plan.total_point_charges) {
       error = "GFN1 external point-charge offsets are not valid ragged partitions";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      const std::size_t atom_index = static_cast<std::size_t>(atom);
+      if (plan.atom_to_batch[atom_index] != static_cast<std::int64_t>(batch) ||
+          plan.atom_shell_offsets[atom_index] < shell_begin ||
+          plan.atom_shell_offsets[atom_index] > plan.atom_shell_offsets[atom_index + 1u] ||
+          plan.atom_shell_offsets[atom_index + 1u] > shell_end) {
+        error = "GFN1 external point-charge atom metadata is inconsistent";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      for (std::int64_t shell = plan.atom_shell_offsets[atom_index];
+           shell < plan.atom_shell_offsets[atom_index + 1u]; ++shell) {
+        if (plan.shell_to_atom[static_cast<std::size_t>(shell)] != atom) {
+          error = "GFN1 external point-charge atom-to-shell metadata is inconsistent";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
+      }
+    }
+    for (std::int64_t point = point_begin; point < point_end; ++point) {
+      if (plan.point_to_batch[static_cast<std::size_t>(point)] !=
+          static_cast<std::int64_t>(batch)) {
+        error = "GFN1 external point-charge site metadata is inconsistent";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
     }
     for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
       const std::size_t index = static_cast<std::size_t>(shell);
@@ -346,15 +378,10 @@ bool qm_force_value(const ExternalPointChargePlan& plan, std::int64_t atom, std:
                     const double* point_charges, const double* point_hardnesses,
                     const double* shell_charges, double initial, double& value) {
   value = initial;
-  std::size_t batch = 0u;
-  while (plan.atom_offsets[batch + 1u] <= atom) {
-    ++batch;
-  }
-  for (std::int64_t shell = plan.batch_shell_offsets[batch];
-       shell < plan.batch_shell_offsets[batch + 1u]; ++shell) {
-    if (plan.shell_to_atom[static_cast<std::size_t>(shell)] != atom) {
-      continue;
-    }
+  const std::size_t atom_index = static_cast<std::size_t>(atom);
+  const std::size_t batch = static_cast<std::size_t>(plan.atom_to_batch[atom_index]);
+  for (std::int64_t shell = plan.atom_shell_offsets[atom_index];
+       shell < plan.atom_shell_offsets[atom_index + 1u]; ++shell) {
     for (std::int64_t point = plan.point_charge_offsets[batch];
          point < plan.point_charge_offsets[batch + 1u]; ++point) {
       double term = 0.0;
@@ -378,10 +405,8 @@ bool point_force_value(const ExternalPointChargePlan& plan, std::int64_t point, 
                        const double* point_charges, const double* point_hardnesses,
                        const double* shell_charges, double initial, double& value) {
   value = initial;
-  std::size_t batch = 0u;
-  while (plan.point_charge_offsets[batch + 1u] <= point) {
-    ++batch;
-  }
+  const std::size_t batch =
+      static_cast<std::size_t>(plan.point_to_batch[static_cast<std::size_t>(point)]);
   for (std::int64_t shell = plan.batch_shell_offsets[batch];
        shell < plan.batch_shell_offsets[batch + 1u]; ++shell) {
     double term = 0.0;
@@ -479,13 +504,28 @@ xtbloom_status_t make_external_point_charge_plan(const BasisPlan& basis, const E
     created.total_point_charges = total_point_charges;
     created.atom_offsets = basis.atom_offsets;
     created.batch_shell_offsets = basis.batch_shell_offsets;
+    created.atom_shell_offsets = basis.atom_shell_offsets;
     created.shell_to_atom = basis.shell_to_atom;
     created.shell_hardness = es2.shell_hardness();
+    created.atom_to_batch.resize(atoms);
+    for (std::size_t batch = 0u; batch < batches; ++batch) {
+      for (std::int64_t atom = basis.atom_offsets[batch]; atom < basis.atom_offsets[batch + 1u];
+           ++atom) {
+        created.atom_to_batch[static_cast<std::size_t>(atom)] = static_cast<std::int64_t>(batch);
+      }
+    }
     if (point_charge_offsets == nullptr) {
       created.point_charge_offsets.assign(batches + 1u, 0);
     } else {
       created.point_charge_offsets.assign(point_charge_offsets,
                                           point_charge_offsets + basis.batch_size + 1);
+    }
+    created.point_to_batch.resize(static_cast<std::size_t>(total_point_charges));
+    for (std::size_t batch = 0u; batch < batches; ++batch) {
+      for (std::int64_t point = created.point_charge_offsets[batch];
+           point < created.point_charge_offsets[batch + 1u]; ++point) {
+        created.point_to_batch[static_cast<std::size_t>(point)] = static_cast<std::int64_t>(batch);
+      }
     }
     plan = std::move(created);
     error.clear();
@@ -537,6 +577,8 @@ xtbloom_status_t evaluate_external_point_charge_potential_cpu(
     return status;
   }
 
+  /* Without caller-owned scratch, a complete arithmetic preflight is the only
+   * allocation-free way to preserve unchanged outputs on a late failure. */
   for (std::size_t batch = 0u; batch < static_cast<std::size_t>(plan.batch_size); ++batch) {
     for (std::int64_t shell = plan.batch_shell_offsets[batch];
          shell < plan.batch_shell_offsets[batch + 1u]; ++shell) {
@@ -549,6 +591,8 @@ xtbloom_status_t evaluate_external_point_charge_potential_cpu(
       }
     }
   }
+  /* The second pass is the publication phase of that scratch-free
+   * transaction and deliberately repeats the floating-point accumulation. */
   for (std::size_t batch = 0u; batch < static_cast<std::size_t>(plan.batch_size); ++batch) {
     for (std::int64_t shell = plan.batch_shell_offsets[batch];
          shell < plan.batch_shell_offsets[batch + 1u]; ++shell) {
@@ -600,6 +644,8 @@ xtbloom_status_t add_external_point_charge_energy_cpu(const ExternalPointChargeP
     return status;
   }
 
+  /* Energy accumulation uses the same scratch-free preflight/publication
+   * transaction as potential and force evaluation. */
   for (std::size_t batch = 0u; batch < static_cast<std::size_t>(plan.batch_size); ++batch) {
     double value = energies[batch];
     for (std::int64_t shell = plan.batch_shell_offsets[batch];
@@ -688,7 +734,9 @@ xtbloom_status_t add_external_point_charge_forces_cpu(
     return status;
   }
 
-  /* Preflight every accumulator in the same contribution order used below. */
+  /* Preflight every accumulator in the same contribution order used below.
+   * Recomputing after success preserves all-or-nothing publication without a
+   * steady-state allocation or a new caller-owned workspace contract. */
   if (qm_forces != nullptr) {
     for (std::int64_t atom = 0; atom < plan.total_atoms; ++atom) {
       for (std::size_t axis = 0u; axis < 3u; ++axis) {

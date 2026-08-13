@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
@@ -41,6 +42,14 @@ void print_array(const std::vector<T>& values) {
     if (index != 0u) std::cout << ',';
     if constexpr (std::is_same_v<T, std::uint8_t>) {
       std::cout << static_cast<unsigned int>(values[index]);
+    } else if constexpr (std::is_same_v<T, double>) {
+      const double value = values[index];
+      if (std::isfinite(value)) {
+        std::cout << value;
+      } else {
+        /* Preserve valid JSON; failure diagnostics use statuses/convergence. */
+        std::cout << "null";
+      }
     } else {
       std::cout << values[index];
     }

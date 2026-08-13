@@ -168,6 +168,7 @@ struct SccStationaryProjection {
   std::int64_t atom_elements = 0;
 };
 
+/* electronic_temperature is k_B*T in Hartree, never a temperature in Kelvin. */
 xtbloom_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
                                       const MullikenPlan& mulliken, const ES2Plan& es2,
                                       const ES3Plan& es3, const SpinPolarizationPlan& spin,

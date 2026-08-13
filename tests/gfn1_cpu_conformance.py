@@ -620,19 +620,30 @@ def main() -> int:
                     f"{case.case_id}: ragged/sequential {name} error "
                     f"{error:.3e} > 1.000e-12"
                 )
-    selected = {
-        case.case_id: case
-        for case in cases
-        if case.case_id
-        in {
-            "gfn1_ketene",
-            "gfn1_oh_radical",
-            "gfn1_spin2_p10",
-            "gfn1_halogen_bond",
-            "gfn1_water_dimer_6pc_hardness",
-            "gfn1_water_dimer_6pc_gamma999",
-        }
+    expected_ids = {
+        "gfn1_ketene",
+        "gfn1_oh_radical",
+        "gfn1_spin2_p10",
+        "gfn1_halogen_bond",
+        "gfn1_water_dimer_6pc_hardness",
+        "gfn1_water_dimer_6pc_gamma999",
     }
+    selected = {case.case_id: case for case in cases if case.case_id in expected_ids}
+    selected_counts = {
+        case_id: sum(case.case_id == case_id for case in cases)
+        for case_id in expected_ids
+    }
+    if set(selected) != expected_ids or any(
+        count != 1 for count in selected_counts.values()
+    ):
+        missing = ", ".join(sorted(expected_ids - set(selected)))
+        duplicates = ", ".join(
+            sorted(case_id for case_id, count in selected_counts.items() if count > 1)
+        )
+        raise RuntimeError(
+            "reviewed scientific cases must occur exactly once: "
+            f"missing={missing or 'none'} duplicates={duplicates or 'none'}"
+        )
     scientific_cases = list(selected.values())
     failures.extend(finite_difference_checks(args.probe, scientific_cases))
     failures.extend(covariance_and_conservation_checks(args.probe, scientific_cases))

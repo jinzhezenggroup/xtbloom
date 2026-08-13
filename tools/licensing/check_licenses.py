@@ -1807,6 +1807,14 @@ def _check_gfn1_legacy_sto_provenance(
     """Pin the xTB GFN1-only legacy 4s/4p expansion and legal record."""
     if not isinstance(manifest, dict):
         raise LicenseCheckError("GFN1 legacy STO manifest has unreviewed provenance")
+    if set(manifest) != {
+        "schema_version",
+        "model",
+        "source",
+        "consumer",
+        "extraction",
+    }:
+        raise LicenseCheckError("GFN1 legacy STO manifest has unexpected fields")
     source = manifest.get("source", {})
     expected_legal = [
         {
