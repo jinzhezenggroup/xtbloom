@@ -264,6 +264,7 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
             "data/parameters/gfn1.toml whitespace=-blank-at-eof",
             "data/parameters/tblite_sto.hpp text eol=lf",
             "LICENSES/Apache-2.0.txt -text",
+            "LICENSES/LGPL-3.0-or-later.txt -text",
             "LICENSES/scipy-openblas32-0.3.34.0.0.txt -text",
             "LICENSES/openchemlib-BSD-3-Clause.txt -text",
             "LICENSES/pyodide-MPL-2.0.txt -text "
