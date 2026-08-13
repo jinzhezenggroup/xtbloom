@@ -1733,6 +1733,10 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                     "dd1b5c10632636122fd2e47f2133e345f5274151",
                     "429b028ecba85a077f795fa009757b1e5936c8c6ec9c7bd1c00c71db9392c66a",
                 ),
+                "test/test_classical/test_halogen/samples.py": (
+                    "34836e0fe2c51cd134115689a58e0657122d76b2",
+                    "fff9cc5981e5c05f15d75f8064ebb10c398aac2786a549aa116d7faf1eec0ffd",
+                ),
             },
         },
         "mstore": {
@@ -1760,6 +1764,10 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                 "test/unit/test_repulsion.f90": (
                     "9cb9671606ccb3081ba798247791f088eb1ffa40",
                     "a208f0847342ede9c68e5b54c5765ef421d844f9f94268334b7fcee15aa298a2",
+                ),
+                "test/unit/test_halogen.f90": (
+                    "ca976269459875725c93a31bac980c0532c88d94",
+                    "f078b628b9eafa9dec75609d15a956aa33ae084a74b5de685f8262bb4389100c",
                 ),
             },
         },
@@ -1794,6 +1802,12 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                 "gradients identified by dxtb as tblite reference values.",
                 ("tests/gfn1_d3_test.cpp",),
             ),
+            "test/test_classical/test_halogen/samples.py": (
+                "Literal Br2-NH3 analytic gradient identified by dxtb as the "
+                "tblite GFN1 halogen reference; geometry and energy are "
+                "independently pinned from tblite.",
+                ("tests/gfn1_halogen_test.cpp",),
+            ),
         },
         "mstore": {
             "src/mstore/mb16_43.f90": (
@@ -1816,6 +1830,12 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                 "Literal GFN1 effective-repulsion energy golden for mstore "
                 "MB16-43 structure 01.",
                 ("tests/gfn1_repulsion_test.cpp",),
+            ),
+            "test/unit/test_halogen.f90": (
+                "Literal Br2-NH3, Br2-OCH2, and FI-NCH geometries and GFN1 "
+                "halogen energies, plus the upstream derivative finite-difference "
+                "contract.",
+                ("tests/gfn1_halogen_test.cpp",),
             ),
         },
     }

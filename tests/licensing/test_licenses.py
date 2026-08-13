@@ -1336,6 +1336,27 @@ class Gfn1FixtureProvenanceTests(unittest.TestCase):
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source files"):
                 CHECKER._check_gfn1_fixture_provenance(root)
 
+    def test_halogen_fixture_source_is_rejected_when_missing(self) -> None:
+        """Keep the tblite halogen geometries and energies provenance-pinned."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            tblite = next(
+                source
+                for source in manifest["sources"]
+                if source["project"] == "tblite"
+            )
+            tblite["files"] = [
+                item
+                for item in tblite["files"]
+                if item["path"] != "test/unit/test_halogen.f90"
+            ]
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source files"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
     def test_duplicate_fixture_project_is_rejected(self) -> None:
         """Reject duplicate projects that hide a required provenance source."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:

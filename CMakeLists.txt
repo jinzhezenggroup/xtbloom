@@ -965,6 +965,7 @@ add_library(xtbloom_gfn1_cpu_objects OBJECT
   src/model/gfn1/es2.cpp
   src/model/gfn1/es3.cpp
   src/model/gfn1/h0.cpp
+  src/model/gfn1/halogen.cpp
   src/model/gfn1/repulsion.cpp
   src/model/gfn1/spin.cpp
 )
@@ -3293,6 +3294,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_gfn1_d3_test PRIVATE xtbloom_gfn1_cpu)
   target_compile_features(xtbloom_gfn1_d3_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn1.d3 COMMAND xtbloom_gfn1_d3_test)
+
+  add_executable(xtbloom_gfn1_halogen_test tests/gfn1_halogen_test.cpp)
+  target_link_libraries(xtbloom_gfn1_halogen_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_halogen_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.halogen COMMAND xtbloom_gfn1_halogen_test)
 
   add_executable(xtbloom_d4_test tests/d4_test.cpp)
   target_link_libraries(xtbloom_d4_test PRIVATE xtbloom_gfn2_cpu)
