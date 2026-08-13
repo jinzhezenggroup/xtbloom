@@ -880,6 +880,27 @@ add_library(xtbloom_gfn2_cpu OBJECT
   src/model/gfn2/spin.cpp
   src/model/gfn2/wavefunction.cpp
 )
+
+# GFN1 model terms are kept in a separate object target so partial internal
+# foundations cannot accidentally become a GFN2 execution path. Public GFN1
+# dispatch remains disabled until the complete CPU model passes issue #385.
+add_library(xtbloom_gfn1_cpu OBJECT
+  src/model/gfn1/es2.cpp
+  src/model/gfn1/es3.cpp
+  src/model/gfn1/spin.cpp
+)
+target_compile_features(xtbloom_gfn1_cpu PUBLIC cxx_std_17)
+target_include_directories(xtbloom_gfn1_cpu PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(xtbloom_gfn1_cpu PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+target_link_libraries(xtbloom_gfn1_cpu PUBLIC xtbloom_gfn2_cpu)
 target_compile_features(xtbloom_gfn2_cpu PUBLIC cxx_std_17)
 target_include_directories(xtbloom_gfn2_cpu PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
@@ -3320,6 +3341,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_es3_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_es3_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.es3 COMMAND xtbloom_es3_test)
+
+  add_executable(xtbloom_gfn1_es_spin_test tests/gfn1_es_spin_test.cpp)
+  target_link_libraries(xtbloom_gfn1_es_spin_test PRIVATE xtbloom_gfn1_cpu xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_gfn1_es_spin_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.es_spin COMMAND xtbloom_gfn1_es_spin_test)
 
   add_executable(xtbloom_spin_test tests/spin_test.cpp)
   target_link_libraries(xtbloom_spin_test PRIVATE xtbloom_gfn2_cpu)

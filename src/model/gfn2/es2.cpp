@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -26,6 +27,7 @@ struct ES2PlanData final {
   std::vector<std::int64_t> matrix_offsets;
   std::vector<std::int64_t> shell_to_atom;
   std::vector<double> shell_hardness;
+  ES2HardnessAverage hardness_average = ES2HardnessAverage::kArithmetic;
 };
 
 namespace {
@@ -216,14 +218,26 @@ double arithmetic_hardness(double first_hardness, double second_hardness) {
   return 0.5 * first_hardness + 0.5 * second_hardness;
 }
 
+double harmonic_hardness(double first_hardness, double second_hardness) {
+  /* This is the operation order used by tblite's GFN1 harmonic_average. */
+  return 2.0 / (1.0 / first_hardness + 1.0 / second_hardness);
+}
+
+double average_hardness(ES2HardnessAverage average, double first_hardness,
+                        double second_hardness) {
+  return average == ES2HardnessAverage::kHarmonic
+             ? harmonic_hardness(first_hardness, second_hardness)
+             : arithmetic_hardness(first_hardness, second_hardness);
+}
+
 bool softened_kernel(double dx, double dy, double dz, double first_hardness, double second_hardness,
-                     double& value) {
-  const double average_hardness = arithmetic_hardness(first_hardness, second_hardness);
-  const double inverse_average_hardness = 1.0 / average_hardness;
+                     ES2HardnessAverage average, double& value) {
+  const double pair_hardness = average_hardness(average, first_hardness, second_hardness);
+  const double inverse_average_hardness = 1.0 / pair_hardness;
   const double softened_distance =
       std::hypot(std::hypot(dx, dy), std::hypot(dz, inverse_average_hardness));
   value = 1.0 / softened_distance;
-  return average_hardness > 0.0 && std::isfinite(average_hardness) &&
+  return pair_hardness > 0.0 && std::isfinite(pair_hardness) &&
          std::isfinite(inverse_average_hardness) && softened_distance > 0.0 &&
          std::isfinite(softened_distance) && value > 0.0 && std::isfinite(value);
 }
@@ -332,6 +346,10 @@ const std::vector<double>& ES2Plan::shell_hardness() const noexcept {
   return data_ == nullptr ? kEmptyDoubleVector : data_->shell_hardness;
 }
 
+ES2HardnessAverage ES2Plan::hardness_average() const noexcept {
+  return data_ == nullptr ? ES2HardnessAverage::kArithmetic : data_->hardness_average;
+}
+
 bool ES2Plan::overlaps_storage(const void* data, std::size_t size_bytes) const noexcept {
   return size_bytes != 0u && (data_ == nullptr || overlaps_plan_storage(*this, data, size_bytes));
 }
@@ -401,6 +419,7 @@ xtbloom_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomi
     created.batch_shell_offsets = basis.batch_shell_offsets;
     created.atom_shell_offsets = basis.atom_shell_offsets;
     created.shell_to_atom = basis.shell_to_atom;
+    created.hardness_average = ES2HardnessAverage::kArithmetic;
     created.matrix_offsets.resize(batch_count + 1u);
     created.shell_hardness.resize(shell_count);
 
@@ -464,6 +483,107 @@ xtbloom_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomi
     return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the GFN2 ES2 plan";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  }
+}
+
+xtbloom_status_t make_es2_plan_from_shell_hardness(
+    const BasisPlan& basis, ES2HardnessAverage average, const double* shell_hardness,
+    std::int64_t shell_hardness_count, ES2Plan& plan, std::string& error) {
+  if (basis.batch_size <= 0 || basis.total_atoms <= 0 || basis.total_shells <= 0 ||
+      !count_fits_storage(basis.batch_size, sizeof(std::int64_t), true) ||
+      !count_fits_storage(basis.total_atoms, sizeof(std::int64_t), true) ||
+      !count_fits_storage(basis.total_shells, sizeof(std::int64_t)) || shell_hardness == nullptr ||
+      shell_hardness_count != basis.total_shells ||
+      (average != ES2HardnessAverage::kArithmetic &&
+       average != ES2HardnessAverage::kHarmonic)) {
+    error = "ES2 shared plan requires a representable basis, averaging rule, and shell hardnesses";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  const std::size_t batch_count = static_cast<std::size_t>(basis.batch_size);
+  const std::size_t atom_count = static_cast<std::size_t>(basis.total_atoms);
+  const std::size_t shell_count = static_cast<std::size_t>(basis.total_shells);
+  if (basis.atom_offsets.size() != batch_count + 1u ||
+      basis.batch_shell_offsets.size() != batch_count + 1u ||
+      basis.atom_shell_offsets.size() != atom_count + 1u ||
+      basis.shell_to_atom.size() != shell_count || basis.atom_offsets.front() != 0 ||
+      basis.atom_offsets.back() != basis.total_atoms || basis.batch_shell_offsets.front() != 0 ||
+      basis.batch_shell_offsets.back() != basis.total_shells ||
+      basis.atom_shell_offsets.front() != 0 || basis.atom_shell_offsets.back() != basis.total_shells) {
+    error = "ES2 shared plan received an inconsistent basis topology";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  std::int64_t total_matrix_elements = 0;
+  for (std::size_t batch = 0; batch < batch_count; ++batch) {
+    const std::int64_t atom_begin = basis.atom_offsets[batch];
+    const std::int64_t atom_end = basis.atom_offsets[batch + 1u];
+    const std::int64_t shell_begin = basis.batch_shell_offsets[batch];
+    const std::int64_t shell_end = basis.batch_shell_offsets[batch + 1u];
+    std::int64_t matrix_elements = 0;
+    if (atom_begin < 0 || atom_begin > atom_end || atom_end > basis.total_atoms ||
+        shell_begin < 0 || shell_begin > shell_end || shell_end > basis.total_shells ||
+        shell_begin != basis.atom_shell_offsets[static_cast<std::size_t>(atom_begin)] ||
+        shell_end != basis.atom_shell_offsets[static_cast<std::size_t>(atom_end)] ||
+        !checked_square(shell_end - shell_begin, matrix_elements) ||
+        !checked_add(matrix_elements, total_matrix_elements)) {
+      error = "ES2 shared plan basis offsets are not valid ragged partitions";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  if (total_matrix_elements <= 0 ||
+      !count_fits_storage(total_matrix_elements, sizeof(double))) {
+    error = "ES2 shared plan matrix storage is not representable";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  for (std::size_t shell = 0; shell < shell_count; ++shell) {
+    if (!(shell_hardness[shell] > 0.0) || !std::isfinite(shell_hardness[shell])) {
+      error = "ES2 shared plan shell hardnesses must be positive and finite";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    const std::int64_t atom = basis.shell_to_atom[shell];
+    if (atom < 0 || atom >= basis.total_atoms ||
+        static_cast<std::int64_t>(shell) <
+            basis.atom_shell_offsets[static_cast<std::size_t>(atom)] ||
+        static_cast<std::int64_t>(shell) >=
+            basis.atom_shell_offsets[static_cast<std::size_t>(atom) + 1u]) {
+      error = "ES2 shared plan contains an invalid shell-to-atom mapping";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+  }
+
+  try {
+    ES2PlanData created;
+    created.batch_size = basis.batch_size;
+    created.total_atoms = basis.total_atoms;
+    created.total_shells = basis.total_shells;
+    created.total_matrix_elements = total_matrix_elements;
+    created.atom_offsets = basis.atom_offsets;
+    created.batch_shell_offsets = basis.batch_shell_offsets;
+    created.atom_shell_offsets = basis.atom_shell_offsets;
+    created.shell_to_atom = basis.shell_to_atom;
+    created.shell_hardness.assign(shell_hardness, shell_hardness + shell_count);
+    created.hardness_average = average;
+    created.matrix_offsets.resize(batch_count + 1u);
+    std::int64_t matrix_offset = 0;
+    for (std::size_t batch = 0; batch < batch_count; ++batch) {
+      created.matrix_offsets[batch] = matrix_offset;
+      const std::int64_t shells =
+          basis.batch_shell_offsets[batch + 1u] - basis.batch_shell_offsets[batch];
+      matrix_offset += shells * shells;
+    }
+    created.matrix_offsets[batch_count] = matrix_offset;
+
+    auto sealed = std::make_shared<const ES2PlanData>(std::move(created));
+    plan = ES2Plan(std::move(sealed));
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    error = "failed to allocate the shared ES2 plan";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  } catch (const std::length_error&) {
+    error = "shared ES2 plan dimensions exceed host container limits";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
@@ -541,17 +661,18 @@ xtbloom_status_t update_es2_geometry_cache_cpu(const ES2Plan& plan, const double
            ++first_shell) {
         for (std::int64_t second_shell = first_shell_begin; second_shell < first_shell_end;
              ++second_shell) {
-          const double average_hardness =
-              arithmetic_hardness(plan.shell_hardness()[static_cast<std::size_t>(first_shell)],
-                                  plan.shell_hardness()[static_cast<std::size_t>(second_shell)]);
-          const double inverse_average_hardness = 1.0 / average_hardness;
-          if (!(average_hardness > 0.0) || !std::isfinite(average_hardness) ||
+          const double pair_hardness = average_hardness(
+              plan.hardness_average(),
+              plan.shell_hardness()[static_cast<std::size_t>(first_shell)],
+              plan.shell_hardness()[static_cast<std::size_t>(second_shell)]);
+          const double inverse_average_hardness = 1.0 / pair_hardness;
+          if (!(pair_hardness > 0.0) || !std::isfinite(pair_hardness) ||
               !std::isfinite(inverse_average_hardness)) {
             error = "ES2 onsite hardness arithmetic exceeded floating-point range";
             return XTBLOOM_STATUS_INVALID_ARGUMENT;
           }
           workspace.matrix_scratch[matrix_index(plan, batch_index, first_shell, second_shell)] =
-              average_hardness;
+              pair_hardness;
         }
       }
       for (std::int64_t second = atom_begin; second < first; ++second) {
@@ -572,7 +693,8 @@ xtbloom_status_t update_es2_geometry_cache_cpu(const ES2Plan& plan, const double
             double kernel = 0.0;
             if (!softened_kernel(
                     dx, dy, dz, plan.shell_hardness()[static_cast<std::size_t>(first_shell)],
-                    plan.shell_hardness()[static_cast<std::size_t>(second_shell)], kernel)) {
+                    plan.shell_hardness()[static_cast<std::size_t>(second_shell)],
+                    plan.hardness_average(), kernel)) {
               error = "ES2 Coulomb-kernel arithmetic exceeded floating-point range";
               return XTBLOOM_STATUS_INVALID_ARGUMENT;
             }
