@@ -213,6 +213,22 @@ int test_plan_validation_and_element_boundaries() {
   CHECK(xtbloom::detail::gfn1::make_repulsion_plan(1, 2, offsets.data(), high_atom.data(), plan,
                                                    error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
+  std::array<double, 6> two_atom_positions{};
+  std::array<double, 1> two_atom_energy{23.0};
+  CHECK(xtbloom::detail::gfn1::make_repulsion_plan(1, 2, offsets.data(), atoms.data(), plan,
+                                                   error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::add_repulsion_cpu(plan, nullptr, two_atom_energy.data(), nullptr,
+                                                 error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(two_atom_energy[0] == 23.0);
+  CHECK(xtbloom::detail::gfn1::add_repulsion_cpu(plan, two_atom_positions.data(), nullptr, nullptr,
+                                                 error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn1::add_repulsion_cpu(plan, two_atom_positions.data(),
+                                                 two_atom_positions.data(), nullptr,
+                                                 error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn1::add_repulsion_cpu(plan, two_atom_positions.data(),
+                                                 plan.sqrt_alpha.data(), nullptr,
+                                                 error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+
   std::vector<std::int64_t> all_offsets{0, 86};
   std::vector<std::int32_t> all_elements(86);
   for (std::int32_t atomic_number = 1; atomic_number <= 86; ++atomic_number) {

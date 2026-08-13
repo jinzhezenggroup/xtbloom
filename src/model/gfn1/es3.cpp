@@ -38,6 +38,10 @@ bool aligned_double(const void* pointer) {
   return reinterpret_cast<std::uintptr_t>(pointer) % alignof(double) == 0u;
 }
 
+bool aligned_int64(const void* pointer) {
+  return reinterpret_cast<std::uintptr_t>(pointer) % alignof(std::int64_t) == 0u;
+}
+
 bool ranges_overlap(const void* first, std::size_t first_bytes, const void* second,
                     std::size_t second_bytes) {
   if (first_bytes == 0u || second_bytes == 0u) {
@@ -53,12 +57,17 @@ bool ranges_overlap(const void* first, std::size_t first_bytes, const void* seco
 }
 
 xtbloom_status_t validate_view(ES3View view, std::string& error) {
+  std::size_t offset_bytes = 0u;
+  std::size_t gamma_bytes = 0u;
   if (view.batch_size <= 0 || view.total_atoms <= 0 || !representable(view.batch_size) ||
       !representable(view.total_atoms) ||
       view.batch_size == std::numeric_limits<std::int64_t>::max() ||
       view.atom_offset_count != view.batch_size + 1 || view.atom_gamma3_count != view.total_atoms ||
-      view.atom_offsets == nullptr || view.atom_gamma3 == nullptr) {
-    error = "GFN1 ES3 view is incomplete or has unrepresentable dimensions";
+      !count_bytes(view.atom_offset_count, sizeof(std::int64_t), offset_bytes) ||
+      !count_bytes(view.atom_gamma3_count, sizeof(double), gamma_bytes) ||
+      view.atom_offsets == nullptr || view.atom_gamma3 == nullptr ||
+      !aligned_int64(view.atom_offsets) || !aligned_double(view.atom_gamma3)) {
+    error = "GFN1 ES3 view is incomplete, misaligned, or has unrepresentable dimensions";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (view.atom_offsets[0] != 0 || view.atom_offsets[view.batch_size] != view.total_atoms) {
@@ -117,6 +126,17 @@ bool system_energy(ES3View view, std::int64_t atom_begin, std::int64_t atom_end,
   return true;
 }
 
+bool output_overlaps_control(const void* output, std::size_t output_bytes, ES3View view,
+                             const std::string& error) {
+  std::size_t offset_bytes = 0u;
+  std::size_t gamma_bytes = 0u;
+  return !count_bytes(view.atom_offset_count, sizeof(std::int64_t), offset_bytes) ||
+         !count_bytes(view.atom_gamma3_count, sizeof(double), gamma_bytes) ||
+         ranges_overlap(output, output_bytes, view.atom_offsets, offset_bytes) ||
+         ranges_overlap(output, output_bytes, view.atom_gamma3, gamma_bytes) ||
+         ranges_overlap(output, output_bytes, &error, sizeof(error));
+}
+
 }  // namespace
 
 xtbloom_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
@@ -130,7 +150,9 @@ xtbloom_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomi
       basis.principal_quantum_numbers.size() != static_cast<std::size_t>(basis.total_shells) ||
       basis.angular_momenta.size() != static_cast<std::size_t>(basis.total_shells) ||
       basis.slater_exponents.size() != static_cast<std::size_t>(basis.total_shells) ||
-      basis.atom_offsets.front() != 0 || basis.atom_offsets.back() != basis.total_atoms) {
+      basis.atom_offsets.front() != 0 || basis.atom_offsets.back() != basis.total_atoms ||
+      basis.atom_shell_offsets.front() != 0 ||
+      basis.atom_shell_offsets.back() != basis.total_shells) {
     error = "GFN1 ES3 plan requires one complete representable basis and element list";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -222,8 +244,9 @@ xtbloom_status_t evaluate_es3_potential_cpu(ES3View view, const double* atomic_c
   }
   std::size_t atom_bytes = 0u;
   if (!count_bytes(view.total_atoms, sizeof(double), atom_bytes) ||
-      ranges_overlap(atomic_charges, atom_bytes, atomic_potentials, atom_bytes)) {
-    error = "GFN1 ES3 atomic potential output must not overlap its input";
+      ranges_overlap(atomic_charges, atom_bytes, atomic_potentials, atom_bytes) ||
+      output_overlaps_control(atomic_potentials, atom_bytes, view, error)) {
+    error = "GFN1 ES3 atomic potential output must not overlap inputs or control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t atom = 0; atom < view.total_atoms; ++atom) {
@@ -234,7 +257,9 @@ xtbloom_status_t evaluate_es3_potential_cpu(ES3View view, const double* atomic_c
     }
   }
   for (std::int64_t atom = 0; atom < view.total_atoms; ++atom) {
-    atomic_potentials[atom] = view.atom_gamma3[atom] * atomic_charges[atom] * atomic_charges[atom];
+    double potential = 0.0;
+    (void)atom_potential(view.atom_gamma3[atom], atomic_charges[atom], potential);
+    atomic_potentials[atom] = potential;
   }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
@@ -255,8 +280,9 @@ xtbloom_status_t add_es3_energy_cpu(ES3View view, const double* atomic_charges, 
   std::size_t energy_bytes = 0u;
   if (!count_bytes(view.total_atoms, sizeof(double), atom_bytes) ||
       !count_bytes(view.batch_size, sizeof(double), energy_bytes) ||
-      ranges_overlap(atomic_charges, atom_bytes, energies, energy_bytes)) {
-    error = "GFN1 ES3 energy output must not overlap its input";
+      ranges_overlap(atomic_charges, atom_bytes, energies, energy_bytes) ||
+      output_overlaps_control(energies, energy_bytes, view, error)) {
+    error = "GFN1 ES3 energy output must not overlap inputs or control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t system = 0; system < view.batch_size; ++system) {
@@ -295,8 +321,9 @@ xtbloom_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t sy
   }
   std::size_t atom_bytes = 0u;
   if (!count_bytes(view.total_atoms, sizeof(double), atom_bytes) ||
-      ranges_overlap(atomic_charges, atom_bytes, atomic_potentials, atom_bytes)) {
-    error = "GFN1 ES3 one-system potential output must not overlap its input";
+      ranges_overlap(atomic_charges, atom_bytes, atomic_potentials, atom_bytes) ||
+      output_overlaps_control(atomic_potentials, atom_bytes, view, error)) {
+    error = "GFN1 ES3 one-system potential output must not overlap inputs or control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
@@ -305,6 +332,10 @@ xtbloom_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t sy
       error = "GFN1 ES3 target-system potential contains invalid data or exceeded range";
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
+  }
+  for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+    double potential = 0.0;
+    (void)atom_potential(view.atom_gamma3[atom], atomic_charges[atom], potential);
     atomic_potentials[atom] = potential;
   }
   error.clear();
@@ -320,8 +351,16 @@ xtbloom_status_t add_es3_energy_system_cpu(ES3View view, std::int64_t system,
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
-  if (atomic_charges == nullptr || !aligned_double(atomic_charges)) {
-    error = "GFN1 ES3 one-system charges must not be NULL or misaligned";
+  if (atomic_charges == nullptr || !aligned_double(atomic_charges) ||
+      !aligned_double(&accumulated_energy)) {
+    error = "GFN1 ES3 one-system charges and accumulator must not be NULL or misaligned";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  std::size_t atom_bytes = 0u;
+  if (!count_bytes(view.total_atoms, sizeof(double), atom_bytes) ||
+      ranges_overlap(atomic_charges, atom_bytes, &accumulated_energy, sizeof(accumulated_energy)) ||
+      output_overlaps_control(&accumulated_energy, sizeof(accumulated_energy), view, error)) {
+    error = "GFN1 ES3 one-system accumulator must not overlap inputs or control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!std::isfinite(accumulated_energy)) {

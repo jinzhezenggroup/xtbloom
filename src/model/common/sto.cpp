@@ -69,11 +69,13 @@ bool sto_table(std::uint8_t n, std::uint8_t l, std::uint8_t ng, const double*& a
   return false;
 }
 
-void expand_sto_shell(std::uint8_t n, std::uint8_t l, std::uint8_t ng, double slater, double* alpha,
+bool expand_sto_shell(std::uint8_t n, std::uint8_t l, std::uint8_t ng, double slater, double* alpha,
                       double* coefficients) noexcept {
   const double* base_alpha = nullptr;
   const double* base_coefficients = nullptr;
-  (void)sto_table(n, l, ng, base_alpha, base_coefficients);
+  if (!sto_table(n, l, ng, base_alpha, base_coefficients)) {
+    return false;
+  }
 
   const double zeta_squared = slater * slater;
   for (std::size_t primitive = 0; primitive < ng; ++primitive) {
@@ -84,6 +86,7 @@ void expand_sto_shell(std::uint8_t n, std::uint8_t l, std::uint8_t ng, double sl
         std::sqrt(kDoubleFactorial[l]);
     coefficients[primitive] = base_coefficients[primitive] * normalization;
   }
+  return true;
 }
 
 void orthogonalize_to_first(const double* first_alpha, const double* first_coefficients,

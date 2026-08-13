@@ -3,10 +3,13 @@
 
 #include "model/gfn1/repulsion.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <utility>
 
 #include "data/parameters/gfn1.hpp"
@@ -87,9 +90,51 @@ xtbloom_status_t validate_positions(const RepulsionPlan& plan, const double* pos
   return XTBLOOM_STATUS_SUCCESS;
 }
 
+bool aligned_double(const void* pointer) {
+  return reinterpret_cast<std::uintptr_t>(pointer) % alignof(double) == 0u;
+}
+
+bool count_bytes(std::size_t count, std::size_t element_size, std::size_t& bytes) {
+  if (count > std::numeric_limits<std::size_t>::max() / element_size) {
+    return false;
+  }
+  bytes = count * element_size;
+  return true;
+}
+
+bool ranges_overlap(const void* first, std::size_t first_bytes, const void* second,
+                    std::size_t second_bytes) {
+  if (first_bytes == 0u || second_bytes == 0u) {
+    return false;
+  }
+  const std::uintptr_t first_begin = reinterpret_cast<std::uintptr_t>(first);
+  const std::uintptr_t second_begin = reinterpret_cast<std::uintptr_t>(second);
+  if (first_begin > std::numeric_limits<std::uintptr_t>::max() - first_bytes ||
+      second_begin > std::numeric_limits<std::uintptr_t>::max() - second_bytes) {
+    return true;
+  }
+  return first_begin < second_begin + second_bytes && second_begin < first_begin + first_bytes;
+}
+
+template <typename T>
+bool overlaps_vector(const void* pointer, std::size_t bytes, const std::vector<T>& values) {
+  std::size_t value_bytes = 0u;
+  return !count_bytes(values.size(), sizeof(T), value_bytes) ||
+         ranges_overlap(pointer, bytes, values.data(), value_bytes);
+}
+
+bool overlaps_plan_or_error(const void* pointer, std::size_t bytes, const RepulsionPlan& plan,
+                            const std::string& error) {
+  return ranges_overlap(pointer, bytes, &plan, sizeof(plan)) ||
+         ranges_overlap(pointer, bytes, &error, sizeof(error)) ||
+         overlaps_vector(pointer, bytes, plan.atom_offsets) ||
+         overlaps_vector(pointer, bytes, plan.sqrt_alpha) ||
+         overlaps_vector(pointer, bytes, plan.effective_charge);
+}
+
 template <typename PairFunction>
-void for_each_active_pair(const RepulsionPlan& plan, const double* positions,
-                          PairFunction&& function) {
+xtbloom_status_t for_each_active_pair(const RepulsionPlan& plan, const double* positions,
+                                      PairFunction&& function, std::string& error) {
   constexpr double cutoff_squared = kCutoffBohr * kCutoffBohr;
   for (std::int64_t batch = 0; batch < plan.batch_size; ++batch) {
     const std::int64_t begin = plan.atom_offsets[static_cast<std::size_t>(batch)];
@@ -102,6 +147,10 @@ void for_each_active_pair(const RepulsionPlan& plan, const double* positions,
         const double dy = positions[first_index * 3u + 1u] - positions[second_index * 3u + 1u];
         const double dz = positions[first_index * 3u + 2u] - positions[second_index * 3u + 2u];
         const double distance_squared = dx * dx + dy * dy + dz * dz;
+        if (!std::isfinite(distance_squared)) {
+          error = "GFN1 repulsion coordinate differences overflow floating-point range";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
         if (distance_squared < kMinimumDistanceSquared) {
           /* Preserve tblite's diagonal/self-image exclusion exactly. */
           continue;
@@ -109,11 +158,117 @@ void for_each_active_pair(const RepulsionPlan& plan, const double* positions,
         if (distance_squared > cutoff_squared) {
           continue;
         }
-        function(static_cast<std::size_t>(batch), first_index, second_index, dx, dy, dz,
-                 distance_squared);
+        const xtbloom_status_t status = function(static_cast<std::size_t>(batch), first_index,
+                                                 second_index, dx, dy, dz, distance_squared);
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          return status;
+        }
       }
     }
   }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+template <typename PairFunction>
+xtbloom_status_t for_each_active_pair_in_batch(const RepulsionPlan& plan, const double* positions,
+                                               std::size_t batch, PairFunction&& function,
+                                               std::string& error) {
+  constexpr double cutoff_squared = kCutoffBohr * kCutoffBohr;
+  const std::int64_t begin = plan.atom_offsets[batch];
+  const std::int64_t end = plan.atom_offsets[batch + 1u];
+  for (std::int64_t first = begin; first < end; ++first) {
+    const std::size_t first_index = static_cast<std::size_t>(first);
+    for (std::int64_t second = begin; second < first; ++second) {
+      const std::size_t second_index = static_cast<std::size_t>(second);
+      const double dx = positions[first_index * 3u] - positions[second_index * 3u];
+      const double dy = positions[first_index * 3u + 1u] - positions[second_index * 3u + 1u];
+      const double dz = positions[first_index * 3u + 2u] - positions[second_index * 3u + 2u];
+      const double distance_squared = dx * dx + dy * dy + dz * dz;
+      if (!std::isfinite(distance_squared)) {
+        error = "GFN1 repulsion coordinate differences overflow floating-point range";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      if (distance_squared < kMinimumDistanceSquared || distance_squared > cutoff_squared) {
+        continue;
+      }
+      const xtbloom_status_t status =
+          function(first_index, second_index, dx, dy, dz, distance_squared);
+      if (status != XTBLOOM_STATUS_SUCCESS) {
+        return status;
+      }
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+template <typename PairFunction>
+xtbloom_status_t for_each_active_pair_of_atom(const RepulsionPlan& plan, const double* positions,
+                                              std::size_t atom, PairFunction&& function,
+                                              std::string& error) {
+  constexpr double cutoff_squared = kCutoffBohr * kCutoffBohr;
+  const auto upper = std::upper_bound(plan.atom_offsets.begin(), plan.atom_offsets.end(),
+                                      static_cast<std::int64_t>(atom));
+  const std::size_t batch = static_cast<std::size_t>(upper - plan.atom_offsets.begin() - 1);
+  const std::int64_t begin = plan.atom_offsets[batch];
+  const std::int64_t end = plan.atom_offsets[batch + 1u];
+  for (std::int64_t other = begin; other < end; ++other) {
+    const std::size_t other_index = static_cast<std::size_t>(other);
+    if (other_index == atom) {
+      continue;
+    }
+    const double dx = positions[atom * 3u] - positions[other_index * 3u];
+    const double dy = positions[atom * 3u + 1u] - positions[other_index * 3u + 1u];
+    const double dz = positions[atom * 3u + 2u] - positions[other_index * 3u + 2u];
+    const double distance_squared = dx * dx + dy * dy + dz * dz;
+    if (!std::isfinite(distance_squared)) {
+      error = "GFN1 repulsion coordinate differences overflow floating-point range";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    if (distance_squared < kMinimumDistanceSquared || distance_squared > cutoff_squared) {
+      continue;
+    }
+    const xtbloom_status_t status = function(other_index, dx, dy, dz, distance_squared);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+struct PairContribution {
+  double energy;
+  double force[3];
+};
+
+xtbloom_status_t evaluate_pair(const RepulsionPlan& plan, std::size_t first, std::size_t second,
+                               double dx, double dy, double dz, double distance_squared,
+                               bool with_forces, PairContribution& contribution,
+                               std::string& error) {
+  const double distance = std::sqrt(distance_squared);
+  const double distance_power = distance * std::sqrt(distance);
+  const double pair_alpha = plan.sqrt_alpha[first] * plan.sqrt_alpha[second];
+  const double pair_charge = plan.effective_charge[first] * plan.effective_charge[second];
+  contribution.energy = pair_charge * std::exp(-pair_alpha * distance_power) / distance;
+  if (!std::isfinite(distance) || !std::isfinite(distance_power) || !std::isfinite(pair_alpha) ||
+      !std::isfinite(pair_charge) || !std::isfinite(contribution.energy)) {
+    error = "GFN1 repulsion energy arithmetic exceeded floating-point range";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  if (with_forces) {
+    const double force_scale =
+        (pair_alpha * parameters::gfn1::kGlobal.repulsion_kexp * distance_power +
+         kDistanceDenominatorExponent) *
+        contribution.energy / distance_squared;
+    contribution.force[0] = force_scale * dx;
+    contribution.force[1] = force_scale * dy;
+    contribution.force[2] = force_scale * dz;
+    if (!std::isfinite(force_scale) || !std::isfinite(contribution.force[0]) ||
+        !std::isfinite(contribution.force[1]) || !std::isfinite(contribution.force[2])) {
+      error = "GFN1 repulsion force arithmetic exceeded floating-point range";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 }  // namespace
@@ -174,6 +329,9 @@ xtbloom_status_t make_repulsion_plan(std::int64_t batch_size, std::int64_t total
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the GFN1 repulsion plan";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  } catch (const std::length_error&) {
+    error = "GFN1 repulsion plan dimensions exceed host container limits";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
@@ -183,41 +341,117 @@ xtbloom_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* posi
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
-  if (energies == nullptr) {
-    error = "GFN1 repulsion energies must not be NULL";
+  if (positions == nullptr || energies == nullptr || !aligned_double(positions) ||
+      !aligned_double(energies) || (forces != nullptr && !aligned_double(forces))) {
+    error = "GFN1 repulsion positions and outputs must not be NULL or misaligned";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t batch_count = static_cast<std::size_t>(plan.batch_size);
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms);
+  std::size_t position_bytes = 0u;
+  std::size_t energy_bytes = 0u;
+  if (!count_bytes(atom_count, 3u * sizeof(double), position_bytes) ||
+      !count_bytes(batch_count, sizeof(double), energy_bytes) ||
+      ranges_overlap(positions, position_bytes, energies, energy_bytes) ||
+      overlaps_plan_or_error(energies, energy_bytes, plan, error)) {
+    error = "GFN1 repulsion energies must be disjoint from inputs and control storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (forces != nullptr && (ranges_overlap(positions, position_bytes, forces, position_bytes) ||
+                            ranges_overlap(energies, energy_bytes, forces, position_bytes) ||
+                            overlaps_plan_or_error(forces, position_bytes, plan, error))) {
+    error = "GFN1 repulsion forces must be disjoint from inputs and control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   status = validate_positions(plan, positions, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
-  const double exponent = parameters::gfn1::kGlobal.repulsion_kexp;
-  for_each_active_pair(
+  for (std::size_t batch = 0; batch < batch_count; ++batch) {
+    if (!std::isfinite(energies[batch])) {
+      error = "GFN1 repulsion energy accumulators contain NaN or infinity";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    double candidate = energies[batch];
+    status = for_each_active_pair_in_batch(
+        plan, positions, batch,
+        [&](std::size_t first, std::size_t second, double dx, double dy, double dz,
+            double distance_squared) -> xtbloom_status_t {
+          PairContribution contribution{};
+          const xtbloom_status_t pair_status =
+              evaluate_pair(plan, first, second, dx, dy, dz, distance_squared, forces != nullptr,
+                            contribution, error);
+          if (pair_status != XTBLOOM_STATUS_SUCCESS) {
+            return pair_status;
+          }
+          candidate += contribution.energy;
+          if (!std::isfinite(candidate)) {
+            error = "GFN1 repulsion energy accumulation exceeded floating-point range";
+            return XTBLOOM_STATUS_INTERNAL_ERROR;
+          }
+          return XTBLOOM_STATUS_SUCCESS;
+        },
+        error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
+  }
+  if (forces != nullptr) {
+    for (std::size_t coordinate = 0; coordinate < atom_count * 3u; ++coordinate) {
+      if (!std::isfinite(forces[coordinate])) {
+        error = "GFN1 repulsion force accumulators contain NaN or infinity";
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+      const std::size_t atom = coordinate / 3u;
+      const std::size_t axis = coordinate % 3u;
+      double candidate = forces[coordinate];
+      status = for_each_active_pair_of_atom(
+          plan, positions, atom,
+          [&](std::size_t other, double dx, double dy, double dz,
+              double distance_squared) -> xtbloom_status_t {
+            PairContribution contribution{};
+            const xtbloom_status_t pair_status = evaluate_pair(
+                plan, atom, other, dx, dy, dz, distance_squared, true, contribution, error);
+            if (pair_status != XTBLOOM_STATUS_SUCCESS) {
+              return pair_status;
+            }
+            candidate += contribution.force[axis];
+            if (!std::isfinite(candidate)) {
+              error = "GFN1 repulsion force accumulation exceeded floating-point range";
+              return XTBLOOM_STATUS_INTERNAL_ERROR;
+            }
+            return XTBLOOM_STATUS_SUCCESS;
+          },
+          error);
+      if (status != XTBLOOM_STATUS_SUCCESS) {
+        return status;
+      }
+    }
+  }
+
+  status = for_each_active_pair(
       plan, positions,
       [&](std::size_t batch, std::size_t first, std::size_t second, double dx, double dy, double dz,
-          double distance_squared) {
-        const double distance = std::sqrt(distance_squared);
-        const double distance_power = distance * std::sqrt(distance);
-        const double pair_alpha = plan.sqrt_alpha[first] * plan.sqrt_alpha[second];
-        const double pair_charge = plan.effective_charge[first] * plan.effective_charge[second];
-        const double pair_energy = pair_charge * std::exp(-pair_alpha * distance_power) / distance;
-        energies[batch] += pair_energy;
-
-        if (forces != nullptr) {
-          const double force_scale =
-              (pair_alpha * exponent * distance_power + kDistanceDenominatorExponent) *
-              pair_energy / distance_squared;
-          const double fx = force_scale * dx;
-          const double fy = force_scale * dy;
-          const double fz = force_scale * dz;
-          forces[first * 3u] += fx;
-          forces[first * 3u + 1u] += fy;
-          forces[first * 3u + 2u] += fz;
-          forces[second * 3u] -= fx;
-          forces[second * 3u + 1u] -= fy;
-          forces[second * 3u + 2u] -= fz;
+          double distance_squared) -> xtbloom_status_t {
+        PairContribution contribution{};
+        const xtbloom_status_t pair_status =
+            evaluate_pair(plan, first, second, dx, dy, dz, distance_squared, forces != nullptr,
+                          contribution, error);
+        if (pair_status == XTBLOOM_STATUS_SUCCESS) {
+          energies[batch] += contribution.energy;
+          if (forces != nullptr) {
+            for (std::size_t axis = 0; axis < 3u; ++axis) {
+              forces[first * 3u + axis] += contribution.force[axis];
+              forces[second * 3u + axis] -= contribution.force[axis];
+            }
+          }
         }
-      });
+        return pair_status;
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }

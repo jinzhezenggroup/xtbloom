@@ -42,7 +42,9 @@ xtbloom_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomi
       basis.shell_to_atom.size() != static_cast<std::size_t>(basis.total_shells) ||
       basis.principal_quantum_numbers.size() != static_cast<std::size_t>(basis.total_shells) ||
       basis.angular_momenta.size() != static_cast<std::size_t>(basis.total_shells) ||
-      basis.slater_exponents.size() != static_cast<std::size_t>(basis.total_shells)) {
+      basis.slater_exponents.size() != static_cast<std::size_t>(basis.total_shells) ||
+      basis.atom_shell_offsets.front() != 0 ||
+      basis.atom_shell_offsets.back() != basis.total_shells) {
     error = "GFN1 ES2 plan requires one complete representable basis and element list";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }

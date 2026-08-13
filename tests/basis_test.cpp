@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "model/common/sto.hpp"
+
 #define CHECK(condition) \
   do {                   \
     if (!(condition)) {  \
@@ -194,6 +196,20 @@ int test_resident_bytes_include_valence_metadata() {
   return 0;
 }
 
+int test_missing_sto_row_is_transactional() {
+  std::array<double, 6> exponents{};
+  std::array<double, 6> coefficients{};
+  exponents.fill(17.0);
+  coefficients.fill(19.0);
+  CHECK(!xtbloom::detail::common::expand_sto_shell(0u, 0u, 6u, 1.0, exponents.data(),
+                                                   coefficients.data()));
+  CHECK(
+      std::all_of(exponents.begin(), exponents.end(), [](double value) { return value == 17.0; }));
+  CHECK(std::all_of(coefficients.begin(), coefficients.end(),
+                    [](double value) { return value == 19.0; }));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -206,5 +222,8 @@ int main() {
   if (const int status = test_validation_and_strong_failure_guarantee(); status != 0) {
     return status;
   }
-  return test_resident_bytes_include_valence_metadata();
+  if (const int status = test_resident_bytes_include_valence_metadata(); status != 0) {
+    return status;
+  }
+  return test_missing_sto_row_is_transactional();
 }

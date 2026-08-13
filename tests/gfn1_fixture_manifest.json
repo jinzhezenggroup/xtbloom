@@ -18,13 +18,6 @@
           "consumers": ["tests/gfn1_h0_test.cpp"]
         },
         {
-          "path": "test/test_hamiltonian/h0.npz",
-          "git_blob": "f6995ff6aea9b67731c6097fcc1a00757bb7fafe",
-          "sha256": "b930d3f56f8ac0de1ac875e55b340c539424880ff805fd7f6d038e496c9d76ce",
-          "use": "Upstream archive retaining the broader tblite-generated H0 fixture set; recorded to pin the surrounding oracle artifact.",
-          "consumers": ["tests/gfn1_h0_test.cpp"]
-        },
-        {
           "path": "test/test_overlap/overlap.npz",
           "git_blob": "8fd0e1ad61a2961e9242dc9c799cf2e180f5a2e2",
           "sha256": "f2be66d19693cc932f2fb8d1b5b4ad8a6fe47bea4e999b401bb77115d71aa292",
@@ -64,6 +57,13 @@
       "revision": "133f91efb94b47f05848e1f86832f40a1accc385",
       "tree": "008603bbf877b414f68208d3fe8393265f72b108",
       "files": [
+        {
+          "path": "src/tblite/coulomb/charge/effective.f90",
+          "git_blob": "67b91d63e13803e5bc297597e7312404bb1e576c",
+          "sha256": "1d66415c1046e3b83bde1434f6e1ea5697a95362332c70a8db08b2668a07214a",
+          "use": "GFN1 harmonic pair-averaging and effective Coulomb equations independently expanded in the ES2 fixture; shell hardness parameters come from the separately pinned canonical GFN1 tables.",
+          "consumers": ["tests/gfn1_es_spin_test.cpp"]
+        },
         {
           "path": "test/unit/test_repulsion.f90",
           "git_blob": "9cb9671606ccb3081ba798247791f088eb1ffa40",

@@ -102,8 +102,8 @@ int test_es2_harmonic_oracle_and_potential_derivative() {
 
   /*
    * Independent literal expansion of tblite effective.f90 at pinned revision
-   * 133f91e: g_s=gam_Z*shell_hubbard_scale and
-   * g_st=2/(1/g_s+1/g_t), including onsite off-diagonal O(s,p).
+   * 133f91e: g_st=2/(1/g_s+1/g_t), including onsite off-diagonal O(s,p).
+   * The g_s inputs come from the separately pinned canonical GFN1 tables.
    */
   std::vector<double> expected_hardness;
   for (std::int32_t number : numbers) {
@@ -140,6 +140,13 @@ int test_es2_harmonic_oracle_and_potential_derivative() {
     }
   }
   CHECK(evaluation.matrix[1] != 0.5 * (expected_hardness[0] + expected_hardness[1]));
+
+  auto corrupt_basis = evaluation.basis;
+  corrupt_basis.atom_shell_offsets.front() = 1;
+  xtbloom::detail::gfn1::ES2Plan unchanged_plan = evaluation.plan;
+  CHECK(xtbloom::detail::gfn1::make_es2_plan(corrupt_basis, numbers.data(), unchanged_plan,
+                                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(unchanged_plan.shell_hardness() == evaluation.plan.shell_hardness());
 
   std::vector<double> charges{0.32, -0.51, 0.17, -0.08, 0.24, -0.14};
   std::vector<double> potential(charges.size());
@@ -231,6 +238,13 @@ int test_es3_atomwise_oracle_derivative_and_failures() {
     CHECK(plan.atom_gamma3[atom] ==
           xtbloom::parameters::gfn1::kElements[static_cast<std::size_t>(numbers[atom] - 1)].gam3);
   }
+
+  auto corrupt_basis = basis;
+  corrupt_basis.atom_shell_offsets.back() -= 1;
+  xtbloom::detail::gfn1::ES3Plan unchanged_plan = plan;
+  CHECK(xtbloom::detail::gfn1::make_es3_plan(corrupt_basis, numbers.data(), unchanged_plan,
+                                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(unchanged_plan.atom_gamma3 == plan.atom_gamma3);
   std::vector<double> charges{0.31, -0.27, 0.42, -0.19, 0.08};
   std::vector<double> potentials(charges.size(), 91.0);
   CHECK(xtbloom::detail::gfn1::evaluate_es3_potential_cpu(view, charges.data(), potentials.data(),
@@ -265,12 +279,41 @@ int test_es3_atomwise_oracle_derivative_and_failures() {
                                                          error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(accumulated == 4.0);
 
+  auto overflow_plan = plan;
+  overflow_plan.atom_gamma3[0] = 1.0;
+  overflow_plan.atom_gamma3[1] = std::numeric_limits<double>::max();
+  const auto overflow_view = xtbloom::detail::gfn1::make_es3_view(overflow_plan);
+  const std::vector<double> overflow_charges{1.0, 2.0, 0.0, 0.0, 0.0};
+  std::vector<double> unchanged_potential(overflow_charges.size(), 17.0);
+  CHECK(xtbloom::detail::gfn1::evaluate_es3_potential_system_cpu(
+            overflow_view, 0, overflow_charges.data(), unchanged_potential.data(), error) ==
+        XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(std::all_of(unchanged_potential.begin(), unchanged_potential.end(),
+                    [](double value) { return value == 17.0; }));
+
   auto bad = view;
   bad.atom_gamma3_count -= 1;
   const std::vector<double> sentinel = target;
   CHECK(xtbloom::detail::gfn1::evaluate_es3_potential_cpu(
             bad, charges.data(), target.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(target == sentinel);
+
+  bad = view;
+  const auto* offset_bytes = reinterpret_cast<const unsigned char*>(view.atom_offsets);
+  bad.atom_offsets = reinterpret_cast<const std::int64_t*>(offset_bytes + 1u);
+  CHECK(xtbloom::detail::gfn1::evaluate_es3_potential_cpu(
+            bad, charges.data(), target.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(target == sentinel);
+
+  bad = view;
+  bad.total_atoms = std::numeric_limits<std::int64_t>::max();
+  bad.atom_gamma3_count = bad.total_atoms;
+  CHECK(xtbloom::detail::gfn1::evaluate_es3_potential_cpu(
+            bad, charges.data(), target.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(target == sentinel);
+  CHECK(xtbloom::detail::gfn1::evaluate_es3_potential_cpu(view, charges.data(),
+                                                          plan.atom_gamma3.data(), error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   return 0;
 }
 
@@ -376,15 +419,64 @@ int test_spin_peer_local_failure_and_descriptor_validation() {
             view, 1, populations.data(), energy, potentials.data(), error) ==
         XTBLOOM_STATUS_SUCCESS);
   CHECK(std::isfinite(energy));
+  CHECK(std::all_of(potentials.begin() + layout.system_offsets[1],
+                    potentials.begin() + system_one_magnetization,
+                    [](double value) { return value == 0.0; }));
   const double saved = 7.0;
   energy = saved;
   CHECK(xtbloom::detail::gfn1::add_spin_polarization_energy_system_cpu(
             view, 0, populations.data(), energy, error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(energy == saved);
 
+  /* A late arithmetic failure must not publish an earlier row's potential. */
+  auto overflow_plan = plan;
+  const std::int64_t matrix_begin = overflow_plan.coupling_offsets[1];
+  overflow_plan.coupling_matrices[static_cast<std::size_t>(matrix_begin)] = 1.0;
+  overflow_plan.coupling_matrices[static_cast<std::size_t>(matrix_begin + 1)] = 0.0;
+  overflow_plan.coupling_matrices[static_cast<std::size_t>(matrix_begin + 2)] =
+      std::numeric_limits<double>::max();
+  overflow_plan.coupling_matrices[static_cast<std::size_t>(matrix_begin + 3)] =
+      std::numeric_limits<double>::max();
+  const auto overflow_view = xtbloom::detail::gfn1::make_spin_polarization_view(overflow_plan);
+  std::vector<double> overflowing_populations(static_cast<std::size_t>(layout.element_count), 0.0);
+  overflowing_populations[static_cast<std::size_t>(system_one_magnetization)] = 1.0;
+  overflowing_populations[static_cast<std::size_t>(system_one_magnetization + 1)] = 1.0;
+  std::vector<double> unchanged_potentials(overflowing_populations.size(), 23.0);
+  energy = 29.0;
+  CHECK(xtbloom::detail::gfn1::evaluate_spin_polarization_system_cpu(
+            overflow_view, 1, overflowing_populations.data(), energy, unchanged_potentials.data(),
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(energy == 29.0);
+  CHECK(std::all_of(unchanged_potentials.begin(), unchanged_potentials.end(),
+                    [](double value) { return value == 23.0; }));
+
+  energy = 31.0;
+  CHECK(xtbloom::detail::gfn1::evaluate_spin_polarization_system_cpu(
+            view, 1, populations.data(), populations[0], potentials.data(), error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn1::evaluate_spin_polarization_system_cpu(view, 1, populations.data(),
+                                                                     energy, &energy, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(energy == 31.0);
+
   view.coupling_matrix_count -= 1;
   const std::vector<double> sentinel = potentials;
   std::vector<double> energies(2, 4.0);
+  CHECK(xtbloom::detail::gfn1::evaluate_spin_polarization_cpu(
+            view, populations.data(), energies.data(), potentials.data(), error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(potentials == sentinel && energies == std::vector<double>({4.0, 4.0}));
+
+  view = xtbloom::detail::gfn1::make_spin_polarization_view(plan);
+  const auto* offset_bytes = reinterpret_cast<const unsigned char*>(view.atom_offsets);
+  view.atom_offsets = reinterpret_cast<const std::int64_t*>(offset_bytes + 1u);
+  CHECK(xtbloom::detail::gfn1::evaluate_spin_polarization_cpu(
+            view, populations.data(), energies.data(), potentials.data(), error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(potentials == sentinel && energies == std::vector<double>({4.0, 4.0}));
+
+  view = xtbloom::detail::gfn1::make_spin_polarization_view(plan);
+  view.coupling_matrix_count = std::numeric_limits<std::int64_t>::max();
   CHECK(xtbloom::detail::gfn1::evaluate_spin_polarization_cpu(
             view, populations.data(), energies.data(), potentials.data(), error) ==
         XTBLOOM_STATUS_INVALID_ARGUMENT);

@@ -126,13 +126,13 @@ int test_sto6g_spd_ragged_and_translation() {
   return 0;
 }
 
-bool weighted_overlap(const Evaluation& evaluation, const std::vector<double>& positions,
+bool weighted_overlap(Evaluation& evaluation, const std::vector<double>& positions,
                       const std::vector<double>& weights, double& value, std::string& error) {
   std::vector<double> overlap(weights.size());
   if (xtbloom::detail::gfn1::evaluate_overlap_cpu(
           evaluation.basis, evaluation.integrals, positions.data(), overlap.data(),
-          const_cast<double*>(evaluation.workspace.data()),
-          evaluation.workspace.size() * sizeof(double), error) != XTBLOOM_STATUS_SUCCESS) {
+          evaluation.workspace.data(), evaluation.workspace.size() * sizeof(double),
+          error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   value = 0.0;
@@ -206,6 +206,7 @@ int test_transactional_validation() {
             evaluation.basis, evaluation.integrals, bad_positions.data(), overlap.data(),
             evaluation.workspace.data(), evaluation.workspace.size() * sizeof(double),
             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(std::all_of(overlap.begin(), overlap.end(), [](double value) { return value == 3.0; }));
   return 0;
 }
 

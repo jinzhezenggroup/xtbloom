@@ -14,8 +14,11 @@ inline constexpr std::size_t kMaximumContractedPrimitives = 12;
 bool sto_table(std::uint8_t n, std::uint8_t l, std::uint8_t ng, const double*& alpha,
                const double*& coefficients) noexcept;
 
-/* Expand and Cartesian-normalize one STO-nG shell. */
-void expand_sto_shell(std::uint8_t n, std::uint8_t l, std::uint8_t ng, double slater, double* alpha,
+/*
+ * Expand and Cartesian-normalize one STO-nG shell. A false return means the
+ * requested pinned table row does not exist; output arrays are then untouched.
+ */
+bool expand_sto_shell(std::uint8_t n, std::uint8_t l, std::uint8_t ng, double slater, double* alpha,
                       double* coefficients) noexcept;
 
 /* Apply tblite's first-matching-shell orthogonalization and renormalization. */

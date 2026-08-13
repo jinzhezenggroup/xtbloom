@@ -262,6 +262,7 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
         attributes = (REPOSITORY / ".gitattributes").read_text(encoding="utf-8")
         for expected in (
             "data/parameters/gfn1.toml whitespace=-blank-at-eof",
+            "data/parameters/tblite_sto.hpp text eol=lf",
             "LICENSES/Apache-2.0.txt -text",
             "LICENSES/scipy-openblas32-0.3.34.0.0.txt -text",
             "LICENSES/openchemlib-BSD-3-Clause.txt -text",
@@ -1305,6 +1306,146 @@ class Gfn1FixtureProvenanceTests(unittest.TestCase):
             manifest["sources"][0]["files"][0]["sha256"] = "0" * 64
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source files"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_fixture_required_source_file_is_rejected_when_missing(self) -> None:
+        """Keep the tblite ES2 equation source tied to its scientific fixture."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            tblite = next(
+                source
+                for source in manifest["sources"]
+                if source["project"] == "tblite"
+            )
+            tblite["files"] = [
+                item
+                for item in tblite["files"]
+                if item["path"] != "src/tblite/coulomb/charge/effective.f90"
+            ]
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source files"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_duplicate_fixture_project_is_rejected(self) -> None:
+        """Reject duplicate projects that hide a required provenance source."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sources"][1] = copy.deepcopy(manifest["sources"][0])
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "incomplete sources"
+            ):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_duplicate_fixture_source_file_is_rejected(self) -> None:
+        """Reject duplicate paths before they collapse into a file mapping."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            tblite = next(
+                source
+                for source in manifest["sources"]
+                if source["project"] == "tblite"
+            )
+            tblite["files"].append(copy.deepcopy(tblite["files"][0]))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "duplicate source file paths"
+            ):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_non_string_fixture_source_path_is_rejected(self) -> None:
+        """Reject malformed source paths without leaking a Python TypeError."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sources"][0]["files"][0]["path"] = []
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source files"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_fixture_source_use_mutation_is_rejected(self) -> None:
+        """Keep every fixture tied to its reviewed scientific extraction role."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sources"][0]["files"][0]["use"] = "unreviewed role"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "extraction roles"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_fixture_source_consumer_mutation_is_rejected(self) -> None:
+        """Keep copied values tied to their exact reviewed local consumers."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sources"][0]["files"][0]["consumers"] = [
+                "tests/gfn1_basis_test.cpp"
+            ]
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "extraction roles"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_missing_fixture_consumer_is_rejected(self) -> None:
+        """Reject a reviewed consumer path when its local test file is absent."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            (root / "tests/gfn1_h0_test.cpp").unlink()
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "missing consumer"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_duplicate_fixture_consumers_are_rejected(self) -> None:
+        """Reject duplicate consumers instead of silently normalizing them."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            consumers = manifest["sources"][0]["files"][0]["consumers"]
+            consumers.append(consumers[0])
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "extraction roles"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_non_string_fixture_project_is_rejected(self) -> None:
+        """Report malformed project scalars through the controlled checker error."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sources"][0]["project"] = []
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "incomplete sources"
+            ):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_non_string_fixture_consumer_is_rejected(self) -> None:
+        """Reject malformed consumer scalars without leaking a Python TypeError."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sources"][0]["files"][0]["consumers"][0] = []
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "extraction roles"):
                 CHECKER._check_gfn1_fixture_provenance(root)
 
 

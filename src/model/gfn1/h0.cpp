@@ -3,6 +3,7 @@
 
 #include "model/gfn1/h0.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +32,91 @@ bool checked_square(std::int64_t value, std::int64_t& square) {
   }
   square = value * value;
   return true;
+}
+
+bool aligned_double(const void* pointer) {
+  return reinterpret_cast<std::uintptr_t>(pointer) % alignof(double) == 0u;
+}
+
+bool count_bytes(std::size_t count, std::size_t element_size, std::size_t& bytes) {
+  if (count > std::numeric_limits<std::size_t>::max() / element_size) {
+    return false;
+  }
+  bytes = count * element_size;
+  return true;
+}
+
+bool ranges_overlap(const void* first, std::size_t first_bytes, const void* second,
+                    std::size_t second_bytes) {
+  if (first_bytes == 0u || second_bytes == 0u) {
+    return false;
+  }
+  const std::uintptr_t first_begin = reinterpret_cast<std::uintptr_t>(first);
+  const std::uintptr_t second_begin = reinterpret_cast<std::uintptr_t>(second);
+  if (first_begin > std::numeric_limits<std::uintptr_t>::max() - first_bytes ||
+      second_begin > std::numeric_limits<std::uintptr_t>::max() - second_bytes) {
+    return true;
+  }
+  return first_begin < second_begin + second_bytes && second_begin < first_begin + first_bytes;
+}
+
+template <typename T>
+bool overlaps_vector(const void* pointer, std::size_t bytes, const std::vector<T>& values) {
+  std::size_t value_bytes = 0u;
+  return !count_bytes(values.size(), sizeof(T), value_bytes) ||
+         ranges_overlap(pointer, bytes, values.data(), value_bytes);
+}
+
+bool overlaps_basis_storage(const void* pointer, std::size_t bytes, const BasisPlan& basis) {
+  return ranges_overlap(pointer, bytes, &basis, sizeof(basis)) ||
+         overlaps_vector(pointer, bytes, basis.atom_offsets) ||
+         overlaps_vector(pointer, bytes, basis.batch_shell_offsets) ||
+         overlaps_vector(pointer, bytes, basis.batch_orbital_offsets) ||
+         overlaps_vector(pointer, bytes, basis.batch_cartesian_orbital_offsets) ||
+         overlaps_vector(pointer, bytes, basis.batch_primitive_offsets) ||
+         overlaps_vector(pointer, bytes, basis.atom_shell_offsets) ||
+         overlaps_vector(pointer, bytes, basis.atom_orbital_offsets) ||
+         overlaps_vector(pointer, bytes, basis.atom_cartesian_orbital_offsets) ||
+         overlaps_vector(pointer, bytes, basis.atom_primitive_offsets) ||
+         overlaps_vector(pointer, bytes, basis.shell_orbital_offsets) ||
+         overlaps_vector(pointer, bytes, basis.shell_cartesian_orbital_offsets) ||
+         overlaps_vector(pointer, bytes, basis.shell_primitive_offsets) ||
+         overlaps_vector(pointer, bytes, basis.shell_to_atom) ||
+         overlaps_vector(pointer, bytes, basis.principal_quantum_numbers) ||
+         overlaps_vector(pointer, bytes, basis.angular_momenta) ||
+         overlaps_vector(pointer, bytes, basis.shell_is_valence) ||
+         overlaps_vector(pointer, bytes, basis.slater_exponents) ||
+         overlaps_vector(pointer, bytes, basis.primitive_exponents) ||
+         overlaps_vector(pointer, bytes, basis.primitive_coefficients);
+}
+
+bool overlaps_integral_storage(const void* pointer, std::size_t bytes,
+                               const IntegralPlan& integrals) {
+  return ranges_overlap(pointer, bytes, &integrals, sizeof(integrals)) ||
+         overlaps_vector(pointer, bytes, integrals.matrix_offsets);
+}
+
+bool overlaps_h0_storage(const void* pointer, std::size_t bytes, const H0Plan& plan) {
+  return ranges_overlap(pointer, bytes, &plan, sizeof(plan)) ||
+         overlaps_vector(pointer, bytes, plan.atom_offsets) ||
+         overlaps_vector(pointer, bytes, plan.batch_shell_offsets) ||
+         overlaps_vector(pointer, bytes, plan.batch_orbital_offsets) ||
+         overlaps_vector(pointer, bytes, plan.matrix_offsets) ||
+         overlaps_vector(pointer, bytes, plan.shell_pair_offsets) ||
+         overlaps_vector(pointer, bytes, plan.atomic_radii) ||
+         overlaps_vector(pointer, bytes, plan.shell_levels) ||
+         overlaps_vector(pointer, bytes, plan.shell_coordination_scale) ||
+         overlaps_vector(pointer, bytes, plan.shell_polynomial) ||
+         overlaps_vector(pointer, bytes, plan.shell_pair_scale);
+}
+
+bool overlaps_control_storage(const void* pointer, std::size_t bytes, const BasisPlan& basis,
+                              const IntegralPlan& integrals, const H0Plan& plan,
+                              const std::string& error) {
+  return overlaps_basis_storage(pointer, bytes, basis) ||
+         overlaps_integral_storage(pointer, bytes, integrals) ||
+         overlaps_h0_storage(pointer, bytes, plan) ||
+         ranges_overlap(pointer, bytes, &error, sizeof(error));
 }
 
 const parameters::gfn1::ShellParameters* element_shells(
@@ -219,6 +305,11 @@ xtbloom_status_t validate_evaluation_inputs(const BasisPlan& basis, const Integr
     error = "GFN1 H0 positions, coordination numbers, and overlap must not be NULL";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
+  if (!aligned_double(positions) || !aligned_double(coordination_numbers) ||
+      !aligned_double(overlap)) {
+    error = "GFN1 H0 positions, coordination numbers, and overlap must be double-aligned";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
   const auto atom_count = static_cast<std::size_t>(plan.total_atoms);
   for (std::size_t coordinate = 0; coordinate < atom_count * 3u; ++coordinate) {
     if (!std::isfinite(positions[coordinate])) {
@@ -236,6 +327,277 @@ xtbloom_status_t validate_evaluation_inputs(const BasisPlan& basis, const Integr
     if (!std::isfinite(overlap[element])) {
       error = "GFN1 H0 overlap contains NaN or infinity";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t validate_coordinate_differences(const H0Plan& plan, const double* positions,
+                                                 std::string& error) {
+  /*
+   * Finite coordinates can still produce an infinite difference or squared
+   * distance. Probe the geometry before H0 overwrites caller-owned output.
+   */
+  for (std::int64_t batch = 0; batch < plan.batch_size; ++batch) {
+    const auto batch_index = static_cast<std::size_t>(batch);
+    const std::int64_t atom_begin = plan.atom_offsets[batch_index];
+    const std::int64_t atom_end = plan.atom_offsets[batch_index + 1u];
+    for (std::int64_t first = atom_begin; first < atom_end; ++first) {
+      const auto first_index = static_cast<std::size_t>(first);
+      for (std::int64_t second = atom_begin; second < first; ++second) {
+        const auto second_index = static_cast<std::size_t>(second);
+        const double dx = positions[first_index * 3u] - positions[second_index * 3u];
+        const double dy = positions[first_index * 3u + 1u] - positions[second_index * 3u + 1u];
+        const double dz = positions[first_index * 3u + 2u] - positions[second_index * 3u + 2u];
+        const double distance_squared = dx * dx + dy * dy + dz * dz;
+        if (!std::isfinite(distance_squared)) {
+          error = "GFN1 H0 coordinate differences overflow floating-point range";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
+      }
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+template <typename MatrixFunction>
+xtbloom_status_t for_each_h0_value(const BasisPlan& basis, const H0Plan& plan,
+                                   const double* positions, const double* coordination_numbers,
+                                   const double* overlap, MatrixFunction&& function,
+                                   std::string& error) {
+  for (std::int64_t batch = 0; batch < plan.batch_size; ++batch) {
+    const auto batch_index = static_cast<std::size_t>(batch);
+    const std::int64_t shell_begin = plan.batch_shell_offsets[batch_index];
+    const std::int64_t shell_end = plan.batch_shell_offsets[batch_index + 1u];
+    const std::int64_t molecule_shells = shell_end - shell_begin;
+    const std::int64_t orbital_begin = plan.batch_orbital_offsets[batch_index];
+    const std::int64_t orbital_end = plan.batch_orbital_offsets[batch_index + 1u];
+    const std::int64_t molecule_orbitals = orbital_end - orbital_begin;
+    const std::int64_t matrix_begin = plan.matrix_offsets[batch_index];
+    const std::int64_t pair_begin = plan.shell_pair_offsets[batch_index];
+    for (std::int64_t first = shell_begin; first < shell_end; ++first) {
+      const auto first_index = static_cast<std::size_t>(first);
+      const std::int64_t first_atom = basis.shell_to_atom[first_index];
+      const auto first_atom_index = static_cast<std::size_t>(first_atom);
+      const double first_level =
+          plan.shell_levels[first_index] -
+          plan.shell_coordination_scale[first_index] * coordination_numbers[first_atom];
+      const std::int64_t first_orbital_begin = basis.shell_orbital_offsets[first_index];
+      const std::int64_t first_orbital_end = basis.shell_orbital_offsets[first_index + 1u];
+      for (std::int64_t second = shell_begin; second < shell_end; ++second) {
+        const auto second_index = static_cast<std::size_t>(second);
+        const std::int64_t second_atom = basis.shell_to_atom[second_index];
+        const auto second_atom_index = static_cast<std::size_t>(second_atom);
+        const double second_level =
+            plan.shell_levels[second_index] -
+            plan.shell_coordination_scale[second_index] * coordination_numbers[second_atom];
+        double spatial_scale = 1.0;
+        if (first_atom != second_atom) {
+          const double dx = positions[first_atom_index * 3u] - positions[second_atom_index * 3u];
+          const double dy =
+              positions[first_atom_index * 3u + 1u] - positions[second_atom_index * 3u + 1u];
+          const double dz =
+              positions[first_atom_index * 3u + 2u] - positions[second_atom_index * 3u + 2u];
+          const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+          const double reduced_distance =
+              std::sqrt(distance / (plan.atomic_radii[first_atom_index] +
+                                    plan.atomic_radii[second_atom_index]));
+          const double polynomial = (1.0 + plan.shell_polynomial[first_index] * reduced_distance) *
+                                    (1.0 + plan.shell_polynomial[second_index] * reduced_distance);
+          const std::int64_t local_first = first - shell_begin;
+          const std::int64_t local_second = second - shell_begin;
+          spatial_scale = plan.shell_pair_scale[static_cast<std::size_t>(
+                              pair_begin + local_first * molecule_shells + local_second)] *
+                          polynomial;
+        }
+        const double factor = 0.5 * (first_level + second_level) * spatial_scale;
+        if (!std::isfinite(first_level) || !std::isfinite(second_level) ||
+            !std::isfinite(spatial_scale) || !std::isfinite(factor)) {
+          error = "GFN1 H0 arithmetic exceeded floating-point range";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+        const std::int64_t second_orbital_begin = basis.shell_orbital_offsets[second_index];
+        const std::int64_t second_orbital_end = basis.shell_orbital_offsets[second_index + 1u];
+        for (std::int64_t first_orbital = first_orbital_begin; first_orbital < first_orbital_end;
+             ++first_orbital) {
+          const std::int64_t row = first_orbital - orbital_begin;
+          for (std::int64_t second_orbital = second_orbital_begin;
+               second_orbital < second_orbital_end; ++second_orbital) {
+            const std::int64_t column = second_orbital - orbital_begin;
+            const std::int64_t matrix_index = matrix_begin + row * molecule_orbitals + column;
+            const double value = overlap[matrix_index] * factor;
+            if (!std::isfinite(value)) {
+              error = "GFN1 H0 arithmetic exceeded floating-point range";
+              return XTBLOOM_STATUS_INTERNAL_ERROR;
+            }
+            function(matrix_index, value);
+          }
+        }
+      }
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+struct H0VjpBlock {
+  std::size_t first_atom = 0u;
+  std::size_t second_atom = 0u;
+  double first_cn_increment = 0.0;
+  double second_cn_increment = 0.0;
+  double gradient_increment[3]{};
+};
+
+template <typename MatrixFunction, typename BlockFunction>
+xtbloom_status_t for_each_h0_vjp_contribution(const BasisPlan& basis, const H0Plan& plan,
+                                              const double* positions,
+                                              const double* coordination_numbers,
+                                              const double* overlap, const double* dE_dhamiltonian,
+                                              std::size_t target_atom,
+                                              MatrixFunction&& matrix_function,
+                                              BlockFunction&& block_function, std::string& error) {
+  std::int64_t batch_begin = 0;
+  std::int64_t batch_end = plan.batch_size;
+  if (target_atom != std::numeric_limits<std::size_t>::max()) {
+    const auto upper = std::upper_bound(plan.atom_offsets.begin(), plan.atom_offsets.end(),
+                                        static_cast<std::int64_t>(target_atom));
+    batch_begin = static_cast<std::int64_t>(upper - plan.atom_offsets.begin() - 1);
+    batch_end = batch_begin + 1;
+  }
+  for (std::int64_t batch = batch_begin; batch < batch_end; ++batch) {
+    const auto batch_index = static_cast<std::size_t>(batch);
+    const std::int64_t shell_begin = plan.batch_shell_offsets[batch_index];
+    const std::int64_t shell_end = plan.batch_shell_offsets[batch_index + 1u];
+    const std::int64_t molecule_shells = shell_end - shell_begin;
+    const std::int64_t orbital_begin = plan.batch_orbital_offsets[batch_index];
+    const std::int64_t orbital_end = plan.batch_orbital_offsets[batch_index + 1u];
+    const std::int64_t molecule_orbitals = orbital_end - orbital_begin;
+    const std::int64_t matrix_begin = plan.matrix_offsets[batch_index];
+    const std::int64_t pair_begin = plan.shell_pair_offsets[batch_index];
+
+    for (std::int64_t first = shell_begin; first < shell_end; ++first) {
+      const auto first_index = static_cast<std::size_t>(first);
+      const std::int64_t first_atom = basis.shell_to_atom[first_index];
+      const auto first_atom_index = static_cast<std::size_t>(first_atom);
+      const double first_level =
+          plan.shell_levels[first_index] -
+          plan.shell_coordination_scale[first_index] * coordination_numbers[first_atom];
+      const std::int64_t first_orbital_begin = basis.shell_orbital_offsets[first_index];
+      const std::int64_t first_orbital_end = basis.shell_orbital_offsets[first_index + 1u];
+
+      const bool first_is_target = first_atom_index == target_atom;
+      const std::int64_t second_begin =
+          target_atom == std::numeric_limits<std::size_t>::max() || first_is_target
+              ? shell_begin
+              : basis.atom_shell_offsets[target_atom];
+      const std::int64_t second_end =
+          target_atom == std::numeric_limits<std::size_t>::max() || first_is_target
+              ? shell_end
+              : basis.atom_shell_offsets[target_atom + 1u];
+      for (std::int64_t second = second_begin; second < second_end; ++second) {
+        const auto second_index = static_cast<std::size_t>(second);
+        const std::int64_t second_atom = basis.shell_to_atom[second_index];
+        const auto second_atom_index = static_cast<std::size_t>(second_atom);
+        const double second_level =
+            plan.shell_levels[second_index] -
+            plan.shell_coordination_scale[second_index] * coordination_numbers[second_atom];
+        const double average_level = 0.5 * (first_level + second_level);
+        double spatial_scale = 1.0;
+        double spatial_scale_derivative = 0.0;
+        double dx = 0.0;
+        double dy = 0.0;
+        double dz = 0.0;
+        double distance = 0.0;
+        if (first_atom != second_atom) {
+          dx = positions[first_atom_index * 3u] - positions[second_atom_index * 3u];
+          dy = positions[first_atom_index * 3u + 1u] - positions[second_atom_index * 3u + 1u];
+          dz = positions[first_atom_index * 3u + 2u] - positions[second_atom_index * 3u + 2u];
+          const double distance_squared = dx * dx + dy * dy + dz * dz;
+          if (distance_squared <= kDerivativeDistanceSquaredCutoff) {
+            /* The reference omits every H0 contribution to this pair's VJP. */
+            continue;
+          }
+          distance = std::sqrt(distance_squared);
+          const double reduced_distance =
+              std::sqrt(distance / (plan.atomic_radii[first_atom_index] +
+                                    plan.atomic_radii[second_atom_index]));
+          const double first_polynomial =
+              1.0 + plan.shell_polynomial[first_index] * reduced_distance;
+          const double second_polynomial =
+              1.0 + plan.shell_polynomial[second_index] * reduced_distance;
+          const std::int64_t local_first = first - shell_begin;
+          const std::int64_t local_second = second - shell_begin;
+          const double pair_scale = plan.shell_pair_scale[static_cast<std::size_t>(
+              pair_begin + local_first * molecule_shells + local_second)];
+          spatial_scale = pair_scale * first_polynomial * second_polynomial;
+          const double polynomial_derivative =
+              (plan.shell_polynomial[first_index] * second_polynomial +
+               plan.shell_polynomial[second_index] * first_polynomial) *
+              reduced_distance / (2.0 * distance);
+          spatial_scale_derivative = pair_scale * polynomial_derivative;
+        }
+
+        const double factor = average_level * spatial_scale;
+        if (!std::isfinite(first_level) || !std::isfinite(second_level) ||
+            !std::isfinite(average_level) || !std::isfinite(spatial_scale) ||
+            !std::isfinite(spatial_scale_derivative) || !std::isfinite(factor)) {
+          error = "GFN1 H0 VJP arithmetic exceeded floating-point range";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+
+        double block_weight = 0.0;
+        const std::int64_t second_orbital_begin = basis.shell_orbital_offsets[second_index];
+        const std::int64_t second_orbital_end = basis.shell_orbital_offsets[second_index + 1u];
+        for (std::int64_t first_orbital = first_orbital_begin; first_orbital < first_orbital_end;
+             ++first_orbital) {
+          const std::int64_t row = first_orbital - orbital_begin;
+          for (std::int64_t second_orbital = second_orbital_begin;
+               second_orbital < second_orbital_end; ++second_orbital) {
+            const std::int64_t column = second_orbital - orbital_begin;
+            const std::int64_t matrix_index = matrix_begin + row * molecule_orbitals + column;
+            const double adjoint = dE_dhamiltonian[matrix_index];
+            const double overlap_increment = adjoint * factor;
+            const double block_increment = adjoint * overlap[matrix_index];
+            const double updated_block_weight = block_weight + block_increment;
+            if (!std::isfinite(overlap_increment) || !std::isfinite(block_increment) ||
+                !std::isfinite(updated_block_weight)) {
+              error = "GFN1 H0 VJP arithmetic exceeded floating-point range";
+              return XTBLOOM_STATUS_INTERNAL_ERROR;
+            }
+            matrix_function(static_cast<std::size_t>(matrix_index), overlap_increment);
+            block_weight = updated_block_weight;
+          }
+        }
+
+        const double level_weight = 0.5 * block_weight * spatial_scale;
+        H0VjpBlock contribution;
+        contribution.first_atom = first_atom_index;
+        contribution.second_atom = second_atom_index;
+        contribution.first_cn_increment =
+            -plan.shell_coordination_scale[first_index] * level_weight;
+        contribution.second_cn_increment =
+            -plan.shell_coordination_scale[second_index] * level_weight;
+        if (!std::isfinite(level_weight) || !std::isfinite(contribution.first_cn_increment) ||
+            !std::isfinite(contribution.second_cn_increment)) {
+          error = "GFN1 H0 VJP arithmetic exceeded floating-point range";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+
+        if (first_atom != second_atom) {
+          const double radial_derivative = block_weight * average_level * spatial_scale_derivative;
+          const double coordinate_scale = radial_derivative / distance;
+          contribution.gradient_increment[0] = coordinate_scale * dx;
+          contribution.gradient_increment[1] = coordinate_scale * dy;
+          contribution.gradient_increment[2] = coordinate_scale * dz;
+          if (!std::isfinite(radial_derivative) || !std::isfinite(coordinate_scale) ||
+              !std::isfinite(contribution.gradient_increment[0]) ||
+              !std::isfinite(contribution.gradient_increment[1]) ||
+              !std::isfinite(contribution.gradient_increment[2])) {
+            error = "GFN1 H0 VJP arithmetic exceeded floating-point range";
+            return XTBLOOM_STATUS_INTERNAL_ERROR;
+          }
+        }
+        block_function(contribution);
+      }
     }
   }
   return XTBLOOM_STATUS_SUCCESS;
@@ -412,69 +774,37 @@ xtbloom_status_t evaluate_h0_cpu(const BasisPlan& basis, const IntegralPlan& int
     error = "GFN1 H0 Hamiltonian output must not be NULL";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-
-  for (std::int64_t batch = 0; batch < plan.batch_size; ++batch) {
-    const auto batch_index = static_cast<std::size_t>(batch);
-    const std::int64_t shell_begin = plan.batch_shell_offsets[batch_index];
-    const std::int64_t shell_end = plan.batch_shell_offsets[batch_index + 1u];
-    const std::int64_t molecule_shells = shell_end - shell_begin;
-    const std::int64_t orbital_begin = plan.batch_orbital_offsets[batch_index];
-    const std::int64_t orbital_end = plan.batch_orbital_offsets[batch_index + 1u];
-    const std::int64_t molecule_orbitals = orbital_end - orbital_begin;
-    const std::int64_t matrix_begin = plan.matrix_offsets[batch_index];
-    const std::int64_t pair_begin = plan.shell_pair_offsets[batch_index];
-
-    for (std::int64_t first = shell_begin; first < shell_end; ++first) {
-      const auto first_index = static_cast<std::size_t>(first);
-      const std::int64_t first_atom = basis.shell_to_atom[first_index];
-      const auto first_atom_index = static_cast<std::size_t>(first_atom);
-      const double first_level =
-          plan.shell_levels[first_index] -
-          plan.shell_coordination_scale[first_index] * coordination_numbers[first_atom];
-      const std::int64_t first_orbital_begin = basis.shell_orbital_offsets[first_index];
-      const std::int64_t first_orbital_end = basis.shell_orbital_offsets[first_index + 1u];
-
-      for (std::int64_t second = shell_begin; second < shell_end; ++second) {
-        const auto second_index = static_cast<std::size_t>(second);
-        const std::int64_t second_atom = basis.shell_to_atom[second_index];
-        const auto second_atom_index = static_cast<std::size_t>(second_atom);
-        const double second_level =
-            plan.shell_levels[second_index] -
-            plan.shell_coordination_scale[second_index] * coordination_numbers[second_atom];
-        double spatial_scale = 1.0;
-        if (first_atom != second_atom) {
-          const double dx = positions[first_atom_index * 3u] - positions[second_atom_index * 3u];
-          const double dy =
-              positions[first_atom_index * 3u + 1u] - positions[second_atom_index * 3u + 1u];
-          const double dz =
-              positions[first_atom_index * 3u + 2u] - positions[second_atom_index * 3u + 2u];
-          const double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-          const double reduced_distance =
-              std::sqrt(distance / (plan.atomic_radii[first_atom_index] +
-                                    plan.atomic_radii[second_atom_index]));
-          const double polynomial = (1.0 + plan.shell_polynomial[first_index] * reduced_distance) *
-                                    (1.0 + plan.shell_polynomial[second_index] * reduced_distance);
-          const std::int64_t local_first = first - shell_begin;
-          const std::int64_t local_second = second - shell_begin;
-          spatial_scale = plan.shell_pair_scale[static_cast<std::size_t>(
-                              pair_begin + local_first * molecule_shells + local_second)] *
-                          polynomial;
-        }
-        const double factor = 0.5 * (first_level + second_level) * spatial_scale;
-        const std::int64_t second_orbital_begin = basis.shell_orbital_offsets[second_index];
-        const std::int64_t second_orbital_end = basis.shell_orbital_offsets[second_index + 1u];
-        for (std::int64_t first_orbital = first_orbital_begin; first_orbital < first_orbital_end;
-             ++first_orbital) {
-          const std::int64_t row = first_orbital - orbital_begin;
-          for (std::int64_t second_orbital = second_orbital_begin;
-               second_orbital < second_orbital_end; ++second_orbital) {
-            const std::int64_t column = second_orbital - orbital_begin;
-            const std::int64_t matrix_index = matrix_begin + row * molecule_orbitals + column;
-            hamiltonian[matrix_index] = overlap[matrix_index] * factor;
-          }
-        }
-      }
-    }
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms);
+  const std::size_t matrix_count = static_cast<std::size_t>(plan.total_matrix_elements);
+  std::size_t position_bytes = 0u;
+  std::size_t atom_bytes = 0u;
+  std::size_t matrix_bytes = 0u;
+  if (!aligned_double(hamiltonian) ||
+      !count_bytes(atom_count, 3u * sizeof(double), position_bytes) ||
+      !count_bytes(atom_count, sizeof(double), atom_bytes) ||
+      !count_bytes(matrix_count, sizeof(double), matrix_bytes) ||
+      ranges_overlap(hamiltonian, matrix_bytes, positions, position_bytes) ||
+      ranges_overlap(hamiltonian, matrix_bytes, coordination_numbers, atom_bytes) ||
+      ranges_overlap(hamiltonian, matrix_bytes, overlap, matrix_bytes) ||
+      overlaps_control_storage(hamiltonian, matrix_bytes, basis, integrals, plan, error)) {
+    error =
+        "GFN1 H0 Hamiltonian output must be aligned and disjoint from inputs and control storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  status = validate_coordinate_differences(plan, positions, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  status = for_each_h0_value(
+      basis, plan, positions, coordination_numbers, overlap, [](std::int64_t, double) {}, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  status = for_each_h0_value(
+      basis, plan, positions, coordination_numbers, overlap,
+      [&](std::int64_t matrix_index, double value) { hamiltonian[matrix_index] = value; }, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
   }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
@@ -495,6 +825,33 @@ xtbloom_status_t add_h0_vjp_cpu(const BasisPlan& basis, const IntegralPlan& inte
     error = "GFN1 H0 VJP inputs and outputs must not be NULL";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms);
+  const std::size_t matrix_count = static_cast<std::size_t>(plan.total_matrix_elements);
+  std::size_t position_bytes = 0u;
+  std::size_t atom_bytes = 0u;
+  std::size_t matrix_bytes = 0u;
+  if (!aligned_double(dE_dhamiltonian) || !aligned_double(dE_doverlap) || !aligned_double(dE_dcn) ||
+      !aligned_double(gradients) || !count_bytes(atom_count, 3u * sizeof(double), position_bytes) ||
+      !count_bytes(atom_count, sizeof(double), atom_bytes) ||
+      !count_bytes(matrix_count, sizeof(double), matrix_bytes)) {
+    error = "GFN1 H0 VJP arrays must be double-aligned with representable extents";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const auto overlaps_read_inputs = [&](const void* output, std::size_t output_bytes) {
+    return ranges_overlap(output, output_bytes, positions, position_bytes) ||
+           ranges_overlap(output, output_bytes, coordination_numbers, atom_bytes) ||
+           ranges_overlap(output, output_bytes, overlap, matrix_bytes) ||
+           ranges_overlap(output, output_bytes, dE_dhamiltonian, matrix_bytes) ||
+           overlaps_control_storage(output, output_bytes, basis, integrals, plan, error);
+  };
+  if (overlaps_read_inputs(dE_doverlap, matrix_bytes) || overlaps_read_inputs(dE_dcn, atom_bytes) ||
+      overlaps_read_inputs(gradients, position_bytes) ||
+      ranges_overlap(dE_doverlap, matrix_bytes, dE_dcn, atom_bytes) ||
+      ranges_overlap(dE_doverlap, matrix_bytes, gradients, position_bytes) ||
+      ranges_overlap(dE_dcn, atom_bytes, gradients, position_bytes)) {
+    error = "GFN1 H0 VJP outputs must be disjoint from inputs, each other, and control storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
   for (std::int64_t element = 0; element < plan.total_matrix_elements; ++element) {
     if (!std::isfinite(dE_dhamiltonian[element])) {
       error = "GFN1 H0 Hamiltonian derivatives contain NaN or infinity";
@@ -507,126 +864,102 @@ xtbloom_status_t add_h0_vjp_cpu(const BasisPlan& basis, const IntegralPlan& inte
    * other pair distances before touching caller adjoints so an overflowing
    * coordinate difference cannot leave a partially accumulated VJP.
    */
-  for (std::int64_t batch = 0; batch < plan.batch_size; ++batch) {
-    const auto batch_index = static_cast<std::size_t>(batch);
-    const std::int64_t atom_begin = plan.atom_offsets[batch_index];
-    const std::int64_t atom_end = plan.atom_offsets[batch_index + 1u];
-    for (std::int64_t first = atom_begin; first < atom_end; ++first) {
-      const auto first_index = static_cast<std::size_t>(first);
-      for (std::int64_t second = atom_begin; second < first; ++second) {
-        const auto second_index = static_cast<std::size_t>(second);
-        const double dx = positions[first_index * 3u] - positions[second_index * 3u];
-        const double dy = positions[first_index * 3u + 1u] - positions[second_index * 3u + 1u];
-        const double dz = positions[first_index * 3u + 2u] - positions[second_index * 3u + 2u];
-        const double distance_squared = dx * dx + dy * dy + dz * dz;
-        if (!std::isfinite(distance_squared)) {
-          error = "GFN1 H0 coordinate differences overflow floating-point range";
-          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  status = validate_coordinate_differences(plan, positions, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+
+  for (std::size_t matrix = 0; matrix < matrix_count; ++matrix) {
+    if (!std::isfinite(dE_doverlap[matrix])) {
+      error = "GFN1 H0 overlap derivative accumulators contain NaN or infinity";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+  }
+  /* Each packed overlap element receives exactly one increment. */
+  bool overlap_accumulation_is_finite = true;
+  status = for_each_h0_vjp_contribution(
+      basis, plan, positions, coordination_numbers, overlap, dE_dhamiltonian,
+      std::numeric_limits<std::size_t>::max(),
+      [&](std::size_t index, double increment) {
+        if (!std::isfinite(dE_doverlap[index] + increment)) {
+          overlap_accumulation_is_finite = false;
         }
+      },
+      [](const H0VjpBlock&) {}, error);
+  if (status != XTBLOOM_STATUS_SUCCESS || !overlap_accumulation_is_finite) {
+    if (status == XTBLOOM_STATUS_SUCCESS) {
+      error = "GFN1 H0 overlap derivative accumulation exceeded floating-point range";
+    }
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  for (std::size_t atom = 0; atom < atom_count; ++atom) {
+    if (!std::isfinite(dE_dcn[atom])) {
+      error = "GFN1 H0 CN derivative accumulators contain NaN or infinity";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    double candidate = dE_dcn[atom];
+    status = for_each_h0_vjp_contribution(
+        basis, plan, positions, coordination_numbers, overlap, dE_dhamiltonian, atom,
+        [](std::size_t, double) {},
+        [&](const H0VjpBlock& contribution) {
+          if (contribution.first_atom == atom) {
+            candidate += contribution.first_cn_increment;
+          }
+          if (contribution.second_atom == atom) {
+            candidate += contribution.second_cn_increment;
+          }
+        },
+        error);
+    if (status != XTBLOOM_STATUS_SUCCESS || !std::isfinite(candidate)) {
+      if (status == XTBLOOM_STATUS_SUCCESS) {
+        error = "GFN1 H0 CN derivative accumulation exceeded floating-point range";
       }
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+  }
+  for (std::size_t coordinate = 0; coordinate < atom_count * 3u; ++coordinate) {
+    if (!std::isfinite(gradients[coordinate])) {
+      error = "GFN1 H0 gradient accumulators contain NaN or infinity";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    const std::size_t atom = coordinate / 3u;
+    const std::size_t axis = coordinate % 3u;
+    double candidate = gradients[coordinate];
+    status = for_each_h0_vjp_contribution(
+        basis, plan, positions, coordination_numbers, overlap, dE_dhamiltonian, atom,
+        [](std::size_t, double) {},
+        [&](const H0VjpBlock& contribution) {
+          if (contribution.first_atom == atom) {
+            candidate += contribution.gradient_increment[axis];
+          }
+          if (contribution.second_atom == atom) {
+            candidate -= contribution.gradient_increment[axis];
+          }
+        },
+        error);
+    if (status != XTBLOOM_STATUS_SUCCESS || !std::isfinite(candidate)) {
+      if (status == XTBLOOM_STATUS_SUCCESS) {
+        error = "GFN1 H0 gradient accumulation exceeded floating-point range";
+      }
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
   }
 
-  for (std::int64_t batch = 0; batch < plan.batch_size; ++batch) {
-    const auto batch_index = static_cast<std::size_t>(batch);
-    const std::int64_t shell_begin = plan.batch_shell_offsets[batch_index];
-    const std::int64_t shell_end = plan.batch_shell_offsets[batch_index + 1u];
-    const std::int64_t molecule_shells = shell_end - shell_begin;
-    const std::int64_t orbital_begin = plan.batch_orbital_offsets[batch_index];
-    const std::int64_t orbital_end = plan.batch_orbital_offsets[batch_index + 1u];
-    const std::int64_t molecule_orbitals = orbital_end - orbital_begin;
-    const std::int64_t matrix_begin = plan.matrix_offsets[batch_index];
-    const std::int64_t pair_begin = plan.shell_pair_offsets[batch_index];
-
-    for (std::int64_t first = shell_begin; first < shell_end; ++first) {
-      const auto first_index = static_cast<std::size_t>(first);
-      const std::int64_t first_atom = basis.shell_to_atom[first_index];
-      const auto first_atom_index = static_cast<std::size_t>(first_atom);
-      const double first_level =
-          plan.shell_levels[first_index] -
-          plan.shell_coordination_scale[first_index] * coordination_numbers[first_atom];
-      const std::int64_t first_orbital_begin = basis.shell_orbital_offsets[first_index];
-      const std::int64_t first_orbital_end = basis.shell_orbital_offsets[first_index + 1u];
-
-      for (std::int64_t second = shell_begin; second < shell_end; ++second) {
-        const auto second_index = static_cast<std::size_t>(second);
-        const std::int64_t second_atom = basis.shell_to_atom[second_index];
-        const auto second_atom_index = static_cast<std::size_t>(second_atom);
-        const double second_level =
-            plan.shell_levels[second_index] -
-            plan.shell_coordination_scale[second_index] * coordination_numbers[second_atom];
-        const double average_level = 0.5 * (first_level + second_level);
-        double spatial_scale = 1.0;
-        double spatial_scale_derivative = 0.0;
-        double dx = 0.0;
-        double dy = 0.0;
-        double dz = 0.0;
-        double distance = 0.0;
-        if (first_atom != second_atom) {
-          dx = positions[first_atom_index * 3u] - positions[second_atom_index * 3u];
-          dy = positions[first_atom_index * 3u + 1u] - positions[second_atom_index * 3u + 1u];
-          dz = positions[first_atom_index * 3u + 2u] - positions[second_atom_index * 3u + 2u];
-          const double distance_squared = dx * dx + dy * dy + dz * dz;
-          if (distance_squared <= kDerivativeDistanceSquaredCutoff) {
-            /* The reference omits every H0 contribution to this pair's VJP. */
-            continue;
-          }
-          distance = std::sqrt(distance_squared);
-          const double reduced_distance =
-              std::sqrt(distance / (plan.atomic_radii[first_atom_index] +
-                                    plan.atomic_radii[second_atom_index]));
-          const double first_polynomial =
-              1.0 + plan.shell_polynomial[first_index] * reduced_distance;
-          const double second_polynomial =
-              1.0 + plan.shell_polynomial[second_index] * reduced_distance;
-          const std::int64_t local_first = first - shell_begin;
-          const std::int64_t local_second = second - shell_begin;
-          const double pair_scale = plan.shell_pair_scale[static_cast<std::size_t>(
-              pair_begin + local_first * molecule_shells + local_second)];
-          spatial_scale = pair_scale * first_polynomial * second_polynomial;
-          const double polynomial_derivative =
-              (plan.shell_polynomial[first_index] * second_polynomial +
-               plan.shell_polynomial[second_index] * first_polynomial) *
-              reduced_distance / (2.0 * distance);
-          spatial_scale_derivative = pair_scale * polynomial_derivative;
+  status = for_each_h0_vjp_contribution(
+      basis, plan, positions, coordination_numbers, overlap, dE_dhamiltonian,
+      std::numeric_limits<std::size_t>::max(),
+      [&](std::size_t matrix_index, double increment) { dE_doverlap[matrix_index] += increment; },
+      [&](const H0VjpBlock& contribution) {
+        dE_dcn[contribution.first_atom] += contribution.first_cn_increment;
+        dE_dcn[contribution.second_atom] += contribution.second_cn_increment;
+        for (std::size_t axis = 0; axis < 3u; ++axis) {
+          gradients[contribution.first_atom * 3u + axis] += contribution.gradient_increment[axis];
+          gradients[contribution.second_atom * 3u + axis] -= contribution.gradient_increment[axis];
         }
-
-        double block_weight = 0.0;
-        const double factor = average_level * spatial_scale;
-        const std::int64_t second_orbital_begin = basis.shell_orbital_offsets[second_index];
-        const std::int64_t second_orbital_end = basis.shell_orbital_offsets[second_index + 1u];
-        for (std::int64_t first_orbital = first_orbital_begin; first_orbital < first_orbital_end;
-             ++first_orbital) {
-          const std::int64_t row = first_orbital - orbital_begin;
-          for (std::int64_t second_orbital = second_orbital_begin;
-               second_orbital < second_orbital_end; ++second_orbital) {
-            const std::int64_t column = second_orbital - orbital_begin;
-            const std::int64_t matrix_index = matrix_begin + row * molecule_orbitals + column;
-            const double adjoint = dE_dhamiltonian[matrix_index];
-            dE_doverlap[matrix_index] += adjoint * factor;
-            block_weight += adjoint * overlap[matrix_index];
-          }
-        }
-
-        const double level_weight = 0.5 * block_weight * spatial_scale;
-        dE_dcn[first_atom] -= plan.shell_coordination_scale[first_index] * level_weight;
-        dE_dcn[second_atom] -= plan.shell_coordination_scale[second_index] * level_weight;
-
-        if (first_atom != second_atom) {
-          const double radial_derivative = block_weight * average_level * spatial_scale_derivative;
-          const double coordinate_scale = radial_derivative / distance;
-          const double gx = coordinate_scale * dx;
-          const double gy = coordinate_scale * dy;
-          const double gz = coordinate_scale * dz;
-          gradients[first_atom_index * 3u] += gx;
-          gradients[first_atom_index * 3u + 1u] += gy;
-          gradients[first_atom_index * 3u + 2u] += gz;
-          gradients[second_atom_index * 3u] -= gx;
-          gradients[second_atom_index * 3u + 1u] -= gy;
-          gradients[second_atom_index * 3u + 2u] -= gz;
-        }
-      }
-    }
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
   }
 
   error.clear();

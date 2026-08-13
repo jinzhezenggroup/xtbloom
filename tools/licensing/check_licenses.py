@@ -211,6 +211,7 @@ SOURCE_FILES = (
     "data/parameters/d4_manifest.json",
     "data/parameters/gfn1_manifest.json",
     "data/parameters/gfn1_d3_manifest.json",
+    GFN1_FIXTURE_MANIFEST_PATH,
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
@@ -1687,10 +1688,6 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                     "0bd768b42e5cecee4f014d9063832a1e864aa751",
                     "306eca70943447fa6b0972ed9af5667128064d5a8b3bacac2a0fb47adf15da13",
                 ),
-                "test/test_hamiltonian/h0.npz": (
-                    "f6995ff6aea9b67731c6097fcc1a00757bb7fafe",
-                    "b930d3f56f8ac0de1ac875e55b340c539424880ff805fd7f6d038e496c9d76ce",
-                ),
                 "test/test_overlap/overlap.npz": (
                     "8fd0e1ad61a2961e9242dc9c799cf2e180f5a2e2",
                     "f2be66d19693cc932f2fb8d1b5b4ad8a6fe47bea4e999b401bb77115d71aa292",
@@ -1719,25 +1716,81 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
             "revision": "133f91efb94b47f05848e1f86832f40a1accc385",
             "tree": "008603bbf877b414f68208d3fe8393265f72b108",
             "files": {
+                "src/tblite/coulomb/charge/effective.f90": (
+                    "67b91d63e13803e5bc297597e7312404bb1e576c",
+                    "1d66415c1046e3b83bde1434f6e1ea5697a95362332c70a8db08b2668a07214a",
+                ),
                 "test/unit/test_repulsion.f90": (
                     "9cb9671606ccb3081ba798247791f088eb1ffa40",
                     "a208f0847342ede9c68e5b54c5765ef421d844f9f94268334b7fcee15aa298a2",
-                )
+                ),
             },
+        },
+    }
+    reviewed_extraction = {
+        "dxtb": {
+            "test/test_hamiltonian/test_gfn1.py": (
+                "Literal H2 GFN1 Hamiltonian matrix from test_no_cn; dxtb "
+                "identifies tblite 0.3.0 as the numerical generator.",
+                ("tests/gfn1_h0_test.cpp",),
+            ),
+            "test/test_overlap/overlap.npz": (
+                "H2 float32 overlap matrix extracted by array key; raw extracted "
+                "array SHA-256 874375eb64c283f9c4061c56c40baf5b4f54dc936c44"
+                "bfedf0f7296aaca0a98e.",
+                ("tests/gfn1_integrals_test.cpp",),
+            ),
+            "test/test_singlepoint/mols/H2/coord": (
+                "H2 bohr geometry used by the H0 and overlap fixtures.",
+                ("tests/gfn1_h0_test.cpp", "tests/gfn1_integrals_test.cpp"),
+            ),
+        },
+        "mstore": {
+            "src/mstore/mb16_43.f90": (
+                "MB16-43 structure 01 atomic numbers and Cartesian coordinates, "
+                "transcribed from the first structure entry.",
+                (
+                    "tests/gfn1_coordination_test.cpp",
+                    "tests/gfn1_repulsion_test.cpp",
+                ),
+            ),
+        },
+        "tblite": {
+            "src/tblite/coulomb/charge/effective.f90": (
+                "GFN1 harmonic pair-averaging and effective Coulomb equations "
+                "independently expanded in the ES2 fixture; shell hardness "
+                "parameters come from the separately pinned canonical GFN1 tables.",
+                ("tests/gfn1_es_spin_test.cpp",),
+            ),
+            "test/unit/test_repulsion.f90": (
+                "Literal GFN1 effective-repulsion energy golden for mstore "
+                "MB16-43 structure 01.",
+                ("tests/gfn1_repulsion_test.cpp",),
+            ),
         },
     }
     manifest = json.loads(
         (root / GFN1_FIXTURE_MANIFEST_PATH).read_text(encoding="utf-8")
     )
     if (
-        manifest.get("schema_version") != 1
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 1
         or manifest.get("scope") != "repository-only GFN1 CPU scientific fixtures"
+        or not isinstance(manifest.get("distribution"), str)
         or "excluded from native installs, PyPI sdists, and wheels"
         not in manifest.get("distribution", "")
     ):
         raise LicenseCheckError("GFN1 fixture manifest has unreviewed scope")
     sources = manifest.get("sources")
-    if not isinstance(sources, list) or len(sources) != len(expected):
+    if (
+        not isinstance(sources, list)
+        or len(sources) != len(expected)
+        or not all(
+            isinstance(source, dict) and isinstance(source.get("project"), str)
+            for source in sources
+        )
+        or {source["project"] for source in sources} != set(expected)
+    ):
         raise LicenseCheckError("GFN1 fixture manifest has incomplete sources")
     for source in sources:
         if not isinstance(source, dict) or source.get("project") not in expected:
@@ -1748,21 +1801,40 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                 raise LicenseCheckError(
                     "GFN1 fixture manifest has unreviewed provenance"
                 )
+        source_files = source.get("files")
+        if not isinstance(source_files, list) or not all(
+            isinstance(item, dict) and isinstance(item.get("path"), str)
+            for item in source_files
+        ):
+            raise LicenseCheckError("GFN1 fixture manifest has incomplete source files")
+        source_paths = [item.get("path") for item in source_files]
+        if len(source_paths) != len(set(source_paths)):
+            raise LicenseCheckError(
+                "GFN1 fixture manifest has duplicate source file paths"
+            )
         observed_files = {
             item.get("path"): (item.get("git_blob"), item.get("sha256"))
-            for item in source.get("files", ())
-            if isinstance(item, dict)
+            for item in source_files
         }
         if observed_files != reviewed["files"]:
             raise LicenseCheckError("GFN1 fixture manifest has incomplete source files")
-        for item in source["files"]:
+        for item in source_files:
             consumers = item.get("consumers")
-            if not item.get("use") or not isinstance(consumers, list) or not consumers:
+            reviewed_use, reviewed_consumers = reviewed_extraction[source["project"]][
+                item["path"]
+            ]
+            if (
+                item.get("use") != reviewed_use
+                or not isinstance(consumers, list)
+                or not all(isinstance(consumer, str) for consumer in consumers)
+                or tuple(consumers) != reviewed_consumers
+                or len(consumers) != len(set(consumers))
+            ):
                 raise LicenseCheckError(
                     "GFN1 fixture manifest has incomplete extraction roles"
                 )
             for consumer in consumers:
-                if not isinstance(consumer, str) or not (root / consumer).is_file():
+                if not (root / consumer).is_file():
                     raise LicenseCheckError(
                         "GFN1 fixture manifest names a missing consumer"
                     )

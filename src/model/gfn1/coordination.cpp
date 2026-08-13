@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <utility>
 
 #include "data/parameters/gfn1.hpp"
@@ -89,9 +91,50 @@ xtbloom_status_t validate_positions(const CoordinationPlan& plan, const double* 
   return XTBLOOM_STATUS_SUCCESS;
 }
 
+bool aligned_double(const void* pointer) {
+  return reinterpret_cast<std::uintptr_t>(pointer) % alignof(double) == 0u;
+}
+
+bool count_bytes(std::size_t count, std::size_t element_size, std::size_t& bytes) {
+  if (count > std::numeric_limits<std::size_t>::max() / element_size) {
+    return false;
+  }
+  bytes = count * element_size;
+  return true;
+}
+
+bool ranges_overlap(const void* first, std::size_t first_bytes, const void* second,
+                    std::size_t second_bytes) {
+  if (first_bytes == 0u || second_bytes == 0u) {
+    return false;
+  }
+  const std::uintptr_t first_begin = reinterpret_cast<std::uintptr_t>(first);
+  const std::uintptr_t second_begin = reinterpret_cast<std::uintptr_t>(second);
+  if (first_begin > std::numeric_limits<std::uintptr_t>::max() - first_bytes ||
+      second_begin > std::numeric_limits<std::uintptr_t>::max() - second_bytes) {
+    return true;
+  }
+  return first_begin < second_begin + second_bytes && second_begin < first_begin + first_bytes;
+}
+
+template <typename T>
+bool overlaps_vector(const void* pointer, std::size_t bytes, const std::vector<T>& values) {
+  std::size_t value_bytes = 0u;
+  return !count_bytes(values.size(), sizeof(T), value_bytes) ||
+         ranges_overlap(pointer, bytes, values.data(), value_bytes);
+}
+
+bool overlaps_plan_or_error(const void* pointer, std::size_t bytes, const CoordinationPlan& plan,
+                            const std::string& error) {
+  return ranges_overlap(pointer, bytes, &plan, sizeof(plan)) ||
+         ranges_overlap(pointer, bytes, &error, sizeof(error)) ||
+         overlaps_vector(pointer, bytes, plan.atom_offsets) ||
+         overlaps_vector(pointer, bytes, plan.covalent_radius);
+}
+
 template <typename PairFunction>
-void for_each_active_pair(const CoordinationPlan& plan, const double* positions,
-                          PairFunction&& function) {
+xtbloom_status_t for_each_active_pair(const CoordinationPlan& plan, const double* positions,
+                                      PairFunction&& function, std::string& error) {
   const double cutoff = parameters::gfn1::kGlobal.coordination_cutoff_bohr;
   const double cutoff_squared = cutoff * cutoff;
   const double minimum_squared =
@@ -108,6 +151,10 @@ void for_each_active_pair(const CoordinationPlan& plan, const double* positions,
         const double dy = positions[first_index * 3u + 1u] - positions[second_index * 3u + 1u];
         const double dz = positions[first_index * 3u + 2u] - positions[second_index * 3u + 2u];
         const double distance_squared = dx * dx + dy * dy + dz * dz;
+        if (!std::isfinite(distance_squared)) {
+          error = "GFN1 coordination coordinate differences overflow floating-point range";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
         if (distance_squared < minimum_squared) {
           /* Preserve the reference's diagonal/self-image exclusion exactly. */
           continue;
@@ -115,10 +162,52 @@ void for_each_active_pair(const CoordinationPlan& plan, const double* positions,
         if (distance_squared > cutoff_squared) {
           continue;
         }
-        function(first_index, second_index, dx, dy, dz, distance_squared);
+        const xtbloom_status_t status =
+            function(first_index, second_index, dx, dy, dz, distance_squared);
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          return status;
+        }
       }
     }
   }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+template <typename PairFunction>
+xtbloom_status_t for_each_active_pair_of_atom(const CoordinationPlan& plan, const double* positions,
+                                              std::size_t atom, PairFunction&& function,
+                                              std::string& error) {
+  const double cutoff = parameters::gfn1::kGlobal.coordination_cutoff_bohr;
+  const double cutoff_squared = cutoff * cutoff;
+  const double minimum_squared =
+      parameters::gfn1::kGlobal.coordination_coincident_distance_squared_cutoff_bohr2;
+  const auto upper = std::upper_bound(plan.atom_offsets.begin(), plan.atom_offsets.end(),
+                                      static_cast<std::int64_t>(atom));
+  const std::size_t batch = static_cast<std::size_t>(upper - plan.atom_offsets.begin() - 1);
+  const std::int64_t begin = plan.atom_offsets[batch];
+  const std::int64_t end = plan.atom_offsets[batch + 1u];
+  for (std::int64_t other = begin; other < end; ++other) {
+    const std::size_t other_index = static_cast<std::size_t>(other);
+    if (other_index == atom) {
+      continue;
+    }
+    const double dx = positions[atom * 3u] - positions[other_index * 3u];
+    const double dy = positions[atom * 3u + 1u] - positions[other_index * 3u + 1u];
+    const double dz = positions[atom * 3u + 2u] - positions[other_index * 3u + 2u];
+    const double distance_squared = dx * dx + dy * dy + dz * dz;
+    if (!std::isfinite(distance_squared)) {
+      error = "GFN1 coordination coordinate differences overflow floating-point range";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    if (distance_squared < minimum_squared || distance_squared > cutoff_squared) {
+      continue;
+    }
+    const xtbloom_status_t status = function(other_index, dx, dy, dz, distance_squared);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 struct PairCount {
@@ -151,6 +240,38 @@ PairCount exponential_count(double distance, double radius) {
   }
 
   return {value, -steepness * radius * inverse_distance * inverse_distance * logistic_derivative};
+}
+
+xtbloom_status_t pair_count(const CoordinationPlan& plan, std::size_t first, std::size_t second,
+                            double distance_squared, double& count, std::string& error) {
+  const double radius = plan.covalent_radius[first] + plan.covalent_radius[second];
+  count = exponential_count(std::sqrt(distance_squared), radius).value;
+  if (!std::isfinite(radius) || !std::isfinite(count)) {
+    error = "GFN1 coordination arithmetic exceeded floating-point range";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t pair_gradient_increment(const CoordinationPlan& plan, const double* dE_dcn,
+                                         std::size_t first, std::size_t second, double dx,
+                                         double dy, double dz, double distance_squared,
+                                         double increments[3], std::string& error) {
+  const double distance = std::sqrt(distance_squared);
+  const double radius = plan.covalent_radius[first] + plan.covalent_radius[second];
+  const double derivative = exponential_count(distance, radius).distance_derivative;
+  const double derivative_sum = dE_dcn[first] + dE_dcn[second];
+  const double scale = derivative_sum * derivative / distance;
+  increments[0] = scale * dx;
+  increments[1] = scale * dy;
+  increments[2] = scale * dz;
+  if (!std::isfinite(radius) || !std::isfinite(derivative) || !std::isfinite(derivative_sum) ||
+      !std::isfinite(scale) || !std::isfinite(increments[0]) || !std::isfinite(increments[1]) ||
+      !std::isfinite(increments[2])) {
+    error = "GFN1 coordination gradient arithmetic exceeded floating-point range";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 }  // namespace
@@ -207,6 +328,9 @@ xtbloom_status_t make_coordination_plan(std::int64_t batch_size, std::int64_t to
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the GFN1 coordination plan";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  } catch (const std::length_error&) {
+    error = "GFN1 coordination plan dimensions exceed host container limits";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
 
@@ -216,23 +340,69 @@ xtbloom_status_t evaluate_coordination_cpu(const CoordinationPlan& plan, const d
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
-  if (coordination_numbers == nullptr) {
-    error = "GFN1 coordination output must not be NULL";
+  if (positions == nullptr || coordination_numbers == nullptr || !aligned_double(positions) ||
+      !aligned_double(coordination_numbers)) {
+    error = "GFN1 coordination positions and output must not be NULL or misaligned";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms);
+  std::size_t position_bytes = 0u;
+  std::size_t output_bytes = 0u;
+  if (!count_bytes(atom_count, 3u * sizeof(double), position_bytes) ||
+      !count_bytes(atom_count, sizeof(double), output_bytes) ||
+      ranges_overlap(positions, position_bytes, coordination_numbers, output_bytes) ||
+      overlaps_plan_or_error(coordination_numbers, output_bytes, plan, error)) {
+    error = "GFN1 coordination output must be disjoint from inputs and control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   status = validate_positions(plan, positions, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
-  std::fill_n(coordination_numbers, static_cast<std::size_t>(plan.total_atoms), 0.0);
-  for_each_active_pair(
+
+  /* Simulate every atom's exact accumulation order before publishing output. */
+  for (std::size_t atom = 0; atom < atom_count; ++atom) {
+    double candidate = 0.0;
+    status = for_each_active_pair_of_atom(
+        plan, positions, atom,
+        [&](std::size_t other, double, double, double,
+            double distance_squared) -> xtbloom_status_t {
+          double count = 0.0;
+          const xtbloom_status_t pair_status =
+              pair_count(plan, atom, other, distance_squared, count, error);
+          if (pair_status != XTBLOOM_STATUS_SUCCESS) {
+            return pair_status;
+          }
+          candidate += count;
+          if (!std::isfinite(candidate)) {
+            error = "GFN1 coordination accumulation exceeded floating-point range";
+            return XTBLOOM_STATUS_INTERNAL_ERROR;
+          }
+          return XTBLOOM_STATUS_SUCCESS;
+        },
+        error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
+  }
+
+  std::fill_n(coordination_numbers, atom_count, 0.0);
+  status = for_each_active_pair(
       plan, positions,
       [&](std::size_t first, std::size_t second, double, double, double, double distance_squared) {
-        const double radius = plan.covalent_radius[first] + plan.covalent_radius[second];
-        const double count = exponential_count(std::sqrt(distance_squared), radius).value;
-        coordination_numbers[first] += count;
-        coordination_numbers[second] += count;
-      });
+        double count = 0.0;
+        const xtbloom_status_t pair_status =
+            pair_count(plan, first, second, distance_squared, count, error);
+        if (pair_status == XTBLOOM_STATUS_SUCCESS) {
+          coordination_numbers[first] += count;
+          coordination_numbers[second] += count;
+        }
+        return pair_status;
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }
@@ -244,8 +414,20 @@ xtbloom_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan,
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
-  if (dE_dcn == nullptr || gradients == nullptr) {
-    error = "GFN1 coordination derivative inputs and gradients must not be NULL";
+  if (positions == nullptr || dE_dcn == nullptr || gradients == nullptr ||
+      !aligned_double(positions) || !aligned_double(dE_dcn) || !aligned_double(gradients)) {
+    error = "GFN1 coordination derivative inputs and gradients must not be NULL or misaligned";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms);
+  std::size_t position_bytes = 0u;
+  std::size_t atom_bytes = 0u;
+  if (!count_bytes(atom_count, 3u * sizeof(double), position_bytes) ||
+      !count_bytes(atom_count, sizeof(double), atom_bytes) ||
+      ranges_overlap(positions, position_bytes, gradients, position_bytes) ||
+      ranges_overlap(dE_dcn, atom_bytes, gradients, position_bytes) ||
+      overlaps_plan_or_error(gradients, position_bytes, plan, error)) {
+    error = "GFN1 coordination gradients must be disjoint from inputs and control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   status = validate_positions(plan, positions, error);
@@ -258,24 +440,56 @@ xtbloom_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan,
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  for_each_active_pair(
+  for (std::size_t coordinate = 0; coordinate < atom_count * 3u; ++coordinate) {
+    if (!std::isfinite(gradients[coordinate])) {
+      error = "GFN1 coordination gradient accumulators contain NaN or infinity";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    const std::size_t atom = coordinate / 3u;
+    const std::size_t axis = coordinate % 3u;
+    double candidate = gradients[coordinate];
+    status = for_each_active_pair_of_atom(
+        plan, positions, atom,
+        [&](std::size_t other, double dx, double dy, double dz,
+            double distance_squared) -> xtbloom_status_t {
+          double increments[3]{};
+          const xtbloom_status_t pair_status = pair_gradient_increment(
+              plan, dE_dcn, atom, other, dx, dy, dz, distance_squared, increments, error);
+          if (pair_status != XTBLOOM_STATUS_SUCCESS) {
+            return pair_status;
+          }
+          candidate += increments[axis];
+          if (!std::isfinite(candidate)) {
+            error = "GFN1 coordination gradient accumulation exceeded floating-point range";
+            return XTBLOOM_STATUS_INTERNAL_ERROR;
+          }
+          return XTBLOOM_STATUS_SUCCESS;
+        },
+        error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
+  }
+
+  status = for_each_active_pair(
       plan, positions,
       [&](std::size_t first, std::size_t second, double dx, double dy, double dz,
           double distance_squared) {
-        const double distance = std::sqrt(distance_squared);
-        const double radius = plan.covalent_radius[first] + plan.covalent_radius[second];
-        const double derivative = exponential_count(distance, radius).distance_derivative;
-        const double scale = (dE_dcn[first] + dE_dcn[second]) * derivative / distance;
-        const double gx = scale * dx;
-        const double gy = scale * dy;
-        const double gz = scale * dz;
-        gradients[first * 3u] += gx;
-        gradients[first * 3u + 1u] += gy;
-        gradients[first * 3u + 2u] += gz;
-        gradients[second * 3u] -= gx;
-        gradients[second * 3u + 1u] -= gy;
-        gradients[second * 3u + 2u] -= gz;
-      });
+        double increments[3]{};
+        const xtbloom_status_t pair_status = pair_gradient_increment(
+            plan, dE_dcn, first, second, dx, dy, dz, distance_squared, increments, error);
+        if (pair_status == XTBLOOM_STATUS_SUCCESS) {
+          for (std::size_t axis = 0; axis < 3u; ++axis) {
+            gradients[first * 3u + axis] += increments[axis];
+            gradients[second * 3u + axis] -= increments[axis];
+          }
+        }
+        return pair_status;
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }

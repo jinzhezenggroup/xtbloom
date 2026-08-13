@@ -58,9 +58,12 @@ static_assert(pair_scale(1u, 1u) == 0.96);
 static_assert(pair_scale(1u, 5u) == 0.95);
 static_assert(pair_scale(5u, 1u) == 0.95);
 static_assert(pair_scale(1u, 6u) == 1.0);
+static_assert(pair_scale(6u, 1u) == 1.0);
 static_assert(pair_scale(78u, 1u) == 0.8);
+static_assert(pair_scale(1u, 78u) == 0.8);
 static_assert(pair_scale(21u, 21u) == 1.1);
 static_assert(pair_scale(21u, 39u) == 1.15);
+static_assert(pair_scale(39u, 21u) == 1.15);
 static_assert(pair_scale(79u, 79u) == 1.2);
 
 int main() {

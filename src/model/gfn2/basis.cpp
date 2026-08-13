@@ -202,8 +202,11 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
 
         double* alpha = created.primitive_exponents.data() + current_primitive;
         double* coeff = created.primitive_coefficients.data() + current_primitive;
-        common::expand_sto_shell(shell.principal_quantum_number, shell.angular_momentum,
-                                 shell.gaussian_count, shell.slater, alpha, coeff);
+        if (!common::expand_sto_shell(shell.principal_quantum_number, shell.angular_momentum,
+                                      shell.gaussian_count, shell.slater, alpha, coeff)) {
+          error = "GFN2 basis references an unavailable pinned STO table row";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
         std::size_t actual_count = shell.gaussian_count;
 
         const std::size_t l = shell.angular_momentum;

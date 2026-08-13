@@ -373,6 +373,25 @@ int test_validation_is_strong() {
                                                overlap.data(), output.data(),
                                                error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(output.begin(), output.end(), [](double value) { return value == 77.0; }));
+
+  overlap[0] = 1.0;
+  const std::vector<double> overflowing_positions{
+      std::numeric_limits<double>::max(), 0.0, 0.0, -std::numeric_limits<double>::max(), 0.0, 0.0,
+  };
+  CHECK(xtbloom::detail::gfn1::evaluate_h0_cpu(evaluation.basis, evaluation.integrals,
+                                               evaluation.h0, overflowing_positions.data(),
+                                               coordination.data(), overlap.data(), output.data(),
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(std::all_of(output.begin(), output.end(), [](double value) { return value == 77.0; }));
+
+  auto overflow_plan = evaluation.h0;
+  overflow_plan.shell_levels[0] = std::numeric_limits<double>::max();
+  overflow_plan.shell_levels[1] = std::numeric_limits<double>::max();
+  CHECK(xtbloom::detail::gfn1::evaluate_h0_cpu(evaluation.basis, evaluation.integrals,
+                                               overflow_plan, positions.data(), coordination.data(),
+                                               overlap.data(), output.data(),
+                                               error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(std::all_of(output.begin(), output.end(), [](double value) { return value == 77.0; }));
   return 0;
 }
 
@@ -441,6 +460,52 @@ int test_vjp_reference_distance_boundary_and_failure_atomicity() {
   return 0;
 }
 
+int test_output_aliases_and_late_vjp_overflow_are_transactional() {
+  const std::vector<std::int64_t> atom_offsets{0, 2};
+  const std::vector<std::int32_t> atomic_numbers{1, 1};
+  Evaluation evaluation;
+  std::string error;
+  CHECK(make_evaluation(atom_offsets, atomic_numbers, evaluation, error));
+  const std::vector<double> positions{0.0, 0.0, -0.7, 0.0, 0.0, 0.7};
+  const std::vector<double> coordination(2, 0.8);
+  const std::size_t matrix_count =
+      static_cast<std::size_t>(evaluation.integrals.total_matrix_elements);
+  std::vector<double> overlap(matrix_count, 1.0);
+  const auto original_overlap = overlap;
+
+  CHECK(xtbloom::detail::gfn1::evaluate_h0_cpu(evaluation.basis, evaluation.integrals,
+                                               evaluation.h0, positions.data(), coordination.data(),
+                                               overlap.data(), overlap.data(),
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(overlap == original_overlap);
+  const auto original_shell_levels = evaluation.h0.shell_levels;
+  CHECK(xtbloom::detail::gfn1::evaluate_h0_cpu(evaluation.basis, evaluation.integrals,
+                                               evaluation.h0, positions.data(), coordination.data(),
+                                               overlap.data(), evaluation.h0.shell_levels.data(),
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(evaluation.h0.shell_levels == original_shell_levels);
+
+  std::vector<double> weights(matrix_count, 1.0);
+  std::vector<double> overlap_adjoint(matrix_count, 31.0);
+  std::vector<double> cn_adjoint(2, 37.0);
+  std::vector<double> gradients(6, 41.0);
+  const auto original_overlap_adjoint = overlap_adjoint;
+  const auto original_cn_adjoint = cn_adjoint;
+  const auto original_gradients = gradients;
+  overlap_adjoint.back() = std::numeric_limits<double>::max();
+  weights.back() = -std::numeric_limits<double>::max();
+  CHECK(xtbloom::detail::gfn1::add_h0_vjp_cpu(
+            evaluation.basis, evaluation.integrals, evaluation.h0, positions.data(),
+            coordination.data(), overlap.data(), weights.data(), overlap_adjoint.data(),
+            cn_adjoint.data(), gradients.data(), error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(std::equal(overlap_adjoint.begin(), overlap_adjoint.end() - 1,
+                   original_overlap_adjoint.begin()));
+  CHECK(overlap_adjoint.back() == std::numeric_limits<double>::max());
+  CHECK(cn_adjoint == original_cn_adjoint);
+  CHECK(gradients == original_gradients);
+  return 0;
+}
+
 int test_ragged_batch_boundaries_are_tied_to_atom_topology() {
   const std::vector<std::int64_t> atom_offsets{0, 1, 2};
   const std::vector<std::int32_t> atomic_numbers{1, 1};
@@ -480,6 +545,9 @@ int main() {
     return line;
   }
   if (const int line = test_vjp_reference_distance_boundary_and_failure_atomicity(); line != 0) {
+    return line;
+  }
+  if (const int line = test_output_aliases_and_late_vjp_overflow_are_transactional(); line != 0) {
     return line;
   }
   return test_ragged_batch_boundaries_are_tied_to_atom_topology();

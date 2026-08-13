@@ -41,6 +41,15 @@ bool count_bytes(std::int64_t count, std::size_t element_size, std::size_t& byte
   return true;
 }
 
+bool aligned_double(const void* pointer) {
+  return reinterpret_cast<std::uintptr_t>(pointer) % alignof(double) == 0u;
+}
+
+template <typename T>
+bool aligned_as(const void* pointer) {
+  return reinterpret_cast<std::uintptr_t>(pointer) % alignof(T) == 0u;
+}
+
 bool ranges_overlap(const void* first, std::size_t first_bytes, const void* second,
                     std::size_t second_bytes) {
   if (first_bytes == 0u || second_bytes == 0u) {
@@ -69,6 +78,13 @@ std::size_t coupling_index(std::uint8_t first, std::uint8_t second) {
 }
 
 xtbloom_status_t validate_view(SpinPolarizationView view, std::string& error) {
+  std::size_t atom_offset_bytes = 0u;
+  std::size_t batch_shell_offset_bytes = 0u;
+  std::size_t atom_shell_offset_bytes = 0u;
+  std::size_t population_offset_bytes = 0u;
+  std::size_t spin_channel_bytes = 0u;
+  std::size_t coupling_offset_bytes = 0u;
+  std::size_t coupling_bytes = 0u;
   if (view.batch_size <= 0 || view.total_atoms <= 0 || view.total_shells <= 0 ||
       view.shell_population_elements <= 0 || !representable(view.batch_size) ||
       !representable(view.total_atoms) || !representable(view.total_shells) ||
@@ -81,11 +97,25 @@ xtbloom_status_t validate_view(SpinPolarizationView view, std::string& error) {
       view.shell_population_offset_count != view.batch_size + 1 ||
       view.spin_channel_count != view.batch_size ||
       view.coupling_offset_count != view.total_atoms + 1 || view.coupling_matrix_count <= 0 ||
+      !count_bytes(view.atom_offset_count, sizeof(std::int64_t), atom_offset_bytes) ||
+      !count_bytes(view.batch_shell_offset_count, sizeof(std::int64_t), batch_shell_offset_bytes) ||
+      !count_bytes(view.atom_shell_offset_count, sizeof(std::int64_t), atom_shell_offset_bytes) ||
+      !count_bytes(view.shell_population_offset_count, sizeof(std::int64_t),
+                   population_offset_bytes) ||
+      !count_bytes(view.spin_channel_count, sizeof(std::int32_t), spin_channel_bytes) ||
+      !count_bytes(view.coupling_offset_count, sizeof(std::int64_t), coupling_offset_bytes) ||
+      !count_bytes(view.coupling_matrix_count, sizeof(double), coupling_bytes) ||
       view.atom_offsets == nullptr || view.batch_shell_offsets == nullptr ||
       view.atom_shell_offsets == nullptr || view.shell_population_offsets == nullptr ||
       view.spin_channels == nullptr || view.coupling_offsets == nullptr ||
-      view.coupling_matrices == nullptr) {
-    error = "GFN1 spin-polarization view is incomplete or has unrepresentable dimensions";
+      view.coupling_matrices == nullptr || !aligned_as<std::int64_t>(view.atom_offsets) ||
+      !aligned_as<std::int64_t>(view.batch_shell_offsets) ||
+      !aligned_as<std::int64_t>(view.atom_shell_offsets) ||
+      !aligned_as<std::int64_t>(view.shell_population_offsets) ||
+      !aligned_as<std::int32_t>(view.spin_channels) ||
+      !aligned_as<std::int64_t>(view.coupling_offsets) || !aligned_double(view.coupling_matrices)) {
+    error =
+        "GFN1 spin-polarization view is incomplete, misaligned, or has unrepresentable dimensions";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (view.atom_offsets[0] != 0 || view.atom_offsets[view.batch_size] != view.total_atoms ||
@@ -111,8 +141,13 @@ xtbloom_status_t validate_view(SpinPolarizationView view, std::string& error) {
     if (atom_begin < 0 || atom_begin > atom_end || atom_end > view.total_atoms || shell_begin < 0 ||
         shell_begin > shell_end || shell_end > view.total_shells || population_begin < 0 ||
         population_begin > population_end || population_end > view.shell_population_elements ||
-        (channels != 1 && channels != 2) ||
-        population_end - population_begin != (shell_end - shell_begin) * channels ||
+        (channels != 1 && channels != 2)) {
+      error = "GFN1 spin-polarization view has an invalid ragged system partition";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    const std::int64_t shells = shell_end - shell_begin;
+    if ((shells > 0 && shells > std::numeric_limits<std::int64_t>::max() / channels) ||
+        population_end - population_begin != shells * channels ||
         view.atom_shell_offsets[atom_begin] != shell_begin ||
         view.atom_shell_offsets[atom_end] != shell_end) {
       error = "GFN1 spin-polarization view has an invalid ragged system partition";
@@ -122,12 +157,16 @@ xtbloom_status_t validate_view(SpinPolarizationView view, std::string& error) {
   for (std::int64_t atom = 0; atom < view.total_atoms; ++atom) {
     const std::int64_t shell_begin = view.atom_shell_offsets[atom];
     const std::int64_t shell_end = view.atom_shell_offsets[atom + 1];
-    const std::int64_t shells = shell_end - shell_begin;
     const std::int64_t matrix_begin = view.coupling_offsets[atom];
     const std::int64_t matrix_end = view.coupling_offsets[atom + 1];
     if (shell_begin < 0 || shell_begin >= shell_end || shell_end > view.total_shells ||
-        shells > 3 || matrix_begin < 0 || matrix_begin > matrix_end ||
-        matrix_end > view.coupling_matrix_count || matrix_end - matrix_begin != shells * shells) {
+        matrix_begin < 0 || matrix_begin > matrix_end || matrix_end > view.coupling_matrix_count) {
+      error = "GFN1 spin-polarization view has an invalid atom-local coupling partition";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    const std::int64_t shells = shell_end - shell_begin;
+    if (shells > 3 || (shells > 0 && shells > std::numeric_limits<std::int64_t>::max() / shells) ||
+        matrix_end - matrix_begin != shells * shells) {
       error = "GFN1 spin-polarization view has an invalid atom-local coupling partition";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
@@ -139,6 +178,36 @@ xtbloom_status_t validate_view(SpinPolarizationView view, std::string& error) {
     }
   }
   return XTBLOOM_STATUS_SUCCESS;
+}
+
+bool output_overlaps_view(const void* output, std::size_t output_bytes, SpinPolarizationView view,
+                          const std::string& error) {
+  std::size_t atom_offset_bytes = 0u;
+  std::size_t batch_shell_offset_bytes = 0u;
+  std::size_t atom_shell_offset_bytes = 0u;
+  std::size_t population_offset_bytes = 0u;
+  std::size_t spin_channel_bytes = 0u;
+  std::size_t coupling_offset_bytes = 0u;
+  std::size_t coupling_bytes = 0u;
+  return !count_bytes(view.atom_offset_count, sizeof(std::int64_t), atom_offset_bytes) ||
+         !count_bytes(view.batch_shell_offset_count, sizeof(std::int64_t),
+                      batch_shell_offset_bytes) ||
+         !count_bytes(view.atom_shell_offset_count, sizeof(std::int64_t),
+                      atom_shell_offset_bytes) ||
+         !count_bytes(view.shell_population_offset_count, sizeof(std::int64_t),
+                      population_offset_bytes) ||
+         !count_bytes(view.spin_channel_count, sizeof(std::int32_t), spin_channel_bytes) ||
+         !count_bytes(view.coupling_offset_count, sizeof(std::int64_t), coupling_offset_bytes) ||
+         !count_bytes(view.coupling_matrix_count, sizeof(double), coupling_bytes) ||
+         ranges_overlap(output, output_bytes, view.atom_offsets, atom_offset_bytes) ||
+         ranges_overlap(output, output_bytes, view.batch_shell_offsets, batch_shell_offset_bytes) ||
+         ranges_overlap(output, output_bytes, view.atom_shell_offsets, atom_shell_offset_bytes) ||
+         ranges_overlap(output, output_bytes, view.shell_population_offsets,
+                        population_offset_bytes) ||
+         ranges_overlap(output, output_bytes, view.spin_channels, spin_channel_bytes) ||
+         ranges_overlap(output, output_bytes, view.coupling_offsets, coupling_offset_bytes) ||
+         ranges_overlap(output, output_bytes, view.coupling_matrices, coupling_bytes) ||
+         ranges_overlap(output, output_bytes, &error, sizeof(error));
 }
 
 bool evaluate_unrestricted_system(SpinPolarizationView view, std::int64_t system,
@@ -382,8 +451,10 @@ xtbloom_status_t evaluate_spin_polarization_cpu(SpinPolarizationView view,
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
-  if (shell_populations == nullptr || spin_energies == nullptr || shell_potentials == nullptr) {
-    error = "GFN1 spin populations and outputs must not be NULL";
+  if (shell_populations == nullptr || spin_energies == nullptr || shell_potentials == nullptr ||
+      !aligned_double(shell_populations) || !aligned_double(spin_energies) ||
+      !aligned_double(shell_potentials)) {
+    error = "GFN1 spin populations and outputs must not be NULL or misaligned";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   std::size_t population_bytes = 0u;
@@ -392,8 +463,10 @@ xtbloom_status_t evaluate_spin_polarization_cpu(SpinPolarizationView view,
       !count_bytes(view.batch_size, sizeof(double), energy_bytes) ||
       ranges_overlap(shell_populations, population_bytes, spin_energies, energy_bytes) ||
       ranges_overlap(shell_populations, population_bytes, shell_potentials, population_bytes) ||
-      ranges_overlap(spin_energies, energy_bytes, shell_potentials, population_bytes)) {
-    error = "GFN1 spin outputs must be mutually disjoint from their inputs";
+      ranges_overlap(spin_energies, energy_bytes, shell_potentials, population_bytes) ||
+      output_overlaps_view(spin_energies, energy_bytes, view, error) ||
+      output_overlaps_view(shell_potentials, population_bytes, view, error)) {
+    error = "GFN1 spin outputs must be disjoint from inputs and control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t element = 0; element < view.shell_population_elements; ++element) {
@@ -431,14 +504,19 @@ xtbloom_status_t evaluate_spin_polarization_system_cpu(
     return status;
   }
   if (system < 0 || system >= view.batch_size || shell_populations == nullptr ||
-      shell_potentials == nullptr) {
-    error = "GFN1 spin one-system inputs and outputs are invalid";
+      shell_potentials == nullptr || !aligned_double(shell_populations) ||
+      !aligned_double(shell_potentials) || !aligned_double(&spin_energy)) {
+    error = "GFN1 spin one-system inputs and outputs must not be NULL or misaligned";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   std::size_t population_bytes = 0u;
   if (!count_bytes(view.shell_population_elements, sizeof(double), population_bytes) ||
-      ranges_overlap(shell_populations, population_bytes, shell_potentials, population_bytes)) {
-    error = "GFN1 spin one-system potential output must not overlap populations";
+      ranges_overlap(shell_populations, population_bytes, shell_potentials, population_bytes) ||
+      ranges_overlap(shell_populations, population_bytes, &spin_energy, sizeof(spin_energy)) ||
+      ranges_overlap(shell_potentials, population_bytes, &spin_energy, sizeof(spin_energy)) ||
+      output_overlaps_view(shell_potentials, population_bytes, view, error) ||
+      output_overlaps_view(&spin_energy, sizeof(spin_energy), view, error)) {
+    error = "GFN1 spin one-system outputs must be disjoint from inputs and control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::int64_t population_begin = view.shell_population_offsets[system];
@@ -450,10 +528,16 @@ xtbloom_status_t evaluate_spin_polarization_system_cpu(
     }
   }
   double energy = 0.0;
-  if (view.spin_channels[system] == 2 &&
-      !evaluate_unrestricted_system(view, system, shell_populations, shell_potentials, energy)) {
-    error = "GFN1 spin target potential exceeded floating-point range";
-    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  if (view.spin_channels[system] == 2) {
+    /* Probe first so arithmetic failure cannot partially publish potentials. */
+    if (!evaluate_unrestricted_system(view, system, shell_populations, nullptr, energy)) {
+      error = "GFN1 spin target potential exceeded floating-point range";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+  }
+  std::fill(shell_potentials + population_begin, shell_potentials + population_end, 0.0);
+  if (view.spin_channels[system] == 2) {
+    (void)evaluate_unrestricted_system(view, system, shell_populations, shell_potentials, energy);
   }
   spin_energy = energy;
   error.clear();
@@ -469,8 +553,17 @@ xtbloom_status_t add_spin_polarization_energy_system_cpu(SpinPolarizationView vi
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
-  if (system < 0 || system >= view.batch_size || shell_populations == nullptr) {
-    error = "GFN1 spin energy system index or populations are invalid";
+  if (system < 0 || system >= view.batch_size || shell_populations == nullptr ||
+      !aligned_double(shell_populations) || !aligned_double(&accumulated_energy)) {
+    error = "GFN1 spin energy system index, populations, or accumulator are invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  std::size_t population_bytes = 0u;
+  if (!count_bytes(view.shell_population_elements, sizeof(double), population_bytes) ||
+      ranges_overlap(shell_populations, population_bytes, &accumulated_energy,
+                     sizeof(accumulated_energy)) ||
+      output_overlaps_view(&accumulated_energy, sizeof(accumulated_energy), view, error)) {
+    error = "GFN1 spin energy accumulator must be disjoint from inputs and control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!std::isfinite(accumulated_energy)) {

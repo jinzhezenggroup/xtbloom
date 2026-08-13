@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -266,6 +267,21 @@ int test_plan_validation_and_element_boundaries() {
   for (double value : coordination) {
     CHECK(value == 9.0);
   }
+
+  CHECK(xtbloom::detail::gfn1::make_coordination_plan(
+            1, 86, all_offsets.data(), all_elements.data(), plan, error) == XTBLOOM_STATUS_SUCCESS);
+  std::vector<double> valid_positions(86u * 3u, 0.0);
+  valid_positions[3] = 1.4;
+  const std::vector<double> positions_before = valid_positions;
+  const std::vector<double> radii_before = plan.covalent_radius;
+  CHECK(xtbloom::detail::gfn1::evaluate_coordination_cpu(plan, valid_positions.data(),
+                                                         valid_positions.data(),
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(valid_positions == positions_before);
+  CHECK(xtbloom::detail::gfn1::evaluate_coordination_cpu(plan, valid_positions.data(),
+                                                         plan.covalent_radius.data(),
+                                                         error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(plan.covalent_radius == radii_before);
   return 0;
 }
 
