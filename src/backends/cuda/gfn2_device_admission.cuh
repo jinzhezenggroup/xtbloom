@@ -12,9 +12,14 @@ namespace xtbloom::detail::cuda {
  * reads this scalar, so rejected requests need not execute any numerical or
  * publication mutation merely to report their precise status. */
 inline constexpr std::uint32_t kGfn2RequestErrorNone = 0u;
-inline constexpr std::uint32_t kGfn2RequestErrorInvalid = 1u;
-inline constexpr std::uint32_t kGfn2RequestErrorNotImplemented = 2u;
-inline constexpr std::uint32_t kGfn2RequestErrorWarmIncompatible = 3u;
+/* Larger values win when independent stream-ordered validators use atomicMax.
+ * Preserve a distinct public status while giving malformed input priority over
+ * unavailable features and fixed-topology mismatch priority over every leaf. */
+inline constexpr std::uint32_t kGfn2RequestErrorNotImplemented = 1u;
+inline constexpr std::uint32_t kGfn2RequestErrorNotSupported = 2u;
+inline constexpr std::uint32_t kGfn2RequestErrorInvalid = 3u;
+inline constexpr std::uint32_t kGfn2RequestErrorWarmIncompatible = 4u;
+inline constexpr std::uint32_t kGfn2RequestErrorTopologyMismatch = 5u;
 
 /* Plan-owned stream-ordered request gate used by persistent mutation roots. */
 struct Gfn2DeviceAdmission {

@@ -34,6 +34,8 @@ enum TopologyValidationRequirement : std::uint32_t {
    * interactions are external attachments, not topology metadata. */
   kInteractionDescriptorsNeedStaging = 1u << 8,
   kInteractionPayloadNeedsStaging = 1u << 9,
+  kCellMatricesNeedStaging = 1u << 10,
+  kPeriodicAxesNeedStaging = 1u << 11,
   kTopologyMetadataStagingMask = kAtomOffsetsNeedStaging | kAtomicNumbersNeedStaging |
                                  kMolecularChargesNeedStaging | kUnpairedElectronsNeedStaging |
                                  kPointChargeOffsetsNeedStaging |
@@ -103,6 +105,25 @@ struct DescriptorValidationResult {
 [[nodiscard]] DescriptorValidationResult validate_compute_descriptors_for_dispatch(
     xtbloom_backend_t backend, const xtbloom_batch_t* batch,
     const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result);
+
+/*
+ * Validate the ABI-v4 native-cell contents after the caller's HOST pointers
+ * are known to be CPU-accessible or after a CUDA bridge has staged them into
+ * HOST storage.  This pass checks only released mask/cell semantics.  The
+ * availability pass is separate so malformed requests retain precise errors
+ * before a valid periodic request is refused.
+ */
+[[nodiscard]] DescriptorValidationResult validate_host_lattice_semantics(
+    const xtbloom_batch_t& batch);
+
+/*
+ * Return SUCCESS for an absent suffix or an explicitly molecular V4 image
+ * (all masks NONE with zero cells).  Any released XYZ item is currently
+ * refused atomically because native periodic GFN2 execution is not connected.
+ * Call only after validate_host_lattice_semantics() has succeeded.
+ */
+[[nodiscard]] DescriptorValidationResult validate_host_lattice_execution_availability(
+    const xtbloom_batch_t& batch);
 
 /*
  * Compatibility entry point for the complete ABI-v1 validation sequence. It

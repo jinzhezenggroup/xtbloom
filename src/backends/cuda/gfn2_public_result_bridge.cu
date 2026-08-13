@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "backends/cuda/gfn2_device_admission.cuh"
 #include "backends/cuda/gfn2_public_result_bridge.cuh"
 
 namespace xtbloom::detail::cuda {
@@ -403,14 +404,34 @@ __global__ void public_result_preflight_kernel(
 
   BridgeError error =
       static_contract_error(plan, input, device_staging, destinations, staging, diagnostics);
+  /* Preserve one deterministic caller-visible reason when several stream-
+   * ordered gates fail: static binding, request validation, publication plan,
+   * property availability, epoch identity, then aggregate peer status. */
+  const std::uint32_t request_error = *input.request_topology_error;
+  if (error == BridgeError::kSuccess && request_error != 0u) {
+    switch (request_error) {
+      case kGfn2RequestErrorTopologyMismatch:
+        error = BridgeError::kRequestTopologyMismatch;
+        break;
+      case kGfn2RequestErrorWarmIncompatible:
+        error = BridgeError::kRequestWarmIncompatible;
+        break;
+      case kGfn2RequestErrorInvalid:
+        error = BridgeError::kRequestInvalidArgument;
+        break;
+      case kGfn2RequestErrorNotSupported:
+        error = BridgeError::kRequestNotSupported;
+        break;
+      case kGfn2RequestErrorNotImplemented:
+        error = BridgeError::kRequestNotImplemented;
+        break;
+      default:
+        error = BridgeError::kInternalPublicationFailure;
+        break;
+    }
+  }
   if (error == BridgeError::kSuccess && control.internal_publication_plan_error != 0u) {
     error = BridgeError::kInternalPublicationFailure;
-  }
-  if (error == BridgeError::kSuccess && *input.request_topology_error != 0u) {
-    error = *input.request_topology_error == 2u
-                ? BridgeError::kRequestNotImplemented
-                : (*input.request_topology_error == 3u ? BridgeError::kRequestWarmIncompatible
-                                                       : BridgeError::kRequestTopologyMismatch);
   }
   if (error == BridgeError::kSuccess &&
       (control.publication_epoch_snapshot == 0u || control.current_geometry_epoch == 0u ||

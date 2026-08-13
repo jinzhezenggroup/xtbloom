@@ -199,6 +199,31 @@ materialized-input, command, and normalized-output hashes are recorded in
 `data/conformance/gfn1/manifest.json`. xTB source and binaries are not
 redistributed.
 
+## Native-lattice implementation references
+
+The ABI-v4 lattice and image foundation was independently implemented after
+reviewing the cutoff, coordinate-transform, wrapping, and lattice-point
+behavior in these immutable LGPL-3.0-or-later sources:
+
+- tblite revision `133f91efb94b47f05848e1f86832f40a1accc385`,
+  `src/tblite/cutoff.f90` (Git blob
+  `0c456606b64818e6962ad95b988ecc4f1f4a90f1`, SHA-256
+  `a8d039243e9c8a9e938085bc561b2ae3d767c034e8cacef0f905cb56319facf9`);
+- xTB revision `b31754bf3c7cccf8c242c469b03ae675e04bd608`,
+  `src/pbc.f90` (Git blob `c979bf7229f26e7de2fb6df937049f19e11a7ebb`,
+  SHA-256
+  `9379cdaf5dce94c4c762b90b9703826ebb863c2941d4d892e3f1c550d24afe49`)
+  and `src/type/latticepoint.f90` (Git blob
+  `1406ed707b9bec5cce7f771a3bbf51b836778450`, SHA-256
+  `d50db182bd78b686c96dc1d0c1420dcef9f012031404f731917eda2d400e2e4e`).
+
+Only mathematical formulas and externally observable behavior were used as
+clean-room references. No upstream source, generated data, numerical table,
+binary, or other external byte was copied into xTBloom, no dependency was
+added, and the distributed payload is unchanged apart from xTBloom's original
+implementation and tests. The applicable LGPL text is retained in
+`LICENSES/LGPL-3.0-or-later.txt`.
+
 ## xTB issue #678 difficult-SCC input
 
 Origin: <https://github.com/grimme-lab/xtb/issues/678>

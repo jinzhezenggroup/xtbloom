@@ -19,6 +19,15 @@ layout avoids padding small molecules to the largest basis in a batch, while sti
 backend-specific bucketing by atom and orbital count. Every buffer carries a memory-space tag, so
 the CUDA backend can consume device pointers directly and stage host pointers when necessary.
 
+The ABI-v4 batch suffix reserves native 3D cell input as row-major direct
+lattice vectors in bohr plus a fixed-width periodic-axis mask. V1/V2/V3 callers
+remain molecular, and a V4 image whose masks are all `NONE` is also molecular.
+`XYZ` cells are validated for finite, right-handed, nonsingular geometry, but
+then refused with `NOT_IMPLEMENTED` before execution because complete periodic
+GFN2 topology, electrostatics, multipoles, forces, and cell derivatives are not
+yet connected. This native-cell suffix is separate from the caller-owned
+`b + A*q` response operator described below.
+
 Point-charge embedding uses a caller-provided per-site screening gamma so the softened short-range
 Coulomb form is unambiguous. Optional per-atom potential shifts `b` and symmetric charge-response
 matrices `A` support periodic QM/MM embeddings through `b + A*q` in every SCC iteration and the

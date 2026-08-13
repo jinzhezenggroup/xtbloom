@@ -67,7 +67,10 @@ charge response, a Python batched numerical QM Hessian, ASE, and dpdata. The
 low-level CUDA ABI accepts host, device, and mixed descriptors, including
 independently placed interaction descriptor and payload buffers.
 
-GFN1-xTB, ROCm, native geometry optimization, molecular dynamics, solvation,
-native/analytic Hessians, vibrational analysis, and lattice/PBC descriptors are
-not implemented. The Python Hessian and the browser/dpdata optimizers are
-higher-level adapters built on repeated native calculations.
+The ABI-v4 native-cell descriptors validate molecular `NONE` and fully
+periodic `XYZ` inputs, but valid `XYZ` compute requests return
+`NOT_IMPLEMENTED` transactionally. GFN1-xTB, ROCm, native geometry
+optimization, molecular dynamics, solvation, native/analytic Hessians,
+vibrational analysis, and periodic GFN2 execution are not implemented. The
+Python Hessian and the browser/dpdata optimizers are higher-level adapters
+built on repeated native calculations.

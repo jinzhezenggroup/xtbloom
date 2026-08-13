@@ -45,6 +45,7 @@
 #include "model/gfn2/external_point_charges.hpp"
 #include "model/gfn2/h0.hpp"
 #include "model/gfn2/integrals.hpp"
+#include "model/gfn2/lattice.hpp"
 #include "model/gfn2/mulliken.hpp"
 #include "model/gfn2/periodic_embedding.hpp"
 #include "model/gfn2/repulsion.hpp"
@@ -78,6 +79,25 @@ std::atomic<std::uint32_t> g_admission_alias_test_hook{
  * inclusive 25/30-bohr predicates and never infer physical membership solely
  * from list presence. */
 constexpr double kD4PairlistBuilderCutoffBohr = 50.0;
+
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+std::atomic<std::uint32_t> g_execution_test_fault{
+    static_cast<std::uint32_t>(Gfn2CudaExecutionTestFault::kNone)};
+std::atomic<std::uint64_t> g_native_lattice_allocation_faults{0u};
+std::atomic<std::uint64_t> g_native_lattice_completion_faults{0u};
+std::atomic<std::uint64_t> g_native_lattice_teardown_faults{0u};
+std::atomic<std::uint64_t> g_quarantined_native_lattice_arenas{0u};
+std::atomic<std::uint64_t> g_quarantined_native_lattice_bytes{0u};
+std::atomic<std::uint64_t> g_request_graph_build_attempts{0u};
+std::atomic<std::uint64_t> g_request_graph_build_successes{0u};
+
+bool consume_execution_test_fault(Gfn2CudaExecutionTestFault fault) noexcept {
+  std::uint32_t expected = static_cast<std::uint32_t>(fault);
+  return g_execution_test_fault.compare_exchange_strong(
+      expected, static_cast<std::uint32_t>(Gfn2CudaExecutionTestFault::kNone),
+      std::memory_order_acq_rel, std::memory_order_relaxed);
+}
+#endif
 
 Gfn2CudaSccStartMode public_scc_start_mode(const xtbloom_compute_options_t& options) noexcept {
   return options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
@@ -246,6 +266,84 @@ bool checked_triangle(std::int64_t atoms, std::int64_t& pairs) noexcept {
   return checked_elements(atoms, lower / 2, pairs);
 }
 
+bool native_lattice_active(const xtbloom_batch_t& batch) noexcept {
+  return batch.struct_size >= XTBLOOM_BATCH_V4_SIZE &&
+         (batch.cell_matrices.data != nullptr || batch.cell_matrices.size_bytes != 0u ||
+          batch.periodic_axes.data != nullptr || batch.periodic_axes.size_bytes != 0u);
+}
+
+/*
+ * CUDA backend objects are linked directly into white-box test executables,
+ * while validation.cpp remains hidden inside libxtbloom. Keep this staged HOST
+ * content check local instead of creating a link-time dependency on internal
+ * shared-library symbols. The predicate itself is shared with the CPU ABI and
+ * lattice builder through model/gfn2/lattice.cpp.
+ */
+xtbloom_status_t validate_host_native_lattice_request(const xtbloom_batch_t& batch,
+                                                      std::string& error) {
+  if (!native_lattice_active(batch)) return XTBLOOM_STATUS_SUCCESS;
+
+  std::int64_t cell_elements = 0;
+  std::size_t cell_bytes = 0u;
+  std::size_t axes_bytes = 0u;
+  if (batch.batch_size <= 0 || !checked_elements(batch.batch_size, 9, cell_elements) ||
+      !checked_bytes(cell_elements, sizeof(double), cell_bytes) ||
+      !checked_bytes(batch.batch_size, sizeof(std::int32_t), axes_bytes)) {
+    error = "CUDA native-cell extent overflows the host address space";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (batch.cell_matrices.memory_space != XTBLOOM_MEMORY_HOST ||
+      batch.periodic_axes.memory_space != XTBLOOM_MEMORY_HOST ||
+      batch.cell_matrices.data == nullptr || batch.periodic_axes.data == nullptr ||
+      batch.cell_matrices.size_bytes < cell_bytes || batch.periodic_axes.size_bytes < axes_bytes) {
+    error = "CUDA native-cell semantic validation requires complete HOST staging buffers";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+
+  bool periodic = false;
+  for (std::int64_t system = 0; system < batch.batch_size; ++system) {
+    std::int32_t mask = 0;
+    std::array<double, 9> cell{};
+    std::memcpy(&mask,
+                static_cast<const std::byte*>(batch.periodic_axes.data) +
+                    static_cast<std::size_t>(system) * sizeof(mask),
+                sizeof(mask));
+    std::memcpy(cell.data(),
+                static_cast<const std::byte*>(batch.cell_matrices.data) +
+                    static_cast<std::size_t>(system) * sizeof(cell),
+                sizeof(cell));
+
+    if (mask == XTBLOOM_PERIODIC_AXES_NONE) {
+      if (!std::all_of(cell.begin(), cell.end(), [](double value) { return value == 0.0; })) {
+        error = "a nonperiodic batch item must use an all-zero cell matrix";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      continue;
+    }
+    if ((mask & ~XTBLOOM_PERIODIC_AXES_XYZ) != 0) {
+      error = "periodic_axes contains unknown mask bits";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    if (mask != XTBLOOM_PERIODIC_AXES_XYZ) {
+      error = "one- and two-dimensional periodic axes are reserved but not supported";
+      return XTBLOOM_STATUS_NOT_SUPPORTED;
+    }
+    if (!gfn2::valid_lattice_cell_3d(cell.data())) {
+      error = "a periodic cell must be finite, right-handed, and nonsingular";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    periodic = true;
+  }
+  if (periodic) {
+    error =
+        "native lattice/PBC descriptors are valid but periodic GFN2 execution is not "
+        "implemented yet";
+    return XTBLOOM_STATUS_NOT_IMPLEMENTED;
+  }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
 template <typename T>
 xtbloom_status_t copy_host_buffer(const char* name, const xtbloom_const_buffer_t& buffer,
                                   std::int64_t elements, std::vector<T>& output, std::string& error,
@@ -342,10 +440,26 @@ class PinnedArena {
   PinnedArena(PinnedArena&&) = delete;
   PinnedArena& operator=(PinnedArena&&) = delete;
 
-  cudaError_t allocate(std::size_t bytes) noexcept {
-    reset();
+  cudaError_t allocate(std::size_t bytes, bool inject_allocation_failure = false) noexcept {
+    if (bytes == 0u) {
+      reset();
+      return cudaSuccess;
+    }
+
+    /* Preserve the old image until a complete replacement exists. In
+     * particular, a failed growth must not publish a nonzero capacity beside
+     * a null pointer, because callers use capacity to decide whether the
+     * retained image is reusable. */
+    void* replacement = nullptr;
+    const cudaError_t status =
+        inject_allocation_failure ? cudaErrorMemoryAllocation : cudaMallocHost(&replacement, bytes);
+    if (status != cudaSuccess) return status;
+
+    void* const previous = pointer_;
+    pointer_ = replacement;
     bytes_ = bytes;
-    return bytes == 0u ? cudaSuccess : cudaMallocHost(&pointer_, bytes);
+    if (previous != nullptr) (void)cudaFreeHost(previous);
+    return cudaSuccess;
   }
 
   void reset() noexcept {
@@ -358,6 +472,16 @@ class PinnedArena {
 
   void* get() const noexcept { return pointer_; }
   std::size_t bytes() const noexcept { return bytes_; }
+
+  /* Relinquish an image that cannot be proved idle. CUDA may still reference
+   * it, so the caller deliberately leaves it allocated instead of risking a
+   * use-after-free in a noexcept teardown path. */
+  void* release_without_free() noexcept {
+    void* const released = pointer_;
+    pointer_ = nullptr;
+    bytes_ = 0u;
+    return released;
+  }
 
  private:
   void* pointer_ = nullptr;
@@ -551,6 +675,62 @@ struct NumericalRefreshDeviceSources {
   std::uint8_t interaction_payload_staged_at_offsets = 0u;
   std::uint8_t prevalidated_reserved_interaction = 0u;
 };
+
+/* The start-mode scalar is written by a kernel argument so steady-state
+ * admission neither transfers host bytes nor retains a caller-owned pointer. */
+__global__ void stage_request_start_mode_kernel(std::uint32_t start_mode,
+                                                std::uint32_t* staged_start_mode) {
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    *staged_start_mode = start_mode;
+  }
+}
+
+/*
+ * A request admitted past all known semantic gates consumes the preceding
+ * public checkpoint. WARM moves the token into request scratch so the later
+ * reset can validate it after numerical refresh. FRESH clears the old token
+ * but publishes no scratch checkpoint. Classified semantic rejections leave
+ * the checkpoint intact; unknown/internal request codes consume it safely.
+ */
+struct RequestAdmissionDeviceBinding {
+  std::int64_t batch_size = 0;
+  const std::uint32_t* request_error = nullptr;
+  const std::uint32_t* start_mode = nullptr;
+  std::uint64_t* warm_checkpoint_generations = nullptr;
+  std::uint32_t* warm_checkpoint_batch_ready = nullptr;
+  std::uint64_t* admitted_warm_checkpoint_generations = nullptr;
+  cudaGraphConditionalHandle execution_condition = 0u;
+  cudaGraphConditionalHandle start_mode_condition = 0u;
+};
+
+static_assert(std::is_trivially_copyable_v<RequestAdmissionDeviceBinding>);
+
+__global__ void consume_request_checkpoint_kernel(RequestAdmissionDeviceBinding binding) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system >= binding.batch_size) return;
+  const std::uint32_t request_error = *binding.request_error;
+  if (request_error != kGfn2RequestErrorNone &&
+      request_error <= kGfn2RequestErrorTopologyMismatch) {
+    /* A fully classified semantic rejection never starts numerical execution,
+     * so the preceding public checkpoint remains reusable. Unknown codes are
+     * treated as internal failures below and consume the token defensively. */
+    binding.admitted_warm_checkpoint_generations[system] = 0u;
+    return;
+  }
+  const std::uint32_t start_mode = *binding.start_mode;
+  const bool warm = start_mode == 1u;
+  const std::uint64_t checkpoint = atomicExch(
+      reinterpret_cast<unsigned long long*>(binding.warm_checkpoint_generations + system), 0ULL);
+  binding.admitted_warm_checkpoint_generations[system] = warm ? checkpoint : 0u;
+}
+
+__global__ void set_request_execution_conditions_kernel(RequestAdmissionDeviceBinding binding) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+  const bool warm = *binding.start_mode == 1u;
+  *binding.warm_checkpoint_batch_ready = 0u;
+  cudaGraphSetConditional(binding.start_mode_condition, warm ? 1u : 0u);
+  cudaGraphSetConditional(binding.execution_condition, *binding.request_error == 0u ? 1u : 0u);
+}
 
 struct NumericalRefreshDeviceBinding {
   std::int64_t batch_size = 0;
@@ -865,7 +1045,7 @@ __global__ void merge_gfn2_request_error_kernel(const std::uint32_t* interaction
                                                 std::uint32_t* request_error) {
   if (blockIdx.x == 0 && threadIdx.x == 0) {
     const std::uint32_t error = *interaction_error;
-    if (error != 0u) atomicCAS(request_error, 0u, error);
+    if (error != 0u) atomicMax(request_error, error);
   }
 }
 
@@ -1431,6 +1611,8 @@ struct FixedTopologyComparisonDeviceBinding {
   const std::int32_t* spin_channels = nullptr;
   const std::int64_t* point_offsets = nullptr;
   const std::int64_t* response_offsets = nullptr;
+  const double* cell_matrices = nullptr;
+  const std::int32_t* periodic_axes = nullptr;
 
   const std::int64_t* expected_atom_offsets = nullptr;
   const std::int32_t* expected_atomic_numbers = nullptr;
@@ -1445,6 +1627,7 @@ struct FixedTopologyComparisonDeviceBinding {
   std::int64_t batch_elements = 0;
   std::int64_t point_offset_elements = 0;
   std::int64_t response_offset_elements = 0;
+  std::int64_t lattice_systems = 0;
   std::uint32_t* request_error = nullptr;
 };
 
@@ -1479,8 +1662,40 @@ __global__ void compare_fixed_topology_kernel(FixedTopologyComparisonDeviceBindi
                                      binding.point_offset_elements) ||
         fixed_topology_value_differs(binding.response_offsets, binding.expected_response_offsets,
                                      element, binding.response_offset_elements);
-    if (mismatch) atomicExch(binding.request_error, kGfn2RequestErrorInvalid);
+    if (mismatch) atomicMax(binding.request_error, kGfn2RequestErrorTopologyMismatch);
   }
+}
+
+__global__ void validate_lattice_request_kernel(FixedTopologyComparisonDeviceBinding binding) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system >= binding.lattice_systems || binding.cell_matrices == nullptr ||
+      binding.periodic_axes == nullptr) {
+    return;
+  }
+  const std::int32_t mask = binding.periodic_axes[system];
+  const double* cell = binding.cell_matrices + system * 9;
+  if (mask == XTBLOOM_PERIODIC_AXES_NONE) {
+    for (int element = 0; element < 9; ++element) {
+      if (cell[element] != 0.0) {
+        atomicMax(binding.request_error, kGfn2RequestErrorInvalid);
+        return;
+      }
+    }
+    return;
+  }
+  if ((mask & ~XTBLOOM_PERIODIC_AXES_XYZ) != 0) {
+    atomicMax(binding.request_error, kGfn2RequestErrorInvalid);
+    return;
+  }
+  if (mask != XTBLOOM_PERIODIC_AXES_XYZ) {
+    atomicMax(binding.request_error, kGfn2RequestErrorNotSupported);
+    return;
+  }
+  if (!gfn2::valid_lattice_cell_3d_binary64(cell)) {
+    atomicMax(binding.request_error, kGfn2RequestErrorInvalid);
+    return;
+  }
+  atomicMax(binding.request_error, kGfn2RequestErrorNotImplemented);
 }
 
 cudaError_t compare_fixed_topology_async(const FixedTopologyComparisonDeviceBinding& binding,
@@ -1504,6 +1719,22 @@ cudaError_t compare_fixed_topology_async(const FixedTopologyComparisonDeviceBind
   const std::int64_t required_blocks = (maximum + kThreads - 1) / kThreads;
   const int blocks = static_cast<int>(std::min<std::int64_t>(required_blocks, 256));
   compare_fixed_topology_kernel<<<blocks, kThreads, 0, stream>>>(binding);
+  return cudaPeekAtLastError();
+}
+
+cudaError_t validate_lattice_request_async(const FixedTopologyComparisonDeviceBinding& binding,
+                                           cudaStream_t stream) noexcept {
+  if (binding.request_error == nullptr || binding.lattice_systems < 0 ||
+      (binding.lattice_systems != 0 &&
+       (binding.cell_matrices == nullptr || binding.periodic_axes == nullptr))) {
+    return cudaErrorInvalidValue;
+  }
+  if (binding.lattice_systems == 0) {
+    return cudaSuccess;
+  }
+  constexpr int kThreads = 128;
+  const int blocks = static_cast<int>((binding.lattice_systems + kThreads - 1) / kThreads);
+  validate_lattice_request_kernel<<<blocks, kThreads, 0, stream>>>(binding);
   return cudaPeekAtLastError();
 }
 
@@ -2550,6 +2781,10 @@ struct InferenceState {
   std::uint64_t* warm_checkpoint_generations = nullptr;
   /* Device aggregate: nonzero only when every peer published a checkpoint. */
   std::uint32_t* warm_checkpoint_batch_ready = nullptr;
+  /* Single-flight asynchronous request control and the checkpoint token moved
+   * out of public storage at accepted admission. */
+  std::uint32_t* request_start_mode = nullptr;
+  std::uint64_t* admitted_warm_checkpoint_generations = nullptr;
   std::uint8_t* warm_checkpoint_field_attached = nullptr;
   double* warm_checkpoint_field_vectors = nullptr;
   bool ready = false;
@@ -2585,6 +2820,10 @@ struct PublicResultState {
   const std::int32_t* expected_spin_channels = nullptr;
   const std::int64_t* expected_point_offsets = nullptr;
   const std::int64_t* expected_response_offsets = nullptr;
+  double* staged_lattice_cells = nullptr;
+  std::int32_t* staged_periodic_axes = nullptr;
+  double* host_lattice_cells = nullptr;
+  std::int32_t* host_periodic_axes = nullptr;
   Gfn2PublicResultBridgeDeviceStaging device_staging{};
   Gfn2PublicResultBridgeDeviceDiagnostics diagnostics{};
   std::uint32_t pending_result_flags = 0u;
@@ -2618,6 +2857,101 @@ struct PublicResultTransaction {
   Gfn2PublicResultBridgeDeviceDestinations destinations{};
   PublicResultTransactionPhase phase = PublicResultTransactionPhase::kEmpty;
   bool prior_warm_checkpoint_ready = false;
+};
+
+class RequestExecutionGraphOwner {
+ public:
+  RequestExecutionGraphOwner() = default;
+  ~RequestExecutionGraphOwner() { reset(); }
+  RequestExecutionGraphOwner(const RequestExecutionGraphOwner&) = delete;
+  RequestExecutionGraphOwner& operator=(const RequestExecutionGraphOwner&) = delete;
+
+  void reset() noexcept {
+    if (executable_ != nullptr) (void)cudaGraphExecDestroy(executable_);
+    if (graph_ != nullptr) (void)cudaGraphDestroy(graph_);
+    executable_ = nullptr;
+    graph_ = nullptr;
+    execution_condition_ = 0u;
+    start_mode_condition_ = 0u;
+  }
+
+  [[nodiscard]] bool ready() const noexcept { return executable_ != nullptr; }
+  [[nodiscard]] cudaGraph_t graph() const noexcept { return graph_; }
+  [[nodiscard]] cudaGraphConditionalHandle execution_condition() const noexcept {
+    return execution_condition_;
+  }
+  [[nodiscard]] cudaGraphConditionalHandle start_mode_condition() const noexcept {
+    return start_mode_condition_;
+  }
+
+  cudaError_t create() noexcept {
+    reset();
+    cudaError_t status = cudaGraphCreate(&graph_, 0u);
+    if (status == cudaSuccess) {
+      status = cudaGraphConditionalHandleCreate(&execution_condition_, graph_, 0u,
+                                                cudaGraphCondAssignDefault);
+    }
+    if (status == cudaSuccess) {
+      status = cudaGraphConditionalHandleCreate(&start_mode_condition_, graph_, 0u,
+                                                cudaGraphCondAssignDefault);
+    }
+    if (status != cudaSuccess) reset();
+    return status;
+  }
+
+  cudaError_t add_if_node(cudaGraphNode_t dependency, cudaGraph_t& body) noexcept {
+    body = nullptr;
+    if (graph_ == nullptr || execution_condition_ == 0u || dependency == nullptr) {
+      return cudaErrorInvalidValue;
+    }
+    cudaGraphNodeParams parameters{};
+    parameters.type = cudaGraphNodeTypeConditional;
+    parameters.conditional.handle = execution_condition_;
+    parameters.conditional.type = cudaGraphCondTypeIf;
+    parameters.conditional.size = 1u;
+    cudaGraphNode_t node = nullptr;
+    const cudaError_t status = cudaGraphAddNode(&node, graph_, &dependency, 1u, &parameters);
+    if (status == cudaSuccess) body = parameters.conditional.phGraph_out[0];
+    return status;
+  }
+
+  cudaError_t add_start_mode_switch(cudaGraph_t body, cudaGraphNode_t dependency,
+                                    cudaGraph_t*& branches, cudaGraphNode_t& switch_node) noexcept {
+    branches = nullptr;
+    switch_node = nullptr;
+    if (body == nullptr || start_mode_condition_ == 0u || dependency == nullptr) {
+      return cudaErrorInvalidValue;
+    }
+    cudaGraphNodeParams parameters{};
+    parameters.type = cudaGraphNodeTypeConditional;
+    parameters.conditional.handle = start_mode_condition_;
+    parameters.conditional.type = cudaGraphCondTypeSwitch;
+    parameters.conditional.size = 2u;
+    const cudaError_t status = cudaGraphAddNode(&switch_node, body, &dependency, 1u, &parameters);
+    if (status == cudaSuccess) branches = parameters.conditional.phGraph_out;
+    return status;
+  }
+
+  cudaError_t instantiate() noexcept {
+    if (graph_ == nullptr || executable_ != nullptr) return cudaErrorInvalidValue;
+    return cudaGraphInstantiate(&executable_, graph_, 0u);
+  }
+
+  cudaError_t upload(cudaStream_t stream) const noexcept {
+    return executable_ == nullptr ? cudaErrorInvalidResourceHandle
+                                  : cudaGraphUpload(executable_, stream);
+  }
+
+  cudaError_t launch(cudaStream_t stream) const noexcept {
+    return executable_ == nullptr ? cudaErrorInvalidResourceHandle
+                                  : cudaGraphLaunch(executable_, stream);
+  }
+
+ private:
+  cudaGraph_t graph_ = nullptr;
+  cudaGraphExec_t executable_ = nullptr;
+  cudaGraphConditionalHandle execution_condition_ = 0u;
+  cudaGraphConditionalHandle start_mode_condition_ = 0u;
 };
 
 }  // namespace
@@ -2697,6 +3031,10 @@ struct Gfn2CudaExecutionCache::Impl {
      * The owner retains a bounded fallback when conditional capture is not
      * supported by the selected CUDA/provider stack. */
     Gfn2SccLoopCudaGraphOwner scc_loop;
+    /* Declared after scc_loop so the outer graph is destroyed first. Its
+     * common numerical/SCC body retains the scc_loop root graph by reference;
+     * only the small FRESH/WARM reset preludes are distinct. */
+    RequestExecutionGraphOwner request_execution_graph;
     const std::int32_t* atomic_numbers = nullptr;
     EnergyForceBindings energy_force{};
     NumericalRefreshState numerical{};
@@ -2992,12 +3330,28 @@ struct Gfn2CudaExecutionCache::Impl {
     xtbloom_status_t deferred_status = XTBLOOM_STATUS_SUCCESS;
     std::string deferred_error;
     bool host_upload_release_ordered = false;
+    /* A post-Graph host-side submission failure is already an accepted CUDA
+     * request because the Graph may have consumed persistent state. If the
+     * first exact-stream settlement attempt itself fails, keep the request
+     * PENDING and retain this cache as its completion owner until a later
+     * wait/destroy proves both the owner and private callback streams idle. */
+    bool settlement_only_pending = false;
+    /* Context enqueue builds a new Prepared owner transactionally and does not
+     * publish it into the cache until caller-output commit is accepted. If a
+     * post-launch failure cannot be settled immediately, retain that candidate
+     * here so queued GPU work cannot outlive its arenas. The matching topology
+     * staging candidate remains unpublished and is aborted only after both
+     * execution streams are known idle. */
+    std::unique_ptr<Prepared> pending_prepared;
+    bool pending_topology_candidate = false;
   };
 
   static bool request_semantic_rejection(const PublicResultState& state) noexcept {
     const auto aggregate =
         static_cast<Gfn2PublicResultBridgeError>(state.host_control->aggregate_error);
     return aggregate == Gfn2PublicResultBridgeError::kRequestTopologyMismatch ||
+           aggregate == Gfn2PublicResultBridgeError::kRequestInvalidArgument ||
+           aggregate == Gfn2PublicResultBridgeError::kRequestNotSupported ||
            aggregate == Gfn2PublicResultBridgeError::kRequestNotImplemented ||
            aggregate == Gfn2PublicResultBridgeError::kRequestWarmIncompatible;
   }
@@ -3016,13 +3370,62 @@ struct Gfn2CudaExecutionCache::Impl {
      * necessarily best effort. */
     int caller_device = -1;
     const bool caller_device_known = cudaGetDevice(&caller_device) == cudaSuccess;
-    const bool restore_caller_device = caller_device_known && caller_device != device_id &&
-                                       cudaSetDevice(device_id) == cudaSuccess;
-    if (!caller_device_known) (void)cudaSetDevice(device_id);
+    bool owner_device_selected = caller_device_known && caller_device == device_id;
+    bool restore_caller_device = false;
+    if (!owner_device_selected && cudaSetDevice(device_id) == cudaSuccess) {
+      owner_device_selected = true;
+      restore_caller_device = caller_device_known && caller_device != device_id;
+    }
+
+    /* One owner-stream fence settles both handle-owned work and the native
+     * lattice D2H. A failed or wrong-device fence cannot authorize freeing the
+     * pinned destination: detach it below so member destruction cannot issue
+     * cudaFreeHost while DMA may still reference the image. */
+    cudaError_t owner_stream_status = cudaSuccess;
+    bool owner_stream_settlement_attempted = false;
+    if (owner_device_selected && (handles_created || native_lattice_staging_pending)) {
+      owner_stream_settlement_attempted = true;
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+      if (native_lattice_staging_pending &&
+          consume_execution_test_fault(
+              Gfn2CudaExecutionTestFault::kNativeLatticeTeardownSettlement)) {
+        g_native_lattice_teardown_faults.fetch_add(1u, std::memory_order_relaxed);
+        owner_stream_status = cudaErrorUnknown;
+      } else
+#endif
+      {
+        owner_stream_status = cudaStreamSynchronize(stream);
+      }
+    }
+    if (native_lattice_staging_pending) {
+      const bool settled = owner_stream_settlement_attempted && owner_stream_status == cudaSuccess;
+      if (settled) {
+        native_lattice_staging_pending = false;
+      } else {
+        const std::size_t quarantined_bytes = native_lattice_host_arena.bytes();
+        void* const quarantined = native_lattice_host_arena.release_without_free();
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+        if (quarantined != nullptr) {
+          g_quarantined_native_lattice_arenas.fetch_add(1u, std::memory_order_relaxed);
+          g_quarantined_native_lattice_bytes.fetch_add(
+              static_cast<std::uint64_t>(quarantined_bytes), std::memory_order_relaxed);
+        }
+#else
+        (void)quarantined;
+        (void)quarantined_bytes;
+#endif
+      }
+    }
     if (prepared != nullptr) {
       prepared.reset();
     }
-    if (handles_created) (void)cudaStreamSynchronize(stream);
+    if (active_request.pending_prepared != nullptr) {
+      active_request.pending_prepared.reset();
+    }
+    if (active_request.pending_topology_candidate) {
+      topology_staging.abort_candidate();
+      active_request.pending_topology_candidate = false;
+    }
     if (blas != nullptr) (void)cublasDestroy(blas);
     if (solver_jacobi != nullptr) (void)cusolverDnDestroySyevjInfo(solver_jacobi);
     if (solver_parameters != nullptr) (void)cusolverDnDestroyParams(solver_parameters);
@@ -3042,8 +3445,11 @@ struct Gfn2CudaExecutionCache::Impl {
     const bool owner_selected = (caller_device_known && caller_device == device_id) ||
                                 cudaSetDevice(device_id) == cudaSuccess;
     bool settled = false;
-    if (owner_selected && prepared != nullptr) {
-      auto& current = *prepared;
+    Prepared* const active_prepared = active_request.pending_prepared != nullptr
+                                          ? active_request.pending_prepared.get()
+                                          : prepared.get();
+    if (owner_selected && active_prepared != nullptr) {
+      auto& current = *active_prepared;
       cudaError_t owner_status = cudaSuccess;
       if (current.submitted) {
         owner_status = cudaStreamSynchronize(stream);
@@ -3065,10 +3471,13 @@ struct Gfn2CudaExecutionCache::Impl {
       (void)cudaSetDevice(caller_device);
     }
     if (settled) {
+      if (active_request.pending_topology_candidate) {
+        topology_staging.abort_candidate();
+      }
       active_request = {};
     } else {
       request_poisoned = true;
-      if (prepared != nullptr) prepared->numerical.host_staging_poisoned = true;
+      if (active_prepared != nullptr) active_prepared->numerical.host_staging_poisoned = true;
     }
   }
 
@@ -5502,6 +5911,8 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t publication_plan_error = 0u;
       std::size_t warm_checkpoint_generations = 0u;
       std::size_t warm_checkpoint_batch_ready = 0u;
+      std::size_t request_start_mode = 0u;
+      std::size_t admitted_warm_checkpoint_generations = 0u;
       std::size_t warm_checkpoint_field_attached = 0u;
       std::size_t warm_checkpoint_field_vectors = 0u;
     } offset;
@@ -5540,6 +5951,8 @@ struct Gfn2CudaExecutionCache::Impl {
     offset.publication_plan_error = layout.append<std::uint32_t>(1);
     offset.warm_checkpoint_generations = layout.append<std::uint64_t>(batch);
     offset.warm_checkpoint_batch_ready = layout.append<std::uint32_t>(1);
+    offset.request_start_mode = layout.append<std::uint32_t>(1);
+    offset.admitted_warm_checkpoint_generations = layout.append<std::uint64_t>(batch);
     offset.warm_checkpoint_field_attached = layout.append<std::uint8_t>(batch);
     offset.warm_checkpoint_field_vectors = layout.append<double>(3 * batch);
     if (!layout.valid()) {
@@ -5737,6 +6150,9 @@ struct Gfn2CudaExecutionCache::Impl {
         arena_pointer<std::uint64_t>(arena, offset.warm_checkpoint_generations);
     inference.warm_checkpoint_batch_ready =
         arena_pointer<std::uint32_t>(arena, offset.warm_checkpoint_batch_ready);
+    inference.request_start_mode = arena_pointer<std::uint32_t>(arena, offset.request_start_mode);
+    inference.admitted_warm_checkpoint_generations =
+        arena_pointer<std::uint64_t>(arena, offset.admitted_warm_checkpoint_generations);
     inference.warm_checkpoint_field_attached =
         arena_pointer<std::uint8_t>(arena, offset.warm_checkpoint_field_attached);
     inference.warm_checkpoint_field_vectors =
@@ -5752,8 +6168,10 @@ struct Gfn2CudaExecutionCache::Impl {
     const std::uint32_t requested = candidate.host.key.flags;
     std::int64_t coordinates = 0;
     std::int64_t point_coordinates = 0;
+    std::int64_t lattice_elements = 0;
     if (!checked_elements(atoms, 3, coordinates) ||
-        !checked_elements(points, 3, point_coordinates)) {
+        !checked_elements(points, 3, point_coordinates) ||
+        !checked_elements(batch, 9, lattice_elements)) {
       error = "public CUDA result staging extent overflows int64_t";
       return XTBLOOM_STATUS_ALLOCATION_FAILED;
     }
@@ -5779,6 +6197,8 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t system_statuses = 0u;
       std::size_t control = 0u;
       std::size_t warm_checkpoint_ready = 0u;
+      std::size_t lattice_cells = 0u;
+      std::size_t periodic_axes = 0u;
     } host_offset;
     struct DeviceOffsets {
       std::size_t energies = 0u;
@@ -5798,6 +6218,8 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t expected_spin_channels = 0u;
       std::size_t expected_point_offsets = 0u;
       std::size_t expected_response_offsets = 0u;
+      std::size_t lattice_cells = 0u;
+      std::size_t periodic_axes = 0u;
     } device_offset;
     ArenaLayout host_layout;
     host_offset.energies = host_layout.append<double>(energy_requested ? batch : 0);
@@ -5811,6 +6233,8 @@ struct Gfn2CudaExecutionCache::Impl {
     host_offset.system_statuses = host_layout.append<xtbloom_status_t>(batch);
     host_offset.control = host_layout.append<Gfn2PublicResultBridgeControl>(1);
     host_offset.warm_checkpoint_ready = host_layout.append<std::uint32_t>(1);
+    host_offset.lattice_cells = host_layout.append<double>(lattice_elements);
+    host_offset.periodic_axes = host_layout.append<std::int32_t>(batch);
 
     ArenaLayout device_layout;
     device_offset.energies = device_layout.append<double>(energy_requested ? batch : 0);
@@ -5831,6 +6255,8 @@ struct Gfn2CudaExecutionCache::Impl {
     device_offset.expected_spin_channels = device_layout.append<std::int32_t>(batch);
     device_offset.expected_point_offsets = device_layout.append<std::int64_t>(batch + 1);
     device_offset.expected_response_offsets = device_layout.append<std::int64_t>(batch + 1);
+    device_offset.lattice_cells = device_layout.append<double>(lattice_elements);
+    device_offset.periodic_axes = device_layout.append<std::int32_t>(batch);
     if (!host_layout.valid() || !device_layout.valid()) {
       error = "public CUDA result staging layout overflows size_t";
       return XTBLOOM_STATUS_ALLOCATION_FAILED;
@@ -5893,6 +6319,11 @@ struct Gfn2CudaExecutionCache::Impl {
         arena_pointer<std::int64_t>(device_arena, device_offset.expected_point_offsets);
     state.expected_response_offsets =
         arena_pointer<std::int64_t>(device_arena, device_offset.expected_response_offsets);
+    state.staged_lattice_cells = arena_pointer<double>(device_arena, device_offset.lattice_cells);
+    state.staged_periodic_axes =
+        arena_pointer<std::int32_t>(device_arena, device_offset.periodic_axes);
+    state.host_lattice_cells = arena_pointer<double>(host_arena, host_offset.lattice_cells);
+    state.host_periodic_axes = arena_pointer<std::int32_t>(host_arena, host_offset.periodic_axes);
     state.device_staging = {
         arena_pointer_if<double>(device_arena, device_offset.energies,
                                  energy_requested ? batch : 0),
@@ -6098,13 +6529,11 @@ struct Gfn2CudaExecutionCache::Impl {
     return XTBLOOM_STATUS_SUCCESS;
   }
 
-  xtbloom_status_t build_candidate(TopologyKey&& key, std::vector<double>&& positions,
-                                   std::vector<double>&& point_positions,
-                                   std::vector<double>&& point_values,
-                                   std::vector<double>&& point_gammas,
-                                   std::vector<double>&& periodic_shifts,
-                                   std::vector<double>&& periodic_response,
-                                   std::unique_ptr<Prepared>& output, std::string& error) {
+  xtbloom_status_t build_candidate(
+      TopologyKey&& key, std::vector<double>&& positions, std::vector<double>&& point_positions,
+      std::vector<double>&& point_values, std::vector<double>&& point_gammas,
+      std::vector<double>&& periodic_shifts, std::vector<double>&& periodic_response,
+      std::unique_ptr<Prepared>& output, std::string& error, bool build_request_graph = false) {
     auto candidate = std::make_unique<Prepared>(stream);
     const std::uint64_t fingerprint = key.fingerprint();
     std::uint64_t token = hash_mix(fingerprint ^ next_plan_token++ ^ 0x112112112ULL);
@@ -6205,12 +6634,14 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     cuda_status =
         candidate->iteration_arena.allocate(candidate->iteration_requirements.total_bytes);
-    if (cuda_status == cudaSuccess) {
-      cuda_status = candidate->provider_host_workspace.allocate(
-          eigensolver_requirements.provider.solver_host_workspace_bytes);
-    }
     if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA SCC iteration/provider workspace allocation", cuda_status);
+      error = cuda_error_message("CUDA SCC iteration arena allocation", cuda_status);
+      return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    }
+    cuda_status = candidate->provider_host_workspace.allocate(
+        eigensolver_requirements.provider.solver_host_workspace_bytes);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA SCC provider workspace allocation", cuda_status);
       return XTBLOOM_STATUS_ALLOCATION_FAILED;
     }
     const auto bind_diagnostic = bind_gfn2_scc_iteration_arena_cuda(
@@ -6272,6 +6703,12 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     candidate->plan_seed.eigensolver_batch = candidate->eigensolver_binding.batch;
     candidate->plan_seed.eigensolver_provider = candidate->eigensolver_binding.provider;
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+    if (consume_execution_test_fault(Gfn2CudaExecutionTestFault::kSccProviderUncapturedFallback)) {
+      candidate->plan_seed.eigensolver_provider.capture_mode =
+          Gfn2SccIterationProviderCaptureMode::kUncapturedSegmentRequired;
+    }
+#endif
     candidate->plan_seed.overlap_cache = candidate->eigensolver_binding.cache;
     candidate->plan_seed.eigensolver_options = candidate->eigensolver_binding.options;
 
@@ -6391,6 +6828,10 @@ struct Gfn2CudaExecutionCache::Impl {
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     candidate->submitted = true;
+    if (build_request_graph) {
+      status = build_request_execution_graph(*candidate, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
     output = std::move(candidate);
     return XTBLOOM_STATUS_SUCCESS;
   }
@@ -6401,8 +6842,23 @@ struct Gfn2CudaExecutionCache::Impl {
                                                     std::string& error) {
     std::int64_t coordinates = 0;
     std::int64_t point_coordinates = 0;
+    std::int64_t cell_elements = 0;
+    std::int64_t dipole_elements = 0;
+    const bool lattice_active =
+        batch.struct_size >= XTBLOOM_BATCH_V4_SIZE &&
+        (batch.cell_matrices.data != nullptr || batch.cell_matrices.size_bytes != 0u ||
+         batch.periodic_axes.data != nullptr || batch.periodic_axes.size_bytes != 0u);
+    const bool interaction_suffix_present = batch.struct_size >= XTBLOOM_BATCH_V3_SIZE;
+    const bool interaction_descriptors_active =
+        interaction_suffix_present && (batch.interaction_descriptors.data != nullptr ||
+                                       batch.interaction_descriptors.size_bytes != 0u);
+    const bool interaction_payload_active =
+        interaction_suffix_present &&
+        (batch.interaction_payload.data != nullptr || batch.interaction_payload.size_bytes != 0u);
     if (!checked_elements(batch.total_atoms, 3, coordinates) ||
-        !checked_elements(batch.total_point_charges, 3, point_coordinates)) {
+        !checked_elements(batch.total_point_charges, 3, point_coordinates) ||
+        !checked_elements(batch.batch_size, 3, dipole_elements) ||
+        (lattice_active && !checked_elements(batch.batch_size, 9, cell_elements))) {
       error = "CUDA public descriptor coordinate extent overflows int64_t";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
@@ -6489,21 +6945,37 @@ struct Gfn2CudaExecutionCache::Impl {
                             response_active ? batch.total_charge_response_elements : 0,
                             sizeof(double), alignof(double));
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
-    const bool interaction_suffix = batch.struct_size >= XTBLOOM_BATCH_V3_SIZE;
-    const std::int64_t interaction_count = interaction_suffix ? batch.total_interactions : 0;
-    const xtbloom_const_buffer_t absent_interaction_buffer{};
-    const auto& interaction_descriptors =
-        interaction_suffix ? batch.interaction_descriptors : absent_interaction_buffer;
-    const auto& interaction_payload =
-        interaction_suffix ? batch.interaction_payload : absent_interaction_buffer;
-    status = validate_const("interaction_descriptors", interaction_descriptors, interaction_count,
-                            sizeof(xtbloom_interaction_t), alignof(xtbloom_interaction_t));
+    const xtbloom_const_buffer_t absent_interaction{};
+    const xtbloom_const_buffer_t& interaction_descriptor_buffer =
+        interaction_descriptors_active ? batch.interaction_descriptors : absent_interaction;
+    const xtbloom_const_buffer_t& interaction_payload_buffer =
+        interaction_payload_active ? batch.interaction_payload : absent_interaction;
+    /* HOST descriptors are a public byte store and are decoded with memcpy;
+     * only device-resident descriptors require natural alignment for typed
+     * device loads. */
+    const std::size_t interaction_descriptor_alignment =
+        interaction_descriptor_buffer.memory_space == XTBLOOM_MEMORY_HOST
+            ? 1u
+            : alignof(xtbloom_interaction_t);
+    status = validate_const("interaction_descriptors", interaction_descriptor_buffer,
+                            interaction_descriptors_active ? batch.total_interactions : 0,
+                            sizeof(xtbloom_interaction_t), interaction_descriptor_alignment);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
-    CudaValidatedConstBuffer payload_validated{};
     status = validate_cuda_const_buffer(
-        device_id, "interaction_payload", interaction_payload,
-        interaction_count == 0 ? 0u : interaction_payload.size_bytes, alignof(std::int32_t),
-        CudaManagedMemoryPolicy::kReject, payload_validated, error);
+        device_id, "interaction_payload", interaction_payload_buffer,
+        interaction_payload_active ? interaction_payload_buffer.size_bytes : 0u,
+        alignof(std::int32_t), CudaManagedMemoryPolicy::kReject, validated_const, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    const xtbloom_const_buffer_t absent_lattice{};
+    const xtbloom_const_buffer_t& cell_buffer =
+        lattice_active ? batch.cell_matrices : absent_lattice;
+    const xtbloom_const_buffer_t& axes_buffer =
+        lattice_active ? batch.periodic_axes : absent_lattice;
+    status = validate_const("cell_matrices", cell_buffer, lattice_active ? cell_elements : 0,
+                            sizeof(double), alignof(double));
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = validate_const("periodic_axes", axes_buffer, lattice_active ? batch.batch_size : 0,
+                            sizeof(std::int32_t), alignof(std::int32_t));
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     if (result == nullptr) return XTBLOOM_STATUS_SUCCESS;
 
@@ -6532,12 +7004,12 @@ struct Gfn2CudaExecutionCache::Impl {
                              alignof(double));
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     const xtbloom_buffer_t absent_output{};
-    const auto& dipole_output = result->struct_size >= XTBLOOM_BATCH_RESULT_V2_SIZE
-                                    ? result->dipole_moments
-                                    : absent_output;
-    status = validate_output("dipole_moments", dipole_output,
-                             dipoles_requested ? 3 * batch.batch_size : 0, sizeof(double),
-                             alignof(double));
+    const xtbloom_buffer_t& dipole_buffer = result->struct_size >= XTBLOOM_BATCH_RESULT_V2_SIZE
+                                                ? result->dipole_moments
+                                                : absent_output;
+    status =
+        validate_output("dipole_moments", dipole_buffer, dipoles_requested ? dipole_elements : 0,
+                        sizeof(double), alignof(double));
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = validate_output("scc_iterations", result->scc_iterations, batch.batch_size,
                              sizeof(std::int32_t), alignof(std::int32_t));
@@ -6547,6 +7019,151 @@ struct Gfn2CudaExecutionCache::Impl {
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     return validate_output("per_system_status", result->per_system_status, batch.batch_size,
                            sizeof(xtbloom_status_t), alignof(xtbloom_status_t));
+  }
+
+  xtbloom_status_t validate_native_lattice_request_sync(const xtbloom_batch_t& batch,
+                                                        std::string& error) {
+    if (native_lattice_staging_poisoned) {
+      error = "CUDA native-cell staging is poisoned by an earlier stream-settlement failure";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    if (!native_lattice_active(batch)) {
+      return XTBLOOM_STATUS_SUCCESS;
+    }
+    if (native_lattice_staging_pending) {
+      const cudaError_t settle_status = cudaStreamSynchronize(stream);
+      if (settle_status != cudaSuccess) {
+        native_lattice_staging_poisoned = true;
+        error = cuda_error_message("CUDA native-cell staging settlement", settle_status);
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+      native_lattice_staging_pending = false;
+    }
+
+    std::int64_t cell_elements = 0;
+    if (!checked_elements(batch.batch_size, 9, cell_elements)) {
+      error = "CUDA native-cell extent overflows int64_t";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    std::size_t cell_bytes = 0u;
+    std::size_t axes_bytes = 0u;
+    if (!checked_bytes(cell_elements, sizeof(double), cell_bytes) ||
+        !checked_bytes(batch.batch_size, sizeof(std::int32_t), axes_bytes)) {
+      error = "CUDA native-cell extent overflows size_t";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+
+    const bool cells_host = batch.cell_matrices.memory_space == XTBLOOM_MEMORY_HOST;
+    const bool axes_host = batch.periodic_axes.memory_space == XTBLOOM_MEMORY_HOST;
+    if (cells_host && axes_host) {
+      return validate_host_native_lattice_request(batch, error);
+    }
+
+    if (native_lattice_event.get() == nullptr) {
+      const cudaError_t event_status = native_lattice_event.create(cudaEventDisableTiming);
+      if (event_status != cudaSuccess) {
+        error = cuda_error_message("CUDA native-cell validation event creation", event_status);
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+    }
+
+    ArenaLayout layout;
+    const std::size_t cell_offset = layout.append<double>(cell_elements);
+    const std::size_t axes_offset = layout.append<std::int32_t>(batch.batch_size);
+    if (!layout.valid()) {
+      error = "CUDA native-cell validation staging layout overflows size_t";
+      return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    }
+    if (native_lattice_host_arena.bytes() < layout.bytes()) {
+      bool inject_allocation_failure = false;
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+      inject_allocation_failure =
+          consume_execution_test_fault(Gfn2CudaExecutionTestFault::kNativeLatticePinnedAllocation);
+      if (inject_allocation_failure) {
+        g_native_lattice_allocation_faults.fetch_add(1u, std::memory_order_relaxed);
+      }
+#endif
+      const cudaError_t allocation_status =
+          native_lattice_host_arena.allocate(layout.bytes(), inject_allocation_failure);
+      if (allocation_status != cudaSuccess) {
+        error =
+            cuda_error_message("CUDA native-cell validation staging allocation", allocation_status);
+        return XTBLOOM_STATUS_ALLOCATION_FAILED;
+      }
+    }
+    void* const arena = native_lattice_host_arena.get();
+    auto* const staged_cells = arena_pointer<double>(arena, cell_offset);
+    auto* const staged_axes = arena_pointer<std::int32_t>(arena, axes_offset);
+    if (cells_host) {
+      std::memcpy(staged_cells, batch.cell_matrices.data, cell_bytes);
+    } else {
+      const cudaError_t copy_status = cudaMemcpyAsync(staged_cells, batch.cell_matrices.data,
+                                                      cell_bytes, cudaMemcpyDeviceToHost, stream);
+      if (copy_status != cudaSuccess) {
+        error = cuda_error_message("CUDA cell-matrix validation copy", copy_status);
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+      native_lattice_staging_pending = true;
+    }
+    if (axes_host) {
+      std::memcpy(staged_axes, batch.periodic_axes.data, axes_bytes);
+    } else {
+      const cudaError_t copy_status = cudaMemcpyAsync(staged_axes, batch.periodic_axes.data,
+                                                      axes_bytes, cudaMemcpyDeviceToHost, stream);
+      if (copy_status != cudaSuccess) {
+        error = cuda_error_message("CUDA periodic-axis validation copy", copy_status);
+        if (native_lattice_staging_pending) {
+          const cudaError_t settle_status = cudaStreamSynchronize(stream);
+          if (settle_status == cudaSuccess) {
+            native_lattice_staging_pending = false;
+          } else {
+            native_lattice_staging_poisoned = true;
+            error += "; additionally, " +
+                     cuda_error_message("CUDA native-cell staging settlement", settle_status);
+          }
+        }
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+      native_lattice_staging_pending = true;
+    }
+    const cudaError_t record_status = cudaEventRecord(native_lattice_event.get(), stream);
+    if (record_status != cudaSuccess) {
+      error = cuda_error_message("CUDA native-cell validation event", record_status);
+      if (native_lattice_staging_pending) {
+        const cudaError_t settle_status = cudaStreamSynchronize(stream);
+        if (settle_status == cudaSuccess) {
+          native_lattice_staging_pending = false;
+        } else {
+          native_lattice_staging_poisoned = true;
+          error += "; additionally, " +
+                   cuda_error_message("CUDA native-cell staging settlement", settle_status);
+        }
+      }
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    cudaError_t wait_status = cudaSuccess;
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+    if (consume_execution_test_fault(Gfn2CudaExecutionTestFault::kNativeLatticeCompletionWait)) {
+      g_native_lattice_completion_faults.fetch_add(1u, std::memory_order_relaxed);
+      wait_status = cudaErrorUnknown;
+    } else
+#endif
+    {
+      wait_status = cudaEventSynchronize(native_lattice_event.get());
+    }
+    if (wait_status != cudaSuccess) {
+      native_lattice_staging_poisoned = true;
+      error = cuda_error_message("CUDA native-cell validation completion", wait_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    native_lattice_staging_pending = false;
+
+    xtbloom_batch_t staged_batch{};
+    std::memcpy(&staged_batch, &batch,
+                std::min<std::size_t>(batch.struct_size, sizeof(staged_batch)));
+    staged_batch.cell_matrices = {staged_cells, cell_bytes, XTBLOOM_MEMORY_HOST, 0u};
+    staged_batch.periodic_axes = {staged_axes, axes_bytes, XTBLOOM_MEMORY_HOST, 0u};
+    return validate_host_native_lattice_request(staged_batch, error);
   }
 
   xtbloom_status_t reset_request_topology_error_locked(Prepared& current, std::string& error) {
@@ -6679,11 +7296,65 @@ struct Gfn2CudaExecutionCache::Impl {
     return XTBLOOM_STATUS_SUCCESS;
   }
 
-  xtbloom_status_t refresh_numerical_locked(Prepared& current,
-                                            const Gfn2CudaNumericalInputView& input,
-                                            bool strict_warm,
-                                            bool allow_blocking_interaction_readback,
-                                            std::string& error) {
+  xtbloom_status_t enqueue_native_lattice_validation_locked(Prepared& current,
+                                                            const xtbloom_batch_t& batch,
+                                                            std::string& error) {
+    if (batch.struct_size < XTBLOOM_BATCH_V4_SIZE ||
+        (batch.cell_matrices.data == nullptr && batch.cell_matrices.size_bytes == 0u &&
+         batch.periodic_axes.data == nullptr && batch.periodic_axes.size_bytes == 0u)) {
+      return XTBLOOM_STATUS_SUCCESS;
+    }
+    const auto& state = current.public_result;
+    if (state.staged_lattice_cells == nullptr || state.staged_periodic_axes == nullptr ||
+        state.host_lattice_cells == nullptr || state.host_periodic_axes == nullptr) {
+      error = "CUDA fixed-plan lattice validation storage is not initialized";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    const auto stage = [&](const xtbloom_const_buffer_t& source, void* host_stage,
+                           void* device_stage, std::size_t bytes) -> cudaError_t {
+      if (source.memory_space == XTBLOOM_MEMORY_HOST) {
+        std::memcpy(host_stage, source.data, bytes);
+        return cudaMemcpyAsync(device_stage, host_stage, bytes, cudaMemcpyHostToDevice, stream);
+      }
+      return cudaMemcpyAsync(device_stage, source.data, bytes, cudaMemcpyDeviceToDevice, stream);
+    };
+    const std::size_t cell_bytes = static_cast<std::size_t>(batch.batch_size) * 9u * sizeof(double);
+    const std::size_t axes_bytes =
+        static_cast<std::size_t>(batch.batch_size) * sizeof(std::int32_t);
+    cudaError_t cuda_status = stage(batch.cell_matrices, state.host_lattice_cells,
+                                    state.staged_lattice_cells, cell_bytes);
+    if (cuda_status == cudaSuccess) {
+      cuda_status = stage(batch.periodic_axes, state.host_periodic_axes, state.staged_periodic_axes,
+                          axes_bytes);
+    }
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA fixed-plan lattice staging", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    FixedTopologyComparisonDeviceBinding binding{};
+    binding.cell_matrices = state.staged_lattice_cells;
+    binding.periodic_axes = state.staged_periodic_axes;
+    binding.lattice_systems = batch.batch_size;
+    binding.request_error = state.request_topology_error;
+    cuda_status = validate_lattice_request_async(binding, stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA fixed-plan lattice validation submission", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
+                                                  : XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    current.submitted = true;
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  xtbloom_status_t stage_numerical_ingress_locked(Prepared& current,
+                                                  const Gfn2CudaNumericalInputView& input,
+                                                  bool strict_warm,
+                                                  bool allow_blocking_interaction_readback,
+                                                  bool& host_upload_enqueued, std::string& error) {
+    host_upload_enqueued = false;
     if (!current.numerical.ready) {
       error = "CUDA GFN2 numerical refresh requires a prepared fixed topology";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -7106,7 +7777,6 @@ struct Gfn2CudaExecutionCache::Impl {
     if (!absent_mask && input.requested_mask.memory_space == XTBLOOM_MEMORY_HOST) {
       std::memcpy(numerical.owned_host_requested, input.requested_mask.data, mask_bytes);
     }
-    bool host_upload_enqueued = false;
     const auto seal_host_uploads = [&]() -> cudaError_t {
       if (!host_upload_enqueued) return cudaSuccess;
       auto& completion = current.numerical_host_upload_completion;
@@ -7340,15 +8010,34 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     current.submitted = true;
 
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  xtbloom_status_t execute_numerical_body_locked(Prepared& current, cudaStream_t execution_stream,
+                                                 std::string& error) {
+    if (!current.numerical.ready) {
+      error = "CUDA GFN2 numerical refresh requires a prepared fixed topology";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    auto& numerical = current.numerical;
+    auto& device = numerical.device;
+    auto& preprocessing = numerical.preprocessing;
+    cudaError_t cuda_status = cudaSetDevice(device_id);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("cudaSetDevice for numerical refresh", cuda_status);
+      return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
+    }
+
     cuda_status = reset_gfn2_electric_field_device_errors_cuda(
-        device.batch_size, device.field_system_errors, device.field_plan_error, stream);
+        device.batch_size, device.field_system_errors, device.field_plan_error, execution_stream);
     if (cuda_status == cudaSuccess) {
       const Gfn2ElectricFieldDeviceInput field_input{
           device.candidate_field_vectors, 3 * device.batch_size, device.candidate_positions,
           3 * device.total_atoms, device.plan_token};
       cuda_status = refresh_gfn2_electric_field_potentials_cuda(
           numerical.field_batch, field_input, numerical.field_candidate_potentials,
-          device.field_system_errors, device.field_plan_error, stream);
+          device.field_system_errors, device.field_plan_error, execution_stream);
     }
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA electric-field potential refresh", cuda_status);
@@ -7356,7 +8045,8 @@ struct Gfn2CudaExecutionCache::Impl {
                                                   : XTBLOOM_STATUS_INTERNAL_ERROR;
     }
 
-    const auto preprocessing_launch = compose_gfn2_preprocessing_epoch_cuda(preprocessing, stream);
+    const auto preprocessing_launch =
+        compose_gfn2_preprocessing_epoch_cuda(preprocessing, execution_stream);
     if (!preprocessing_launch.success()) {
       error = "CUDA numerical preprocessing composer rejected the runtime binding";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -7365,7 +8055,7 @@ struct Gfn2CudaExecutionCache::Impl {
     if (device.d4_enabled != 0u) {
       cuda_status = reset_gfn2_d4_device_errors_cuda(
           device.batch_size, const_cast<std::uint32_t*>(device.d4_system_errors),
-          const_cast<std::uint32_t*>(device.d4_device_error), stream);
+          const_cast<std::uint32_t*>(device.d4_device_error), execution_stream);
       if (cuda_status == cudaSuccess) {
         /* compose_gfn2_preprocessing_epoch_cuda commits the physical pair
          * superset earlier on this stream. The D4 refresh therefore observes
@@ -7374,7 +8064,7 @@ struct Gfn2CudaExecutionCache::Impl {
         cuda_status = update_gfn2_d4_pairlist_cache_cuda(
             current.plan_seed.d4_batch, current.plan_seed.d4_parameters,
             preprocessing.geometry_epoch, numerical.d4_refresh_cache, numerical.d4_workspace,
-            const_cast<std::uint32_t*>(device.d4_device_error), stream);
+            const_cast<std::uint32_t*>(device.d4_device_error), execution_stream);
       }
       if (cuda_status != cudaSuccess) {
         error = cuda_error_message("CUDA D4 numerical refresh", cuda_status);
@@ -7384,9 +8074,9 @@ struct Gfn2CudaExecutionCache::Impl {
     if (device.point_enabled != 0u) {
       cuda_status = reset_gfn2_external_point_charge_scc_errors_cuda(
           device.batch_size, const_cast<std::uint32_t*>(device.point_system_errors),
-          const_cast<std::uint32_t*>(device.point_plan_error), stream);
+          const_cast<std::uint32_t*>(device.point_plan_error), execution_stream);
       if (cuda_status == cudaSuccess) {
-        initialize_gfn2_refresh_sequence_kernel<<<1, 1, 0, stream>>>(
+        initialize_gfn2_refresh_sequence_kernel<<<1, 1, 0, execution_stream>>>(
             const_cast<std::uint32_t*>(numerical.point_activity.sequence_active));
         cuda_status = cudaPeekAtLastError();
       }
@@ -7395,7 +8085,7 @@ struct Gfn2CudaExecutionCache::Impl {
             numerical.point_batch, numerical.point_activity, numerical.point_candidate,
             kInitialGeometryGeneration, numerical.point_workspace,
             const_cast<std::uint32_t*>(device.point_system_errors),
-            const_cast<std::uint32_t*>(device.point_plan_error), stream);
+            const_cast<std::uint32_t*>(device.point_plan_error), execution_stream);
       }
       if (cuda_status != cudaSuccess) {
         error = cuda_error_message("CUDA explicit-point-charge numerical refresh", cuda_status);
@@ -7405,16 +8095,17 @@ struct Gfn2CudaExecutionCache::Impl {
     if (device.periodic_enabled != 0u) {
       cuda_status = cudaMemsetAsync(
           device.periodic_system_errors, 0,
-          static_cast<std::size_t>(device.batch_size) * sizeof(std::uint32_t), stream);
+          static_cast<std::size_t>(device.batch_size) * sizeof(std::uint32_t), execution_stream);
       if (cuda_status == cudaSuccess) {
-        cuda_status = cudaMemsetAsync(device.periodic_plan_error, 0, sizeof(std::uint32_t), stream);
+        cuda_status =
+            cudaMemsetAsync(device.periodic_plan_error, 0, sizeof(std::uint32_t), execution_stream);
       }
       if (cuda_status != cudaSuccess) {
         error = cuda_error_message("CUDA periodic refresh diagnostic reset", cuda_status);
         return XTBLOOM_STATUS_INTERNAL_ERROR;
       }
       validate_gfn2_periodic_refresh_kernel<<<static_cast<unsigned int>(device.batch_size), 256, 0,
-                                              stream>>>(device);
+                                              execution_stream>>>(device);
       cuda_status = cudaPeekAtLastError();
       if (cuda_status != cudaSuccess) {
         error = cuda_error_message("CUDA periodic numerical validation", cuda_status);
@@ -7423,7 +8114,7 @@ struct Gfn2CudaExecutionCache::Impl {
     }
 
     gate_gfn2_numerical_refresh_kernel<<<static_cast<unsigned int>(device.batch_size), 1, 0,
-                                         stream>>>(device);
+                                         execution_stream>>>(device);
     cuda_status = cudaPeekAtLastError();
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA numerical pre-factor publication gate", cuda_status);
@@ -7433,7 +8124,7 @@ struct Gfn2CudaExecutionCache::Impl {
         current.eigensolver_setup_arena.get(), current.eigensolver_setup_arena.bytes(),
         current.eigensolver_binding, preprocessing.output.overlap,
         preprocessing.output.overlap_elements, preprocessing.geometry_epoch,
-        current.public_result.request_topology_error, stream);
+        current.public_result.request_topology_error, execution_stream);
     if (!factor.success()) {
       error = setup_error_message("CUDA numerical overlap refactor", factor.status,
                                   static_cast<std::uint32_t>(factor.error),
@@ -7443,7 +8134,7 @@ struct Gfn2CudaExecutionCache::Impl {
     device.factor_generations = current.eigensolver_binding.cache.geometry_generations;
     device.factor_statuses = current.eigensolver_binding.cache.factor_statuses;
     commit_gfn2_numerical_refresh_kernel<<<static_cast<unsigned int>(device.batch_size), 256, 0,
-                                           stream>>>(device);
+                                           execution_stream>>>(device);
     cuda_status = cudaPeekAtLastError();
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA numerical final publication", cuda_status);
@@ -7451,6 +8142,464 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     current.submitted = true;
     error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  xtbloom_status_t enqueue_inference_tail_locked(Prepared& current, bool capture_bounded_scc,
+                                                 cudaStream_t execution_stream,
+                                                 std::string& error) {
+    auto& inference = current.inference;
+    cudaError_t cuda_status = cudaSetDevice(device_id);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("cudaSetDevice for CUDA GFN2 inference", cuda_status);
+      return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
+    }
+
+    /* The synchronous path launches the production device-resident early-stop
+     * Graph. The asynchronous request Graph instead captures the bounded
+     * iteration DAG at setup. Nesting a device-launched/tail-launched SCC
+     * Graph inside a conditional Graph did not provide a reliable completion
+     * boundary on CUDA 12.9/Blackwell; the bounded body keeps one prebuilt
+     * request-Graph launch per call and introduces no steady-state allocation,
+     * host polling, transfer, or synchronization. */
+    const Gfn2SccLoopLaunchResult loop =
+        capture_bounded_scc ? launch_gfn2_restricted_scc_loop_cuda(
+                                  current.scc_binding, inference.epoch_consumer, execution_stream)
+                            : current.scc_loop.launch(execution_stream);
+    if (!loop.success()) {
+      std::ostringstream message;
+      message << "CUDA SCC loop submission failed: mode="
+              << static_cast<std::uint32_t>(loop.execution_mode)
+              << " status=" << static_cast<std::uint32_t>(loop.iteration.status)
+              << " stage=" << static_cast<std::uint32_t>(loop.iteration.stage)
+              << " cuda=" << static_cast<int>(loop.iteration.cuda_status);
+      error = message.str();
+      if (loop.iteration.status == Gfn2SccIterationLaunchStatus::kInvalidBinding) {
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      if (loop.iteration.status == Gfn2SccIterationLaunchStatus::kCublasError ||
+          loop.iteration.status == Gfn2SccIterationLaunchStatus::kCusolverError) {
+        return XTBLOOM_STATUS_EIGENSOLVER_FAILED;
+      }
+      if (loop.iteration.status == Gfn2SccIterationLaunchStatus::kProviderCaptureUnsupported) {
+        return XTBLOOM_STATUS_NOT_SUPPORTED;
+      }
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    cuda_status = evaluate_gfn2_terminal_classical_energy_cuda(
+        inference.terminal_plan, inference.terminal_activity, inference.terminal_results,
+        inference.terminal_workspace, inference.terminal_diagnostics, execution_stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA terminal classical energy", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
+                                                  : XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    if (current.energy_force.stationary_projection.enabled == 1u) {
+      cuda_status = project_gfn2_stationary_force_state_cuda(
+          current.energy_force.stationary_projection, execution_stream);
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA stationary force projection", cuda_status);
+        return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
+                                                    : XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+    }
+
+    cuda_status = execute_gfn2_energy_force_cuda(
+        current.energy_force.plan, current.energy_force.input, current.energy_force.results,
+        current.energy_force.intermediates, current.energy_force.workspace,
+        current.energy_force.diagnostics, inference.epoch_consumer, execution_stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA terminal energy/force execution", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
+                                                  : XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    cuda_status = publish_gfn2_inference_results_cuda(
+        inference.publication_plan, inference.publication_input, inference.publication_results,
+        inference.publication_workspace, inference.publication_diagnostics, execution_stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA internal inference publication", cuda_status);
+      return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
+                                                  : XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    initialize_gfn2_warm_checkpoint_batch_if_admitted_kernel<<<1, 1, 0, execution_stream>>>(
+        inference.warm_checkpoint_batch_ready,
+        {current.public_result.request_topology_error, 1, current.host.plan_token});
+    cuda_status = cudaPeekAtLastError();
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA warm-checkpoint aggregate initialization", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    const WarmCheckpointPublicationDeviceBinding checkpoint{
+        current.host.basis.batch_size,
+        inference.epoch_consumer.epoch,
+        inference.epoch_consumer.eligible_mask,
+        inference.epoch_consumer.committed_generations,
+        inference.publication_diagnostics.plan_error,
+        inference.publication_results.system_statuses,
+        inference.publication_results.converged,
+        inference.warm_checkpoint_generations,
+        inference.warm_checkpoint_batch_ready,
+        current.numerical.device.committed_field_attached,
+        current.numerical.device.committed_field_vectors,
+        inference.warm_checkpoint_field_attached,
+        inference.warm_checkpoint_field_vectors,
+        current.public_result.request_topology_error,
+    };
+    constexpr int kThreads = 256;
+    const auto blocks = static_cast<unsigned int>(
+        (static_cast<std::uint64_t>(checkpoint.batch_size) + kThreads - 1u) / kThreads);
+    publish_gfn2_warm_checkpoint_generation_kernel<<<blocks, kThreads, 0, execution_stream>>>(
+        checkpoint);
+    cuda_status = cudaPeekAtLastError();
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA warm-checkpoint publication", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    current.submitted = true;
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  xtbloom_status_t execute_inference_body_locked(Prepared& current, std::string& error) {
+    return enqueue_inference_tail_locked(current, false, stream, error);
+  }
+
+  xtbloom_status_t build_request_execution_graph(Prepared& current, std::string& error) {
+    if (!current.public_result.ready || current.public_result.request_topology_error == nullptr ||
+        current.inference.warm_checkpoint_generations == nullptr ||
+        current.inference.warm_checkpoint_batch_ready == nullptr ||
+        current.inference.request_start_mode == nullptr ||
+        current.inference.admitted_warm_checkpoint_generations == nullptr) {
+      error = "CUDA asynchronous request graph has an incomplete fixed binding";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    /* A bounded SCC fallback remains a valid synchronous runtime. Async
+     * enqueue reports that narrower capability gap without preventing plan
+     * creation or synchronous plan execution on older CUDA/provider stacks. */
+    if (!current.scc_loop.conditional_graph_ready()) {
+      error.clear();
+      return XTBLOOM_STATUS_SUCCESS;
+    }
+
+    auto& owner = current.request_execution_graph;
+    if (owner.ready()) {
+      error.clear();
+      return XTBLOOM_STATUS_SUCCESS;
+    }
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+    g_request_graph_build_attempts.fetch_add(1u, std::memory_order_relaxed);
+    if (consume_execution_test_fault(Gfn2CudaExecutionTestFault::kRequestGraphCreate)) {
+      error = "injected CUDA asynchronous request graph creation failure";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+#endif
+    cudaError_t cuda_status = owner.create();
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA asynchronous request graph creation", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    cudaStream_t capture_stream = nullptr;
+    cuda_status = cudaStreamCreateWithFlags(&capture_stream, cudaStreamNonBlocking);
+    if (cuda_status != cudaSuccess) {
+      owner.reset();
+      error = cuda_error_message("CUDA asynchronous request capture stream creation", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    bool capture_active = false;
+    const auto finish_capture = [&]() noexcept {
+      if (capture_active) {
+        cudaGraph_t ended = nullptr;
+        (void)cudaStreamEndCapture(capture_stream, &ended);
+      }
+      (void)cudaStreamDestroy(capture_stream);
+      owner.reset();
+    };
+
+    cuda_status = cudaStreamBeginCaptureToGraph(capture_stream, owner.graph(), nullptr, nullptr, 0u,
+                                                cudaStreamCaptureModeThreadLocal);
+    if (cuda_status != cudaSuccess) {
+      finish_capture();
+      error = cuda_error_message("CUDA asynchronous request root capture", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    capture_active = true;
+
+    const RequestAdmissionDeviceBinding admission_binding{
+        current.host.basis.batch_size,
+        current.public_result.request_topology_error,
+        current.inference.request_start_mode,
+        current.inference.warm_checkpoint_generations,
+        current.inference.warm_checkpoint_batch_ready,
+        current.inference.admitted_warm_checkpoint_generations,
+        owner.execution_condition(),
+        owner.start_mode_condition(),
+    };
+    constexpr int kAdmissionThreads = 256;
+    const auto admission_blocks = static_cast<unsigned int>(
+        (static_cast<std::uint64_t>(admission_binding.batch_size) + kAdmissionThreads - 1u) /
+        kAdmissionThreads);
+    consume_request_checkpoint_kernel<<<admission_blocks, kAdmissionThreads, 0, capture_stream>>>(
+        admission_binding);
+    cuda_status = cudaPeekAtLastError();
+    if (cuda_status == cudaSuccess) {
+      set_request_execution_conditions_kernel<<<1, 1, 0, capture_stream>>>(admission_binding);
+      cuda_status = cudaPeekAtLastError();
+    }
+    if (cuda_status != cudaSuccess) {
+      finish_capture();
+      error = cuda_error_message("CUDA asynchronous request admission capture", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+    cudaGraph_t captured_graph = nullptr;
+    const cudaGraphNode_t* dependencies = nullptr;
+    std::size_t dependency_count = 0u;
+    cuda_status = cudaStreamGetCaptureInfo(capture_stream, &capture_status, nullptr,
+                                           &captured_graph, &dependencies, &dependency_count);
+    if (cuda_status != cudaSuccess || capture_status == cudaStreamCaptureStatusNone ||
+        captured_graph != owner.graph() || dependencies == nullptr || dependency_count != 1u) {
+      finish_capture();
+      error = "CUDA asynchronous request capture has no admission dependency frontier";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    const cudaGraphNode_t admission = dependencies[0];
+    cudaGraph_t body = nullptr;
+    cuda_status = owner.add_if_node(admission, body);
+    cudaGraph_t ended_graph = nullptr;
+    if (cuda_status == cudaSuccess) {
+      cuda_status = cudaStreamEndCapture(capture_stream, &ended_graph);
+      capture_active = false;
+    }
+    if (cuda_status != cudaSuccess || ended_graph != owner.graph() || body == nullptr) {
+      finish_capture();
+      error = cuda_error_message(
+          "CUDA asynchronous request conditional graph",
+          cuda_status == cudaSuccess ? cudaErrorStreamCaptureInvalidated : cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    /* Populate the accepted body once. Numerical refresh precedes a small
+     * nested start-mode switch; the expensive SCC/terminal/publication tail is
+     * shared by FRESH and WARM instead of being instantiated twice. */
+    cudaGraph_t* start_mode_branches = nullptr;
+    cuda_status = cudaStreamBeginCaptureToGraph(capture_stream, body, nullptr, nullptr, 0u,
+                                                cudaStreamCaptureModeThreadLocal);
+    if (cuda_status == cudaSuccess) {
+      capture_active = true;
+      std::string capture_error;
+      xtbloom_status_t status =
+          execute_numerical_body_locked(current, capture_stream, capture_error);
+      if (status == XTBLOOM_STATUS_SUCCESS) {
+        cudaStreamCaptureStatus body_capture_status = cudaStreamCaptureStatusNone;
+        cudaGraph_t body_capture_graph = nullptr;
+        const cudaGraphNode_t* body_dependencies = nullptr;
+        std::size_t body_dependency_count = 0u;
+        cuda_status = cudaStreamGetCaptureInfo(capture_stream, &body_capture_status, nullptr,
+                                               &body_capture_graph, &body_dependencies,
+                                               &body_dependency_count);
+        if (cuda_status != cudaSuccess || body_capture_status == cudaStreamCaptureStatusNone ||
+            body_capture_graph != body || body_dependencies == nullptr ||
+            body_dependency_count != 1u) {
+          status = XTBLOOM_STATUS_INTERNAL_ERROR;
+          capture_error = "CUDA request body has no numerical dependency frontier";
+        } else {
+          cudaGraphNode_t switch_node = nullptr;
+          cuda_status = owner.add_start_mode_switch(body, body_dependencies[0], start_mode_branches,
+                                                    switch_node);
+          if (cuda_status == cudaSuccess) {
+            cuda_status = cudaStreamUpdateCaptureDependencies(capture_stream, &switch_node, 1u,
+                                                              cudaStreamSetCaptureDependencies);
+          }
+          if (cuda_status != cudaSuccess || start_mode_branches == nullptr) {
+            status = XTBLOOM_STATUS_INTERNAL_ERROR;
+            capture_error = cuda_error_message("CUDA request start-mode switch", cuda_status);
+          }
+        }
+      }
+      if (status == XTBLOOM_STATUS_SUCCESS) {
+        status = enqueue_inference_tail_locked(current, true, capture_stream, capture_error);
+      }
+      if (status != XTBLOOM_STATUS_SUCCESS) {
+        finish_capture();
+        error = capture_error.empty() ? "CUDA asynchronous request body capture failed"
+                                      : std::move(capture_error);
+        return status;
+      }
+      cuda_status = cudaStreamEndCapture(capture_stream, &ended_graph);
+      capture_active = false;
+    }
+    if (cuda_status != cudaSuccess || ended_graph != body) {
+      finish_capture();
+      error = cuda_error_message(
+          "CUDA asynchronous request body capture",
+          cuda_status == cudaSuccess ? cudaErrorStreamCaptureInvalidated : cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    /* Branch 0 is FRESH: restore the immutable device checkpoint directly.
+     * The initializer validated these fixed addresses during candidate setup,
+     * and its owner outlives this executable. */
+    cuda_status = cudaStreamBeginCaptureToGraph(capture_stream, start_mode_branches[0], nullptr,
+                                                nullptr, 0u, cudaStreamCaptureModeThreadLocal);
+    if (cuda_status == cudaSuccess) {
+      capture_active = true;
+      cuda_status = cudaMemcpyAsync(
+          current.iteration_arena.get(), current.initializer.device_checkpoint(),
+          current.initializer.image_bytes(), cudaMemcpyDeviceToDevice, capture_stream);
+      cudaGraph_t fresh_graph = nullptr;
+      if (cuda_status == cudaSuccess) {
+        cuda_status = cudaStreamEndCapture(capture_stream, &fresh_graph);
+        capture_active = false;
+      }
+      if (cuda_status == cudaSuccess && fresh_graph != start_mode_branches[0]) {
+        cuda_status = cudaErrorStreamCaptureInvalidated;
+      }
+    }
+    if (cuda_status != cudaSuccess) {
+      finish_capture();
+      error = cuda_error_message("CUDA request FRESH prelude capture", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    /* Branch 1 is WARM: validate the token moved into request scratch during
+     * admission, then restart only the per-attempt trace/history state. */
+    cuda_status = cudaStreamBeginCaptureToGraph(capture_stream, start_mode_branches[1], nullptr,
+                                                nullptr, 0u, cudaStreamCaptureModeThreadLocal);
+    if (cuda_status == cudaSuccess) {
+      capture_active = true;
+      const WarmSccResetDeviceBinding warm{
+          current.host.basis.batch_size,
+          current.host.plan_token,
+          current.inference.epoch_consumer.epoch,
+          current.inference.epoch_consumer.eligible_mask,
+          current.inference.epoch_consumer.committed_generations,
+          current.numerical.device.refresh_predecessor_generations,
+          current.inference.admitted_warm_checkpoint_generations,
+          current.numerical.device.committed_field_attached,
+          current.numerical.device.committed_field_vectors,
+          current.inference.warm_checkpoint_field_attached,
+          current.inference.warm_checkpoint_field_vectors,
+          current.public_result.request_topology_error,
+          current.public_result.request_topology_error,
+          current.state_seed.mixer,
+          current.state_seed.scc,
+      };
+      constexpr int kWarmThreads = 256;
+      const auto warm_blocks = static_cast<unsigned int>(
+          (static_cast<std::uint64_t>(warm.batch_size) + kWarmThreads - 1u) / kWarmThreads);
+      reset_gfn2_warm_scc_trace_kernel<<<warm_blocks, kWarmThreads, 0, capture_stream>>>(warm);
+      cuda_status = cudaPeekAtLastError();
+      cudaGraph_t warm_graph = nullptr;
+      if (cuda_status == cudaSuccess) {
+        cuda_status = cudaStreamEndCapture(capture_stream, &warm_graph);
+        capture_active = false;
+      }
+      if (cuda_status == cudaSuccess && warm_graph != start_mode_branches[1]) {
+        cuda_status = cudaErrorStreamCaptureInvalidated;
+      }
+    }
+    if (cuda_status != cudaSuccess) {
+      finish_capture();
+      error = cuda_error_message("CUDA request WARM prelude capture", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+    if (consume_execution_test_fault(Gfn2CudaExecutionTestFault::kRequestGraphInstantiate)) {
+      cuda_status = cudaErrorUnknown;
+    } else
+#endif
+    {
+      cuda_status = owner.instantiate();
+    }
+    if (cuda_status == cudaSuccess) {
+      /* Conditional Graph launch may otherwise perform a lazy upload on the
+       * caller stream. That can make enqueue synchronously wait behind work
+       * already ordered on the stream, violating the request API's admission
+       * contract. Finish the one-time upload on the private setup stream. */
+      cuda_status = owner.upload(capture_stream);
+    }
+    if (cuda_status == cudaSuccess) cuda_status = cudaStreamSynchronize(capture_stream);
+    (void)cudaStreamDestroy(capture_stream);
+    if (cuda_status != cudaSuccess) {
+      owner.reset();
+      error =
+          cuda_error_message("CUDA asynchronous request graph instantiation/upload", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+    g_request_graph_build_successes.fetch_add(1u, std::memory_order_relaxed);
+#endif
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  xtbloom_status_t ensure_request_execution_graph_locked(Prepared& current, std::string& error) {
+    return current.request_execution_graph.ready() ? XTBLOOM_STATUS_SUCCESS
+                                                   : build_request_execution_graph(current, error);
+  }
+
+  xtbloom_status_t launch_request_execution_graph_locked(Prepared& current,
+                                                         Gfn2CudaSccStartMode mode,
+                                                         std::string& error) {
+    if (mode != Gfn2CudaSccStartMode::kFresh && mode != Gfn2CudaSccStartMode::kWarm) {
+      error = "CUDA asynchronous request received an unknown SCC start mode";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    const RequestExecutionGraphOwner& owner = current.request_execution_graph;
+    if (!owner.ready()) {
+      error = "CUDA asynchronous request execution graph is not initialized";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    stage_request_start_mode_kernel<<<1, 1, 0, stream>>>(
+        mode == Gfn2CudaSccStartMode::kWarm ? 1u : 0u, current.inference.request_start_mode);
+    cudaError_t cuda_status = cudaPeekAtLastError();
+    if (cuda_status == cudaSuccess) current.submitted = true;
+    if (cuda_status == cudaSuccess) cuda_status = owner.launch(stream);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA asynchronous request graph launch", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    current.inference.warm_checkpoint_ready = false;
+    error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  xtbloom_status_t refresh_numerical_locked(Prepared& current,
+                                            const Gfn2CudaNumericalInputView& input,
+                                            bool strict_warm,
+                                            bool allow_blocking_interaction_readback,
+                                            std::string& error) {
+    bool host_upload_enqueued = false;
+    xtbloom_status_t status = stage_numerical_ingress_locked(current, input, strict_warm,
+                                                             allow_blocking_interaction_readback,
+                                                             host_upload_enqueued, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = execute_numerical_body_locked(current, stream, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    if (host_upload_enqueued) {
+      /* Make owner-stream completion prove that the private callback has
+       * released the pinned snapshot. This preserves allocation-free,
+       * no-polling steady state while preventing a completed refresh from
+       * spuriously rejecting the next host-backed refresh. */
+      const cudaError_t release_status =
+          cudaStreamWaitEvent(stream, current.numerical_host_release_complete.get(), 0u);
+      if (release_status != cudaSuccess) {
+        current.numerical.host_staging_poisoned = true;
+        error = cuda_error_message("CUDA numerical host-release tail ordering", release_status);
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+      current.submitted = true;
+    }
     return XTBLOOM_STATUS_SUCCESS;
   }
 
@@ -7543,100 +8692,8 @@ struct Gfn2CudaExecutionCache::Impl {
       inference.warm_checkpoint_ready = false;
     }
 
-    const Gfn2SccLoopLaunchResult loop = current.scc_loop.launch(stream);
-    if (!loop.success()) {
-      std::ostringstream message;
-      message << "CUDA SCC loop submission failed: mode="
-              << static_cast<std::uint32_t>(loop.execution_mode)
-              << " status=" << static_cast<std::uint32_t>(loop.iteration.status)
-              << " stage=" << static_cast<std::uint32_t>(loop.iteration.stage);
-      error = message.str();
-      if (loop.iteration.status == Gfn2SccIterationLaunchStatus::kInvalidBinding) {
-        return XTBLOOM_STATUS_INVALID_ARGUMENT;
-      }
-      if (loop.iteration.status == Gfn2SccIterationLaunchStatus::kCublasError ||
-          loop.iteration.status == Gfn2SccIterationLaunchStatus::kCusolverError) {
-        return XTBLOOM_STATUS_EIGENSOLVER_FAILED;
-      }
-      if (loop.iteration.status == Gfn2SccIterationLaunchStatus::kProviderCaptureUnsupported) {
-        return XTBLOOM_STATUS_NOT_SUPPORTED;
-      }
-      return XTBLOOM_STATUS_INTERNAL_ERROR;
-    }
-
-    cuda_status = evaluate_gfn2_terminal_classical_energy_cuda(
-        inference.terminal_plan, inference.terminal_activity, inference.terminal_results,
-        inference.terminal_workspace, inference.terminal_diagnostics, stream);
-    if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA terminal classical energy", cuda_status);
-      return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
-                                                  : XTBLOOM_STATUS_INTERNAL_ERROR;
-    }
-
-    if (current.energy_force.stationary_projection.enabled == 1u) {
-      cuda_status = project_gfn2_stationary_force_state_cuda(
-          current.energy_force.stationary_projection, stream);
-      if (cuda_status != cudaSuccess) {
-        error = cuda_error_message("CUDA stationary force projection", cuda_status);
-        return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
-                                                    : XTBLOOM_STATUS_INTERNAL_ERROR;
-      }
-    }
-
-    cuda_status = execute_gfn2_energy_force_cuda(
-        current.energy_force.plan, current.energy_force.input, current.energy_force.results,
-        current.energy_force.intermediates, current.energy_force.workspace,
-        current.energy_force.diagnostics, inference.epoch_consumer, stream);
-    if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA terminal energy/force execution", cuda_status);
-      return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
-                                                  : XTBLOOM_STATUS_INTERNAL_ERROR;
-    }
-
-    cuda_status = publish_gfn2_inference_results_cuda(
-        inference.publication_plan, inference.publication_input, inference.publication_results,
-        inference.publication_workspace, inference.publication_diagnostics, stream);
-    if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA internal inference publication", cuda_status);
-      return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
-                                                  : XTBLOOM_STATUS_INTERNAL_ERROR;
-    }
-
-    initialize_gfn2_warm_checkpoint_batch_if_admitted_kernel<<<1, 1, 0, stream>>>(
-        inference.warm_checkpoint_batch_ready,
-        {current.public_result.request_topology_error, 1, current.host.plan_token});
-    cuda_status = cudaPeekAtLastError();
-    if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA warm-checkpoint aggregate initialization", cuda_status);
-      return XTBLOOM_STATUS_INTERNAL_ERROR;
-    }
-
-    const WarmCheckpointPublicationDeviceBinding checkpoint{
-        current.host.basis.batch_size,
-        inference.epoch_consumer.epoch,
-        inference.epoch_consumer.eligible_mask,
-        inference.epoch_consumer.committed_generations,
-        inference.publication_diagnostics.plan_error,
-        inference.publication_results.system_statuses,
-        inference.publication_results.converged,
-        inference.warm_checkpoint_generations,
-        inference.warm_checkpoint_batch_ready,
-        current.numerical.device.committed_field_attached,
-        current.numerical.device.committed_field_vectors,
-        inference.warm_checkpoint_field_attached,
-        inference.warm_checkpoint_field_vectors,
-        current.public_result.request_topology_error,
-    };
-    constexpr int kThreads = 256;
-    const auto blocks = static_cast<unsigned int>(
-        (static_cast<std::uint64_t>(checkpoint.batch_size) + kThreads - 1u) / kThreads);
-    publish_gfn2_warm_checkpoint_generation_kernel<<<blocks, kThreads, 0, stream>>>(checkpoint);
-    cuda_status = cudaPeekAtLastError();
-    if (cuda_status != cudaSuccess) {
-      error = cuda_error_message("CUDA warm-checkpoint publication", cuda_status);
-      return XTBLOOM_STATUS_INTERNAL_ERROR;
-    }
-
+    const xtbloom_status_t body_status = execute_inference_body_locked(current, error);
+    if (body_status != XTBLOOM_STATUS_SUCCESS) return body_status;
     inference.warm_checkpoint_ready = true;
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
@@ -7654,15 +8711,22 @@ struct Gfn2CudaExecutionCache::Impl {
                                                     std::string& error) {
     cudaError_t owner_status = cudaSuccess;
     if (current.submitted) {
-      owner_status = cudaEventRecord(current.public_result_completion_event.get(), stream);
-      if (owner_status == cudaSuccess) {
-        owner_status = cudaEventSynchronize(current.public_result_completion_event.get());
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+      if (consume_execution_test_fault(Gfn2CudaExecutionTestFault::kRequestSettlement)) {
+        owner_status = cudaErrorUnknown;
+      } else
+#endif
+      {
+        owner_status = cudaEventRecord(current.public_result_completion_event.get(), stream);
+        if (owner_status == cudaSuccess) {
+          owner_status = cudaEventSynchronize(current.public_result_completion_event.get());
+        }
+        if (owner_status != cudaSuccess) {
+          const cudaError_t fallback_status = cudaStreamSynchronize(stream);
+          if (fallback_status == cudaSuccess) owner_status = cudaSuccess;
+        }
+        if (owner_status == cudaSuccess) current.submitted = false;
       }
-      if (owner_status != cudaSuccess) {
-        const cudaError_t fallback_status = cudaStreamSynchronize(stream);
-        if (fallback_status == cudaSuccess) owner_status = cudaSuccess;
-      }
-      if (owner_status == cudaSuccess) current.submitted = false;
     }
 
     cudaError_t host_status = cudaSuccess;
@@ -7904,8 +8968,16 @@ struct Gfn2CudaExecutionCache::Impl {
         error = "the batch topology does not match the fixed CUDA plan topology";
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
+      if (aggregate == Gfn2PublicResultBridgeError::kRequestInvalidArgument) {
+        error = "CUDA stream-ordered request validation rejected an invalid descriptor";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      if (aggregate == Gfn2PublicResultBridgeError::kRequestNotSupported) {
+        error = "CUDA stream-ordered request validation rejected unsupported periodic axes";
+        return XTBLOOM_STATUS_NOT_SUPPORTED;
+      }
       if (aggregate == Gfn2PublicResultBridgeError::kRequestNotImplemented) {
-        error = "the CUDA request contains a known but unavailable interaction";
+        error = "the CUDA request uses a validated feature that is not implemented yet";
         return XTBLOOM_STATUS_NOT_IMPLEMENTED;
       }
       if (aggregate == Gfn2PublicResultBridgeError::kRequestWarmIncompatible) {
@@ -7946,8 +9018,16 @@ struct Gfn2CudaExecutionCache::Impl {
         error = "the batch topology does not match the fixed CUDA plan topology";
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
+      if (aggregate == Gfn2PublicResultBridgeError::kRequestInvalidArgument) {
+        error = "CUDA stream-ordered request validation rejected an invalid descriptor";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      if (aggregate == Gfn2PublicResultBridgeError::kRequestNotSupported) {
+        error = "CUDA stream-ordered request validation rejected unsupported periodic axes";
+        return XTBLOOM_STATUS_NOT_SUPPORTED;
+      }
       if (aggregate == Gfn2PublicResultBridgeError::kRequestNotImplemented) {
-        error = "the CUDA request contains a known but unavailable interaction";
+        error = "the CUDA request uses a validated feature that is not implemented yet";
         return XTBLOOM_STATUS_NOT_IMPLEMENTED;
       }
       if (aggregate == Gfn2PublicResultBridgeError::kRequestWarmIncompatible) {
@@ -8144,6 +9224,8 @@ struct Gfn2CudaExecutionCache::Impl {
         opaque_address(current.scc_loop.canonical_active_count_device());
     identity.scc_loop_numerical_body_count =
         opaque_address(current.scc_loop.numerical_body_count_device());
+    identity.scc_loop_device_launch_error =
+        opaque_address(current.scc_loop.device_launch_error_device());
     identity.energy_force_descriptors = opaque_address(&current.energy_force);
     identity.request_submissions = request_submissions;
     identity.request_active = active_request.id == 0u ? 0u : 1u;
@@ -8254,6 +9336,8 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.public_result_device_arena_bytes = current.public_result_device_arena.bytes();
     identity.public_result_host_arena_bytes = current.public_result_host_arena.bytes();
     identity.candidate_validation_arena_bytes = current.candidate_validation_arena.bytes();
+    identity.native_lattice_host_staging = opaque_address(native_lattice_host_arena.get());
+    identity.native_lattice_host_staging_bytes = native_lattice_host_arena.bytes();
     const Gfn2CudaTopologyStagingWorkspaceBytes topology_workspace =
         topology_staging.workspace_bytes();
     identity.topology_staging_host_bytes = topology_workspace.host_bytes;
@@ -8271,10 +9355,10 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.retained_host_workspace_bytes =
         identity.provider_host_workspace_bytes + identity.numerical_host_staging_arena_bytes +
         identity.public_result_host_arena_bytes + identity.candidate_validation_arena_bytes +
-        identity.topology_staging_host_bytes + identity.runtime_owner_host_bytes +
-        identity.host_plans_bytes + identity.topology_setup_host_bytes +
-        identity.inputs_setup_host_bytes + identity.eigensolver_setup_host_bytes +
-        identity.initializer_host_bytes;
+        identity.native_lattice_host_staging_bytes + identity.topology_staging_host_bytes +
+        identity.runtime_owner_host_bytes + identity.host_plans_bytes +
+        identity.topology_setup_host_bytes + identity.inputs_setup_host_bytes +
+        identity.eigensolver_setup_host_bytes + identity.initializer_host_bytes;
     identity.retained_device_workspace_bytes =
         identity.topology_arena_bytes + identity.input_arena_bytes +
         identity.iteration_arena_bytes + identity.eigensolver_setup_arena_bytes +
@@ -8298,6 +9382,10 @@ struct Gfn2CudaExecutionCache::Impl {
   std::uint64_t next_request_id = 1u;
   std::uint64_t request_submissions = 0u;
   bool request_poisoned = false;
+  PinnedArena native_lattice_host_arena;
+  CudaEvent native_lattice_event;
+  bool native_lattice_staging_pending = false;
+  bool native_lattice_staging_poisoned = false;
   ActiveRequest active_request;
   std::unique_ptr<Prepared> prepared;
   mutable std::mutex mutex;
@@ -8350,6 +9438,8 @@ xtbloom_status_t execute_restricted_gfn2_cuda_impl(Gfn2CudaExecutionCache& cache
         validate_cuda_stream_owner(implementation.device_id, implementation.stream, true, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = implementation.validate_public_request_pointers(batch, options, &result, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = implementation.validate_native_lattice_request_sync(batch, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = implementation.ensure_handles(error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -8637,11 +9727,26 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
           return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
       }
+      const auto ensure_selected_request_graph = [&]() -> xtbloom_status_t {
+        if (working == nullptr) {
+          error = "CUDA asynchronous request selected no prepared runtime";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+        if (!working->scc_loop.conditional_graph_ready()) {
+          error =
+              "asynchronous CUDA execution is unavailable because the selected SCC "
+              "provider requires the bounded uncaptured fallback";
+          return XTBLOOM_STATUS_NOT_SUPPORTED;
+        }
+        return implementation.ensure_request_execution_graph_locked(*working, error);
+      };
       if (require_prepared_topology) {
         if (working == nullptr) {
           error = "CUDA plan request has no prepared fixed-topology runtime";
           return XTBLOOM_STATUS_INTERNAL_ERROR;
         }
+        status = ensure_selected_request_graph();
+        if (status != XTBLOOM_STATUS_SUCCESS) return status;
         status = implementation.enqueue_fixed_topology_validation_locked(*working, batch, options,
                                                                          error);
         if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -8656,6 +9761,8 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
             match_existing_topology(batch, options, working->host.key, error, false);
         if (match == TopologyMatch::kInvalid) return XTBLOOM_STATUS_INVALID_ARGUMENT;
         if (match == TopologyMatch::kMatch) {
+          status = ensure_selected_request_graph();
+          if (status != XTBLOOM_STATUS_SUCCESS) return status;
           status = implementation.enqueue_fixed_topology_validation_locked(*working, batch, options,
                                                                            error);
           if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -8671,6 +9778,8 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
          * order. A mutation completes this request with INVALID_ARGUMENT; a
          * caller that intentionally changes device topology can use a changed
          * shape/policy or the synchronous convenience path to rebuild it. */
+        status = ensure_selected_request_graph();
+        if (status != XTBLOOM_STATUS_SUCCESS) return status;
         status = implementation.enqueue_fixed_topology_validation_locked(*working, batch, options,
                                                                          error);
         if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -8733,6 +9842,11 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
           return status;
         }
         working = candidate.get();
+        status = ensure_selected_request_graph();
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          abort_topology_candidate();
+          return status;
+        }
         if (topology_candidate_pending) {
           /* Seal the canonical topology before numerical inference is queued.
            * The bounded wait here belongs to topology/setup admission; placing
@@ -8752,7 +9866,6 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
           }
         }
       }
-
       const auto fail_submitted = [&](xtbloom_status_t failure) {
         const xtbloom_status_t settled =
             implementation.settle_public_submissions_locked(*working, failure, error);
@@ -8761,6 +9874,24 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
       };
       auto& active = implementation.active_request;
       active.transaction.prior_warm_checkpoint_ready = working->inference.warm_checkpoint_ready;
+      /* Fixed-topology comparison above owns the one request-error reset. The
+       * lattice gate appends a priority code with atomicMax so
+       * a topology mismatch remains the most specific eventual diagnostic. */
+      status = implementation.enqueue_native_lattice_validation_locked(*working, batch, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+      if (consume_execution_test_fault(Gfn2CudaExecutionTestFault::kUnknownRequestValidationCode)) {
+        constexpr std::uint32_t kUnknownRequestCode = 99u;
+        const cudaError_t mark_status = cudaMemcpyAsync(
+            working->public_result.request_topology_error, &kUnknownRequestCode,
+            sizeof(kUnknownRequestCode), cudaMemcpyHostToDevice, implementation.stream);
+        if (mark_status != cudaSuccess) {
+          error = cuda_error_message("CUDA unknown request-code test injection", mark_status);
+          return fail_submitted(XTBLOOM_STATUS_INTERNAL_ERROR);
+        }
+        working->submitted = true;
+      }
+#endif
       Gfn2CudaNumericalInputView numerical{};
       numerical.positions = batch.positions;
       numerical.point_charge_positions = batch.point_charge_positions;
@@ -8773,29 +9904,92 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
         numerical.interaction_descriptors = batch.interaction_descriptors;
         numerical.interaction_payload = batch.interaction_payload;
       }
-      status = implementation.refresh_numerical_locked(
-          *working, numerical, start_mode == Gfn2CudaSccStartMode::kWarm, false, error);
+      bool host_upload_enqueued = false;
+      status = implementation.stage_numerical_ingress_locked(
+          *working, numerical, start_mode == Gfn2CudaSccStartMode::kWarm, false,
+          host_upload_enqueued, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
-      status = implementation.execute_inference_locked(*working, start_mode, error);
+      status = implementation.launch_request_execution_graph_locked(*working, start_mode, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
       working->inference.warm_checkpoint_ready = false;
 
+      const auto accept_post_launch_failure = [&](xtbloom_status_t failure) {
+        const xtbloom_status_t settled =
+            implementation.settle_public_submissions_locked(*working, failure, error);
+        const bool owner_idle = !working->submitted;
+        const bool host_idle =
+            !working->numerical_host_upload_completion.pending.load(std::memory_order_acquire);
+        if (owner_idle && host_idle) {
+          active.completion_ready = true;
+          active.completion_status = settled;
+          active.result_flags = 0u;
+          active.completion_error = error;
+          abort_topology_candidate();
+        } else {
+          /* The original failure remains the eventual compute status. The
+           * settlement diagnostic describes why this enqueue must retain a
+           * PENDING completion owner instead of publishing an unsafe inline
+           * COMPLETE state. */
+          active.settlement_only_pending = true;
+          active.deferred_status = failure;
+          active.deferred_error = error;
+          if (candidate != nullptr) {
+            active.pending_prepared = std::move(candidate);
+            working = active.pending_prepared.get();
+          }
+          if (topology_candidate_pending) {
+            active.pending_topology_candidate = true;
+            topology_candidate_pending = false;
+          }
+        }
+        return XTBLOOM_STATUS_SUCCESS;
+      };
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+      const bool prepare_and_settlement_failure = consume_execution_test_fault(
+          Gfn2CudaExecutionTestFault::kRequestPrepareSubmissionAndSettlement);
+      if (prepare_and_settlement_failure) {
+        g_execution_test_fault.store(
+            static_cast<std::uint32_t>(Gfn2CudaExecutionTestFault::kRequestSettlement),
+            std::memory_order_release);
+      }
+      if (prepare_and_settlement_failure ||
+          consume_execution_test_fault(Gfn2CudaExecutionTestFault::kRequestPrepareSubmission)) {
+        error = "injected CUDA asynchronous result-prepare submission failure";
+        return accept_post_launch_failure(XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+#endif
       status = implementation.enqueue_public_result_prepare_locked(
           *working, batch, options, active.result, active.transaction, error);
-      if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
+      if (status != XTBLOOM_STATUS_SUCCESS) return accept_post_launch_failure(status);
       /* Commit is device-gated by the control record produced by prepare. It
        * is submitted now so downstream work on the same CUDA stream observes
        * real outputs without requiring a host query to advance execution. */
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+      const bool commit_and_settlement_failure = consume_execution_test_fault(
+          Gfn2CudaExecutionTestFault::kRequestCommitSubmissionAndSettlement);
+      if (commit_and_settlement_failure) {
+        g_execution_test_fault.store(
+            static_cast<std::uint32_t>(Gfn2CudaExecutionTestFault::kRequestSettlement),
+            std::memory_order_release);
+      }
+      if (commit_and_settlement_failure ||
+          consume_execution_test_fault(Gfn2CudaExecutionTestFault::kRequestCommitSubmission)) {
+        error = "injected CUDA asynchronous result-commit submission failure";
+        return accept_post_launch_failure(XTBLOOM_STATUS_INTERNAL_ERROR);
+      }
+#endif
       status = implementation.enqueue_public_result_commit_locked(*working, active.transaction,
                                                                   true, error);
-      if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
-      if (candidate != nullptr) implementation.prepared = std::move(candidate);
+      if (status != XTBLOOM_STATUS_SUCCESS) return accept_post_launch_failure(status);
+      if (candidate != nullptr) {
+        implementation.prepared = std::move(candidate);
+        working = implementation.prepared.get();
+      }
       if (topology_candidate_pending) {
         if (!implementation.topology_staging.publish_candidate()) {
-          /* Prepared ownership has already moved and caller-output commit is
-           * accepted, so rollback is impossible. Poison the cache as well as
-           * reporting deferred failure: a later call must never combine the
-           * new runtime key with the old committed staging owner. */
+          /* Prepared ownership and caller-output commit are already accepted,
+           * so rollback is impossible. Poison the cache rather than exposing
+           * a new runtime key beside the old committed topology snapshot. */
           implementation.request_poisoned = true;
           working->numerical.host_staging_poisoned = true;
           active.deferred_status = XTBLOOM_STATUS_INTERNAL_ERROR;
@@ -8806,7 +10000,7 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
         topology_candidate_pending = false;
       }
       ++implementation.request_submissions;
-      if (working->numerical_host_upload_completion.pending.load(std::memory_order_acquire)) {
+      if (host_upload_enqueued) {
         const cudaError_t release_status = cudaStreamWaitEvent(
             implementation.stream, working->numerical_host_release_complete.get(), 0u);
         if (release_status != cudaSuccess) {
@@ -8868,8 +10062,11 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
         active.deferred_status = XTBLOOM_STATUS_INTERNAL_ERROR;
         /* Device restoration is part of the accepted request contract. Close
          * readiness before any potentially-throwing diagnostic allocation. */
-        if (implementation.prepared != nullptr) {
-          implementation.prepared->inference.warm_checkpoint_ready = false;
+        auto* const active_prepared = implementation.active_request.pending_prepared != nullptr
+                                          ? implementation.active_request.pending_prepared.get()
+                                          : implementation.prepared.get();
+        if (active_prepared != nullptr) {
+          active_prepared->inference.warm_checkpoint_ready = false;
         }
         if (!active.deferred_error.empty()) active.deferred_error += "; additionally, ";
         active.deferred_error += restore_error;
@@ -8936,7 +10133,9 @@ xtbloom_status_t Gfn2CudaExecutionCache::probe(bool wait,
   try {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     auto& active = impl_->active_request;
-    if (active.id == 0u || impl_->prepared == nullptr) {
+    Gfn2CudaExecutionCache::Impl::Prepared* current_owner =
+        active.pending_prepared != nullptr ? active.pending_prepared.get() : impl_->prepared.get();
+    if (active.id == 0u || current_owner == nullptr) {
       result.completion_error = "CUDA request completion does not own the active cache submission";
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
@@ -8954,8 +10153,72 @@ xtbloom_status_t Gfn2CudaExecutionCache::probe(bool wait,
       result.completion_error = std::move(device_error);
       return device.status();
     }
-    auto& current = *impl_->prepared;
+    auto& current = *current_owner;
     auto& transaction = active.transaction;
+
+    if (active.settlement_only_pending) {
+      bool incomplete = false;
+      const auto observe_stream = [&](cudaStream_t stream, const char* operation,
+                                      bool& submitted) -> xtbloom_status_t {
+        if (!submitted) return XTBLOOM_STATUS_SUCCESS;
+        const cudaError_t cuda_status =
+            wait ? cudaStreamSynchronize(stream) : cudaStreamQuery(stream);
+        if (!wait && cuda_status == cudaErrorNotReady) {
+          incomplete = true;
+          return XTBLOOM_STATUS_SUCCESS;
+        }
+        if (cuda_status != cudaSuccess) {
+          result.completion_error = cuda_error_message(operation, cuda_status);
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+        submitted = false;
+        return XTBLOOM_STATUS_SUCCESS;
+      };
+
+      xtbloom_status_t status =
+          observe_stream(impl_->stream, "CUDA post-launch request settlement", current.submitted);
+      bool host_pending =
+          current.numerical_host_upload_completion.pending.load(std::memory_order_acquire);
+      if (status == XTBLOOM_STATUS_SUCCESS && !incomplete && host_pending) {
+        status = observe_stream(current.numerical_host_completion_stream.get(),
+                                "CUDA post-launch host snapshot settlement", host_pending);
+        if (status == XTBLOOM_STATUS_SUCCESS && !host_pending) {
+          current.numerical_host_upload_completion.pending.store(false, std::memory_order_release);
+        }
+      }
+      if (status != XTBLOOM_STATUS_SUCCESS) {
+        std::string ignored;
+        (void)device.restore(ignored);
+        return status;
+      }
+      if (!incomplete && !current.submitted &&
+          !current.numerical_host_upload_completion.pending.load(std::memory_order_acquire)) {
+        active.completion_ready = true;
+        active.completion_status = active.deferred_status;
+        active.result_flags = 0u;
+        active.completion_error = active.deferred_error;
+        active.settlement_only_pending = false;
+        if (active.pending_topology_candidate) {
+          impl_->topology_staging.abort_candidate();
+          active.pending_topology_candidate = false;
+        }
+        active.pending_prepared.reset();
+      }
+
+      std::string restore_error;
+      const xtbloom_status_t restore_status = device.restore(restore_error);
+      if (restore_status != XTBLOOM_STATUS_SUCCESS) {
+        result.completion_error = std::move(restore_error);
+        return restore_status;
+      }
+      if (active.completion_ready) {
+        result.complete = true;
+        result.completion_status = active.completion_status;
+        result.result_flags = active.result_flags;
+        result.completion_error = active.completion_error;
+      }
+      return XTBLOOM_STATUS_SUCCESS;
+    }
 
     bool incomplete = false;
     const auto observe_event = [&]() -> xtbloom_status_t {
@@ -9079,9 +10342,19 @@ void Gfn2CudaExecutionCache::settle_noexcept() noexcept {
   try {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (impl_->active_request.id == 0u) return;
+    if (impl_->active_request.completion_ready) {
+      if (impl_->active_request.pending_topology_candidate) {
+        impl_->topology_staging.abort_candidate();
+      }
+      impl_->active_request = {};
+      return;
+    }
     bool settled = false;
-    if (impl_->prepared != nullptr) {
-      auto& current = *impl_->prepared;
+    Impl::Prepared* const current_owner = impl_->active_request.pending_prepared != nullptr
+                                              ? impl_->active_request.pending_prepared.get()
+                                              : impl_->prepared.get();
+    if (current_owner != nullptr) {
+      auto& current = *current_owner;
       std::string ignored;
       ScopedCudaDevice device(impl_->device_id, ignored);
       if (device.ok()) {
@@ -9114,10 +10387,13 @@ void Gfn2CudaExecutionCache::settle_noexcept() noexcept {
       }
     }
     if (settled) {
+      if (impl_->active_request.pending_topology_candidate) {
+        impl_->topology_staging.abort_candidate();
+      }
       impl_->active_request = {};
     } else {
       impl_->request_poisoned = true;
-      if (impl_->prepared != nullptr) impl_->prepared->numerical.host_staging_poisoned = true;
+      if (current_owner != nullptr) current_owner->numerical.host_staging_poisoned = true;
     }
   } catch (...) {
     /* Request destruction cannot report. Prepared teardown retains a second
@@ -9256,6 +10532,8 @@ xtbloom_status_t Gfn2CudaExecutionCache::prepare_topology_only(
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = impl_->validate_public_request_pointers(batch, options, nullptr, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = impl_->validate_native_lattice_request_sync(batch, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = impl_->ensure_handles(error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
@@ -9306,7 +10584,7 @@ xtbloom_status_t Gfn2CudaExecutionCache::prepare_topology_only(
         status = impl_->build_candidate(std::move(key), std::move(positions),
                                         std::move(point_positions), std::move(point_values),
                                         std::move(point_gammas), std::move(periodic_shifts),
-                                        std::move(periodic_response), candidate, error);
+                                        std::move(periodic_response), candidate, error, true);
       }
     } catch (const std::bad_alloc&) {
       error = "failed to allocate host metadata for the CUDA GFN2 runtime candidate";
@@ -9381,7 +10659,72 @@ Gfn2CudaExecutionIdentity Gfn2CudaExecutionCache::identity() const noexcept {
   return identity;
 }
 
-#ifdef XTBLOOM_CUDA_TEST_HOOKS
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+xtbloom_status_t Gfn2CudaExecutionCache::validate_native_lattice_test_only(
+    const xtbloom_batch_t& batch, std::string& error) {
+  if (impl_ == nullptr) {
+    error = "CUDA GFN2 execution cache has no implementation";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  ScopedCudaDevice device(impl_->device_id, error);
+  if (!device.ok()) return device.status();
+  const xtbloom_status_t status = impl_->validate_native_lattice_request_sync(batch, error);
+  std::string restore_error;
+  const xtbloom_status_t restore_status = device.restore(restore_error);
+  if (restore_status == XTBLOOM_STATUS_SUCCESS) return status;
+  if (status != XTBLOOM_STATUS_SUCCESS && !error.empty()) {
+    error += "; additionally, " + restore_error;
+  } else {
+    error = std::move(restore_error);
+  }
+  return restore_status;
+}
+
+Gfn2CudaNativeLatticeTestIdentity Gfn2CudaExecutionCache::native_lattice_test_identity()
+    const noexcept {
+  if (impl_ == nullptr) return {};
+  std::lock_guard<std::mutex> lock(impl_->mutex);
+  return {opaque_address(impl_->native_lattice_host_arena.get()),
+          impl_->native_lattice_host_arena.bytes(), impl_->native_lattice_staging_pending,
+          impl_->native_lattice_staging_poisoned};
+}
+
+void reset_gfn2_cuda_execution_test_state() noexcept {
+  g_execution_test_fault.store(static_cast<std::uint32_t>(Gfn2CudaExecutionTestFault::kNone),
+                               std::memory_order_release);
+  g_native_lattice_allocation_faults.store(0u, std::memory_order_relaxed);
+  g_native_lattice_completion_faults.store(0u, std::memory_order_relaxed);
+  g_native_lattice_teardown_faults.store(0u, std::memory_order_relaxed);
+  g_quarantined_native_lattice_arenas.store(0u, std::memory_order_relaxed);
+  g_quarantined_native_lattice_bytes.store(0u, std::memory_order_relaxed);
+  g_request_graph_build_attempts.store(0u, std::memory_order_relaxed);
+  g_request_graph_build_successes.store(0u, std::memory_order_relaxed);
+}
+
+void arm_gfn2_cuda_execution_test_fault(Gfn2CudaExecutionTestFault fault) noexcept {
+  g_execution_test_fault.store(static_cast<std::uint32_t>(fault), std::memory_order_release);
+}
+
+Gfn2CudaExecutionTestStats gfn2_cuda_execution_test_stats() noexcept {
+  Gfn2CudaExecutionTestStats stats{};
+  stats.native_lattice_allocation_faults =
+      g_native_lattice_allocation_faults.load(std::memory_order_relaxed);
+  stats.native_lattice_completion_faults =
+      g_native_lattice_completion_faults.load(std::memory_order_relaxed);
+  stats.native_lattice_teardown_faults =
+      g_native_lattice_teardown_faults.load(std::memory_order_relaxed);
+  stats.quarantined_native_lattice_arenas =
+      g_quarantined_native_lattice_arenas.load(std::memory_order_relaxed);
+  stats.quarantined_native_lattice_bytes =
+      g_quarantined_native_lattice_bytes.load(std::memory_order_relaxed);
+  stats.request_graph_build_attempts =
+      g_request_graph_build_attempts.load(std::memory_order_relaxed);
+  stats.request_graph_build_successes =
+      g_request_graph_build_successes.load(std::memory_order_relaxed);
+  return stats;
+}
+
 void set_gfn2_cuda_admission_alias_test_hook(Gfn2CudaAdmissionAliasTestHook hook) noexcept {
   g_admission_alias_test_hook.store(static_cast<std::uint32_t>(hook), std::memory_order_relaxed);
 }

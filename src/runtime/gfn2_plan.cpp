@@ -330,7 +330,11 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
   {
     xtbloom_status_t status = impl_->cuda_cache->prepare_topology_only(batch, impl_->policy, error);
     if (status != XTBLOOM_STATUS_SUCCESS) {
-      impl_->context = nullptr;
+      /* A failed CUDA setup may already own handles, topology staging, or a
+       * native-cell D2H arena. Release the incomplete plan immediately so a
+       * caller that retries this C++ object cannot retain poisoned or hidden
+       * workspace from the failed construction. */
+      destroy();
       return status;
     }
     const Gfn2CudaExecutionIdentity identity = impl_->cuda_cache->identity();

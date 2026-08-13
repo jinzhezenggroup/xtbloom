@@ -186,6 +186,26 @@ Required batch topology uses flat arrays:
 
 See the public header for every optional field and its exact element type.
 
+## Native cell descriptors (ABI-v4 foundation)
+
+The ABI-v4 `xtbloom_batch_t` suffix appends `cell_matrices` and
+`periodic_axes`. Both are caller-owned borrowed buffers with one entry per
+system: each cell is nine row-major binary64 values in bohr whose rows are the
+direct vectors `a`, `b`, and `c`; each periodicity entry is a fixed-width
+`int32_t` mask. This release accepts `XTBLOOM_PERIODIC_AXES_NONE` for a
+molecular item and reserves the X/Y/Z bits, with `XTBLOOM_PERIODIC_AXES_XYZ`
+describing three-dimensional periodicity. One- and two-dimensional masks are
+reserved but not supported.
+
+The two buffers must be supplied together. A `NONE` item uses an all-zero cell;
+an `XYZ` item requires a finite, right-handed, nonsingular cell. V1/V2/V3
+callers and V4 batches containing only `NONE` items keep molecular behavior.
+Native periodic GFN2 physics is not released yet: after complete host/CUDA
+descriptor, pointer, and cell validation, any `XYZ` item returns
+`XTBLOOM_STATUS_NOT_IMPLEMENTED` before output publication. This descriptor is
+not the caller-supplied periodic `b + A*q` embedding operator and does not make
+solvation periodic.
+
 ## External interaction attachments (ABI-v3)
 
 The ABI-v3 `xtbloom_batch_t` suffix carries a generic, versioned attachment

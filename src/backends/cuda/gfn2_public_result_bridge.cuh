@@ -29,8 +29,10 @@ enum class Gfn2PublicResultBridgeError : std::uint32_t {
   kInvalidExtents = 6u,
   kInvalidDestinations = 7u,
   kRequestTopologyMismatch = 8u,
-  kRequestNotImplemented = 9u,
-  kRequestWarmIncompatible = 10u,
+  kRequestInvalidArgument = 9u,
+  kRequestNotSupported = 10u,
+  kRequestNotImplemented = 11u,
+  kRequestWarmIncompatible = 12u,
 };
 
 /* Host and CUDA outputs are both staged before the caller-visible commit. */
@@ -74,9 +76,8 @@ struct Gfn2PublicResultBridgeDeviceInput {
 
   /* Control values produced by internal inference publication. */
   const std::uint32_t* publication_plan_error = nullptr;
-  /* Stream-ordered request validation. Zero accepts the request, two reports
-   * a known but unavailable interaction, and three reports strict-WARM field
-   * incompatibility. All failures suppress caller destinations
+  /* Stream-ordered request validation uses the shared priority codes in
+   * gfn2_device_admission.cuh. All failures suppress caller destinations
    * without requiring a host admission fence. The historical field name is
    * retained to avoid unnecessary internal descriptor churn. */
   const std::uint32_t* request_topology_error = nullptr;

@@ -532,11 +532,12 @@ class XTBloomMinimizer(Minimizer):
 
 
 def _reject_periodic(data: dict) -> None:
-    """Raise for periodic systems the molecular ABI cannot represent."""
+    """Raise until the ABI-v4 lattice foundation has a periodic adapter."""
     if not bool(np.asarray(data.get("nopbc", True)).all()):
         raise XTBloomNotSupportedError(
-            "the xTBloom Python driver does not support periodic systems "
-            "(the public C ABI has no lattice input)"
+            "the xTBloom Python driver does not support periodic systems yet "
+            "(the ABI-v4 lattice descriptor exists, but native periodic "
+            "execution and the dpdata adapter are not implemented)"
         )
 
 

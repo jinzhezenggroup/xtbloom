@@ -150,15 +150,17 @@ class ConformanceToolTest(unittest.TestCase):
         storage = PUBLIC_API.assemble_batch(MANIFEST, manifest, cases)
         self.assertEqual(storage.unpaired_electrons, [1])
         self.assertEqual(storage.spin_channels, [1])
-        # The public mirror keeps the ABI-v2 spin suffix and the ABI-v3
-        # interaction suffix, matching python/xtbloom/library.py.
+        # The public mirror keeps the ABI-v3 interaction and ABI-v4 lattice
+        # suffixes, matching python/xtbloom/library.py.
         self.assertEqual(
-            [name for name, _ in PUBLIC_API.Batch._fields_[-4:]],
+            [name for name, _ in PUBLIC_API.Batch._fields_[-6:]],
             [
                 "spin_channels",
                 "total_interactions",
                 "interaction_descriptors",
                 "interaction_payload",
+                "cell_matrices",
+                "periodic_axes",
             ],
         )
         self.assertEqual(

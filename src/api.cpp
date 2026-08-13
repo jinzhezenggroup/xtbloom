@@ -522,6 +522,13 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
     if (!availability.ok()) {
       return fail(availability.status, std::move(availability.error));
     }
+    if (!cuda_backend) {
+      const xtbloom::detail::DescriptorValidationResult lattice_availability =
+          xtbloom::detail::validate_host_lattice_execution_availability(*batch);
+      if (!lattice_availability.ok()) {
+        return fail(lattice_availability.status, std::move(lattice_availability.error));
+      }
+    }
   } catch (const std::bad_alloc&) {
     return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
                 "failed to allocate temporary storage while validating or dispatching a compute "

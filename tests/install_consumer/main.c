@@ -66,8 +66,15 @@ _Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V3_S
 _Static_assert(XTBLOOM_BATCH_V1_SIZE == 328, "installed ABI-v1 batch prefix must remain 328 bytes");
 _Static_assert(XTBLOOM_BATCH_V2_SIZE == 352, "installed ABI-v2 batch prefix must remain 352 bytes");
 _Static_assert(XTBLOOM_BATCH_V3_SIZE == 408, "installed ABI-v3 batch image must remain 408 bytes");
-_Static_assert(sizeof(xtbloom_batch_t) == XTBLOOM_BATCH_V3_SIZE,
-               "installed batch layout must include the ABI-v3 interaction suffix");
+_Static_assert(XTBLOOM_BATCH_V4_SIZE == 456, "installed ABI-v4 batch image must be 456 bytes");
+_Static_assert(offsetof(xtbloom_batch_t, cell_matrices) == 408,
+               "installed ABI-v4 cell matrices must follow ABI v3");
+_Static_assert(offsetof(xtbloom_batch_t, periodic_axes) == 432,
+               "installed ABI-v4 periodic axes must follow cell matrices");
+_Static_assert(sizeof(xtbloom_batch_t) == XTBLOOM_BATCH_V4_SIZE,
+               "installed batch layout must include the ABI-v4 lattice suffix");
+_Static_assert(sizeof(xtbloom_periodic_axes_t) == sizeof(int32_t),
+               "installed periodic-axis mask must remain fixed-width");
 _Static_assert(XTBLOOM_BATCH_RESULT_V1_SIZE == 184,
                "installed ABI-v1 batch-result prefix must remain 184 bytes");
 _Static_assert(XTBLOOM_BATCH_RESULT_V2_SIZE == 280,
@@ -203,6 +210,68 @@ static xtbloom_const_buffer_t input_buffer(const void* data, size_t size_bytes) 
 static xtbloom_buffer_t output_buffer(void* data, size_t size_bytes) {
   xtbloom_buffer_t buffer = {data, size_bytes, XTBLOOM_MEMORY_HOST, 0};
   return buffer;
+}
+
+/* Exercise the installed ABI-v4 availability boundary without a linear-
+ * algebra provider. Complete descriptor validation must precede the explicit
+ * periodic-execution refusal, and that call-level refusal must not publish a
+ * single caller-owned byte. This runs in smoke mode for both shared and
+ * static install consumers. */
+static int run_installed_native_lattice_refusal(xtbloom_context_t* context) {
+  const int64_t atom_offsets[] = {0, 1};
+  const int32_t atomic_numbers[] = {1};
+  const double positions[] = {0.0, 0.0, 0.0};
+  const double molecular_charges[] = {0.0};
+  const int32_t unpaired_electrons[] = {1};
+  const double cell[] = {8.0, 0.0, 0.0, 0.0, 9.0, 0.0, 0.0, 0.0, 10.0};
+  const int32_t periodic_axes[] = {XTBLOOM_PERIODIC_AXES_XYZ};
+  const uint32_t flags_canary = UINT32_C(0xa55a39c6);
+  const double energy_canary = -9182.625;
+  const int32_t iterations_canary = -123456789;
+  const uint8_t converged_canary = UINT8_C(0xa5);
+  const xtbloom_status_t status_canary = XTBLOOM_STATUS_INTERNAL_ERROR;
+
+  xtbloom_batch_t batch;
+  xtbloom_compute_options_t options;
+  xtbloom_batch_result_t result;
+  if (xtbloom_batch_init(&batch, sizeof(batch)) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom_compute_options_init(&options, sizeof(options)) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom_batch_result_init(&result, sizeof(result)) != XTBLOOM_STATUS_SUCCESS) {
+    return 40;
+  }
+  batch.batch_size = 1;
+  batch.total_atoms = 1;
+  batch.atom_offsets = input_buffer(atom_offsets, sizeof(atom_offsets));
+  batch.atomic_numbers = input_buffer(atomic_numbers, sizeof(atomic_numbers));
+  batch.positions = input_buffer(positions, sizeof(positions));
+  batch.molecular_charges = input_buffer(molecular_charges, sizeof(molecular_charges));
+  batch.unpaired_electrons = input_buffer(unpaired_electrons, sizeof(unpaired_electrons));
+  batch.cell_matrices = input_buffer(cell, sizeof(cell));
+  batch.periodic_axes = input_buffer(periodic_axes, sizeof(periodic_axes));
+  options.flags = XTBLOOM_COMPUTE_ENERGY;
+
+  double energy = energy_canary;
+  int32_t iterations = iterations_canary;
+  uint8_t converged = converged_canary;
+  xtbloom_status_t system_status = status_canary;
+  result.flags = flags_canary;
+  result.energies = output_buffer(&energy, sizeof(energy));
+  result.scc_iterations = output_buffer(&iterations, sizeof(iterations));
+  result.scc_converged = output_buffer(&converged, sizeof(converged));
+  result.per_system_status = output_buffer(&system_status, sizeof(system_status));
+
+  const xtbloom_status_t call_status = xtbloom_compute(context, &batch, &options, &result);
+  if (call_status != XTBLOOM_STATUS_NOT_IMPLEMENTED || result.flags != flags_canary ||
+      energy != energy_canary || iterations != iterations_canary || converged != converged_canary ||
+      system_status != status_canary) {
+    fprintf(stderr,
+            "installed native-lattice refusal is not transactional: call=%d flags=0x%08x "
+            "energy=%.17g iterations=%d converged=%u system=%d error=%s\n",
+            (int)call_status, (unsigned int)result.flags, energy, (int)iterations,
+            (unsigned int)converged, (int)system_status, xtbloom_get_last_error());
+    return 41;
+  }
+  return 0;
 }
 
 /* Exercise actual inference through the installed C ABI without requiring a
@@ -498,6 +567,12 @@ int main(int argc, char** argv) {
     fprintf(stderr, "installed consumer selected an unexpected backend\n");
     xtbloom_context_destroy(context);
     return 4;
+  }
+
+  const int lattice_status = run_installed_native_lattice_refusal(context);
+  if (lattice_status != 0) {
+    xtbloom_context_destroy(context);
+    return lattice_status;
   }
 
   const int request_status = run_installed_request_shell(context);

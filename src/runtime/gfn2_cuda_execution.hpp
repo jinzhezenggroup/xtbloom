@@ -82,6 +82,7 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t scc_loop_owner = 0u;
   std::uintptr_t scc_loop_active_count = 0u;
   std::uintptr_t scc_loop_numerical_body_count = 0u;
+  std::uintptr_t scc_loop_device_launch_error = 0u;
   std::uintptr_t energy_force_descriptors = 0u;
   /* Stable completion owner and accepted single-flight submission count. */
   std::uintptr_t request_completion_owner = 0u;
@@ -93,6 +94,7 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t iteration_arena = 0u;
   std::uintptr_t eigensolver_setup_arena = 0u;
   std::uintptr_t provider_host_workspace = 0u;
+  std::uintptr_t native_lattice_host_staging = 0u;
   std::uintptr_t force_immutable_arena = 0u;
   std::uintptr_t force_execution_arena = 0u;
   std::uintptr_t numerical_refresh_arena = 0u;
@@ -173,6 +175,7 @@ struct Gfn2CudaExecutionIdentity {
   std::size_t public_result_device_arena_bytes = 0u;
   std::size_t public_result_host_arena_bytes = 0u;
   std::size_t candidate_validation_arena_bytes = 0u;
+  std::size_t native_lattice_host_staging_bytes = 0u;
   std::size_t topology_staging_host_bytes = 0u;
   std::size_t topology_staging_device_bytes = 0u;
   /* Heap bodies for the prepared cache and its retained topology candidate. */
@@ -196,6 +199,59 @@ enum class Gfn2CudaSccStartMode : std::uint32_t {
   kFresh = 1u,
   kWarm = 2u,
 };
+
+struct Gfn2CudaNativeLatticeTestIdentity {
+  std::uintptr_t host_staging = 0u;
+  std::size_t host_staging_bytes = 0u;
+  bool pending = false;
+  bool poisoned = false;
+};
+
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+/*
+ * Test-only failure points for the context-owned native-lattice staging
+ * transaction. Each armed fault is consumed once so a test can exercise the
+ * original failure and then prove that the same cache remains retryable.
+ */
+enum class Gfn2CudaExecutionTestFault : std::uint32_t {
+  kNone = 0u,
+  kNativeLatticePinnedAllocation = 1u,
+  kNativeLatticeCompletionWait = 2u,
+  kNativeLatticeTeardownSettlement = 3u,
+  kUnknownRequestValidationCode = 4u,
+  kRequestPrepareSubmission = 5u,
+  kRequestCommitSubmission = 6u,
+  /* Force one newly built runtime to retain the production bounded SCC
+   * fallback. This proves that the synchronous plan remains usable while the
+   * narrower asynchronous Graph capability is reported as unavailable. */
+  kSccProviderUncapturedFallback = 7u,
+  kRequestSettlement = 8u,
+  kRequestPrepareSubmissionAndSettlement = 9u,
+  kRequestCommitSubmissionAndSettlement = 10u,
+  /* Fail before Graph creation or after capture but before executable
+   * publication. These prove that lazy setup leaves the request IDLE and no
+   * caller-owned descriptor is retained by queued work. */
+  kRequestGraphCreate = 11u,
+  kRequestGraphInstantiate = 12u,
+};
+
+/* Read-only evidence for failure paths that intentionally cannot retain an
+ * owner for later inspection. Resetting these counters never reclaims a
+ * quarantined allocation because no reliable CUDA completion fence exists. */
+struct Gfn2CudaExecutionTestStats {
+  std::uint64_t native_lattice_allocation_faults = 0u;
+  std::uint64_t native_lattice_completion_faults = 0u;
+  std::uint64_t native_lattice_teardown_faults = 0u;
+  std::uint64_t quarantined_native_lattice_arenas = 0u;
+  std::uint64_t quarantined_native_lattice_bytes = 0u;
+  std::uint64_t request_graph_build_attempts = 0u;
+  std::uint64_t request_graph_build_successes = 0u;
+};
+
+void reset_gfn2_cuda_execution_test_state() noexcept;
+void arm_gfn2_cuda_execution_test_fault(Gfn2CudaExecutionTestFault fault) noexcept;
+[[nodiscard]] Gfn2CudaExecutionTestStats gfn2_cuda_execution_test_stats() noexcept;
+#endif
 
 /*
  * CUDA-free numerical view for a previously prepared fixed topology.
@@ -302,6 +358,14 @@ class Gfn2CudaExecutionCache : public RequestCompletion {
 
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] Gfn2CudaExecutionIdentity identity() const noexcept;
+
+  /* White-box staging entry points used to isolate allocation and teardown
+   * contracts from SCC/request-graph construction. Definitions exist only in
+   * test builds, but the declarations remain unconditional so every
+   * translation unit sees the same internal class definition. */
+  [[nodiscard]] xtbloom_status_t validate_native_lattice_test_only(const xtbloom_batch_t& batch,
+                                                                   std::string& error);
+  [[nodiscard]] Gfn2CudaNativeLatticeTestIdentity native_lattice_test_identity() const noexcept;
 
   /* The single-flight cache is its own preallocated completion owner, so
    * publishing it into a reusable request needs no per-enqueue allocation. */

@@ -284,10 +284,38 @@ def test_abi_struct_sizes() -> None:
     assert ctypes.sizeof(library.ContextOptions) == 32
     assert ctypes.sizeof(library.ConstBuffer) == 24
     assert ctypes.sizeof(library.Buffer) == 24
-    assert ctypes.sizeof(library.Batch) == 408
+    assert ctypes.sizeof(library.Batch) == 456
     assert library.Batch.total_interactions.offset == 352
     assert library.Batch.interaction_descriptors.offset == 360
     assert library.Batch.interaction_payload.offset == 384
+    assert library.Batch.cell_matrices.offset == 408
+    assert library.Batch.periodic_axes.offset == 432
+    assert library.PERIODIC_AXES_NONE == 0
+    assert library.PERIODIC_AXES_XYZ == 7
+    assert {
+        "PERIODIC_AXES_NONE",
+        "PERIODIC_AXES_XYZ",
+        "PERIODIC_AXIS_X",
+        "PERIODIC_AXIS_Y",
+        "PERIODIC_AXIS_Z",
+    }.issubset(library.__all__)
+    batch = library.Batch()
+    assert (
+        library.load_library().xtbloom_batch_init(
+            ctypes.byref(batch), ctypes.sizeof(batch)
+        )
+        == library.STATUS_SUCCESS
+    )
+    assert batch.struct_size == ctypes.sizeof(batch)
+    assert batch.api_version == library.API_VERSION
+    assert batch.cell_matrices.data is None
+    assert batch.cell_matrices.size_bytes == 0
+    assert batch.cell_matrices.memory_space == library.MEMORY_HOST
+    assert batch.cell_matrices.reserved == 0
+    assert batch.periodic_axes.data is None
+    assert batch.periodic_axes.size_bytes == 0
+    assert batch.periodic_axes.memory_space == library.MEMORY_HOST
+    assert batch.periodic_axes.reserved == 0
     assert ctypes.sizeof(library.ComputeOptions) == 80
     assert library.ComputeOptions.scc_start_mode.offset == 48
     assert library.ComputeOptions.reserved_v2.offset == 52

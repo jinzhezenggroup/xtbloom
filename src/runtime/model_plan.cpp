@@ -57,6 +57,14 @@ xtbloom_status_t ModelPlan::create(Context& context, const xtbloom_batch_t& batc
         error = std::move(availability.error);
         return availability.status;
       }
+      if (context.backend == XTBLOOM_BACKEND_CPU) {
+        DescriptorValidationResult lattice_availability =
+            validate_host_lattice_execution_availability(batch);
+        if (!lattice_availability.ok()) {
+          error = std::move(lattice_availability.error);
+          return lattice_availability.status;
+        }
+      }
       auto plan = std::unique_ptr<Gfn2Plan>(new (std::nothrow) Gfn2Plan{});
       if (plan == nullptr) {
         error = "failed to allocate a GFN2 plan implementation";

@@ -187,6 +187,24 @@ enum xtbloom_interaction_type_value {
 };
 
 /*
+ * Periodic-axis mask for the ABI-v4 native-lattice batch suffix.
+ *
+ * The individual x/y/z bits are reserved so later releases can describe
+ * lower-dimensional boundary conditions without changing the field width.
+ * This release accepts NONE for a molecular batch item and XYZ for a native
+ * three-dimensional periodic item. Partial masks are not implemented.
+ */
+typedef int32_t xtbloom_periodic_axes_t;
+enum xtbloom_periodic_axes_value {
+  XTBLOOM_PERIODIC_AXES_NONE = 0,
+  XTBLOOM_PERIODIC_AXIS_X = 1 << 0,
+  XTBLOOM_PERIODIC_AXIS_Y = 1 << 1,
+  XTBLOOM_PERIODIC_AXIS_Z = 1 << 2,
+  XTBLOOM_PERIODIC_AXES_XYZ =
+      XTBLOOM_PERIODIC_AXIS_X | XTBLOOM_PERIODIC_AXIS_Y | XTBLOOM_PERIODIC_AXIS_Z
+};
+
+/*
  * One attachment of an external interaction to one batch item.
  *
  * type selects the interaction; flags is reserved and must be zero;
@@ -231,6 +249,8 @@ static_assert(sizeof(xtbloom_result_flag_t) == sizeof(int32_t),
               "xtbloom_result_flag_t must be 32-bit");
 static_assert(sizeof(xtbloom_interaction_type_t) == sizeof(int32_t),
               "xtbloom_interaction_type_t must be 32-bit");
+static_assert(sizeof(xtbloom_periodic_axes_t) == sizeof(int32_t),
+              "xtbloom_periodic_axes_t must be 32-bit");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(xtbloom_status_t) == sizeof(int32_t), "xtbloom_status_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_request_state_t) == sizeof(int32_t),
@@ -251,6 +271,8 @@ _Static_assert(sizeof(xtbloom_result_flag_t) == sizeof(int32_t),
                "xtbloom_result_flag_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_interaction_type_t) == sizeof(int32_t),
                "xtbloom_interaction_type_t must be 32-bit");
+_Static_assert(sizeof(xtbloom_periodic_axes_t) == sizeof(int32_t),
+               "xtbloom_periodic_axes_t must be 32-bit");
 #endif
 
 /*
@@ -309,6 +331,9 @@ typedef struct xtbloom_buffer {
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_DESCRIPTORS_OFFSET 360u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_PAYLOAD_OFFSET 384u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_V3_SIZE 408u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_CELL_MATRICES_OFFSET 408u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_PERIODIC_AXES_OFFSET 432u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_V4_SIZE 456u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V1_SIZE 184u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_DIPOLE_OFFSET 184u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_QUADRUPOLE_OFFSET 208u
@@ -329,6 +354,9 @@ typedef struct xtbloom_buffer {
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_DESCRIPTORS_OFFSET 256u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_PAYLOAD_OFFSET 272u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_V3_SIZE 288u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_CELL_MATRICES_OFFSET 288u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_PERIODIC_AXES_OFFSET 304u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_V4_SIZE 320u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V1_SIZE 128u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_DIPOLE_OFFSET 128u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_QUADRUPOLE_OFFSET 144u
@@ -438,6 +466,24 @@ typedef struct xtbloom_batch {
   int64_t total_interactions;
   xtbloom_const_buffer_t interaction_descriptors;
   xtbloom_const_buffer_t interaction_payload;
+  /* ABI v4 optional suffix: native lattice/PBC descriptors.
+   *
+   * When either buffer is active, both are required. cell_matrices contains
+   * batch_size row-major 3x3 direct-cell matrices in bohr. The three rows are
+   * the a, b, and c lattice vectors, so a fractional row vector u maps to the
+   * Cartesian vector u[0]*a + u[1]*b + u[2]*c. periodic_axes contains
+   * batch_size xtbloom_periodic_axes_t values. NONE requires the corresponding
+   * nine cell entries to be exactly zero; XYZ requires a finite, right-handed,
+   * nonsingular cell. Partial-axis masks are reserved but not implemented.
+   *
+   * Native PBC changes the complete GFN2 topology and is distinct from the
+   * caller-supplied b + A*q charge-response operator above. A V4 batch whose
+   * masks are all NONE remains a molecular request. If any item uses XYZ,
+   * this ABI release validates the complete descriptor set but returns
+   * NOT_IMPLEMENTED before execution until every periodic GFN2 energy and
+   * derivative term is connected. */
+  xtbloom_const_buffer_t cell_matrices;
+  xtbloom_const_buffer_t periodic_axes;
 } xtbloom_batch_t;
 
 #define XTBLOOM_BATCH_V1_SIZE \
@@ -446,6 +492,8 @@ typedef struct xtbloom_batch {
   (offsetof(xtbloom_batch_t, spin_channels) + sizeof(xtbloom_const_buffer_t))
 #define XTBLOOM_BATCH_V3_SIZE \
   (offsetof(xtbloom_batch_t, interaction_payload) + sizeof(xtbloom_const_buffer_t))
+#define XTBLOOM_BATCH_V4_SIZE \
+  (offsetof(xtbloom_batch_t, periodic_axes) + sizeof(xtbloom_const_buffer_t))
 
 /*
  * electronic_temperature is k_B*T in Hartree. Bindings that accept kelvin
@@ -570,7 +618,15 @@ XTBLOOM_DETAIL_ABI_ASSERT(offsetof(xtbloom_batch_t, interaction_payload) ==
                           "xtbloom_batch_t payload must match the target pointer width");
 XTBLOOM_DETAIL_ABI_ASSERT(XTBLOOM_BATCH_V3_SIZE == XTBLOOM_DETAIL_EXPECTED_BATCH_V3_SIZE,
                           "xtbloom_batch_t ABI-v3 image must match the target pointer width");
-XTBLOOM_DETAIL_ABI_ASSERT(sizeof(xtbloom_batch_t) == XTBLOOM_BATCH_V3_SIZE,
+XTBLOOM_DETAIL_ABI_ASSERT(offsetof(xtbloom_batch_t, cell_matrices) ==
+                              XTBLOOM_DETAIL_EXPECTED_BATCH_CELL_MATRICES_OFFSET,
+                          "xtbloom_batch_t cell matrices must match the target pointer width");
+XTBLOOM_DETAIL_ABI_ASSERT(offsetof(xtbloom_batch_t, periodic_axes) ==
+                              XTBLOOM_DETAIL_EXPECTED_BATCH_PERIODIC_AXES_OFFSET,
+                          "xtbloom_batch_t periodic axes must match the target pointer width");
+XTBLOOM_DETAIL_ABI_ASSERT(XTBLOOM_BATCH_V4_SIZE == XTBLOOM_DETAIL_EXPECTED_BATCH_V4_SIZE,
+                          "xtbloom_batch_t ABI-v4 image must match the target pointer width");
+XTBLOOM_DETAIL_ABI_ASSERT(sizeof(xtbloom_batch_t) == XTBLOOM_BATCH_V4_SIZE,
                           "xtbloom_batch_t must not add trailing ABI padding");
 XTBLOOM_DETAIL_ABI_ASSERT(XTBLOOM_INTERACTION_V1_SIZE == 32u,
                           "xtbloom_interaction_t image must remain 32 bytes");
@@ -1055,6 +1111,9 @@ XTBLOOM_DETAIL_ABI_ASSERT(sizeof(xtbloom_dlpack_view_t) == XTBLOOM_DLPACK_VIEW_V
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_DESCRIPTORS_OFFSET
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_PAYLOAD_OFFSET
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_V3_SIZE
+#undef XTBLOOM_DETAIL_EXPECTED_BATCH_CELL_MATRICES_OFFSET
+#undef XTBLOOM_DETAIL_EXPECTED_BATCH_PERIODIC_AXES_OFFSET
+#undef XTBLOOM_DETAIL_EXPECTED_BATCH_V4_SIZE
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V1_SIZE
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_DIPOLE_OFFSET
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_QUADRUPOLE_OFFSET

@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include "model/gfn2/lattice.hpp"
 #include "runtime/model_registry.hpp"
 
 namespace xtbloom::detail {
@@ -49,8 +50,10 @@ struct DescriptorExtentState {
   std::size_t response_f64_bytes = 0;
   std::size_t interaction_descriptor_bytes = 0;
   std::size_t dipole_f64_bytes = 0;
+  std::size_t cell_matrix_bytes = 0;
   bool response_enabled = false;
   bool interactions_enabled = false;
+  bool lattice_descriptors_enabled = false;
 };
 
 struct RequiredInput {
@@ -132,6 +135,10 @@ bool has_interaction_suffix(const xtbloom_batch_t& batch) {
   return batch.struct_size >= XTBLOOM_BATCH_V3_SIZE;
 }
 
+bool has_lattice_suffix(const xtbloom_batch_t& batch) {
+  return batch.struct_size >= XTBLOOM_BATCH_V4_SIZE;
+}
+
 bool has_result_v2_suffix(const xtbloom_batch_result_t& result) {
   return result.struct_size >= XTBLOOM_BATCH_RESULT_V2_SIZE;
 }
@@ -145,6 +152,17 @@ BufferView interaction_descriptor_view(const xtbloom_batch_t& batch) {
 BufferView interaction_payload_view(const xtbloom_batch_t& batch) {
   return has_interaction_suffix(batch) ? view(batch.interaction_payload)
                                        : BufferView{nullptr, 0u, XTBLOOM_MEMORY_HOST, 0u};
+}
+
+/* Do not evaluate ABI-v4 members for a short ABI-v1/v2/v3 caller. */
+BufferView cell_matrix_view(const xtbloom_batch_t& batch) {
+  return has_lattice_suffix(batch) ? view(batch.cell_matrices)
+                                   : BufferView{nullptr, 0u, XTBLOOM_MEMORY_HOST, 0u};
+}
+
+BufferView periodic_axes_view(const xtbloom_batch_t& batch) {
+  return has_lattice_suffix(batch) ? view(batch.periodic_axes)
+                                   : BufferView{nullptr, 0u, XTBLOOM_MEMORY_HOST, 0u};
 }
 
 bool checked_add(std::size_t lhs, std::size_t rhs, std::size_t& result) {
@@ -473,6 +491,8 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
       {"charge_response_matrix", view(batch->charge_response_matrix)},
       {"interaction_descriptors", interaction_descriptor_view(*batch)},
       {"interaction_payload", interaction_payload_view(*batch)},
+      {"cell_matrices", cell_matrix_view(*batch)},
+      {"periodic_axes", periodic_axes_view(*batch)},
       {"energies", result == nullptr ? view(empty_buffer) : view(result->energies)},
       {"forces", result == nullptr ? view(empty_buffer) : view(result->forces)},
       {"atomic_charges", result == nullptr ? view(empty_buffer) : view(result->atomic_charges)},
@@ -530,6 +550,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   std::size_t atom_offset_bytes = 0;
   std::size_t response_f64_bytes = 0;
   std::size_t interaction_descriptor_bytes = 0;
+  std::size_t cell_matrix_bytes = 0;
   if (!count_bytes(batch->batch_size, 1, sizeof(std::int32_t), batch_i32_bytes) ||
       !count_bytes(batch->batch_size, 1, sizeof(std::uint8_t), batch_u8_bytes) ||
       !count_bytes(batch->batch_size, 1, sizeof(double), batch_f64_bytes) ||
@@ -600,6 +621,27 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
      * actually reference. */
     DescriptorValidationResult checked =
         require_bytes("interaction_descriptors", interaction_descriptors, 0u);
+    if (!checked.ok()) {
+      return checked;
+    }
+  }
+
+  const BufferView cell_matrices = cell_matrix_view(*batch);
+  const BufferView periodic_axes = periodic_axes_view(*batch);
+  const bool lattice_descriptors_enabled = active(cell_matrices) || active(periodic_axes);
+  if (lattice_descriptors_enabled) {
+    if (!count_bytes(batch->batch_size, 9, sizeof(double), cell_matrix_bytes)) {
+      return invalid("the native-cell extent overflows the addressable byte size");
+    }
+    if (!active(cell_matrices) || !active(periodic_axes)) {
+      return invalid("cell_matrices and periodic_axes must be supplied together");
+    }
+    DescriptorValidationResult checked =
+        require_bytes("cell_matrices", cell_matrices, cell_matrix_bytes);
+    if (!checked.ok()) {
+      return checked;
+    }
+    checked = require_bytes("periodic_axes", periodic_axes, batch_i32_bytes);
     if (!checked.ok()) {
       return checked;
     }
@@ -699,8 +741,10 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   extents.response_f64_bytes = response_f64_bytes;
   extents.interaction_descriptor_bytes = interaction_descriptor_bytes;
   extents.dipole_f64_bytes = dipole_f64_bytes;
+  extents.cell_matrix_bytes = cell_matrix_bytes;
   extents.response_enabled = response_enabled;
   extents.interactions_enabled = has_interaction_suffix(*batch) && batch->total_interactions != 0;
+  extents.lattice_descriptors_enabled = lattice_descriptors_enabled;
   return {};
 }
 
@@ -708,7 +752,7 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
     const xtbloom_batch_t& batch, const xtbloom_compute_options_t& options,
     const xtbloom_batch_result_t* result, const DescriptorExtentState& extents) {
   /* One fixed entry per known buffer keeps successful validation allocation-free. */
-  std::array<ActiveRange, 28> ranges{};
+  std::array<ActiveRange, 30> ranges{};
   std::size_t range_count = 0;
   const RequiredInput alias_inputs[] = {
       {"atom_offsets", view(batch.atom_offsets), extents.atom_offset_bytes},
@@ -781,6 +825,19 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
     const BufferView payload = interaction_payload_view(batch);
     checked = add_active_range(ranges, range_count, "interaction_payload", payload,
                                payload.size_bytes, false);
+    if (!checked.ok()) {
+      return checked;
+    }
+  }
+  if (extents.lattice_descriptors_enabled) {
+    DescriptorValidationResult checked =
+        add_active_range(ranges, range_count, "cell_matrices", cell_matrix_view(batch),
+                         extents.cell_matrix_bytes, false);
+    if (!checked.ok()) {
+      return checked;
+    }
+    checked = add_active_range(ranges, range_count, "periodic_axes", periodic_axes_view(batch),
+                               extents.batch_i32_bytes, false);
     if (!checked.ok()) {
       return checked;
     }
@@ -955,6 +1012,82 @@ DescriptorValidationResult validate_host_interaction_semantics(const xtbloom_bat
   return validation;
 }
 
+DescriptorValidationResult validate_host_lattice_semantics_impl(const xtbloom_batch_t& batch) {
+  DescriptorValidationResult validation;
+  const BufferView cells = cell_matrix_view(batch);
+  const BufferView axes = periodic_axes_view(batch);
+  if (!active(cells) && !active(axes)) {
+    return validation;
+  }
+  if (cells.memory_space != XTBLOOM_MEMORY_HOST) {
+    validation.pending_offset_checks |= kCellMatricesNeedStaging;
+  }
+  if (axes.memory_space != XTBLOOM_MEMORY_HOST) {
+    validation.pending_offset_checks |= kPeriodicAxesNeedStaging;
+  }
+  if (validation.pending_offset_checks != kNoOffsetValidationPending) {
+    return validation;
+  }
+
+  for (std::int64_t system = 0; system < batch.batch_size; ++system) {
+    std::int32_t mask = 0;
+    std::memcpy(&mask,
+                static_cast<const unsigned char*>(axes.data) +
+                    static_cast<std::size_t>(system) * sizeof(mask),
+                sizeof(mask));
+    std::array<double, 9> cell{};
+    std::memcpy(cell.data(),
+                static_cast<const unsigned char*>(cells.data) +
+                    static_cast<std::size_t>(system) * sizeof(cell),
+                sizeof(cell));
+
+    if (mask == XTBLOOM_PERIODIC_AXES_NONE) {
+      if (!std::all_of(cell.begin(), cell.end(), [](double value) { return value == 0.0; })) {
+        return invalid("a nonperiodic batch item must use an all-zero cell matrix");
+      }
+      continue;
+    }
+    if ((mask & ~XTBLOOM_PERIODIC_AXES_XYZ) != 0) {
+      return invalid("periodic_axes contains unknown mask bits");
+    }
+    if (mask != XTBLOOM_PERIODIC_AXES_XYZ) {
+      return unsupported("one- and two-dimensional periodic axes are reserved but not supported");
+    }
+    if (!std::all_of(cell.begin(), cell.end(), [](double value) { return std::isfinite(value); })) {
+      return invalid("a periodic cell matrix contains NaN or infinity");
+    }
+
+    if (!gfn2::valid_lattice_cell_3d(cell.data())) {
+      return invalid("a periodic cell must be finite, right-handed, and nonsingular");
+    }
+  }
+  return validation;
+}
+
+DescriptorValidationResult validate_host_lattice_execution_availability_impl(
+    const xtbloom_batch_t& batch) {
+  if (!active(cell_matrix_view(batch)) && !active(periodic_axes_view(batch))) {
+    return {};
+  }
+  const BufferView axes = periodic_axes_view(batch);
+  if (axes.memory_space != XTBLOOM_MEMORY_HOST) {
+    return internal_error("native lattice availability requires staged HOST periodic_axes storage");
+  }
+  for (std::int64_t system = 0; system < batch.batch_size; ++system) {
+    std::int32_t mask = 0;
+    std::memcpy(&mask,
+                static_cast<const unsigned char*>(axes.data) +
+                    static_cast<std::size_t>(system) * sizeof(mask),
+                sizeof(mask));
+    if (mask == XTBLOOM_PERIODIC_AXES_XYZ) {
+      return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+              "native lattice/PBC descriptors are valid but periodic GFN2 execution is not "
+              "implemented yet"};
+    }
+  }
+  return {};
+}
+
 DescriptorValidationResult validate_output_execution_availability(
     const xtbloom_compute_options_t& options, xtbloom_backend_t backend) {
   (void)options;
@@ -1007,6 +1140,15 @@ DescriptorValidationResult validate_interaction_execution_availability(const xtb
 }
 
 }  // namespace
+
+DescriptorValidationResult validate_host_lattice_semantics(const xtbloom_batch_t& batch) {
+  return validate_host_lattice_semantics_impl(batch);
+}
+
+DescriptorValidationResult validate_host_lattice_execution_availability(
+    const xtbloom_batch_t& batch) {
+  return validate_host_lattice_execution_availability_impl(batch);
+}
 
 DescriptorValidationResult validate_compute_descriptor_structure_for_dispatch(
     xtbloom_backend_t backend, const xtbloom_batch_t* batch,
@@ -1063,6 +1205,11 @@ DescriptorValidationResult validate_plan_descriptor_structure_for_dispatch(
       return interaction_semantics;
     }
     semantics.pending_offset_checks |= interaction_semantics.pending_offset_checks;
+    DescriptorValidationResult lattice_semantics = validate_host_lattice_semantics_impl(*batch);
+    if (!lattice_semantics.ok()) {
+      return lattice_semantics;
+    }
+    semantics.pending_offset_checks |= lattice_semantics.pending_offset_checks;
   }
   DescriptorValidationResult aliases =
       validate_compute_descriptor_aliases(*batch, *options, nullptr, extents);
@@ -1082,7 +1229,22 @@ DescriptorValidationResult validate_plan_descriptor_structure(
   }
   DescriptorValidationResult availability =
       validate_compute_execution_availability(backend, *batch, *options);
-  return availability.ok() ? validation : availability;
+  if (!availability.ok()) {
+    return availability;
+  }
+  if (backend == XTBLOOM_BACKEND_CPU) {
+    /* CPU plan creation has completed all host semantic and pointer-space
+     * checks at this boundary, so a valid native cell must be refused before
+     * an internal Gfn2Plan can prepare a molecular cache that ignores it. CUDA
+     * retains the staged backend transaction so device and mislabeled pointers
+     * are proven before availability is reported. */
+    DescriptorValidationResult lattice_availability =
+        validate_host_lattice_execution_availability_impl(*batch);
+    if (!lattice_availability.ok()) {
+      return lattice_availability;
+    }
+  }
+  return validation;
 }
 
 DescriptorValidationResult validate_host_topology_semantics(const xtbloom_batch_t& batch) {
@@ -1221,6 +1383,11 @@ DescriptorValidationResult validate_compute_descriptors_for_dispatch(
     return interaction_semantics;
   }
   semantics.pending_offset_checks |= interaction_semantics.pending_offset_checks;
+  DescriptorValidationResult lattice_semantics = validate_host_lattice_semantics_impl(*batch);
+  if (!lattice_semantics.ok()) {
+    return lattice_semantics;
+  }
+  semantics.pending_offset_checks |= lattice_semantics.pending_offset_checks;
   DescriptorValidationResult aliases =
       validate_compute_descriptor_aliases(*batch, *options, result, extents);
   if (!aliases.ok()) {
@@ -1242,6 +1409,14 @@ DescriptorValidationResult validate_compute_descriptors(xtbloom_backend_t backen
       validate_compute_execution_availability(backend, *batch, *options);
   if (!availability.ok()) {
     return availability;
+  }
+  if ((validation.pending_offset_checks & (kCellMatricesNeedStaging | kPeriodicAxesNeedStaging)) ==
+      0u) {
+    DescriptorValidationResult lattice_availability =
+        validate_host_lattice_execution_availability_impl(*batch);
+    if (!lattice_availability.ok()) {
+      return lattice_availability;
+    }
   }
   return validation;
 }

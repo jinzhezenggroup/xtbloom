@@ -422,7 +422,8 @@ Install `xtbloom[ase]`, `xtbloom[dpdata]`, or both with
 `pip install "xtbloom[ase,dpdata]"`, then use `xtbloom.ase.XTBloom` as an ASE
 calculator or `driver="xtbloom"` with dpdata. These integrations convert native
 atomic units to eV and Angstrom conventions. dpdata periodic systems are
-rejected because the native ABI has no lattice descriptor. The ASE calculator
+rejected because the adapters do not yet expose the ABI-v4 lattice descriptor
+and native periodic GFN2 execution is not implemented. The ASE calculator
 enables warm start by default (`warm_start=True`), so an ASE dynamics run
 automatically seeds each step's SCC from the previous converged state and
 falls back to a fresh solve whenever the request's identity changes; pass

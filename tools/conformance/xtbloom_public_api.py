@@ -89,7 +89,7 @@ class Buffer(ctypes.Structure):
 
 
 class Batch(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_batch_t`` through ABI version 3."""
+    """ctypes mirror of ``xtbloom_batch_t`` through its ABI-v4 suffix."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -114,6 +114,8 @@ class Batch(ctypes.Structure):
         ("total_interactions", ctypes.c_int64),
         ("interaction_descriptors", ConstBuffer),
         ("interaction_payload", ConstBuffer),
+        ("cell_matrices", ConstBuffer),
+        ("periodic_axes", ConstBuffer),
     ]
 
 
