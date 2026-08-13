@@ -110,7 +110,9 @@ def _load_invariants(source_root: Path) -> ModuleType:
 def _run_complete_invariants(source_root: Path) -> None:
     """Run the complete corpus-wide public invariance/FD/ragged gates."""
     import numpy as np
-    from xtbloom import BatchCalculator, PointCharge, Structure
+    from xtbloom import Context, PointCharge, Structure
+    from xtbloom import interface as xtbloom_interface
+    from xtbloom import library as xtbloom_library
 
     invariants = _load_invariants(source_root)
     manifest_path = source_root / "data" / "conformance" / "manifest.json"
@@ -136,49 +138,82 @@ def _run_complete_invariants(source_root: Path) -> None:
                     uhf=geometry.unpaired_electrons,
                     spin_channels=geometry.spin_channels,
                     point_charges=points,
-                    # The high-level interface requests dipoles whenever a
-                    # field attachment is present. Attach an explicit zero
-                    # field to field-free invariant calls so their dipoles are
-                    # retained in singleton as well as heterogeneous batches.
-                    efield=(
-                        geometry.efield
-                        if geometry.efield is not None
-                        else [0.0, 0.0, 0.0]
-                    ),
+                    efield=geometry.efield,
                 )
             )
 
-        with BatchCalculator(
-            structures,
-            backend="cpu",
-            **_strict_scc_options(),
-        ) as calculator:
-            batch = calculator.compute()
-        if batch.failed_indices.size:
-            raise RuntimeError(
-                "Pyodide invariant solve failed for systems "
-                f"{batch.failed_indices.tolist()}"
+        # The invariant contract requires molecular dipoles for field-free as
+        # well as field-attached systems. Request that ABI outlet explicitly:
+        # the high-level Structure API intentionally normalizes an all-zero
+        # field to no attachment and therefore cannot be used as a proxy for
+        # an output-only dipole request.
+        flags = (
+            xtbloom_library.COMPUTE_ENERGY
+            | xtbloom_library.COMPUTE_FORCES
+            | xtbloom_library.COMPUTE_ATOMIC_CHARGES
+            | xtbloom_library.COMPUTE_DIPOLE_MOMENTS
+        )
+        if any(structure.point_charges is not None for structure in structures):
+            flags |= xtbloom_library.COMPUTE_POINT_CHARGE_FORCES
+        strict = _strict_scc_options()
+        with Context("cpu") as context:
+            computed = xtbloom_interface._compute_batch(
+                context,
+                structures,
+                model=xtbloom_library.MODEL_GFN2_XTB,
+                max_scc_iterations=int(strict["max_scc_iterations"]),
+                charge_tolerance=float(strict["charge_tolerance"]),
+                energy_tolerance=float(strict["energy_tolerance"]),
+                electronic_temperature=300.0,
+                scc_mixer=xtbloom_library.SCC_MIXER_MODIFIED_BROYDEN,
+                scc_mixer_history=xtbloom_library.DEFAULT_SCC_MIXER_HISTORY,
+                scc_mixer_damping=xtbloom_library.DEFAULT_SCC_MIXER_DAMPING,
+                determinism=xtbloom_library.DETERMINISM_DEFAULT,
+                flags=flags,
             )
+        failed = np.flatnonzero(
+            (computed.per_system_status != xtbloom_library.STATUS_SUCCESS)
+            | (computed.scc_converged != 1)
+        )
+        if failed.size:
+            raise RuntimeError(
+                f"Pyodide invariant solve failed for systems {failed.tolist()}"
+            )
+        if computed.dipole_moments is None:
+            raise RuntimeError("Pyodide invariant solve omitted dipoles")
 
         results = []
         for index, geometry in enumerate(input_geometries):
-            item = batch[index]
+            atom_begin = int(computed.atom_offsets[index])
+            atom_end = int(computed.atom_offsets[index + 1])
+            point_begin = (
+                int(computed.point_offsets[index])
+                if computed.point_offsets is not None
+                else 0
+            )
+            point_end = (
+                int(computed.point_offsets[index + 1])
+                if computed.point_offsets is not None
+                else 0
+            )
             point_forces = (
                 []
-                if item.point_charge_forces is None
-                else np.asarray(item.point_charge_forces).reshape(-1).tolist()
+                if computed.point_charge_forces is None
+                else np.asarray(computed.point_charge_forces[point_begin:point_end])
+                .reshape(-1)
+                .tolist()
             )
-            if item.dipole_moments is None:
-                raise RuntimeError("Pyodide invariant solve omitted dipoles")
             results.append(
                 invariants.InvariantResult(
                     case_id=geometry.case_id,
                     molecular_charge=geometry.molecular_charge,
-                    energy=item.energy,
-                    forces=np.asarray(item.forces).reshape(-1).tolist(),
-                    charges=np.asarray(item.charges).reshape(-1).tolist(),
+                    energy=float(computed.energies[index]),
+                    forces=np.asarray(computed.forces[atom_begin:atom_end])
+                    .reshape(-1)
+                    .tolist(),
+                    charges=np.asarray(computed.charges[atom_begin:atom_end]).tolist(),
                     point_forces=point_forces,
-                    dipoles=np.asarray(item.dipole_moments).reshape(-1).tolist(),
+                    dipoles=np.asarray(computed.dipole_moments[index]).tolist(),
                     efield=None if geometry.efield is None else list(geometry.efield),
                 )
             )
