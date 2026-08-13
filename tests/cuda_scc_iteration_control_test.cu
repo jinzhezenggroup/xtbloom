@@ -912,12 +912,17 @@ int test_status_code_format() {
 int test_graph_replay_resets_control() {
   Fixture fixture(8u);
   CHECK(fixture.valid());
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   std::vector<std::uint64_t> iterations(8u, 0u);
   std::vector<xtbloom_status_t> statuses(8u, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(8u, 0u);
   std::vector<std::uint32_t> codes(8u, 0u);
-  CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
-  CUDA_CHECK(fixture.install_stage(codes, 0u, 1u));
+  /* The replay stream is nonblocking, so it has no implicit ordering with the
+   * legacy default stream. Queue fixture initialization on the same stream as
+   * the captured Graph to prevent its first replay from observing stale bytes. */
+  CUDA_CHECK(fixture.install_state(iterations, statuses, converged, stream));
+  CUDA_CHECK(fixture.install_stage(codes, 0u, 1u, stream));
 
   const Gfn2SccStageDeviceReport report{
       Gfn2SccStageId::kMixer,
@@ -933,8 +938,6 @@ int test_graph_replay_resets_control() {
       kPlanToken,
   };
 
-  cudaStream_t stream = nullptr;
-  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
@@ -995,20 +998,23 @@ int test_device_epoch_graph_replay_and_fail_closed_gates() {
   constexpr std::size_t batch_size = 8u;
   Fixture fixture(batch_size);
   CHECK(fixture.valid());
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   std::vector<std::uint64_t> iterations(batch_size, 0u);
   std::vector<xtbloom_status_t> statuses(batch_size, XTBLOOM_STATUS_SUCCESS);
   std::vector<std::uint8_t> converged(batch_size, 0u);
   std::vector<std::uint64_t> committed(batch_size, kGeometryGeneration);
   std::vector<std::uint64_t> warm(batch_size, kWarmStartGeneration);
   std::vector<std::uint8_t> eligible(batch_size, 1u);
-  CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
-  CUDA_CHECK(fixture.install_per_system_provenance(committed, warm));
-  CUDA_CHECK(fixture.install_geometry_transaction(kGeometryGeneration, committed, eligible));
+  /* Keep the initial state and epoch transaction ordered before the first
+   * replay. A nonblocking stream does not wait for default-stream H2D copies. */
+  CUDA_CHECK(fixture.install_state(iterations, statuses, converged, stream));
+  CUDA_CHECK(fixture.install_per_system_provenance(committed, warm, stream));
+  CUDA_CHECK(
+      fixture.install_geometry_transaction(kGeometryGeneration, committed, eligible, stream));
 
-  cudaStream_t stream = nullptr;
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
-  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
   CUDA_CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
       fixture.policy, fixture.state, fixture.provenance, fixture.geometry_consumer(),

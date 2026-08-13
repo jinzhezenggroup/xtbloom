@@ -82,6 +82,8 @@ std::atomic<std::uint64_t> g_native_lattice_completion_faults{0u};
 std::atomic<std::uint64_t> g_native_lattice_teardown_faults{0u};
 std::atomic<std::uint64_t> g_quarantined_native_lattice_arenas{0u};
 std::atomic<std::uint64_t> g_quarantined_native_lattice_bytes{0u};
+std::atomic<std::uint64_t> g_request_graph_build_attempts{0u};
+std::atomic<std::uint64_t> g_request_graph_build_successes{0u};
 
 bool consume_execution_test_fault(Gfn2CudaExecutionTestFault fault) noexcept {
   std::uint32_t expected = static_cast<std::uint32_t>(fault);
@@ -573,16 +575,51 @@ struct NumericalRefreshDeviceSources {
   const double* periodic_response = nullptr;
 };
 
-/* One accepted asynchronous FRESH request consumes every prior WARM token
- * even when its stream-ordered descriptor validation later rejects numerical
- * execution. The request condition is set after that consumption so only
- * committed numerical/SCC/inference state is protected by the conditional
- * body. */
-__global__ void set_request_execution_condition_kernel(const std::uint32_t* request_error,
-                                                       cudaGraphConditionalHandle condition) {
+/* The start-mode scalar is written by a kernel argument so steady-state
+ * admission neither transfers host bytes nor retains a caller-owned pointer. */
+__global__ void stage_request_start_mode_kernel(std::uint32_t start_mode,
+                                                std::uint32_t* staged_start_mode) {
   if (blockIdx.x == 0 && threadIdx.x == 0) {
-    cudaGraphSetConditional(condition, *request_error == 0u ? 1u : 0u);
+    *staged_start_mode = start_mode;
   }
+}
+
+/*
+ * An accepted request consumes the preceding public checkpoint before its
+ * deferred device-side descriptor gate. WARM moves the token into request
+ * scratch so the later reset can validate it after numerical refresh without
+ * leaving a reusable token behind when the outer gate rejects execution.
+ * FRESH also clears the old token but publishes no scratch checkpoint.
+ */
+struct RequestAdmissionDeviceBinding {
+  std::int64_t batch_size = 0;
+  const std::uint32_t* request_error = nullptr;
+  const std::uint32_t* start_mode = nullptr;
+  std::uint64_t* warm_checkpoint_generations = nullptr;
+  std::uint32_t* warm_checkpoint_batch_ready = nullptr;
+  std::uint64_t* admitted_warm_checkpoint_generations = nullptr;
+  cudaGraphConditionalHandle execution_condition = 0u;
+  cudaGraphConditionalHandle start_mode_condition = 0u;
+};
+
+static_assert(std::is_trivially_copyable_v<RequestAdmissionDeviceBinding>);
+
+__global__ void consume_request_checkpoint_kernel(RequestAdmissionDeviceBinding binding) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (system >= binding.batch_size) return;
+  const std::uint32_t start_mode = *binding.start_mode;
+  const bool warm = start_mode == 1u;
+  const std::uint64_t checkpoint = atomicExch(
+      reinterpret_cast<unsigned long long*>(binding.warm_checkpoint_generations + system), 0ULL);
+  binding.admitted_warm_checkpoint_generations[system] = warm ? checkpoint : 0u;
+}
+
+__global__ void set_request_execution_conditions_kernel(RequestAdmissionDeviceBinding binding) {
+  if (blockIdx.x != 0 || threadIdx.x != 0) return;
+  const bool warm = *binding.start_mode == 1u;
+  *binding.warm_checkpoint_batch_ready = 0u;
+  cudaGraphSetConditional(binding.start_mode_condition, warm ? 1u : 0u);
+  cudaGraphSetConditional(binding.execution_condition, *binding.request_error == 0u ? 1u : 0u);
 }
 
 struct NumericalRefreshDeviceBinding {
@@ -2364,6 +2401,10 @@ struct InferenceState {
   std::uint64_t* warm_checkpoint_generations = nullptr;
   /* Device aggregate: nonzero only when every peer published a checkpoint. */
   std::uint32_t* warm_checkpoint_batch_ready = nullptr;
+  /* Single-flight asynchronous request control and the checkpoint token moved
+   * out of public storage at accepted admission. */
+  std::uint32_t* request_start_mode = nullptr;
+  std::uint64_t* admitted_warm_checkpoint_generations = nullptr;
   bool ready = false;
   bool warm_checkpoint_ready = false;
 };
@@ -2446,19 +2487,29 @@ class RequestExecutionGraphOwner {
     if (graph_ != nullptr) (void)cudaGraphDestroy(graph_);
     executable_ = nullptr;
     graph_ = nullptr;
-    condition_ = 0u;
+    execution_condition_ = 0u;
+    start_mode_condition_ = 0u;
   }
 
   [[nodiscard]] bool ready() const noexcept { return executable_ != nullptr; }
   [[nodiscard]] cudaGraph_t graph() const noexcept { return graph_; }
-  [[nodiscard]] cudaGraphConditionalHandle condition() const noexcept { return condition_; }
+  [[nodiscard]] cudaGraphConditionalHandle execution_condition() const noexcept {
+    return execution_condition_;
+  }
+  [[nodiscard]] cudaGraphConditionalHandle start_mode_condition() const noexcept {
+    return start_mode_condition_;
+  }
 
   cudaError_t create() noexcept {
     reset();
     cudaError_t status = cudaGraphCreate(&graph_, 0u);
     if (status == cudaSuccess) {
-      status =
-          cudaGraphConditionalHandleCreate(&condition_, graph_, 0u, cudaGraphCondAssignDefault);
+      status = cudaGraphConditionalHandleCreate(&execution_condition_, graph_, 0u,
+                                                cudaGraphCondAssignDefault);
+    }
+    if (status == cudaSuccess) {
+      status = cudaGraphConditionalHandleCreate(&start_mode_condition_, graph_, 0u,
+                                                cudaGraphCondAssignDefault);
     }
     if (status != cudaSuccess) reset();
     return status;
@@ -2466,12 +2517,12 @@ class RequestExecutionGraphOwner {
 
   cudaError_t add_if_node(cudaGraphNode_t dependency, cudaGraph_t& body) noexcept {
     body = nullptr;
-    if (graph_ == nullptr || condition_ == 0u || dependency == nullptr) {
+    if (graph_ == nullptr || execution_condition_ == 0u || dependency == nullptr) {
       return cudaErrorInvalidValue;
     }
     cudaGraphNodeParams parameters{};
     parameters.type = cudaGraphNodeTypeConditional;
-    parameters.conditional.handle = condition_;
+    parameters.conditional.handle = execution_condition_;
     parameters.conditional.type = cudaGraphCondTypeIf;
     parameters.conditional.size = 1u;
     cudaGraphNode_t node = nullptr;
@@ -2480,9 +2531,32 @@ class RequestExecutionGraphOwner {
     return status;
   }
 
+  cudaError_t add_start_mode_switch(cudaGraph_t body, cudaGraphNode_t dependency,
+                                    cudaGraph_t*& branches,
+                                    cudaGraphNode_t& switch_node) noexcept {
+    branches = nullptr;
+    switch_node = nullptr;
+    if (body == nullptr || start_mode_condition_ == 0u || dependency == nullptr) {
+      return cudaErrorInvalidValue;
+    }
+    cudaGraphNodeParams parameters{};
+    parameters.type = cudaGraphNodeTypeConditional;
+    parameters.conditional.handle = start_mode_condition_;
+    parameters.conditional.type = cudaGraphCondTypeSwitch;
+    parameters.conditional.size = 2u;
+    const cudaError_t status = cudaGraphAddNode(&switch_node, body, &dependency, 1u, &parameters);
+    if (status == cudaSuccess) branches = parameters.conditional.phGraph_out;
+    return status;
+  }
+
   cudaError_t instantiate() noexcept {
     if (graph_ == nullptr || executable_ != nullptr) return cudaErrorInvalidValue;
     return cudaGraphInstantiate(&executable_, graph_, 0u);
+  }
+
+  cudaError_t upload(cudaStream_t stream) const noexcept {
+    return executable_ == nullptr ? cudaErrorInvalidResourceHandle
+                                  : cudaGraphUpload(executable_, stream);
   }
 
   cudaError_t launch(cudaStream_t stream) const noexcept {
@@ -2493,7 +2567,8 @@ class RequestExecutionGraphOwner {
  private:
   cudaGraph_t graph_ = nullptr;
   cudaGraphExec_t executable_ = nullptr;
-  cudaGraphConditionalHandle condition_ = 0u;
+  cudaGraphConditionalHandle execution_condition_ = 0u;
+  cudaGraphConditionalHandle start_mode_condition_ = 0u;
 };
 
 }  // namespace
@@ -2571,9 +2646,9 @@ struct Gfn2CudaExecutionCache::Impl {
      * The owner retains a bounded fallback when conditional capture is not
      * supported by the selected CUDA/provider stack. */
     Gfn2SccLoopCudaGraphOwner scc_loop;
-    /* Declared after scc_loop so the outer graph is destroyed first. Its SCC
-     * child retains the scc_loop root graph by reference for the Prepared
-     * lifetime. */
+    /* Declared after scc_loop so the outer graph is destroyed first. Its
+     * common numerical/SCC body retains the scc_loop root graph by reference;
+     * only the small FRESH/WARM reset preludes are distinct. */
     RequestExecutionGraphOwner request_execution_graph;
     const std::int32_t* atomic_numbers = nullptr;
     EnergyForceBindings energy_force{};
@@ -5072,6 +5147,8 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t publication_plan_error = 0u;
       std::size_t warm_checkpoint_generations = 0u;
       std::size_t warm_checkpoint_batch_ready = 0u;
+      std::size_t request_start_mode = 0u;
+      std::size_t admitted_warm_checkpoint_generations = 0u;
     } offset;
 
     ArenaLayout layout;
@@ -5106,6 +5183,8 @@ struct Gfn2CudaExecutionCache::Impl {
     offset.publication_plan_error = layout.append<std::uint32_t>(1);
     offset.warm_checkpoint_generations = layout.append<std::uint64_t>(batch);
     offset.warm_checkpoint_batch_ready = layout.append<std::uint32_t>(1);
+    offset.request_start_mode = layout.append<std::uint32_t>(1);
+    offset.admitted_warm_checkpoint_generations = layout.append<std::uint64_t>(batch);
     if (!layout.valid()) {
       error = "inference arena layout overflows size_t";
       return XTBLOOM_STATUS_ALLOCATION_FAILED;
@@ -5291,6 +5370,9 @@ struct Gfn2CudaExecutionCache::Impl {
         arena_pointer<std::uint64_t>(arena, offset.warm_checkpoint_generations);
     inference.warm_checkpoint_batch_ready =
         arena_pointer<std::uint32_t>(arena, offset.warm_checkpoint_batch_ready);
+    inference.request_start_mode = arena_pointer<std::uint32_t>(arena, offset.request_start_mode);
+    inference.admitted_warm_checkpoint_generations =
+        arena_pointer<std::uint64_t>(arena, offset.admitted_warm_checkpoint_generations);
     inference.ready = true;
     return XTBLOOM_STATUS_SUCCESS;
   }
@@ -5658,7 +5740,8 @@ struct Gfn2CudaExecutionCache::Impl {
                                    std::vector<double>&& point_gammas,
                                    std::vector<double>&& periodic_shifts,
                                    std::vector<double>&& periodic_response,
-                                   std::unique_ptr<Prepared>& output, std::string& error) {
+                                   std::unique_ptr<Prepared>& output, std::string& error,
+                                   bool build_request_graph = false) {
     auto candidate = std::make_unique<Prepared>(stream);
     const std::uint64_t fingerprint = key.fingerprint();
     std::uint64_t token = hash_mix(fingerprint ^ next_plan_token++ ^ 0x112112112ULL);
@@ -5875,8 +5958,10 @@ struct Gfn2CudaExecutionCache::Impl {
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     candidate->submitted = true;
-    status = build_request_execution_graph(*candidate, error);
-    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    if (build_request_graph) {
+      status = build_request_execution_graph(*candidate, error);
+      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    }
     output = std::move(candidate);
     return XTBLOOM_STATUS_SUCCESS;
   }
@@ -6955,7 +7040,9 @@ struct Gfn2CudaExecutionCache::Impl {
   xtbloom_status_t build_request_execution_graph(Prepared& current, std::string& error) {
     if (!current.public_result.ready || current.public_result.request_topology_error == nullptr ||
         current.inference.warm_checkpoint_generations == nullptr ||
-        current.inference.warm_checkpoint_batch_ready == nullptr) {
+        current.inference.warm_checkpoint_batch_ready == nullptr ||
+        current.inference.request_start_mode == nullptr ||
+        current.inference.admitted_warm_checkpoint_generations == nullptr) {
       error = "CUDA asynchronous request graph has an incomplete fixed binding";
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
@@ -6968,6 +7055,17 @@ struct Gfn2CudaExecutionCache::Impl {
     }
 
     auto& owner = current.request_execution_graph;
+    if (owner.ready()) {
+      error.clear();
+      return XTBLOOM_STATUS_SUCCESS;
+    }
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+    g_request_graph_build_attempts.fetch_add(1u, std::memory_order_relaxed);
+    if (consume_execution_test_fault(Gfn2CudaExecutionTestFault::kRequestGraphCreate)) {
+      error = "injected CUDA asynchronous request graph creation failure";
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+#endif
     cudaError_t cuda_status = owner.create();
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA asynchronous request graph creation", cuda_status);
@@ -7000,19 +7098,25 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     capture_active = true;
 
-    /* Accepted FRESH submission consumes the old checkpoint irrespective of
-     * the IF body, matching the public asynchronous contract. */
-    cuda_status = cudaMemsetAsync(
-        current.inference.warm_checkpoint_generations, 0,
-        static_cast<std::size_t>(current.host.basis.batch_size) * sizeof(std::uint64_t),
-        capture_stream);
+    const RequestAdmissionDeviceBinding admission_binding{
+        current.host.basis.batch_size,
+        current.public_result.request_topology_error,
+        current.inference.request_start_mode,
+        current.inference.warm_checkpoint_generations,
+        current.inference.warm_checkpoint_batch_ready,
+        current.inference.admitted_warm_checkpoint_generations,
+        owner.execution_condition(),
+        owner.start_mode_condition(),
+    };
+    constexpr int kAdmissionThreads = 256;
+    const auto admission_blocks = static_cast<unsigned int>(
+        (static_cast<std::uint64_t>(admission_binding.batch_size) + kAdmissionThreads - 1u) /
+        kAdmissionThreads);
+    consume_request_checkpoint_kernel<<<admission_blocks, kAdmissionThreads, 0, capture_stream>>>(
+        admission_binding);
+    cuda_status = cudaPeekAtLastError();
     if (cuda_status == cudaSuccess) {
-      cuda_status = cudaMemsetAsync(current.inference.warm_checkpoint_batch_ready, 0,
-                                    sizeof(std::uint32_t), capture_stream);
-    }
-    if (cuda_status == cudaSuccess) {
-      set_request_execution_condition_kernel<<<1, 1, 0, capture_stream>>>(
-          current.public_result.request_topology_error, owner.condition());
+      set_request_execution_conditions_kernel<<<1, 1, 0, capture_stream>>>(admission_binding);
       cuda_status = cudaPeekAtLastError();
     }
     if (cuda_status != cudaSuccess) {
@@ -7050,9 +7154,10 @@ struct Gfn2CudaExecutionCache::Impl {
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
 
-    /* Populate the IF body after root capture. The body owns a stable copy of
-     * numerical ingress, fresh-state restore, the SCC root child, and terminal
-     * internal publication. */
+    /* Populate the accepted body once. Numerical refresh precedes a small
+     * nested start-mode switch; the expensive SCC/terminal/publication tail is
+     * shared by FRESH and WARM instead of being instantiated twice. */
+    cudaGraph_t* start_mode_branches = nullptr;
     cuda_status = cudaStreamBeginCaptureToGraph(capture_stream, body, nullptr, nullptr, 0u,
                                                 cudaStreamCaptureModeThreadLocal);
     if (cuda_status == cudaSuccess) {
@@ -7061,15 +7166,30 @@ struct Gfn2CudaExecutionCache::Impl {
       xtbloom_status_t status =
           execute_numerical_body_locked(current, capture_stream, capture_error);
       if (status == XTBLOOM_STATUS_SUCCESS) {
-        const auto diagnostic = current.initializer.upload_async(current.iteration_arena.get(),
-                                                                 current.iteration_arena.bytes(),
-                                                                 current.ready, capture_stream);
-        if (!diagnostic.success()) {
-          status = diagnostic.status;
-          capture_error =
-              setup_error_message("CUDA request-graph SCC fresh-state restore", diagnostic.status,
-                                  static_cast<std::uint32_t>(diagnostic.error),
-                                  static_cast<std::uint32_t>(diagnostic.field), diagnostic.index);
+        cudaStreamCaptureStatus body_capture_status = cudaStreamCaptureStatusNone;
+        cudaGraph_t body_capture_graph = nullptr;
+        const cudaGraphNode_t* body_dependencies = nullptr;
+        std::size_t body_dependency_count = 0u;
+        cuda_status = cudaStreamGetCaptureInfo(capture_stream, &body_capture_status, nullptr,
+                                               &body_capture_graph, &body_dependencies,
+                                               &body_dependency_count);
+        if (cuda_status != cudaSuccess || body_capture_status == cudaStreamCaptureStatusNone ||
+            body_capture_graph != body || body_dependencies == nullptr ||
+            body_dependency_count != 1u) {
+          status = XTBLOOM_STATUS_INTERNAL_ERROR;
+          capture_error = "CUDA request body has no numerical dependency frontier";
+        } else {
+          cudaGraphNode_t switch_node = nullptr;
+          cuda_status = owner.add_start_mode_switch(body, body_dependencies[0],
+                                                    start_mode_branches, switch_node);
+          if (cuda_status == cudaSuccess) {
+            cuda_status = cudaStreamUpdateCaptureDependencies(
+                capture_stream, &switch_node, 1u, cudaStreamSetCaptureDependencies);
+          }
+          if (cuda_status != cudaSuccess || start_mode_branches == nullptr) {
+            status = XTBLOOM_STATUS_INTERNAL_ERROR;
+            capture_error = cuda_error_message("CUDA request start-mode switch", cuda_status);
+          }
         }
       }
       if (status == XTBLOOM_STATUS_SUCCESS) {
@@ -7092,28 +7212,126 @@ struct Gfn2CudaExecutionCache::Impl {
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
 
-    cuda_status = owner.instantiate();
+    /* Branch 0 is FRESH: restore the immutable device checkpoint directly.
+     * The initializer validated these fixed addresses during candidate setup,
+     * and its owner outlives this executable. */
+    cuda_status = cudaStreamBeginCaptureToGraph(capture_stream, start_mode_branches[0], nullptr,
+                                                nullptr, 0u, cudaStreamCaptureModeThreadLocal);
+    if (cuda_status == cudaSuccess) {
+      capture_active = true;
+      cuda_status = cudaMemcpyAsync(current.iteration_arena.get(),
+                                    current.initializer.device_checkpoint(),
+                                    current.initializer.image_bytes(), cudaMemcpyDeviceToDevice,
+                                    capture_stream);
+      cudaGraph_t fresh_graph = nullptr;
+      if (cuda_status == cudaSuccess) {
+        cuda_status = cudaStreamEndCapture(capture_stream, &fresh_graph);
+        capture_active = false;
+      }
+      if (cuda_status == cudaSuccess && fresh_graph != start_mode_branches[0]) {
+        cuda_status = cudaErrorStreamCaptureInvalidated;
+      }
+    }
+    if (cuda_status != cudaSuccess) {
+      finish_capture();
+      error = cuda_error_message("CUDA request FRESH prelude capture", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+    /* Branch 1 is WARM: validate the token moved into request scratch during
+     * admission, then restart only the per-attempt trace/history state. */
+    cuda_status = cudaStreamBeginCaptureToGraph(capture_stream, start_mode_branches[1], nullptr,
+                                                nullptr, 0u, cudaStreamCaptureModeThreadLocal);
+    if (cuda_status == cudaSuccess) {
+      capture_active = true;
+      const WarmSccResetDeviceBinding warm{
+          current.host.basis.batch_size,
+          current.host.plan_token,
+          current.inference.epoch_consumer.epoch,
+          current.inference.epoch_consumer.eligible_mask,
+          current.inference.epoch_consumer.committed_generations,
+          current.numerical.device.refresh_predecessor_generations,
+          current.inference.admitted_warm_checkpoint_generations,
+          current.state_seed.mixer,
+          current.state_seed.scc,
+      };
+      constexpr int kWarmThreads = 256;
+      const auto warm_blocks = static_cast<unsigned int>(
+          (static_cast<std::uint64_t>(warm.batch_size) + kWarmThreads - 1u) / kWarmThreads);
+      reset_gfn2_warm_scc_trace_kernel<<<warm_blocks, kWarmThreads, 0, capture_stream>>>(warm);
+      cuda_status = cudaPeekAtLastError();
+      cudaGraph_t warm_graph = nullptr;
+      if (cuda_status == cudaSuccess) {
+        cuda_status = cudaStreamEndCapture(capture_stream, &warm_graph);
+        capture_active = false;
+      }
+      if (cuda_status == cudaSuccess && warm_graph != start_mode_branches[1]) {
+        cuda_status = cudaErrorStreamCaptureInvalidated;
+      }
+    }
+    if (cuda_status != cudaSuccess) {
+      finish_capture();
+      error = cuda_error_message("CUDA request WARM prelude capture", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+    if (consume_execution_test_fault(Gfn2CudaExecutionTestFault::kRequestGraphInstantiate)) {
+      cuda_status = cudaErrorUnknown;
+    } else
+#endif
+    {
+      cuda_status = owner.instantiate();
+    }
+    if (cuda_status == cudaSuccess) {
+      /* Conditional Graph launch may otherwise perform a lazy upload on the
+       * caller stream. That can make enqueue synchronously wait behind work
+       * already ordered on the stream, violating the request API's admission
+       * contract. Finish the one-time upload on the private setup stream. */
+      cuda_status = owner.upload(capture_stream);
+    }
+    if (cuda_status == cudaSuccess) cuda_status = cudaStreamSynchronize(capture_stream);
     (void)cudaStreamDestroy(capture_stream);
     if (cuda_status != cudaSuccess) {
       owner.reset();
-      error = cuda_error_message("CUDA asynchronous request graph instantiation", cuda_status);
+      error = cuda_error_message("CUDA asynchronous request graph instantiation/upload",
+                                 cuda_status);
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
+#if defined(XTBLOOM_CUDA_TEST_HOOKS)
+    g_request_graph_build_successes.fetch_add(1u, std::memory_order_relaxed);
+#endif
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
   }
 
-  xtbloom_status_t launch_request_execution_graph_locked(Prepared& current, std::string& error) {
-    if (!current.request_execution_graph.ready()) {
+  xtbloom_status_t ensure_request_execution_graph_locked(Prepared& current, std::string& error) {
+    return current.request_execution_graph.ready()
+               ? XTBLOOM_STATUS_SUCCESS
+               : build_request_execution_graph(current, error);
+  }
+
+  xtbloom_status_t launch_request_execution_graph_locked(Prepared& current,
+                                                          Gfn2CudaSccStartMode mode,
+                                                          std::string& error) {
+    if (mode != Gfn2CudaSccStartMode::kFresh && mode != Gfn2CudaSccStartMode::kWarm) {
+      error = "CUDA asynchronous request received an unknown SCC start mode";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    const RequestExecutionGraphOwner& owner = current.request_execution_graph;
+    if (!owner.ready()) {
       error = "CUDA asynchronous request execution graph is not initialized";
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
-    const cudaError_t cuda_status = current.request_execution_graph.launch(stream);
+    stage_request_start_mode_kernel<<<1, 1, 0, stream>>>(
+        mode == Gfn2CudaSccStartMode::kWarm ? 1u : 0u, current.inference.request_start_mode);
+    cudaError_t cuda_status = cudaPeekAtLastError();
+    if (cuda_status == cudaSuccess) current.submitted = true;
+    if (cuda_status == cudaSuccess) cuda_status = owner.launch(stream);
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("CUDA asynchronous request graph launch", cuda_status);
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
-    current.submitted = true;
     current.inference.warm_checkpoint_ready = false;
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
@@ -8201,11 +8419,26 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
           return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
       }
+      const auto ensure_selected_request_graph = [&]() -> xtbloom_status_t {
+        if (working == nullptr) {
+          error = "CUDA asynchronous request selected no prepared runtime";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+        if (!working->scc_loop.conditional_graph_ready()) {
+          error =
+              "asynchronous CUDA execution is unavailable because the selected SCC "
+              "provider requires the bounded uncaptured fallback";
+          return XTBLOOM_STATUS_NOT_SUPPORTED;
+        }
+        return implementation.ensure_request_execution_graph_locked(*working, error);
+      };
       if (require_prepared_topology) {
         if (working == nullptr) {
           error = "CUDA plan request has no prepared fixed-topology runtime";
           return XTBLOOM_STATUS_INTERNAL_ERROR;
         }
+        status = ensure_selected_request_graph();
+        if (status != XTBLOOM_STATUS_SUCCESS) return status;
         status = implementation.enqueue_fixed_topology_validation_locked(*working, batch, options,
                                                                          error);
         if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -8220,6 +8453,8 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
             match_existing_topology(batch, options, working->host.key, error, false);
         if (match == TopologyMatch::kInvalid) return XTBLOOM_STATUS_INVALID_ARGUMENT;
         if (match == TopologyMatch::kMatch) {
+          status = ensure_selected_request_graph();
+          if (status != XTBLOOM_STATUS_SUCCESS) return status;
           status = implementation.enqueue_fixed_topology_validation_locked(*working, batch, options,
                                                                            error);
           if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -8235,6 +8470,8 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
          * order. A mutation completes this request with INVALID_ARGUMENT; a
          * caller that intentionally changes device topology can use a changed
          * shape/policy or the synchronous convenience path to rebuild it. */
+        status = ensure_selected_request_graph();
+        if (status != XTBLOOM_STATUS_SUCCESS) return status;
         status = implementation.enqueue_fixed_topology_validation_locked(*working, batch, options,
                                                                          error);
         if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -8297,6 +8534,11 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
           return status;
         }
         working = candidate.get();
+        status = ensure_selected_request_graph();
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          abort_topology_candidate();
+          return status;
+        }
         if (topology_candidate_pending) {
           /* Seal the canonical topology before numerical inference is queued.
            * The bounded wait here belongs to topology/setup admission; placing
@@ -8316,14 +8558,6 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
           }
         }
       }
-      if (!working->scc_loop.conditional_graph_ready()) {
-        abort_topology_candidate();
-        error =
-            "asynchronous CUDA execution is unavailable because the selected SCC "
-            "provider requires the bounded uncaptured fallback";
-        return XTBLOOM_STATUS_NOT_SUPPORTED;
-      }
-
       const auto fail_submitted = [&](xtbloom_status_t failure) {
         const xtbloom_status_t settled =
             implementation.settle_public_submissions_locked(*working, failure, error);
@@ -8371,9 +8605,11 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
       numerical.point_charge_gammas = batch.point_charge_gammas;
       numerical.atomic_potential_shifts = batch.atomic_potential_shifts;
       numerical.charge_response_matrix = batch.charge_response_matrix;
-      status = implementation.refresh_numerical_locked(*working, numerical, error);
+      bool host_upload_enqueued = false;
+      status = implementation.stage_numerical_ingress_locked(*working, numerical,
+                                                             host_upload_enqueued, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
-      status = implementation.execute_inference_locked(*working, start_mode, error);
+      status = implementation.launch_request_execution_graph_locked(*working, start_mode, error);
       if (status != XTBLOOM_STATUS_SUCCESS) return fail_submitted(status);
       working->inference.warm_checkpoint_ready = false;
 
@@ -8465,7 +8701,7 @@ xtbloom_status_t enqueue_restricted_gfn2_cuda_impl(
         topology_candidate_pending = false;
       }
       ++implementation.request_submissions;
-      if (working->numerical_host_upload_completion.pending.load(std::memory_order_acquire)) {
+      if (host_upload_enqueued) {
         const cudaError_t release_status = cudaStreamWaitEvent(
             implementation.stream, working->numerical_host_release_complete.get(), 0u);
         if (release_status != cudaSuccess) {
@@ -9030,7 +9266,7 @@ xtbloom_status_t Gfn2CudaExecutionCache::prepare_topology_only(
         status = impl_->build_candidate(std::move(key), std::move(positions),
                                         std::move(point_positions), std::move(point_values),
                                         std::move(point_gammas), std::move(periodic_shifts),
-                                        std::move(periodic_response), candidate, error);
+                                        std::move(periodic_response), candidate, error, true);
       }
     } catch (const std::bad_alloc&) {
       error = "failed to allocate host metadata for the CUDA GFN2 runtime candidate";
@@ -9144,6 +9380,8 @@ void reset_gfn2_cuda_execution_test_state() noexcept {
   g_native_lattice_teardown_faults.store(0u, std::memory_order_relaxed);
   g_quarantined_native_lattice_arenas.store(0u, std::memory_order_relaxed);
   g_quarantined_native_lattice_bytes.store(0u, std::memory_order_relaxed);
+  g_request_graph_build_attempts.store(0u, std::memory_order_relaxed);
+  g_request_graph_build_successes.store(0u, std::memory_order_relaxed);
 }
 
 void arm_gfn2_cuda_execution_test_fault(Gfn2CudaExecutionTestFault fault) noexcept {
@@ -9162,6 +9400,10 @@ Gfn2CudaExecutionTestStats gfn2_cuda_execution_test_stats() noexcept {
       g_quarantined_native_lattice_arenas.load(std::memory_order_relaxed);
   stats.quarantined_native_lattice_bytes =
       g_quarantined_native_lattice_bytes.load(std::memory_order_relaxed);
+  stats.request_graph_build_attempts =
+      g_request_graph_build_attempts.load(std::memory_order_relaxed);
+  stats.request_graph_build_successes =
+      g_request_graph_build_successes.load(std::memory_order_relaxed);
   return stats;
 }
 #endif

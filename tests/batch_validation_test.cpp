@@ -920,16 +920,14 @@ bool test_interaction_abi_v3() {
     CHECK(!checked.requires_backend_staging_validation());
   }
 
-  /* CUDA structure validation defers availability until pointer ownership and
-   * active lattice contents have been checked by the backend transaction. */
+  /* The compatibility structure entry point retains main's established CUDA
+   * availability gate for interactions. Lattice staging uses the newer
+   * dispatch-only entry point inside the CUDA transaction. */
   {
     Fixture field;
     field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
     checked = validate_compute_descriptor_structure(XTBLOOM_BACKEND_CUDA, &field.batch,
                                                     &field.options, &field.result);
-    CHECK(checked.ok());
-    checked = xtbloom::detail::validate_compute_execution_availability(
-        XTBLOOM_BACKEND_CUDA, field.batch, field.options);
     CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
   }
 
@@ -1143,9 +1141,6 @@ bool test_interaction_abi_v3() {
     cuda_dipole.result.dipole_moments = output_buffer(cuda_output);
     checked = validate_compute_descriptor_structure(XTBLOOM_BACKEND_CUDA, &cuda_dipole.batch,
                                                     &cuda_dipole.options, &cuda_dipole.result);
-    CHECK(checked.ok());
-    checked = xtbloom::detail::validate_compute_execution_availability(
-        XTBLOOM_BACKEND_CUDA, cuda_dipole.batch, cuda_dipole.options);
     CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
   }
 
@@ -1215,6 +1210,16 @@ bool test_lattice_abi_v4() {
                                    static_cast<std::uint32_t>(XTBLOOM_BATCH_V4_SIZE - 1u)}) {
     Fixture legacy;
     legacy.batch.struct_size = size;
+    if (size == XTBLOOM_BATCH_V4_SIZE - 1u) {
+      /* A partial suffix owns neither V4 field. Hostile bytes in the backing
+       * object must therefore remain semantically invisible to validation. */
+      legacy.batch.cell_matrices = {reinterpret_cast<const void*>(std::uintptr_t{1u}),
+                                    std::numeric_limits<std::size_t>::max(),
+                                    static_cast<xtbloom_memory_space_t>(INT32_C(0x7fffffff)), 1u};
+      legacy.batch.periodic_axes = {reinterpret_cast<const void*>(std::uintptr_t{2u}),
+                                    std::numeric_limits<std::size_t>::max(),
+                                    static_cast<xtbloom_memory_space_t>(INT32_C(0x7fffffff)), 1u};
+    }
     CHECK(validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &legacy.batch, &legacy.options,
                                        &legacy.result)
               .ok());
@@ -1246,6 +1251,9 @@ bool test_lattice_abi_v4() {
   DescriptorValidationResult checked = validate_compute_descriptors(
       XTBLOOM_BACKEND_CPU, &molecular.batch, &molecular.options, &molecular.result);
   CHECK(checked.ok());
+  CHECK(xtbloom::detail::validate_plan_descriptor_structure(
+            XTBLOOM_BACKEND_CPU, &molecular.batch, &molecular.options)
+            .ok());
 
   /* A valid released 3D request is fully validated, then refused atomically. */
   Fixture periodic;
@@ -1258,6 +1266,10 @@ bool test_lattice_abi_v4() {
   checked = validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &periodic.batch, &periodic.options,
                                          &periodic.result);
   CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  checked = xtbloom::detail::validate_plan_descriptor_structure(
+      XTBLOOM_BACKEND_CPU, &periodic.batch, &periodic.options);
+  CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(checked.error.find("periodic GFN2 execution is not implemented") != std::string::npos);
   CHECK(checked.error.find("periodic GFN2 execution") != std::string::npos);
   CHECK(periodic.result.flags == 0u);
   CHECK(periodic.energies == energies_before);

@@ -678,6 +678,10 @@ int test_ragged_runtime_shapes(cudaStream_t stream, std::int32_t device_id) {
     CHECK(cache.valid());
     const Gfn2CudaExecutionIdentity initial = cache.identity();
     CHECK(validate_identity(initial, batch_size, true, true, true) == 0);
+    /* This case tests topology reuse, not host-snapshot single flight. Finish
+     * the initial host upload before submitting the changed geometry through
+     * the same fixed pinned staging image. */
+    CUDA_CHECK(cudaStreamSynchronize(stream));
     batch.positions[0] += 0.01;
     batch.bind();
     CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == XTBLOOM_STATUS_SUCCESS);
@@ -744,6 +748,11 @@ int test_reuse_and_transactions(cudaStream_t stream, std::int32_t device_id) {
   CHECK(!reused);
   const Gfn2CudaExecutionIdentity initial = cache.identity();
   CHECK(validate_identity(initial, 8, true, true, true) == 0);
+  /* prepare_host queues the pinned host snapshot release behind the numerical
+   * refresh. Complete that transaction before immediately reusing the same
+   * host staging arena; otherwise callback timing alone decides whether the
+   * next admission observes the documented single-flight guard. */
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   /* Coordinates and all numerical QM/MM fields are intentionally excluded
    * from the topology key and refresh through stable runtime-owned staging. */
@@ -855,6 +864,10 @@ int test_reuse_and_transactions(cudaStream_t stream, std::int32_t device_id) {
   CHECK(history_replaced.scc_loop_owner != replaced.scc_loop_owner);
   CHECK(history_replaced.solver_handle == replaced.solver_handle);
   CHECK(history_replaced.blas_handle == replaced.blas_handle);
+  /* The next call deliberately proves same-policy reuse. Its admission must
+   * not depend on whether the preceding host-release callback won a race with
+   * this test thread. */
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(cache.prepare_host(batch.descriptor, short_history, reused, error) ==
         XTBLOOM_STATUS_SUCCESS);
   CHECK(reused);
@@ -1240,6 +1253,9 @@ int test_large_system_sparse_gate(cudaStream_t stream, std::int32_t device_id) {
   CHECK(initial.force_mode_ready == 1u);
   CHECK(initial.energy_force_smoke_ready == 1u);
   CHECK(initial.scc_conditional_graph_ready == 1u);
+  /* Initial preparation also publishes a host-backed numerical epoch. Settle
+   * that setup transaction before this test starts its explicit refreshes. */
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   PinnedHostBuffer<double> caller_positions;
   PinnedHostBuffer<std::uint8_t> caller_requested;
@@ -1311,6 +1327,10 @@ int test_host_refresh_snapshot_lifetime(cudaStream_t stream, std::int32_t device
   CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
   const Gfn2CudaExecutionIdentity initial = cache.identity();
+  /* Isolate the single-flight experiment below from the host upload performed
+   * by initial preparation. Only the two explicit refresh submissions are
+   * intended to contend for the staging image. */
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   std::vector<double> submitted_positions = batch.positions;
   submitted_positions[3] += 0.031;
@@ -1467,6 +1487,10 @@ int test_host_refresh_rejected_during_cuda_graph_capture(cudaStream_t stream,
   bool reused = true;
   CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
+  /* The capture assertions concern a new host refresh. Complete the initial
+   * prepare so an unrelated pending snapshot cannot affect post-capture
+   * admission. */
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   Gfn2CudaNumericalInputView numerical{};
   numerical.positions = batch.descriptor.positions;
@@ -1518,6 +1542,9 @@ int test_periodic_refresh_uses_zero_for_absent_optional_leaf(cudaStream_t stream
   bool reused = true;
   CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
+  /* Both cases below exercise optional periodic leaves, not host staging
+   * contention. Establish a deterministic baseline after initial prepare. */
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   Gfn2CudaNumericalInputView numerical{};
   numerical.positions = batch.descriptor.positions;
@@ -1693,6 +1720,9 @@ int test_default_stream_refresh(std::int32_t device_id) {
   bool reused = true;
   CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
+  /* The default stream still uses the same asynchronous private host-release
+   * stream, so finish the initial transaction before testing reuse. */
+  CUDA_CHECK(cudaStreamSynchronize(nullptr));
   batch.positions[0] += 0.018;
   batch.bind();
   CHECK(cache.prepare_host(batch.descriptor, options, reused, error) == XTBLOOM_STATUS_SUCCESS);
@@ -2107,6 +2137,208 @@ int test_rejected_async_request_preserves_internal_state(cudaStream_t stream,
   return 0;
 }
 
+int test_context_candidate_survives_deferred_settlement(cudaStream_t stream,
+                                                        std::int32_t device_id) {
+  auto cache = std::make_shared<Gfn2CudaExecutionCache>(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  CHECK(HostSccCase::create(homogeneous_case_options(1, SmallSystemKind::kHe, false, false, false),
+                            host, error) == XTBLOOM_STATUS_SUCCESS);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, false);
+  xtbloom_compute_options_t options = compute_options(false);
+  options.max_scc_iterations = 32;
+
+  const auto submit = [&](Gfn2CudaExecutionTestFault fault,
+                          xtbloom_status_t expected_completion) {
+    constexpr double kEnergyCanary = 8125.75;
+    constexpr std::int32_t kIterationCanary = INT32_C(0x13572468);
+    constexpr std::uint8_t kConvergedCanary = UINT8_C(0xa5);
+    constexpr xtbloom_status_t kStatusCanary = INT32_C(0x24681357);
+    std::vector<double> energies(1u, kEnergyCanary);
+    std::vector<std::int32_t> iterations(1u, kIterationCanary);
+    std::vector<std::uint8_t> converged(1u, kConvergedCanary);
+    std::vector<xtbloom_status_t> statuses(1u, kStatusCanary);
+    xtbloom_batch_result_t result{};
+    CHECK(xtbloom_batch_result_init(&result, sizeof(result)) == XTBLOOM_STATUS_SUCCESS);
+    result.energies = mutable_host_buffer(energies);
+    result.scc_iterations = mutable_host_buffer(iterations);
+    result.scc_converged = mutable_host_buffer(converged);
+    result.per_system_status = mutable_host_buffer(statuses);
+
+    arm_gfn2_cuda_execution_test_fault(fault);
+    RequestSubmission submission;
+    CHECK(enqueue_restricted_gfn2_cuda(cache, batch.descriptor, options, result, submission,
+                                       error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(!submission.completed_inline);
+    CHECK(submission.pending != nullptr);
+    RequestCompletionResult completion;
+    CHECK(submission.pending->probe(true, completion) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(completion.complete);
+    CHECK(completion.completion_status == expected_completion);
+    submission.pending->settle_noexcept();
+    if (expected_completion == XTBLOOM_STATUS_SUCCESS) {
+      CHECK(std::isfinite(energies[0]));
+      CHECK(iterations[0] > 0 && iterations[0] <= options.max_scc_iterations);
+      CHECK(converged[0] == 1u);
+      CHECK(statuses[0] == XTBLOOM_STATUS_SUCCESS);
+    } else {
+      CHECK(energies[0] == kEnergyCanary);
+      CHECK(iterations[0] == kIterationCanary);
+      CHECK(converged[0] == kConvergedCanary);
+      CHECK(statuses[0] == kStatusCanary);
+    }
+    return 0;
+  };
+
+  /* The first context request owns an unpublished runtime candidate. A failed
+   * immediate settlement must retain that owner until wait proves both CUDA
+   * streams idle, then abort the topology candidate without poisoning retry. */
+  CHECK(submit(Gfn2CudaExecutionTestFault::kRequestPrepareSubmissionAndSettlement,
+               XTBLOOM_STATUS_INTERNAL_ERROR) == 0);
+  CHECK(!cache->valid());
+  CHECK(submit(Gfn2CudaExecutionTestFault::kNone, XTBLOOM_STATUS_SUCCESS) == 0);
+  CHECK(cache->valid());
+  return 0;
+}
+
+int test_lazy_request_graph_selection_and_faults(cudaStream_t stream, std::int32_t device_id) {
+  HostSccCase host_a;
+  HostSccCase host_b;
+  std::string error;
+  CHECK(HostSccCase::create(homogeneous_case_options(1, SmallSystemKind::kHe, false, false, false),
+                            host_a, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(HostSccCase::create(homogeneous_case_options(1, SmallSystemKind::kH2, false, false, false),
+                            host_b, error) == XTBLOOM_STATUS_SUCCESS);
+  PublicHostBatch batch_a = PublicHostBatch::from_host(host_a, false);
+  PublicHostBatch batch_b = PublicHostBatch::from_host(host_b, false);
+  xtbloom_compute_options_t options = compute_options(false);
+  options.max_scc_iterations = 32;
+
+  const auto submit = [&](const std::shared_ptr<Gfn2CudaExecutionCache>& cache,
+                          const xtbloom_batch_t& batch, xtbloom_status_t expected_enqueue,
+                          bool expect_successful_completion) {
+    constexpr double kEnergyCanary = 8125.75;
+    constexpr std::int32_t kIterationCanary = INT32_C(0x13572468);
+    constexpr std::uint8_t kConvergedCanary = UINT8_C(0xa5);
+    constexpr xtbloom_status_t kStatusCanary = INT32_C(0x24681357);
+    std::vector<double> energies(1u, kEnergyCanary);
+    std::vector<std::int32_t> iterations(1u, kIterationCanary);
+    std::vector<std::uint8_t> converged(1u, kConvergedCanary);
+    std::vector<xtbloom_status_t> statuses(1u, kStatusCanary);
+    xtbloom_batch_result_t result{};
+    CHECK(xtbloom_batch_result_init(&result, sizeof(result)) == XTBLOOM_STATUS_SUCCESS);
+    result.flags = UINT32_C(0xc35aa53c);
+    result.energies = mutable_host_buffer(energies);
+    result.scc_iterations = mutable_host_buffer(iterations);
+    result.scc_converged = mutable_host_buffer(converged);
+    result.per_system_status = mutable_host_buffer(statuses);
+    RequestSubmission submission;
+    CHECK(enqueue_restricted_gfn2_cuda(cache, batch, options, result, submission, error) ==
+          expected_enqueue);
+    if (expected_enqueue != XTBLOOM_STATUS_SUCCESS) {
+      CHECK(submission.pending == nullptr);
+      CHECK(!submission.completed_inline);
+      CHECK(result.flags == UINT32_C(0xc35aa53c));
+      CHECK(energies[0] == kEnergyCanary);
+      CHECK(iterations[0] == kIterationCanary);
+      CHECK(converged[0] == kConvergedCanary);
+      CHECK(statuses[0] == kStatusCanary);
+      CHECK(cache->identity().request_active == 0u);
+      return 0;
+    }
+    CHECK(!submission.completed_inline);
+    CHECK(submission.pending != nullptr);
+    RequestCompletionResult completion;
+    CHECK(submission.pending->probe(true, completion) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(completion.complete);
+    CHECK(completion.completion_status ==
+          (expect_successful_completion ? XTBLOOM_STATUS_SUCCESS
+                                        : XTBLOOM_STATUS_INTERNAL_ERROR));
+    submission.pending->settle_noexcept();
+    if (expect_successful_completion) {
+      CHECK(std::isfinite(energies[0]));
+      CHECK(iterations[0] > 0 && iterations[0] <= options.max_scc_iterations);
+      CHECK(converged[0] == 1u);
+      CHECK(statuses[0] == XTBLOOM_STATUS_SUCCESS);
+    }
+    return 0;
+  };
+
+  for (Gfn2CudaExecutionTestFault fault : {Gfn2CudaExecutionTestFault::kRequestGraphCreate,
+                                           Gfn2CudaExecutionTestFault::kRequestGraphInstantiate}) {
+    reset_gfn2_cuda_execution_test_state();
+    auto cache =
+        std::make_shared<Gfn2CudaExecutionCache>(device_id, reinterpret_cast<void*>(stream));
+    bool reused = true;
+    CHECK(cache->prepare_host(batch_a.descriptor, options, reused, error) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(!reused);
+    const Gfn2CudaExecutionIdentity identity_a = cache->identity();
+    Gfn2CudaExecutionTestStats stats = gfn2_cuda_execution_test_stats();
+    CHECK(stats.request_graph_build_attempts == 0u);
+    CHECK(stats.request_graph_build_successes == 0u);
+
+    /* Host topology B is selected before lazy Graph setup. A one-shot failure
+     * must therefore belong to B, preserve A, and make retry build exactly one
+     * executable instead of first compiling the now-irrelevant A runtime. */
+    arm_gfn2_cuda_execution_test_fault(fault);
+    CHECK(submit(cache, batch_b.descriptor, XTBLOOM_STATUS_INTERNAL_ERROR, false) == 0);
+    CHECK(same_identity(identity_a, cache->identity()));
+    stats = gfn2_cuda_execution_test_stats();
+    CHECK(stats.request_graph_build_attempts == 1u);
+    CHECK(stats.request_graph_build_successes == 0u);
+
+    CHECK(submit(cache, batch_b.descriptor, XTBLOOM_STATUS_SUCCESS, true) == 0);
+    CHECK(cache->identity().topology_fingerprint != identity_a.topology_fingerprint);
+    stats = gfn2_cuda_execution_test_stats();
+    CHECK(stats.request_graph_build_attempts == 2u);
+    CHECK(stats.request_graph_build_successes == 1u);
+  }
+
+  /* A synchronous runtime may legally use the bounded uncaptured SCC fallback.
+   * That narrower capability on old topology A must not reject a context
+   * enqueue whose host-visible topology selects a fresh Graph-capable B. */
+  reset_gfn2_cuda_execution_test_state();
+  auto fallback_cache =
+      std::make_shared<Gfn2CudaExecutionCache>(device_id, reinterpret_cast<void*>(stream));
+  arm_gfn2_cuda_execution_test_fault(Gfn2CudaExecutionTestFault::kSccProviderUncapturedFallback);
+  bool reused = true;
+  CHECK(fallback_cache->prepare_host(batch_a.descriptor, options, reused, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(fallback_cache->identity().scc_conditional_graph_ready == 0u);
+  CHECK(submit(fallback_cache, batch_b.descriptor, XTBLOOM_STATUS_SUCCESS, true) == 0);
+  CHECK(fallback_cache->identity().scc_conditional_graph_ready == 1u);
+  Gfn2CudaExecutionTestStats stats = gfn2_cuda_execution_test_stats();
+  CHECK(stats.request_graph_build_attempts == 1u);
+  CHECK(stats.request_graph_build_successes == 1u);
+
+  /* Device topology comparison borrows the caller buffer only after Graph
+   * setup succeeds. On either setup fault the enqueue returns IDLE, after
+   * which the device buffer can be destroyed before owner-stream settlement. */
+  for (Gfn2CudaExecutionTestFault fault : {Gfn2CudaExecutionTestFault::kRequestGraphCreate,
+                                           Gfn2CudaExecutionTestFault::kRequestGraphInstantiate}) {
+    reset_gfn2_cuda_execution_test_state();
+    auto cache =
+        std::make_shared<Gfn2CudaExecutionCache>(device_id, reinterpret_cast<void*>(stream));
+    reused = true;
+    CHECK(cache->prepare_host(batch_a.descriptor, options, reused, error) ==
+          XTBLOOM_STATUS_SUCCESS);
+    {
+      DeviceBuffer<double> device_charges;
+      CHECK(device_charges.upload(batch_a.molecular_charges, stream) == cudaSuccess);
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+      xtbloom_batch_t mixed = batch_a.descriptor;
+      mixed.molecular_charges = device_charges.view();
+      arm_gfn2_cuda_execution_test_fault(fault);
+      CHECK(submit(cache, mixed, XTBLOOM_STATUS_INTERNAL_ERROR, false) == 0);
+    }
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(submit(cache, batch_a.descriptor, XTBLOOM_STATUS_SUCCESS, true) == 0);
+  }
+  reset_gfn2_cuda_execution_test_state();
+  return 0;
+}
+
 int test_bounded_fallback_preserves_synchronous_plan(cudaStream_t stream,
                                                      std::int32_t device_id) {
   auto cache = std::make_shared<Gfn2CudaExecutionCache>(device_id, reinterpret_cast<void*>(stream));
@@ -2338,7 +2570,13 @@ int main(int argc, char** argv) {
   const bool request_state_only =
       argc == 2 && std::strcmp(argv[1], "--request-state") == 0;
   if (request_state_only) {
-    const int status = test_rejected_async_request_preserves_internal_state(stream, device_id);
+    int status = test_rejected_async_request_preserves_internal_state(stream, device_id);
+    if (status == 0) {
+      status = test_context_candidate_survives_deferred_settlement(stream, device_id);
+    }
+    if (status == 0) {
+      status = test_lazy_request_graph_selection_and_faults(stream, device_id);
+    }
     CUDA_CHECK(cudaStreamSynchronize(stream));
     CUDA_CHECK(cudaStreamDestroy(stream));
     return status;

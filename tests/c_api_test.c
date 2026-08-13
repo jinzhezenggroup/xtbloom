@@ -348,7 +348,7 @@ static xtbloom_buffer_t output_view(void* data, size_t size_bytes) {
  * model setup and execution. */
 static int check_periodic_refusal_is_atomic(xtbloom_context_t* context) {
   const int64_t atom_offsets[2] = {0, 1};
-  const int32_t atomic_numbers[1] = {1};
+  const int32_t atomic_numbers[1] = {2};
   const double positions[3] = {0.0, 0.0, 0.0};
   const double molecular_charges[1] = {0.0};
   const int32_t unpaired_electrons[1] = {0};

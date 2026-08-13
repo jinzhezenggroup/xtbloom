@@ -53,7 +53,11 @@ int test_orthogonal_geometry_and_wrap() {
   CHECK(error.empty());
   CHECK(lattice.direct == direct);
   CHECK(lattice.volume == 24.0);
-  CHECK((lattice.plane_spacing == std::array<double, 3>{2.0, 3.0, 4.0}));
+  const std::array<double, 3> exact_spacing{2.0, 3.0, 4.0};
+  for (std::size_t vector = 0; vector < 3u; ++vector) {
+    CHECK(lattice.plane_spacing[vector] <= exact_spacing[vector]);
+    CHECK(near(lattice.plane_spacing[vector], exact_spacing[vector], 8.0e-15));
+  }
   CHECK(near(lattice.reciprocal[0], kTwoPi / 2.0, 5.0e-16));
   CHECK(near(lattice.reciprocal[4], kTwoPi / 3.0, 5.0e-16));
   CHECK(near(lattice.reciprocal[8], kTwoPi / 4.0, 5.0e-16));
@@ -250,6 +254,75 @@ int test_small_skew_cell_cutoff_completeness() {
   return 0;
 }
 
+int test_rounding_boundary_image_completeness() {
+  /* Nearest rounding raises the first plane spacing for this cell. Using that
+   * rounded-up value directly makes ceil(cutoff / spacing) equal four even
+   * though the fifth image can bring two wrapped points inside the cutoff. */
+  constexpr std::array<double, 9> direct{
+      1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.0, 1.0,
+  };
+  constexpr double cutoff = 3.999800014998750263828;
+  xtbloom::detail::gfn2::Lattice3D lattice;
+  std::string error;
+  CHECK(xtbloom::detail::gfn2::make_lattice_3d(direct.data(), lattice, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const long double exact_spacing =
+      1.0L / std::hypot(static_cast<long double>(direct[6]),
+                        static_cast<long double>(direct[8]));
+  CHECK(static_cast<long double>(lattice.plane_spacing[0]) <= exact_spacing);
+
+  std::vector<xtbloom::detail::gfn2::LatticeTranslation> translations;
+  CHECK(xtbloom::detail::gfn2::make_lattice_translations(
+            lattice, cutoff, xtbloom::detail::gfn2::LatticeOriginPolicy::kInclude, translations,
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(contains_index(translations, {5, 0, 0}));
+
+  const long double dx =
+      static_cast<long double>(std::nextafter(-1.0, 0.0));
+  constexpr long double dz = -0.03999600039996000638842L;
+  const long double x = (5.0L + dx) * static_cast<long double>(direct[0]) +
+                        dz * static_cast<long double>(direct[6]);
+  const long double z = dz * static_cast<long double>(direct[8]);
+  CHECK(std::hypot(x, z) <= static_cast<long double>(cutoff));
+  return 0;
+}
+
+int test_integer_cartesian_translations_wrap_canonically() {
+  constexpr std::array<double, 9> direct{
+      0.79979393826591227,  -0.27902125012705659, -1.9036126812397094,
+      -1.9438839310276417, -0.55375873092674577, -1.12666756478776,
+      -0.3563602655153677, 1.2829454330487802,   -0.74540186630715821,
+  };
+  xtbloom::detail::gfn2::Lattice3D lattice;
+  std::string error;
+  CHECK(xtbloom::detail::gfn2::make_lattice_3d(direct.data(), lattice, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  for (std::size_t vector = 0; vector < 3u; ++vector) {
+    std::array<double, 3> wrapped{};
+    CHECK(xtbloom::detail::gfn2::wrap_cartesian(lattice, direct.data() + vector * 3u,
+                                                wrapped.data(), error) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK((wrapped == std::array<double, 3>{0.0, 0.0, 0.0}));
+  }
+
+  /* Improving the inverse must not introduce an epsilon snap that erases a
+   * genuine fractional coordinate immediately below the cell boundary. */
+  const std::array<double, 3> fractional{
+      0.125, std::nextafter(1.0, 0.0), 0.375,
+  };
+  std::array<double, 3> cartesian{};
+  std::array<double, 3> recovered{};
+  CHECK(xtbloom::detail::gfn2::fractional_to_cartesian(
+            lattice, fractional.data(), cartesian.data(), error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::cartesian_to_fractional(
+            lattice, cartesian.data(), recovered.data(), error) == XTBLOOM_STATUS_SUCCESS);
+  for (std::size_t component = 0; component < 3u; ++component) {
+    CHECK(near(recovered[component], fractional[component], 2.0e-16));
+  }
+  return 0;
+}
+
 int test_validation_and_transactional_outputs() {
   constexpr std::array<double, 9> valid{
       2.0, 0.0, 0.0, 0.3, 1.7, 0.0, -0.2, 0.4, 1.3,
@@ -352,6 +425,51 @@ int test_binary64_scale_range() {
       CHECK(near(recovered[component], fractional[component], 3.0e-16));
     }
   }
+
+  /* These derived quantities are all representable, despite the direct rows
+   * spanning 400 decimal orders. A global normalization loses the short row
+   * when long double has only the binary64 exponent range. */
+  constexpr std::array<double, 9> anisotropic{
+      1.0e200, 0.0, 0.0, 0.0, 1.0e200, 0.0, 0.0, 0.0, 1.0e-200,
+  };
+  xtbloom::detail::gfn2::Lattice3D anisotropic_lattice;
+  CHECK(xtbloom::detail::gfn2::valid_lattice_cell_3d(anisotropic.data()));
+  CHECK(xtbloom::detail::gfn2::make_lattice_3d(anisotropic.data(), anisotropic_lattice, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(near(anisotropic_lattice.volume / 1.0e200, 1.0, 8.0e-16));
+  CHECK(anisotropic_lattice.plane_spacing[0] <= 1.0e200);
+  CHECK(anisotropic_lattice.plane_spacing[1] <= 1.0e200);
+  CHECK(anisotropic_lattice.plane_spacing[2] <= 1.0e-200);
+  CHECK(std::isfinite(anisotropic_lattice.reciprocal[8]));
+  constexpr std::array<double, 3> fractional{0.125, 0.5, 0.875};
+  std::array<double, 3> cartesian{};
+  std::array<double, 3> recovered{};
+  CHECK(xtbloom::detail::gfn2::fractional_to_cartesian(
+            anisotropic_lattice, fractional.data(), cartesian.data(), error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::cartesian_to_fractional(
+            anisotropic_lattice, cartesian.data(), recovered.data(), error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  for (std::size_t component = 0; component < 3u; ++component) {
+    CHECK(near(recovered[component], fractional[component], 4.0e-16));
+  }
+
+  /* Large, mildly skew rows exercise cancellation in the normalized
+   * determinant without overflowing the unscaled cofactor products. */
+  constexpr double scale = 1.0e106;
+  constexpr double epsilon = 3.0e-7;
+  constexpr std::array<double, 9> large_skew{
+      scale, scale, scale, scale, scale * (1.0 + epsilon), scale,
+      scale, scale, scale * (1.0 + epsilon),
+  };
+  xtbloom::detail::gfn2::Lattice3D large_skew_lattice;
+  CHECK(xtbloom::detail::gfn2::valid_lattice_cell_3d(large_skew.data()));
+  CHECK(xtbloom::detail::gfn2::make_lattice_3d(large_skew.data(), large_skew_lattice, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(large_skew_lattice.volume > 0.0 && std::isfinite(large_skew_lattice.volume));
+  CHECK(std::all_of(large_skew_lattice.plane_spacing.begin(),
+                    large_skew_lattice.plane_spacing.end(),
+                    [](double value) { return value > 0.0 && std::isfinite(value); }));
   return 0;
 }
 
@@ -387,6 +505,12 @@ int main() {
     return line;
   }
   if (const int line = test_small_skew_cell_cutoff_completeness(); line != 0) {
+    return line;
+  }
+  if (const int line = test_rounding_boundary_image_completeness(); line != 0) {
+    return line;
+  }
+  if (const int line = test_integer_cartesian_translations_wrap_canonically(); line != 0) {
     return line;
   }
   if (const int line = test_validation_and_transactional_outputs(); line != 0) {

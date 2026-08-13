@@ -1231,7 +1231,22 @@ DescriptorValidationResult validate_plan_descriptor_structure(
   }
   DescriptorValidationResult availability =
       validate_compute_execution_availability(backend, *batch, *options);
-  return availability.ok() ? validation : availability;
+  if (!availability.ok()) {
+    return availability;
+  }
+  if (backend == XTBLOOM_BACKEND_CPU) {
+    /* CPU plan creation has completed all host semantic and pointer-space
+     * checks at this boundary, so a valid native cell must be refused before
+     * an internal Gfn2Plan can prepare a molecular cache that ignores it. CUDA
+     * retains the staged backend transaction so device and mislabeled pointers
+     * are proven before availability is reported. */
+    DescriptorValidationResult lattice_availability =
+        validate_host_lattice_execution_availability_impl(*batch);
+    if (!lattice_availability.ok()) {
+      return lattice_availability;
+    }
+  }
+  return validation;
 }
 
 DescriptorValidationResult validate_host_topology_semantics(const xtbloom_batch_t& batch) {

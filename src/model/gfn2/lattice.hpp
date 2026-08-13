@@ -135,6 +135,7 @@ XTBLOOM_LATTICE_HD inline bool valid_lattice_cell_3d_binary64(const double* dire
 struct Lattice3D {
   std::array<double, 9> direct{};
   std::array<double, 9> reciprocal{};
+  /* Conservative binary64 lower bounds used for complete image enumeration. */
   std::array<double, 3> plane_spacing{};
   double volume = 0.0;
 };

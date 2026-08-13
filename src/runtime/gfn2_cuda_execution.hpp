@@ -220,6 +220,11 @@ enum class Gfn2CudaExecutionTestFault : std::uint32_t {
   kRequestSettlement = 8u,
   kRequestPrepareSubmissionAndSettlement = 9u,
   kRequestCommitSubmissionAndSettlement = 10u,
+  /* Fail before Graph creation or after capture but before executable
+   * publication. These prove that lazy setup leaves the request IDLE and no
+   * caller-owned descriptor is retained by queued work. */
+  kRequestGraphCreate = 11u,
+  kRequestGraphInstantiate = 12u,
 };
 
 /* Read-only evidence for failure paths that intentionally cannot retain an
@@ -231,6 +236,8 @@ struct Gfn2CudaExecutionTestStats {
   std::uint64_t native_lattice_teardown_faults = 0u;
   std::uint64_t quarantined_native_lattice_arenas = 0u;
   std::uint64_t quarantined_native_lattice_bytes = 0u;
+  std::uint64_t request_graph_build_attempts = 0u;
+  std::uint64_t request_graph_build_successes = 0u;
 };
 
 void reset_gfn2_cuda_execution_test_state() noexcept;
