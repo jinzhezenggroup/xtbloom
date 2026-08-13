@@ -1692,6 +1692,16 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_model_registry_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.model_registry COMMAND xtbloom_model_registry_test)
 
+  add_executable(xtbloom_gfn1_cpu_execution_header_test
+    tests/gfn1_cpu_execution_header_test.cpp
+  )
+  target_include_directories(xtbloom_gfn1_cpu_execution_header_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_features(xtbloom_gfn1_cpu_execution_header_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.execution_header COMMAND xtbloom_gfn1_cpu_execution_header_test)
+
   if(XTBLOOM_HAS_CUDA)
     # This host-only test must compile in the provider-free configuration. It
     # verifies that provider status returns remain fixed-width integer domains

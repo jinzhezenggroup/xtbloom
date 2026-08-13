@@ -4,6 +4,7 @@
 #define XTBLOOM_RUNTIME_GFN1_CPU_EXECUTION_HPP
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 
