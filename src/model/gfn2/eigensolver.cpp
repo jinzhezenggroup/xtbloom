@@ -1405,10 +1405,9 @@ xtbloom_status_t make_internal_test_lp64_backend(
     LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
     CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
     CpuLinearAlgebraBackend& backend, std::string& error, BlasThreadCleanup thread_cleanup) {
-  CpuLinearAlgebraBackend created =
-      CpuLinearAlgebraAccess::make(CpuLinearAlgebraBackend::Origin::kInternalTestLp64, dpotrf_work,
-                                   dpocon_work, dsyevd_work, dtrsm, dgemm,
-                                   set_num_threads_local, thread_cleanup);
+  CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+      CpuLinearAlgebraBackend::Origin::kInternalTestLp64, dpotrf_work, dpocon_work, dsyevd_work,
+      dtrsm, dgemm, set_num_threads_local, thread_cleanup);
   if (!created.ready() || !backend_self_test(created)) {
     error = "internal LP64 test backend failed its column-major preflight";
     return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
@@ -2198,8 +2197,9 @@ xtbloom_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, 
   return XTBLOOM_STATUS_SUCCESS;
 }
 
-xtbloom_status_t validate_eigensolver_overlap_cache_binding(
-    const EigensolverPlan& plan, const EigensolverOverlapCache& cache, std::string& error) {
+xtbloom_status_t validate_eigensolver_overlap_cache_binding(const EigensolverPlan& plan,
+                                                            const EigensolverOverlapCache& cache,
+                                                            std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   return status == XTBLOOM_STATUS_SUCCESS ? validate_cache(plan, cache, error) : status;
 }

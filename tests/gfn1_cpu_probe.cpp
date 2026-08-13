@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#include "runtime/gfn1_cpu_execution.hpp"
-
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
@@ -10,18 +8,20 @@
 #include <type_traits>
 #include <vector>
 
+#include "runtime/gfn1_cpu_execution.hpp"
+
 namespace {
 
 template <typename T>
 xtbloom_const_buffer_t input_buffer(const std::vector<T>& values) {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T),
-          XTBLOOM_MEMORY_HOST, 0u};
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
+          0u};
 }
 
 template <typename T>
 xtbloom_buffer_t output_buffer(std::vector<T>& values) {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T),
-          XTBLOOM_MEMORY_HOST, 0u};
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
+          0u};
 }
 
 template <typename T>

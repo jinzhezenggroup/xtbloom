@@ -12,10 +12,8 @@ common::SccMixerVectorLayoutView make_common_layout(const WavefunctionLayout& la
   common_layout.workspace_size_bytes = layout.workspace_size_bytes;
   common_layout.workspace_alignment = kWavefunctionWorkspaceAlignment;
   common_layout.field_count = 1u;
-  common_layout.fields[0] = {layout.qsh.offset_bytes,
-                             layout.qsh.size_bytes,
-                             layout.qsh.element_count,
-                             layout.qsh.system_offsets.data(),
+  common_layout.fields[0] = {layout.qsh.offset_bytes, layout.qsh.size_bytes,
+                             layout.qsh.element_count, layout.qsh.system_offsets.data(),
                              layout.qsh.system_offsets.size()};
   return common_layout;
 }
@@ -31,9 +29,7 @@ common::SccMixerVectorView make_common_view(const WavefunctionView& wavefunction
 
 }  // namespace
 
-const common::SccMixerPlan& common_plan(const SccMixerPlan& plan) noexcept {
-  return plan.engine_;
-}
+const common::SccMixerPlan& common_plan(const SccMixerPlan& plan) noexcept { return plan.engine_; }
 
 bool SccMixerPlan::sealed() const noexcept { return engine_.sealed(); }
 std::int64_t SccMixerPlan::batch_size() const noexcept { return engine_.batch_size(); }
@@ -63,14 +59,13 @@ bool SccMixerPlan::overlaps_storage(const void* data, std::size_t size_bytes) co
 }
 const SccMixerPlanData* SccMixerPlan::identity() const noexcept { return engine_.identity(); }
 
-xtbloom_status_t make_scc_mixer_plan(const WavefunctionLayout& layout,
-                                     std::int64_t history_size, double damping,
-                                     double rms_tolerance, double maximum_tolerance,
+xtbloom_status_t make_scc_mixer_plan(const WavefunctionLayout& layout, std::int64_t history_size,
+                                     double damping, double rms_tolerance, double maximum_tolerance,
                                      SccMixerPlan& plan, std::string& error) {
   common::SccMixerPlan created;
-  const xtbloom_status_t status = common::make_scc_mixer_plan(
-      make_common_layout(layout), history_size, damping, rms_tolerance,
-      maximum_tolerance, created, error);
+  const xtbloom_status_t status =
+      common::make_scc_mixer_plan(make_common_layout(layout), history_size, damping, rms_tolerance,
+                                  maximum_tolerance, created, error);
   if (status == XTBLOOM_STATUS_SUCCESS) {
     plan.engine_ = std::move(created);
   }
@@ -84,15 +79,14 @@ xtbloom_status_t bind_scc_mixer_state(const SccMixerPlan& plan, void* workspace,
 }
 
 xtbloom_status_t bind_scc_mixer_workspace(const SccMixerPlan& plan, void* workspace,
-                                          std::size_t workspace_size,
-                                          SccMixerWorkspace& view, std::string& error) {
+                                          std::size_t workspace_size, SccMixerWorkspace& view,
+                                          std::string& error) {
   return common::bind_scc_mixer_workspace(common_plan(plan), workspace, workspace_size, view,
                                           error);
 }
 
 xtbloom_status_t validate_scc_mixer_state_binding(const SccMixerPlan& plan,
-                                                  const SccMixerState& state,
-                                                  std::string& error) {
+                                                  const SccMixerState& state, std::string& error) {
   return common::validate_scc_mixer_state_binding(common_plan(plan), state, error);
 }
 
@@ -104,51 +98,49 @@ xtbloom_status_t validate_scc_mixer_workspace_binding(const SccMixerPlan& plan,
 
 xtbloom_status_t initialize_scc_mixer_state_cpu(const SccMixerPlan& plan,
                                                 const WavefunctionView& wavefunction,
-                                                const SccMixerState& state,
-                                                std::string& error) {
+                                                const SccMixerState& state, std::string& error) {
   return common::initialize_scc_mixer_state_cpu(common_plan(plan), make_common_view(wavefunction),
                                                 state, error);
 }
 
-xtbloom_status_t restart_scc_mixer_system_cpu(const SccMixerPlan& plan,
-                                              std::int64_t system,
+xtbloom_status_t restart_scc_mixer_system_cpu(const SccMixerPlan& plan, std::int64_t system,
                                               const WavefunctionView& wavefunction,
-                                              const SccMixerState& state,
-                                              std::string& error) {
+                                              const SccMixerState& state, std::string& error) {
   return common::restart_scc_mixer_system_cpu(common_plan(plan), system,
                                               make_common_view(wavefunction), state, error);
 }
 
-xtbloom_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan,
-                                            std::int64_t system,
+xtbloom_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan, std::int64_t system,
                                             const WavefunctionView& wavefunction,
                                             const SccMixerState& state,
                                             const SccMixerWorkspace& workspace,
                                             std::string& error) {
-  return common::mix_scc_broyden_system_cpu(common_plan(plan), system,
-                                            make_common_view(wavefunction), state, workspace,
-                                            error);
+  return common::mix_scc_broyden_system_cpu(
+      common_plan(plan), system, make_common_view(wavefunction), state, workspace, error);
 }
 
 xtbloom_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,
                                            const WavefunctionView& wavefunction,
                                            const SccMixerState& state,
-                                           const SccMixerWorkspace& workspace,
-                                           std::string& error) {
-  return common::mix_scc_broyden_batch_cpu(common_plan(plan), make_common_view(wavefunction),
-                                           state, workspace, error);
+                                           const SccMixerWorkspace& workspace, std::string& error) {
+  return common::mix_scc_broyden_batch_cpu(common_plan(plan), make_common_view(wavefunction), state,
+                                           workspace, error);
 }
 
-xtbloom_status_t prepare_scc_mixer_system_transaction_cpu(
-    const SccMixerPlan& plan, std::int64_t system, const SccMixerState& source,
-    const SccMixerState& staged, std::string& error) {
-  return common::prepare_scc_mixer_system_transaction_cpu(common_plan(plan), system, source,
-                                                          staged, error);
+xtbloom_status_t prepare_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
+                                                          std::int64_t system,
+                                                          const SccMixerState& source,
+                                                          const SccMixerState& staged,
+                                                          std::string& error) {
+  return common::prepare_scc_mixer_system_transaction_cpu(common_plan(plan), system, source, staged,
+                                                          error);
 }
 
-xtbloom_status_t commit_scc_mixer_system_transaction_cpu(
-    const SccMixerPlan& plan, std::int64_t system, const SccMixerState& staged,
-    const SccMixerState& destination, std::string& error) {
+xtbloom_status_t commit_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
+                                                         std::int64_t system,
+                                                         const SccMixerState& staged,
+                                                         const SccMixerState& destination,
+                                                         std::string& error) {
   return common::commit_scc_mixer_system_transaction_cpu(common_plan(plan), system, staged,
                                                          destination, error);
 }

@@ -110,16 +110,13 @@ int test_complete_element_topology() {
             plan.shell_primitive_offsets[bromine_p_shell] ==
         6);
   constexpr std::array<double, 6> legacy_alpha{
-      1.365346e+00, 4.393213e-01, 1.877069e-01,
-      9.360270e-02, 5.052263e-02, 2.809354e-02,
+      1.365346e+00, 4.393213e-01, 1.877069e-01, 9.360270e-02, 5.052263e-02, 2.809354e-02,
   };
   constexpr std::array<double, 6> legacy_s_coefficients{
-      3.775056e-03, -5.585965e-02, -3.192946e-01,
-      -2.764780e-02, 9.049199e-01, 3.406258e-01,
+      3.775056e-03, -5.585965e-02, -3.192946e-01, -2.764780e-02, 9.049199e-01, 3.406258e-01,
   };
   constexpr std::array<double, 6> legacy_p_coefficients{
-      -7.052075e-03, -5.259505e-02, -3.773450e-02,
-      3.874773e-01, 5.791672e-01, 1.221817e-01,
+      -7.052075e-03, -5.259505e-02, -3.773450e-02, 3.874773e-01, 5.791672e-01, 1.221817e-01,
   };
   constexpr double pi = 3.141592653589793238462643383279502884;
   for (std::size_t primitive = 0u; primitive < legacy_alpha.size(); ++primitive) {

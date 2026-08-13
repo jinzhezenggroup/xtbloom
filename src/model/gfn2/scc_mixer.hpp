@@ -13,8 +13,7 @@
 
 namespace xtbloom::detail::gfn2 {
 
-inline constexpr std::size_t kSccMixerWorkspaceAlignment =
-    common::kSccMixerWorkspaceAlignment;
+inline constexpr std::size_t kSccMixerWorkspaceAlignment = common::kSccMixerWorkspaceAlignment;
 
 using SccMixerPlanData = common::SccMixerPlanData;
 using SccMixerState = common::SccMixerState;
@@ -55,15 +54,13 @@ class SccMixerPlan {
 
   friend xtbloom_status_t make_scc_mixer_plan(const WavefunctionLayout& layout,
                                               std::int64_t history_size, double damping,
-                                              double rms_tolerance,
-                                              double maximum_tolerance, SccMixerPlan& plan,
-                                              std::string& error);
+                                              double rms_tolerance, double maximum_tolerance,
+                                              SccMixerPlan& plan, std::string& error);
   friend const common::SccMixerPlan& common_plan(const SccMixerPlan& plan) noexcept;
 };
 
-xtbloom_status_t make_scc_mixer_plan(const WavefunctionLayout& layout,
-                                     std::int64_t history_size, double damping,
-                                     double rms_tolerance, double maximum_tolerance,
+xtbloom_status_t make_scc_mixer_plan(const WavefunctionLayout& layout, std::int64_t history_size,
+                                     double damping, double rms_tolerance, double maximum_tolerance,
                                      SccMixerPlan& plan, std::string& error);
 
 xtbloom_status_t bind_scc_mixer_state(const SccMixerPlan& plan, void* workspace,
@@ -71,40 +68,38 @@ xtbloom_status_t bind_scc_mixer_state(const SccMixerPlan& plan, void* workspace,
                                       std::string& error);
 
 xtbloom_status_t bind_scc_mixer_workspace(const SccMixerPlan& plan, void* workspace,
-                                          std::size_t workspace_size,
-                                          SccMixerWorkspace& view, std::string& error);
+                                          std::size_t workspace_size, SccMixerWorkspace& view,
+                                          std::string& error);
 
 xtbloom_status_t initialize_scc_mixer_state_cpu(const SccMixerPlan& plan,
                                                 const WavefunctionView& wavefunction,
-                                                const SccMixerState& state,
-                                                std::string& error);
+                                                const SccMixerState& state, std::string& error);
 
-xtbloom_status_t restart_scc_mixer_system_cpu(const SccMixerPlan& plan,
-                                              std::int64_t system,
+xtbloom_status_t restart_scc_mixer_system_cpu(const SccMixerPlan& plan, std::int64_t system,
                                               const WavefunctionView& wavefunction,
-                                              const SccMixerState& state,
-                                              std::string& error);
+                                              const SccMixerState& state, std::string& error);
 
-xtbloom_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan,
-                                            std::int64_t system,
+xtbloom_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan, std::int64_t system,
                                             const WavefunctionView& wavefunction,
                                             const SccMixerState& state,
-                                            const SccMixerWorkspace& workspace,
-                                            std::string& error);
+                                            const SccMixerWorkspace& workspace, std::string& error);
 
 xtbloom_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,
                                            const WavefunctionView& wavefunction,
                                            const SccMixerState& state,
-                                           const SccMixerWorkspace& workspace,
-                                           std::string& error);
+                                           const SccMixerWorkspace& workspace, std::string& error);
 
-xtbloom_status_t prepare_scc_mixer_system_transaction_cpu(
-    const SccMixerPlan& plan, std::int64_t system, const SccMixerState& source,
-    const SccMixerState& staged, std::string& error);
+xtbloom_status_t prepare_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
+                                                          std::int64_t system,
+                                                          const SccMixerState& source,
+                                                          const SccMixerState& staged,
+                                                          std::string& error);
 
-xtbloom_status_t commit_scc_mixer_system_transaction_cpu(
-    const SccMixerPlan& plan, std::int64_t system, const SccMixerState& staged,
-    const SccMixerState& destination, std::string& error);
+xtbloom_status_t commit_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
+                                                         std::int64_t system,
+                                                         const SccMixerState& staged,
+                                                         const SccMixerState& destination,
+                                                         std::string& error);
 
 }  // namespace xtbloom::detail::gfn2
 

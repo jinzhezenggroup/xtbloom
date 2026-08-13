@@ -102,9 +102,9 @@ std::int32_t injected_dpotrf(std::int32_t layout, char uplo, std::int32_t n, dou
   return LAPACKE_dpotrf_work(layout, uplo, n, matrix, leading_dimension);
 }
 
-std::int32_t injected_dpocon(std::int32_t layout, char uplo, std::int32_t n,
-                             const double* factor, std::int32_t leading_dimension,
-                             double matrix_one_norm, double* reciprocal_condition, double* work,
+std::int32_t injected_dpocon(std::int32_t layout, char uplo, std::int32_t n, const double* factor,
+                             std::int32_t leading_dimension, double matrix_one_norm,
+                             double* reciprocal_condition, double* work,
                              std::int32_t* integer_work) {
   return LAPACKE_dpocon_work(layout, uplo, n, factor, leading_dimension, matrix_one_norm,
                              reciprocal_condition, work, integer_work);
@@ -126,8 +126,8 @@ void injected_dtrsm(int layout, int side, int triangle, int transpose, int diago
                     std::int32_t rows, std::int32_t columns, double alpha,
                     const double* triangular_matrix, std::int32_t leading_triangular,
                     double* right_hand_side, std::int32_t leading_rhs) {
-  cblas_dtrsm(layout, side, triangle, transpose, diagonal, rows, columns, alpha,
-              triangular_matrix, leading_triangular, right_hand_side, leading_rhs);
+  cblas_dtrsm(layout, side, triangle, transpose, diagonal, rows, columns, alpha, triangular_matrix,
+              leading_triangular, right_hand_side, leading_rhs);
 }
 
 void injected_dgemm(int layout, int transpose_left, int transpose_right, std::int32_t rows,
@@ -138,17 +138,14 @@ void injected_dgemm(int layout, int transpose_left, int transpose_right, std::in
               leading_left, right, leading_right, beta, result, leading_result);
 }
 
-void injected_backend_cleanup() {
-  backend_cleanup_calls.fetch_add(1u, std::memory_order_relaxed);
-}
+void injected_backend_cleanup() { backend_cleanup_calls.fetch_add(1u, std::memory_order_relaxed); }
 
 CpuLinearAlgebraBackend make_injected_backend() {
   CpuLinearAlgebraBackend backend;
   std::string error;
   if (xtbloom::detail::gfn2::make_internal_test_lp64_backend(
-          &injected_dpotrf, &injected_dpocon, &injected_dsyevd, &injected_dtrsm,
-          &injected_dgemm, nullptr, backend, error, &injected_backend_cleanup) !=
-      XTBLOOM_STATUS_SUCCESS) {
+          &injected_dpotrf, &injected_dpocon, &injected_dsyevd, &injected_dtrsm, &injected_dgemm,
+          nullptr, backend, error, &injected_backend_cleanup) != XTBLOOM_STATUS_SUCCESS) {
     std::abort();
   }
   return backend;
@@ -160,9 +157,7 @@ void begin_allocation_counting() {
   allocation_test::enabled.store(true, std::memory_order_release);
 }
 
-void end_allocation_counting() {
-  allocation_test::enabled.store(false, std::memory_order_release);
-}
+void end_allocation_counting() { allocation_test::enabled.store(false, std::memory_order_release); }
 
 bool no_counted_allocations() {
   if (allocation_test::new_count.load(std::memory_order_relaxed) != 0u) return false;
@@ -175,14 +170,14 @@ bool no_counted_allocations() {
 
 template <typename T>
 xtbloom_const_buffer_t input_buffer(const std::vector<T>& values) {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T),
-          XTBLOOM_MEMORY_HOST, 0u};
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
+          0u};
 }
 
 template <typename T>
 xtbloom_buffer_t output_buffer(std::vector<T>& values) {
-  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T),
-          XTBLOOM_MEMORY_HOST, 0u};
+  return {values.empty() ? nullptr : values.data(), values.size() * sizeof(T), XTBLOOM_MEMORY_HOST,
+          0u};
 }
 
 struct Request {
@@ -257,9 +252,8 @@ struct Result {
     const std::size_t points = static_cast<std::size_t>(request.batch.total_point_charges);
     energies.assign((request.options.flags & XTBLOOM_COMPUTE_ENERGY) != 0u ? batch : 0u, 71.0);
     forces.assign((request.options.flags & XTBLOOM_COMPUTE_FORCES) != 0u ? 3u * atoms : 0u, 72.0);
-    atomic_charges.assign((request.options.flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0u ? atoms
-                                                                                         : 0u,
-                          73.0);
+    atomic_charges.assign(
+        (request.options.flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES) != 0u ? atoms : 0u, 73.0);
     point_forces.assign(
         (request.options.flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u ? 3u * points : 0u,
         74.0);
@@ -352,8 +346,8 @@ bool warm_rejected_atomically(xtbloom::detail::Gfn1CpuExecutionCache& cache, Req
 }
 
 int test_mixed_ragged_warm_and_periodic() {
-  using xtbloom::detail::Gfn1CpuExecutionCache;
   using xtbloom::detail::execute_gfn1_cpu;
+  using xtbloom::detail::Gfn1CpuExecutionCache;
   using xtbloom::detail::persistent_workspace_bytes_gfn1_cpu;
   using xtbloom::detail::prepare_gfn1_cpu;
 
@@ -386,8 +380,8 @@ int test_mixed_ragged_warm_and_periodic() {
   CHECK(finite_vector(result.energies) && finite_vector(result.forces) &&
         finite_vector(result.atomic_charges) && finite_vector(result.point_forces));
   CHECK(result.converged == std::vector<std::uint8_t>({1u, 1u}));
-  CHECK(result.statuses == std::vector<std::int32_t>({XTBLOOM_STATUS_SUCCESS,
-                                                     XTBLOOM_STATUS_SUCCESS}));
+  CHECK(result.statuses ==
+        std::vector<std::int32_t>({XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS}));
   CHECK(near(result.atomic_charges[0] + result.atomic_charges[1], 0.0, 2.0e-7));
   CHECK(near(result.atomic_charges[2], 0.0, 2.0e-7));
 
@@ -454,8 +448,8 @@ int test_mixed_ragged_warm_and_periodic() {
 }
 
 int test_strict_warm_and_call_failure_are_atomic() {
-  using xtbloom::detail::Gfn1CpuExecutionCache;
   using xtbloom::detail::execute_gfn1_cpu;
+  using xtbloom::detail::Gfn1CpuExecutionCache;
   constexpr std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
   Request request = mixed_request(flags);
   request.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
@@ -599,11 +593,11 @@ int test_strict_warm_and_call_failure_are_atomic() {
 }
 
 int test_nonconvergence_is_data_level_and_nan_filled() {
-  using xtbloom::detail::Gfn1CpuExecutionCache;
   using xtbloom::detail::execute_gfn1_cpu;
-  Request request = mixed_request(XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
-                                  XTBLOOM_COMPUTE_ATOMIC_CHARGES |
-                                  XTBLOOM_COMPUTE_POINT_CHARGE_FORCES);
+  using xtbloom::detail::Gfn1CpuExecutionCache;
+  Request request =
+      mixed_request(XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
+                    XTBLOOM_COMPUTE_ATOMIC_CHARGES | XTBLOOM_COMPUTE_POINT_CHARGE_FORCES);
   request.options.max_scc_iterations = 1;
   request.options.charge_tolerance = 1.0e-30;
   request.options.energy_tolerance = 1.0e-30;
@@ -628,8 +622,8 @@ int test_nonconvergence_is_data_level_and_nan_filled() {
 }
 
 int test_successful_peer_survives_scc_nonconvergence() {
-  using xtbloom::detail::Gfn1CpuExecutionCache;
   using xtbloom::detail::execute_gfn1_cpu;
+  using xtbloom::detail::Gfn1CpuExecutionCache;
   constexpr std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
                                   XTBLOOM_COMPUTE_ATOMIC_CHARGES |
                                   XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
@@ -673,8 +667,8 @@ int test_successful_peer_survives_scc_nonconvergence() {
 }
 
 int test_injected_eigensolver_failure_isolated_and_backend_cleaned_up() {
-  using xtbloom::detail::Gfn1CpuExecutionCache;
   using xtbloom::detail::execute_gfn1_cpu;
+  using xtbloom::detail::Gfn1CpuExecutionCache;
   using xtbloom::detail::set_gfn1_cpu_linear_algebra_backend_for_testing;
   constexpr std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
                                   XTBLOOM_COMPUTE_ATOMIC_CHARGES |
@@ -727,16 +721,15 @@ int test_injected_eigensolver_failure_isolated_and_backend_cleaned_up() {
 }
 
 int test_failed_peer_isolated_nan_filled_and_consumes_warm_checkpoint() {
-  using xtbloom::detail::Gfn1CpuExecutionCache;
   using xtbloom::detail::execute_gfn1_cpu;
+  using xtbloom::detail::Gfn1CpuExecutionCache;
   constexpr std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
                                   XTBLOOM_COMPUTE_ATOMIC_CHARGES |
                                   XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
   Request request;
   request.atom_offsets = {0, 2, 4};
   request.atomic_numbers = {1, 1, 1, 1};
-  request.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0,
-                       3.30,  0.0, 0.0, 4.70, 0.0, 0.0};
+  request.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0, 3.30, 0.0, 0.0, 4.70, 0.0, 0.0};
   request.charges = {0.0, 0.0};
   request.unpaired = {0, 0};
   request.spin_channels = {1, 1};
@@ -752,8 +745,8 @@ int test_failed_peer_isolated_nan_filled_and_consumes_warm_checkpoint() {
   std::string error;
   CHECK(execute_gfn1_cpu(cache, request.batch, request.options, result.result, error) ==
         XTBLOOM_STATUS_SUCCESS);
-  CHECK(result.statuses == std::vector<std::int32_t>({XTBLOOM_STATUS_SUCCESS,
-                                                     XTBLOOM_STATUS_SUCCESS}));
+  CHECK(result.statuses ==
+        std::vector<std::int32_t>({XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS}));
 
   /* An almost linearly dependent H2 overlap deterministically fails the
    * production overlap/eigensolver path. The healthy peer must still publish,
@@ -808,8 +801,7 @@ int test_failed_peer_isolated_nan_filled_and_consumes_warm_checkpoint() {
 
 int main() {
   if (const int result = test_mixed_ragged_warm_and_periodic(); result != 0) return result;
-  if (const int result = test_strict_warm_and_call_failure_are_atomic(); result != 0)
-    return result;
+  if (const int result = test_strict_warm_and_call_failure_are_atomic(); result != 0) return result;
   if (const int result = test_nonconvergence_is_data_level_and_nan_filled(); result != 0)
     return result;
   if (const int result = test_successful_peer_survives_scc_nonconvergence(); result != 0)

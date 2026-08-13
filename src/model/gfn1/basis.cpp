@@ -77,8 +77,7 @@ bool expand_gfn1_sto_shell(const parameters::gfn1::ShellParameters& shell, doubl
       alpha[primitive] = parameters::gfn1::kLegacyAlpha6_4sp[primitive] * zeta_squared;
       const double normalization =
           std::pow(kTwoOverPi * alpha[primitive], 0.75) *
-          std::pow(std::sqrt(4.0 * alpha[primitive]),
-                   static_cast<double>(shell.angular_momentum)) /
+          std::pow(std::sqrt(4.0 * alpha[primitive]), static_cast<double>(shell.angular_momentum)) /
           std::sqrt(kDoubleFactorial[shell.angular_momentum]);
       coefficients[primitive] = source_coefficients[primitive] * normalization;
     }

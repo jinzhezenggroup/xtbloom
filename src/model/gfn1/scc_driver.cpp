@@ -109,8 +109,12 @@ gfn2::EigensolverWavefunctionLayout make_eigensolver_wavefunction_layout(
 
 gfn2::EigensolverWavefunctionView make_eigensolver_wavefunction_view(
     const WavefunctionView& view) noexcept {
-  return {view.workspace_base,         view.workspace_size_bytes, view.coefficients,
-          view.eigenvalues,            view.occupations,           view.density,
+  return {view.workspace_base,
+          view.workspace_size_bytes,
+          view.coefficients,
+          view.eigenvalues,
+          view.occupations,
+          view.density,
           view.energy_weighted_density};
 }
 
@@ -364,8 +368,7 @@ xtbloom_status_t validate_plan(const SccDriverPlan& plan, std::string& error) {
 }
 
 xtbloom_status_t validate_wavefunction(const SccDriverPlanData& data,
-                                       const WavefunctionView& wavefunction,
-                                       std::string& error) {
+                                       const WavefunctionView& wavefunction, std::string& error) {
   WavefunctionSystemView ignored;
   return make_wavefunction_system_view(data.wavefunction, wavefunction, 0, ignored, error);
 }
@@ -409,12 +412,10 @@ bool exact_state_binding(const SccDriverPlanData& data, const SccDriverState& st
              offset_pointer<std::uint8_t>(state.workspace_base, data.state_converged_offset);
 }
 
-bool exact_workspace_binding(const SccDriverPlanData& data,
-                             const SccDriverWorkspace& workspace) {
+bool exact_workspace_binding(const SccDriverPlanData& data, const SccDriverWorkspace& workspace) {
   const std::size_t batch = static_cast<std::size_t>(data.wavefunction.batch_size);
-  const std::int64_t mulliken_elements =
-      std::max(data.mulliken.population_scratch_elements(),
-               data.mulliken.hamiltonian_scratch_elements());
+  const std::int64_t mulliken_elements = std::max(data.mulliken.population_scratch_elements(),
+                                                  data.mulliken.hamiltonian_scratch_elements());
   return workspace.workspace_base != nullptr &&
          workspace.workspace_size_bytes >= data.workspace_size_bytes &&
          workspace.plan_identity == &data &&
@@ -647,7 +648,8 @@ xtbloom_status_t prepare_system(const SccDriverPlanData& data,
       workspace.component_atomic_potential, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   for (std::int64_t shell = 0; shell < shells; ++shell) {
-    const std::int64_t atom = data.mulliken.shell_to_atom()[static_cast<std::size_t>(shell_begin + shell)];
+    const std::int64_t atom =
+        data.mulliken.shell_to_atom()[static_cast<std::size_t>(shell_begin + shell)];
     double& potential = workspace.shell_potentials[qsh_begin + shell];
     if (!add_finite(workspace.component_atomic_potential[atom], potential)) {
       error = "GFN1 SCC ES2+ES3 shell potential overflowed";
@@ -662,20 +664,19 @@ xtbloom_status_t prepare_system(const SccDriverPlanData& data,
   }
 
   if (data.periodic_embedding.sealed()) {
-    const gfn2::PeriodicEmbeddingView periodic_view{
-        geometry.periodic_shifts,
-        geometry.periodic_shift_elements,
-        geometry.periodic_response_matrices,
-        geometry.periodic_response_elements,
-        workspace.atomic_charges,
-        layout.total_atoms,
-        workspace.periodic_atomic_potentials,
-        layout.total_atoms,
-        workspace.periodic_embedding_energies,
-        layout.batch_size,
-        workspace.periodic_system_statuses,
-        layout.batch_size,
-        data.periodic_embedding.identity()};
+    const gfn2::PeriodicEmbeddingView periodic_view{geometry.periodic_shifts,
+                                                    geometry.periodic_shift_elements,
+                                                    geometry.periodic_response_matrices,
+                                                    geometry.periodic_response_elements,
+                                                    workspace.atomic_charges,
+                                                    layout.total_atoms,
+                                                    workspace.periodic_atomic_potentials,
+                                                    layout.total_atoms,
+                                                    workspace.periodic_embedding_energies,
+                                                    layout.batch_size,
+                                                    workspace.periodic_system_statuses,
+                                                    layout.batch_size,
+                                                    data.periodic_embedding.identity()};
     status = gfn2::evaluate_periodic_embedding_system_cpu(
         data.periodic_embedding, static_cast<std::int64_t>(system), periodic_view,
         workspace.periodic_embedding_workspace, error);
@@ -686,8 +687,7 @@ xtbloom_status_t prepare_system(const SccDriverPlanData& data,
        * continue through the batch transaction. */
       std::fill_n(workspace.periodic_atomic_potentials + atom_begin,
                   static_cast<std::size_t>(atoms), 0.0);
-      workspace.periodic_embedding_energies[system] =
-          std::numeric_limits<double>::quiet_NaN();
+      workspace.periodic_embedding_energies[system] = std::numeric_limits<double>::quiet_NaN();
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
     for (std::int64_t shell = 0; shell < shells; ++shell) {
@@ -721,9 +721,9 @@ xtbloom_status_t prepare_system(const SccDriverPlanData& data,
                                         data.mulliken.identity()};
   const MullikenHamiltonianView hamiltonian{workspace.hamiltonian, layout.density.element_count,
                                             data.mulliken.identity()};
-  status = add_mulliken_hamiltonian_system_cpu(
-      data.mulliken, geometry.integrals, potential, hamiltonian,
-      static_cast<std::int64_t>(system), workspace.mulliken_workspace, error);
+  status = add_mulliken_hamiltonian_system_cpu(data.mulliken, geometry.integrals, potential,
+                                               hamiltonian, static_cast<std::int64_t>(system),
+                                               workspace.mulliken_workspace, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   /* Mulliken uses tblite's half-valued charge/magnetization conversion.
@@ -735,9 +735,9 @@ xtbloom_status_t prepare_system(const SccDriverPlanData& data,
     for (std::int32_t spin = 0; spin < 2; ++spin) {
       for (std::int64_t matrix = 0; matrix < matrix_count; ++matrix) {
         const double h0 = geometry.h0[matrix_begin + matrix];
-        double& target = workspace.hamiltonian[hamiltonian_begin +
-                                               static_cast<std::int64_t>(spin) * matrix_count +
-                                               matrix];
+        double& target =
+            workspace.hamiltonian[hamiltonian_begin +
+                                  static_cast<std::int64_t>(spin) * matrix_count + matrix];
         const double physical = std::fma(2.0, target - h0, h0);
         if (!std::isfinite(physical)) {
           error = "GFN1 SCC unrestricted Hamiltonian scaling overflowed";
@@ -776,10 +776,10 @@ xtbloom_status_t evaluate_energy(const SccDriverPlanData& data,
   const std::int64_t density_begin = layout.density.system_offsets[system];
   for (std::int32_t spin = 0; spin < layout.spin_channels[system]; ++spin) {
     for (std::int64_t matrix = 0; matrix < matrix_count; ++matrix) {
-      core_energy = std::fma(geometry.h0[matrix_begin + matrix],
-                             workspace.staged_wavefunction.density[density_begin +
-                                                                  spin * matrix_count + matrix],
-                             core_energy);
+      core_energy = std::fma(
+          geometry.h0[matrix_begin + matrix],
+          workspace.staged_wavefunction.density[density_begin + spin * matrix_count + matrix],
+          core_energy);
       if (!std::isfinite(core_energy)) {
         error = "GFN1 SCC H0 density contraction overflowed";
         return XTBLOOM_STATUS_INTERNAL_ERROR;
@@ -787,44 +787,42 @@ xtbloom_status_t evaluate_energy(const SccDriverPlanData& data,
     }
   }
   double es2_energy = 0.0;
-  xtbloom_status_t status = add_es2_energy_system_cpu(
-      data.es2, geometry.es2_cache, static_cast<std::int64_t>(system), workspace.shell_charges,
-      es2_energy, error);
+  xtbloom_status_t status =
+      add_es2_energy_system_cpu(data.es2, geometry.es2_cache, static_cast<std::int64_t>(system),
+                                workspace.shell_charges, es2_energy, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   double es3_energy = 0.0;
   status = add_es3_energy_system_cpu(make_es3_view(data.es3), static_cast<std::int64_t>(system),
                                      workspace.atomic_charges, es3_energy, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   double spin_energy = 0.0;
-  status = add_spin_polarization_energy_system_cpu(
-      make_spin_polarization_view(data.spin), static_cast<std::int64_t>(system), workspace.raw_qsh,
-      spin_energy, error);
+  status = add_spin_polarization_energy_system_cpu(make_spin_polarization_view(data.spin),
+                                                   static_cast<std::int64_t>(system),
+                                                   workspace.raw_qsh, spin_energy, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   double explicit_pc_energy = 0.0;
   if (geometry.explicit_point_charge_shell_elements != 0) {
     for (std::int64_t shell = 0; shell < shells; ++shell) {
       explicit_pc_energy = std::fma(
           workspace.shell_charges[shell_begin + shell],
-          geometry.explicit_point_charge_shell_potential[shell_begin + shell],
-          explicit_pc_energy);
+          geometry.explicit_point_charge_shell_potential[shell_begin + shell], explicit_pc_energy);
     }
   }
   double periodic_energy = 0.0;
   if (data.periodic_embedding.sealed()) {
-    const gfn2::PeriodicEmbeddingView periodic_view{
-        geometry.periodic_shifts,
-        geometry.periodic_shift_elements,
-        geometry.periodic_response_matrices,
-        geometry.periodic_response_elements,
-        workspace.atomic_charges,
-        layout.total_atoms,
-        workspace.periodic_atomic_potentials,
-        layout.total_atoms,
-        workspace.periodic_embedding_energies,
-        layout.batch_size,
-        workspace.periodic_system_statuses,
-        layout.batch_size,
-        data.periodic_embedding.identity()};
+    const gfn2::PeriodicEmbeddingView periodic_view{geometry.periodic_shifts,
+                                                    geometry.periodic_shift_elements,
+                                                    geometry.periodic_response_matrices,
+                                                    geometry.periodic_response_elements,
+                                                    workspace.atomic_charges,
+                                                    layout.total_atoms,
+                                                    workspace.periodic_atomic_potentials,
+                                                    layout.total_atoms,
+                                                    workspace.periodic_embedding_energies,
+                                                    layout.batch_size,
+                                                    workspace.periodic_system_statuses,
+                                                    layout.batch_size,
+                                                    data.periodic_embedding.identity()};
     status = gfn2::evaluate_periodic_embedding_system_cpu(
         data.periodic_embedding, static_cast<std::int64_t>(system), periodic_view,
         workspace.periodic_embedding_workspace, error);
@@ -894,18 +892,17 @@ std::size_t SccDriverPlan::resident_bytes() const noexcept {
     return values.capacity() * sizeof(Value);
   };
   const WavefunctionLayout& wavefunction = data_->wavefunction;
-  std::size_t total = sizeof(*data_) + vector_bytes(wavefunction.atom_offsets) +
-                      vector_bytes(wavefunction.batch_shell_offsets) +
-                      vector_bytes(wavefunction.batch_orbital_offsets) +
-                      vector_bytes(wavefunction.atomic_numbers) +
-                      vector_bytes(wavefunction.molecular_charges) +
-                      vector_bytes(wavefunction.unpaired_electrons) +
-                      vector_bytes(wavefunction.spin_channels) +
-                      vector_bytes(wavefunction.reference_atom_occupations) +
-                      vector_bytes(wavefunction.reference_shell_occupations) +
-                      vector_bytes(wavefunction.electron_counts) +
-                      vector_bytes(wavefunction.alpha_electron_counts) +
-                      vector_bytes(wavefunction.beta_electron_counts);
+  std::size_t total =
+      sizeof(*data_) + vector_bytes(wavefunction.atom_offsets) +
+      vector_bytes(wavefunction.batch_shell_offsets) +
+      vector_bytes(wavefunction.batch_orbital_offsets) + vector_bytes(wavefunction.atomic_numbers) +
+      vector_bytes(wavefunction.molecular_charges) + vector_bytes(wavefunction.unpaired_electrons) +
+      vector_bytes(wavefunction.spin_channels) +
+      vector_bytes(wavefunction.reference_atom_occupations) +
+      vector_bytes(wavefunction.reference_shell_occupations) +
+      vector_bytes(wavefunction.electron_counts) +
+      vector_bytes(wavefunction.alpha_electron_counts) +
+      vector_bytes(wavefunction.beta_electron_counts);
   total += vector_bytes(wavefunction.coefficients.system_offsets) +
            vector_bytes(wavefunction.eigenvalues.system_offsets) +
            vector_bytes(wavefunction.occupations.system_offsets) +
@@ -918,25 +915,26 @@ std::size_t SccDriverPlan::resident_bytes() const noexcept {
    * allocations distinct from the executor's direct term plans. Mulliken,
    * ES2, eigensolver, mixer, and periodic handles share immutable backing. */
   total += vector_bytes(data_->es3.atom_offsets) + vector_bytes(data_->es3.atom_gamma3) +
-           vector_bytes(data_->spin.atom_offsets) +
-           vector_bytes(data_->spin.batch_shell_offsets) +
+           vector_bytes(data_->spin.atom_offsets) + vector_bytes(data_->spin.batch_shell_offsets) +
            vector_bytes(data_->spin.atom_shell_offsets) +
            vector_bytes(data_->spin.shell_population_offsets) +
-           vector_bytes(data_->spin.spin_channels) +
-           vector_bytes(data_->spin.coupling_offsets) +
+           vector_bytes(data_->spin.spin_channels) + vector_bytes(data_->spin.coupling_offsets) +
            vector_bytes(data_->spin.coupling_matrices);
   return total;
 }
 const SccDriverPlanData* SccDriverPlan::identity() const noexcept { return data_.get(); }
 
-xtbloom_status_t make_scc_driver_plan(
-    const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
-    const ES3Plan& es3, const SpinPolarizationPlan& spin, const EigensolverPlan& eigensolver,
-    const SccMixerPlan& mixer, const PeriodicEmbeddingPlan* periodic_embedding,
-    std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
-    SccDriverPlan& plan, std::string& error) {
+xtbloom_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
+                                      const MullikenPlan& mulliken, const ES2Plan& es2,
+                                      const ES3Plan& es3, const SpinPolarizationPlan& spin,
+                                      const EigensolverPlan& eigensolver, const SccMixerPlan& mixer,
+                                      const PeriodicEmbeddingPlan* periodic_embedding,
+                                      std::uint64_t maximum_iterations,
+                                      double electronic_temperature, double energy_tolerance,
+                                      SccDriverPlan& plan, std::string& error) {
   WavefunctionWarmStartIdentity validated;
-  xtbloom_status_t status = make_wavefunction_warm_start_identity(wavefunction, 0u, validated, error);
+  xtbloom_status_t status =
+      make_wavefunction_warm_start_identity(wavefunction, 0u, validated, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   if (!mulliken.sealed() || !es2.sealed() || !eigensolver.sealed() || !mixer.sealed() ||
       maximum_iterations == 0u || !std::isfinite(electronic_temperature) ||
@@ -963,11 +961,10 @@ xtbloom_status_t make_scc_driver_plan(
   if (status == XTBLOOM_STATUS_SUCCESS)
     status = make_integral_plan(expected_basis, expected_integrals, error);
   if (status == XTBLOOM_STATUS_SUCCESS)
-    status = make_wavefunction_layout(expected_basis, wavefunction.atomic_numbers.data(),
-                                      wavefunction.molecular_charges.data(),
-                                      wavefunction.unpaired_electrons.data(),
-                                      wavefunction.spin_channels.data(), expected_wavefunction,
-                                      error);
+    status = make_wavefunction_layout(
+        expected_basis, wavefunction.atomic_numbers.data(), wavefunction.molecular_charges.data(),
+        wavefunction.unpaired_electrons.data(), wavefunction.spin_channels.data(),
+        expected_wavefunction, error);
   if (status == XTBLOOM_STATUS_SUCCESS)
     status = make_mulliken_plan(expected_basis, expected_integrals, expected_wavefunction,
                                 expected_mulliken, error);
@@ -983,9 +980,9 @@ xtbloom_status_t make_scc_driver_plan(
     status = make_spin_polarization_plan(expected_basis, wavefunction.atomic_numbers.data(),
                                          expected_spin_layout, expected_spin, error);
   if (status == XTBLOOM_STATUS_SUCCESS)
-    status = gfn2::make_eigensolver_plan(make_eigensolver_wavefunction_layout(expected_wavefunction),
-                                         expected_eigensolver, error,
-                                         eigensolver.minimum_overlap_rcond());
+    status = gfn2::make_eigensolver_plan(
+        make_eigensolver_wavefunction_layout(expected_wavefunction), expected_eigensolver, error,
+        eigensolver.minimum_overlap_rcond());
   if (status == XTBLOOM_STATUS_SUCCESS)
     status = make_scc_mixer_plan(expected_wavefunction, mixer.history_size(), mixer.damping(),
                                  mixer.rms_tolerance(), mixer.maximum_tolerance(), expected_mixer,
@@ -1002,25 +999,22 @@ xtbloom_status_t make_scc_driver_plan(
       mulliken.shell_to_atom() == expected_mulliken.shell_to_atom() &&
       mulliken.orbital_to_shell() == expected_mulliken.orbital_to_shell() &&
       mulliken.spin_channels() == expected_mulliken.spin_channels() &&
-      mulliken.reference_shell_occupations() ==
-          expected_mulliken.reference_shell_occupations() &&
+      mulliken.reference_shell_occupations() == expected_mulliken.reference_shell_occupations() &&
       mulliken.matrix_elements() == expected_mulliken.matrix_elements() &&
       mulliken.density_elements() == expected_mulliken.density_elements() &&
       mulliken.shell_population_elements() == expected_mulliken.shell_population_elements() &&
       mulliken.atom_population_elements() == expected_mulliken.atom_population_elements() &&
       mulliken.population_scratch_elements() == expected_mulliken.population_scratch_elements() &&
-      mulliken.hamiltonian_scratch_elements() ==
-          expected_mulliken.hamiltonian_scratch_elements() &&
+      mulliken.hamiltonian_scratch_elements() == expected_mulliken.hamiltonian_scratch_elements() &&
       es2.atom_offsets() == expected_es2.atom_offsets() &&
       es2.batch_shell_offsets() == expected_es2.batch_shell_offsets() &&
       es2.atom_shell_offsets() == expected_es2.atom_shell_offsets() &&
       es2.matrix_offsets() == expected_es2.matrix_offsets() &&
       es2.shell_to_atom() == expected_es2.shell_to_atom() &&
       es2.shell_hardness() == expected_es2.shell_hardness() &&
-      es2.hardness_average() == expected_es2.hardness_average() &&
-      same_es3(es3, expected_es3) && same_spin(spin, expected_spin) &&
-      same_eigensolver(eigensolver, expected_eigensolver) && same_mixer(mixer, expected_mixer) &&
-      mixer.matches_wavefunction_layout(expected_wavefunction);
+      es2.hardness_average() == expected_es2.hardness_average() && same_es3(es3, expected_es3) &&
+      same_spin(spin, expected_spin) && same_eigensolver(eigensolver, expected_eigensolver) &&
+      same_mixer(mixer, expected_mixer) && mixer.matches_wavefunction_layout(expected_wavefunction);
   if (!component_match) {
     error = "GFN1 SCC driver components do not share one canonical model identity";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -1094,8 +1088,10 @@ xtbloom_status_t make_scc_driver_plan(
                         created.state_explicit_pc_energy_offset) ||
         !append_segment(periodic_embedding == nullptr ? 0u : batch_double, alignof(double), cursor,
                         created.state_periodic_energy_offset) ||
-        !append_segment(batch_double, alignof(double), cursor, created.state_internal_energy_offset) ||
-        !append_segment(batch_u64, alignof(std::uint64_t), cursor, created.state_iteration_offset) ||
+        !append_segment(batch_double, alignof(double), cursor,
+                        created.state_internal_energy_offset) ||
+        !append_segment(batch_u64, alignof(std::uint64_t), cursor,
+                        created.state_iteration_offset) ||
         !append_segment(batch_status, alignof(xtbloom_status_t), cursor,
                         created.state_status_offset) ||
         !append_segment(batch_byte, alignof(std::uint8_t), cursor,
@@ -1123,8 +1119,7 @@ xtbloom_status_t make_scc_driver_plan(
         !append_segment(batch_double, alignof(double), cursor, created.es2_energy_offset) ||
         !append_segment(batch_double, alignof(double), cursor, created.es3_energy_offset) ||
         !append_segment(batch_double, alignof(double), cursor, created.spin_energy_offset) ||
-        !append_segment(batch_double, alignof(double), cursor,
-                        created.explicit_pc_energy_offset) ||
+        !append_segment(batch_double, alignof(double), cursor, created.explicit_pc_energy_offset) ||
         !append_segment(batch_double, alignof(double), cursor, created.internal_energy_offset) ||
         !append_segment(batch_double, alignof(double), cursor, created.free_energy_offset) ||
         !append_segment(periodic_embedding == nullptr ? 0u : atom, alignof(double), cursor,
@@ -1139,8 +1134,8 @@ xtbloom_status_t make_scc_driver_plan(
         !append_segment(mulliken_scratch, alignof(double), cursor,
                         created.mulliken_scratch_offset) ||
         !append_segment(eigensolver.worker_workspace_size_bytes(),
-                        gfn2::kEigensolverWorkspaceAlignment,
-                        cursor, created.eigensolver_scratch_offset) ||
+                        gfn2::kEigensolverWorkspaceAlignment, cursor,
+                        created.eigensolver_scratch_offset) ||
         !append_segment(mixer.state_size_bytes(), kSccMixerWorkspaceAlignment, cursor,
                         created.staged_mixer_state_offset) ||
         !append_segment(mixer.workspace_size_bytes(), kSccMixerWorkspaceAlignment, cursor,
@@ -1154,8 +1149,7 @@ xtbloom_status_t make_scc_driver_plan(
                         created.thermodynamic_band_energy_offset) ||
         !append_segment(batch_double, alignof(double), cursor,
                         created.thermodynamic_free_energy_offset) ||
-        !append_segment(batch_byte, alignof(std::uint8_t), cursor,
-                        created.active_system_offset) ||
+        !append_segment(batch_byte, alignof(std::uint8_t), cursor, created.active_system_offset) ||
         !align_up(cursor, kSccDriverWorkspaceAlignment, created.workspace_size_bytes)) {
       error = "GFN1 SCC workspace layout overflows size_t";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -1179,13 +1173,13 @@ xtbloom_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspac
   AddressRange plan_range;
   AddressRange state_range;
   AddressRange error_range;
-  if (!aligned(workspace, kSccDriverWorkspaceAlignment) ||
-      workspace_size < data.state_size_bytes ||
+  if (!aligned(workspace, kSccDriverWorkspaceAlignment) || workspace_size < data.state_size_bytes ||
       !make_range(workspace, data.state_size_bytes, storage_range) ||
-      !make_range(&plan, sizeof(plan), plan_range) || !make_range(&state, sizeof(state), state_range) ||
-      !make_range(&error, sizeof(error), error_range) || overlaps_plan_storage(data, storage_range) ||
-      ranges_overlap(storage_range, plan_range) || ranges_overlap(storage_range, state_range) ||
-      ranges_overlap(storage_range, error_range)) {
+      !make_range(&plan, sizeof(plan), plan_range) ||
+      !make_range(&state, sizeof(state), state_range) ||
+      !make_range(&error, sizeof(error), error_range) ||
+      overlaps_plan_storage(data, storage_range) || ranges_overlap(storage_range, plan_range) ||
+      ranges_overlap(storage_range, state_range) || ranges_overlap(storage_range, error_range)) {
     error = "GFN1 SCC state storage is invalid or overlaps control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -1205,14 +1199,13 @@ xtbloom_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspac
   bound.spin_energies = offset_pointer<double>(workspace, data.state_spin_energy_offset);
   bound.explicit_point_charge_energies =
       offset_pointer<double>(workspace, data.state_explicit_pc_energy_offset);
-  bound.periodic_embedding_energies = data.periodic_embedding.sealed()
-                                           ? offset_pointer<double>(
-                                                 workspace, data.state_periodic_energy_offset)
-                                           : nullptr;
+  bound.periodic_embedding_energies =
+      data.periodic_embedding.sealed()
+          ? offset_pointer<double>(workspace, data.state_periodic_energy_offset)
+          : nullptr;
   bound.internal_energies = offset_pointer<double>(workspace, data.state_internal_energy_offset);
   bound.iterations = offset_pointer<std::uint64_t>(workspace, data.state_iteration_offset);
-  bound.system_statuses =
-      offset_pointer<xtbloom_status_t>(workspace, data.state_status_offset);
+  bound.system_statuses = offset_pointer<xtbloom_status_t>(workspace, data.state_status_offset);
   bound.initialized = offset_pointer<std::uint8_t>(workspace, data.state_initialized_offset);
   bound.converged = offset_pointer<std::uint8_t>(workspace, data.state_converged_offset);
   bound.plan_identity = &data;
@@ -1222,8 +1215,8 @@ xtbloom_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspac
 }
 
 xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* workspace,
-                                           std::size_t workspace_size,
-                                           SccDriverWorkspace& view, std::string& error) {
+                                           std::size_t workspace_size, SccDriverWorkspace& view,
+                                           std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   const auto& data = *plan.identity();
@@ -1234,10 +1227,11 @@ xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* work
   if (!aligned(workspace, kSccDriverWorkspaceAlignment) ||
       workspace_size < data.workspace_size_bytes ||
       !make_range(workspace, data.workspace_size_bytes, storage_range) ||
-      !make_range(&plan, sizeof(plan), plan_range) || !make_range(&view, sizeof(view), view_range) ||
-      !make_range(&error, sizeof(error), error_range) || overlaps_plan_storage(data, storage_range) ||
-      ranges_overlap(storage_range, plan_range) || ranges_overlap(storage_range, view_range) ||
-      ranges_overlap(storage_range, error_range)) {
+      !make_range(&plan, sizeof(plan), plan_range) ||
+      !make_range(&view, sizeof(view), view_range) ||
+      !make_range(&error, sizeof(error), error_range) ||
+      overlaps_plan_storage(data, storage_range) || ranges_overlap(storage_range, plan_range) ||
+      ranges_overlap(storage_range, view_range) || ranges_overlap(storage_range, error_range)) {
     error = "GFN1 SCC workspace is invalid or overlaps control storage";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -1253,11 +1247,9 @@ xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* work
   bound.atomic_charges = offset_pointer<double>(workspace, data.atomic_charge_offset);
   bound.component_atomic_potential =
       offset_pointer<double>(workspace, data.component_atomic_offset);
-  bound.component_shell_potential =
-      offset_pointer<double>(workspace, data.component_shell_offset);
+  bound.component_shell_potential = offset_pointer<double>(workspace, data.component_shell_offset);
   bound.shell_potentials = offset_pointer<double>(workspace, data.shell_potential_offset);
-  bound.spin_shell_potentials =
-      offset_pointer<double>(workspace, data.spin_shell_potential_offset);
+  bound.spin_shell_potentials = offset_pointer<double>(workspace, data.spin_shell_potential_offset);
   bound.raw_qsh = offset_pointer<double>(workspace, data.raw_qsh_offset);
   bound.raw_qat = offset_pointer<double>(workspace, data.raw_qat_offset);
   bound.core_energies = offset_pointer<double>(workspace, data.core_energy_offset);
@@ -1268,18 +1260,18 @@ xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* work
       offset_pointer<double>(workspace, data.explicit_pc_energy_offset);
   bound.internal_energies = offset_pointer<double>(workspace, data.internal_energy_offset);
   bound.free_energies = offset_pointer<double>(workspace, data.free_energy_offset);
-  bound.periodic_atomic_potentials = data.periodic_embedding.sealed()
-                                         ? offset_pointer<double>(
-                                               workspace, data.periodic_potential_offset)
-                                         : nullptr;
-  bound.periodic_embedding_energies = data.periodic_embedding.sealed()
-                                          ? offset_pointer<double>(
-                                                workspace, data.periodic_energy_offset)
-                                          : nullptr;
-  bound.periodic_system_statuses = data.periodic_embedding.sealed()
-                                       ? offset_pointer<xtbloom_status_t>(
-                                             workspace, data.periodic_status_offset)
-                                       : nullptr;
+  bound.periodic_atomic_potentials =
+      data.periodic_embedding.sealed()
+          ? offset_pointer<double>(workspace, data.periodic_potential_offset)
+          : nullptr;
+  bound.periodic_embedding_energies =
+      data.periodic_embedding.sealed()
+          ? offset_pointer<double>(workspace, data.periodic_energy_offset)
+          : nullptr;
+  bound.periodic_system_statuses =
+      data.periodic_embedding.sealed()
+          ? offset_pointer<xtbloom_status_t>(workspace, data.periodic_status_offset)
+          : nullptr;
   bound.active_systems = offset_pointer<std::uint8_t>(workspace, data.active_system_offset);
   bound.es2_workspace.shell_scratch =
       offset_pointer<double>(workspace, data.es2_shell_scratch_offset);
@@ -1288,9 +1280,8 @@ xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* work
   bound.es2_workspace.batch_elements = data.wavefunction.batch_size;
   bound.mulliken_workspace.scratch =
       offset_pointer<double>(workspace, data.mulliken_scratch_offset);
-  bound.mulliken_workspace.elements =
-      std::max(data.mulliken.population_scratch_elements(),
-               data.mulliken.hamiltonian_scratch_elements());
+  bound.mulliken_workspace.elements = std::max(data.mulliken.population_scratch_elements(),
+                                               data.mulliken.hamiltonian_scratch_elements());
   if (data.periodic_embedding.sealed()) {
     status = gfn2::bind_periodic_embedding_workspace(
         data.periodic_embedding, offset_pointer<double>(workspace, data.periodic_scratch_offset),
@@ -1302,9 +1293,9 @@ xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* work
       data.eigensolver, offset_pointer<void>(workspace, data.eigensolver_scratch_offset),
       data.eigensolver.worker_workspace_size_bytes(), bound.eigensolver_workspace, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = bind_scc_mixer_state(
-      data.mixer, offset_pointer<void>(workspace, data.staged_mixer_state_offset),
-      data.mixer.state_size_bytes(), bound.staged_mixer_state, error);
+  status = bind_scc_mixer_state(data.mixer,
+                                offset_pointer<void>(workspace, data.staged_mixer_state_offset),
+                                data.mixer.state_size_bytes(), bound.staged_mixer_state, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = bind_scc_mixer_workspace(
       data.mixer, offset_pointer<void>(workspace, data.mixer_scratch_offset),
@@ -1330,14 +1321,12 @@ xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* work
 xtbloom_status_t initialize_scc_driver_state_cpu(const SccDriverPlan& plan,
                                                  const WavefunctionView& wavefunction,
                                                  const SccMixerState& mixer_state,
-                                                 const SccDriverState& state,
-                                                 std::string& error) {
+                                                 const SccDriverState& state, std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   const auto& data = *plan.identity();
   if (!exact_state_binding(data, state) ||
-      validate_scc_mixer_state_binding(data.mixer, mixer_state, error) !=
-          XTBLOOM_STATUS_SUCCESS) {
+      validate_scc_mixer_state_binding(data.mixer, mixer_state, error) != XTBLOOM_STATUS_SUCCESS) {
     error = "GFN1 SCC initialization bindings do not belong to the sealed plan";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -1385,14 +1374,12 @@ xtbloom_status_t initialize_scc_driver_state_cpu(const SccDriverPlan& plan,
 xtbloom_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::int64_t system,
                                                const WavefunctionView& wavefunction,
                                                const SccMixerState& mixer_state,
-                                               const SccDriverState& state,
-                                               std::string& error) {
+                                               const SccDriverState& state, std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   const auto& data = *plan.identity();
   if (system < 0 || system >= data.wavefunction.batch_size || !exact_state_binding(data, state) ||
-      validate_scc_mixer_state_binding(data.mixer, mixer_state, error) !=
-          XTBLOOM_STATUS_SUCCESS) {
+      validate_scc_mixer_state_binding(data.mixer, mixer_state, error) != XTBLOOM_STATUS_SUCCESS) {
     error = "GFN1 SCC restart bindings or system index are invalid";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -1448,11 +1435,10 @@ xtbloom_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::i
 namespace {
 
 xtbloom_status_t validate_iteration_bindings(
-    const SccDriverPlan& plan, const SccDriverPlanData& data,
-    const SccDriverGeometryView& geometry, const CpuLinearAlgebraBackend& backend,
-    const EigensolverOverlapCache& overlap_cache, const WavefunctionView& wavefunction,
-    const SccMixerState& mixer_state, const SccDriverState& state,
-    const SccDriverWorkspace& workspace, std::string& error) {
+    const SccDriverPlan& plan, const SccDriverPlanData& data, const SccDriverGeometryView& geometry,
+    const CpuLinearAlgebraBackend& backend, const EigensolverOverlapCache& overlap_cache,
+    const WavefunctionView& wavefunction, const SccMixerState& mixer_state,
+    const SccDriverState& state, const SccDriverWorkspace& workspace, std::string& error) {
   if (!backend.ready() || !exact_state_binding(data, state) ||
       !exact_workspace_binding(data, workspace)) {
     error = "GFN1 SCC runtime bindings do not belong to the sealed plan";
@@ -1671,14 +1657,14 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
   const MullikenDensityView density{workspace.staged_wavefunction.density,
                                     data.wavefunction.density.element_count,
                                     data.mulliken.identity()};
-  const MullikenPopulationView population{
-      workspace.raw_qsh, data.wavefunction.qsh.element_count, workspace.raw_qat,
-      data.wavefunction.qat.element_count, data.mulliken.identity()};
+  const MullikenPopulationView population{workspace.raw_qsh, data.wavefunction.qsh.element_count,
+                                          workspace.raw_qat, data.wavefunction.qat.element_count,
+                                          data.mulliken.identity()};
   for (std::size_t system = 0u; system < batch; ++system) {
     if (workspace.active_systems[system] != 1u) continue;
-    status = evaluate_mulliken_population_system_cpu(
-        data.mulliken, geometry.integrals, density, population, static_cast<std::int64_t>(system),
-        workspace.mulliken_workspace, error);
+    status = evaluate_mulliken_population_system_cpu(data.mulliken, geometry.integrals, density,
+                                                     population, static_cast<std::int64_t>(system),
+                                                     workspace.mulliken_workspace, error);
     if (status == XTBLOOM_STATUS_INVALID_ARGUMENT) return status;
     if (status != XTBLOOM_STATUS_SUCCESS) {
       workspace.active_systems[system] = 6u;
@@ -1691,24 +1677,23 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
 
   for (std::size_t system = 0u; system < batch; ++system) {
     if (workspace.active_systems[system] != 1u) continue;
-    status = prepare_scc_mixer_system_transaction_cpu(
-        data.mixer, static_cast<std::int64_t>(system), mixer_state,
-        workspace.staged_mixer_state, error);
+    status =
+        prepare_scc_mixer_system_transaction_cpu(data.mixer, static_cast<std::int64_t>(system),
+                                                 mixer_state, workspace.staged_mixer_state, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     copy_system_field(data.wavefunction.qsh, system, workspace.raw_qsh,
                       workspace.staged_wavefunction.qsh);
     copy_system_field(data.wavefunction.qat, system, workspace.raw_qat,
                       workspace.staged_wavefunction.qat);
-    status = mix_scc_broyden_system_cpu(
-        data.mixer, static_cast<std::int64_t>(system), workspace.staged_wavefunction,
-        workspace.staged_mixer_state, workspace.mixer_workspace, error);
+    status = mix_scc_broyden_system_cpu(data.mixer, static_cast<std::int64_t>(system),
+                                        workspace.staged_wavefunction, workspace.staged_mixer_state,
+                                        workspace.mixer_workspace, error);
     if (status == XTBLOOM_STATUS_INVALID_ARGUMENT) return status;
     if (status != XTBLOOM_STATUS_SUCCESS) {
       /* Discard the staged history but retain the mixer's peer-local failure
        * status so the driver and mixer diagnostics describe the same failed
        * transaction. */
-      mixer_state.system_statuses[system] =
-          workspace.staged_mixer_state.system_statuses[system];
+      mixer_state.system_statuses[system] = workspace.staged_mixer_state.system_statuses[system];
       workspace.active_systems[system] = 3u;
       continue;
     }
@@ -1716,8 +1701,7 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
     const double change = workspace.free_energies[system] - old_energy;
     if (!std::isfinite(old_energy) || !std::isfinite(change)) {
       workspace.staged_mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
-      mixer_state.system_statuses[system] =
-          workspace.staged_mixer_state.system_statuses[system];
+      mixer_state.system_statuses[system] = workspace.staged_mixer_state.system_statuses[system];
       workspace.active_systems[system] = 3u;
       continue;
     }
@@ -1736,15 +1720,14 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
                                  workspace.staged_wavefunction.qat, valid);
       if (!valid) {
         workspace.staged_mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
-        mixer_state.system_statuses[system] =
-            workspace.staged_mixer_state.system_statuses[system];
+        mixer_state.system_statuses[system] = workspace.staged_mixer_state.system_statuses[system];
         workspace.active_systems[system] = 3u;
         continue;
       }
     }
-    status = commit_scc_mixer_system_transaction_cpu(
-        data.mixer, static_cast<std::int64_t>(system), workspace.staged_mixer_state, mixer_state,
-        error);
+    status =
+        commit_scc_mixer_system_transaction_cpu(data.mixer, static_cast<std::int64_t>(system),
+                                                workspace.staged_mixer_state, mixer_state, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     workspace.active_systems[system] = 4u;
   }
@@ -1796,8 +1779,7 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
     state.es2_energies[system] = workspace.es2_energies[system];
     state.es3_energies[system] = workspace.es3_energies[system];
     state.spin_energies[system] = workspace.spin_energies[system];
-    state.explicit_point_charge_energies[system] =
-        workspace.explicit_point_charge_energies[system];
+    state.explicit_point_charge_energies[system] = workspace.explicit_point_charge_energies[system];
     if (state.periodic_embedding_energies != nullptr)
       state.periodic_embedding_energies[system] = workspace.periodic_embedding_energies[system];
     state.internal_energies[system] = workspace.internal_energies[system];
@@ -1831,10 +1813,11 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
   return XTBLOOM_STATUS_SUCCESS;
 }
 
-xtbloom_status_t rebuild_scc_stationary_potentials_cpu(
-    const SccDriverPlan& plan, const SccDriverGeometryView& geometry,
-    const WavefunctionView& wavefunction, const SccDriverWorkspace& workspace,
-    std::string& error) {
+xtbloom_status_t rebuild_scc_stationary_potentials_cpu(const SccDriverPlan& plan,
+                                                       const SccDriverGeometryView& geometry,
+                                                       const WavefunctionView& wavefunction,
+                                                       const SccDriverWorkspace& workspace,
+                                                       std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   const auto& data = *plan.identity();
@@ -1887,8 +1870,8 @@ xtbloom_status_t rebuild_scc_stationary_potentials_cpu(
   }
 
   copy_wavefunction(data.wavefunction, wavefunction, workspace.staged_wavefunction);
-  for (std::size_t system = 0u;
-       system < static_cast<std::size_t>(data.wavefunction.batch_size); ++system) {
+  for (std::size_t system = 0u; system < static_cast<std::size_t>(data.wavefunction.batch_size);
+       ++system) {
     status = prepare_system(data, geometry, system, workspace, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
@@ -1896,13 +1879,14 @@ xtbloom_status_t rebuild_scc_stationary_potentials_cpu(
   return XTBLOOM_STATUS_SUCCESS;
 }
 
-xtbloom_status_t project_scc_stationary_state_cpu(
-    const WavefunctionLayout& layout, const WavefunctionView& wavefunction,
-    const double* packed_shell_potentials, std::int64_t packed_shell_potential_elements,
-    const SccStationaryProjection& projection, std::string& error) {
+xtbloom_status_t project_scc_stationary_state_cpu(const WavefunctionLayout& layout,
+                                                  const WavefunctionView& wavefunction,
+                                                  const double* packed_shell_potentials,
+                                                  std::int64_t packed_shell_potential_elements,
+                                                  const SccStationaryProjection& projection,
+                                                  std::string& error) {
   WavefunctionSystemView ignored;
-  xtbloom_status_t status =
-      make_wavefunction_system_view(layout, wavefunction, 0, ignored, error);
+  xtbloom_status_t status = make_wavefunction_system_view(layout, wavefunction, 0, ignored, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   std::int64_t matrix_elements = 0;
@@ -1917,8 +1901,8 @@ xtbloom_status_t project_scc_stationary_state_cpu(
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     matrix_elements += orbitals * orbitals;
-    has_unrestricted = has_unrestricted ||
-                       layout.spin_channels[static_cast<std::size_t>(system)] == 2;
+    has_unrestricted =
+        has_unrestricted || layout.spin_channels[static_cast<std::size_t>(system)] == 2;
   }
   if (packed_shell_potentials == nullptr ||
       packed_shell_potential_elements != layout.qsh.element_count ||
@@ -1963,8 +1947,7 @@ xtbloom_status_t project_scc_stationary_state_cpu(
       {projection.spin_shell_potentials, has_unrestricted ? shell_bytes : 0u},
   }};
   for (std::size_t index = 0u; index < outputs.size(); ++index) {
-    if (!make_range(output_bindings[index].first, output_bindings[index].second,
-                    outputs[index]) ||
+    if (!make_range(output_bindings[index].first, output_bindings[index].second, outputs[index]) ||
         ranges_overlap(outputs[index], wavefunction_range) ||
         ranges_overlap(outputs[index], potential_range)) {
       error = "GFN1 stationary projection outputs overlap an input or have invalid ranges";
@@ -2012,8 +1995,7 @@ xtbloom_status_t project_scc_stationary_state_cpu(
     for (std::int64_t element = 0; element < matrices; ++element) {
       const double alpha_density = wavefunction.density[density_begin + element];
       const double beta_density = wavefunction.density[density_begin + matrices + element];
-      const double alpha_weighted =
-          wavefunction.energy_weighted_density[weighted_begin + element];
+      const double alpha_weighted = wavefunction.energy_weighted_density[weighted_begin + element];
       const double beta_weighted =
           wavefunction.energy_weighted_density[weighted_begin + matrices + element];
       if (!std::isfinite(alpha_density + beta_density) ||
@@ -2036,8 +2018,7 @@ xtbloom_status_t project_scc_stationary_state_cpu(
     const std::int32_t channels = layout.spin_channels[index];
     for (std::int64_t element = 0; element < matrices; ++element) {
       const double alpha_density = wavefunction.density[density_begin + element];
-      const double alpha_weighted =
-          wavefunction.energy_weighted_density[weighted_begin + element];
+      const double alpha_weighted = wavefunction.energy_weighted_density[weighted_begin + element];
       double total_density = alpha_density;
       double total_weighted = alpha_weighted;
       double spin_density = 0.0;

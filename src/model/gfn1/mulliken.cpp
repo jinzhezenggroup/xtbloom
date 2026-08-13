@@ -104,29 +104,28 @@ bool pairwise_disjoint(const std::array<MemoryRange, N>& ranges) noexcept {
 
 std::array<MemoryRange, 15> plan_storage_ranges(const MullikenPlan& plan) {
   const MullikenPlanData* data = plan.identity();
-  return {{{&plan, sizeof(plan)},
-           {data, sizeof(MullikenPlanData)},
-           {data->atom_offsets.data(), data->atom_offsets.capacity() * sizeof(std::int64_t)},
-           {data->batch_shell_offsets.data(),
-            data->batch_shell_offsets.capacity() * sizeof(std::int64_t)},
-           {data->batch_orbital_offsets.data(),
-            data->batch_orbital_offsets.capacity() * sizeof(std::int64_t)},
-           {data->matrix_offsets.data(), data->matrix_offsets.capacity() * sizeof(std::int64_t)},
-           {data->shell_orbital_offsets.data(),
-            data->shell_orbital_offsets.capacity() * sizeof(std::int64_t)},
-           {data->shell_to_atom.data(), data->shell_to_atom.capacity() * sizeof(std::int64_t)},
-           {data->orbital_to_shell.data(),
-            data->orbital_to_shell.capacity() * sizeof(std::int64_t)},
-           {data->spin_channels.data(), data->spin_channels.capacity() * sizeof(std::int32_t)},
-           {data->reference_shell_occupations.data(),
-            data->reference_shell_occupations.capacity() * sizeof(double)},
-           {data->density_offsets.data(),
-            data->density_offsets.capacity() * sizeof(std::int64_t)},
-           {data->shell_population_offsets.data(),
-            data->shell_population_offsets.capacity() * sizeof(std::int64_t)},
-           {data->atom_population_offsets.data(),
-            data->atom_population_offsets.capacity() * sizeof(std::int64_t)},
-           {nullptr, 0u}}};
+  return {
+      {{&plan, sizeof(plan)},
+       {data, sizeof(MullikenPlanData)},
+       {data->atom_offsets.data(), data->atom_offsets.capacity() * sizeof(std::int64_t)},
+       {data->batch_shell_offsets.data(),
+        data->batch_shell_offsets.capacity() * sizeof(std::int64_t)},
+       {data->batch_orbital_offsets.data(),
+        data->batch_orbital_offsets.capacity() * sizeof(std::int64_t)},
+       {data->matrix_offsets.data(), data->matrix_offsets.capacity() * sizeof(std::int64_t)},
+       {data->shell_orbital_offsets.data(),
+        data->shell_orbital_offsets.capacity() * sizeof(std::int64_t)},
+       {data->shell_to_atom.data(), data->shell_to_atom.capacity() * sizeof(std::int64_t)},
+       {data->orbital_to_shell.data(), data->orbital_to_shell.capacity() * sizeof(std::int64_t)},
+       {data->spin_channels.data(), data->spin_channels.capacity() * sizeof(std::int32_t)},
+       {data->reference_shell_occupations.data(),
+        data->reference_shell_occupations.capacity() * sizeof(double)},
+       {data->density_offsets.data(), data->density_offsets.capacity() * sizeof(std::int64_t)},
+       {data->shell_population_offsets.data(),
+        data->shell_population_offsets.capacity() * sizeof(std::int64_t)},
+       {data->atom_population_offsets.data(),
+        data->atom_population_offsets.capacity() * sizeof(std::int64_t)},
+       {nullptr, 0u}}};
 }
 
 bool overlaps_plan_storage(const MullikenPlan& plan, const MemoryRange& candidate) {
@@ -168,8 +167,7 @@ xtbloom_status_t validate_plan(const MullikenPlan& plan, std::string& error) {
 }
 
 xtbloom_status_t validate_common_views(const MullikenPlan& plan,
-                                       const MullikenIntegralView& integrals,
-                                       std::string& error) {
+                                       const MullikenIntegralView& integrals, std::string& error) {
   if (!valid_view_identity(plan, integrals.plan_identity) || integrals.overlap == nullptr ||
       integrals.elements != plan.matrix_elements() ||
       reinterpret_cast<std::uintptr_t>(integrals.overlap) % alignof(double) != 0u) {
@@ -180,9 +178,9 @@ xtbloom_status_t validate_common_views(const MullikenPlan& plan,
 }
 
 void population_system_unchecked(const MullikenPlanData& data, std::size_t system,
-                                 const double* overlap, const double* density,
-                                 double* qsh_scratch, double* qat_scratch,
-                                 std::string& error, xtbloom_status_t& status) {
+                                 const double* overlap, const double* density, double* qsh_scratch,
+                                 double* qat_scratch, std::string& error,
+                                 xtbloom_status_t& status) {
   const std::int64_t atom_begin = data.atom_offsets[system];
   const std::int64_t atom_end = data.atom_offsets[system + 1u];
   const std::int64_t shell_begin = data.batch_shell_offsets[system];
@@ -255,9 +253,11 @@ void population_system_unchecked(const MullikenPlanData& data, std::size_t syste
   for (std::int32_t channel = 0; channel < nspin; ++channel) {
     for (std::int64_t local_shell = 0; local_shell < shells; ++local_shell) {
       const std::int64_t shell = shell_begin + local_shell;
-      const std::int64_t local_atom = data.shell_to_atom[static_cast<std::size_t>(shell)] - atom_begin;
+      const std::int64_t local_atom =
+          data.shell_to_atom[static_cast<std::size_t>(shell)] - atom_begin;
       double& atom_population = qat_scratch[qat_base + channel * atoms + local_atom];
-      const double updated = atom_population + qsh_scratch[qsh_base + channel * shells + local_shell];
+      const double updated =
+          atom_population + qsh_scratch[qsh_base + channel * shells + local_shell];
       if (!std::isfinite(updated)) {
         error = "GFN1 Mulliken shell-to-atom reduction overflowed";
         status = XTBLOOM_STATUS_INTERNAL_ERROR;
@@ -269,10 +269,10 @@ void population_system_unchecked(const MullikenPlanData& data, std::size_t syste
   status = XTBLOOM_STATUS_SUCCESS;
 }
 
-xtbloom_status_t add_hamiltonian_system_unchecked(
-    const MullikenPlanData& data, std::size_t system, const double* overlap,
-    const double* potential, double* matrix, double* converted_potential,
-    std::string& error) {
+xtbloom_status_t add_hamiltonian_system_unchecked(const MullikenPlanData& data, std::size_t system,
+                                                  const double* overlap, const double* potential,
+                                                  double* matrix, double* converted_potential,
+                                                  std::string& error) {
   const std::int64_t orbital_begin = data.batch_orbital_offsets[system];
   const std::int64_t orbital_end = data.batch_orbital_offsets[system + 1u];
   const std::int64_t shell_begin = data.batch_shell_offsets[system];
@@ -348,8 +348,7 @@ xtbloom_status_t validate_population_call(const MullikenPlan& plan,
                                           const MullikenIntegralView& integrals,
                                           const MullikenDensityView& density,
                                           const MullikenPopulationView& population,
-                                          const MullikenWorkspace& workspace,
-                                          std::string& error) {
+                                          const MullikenWorkspace& workspace, std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = validate_common_views(plan, integrals, error);
@@ -410,8 +409,7 @@ xtbloom_status_t validate_hamiltonian_call(const MullikenPlan& plan,
                                            const MullikenIntegralView& integrals,
                                            const MullikenPotentialView& potential,
                                            const MullikenHamiltonianView& hamiltonian,
-                                           const MullikenWorkspace& workspace,
-                                           std::string& error) {
+                                           const MullikenWorkspace& workspace, std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = validate_common_views(plan, integrals, error);
@@ -473,13 +471,27 @@ bool MullikenPlan::sealed() const noexcept { return data_ != nullptr; }
 std::int64_t MullikenPlan::batch_size() const noexcept { return data_ ? data_->batch_size : 0; }
 std::int64_t MullikenPlan::total_atoms() const noexcept { return data_ ? data_->total_atoms : 0; }
 std::int64_t MullikenPlan::total_shells() const noexcept { return data_ ? data_->total_shells : 0; }
-std::int64_t MullikenPlan::total_orbitals() const noexcept { return data_ ? data_->total_orbitals : 0; }
-std::int64_t MullikenPlan::matrix_elements() const noexcept { return data_ ? data_->matrix_elements : 0; }
-std::int64_t MullikenPlan::density_elements() const noexcept { return data_ ? data_->density_elements : 0; }
-std::int64_t MullikenPlan::shell_population_elements() const noexcept { return data_ ? data_->shell_population_elements : 0; }
-std::int64_t MullikenPlan::atom_population_elements() const noexcept { return data_ ? data_->atom_population_elements : 0; }
-std::int64_t MullikenPlan::population_scratch_elements() const noexcept { return data_ ? data_->population_scratch_elements : 0; }
-std::int64_t MullikenPlan::hamiltonian_scratch_elements() const noexcept { return data_ ? data_->hamiltonian_scratch_elements : 0; }
+std::int64_t MullikenPlan::total_orbitals() const noexcept {
+  return data_ ? data_->total_orbitals : 0;
+}
+std::int64_t MullikenPlan::matrix_elements() const noexcept {
+  return data_ ? data_->matrix_elements : 0;
+}
+std::int64_t MullikenPlan::density_elements() const noexcept {
+  return data_ ? data_->density_elements : 0;
+}
+std::int64_t MullikenPlan::shell_population_elements() const noexcept {
+  return data_ ? data_->shell_population_elements : 0;
+}
+std::int64_t MullikenPlan::atom_population_elements() const noexcept {
+  return data_ ? data_->atom_population_elements : 0;
+}
+std::int64_t MullikenPlan::population_scratch_elements() const noexcept {
+  return data_ ? data_->population_scratch_elements : 0;
+}
+std::int64_t MullikenPlan::hamiltonian_scratch_elements() const noexcept {
+  return data_ ? data_->hamiltonian_scratch_elements : 0;
+}
 
 std::size_t MullikenPlan::resident_bytes() const noexcept {
   if (!data_) return 0u;
@@ -497,15 +509,33 @@ bool MullikenPlan::overlaps_storage(const void* data, std::size_t size_bytes) co
   return overlaps_plan_storage(*this, MemoryRange{data, size_bytes});
 }
 
-const std::vector<std::int64_t>& MullikenPlan::atom_offsets() const noexcept { return data_ ? data_->atom_offsets : kEmptyInt64; }
-const std::vector<std::int64_t>& MullikenPlan::batch_shell_offsets() const noexcept { return data_ ? data_->batch_shell_offsets : kEmptyInt64; }
-const std::vector<std::int64_t>& MullikenPlan::batch_orbital_offsets() const noexcept { return data_ ? data_->batch_orbital_offsets : kEmptyInt64; }
-const std::vector<std::int64_t>& MullikenPlan::matrix_offsets() const noexcept { return data_ ? data_->matrix_offsets : kEmptyInt64; }
-const std::vector<std::int64_t>& MullikenPlan::shell_orbital_offsets() const noexcept { return data_ ? data_->shell_orbital_offsets : kEmptyInt64; }
-const std::vector<std::int64_t>& MullikenPlan::shell_to_atom() const noexcept { return data_ ? data_->shell_to_atom : kEmptyInt64; }
-const std::vector<std::int64_t>& MullikenPlan::orbital_to_shell() const noexcept { return data_ ? data_->orbital_to_shell : kEmptyInt64; }
-const std::vector<std::int32_t>& MullikenPlan::spin_channels() const noexcept { return data_ ? data_->spin_channels : kEmptyInt32; }
-const std::vector<double>& MullikenPlan::reference_shell_occupations() const noexcept { return data_ ? data_->reference_shell_occupations : kEmptyDouble; }
+const std::vector<std::int64_t>& MullikenPlan::atom_offsets() const noexcept {
+  return data_ ? data_->atom_offsets : kEmptyInt64;
+}
+const std::vector<std::int64_t>& MullikenPlan::batch_shell_offsets() const noexcept {
+  return data_ ? data_->batch_shell_offsets : kEmptyInt64;
+}
+const std::vector<std::int64_t>& MullikenPlan::batch_orbital_offsets() const noexcept {
+  return data_ ? data_->batch_orbital_offsets : kEmptyInt64;
+}
+const std::vector<std::int64_t>& MullikenPlan::matrix_offsets() const noexcept {
+  return data_ ? data_->matrix_offsets : kEmptyInt64;
+}
+const std::vector<std::int64_t>& MullikenPlan::shell_orbital_offsets() const noexcept {
+  return data_ ? data_->shell_orbital_offsets : kEmptyInt64;
+}
+const std::vector<std::int64_t>& MullikenPlan::shell_to_atom() const noexcept {
+  return data_ ? data_->shell_to_atom : kEmptyInt64;
+}
+const std::vector<std::int64_t>& MullikenPlan::orbital_to_shell() const noexcept {
+  return data_ ? data_->orbital_to_shell : kEmptyInt64;
+}
+const std::vector<std::int32_t>& MullikenPlan::spin_channels() const noexcept {
+  return data_ ? data_->spin_channels : kEmptyInt32;
+}
+const std::vector<double>& MullikenPlan::reference_shell_occupations() const noexcept {
+  return data_ ? data_->reference_shell_occupations : kEmptyDouble;
+}
 const MullikenPlanData* MullikenPlan::identity() const noexcept { return data_.get(); }
 
 xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
@@ -514,7 +544,8 @@ xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& 
   const bool topology_valid =
       basis.batch_size > 0 && basis.total_atoms > 0 && basis.total_shells > 0 &&
       basis.total_orbitals > 0 && integrals.batch_size == basis.batch_size &&
-      wavefunction.batch_size == basis.batch_size && wavefunction.total_atoms == basis.total_atoms &&
+      wavefunction.batch_size == basis.batch_size &&
+      wavefunction.total_atoms == basis.total_atoms &&
       wavefunction.total_shells == basis.total_shells &&
       wavefunction.total_orbitals == basis.total_orbitals &&
       basis.atom_offsets == wavefunction.atom_offsets &&
@@ -558,8 +589,8 @@ xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& 
         error = "GFN1 Mulliken basis has an invalid shell orbital partition";
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
-      std::fill(created.orbital_to_shell.begin() + begin,
-                created.orbital_to_shell.begin() + end, shell);
+      std::fill(created.orbital_to_shell.begin() + begin, created.orbital_to_shell.begin() + end,
+                shell);
     }
     created.population_scratch_elements = created.shell_population_elements;
     if (!checked_add(created.atom_population_elements, created.population_scratch_elements)) {
@@ -626,7 +657,8 @@ xtbloom_status_t evaluate_mulliken_population_cpu(const MullikenPlan& plan,
                                 qat_scratch, error, status);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
-  std::copy_n(qsh_scratch, static_cast<std::size_t>(data.shell_population_elements), population.qsh);
+  std::copy_n(qsh_scratch, static_cast<std::size_t>(data.shell_population_elements),
+              population.qsh);
   std::copy_n(qat_scratch, static_cast<std::size_t>(data.atom_population_elements), population.qat);
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
@@ -675,9 +707,9 @@ xtbloom_status_t add_mulliken_hamiltonian_cpu(const MullikenPlan& plan,
   std::copy_n(hamiltonian.matrix, static_cast<std::size_t>(hamiltonian.elements),
               workspace.scratch);
   for (std::int64_t system = 0; system < plan.batch_size(); ++system) {
-    status = add_hamiltonian_system_unchecked(
-        *plan.identity(), static_cast<std::size_t>(system), integrals.overlap, potential.vsh,
-        workspace.scratch, workspace.scratch + plan.density_elements(), error);
+    status = add_hamiltonian_system_unchecked(*plan.identity(), static_cast<std::size_t>(system),
+                                              integrals.overlap, potential.vsh, workspace.scratch,
+                                              workspace.scratch + plan.density_elements(), error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
   std::copy_n(workspace.scratch, static_cast<std::size_t>(hamiltonian.elements),

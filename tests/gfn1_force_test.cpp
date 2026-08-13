@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#include "model/gfn1/force.hpp"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -14,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "model/gfn1/force.hpp"
 #include "model/gfn1/wavefunction.hpp"
 
 #define CHECK(condition)                                                                   \
@@ -117,8 +116,7 @@ struct Fixture {
     if (mixed_spin) {
       atom_offsets = {0, 2, 4};
       atomic_numbers = {1, 1, 1, 1};
-      positions = {0.0, 0.0, -1.2, 0.0, 0.0, 1.2,
-                   0.0, 0.0, -1.0, 0.0, 0.0, 1.0};
+      positions = {0.0, 0.0, -1.2, 0.0, 0.0, 1.2, 0.0, 0.0, -1.0, 0.0, 0.0, 1.0};
       scc_free_energy = {-1.25, -1.15};
     }
     const std::int64_t batch = static_cast<std::int64_t>(atom_offsets.size() - 1u);
@@ -133,8 +131,8 @@ struct Fixture {
     if (make_basis_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), basis, error) !=
             XTBLOOM_STATUS_SUCCESS ||
         make_integral_plan(basis, integrals, error) != XTBLOOM_STATUS_SUCCESS ||
-        make_repulsion_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), repulsion, error) !=
-            XTBLOOM_STATUS_SUCCESS ||
+        make_repulsion_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), repulsion,
+                            error) != XTBLOOM_STATUS_SUCCESS ||
         make_h0_plan(basis, integrals, atomic_numbers.data(), h0, error) !=
             XTBLOOM_STATUS_SUCCESS ||
         make_wavefunction_layout(basis, atomic_numbers.data(), charges.data(), unpaired.data(),
@@ -145,8 +143,8 @@ struct Fixture {
             XTBLOOM_STATUS_SUCCESS ||
         make_d3_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), d3, error) !=
             XTBLOOM_STATUS_SUCCESS ||
-        make_halogen_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), halogen, error) !=
-            XTBLOOM_STATUS_SUCCESS) {
+        make_halogen_plan(batch, atoms, atom_offsets.data(), atomic_numbers.data(), halogen,
+                          error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     if (point_charges) {
@@ -171,8 +169,7 @@ struct Fixture {
     coordination.resize(static_cast<std::size_t>(basis.total_atoms));
     overlap.resize(static_cast<std::size_t>(integrals.total_matrix_elements));
     density.assign(overlap.size(), 0.0);
-    const bool has_unrestricted =
-        std::find(spins.begin(), spins.end(), 2) != spins.end();
+    const bool has_unrestricted = std::find(spins.begin(), spins.end(), 2) != spins.end();
     spin_density.assign(has_unrestricted ? overlap.size() : 0u, 0.0);
     energy_weighted_density.assign(overlap.size(), 0.0);
     shell_charges.assign(static_cast<std::size_t>(basis.total_shells), 0.0);
@@ -181,8 +178,8 @@ struct Fixture {
     if (evaluate_coordination_cpu(d3.coordination_plan(), positions.data(), coordination.data(),
                                   error) != XTBLOOM_STATUS_SUCCESS ||
         evaluate_overlap_cpu(basis, integrals, positions.data(), overlap.data(),
-                             integral_storage.data(), integral_storage.size(), error) !=
-            XTBLOOM_STATUS_SUCCESS) {
+                             integral_storage.data(), integral_storage.size(),
+                             error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
     for (std::int64_t system = 0; system < basis.batch_size; ++system) {
@@ -284,9 +281,8 @@ int test_unrestricted_spin_summed_matrix_extent_and_component_sum() {
   std::vector<double> forces(6u, 77.0);
   std::array<std::vector<double>, 6> diagnostics;
   for (auto& values : diagnostics) values.assign(6u, 77.0);
-  ComponentGradients components{diagnostics[0].data(), diagnostics[1].data(),
-                                diagnostics[2].data(), diagnostics[3].data(),
-                                diagnostics[4].data(), nullptr};
+  ComponentGradients components{diagnostics[0].data(), diagnostics[1].data(), diagnostics[2].data(),
+                                diagnostics[3].data(), diagnostics[4].data(), nullptr};
   CHECK(fixture.evaluate(fixture.input(true, false), energy.data(), forces.data(), nullptr,
                          components, error) == XTBLOOM_STATUS_SUCCESS ||
         (std::fprintf(stderr, "unrestricted force failure: %s\n", error.c_str()), false));
@@ -337,10 +333,9 @@ int test_qm_only_point_charge_force_and_conservation() {
     }
     std::array<double, 1> value{};
     if (add_external_point_charge_energy_cpu(fixture.external, fixture.shell_charges.data(),
-                                             potential.data(), value.data(), local_error) !=
-        XTBLOOM_STATUS_SUCCESS) {
-      std::fprintf(stderr, "external energy finite-difference failure: %s\n",
-                   local_error.c_str());
+                                             potential.data(), value.data(),
+                                             local_error) != XTBLOOM_STATUS_SUCCESS) {
+      std::fprintf(stderr, "external energy finite-difference failure: %s\n", local_error.c_str());
       return std::numeric_limits<double>::quiet_NaN();
     }
     return value[0];
@@ -432,8 +427,8 @@ int test_mixed_batch_ignores_restricted_spin_slices() {
   const std::int64_t restricted_matrix_end = fixture.integrals.matrix_offsets[1];
   std::fill_n(fixture.spin_density.data(), static_cast<std::size_t>(restricted_matrix_end), 0.75);
   const std::int64_t restricted_shell_end = fixture.basis.batch_shell_offsets[1];
-  std::fill_n(fixture.spin_shell_potentials.data(),
-              static_cast<std::size_t>(restricted_shell_end), -0.4);
+  std::fill_n(fixture.spin_shell_potentials.data(), static_cast<std::size_t>(restricted_shell_end),
+              -0.4);
   std::vector<double> energy(static_cast<std::size_t>(fixture.basis.batch_size));
   std::vector<double> forces(static_cast<std::size_t>(3 * fixture.basis.total_atoms));
   ComponentGradients components;
@@ -442,8 +437,8 @@ int test_mixed_batch_ignores_restricted_spin_slices() {
   const std::vector<double> poisoned_forces = forces;
 
   std::fill_n(fixture.spin_density.data(), static_cast<std::size_t>(restricted_matrix_end), 0.0);
-  std::fill_n(fixture.spin_shell_potentials.data(),
-              static_cast<std::size_t>(restricted_shell_end), 0.0);
+  std::fill_n(fixture.spin_shell_potentials.data(), static_cast<std::size_t>(restricted_shell_end),
+              0.0);
   CHECK(fixture.evaluate(fixture.input(true, false), energy.data(), forces.data(), nullptr,
                          components, error) == XTBLOOM_STATUS_SUCCESS);
   for (std::size_t coordinate = 0u; coordinate < forces.size(); ++coordinate) {

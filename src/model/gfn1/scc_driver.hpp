@@ -65,10 +65,12 @@ class SccDriverPlan {
  private:
   explicit SccDriverPlan(std::shared_ptr<const SccDriverPlanData> data) noexcept;
   std::shared_ptr<const SccDriverPlanData> data_;
-  friend xtbloom_status_t make_scc_driver_plan(
-      const WavefunctionLayout&, const MullikenPlan&, const ES2Plan&, const ES3Plan&,
-      const SpinPolarizationPlan&, const EigensolverPlan&, const SccMixerPlan&,
-      const PeriodicEmbeddingPlan*, std::uint64_t, double, double, SccDriverPlan&, std::string&);
+  friend xtbloom_status_t make_scc_driver_plan(const WavefunctionLayout&, const MullikenPlan&,
+                                               const ES2Plan&, const ES3Plan&,
+                                               const SpinPolarizationPlan&, const EigensolverPlan&,
+                                               const SccMixerPlan&, const PeriodicEmbeddingPlan*,
+                                               std::uint64_t, double, double, SccDriverPlan&,
+                                               std::string&);
 };
 
 struct SccDriverGeometryView {
@@ -166,12 +168,14 @@ struct SccStationaryProjection {
   std::int64_t atom_elements = 0;
 };
 
-xtbloom_status_t make_scc_driver_plan(
-    const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
-    const ES3Plan& es3, const SpinPolarizationPlan& spin, const EigensolverPlan& eigensolver,
-    const SccMixerPlan& mixer, const PeriodicEmbeddingPlan* periodic_embedding,
-    std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
-    SccDriverPlan& plan, std::string& error);
+xtbloom_status_t make_scc_driver_plan(const WavefunctionLayout& wavefunction,
+                                      const MullikenPlan& mulliken, const ES2Plan& es2,
+                                      const ES3Plan& es3, const SpinPolarizationPlan& spin,
+                                      const EigensolverPlan& eigensolver, const SccMixerPlan& mixer,
+                                      const PeriodicEmbeddingPlan* periodic_embedding,
+                                      std::uint64_t maximum_iterations,
+                                      double electronic_temperature, double energy_tolerance,
+                                      SccDriverPlan& plan, std::string& error);
 
 xtbloom_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspace,
                                        std::size_t workspace_size, SccDriverState& state,
@@ -182,8 +186,7 @@ xtbloom_status_t bind_scc_driver_workspace(const SccDriverPlan& plan, void* work
 xtbloom_status_t initialize_scc_driver_state_cpu(const SccDriverPlan& plan,
                                                  const WavefunctionView& wavefunction,
                                                  const SccMixerState& mixer_state,
-                                                 const SccDriverState& state,
-                                                 std::string& error);
+                                                 const SccDriverState& state, std::string& error);
 xtbloom_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::int64_t system,
                                                const WavefunctionView& wavefunction,
                                                const SccMixerState& mixer_state,
@@ -203,10 +206,11 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
  * force composition; outputs remain in the supplied canonical driver
  * workspace and no caller wavefunction bytes are modified.
  */
-xtbloom_status_t rebuild_scc_stationary_potentials_cpu(
-    const SccDriverPlan& plan, const SccDriverGeometryView& geometry,
-    const WavefunctionView& wavefunction, const SccDriverWorkspace& workspace,
-    std::string& error);
+xtbloom_status_t rebuild_scc_stationary_potentials_cpu(const SccDriverPlan& plan,
+                                                       const SccDriverGeometryView& geometry,
+                                                       const WavefunctionView& wavefunction,
+                                                       const SccDriverWorkspace& workspace,
+                                                       std::string& error);
 
 /*
  * Project a converged SCC state into the stationary force representation.
@@ -214,10 +218,12 @@ xtbloom_status_t rebuild_scc_stationary_potentials_cpu(
  * charge/magnetization layout.  Restricted members contribute zero to the
  * batch-wide spin outputs when an unrestricted peer requires those buffers.
  */
-xtbloom_status_t project_scc_stationary_state_cpu(
-    const WavefunctionLayout& layout, const WavefunctionView& wavefunction,
-    const double* packed_shell_potentials, std::int64_t packed_shell_potential_elements,
-    const SccStationaryProjection& projection, std::string& error);
+xtbloom_status_t project_scc_stationary_state_cpu(const WavefunctionLayout& layout,
+                                                  const WavefunctionView& wavefunction,
+                                                  const double* packed_shell_potentials,
+                                                  std::int64_t packed_shell_potential_elements,
+                                                  const SccStationaryProjection& projection,
+                                                  std::string& error);
 
 }  // namespace xtbloom::detail::gfn1
 

@@ -313,8 +313,7 @@ class LicenseArchiveTests(unittest.TestCase):
                     ).read_bytes()
                 elif name.endswith("/provenance/gfn1_legacy_sto_manifest.json"):
                     payload = (
-                        REPOSITORY
-                        / "data/parameters/gfn1_legacy_sto_manifest.json"
+                        REPOSITORY / "data/parameters/gfn1_legacy_sto_manifest.json"
                     ).read_bytes()
                 elif name.endswith("/provenance/implib_manifest.json"):
                     payload = (REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH).read_bytes()
@@ -800,8 +799,7 @@ class InstallPayloadTests(unittest.TestCase):
             elif relative.endswith("provenance/gfn1_legacy_sto_manifest.json"):
                 destination.write_bytes(
                     (
-                        REPOSITORY
-                        / "data/parameters/gfn1_legacy_sto_manifest.json"
+                        REPOSITORY / "data/parameters/gfn1_legacy_sto_manifest.json"
                     ).read_bytes()
                 )
             elif relative.endswith("third-party/Apache-2.0.txt"):
@@ -1371,9 +1369,9 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
             )
         )
         cls.gfn1_legacy_sto = json.loads(
-            (
-                REPOSITORY / "data/parameters/gfn1_legacy_sto_manifest.json"
-            ).read_text(encoding="utf-8")
+            (REPOSITORY / "data/parameters/gfn1_legacy_sto_manifest.json").read_text(
+                encoding="utf-8"
+            )
         )
         cls.gfn1_legacy_sto_header = (
             REPOSITORY / "data/parameters/gfn1_legacy_sto.hpp"
@@ -1397,15 +1395,11 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
         """The GFN1-only xTB rows and retained header remain exact."""
         manifest = copy.deepcopy(self.gfn1_legacy_sto)
         manifest["source"]["git_blob"] = "0" * 40
-        with self.assertRaisesRegex(
-            CHECKER.LicenseCheckError, "legacy STO manifest"
-        ):
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "legacy STO manifest"):
             CHECKER._check_gfn1_legacy_sto_provenance(
                 manifest, self.lgpl, self.gfn1_legacy_sto_header
             )
-        with self.assertRaisesRegex(
-            CHECKER.LicenseCheckError, "legacy STO consumer"
-        ):
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "legacy STO consumer"):
             CHECKER._check_gfn1_legacy_sto_provenance(
                 copy.deepcopy(self.gfn1_legacy_sto),
                 self.lgpl,

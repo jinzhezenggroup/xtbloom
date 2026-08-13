@@ -3,8 +3,6 @@
 
 #include "model/gfn1/force.hpp"
 
-#include "data/parameters/gfn1.hpp"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -13,6 +11,8 @@
 #include <limits>
 #include <utility>
 #include <vector>
+
+#include "data/parameters/gfn1.hpp"
 
 namespace xtbloom::detail::gfn1 {
 namespace {
@@ -40,8 +40,7 @@ bool checked_multiply(std::int64_t first, std::int64_t second, std::int64_t& res
   return true;
 }
 
-bool same_offsets(const std::vector<std::int64_t>& first,
-                  const std::vector<std::int64_t>& second) {
+bool same_offsets(const std::vector<std::int64_t>& first, const std::vector<std::int64_t>& second) {
   return first == second;
 }
 
@@ -111,8 +110,8 @@ bool overlaps_known_plan_storage(const AddressRange& range, const BasisPlan& bas
                                  const IntegralPlan& integrals,
                                  const CoordinationPlan& coordination,
                                  const RepulsionPlan& repulsion, const H0Plan& h0,
-                                 const MullikenPlan& mulliken, const ES2Plan& es2,
-                                 const D3Plan& d3, const HalogenPlan& halogen,
+                                 const MullikenPlan& mulliken, const ES2Plan& es2, const D3Plan& d3,
+                                 const HalogenPlan& halogen,
                                  const ExternalPointChargePlan* external) {
   const std::size_t bytes = static_cast<std::size_t>(range.end - range.begin);
   const void* pointer = reinterpret_cast<const void*>(range.begin);
@@ -141,12 +140,11 @@ bool overlaps_known_plan_storage(const AddressRange& range, const BasisPlan& bas
       halogen.overlaps_storage(pointer, bytes)) {
     return true;
   }
-  return external != nullptr &&
-         (overlaps_vector(range, external->atom_offsets) ||
-          overlaps_vector(range, external->batch_shell_offsets) ||
-          overlaps_vector(range, external->point_charge_offsets) ||
-          overlaps_vector(range, external->shell_to_atom) ||
-          overlaps_vector(range, external->shell_hardness));
+  return external != nullptr && (overlaps_vector(range, external->atom_offsets) ||
+                                 overlaps_vector(range, external->batch_shell_offsets) ||
+                                 overlaps_vector(range, external->point_charge_offsets) ||
+                                 overlaps_vector(range, external->shell_to_atom) ||
+                                 overlaps_vector(range, external->shell_hardness));
 }
 
 bool exact_d3_workspace(const D3Plan& plan, const D3Workspace& workspace) {
@@ -291,12 +289,12 @@ bool exact_mulliken_topology(const BasisPlan& basis, const IntegralPlan& integra
 }
 
 xtbloom_status_t validate_canonical_model_parameters(
-    const BasisPlan& basis, const CoordinationPlan& coordination,
-    const RepulsionPlan& repulsion, const H0Plan& h0, const MullikenPlan& mulliken,
-    const ES2Plan& es2, const std::int32_t* atomic_numbers, std::string& error) {
+    const BasisPlan& basis, const CoordinationPlan& coordination, const RepulsionPlan& repulsion,
+    const H0Plan& h0, const MullikenPlan& mulliken, const ES2Plan& es2,
+    const std::int32_t* atomic_numbers, std::string& error) {
   constexpr double kElectronvoltToHartree = 1.0 / 27.21138505;
-  if (atomic_numbers == nullptr || coordination.covalent_radius.size() !=
-                                       static_cast<std::size_t>(basis.total_atoms) ||
+  if (atomic_numbers == nullptr ||
+      coordination.covalent_radius.size() != static_cast<std::size_t>(basis.total_atoms) ||
       repulsion.sqrt_alpha.size() != static_cast<std::size_t>(basis.total_atoms) ||
       repulsion.effective_charge.size() != static_cast<std::size_t>(basis.total_atoms) ||
       h0.atomic_radii.size() != static_cast<std::size_t>(basis.total_atoms) ||
@@ -329,9 +327,9 @@ xtbloom_status_t validate_canonical_model_parameters(
     }
     for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
       const std::size_t shell_index = static_cast<std::size_t>(shell);
-      const auto& shell_parameter = parameters::gfn1::kShells[
-          static_cast<std::size_t>(element->shell_offset) + shell_index -
-          static_cast<std::size_t>(shell_begin)];
+      const auto& shell_parameter =
+          parameters::gfn1::kShells[static_cast<std::size_t>(element->shell_offset) + shell_index -
+                                    static_cast<std::size_t>(shell_begin)];
       const bool basis_match =
           basis.principal_quantum_numbers[shell_index] ==
               shell_parameter.principal_quantum_number &&
@@ -354,9 +352,8 @@ xtbloom_status_t validate_canonical_model_parameters(
     }
   }
   if (h0.shell_pair_offsets.size() != static_cast<std::size_t>(basis.batch_size) + 1u ||
-      h0.shell_pair_offsets.front() != 0 || h0.shell_pair_scale.size() !=
-                                                   static_cast<std::size_t>(
-                                                       h0.shell_pair_offsets.back())) {
+      h0.shell_pair_offsets.front() != 0 ||
+      h0.shell_pair_scale.size() != static_cast<std::size_t>(h0.shell_pair_offsets.back())) {
     error = "GFN1 H0 shell-pair metadata is not canonical";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -394,8 +391,7 @@ xtbloom_status_t validate_canonical_model_parameters(
                      (1.0 + parameters::gfn1::kGlobal.hamiltonian_enscale * delta * delta);
         } else if (first_valence || second_valence) {
           const std::size_t active = first_valence ? first_index : second_index;
-          const std::size_t angular =
-              static_cast<std::size_t>(basis.angular_momenta[active]) * 4u;
+          const std::size_t angular = static_cast<std::size_t>(basis.angular_momenta[active]) * 4u;
           expected = 0.5 * (parameters::gfn1::kGlobal.shell_pair_scale[angular] +
                             parameters::gfn1::kGlobal.hamiltonian_kpol);
         }
@@ -415,8 +411,7 @@ xtbloom_status_t add_scalar_stationary_overlap_adjoint(const MullikenPlan& mulli
                                                        const double* density,
                                                        const double* shell_potentials,
                                                        double* overlap_adjoint,
-                                                       bool unrestricted_only,
-                                                       std::string& error) {
+                                                       bool unrestricted_only, std::string& error) {
   const auto& orbital_offsets = mulliken.batch_orbital_offsets();
   const auto& matrix_offsets = mulliken.matrix_offsets();
   const auto& orbital_to_shell = mulliken.orbital_to_shell();
@@ -425,12 +420,12 @@ xtbloom_status_t add_scalar_stationary_overlap_adjoint(const MullikenPlan& mulli
      * batches share one descriptor. Restricted members own no magnetization
      * response, so ignore their slices even if a caller's reusable scratch
      * contains stale finite values there. */
-    if (unrestricted_only &&
-        mulliken.spin_channels()[static_cast<std::size_t>(system)] != 2) {
+    if (unrestricted_only && mulliken.spin_channels()[static_cast<std::size_t>(system)] != 2) {
       continue;
     }
     const std::int64_t orbital_begin = orbital_offsets[static_cast<std::size_t>(system)];
-    const std::int64_t orbitals = orbital_offsets[static_cast<std::size_t>(system + 1)] - orbital_begin;
+    const std::int64_t orbitals =
+        orbital_offsets[static_cast<std::size_t>(system + 1)] - orbital_begin;
     const std::int64_t matrix_begin = matrix_offsets[static_cast<std::size_t>(system)];
     for (std::int64_t row = 0; row < orbitals; ++row) {
       const std::int64_t row_shell =
@@ -440,7 +435,8 @@ xtbloom_status_t add_scalar_stationary_overlap_adjoint(const MullikenPlan& mulli
             orbital_to_shell[static_cast<std::size_t>(orbital_begin + column)];
         const std::int64_t forward = matrix_begin + row * orbitals + column;
         const std::int64_t reverse = matrix_begin + column * orbitals + row;
-        const double pair_density = density[forward] + (forward == reverse ? 0.0 : density[reverse]);
+        const double pair_density =
+            density[forward] + (forward == reverse ? 0.0 : density[reverse]);
         const double contribution =
             -0.5 * pair_density * (shell_potentials[row_shell] + shell_potentials[column_shell]);
         const double updated = overlap_adjoint[forward] + contribution;
@@ -458,46 +454,41 @@ xtbloom_status_t add_scalar_stationary_overlap_adjoint(const MullikenPlan& mulli
 xtbloom_status_t validate_plans(const BasisPlan& basis, const IntegralPlan& integrals,
                                 const CoordinationPlan& coordination,
                                 const RepulsionPlan& repulsion, const H0Plan& h0,
-                                const MullikenPlan& mulliken, const ES2Plan& es2,
-                                const D3Plan& d3, const HalogenPlan& halogen,
-                                const ExternalPointChargePlan* external,
+                                const MullikenPlan& mulliken, const ES2Plan& es2, const D3Plan& d3,
+                                const HalogenPlan& halogen, const ExternalPointChargePlan* external,
                                 const std::int32_t* atomic_numbers, std::string& error) {
-  const bool valid = basis.batch_size > 0 && basis.total_atoms > 0 && basis.total_shells > 0 &&
-                     basis.total_orbitals > 0 && integrals.batch_size == basis.batch_size &&
-                     integrals.total_matrix_elements > 0 &&
-                     coordination.batch_size == basis.batch_size &&
-                     coordination.total_atoms == basis.total_atoms &&
-                     repulsion.batch_size == basis.batch_size && repulsion.total_atoms == basis.total_atoms &&
-                     h0.batch_size == basis.batch_size && h0.total_atoms == basis.total_atoms &&
-                     h0.total_shells == basis.total_shells && h0.total_orbitals == basis.total_orbitals &&
-                     h0.total_matrix_elements == integrals.total_matrix_elements &&
-                     mulliken.sealed() && mulliken.batch_size() == basis.batch_size &&
-                     mulliken.total_atoms() == basis.total_atoms &&
-                     mulliken.total_shells() == basis.total_shells &&
-                     mulliken.total_orbitals() == basis.total_orbitals &&
-                     mulliken.matrix_elements() == integrals.total_matrix_elements &&
-                     es2.sealed() && es2.batch_size() == basis.batch_size &&
-                     es2.total_atoms() == basis.total_atoms && es2.total_shells() == basis.total_shells &&
-                     atomic_numbers != nullptr && d3.sealed() && d3.batch_size() == basis.batch_size &&
-                     d3.total_atoms() == basis.total_atoms && halogen.sealed() &&
-                     halogen.batch_size() == basis.batch_size && halogen.total_atoms() == basis.total_atoms &&
-                     d3.matches_atomic_numbers(atomic_numbers) &&
-                     halogen.matches_atomic_numbers(atomic_numbers) &&
-                     same_basis_topology(basis, h0) &&
-                     exact_mulliken_topology(basis, integrals, mulliken) &&
-                     exact_es2_topology(basis, es2) &&
-                     es2.total_matrix_elements() > 0 &&
-                     same_offsets(basis.atom_offsets, coordination.atom_offsets) &&
-                     same_offsets(basis.atom_offsets, repulsion.atom_offsets) &&
-                     same_offsets(basis.atom_offsets, mulliken.atom_offsets()) &&
-                     same_offsets(basis.atom_offsets, es2.atom_offsets()) &&
-                     same_offsets(basis.atom_offsets, d3.atom_offsets()) &&
-                     same_offsets(basis.atom_offsets, halogen.atom_offsets()) &&
-                     same_offsets(basis.batch_shell_offsets, h0.batch_shell_offsets) &&
-                     same_offsets(basis.batch_shell_offsets, mulliken.batch_shell_offsets()) &&
-                     same_offsets(basis.batch_shell_offsets, es2.batch_shell_offsets()) &&
-                     same_offsets(integrals.matrix_offsets, h0.matrix_offsets) &&
-                     same_offsets(integrals.matrix_offsets, mulliken.matrix_offsets());
+  const bool valid =
+      basis.batch_size > 0 && basis.total_atoms > 0 && basis.total_shells > 0 &&
+      basis.total_orbitals > 0 && integrals.batch_size == basis.batch_size &&
+      integrals.total_matrix_elements > 0 && coordination.batch_size == basis.batch_size &&
+      coordination.total_atoms == basis.total_atoms && repulsion.batch_size == basis.batch_size &&
+      repulsion.total_atoms == basis.total_atoms && h0.batch_size == basis.batch_size &&
+      h0.total_atoms == basis.total_atoms && h0.total_shells == basis.total_shells &&
+      h0.total_orbitals == basis.total_orbitals &&
+      h0.total_matrix_elements == integrals.total_matrix_elements && mulliken.sealed() &&
+      mulliken.batch_size() == basis.batch_size && mulliken.total_atoms() == basis.total_atoms &&
+      mulliken.total_shells() == basis.total_shells &&
+      mulliken.total_orbitals() == basis.total_orbitals &&
+      mulliken.matrix_elements() == integrals.total_matrix_elements && es2.sealed() &&
+      es2.batch_size() == basis.batch_size && es2.total_atoms() == basis.total_atoms &&
+      es2.total_shells() == basis.total_shells && atomic_numbers != nullptr && d3.sealed() &&
+      d3.batch_size() == basis.batch_size && d3.total_atoms() == basis.total_atoms &&
+      halogen.sealed() && halogen.batch_size() == basis.batch_size &&
+      halogen.total_atoms() == basis.total_atoms && d3.matches_atomic_numbers(atomic_numbers) &&
+      halogen.matches_atomic_numbers(atomic_numbers) && same_basis_topology(basis, h0) &&
+      exact_mulliken_topology(basis, integrals, mulliken) && exact_es2_topology(basis, es2) &&
+      es2.total_matrix_elements() > 0 &&
+      same_offsets(basis.atom_offsets, coordination.atom_offsets) &&
+      same_offsets(basis.atom_offsets, repulsion.atom_offsets) &&
+      same_offsets(basis.atom_offsets, mulliken.atom_offsets()) &&
+      same_offsets(basis.atom_offsets, es2.atom_offsets()) &&
+      same_offsets(basis.atom_offsets, d3.atom_offsets()) &&
+      same_offsets(basis.atom_offsets, halogen.atom_offsets()) &&
+      same_offsets(basis.batch_shell_offsets, h0.batch_shell_offsets) &&
+      same_offsets(basis.batch_shell_offsets, mulliken.batch_shell_offsets()) &&
+      same_offsets(basis.batch_shell_offsets, es2.batch_shell_offsets()) &&
+      same_offsets(integrals.matrix_offsets, h0.matrix_offsets) &&
+      same_offsets(integrals.matrix_offsets, mulliken.matrix_offsets());
   if (!valid) {
     error = "GFN1 force plans do not describe one exact ragged topology";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -526,10 +517,10 @@ xtbloom_status_t validate_plans(const BasisPlan& basis, const IntegralPlan& inte
 }
 
 xtbloom_status_t validate_numerical_ranges(
-    const BasisPlan& basis, const IntegralPlan& integrals,
-    const CoordinationPlan& coordination, const RepulsionPlan& repulsion, const H0Plan& h0,
-    const MullikenPlan& mulliken, const ES2Plan& es2, const ES2GeometryCache& es2_cache,
-    const D3Plan& d3, const HalogenPlan& halogen, const ExternalPointChargePlan* external,
+    const BasisPlan& basis, const IntegralPlan& integrals, const CoordinationPlan& coordination,
+    const RepulsionPlan& repulsion, const H0Plan& h0, const MullikenPlan& mulliken,
+    const ES2Plan& es2, const ES2GeometryCache& es2_cache, const D3Plan& d3,
+    const HalogenPlan& halogen, const ExternalPointChargePlan* external,
     const StationaryInput& input, double* energies, double* qm_forces, double* point_forces,
     const ComponentGradients& components, const ForceWorkspace& workspace, bool force_requested,
     std::int64_t coordinates, std::int64_t points, std::int64_t point_coordinates,
@@ -569,7 +560,8 @@ xtbloom_status_t validate_numerical_ranges(
        !add_read(input.energy_weighted_density, integrals.total_matrix_elements) ||
        !add_read(input.shell_charges, basis.total_shells) ||
        !add_read(input.scalar_shell_potentials, basis.total_shells) ||
-       !add_read(input.spin_density, input.spin_density == nullptr ? 0 : integrals.total_matrix_elements) ||
+       !add_read(input.spin_density,
+                 input.spin_density == nullptr ? 0 : integrals.total_matrix_elements) ||
        !add_read(input.spin_shell_potentials,
                  input.spin_shell_potentials == nullptr ? 0 : basis.total_shells) ||
        !add_read(es2_cache.coulomb_matrix, es2.total_matrix_elements()) ||
@@ -588,10 +580,8 @@ xtbloom_status_t validate_numerical_ranges(
        !add_write(workspace.coordination_adjoint, workspace.atom_elements) ||
        !add_write(workspace.es2_workspace.matrix_scratch,
                   workspace.es2_workspace.matrix_elements) ||
-       !add_write(workspace.es2_workspace.shell_scratch,
-                  workspace.es2_workspace.shell_elements) ||
-       !add_write(workspace.es2_workspace.batch_scratch,
-                  workspace.es2_workspace.batch_elements) ||
+       !add_write(workspace.es2_workspace.shell_scratch, workspace.es2_workspace.shell_elements) ||
+       !add_write(workspace.es2_workspace.batch_scratch, workspace.es2_workspace.batch_elements) ||
        !add_write(workspace.es2_workspace.gradient_scratch,
                   workspace.es2_workspace.gradient_elements) ||
        !add_component(components.electronic) || !add_component(components.es2) ||
@@ -634,11 +624,12 @@ xtbloom_status_t validate_numerical_ranges(
   }
 
   if (!add_control(&basis, sizeof(basis)) || !add_control(&integrals, sizeof(integrals)) ||
-      !add_control(&coordination, sizeof(coordination)) || !add_control(&repulsion, sizeof(repulsion)) ||
-      !add_control(&h0, sizeof(h0)) || !add_control(&mulliken, sizeof(mulliken)) ||
-      !add_control(&es2, sizeof(es2)) || !add_control(&es2_cache, sizeof(es2_cache)) ||
-      !add_control(&d3, sizeof(d3)) || !add_control(&halogen, sizeof(halogen)) ||
-      !add_control(&input, sizeof(input)) || !add_control(&components, sizeof(components)) ||
+      !add_control(&coordination, sizeof(coordination)) ||
+      !add_control(&repulsion, sizeof(repulsion)) || !add_control(&h0, sizeof(h0)) ||
+      !add_control(&mulliken, sizeof(mulliken)) || !add_control(&es2, sizeof(es2)) ||
+      !add_control(&es2_cache, sizeof(es2_cache)) || !add_control(&d3, sizeof(d3)) ||
+      !add_control(&halogen, sizeof(halogen)) || !add_control(&input, sizeof(input)) ||
+      !add_control(&components, sizeof(components)) ||
       !add_control(&workspace, sizeof(workspace)) || !add_control(&error, sizeof(error)) ||
       (external != nullptr && !add_control(external, sizeof(*external)))) {
     error = "GFN1 force descriptors have invalid address ranges";
@@ -718,10 +709,11 @@ xtbloom_status_t evaluate_gfn1_energy_forces_cpu(
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::int64_t points = external == nullptr ? 0 : external->total_point_charges;
-  const bool force_requested = qm_forces != nullptr || point_forces != nullptr || diagnostics_requested(components);
-  const bool has_unrestricted = std::find(mulliken.spin_channels().begin(),
-                                          mulliken.spin_channels().end(), 2) !=
-                                mulliken.spin_channels().end();
+  const bool force_requested =
+      qm_forces != nullptr || point_forces != nullptr || diagnostics_requested(components);
+  const bool has_unrestricted =
+      std::find(mulliken.spin_channels().begin(), mulliken.spin_channels().end(), 2) !=
+      mulliken.spin_channels().end();
   if (energies == nullptr || input.positions == nullptr || input.coordination_numbers == nullptr ||
       input.scc_free_energies == nullptr ||
       !valid_scratch(workspace.energy_scratch, workspace.energy_elements, batch) ||
@@ -759,23 +751,22 @@ xtbloom_status_t evaluate_gfn1_energy_forces_cpu(
     error = "GFN1 classical force workspaces are not exact plan bindings";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  if (force_requested &&
-      (workspace.es2_workspace.gradient_scratch == nullptr ||
-       workspace.es2_workspace.gradient_elements != coordinates ||
-       workspace.es2_workspace.matrix_scratch != nullptr ||
-       workspace.es2_workspace.matrix_elements != 0 ||
-       workspace.es2_workspace.shell_scratch != nullptr ||
-       workspace.es2_workspace.shell_elements != 0 ||
-       workspace.es2_workspace.batch_scratch != nullptr ||
-       workspace.es2_workspace.batch_elements != 0)) {
+  if (force_requested && (workspace.es2_workspace.gradient_scratch == nullptr ||
+                          workspace.es2_workspace.gradient_elements != coordinates ||
+                          workspace.es2_workspace.matrix_scratch != nullptr ||
+                          workspace.es2_workspace.matrix_elements != 0 ||
+                          workspace.es2_workspace.shell_scratch != nullptr ||
+                          workspace.es2_workspace.shell_elements != 0 ||
+                          workspace.es2_workspace.batch_scratch != nullptr ||
+                          workspace.es2_workspace.batch_elements != 0)) {
     error = "GFN1 force ES2 workspace must be the canonical gradient-only binding";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
-  status = validate_numerical_ranges(
-      basis, integrals, coordination, repulsion, h0, mulliken, es2, es2_cache, d3, halogen,
-      external, input, energies, qm_forces, point_forces, components, workspace, force_requested,
-      coordinates, points, point_coordinates, error);
+  status = validate_numerical_ranges(basis, integrals, coordination, repulsion, h0, mulliken, es2,
+                                     es2_cache, d3, halogen, external, input, energies, qm_forces,
+                                     point_forces, components, workspace, force_requested,
+                                     coordinates, points, point_coordinates, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   std::copy_n(input.scc_free_energies, static_cast<std::size_t>(batch), workspace.energy_scratch);
@@ -819,8 +810,7 @@ xtbloom_status_t evaluate_gfn1_energy_forces_cpu(
   if (!checked_multiply(coordinates, static_cast<std::int64_t>(ComponentIndex::kCount),
                         component_staging_elements) ||
       !valid_scratch(workspace.component_gradient_staging,
-                     workspace.component_gradient_staging_elements,
-                     component_staging_elements)) {
+                     workspace.component_gradient_staging_elements, component_staging_elements)) {
     error = "GFN1 component diagnostic staging is incomplete";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -829,19 +819,19 @@ xtbloom_status_t evaluate_gfn1_energy_forces_cpu(
       !finite_array(input.energy_weighted_density, static_cast<std::size_t>(matrix)) ||
       !finite_array(input.shell_charges, static_cast<std::size_t>(basis.total_shells)) ||
       !finite_array(input.scalar_shell_potentials, static_cast<std::size_t>(basis.total_shells)) ||
-      (has_unrestricted &&
-       (!finite_array(input.spin_density, static_cast<std::size_t>(matrix)) ||
-        !finite_array(input.spin_shell_potentials, static_cast<std::size_t>(basis.total_shells))))) {
+      (has_unrestricted && (!finite_array(input.spin_density, static_cast<std::size_t>(matrix)) ||
+                            !finite_array(input.spin_shell_potentials,
+                                          static_cast<std::size_t>(basis.total_shells))))) {
     error = "GFN1 stationary force inputs contain NaN or infinity";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   std::fill_n(workspace.total_gradient, static_cast<std::size_t>(coordinates), 0.0);
   std::fill_n(workspace.component_gradient, static_cast<std::size_t>(coordinates), 0.0);
-  std::fill_n(workspace.component_gradient_staging,
-              static_cast<std::size_t>(coordinates) *
-                  static_cast<std::size_t>(ComponentIndex::kCount),
-              0.0);
+  std::fill_n(
+      workspace.component_gradient_staging,
+      static_cast<std::size_t>(coordinates) * static_cast<std::size_t>(ComponentIndex::kCount),
+      0.0);
   std::fill_n(workspace.overlap_adjoint, static_cast<std::size_t>(matrix), 0.0);
   std::fill_n(workspace.coordination_adjoint, static_cast<std::size_t>(atoms), 0.0);
   status = add_h0_vjp_cpu(basis, integrals, h0, input.positions, input.coordination_numbers,
@@ -851,9 +841,9 @@ xtbloom_status_t evaluate_gfn1_energy_forces_cpu(
   for (std::int64_t element = 0; element < matrix; ++element) {
     workspace.overlap_adjoint[element] -= input.energy_weighted_density[element];
   }
-  status = add_scalar_stationary_overlap_adjoint(mulliken, input.density,
-                                                 input.scalar_shell_potentials,
-                                                 workspace.overlap_adjoint, false, error);
+  status =
+      add_scalar_stationary_overlap_adjoint(mulliken, input.density, input.scalar_shell_potentials,
+                                            workspace.overlap_adjoint, false, error);
   if (status == XTBLOOM_STATUS_SUCCESS && has_unrestricted) {
     status = add_scalar_stationary_overlap_adjoint(mulliken, input.spin_density,
                                                    input.spin_shell_potentials,
@@ -865,9 +855,9 @@ xtbloom_status_t evaluate_gfn1_energy_forces_cpu(
                                       workspace.integral_workspace_size, error);
   }
   if (status == XTBLOOM_STATUS_SUCCESS) {
-    status = add_coordination_gradient_cpu(coordination, input.positions,
-                                           workspace.coordination_adjoint,
-                                           workspace.component_gradient, error);
+    status =
+        add_coordination_gradient_cpu(coordination, input.positions, workspace.coordination_adjoint,
+                                      workspace.component_gradient, error);
   }
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   std::copy_n(workspace.component_gradient, static_cast<std::size_t>(coordinates),

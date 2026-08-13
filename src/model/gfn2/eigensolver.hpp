@@ -297,8 +297,9 @@ xtbloom_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, 
                                                    EigensolverWorkspace& view, std::string& error);
 
 /* Read-only canonical-binding checks used by model-owned SCC orchestrators. */
-xtbloom_status_t validate_eigensolver_overlap_cache_binding(
-    const EigensolverPlan& plan, const EigensolverOverlapCache& cache, std::string& error);
+xtbloom_status_t validate_eigensolver_overlap_cache_binding(const EigensolverPlan& plan,
+                                                            const EigensolverOverlapCache& cache,
+                                                            std::string& error);
 xtbloom_status_t validate_eigensolver_worker_workspace_binding(
     const EigensolverPlan& plan, const EigensolverWorkspace& workspace, std::string& error);
 

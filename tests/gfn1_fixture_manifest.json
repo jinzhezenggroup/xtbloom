@@ -29,8 +29,8 @@
     {
       "id": "gfn1-spin2-p10-tblite",
       "consumer": "tests/gfn1_cpu_conformance.py",
-      "bytes": 2039,
-      "sha256": "b947d87aced39195fa6be088128b9ae49299c6946f4e906d143e4359ab5fa596",
+      "bytes": 2040,
+      "sha256": "d33b89e59a45ed01b9efb78d710c6a2390ac07f769f2c187626b579be7ee47db",
       "sources": [
         "tblite:test/unit/test_spin.f90"
       ],

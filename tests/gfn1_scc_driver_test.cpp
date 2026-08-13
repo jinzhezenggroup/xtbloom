@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#include "model/gfn1/scc_driver.hpp"
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -20,6 +18,7 @@
 #include "model/gfn1/basis.hpp"
 #include "model/gfn1/h0.hpp"
 #include "model/gfn1/integrals.hpp"
+#include "model/gfn1/scc_driver.hpp"
 
 #define CHECK(condition)                                                                   \
   do {                                                                                     \
@@ -105,8 +104,7 @@ LapackInt tiny_dsyevd(LapackInt, char, char, LapackInt n, double* matrix, Lapack
     double largest = 0.0;
     for (LapackInt row = 0; row < n; ++row) {
       for (LapackInt column = row + 1; column < n; ++column) {
-        const double magnitude =
-            std::abs(values[static_cast<std::size_t>(row * n + column)]);
+        const double magnitude = std::abs(values[static_cast<std::size_t>(row * n + column)]);
         if (magnitude > largest) {
           largest = magnitude;
           p = row;
@@ -122,8 +120,7 @@ LapackInt tiny_dsyevd(LapackInt, char, char, LapackInt n, double* matrix, Lapack
     const double aqq = values[static_cast<std::size_t>(q * n + q)];
     const double apq = values[static_cast<std::size_t>(p * n + q)];
     const double tau = (aqq - app) / (2.0 * apq);
-    const double tangent =
-        std::copysign(1.0, tau) / (std::abs(tau) + std::sqrt(1.0 + tau * tau));
+    const double tangent = std::copysign(1.0, tau) / (std::abs(tau) + std::sqrt(1.0 + tau * tau));
     const double cosine = 1.0 / std::sqrt(1.0 + tangent * tangent);
     const double sine = tangent * cosine;
     for (LapackInt index = 0; index < n; ++index) {
@@ -243,21 +240,13 @@ struct FixtureInput {
 };
 
 FixtureInput mixed_input() {
-  return {{0, 2, 3},
-          {1, 1, 1},
-          {0.0, 0.0, -0.7, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0},
-          {0.0, 0.0},
-          {0, 1},
-          {1, 2}};
+  return {{0, 2, 3},  {1, 1, 1}, {0.0, 0.0, -0.7, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0},
+          {0.0, 0.0}, {0, 1},    {1, 2}};
 }
 
 FixtureInput two_restricted_input() {
-  return {{0, 2, 4},
-          {1, 1, 1, 1},
-          {0.0, 0.0, -0.7, 0.0, 0.0, 0.7, 0.0, 0.0, -0.8, 0.0, 0.0, 0.8},
-          {0.0, 0.0},
-          {0, 0},
-          {1, 1}};
+  return {{0, 2, 4},  {1, 1, 1, 1}, {0.0, 0.0, -0.7, 0.0, 0.0, 0.7, 0.0, 0.0, -0.8, 0.0, 0.0, 0.8},
+          {0.0, 0.0}, {0, 0},       {1, 1}};
 }
 
 struct Fixture {
@@ -303,8 +292,8 @@ struct Fixture {
   SccDriverGeometryView geometry;
 
   bool initialize(FixtureInput definition, std::uint64_t maximum_iterations,
-                  double electronic_temperature, double mixer_tolerance,
-                  double energy_tolerance, bool enable_periodic, std::string& error) {
+                  double electronic_temperature, double mixer_tolerance, double energy_tolerance,
+                  bool enable_periodic, std::string& error) {
     input = std::move(definition);
     const std::int64_t batch = static_cast<std::int64_t>(input.atom_offsets.size() - 1u);
     const std::int64_t atoms = static_cast<std::int64_t>(input.atomic_numbers.size());
@@ -320,8 +309,7 @@ struct Fixture {
             XTBLOOM_STATUS_SUCCESS ||
         xtbloom::detail::gfn1::make_es2_plan(basis, input.atomic_numbers.data(), es2, error) !=
             XTBLOOM_STATUS_SUCCESS ||
-        make_es3_plan(basis, input.atomic_numbers.data(), es3, error) !=
-            XTBLOOM_STATUS_SUCCESS ||
+        make_es3_plan(basis, input.atomic_numbers.data(), es3, error) != XTBLOOM_STATUS_SUCCESS ||
         make_spin_population_layout(basis, input.spin_channels.data(), spin_layout, error) !=
             XTBLOOM_STATUS_SUCCESS ||
         make_spin_polarization_plan(basis, input.atomic_numbers.data(), spin_layout, spin, error) !=
@@ -351,8 +339,8 @@ struct Fixture {
     integral_workspace = std::make_unique<AlignedBuffer>(integrals.workspace_size_bytes);
     if (integral_workspace->data() == nullptr ||
         evaluate_overlap_cpu(basis, integrals, input.positions.data(), overlap.data(),
-                             integral_workspace->data(), integral_workspace->size(), error) !=
-            XTBLOOM_STATUS_SUCCESS ||
+                             integral_workspace->data(), integral_workspace->size(),
+                             error) != XTBLOOM_STATUS_SUCCESS ||
         evaluate_h0_cpu(basis, integrals, h0_plan, input.positions.data(), coordination.data(),
                         overlap.data(), h0.data(), error) != XTBLOOM_STATUS_SUCCESS) {
       return false;
@@ -371,16 +359,15 @@ struct Fixture {
 
     wavefunction_storage =
         std::make_unique<AlignedBuffer>(wavefunction_layout.workspace_size_bytes);
-    overlap_cache_storage =
-        std::make_unique<AlignedBuffer>(eigensolver.overlap_cache_size_bytes());
+    overlap_cache_storage = std::make_unique<AlignedBuffer>(eigensolver.overlap_cache_size_bytes());
     eigensolver_workspace_storage =
         std::make_unique<AlignedBuffer>(eigensolver.workspace_size_bytes());
     mixer_state_storage = std::make_unique<AlignedBuffer>(mixer.state_size_bytes());
     driver_state_storage = std::make_unique<AlignedBuffer>(driver.state_size_bytes());
     driver_workspace_storage = std::make_unique<AlignedBuffer>(driver.workspace_size_bytes());
     if (bind_wavefunction_view(wavefunction_layout, wavefunction_storage->data(),
-                               wavefunction_storage->size(), wavefunction, error) !=
-            XTBLOOM_STATUS_SUCCESS ||
+                               wavefunction_storage->size(), wavefunction,
+                               error) != XTBLOOM_STATUS_SUCCESS ||
         initialize_sad_multipole_state(wavefunction_layout, wavefunction, error) !=
             XTBLOOM_STATUS_SUCCESS ||
         xtbloom::detail::gfn2::bind_eigensolver_overlap_cache(
@@ -400,8 +387,8 @@ struct Fixture {
         bind_scc_driver_workspace(driver, driver_workspace_storage->data(),
                                   driver_workspace_storage->size(), driver_workspace,
                                   error) != XTBLOOM_STATUS_SUCCESS ||
-        initialize_scc_driver_state_cpu(driver, wavefunction, mixer_state, driver_state,
-                                        error) != XTBLOOM_STATUS_SUCCESS) {
+        initialize_scc_driver_state_cpu(driver, wavefunction, mixer_state, driver_state, error) !=
+            XTBLOOM_STATUS_SUCCESS) {
       return false;
     }
 
@@ -473,12 +460,11 @@ int test_restricted_unrestricted_free_energy_periodic_and_point_potential() {
                fixture.driver_state.internal_energies[system] -
                    0.02 * fixture.driver_state.entropies[system]));
     CHECK(fixture.driver_state.entropies[system] >= 0.0);
-    const double sum = fixture.driver_state.core_energies[system] +
-                       fixture.driver_state.es2_energies[system] +
-                       fixture.driver_state.es3_energies[system] +
-                       fixture.driver_state.spin_energies[system] +
-                       fixture.driver_state.explicit_point_charge_energies[system] +
-                       fixture.driver_state.periodic_embedding_energies[system];
+    const double sum =
+        fixture.driver_state.core_energies[system] + fixture.driver_state.es2_energies[system] +
+        fixture.driver_state.es3_energies[system] + fixture.driver_state.spin_energies[system] +
+        fixture.driver_state.explicit_point_charge_energies[system] +
+        fixture.driver_state.periodic_embedding_energies[system];
     CHECK(near(fixture.driver_state.internal_energies[system], sum));
 
     const std::int64_t shell_begin = fixture.wavefunction_layout.batch_shell_offsets[system];
@@ -486,9 +472,9 @@ int test_restricted_unrestricted_free_energy_periodic_and_point_potential() {
     const std::int64_t qsh_begin = fixture.wavefunction_layout.qsh.system_offsets[system];
     double point_energy = 0.0;
     for (std::int64_t local = 0; local < shell_end - shell_begin; ++local) {
-      point_energy = std::fma(fixture.driver_workspace.raw_qsh[qsh_begin + local],
-                              fixture.point_potential[static_cast<std::size_t>(shell_begin + local)],
-                              point_energy);
+      point_energy = std::fma(
+          fixture.driver_workspace.raw_qsh[qsh_begin + local],
+          fixture.point_potential[static_cast<std::size_t>(shell_begin + local)], point_energy);
     }
     CHECK(near(fixture.driver_state.explicit_point_charge_energies[system], point_energy));
   }
@@ -502,8 +488,8 @@ int test_restricted_unrestricted_free_energy_periodic_and_point_potential() {
   const std::int64_t matrix_count = matrix_end - matrix_begin;
   const std::int64_t density_begin =
       fixture.wavefunction_layout.density.system_offsets[unrestricted_system];
-  std::vector<double> expected(static_cast<std::size_t>(fixture.wavefunction_layout.density.element_count),
-                               0.0);
+  std::vector<double> expected(
+      static_cast<std::size_t>(fixture.wavefunction_layout.density.element_count), 0.0);
   for (std::int32_t spin = 0; spin < 2; ++spin) {
     std::copy_n(fixture.h0.data() + matrix_begin, static_cast<std::size_t>(matrix_count),
                 expected.data() + density_begin + spin * matrix_count);
@@ -518,8 +504,8 @@ int test_restricted_unrestricted_free_energy_periodic_and_point_potential() {
   const MullikenHamiltonianView hamiltonian{expected.data(),
                                             fixture.wavefunction_layout.density.element_count,
                                             fixture.mulliken.identity()};
-  CHECK(add_mulliken_hamiltonian_system_cpu(fixture.mulliken, fixture.geometry.integrals,
-                                            potential, hamiltonian, unrestricted_system, workspace,
+  CHECK(add_mulliken_hamiltonian_system_cpu(fixture.mulliken, fixture.geometry.integrals, potential,
+                                            hamiltonian, unrestricted_system, workspace,
                                             error) == XTBLOOM_STATUS_SUCCESS);
   for (std::int32_t spin = 0; spin < 2; ++spin) {
     for (std::int64_t matrix = 0; matrix < matrix_count; ++matrix) {
@@ -546,9 +532,8 @@ int test_max_iterations_and_exact_restart_population() {
   /* A terminal data failure is explicitly restarted from the public raw
    * population. Restart deliberately accepts the failure-status mismatch and
    * resets both the driver and mixer as one transaction. */
-  CHECK(restart_scc_driver_system_cpu(fixture.driver, 1, fixture.wavefunction,
-                                      fixture.mixer_state, fixture.driver_state,
-                                      error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(restart_scc_driver_system_cpu(fixture.driver, 1, fixture.wavefunction, fixture.mixer_state,
+                                      fixture.driver_state, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.driver_state.iterations[1] == 0u && fixture.mixer_state.iterations[1] == 0u);
   CHECK(fixture.driver_state.converged[1] == 0u && fixture.mixer_state.converged[1] == 0u);
   const std::int64_t begin = fixture.wavefunction_layout.qsh.system_offsets[1];
@@ -590,11 +575,9 @@ int test_eigensolver_failure_preserves_successful_peer() {
 int test_mixer_and_nonfinite_history_failures_are_transactional() {
   Fixture mixer_failure;
   std::string error;
-  CHECK(mixer_failure.initialize(two_restricted_input(), 2u, 0.0, 1.0e-30, 1.0e-30, false,
-                                 error));
+  CHECK(mixer_failure.initialize(two_restricted_input(), 2u, 0.0, 1.0e-30, 1.0e-30, false, error));
   const std::int64_t first_vector_end = mixer_failure.mixer.vector_offsets()[1];
-  std::fill_n(mixer_failure.mixer_state.current_inputs,
-              static_cast<std::size_t>(first_vector_end),
+  std::fill_n(mixer_failure.mixer_state.current_inputs, static_cast<std::size_t>(first_vector_end),
               std::numeric_limits<double>::max());
   const auto wavefunction_before = snapshot(*mixer_failure.wavefunction_storage);
   CHECK(mixer_failure.iterate(error) == XTBLOOM_STATUS_INTERNAL_ERROR);
@@ -605,8 +588,8 @@ int test_mixer_and_nonfinite_history_failures_are_transactional() {
   CHECK(mixer_failure.mixer_state.iterations[1] == 1u);
   const auto failed_field_unchanged = [&](const WavefunctionFieldLayout& layout,
                                           const double* current) {
-    const auto* before = reinterpret_cast<const double*>(
-        wavefunction_before.data() + layout.offset_bytes);
+    const auto* before =
+        reinterpret_cast<const double*>(wavefunction_before.data() + layout.offset_bytes);
     const std::int64_t end = layout.system_offsets[1];
     return std::equal(current, current + end, before);
   };
@@ -626,12 +609,11 @@ int test_mixer_and_nonfinite_history_failures_are_transactional() {
                                mixer_failure.wavefunction.energy_weighted_density));
 
   Fixture history_failure;
-  CHECK(history_failure.initialize(two_restricted_input(), 3u, 0.0, 1.0e-30, 1.0e-30, false,
-                                   error));
+  CHECK(
+      history_failure.initialize(two_restricted_input(), 3u, 0.0, 1.0e-30, 1.0e-30, false, error));
   CHECK(history_failure.iterate(error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(history_failure.driver_state.iterations[0] == 1u);
-  history_failure.driver_state.free_energies[0] =
-      std::numeric_limits<double>::quiet_NaN();
+  history_failure.driver_state.free_energies[0] = std::numeric_limits<double>::quiet_NaN();
   const auto history_wavefunction_before = snapshot(*history_failure.wavefunction_storage);
   const std::uint64_t peer_iteration_before = history_failure.driver_state.iterations[1];
   CHECK(history_failure.iterate(error) == XTBLOOM_STATUS_INTERNAL_ERROR);
@@ -640,8 +622,9 @@ int test_mixer_and_nonfinite_history_failures_are_transactional() {
   CHECK(history_failure.mixer_state.iterations[0] == 1u);
   CHECK(history_failure.driver_state.iterations[0] == 2u);
   CHECK(history_failure.driver_state.iterations[1] == peer_iteration_before + 1u);
-  const auto* history_before = reinterpret_cast<const double*>(
-      history_wavefunction_before.data() + history_failure.wavefunction_layout.density.offset_bytes);
+  const auto* history_before =
+      reinterpret_cast<const double*>(history_wavefunction_before.data() +
+                                      history_failure.wavefunction_layout.density.offset_bytes);
   const std::int64_t system0_density_end =
       history_failure.wavefunction_layout.density.system_offsets[1];
   CHECK(std::equal(history_failure.wavefunction.density,
@@ -684,18 +667,16 @@ int test_binding_state_agreement_and_component_sealing() {
   ES3Plan forged_es3 = fixture.es3;
   ++forged_es3.total_atoms;
   SccDriverPlan sentinel = fixture.driver;
-  CHECK(make_scc_driver_plan(fixture.wavefunction_layout, fixture.mulliken, fixture.es2,
-                             forged_es3, fixture.spin, fixture.eigensolver, fixture.mixer, nullptr,
-                             3u, 0.0, 1.0e-10, sentinel,
-                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(make_scc_driver_plan(fixture.wavefunction_layout, fixture.mulliken, fixture.es2, forged_es3,
+                             fixture.spin, fixture.eigensolver, fixture.mixer, nullptr, 3u, 0.0,
+                             1.0e-10, sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(sentinel.identity() == fixture.driver.identity());
 
   SpinPolarizationPlan forged_spin = fixture.spin;
   forged_spin.spin_channels[0] = 2;
   CHECK(make_scc_driver_plan(fixture.wavefunction_layout, fixture.mulliken, fixture.es2,
                              fixture.es3, forged_spin, fixture.eigensolver, fixture.mixer, nullptr,
-                             3u, 0.0, 1.0e-10, sentinel,
-                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+                             3u, 0.0, 1.0e-10, sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(sentinel.identity() == fixture.driver.identity());
   return 0;
 }
@@ -714,8 +695,7 @@ int test_stationary_projection_mixed_spin_and_transaction() {
   for (std::int64_t element = 0; element < fixture.wavefunction_layout.qsh.element_count;
        ++element) {
     fixture.wavefunction.qsh[element] = 0.1 * static_cast<double>(element + 1);
-    fixture.driver_workspace.shell_potentials[element] =
-        -0.3 * static_cast<double>(element + 1);
+    fixture.driver_workspace.shell_potentials[element] = -0.3 * static_cast<double>(element + 1);
   }
   for (std::int64_t element = 0; element < fixture.wavefunction_layout.qat.element_count;
        ++element) {
@@ -738,23 +718,26 @@ int test_stationary_projection_mixed_spin_and_transaction() {
       static_cast<std::size_t>(fixture.wavefunction_layout.total_atoms), 95.0);
   std::vector<double> scalar_potentials(shell_charges.size(), 96.0);
   std::vector<double> spin_potentials(shell_charges.size(), 97.0);
-  const SccStationaryProjection projection{
-      density.data(),          weighted.data(),       spin_density.data(), matrices,
-      shell_charges.data(),    atomic_charges.data(), scalar_potentials.data(),
-      spin_potentials.data(),  fixture.wavefunction_layout.total_shells,
-      fixture.wavefunction_layout.total_atoms};
-  CHECK(project_scc_stationary_state_cpu(
-            fixture.wavefunction_layout, fixture.wavefunction,
-            fixture.driver_workspace.shell_potentials,
-            fixture.wavefunction_layout.qsh.element_count, projection, error) ==
-        XTBLOOM_STATUS_SUCCESS);
+  const SccStationaryProjection projection{density.data(),
+                                           weighted.data(),
+                                           spin_density.data(),
+                                           matrices,
+                                           shell_charges.data(),
+                                           atomic_charges.data(),
+                                           scalar_potentials.data(),
+                                           spin_potentials.data(),
+                                           fixture.wavefunction_layout.total_shells,
+                                           fixture.wavefunction_layout.total_atoms};
+  CHECK(project_scc_stationary_state_cpu(fixture.wavefunction_layout, fixture.wavefunction,
+                                         fixture.driver_workspace.shell_potentials,
+                                         fixture.wavefunction_layout.qsh.element_count, projection,
+                                         error) == XTBLOOM_STATUS_SUCCESS);
 
   std::int64_t compact_matrix = 0;
   for (std::int64_t system = 0; system < fixture.wavefunction_layout.batch_size; ++system) {
     const std::size_t index = static_cast<std::size_t>(system);
-    const std::int64_t orbitals =
-        fixture.wavefunction_layout.batch_orbital_offsets[index + 1u] -
-        fixture.wavefunction_layout.batch_orbital_offsets[index];
+    const std::int64_t orbitals = fixture.wavefunction_layout.batch_orbital_offsets[index + 1u] -
+                                  fixture.wavefunction_layout.batch_orbital_offsets[index];
     const std::int64_t count = orbitals * orbitals;
     const std::int64_t packed = fixture.wavefunction_layout.density.system_offsets[index];
     for (std::int64_t element = 0; element < count; ++element) {
@@ -774,16 +757,17 @@ int test_stationary_projection_mixed_spin_and_transaction() {
       }
     }
     const std::int64_t shell_begin = fixture.wavefunction_layout.batch_shell_offsets[index];
-    const std::int64_t shells = fixture.wavefunction_layout.batch_shell_offsets[index + 1u] -
-                                shell_begin;
+    const std::int64_t shells =
+        fixture.wavefunction_layout.batch_shell_offsets[index + 1u] - shell_begin;
     const std::int64_t qsh = fixture.wavefunction_layout.qsh.system_offsets[index];
     for (std::int64_t shell = 0; shell < shells; ++shell) {
       CHECK(near(shell_charges[shell_begin + shell], fixture.wavefunction.qsh[qsh + shell]));
       CHECK(near(scalar_potentials[shell_begin + shell],
                  fixture.driver_workspace.shell_potentials[qsh + shell]));
-      const double expected_spin = fixture.wavefunction_layout.spin_channels[index] == 2
-                                       ? fixture.driver_workspace.shell_potentials[qsh + shells + shell]
-                                       : 0.0;
+      const double expected_spin =
+          fixture.wavefunction_layout.spin_channels[index] == 2
+              ? fixture.driver_workspace.shell_potentials[qsh + shells + shell]
+              : 0.0;
       CHECK(near(spin_potentials[shell_begin + shell], expected_spin));
     }
     const std::int64_t atom_begin = fixture.wavefunction_layout.atom_offsets[index];
@@ -805,15 +789,14 @@ int test_stationary_projection_mixed_spin_and_transaction() {
   const std::int64_t unrestricted_begin = fixture.wavefunction_layout.density.system_offsets[1];
   const double saved = fixture.wavefunction.density[unrestricted_begin];
   fixture.wavefunction.density[unrestricted_begin] = std::numeric_limits<double>::max();
-  fixture.wavefunction.density[unrestricted_begin +
-                               (fixture.wavefunction_layout.density.system_offsets[2] -
-                                unrestricted_begin) /
-                                   2] = std::numeric_limits<double>::max();
-  CHECK(project_scc_stationary_state_cpu(
-            fixture.wavefunction_layout, fixture.wavefunction,
-            fixture.driver_workspace.shell_potentials,
-            fixture.wavefunction_layout.qsh.element_count, projection, error) ==
-        XTBLOOM_STATUS_INTERNAL_ERROR);
+  fixture.wavefunction
+      .density[unrestricted_begin +
+               (fixture.wavefunction_layout.density.system_offsets[2] - unrestricted_begin) / 2] =
+      std::numeric_limits<double>::max();
+  CHECK(project_scc_stationary_state_cpu(fixture.wavefunction_layout, fixture.wavefunction,
+                                         fixture.driver_workspace.shell_potentials,
+                                         fixture.wavefunction_layout.qsh.element_count, projection,
+                                         error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(density == density_before && weighted == weighted_before && spin_density == spin_before &&
         shell_charges == shell_before && atomic_charges == atom_before &&
         scalar_potentials == scalar_before && spin_potentials == spin_potential_before);

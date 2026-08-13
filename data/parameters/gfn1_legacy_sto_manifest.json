@@ -1,8 +1,8 @@
 {
   "consumer": {
-    "bytes": 1003,
+    "bytes": 1051,
     "path": "data/parameters/gfn1_legacy_sto.hpp",
-    "sha256": "d383ff02a495565686b15b2964ab6685202395741a7b5649f1ceb80867f9c884"
+    "sha256": "bb47a8f47d62c38306bb811b8900a1c9b0ccf1be4ebaf7162bf0b9deb984a19f"
   },
   "extraction": {
     "method": "literal transcription of the active legacy STO-6G 4s/4p exponent and contraction-coefficient rows; preserve source decimal values as IEEE binary64",

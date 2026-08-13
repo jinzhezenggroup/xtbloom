@@ -1,5 +1,3 @@
-#include "model/gfn1/scc_mixer.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -9,6 +7,8 @@
 #include <iterator>
 #include <memory>
 #include <string>
+
+#include "model/gfn1/scc_mixer.hpp"
 
 #define CHECK(condition) \
   do {                   \
@@ -47,9 +47,8 @@ int test_qsh_only_wrapper() {
 
   std::string error;
   xtbloom::detail::gfn1::SccMixerPlan plan;
-  CHECK(xtbloom::detail::gfn1::make_scc_mixer_plan(
-            layout, 3, 0.4, 1.0e-8, 2.0e-8, plan,
-            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::make_scc_mixer_plan(layout, 3, 0.4, 1.0e-8, 2.0e-8, plan, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(plan.vector_offsets() == layout.qsh.system_offsets);
   CHECK(plan.total_vector_elements() == layout.qsh.element_count);
   CHECK(plan.matches_wavefunction_layout(layout));
@@ -70,31 +69,30 @@ int test_qsh_only_wrapper() {
 
   xtbloom::detail::gfn1::SccMixerState state;
   xtbloom::detail::gfn1::SccMixerWorkspace scratch;
-  CHECK(xtbloom::detail::gfn1::bind_scc_mixer_state(
-            plan, state_storage.data(), state_storage.size(), state,
-            error) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(xtbloom::detail::gfn1::bind_scc_mixer_workspace(
-            plan, scratch_storage.data(), scratch_storage.size(), scratch,
-            error) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(xtbloom::detail::gfn1::initialize_scc_mixer_state_cpu(
-            plan, wavefunction, state, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::bind_scc_mixer_state(plan, state_storage.data(),
+                                                    state_storage.size(), state,
+                                                    error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::bind_scc_mixer_workspace(plan, scratch_storage.data(),
+                                                        scratch_storage.size(), scratch,
+                                                        error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::initialize_scc_mixer_state_cpu(plan, wavefunction, state, error) ==
+        XTBLOOM_STATUS_SUCCESS);
 
   wavefunction.qsh[2] = initial[2] + 0.02;
   wavefunction.qsh[3] = initial[3] - 0.01;
   wavefunction.qsh[4] = initial[4] + 0.04;
   wavefunction.qsh[5] = initial[5] - 0.03;
-  CHECK(xtbloom::detail::gfn1::mix_scc_broyden_system_cpu(
-            plan, 1, wavefunction, state, scratch,
-            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::mix_scc_broyden_system_cpu(plan, 1, wavefunction, state, scratch,
+                                                          error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::abs(wavefunction.qsh[2] - (initial[2] + 0.4 * 0.02)) < 1.0e-15);
   CHECK(std::abs(wavefunction.qsh[5] - (initial[5] - 0.4 * 0.03)) < 1.0e-15);
   CHECK(state.iterations[0] == 0u && state.iterations[1] == 1u);
 
   AlignedBuffer staged_storage(plan.state_size_bytes());
   xtbloom::detail::gfn1::SccMixerState staged;
-  CHECK(xtbloom::detail::gfn1::bind_scc_mixer_state(
-            plan, staged_storage.data(), staged_storage.size(), staged,
-            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::bind_scc_mixer_state(plan, staged_storage.data(),
+                                                    staged_storage.size(), staged,
+                                                    error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(xtbloom::detail::gfn1::prepare_scc_mixer_system_transaction_cpu(
             plan, 1, state, staged, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(xtbloom::detail::gfn1::commit_scc_mixer_system_transaction_cpu(
@@ -102,8 +100,8 @@ int test_qsh_only_wrapper() {
 
   const double restart[4]{-0.1, 0.2, -0.3, 0.4};
   std::copy(std::begin(restart), std::end(restart), wavefunction.qsh + 2);
-  CHECK(xtbloom::detail::gfn1::restart_scc_mixer_system_cpu(
-            plan, 1, wavefunction, state, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::restart_scc_mixer_system_cpu(plan, 1, wavefunction, state, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(state.restart_counts[1] == 1u && state.iterations[1] == 0u);
   CHECK(std::equal(std::begin(restart), std::end(restart), state.current_inputs + 2));
   return 0;

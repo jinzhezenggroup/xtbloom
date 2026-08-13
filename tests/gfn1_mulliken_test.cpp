@@ -1,11 +1,11 @@
-#include "model/gfn1/mulliken.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>
 #include <string>
 #include <vector>
+
+#include "model/gfn1/mulliken.hpp"
 
 #define CHECK(condition)                                                                   \
   do {                                                                                     \
@@ -39,8 +39,7 @@ struct Fixture {
 };
 
 bool make_fixture(const std::vector<std::int64_t>& offsets,
-                  const std::vector<std::int32_t>& numbers,
-                  const std::vector<double>& charges,
+                  const std::vector<std::int32_t>& numbers, const std::vector<double>& charges,
                   const std::vector<std::int32_t>& unpaired,
                   const std::vector<std::int32_t>& spin_channels, Fixture& fixture,
                   std::string& error) {
@@ -51,8 +50,8 @@ bool make_fixture(const std::vector<std::int64_t>& offsets,
       make_wavefunction_layout(fixture.basis, numbers.data(), charges.data(), unpaired.data(),
                                spin_channels.data(), fixture.wavefunction,
                                error) != XTBLOOM_STATUS_SUCCESS ||
-      make_mulliken_plan(fixture.basis, fixture.integrals, fixture.wavefunction,
-                         fixture.mulliken, error) != XTBLOOM_STATUS_SUCCESS) {
+      make_mulliken_plan(fixture.basis, fixture.integrals, fixture.wavefunction, fixture.mulliken,
+                         error) != XTBLOOM_STATUS_SUCCESS) {
     std::fprintf(stderr, "GFN1 Mulliken fixture setup failed: %s\n", error.c_str());
     return false;
   }
@@ -62,9 +61,9 @@ bool make_fixture(const std::vector<std::int64_t>& offsets,
   fixture.qat.resize(static_cast<std::size_t>(fixture.mulliken.atom_population_elements()));
   fixture.potential.resize(fixture.qsh.size());
   fixture.hamiltonian.resize(fixture.density.size());
-  fixture.scratch.resize(static_cast<std::size_t>(
-      std::max(fixture.mulliken.population_scratch_elements(),
-               fixture.mulliken.hamiltonian_scratch_elements())));
+  fixture.scratch.resize(
+      static_cast<std::size_t>(std::max(fixture.mulliken.population_scratch_elements(),
+                                        fixture.mulliken.hamiltonian_scratch_elements())));
   return true;
 }
 
@@ -87,11 +86,9 @@ int test_repeated_hydrogen_shell_population_and_reduction() {
                                  fixture.mulliken.identity()};
   MullikenDensityView density{fixture.density.data(), fixture.mulliken.density_elements(),
                               fixture.mulliken.identity()};
-  MullikenPopulationView population{fixture.qsh.data(),
-                                    fixture.mulliken.shell_population_elements(),
-                                    fixture.qat.data(),
-                                    fixture.mulliken.atom_population_elements(),
-                                    fixture.mulliken.identity()};
+  MullikenPopulationView population{
+      fixture.qsh.data(), fixture.mulliken.shell_population_elements(), fixture.qat.data(),
+      fixture.mulliken.atom_population_elements(), fixture.mulliken.identity()};
   MullikenWorkspace workspace{fixture.scratch.data(),
                               static_cast<std::int64_t>(fixture.scratch.size())};
   CHECK(evaluate_mulliken_population_cpu(fixture.mulliken, integrals, density, population,
@@ -115,11 +112,9 @@ int test_unrestricted_charge_magnetization_and_scalar_hamiltonian() {
                                  fixture.mulliken.identity()};
   MullikenDensityView density{fixture.density.data(), fixture.mulliken.density_elements(),
                               fixture.mulliken.identity()};
-  MullikenPopulationView population{fixture.qsh.data(),
-                                    fixture.mulliken.shell_population_elements(),
-                                    fixture.qat.data(),
-                                    fixture.mulliken.atom_population_elements(),
-                                    fixture.mulliken.identity()};
+  MullikenPopulationView population{
+      fixture.qsh.data(), fixture.mulliken.shell_population_elements(), fixture.qat.data(),
+      fixture.mulliken.atom_population_elements(), fixture.mulliken.identity()};
   MullikenWorkspace workspace{fixture.scratch.data(),
                               static_cast<std::int64_t>(fixture.scratch.size())};
   CHECK(evaluate_mulliken_population_cpu(fixture.mulliken, integrals, density, population,
@@ -133,11 +128,10 @@ int test_unrestricted_charge_magnetization_and_scalar_hamiltonian() {
   MullikenPotentialView potential{fixture.potential.data(),
                                   fixture.mulliken.shell_population_elements(),
                                   fixture.mulliken.identity()};
-  MullikenHamiltonianView hamiltonian{fixture.hamiltonian.data(),
-                                      fixture.mulliken.density_elements(),
-                                      fixture.mulliken.identity()};
-  CHECK(add_mulliken_hamiltonian_system_cpu(fixture.mulliken, integrals, potential, hamiltonian,
-                                            0, workspace, error) == XTBLOOM_STATUS_SUCCESS);
+  MullikenHamiltonianView hamiltonian{
+      fixture.hamiltonian.data(), fixture.mulliken.density_elements(), fixture.mulliken.identity()};
+  CHECK(add_mulliken_hamiltonian_system_cpu(fixture.mulliken, integrals, potential, hamiltonian, 0,
+                                            workspace, error) == XTBLOOM_STATUS_SUCCESS);
   /* The term-level primitive preserves tblite's half-valued conversion. The
    * SCC composition applies the later unrestricted-Hamiltonian factor. */
   CHECK(near(fixture.hamiltonian[0], -0.5));
@@ -165,21 +159,17 @@ int test_peer_local_failure_leaves_target_unchanged() {
                                  fixture.mulliken.identity()};
   MullikenDensityView density{fixture.density.data(), fixture.mulliken.density_elements(),
                               fixture.mulliken.identity()};
-  MullikenPopulationView population{fixture.qsh.data(),
-                                    fixture.mulliken.shell_population_elements(),
-                                    fixture.qat.data(),
-                                    fixture.mulliken.atom_population_elements(),
-                                    fixture.mulliken.identity()};
+  MullikenPopulationView population{
+      fixture.qsh.data(), fixture.mulliken.shell_population_elements(), fixture.qat.data(),
+      fixture.mulliken.atom_population_elements(), fixture.mulliken.identity()};
   MullikenWorkspace workspace{fixture.scratch.data(),
                               static_cast<std::int64_t>(fixture.scratch.size())};
-  CHECK(evaluate_mulliken_population_system_cpu(fixture.mulliken, integrals, density, population,
-                                                1, workspace,
-                                                error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(evaluate_mulliken_population_system_cpu(fixture.mulliken, integrals, density, population, 1,
+                                                workspace, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(fixture.qsh[0] == 77.0 && fixture.qsh[1] == 77.0);
   CHECK(fixture.qat[0] == 88.0);
-  CHECK(evaluate_mulliken_population_system_cpu(fixture.mulliken, integrals, density, population,
-                                                0, workspace,
-                                                error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(evaluate_mulliken_population_system_cpu(fixture.mulliken, integrals, density, population, 0,
+                                                workspace, error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(fixture.qsh[0] == 77.0 && fixture.qsh[1] == 77.0 && fixture.qat[0] == 88.0);
   return 0;
 }
@@ -204,13 +194,12 @@ int test_batch_hamiltonian_failure_is_transactional() {
   MullikenPotentialView potential{fixture.potential.data(),
                                   fixture.mulliken.shell_population_elements(),
                                   fixture.mulliken.identity()};
-  MullikenHamiltonianView hamiltonian{fixture.hamiltonian.data(),
-                                      fixture.mulliken.density_elements(),
-                                      fixture.mulliken.identity()};
+  MullikenHamiltonianView hamiltonian{
+      fixture.hamiltonian.data(), fixture.mulliken.density_elements(), fixture.mulliken.identity()};
   MullikenWorkspace workspace{fixture.scratch.data(),
                               static_cast<std::int64_t>(fixture.scratch.size())};
-  CHECK(add_mulliken_hamiltonian_cpu(fixture.mulliken, integrals, potential, hamiltonian,
-                                     workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(add_mulliken_hamiltonian_cpu(fixture.mulliken, integrals, potential, hamiltonian, workspace,
+                                     error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.hamiltonian == original);
   return 0;
 }
@@ -229,11 +218,9 @@ int test_aliasing_is_rejected_before_publication() {
                                  fixture.mulliken.identity()};
   MullikenDensityView density{fixture.density.data(), fixture.mulliken.density_elements(),
                               fixture.mulliken.identity()};
-  MullikenPopulationView population{fixture.qsh.data(),
-                                    fixture.mulliken.shell_population_elements(),
-                                    fixture.qat.data(),
-                                    fixture.mulliken.atom_population_elements(),
-                                    fixture.mulliken.identity()};
+  MullikenPopulationView population{
+      fixture.qsh.data(), fixture.mulliken.shell_population_elements(), fixture.qat.data(),
+      fixture.mulliken.atom_population_elements(), fixture.mulliken.identity()};
   std::fill(fixture.qsh.begin(), fixture.qsh.end(), 71.0);
   std::fill(fixture.qat.begin(), fixture.qat.end(), 72.0);
   MullikenWorkspace population_alias{fixture.qsh.data(),
@@ -252,14 +239,12 @@ int test_aliasing_is_rejected_before_publication() {
   MullikenPotentialView potential{fixture.potential.data(),
                                   fixture.mulliken.shell_population_elements(),
                                   fixture.mulliken.identity()};
-  MullikenHamiltonianView hamiltonian{fixture.hamiltonian.data(),
-                                      fixture.mulliken.density_elements(),
-                                      fixture.mulliken.identity()};
+  MullikenHamiltonianView hamiltonian{
+      fixture.hamiltonian.data(), fixture.mulliken.density_elements(), fixture.mulliken.identity()};
   MullikenWorkspace hamiltonian_alias{fixture.hamiltonian.data(),
                                       fixture.mulliken.hamiltonian_scratch_elements()};
   CHECK(add_mulliken_hamiltonian_cpu(fixture.mulliken, integrals, potential, hamiltonian,
-                                     hamiltonian_alias,
-                                     error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+                                     hamiltonian_alias, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(fixture.hamiltonian == original);
   return 0;
 }

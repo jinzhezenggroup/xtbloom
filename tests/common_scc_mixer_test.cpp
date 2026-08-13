@@ -1,5 +1,3 @@
-#include "model/common/scc_mixer.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -11,6 +9,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+#include "model/common/scc_mixer.hpp"
 
 #define CHECK(condition) \
   do {                   \
@@ -76,15 +76,15 @@ struct Fixture {
     }
     vector.workspace_base = vector_storage.data();
     vector.workspace_size_bytes = vector_storage.size();
-    vector.fields[0] = reinterpret_cast<double*>(
-        static_cast<std::byte*>(vector_storage.data()) + kQshOffset);
+    vector.fields[0] =
+        reinterpret_cast<double*>(static_cast<std::byte*>(vector_storage.data()) + kQshOffset);
     vector.field_count = 1u;
-    if (xtbloom::detail::common::bind_scc_mixer_state(
-            plan, state_storage->data(), state_storage->size(), state, error) !=
-            XTBLOOM_STATUS_SUCCESS ||
-        xtbloom::detail::common::bind_scc_mixer_workspace(
-            plan, scratch_storage->data(), scratch_storage->size(), scratch, error) !=
-            XTBLOOM_STATUS_SUCCESS) {
+    if (xtbloom::detail::common::bind_scc_mixer_state(plan, state_storage->data(),
+                                                      state_storage->size(), state,
+                                                      error) != XTBLOOM_STATUS_SUCCESS ||
+        xtbloom::detail::common::bind_scc_mixer_workspace(plan, scratch_storage->data(),
+                                                          scratch_storage->size(), scratch,
+                                                          error) != XTBLOOM_STATUS_SUCCESS) {
       plan = {};
     }
   }
@@ -97,8 +97,8 @@ struct Fixture {
     layout.field_count = 1u;
     layout.fields[0] = {kQshOffset, kQshElements * sizeof(double),
                         static_cast<std::int64_t>(kQshElements), qsh_offsets, 3u};
-    if (xtbloom::detail::common::make_scc_mixer_plan(layout, 3, 0.4, 1.0e-8, 2.0e-8,
-                                                     plan, error) != XTBLOOM_STATUS_SUCCESS) {
+    if (xtbloom::detail::common::make_scc_mixer_plan(layout, 3, 0.4, 1.0e-8, 2.0e-8, plan, error) !=
+        XTBLOOM_STATUS_SUCCESS) {
       return;
     }
   }
@@ -119,11 +119,10 @@ int test_qsh_only_ragged_mix_restart_and_transaction() {
 
   /* Guard bytes prove a qsh-only plan never assumes adjacent D/Q fields. */
   std::memset(fixture.vector_storage.data(), 0x5a, Fixture::kQshOffset);
-  std::memset(static_cast<std::byte*>(fixture.vector_storage.data()) +
-                  Fixture::kQshOffset + Fixture::kQshElements * sizeof(double),
+  std::memset(static_cast<std::byte*>(fixture.vector_storage.data()) + Fixture::kQshOffset +
+                  Fixture::kQshElements * sizeof(double),
               0x5a,
-              Fixture::kVectorBytes - Fixture::kQshOffset -
-                  Fixture::kQshElements * sizeof(double));
+              Fixture::kVectorBytes - Fixture::kQshOffset - Fixture::kQshElements * sizeof(double));
   const double initial[6]{0.10, -0.20, 0.30, -0.40, 0.05, -0.06};
   std::copy(std::begin(initial), std::end(initial), fixture.vector.fields[0]);
   CHECK(xtbloom::detail::common::initialize_scc_mixer_state_cpu(
@@ -135,15 +134,15 @@ int test_qsh_only_ragged_mix_restart_and_transaction() {
       static_cast<const std::byte*>(fixture.vector_storage.data()),
       static_cast<const std::byte*>(fixture.vector_storage.data()) + Fixture::kQshOffset);
   const std::vector<std::byte> suffix_before(
-      static_cast<const std::byte*>(fixture.vector_storage.data()) +
-          Fixture::kQshOffset + Fixture::kQshElements * sizeof(double),
+      static_cast<const std::byte*>(fixture.vector_storage.data()) + Fixture::kQshOffset +
+          Fixture::kQshElements * sizeof(double),
       static_cast<const std::byte*>(fixture.vector_storage.data()) + Fixture::kVectorBytes);
 
   fixture.vector.fields[0][0] = initial[0] + 0.02;
   fixture.vector.fields[0][1] = initial[1] - 0.01;
-  CHECK(xtbloom::detail::common::mix_scc_broyden_system_cpu(
-            fixture.plan, 0, fixture.vector, fixture.state, fixture.scratch,
-            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::common::mix_scc_broyden_system_cpu(fixture.plan, 0, fixture.vector,
+                                                            fixture.state, fixture.scratch,
+                                                            error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(std::abs(fixture.vector.fields[0][0] - (initial[0] + 0.4 * 0.02)) < 1.0e-15);
   CHECK(std::abs(fixture.vector.fields[0][1] - (initial[1] - 0.4 * 0.01)) < 1.0e-15);
   CHECK(fixture.state.iterations[0] == 1u && fixture.state.iterations[1] == 0u);
@@ -155,9 +154,9 @@ int test_qsh_only_ragged_mix_restart_and_transaction() {
 
   AlignedBuffer staged_storage(fixture.plan.state_size_bytes());
   SccMixerState staged;
-  CHECK(xtbloom::detail::common::bind_scc_mixer_state(
-            fixture.plan, staged_storage.data(), staged_storage.size(), staged,
-            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::common::bind_scc_mixer_state(fixture.plan, staged_storage.data(),
+                                                      staged_storage.size(), staged,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
   std::memset(staged_storage.data(), 0x3c, staged_storage.size());
   CHECK(xtbloom::detail::common::prepare_scc_mixer_system_transaction_cpu(
             fixture.plan, 1, fixture.state, staged, error) == XTBLOOM_STATUS_SUCCESS);
@@ -179,8 +178,8 @@ int test_qsh_only_ragged_mix_restart_and_transaction() {
                                  fixture.state.current_inputs[4], fixture.state.current_inputs[5]};
   fixture.vector.fields[0][2] = std::numeric_limits<double>::quiet_NaN();
   CHECK(xtbloom::detail::common::mix_scc_broyden_system_cpu(
-            fixture.plan, 1, fixture.vector, fixture.state, fixture.scratch,
-            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+            fixture.plan, 1, fixture.vector, fixture.state, fixture.scratch, error) ==
+        XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(equal(current_before, fixture.state.current_inputs + 2, 4u));
   CHECK(fixture.state.iterations[1] == 0u);
   CHECK(fixture.state.system_statuses[1] == XTBLOOM_STATUS_INTERNAL_ERROR);
@@ -199,15 +198,13 @@ int test_layout_rejects_fake_or_overlapping_fields() {
   layout.fields[0] = {0u, 2u * sizeof(double), 2, offsets, 2u};
   layout.fields[1] = layout.fields[0];
   SccMixerPlan plan;
-  CHECK(xtbloom::detail::common::make_scc_mixer_plan(
-            layout, 3, 0.4, 1.0e-8, 1.0e-8, plan,
-            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::common::make_scc_mixer_plan(layout, 3, 0.4, 1.0e-8, 1.0e-8, plan, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(!plan.sealed());
   layout.field_count = 1u;
   offsets[1] = 0;
-  CHECK(xtbloom::detail::common::make_scc_mixer_plan(
-            layout, 3, 0.4, 1.0e-8, 1.0e-8, plan,
-            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::common::make_scc_mixer_plan(layout, 3, 0.4, 1.0e-8, 1.0e-8, plan, error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   return 0;
 }
 

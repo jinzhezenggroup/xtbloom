@@ -11,7 +11,27 @@ import subprocess
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, TypedDict, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from types import ModuleType
+
+
+NumericTree = int | float | list["NumericTree"]
+
+
+class ProbeResult(TypedDict):
+    """One decoded result batch from the hidden native GFN1 probe."""
+
+    statuses: list[int]
+    converged: list[int]
+    iterations: list[int]
+    energies: list[float]
+    forces: list[float]
+    atomic_charges: list[float]
+    point_charge_forces: list[float]
+    flags: int
 
 
 @dataclass(frozen=True)
@@ -29,12 +49,11 @@ class Case:
     point_gammas: list[float]
     periodic_shifts: list[float]
     response_matrix: list[float]
-    expected: dict[str, Any]
+    expected: dict[str, NumericTree]
 
 
-def flatten(values: Iterable[Any]) -> list[float]:
+def flatten(values: Iterable[NumericTree]) -> list[float]:
     """Flatten the corpus' nested Cartesian arrays without external packages."""
-
     flattened: list[float] = []
     for value in values:
         if isinstance(value, list):
@@ -44,9 +63,8 @@ def flatten(values: Iterable[Any]) -> list[float]:
     return flattened
 
 
-def load_tool(source_root: Path) -> Any:
+def load_tool(source_root: Path) -> ModuleType:
     """Reuse the canonical corpus parser so input validation remains single-sourced."""
-
     path = source_root / "tools/conformance/gfn1_conformance.py"
     spec = importlib.util.spec_from_file_location("gfn1_conformance", path)
     if spec is None or spec.loader is None:
@@ -57,14 +75,15 @@ def load_tool(source_root: Path) -> Any:
     return module
 
 
-def load_cases(source_root: Path) -> tuple[list[Case], dict[str, Any]]:
+def load_cases(source_root: Path) -> tuple[list[Case], dict[str, object]]:
     """Load all reviewed cases without copying canonical coordinates into tests."""
-
     tool = load_tool(source_root)
     manifest_path = source_root / "data/conformance/gfn1/manifest.json"
     tool.check_manifest(manifest_path)
     manifest = tool.load_json(manifest_path)
-    symbol_to_number = {symbol: number for number, symbol in enumerate(tool.ELEMENT_SYMBOLS)}
+    symbol_to_number = {
+        symbol: number for number, symbol in enumerate(tool.ELEMENT_SYMBOLS)
+    }
     cases: list[Case] = []
     for record in tool.selected_cases(manifest, None):
         input_path = source_root / record["input"]
@@ -82,7 +101,9 @@ def load_cases(source_root: Path) -> tuple[list[Case], dict[str, Any]]:
             point_charges = [float(value) for value in point["charges_e"]]
             point_gammas = [float(value) for value in point["gammas_hartree"]]
         else:
-            symbols, nested_positions = tool.load_coord(input_path, record["atom_count"])
+            symbols, nested_positions = tool.load_coord(
+                input_path, record["atom_count"]
+            )
             atomic_numbers = [symbol_to_number[symbol] for symbol in symbols]
             positions = flatten(nested_positions)
             point_positions = []
@@ -113,7 +134,6 @@ def load_cases(source_root: Path) -> tuple[list[Case], dict[str, Any]]:
 # XTBLOOM_GFN1_FIXTURE_BEGIN gfn1-spin2-p10-tblite
 def p10_case() -> Case:
     """Return tblite's independent unrestricted RSE43 P10 energy/force fixture."""
-
     gradient = [
         4.6250747795231898e-3,
         3.0613008404354290e-3,
@@ -182,12 +202,13 @@ def p10_case() -> Case:
             "forces_hartree_per_bohr": [-value for value in gradient],
         },
     )
+
+
 # XTBLOOM_GFN1_FIXTURE_END gfn1-spin2-p10-tblite
 
 
 def encode(requests: list[list[Case]]) -> str:
     """Serialize deterministic request batches understood by the C++ probe."""
-
     fields = ["XTBLOOM_GFN1_PROBE_V2", str(len(requests))]
     for cases in requests:
         fields.append(str(len(cases)))
@@ -220,26 +241,27 @@ def encode(requests: list[list[Case]]) -> str:
     return "\n".join(fields) + "\n"
 
 
-def run_requests(probe: Path, requests: list[list[Case]]) -> list[dict[str, Any]]:
+def run_requests(probe: Path, requests: list[list[Case]]) -> list[ProbeResult]:
     """Execute request batches in one process while preserving FRESH SCC state."""
-
     completed = subprocess.run(
         [str(probe)],
         input=encode(requests),
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if completed.returncode != 0:
         raise RuntimeError(
             f"GFN1 probe exited {completed.returncode}: {completed.stderr.strip()}"
         )
-    results = json.loads(completed.stdout)
-    if not isinstance(results, list) or len(results) != len(requests):
+    decoded = json.loads(completed.stdout)
+    if not isinstance(decoded, list) or len(decoded) != len(requests):
         raise RuntimeError("GFN1 probe returned an unexpected request count")
+    results = cast("list[ProbeResult]", decoded)
     for cases, result in zip(requests, results, strict=True):
-        if result["statuses"] != [0] * len(cases) or result["converged"] != [1] * len(cases):
+        if result["statuses"] != [0] * len(cases) or result["converged"] != [1] * len(
+            cases
+        ):
             raise RuntimeError(
                 f"GFN1 systems did not converge: statuses={result['statuses']} "
                 f"converged={result['converged']} iterations={result['iterations']}"
@@ -247,17 +269,17 @@ def run_requests(probe: Path, requests: list[list[Case]]) -> list[dict[str, Any]
     return results
 
 
-def run_probe(probe: Path, cases: list[Case]) -> dict[str, Any]:
+def run_probe(probe: Path, cases: list[Case]) -> ProbeResult:
     """Execute one request batch."""
-
     return run_requests(probe, [cases])[0]
 
 
-def maximum_error(actual: Any, expected: Any) -> float:
+def maximum_error(actual: NumericTree, expected: NumericTree) -> float:
     """Return an absolute maximum error while rejecting non-finite results."""
-
     actual_flat = [float(actual)] if not isinstance(actual, list) else flatten(actual)
-    expected_flat = [float(expected)] if not isinstance(expected, list) else flatten(expected)
+    expected_flat = (
+        [float(expected)] if not isinstance(expected, list) else flatten(expected)
+    )
     if len(actual_flat) != len(expected_flat):
         return math.inf
     return max(
@@ -271,10 +293,9 @@ def maximum_error(actual: Any, expected: Any) -> float:
     )
 
 
-def slices(cases: list[Case], result: dict[str, Any]) -> list[dict[str, Any]]:
+def slices(cases: list[Case], result: ProbeResult) -> list[dict[str, NumericTree]]:
     """Split one ragged result into the property shapes used by each golden."""
-
-    split: list[dict[str, Any]] = []
+    split: list[dict[str, NumericTree]] = []
     atom_begin = 0
     point_begin = 0
     for index, case in enumerate(cases):
@@ -289,9 +310,9 @@ def slices(cases: list[Case], result: dict[str, Any]) -> list[dict[str, Any]]:
                 "partial_charges_e": result["atomic_charges"][
                     atom_begin : atom_begin + atoms
                 ],
-                "point_charge_forces_hartree_per_bohr": result[
-                    "point_charge_forces"
-                ][3 * point_begin : 3 * (point_begin + points)],
+                "point_charge_forces_hartree_per_bohr": result["point_charge_forces"][
+                    3 * point_begin : 3 * (point_begin + points)
+                ],
             }
         )
         atom_begin += atoms
@@ -300,10 +321,11 @@ def slices(cases: list[Case], result: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def compare_oracles(
-    cases: list[Case], actual: list[dict[str, Any]], manifest: dict[str, Any]
+    cases: list[Case],
+    actual: list[dict[str, NumericTree]],
+    manifest: dict[str, object],
 ) -> list[str]:
     """Apply the immutable manifest's primary-oracle tolerances unchanged."""
-
     failures: list[str] = []
     tolerance_names = {
         "energy_hartree": "energy",
@@ -316,18 +338,24 @@ def compare_oracles(
             if name not in tolerance_names:
                 continue
             error = maximum_error(properties[name], expected)
-            limit = float(manifest["tolerances"][tolerance_names[name]]["atol"])
+            tolerances = cast("dict[str, dict[str, float]]", manifest["tolerances"])
+            limit = float(tolerances[tolerance_names[name]]["atol"])
             if error > limit:
-                failures.append(f"{case.case_id}: {name} error {error:.3e} > {limit:.3e}")
+                failures.append(
+                    f"{case.case_id}: {name} error {error:.3e} > {limit:.3e}"
+                )
     return failures
 
 
 def add_request(
-    requests: list[list[Case]], metadata: list[tuple[str, int, int, float]], case: Case,
-    coordinate_kind: int, coordinate: int, step: float
+    requests: list[list[Case]],
+    metadata: list[tuple[str, int, int, float]],
+    case: Case,
+    coordinate_kind: int,
+    coordinate: int,
+    step: float,
 ) -> None:
     """Append the plus/minus pair for one Cartesian central difference."""
-
     values = case.positions if coordinate_kind == 0 else case.point_positions
     for sign in (1.0, -1.0):
         displaced = list(values)
@@ -350,7 +378,6 @@ def finite_difference_checks(
     probe: Path, cases: list[Case], tolerance: float = 5.0e-7
 ) -> list[str]:
     """Check total SCC forces at one full and two representative step sizes."""
-
     requests: list[list[Case]] = []
     metadata: list[tuple[str, int, int, float]] = []
     for case in cases:
@@ -381,13 +408,14 @@ def finite_difference_checks(
                 f"{case_id}: {kind} coordinate {coordinate} h={step:.1e} "
                 f"total-force FD error {error:.3e} > {tolerance:.3e}"
             )
-    print(f"GFN1 total-SCC finite differences: max error {maximum:.3e} Eh/bohr")
+    sys.stdout.write(
+        f"GFN1 total-SCC finite differences: max error {maximum:.3e} Eh/bohr\n"
+    )
     return failures
 
 
 def rotate_vectors(values: list[float], matrix: list[list[float]]) -> list[float]:
     """Apply one proper Cartesian rotation to a flat vector list."""
-
     rotated: list[float] = []
     for begin in range(0, len(values), 3):
         vector = values[begin : begin + 3]
@@ -400,7 +428,6 @@ def rotate_vectors(values: list[float], matrix: list[list[float]]) -> list[float
 
 def rotation_matrix() -> list[list[float]]:
     """Return the fixed 37-degree proper rotation used by covariance checks."""
-
     axis = [1.0, 2.0, -1.0]
     norm = math.sqrt(sum(value * value for value in axis))
     x, y, z = (value / norm for value in axis)
@@ -409,18 +436,26 @@ def rotation_matrix() -> list[list[float]]:
     sine = math.sin(angle)
     complement = 1.0 - cosine
     return [
-        [cosine + x * x * complement, x * y * complement - z * sine,
-         x * z * complement + y * sine],
-        [y * x * complement + z * sine, cosine + y * y * complement,
-         y * z * complement - x * sine],
-        [z * x * complement - y * sine, z * y * complement + x * sine,
-         cosine + z * z * complement],
+        [
+            cosine + x * x * complement,
+            x * y * complement - z * sine,
+            x * z * complement + y * sine,
+        ],
+        [
+            y * x * complement + z * sine,
+            cosine + y * y * complement,
+            y * z * complement - x * sine,
+        ],
+        [
+            z * x * complement - y * sine,
+            z * y * complement + x * sine,
+            cosine + z * z * complement,
+        ],
     ]
 
 
 def covariance_and_conservation_checks(probe: Path, cases: list[Case]) -> list[str]:
     """Check rigid covariance plus isolated-system force and torque conservation."""
-
     translation = [7.25, -3.5, 2.125]
     rotation = rotation_matrix()
     requests: list[list[Case]] = []
@@ -435,10 +470,20 @@ def covariance_and_conservation_checks(probe: Path, cases: list[Case]) -> list[s
         requests.extend(
             [
                 [case],
-                [replace(case, positions=translated_positions,
-                         point_positions=translated_points)],
-                [replace(case, positions=rotate_vectors(case.positions, rotation),
-                         point_positions=rotate_vectors(case.point_positions, rotation))],
+                [
+                    replace(
+                        case,
+                        positions=translated_positions,
+                        point_positions=translated_points,
+                    )
+                ],
+                [
+                    replace(
+                        case,
+                        positions=rotate_vectors(case.positions, rotation),
+                        point_positions=rotate_vectors(case.point_positions, rotation),
+                    )
+                ],
             ]
         )
     results = run_requests(probe, requests)
@@ -449,22 +494,39 @@ def covariance_and_conservation_checks(probe: Path, cases: list[Case]) -> list[s
             failures.append(f"{case.case_id}: translation changed energy")
         if maximum_error(original["forces"], translated["forces"]) > 1.0e-7:
             failures.append(f"{case.case_id}: translation changed QM forces")
-        if maximum_error(
-            original["point_charge_forces"], translated["point_charge_forces"]
-        ) > 1.0e-7:
+        if (
+            maximum_error(
+                original["point_charge_forces"], translated["point_charge_forces"]
+            )
+            > 1.0e-7
+        ):
             failures.append(f"{case.case_id}: translation changed point forces")
-        if maximum_error(original["atomic_charges"], translated["atomic_charges"]) > 1.0e-7:
+        if (
+            maximum_error(original["atomic_charges"], translated["atomic_charges"])
+            > 1.0e-7
+        ):
             failures.append(f"{case.case_id}: translation changed charges")
         if abs(original["energies"][0] - rotated["energies"][0]) > 1.0e-9:
             failures.append(f"{case.case_id}: rotation changed energy")
-        if maximum_error(rotate_vectors(original["forces"], rotation), rotated["forces"]) > 1.0e-7:
+        if (
+            maximum_error(
+                rotate_vectors(original["forces"], rotation), rotated["forces"]
+            )
+            > 1.0e-7
+        ):
             failures.append(f"{case.case_id}: QM-force rotation covariance failed")
-        if maximum_error(
-            rotate_vectors(original["point_charge_forces"], rotation),
-            rotated["point_charge_forces"],
-        ) > 1.0e-7:
+        if (
+            maximum_error(
+                rotate_vectors(original["point_charge_forces"], rotation),
+                rotated["point_charge_forces"],
+            )
+            > 1.0e-7
+        ):
             failures.append(f"{case.case_id}: point-force rotation covariance failed")
-        if maximum_error(original["atomic_charges"], rotated["atomic_charges"]) > 1.0e-7:
+        if (
+            maximum_error(original["atomic_charges"], rotated["atomic_charges"])
+            > 1.0e-7
+        ):
             failures.append(f"{case.case_id}: rotation changed charges")
 
         total_force = [0.0, 0.0, 0.0]
@@ -494,7 +556,6 @@ def covariance_and_conservation_checks(probe: Path, cases: list[Case]) -> list[s
 
 def periodic_case(case: Case) -> Case:
     """Attach a fixed, symmetric b+A*q operator without coordinate derivatives."""
-
     atoms = len(case.atomic_numbers)
     shifts = [0.013 * ((index % 3) - 1) for index in range(atoms)]
     response = [0.0] * (atoms * atoms)
@@ -504,14 +565,19 @@ def periodic_case(case: Case) -> Case:
             value = 0.001 * (1 + ((row + column) % 3))
             response[row * atoms + column] = value
             response[column * atoms + row] = value
-    return replace(case, case_id=f"{case.case_id}_periodic", periodic_shifts=shifts,
-                   response_matrix=response)
+    return replace(
+        case,
+        case_id=f"{case.case_id}_periodic",
+        periodic_shifts=shifts,
+        response_matrix=response,
+    )
 
 
 def ragged_replication_checks(probe: Path, cases: list[Case]) -> list[str]:
-    """Compare true homogeneous replicated batches with independent singleton results."""
-
-    results = run_requests(probe, [[case] for case in cases] + [[case, case, case] for case in cases])
+    """Compare replicated batches with independent singleton results."""
+    results = run_requests(
+        probe, [[case] for case in cases] + [[case, case, case] for case in cases]
+    )
     failures: list[str] = []
     for index, case in enumerate(cases):
         singleton = slices([case], results[index])[0]
@@ -519,11 +585,14 @@ def ragged_replication_checks(probe: Path, cases: list[Case]) -> list[str]:
         for replica in replicated:
             for name, expected in singleton.items():
                 if maximum_error(replica[name], expected) > 1.0e-12:
-                    failures.append(f"{case.case_id}: homogeneous ragged {name} differs")
+                    failures.append(
+                        f"{case.case_id}: homogeneous ragged {name} differs"
+                    )
     return failures
 
 
 def main() -> int:
+    """Run the hidden GFN1 CPU scientific acceptance suite."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--source-root", type=Path, required=True)
@@ -531,7 +600,9 @@ def main() -> int:
 
     cases, manifest = load_cases(args.source_root.resolve())
     cases.append(p10_case())
-    singleton_results = [slices([case], run_probe(args.probe, [case]))[0] for case in cases]
+    singleton_results = [
+        slices([case], run_probe(args.probe, [case]))[0] for case in cases
+    ]
     ragged_results = slices(cases, run_probe(args.probe, cases))
     failures = compare_oracles(cases, singleton_results, manifest)
     failures.extend(compare_oracles(cases, ragged_results, manifest))
@@ -539,12 +610,15 @@ def main() -> int:
     # A ragged batch owns independent one-system executors.  Comparing it to
     # separately initialized processes catches topology slicing and peer-state
     # contamination independently of the external oracle gate.
-    for case, singleton, ragged in zip(cases, singleton_results, ragged_results, strict=True):
+    for case, singleton, ragged in zip(
+        cases, singleton_results, ragged_results, strict=True
+    ):
         for name in singleton:
             error = maximum_error(ragged[name], singleton[name])
             if error > 1.0e-12:
                 failures.append(
-                    f"{case.case_id}: ragged/sequential {name} error {error:.3e} > 1.000e-12"
+                    f"{case.case_id}: ragged/sequential {name} error "
+                    f"{error:.3e} > 1.000e-12"
                 )
     selected = {
         case.case_id: case
@@ -571,17 +645,19 @@ def main() -> int:
     periodic = periodic_case(selected["gfn1_ketene"])
     periodic_result = run_probe(args.probe, [periodic])
     if periodic_result["flags"] != 1:
-        failures.append("fixed periodic operator did not publish the external-derivative flag")
+        failures.append(
+            "fixed periodic operator did not publish the external-derivative flag"
+        )
     failures.extend(finite_difference_checks(args.probe, [periodic]))
     if failures:
-        print("GFN1 hidden CPU conformance failed:", file=sys.stderr)
+        sys.stderr.write("GFN1 hidden CPU conformance failed:\n")
         for failure in failures:
-            print(f"- {failure}", file=sys.stderr)
+            sys.stderr.write(f"- {failure}\n")
         return 1
-    print(
+    sys.stdout.write(
         f"GFN1 hidden CPU scientific acceptance OK: {len(cases)} singleton, "
         "heterogeneous/homogeneous ragged, unrestricted, FD, covariance, "
-        "conservation, point-charge, and fixed-periodic gates"
+        "conservation, point-charge, and fixed-periodic gates\n"
     )
     return 0
 

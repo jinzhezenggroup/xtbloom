@@ -1,5 +1,3 @@
-#include "model/gfn1/wavefunction.hpp"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -10,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "model/gfn1/wavefunction.hpp"
 #include "model/gfn2/eigensolver.hpp"
 
 #if defined(XTBLOOM_TEST_HAS_CPU_LINALG) && defined(XTBLOOM_TEST_SCIPY_PREFIXED_BLAS)
@@ -60,8 +59,8 @@ struct AlignedWorkspace {
       : storage(size + xtbloom::detail::gfn1::kWavefunctionWorkspaceAlignment - 1u) {
     void* candidate = storage.data();
     std::size_t space = storage.size();
-    data = std::align(xtbloom::detail::gfn1::kWavefunctionWorkspaceAlignment, size, candidate,
-                      space);
+    data =
+        std::align(xtbloom::detail::gfn1::kWavefunctionWorkspaceAlignment, size, candidate, space);
   }
 };
 
@@ -72,21 +71,19 @@ std::array<const WavefunctionFieldLayout*, 7> fields(const WavefunctionLayout& l
 
 bool make_layout(const std::vector<std::int64_t>& atom_offsets,
                  const std::vector<std::int32_t>& atomic_numbers,
-                 const std::vector<double>& charges,
-                 const std::vector<std::int32_t>& unpaired,
+                 const std::vector<double>& charges, const std::vector<std::int32_t>& unpaired,
                  const std::vector<std::int32_t>& spins, BasisPlan& basis,
                  WavefunctionLayout& layout, std::string& error) {
-  return xtbloom::detail::gfn1::make_basis_plan(
-             static_cast<std::int64_t>(atom_offsets.size() - 1u),
-             static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-             atomic_numbers.data(), basis, error) == XTBLOOM_STATUS_SUCCESS &&
+  return xtbloom::detail::gfn1::make_basis_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
+                                                static_cast<std::int64_t>(atomic_numbers.size()),
+                                                atom_offsets.data(), atomic_numbers.data(), basis,
+                                                error) == XTBLOOM_STATUS_SUCCESS &&
          xtbloom::detail::gfn1::make_wavefunction_layout(
              basis, atomic_numbers.data(), charges.data(), unpaired.data(), spins.data(), layout,
              error) == XTBLOOM_STATUS_SUCCESS;
 }
 
-xtbloom::detail::gfn2::EigensolverWavefunctionLayout project(
-    const WavefunctionLayout& layout) {
+xtbloom::detail::gfn2::EigensolverWavefunctionLayout project(const WavefunctionLayout& layout) {
   xtbloom::detail::gfn2::EigensolverWavefunctionLayout result;
   result.batch_size = layout.batch_size;
   result.workspace_size_bytes = layout.workspace_size_bytes;
@@ -109,8 +106,12 @@ xtbloom::detail::gfn2::EigensolverWavefunctionLayout project(
 }
 
 xtbloom::detail::gfn2::EigensolverWavefunctionView project(const WavefunctionView& view) {
-  return {view.workspace_base,         view.workspace_size_bytes, view.coefficients,
-          view.eigenvalues,            view.occupations,           view.density,
+  return {view.workspace_base,
+          view.workspace_size_bytes,
+          view.coefficients,
+          view.eigenvalues,
+          view.occupations,
+          view.density,
           view.energy_weighted_density};
 }
 
@@ -157,9 +158,9 @@ int test_ragged_layout_views_and_sad() {
   AlignedWorkspace workspace(layout.workspace_size_bytes);
   CHECK(workspace.data != nullptr);
   WavefunctionView view;
-  CHECK(xtbloom::detail::gfn1::bind_wavefunction_view(
-            layout, workspace.data, layout.workspace_size_bytes, view, error) ==
-        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::bind_wavefunction_view(layout, workspace.data,
+                                                      layout.workspace_size_bytes, view,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
   std::fill_n(view.qsh, static_cast<std::size_t>(layout.qsh.element_count), 99.0);
   std::fill_n(view.qat, static_cast<std::size_t>(layout.qat.element_count), 99.0);
   CHECK(xtbloom::detail::gfn1::initialize_sad_multipole_state(layout, view, error) ==
@@ -170,10 +171,9 @@ int test_ragged_layout_views_and_sad() {
   CHECK(view.qat[0] == 1.0);
   const std::size_t second_qat = static_cast<std::size_t>(layout.qat.system_offsets[1]);
   const std::size_t second_qsh = static_cast<std::size_t>(layout.qsh.system_offsets[1]);
-  const std::size_t second_atoms =
-      static_cast<std::size_t>(atom_offsets[2] - atom_offsets[1]);
-  const std::size_t second_shells = static_cast<std::size_t>(
-      layout.batch_shell_offsets[2] - layout.batch_shell_offsets[1]);
+  const std::size_t second_atoms = static_cast<std::size_t>(atom_offsets[2] - atom_offsets[1]);
+  const std::size_t second_shells =
+      static_cast<std::size_t>(layout.batch_shell_offsets[2] - layout.batch_shell_offsets[1]);
   double atom_sum = 0.0;
   double shell_sum = 0.0;
   for (std::size_t atom = 0; atom < second_atoms; ++atom) {
@@ -216,22 +216,22 @@ int test_strong_failure_and_warm_identity() {
   const std::array<std::int32_t, 1> singlet{0};
   const std::array<std::int32_t, 1> restricted{1};
   const std::array<std::int32_t, 2> invalid_atoms{87, 1};
-  CHECK(xtbloom::detail::gfn1::make_wavefunction_layout(
-            basis, invalid_atoms.data(), neutral.data(), singlet.data(), restricted.data(),
-            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom::detail::gfn1::make_wavefunction_layout(basis, invalid_atoms.data(), neutral.data(),
+                                                        singlet.data(), restricted.data(), sentinel,
+                                                        error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(sentinel.batch_size == 17);
   const std::array<double, 1> nonfinite{std::numeric_limits<double>::infinity()};
   CHECK(xtbloom::detail::gfn1::make_wavefunction_layout(
-            basis, layout.atomic_numbers.data(), nonfinite.data(), singlet.data(), restricted.data(),
-            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+            basis, layout.atomic_numbers.data(), nonfinite.data(), singlet.data(),
+            restricted.data(), sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   const std::array<double, 1> parity_charge{2.0};
   CHECK(xtbloom::detail::gfn1::make_wavefunction_layout(
             basis, layout.atomic_numbers.data(), parity_charge.data(), singlet.data(),
             restricted.data(), sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   const std::array<std::int32_t, 1> invalid_spin{3};
   CHECK(xtbloom::detail::gfn1::make_wavefunction_layout(
-            basis, layout.atomic_numbers.data(), neutral.data(), singlet.data(), invalid_spin.data(),
-            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+            basis, layout.atomic_numbers.data(), neutral.data(), singlet.data(),
+            invalid_spin.data(), sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
 
   AlignedWorkspace workspace(layout.workspace_size_bytes);
   WavefunctionView view;
@@ -242,9 +242,9 @@ int test_strong_failure_and_warm_identity() {
   CHECK(view.coefficients == reinterpret_cast<double*>(1));
 
   WavefunctionView valid_view;
-  CHECK(xtbloom::detail::gfn1::bind_wavefunction_view(
-            layout, workspace.data, layout.workspace_size_bytes, valid_view, error) ==
-        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::bind_wavefunction_view(layout, workspace.data,
+                                                      layout.workspace_size_bytes, valid_view,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
   std::fill_n(valid_view.qsh, static_cast<std::size_t>(layout.qsh.element_count), 23.0);
   WavefunctionView forged = valid_view;
   ++forged.qsh;
@@ -287,9 +287,9 @@ int test_model_neutral_eigensolver_projection() {
 
   AlignedWorkspace workspace(layout.workspace_size_bytes);
   WavefunctionView view;
-  CHECK(xtbloom::detail::gfn1::bind_wavefunction_view(
-            layout, workspace.data, layout.workspace_size_bytes, view, error) ==
-        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::bind_wavefunction_view(layout, workspace.data,
+                                                      layout.workspace_size_bytes, view,
+                                                      error) == XTBLOOM_STATUS_SUCCESS);
   const auto eigensolver_view = project(view);
   CHECK(eigensolver_view.coefficients == view.coefficients);
   CHECK(eigensolver_view.energy_weighted_density == view.energy_weighted_density);
@@ -306,24 +306,28 @@ int test_model_neutral_eigensolver_projection() {
   CHECK(xtbloom::detail::gfn2::bind_eigensolver_overlap_cache(
             plan, cache_storage.data, plan.overlap_cache_size_bytes(), cache, error) ==
         XTBLOOM_STATUS_SUCCESS);
-  CHECK(xtbloom::detail::gfn2::bind_eigensolver_workspace(
-            plan, scratch_storage.data, plan.workspace_size_bytes(), scratch, error) ==
-        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn2::bind_eigensolver_workspace(plan, scratch_storage.data,
+                                                          plan.workspace_size_bytes(), scratch,
+                                                          error) == XTBLOOM_STATUS_SUCCESS);
   const std::array<double, 4> overlap{1.0, 0.0, 0.0, 1.0};
   CHECK(xtbloom::detail::gfn2::factor_overlap_cpu(plan, overlap.data(), 7u, backend, scratch, cache,
                                                   error) == XTBLOOM_STATUS_SUCCESS);
-  const std::array<double, 8> hamiltonian{-0.5, 0.0, 0.0, 0.5,
-                                         -0.4, 0.0, 0.0, 0.6};
+  const std::array<double, 8> hamiltonian{-0.5, 0.0, 0.0, 0.5, -0.4, 0.0, 0.0, 0.6};
   std::array<xtbloom_status_t, 1> statuses{};
   std::array<double, 2> chemical_potentials{};
   std::array<double, 1> entropies{};
   std::array<double, 1> band_energies{};
   std::array<double, 1> free_energies{};
-  xtbloom::detail::gfn2::EigensolverThermodynamicsView thermodynamics{
-      statuses.data(),          statuses.size(),          chemical_potentials.data(),
-      chemical_potentials.size(), entropies.data(),       entropies.size(),
-      band_energies.data(),     band_energies.size(),     free_energies.data(),
-      free_energies.size()};
+  xtbloom::detail::gfn2::EigensolverThermodynamicsView thermodynamics{statuses.data(),
+                                                                      statuses.size(),
+                                                                      chemical_potentials.data(),
+                                                                      chemical_potentials.size(),
+                                                                      entropies.data(),
+                                                                      entropies.size(),
+                                                                      band_energies.data(),
+                                                                      band_energies.size(),
+                                                                      free_energies.data(),
+                                                                      free_energies.size()};
   CHECK(xtbloom::detail::gfn2::solve_eigensystems_cpu(
             plan, cache, 7u, hamiltonian.data(), 0.0, backend, scratch, eigensolver_view,
             thermodynamics, error) == XTBLOOM_STATUS_SUCCESS);

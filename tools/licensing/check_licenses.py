@@ -1819,18 +1819,16 @@ def _check_gfn1_legacy_sto_provenance(
         }
     ]
     expected_consumer = {
-        "bytes": 1003,
+        "bytes": 1051,
         "path": "data/parameters/gfn1_legacy_sto.hpp",
-        "sha256": "d383ff02a495565686b15b2964ab6685202395741a7b5649f1ceb80867f9c884",
+        "sha256": "bb47a8f47d62c38306bb811b8900a1c9b0ccf1be4ebaf7162bf0b9deb984a19f",
     }
     if (
         manifest.get("schema_version") != 1
-        or manifest.get("model")
-        != "xTB 6.7.1 GFN1 legacy STO-6G 4s/4p expansion"
+        or manifest.get("model") != "xTB 6.7.1 GFN1 legacy STO-6G 4s/4p expansion"
         or not isinstance(source, dict)
         or source.get("repository") != "https://github.com/grimme-lab/xtb"
-        or source.get("revision")
-        != "edcfbbe39d411edc225e27315fbda3a204ddb023"
+        or source.get("revision") != "edcfbbe39d411edc225e27315fbda3a204ddb023"
         or source.get("tree") != "e34d886052b7274849146db2dcd435acc05c9e5e"
         or source.get("path") != "src/slater.f90"
         or source.get("git_blob") != "b0eb607848c607daee595477f7afa794939fce68"
@@ -1897,9 +1895,9 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
         },
         "gfn1-spin2-p10-tblite": {
             "consumer": "tests/gfn1_cpu_conformance.py",
-            "bytes": 2039,
+            "bytes": 2040,
             "sha256": (
-                "b947d87aced39195fa6be088128b9ae49299c6946f4e906d143e4359ab5fa596"
+                "d33b89e59a45ed01b9efb78d710c6a2390ac07f769f2c187626b579be7ee47db"
             ),
             "sources": ["tblite:test/unit/test_spin.f90"],
             "contract": (
@@ -2586,7 +2584,9 @@ def check_install(prefix: Path) -> None:
             ).read_text(encoding="utf-8")
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise LicenseCheckError("installed GFN1 legacy STO manifest is malformed") from exc
+        raise LicenseCheckError(
+            "installed GFN1 legacy STO manifest is malformed"
+        ) from exc
     installed_apache = (
         prefix / "share/licenses/xtbloom/third-party/Apache-2.0.txt"
     ).read_bytes()
@@ -2863,7 +2863,9 @@ def _check_archived_gfn1_legacy_sto(path: Path, names: set[str], wheel: bool) ->
     try:
         manifest = json.loads(payloads[manifest_name].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise LicenseCheckError("archived GFN1 legacy STO manifest is malformed") from exc
+        raise LicenseCheckError(
+            "archived GFN1 legacy STO manifest is malformed"
+        ) from exc
     _check_gfn1_legacy_sto_provenance(
         manifest,
         payloads[lgpl_name],

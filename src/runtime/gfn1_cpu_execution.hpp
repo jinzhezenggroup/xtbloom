@@ -36,11 +36,10 @@ class Gfn1CpuExecutionCache {
   std::unique_ptr<Impl> impl_;
 
   friend xtbloom_status_t prepare_gfn1_cpu(Gfn1CpuExecutionCache&, const xtbloom_batch_t&,
-                                            const xtbloom_compute_options_t&, bool&,
-                                            std::string&);
+                                           const xtbloom_compute_options_t&, bool&, std::string&);
   friend xtbloom_status_t execute_gfn1_cpu(Gfn1CpuExecutionCache&, const xtbloom_batch_t&,
-                                            const xtbloom_compute_options_t&,
-                                            xtbloom_batch_result_t&, std::string&);
+                                           const xtbloom_compute_options_t&,
+                                           xtbloom_batch_result_t&, std::string&);
   friend std::size_t persistent_workspace_bytes_gfn1_cpu(Gfn1CpuExecutionCache&) noexcept;
   friend xtbloom_status_t set_gfn1_cpu_linear_algebra_backend_for_testing(
       Gfn1CpuExecutionCache&, const gfn2::CpuLinearAlgebraBackend&, std::string&);
@@ -67,8 +66,7 @@ std::size_t persistent_workspace_bytes_gfn1_cpu(Gfn1CpuExecutionCache& cache) no
  * changing production backend discovery or the public C ABI.
  */
 xtbloom_status_t set_gfn1_cpu_linear_algebra_backend_for_testing(
-    Gfn1CpuExecutionCache& cache, const gfn2::CpuLinearAlgebraBackend& backend,
-    std::string& error);
+    Gfn1CpuExecutionCache& cache, const gfn2::CpuLinearAlgebraBackend& backend, std::string& error);
 
 }  // namespace xtbloom::detail
 

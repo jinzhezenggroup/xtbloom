@@ -274,8 +274,8 @@ xtbloom_status_t validate_vector(const SccMixerPlan& plan, const SccMixerVectorV
   AddressRange range;
   bool exact_fields = vector.field_count == data.field_count;
   for (std::size_t field = 0u; exact_fields && field < data.field_count; ++field) {
-    exact_fields = exact_pointer(vector.workspace_base, data.field_offset_bytes[field],
-                                 vector.fields[field]);
+    exact_fields =
+        exact_pointer(vector.workspace_base, data.field_offset_bytes[field], vector.fields[field]);
   }
   if (!is_aligned(vector.workspace_base, data.workspace_alignment) ||
       vector.workspace_size_bytes < data.vector_workspace_size_bytes ||
@@ -287,8 +287,7 @@ xtbloom_status_t validate_vector(const SccMixerPlan& plan, const SccMixerVectorV
   return XTBLOOM_STATUS_SUCCESS;
 }
 
-xtbloom_status_t validate_active_ranges(const SccMixerPlan& plan,
-                                        const SccMixerVectorView& vector,
+xtbloom_status_t validate_active_ranges(const SccMixerPlan& plan, const SccMixerVectorView& vector,
                                         const SccMixerState& state,
                                         const SccMixerWorkspace* workspace, std::string& error) {
   const SccMixerPlanData& data = *plan.identity();
@@ -414,10 +413,8 @@ void for_each_raw_component(const SccMixerPlanData& data, const SccMixerVectorVi
                             std::size_t system, Function&& function) {
   std::size_t packed = 0u;
   for (std::size_t field = 0u; field < data.field_count; ++field) {
-    const std::size_t begin =
-        static_cast<std::size_t>(data.field_system_offsets[field][system]);
-    const std::size_t end =
-        static_cast<std::size_t>(data.field_system_offsets[field][system + 1u]);
+    const std::size_t begin = static_cast<std::size_t>(data.field_system_offsets[field][system]);
+    const std::size_t end = static_cast<std::size_t>(data.field_system_offsets[field][system + 1u]);
     for (std::size_t source = begin; source < end; ++source, ++packed) {
       function(packed, vector.fields[field][source]);
     }
@@ -428,10 +425,8 @@ void publish_mixed_components(const SccMixerPlanData& data, const SccMixerVector
                               std::size_t system, const double* mixed) {
   std::size_t packed = 0u;
   for (std::size_t field = 0u; field < data.field_count; ++field) {
-    const std::size_t begin =
-        static_cast<std::size_t>(data.field_system_offsets[field][system]);
-    const std::size_t end =
-        static_cast<std::size_t>(data.field_system_offsets[field][system + 1u]);
+    const std::size_t begin = static_cast<std::size_t>(data.field_system_offsets[field][system]);
+    const std::size_t end = static_cast<std::size_t>(data.field_system_offsets[field][system + 1u]);
     for (std::size_t destination = begin; destination < end; ++destination, ++packed) {
       vector.fields[field][destination] = mixed[packed];
     }
@@ -835,8 +830,9 @@ bool SccMixerPlan::overlaps_storage(const void* data, std::size_t size_bytes) co
 
 const SccMixerPlanData* SccMixerPlan::identity() const noexcept { return data_.get(); }
 
-xtbloom_status_t make_scc_mixer_plan(const SccMixerVectorLayoutView& layout, std::int64_t history_size,
-                                     double damping, double rms_tolerance, double maximum_tolerance,
+xtbloom_status_t make_scc_mixer_plan(const SccMixerVectorLayoutView& layout,
+                                     std::int64_t history_size, double damping,
+                                     double rms_tolerance, double maximum_tolerance,
                                      SccMixerPlan& plan, std::string& error) {
   if (layout.batch_size <= 0 || layout.workspace_size_bytes == 0u ||
       layout.workspace_alignment == 0u ||
@@ -865,9 +861,9 @@ xtbloom_status_t make_scc_mixer_plan(const SccMixerVectorLayoutView& layout, std
       error = "SCC mixer vector field layout is malformed or exceeds its workspace";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
-    field_ranges[field] = {static_cast<std::uintptr_t>(candidate.offset_bytes),
-                           static_cast<std::uintptr_t>(candidate.offset_bytes +
-                                                       candidate.size_bytes)};
+    field_ranges[field] = {
+        static_cast<std::uintptr_t>(candidate.offset_bytes),
+        static_cast<std::uintptr_t>(candidate.offset_bytes + candidate.size_bytes)};
     for (std::size_t system = 0u; system < batch; ++system) {
       if (candidate.system_offsets[system] < 0 ||
           candidate.system_offsets[system] >= candidate.system_offsets[system + 1u]) {
@@ -899,9 +895,8 @@ xtbloom_status_t make_scc_mixer_plan(const SccMixerVectorLayoutView& layout, std
       const SccMixerFieldLayoutView& candidate = layout.fields[field];
       created.field_offset_bytes[field] = candidate.offset_bytes;
       created.field_size_bytes[field] = candidate.size_bytes;
-      created.field_system_offsets[field].assign(candidate.system_offsets,
-                                                 candidate.system_offsets +
-                                                     candidate.system_offset_count);
+      created.field_system_offsets[field].assign(
+          candidate.system_offsets, candidate.system_offsets + candidate.system_offset_count);
     }
 
     created.vector_offsets.assign(batch + 1u, 0);
@@ -910,9 +905,8 @@ xtbloom_status_t make_scc_mixer_plan(const SccMixerVectorLayoutView& layout, std
       std::int64_t dimension = 0;
       std::int64_t history_elements = 0;
       for (std::size_t field = 0u; field < layout.field_count; ++field) {
-        const std::int64_t field_elements =
-            created.field_system_offsets[field][system + 1u] -
-            created.field_system_offsets[field][system];
+        const std::int64_t field_elements = created.field_system_offsets[field][system + 1u] -
+                                            created.field_system_offsets[field][system];
         if (!checked_add_i64(field_elements, dimension)) {
           error = "SCC mixer ragged vector dimensions overflow int64_t";
           return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -1127,8 +1121,7 @@ xtbloom_status_t bind_scc_mixer_workspace(const SccMixerPlan& plan, void* worksp
 }
 
 xtbloom_status_t validate_scc_mixer_state_binding(const SccMixerPlan& plan,
-                                                  const SccMixerState& state,
-                                                  std::string& error) {
+                                                  const SccMixerState& state, std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   return status == XTBLOOM_STATUS_SUCCESS ? validate_state(plan, state, error) : status;
 }

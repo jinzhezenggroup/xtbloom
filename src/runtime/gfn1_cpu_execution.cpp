@@ -44,9 +44,9 @@ using namespace xtbloom::detail::gfn1;
 constexpr std::size_t kHostAlignment = 64u;
 constexpr std::int32_t kDefaultMixerHistory = 8;
 constexpr double kDefaultMixerDamping = 0.4;
-constexpr std::uint32_t kSupportedFlags =
-    XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
-    XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+constexpr std::uint32_t kSupportedFlags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
+                                          XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+                                          XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
 
 void* host_aligned_allocate(std::size_t alignment, std::size_t size) {
 #if defined(_WIN32)
@@ -177,10 +177,9 @@ void stage_request(const xtbloom_batch_t& batch, HostRequest& request) {
     copy_from_buffer(batch.point_charge_positions,
                      3u * static_cast<std::size_t>(batch.total_point_charges),
                      request.point_positions);
-    copy_from_buffer(batch.point_charge_values,
-                     static_cast<std::size_t>(batch.total_point_charges), request.point_charges);
-    copy_from_buffer(batch.point_charge_gammas,
-                     static_cast<std::size_t>(batch.total_point_charges),
+    copy_from_buffer(batch.point_charge_values, static_cast<std::size_t>(batch.total_point_charges),
+                     request.point_charges);
+    copy_from_buffer(batch.point_charge_gammas, static_cast<std::size_t>(batch.total_point_charges),
                      request.point_hardnesses);
   } else {
     request.point_offsets.assign(static_cast<std::size_t>(batch.batch_size) + 1u, 0);
@@ -198,8 +197,8 @@ void stage_request(const xtbloom_batch_t& batch, HostRequest& request) {
   }
   request.response_enabled = batch.total_charge_response_elements != 0;
   if (request.response_enabled) {
-    copy_from_buffer(batch.charge_response_offsets,
-                     static_cast<std::size_t>(batch.batch_size) + 1u, request.response_offsets);
+    copy_from_buffer(batch.charge_response_offsets, static_cast<std::size_t>(batch.batch_size) + 1u,
+                     request.response_offsets);
     copy_from_buffer(batch.charge_response_matrix,
                      static_cast<std::size_t>(batch.total_charge_response_elements),
                      request.response_matrices);
@@ -227,10 +226,9 @@ xtbloom_status_t validate_hidden_request(const xtbloom_batch_t& batch,
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE &&
-      (options.scc_mixer != XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN ||
-       options.scc_mixer_history < 1 || options.scc_mixer_history > 64 ||
-       !std::isfinite(options.scc_mixer_damping) || options.scc_mixer_damping <= 0.0 ||
-       options.scc_mixer_damping > 1.0 ||
+      (options.scc_mixer != XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN || options.scc_mixer_history < 1 ||
+       options.scc_mixer_history > 64 || !std::isfinite(options.scc_mixer_damping) ||
+       options.scc_mixer_damping <= 0.0 || options.scc_mixer_damping > 1.0 ||
        (options.determinism != XTBLOOM_DETERMINISM_DEFAULT &&
         options.determinism != XTBLOOM_DETERMINISM_REPRODUCIBLE))) {
     error = "internal CPU GFN1 mixer or determinism policy is invalid";
@@ -317,8 +315,7 @@ struct SystemKey {
            first.energy_tolerance == second.energy_tolerance &&
            first.electronic_temperature == second.electronic_temperature &&
            first.mixer == second.mixer && first.mixer_history == second.mixer_history &&
-           first.mixer_damping == second.mixer_damping &&
-           first.determinism == second.determinism;
+           first.mixer_damping == second.mixer_damping && first.determinism == second.determinism;
   }
 };
 
@@ -466,7 +463,8 @@ struct SystemExecution {
                          const double* input_response, bool warm_start, SystemOutput& output,
                          std::string& error);
   void promote_checkpoint() noexcept {
-    std::memcpy(checkpoint_storage.data(), wavefunction_storage.data(), wavefunction_storage.size());
+    std::memcpy(checkpoint_storage.data(), wavefunction_storage.data(),
+                wavefunction_storage.size());
     checkpoint_valid = true;
   }
   void invalidate_checkpoint() noexcept { checkpoint_valid = false; }
@@ -489,10 +487,9 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
                                     repulsion, error)) != XTBLOOM_STATUS_SUCCESS ||
       (status = make_h0_plan(basis, integrals, key.atomic_numbers.data(), h0, error)) !=
           XTBLOOM_STATUS_SUCCESS ||
-      (status = make_wavefunction_layout(basis, key.atomic_numbers.data(),
-                                         molecular_charges.data(), unpaired_electrons.data(),
-                                         spin_channels.data(), wavefunction_layout, error)) !=
-          XTBLOOM_STATUS_SUCCESS ||
+      (status = make_wavefunction_layout(basis, key.atomic_numbers.data(), molecular_charges.data(),
+                                         unpaired_electrons.data(), spin_channels.data(),
+                                         wavefunction_layout, error)) != XTBLOOM_STATUS_SUCCESS ||
       (status = make_mulliken_plan(basis, integrals, wavefunction_layout, mulliken, error)) !=
           XTBLOOM_STATUS_SUCCESS ||
       (status = gfn1::make_es2_plan(basis, key.atomic_numbers.data(), es2, error)) !=
@@ -503,15 +500,16 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
           XTBLOOM_STATUS_SUCCESS ||
       (status = make_spin_polarization_plan(basis, key.atomic_numbers.data(), spin_layout, spin,
                                             error)) != XTBLOOM_STATUS_SUCCESS ||
-      (status = gfn2::make_eigensolver_plan(make_eigensolver_wavefunction_layout(wavefunction_layout),
-                                            eigensolver, error)) != XTBLOOM_STATUS_SUCCESS ||
+      (status = gfn2::make_eigensolver_plan(
+           make_eigensolver_wavefunction_layout(wavefunction_layout), eigensolver, error)) !=
+          XTBLOOM_STATUS_SUCCESS ||
       (status = make_scc_mixer_plan(wavefunction_layout, key.mixer_history, key.mixer_damping,
                                     key.charge_tolerance, key.charge_tolerance, mixer, error)) !=
           XTBLOOM_STATUS_SUCCESS ||
       (status = make_d3_plan(1, atoms, atom_offsets.data(), key.atomic_numbers.data(), d3,
                              error)) != XTBLOOM_STATUS_SUCCESS ||
-      (status = make_halogen_plan(1, atoms, atom_offsets.data(), key.atomic_numbers.data(),
-                                  halogen, error)) != XTBLOOM_STATUS_SUCCESS ||
+      (status = make_halogen_plan(1, atoms, atom_offsets.data(), key.atomic_numbers.data(), halogen,
+                                  error)) != XTBLOOM_STATUS_SUCCESS ||
       (status = make_external_point_charge_plan(
            basis, es2, key.point_count, key.point_count == 0 ? nullptr : point_offsets.data(),
            external, error)) != XTBLOOM_STATUS_SUCCESS) {
@@ -561,8 +559,8 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
           XTBLOOM_STATUS_SUCCESS ||
       (status = allocate(driver_workspace_storage, driver.workspace_size_bytes(),
                          "driver workspace", error)) != XTBLOOM_STATUS_SUCCESS ||
-      (status = allocate(d3_workspace_storage, d3.workspace_size_bytes(), "D3 workspace",
-                         error)) != XTBLOOM_STATUS_SUCCESS ||
+      (status = allocate(d3_workspace_storage, d3.workspace_size_bytes(), "D3 workspace", error)) !=
+          XTBLOOM_STATUS_SUCCESS ||
       (status = allocate(halogen_workspace_storage, halogen.workspace_size_bytes(),
                          "halogen workspace", error)) != XTBLOOM_STATUS_SUCCESS) {
     return status;
@@ -570,9 +568,9 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   if ((status = bind_wavefunction_view(wavefunction_layout, wavefunction_storage.data(),
                                        wavefunction_storage.size(), wavefunction, error)) !=
           XTBLOOM_STATUS_SUCCESS ||
-      (status = gfn2::bind_eigensolver_overlap_cache(
-           eigensolver, overlap_cache_storage.data(), overlap_cache_storage.size(), overlap_cache,
-           error)) != XTBLOOM_STATUS_SUCCESS ||
+      (status = gfn2::bind_eigensolver_overlap_cache(eigensolver, overlap_cache_storage.data(),
+                                                     overlap_cache_storage.size(), overlap_cache,
+                                                     error)) != XTBLOOM_STATUS_SUCCESS ||
       (status = gfn2::bind_eigensolver_workspace(
            eigensolver, eigensolver_workspace_storage.data(), eigensolver_workspace_storage.size(),
            eigensolver_workspace, error)) != XTBLOOM_STATUS_SUCCESS ||
@@ -635,11 +633,13 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   return XTBLOOM_STATUS_SUCCESS;
 }
 
-xtbloom_status_t SystemExecution::infer(
-    const CpuLinearAlgebraBackend& backend, const double* input_positions,
-    const double* input_point_positions, const double* input_point_charges,
-    const double* input_point_hardnesses, const double* input_shifts, const double* input_response,
-    bool warm_start, SystemOutput& output, std::string& error) {
+xtbloom_status_t SystemExecution::infer(const CpuLinearAlgebraBackend& backend,
+                                        const double* input_positions,
+                                        const double* input_point_positions,
+                                        const double* input_point_charges,
+                                        const double* input_point_hardnesses,
+                                        const double* input_shifts, const double* input_response,
+                                        bool warm_start, SystemOutput& output, std::string& error) {
   std::copy_n(input_positions, positions.size(), positions.data());
   if (!point_positions.empty()) {
     std::copy_n(input_point_positions, point_positions.size(), point_positions.data());
@@ -661,8 +661,8 @@ xtbloom_status_t SystemExecution::infer(
 
   ++geometry_generation;
   if (geometry_generation == 0u) geometry_generation = 1u;
-  xtbloom_status_t status =
-      evaluate_coordination_cpu(d3.coordination_plan(), positions.data(), coordination.data(), error);
+  xtbloom_status_t status = evaluate_coordination_cpu(d3.coordination_plan(), positions.data(),
+                                                      coordination.data(), error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   if ((status = evaluate_overlap_cpu(basis, integrals, positions.data(), overlap.data(),
                                      integral_storage.data(), integral_storage.size(), error)) !=
@@ -675,9 +675,9 @@ xtbloom_status_t SystemExecution::infer(
   ES2Workspace es2_update;
   es2_update.matrix_scratch = es2_matrix_scratch.data();
   es2_update.matrix_elements = es2.total_matrix_elements();
-  status = update_es2_geometry_cache_cpu(es2, positions.data(), geometry_generation,
-                                         es2_matrix.data(), es2_matrix.size(), es2_update, es2_cache,
-                                         error);
+  status =
+      update_es2_geometry_cache_cpu(es2, positions.data(), geometry_generation, es2_matrix.data(),
+                                    es2_matrix.size(), es2_update, es2_cache, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = evaluate_external_point_charge_potential_cpu(
       external, positions.data(), point_positions.empty() ? nullptr : point_positions.data(),
@@ -694,7 +694,8 @@ xtbloom_status_t SystemExecution::infer(
       error = "internal CPU GFN1 WARM execution found no per-system checkpoint";
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
-    std::memcpy(wavefunction_storage.data(), checkpoint_storage.data(), wavefunction_storage.size());
+    std::memcpy(wavefunction_storage.data(), checkpoint_storage.data(),
+                wavefunction_storage.size());
   } else {
     status = initialize_sad_multipole_state(wavefunction_layout, wavefunction, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -739,8 +740,8 @@ xtbloom_status_t SystemExecution::infer(
    * without advancing SCC. The model-owned seam is also responsible for ES3
    * atom-to-shell broadcasting, so the executor cannot drift from iteration
    * assembly when a new scalar term is added. */
-  status = rebuild_scc_stationary_potentials_cpu(driver, geometry, wavefunction,
-                                                 driver_workspace, error);
+  status = rebuild_scc_stationary_potentials_cpu(driver, geometry, wavefunction, driver_workspace,
+                                                 error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   const SccStationaryProjection projection{
@@ -770,23 +771,22 @@ xtbloom_status_t SystemExecution::infer(
     const bool compose_force = need_qm_force || need_point_force;
     output.forces.assign(compose_force ? positions.size() : 0u, 0.0);
     output.point_forces.assign(need_point_force ? point_positions.size() : 0u, 0.0);
-    const StationaryInput input{key.atomic_numbers.data(),
-                                positions.data(),
-                                coordination.data(),
-                                geometry_generation,
-                                overlap.data(),
-                                stationary_density.data(),
-                                stationary_weighted_density.data(),
-                                stationary_shell_charges.data(),
-                                stationary_scalar_potential.data(),
-                                driver_state.free_energies,
-                                stationary_spin_density.empty() ? nullptr
-                                                               : stationary_spin_density.data(),
-                                stationary_spin_potential.empty() ? nullptr
-                                                                 : stationary_spin_potential.data(),
-                                point_positions.empty() ? nullptr : point_positions.data(),
-                                point_charges.empty() ? nullptr : point_charges.data(),
-                                point_hardnesses.empty() ? nullptr : point_hardnesses.data()};
+    const StationaryInput input{
+        key.atomic_numbers.data(),
+        positions.data(),
+        coordination.data(),
+        geometry_generation,
+        overlap.data(),
+        stationary_density.data(),
+        stationary_weighted_density.data(),
+        stationary_shell_charges.data(),
+        stationary_scalar_potential.data(),
+        driver_state.free_energies,
+        stationary_spin_density.empty() ? nullptr : stationary_spin_density.data(),
+        stationary_spin_potential.empty() ? nullptr : stationary_spin_potential.data(),
+        point_positions.empty() ? nullptr : point_positions.data(),
+        point_charges.empty() ? nullptr : point_charges.data(),
+        point_hardnesses.empty() ? nullptr : point_hardnesses.data()};
     status = evaluate_gfn1_energy_forces_cpu(
         basis, integrals, d3.coordination_plan(), repulsion, h0, mulliken, es2, es2_cache, d3,
         halogen, key.point_count == 0 ? nullptr : &external, input, &output.energy,
@@ -801,10 +801,9 @@ xtbloom_status_t SystemExecution::infer(
 }
 
 std::size_t SystemExecution::resident_bytes() const noexcept {
-  const std::size_t small_vectors =
-      vector_bytes(key.atomic_numbers) + vector_bytes(atom_offsets) + vector_bytes(point_offsets) +
-      vector_bytes(molecular_charges) + vector_bytes(unpaired_electrons) +
-      vector_bytes(spin_channels);
+  const std::size_t small_vectors = vector_bytes(key.atomic_numbers) + vector_bytes(atom_offsets) +
+                                    vector_bytes(point_offsets) + vector_bytes(molecular_charges) +
+                                    vector_bytes(unpaired_electrons) + vector_bytes(spin_channels);
   const std::size_t direct_plan_vectors =
       common::basis_plan_resident_bytes(basis) + vector_bytes(integrals.matrix_offsets) +
       vector_bytes(repulsion.atom_offsets) + vector_bytes(repulsion.sqrt_alpha) +
@@ -846,25 +845,42 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       d3.resident_bytes() + halogen.resident_bytes() + es2.resident_bytes() +
       eigensolver.resident_bytes() + mulliken.resident_bytes() + mixer.resident_bytes() +
       driver.resident_bytes() + (periodic.sealed() ? periodic.resident_bytes() : 0u);
-  const std::vector<const std::vector<double>*> doubles{
-      &positions,          &point_positions,         &point_charges,
-      &point_hardnesses,   &periodic_shifts,         &periodic_response,
-      &coordination,       &overlap,                 &hamiltonian,
-      &es2_matrix,         &es2_matrix_scratch,      &point_shell_potential,
-      &stationary_density, &stationary_weighted_density,
-      &stationary_spin_density, &stationary_shell_charges, &stationary_atomic_charges,
-      &stationary_scalar_potential, &stationary_spin_potential, &energy_scratch,
-      &component_energy_scratch, &total_gradient, &component_gradient, &component_staging,
-      &force_scratch, &point_force_scratch, &overlap_adjoint, &coordination_adjoint,
-      &es2_gradient_scratch};
+  const std::vector<const std::vector<double>*> doubles{&positions,
+                                                        &point_positions,
+                                                        &point_charges,
+                                                        &point_hardnesses,
+                                                        &periodic_shifts,
+                                                        &periodic_response,
+                                                        &coordination,
+                                                        &overlap,
+                                                        &hamiltonian,
+                                                        &es2_matrix,
+                                                        &es2_matrix_scratch,
+                                                        &point_shell_potential,
+                                                        &stationary_density,
+                                                        &stationary_weighted_density,
+                                                        &stationary_spin_density,
+                                                        &stationary_shell_charges,
+                                                        &stationary_atomic_charges,
+                                                        &stationary_scalar_potential,
+                                                        &stationary_spin_potential,
+                                                        &energy_scratch,
+                                                        &component_energy_scratch,
+                                                        &total_gradient,
+                                                        &component_gradient,
+                                                        &component_staging,
+                                                        &force_scratch,
+                                                        &point_force_scratch,
+                                                        &overlap_adjoint,
+                                                        &coordination_adjoint,
+                                                        &es2_gradient_scratch};
   std::size_t planar_vectors = 0u;
   for (const auto* values : doubles) planar_vectors += vector_bytes(*values);
   const std::size_t aligned_buffers =
       integral_storage.size() + wavefunction_storage.size() + checkpoint_storage.size() +
       overlap_cache_storage.size() + eigensolver_workspace_storage.size() +
-      mixer_state_storage.size() + driver_state_storage.size() +
-      driver_workspace_storage.size() + d3_workspace_storage.size() +
-      halogen_workspace_storage.size();
+      mixer_state_storage.size() + driver_state_storage.size() + driver_workspace_storage.size() +
+      d3_workspace_storage.size() + halogen_workspace_storage.size();
   return small_vectors + direct_plan_vectors + wavefunction_plan_vectors + opaque_plan_storage +
          planar_vectors + aligned_buffers;
 }
@@ -924,10 +940,10 @@ struct Gfn1CpuExecutionCache::Impl {
     const double nan = std::numeric_limits<double>::quiet_NaN();
     outputs.resize(batch);
     for (std::size_t index = 0u; index < batch; ++index) {
-      const std::size_t atoms = static_cast<std::size_t>(
-          request.atom_offsets[index + 1u] - request.atom_offsets[index]);
-      const std::size_t points = static_cast<std::size_t>(
-          request.point_offsets[index + 1u] - request.point_offsets[index]);
+      const std::size_t atoms =
+          static_cast<std::size_t>(request.atom_offsets[index + 1u] - request.atom_offsets[index]);
+      const std::size_t points = static_cast<std::size_t>(request.point_offsets[index + 1u] -
+                                                          request.point_offsets[index]);
       outputs[index].forces.reserve(3u * atoms);
       outputs[index].atomic_charges.reserve(atoms);
       outputs[index].point_forces.reserve(3u * points);
@@ -1000,7 +1016,8 @@ xtbloom_status_t execute_gfn1_cpu(Gfn1CpuExecutionCache& cache, const xtbloom_ba
     std::lock_guard<std::mutex> lock(cache.impl_->mutex);
     Gfn1CpuExecutionCache::Impl& implementation = *cache.impl_;
     stage_request(batch, implementation.request);
-    xtbloom_status_t status = validate_hidden_request(batch, options, implementation.request, error);
+    xtbloom_status_t status =
+        validate_hidden_request(batch, options, implementation.request, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     make_system_keys(implementation.request, options, implementation.requested_keys);
     const bool warm = options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
@@ -1025,16 +1042,14 @@ xtbloom_status_t execute_gfn1_cpu(Gfn1CpuExecutionCache& cache, const xtbloom_ba
       output.reset();
       const std::int64_t atom_begin = implementation.request.atom_offsets[index];
       const std::int64_t point_begin = implementation.request.point_offsets[index];
-      const std::int64_t points =
-          implementation.request.point_offsets[index + 1u] - point_begin;
+      const std::int64_t points = implementation.request.point_offsets[index + 1u] - point_begin;
       const double* shifts = implementation.request.shifts_enabled
                                  ? implementation.request.periodic_shifts.data() + atom_begin
                                  : nullptr;
-      const double* response =
-          implementation.request.response_enabled
-              ? implementation.request.response_matrices.data() +
-                    implementation.request.response_offsets[index]
-              : nullptr;
+      const double* response = implementation.request.response_enabled
+                                   ? implementation.request.response_matrices.data() +
+                                         implementation.request.response_offsets[index]
+                                   : nullptr;
       status = implementation.systems[index]->infer(
           implementation.backend, implementation.request.positions.data() + 3 * atom_begin,
           points == 0 ? nullptr : implementation.request.point_positions.data() + 3 * point_begin,
@@ -1085,9 +1100,10 @@ xtbloom_status_t execute_gfn1_cpu(Gfn1CpuExecutionCache& cache, const xtbloom_ba
     publish_to_buffer(implementation.iterations, result.scc_iterations);
     publish_to_buffer(implementation.converged, result.scc_converged);
     publish_to_buffer(implementation.statuses, result.per_system_status);
-    result.flags = (implementation.request.shifts_enabled || implementation.request.response_enabled)
-                       ? XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES
-                       : 0u;
+    result.flags =
+        (implementation.request.shifts_enabled || implementation.request.response_enabled)
+            ? XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES
+            : 0u;
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
@@ -1099,8 +1115,7 @@ xtbloom_status_t execute_gfn1_cpu(Gfn1CpuExecutionCache& cache, const xtbloom_ba
 std::size_t persistent_workspace_bytes_gfn1_cpu(Gfn1CpuExecutionCache& cache) noexcept {
   std::lock_guard<std::mutex> lock(cache.impl_->mutex);
   const Gfn1CpuExecutionCache::Impl& implementation = *cache.impl_;
-  std::size_t total = sizeof(Gfn1CpuExecutionCache::Impl) +
-                      vector_bytes(implementation.systems);
+  std::size_t total = sizeof(Gfn1CpuExecutionCache::Impl) + vector_bytes(implementation.systems);
   for (const auto& system : implementation.systems)
     total += sizeof(SystemExecution) + system->resident_bytes();
   const auto keys_bytes = [](const std::vector<SystemKey>& keys) {

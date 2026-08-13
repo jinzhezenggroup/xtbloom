@@ -93,9 +93,8 @@ class SccMixerPlan {
 
   friend xtbloom_status_t make_scc_mixer_plan(const SccMixerVectorLayoutView& layout,
                                               std::int64_t history_size, double damping,
-                                              double rms_tolerance,
-                                              double maximum_tolerance, SccMixerPlan& plan,
-                                              std::string& error);
+                                              double rms_tolerance, double maximum_tolerance,
+                                              SccMixerPlan& plan, std::string& error);
 };
 
 /* Persistent system-major history and convergence diagnostics. */
@@ -152,8 +151,7 @@ xtbloom_status_t bind_scc_mixer_workspace(const SccMixerPlan& plan, void* worksp
 
 /* Read-only canonical-binding checks for higher-level allocation-free drivers. */
 xtbloom_status_t validate_scc_mixer_state_binding(const SccMixerPlan& plan,
-                                                  const SccMixerState& state,
-                                                  std::string& error);
+                                                  const SccMixerState& state, std::string& error);
 xtbloom_status_t validate_scc_mixer_workspace_binding(const SccMixerPlan& plan,
                                                       const SccMixerWorkspace& workspace,
                                                       std::string& error);
@@ -161,14 +159,12 @@ xtbloom_status_t validate_scc_mixer_workspace_binding(const SccMixerPlan& plan,
 /* Initialization is all-or-nothing across the complete ragged batch. */
 xtbloom_status_t initialize_scc_mixer_state_cpu(const SccMixerPlan& plan,
                                                 const SccMixerVectorView& vector,
-                                                const SccMixerState& state,
-                                                std::string& error);
+                                                const SccMixerState& state, std::string& error);
 
 /* Restart clears only the selected system after its new vector is validated. */
 xtbloom_status_t restart_scc_mixer_system_cpu(const SccMixerPlan& plan, std::int64_t system,
                                               const SccMixerVectorView& vector,
-                                              const SccMixerState& state,
-                                              std::string& error);
+                                              const SccMixerState& state, std::string& error);
 
 /*
  * Mix one raw vector in place. Numerical failure changes only the selected
@@ -177,15 +173,13 @@ xtbloom_status_t restart_scc_mixer_system_cpu(const SccMixerPlan& plan, std::int
 xtbloom_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan, std::int64_t system,
                                             const SccMixerVectorView& vector,
                                             const SccMixerState& state,
-                                            const SccMixerWorkspace& workspace,
-                                            std::string& error);
+                                            const SccMixerWorkspace& workspace, std::string& error);
 
 /* Serial wrapper retaining peer-local numerical failure isolation. */
 xtbloom_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,
                                            const SccMixerVectorView& vector,
                                            const SccMixerState& state,
-                                           const SccMixerWorkspace& workspace,
-                                           std::string& error);
+                                           const SccMixerWorkspace& workspace, std::string& error);
 
 /* Copy exactly one system into or out of a disjoint full-layout binding. */
 xtbloom_status_t prepare_scc_mixer_system_transaction_cpu(const SccMixerPlan& plan,
