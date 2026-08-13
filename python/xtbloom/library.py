@@ -720,28 +720,6 @@ def _runtime_search_dirs() -> list[Path]:
     return dirs
 
 
-def _load_cuda_runtime() -> ctypes.CDLL | None:
-    """Load xTBloom's CUDA-12 runtime cohort for small host-side queries.
-
-    The Python boundary uses this only for thread-local device selection and
-    memory queries.  Loading by the exact SONAME first preserves an already
-    registered runtime; the absolute-path fallback matches native-library
-    discovery without importing an array backend.
-    """
-    try:
-        return ctypes.CDLL("libcudart.so.12")
-    except OSError:
-        for directory in _runtime_search_dirs():
-            candidate = directory / "libcudart.so.12"
-            if not candidate.is_file():
-                continue
-            try:
-                return ctypes.CDLL(str(candidate))
-            except OSError:
-                continue
-    return None
-
-
 def _load_cuda_driver() -> ctypes.CDLL | None:
     """Load the process-global NVIDIA driver used to scope DLPack export.
 
@@ -1005,9 +983,20 @@ def device_memory_info(device_id: int = 0) -> tuple[int, int] | None:
     attempts to restore the caller's current CUDA device on every changed-device
     exit, including query failure.
     """
-    cudart = _load_cuda_runtime()
-    if cudart is None:
-        return None
+    try:
+        cudart = ctypes.CDLL("libcudart.so.12")
+    except OSError:
+        for directory in _runtime_search_dirs():
+            candidate = directory / "libcudart.so.12"
+            if not candidate.is_file():
+                continue
+            try:
+                cudart = ctypes.CDLL(str(candidate))
+                break
+            except OSError:
+                continue
+        else:
+            return None
 
     try:
         cuda_get_device = cudart.cudaGetDevice
