@@ -119,8 +119,11 @@ mctc-lib v0.5.1 revision `aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5`
 under its Apache-2.0 license. `gfn1_d3_manifest.json` records the exact source,
 equation, legal, and conversion blobs, Git trees, SHA-256 digests,
 representation, and generated-output hashes. The equation records pin the
-reference weighting/interpolation, BJ two-body derivative, composition, and
-smooth-cutoff contracts used by the model-owned CPU implementation. The
+reference weighting/interpolation, BJ two-body derivative, and generic
+smooth-cutoff equation used by the model-owned CPU implementation. The same
+manifest pins tblite v0.7.0 revision
+`fa8a4416e8fe093d0075bc10ac875494c2a449a9` for GFN1's 50-bohr two-body
+cutoff, 0.05-bohr switch width, and calculator-to-D3 forwarding chain. The
 mctc-lib records verify the evaluated physical
 unit conversion; no mctc-lib source table or expressive implementation is
 copied into the generated D3 data, which retains the simple-dftd3

@@ -295,6 +295,7 @@ void test_reference_interpolation_layout_and_fallback() {
               "underflow fallback selects maximum reference CN");
 }
 
+// XTBLOOM_GFN1_FIXTURE_BEGIN gfn1-d3-dxtb-tblite
 void test_dxtb_tblite_term_goldens() {
   /*
    * dxtb b529b5dd retains these GFN1 D3 values as tblite-generated
@@ -331,6 +332,7 @@ void test_dxtb_tblite_term_goldens() {
                 "SiH4 dxtb/tblite D3 gradient golden");
   }
 }
+// XTBLOOM_GFN1_FIXTURE_END gfn1-d3-dxtb-tblite
 
 void test_cutoff_contract() {
   const std::vector<double> cn{0.0, 0.0};

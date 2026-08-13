@@ -415,7 +415,7 @@ GFN1_PROVENANCE_SHA256 = (
     "422170e3d1beaa94be96488fc9303374a3b217e89e501823db894aa7fd17a9c5"
 )
 GFN1_D3_PROVENANCE_SHA256 = (
-    "958094427fc38b44675d125453fccbb4626399c500b6c3fdc5214c129f146146"
+    "9129cc27bdeafde0d6b4eb89197741a365eac6db233fc41da97367636506b65d"
 )
 GFN1_D3_MCTC_LICENSE_RECORD = {
     "bytes": 11358,
@@ -1655,6 +1655,7 @@ def _check_gfn1_d3_provenance(
                 "method",
                 "source",
                 "unit_conversion",
+                "execution_contract",
                 "representation",
             )
         }
@@ -1691,6 +1692,51 @@ def _check_gfn1_d3_provenance(
         != expected_equations
     ):
         raise LicenseCheckError("GFN1-D3 manifest has incomplete equation provenance")
+    execution_contract = gfn1_d3.get("execution_contract", {})
+    expected_tblite_sources = {
+        "src/tblite/disp/d3.f90": (
+            "df1b9cfe8e45078c021c55359c758506efae7210",
+            "b4a8d386fd30723cc7bebf7ced4f5a08c1ed4bae58ca753e4e2dcdaf92a4029c",
+        ),
+        "src/tblite/xtb/calculator.f90": (
+            "31e1394455e0f1fc77f3dfc0dfd7cc14abd36e38",
+            "40a44bfe99b0d6aa11d6d9de18ae1f12cfbd32e73eaf344c88492de46927818d",
+        ),
+        "src/tblite/xtb/gfn1.f90": (
+            "dc96235fa5bd0ece28f9a7e3672716cfea3633b6",
+            "0df0d3eca4b69efa445733a2fda269220cb203fb325acf0f6f06c21c55feb630",
+        ),
+    }
+    if (
+        not isinstance(execution_contract, dict)
+        or execution_contract.get("repository") != "https://github.com/tblite/tblite"
+        or execution_contract.get("revision")
+        != "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
+        or execution_contract.get("tree") != "2cfe9e53c6413bd022e36346d62ba110c1c42f57"
+        or execution_contract.get("license") != "LGPL-3.0-or-later"
+        or execution_contract.get("two_body_cutoff_bohr") != 50.0
+        or execution_contract.get("smooth_cutoff_width_bohr") != 0.05
+        or {
+            entry.get("path"): (entry.get("git_blob"), entry.get("sha256"))
+            for entry in execution_contract.get("sources", ())
+            if isinstance(entry, dict)
+        }
+        != expected_tblite_sources
+        or execution_contract.get("legal_files")
+        != [
+            {
+                "path": "COPYING.LESSER",
+                "git_blob": "0a041280bd00a9d068f503b8ee7ce35214bd24a1",
+                "bytes": 7652,
+                "sha256": (
+                    "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+                ),
+            }
+        ]
+    ):
+        raise LicenseCheckError(
+            "GFN1-D3 manifest has incomplete tblite execution provenance"
+        )
     unit_conversion = gfn1_d3.get("unit_conversion", {})
     if not isinstance(unit_conversion, dict) or unit_conversion.get("legal_files") != [
         GFN1_D3_MCTC_LICENSE_RECORD
@@ -1706,6 +1752,40 @@ def _check_gfn1_d3_provenance(
 
 def _check_gfn1_fixture_provenance(root: Path) -> None:
     """Pin repository-only copied GFN1 scientific fixture provenance."""
+    expected_extractions = {
+        "gfn1-d3-dxtb-tblite": {
+            "consumer": "tests/gfn1_d3_test.cpp",
+            "bytes": 2011,
+            "sha256": (
+                "a6ce50fa142997e092c7e2d447e36e28d1db64523eef1a8593a48e7a3fd6d05c"
+            ),
+            "sources": [
+                "dxtb:test/test_singlepoint/mols/LiH/coord",
+                "dxtb:test/test_singlepoint/mols/SiH4/coord",
+                "dxtb:test/test_classical/test_dispersion/samples.py",
+            ],
+            "contract": (
+                "The exact marker-delimited C++ fixture block contains the reviewed "
+                "LiH/SiH4 geometries, D3 energies, and analytic gradients."
+            ),
+        },
+        "gfn1-halogen-tblite-dxtb": {
+            "consumer": "tests/gfn1_halogen_test.cpp",
+            "bytes": 5479,
+            "sha256": (
+                "43d1775f98946f246a5791f886cae1a3023a711307fab8a7ef64f5446ec88bcb"
+            ),
+            "sources": [
+                "tblite:test/unit/test_halogen.f90",
+                "dxtb:test/test_classical/test_halogen/samples.py",
+            ],
+            "contract": (
+                "The exact marker-delimited C++ fixture block contains the reviewed "
+                "halogen geometries, energies, dxtb/tblite force cross-check, and "
+                "derivative test contract."
+            ),
+        },
+    }
     expected = {
         "dxtb": {
             "repository": "https://github.com/grimme-lab/dxtb",
@@ -1856,6 +1936,40 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
         not in manifest.get("distribution", "")
     ):
         raise LicenseCheckError("GFN1 fixture manifest has unreviewed scope")
+    extractions = manifest.get("extracted_fixtures")
+    if (
+        not isinstance(extractions, list)
+        or not all(isinstance(item, dict) for item in extractions)
+        or {item.get("id") for item in extractions} != set(expected_extractions)
+        or len(extractions) != len(expected_extractions)
+    ):
+        raise LicenseCheckError(
+            "GFN1 fixture manifest has incomplete extracted fixtures"
+        )
+    for item in extractions:
+        fixture_id = item["id"]
+        expected_fixture = expected_extractions[fixture_id]
+        if any(item.get(key) != value for key, value in expected_fixture.items()):
+            raise LicenseCheckError(
+                "GFN1 fixture manifest has unreviewed extracted fixtures"
+            )
+        consumer = root / expected_fixture["consumer"]
+        try:
+            payload = consumer.read_bytes()
+            begin = f"// XTBLOOM_GFN1_FIXTURE_BEGIN {fixture_id}\n".encode()
+            end = f"// XTBLOOM_GFN1_FIXTURE_END {fixture_id}\n".encode()
+            if payload.count(begin) != 1 or payload.count(end) != 1:
+                raise ValueError
+            extracted = payload.split(begin, 1)[1].split(end, 1)[0]
+        except (OSError, ValueError) as exc:
+            raise LicenseCheckError(
+                "GFN1 extracted fixture markers are missing or ambiguous"
+            ) from exc
+        if (
+            len(extracted) != expected_fixture["bytes"]
+            or hashlib.sha256(extracted).hexdigest() != expected_fixture["sha256"]
+        ):
+            raise LicenseCheckError("GFN1 extracted fixture bytes differ")
     sources = manifest.get("sources")
     if (
         not isinstance(sources, list)
@@ -2294,6 +2408,15 @@ def _file_starts_with(path: Path, prefix: bytes) -> bool:
 def check_install(prefix: Path) -> None:
     """Validate the legal payload installed by CMake."""
     _require_files(prefix, INSTALL_FILES, "install tree")
+    installed_gfn1_d3 = json.loads(
+        (prefix / "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    installed_apache = (
+        prefix / "share/licenses/xtbloom/third-party/Apache-2.0.txt"
+    ).read_bytes()
+    _check_gfn1_d3_provenance(installed_gfn1_d3, installed_apache)
     bundled = _find_bundled_vendor_libraries(
         {
             path.relative_to(prefix).as_posix()
@@ -2519,6 +2642,26 @@ def _find_archive_name(names: set[str], suffix: str) -> str:
             f"archive must contain exactly one {suffix}; found {len(matches)}"
         )
     return matches[0]
+
+
+def _check_archived_gfn1_d3(path: Path, names: set[str], wheel: bool) -> None:
+    """Validate the exact D3 provenance retained in a distribution archive."""
+    manifest_suffix = (
+        "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json"
+        if wheel
+        else "data/parameters/gfn1_d3_manifest.json"
+    )
+    # The wheel's PEP 639 license payload is mandatory even if the installed
+    # CMake license tree is later relocated by a repair tool.
+    apache_suffix = "LICENSES/Apache-2.0.txt"
+    manifest_name = _find_archive_name(names, manifest_suffix)
+    apache_name = _find_archive_name(names, apache_suffix)
+    payloads = _read_archive_members(path, {manifest_name, apache_name})
+    try:
+        manifest = json.loads(payloads[manifest_name].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError("archived GFN1-D3 manifest is malformed") from exc
+    _check_gfn1_d3_provenance(manifest, payloads[apache_name])
 
 
 def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:
@@ -3117,6 +3260,7 @@ def check_archive(path: Path, source_root: Path | None = None) -> None:
         raise LicenseCheckError(
             f"{path} bundles a CUDA/MKL provider library: {bundled[0]}"
         )
+    _check_archived_gfn1_d3(path, names, wheel=path.suffix == ".whl")
     _check_archived_implib(path, names, wheel=path.suffix == ".whl")
     if path.suffix != ".whl":
         if source_root is None:

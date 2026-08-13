@@ -2,6 +2,31 @@
   "schema_version": 1,
   "scope": "repository-only GFN1 CPU scientific fixtures",
   "distribution": "Tracked Git repository source only. Tests and this manifest are excluded from native installs, PyPI sdists, and wheels.",
+  "extracted_fixtures": [
+    {
+      "id": "gfn1-d3-dxtb-tblite",
+      "consumer": "tests/gfn1_d3_test.cpp",
+      "bytes": 2011,
+      "sha256": "a6ce50fa142997e092c7e2d447e36e28d1db64523eef1a8593a48e7a3fd6d05c",
+      "sources": [
+        "dxtb:test/test_singlepoint/mols/LiH/coord",
+        "dxtb:test/test_singlepoint/mols/SiH4/coord",
+        "dxtb:test/test_classical/test_dispersion/samples.py"
+      ],
+      "contract": "The exact marker-delimited C++ fixture block contains the reviewed LiH/SiH4 geometries, D3 energies, and analytic gradients."
+    },
+    {
+      "id": "gfn1-halogen-tblite-dxtb",
+      "consumer": "tests/gfn1_halogen_test.cpp",
+      "bytes": 5479,
+      "sha256": "43d1775f98946f246a5791f886cae1a3023a711307fab8a7ef64f5446ec88bcb",
+      "sources": [
+        "tblite:test/unit/test_halogen.f90",
+        "dxtb:test/test_classical/test_halogen/samples.py"
+      ],
+      "contract": "The exact marker-delimited C++ fixture block contains the reviewed halogen geometries, energies, dxtb/tblite force cross-check, and derivative test contract."
+    }
+  ],
   "sources": [
     {
       "project": "dxtb",

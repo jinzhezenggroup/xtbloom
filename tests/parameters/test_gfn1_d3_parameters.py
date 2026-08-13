@@ -145,6 +145,29 @@ class Gfn1D3ParameterTests(unittest.TestCase):
                 ),
             },
         )
+        execution = self.manifest["execution_contract"]
+        self.assertEqual(execution["two_body_cutoff_bohr"], 50.0)
+        self.assertEqual(execution["smooth_cutoff_width_bohr"], 0.05)
+        self.assertEqual(
+            {
+                record["path"]: (record["git_blob"], record["sha256"])
+                for record in execution["sources"]
+            },
+            {
+                "src/tblite/disp/d3.f90": (
+                    "df1b9cfe8e45078c021c55359c758506efae7210",
+                    "b4a8d386fd30723cc7bebf7ced4f5a08c1ed4bae58ca753e4e2dcdaf92a4029c",
+                ),
+                "src/tblite/xtb/calculator.f90": (
+                    "31e1394455e0f1fc77f3dfc0dfd7cc14abd36e38",
+                    "40a44bfe99b0d6aa11d6d9de18ae1f12cfbd32e73eaf344c88492de46927818d",
+                ),
+                "src/tblite/xtb/gfn1.f90": (
+                    "dc96235fa5bd0ece28f9a7e3672716cfea3633b6",
+                    "0df0d3eca4b69efa445733a2fda269220cb203fb325acf0f6f06c21c55feb630",
+                ),
+            },
+        )
         output = (DATA_DIR / GENERATOR.HEADER_FILENAME).read_bytes()
         self.assertEqual(
             hashlib.sha256(output).hexdigest(),
@@ -184,16 +207,19 @@ class Gfn1D3ParameterTests(unittest.TestCase):
         """Recheck the pinned Git blobs when explicit local sources are supplied."""
         d3_source = os.environ.get("XTBLOOM_SIMPLE_DFTD3_SOURCE")
         mctc_source = os.environ.get("XTBLOOM_MCTC_SOURCE")
-        if not d3_source or not mctc_source:
+        tblite_source = os.environ.get("XTBLOOM_TBLITE_SOURCE")
+        if not d3_source or not mctc_source or not tblite_source:
             self.skipTest(
-                "set XTBLOOM_SIMPLE_DFTD3_SOURCE and XTBLOOM_MCTC_SOURCE "
-                "to audit upstream Git blobs"
+                "set XTBLOOM_SIMPLE_DFTD3_SOURCE, XTBLOOM_MCTC_SOURCE, and "
+                "XTBLOOM_TBLITE_SOURCE to audit upstream Git blobs"
             )
         refreshed = GENERATOR.build_artifacts(
             Path(d3_source),
             GENERATOR.UPSTREAM_REVISION,
             Path(mctc_source),
             GENERATOR.MCTC_REVISION,
+            Path(tblite_source),
+            GENERATOR.TBLITE_REVISION,
         )
         for filename, content in refreshed.items():
             self.assertEqual(content, (DATA_DIR / filename).read_bytes(), filename)

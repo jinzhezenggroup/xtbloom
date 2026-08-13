@@ -36,6 +36,11 @@ MCTC_REVISION = "aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5"
 MCTC_TREE = "c64c3f6936121d2445459b57f7904a94b276d0b5"
 MCTC_TAG = "v0.5.1"
 MCTC_LICENSE = "Apache-2.0"
+TBLITE_REPOSITORY = "https://github.com/tblite/tblite"
+TBLITE_REVISION = "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
+TBLITE_TREE = "2cfe9e53c6413bd022e36346d62ba110c1c42f57"
+TBLITE_TAG = "v0.7.0"
+TBLITE_LICENSE = "LGPL-3.0-or-later"
 HEADER_FILENAME = "gfn1_d3.hpp"
 JSON_FILENAME = "gfn1_d3.json"
 MANIFEST_FILENAME = "gfn1_d3_manifest.json"
@@ -58,12 +63,18 @@ MCTC_SOURCE_PATHS = (
     "src/mctc/io/convert.f90",
 )
 MCTC_LEGAL_PATHS = ("LICENSE",)
+TBLITE_CONTRACT_PATHS = (
+    "src/tblite/disp/d3.f90",
+    "src/tblite/xtb/calculator.f90",
+    "src/tblite/xtb/gfn1.f90",
+)
+TBLITE_LEGAL_PATHS = ("COPYING.LESSER",)
 
 # Bind every source, legal, conversion, and representation field retained by
 # offline regeneration.  Generated-output and generator hashes are refreshed
 # separately and therefore are intentionally excluded from this digest.
 PINNED_PROVENANCE_SHA256 = (
-    "958094427fc38b44675d125453fccbb4626399c500b6c3fdc5214c129f146146"
+    "9129cc27bdeafde0d6b4eb89197741a365eac6db233fc41da97367636506b65d"
 )
 
 
@@ -252,6 +263,35 @@ def _angstrom_to_bohr(mctc_sources: Mapping[str, bytes]) -> float:
             "mctc-lib aatoau no longer matches the reviewed binary64 value"
         )
     return value
+
+
+def _validate_tblite_execution_contract(sources: Mapping[str, bytes]) -> None:
+    """Bind tblite's GFN1 cutoff values and the switch-width forwarding chain."""
+    d3 = sources["src/tblite/disp/d3.f90"].decode("utf-8")
+    calculator = sources["src/tblite/xtb/calculator.f90"].decode("utf-8")
+    gfn1 = sources["src/tblite/xtb/gfn1.f90"].decode("utf-8")
+    required = (
+        (d3, r"disp2\s*=\s*50\.0_wp", "50-bohr two-body cutoff"),
+        (d3, r"width2\s*=\s*disp2_width", "two-body switch forwarding"),
+        (
+            calculator,
+            r"smooth_cutoff\s*=\s*0\.05_wp",
+            "0.05-bohr default switch width",
+        ),
+        (
+            calculator,
+            r"disp2_width\s*=\s*smooth_cutoff",
+            "calculator-to-D3 switch forwarding",
+        ),
+        (
+            gfn1,
+            r"smooth_cutoff\s*=\s*cfg%smooth_cutoff",
+            "GFN1 calculator switch forwarding",
+        ),
+    )
+    for source, pattern, label in required:
+        if re.search(pattern, source, re.IGNORECASE) is None:
+            raise D3DataError(f"tblite no longer supplies the reviewed {label}")
 
 
 def build_tables(
@@ -627,10 +667,15 @@ def build_artifacts(
     d3_revision_spec: str,
     mctc_source: Path,
     mctc_revision_spec: str,
+    tblite_source: Path,
+    tblite_revision_spec: str,
 ) -> dict[str, bytes]:
     """Build the header and manifest from exact committed upstream objects."""
     d3_revision = _git(d3_source, "rev-parse", f"{d3_revision_spec}^{{commit}}")
     mctc_revision = _git(mctc_source, "rev-parse", f"{mctc_revision_spec}^{{commit}}")
+    tblite_revision = _git(
+        tblite_source, "rev-parse", f"{tblite_revision_spec}^{{commit}}"
+    )
     if d3_revision != UPSTREAM_REVISION:
         raise D3DataError(
             f"simple-dftd3 revision {d3_revision} is not the reviewed "
@@ -640,9 +685,14 @@ def build_artifacts(
         raise D3DataError(
             f"mctc-lib revision {mctc_revision} is not the reviewed {MCTC_REVISION}"
         )
+    if tblite_revision != TBLITE_REVISION:
+        raise D3DataError(
+            f"tblite revision {tblite_revision} is not the reviewed {TBLITE_REVISION}"
+        )
     d3_tree = _git(d3_source, "rev-parse", f"{d3_revision}^{{tree}}")
     mctc_tree = _git(mctc_source, "rev-parse", f"{mctc_revision}^{{tree}}")
-    if d3_tree != UPSTREAM_TREE or mctc_tree != MCTC_TREE:
+    tblite_tree = _git(tblite_source, "rev-parse", f"{tblite_revision}^{{tree}}")
+    if d3_tree != UPSTREAM_TREE or mctc_tree != MCTC_TREE or tblite_tree != TBLITE_TREE:
         raise D3DataError("one reviewed upstream tree no longer matches its pin")
 
     d3_sources, d3_records = _source_records(
@@ -660,6 +710,13 @@ def build_artifacts(
     _mctc_legal_sources, mctc_legal_records = _source_records(
         mctc_source, mctc_revision, MCTC_LEGAL_PATHS
     )
+    tblite_sources, tblite_records = _source_records(
+        tblite_source, tblite_revision, TBLITE_CONTRACT_PATHS
+    )
+    _tblite_legal_sources, tblite_legal_records = _source_records(
+        tblite_source, tblite_revision, TBLITE_LEGAL_PATHS
+    )
+    _validate_tblite_execution_contract(tblite_sources)
     tables = validate_tables(build_tables(d3_sources, mctc_sources))
     d3_digest = _source_digest(d3_sources)
     mctc_digest = _source_digest(mctc_sources)
@@ -696,6 +753,21 @@ def build_artifacts(
             "legal_files": mctc_legal_records,
             "angstrom_to_bohr": tables["angstrom_to_bohr"],
             "contract": "Evaluate mctc-lib aatoau from CODATA 2018 constants.",
+        },
+        "execution_contract": {
+            "repository": TBLITE_REPOSITORY,
+            "tag": TBLITE_TAG,
+            "revision": tblite_revision,
+            "tree": tblite_tree,
+            "license": TBLITE_LICENSE,
+            "sources": tblite_records,
+            "legal_files": tblite_legal_records,
+            "two_body_cutoff_bohr": 50.0,
+            "smooth_cutoff_width_bohr": 0.05,
+            "contract": (
+                "tblite GFN1 forwards the calculator smooth cutoff to the D3 "
+                "two-body real-space cutoff."
+            ),
         },
         "representation": {
             "element_count": len(tables["elements"]),
@@ -734,6 +806,7 @@ def _provenance_fields(manifest: Mapping[str, Any]) -> dict[str, Any]:
         "generator",
         "source",
         "unit_conversion",
+        "execution_contract",
         "representation",
         "outputs",
     }
@@ -746,6 +819,7 @@ def _provenance_fields(manifest: Mapping[str, Any]) -> dict[str, Any]:
             "method",
             "source",
             "unit_conversion",
+            "execution_contract",
             "representation",
         )
     }
@@ -831,6 +905,8 @@ def _arguments(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--simple-dftd3-revision", default=UPSTREAM_REVISION)
     parser.add_argument("--mctc-source", type=Path)
     parser.add_argument("--mctc-revision", default=MCTC_REVISION)
+    parser.add_argument("--tblite-source", type=Path)
+    parser.add_argument("--tblite-revision", default=TBLITE_REVISION)
     parser.add_argument("--output-dir", type=Path, default=Path("data/parameters"))
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--refresh", action="store_true")
@@ -845,20 +921,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.refresh:
             if arguments.check:
                 raise D3DataError("--refresh and --check are mutually exclusive")
-            if arguments.simple_dftd3_source is None or arguments.mctc_source is None:
+            if (
+                arguments.simple_dftd3_source is None
+                or arguments.mctc_source is None
+                or arguments.tblite_source is None
+            ):
                 raise D3DataError(
-                    "--refresh requires --simple-dftd3-source and --mctc-source"
+                    "--refresh requires --simple-dftd3-source, --mctc-source, "
+                    "and --tblite-source"
                 )
             artifacts = build_artifacts(
                 arguments.simple_dftd3_source.resolve(),
                 arguments.simple_dftd3_revision,
                 arguments.mctc_source.resolve(),
                 arguments.mctc_revision,
+                arguments.tblite_source.resolve(),
+                arguments.tblite_revision,
             )
         else:
             if (
                 arguments.simple_dftd3_source is not None
                 or arguments.mctc_source is not None
+                or arguments.tblite_source is not None
             ):
                 raise D3DataError("source checkouts are accepted only with --refresh")
             artifacts = build_offline_artifacts(arguments.output_dir)

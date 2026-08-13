@@ -86,6 +86,7 @@ bool near(double actual, double expected, double tolerance) {
   return std::abs(actual - expected) <= tolerance;
 }
 
+// XTBLOOM_GFN1_FIXTURE_BEGIN gfn1-halogen-tblite-dxtb
 int test_tblite_reference_energies_and_gradient() {
   /*
    * Exact nonperiodic fixtures from tblite test/unit/test_halogen.f90 at
@@ -202,6 +203,7 @@ int test_tblite_reference_energies_and_gradient() {
   CHECK(near(energy[0], 1.1857937381795408e-2, 8.0e-17));
   return 0;
 }
+// XTBLOOM_GFN1_FIXTURE_END gfn1-halogen-tblite-dxtb
 
 int test_ragged_topology_cutoff_and_ties() {
   /* Empty and no-halogen peers remain untouched beside one active system. */

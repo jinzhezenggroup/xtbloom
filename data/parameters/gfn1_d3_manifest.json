@@ -1,7 +1,45 @@
 {
+  "execution_contract": {
+    "contract": "tblite GFN1 forwards the calculator smooth cutoff to the D3 two-body real-space cutoff.",
+    "legal_files": [
+      {
+        "bytes": 7652,
+        "git_blob": "0a041280bd00a9d068f503b8ee7ce35214bd24a1",
+        "path": "COPYING.LESSER",
+        "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+      }
+    ],
+    "license": "LGPL-3.0-or-later",
+    "repository": "https://github.com/tblite/tblite",
+    "revision": "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
+    "smooth_cutoff_width_bohr": 0.05,
+    "sources": [
+      {
+        "bytes": 5482,
+        "git_blob": "df1b9cfe8e45078c021c55359c758506efae7210",
+        "path": "src/tblite/disp/d3.f90",
+        "sha256": "b4a8d386fd30723cc7bebf7ced4f5a08c1ed4bae58ca753e4e2dcdaf92a4029c"
+      },
+      {
+        "bytes": 25040,
+        "git_blob": "31e1394455e0f1fc77f3dfc0dfd7cc14abd36e38",
+        "path": "src/tblite/xtb/calculator.f90",
+        "sha256": "40a44bfe99b0d6aa11d6d9de18ae1f12cfbd32e73eaf344c88492de46927818d"
+      },
+      {
+        "bytes": 53424,
+        "git_blob": "dc96235fa5bd0ece28f9a7e3672716cfea3633b6",
+        "path": "src/tblite/xtb/gfn1.f90",
+        "sha256": "0df0d3eca4b69efa445733a2fda269220cb203fb325acf0f6f06c21c55feb630"
+      }
+    ],
+    "tag": "v0.7.0",
+    "tree": "2cfe9e53c6413bd022e36346d62ba110c1c42f57",
+    "two_body_cutoff_bohr": 50.0
+  },
   "generator": {
     "path": "tools/parameters/generate_gfn1_d3.py",
-    "sha256": "81b520d111ff38c4f7171391014a646121fd364e531ff3f4586680147dc442bf"
+    "sha256": "f29dae936f19f55bbb1327a421ead6a2aedc80b400cce7950a303243f9f0aa6a"
   },
   "method": "gfn1-d3",
   "outputs": {

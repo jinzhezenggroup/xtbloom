@@ -305,6 +305,10 @@ class LicenseArchiveTests(unittest.TestCase):
             for name in sorted(names):
                 if name in overrides:
                     payload = overrides[name]
+                elif name.endswith("/provenance/gfn1_d3_manifest.json"):
+                    payload = (
+                        REPOSITORY / "data/parameters/gfn1_d3_manifest.json"
+                    ).read_bytes()
                 elif name.endswith("/provenance/implib_manifest.json"):
                     payload = (REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH).read_bytes()
                 elif name.endswith("/provenance/scipy_openblas32_manifest.json"):
@@ -339,6 +343,10 @@ class LicenseArchiveTests(unittest.TestCase):
                         if Path(name).name == Path(relative).name
                     )
                     payload = (REPOSITORY / relative).read_bytes()
+                elif name.endswith("/third-party/Apache-2.0.txt") or name.endswith(
+                    "/LICENSES/Apache-2.0.txt"
+                ):
+                    payload = (REPOSITORY / "LICENSES/Apache-2.0.txt").read_bytes()
                 else:
                     payload = b"test\n"
                 archive.writestr(name, payload)
@@ -411,6 +419,16 @@ class LicenseArchiveTests(unittest.TestCase):
                         CHECKER.LicenseCheckError, filename.split(".")[0]
                     ):
                         CHECKER.check_archive(wheel)
+
+    def test_wheel_rejects_corrupt_gfn1_d3_provenance(self) -> None:
+        """Validate archived D3 provenance bytes, not only its filename."""
+        names = self._valid_wheel_names()
+        manifest = "xtbloom/share/licenses/xtbloom/provenance/gfn1_d3_manifest.json"
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+            self._write_wheel(wheel, names, {manifest: b"{}\n"})
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "GFN1-D3"):
+                CHECKER.check_archive(wheel)
 
     def test_wheel_must_retain_implib_provenance_manifest(self) -> None:
         """Require the vendored implib provenance manifest in wheels."""
@@ -720,6 +738,22 @@ class PyodideOpenBlasProvenanceTests(unittest.TestCase):
 class InstallPayloadTests(unittest.TestCase):
     """Keep wheel-only provider binaries out of native CMake installs."""
 
+    def _write_required_install_files(self, root: Path) -> None:
+        """Create a minimal install tree with authentic reviewed D3 provenance."""
+        for relative in CHECKER.INSTALL_FILES:
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if relative.endswith("provenance/gfn1_d3_manifest.json"):
+                destination.write_bytes(
+                    (REPOSITORY / "data/parameters/gfn1_d3_manifest.json").read_bytes()
+                )
+            elif relative.endswith("third-party/Apache-2.0.txt"):
+                destination.write_bytes(
+                    (REPOSITORY / "LICENSES/Apache-2.0.txt").read_bytes()
+                )
+            else:
+                destination.write_bytes(b"test\n")
+
     def test_install_rejects_unrenamed_desktop_openblas_cohort(self) -> None:
         """Recognize upstream macOS/Windows provider and support filenames."""
         candidates = (
@@ -738,10 +772,7 @@ class InstallPayloadTests(unittest.TestCase):
                 ) as directory,
             ):
                 root = Path(directory)
-                for relative in CHECKER.INSTALL_FILES:
-                    destination = root / relative
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(b"test\n")
+                self._write_required_install_files(root)
                 bundled = root / candidate
                 bundled.parent.mkdir(parents=True, exist_ok=True)
                 bundled.write_bytes(b"native provider")
@@ -756,10 +787,7 @@ class InstallPayloadTests(unittest.TestCase):
             prefix="xtbloom-install-license-test-"
         ) as directory:
             root = Path(directory)
-            for relative in CHECKER.INSTALL_FILES:
-                destination = root / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(b"test\n")
+            self._write_required_install_files(root)
             renamed = root / "lib" / "libinnocent_math.so"
             renamed.parent.mkdir(parents=True, exist_ok=True)
             renamed.write_bytes(CHECKER.WASM_V1_MAGIC + b"renamed provider")
@@ -782,10 +810,7 @@ class InstallPayloadTests(unittest.TestCase):
                 ) as directory,
             ):
                 root = Path(directory)
-                for relative in CHECKER.INSTALL_FILES:
-                    destination = root / relative
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(b"test\n")
+                self._write_required_install_files(root)
                 bundled = root / candidate
                 bundled.parent.mkdir(parents=True, exist_ok=True)
                 bundled.write_bytes(b"Web-only Eigen payload")
@@ -793,6 +818,18 @@ class InstallPayloadTests(unittest.TestCase):
                     CHECKER.LicenseCheckError, "Web-only Eigen"
                 ):
                     CHECKER.check_install(root)
+
+    def test_install_rejects_corrupt_gfn1_d3_provenance(self) -> None:
+        """Validate the installed D3 provenance manifest contents."""
+        with tempfile.TemporaryDirectory(
+            prefix="xtbloom-install-license-test-"
+        ) as directory:
+            root = Path(directory)
+            self._write_required_install_files(root)
+            manifest = root / "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json"
+            manifest.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "GFN1-D3"):
+                CHECKER.check_install(root)
 
 
 class WebSiteLicenseTests(unittest.TestCase):
@@ -1286,6 +1323,13 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
             CHECKER._check_gfn1_d3_provenance(manifest, self.apache)
 
+    def test_gfn1_d3_execution_contract_mutation_is_rejected(self) -> None:
+        """Reject changed tblite cutoff or switch-width provenance."""
+        manifest = copy.deepcopy(self.gfn1_d3)
+        manifest["execution_contract"]["smooth_cutoff_width_bohr"] = 0.0
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_d3_provenance(manifest, self.apache)
+
     def test_gfn1_d3_mctc_license_text_mutation_is_rejected(self) -> None:
         """Reject retained Apache license bytes outside the reviewed record."""
         with self.assertRaisesRegex(
@@ -1313,6 +1357,35 @@ class Gfn1FixtureProvenanceTests(unittest.TestCase):
             manifest["sources"][0]["files"][0]["sha256"] = "0" * 64
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source files"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_extracted_fixture_literal_mutation_is_rejected(self) -> None:
+        """Bind copied numerical literals, not only their upstream source files."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            consumer = root / "tests/gfn1_d3_test.cpp"
+            consumer.write_text(
+                consumer.read_text(encoding="utf-8").replace(
+                    "-8.2108039012179698e-5", "-8.2108039012179697e-5", 1
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "fixture bytes"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_extracted_fixture_digest_mutation_is_rejected(self) -> None:
+        """Keep marker-delimited extraction digests immutable."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["extracted_fixtures"][0]["sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "unreviewed extracted"
+            ):
                 CHECKER._check_gfn1_fixture_provenance(root)
 
     def test_fixture_required_source_file_is_rejected_when_missing(self) -> None:
