@@ -935,6 +935,25 @@ if(XTBLOOM_WHEEL_OPENBLAS)
   endif()
 endif()
 
+# GFN1 remains an internal, incomplete model until its full CPU execution
+# chain and public evidence land. This object target exposes only reviewed
+# model-owned terms to focused native tests and future GFN1 composition work.
+add_library(xtbloom_gfn1_cpu OBJECT
+  src/model/gfn1/coordination.cpp
+  src/model/gfn1/repulsion.cpp
+)
+target_compile_features(xtbloom_gfn1_cpu PUBLIC cxx_std_17)
+target_include_directories(xtbloom_gfn1_cpu PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(xtbloom_gfn1_cpu PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+
 add_library(xtbloom
   src/api.cpp
   src/runtime/backend.cpp
@@ -3212,6 +3231,16 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_coordination_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_coordination_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.coordination COMMAND xtbloom_coordination_test)
+
+  add_executable(xtbloom_gfn1_coordination_test tests/gfn1_coordination_test.cpp)
+  target_link_libraries(xtbloom_gfn1_coordination_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_coordination_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.coordination COMMAND xtbloom_gfn1_coordination_test)
+
+  add_executable(xtbloom_gfn1_repulsion_test tests/gfn1_repulsion_test.cpp)
+  target_link_libraries(xtbloom_gfn1_repulsion_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_repulsion_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.repulsion COMMAND xtbloom_gfn1_repulsion_test)
 
   add_executable(xtbloom_d4_test tests/d4_test.cpp)
   target_link_libraries(xtbloom_d4_test PRIVATE xtbloom_gfn2_cpu)
