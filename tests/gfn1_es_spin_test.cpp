@@ -1,7 +1,3 @@
-#include "model/gfn1/es2.hpp"
-#include "model/gfn1/es3.hpp"
-#include "model/gfn1/spin.hpp"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -14,6 +10,9 @@
 #include "data/parameters/gfn1.hpp"
 #include "data/parameters/tblite_spin.hpp"
 #include "model/gfn1/basis.hpp"
+#include "model/gfn1/es2.hpp"
+#include "model/gfn1/es3.hpp"
+#include "model/gfn1/spin.hpp"
 
 #define CHECK(condition) \
   do {                   \
@@ -33,10 +32,10 @@ bool near(double actual, double expected, double tolerance) {
 bool make_basis(const std::vector<std::int64_t>& atom_offsets,
                 const std::vector<std::int32_t>& atomic_numbers, BasisPlan& basis,
                 std::string& error) {
-  return xtbloom::detail::gfn1::make_basis_plan(
-             static_cast<std::int64_t>(atom_offsets.size() - 1u),
-             static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
-             atomic_numbers.data(), basis, error) == XTBLOOM_STATUS_SUCCESS;
+  return xtbloom::detail::gfn1::make_basis_plan(static_cast<std::int64_t>(atom_offsets.size() - 1u),
+                                                static_cast<std::int64_t>(atomic_numbers.size()),
+                                                atom_offsets.data(), atomic_numbers.data(), basis,
+                                                error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 struct ES2Evaluation {
@@ -52,12 +51,11 @@ struct ES2Evaluation {
 };
 
 bool make_es2(const std::vector<std::int64_t>& offsets,
-              const std::vector<std::int32_t>& atomic_numbers,
-              const std::vector<double>& positions, std::uint64_t generation,
-              ES2Evaluation& evaluation, std::string& error) {
+              const std::vector<std::int32_t>& atomic_numbers, const std::vector<double>& positions,
+              std::uint64_t generation, ES2Evaluation& evaluation, std::string& error) {
   if (!make_basis(offsets, atomic_numbers, evaluation.basis, error) ||
-      xtbloom::detail::gfn1::make_es2_plan(evaluation.basis, atomic_numbers.data(),
-                                           evaluation.plan, error) != XTBLOOM_STATUS_SUCCESS) {
+      xtbloom::detail::gfn1::make_es2_plan(evaluation.basis, atomic_numbers.data(), evaluation.plan,
+                                           error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
   evaluation.matrix.resize(static_cast<std::size_t>(evaluation.plan.total_matrix_elements()));
@@ -80,8 +78,7 @@ bool make_es2(const std::vector<std::int64_t>& offsets,
 double es2_energy(const xtbloom::detail::gfn1::ES2Plan& plan,
                   const xtbloom::detail::gfn1::ES2GeometryCache& cache,
                   const std::vector<double>& charges,
-                  const xtbloom::detail::gfn1::ES2Workspace& workspace,
-                  std::string& error) {
+                  const xtbloom::detail::gfn1::ES2Workspace& workspace, std::string& error) {
   std::vector<double> energies(static_cast<std::size_t>(plan.batch_size()), 0.0);
   if (xtbloom::detail::gfn1::add_es2_energy_cpu(plan, cache, charges.data(), energies.data(),
                                                 workspace, error) != XTBLOOM_STATUS_SUCCESS) {
@@ -101,8 +98,7 @@ int test_es2_harmonic_oracle_and_potential_derivative() {
   ES2Evaluation evaluation;
   std::string error;
   CHECK(make_es2(offsets, numbers, positions, 7u, evaluation, error));
-  CHECK(evaluation.plan.hardness_average() ==
-        xtbloom::detail::gfn2::ES2HardnessAverage::kHarmonic);
+  CHECK(evaluation.plan.hardness_average() == xtbloom::detail::gfn2::ES2HardnessAverage::kHarmonic);
 
   /*
    * Independent literal expansion of tblite effective.f90 at pinned revision
@@ -114,8 +110,8 @@ int test_es2_harmonic_oracle_and_potential_derivative() {
     const auto& element = xtbloom::parameters::gfn1::kElements[number - 1];
     for (std::size_t local = 0; local < element.shell_count; ++local) {
       expected_hardness.push_back(
-          element.gam * xtbloom::parameters::gfn1::kShells[element.shell_offset + local]
-                            .shell_hubbard_scale);
+          element.gam *
+          xtbloom::parameters::gfn1::kShells[element.shell_offset + local].shell_hubbard_scale);
     }
   }
   CHECK(evaluation.plan.shell_hardness() == expected_hardness);
@@ -143,8 +139,7 @@ int test_es2_harmonic_oracle_and_potential_derivative() {
                  2.0e-15));
     }
   }
-  CHECK(evaluation.matrix[1] !=
-        0.5 * (expected_hardness[0] + expected_hardness[1]));
+  CHECK(evaluation.matrix[1] != 0.5 * (expected_hardness[0] + expected_hardness[1]));
 
   std::vector<double> charges{0.32, -0.51, 0.17, -0.08, 0.24, -0.14};
   std::vector<double> potential(charges.size());
@@ -154,11 +149,11 @@ int test_es2_harmonic_oracle_and_potential_derivative() {
   for (std::size_t shell = 0; shell < charges.size(); ++shell) {
     constexpr double step = 1.0e-6;
     charges[shell] += step;
-    const double right = es2_energy(evaluation.plan, evaluation.cache, charges,
-                                    evaluation.workspace, error);
+    const double right =
+        es2_energy(evaluation.plan, evaluation.cache, charges, evaluation.workspace, error);
     charges[shell] -= 2.0 * step;
-    const double left = es2_energy(evaluation.plan, evaluation.cache, charges,
-                                   evaluation.workspace, error);
+    const double left =
+        es2_energy(evaluation.plan, evaluation.cache, charges, evaluation.workspace, error);
     charges[shell] += step;
     CHECK(near((right - left) / (2.0 * step), potential[shell], 3.0e-11));
   }
@@ -168,9 +163,8 @@ int test_es2_harmonic_oracle_and_potential_derivative() {
 int test_es2_coordinate_gradient_multistep_and_ragged_failure() {
   const std::vector<std::int64_t> offsets{0, 2, 5};
   const std::vector<std::int32_t> numbers{1, 8, 6, 1, 7};
-  std::vector<double> positions{0.0, 0.0, 0.0, 1.4, -0.3, 0.7,
-                                -1.1, 0.2, 0.4, 2.0, 0.5, -0.8,
-                                0.6, -1.5, 1.1};
+  std::vector<double> positions{0.0, 0.0, 0.0, 1.4,  -0.3, 0.7,  -1.1, 0.2,
+                                0.4, 2.0, 0.5, -0.8, 0.6,  -1.5, 1.1};
   ES2Evaluation evaluation;
   std::string error;
   CHECK(make_es2(offsets, numbers, positions, 19u, evaluation, error));
@@ -184,8 +178,8 @@ int test_es2_coordinate_gradient_multistep_and_ragged_failure() {
             gradient.data(), evaluation.workspace, error) == XTBLOOM_STATUS_SUCCESS);
 
   for (double step : {2.0e-4, 7.0e-5, 2.0e-5}) {
-    for (std::size_t coordinate : {std::size_t{0}, std::size_t{4}, std::size_t{8},
-                                   std::size_t{13}}) {
+    for (std::size_t coordinate :
+         {std::size_t{0}, std::size_t{4}, std::size_t{8}, std::size_t{13}}) {
       positions[coordinate] += step;
       ES2Evaluation right;
       CHECK(make_es2(offsets, numbers, positions, 31u, right, error));
@@ -210,14 +204,14 @@ int test_es2_coordinate_gradient_multistep_and_ragged_failure() {
   const double sentinel = 4.25;
   double energy = sentinel;
   charges[0] = std::numeric_limits<double>::quiet_NaN();
-  CHECK(xtbloom::detail::gfn1::add_es2_energy_system_cpu(
-            evaluation.plan, evaluation.cache, 1, charges.data(), energy,
-            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, 1,
+                                                         charges.data(), energy,
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(energy != sentinel); /* A poisoned peer must not affect system 1. */
   const double saved = energy;
-  CHECK(xtbloom::detail::gfn1::add_es2_energy_system_cpu(
-            evaluation.plan, evaluation.cache, 0, charges.data(), energy,
-            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(xtbloom::detail::gfn1::add_es2_energy_system_cpu(evaluation.plan, evaluation.cache, 0,
+                                                         charges.data(), energy,
+                                                         error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(energy == saved);
   return 0;
 }
@@ -229,8 +223,8 @@ int test_es3_atomwise_oracle_derivative_and_failures() {
   std::string error;
   CHECK(make_basis(offsets, numbers, basis, error));
   xtbloom::detail::gfn1::ES3Plan plan;
-  CHECK(xtbloom::detail::gfn1::make_es3_plan(basis, numbers.data(), plan,
-                                             error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::make_es3_plan(basis, numbers.data(), plan, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   const auto view = xtbloom::detail::gfn1::make_es3_view(plan);
   CHECK(plan.atom_offsets == offsets);
   for (std::size_t atom = 0; atom < numbers.size(); ++atom) {
@@ -239,11 +233,11 @@ int test_es3_atomwise_oracle_derivative_and_failures() {
   }
   std::vector<double> charges{0.31, -0.27, 0.42, -0.19, 0.08};
   std::vector<double> potentials(charges.size(), 91.0);
-  CHECK(xtbloom::detail::gfn1::evaluate_es3_potential_cpu(
-            view, charges.data(), potentials.data(), error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::evaluate_es3_potential_cpu(view, charges.data(), potentials.data(),
+                                                          error) == XTBLOOM_STATUS_SUCCESS);
   std::vector<double> energies{0.1, -0.2, 0.3};
-  CHECK(xtbloom::detail::gfn1::add_es3_energy_cpu(view, charges.data(), energies.data(),
-                                                  error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::add_es3_energy_cpu(view, charges.data(), energies.data(), error) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(energies[1] == -0.2); /* Empty ragged member. */
   for (std::size_t atom = 0; atom < charges.size(); ++atom) {
     CHECK(potentials[atom] == plan.atom_gamma3[atom] * charges[atom] * charges[atom]);
@@ -251,12 +245,12 @@ int test_es3_atomwise_oracle_derivative_and_failures() {
     const std::int64_t system = atom < 2u ? 0 : 2;
     charges[atom] += step;
     double right = 0.0;
-    CHECK(xtbloom::detail::gfn1::add_es3_energy_system_cpu(
-              view, system, charges.data(), right, error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn1::add_es3_energy_system_cpu(view, system, charges.data(), right,
+                                                           error) == XTBLOOM_STATUS_SUCCESS);
     charges[atom] -= 2.0 * step;
     double left = 0.0;
-    CHECK(xtbloom::detail::gfn1::add_es3_energy_system_cpu(
-              view, system, charges.data(), left, error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn1::add_es3_energy_system_cpu(view, system, charges.data(), left,
+                                                           error) == XTBLOOM_STATUS_SUCCESS);
     charges[atom] += step;
     CHECK(near((right - left) / (2.0 * step), potentials[atom], 2.0e-11));
   }
@@ -267,8 +261,8 @@ int test_es3_atomwise_oracle_derivative_and_failures() {
             view, 2, charges.data(), target.data(), error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(target[0] == -7.0 && target[1] == -7.0);
   double accumulated = 4.0;
-  CHECK(xtbloom::detail::gfn1::add_es3_energy_system_cpu(
-            view, 0, charges.data(), accumulated, error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(xtbloom::detail::gfn1::add_es3_energy_system_cpu(view, 0, charges.data(), accumulated,
+                                                         error) == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(accumulated == 4.0);
 
   auto bad = view;
@@ -288,11 +282,11 @@ int test_spin_repeated_hydrogen_and_derivative() {
   CHECK(make_basis(offsets, numbers, basis, error));
   const std::array<std::int32_t, 3> channels{{1, 2, 2}};
   xtbloom::detail::gfn1::SpinPopulationLayout layout;
-  CHECK(xtbloom::detail::gfn1::make_spin_population_layout(
-            basis, channels.data(), layout, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::make_spin_population_layout(basis, channels.data(), layout, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   xtbloom::detail::gfn1::SpinPolarizationPlan plan;
-  CHECK(xtbloom::detail::gfn1::make_spin_polarization_plan(
-            basis, numbers.data(), layout, plan, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::make_spin_polarization_plan(basis, numbers.data(), layout, plan,
+                                                           error) == XTBLOOM_STATUS_SUCCESS);
   const auto view = xtbloom::detail::gfn1::make_spin_polarization_view(plan);
 
   CHECK(basis.atom_shell_offsets[1] - basis.atom_shell_offsets[0] == 2);
@@ -318,17 +312,17 @@ int test_spin_repeated_hydrogen_and_derivative() {
   }
   std::vector<double> energies(static_cast<std::size_t>(view.batch_size), 91.0);
   std::vector<double> potential(populations.size(), 91.0);
-  CHECK(xtbloom::detail::gfn1::evaluate_spin_polarization_cpu(
-            view, populations.data(), energies.data(), potential.data(),
-            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::evaluate_spin_polarization_cpu(view, populations.data(),
+                                                              energies.data(), potential.data(),
+                                                              error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(energies[0] == 0.0);
   for (std::int64_t index = layout.system_offsets[0]; index < layout.system_offsets[1]; ++index) {
     CHECK(potential[static_cast<std::size_t>(index)] == 0.0);
   }
-  CHECK(near(potential[static_cast<std::size_t>(second_magnetization)],
-             wss * (0.37 - 0.21), 2.0e-17));
-  CHECK(near(potential[static_cast<std::size_t>(second_magnetization + 1)],
-             wss * (0.37 - 0.21), 2.0e-17));
+  CHECK(near(potential[static_cast<std::size_t>(second_magnetization)], wss * (0.37 - 0.21),
+             2.0e-17));
+  CHECK(near(potential[static_cast<std::size_t>(second_magnetization + 1)], wss * (0.37 - 0.21),
+             2.0e-17));
 
   for (std::int64_t system = 1; system < view.batch_size; ++system) {
     const std::int64_t shell_begin = view.batch_shell_offsets[system];
@@ -361,16 +355,17 @@ int test_spin_peer_local_failure_and_descriptor_validation() {
   CHECK(make_basis(offsets, numbers, basis, error));
   const std::array<std::int32_t, 2> channels{{2, 2}};
   xtbloom::detail::gfn1::SpinPopulationLayout layout;
-  CHECK(xtbloom::detail::gfn1::make_spin_population_layout(
-            basis, channels.data(), layout, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::make_spin_population_layout(basis, channels.data(), layout, error) ==
+        XTBLOOM_STATUS_SUCCESS);
   xtbloom::detail::gfn1::SpinPolarizationPlan plan;
-  CHECK(xtbloom::detail::gfn1::make_spin_polarization_plan(
-            basis, numbers.data(), layout, plan, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::gfn1::make_spin_polarization_plan(basis, numbers.data(), layout, plan,
+                                                           error) == XTBLOOM_STATUS_SUCCESS);
   auto view = xtbloom::detail::gfn1::make_spin_polarization_view(plan);
   std::vector<double> populations(static_cast<std::size_t>(layout.element_count), 0.0);
   populations[static_cast<std::size_t>(layout.system_offsets[0] + basis.batch_shell_offsets[1])] =
       std::numeric_limits<double>::quiet_NaN();
-  const std::int64_t system_one_shells = basis.batch_shell_offsets[2] - basis.batch_shell_offsets[1];
+  const std::int64_t system_one_shells =
+      basis.batch_shell_offsets[2] - basis.batch_shell_offsets[1];
   const std::int64_t system_one_magnetization = layout.system_offsets[1] + system_one_shells;
   for (std::int64_t shell = 0; shell < system_one_shells; ++shell) {
     populations[static_cast<std::size_t>(system_one_magnetization + shell)] = 0.2 - 0.1 * shell;
@@ -378,8 +373,8 @@ int test_spin_peer_local_failure_and_descriptor_validation() {
   std::vector<double> potentials(populations.size(), -3.0);
   double energy = 0.0;
   CHECK(xtbloom::detail::gfn1::evaluate_spin_polarization_system_cpu(
-            view, 1, populations.data(), energy, potentials.data(),
-            error) == XTBLOOM_STATUS_SUCCESS);
+            view, 1, populations.data(), energy, potentials.data(), error) ==
+        XTBLOOM_STATUS_SUCCESS);
   CHECK(std::isfinite(energy));
   const double saved = 7.0;
   energy = saved;
@@ -391,8 +386,8 @@ int test_spin_peer_local_failure_and_descriptor_validation() {
   const std::vector<double> sentinel = potentials;
   std::vector<double> energies(2, 4.0);
   CHECK(xtbloom::detail::gfn1::evaluate_spin_polarization_cpu(
-            view, populations.data(), energies.data(), potentials.data(),
-            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+            view, populations.data(), energies.data(), potentials.data(), error) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(potentials == sentinel && energies == std::vector<double>({4.0, 4.0}));
   return 0;
 }

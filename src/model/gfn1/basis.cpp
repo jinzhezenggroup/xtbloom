@@ -265,4 +265,3 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
 }
 
 }  // namespace xtbloom::detail::gfn1
-

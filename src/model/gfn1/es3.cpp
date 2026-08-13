@@ -54,7 +54,8 @@ bool ranges_overlap(const void* first, std::size_t first_bytes, const void* seco
 
 xtbloom_status_t validate_view(ES3View view, std::string& error) {
   if (view.batch_size <= 0 || view.total_atoms <= 0 || !representable(view.batch_size) ||
-      !representable(view.total_atoms) || view.batch_size == std::numeric_limits<std::int64_t>::max() ||
+      !representable(view.total_atoms) ||
+      view.batch_size == std::numeric_limits<std::int64_t>::max() ||
       view.atom_offset_count != view.batch_size + 1 || view.atom_gamma3_count != view.total_atoms ||
       view.atom_offsets == nullptr || view.atom_gamma3 == nullptr) {
     error = "GFN1 ES3 view is incomplete or has unrepresentable dimensions";
@@ -65,7 +66,8 @@ xtbloom_status_t validate_view(ES3View view, std::string& error) {
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   for (std::int64_t system = 0; system < view.batch_size; ++system) {
-    if (view.atom_offsets[system] < 0 || view.atom_offsets[system] > view.atom_offsets[system + 1] ||
+    if (view.atom_offsets[system] < 0 ||
+        view.atom_offsets[system] > view.atom_offsets[system + 1] ||
         view.atom_offsets[system + 1] > view.total_atoms) {
       error = "GFN1 ES3 atom offsets are not a valid ragged partition";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -120,8 +122,8 @@ bool system_energy(ES3View view, std::int64_t atom_begin, std::int64_t atom_end,
 xtbloom_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
                                ES3Plan& plan, std::string& error) {
   if (basis.batch_size <= 0 || basis.total_atoms <= 0 || basis.total_shells <= 0 ||
-      atomic_numbers == nullptr ||
-      !representable(basis.batch_size) || !representable(basis.total_atoms) ||
+      atomic_numbers == nullptr || !representable(basis.batch_size) ||
+      !representable(basis.total_atoms) ||
       basis.atom_offsets.size() != static_cast<std::size_t>(basis.batch_size) + 1u ||
       basis.atom_shell_offsets.size() != static_cast<std::size_t>(basis.total_atoms) + 1u ||
       basis.shell_to_atom.size() != static_cast<std::size_t>(basis.total_shells) ||
@@ -157,8 +159,7 @@ xtbloom_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomi
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       const std::int64_t shell_begin = basis.atom_shell_offsets[static_cast<std::size_t>(atom)];
-      const std::int64_t shell_end =
-          basis.atom_shell_offsets[static_cast<std::size_t>(atom) + 1u];
+      const std::int64_t shell_end = basis.atom_shell_offsets[static_cast<std::size_t>(atom) + 1u];
       const std::size_t parameter_begin = element->shell_offset;
       if (shell_begin < 0 || shell_begin >= shell_end || shell_end > basis.total_shells ||
           shell_end - shell_begin != element->shell_count ||
@@ -169,8 +170,9 @@ xtbloom_status_t make_es3_plan(const BasisPlan& basis, const std::int32_t* atomi
       }
       for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
         const std::size_t shell_index = static_cast<std::size_t>(shell);
-        const auto& parameter = parameters::gfn1::kShells[
-            parameter_begin + static_cast<std::size_t>(shell - shell_begin)];
+        const auto& parameter =
+            parameters::gfn1::kShells[parameter_begin +
+                                      static_cast<std::size_t>(shell - shell_begin)];
         if (basis.shell_to_atom[shell_index] != atom ||
             basis.principal_quantum_numbers[shell_index] != parameter.principal_quantum_number ||
             basis.angular_momenta[shell_index] != parameter.angular_momentum ||
@@ -199,8 +201,12 @@ ES3View make_es3_view(const ES3Plan& plan) noexcept {
                ? static_cast<std::int64_t>(value)
                : std::int64_t{-1};
   };
-  return ES3View{plan.batch_size, plan.total_atoms, count(plan.atom_offsets.size()),
-                 count(plan.atom_gamma3.size()), plan.atom_offsets.data(), plan.atom_gamma3.data()};
+  return ES3View{plan.batch_size,
+                 plan.total_atoms,
+                 count(plan.atom_offsets.size()),
+                 count(plan.atom_gamma3.size()),
+                 plan.atom_offsets.data(),
+                 plan.atom_gamma3.data()};
 }
 
 xtbloom_status_t evaluate_es3_potential_cpu(ES3View view, const double* atomic_charges,
@@ -275,8 +281,7 @@ xtbloom_status_t add_es3_energy_cpu(ES3View view, const double* atomic_charges, 
 
 xtbloom_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t system,
                                                    const double* atomic_charges,
-                                                   double* atomic_potentials,
-                                                   std::string& error) {
+                                                   double* atomic_potentials, std::string& error) {
   std::int64_t atom_begin = 0;
   std::int64_t atom_end = 0;
   xtbloom_status_t status = validate_system(view, system, atom_begin, atom_end, error);
@@ -307,8 +312,8 @@ xtbloom_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t sy
 }
 
 xtbloom_status_t add_es3_energy_system_cpu(ES3View view, std::int64_t system,
-                                           const double* atomic_charges,
-                                           double& accumulated_energy, std::string& error) {
+                                           const double* atomic_charges, double& accumulated_energy,
+                                           std::string& error) {
   std::int64_t atom_begin = 0;
   std::int64_t atom_end = 0;
   xtbloom_status_t status = validate_system(view, system, atom_begin, atom_end, error);

@@ -1,6 +1,3 @@
-#include "model/gfn1/basis.hpp"
-#include "model/gfn1/integrals.hpp"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -9,6 +6,9 @@
 #include <limits>
 #include <string>
 #include <vector>
+
+#include "model/gfn1/basis.hpp"
+#include "model/gfn1/integrals.hpp"
 
 #define CHECK(condition) \
   do {                   \
@@ -31,30 +31,28 @@ struct Evaluation {
 };
 
 bool evaluate(std::int64_t batch_size, const std::vector<std::int64_t>& atom_offsets,
-              const std::vector<std::int32_t>& atomic_numbers,
-              const std::vector<double>& positions, Evaluation& evaluation, std::string& error) {
-  if (xtbloom::detail::gfn1::make_basis_plan(batch_size, atomic_numbers.size(),
-                                             atom_offsets.data(), atomic_numbers.data(),
-                                             evaluation.basis, error) != XTBLOOM_STATUS_SUCCESS ||
+              const std::vector<std::int32_t>& atomic_numbers, const std::vector<double>& positions,
+              Evaluation& evaluation, std::string& error) {
+  if (xtbloom::detail::gfn1::make_basis_plan(batch_size, atomic_numbers.size(), atom_offsets.data(),
+                                             atomic_numbers.data(), evaluation.basis,
+                                             error) != XTBLOOM_STATUS_SUCCESS ||
       xtbloom::detail::gfn1::make_integral_plan(evaluation.basis, evaluation.integrals, error) !=
           XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
-  evaluation.overlap.resize(
-      static_cast<std::size_t>(evaluation.integrals.total_matrix_elements));
-  evaluation.workspace.resize(
-      (evaluation.integrals.workspace_size_bytes + sizeof(double) - 1u) / sizeof(double));
+  evaluation.overlap.resize(static_cast<std::size_t>(evaluation.integrals.total_matrix_elements));
+  evaluation.workspace.resize((evaluation.integrals.workspace_size_bytes + sizeof(double) - 1u) /
+                              sizeof(double));
   return xtbloom::detail::gfn1::evaluate_overlap_cpu(
              evaluation.basis, evaluation.integrals, positions.data(), evaluation.overlap.data(),
-             evaluation.workspace.data(), evaluation.workspace.size() * sizeof(double), error) ==
-         XTBLOOM_STATUS_SUCCESS;
+             evaluation.workspace.data(), evaluation.workspace.size() * sizeof(double),
+             error) == XTBLOOM_STATUS_SUCCESS;
 }
 
 int test_hydrogen_oracle_and_same_center_orthogonality() {
   const std::vector<std::int64_t> offsets{0, 2};
   const std::vector<std::int32_t> atomic_numbers{1, 1};
-  const std::vector<double> positions{0.0, 0.0, -0.70252931147690, 0.0, 0.0,
-                                      0.70252931147690};
+  const std::vector<double> positions{0.0, 0.0, -0.70252931147690, 0.0, 0.0, 0.70252931147690};
   Evaluation evaluation;
   std::string error;
   CHECK(evaluate(1, offsets, atomic_numbers, positions, evaluation, error));
@@ -66,10 +64,9 @@ int test_hydrogen_oracle_and_same_center_orthogonality() {
    * geometry. Tight double checks below additionally fix exact orthogonality.
    */
   constexpr std::array<double, 16> reference{
-      1.0, 8.5040130e-10, 6.6998297e-1, 6.5205745e-2,
-      8.5039964e-10, 1.0, 6.5205745e-2, 1.0264305e-1,
-      6.6998297e-1, 6.5205745e-2, 1.0, 8.5040130e-10,
-      6.5205745e-2, 1.0264305e-1, 8.5039964e-10, 1.0,
+      1.0,          8.5040130e-10, 6.6998297e-1,  6.5205745e-2, 8.5039964e-10, 1.0,
+      6.5205745e-2, 1.0264305e-1,  6.6998297e-1,  6.5205745e-2, 1.0,           8.5040130e-10,
+      6.5205745e-2, 1.0264305e-1,  8.5039964e-10, 1.0,
   };
   for (std::size_t element = 0; element < reference.size(); ++element) {
     CHECK(near(evaluation.overlap[element], reference[element], 1.0e-6));
@@ -80,8 +77,8 @@ int test_hydrogen_oracle_and_same_center_orthogonality() {
   CHECK(near(evaluation.overlap[4], 0.0, 1.0e-9));
   for (std::size_t row = 0; row < 4; ++row) {
     for (std::size_t column = 0; column < 4; ++column) {
-      CHECK(near(evaluation.overlap[row * 4u + column],
-                 evaluation.overlap[column * 4u + row], 2.0e-16));
+      CHECK(near(evaluation.overlap[row * 4u + column], evaluation.overlap[column * 4u + row],
+                 2.0e-16));
     }
   }
   return 0;
@@ -107,10 +104,9 @@ int test_sto6g_spd_ragged_and_translation() {
     const std::vector<std::int32_t> local_numbers(atomic_numbers.begin() + begin,
                                                   atomic_numbers.begin() + end);
     const std::vector<double> local_positions(positions.begin() + begin * 3,
-                                               positions.begin() + end * 3);
+                                              positions.begin() + end * 3);
     CHECK(evaluate(1, local_offsets, local_numbers, local_positions, sequential, error));
-    const auto packed_begin =
-        static_cast<std::size_t>(batch.integrals.matrix_offsets[molecule]);
+    const auto packed_begin = static_cast<std::size_t>(batch.integrals.matrix_offsets[molecule]);
     for (std::size_t element = 0; element < sequential.overlap.size(); ++element) {
       CHECK(batch.overlap[packed_begin + element] == sequential.overlap[element]);
     }
@@ -149,8 +145,7 @@ bool weighted_overlap(const Evaluation& evaluation, const std::vector<double>& p
 int test_overlap_gradient_multiple_steps() {
   const std::vector<std::int64_t> offsets{0, 2, 4};
   const std::vector<std::int32_t> atomic_numbers{1, 1, 14, 8};
-  std::vector<double> positions{0.0, 0.1, -0.7, 0.2, -0.3, 0.8,
-                                -1.4, 0.5, 0.2, 0.7, 1.1, -0.6};
+  std::vector<double> positions{0.0, 0.1, -0.7, 0.2, -0.3, 0.8, -1.4, 0.5, 0.2, 0.7, 1.1, -0.6};
   Evaluation evaluation;
   std::string error;
   CHECK(evaluate(2, offsets, atomic_numbers, positions, evaluation, error));
@@ -209,8 +204,8 @@ int test_transactional_validation() {
   bad_positions[1] = std::numeric_limits<double>::quiet_NaN();
   CHECK(xtbloom::detail::gfn1::evaluate_overlap_cpu(
             evaluation.basis, evaluation.integrals, bad_positions.data(), overlap.data(),
-            evaluation.workspace.data(), evaluation.workspace.size() * sizeof(double), error) ==
-        XTBLOOM_STATUS_INVALID_ARGUMENT);
+            evaluation.workspace.data(), evaluation.workspace.size() * sizeof(double),
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   return 0;
 }
 

@@ -21,8 +21,7 @@ static_assert(parameters::gfn1::kGlobal.charge_average == 1u,
 static_assert(parameters::gfn1::kGlobal.charge_gexp == 2.0,
               "the shared ES2 kernel specializes the GFN1 gexp=2 form");
 
-bool representable_count(std::int64_t value, std::size_t element_size,
-                         bool add_sentinel = false) {
+bool representable_count(std::int64_t value, std::size_t element_size, bool add_sentinel = false) {
   if (value < 0) {
     return false;
   }
@@ -91,9 +90,9 @@ xtbloom_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomi
         hardness[shell_index] = shell_hardness;
       }
     }
-    return gfn2::make_es2_plan_from_shell_hardness(
-        basis, gfn2::ES2HardnessAverage::kHarmonic, hardness.data(), basis.total_shells, plan,
-        error);
+    return gfn2::make_es2_plan_from_shell_hardness(basis, gfn2::ES2HardnessAverage::kHarmonic,
+                                                   hardness.data(), basis.total_shells, plan,
+                                                   error);
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the GFN1 ES2 parameter expansion";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;

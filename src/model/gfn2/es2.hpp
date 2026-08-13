@@ -75,9 +75,11 @@ class ES2Plan {
 
   friend xtbloom_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
                                         ES2Plan& plan, std::string& error);
-  friend xtbloom_status_t make_es2_plan_from_shell_hardness(
-      const BasisPlan& basis, ES2HardnessAverage average, const double* shell_hardness,
-      std::int64_t shell_hardness_count, ES2Plan& plan, std::string& error);
+  friend xtbloom_status_t make_es2_plan_from_shell_hardness(const BasisPlan& basis,
+                                                            ES2HardnessAverage average,
+                                                            const double* shell_hardness,
+                                                            std::int64_t shell_hardness_count,
+                                                            ES2Plan& plan, std::string& error);
 };
 
 /*
@@ -120,9 +122,11 @@ xtbloom_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomi
  * kernel. Model builders remain responsible for validating their own element
  * and shell metadata before calling this lower-level constructor.
  */
-xtbloom_status_t make_es2_plan_from_shell_hardness(
-    const BasisPlan& basis, ES2HardnessAverage average, const double* shell_hardness,
-    std::int64_t shell_hardness_count, ES2Plan& plan, std::string& error);
+xtbloom_status_t make_es2_plan_from_shell_hardness(const BasisPlan& basis,
+                                                   ES2HardnessAverage average,
+                                                   const double* shell_hardness,
+                                                   std::int64_t shell_hardness_count, ES2Plan& plan,
+                                                   std::string& error);
 
 /*
  * Overwrite caller-owned matrix_storage and bind cache to it. Positions use

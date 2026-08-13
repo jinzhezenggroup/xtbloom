@@ -1288,6 +1288,26 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
             )
 
 
+class Gfn1FixtureProvenanceTests(unittest.TestCase):
+    """Pin repository-only GFN1 fixtures without adding package payload."""
+
+    def test_current_fixture_provenance_is_accepted(self) -> None:
+        """Accept the exact reviewed dxtb, mstore, and tblite records."""
+        CHECKER._check_gfn1_fixture_provenance(REPOSITORY)
+
+    def test_fixture_source_digest_mutation_is_rejected(self) -> None:
+        """Reject a changed upstream digest even when the local tests remain."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sources"][0]["files"][0]["sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source files"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+
 class ImplibProvenanceTests(unittest.TestCase):
     """Verify vendored implib content against its pinned provenance."""
 

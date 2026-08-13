@@ -108,10 +108,10 @@ xtbloom_status_t validate_view(SpinPolarizationView view, std::string& error) {
     const std::int64_t population_begin = view.shell_population_offsets[system];
     const std::int64_t population_end = view.shell_population_offsets[system + 1];
     const std::int32_t channels = view.spin_channels[system];
-    if (atom_begin < 0 || atom_begin > atom_end || atom_end > view.total_atoms ||
-        shell_begin < 0 || shell_begin > shell_end || shell_end > view.total_shells ||
-        population_begin < 0 || population_begin > population_end ||
-        population_end > view.shell_population_elements || (channels != 1 && channels != 2) ||
+    if (atom_begin < 0 || atom_begin > atom_end || atom_end > view.total_atoms || shell_begin < 0 ||
+        shell_begin > shell_end || shell_end > view.total_shells || population_begin < 0 ||
+        population_begin > population_end || population_end > view.shell_population_elements ||
+        (channels != 1 && channels != 2) ||
         population_end - population_begin != (shell_end - shell_begin) * channels ||
         view.atom_shell_offsets[atom_begin] != shell_begin ||
         view.atom_shell_offsets[atom_end] != shell_end) {
@@ -125,9 +125,9 @@ xtbloom_status_t validate_view(SpinPolarizationView view, std::string& error) {
     const std::int64_t shells = shell_end - shell_begin;
     const std::int64_t matrix_begin = view.coupling_offsets[atom];
     const std::int64_t matrix_end = view.coupling_offsets[atom + 1];
-    if (shell_begin < 0 || shell_begin >= shell_end || shell_end > view.total_shells || shells > 3 ||
-        matrix_begin < 0 || matrix_begin > matrix_end || matrix_end > view.coupling_matrix_count ||
-        matrix_end - matrix_begin != shells * shells) {
+    if (shell_begin < 0 || shell_begin >= shell_end || shell_end > view.total_shells ||
+        shells > 3 || matrix_begin < 0 || matrix_begin > matrix_end ||
+        matrix_end > view.coupling_matrix_count || matrix_end - matrix_begin != shells * shells) {
       error = "GFN1 spin-polarization view has an invalid atom-local coupling partition";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
@@ -167,8 +167,7 @@ bool evaluate_unrestricted_system(SpinPolarizationView view, std::int64_t system
       if (!std::isfinite(potential)) {
         return false;
       }
-      const std::int64_t population =
-          magnetization_base + shell_begin - system_shell_begin + row;
+      const std::int64_t population = magnetization_base + shell_begin - system_shell_begin + row;
       energy = std::fma(0.5 * shell_populations[population], potential, energy);
       if (!std::isfinite(energy)) {
         return false;
@@ -245,7 +244,8 @@ xtbloom_status_t make_spin_polarization_plan(const BasisPlan& basis,
       basis.slater_exponents.size() != static_cast<std::size_t>(basis.total_shells) ||
       populations.system_offsets.size() != static_cast<std::size_t>(basis.batch_size) + 1u ||
       populations.spin_channels.size() != static_cast<std::size_t>(basis.batch_size)) {
-    error = "GFN1 spin plan requires one complete matching basis, element list, and population layout";
+    error =
+        "GFN1 spin plan requires one complete matching basis, element list, and population layout";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   try {
@@ -297,8 +297,9 @@ xtbloom_status_t make_spin_polarization_plan(const BasisPlan& basis,
       }
       for (std::int64_t shell = shell_begin; shell < shell_end; ++shell) {
         const std::size_t shell_index = static_cast<std::size_t>(shell);
-        const auto& parameter = parameters::gfn1::kShells[
-            element->shell_offset + static_cast<std::size_t>(shell - shell_begin)];
+        const auto& parameter =
+            parameters::gfn1::kShells[element->shell_offset +
+                                      static_cast<std::size_t>(shell - shell_begin)];
         if (basis.shell_to_atom[shell_index] != atom ||
             basis.principal_quantum_numbers[shell_index] != parameter.principal_quantum_number ||
             basis.angular_momenta[shell_index] != parameter.angular_momentum ||
@@ -309,7 +310,8 @@ xtbloom_status_t make_spin_polarization_plan(const BasisPlan& basis,
       }
       const std::int64_t matrix_begin = created.coupling_offsets[static_cast<std::size_t>(atom)];
       for (std::int64_t row = 0; row < shells; ++row) {
-        const std::uint8_t row_l = basis.angular_momenta[static_cast<std::size_t>(shell_begin + row)];
+        const std::uint8_t row_l =
+            basis.angular_momenta[static_cast<std::size_t>(shell_begin + row)];
         if (row_l > 2u) {
           error = "GFN1 spin plan supports only s, p, and d shells";
           return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -321,7 +323,8 @@ xtbloom_status_t make_spin_polarization_plan(const BasisPlan& basis,
             error = "GFN1 spin plan supports only s, p, and d shells";
             return XTBLOOM_STATUS_INVALID_ARGUMENT;
           }
-          created.coupling_matrices[static_cast<std::size_t>(matrix_begin + row * shells + column)] =
+          created
+              .coupling_matrices[static_cast<std::size_t>(matrix_begin + row * shells + column)] =
               parameters::tblite::kSpinConstants[static_cast<std::size_t>(atomic_number - 1)]
                                                 [coupling_index(row_l, column_l)];
         }
@@ -373,8 +376,7 @@ SpinPolarizationView make_spin_polarization_view(const SpinPolarizationPlan& pla
 
 xtbloom_status_t evaluate_spin_polarization_cpu(SpinPolarizationView view,
                                                 const double* shell_populations,
-                                                double* spin_energies,
-                                                double* shell_potentials,
+                                                double* spin_energies, double* shell_potentials,
                                                 std::string& error) {
   xtbloom_status_t status = validate_view(view, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -458,9 +460,11 @@ xtbloom_status_t evaluate_spin_polarization_system_cpu(
   return XTBLOOM_STATUS_SUCCESS;
 }
 
-xtbloom_status_t add_spin_polarization_energy_system_cpu(
-    SpinPolarizationView view, std::int64_t system, const double* shell_populations,
-    double& accumulated_energy, std::string& error) {
+xtbloom_status_t add_spin_polarization_energy_system_cpu(SpinPolarizationView view,
+                                                         std::int64_t system,
+                                                         const double* shell_populations,
+                                                         double& accumulated_energy,
+                                                         std::string& error) {
   xtbloom_status_t status = validate_view(view, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;

@@ -223,16 +223,18 @@ double harmonic_hardness(double first_hardness, double second_hardness) {
   return 2.0 / (1.0 / first_hardness + 1.0 / second_hardness);
 }
 
-double average_hardness(ES2HardnessAverage average, double first_hardness,
-                        double second_hardness) {
-  return average == ES2HardnessAverage::kHarmonic
-             ? harmonic_hardness(first_hardness, second_hardness)
-             : arithmetic_hardness(first_hardness, second_hardness);
+template <ES2HardnessAverage Average>
+double average_hardness(double first_hardness, double second_hardness) {
+  if constexpr (Average == ES2HardnessAverage::kHarmonic) {
+    return harmonic_hardness(first_hardness, second_hardness);
+  }
+  return arithmetic_hardness(first_hardness, second_hardness);
 }
 
+template <ES2HardnessAverage Average>
 bool softened_kernel(double dx, double dy, double dz, double first_hardness, double second_hardness,
-                     ES2HardnessAverage average, double& value) {
-  const double pair_hardness = average_hardness(average, first_hardness, second_hardness);
+                     double& value) {
+  const double pair_hardness = average_hardness<Average>(first_hardness, second_hardness);
   const double inverse_average_hardness = 1.0 / pair_hardness;
   const double softened_distance =
       std::hypot(std::hypot(dx, dy), std::hypot(dz, inverse_average_hardness));
@@ -240,6 +242,66 @@ bool softened_kernel(double dx, double dy, double dz, double first_hardness, dou
   return pair_hardness > 0.0 && std::isfinite(pair_hardness) &&
          std::isfinite(inverse_average_hardness) && softened_distance > 0.0 &&
          std::isfinite(softened_distance) && value > 0.0 && std::isfinite(value);
+}
+
+template <ES2HardnessAverage Average>
+xtbloom_status_t populate_geometry_matrix(const ES2Plan& plan, const double* positions,
+                                          double* matrix_scratch, std::string& error) {
+  for (std::int64_t batch = 0; batch < plan.batch_size(); ++batch) {
+    const std::size_t batch_index = static_cast<std::size_t>(batch);
+    const std::int64_t atom_begin = plan.atom_offsets()[batch_index];
+    const std::int64_t atom_end = plan.atom_offsets()[batch_index + 1u];
+    for (std::int64_t first = atom_begin; first < atom_end; ++first) {
+      const std::size_t first_index = static_cast<std::size_t>(first);
+      const std::int64_t first_shell_begin = plan.atom_shell_offsets()[first_index];
+      const std::int64_t first_shell_end = plan.atom_shell_offsets()[first_index + 1u];
+      for (std::int64_t first_shell = first_shell_begin; first_shell < first_shell_end;
+           ++first_shell) {
+        for (std::int64_t second_shell = first_shell_begin; second_shell < first_shell_end;
+             ++second_shell) {
+          const double pair_hardness = average_hardness<Average>(
+              plan.shell_hardness()[static_cast<std::size_t>(first_shell)],
+              plan.shell_hardness()[static_cast<std::size_t>(second_shell)]);
+          const double inverse_average_hardness = 1.0 / pair_hardness;
+          if (!(pair_hardness > 0.0) || !std::isfinite(pair_hardness) ||
+              !std::isfinite(inverse_average_hardness)) {
+            error = "ES2 onsite hardness arithmetic exceeded floating-point range";
+            return XTBLOOM_STATUS_INVALID_ARGUMENT;
+          }
+          matrix_scratch[matrix_index(plan, batch_index, first_shell, second_shell)] =
+              pair_hardness;
+        }
+      }
+      for (std::int64_t second = atom_begin; second < first; ++second) {
+        const std::size_t second_index = static_cast<std::size_t>(second);
+        const double dx = positions[first_index * 3u] - positions[second_index * 3u];
+        const double dy = positions[first_index * 3u + 1u] - positions[second_index * 3u + 1u];
+        const double dz = positions[first_index * 3u + 2u] - positions[second_index * 3u + 2u];
+        if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz)) {
+          error = "ES2 coordinate differences overflow floating-point range";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
+        const std::int64_t second_shell_begin = plan.atom_shell_offsets()[second_index];
+        const std::int64_t second_shell_end = plan.atom_shell_offsets()[second_index + 1u];
+        for (std::int64_t first_shell = first_shell_begin; first_shell < first_shell_end;
+             ++first_shell) {
+          for (std::int64_t second_shell = second_shell_begin; second_shell < second_shell_end;
+               ++second_shell) {
+            double kernel = 0.0;
+            if (!softened_kernel<Average>(
+                    dx, dy, dz, plan.shell_hardness()[static_cast<std::size_t>(first_shell)],
+                    plan.shell_hardness()[static_cast<std::size_t>(second_shell)], kernel)) {
+              error = "ES2 Coulomb-kernel arithmetic exceeded floating-point range";
+              return XTBLOOM_STATUS_INVALID_ARGUMENT;
+            }
+            matrix_scratch[matrix_index(plan, batch_index, first_shell, second_shell)] = kernel;
+            matrix_scratch[matrix_index(plan, batch_index, second_shell, first_shell)] = kernel;
+          }
+        }
+      }
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
 }
 
 bool calculate_potential_row(const ES2Plan& plan, const ES2GeometryCache& cache,
@@ -487,16 +549,17 @@ xtbloom_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomi
   }
 }
 
-xtbloom_status_t make_es2_plan_from_shell_hardness(
-    const BasisPlan& basis, ES2HardnessAverage average, const double* shell_hardness,
-    std::int64_t shell_hardness_count, ES2Plan& plan, std::string& error) {
+xtbloom_status_t make_es2_plan_from_shell_hardness(const BasisPlan& basis,
+                                                   ES2HardnessAverage average,
+                                                   const double* shell_hardness,
+                                                   std::int64_t shell_hardness_count, ES2Plan& plan,
+                                                   std::string& error) {
   if (basis.batch_size <= 0 || basis.total_atoms <= 0 || basis.total_shells <= 0 ||
       !count_fits_storage(basis.batch_size, sizeof(std::int64_t), true) ||
       !count_fits_storage(basis.total_atoms, sizeof(std::int64_t), true) ||
       !count_fits_storage(basis.total_shells, sizeof(std::int64_t)) || shell_hardness == nullptr ||
       shell_hardness_count != basis.total_shells ||
-      (average != ES2HardnessAverage::kArithmetic &&
-       average != ES2HardnessAverage::kHarmonic)) {
+      (average != ES2HardnessAverage::kArithmetic && average != ES2HardnessAverage::kHarmonic)) {
     error = "ES2 shared plan requires a representable basis, averaging rule, and shell hardnesses";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -510,7 +573,8 @@ xtbloom_status_t make_es2_plan_from_shell_hardness(
       basis.shell_to_atom.size() != shell_count || basis.atom_offsets.front() != 0 ||
       basis.atom_offsets.back() != basis.total_atoms || basis.batch_shell_offsets.front() != 0 ||
       basis.batch_shell_offsets.back() != basis.total_shells ||
-      basis.atom_shell_offsets.front() != 0 || basis.atom_shell_offsets.back() != basis.total_shells) {
+      basis.atom_shell_offsets.front() != 0 ||
+      basis.atom_shell_offsets.back() != basis.total_shells) {
     error = "ES2 shared plan received an inconsistent basis topology";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -532,8 +596,7 @@ xtbloom_status_t make_es2_plan_from_shell_hardness(
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
   }
-  if (total_matrix_elements <= 0 ||
-      !count_fits_storage(total_matrix_elements, sizeof(double))) {
+  if (total_matrix_elements <= 0 || !count_fits_storage(total_matrix_elements, sizeof(double))) {
     error = "ES2 shared plan matrix storage is not representable";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -649,63 +712,13 @@ xtbloom_status_t update_es2_geometry_cache_cpu(const ES2Plan& plan, const double
     return status;
   }
 
-  for (std::int64_t batch = 0; batch < plan.batch_size(); ++batch) {
-    const std::size_t batch_index = static_cast<std::size_t>(batch);
-    const std::int64_t atom_begin = plan.atom_offsets()[batch_index];
-    const std::int64_t atom_end = plan.atom_offsets()[batch_index + 1u];
-    for (std::int64_t first = atom_begin; first < atom_end; ++first) {
-      const std::size_t first_index = static_cast<std::size_t>(first);
-      const std::int64_t first_shell_begin = plan.atom_shell_offsets()[first_index];
-      const std::int64_t first_shell_end = plan.atom_shell_offsets()[first_index + 1u];
-      for (std::int64_t first_shell = first_shell_begin; first_shell < first_shell_end;
-           ++first_shell) {
-        for (std::int64_t second_shell = first_shell_begin; second_shell < first_shell_end;
-             ++second_shell) {
-          const double pair_hardness = average_hardness(
-              plan.hardness_average(),
-              plan.shell_hardness()[static_cast<std::size_t>(first_shell)],
-              plan.shell_hardness()[static_cast<std::size_t>(second_shell)]);
-          const double inverse_average_hardness = 1.0 / pair_hardness;
-          if (!(pair_hardness > 0.0) || !std::isfinite(pair_hardness) ||
-              !std::isfinite(inverse_average_hardness)) {
-            error = "ES2 onsite hardness arithmetic exceeded floating-point range";
-            return XTBLOOM_STATUS_INVALID_ARGUMENT;
-          }
-          workspace.matrix_scratch[matrix_index(plan, batch_index, first_shell, second_shell)] =
-              pair_hardness;
-        }
-      }
-      for (std::int64_t second = atom_begin; second < first; ++second) {
-        const std::size_t second_index = static_cast<std::size_t>(second);
-        const double dx = positions[first_index * 3u] - positions[second_index * 3u];
-        const double dy = positions[first_index * 3u + 1u] - positions[second_index * 3u + 1u];
-        const double dz = positions[first_index * 3u + 2u] - positions[second_index * 3u + 2u];
-        if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz)) {
-          error = "ES2 coordinate differences overflow floating-point range";
-          return XTBLOOM_STATUS_INVALID_ARGUMENT;
-        }
-        const std::int64_t second_shell_begin = plan.atom_shell_offsets()[second_index];
-        const std::int64_t second_shell_end = plan.atom_shell_offsets()[second_index + 1u];
-        for (std::int64_t first_shell = first_shell_begin; first_shell < first_shell_end;
-             ++first_shell) {
-          for (std::int64_t second_shell = second_shell_begin; second_shell < second_shell_end;
-               ++second_shell) {
-            double kernel = 0.0;
-            if (!softened_kernel(
-                    dx, dy, dz, plan.shell_hardness()[static_cast<std::size_t>(first_shell)],
-                    plan.shell_hardness()[static_cast<std::size_t>(second_shell)],
-                    plan.hardness_average(), kernel)) {
-              error = "ES2 Coulomb-kernel arithmetic exceeded floating-point range";
-              return XTBLOOM_STATUS_INVALID_ARGUMENT;
-            }
-            workspace.matrix_scratch[matrix_index(plan, batch_index, first_shell, second_shell)] =
-                kernel;
-            workspace.matrix_scratch[matrix_index(plan, batch_index, second_shell, first_shell)] =
-                kernel;
-          }
-        }
-      }
-    }
+  status = plan.hardness_average() == ES2HardnessAverage::kHarmonic
+               ? populate_geometry_matrix<ES2HardnessAverage::kHarmonic>(
+                     plan, positions, workspace.matrix_scratch, error)
+               : populate_geometry_matrix<ES2HardnessAverage::kArithmetic>(
+                     plan, positions, workspace.matrix_scratch, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
   }
   std::copy_n(workspace.matrix_scratch, static_cast<std::size_t>(plan.total_matrix_elements()),
               matrix_storage);

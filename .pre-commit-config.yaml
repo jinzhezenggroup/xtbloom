@@ -50,7 +50,7 @@ repos:
         # Only generated parameter headers, retained notice copies, and the
         # LibTorch header tree are canonical upstream bytes. Future hand-written
         # C/C++ files in their parent directories must still be formatted.
-        exclude: ^(?:data/parameters/(?:gfn1(?:_d3)?|gfn2|d4)\.hpp|LICENSES/eigen/notices/|cmake/3rdparty/torch-stable/include/)
+        exclude: ^(?:data/parameters/(?:gfn1(?:_d3)?|gfn2|d4|tblite_sto)\.hpp|LICENSES/eigen/notices/|cmake/3rdparty/torch-stable/include/)
   - repo: local
     hooks:
       - id: forbid-retired-project-name-content

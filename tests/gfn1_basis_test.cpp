@@ -1,5 +1,3 @@
-#include "model/gfn1/basis.hpp"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -7,6 +5,8 @@
 #include <limits>
 #include <string>
 #include <vector>
+
+#include "model/gfn1/basis.hpp"
 
 #define CHECK(condition) \
   do {                   \
@@ -27,15 +27,15 @@ double contracted_s_overlap(const xtbloom::detail::gfn1::BasisPlan& plan, std::s
   const auto first_begin = static_cast<std::size_t>(plan.shell_primitive_offsets[first_shell]);
   const auto first_end = static_cast<std::size_t>(plan.shell_primitive_offsets[first_shell + 1u]);
   const auto second_begin = static_cast<std::size_t>(plan.shell_primitive_offsets[second_shell]);
-  const auto second_end =
-      static_cast<std::size_t>(plan.shell_primitive_offsets[second_shell + 1u]);
+  const auto second_end = static_cast<std::size_t>(plan.shell_primitive_offsets[second_shell + 1u]);
   double overlap = 0.0;
   for (std::size_t first = first_begin; first < first_end; ++first) {
     for (std::size_t second = second_begin; second < second_end; ++second) {
-      overlap += plan.primitive_coefficients[first] * plan.primitive_coefficients[second] *
-                 std::pow(std::sqrt(pi / (plan.primitive_exponents[first] +
-                                          plan.primitive_exponents[second])),
-                          3.0);
+      overlap +=
+          plan.primitive_coefficients[first] * plan.primitive_coefficients[second] *
+          std::pow(
+              std::sqrt(pi / (plan.primitive_exponents[first] + plan.primitive_exponents[second])),
+              3.0);
     }
   }
   return overlap;
@@ -69,8 +69,7 @@ int test_complete_element_topology() {
   for (std::size_t atom = 0; atom < atomic_numbers.size(); ++atom) {
     for (std::int64_t shell = plan.atom_shell_offsets[atom];
          shell < plan.atom_shell_offsets[atom + 1u]; ++shell) {
-      CHECK(plan.shell_to_atom[static_cast<std::size_t>(shell)] ==
-            static_cast<std::int64_t>(atom));
+      CHECK(plan.shell_to_atom[static_cast<std::size_t>(shell)] == static_cast<std::int64_t>(atom));
     }
   }
 
@@ -83,17 +82,14 @@ int test_complete_element_topology() {
         6);
   const std::size_t lithium_primitive =
       static_cast<std::size_t>(plan.shell_primitive_offsets[lithium_shell]);
-  CHECK(near(plan.primitive_exponents[lithium_primitive],
-             2.768496241e+1 * 0.743881 * 0.743881));
+  CHECK(near(plan.primitive_exponents[lithium_primitive], 2.768496241e+1 * 0.743881 * 0.743881));
 
-  const std::size_t carbon_p_shell =
-      static_cast<std::size_t>(plan.atom_shell_offsets[5] + 1);
+  const std::size_t carbon_p_shell = static_cast<std::size_t>(plan.atom_shell_offsets[5] + 1);
   CHECK(plan.principal_quantum_numbers[carbon_p_shell] == 2u);
   CHECK(plan.angular_momenta[carbon_p_shell] == 1u);
   const std::size_t carbon_p_primitive =
       static_cast<std::size_t>(plan.shell_primitive_offsets[carbon_p_shell]);
-  CHECK(near(plan.primitive_exponents[carbon_p_primitive],
-             5.868285913 * 1.832096 * 1.832096));
+  CHECK(near(plan.primitive_exponents[carbon_p_primitive], 5.868285913 * 1.832096 * 1.832096));
   return 0;
 }
 
@@ -148,8 +144,8 @@ int test_validation_and_strong_failure() {
 
   constexpr std::array<std::int64_t, 2> huge{0, std::numeric_limits<std::int64_t>::max()};
   CHECK(xtbloom::detail::gfn1::make_basis_plan(1, std::numeric_limits<std::int64_t>::max(),
-                                               huge.data(), hydrogen.data(), plan, error) ==
-        XTBLOOM_STATUS_INVALID_ARGUMENT);
+                                               huge.data(), hydrogen.data(), plan,
+                                               error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(plan.batch_size == 17);
   return 0;
 }

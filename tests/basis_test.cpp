@@ -185,6 +185,15 @@ int test_validation_and_strong_failure_guarantee() {
   return 0;
 }
 
+int test_resident_bytes_include_valence_metadata() {
+  xtbloom::detail::common::BasisPlan plan;
+  plan.shell_is_valence.reserve(17u);
+  CHECK(plan.shell_is_valence.capacity() >= 17u);
+  CHECK(xtbloom::detail::common::basis_plan_resident_bytes(plan) ==
+        plan.shell_is_valence.capacity() * sizeof(std::uint8_t));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -194,5 +203,8 @@ int main() {
   if (const int status = test_all_gfn2_elements_and_sixth_row_expansion(); status != 0) {
     return status;
   }
-  return test_validation_and_strong_failure_guarantee();
+  if (const int status = test_validation_and_strong_failure_guarantee(); status != 0) {
+    return status;
+  }
+  return test_resident_bytes_include_valence_metadata();
 }

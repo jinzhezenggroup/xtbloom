@@ -858,20 +858,37 @@ if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
   endif()
 endif()
 
-add_library(xtbloom_gfn2_cpu OBJECT
-  src/backends/common/gfn2_plan_schema.cpp
+add_library(xtbloom_model_common_cpu_objects OBJECT
   src/model/common/sto.cpp
+  src/model/common/integrals.cpp
+  # The sealed ES2 implementation is shared by GFN2 arithmetic and GFN1
+  # harmonic plan builders. Its legacy namespace remains internal and does
+  # not make the rest of the GFN2 physics target a GFN1 dependency.
+  src/model/gfn2/es2.cpp
+)
+target_compile_features(xtbloom_model_common_cpu_objects PUBLIC cxx_std_17)
+target_include_directories(xtbloom_model_common_cpu_objects PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(xtbloom_model_common_cpu_objects PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+
+add_library(xtbloom_gfn2_cpu_objects OBJECT
+  src/backends/common/gfn2_plan_schema.cpp
   src/model/gfn2/aes2.cpp
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
   src/model/gfn2/d4.cpp
   src/model/gfn2/eigensolver.cpp
-  src/model/gfn2/es2.cpp
   src/model/gfn2/es3.cpp
   src/model/gfn2/external_point_charges.cpp
   src/model/gfn2/force.cpp
   src/model/gfn2/h0.cpp
-  src/model/gfn2/integrals.cpp
   src/model/gfn2/mulliken.cpp
   src/model/gfn2/periodic_embedding.cpp
   src/model/gfn2/repulsion.cpp
@@ -881,116 +898,104 @@ add_library(xtbloom_gfn2_cpu OBJECT
   src/model/gfn2/wavefunction.cpp
 )
 
-# GFN1 model terms are kept in a separate object target so partial internal
-# foundations cannot accidentally become a GFN2 execution path. Public GFN1
-# dispatch remains disabled until the complete CPU model passes issue #385.
-add_library(xtbloom_gfn1_cpu OBJECT
-  src/model/gfn1/es2.cpp
-  src/model/gfn1/es3.cpp
-  src/model/gfn1/spin.cpp
-)
-target_compile_features(xtbloom_gfn1_cpu PUBLIC cxx_std_17)
-target_include_directories(xtbloom_gfn1_cpu PUBLIC
+target_compile_features(xtbloom_gfn2_cpu_objects PUBLIC cxx_std_17)
+target_include_directories(xtbloom_gfn2_cpu_objects PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-set_target_properties(xtbloom_gfn1_cpu PROPERTIES
-  CXX_VISIBILITY_PRESET hidden
-  POSITION_INDEPENDENT_CODE ON
-  VISIBILITY_INLINES_HIDDEN YES
-)
-target_link_libraries(xtbloom_gfn1_cpu PUBLIC xtbloom_gfn2_cpu)
-target_compile_features(xtbloom_gfn2_cpu PUBLIC cxx_std_17)
-target_include_directories(xtbloom_gfn2_cpu PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-set_target_properties(xtbloom_gfn2_cpu PROPERTIES
+set_target_properties(xtbloom_gfn2_cpu_objects PROPERTIES
   CXX_VISIBILITY_PRESET hidden
   POSITION_INDEPENDENT_CODE ON
   VISIBILITY_INLINES_HIDDEN YES
 )
 if(CMAKE_DL_LIBS)
-  target_link_libraries(xtbloom_gfn2_cpu PUBLIC ${CMAKE_DL_LIBS})
+  target_link_libraries(xtbloom_gfn2_cpu_objects PUBLIC ${CMAKE_DL_LIBS})
 endif()
 
-# Model-owned GFN1 setup terms remain disconnected from public dispatch until
-# the complete CPU model is independently validated and activated.
-add_library(xtbloom_gfn1_cpu OBJECT
-  src/model/gfn1/basis.cpp
-)
-target_compile_features(xtbloom_gfn1_cpu PUBLIC cxx_std_17)
-target_include_directories(xtbloom_gfn1_cpu PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-set_target_properties(xtbloom_gfn1_cpu PROPERTIES
-  CXX_VISIBILITY_PRESET hidden
-  POSITION_INDEPENDENT_CODE ON
-  VISIBILITY_INLINES_HIDDEN YES
-)
 if(XTBLOOM_CPU_LINALG_RUNTIME)
-  target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
+  target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
     "XTBLOOM_CONFIGURED_CPU_LINALG_RUNTIME=\"${XTBLOOM_CPU_LINALG_RUNTIME}\""
   )
 endif()
 if(XTBLOOM_CPU_LINALG_RUNTIME_IS_MKL)
-  target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
+  target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
     XTBLOOM_CONFIGURED_CPU_LINALG_MKL=1
   )
 endif()
 if(XTBLOOM_CPU_LINALG_SHIM)
-  target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
+  target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
     XTBLOOM_CONFIGURED_CPU_LINALG_SHIM=1
   )
-  add_dependencies(xtbloom_gfn2_cpu xtbloom_mkl_lp64_shim)
+  add_dependencies(xtbloom_gfn2_cpu_objects xtbloom_mkl_lp64_shim)
 endif()
 if(XTBLOOM_WHEEL_OPENBLAS)
   if(XTBLOOM_WHEEL_OPENBLAS_PYODIDE)
-    target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
+    target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
       XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS=1
       "XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
       "XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_ADAPTER=\"${XTBLOOM_WHEEL_OPENBLAS_ADAPTER_NAME}\""
     )
-    add_dependencies(xtbloom_gfn2_cpu xtbloom_pyodide_lapacke)
+    add_dependencies(xtbloom_gfn2_cpu_objects xtbloom_pyodide_lapacke)
   else()
-    target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
+    target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
       XTBLOOM_CONFIGURED_WHEEL_OPENBLAS=1
       "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
     )
     if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
-      target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
+      target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
         "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME=\"${XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME}\""
       )
     endif()
     if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
-      add_dependencies(xtbloom_gfn2_cpu xtbloom_openblas_lp64_shim)
+      add_dependencies(xtbloom_gfn2_cpu_objects xtbloom_openblas_lp64_shim)
     elseif(APPLE)
-      add_dependencies(xtbloom_gfn2_cpu xtbloom_wheel_openblas_provider)
+      add_dependencies(xtbloom_gfn2_cpu_objects xtbloom_wheel_openblas_provider)
     endif()
   endif()
 endif()
 
 # GFN1 remains an internal, incomplete model until its full CPU execution
-# chain and public evidence land. This object target exposes only reviewed
-# model-owned terms to focused native tests and future GFN1 composition work.
-add_library(xtbloom_gfn1_cpu OBJECT
+# chain and public evidence land. Keep reviewed model-owned terms in one
+# object target that is deliberately absent from libxtbloom public dispatch.
+add_library(xtbloom_gfn1_cpu_objects OBJECT
+  src/model/gfn1/basis.cpp
   src/model/gfn1/coordination.cpp
+  src/model/gfn1/es2.cpp
+  src/model/gfn1/es3.cpp
+  src/model/gfn1/h0.cpp
   src/model/gfn1/repulsion.cpp
+  src/model/gfn1/spin.cpp
 )
-target_compile_features(xtbloom_gfn1_cpu PUBLIC cxx_std_17)
-target_include_directories(xtbloom_gfn1_cpu PUBLIC
+target_compile_features(xtbloom_gfn1_cpu_objects PUBLIC cxx_std_17)
+target_include_directories(xtbloom_gfn1_cpu_objects PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-set_target_properties(xtbloom_gfn1_cpu PROPERTIES
+set_target_properties(xtbloom_gfn1_cpu_objects PROPERTIES
   CXX_VISIBILITY_PRESET hidden
   POSITION_INDEPENDENT_CODE ON
   VISIBILITY_INLINES_HIDDEN YES
+)
+
+# Interface wrappers include object files as link inputs while propagating the
+# object targets' include paths and provider requirements. GFN1 deliberately
+# receives only its own terms plus the small shared-model target.
+add_library(xtbloom_gfn2_cpu INTERFACE)
+target_link_libraries(xtbloom_gfn2_cpu INTERFACE
+  xtbloom_model_common_cpu_objects
+  xtbloom_gfn2_cpu_objects
+  $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+  $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
+)
+
+add_library(xtbloom_gfn1_cpu INTERFACE)
+target_link_libraries(xtbloom_gfn1_cpu INTERFACE
+  xtbloom_model_common_cpu_objects
+  xtbloom_gfn1_cpu_objects
+  $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+  $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
 )
 
 add_library(xtbloom
@@ -1003,7 +1008,8 @@ add_library(xtbloom
   src/runtime/request.cpp
   src/runtime/result_owner.cpp
   src/runtime/validation.cpp
-  $<TARGET_OBJECTS:xtbloom_gfn2_cpu>
+  $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+  $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
 )
 add_library(xtbloom::xtbloom ALIAS xtbloom)
 
@@ -1715,7 +1721,8 @@ if(XTBLOOM_BUILD_TESTS)
       src/runtime/request.cpp
       src/runtime/result_owner.cpp
       src/runtime/validation.cpp
-      $<TARGET_OBJECTS:xtbloom_gfn2_cpu>
+      $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+      $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
     )
     target_include_directories(xtbloom_cpu_worker_teardown_test PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
@@ -3297,18 +3304,12 @@ if(XTBLOOM_BUILD_TESTS)
   add_test(NAME xtbloom.gfn2.integrals COMMAND xtbloom_integrals_test)
 
   add_executable(xtbloom_gfn1_basis_test tests/gfn1_basis_test.cpp)
-  target_link_libraries(xtbloom_gfn1_basis_test PRIVATE
-    xtbloom_gfn1_cpu
-    xtbloom_gfn2_cpu
-  )
+  target_link_libraries(xtbloom_gfn1_basis_test PRIVATE xtbloom_gfn1_cpu)
   target_compile_features(xtbloom_gfn1_basis_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn1.basis COMMAND xtbloom_gfn1_basis_test)
 
   add_executable(xtbloom_gfn1_integrals_test tests/gfn1_integrals_test.cpp)
-  target_link_libraries(xtbloom_gfn1_integrals_test PRIVATE
-    xtbloom_gfn1_cpu
-    xtbloom_gfn2_cpu
-  )
+  target_link_libraries(xtbloom_gfn1_integrals_test PRIVATE xtbloom_gfn1_cpu)
   target_compile_features(xtbloom_gfn1_integrals_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn1.integrals COMMAND xtbloom_gfn1_integrals_test)
 
@@ -3321,6 +3322,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_h0_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_h0_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.h0 COMMAND xtbloom_h0_test)
+
+  add_executable(xtbloom_gfn1_h0_test tests/gfn1_h0_test.cpp)
+  target_link_libraries(xtbloom_gfn1_h0_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_h0_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.h0 COMMAND xtbloom_gfn1_h0_test)
 
   add_executable(xtbloom_force_test tests/force_test.cpp)
   target_link_libraries(xtbloom_force_test PRIVATE xtbloom_gfn2_cpu)
@@ -3343,7 +3349,7 @@ if(XTBLOOM_BUILD_TESTS)
   add_test(NAME xtbloom.gfn2.es3 COMMAND xtbloom_es3_test)
 
   add_executable(xtbloom_gfn1_es_spin_test tests/gfn1_es_spin_test.cpp)
-  target_link_libraries(xtbloom_gfn1_es_spin_test PRIVATE xtbloom_gfn1_cpu xtbloom_gfn2_cpu)
+  target_link_libraries(xtbloom_gfn1_es_spin_test PRIVATE xtbloom_gfn1_cpu)
   target_compile_features(xtbloom_gfn1_es_spin_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn1.es_spin COMMAND xtbloom_gfn1_es_spin_test)
 

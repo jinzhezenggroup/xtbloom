@@ -84,17 +84,18 @@ xtbloom_status_t make_spin_polarization_plan(const BasisPlan& basis,
 
 xtbloom_status_t evaluate_spin_polarization_cpu(SpinPolarizationView view,
                                                 const double* shell_populations,
-                                                double* spin_energies,
-                                                double* shell_potentials,
+                                                double* spin_energies, double* shell_potentials,
                                                 std::string& error);
 
 xtbloom_status_t evaluate_spin_polarization_system_cpu(
     SpinPolarizationView view, std::int64_t system, const double* shell_populations,
     double& spin_energy, double* shell_potentials, std::string& error);
 
-xtbloom_status_t add_spin_polarization_energy_system_cpu(
-    SpinPolarizationView view, std::int64_t system, const double* shell_populations,
-    double& accumulated_energy, std::string& error);
+xtbloom_status_t add_spin_polarization_energy_system_cpu(SpinPolarizationView view,
+                                                         std::int64_t system,
+                                                         const double* shell_populations,
+                                                         double& accumulated_energy,
+                                                         std::string& error);
 
 }  // namespace xtbloom::detail::gfn1
 

@@ -15,8 +15,8 @@ bool sto_table(std::uint8_t n, std::uint8_t l, std::uint8_t ng, const double*& a
                const double*& coefficients) noexcept;
 
 /* Expand and Cartesian-normalize one STO-nG shell. */
-void expand_sto_shell(std::uint8_t n, std::uint8_t l, std::uint8_t ng, double slater,
-                      double* alpha, double* coefficients) noexcept;
+void expand_sto_shell(std::uint8_t n, std::uint8_t l, std::uint8_t ng, double slater, double* alpha,
+                      double* coefficients) noexcept;
 
 /* Apply tblite's first-matching-shell orthogonalization and renormalization. */
 void orthogonalize_to_first(const double* first_alpha, const double* first_coefficients,

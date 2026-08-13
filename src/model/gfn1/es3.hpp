@@ -56,12 +56,11 @@ xtbloom_status_t add_es3_energy_cpu(ES3View view, const double* atomic_charges, 
  */
 xtbloom_status_t evaluate_es3_potential_system_cpu(ES3View view, std::int64_t system,
                                                    const double* atomic_charges,
-                                                   double* atomic_potentials,
-                                                   std::string& error);
+                                                   double* atomic_potentials, std::string& error);
 
 xtbloom_status_t add_es3_energy_system_cpu(ES3View view, std::int64_t system,
-                                           const double* atomic_charges,
-                                           double& accumulated_energy, std::string& error);
+                                           const double* atomic_charges, double& accumulated_energy,
+                                           std::string& error);
 
 }  // namespace xtbloom::detail::gfn1
 

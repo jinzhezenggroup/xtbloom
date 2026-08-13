@@ -1719,30 +1719,20 @@ struct HostPlans {
         vector_bytes(key.atom_offsets) + vector_bytes(key.atomic_numbers) +
         vector_bytes(key.molecular_charges) + vector_bytes(key.unpaired_electrons) +
         vector_bytes(key.spin_channels) + vector_bytes(key.point_offsets) +
-        vector_bytes(key.response_offsets) + vector_bytes(basis.atom_offsets) +
-        vector_bytes(basis.batch_shell_offsets) + vector_bytes(basis.batch_orbital_offsets) +
-        vector_bytes(basis.batch_cartesian_orbital_offsets) +
-        vector_bytes(basis.batch_primitive_offsets) + vector_bytes(basis.atom_shell_offsets) +
-        vector_bytes(basis.atom_orbital_offsets) +
-        vector_bytes(basis.atom_cartesian_orbital_offsets) +
-        vector_bytes(basis.atom_primitive_offsets) + vector_bytes(basis.shell_orbital_offsets) +
-        vector_bytes(basis.shell_cartesian_orbital_offsets) +
-        vector_bytes(basis.shell_primitive_offsets) + vector_bytes(basis.shell_to_atom) +
-        vector_bytes(basis.principal_quantum_numbers) + vector_bytes(basis.angular_momenta) +
-        vector_bytes(basis.slater_exponents) + vector_bytes(basis.primitive_exponents) +
-        vector_bytes(basis.primitive_coefficients) + vector_bytes(integrals.matrix_offsets) +
-        vector_bytes(coordination.atom_offsets) + vector_bytes(coordination.covalent_radius) +
-        vector_bytes(repulsion.atom_offsets) + vector_bytes(repulsion.sqrt_alpha) +
-        vector_bytes(repulsion.effective_charge) + vector_bytes(repulsion.light_element) +
-        vector_bytes(h0.atom_offsets) + vector_bytes(h0.batch_shell_offsets) +
-        vector_bytes(h0.batch_orbital_offsets) + vector_bytes(h0.matrix_offsets) +
-        vector_bytes(h0.shell_pair_offsets) + vector_bytes(h0.atomic_radii) +
-        vector_bytes(h0.shell_levels) + vector_bytes(h0.shell_coordination_scale) +
-        vector_bytes(h0.shell_polynomial) + vector_bytes(h0.shell_pair_scale) +
-        vector_bytes(es3.batch_shell_offsets) + vector_bytes(es3.shell_gamma3) +
-        vector_bytes(external.atom_offsets) + vector_bytes(external.batch_shell_offsets) +
-        vector_bytes(external.point_charge_offsets) + vector_bytes(external.shell_to_atom) +
-        vector_bytes(external.shell_hardness) + vector_bytes(wavefunction_layout.atom_offsets) +
+        vector_bytes(key.response_offsets) + common::basis_plan_resident_bytes(basis) +
+        vector_bytes(integrals.matrix_offsets) + vector_bytes(coordination.atom_offsets) +
+        vector_bytes(coordination.covalent_radius) + vector_bytes(repulsion.atom_offsets) +
+        vector_bytes(repulsion.sqrt_alpha) + vector_bytes(repulsion.effective_charge) +
+        vector_bytes(repulsion.light_element) + vector_bytes(h0.atom_offsets) +
+        vector_bytes(h0.batch_shell_offsets) + vector_bytes(h0.batch_orbital_offsets) +
+        vector_bytes(h0.matrix_offsets) + vector_bytes(h0.shell_pair_offsets) +
+        vector_bytes(h0.atomic_radii) + vector_bytes(h0.shell_levels) +
+        vector_bytes(h0.shell_coordination_scale) + vector_bytes(h0.shell_polynomial) +
+        vector_bytes(h0.shell_pair_scale) + vector_bytes(es3.batch_shell_offsets) +
+        vector_bytes(es3.shell_gamma3) + vector_bytes(external.atom_offsets) +
+        vector_bytes(external.batch_shell_offsets) + vector_bytes(external.point_charge_offsets) +
+        vector_bytes(external.shell_to_atom) + vector_bytes(external.shell_hardness) +
+        vector_bytes(wavefunction_layout.atom_offsets) +
         vector_bytes(wavefunction_layout.batch_shell_offsets) +
         vector_bytes(wavefunction_layout.batch_orbital_offsets) +
         vector_bytes(wavefunction_layout.atomic_numbers) +
