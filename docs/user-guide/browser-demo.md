@@ -85,7 +85,8 @@ xTBloom's published native benchmark evidence.
   stable C ABI capabilities.
 - The demo is for exploration, not a production scientific environment.
 - The browser adapter exposes GFN2-xTB only. CPU GFN1-xTB is available through
-  native and high-level Python interfaces, not through this WebAssembly demo.
+  native APIs and the Python `Calculator`, `BatchCalculator`, ASE, and dpdata
+  interfaces, not through this WebAssembly demo.
   Solvation, molecular dynamics, Hessians, and lattice/PBC inputs remain
   unsupported here.
 

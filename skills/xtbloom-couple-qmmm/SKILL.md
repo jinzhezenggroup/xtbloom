@@ -5,9 +5,9 @@ description: Couple xTBloom GFN2-xTB calculations to QM/MM electrostatics using 
 
 # Couple xTBloom to QM/MM
 
-Treat xTBloom as the variational GFN2 subsystem and make the calling
-electrostatics or simulation program own every external term that xTBloom does
-not calculate.
+Treat xTBloom as the selected variational GFN1-xTB or GFN2-xTB subsystem and
+make the calling electrostatics or simulation program own every external term
+that xTBloom does not calculate.
 
 ## Choose the Host Environment
 

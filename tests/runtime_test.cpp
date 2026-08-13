@@ -213,6 +213,13 @@ int main() {
   if (gfn1_status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE) {
     CHECK(std::strstr(xtbloom_get_last_error(), "LP64") != nullptr);
     CHECK(energies[0] == 123.25);
+    CHECK(forces[0] == -4.0 && forces[1] == -5.0 && forces[2] == -6.0);
+    CHECK(atomic_charges[0] == 71.25);
+    CHECK(point_charge_forces[0] == 81.0 && point_charge_forces[1] == 82.0 &&
+          point_charge_forces[2] == 83.0);
+    CHECK(scc_iterations[0] == 91);
+    CHECK(scc_converged[0] == 1u);
+    CHECK(per_system_status[0] == XTBLOOM_STATUS_INTERNAL_ERROR);
     CHECK(result.flags == UINT32_C(0xa5a55a5a));
   } else {
     CHECK(gfn1_status == XTBLOOM_STATUS_SUCCESS);

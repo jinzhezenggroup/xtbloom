@@ -45,9 +45,9 @@ line to `XTBLOOM_BACKEND_CUDA` to verify the CUDA build explicitly.
 `XTBLOOM_MODEL_GFN2_XTB`. Set it explicitly to `XTBLOOM_MODEL_GFN1_XTB` for
 GFN1 CPU execution. A GFN1 request on a CUDA context returns
 `XTBLOOM_STATUS_NOT_SUPPORTED` transactionally; the library never substitutes
-GFN2. GFN1 publishes energy, forces, charges, point-charge forces, and the
-caller-supplied `b + A*q` response, but not electric-field attachments or the
-molecular-dipole outlet.
+GFN2. GFN1 publishes energy, forces, charges, and point-charge forces, and
+accepts caller-supplied `b` and `A` fields for the `b + A*q` response. It does
+not support electric-field attachments or the molecular-dipole outlet.
 
 A consumer CMake project needs only the exported target:
 

@@ -136,6 +136,8 @@ class CpuWorkerPool final {
     return workers_.capacity() * sizeof(std::thread);
   }
 
+  [[nodiscard]] std::size_t concurrency() const noexcept { return concurrency_; }
+
   void set_thread_cleanup(void* context, ThreadCleanup cleanup) noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     thread_cleanup_context_ = context;
@@ -1228,6 +1230,12 @@ xtbloom_status_t set_gfn1_cpu_linear_algebra_backend_for_testing(
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   cache.impl_->backend = backend;
+  /* Internal test providers may own per-thread state too. Install the same
+   * teardown adapter used by isolated production MKL; it is harmless when the
+   * injected backend has no cleanup hook and lets tests prove both owner- and
+   * worker-thread lifetime ordering. */
+  cache.impl_->workers.set_thread_cleanup(
+      &cache.impl_->backend, &Gfn1CpuExecutionCache::Impl::release_backend_thread_resources);
   cache.impl_->backend_initialized = true;
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
@@ -1398,6 +1406,11 @@ std::size_t persistent_workspace_bytes_gfn1_cpu(Gfn1CpuExecutionCache& cache) no
            vector_bytes(request.periodic_shifts) + vector_bytes(request.response_offsets) +
            vector_bytes(request.response_matrices);
   return total;
+}
+
+std::size_t gfn1_cpu_execution_threads_for_testing(Gfn1CpuExecutionCache& cache) noexcept {
+  std::lock_guard<std::mutex> lock(cache.impl_->mutex);
+  return cache.impl_->workers.concurrency();
 }
 
 }  // namespace xtbloom::detail

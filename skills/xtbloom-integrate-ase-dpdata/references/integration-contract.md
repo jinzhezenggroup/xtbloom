@@ -38,14 +38,14 @@ Important constructor settings and defaults:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `method` | `"GFN2-xTB"` | The only implemented method |
+| `method` | `"GFN2-xTB"` | `"GFN1-xTB"` or `"GFN2-xTB"` |
 | `charge` | `None` | Sum `atoms.get_initial_charges()` when omitted |
 | `multiplicity` | `None` | Derive unpaired electrons from rounded sum of initial magnetic moments when omitted |
 | `electronic_temperature` | `300.0` | kelvin |
 | `max_scc_iterations` | `250` | SCC iteration ceiling |
 | `charge_tolerance` | `1e-6` | charge tolerance |
 | `energy_tolerance` | `1e-8` | Hartree |
-| `backend` | `"auto"` | prefer CUDA, otherwise CPU |
+| `backend` | `"auto"` | prefer CUDA for GFN2; use CPU for GFN1 |
 | `device_id` | `None` | selected CUDA device |
 | `cpu_threads` | `1` | CPU batch-parallel worker ceiling |
 | `cache_api` | `True` | retain the underlying xTBloom calculator |

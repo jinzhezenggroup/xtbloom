@@ -43,6 +43,7 @@ class Gfn1CpuExecutionCache {
                                            const xtbloom_compute_options_t&,
                                            xtbloom_batch_result_t&, std::string&);
   friend std::size_t persistent_workspace_bytes_gfn1_cpu(Gfn1CpuExecutionCache&) noexcept;
+  friend std::size_t gfn1_cpu_execution_threads_for_testing(Gfn1CpuExecutionCache&) noexcept;
   friend xtbloom_status_t set_gfn1_cpu_linear_algebra_backend_for_testing(
       Gfn1CpuExecutionCache&, const gfn2::CpuLinearAlgebraBackend&, std::string&);
 };
@@ -60,6 +61,12 @@ xtbloom_status_t execute_gfn1_cpu(Gfn1CpuExecutionCache& cache, const xtbloom_ba
                                   const xtbloom_compute_options_t& options,
                                   xtbloom_batch_result_t& result, std::string& error);
 std::size_t persistent_workspace_bytes_gfn1_cpu(Gfn1CpuExecutionCache& cache) noexcept;
+
+/* Actual execution concurrency after affinity clamping and any legal worker
+ * creation fallback. Hidden tests use it to distinguish one owner cleanup
+ * from owner-plus-worker cleanup without assuming the host can create a
+ * persistent thread. */
+std::size_t gfn1_cpu_execution_threads_for_testing(Gfn1CpuExecutionCache& cache) noexcept;
 
 /*
  * Install one verified internal-test LP64 backend before preparing or

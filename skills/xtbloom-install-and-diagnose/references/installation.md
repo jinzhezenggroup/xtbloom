@@ -117,7 +117,8 @@ Importing the Python package does not create a backend. CUDA compilation, `nvidi
 
 xTBloom implements GFN1-xTB on CPU and GFN2-xTB on CPU and CUDA. ROCm,
 lattice/PBC inputs, solvation, native optimization, molecular dynamics, and
-Hessians are not supported.
+native/analytic Hessians are not supported. Python `Calculator.hessian()` and
+`BatchCalculator.hessian()` provide numerical QM-coordinate Hessians.
 
 Authoritative online sources:
 

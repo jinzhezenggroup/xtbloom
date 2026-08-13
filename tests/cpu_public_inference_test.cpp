@@ -18,13 +18,19 @@
 namespace allocation_test {
 std::atomic<std::size_t> count{0u};
 std::atomic<bool> enabled{false};
+std::atomic<std::size_t> fail_at{0u};
 }  // namespace allocation_test
 
 /* Interpose C++ allocations from the public runtime so the steady-state test
  * can prove that context-owned request/result staging retains its capacity. */
 void* operator new(std::size_t size) {
   if (allocation_test::enabled.load(std::memory_order_relaxed)) {
-    allocation_test::count.fetch_add(1u, std::memory_order_relaxed);
+    const std::size_t allocation =
+        allocation_test::count.fetch_add(1u, std::memory_order_relaxed) + 1u;
+    const std::size_t fail_at = allocation_test::fail_at.load(std::memory_order_relaxed);
+    if (fail_at != 0u && allocation == fail_at) {
+      throw std::bad_alloc();
+    }
   }
   if (void* pointer = std::malloc(size == 0u ? 1u : size); pointer != nullptr) {
     return pointer;
@@ -238,6 +244,27 @@ PublicBatch make_h2_he_batch() {
   request.positions = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0, 7.0, 0.0, 0.0};
   request.molecular_charges = {0.0, 0.0};
   request.unpaired_electrons = {0, 0};
+  return request;
+}
+
+PublicBatch make_gfn1_h3_plus_oracle_batch() {
+  /* Hash-pinned tblite 0.7.0 case `gfn1_h3_plus`; source geometry and expected
+   * values live in data/conformance/gfn1/{inputs,golden}. Keeping this tiny
+   * public-plan sentinel here makes an accidental GFN2 route fail locally. */
+  PublicBatch request;
+  request.atom_offsets = {0, 3};
+  request.atomic_numbers = {1, 1, 1};
+  request.positions = {-0.47073898552969,
+                       0.81534384004086,
+                       0.0,
+                       -0.47073898552969,
+                       -0.81534384004086,
+                       0.0,
+                       0.94147797105939,
+                       0.0,
+                       0.0};
+  request.molecular_charges = {1.0};
+  request.unpaired_electrons = {0};
   return request;
 }
 
@@ -2102,19 +2129,66 @@ int test_plan_creation_model_and_abi_prefix_contracts() {
   CHECK(xtbloom_plan_compute(partial_plan.get(), &request.batch, &request.options,
                              &request.result) == XTBLOOM_STATUS_SUCCESS);
 
-  /* GFN1 plan setup selects the GFN1 cache and must never construct or execute
-   * a GFN2 cache for the same public model identity. */
-  xtbloom_compute_options_t gfn1 = request.options;
-  gfn1.model = XTBLOOM_MODEL_GFN1_XTB;
+  /* GFN1 plan setup on a fresh context must route directly to GFN1. Compare a
+   * pinned tblite case so falling through to a GFN2 cache cannot pass merely
+   * because both public executors converge. */
+  ContextHandle gfn1_context = make_cpu_context(1);
+  CHECK(gfn1_context != nullptr);
+  PublicBatch gfn1_request = make_gfn1_h3_plus_oracle_batch();
+  gfn1_request.bind(flags);
+  gfn1_request.options.model = XTBLOOM_MODEL_GFN1_XTB;
   xtbloom_plan_t* raw_gfn1_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
-  CHECK(xtbloom_plan_create(context.get(), &request.batch, &gfn1, &raw_gfn1_plan) ==
-        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_plan_create(gfn1_context.get(), &gfn1_request.batch, &gfn1_request.options,
+                            &raw_gfn1_plan) == XTBLOOM_STATUS_SUCCESS);
   CHECK(raw_gfn1_plan != nullptr);
   PlanHandle gfn1_plan(raw_gfn1_plan);
-  CHECK(xtbloom_plan_compute(gfn1_plan.get(), &request.batch, &gfn1, &request.result) ==
-        XTBLOOM_STATUS_SUCCESS);
-  CHECK(std::all_of(request.statuses.begin(), request.statuses.end(),
+  CHECK(xtbloom_plan_compute(gfn1_plan.get(), &gfn1_request.batch, &gfn1_request.options,
+                             &gfn1_request.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(std::all_of(gfn1_request.statuses.begin(), gfn1_request.statuses.end(),
                     [](std::int32_t status) { return status == XTBLOOM_STATUS_SUCCESS; }));
+  constexpr double kExpectedEnergy = -0.9219280086834609;
+  constexpr std::array<double, 9> kExpectedForces{
+      -0.006079136118734187, 0.010529372623774591,  0.0,
+      -0.006079136118734218, -0.010529372623774612, 0.0,
+      0.012158272237468412,  1.884645091576469e-17, 0.0};
+  CHECK(near(gfn1_request.energies[0], kExpectedEnergy, 5.0e-7));
+  for (std::size_t index = 0u; index < kExpectedForces.size(); ++index) {
+    CHECK(near(gfn1_request.forces[index], kExpectedForces[index], 5.0e-7));
+  }
+  return 0;
+}
+
+int test_lazy_model_cache_allocation_failures_are_atomic_and_retryable() {
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  for (const auto [model, diagnostic] :
+       {std::pair{XTBLOOM_MODEL_GFN1_XTB, "CPU GFN1 execution cache"},
+        std::pair{XTBLOOM_MODEL_GFN2_XTB, "CPU GFN2 execution cache"}}) {
+    ContextHandle context = make_cpu_context(1);
+    CHECK(context != nullptr);
+    PublicBatch request = make_h2_he_batch();
+    request.bind(flags);
+    request.options.model = model;
+    const PublicOutputImage before(request);
+
+    allocation_test::count.store(0u, std::memory_order_relaxed);
+    allocation_test::fail_at.store(1u, std::memory_order_relaxed);
+    allocation_test::enabled.store(true, std::memory_order_release);
+    const xtbloom_status_t failed =
+        xtbloom_compute(context.get(), &request.batch, &request.options, &request.result);
+    allocation_test::enabled.store(false, std::memory_order_release);
+    allocation_test::fail_at.store(0u, std::memory_order_relaxed);
+    CHECK(failed == XTBLOOM_STATUS_ALLOCATION_FAILED);
+    CHECK(std::strstr(xtbloom_get_last_error(), diagnostic) != nullptr);
+    CHECK(before.matches(request));
+
+    request.bind(flags);
+    request.options.model = model;
+    CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(std::all_of(request.statuses.begin(), request.statuses.end(),
+                      [](std::int32_t status) { return status == XTBLOOM_STATUS_SUCCESS; }));
+  }
   return 0;
 }
 
@@ -2609,6 +2683,10 @@ int main() {
     return line;
   }
   if (const int line = test_plan_creation_model_and_abi_prefix_contracts(); line != 0) {
+    return line;
+  }
+  if (const int line = test_lazy_model_cache_allocation_failures_are_atomic_and_retryable();
+      line != 0) {
     return line;
   }
   if (const int line = test_gfn1_plan_workspace_warm_and_topology_transactions(); line != 0) {
