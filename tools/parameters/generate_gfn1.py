@@ -587,9 +587,7 @@ def _source_provenance(source_dir: Path, revision_spec: str) -> dict[str, Any]:
             "spdx": UPSTREAM_LICENSE,
             "path": "COPYING.LESSER",
             "bytes": len(license_content),
-            "git_blob": _git(
-                source_dir, "rev-parse", f"{revision}:COPYING.LESSER"
-            ),
+            "git_blob": _git(source_dir, "rev-parse", f"{revision}:COPYING.LESSER"),
             "sha256": sha256_bytes(license_content),
         },
     }

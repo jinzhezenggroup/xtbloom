@@ -1224,6 +1224,7 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        """Load the reviewed manifests and retained Apache license once."""
         cls.gfn1 = json.loads(
             (REPOSITORY / "data/parameters/gfn1_manifest.json").read_text(
                 encoding="utf-8"
@@ -1237,36 +1238,33 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
         cls.apache = (REPOSITORY / "LICENSES/Apache-2.0.txt").read_bytes()
 
     def test_current_gfn1_provenance_is_accepted(self) -> None:
+        """Accept the exact reviewed GFN1 and GFN1-D3 provenance records."""
         CHECKER._check_gfn1_parameter_provenance(copy.deepcopy(self.gfn1))
-        CHECKER._check_gfn1_d3_provenance(
-            copy.deepcopy(self.gfn1_d3), self.apache
-        )
+        CHECKER._check_gfn1_d3_provenance(copy.deepcopy(self.gfn1_d3), self.apache)
 
     def test_gfn1_source_digest_mutation_is_rejected(self) -> None:
+        """Reject a modified aggregate digest for the tblite source set."""
         manifest = copy.deepcopy(self.gfn1)
         manifest["source"]["parameter_sources_sha256"] = "0" * 64
-        with self.assertRaisesRegex(
-            CHECKER.LicenseCheckError, "unreviewed provenance"
-        ):
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
             CHECKER._check_gfn1_parameter_provenance(manifest)
 
     def test_gfn1_cross_check_blob_mutation_is_rejected(self) -> None:
+        """Reject a dxtb cross-check record that names another Git blob."""
         manifest = copy.deepcopy(self.gfn1)
         manifest["cross_check"]["git_blob"] = "0" * 40
-        with self.assertRaisesRegex(
-            CHECKER.LicenseCheckError, "unreviewed provenance"
-        ):
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
             CHECKER._check_gfn1_parameter_provenance(manifest)
 
     def test_gfn1_d3_mctc_source_mutation_is_rejected(self) -> None:
+        """Reject a changed mctc-lib source digest in the D3 manifest."""
         manifest = copy.deepcopy(self.gfn1_d3)
         manifest["unit_conversion"]["sources"][0]["sha256"] = "0" * 64
-        with self.assertRaisesRegex(
-            CHECKER.LicenseCheckError, "unreviewed provenance"
-        ):
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
             CHECKER._check_gfn1_d3_provenance(manifest, self.apache)
 
     def test_gfn1_d3_mctc_license_text_mutation_is_rejected(self) -> None:
+        """Reject retained Apache license bytes outside the reviewed record."""
         with self.assertRaisesRegex(
             CHECKER.LicenseCheckError, "Apache license differs"
         ):

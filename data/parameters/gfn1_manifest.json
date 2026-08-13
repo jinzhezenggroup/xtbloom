@@ -18,7 +18,7 @@
   },
   "generator": {
     "path": "tools/parameters/generate_gfn1.py",
-    "sha256": "78b529bb799aac28f636f036c9bca45d72644b205cb89f6c9339d8f1f202ae67",
+    "sha256": "5729db39c3babe1476dd43dac53a9474d86190fbca673b60a781308a22a3c398",
     "shared_helper": {
       "path": "tools/parameters/generate_gfn2.py",
       "sha256": "4d05555ef2772878ec5cc472d73656312e4b3d6491061f029c8563b0d1327a93"

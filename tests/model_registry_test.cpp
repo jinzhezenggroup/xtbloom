@@ -25,8 +25,7 @@ int main() {
   CHECK(std::strcmp(gfn1->canonical_name, "GFN1-xTB") == 0);
   CHECK(gfn1->cpu_route == ModelBackendRoute::kUnavailable);
   CHECK(gfn1->cuda_route == ModelBackendRoute::kUnavailable);
-  CHECK(model_backend_route(*gfn1, XTBLOOM_BACKEND_CPU) ==
-        ModelBackendRoute::kUnavailable);
+  CHECK(model_backend_route(*gfn1, XTBLOOM_BACKEND_CPU) == ModelBackendRoute::kUnavailable);
 
   const auto* gfn2 = find_model_descriptor(XTBLOOM_MODEL_GFN2_XTB);
   CHECK(gfn2 != nullptr);
@@ -34,8 +33,7 @@ int main() {
   CHECK(std::strcmp(gfn2->canonical_name, "GFN2-xTB") == 0);
   CHECK(gfn2->cpu_route == ModelBackendRoute::kGfn2);
   CHECK(gfn2->cuda_route == ModelBackendRoute::kGfn2);
-  CHECK(model_backend_route(*gfn2, XTBLOOM_BACKEND_ROCM) ==
-        ModelBackendRoute::kUnavailable);
+  CHECK(model_backend_route(*gfn2, XTBLOOM_BACKEND_ROCM) == ModelBackendRoute::kUnavailable);
   CHECK(find_model_descriptor(static_cast<xtbloom_model_t>(99)) == nullptr);
 
   std::string error;

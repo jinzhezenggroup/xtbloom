@@ -1646,10 +1646,9 @@ def _check_gfn1_d3_provenance(
     if _canonical_json_sha256(retained) != GFN1_D3_PROVENANCE_SHA256:
         raise LicenseCheckError("GFN1-D3 manifest has unreviewed provenance")
     unit_conversion = gfn1_d3.get("unit_conversion", {})
-    if (
-        not isinstance(unit_conversion, dict)
-        or unit_conversion.get("legal_files") != [GFN1_D3_MCTC_LICENSE_RECORD]
-    ):
+    if not isinstance(unit_conversion, dict) or unit_conversion.get("legal_files") != [
+        GFN1_D3_MCTC_LICENSE_RECORD
+    ]:
         raise LicenseCheckError("GFN1-D3 manifest has incomplete mctc legal provenance")
     if (
         len(apache_license) != GFN1_D3_MCTC_LICENSE_RECORD["bytes"]
@@ -1889,9 +1888,7 @@ def check_source(root: Path) -> None:
     )
 
     _check_gfn1_parameter_provenance(gfn1)
-    _check_gfn1_d3_provenance(
-        gfn1_d3, (root / "LICENSES/Apache-2.0.txt").read_bytes()
-    )
+    _check_gfn1_d3_provenance(gfn1_d3, (root / "LICENSES/Apache-2.0.txt").read_bytes())
     if gfn2["source"]["license"]["spdx"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("GFN2 parameter manifest has the wrong SPDX license")
     if spin["source"]["license"] != "LGPL-3.0-or-later":
