@@ -1347,6 +1347,16 @@ class Gfn1FixtureProvenanceTests(unittest.TestCase):
         """Accept the exact reviewed dxtb, mstore, and tblite records."""
         CHECKER._check_gfn1_fixture_provenance(REPOSITORY)
 
+    def test_windows_crlf_fixture_checkout_is_accepted(self) -> None:
+        """Hash canonical fixture text across Git's Windows CRLF checkout."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            for relative in ("tests/gfn1_d3_test.cpp", "tests/gfn1_halogen_test.cpp"):
+                consumer = root / relative
+                consumer.write_bytes(consumer.read_bytes().replace(b"\n", b"\r\n"))
+            CHECKER._check_gfn1_fixture_provenance(root)
+
     def test_fixture_source_digest_mutation_is_rejected(self) -> None:
         """Reject a changed upstream digest even when the local tests remain."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:

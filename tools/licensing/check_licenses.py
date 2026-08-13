@@ -1955,7 +1955,11 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
             )
         consumer = root / expected_fixture["consumer"]
         try:
-            payload = consumer.read_bytes()
+            # Git may materialize tracked C++ sources with CRLF on Windows.
+            # Normalize only line endings before applying the manifest's
+            # canonical-LF extraction digest; every scientific literal and
+            # marker byte remains covered by the retained hash.
+            payload = consumer.read_bytes().replace(b"\r\n", b"\n")
             begin = f"// XTBLOOM_GFN1_FIXTURE_BEGIN {fixture_id}\n".encode()
             end = f"// XTBLOOM_GFN1_FIXTURE_END {fixture_id}\n".encode()
             if payload.count(begin) != 1 or payload.count(end) != 1:
