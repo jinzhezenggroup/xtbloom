@@ -2490,6 +2490,41 @@ def _array_shape(array: object) -> tuple[int, ...]:
     return _probe_shape(array)
 
 
+def _validate_array_devices_before_export(
+    arrays: Sequence[object], context: Context
+) -> None:
+    """Reject CUDA arrays on a foreign device before exporting any capsule.
+
+    A custom context stream belongs to the context's resolved CUDA device.
+    Passing that handle to ``__dlpack__`` on a foreign producer device would
+    be unsafe, so this metadata-only preflight runs before the first producer
+    is exported.  The later descriptor check remains defense in depth against
+    a malformed capsule whose embedded device disagrees with its producer.
+    """
+    resolved_backend = int(context.backend)
+    resolved_device = int(context.device_id)
+    for array in arrays:
+        device_type, device_id = _dlpack.dlpack_device(array)
+        memory_space = _dlpack.memory_space_for_device(device_type)
+        if memory_space is None:
+            raise XTBloomNotSupportedError(
+                f"DLPack device type {device_type} is not supported by xTBloom "
+                "(only CPU, CPU-pinned host memory, and CUDA device memory are "
+                "usable)"
+            )
+        if memory_space != library.MEMORY_CUDA_DEVICE:
+            continue
+        if resolved_backend != library.BACKEND_CUDA:
+            raise XTBloomNotSupportedError(
+                "CUDA device arrays require the CUDA backend"
+            )
+        if not _same_device(device_id, resolved_device):
+            raise XTBloomNotSupportedError(
+                f"CUDA array on device {device_id} does not match the "
+                f"context's resolved device {resolved_device}"
+            )
+
+
 def _compute_array_batch(
     batch: ArrayBatch,
     *,
@@ -2532,6 +2567,14 @@ def _compute_array_batch(
 
     out_spec = _normalize_out_spec(out)
 
+    # Device metadata is safe to inspect before capsule export.  Validate the
+    # entire request here so a foreign-device array cannot observe a custom
+    # stream handle owned by the context device, and no earlier producer is
+    # consumed before a later mismatch is diagnosed.
+    requested_arrays = [array for array in arrays.values() if array is not None]
+    requested_arrays.extend(out_spec.values())
+    _validate_array_devices_before_export(requested_arrays, context)
+
     views: list[_dlpack.DLPackView] = []
     keepalive: list[object] = []
     output_owners: dict[str, object] = {}
@@ -2563,6 +2606,7 @@ def _compute_array_batch(
                 expected_dtype=_dlpack.EXPECTED_INPUT_DTYPES[name],
                 expected_shape=shape,
                 stream=context.stream,
+                expected_cuda_device=context.device_id,
                 copy=batch._copy,
             )
             views.append(view)
@@ -2622,6 +2666,7 @@ def _compute_array_batch(
             keepalive,
             output_owners,
             context.stream,
+            context.device_id,
             nsystems,
             natoms,
             npoints,
@@ -2810,7 +2855,11 @@ def _build_compute_options(
 
 
 def _normalize_out_spec(out: object | None) -> dict[str, object]:
-    """Validate and normalize the ``out=`` output-policy mapping."""
+    """Validate and normalize the ``out=`` output-policy mapping.
+
+    A known output mapped to ``None`` is equivalent to omitting that entry,
+    so the selected ``result_memory`` policy still owns its allocation.
+    """
     if out is None:
         return {}
     if not isinstance(out, dict):
@@ -2821,6 +2870,8 @@ def _normalize_out_spec(out: object | None) -> dict[str, object]:
         canonical = aliases.get(name, name)
         if canonical not in _dlpack.EXPECTED_OUTPUT_DTYPES:
             raise XTBloomValueError(f"unknown output name {name!r}")
+        if array is None:
+            continue
         if canonical in normalized:
             raise XTBloomValueError(f"output {name!r} was supplied more than once")
         if _array_adapter.is_lazy(array):
@@ -2867,6 +2918,7 @@ def _bind_outputs(
     keepalive: list[object],
     output_owners: dict[str, object],
     stream: int | None,
+    expected_cuda_device: int,
     nsystems: int,
     natoms: int,
     npoints: int,
@@ -2949,6 +3001,7 @@ def _bind_outputs(
             views,
             keepalive,
             stream,
+            expected_cuda_device,
         )
         if owner is not None:
             output_owners[public_name] = owner
@@ -3037,6 +3090,7 @@ def _bind_one_output(
     views: list[_dlpack.DLPackView],
     keepalive: list[object],
     stream: int | None,
+    expected_cuda_device: int,
 ) -> object | None:
     """Bind one output descriptor and return the array the result must expose.
 
@@ -3056,6 +3110,7 @@ def _bind_one_output(
             expected_dtype=resolved_dtype,
             expected_shape=shape,
             stream=stream,
+            expected_cuda_device=expected_cuda_device,
             # Outputs must always alias the caller's buffer. Allowing the
             # batch input copy policy here would make a producer-side temporary
             # receive the result while the advertised ``out=`` array stays

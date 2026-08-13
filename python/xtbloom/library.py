@@ -28,8 +28,10 @@ import numpy.typing as npt
 from .exceptions import XTBloomRuntimeError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
     from types import ModuleType
+
+_cuda_driver_handle: ctypes.CDLL | None = None
 
 # --- ABI constants (kept in sync with include/xtbloom/xtbloom.h) ----------------
 
@@ -724,6 +726,140 @@ def _runtime_search_dirs() -> list[Path]:
             dirs.append(path)
 
     return dirs
+
+
+def _load_cuda_driver() -> ctypes.CDLL | None:
+    """Load the process-global NVIDIA driver used to scope DLPack export.
+
+    The driver API is independent of the CUDA runtime major used by an array
+    producer.  Keeping this handle alive avoids mixing xTBloom's CUDA-12
+    runtime cohort with a producer such as a CUDA-13 PyTorch build merely to
+    select the producer's current device.
+    """
+    global _cuda_driver_handle
+    if _cuda_driver_handle is not None:
+        return _cuda_driver_handle
+    try:
+        driver = ctypes.CDLL("libcuda.so.1")
+    except OSError:
+        return None
+    _cuda_driver_handle = driver
+    return driver
+
+
+@contextlib.contextmanager
+def _cuda_device_scope(device_id: int) -> Iterator[None]:
+    """Push one CUDA primary context temporarily and restore the caller state.
+
+    Some conforming DLPack producers, notably PyTorch, require their array's
+    device to be current while ``__dlpack__`` exports the capsule.  The driver
+    context stack is runtime-major-neutral and thread-local; using it avoids
+    importing an array backend or calling one CUDA runtime's ``cudaSetDevice``
+    inside a producer built against another runtime major.  The scope performs
+    no synchronization.  A CUDA-less process is a no-op so protocol fakes
+    remain testable without a driver.
+    """
+    driver = _load_cuda_driver()
+    if driver is None:
+        yield
+        return
+
+    try:
+        cu_init = driver.cuInit
+        cu_device_get = driver.cuDeviceGet
+        cu_primary_retain = driver.cuDevicePrimaryCtxRetain
+        cu_primary_release = driver.cuDevicePrimaryCtxRelease
+        cu_context_push = driver.cuCtxPushCurrent_v2
+        cu_context_pop = driver.cuCtxPopCurrent_v2
+    except AttributeError:
+        yield
+        return
+    cu_init.argtypes = [ctypes.c_uint]
+    cu_init.restype = ctypes.c_int
+    cu_device_get.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+    cu_device_get.restype = ctypes.c_int
+    cu_primary_retain.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int]
+    cu_primary_retain.restype = ctypes.c_int
+    cu_primary_release.argtypes = [ctypes.c_int]
+    cu_primary_release.restype = ctypes.c_int
+    cu_context_push.argtypes = [ctypes.c_void_p]
+    cu_context_push.restype = ctypes.c_int
+    cu_context_pop.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    cu_context_pop.restype = ctypes.c_int
+
+    init_status = int(cu_init(0))
+    if init_status != 0:
+        # A loader stub or CUDA-less host cannot establish a meaningful
+        # context stack.  Let the producer provide its normal diagnostic.
+        yield
+        return
+
+    target = int(device_id)
+    device = ctypes.c_int()
+    device_status = int(cu_device_get(ctypes.byref(device), target))
+    if device_status != 0:
+        raise XTBloomRuntimeError(
+            f"could not resolve CUDA device {target} for DLPack export "
+            f"(cuDeviceGet status {device_status})"
+        )
+    context = ctypes.c_void_p()
+    retain_status = int(cu_primary_retain(ctypes.byref(context), device.value))
+    if retain_status != 0:
+        raise XTBloomRuntimeError(
+            f"could not retain CUDA device {target}'s primary context for "
+            f"DLPack export (cuDevicePrimaryCtxRetain status {retain_status})"
+        )
+    push_status = int(cu_context_push(context))
+    if push_status != 0:
+        release_status = int(cu_primary_release(device.value))
+        suffix = (
+            f"; primary-context release status {release_status}"
+            if release_status != 0
+            else ""
+        )
+        raise XTBloomRuntimeError(
+            f"could not make CUDA device {target} current for DLPack export "
+            f"(cuCtxPushCurrent status {push_status}{suffix})"
+        )
+
+    try:
+        yield
+    except BaseException as export_error:
+        popped = ctypes.c_void_p()
+        restore_status = int(cu_context_pop(ctypes.byref(popped)))
+        release_status = (
+            int(cu_primary_release(device.value)) if restore_status == 0 else None
+        )
+        if restore_status != 0 or release_status != 0:
+            release_diagnostic = (
+                str(release_status)
+                if release_status is not None
+                else "not attempted after pop failure"
+            )
+            raise XTBloomRuntimeError(
+                f"DLPack export failed ({export_error}); additionally could "
+                "not restore the caller's CUDA context after DLPack export "
+                f"(cuCtxPopCurrent status {restore_status}, "
+                f"cuDevicePrimaryCtxRelease status {release_diagnostic})"
+            ) from export_error
+        raise
+    else:
+        popped = ctypes.c_void_p()
+        restore_status = int(cu_context_pop(ctypes.byref(popped)))
+        release_status = (
+            int(cu_primary_release(device.value)) if restore_status == 0 else None
+        )
+        if restore_status != 0 or release_status != 0:
+            release_diagnostic = (
+                str(release_status)
+                if release_status is not None
+                else "not attempted after pop failure"
+            )
+            raise XTBloomRuntimeError(
+                "could not restore the caller's CUDA context after DLPack export "
+                f"(cuCtxPopCurrent status {restore_status}, "
+                f"cuDevicePrimaryCtxRelease status {release_diagnostic})"
+            )
 
 
 # Exact dependency groups in load order.  Prefix-scanning every NVIDIA package

@@ -15,7 +15,11 @@ import numpy as np
 import pytest
 from _cases import case_by_id, structure_inputs
 from xtbloom import ArrayBatch, Calculator
-from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
+from xtbloom.exceptions import (
+    XTBloomNotSupportedError,
+    XTBloomRuntimeError,
+    XTBloomValueError,
+)
 
 # --- environment probes ---------------------------------------------------------
 
@@ -408,6 +412,61 @@ def test_cuda_compute_restores_callers_current_device() -> None:
 
         with pytest.raises(XTBloomRuntimeError, match="atom_offsets"):
             ArrayBatch(**bad, backend="cuda", device_id=context_device).compute()
+        assert torch.cuda.current_device() == caller_device
+
+
+@pytest.mark.cuda
+def test_foreign_cuda_array_rejected_before_custom_stream_export() -> None:
+    """Never expose a device-0 stream to a device-1 DLPack producer."""
+    reason = _device_ready()
+    if reason:
+        pytest.skip(reason)
+    if _TORCH is None:
+        pytest.skip("torch not installed")
+    import torch
+
+    if torch.cuda.device_count() < 2:
+        pytest.skip("requires two CUDA devices")
+
+    class TrackingProducer:
+        """Proxy one tensor while recording whether capsule export occurred."""
+
+        def __init__(self, tensor: object) -> None:
+            self.tensor = tensor
+            self.shape = tensor.shape
+            self.exports = 0
+
+        def __dlpack_device__(self) -> tuple[int, int]:
+            return self.tensor.__dlpack_device__()
+
+        def __dlpack__(self, **kwargs: object) -> object:
+            self.exports += 1
+            return self.tensor.__dlpack__(**kwargs)
+
+    context_device = 0
+    foreign_device = 1
+    with torch.cuda.device(context_device):
+        stream = torch.cuda.Stream()
+    with torch.cuda.device(foreign_device):
+        foreign = TrackingProducer(
+            torch.tensor([0.0], dtype=torch.float64, device="cuda:1")
+        )
+        caller_device = torch.cuda.current_device()
+
+        arrays = _water_host_arrays()
+        arrays["molecular_charges"] = foreign
+        with pytest.raises(
+            XTBloomNotSupportedError,
+            match=r"device 1.*resolved device 0",
+        ):
+            ArrayBatch(
+                **arrays,
+                backend="cuda",
+                device_id=context_device,
+                stream=int(stream.cuda_stream),
+            ).compute()
+
+        assert foreign.exports == 0
         assert torch.cuda.current_device() == caller_device
 
 
