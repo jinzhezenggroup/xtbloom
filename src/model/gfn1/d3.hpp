@@ -76,13 +76,11 @@ struct D3Workspace {
 };
 
 xtbloom_status_t make_d3_plan(std::int64_t batch_size, std::int64_t total_atoms,
-                              const std::int64_t* atom_offsets,
-                              const std::int32_t* atomic_numbers, D3Plan& plan,
-                              std::string& error);
+                              const std::int64_t* atom_offsets, const std::int32_t* atomic_numbers,
+                              D3Plan& plan, std::string& error);
 
-xtbloom_status_t bind_d3_workspace(const D3Plan& plan, void* workspace,
-                                   std::size_t workspace_size, D3Workspace& view,
-                                   std::string& error);
+xtbloom_status_t bind_d3_workspace(const D3Plan& plan, void* workspace, std::size_t workspace_size,
+                                   D3Workspace& view, std::string& error);
 
 /*
  * Accumulate charge-independent GFN1 D3(BJ) energy and optional gradients.
@@ -95,9 +93,8 @@ xtbloom_status_t bind_d3_workspace(const D3Plan& plan, void* workspace,
  * three-body term.
  */
 xtbloom_status_t add_d3_cpu(const D3Plan& plan, const double* positions,
-                            const double* coordination_numbers, double* energies,
-                            double* gradients, const D3Workspace& workspace,
-                            std::string& error);
+                            const double* coordination_numbers, double* energies, double* gradients,
+                            const D3Workspace& workspace, std::string& error);
 
 }  // namespace xtbloom::detail::gfn1
 

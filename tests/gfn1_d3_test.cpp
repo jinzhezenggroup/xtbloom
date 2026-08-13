@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include "data/parameters/gfn1_d3.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -15,7 +17,6 @@
 #include <vector>
 
 #include "data/parameters/gfn1.hpp"
-#include "data/parameters/gfn1_d3.hpp"
 #include "model/gfn1/coordination.hpp"
 #include "model/gfn1/d3.hpp"
 
@@ -82,17 +83,16 @@ struct Fixture {
     std::string error;
     const auto batch_size = static_cast<std::int64_t>(offsets.size() - 1u);
     const auto total_atoms = static_cast<std::int64_t>(numbers.size());
-    expect(xtbloom::detail::gfn1::make_d3_plan(batch_size, total_atoms, offsets.data(),
-                                               numbers.data(), d3_plan, error) ==
-               XTBLOOM_STATUS_SUCCESS,
-           "make D3 fixture plan");
-    expect(xtbloom::detail::gfn1::make_coordination_plan(
-               batch_size, total_atoms, offsets.data(), numbers.data(), coordination_plan,
-               error) == XTBLOOM_STATUS_SUCCESS,
+    expect(
+        xtbloom::detail::gfn1::make_d3_plan(batch_size, total_atoms, offsets.data(), numbers.data(),
+                                            d3_plan, error) == XTBLOOM_STATUS_SUCCESS,
+        "make D3 fixture plan");
+    expect(xtbloom::detail::gfn1::make_coordination_plan(batch_size, total_atoms, offsets.data(),
+                                                         numbers.data(), coordination_plan,
+                                                         error) == XTBLOOM_STATUS_SUCCESS,
            "make D3 coordination fixture plan");
-    expect(xtbloom::detail::gfn1::bind_d3_workspace(
-               d3_plan, storage.data(), storage.size_bytes(), workspace, error) ==
-               XTBLOOM_STATUS_SUCCESS,
+    expect(xtbloom::detail::gfn1::bind_d3_workspace(d3_plan, storage.data(), storage.size_bytes(),
+                                                    workspace, error) == XTBLOOM_STATUS_SUCCESS,
            "bind D3 fixture workspace");
   }
 
@@ -101,8 +101,8 @@ struct Fixture {
     D3Plan plan;
     std::string error;
     const auto status = xtbloom::detail::gfn1::make_d3_plan(
-        static_cast<std::int64_t>(offsets.size() - 1u),
-        static_cast<std::int64_t>(numbers.size()), offsets.data(), numbers.data(), plan, error);
+        static_cast<std::int64_t>(offsets.size() - 1u), static_cast<std::int64_t>(numbers.size()),
+        offsets.data(), numbers.data(), plan, error);
     if (status != XTBLOOM_STATUS_SUCCESS) {
       std::cerr << "FAIL: preliminary D3 plan: " << error << '\n';
       ++failures;
@@ -115,22 +115,20 @@ struct Fixture {
     std::vector<double> values(numbers.size(), -1.0);
     std::string error;
     expect(xtbloom::detail::gfn1::evaluate_coordination_cpu(
-               coordination_plan, geometry.data(), values.data(), error) ==
-               XTBLOOM_STATUS_SUCCESS,
+               coordination_plan, geometry.data(), values.data(), error) == XTBLOOM_STATUS_SUCCESS,
            "evaluate fixture coordination");
     return values;
   }
 
   [[nodiscard]] double energy(const std::vector<double>& geometry,
                               const std::vector<double>* explicit_cn = nullptr) {
-    const std::vector<double> computed = explicit_cn == nullptr ? coordination(geometry)
-                                                                : std::vector<double>();
+    const std::vector<double> computed =
+        explicit_cn == nullptr ? coordination(geometry) : std::vector<double>();
     const double* cn = explicit_cn == nullptr ? computed.data() : explicit_cn->data();
     std::vector<double> energies(offsets.size() - 1u, 0.0);
     std::string error;
-    expect(xtbloom::detail::gfn1::add_d3_cpu(d3_plan, geometry.data(), cn, energies.data(),
-                                             nullptr, workspace, error) ==
-               XTBLOOM_STATUS_SUCCESS,
+    expect(xtbloom::detail::gfn1::add_d3_cpu(d3_plan, geometry.data(), cn, energies.data(), nullptr,
+                                             workspace, error) == XTBLOOM_STATUS_SUCCESS,
            "evaluate D3 fixture energy");
     double total = 0.0;
     for (double value : energies) {
@@ -144,8 +142,8 @@ struct Fixture {
     std::vector<double> energies(offsets.size() - 1u, 0.0);
     std::vector<double> values(geometry.size(), 0.0);
     std::string error;
-    expect(xtbloom::detail::gfn1::add_d3_cpu(d3_plan, geometry.data(), cn.data(),
-                                             energies.data(), values.data(), workspace,
+    expect(xtbloom::detail::gfn1::add_d3_cpu(d3_plan, geometry.data(), cn.data(), energies.data(),
+                                             values.data(), workspace,
                                              error) == XTBLOOM_STATUS_SUCCESS,
            "evaluate D3 fixture gradient");
     return values;
@@ -211,12 +209,12 @@ IndependentPair independent_c6(std::uint32_t first, double first_cn, std::uint32
       const double c6 = xtbloom::parameters::gfn1_d3::reference_c6(
           first, static_cast<std::uint32_t>(first_reference), second,
           static_cast<std::uint32_t>(second_reference));
-      result.c6 += first_weights.value[first_reference] *
-                   second_weights.value[second_reference] * c6;
-      result.first_derivative += first_weights.derivative[first_reference] *
-                                 second_weights.value[second_reference] * c6;
-      result.second_derivative += first_weights.value[first_reference] *
-                                  second_weights.derivative[second_reference] * c6;
+      result.c6 +=
+          first_weights.value[first_reference] * second_weights.value[second_reference] * c6;
+      result.first_derivative +=
+          first_weights.derivative[first_reference] * second_weights.value[second_reference] * c6;
+      result.second_derivative +=
+          first_weights.value[first_reference] * second_weights.derivative[second_reference] * c6;
     }
   }
   return result;
@@ -242,15 +240,13 @@ double independent_pair_energy(std::uint32_t first, double first_cn, std::uint32
     const double x = (50.0 - distance) / 0.05;
     sw = x * x * x * (10.0 - 15.0 * x + 6.0 * x * x);
   }
-  const double damping = sw * (1.0 / (r4 * r2 + r0_6) +
-                                2.4 * q / (r4 * r4 + r0_8));
+  const double damping = sw * (1.0 / (r4 * r2 + r0_6) + 2.4 * q / (r4 * r4 + r0_8));
   return -coefficient.c6 * damping;
 }
 
 void test_plan_workspace_and_ragged_energy() {
   Fixture fixture({0, 2, 2, 5}, {1, 6, 8, 1, 86},
-                  {0.0, 0.0, 0.0, 2.4, 0.1, -0.2,
-                   0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.1, 0.4, -0.1});
+                  {0.0, 0.0, 0.0, 2.4, 0.1, -0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.1, 0.4, -0.1});
   expect(fixture.d3_plan.sealed(), "D3 plan is sealed");
   expect(fixture.d3_plan.batch_size() == 3, "D3 plan batch size");
   expect(fixture.d3_plan.total_atoms() == 5, "D3 plan atom count");
@@ -263,17 +259,16 @@ void test_plan_workspace_and_ragged_energy() {
   changed.back() = 85;
   expect(!fixture.d3_plan.matches_atomic_numbers(changed.data()),
          "D3 plan rejects changed atomic numbers");
-  expect(fixture.d3_plan.workspace_size_bytes() %
-             xtbloom::detail::gfn1::kD3WorkspaceAlignment ==
-             0u,
-         "D3 workspace size is aligned");
+  expect(
+      fixture.d3_plan.workspace_size_bytes() % xtbloom::detail::gfn1::kD3WorkspaceAlignment == 0u,
+      "D3 workspace size is aligned");
 
   const auto cn = fixture.coordination(fixture.positions);
   std::array<double, 3> energies{{0.25, -0.5, 0.75}};
   std::string error;
-  expect(xtbloom::detail::gfn1::add_d3_cpu(
-             fixture.d3_plan, fixture.positions.data(), cn.data(), energies.data(), nullptr,
-             fixture.workspace, error) == XTBLOOM_STATUS_SUCCESS,
+  expect(xtbloom::detail::gfn1::add_d3_cpu(fixture.d3_plan, fixture.positions.data(), cn.data(),
+                                           energies.data(), nullptr, fixture.workspace,
+                                           error) == XTBLOOM_STATUS_SUCCESS,
          "ragged D3 energy succeeds");
   expect(energies[0] < 0.25, "first ragged D3 member contributes");
   expect(energies[1] == -0.5, "empty ragged D3 member is unchanged");
@@ -307,13 +302,12 @@ void test_dxtb_tblite_term_goldens() {
    * SiH4 coord files; both source records are authenticated by the repository
    * fixture manifest.
    */
-  Fixture lih({0, 2}, {3, 1},
-              {0.0, 0.0, -1.50796743897235, 0.0, 0.0, 1.50796743897235});
+  Fixture lih({0, 2}, {3, 1}, {0.0, 0.0, -1.50796743897235, 0.0, 0.0, 1.50796743897235});
   expect_near(lih.energy(lih.positions), -8.2108039012179698e-5, 2.0e-15,
               "LiH dxtb/tblite D3 energy golden");
   const std::vector<double> lih_gradient = lih.gradient(lih.positions);
-  const std::array<double, 6> lih_reference{{0.0, 0.0, 2.35781197246301e-6,
-                                             0.0, 0.0, -2.35781197246301e-6}};
+  const std::array<double, 6> lih_reference{
+      {0.0, 0.0, 2.35781197246301e-6, 0.0, 0.0, -2.35781197246301e-6}};
   for (std::size_t coordinate = 0; coordinate < lih_reference.size(); ++coordinate) {
     expect_near(lih_gradient[coordinate], lih_reference[coordinate], 2.0e-14,
                 "LiH dxtb/tblite D3 gradient golden");
@@ -321,19 +315,17 @@ void test_dxtb_tblite_term_goldens() {
 
   Fixture sih4(
       {0, 5}, {14, 1, 1, 1, 1},
-      {0.0, 0.0, 0.0, 1.61768389755830, 1.61768389755830, -1.61768389755830,
-       -1.61768389755830, -1.61768389755830, -1.61768389755830,
-       1.61768389755830, -1.61768389755830, 1.61768389755830,
+      {0.0, 0.0, 0.0, 1.61768389755830, 1.61768389755830, -1.61768389755830, -1.61768389755830,
+       -1.61768389755830, -1.61768389755830, 1.61768389755830, -1.61768389755830, 1.61768389755830,
        -1.61768389755830, 1.61768389755830, 1.61768389755830});
   expect_near(sih4.energy(sih4.positions), -6.8049872510979868e-4, 2.0e-15,
               "SiH4 dxtb/tblite D3 energy golden");
   const std::vector<double> sih4_gradient = sih4.gradient(sih4.positions);
-  const std::array<double, 15> sih4_reference{{
-      0.0, 0.0, 0.0, -7.37831467548165e-7, -7.37831467548165e-7,
-      7.37831467548165e-7, 7.37831467548165e-7, 7.37831467548165e-7,
-      7.37831467548165e-7, -7.37831467548165e-7, 7.37831467548165e-7,
-      -7.37831467548165e-7, 7.37831467548165e-7, -7.37831467548165e-7,
-      -7.37831467548165e-7}};
+  const std::array<double, 15> sih4_reference{
+      {0.0, 0.0, 0.0, -7.37831467548165e-7, -7.37831467548165e-7, 7.37831467548165e-7,
+       7.37831467548165e-7, 7.37831467548165e-7, 7.37831467548165e-7, -7.37831467548165e-7,
+       7.37831467548165e-7, -7.37831467548165e-7, 7.37831467548165e-7, -7.37831467548165e-7,
+       -7.37831467548165e-7}};
   for (std::size_t coordinate = 0; coordinate < sih4_reference.size(); ++coordinate) {
     expect_near(sih4_gradient[coordinate], sih4_reference[coordinate], 2.0e-14,
                 "SiH4 dxtb/tblite D3 gradient golden");
@@ -435,37 +427,36 @@ void test_transactional_failures() {
 
   auto bad_positions = fixture.positions;
   bad_positions[0] = std::numeric_limits<double>::quiet_NaN();
-  expect(xtbloom::detail::gfn1::add_d3_cpu(
-             fixture.d3_plan, bad_positions.data(), cn.data(), energies.data(), gradients.data(),
-             fixture.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT,
+  expect(xtbloom::detail::gfn1::add_d3_cpu(fixture.d3_plan, bad_positions.data(), cn.data(),
+                                           energies.data(), gradients.data(), fixture.workspace,
+                                           error) == XTBLOOM_STATUS_INVALID_ARGUMENT,
          "D3 rejects non-finite positions");
   expect(energies == original_energies && gradients == original_gradients,
          "D3 non-finite failure is transactional");
 
   std::vector<double> bad_cn = cn;
   bad_cn[1] = std::numeric_limits<double>::infinity();
-  expect(xtbloom::detail::gfn1::add_d3_cpu(
-             fixture.d3_plan, fixture.positions.data(), bad_cn.data(), energies.data(),
-             gradients.data(), fixture.workspace, error) == XTBLOOM_STATUS_INVALID_ARGUMENT,
+  expect(xtbloom::detail::gfn1::add_d3_cpu(fixture.d3_plan, fixture.positions.data(), bad_cn.data(),
+                                           energies.data(), gradients.data(), fixture.workspace,
+                                           error) == XTBLOOM_STATUS_INVALID_ARGUMENT,
          "D3 rejects non-finite coordination");
   expect(energies == original_energies && gradients == original_gradients,
          "D3 coordination failure is transactional");
 
   D3Workspace tampered = fixture.workspace;
   tampered.weights += 1;
-  expect(xtbloom::detail::gfn1::add_d3_cpu(
-             fixture.d3_plan, fixture.positions.data(), cn.data(), energies.data(),
-             gradients.data(), tampered, error) == XTBLOOM_STATUS_INVALID_ARGUMENT,
+  expect(xtbloom::detail::gfn1::add_d3_cpu(fixture.d3_plan, fixture.positions.data(), cn.data(),
+                                           energies.data(), gradients.data(), tampered,
+                                           error) == XTBLOOM_STATUS_INVALID_ARGUMENT,
          "D3 rejects tampered workspace pointers");
   expect(energies == original_energies && gradients == original_gradients,
          "D3 workspace failure is transactional");
 
   std::array<double, 6> overlapping_outputs{{3.5, 1.0, 2.0, 3.0, 4.0, 5.0}};
-  expect(xtbloom::detail::gfn1::add_d3_cpu(
-             fixture.d3_plan, fixture.positions.data(), cn.data(),
-             overlapping_outputs.data(), overlapping_outputs.data(), fixture.workspace,
-             error) ==
-             XTBLOOM_STATUS_INVALID_ARGUMENT,
+  expect(xtbloom::detail::gfn1::add_d3_cpu(fixture.d3_plan, fixture.positions.data(), cn.data(),
+                                           overlapping_outputs.data(), overlapping_outputs.data(),
+                                           fixture.workspace,
+                                           error) == XTBLOOM_STATUS_INVALID_ARGUMENT,
          "D3 rejects overlapping output accumulators");
   expect(energies == original_energies, "D3 alias failure preserves energy");
 }
@@ -486,9 +477,8 @@ void test_invalid_plans_and_workspace_binding() {
   std::vector<std::byte> raw(plan.workspace_size_bytes() +
                              xtbloom::detail::gfn1::kD3WorkspaceAlignment);
   D3Workspace view;
-  expect(xtbloom::detail::gfn1::bind_d3_workspace(plan, raw.data() + 1,
-                                                  plan.workspace_size_bytes(), view,
-                                                  error) == XTBLOOM_STATUS_INVALID_ARGUMENT,
+  expect(xtbloom::detail::gfn1::bind_d3_workspace(plan, raw.data() + 1, plan.workspace_size_bytes(),
+                                                  view, error) == XTBLOOM_STATUS_INVALID_ARGUMENT,
          "D3 workspace binding rejects misalignment");
 }
 

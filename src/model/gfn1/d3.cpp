@@ -231,10 +231,9 @@ std::size_t pair_index(const D3PlanData& data, std::int64_t batch, std::int64_t 
 
 void prepare_weight_slice(const D3PlanData& data, const double* coordination,
                           const D3Workspace& workspace) {
-  std::fill_n(workspace.weights,
-              static_cast<std::size_t>(workspace.weight_elements), 0.0);
-  std::fill_n(workspace.weight_cn_derivatives,
-              static_cast<std::size_t>(workspace.weight_elements), 0.0);
+  std::fill_n(workspace.weights, static_cast<std::size_t>(workspace.weight_elements), 0.0);
+  std::fill_n(workspace.weight_cn_derivatives, static_cast<std::size_t>(workspace.weight_elements),
+              0.0);
   for (std::int64_t atom = 0; atom < data.total_atoms; ++atom) {
     const std::size_t atom_index = static_cast<std::size_t>(atom);
     const std::uint32_t atomic_number = data.atomic_numbers[atom_index];
@@ -243,8 +242,8 @@ void prepare_weight_slice(const D3PlanData& data, const double* coordination,
     double norm = 0.0;
     double derivative_norm = 0.0;
     for (std::size_t reference = 0u; reference < element.reference_count; ++reference) {
-      const double reference_cn = parameters::gfn1_d3::reference_cn(
-          atomic_number, static_cast<std::uint32_t>(reference));
+      const double reference_cn =
+          parameters::gfn1_d3::reference_cn(atomic_number, static_cast<std::uint32_t>(reference));
       const double delta = reference_cn - coordination[atom_index];
       const double unnormalized = std::exp(-kReferenceWeightFactor * delta * delta);
       workspace.weights[weight_begin + reference] = unnormalized;
@@ -255,21 +254,19 @@ void prepare_weight_slice(const D3PlanData& data, const double* coordination,
     double maximum_cn = -std::numeric_limits<double>::infinity();
     for (std::size_t reference = 0u; reference < element.reference_count; ++reference) {
       maximum_cn = std::max(maximum_cn, parameters::gfn1_d3::reference_cn(
-                                               atomic_number,
-                                               static_cast<std::uint32_t>(reference)));
+                                            atomic_number, static_cast<std::uint32_t>(reference)));
     }
     for (std::size_t reference = 0u; reference < element.reference_count; ++reference) {
-      const double reference_cn = parameters::gfn1_d3::reference_cn(
-          atomic_number, static_cast<std::uint32_t>(reference));
+      const double reference_cn =
+          parameters::gfn1_d3::reference_cn(atomic_number, static_cast<std::uint32_t>(reference));
       const double delta = reference_cn - coordination[atom_index];
       const double unnormalized = workspace.weights[weight_begin + reference];
       double weight = unnormalized * inverse_norm;
       if (!std::isfinite(weight)) {
         weight = reference_cn == maximum_cn ? 1.0 : 0.0;
       }
-      double derivative =
-          2.0 * kReferenceWeightFactor * delta * unnormalized * inverse_norm -
-          unnormalized * derivative_norm * inverse_norm * inverse_norm;
+      double derivative = 2.0 * kReferenceWeightFactor * delta * unnormalized * inverse_norm -
+                          unnormalized * derivative_norm * inverse_norm * inverse_norm;
       if (!std::isfinite(derivative)) {
         derivative = 0.0;
       }
@@ -285,32 +282,29 @@ struct PairCoefficient {
   double second_cn = 0.0;
 };
 
-PairCoefficient pair_coefficient(const D3PlanData& data, std::int64_t first,
-                                 std::int64_t second, const D3Workspace& workspace) {
+PairCoefficient pair_coefficient(const D3PlanData& data, std::int64_t first, std::int64_t second,
+                                 const D3Workspace& workspace) {
   PairCoefficient result;
   const std::size_t first_index = static_cast<std::size_t>(first);
   const std::size_t second_index = static_cast<std::size_t>(second);
   const std::uint32_t first_atomic_number = data.atomic_numbers[first_index];
   const std::uint32_t second_atomic_number = data.atomic_numbers[second_index];
-  const auto& first_element =
-      parameters::gfn1_d3::kElements[first_atomic_number - 1u];
-  const auto& second_element =
-      parameters::gfn1_d3::kElements[second_atomic_number - 1u];
+  const auto& first_element = parameters::gfn1_d3::kElements[first_atomic_number - 1u];
+  const auto& second_element = parameters::gfn1_d3::kElements[second_atomic_number - 1u];
   const std::size_t first_weight = first_index * kD3MaximumReferences;
   const std::size_t second_weight = second_index * kD3MaximumReferences;
-  for (std::size_t first_reference = 0u;
-       first_reference < first_element.reference_count; ++first_reference) {
+  for (std::size_t first_reference = 0u; first_reference < first_element.reference_count;
+       ++first_reference) {
     const double first_value = workspace.weights[first_weight + first_reference];
-    const double first_derivative =
-        workspace.weight_cn_derivatives[first_weight + first_reference];
-    for (std::size_t second_reference = 0u;
-         second_reference < second_element.reference_count; ++second_reference) {
+    const double first_derivative = workspace.weight_cn_derivatives[first_weight + first_reference];
+    for (std::size_t second_reference = 0u; second_reference < second_element.reference_count;
+         ++second_reference) {
       const double second_value = workspace.weights[second_weight + second_reference];
       const double second_derivative =
           workspace.weight_cn_derivatives[second_weight + second_reference];
       const double reference_c6 = parameters::gfn1_d3::reference_c6(
-          first_atomic_number, static_cast<std::uint32_t>(first_reference),
-          second_atomic_number, static_cast<std::uint32_t>(second_reference));
+          first_atomic_number, static_cast<std::uint32_t>(first_reference), second_atomic_number,
+          static_cast<std::uint32_t>(second_reference));
       result.c6 += first_value * second_value * reference_c6;
       result.first_cn += first_derivative * second_value * reference_c6;
       result.second_cn += first_value * second_derivative * reference_c6;
@@ -361,16 +355,14 @@ xtbloom_status_t evaluate_pair(const D3PlanData& data, std::size_t packed_pair,
                      parameters::gfn1::kGlobal.dispersion_s8 * rrij * t8;
   const double derivative_over_distance =
       parameters::gfn1::kGlobal.dispersion_s6 * (-6.0 * r4 * t6 * t6) +
-      parameters::gfn1::kGlobal.dispersion_s8 * rrij *
-          (-8.0 * r4 * distance_squared * t8 * t8);
+      parameters::gfn1::kGlobal.dispersion_s8 * rrij * (-8.0 * r4 * distance_squared * t8 * t8);
   const SmoothCutoff cutoff = smooth_cutoff(distance);
   const double damping = cutoff.value * phi;
   contribution.energy = -coefficient.c6 * damping;
   contribution.first_cn = -coefficient.first_cn * damping;
   contribution.second_cn = -coefficient.second_cn * damping;
-  contribution.gradient_scale =
-      -coefficient.c6 *
-      (cutoff.value * derivative_over_distance + cutoff.derivative * phi / distance);
+  contribution.gradient_scale = -coefficient.c6 * (cutoff.value * derivative_over_distance +
+                                                   cutoff.derivative * phi / distance);
   if (!std::isfinite(coefficient.c6) || !std::isfinite(coefficient.first_cn) ||
       !std::isfinite(coefficient.second_cn) || !std::isfinite(contribution.energy) ||
       !std::isfinite(contribution.first_cn) || !std::isfinite(contribution.second_cn) ||
@@ -459,9 +451,8 @@ std::size_t D3Plan::resident_bytes() const noexcept {
 const D3PlanData* D3Plan::identity() const noexcept { return data_.get(); }
 
 xtbloom_status_t make_d3_plan(std::int64_t batch_size, std::int64_t total_atoms,
-                              const std::int64_t* atom_offsets,
-                              const std::int32_t* atomic_numbers, D3Plan& plan,
-                              std::string& error) {
+                              const std::int64_t* atom_offsets, const std::int32_t* atomic_numbers,
+                              D3Plan& plan, std::string& error) {
   if (batch_size <= 0 || total_atoms <= 0 || !valid_count(batch_size) ||
       !valid_count(total_atoms) || atom_offsets == nullptr || atomic_numbers == nullptr ||
       atom_offsets[0] != 0 || atom_offsets[batch_size] != total_atoms) {
@@ -509,9 +500,8 @@ xtbloom_status_t make_d3_plan(std::int64_t batch_size, std::int64_t total_atoms,
       created->atomic_numbers[static_cast<std::size_t>(atom)] =
           static_cast<std::uint8_t>(atomic_number);
     }
-    xtbloom_status_t status = make_coordination_plan(batch_size, total_atoms, atom_offsets,
-                                                     atomic_numbers, created->coordination_plan,
-                                                     error);
+    xtbloom_status_t status = make_coordination_plan(
+        batch_size, total_atoms, atom_offsets, atomic_numbers, created->coordination_plan, error);
     if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
@@ -576,9 +566,8 @@ xtbloom_status_t make_d3_plan(std::int64_t batch_size, std::int64_t total_atoms,
   }
 }
 
-xtbloom_status_t bind_d3_workspace(const D3Plan& plan, void* workspace,
-                                   std::size_t workspace_size, D3Workspace& view,
-                                   std::string& error) {
+xtbloom_status_t bind_d3_workspace(const D3Plan& plan, void* workspace, std::size_t workspace_size,
+                                   D3Workspace& view, std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
@@ -586,8 +575,7 @@ xtbloom_status_t bind_d3_workspace(const D3Plan& plan, void* workspace,
   AddressRange workspace_range;
   AddressRange view_range;
   AddressRange error_range;
-  if (!aligned(workspace, kD3WorkspaceAlignment) ||
-      workspace_size < plan.workspace_size_bytes() ||
+  if (!aligned(workspace, kD3WorkspaceAlignment) || workspace_size < plan.workspace_size_bytes() ||
       !make_range(workspace, plan.workspace_size_bytes(), workspace_range) ||
       !make_range(&view, sizeof(view), view_range) ||
       !make_range(&error, sizeof(error), error_range) ||
@@ -617,9 +605,8 @@ xtbloom_status_t bind_d3_workspace(const D3Plan& plan, void* workspace,
 }
 
 xtbloom_status_t add_d3_cpu(const D3Plan& plan, const double* positions,
-                            const double* coordination_numbers, double* energies,
-                            double* gradients, const D3Workspace& workspace,
-                            std::string& error) {
+                            const double* coordination_numbers, double* energies, double* gradients,
+                            const D3Workspace& workspace, std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
@@ -633,8 +620,8 @@ xtbloom_status_t add_d3_cpu(const D3Plan& plan, const double* positions,
   const std::size_t batch_count = static_cast<std::size_t>(data.batch_size);
   const std::size_t coordinate_count = atom_count * 3u;
   const bool derivatives = gradients != nullptr;
-  if (!aligned(positions, alignof(double)) ||
-      !aligned(coordination_numbers, alignof(double)) || !aligned(energies, alignof(double)) ||
+  if (!aligned(positions, alignof(double)) || !aligned(coordination_numbers, alignof(double)) ||
+      !aligned(energies, alignof(double)) ||
       (derivatives && !aligned(gradients, alignof(double))) ||
       !finite_values(positions, coordinate_count) ||
       !finite_values(coordination_numbers, atom_count) || !finite_values(energies, batch_count) ||
@@ -651,8 +638,7 @@ xtbloom_status_t add_d3_cpu(const D3Plan& plan, const double* positions,
   if (!checked_multiply_size(coordinate_count, sizeof(double), position_bytes) ||
       !checked_multiply_size(atom_count, sizeof(double), atom_bytes) ||
       !checked_multiply_size(batch_count, sizeof(double), batch_bytes) ||
-      !checked_multiply_size(derivatives ? coordinate_count : 0u, sizeof(double),
-                             gradient_bytes) ||
+      !checked_multiply_size(derivatives ? coordinate_count : 0u, sizeof(double), gradient_bytes) ||
       !make_range(positions, position_bytes, numerical[0]) ||
       !make_range(coordination_numbers, atom_bytes, numerical[1]) ||
       !make_range(energies, batch_bytes, numerical[2]) ||
@@ -720,9 +706,8 @@ xtbloom_status_t add_d3_cpu(const D3Plan& plan, const double* positions,
     }
   }
   if (!finite_values(workspace.batch_scratch, batch_count) ||
-      (derivatives &&
-       (!finite_values(workspace.coordination_adjoints, atom_count) ||
-        !finite_values(workspace.gradient_scratch, coordinate_count)))) {
+      (derivatives && (!finite_values(workspace.coordination_adjoints, atom_count) ||
+                       !finite_values(workspace.gradient_scratch, coordinate_count)))) {
     error = "GFN1 D3 accumulation exceeded floating-point range";
     return XTBLOOM_STATUS_INTERNAL_ERROR;
   }

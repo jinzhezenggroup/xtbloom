@@ -1681,11 +1681,15 @@ def _check_gfn1_d3_provenance(
             "c98c15fa8f38e961bf920cff176daa649b48f685b28a4b5dd04860ca0c19fd29",
         ),
     }
-    if not isinstance(source, dict) or {
-        entry.get("path"): (entry.get("git_blob"), entry.get("sha256"))
-        for entry in source.get("equation_sources", ())
-        if isinstance(entry, dict)
-    } != expected_equations:
+    if (
+        not isinstance(source, dict)
+        or {
+            entry.get("path"): (entry.get("git_blob"), entry.get("sha256"))
+            for entry in source.get("equation_sources", ())
+            if isinstance(entry, dict)
+        }
+        != expected_equations
+    ):
         raise LicenseCheckError("GFN1-D3 manifest has incomplete equation provenance")
     unit_conversion = gfn1_d3.get("unit_conversion", {})
     if not isinstance(unit_conversion, dict) or unit_conversion.get("legal_files") != [
@@ -1794,7 +1798,8 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                 ("tests/gfn1_d3_test.cpp",),
             ),
             "test/test_singlepoint/mols/SiH4/coord": (
-                "SiH4 bohr geometry used by the GFN1 D3 tblite energy/gradient fixture.",
+                "SiH4 bohr geometry used by the GFN1 D3 tblite "
+                "energy/gradient fixture.",
                 ("tests/gfn1_d3_test.cpp",),
             ),
             "test/test_classical/test_dispersion/samples.py": (
