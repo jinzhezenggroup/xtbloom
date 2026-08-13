@@ -3,6 +3,7 @@
 
 #include "runtime/model_plan.hpp"
 
+#include <mutex>
 #include <new>
 
 #include "runtime/backend.hpp"
@@ -30,6 +31,10 @@ xtbloom_status_t ModelPlan::create(Context& context, const xtbloom_batch_t& batc
     error = "plan has already been created";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
+  std::unique_lock<std::mutex> cpu_transaction;
+  if (context.backend == XTBLOOM_BACKEND_CPU) {
+    cpu_transaction = std::unique_lock<std::mutex>(context.cpu_transaction_mutex);
+  }
   /* Prove the complete public ABI prefix before reading options.model.  This
    * wrapper is the first model-neutral plan boundary, so dispatch must retain
    * the historical short-structure ordering enforced by Gfn2Plan::create. */
@@ -47,10 +52,11 @@ xtbloom_status_t ModelPlan::create(Context& context, const xtbloom_batch_t& batc
   }
 
   switch (selected) {
+    case ModelBackendRoute::kGfn1:
     case ModelBackendRoute::kGfn2: {
-      /* Preserve GFN2's established NOT_IMPLEMENTED ordering before allocating
-       * any model-specific plan state. Gfn2Plan::create validates again because
-       * it is also an independently usable internal boundary. */
+      /* Preserve complete model-specific availability ordering before
+       * allocating plan state. Gfn2Plan::create validates again because it is
+       * also an independently usable internal boundary. */
       DescriptorValidationResult availability =
           validate_compute_execution_availability(context.backend, batch, options);
       if (!availability.ok()) {
@@ -59,7 +65,7 @@ xtbloom_status_t ModelPlan::create(Context& context, const xtbloom_batch_t& batc
       }
       if (context.backend == XTBLOOM_BACKEND_CPU) {
         DescriptorValidationResult lattice_availability =
-            validate_host_lattice_execution_availability(batch);
+            validate_host_lattice_execution_availability(batch, options.model);
         if (!lattice_availability.ok()) {
           error = std::move(lattice_availability.error);
           return lattice_availability.status;
@@ -67,7 +73,7 @@ xtbloom_status_t ModelPlan::create(Context& context, const xtbloom_batch_t& batc
       }
       auto plan = std::unique_ptr<Gfn2Plan>(new (std::nothrow) Gfn2Plan{});
       if (plan == nullptr) {
-        error = "failed to allocate a GFN2 plan implementation";
+        error = "failed to allocate a model plan implementation";
         return XTBLOOM_STATUS_ALLOCATION_FAILED;
       }
       const xtbloom_status_t status = plan->create(context, batch, options, error);
@@ -80,7 +86,6 @@ xtbloom_status_t ModelPlan::create(Context& context, const xtbloom_batch_t& batc
       gfn2_ = std::move(plan);
       return XTBLOOM_STATUS_SUCCESS;
     }
-    case ModelBackendRoute::kGfn1:
     case ModelBackendRoute::kUnavailable:
       return missing_executor(selected, error);
   }
@@ -94,9 +99,9 @@ xtbloom_status_t ModelPlan::query_workspace(std::uint32_t compute_flags,
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   switch (route_) {
+    case ModelBackendRoute::kGfn1:
     case ModelBackendRoute::kGfn2:
       return gfn2_->query_workspace(compute_flags, query, error);
-    case ModelBackendRoute::kGfn1:
     case ModelBackendRoute::kUnavailable:
       return missing_executor(route_, error);
   }
@@ -110,10 +115,14 @@ xtbloom_status_t ModelPlan::compute(const xtbloom_batch_t& batch,
     error = "plan is not created or has been destroyed";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
+  std::unique_lock<std::mutex> cpu_transaction;
+  if (context_->backend == XTBLOOM_BACKEND_CPU) {
+    cpu_transaction = std::unique_lock<std::mutex>(context_->cpu_transaction_mutex);
+  }
   switch (route_) {
+    case ModelBackendRoute::kGfn1:
     case ModelBackendRoute::kGfn2:
       return gfn2_->compute(batch, options, result, error);
-    case ModelBackendRoute::kGfn1:
     case ModelBackendRoute::kUnavailable:
       return missing_executor(route_, error);
   }
@@ -129,9 +138,9 @@ xtbloom_status_t ModelPlan::enqueue(const xtbloom_batch_t& batch,
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   switch (route_) {
+    case ModelBackendRoute::kGfn1:
     case ModelBackendRoute::kGfn2:
       return gfn2_->enqueue(batch, options, result, submission, error);
-    case ModelBackendRoute::kGfn1:
     case ModelBackendRoute::kUnavailable:
       return missing_executor(route_, error);
   }
@@ -149,7 +158,7 @@ void ModelPlan::destroy() noexcept {
 
 bool ModelPlan::valid() const noexcept {
   return context_ != nullptr && route_ != ModelBackendRoute::kUnavailable &&
-         (route_ != ModelBackendRoute::kGfn2 || (gfn2_ != nullptr && gfn2_->valid()));
+         (gfn2_ != nullptr && gfn2_->valid());
 }
 
 Context* ModelPlan::context() const noexcept { return context_; }

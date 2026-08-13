@@ -20,6 +20,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
 GOLDEN_DIR = REPOSITORY_ROOT / "data" / "conformance" / "golden"
 INPUT_DIR = REPOSITORY_ROOT / "data" / "conformance" / "inputs"
+GFN1_MANIFEST_PATH = REPOSITORY_ROOT / "data" / "conformance" / "gfn1" / "manifest.json"
 
 _UNITS_ANGSTROM_PER_BOHR = 0.529177210903
 _HARTREE_TO_EV = 27.211386245988
@@ -115,3 +116,63 @@ def qmmm_points(case: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
 
 def tolerances() -> dict:
     return manifest()["tolerances"]
+
+
+def gfn1_manifest() -> dict:
+    """Return the independent, hash-pinned GFN1 conformance manifest."""
+    return load_json(GFN1_MANIFEST_PATH)
+
+
+def gfn1_case_by_id(case_id: str) -> dict:
+    """Look up one public GFN1 oracle case by its stable identifier."""
+    for case in gfn1_manifest()["cases"]:
+        if case["id"] == case_id:
+            return case
+    raise KeyError(case_id)
+
+
+def gfn1_golden(case: dict) -> dict:
+    """Load the properties recorded by the pinned GFN1 reference engine."""
+    return load_json(REPOSITORY_ROOT / case["golden"])["properties"]
+
+
+def gfn1_tolerances() -> dict:
+    """Return the reviewed GFN1 public-conformance tolerances."""
+    return gfn1_manifest()["tolerances"]
+
+
+def gfn1_structure_inputs(
+    case: dict,
+) -> tuple[np.ndarray, np.ndarray, float, int, int]:
+    """Return numbers, bohr positions, charge, UHF, and spin channels for GFN1."""
+    input_path = REPOSITORY_ROOT / case["input"]
+    if case.get("input_schema") == "qmmm-v1":
+        document = load_json(input_path)
+        numbers = np.asarray(document["qm"]["atomic_numbers"], dtype=np.int64)
+        positions = np.asarray(document["qm"]["positions_bohr"], dtype=np.float64)
+    else:
+        parsed_numbers, positions = _parse_coord(input_path)
+        numbers = np.asarray(parsed_numbers, dtype=np.int64)
+    uhf = int(case["unpaired_electrons"])
+    return (
+        numbers,
+        positions,
+        float(case["molecular_charge"]),
+        uhf,
+        # Missing means the reference engine used one shared orbital channel;
+        # dedicated two-channel GFN1 evidence is a separate native fixture.
+        int(case.get("spin_channels", 1)),
+    )
+
+
+def gfn1_qmmm_points(case: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Return GFN1 point-charge positions, values, and harmonic hardnesses."""
+    if case.get("input_schema") != "qmmm-v1":
+        return None
+    document = load_json(REPOSITORY_ROOT / case["input"])
+    points = document["external_point_charges"]
+    return (
+        np.asarray(points["positions_bohr"], dtype=np.float64),
+        np.asarray(points["charges_e"], dtype=np.float64),
+        np.asarray(points["gammas_hartree"], dtype=np.float64),
+    )

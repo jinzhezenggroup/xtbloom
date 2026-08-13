@@ -1065,7 +1065,7 @@ DescriptorValidationResult validate_host_lattice_semantics_impl(const xtbloom_ba
 }
 
 DescriptorValidationResult validate_host_lattice_execution_availability_impl(
-    const xtbloom_batch_t& batch) {
+    const xtbloom_batch_t& batch, xtbloom_model_t model) {
   if (!active(cell_matrix_view(batch)) && !active(periodic_axes_view(batch))) {
     return {};
   }
@@ -1081,8 +1081,9 @@ DescriptorValidationResult validate_host_lattice_execution_availability_impl(
                 sizeof(mask));
     if (mask == XTBLOOM_PERIODIC_AXES_XYZ) {
       return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
-              "native lattice/PBC descriptors are valid but periodic GFN2 execution is not "
-              "implemented yet"};
+              std::string("native lattice/PBC descriptors are valid but periodic ") +
+                  (model == XTBLOOM_MODEL_GFN1_XTB ? "GFN1-xTB" : "GFN2") +
+                  " execution is not implemented yet"};
     }
   }
   return {};
@@ -1146,8 +1147,8 @@ DescriptorValidationResult validate_host_lattice_semantics(const xtbloom_batch_t
 }
 
 DescriptorValidationResult validate_host_lattice_execution_availability(
-    const xtbloom_batch_t& batch) {
-  return validate_host_lattice_execution_availability_impl(batch);
+    const xtbloom_batch_t& batch, xtbloom_model_t model) {
+  return validate_host_lattice_execution_availability_impl(batch, model);
 }
 
 DescriptorValidationResult validate_compute_descriptor_structure_for_dispatch(
@@ -1239,7 +1240,7 @@ DescriptorValidationResult validate_plan_descriptor_structure(
      * retains the staged backend transaction so device and mislabeled pointers
      * are proven before availability is reported. */
     DescriptorValidationResult lattice_availability =
-        validate_host_lattice_execution_availability_impl(*batch);
+        validate_host_lattice_execution_availability_impl(*batch, options->model);
     if (!lattice_availability.ok()) {
       return lattice_availability;
     }
@@ -1413,7 +1414,7 @@ DescriptorValidationResult validate_compute_descriptors(xtbloom_backend_t backen
   if ((validation.pending_offset_checks & (kCellMatricesNeedStaging | kPeriodicAxesNeedStaging)) ==
       0u) {
     DescriptorValidationResult lattice_availability =
-        validate_host_lattice_execution_availability_impl(*batch);
+        validate_host_lattice_execution_availability_impl(*batch, options->model);
     if (!lattice_availability.ok()) {
       return lattice_availability;
     }
@@ -1424,6 +1425,17 @@ DescriptorValidationResult validate_compute_descriptors(xtbloom_backend_t backen
 DescriptorValidationResult validate_compute_execution_availability(
     xtbloom_backend_t backend, const xtbloom_batch_t& batch,
     const xtbloom_compute_options_t& options) {
+  if (options.model == XTBLOOM_MODEL_GFN1_XTB) {
+    if ((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+      return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+              "GFN1-xTB molecular dipole publication is not implemented"};
+    }
+    if (batch.struct_size >= XTBLOOM_BATCH_V3_SIZE && batch.total_interactions != 0) {
+      return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+              "GFN1-xTB interaction attachments are not implemented"};
+    }
+    return {};
+  }
   DescriptorValidationResult output_availability =
       validate_output_execution_availability(options, backend);
   if (!output_availability.ok()) {

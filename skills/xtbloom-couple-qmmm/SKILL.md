@@ -5,9 +5,9 @@ description: Couple xTBloom GFN2-xTB calculations to QM/MM electrostatics using 
 
 # Couple xTBloom to QM/MM
 
-Treat xTBloom as the variational GFN2 subsystem and make the calling
-electrostatics or simulation program own every external term that xTBloom does
-not calculate.
+Treat xTBloom as the selected variational GFN1-xTB or GFN2-xTB subsystem and
+make the calling electrostatics or simulation program own every external term
+that xTBloom does not calculate.
 
 ## Choose the Host Environment
 
@@ -60,7 +60,8 @@ a C/C++ or native simulation workflow.
 - A point-charge `gamma` is a screening parameter, not an optimizable spatial
   degree of freedom. Coincident QM and point-charge positions remain finite and
   have zero direct pair force at exact coincidence.
-- GFN1-xTB and ROCm remain unsupported reserved values.
+- GFN1-xTB QM/MM is supported on CPU only; GFN2-xTB supports CPU and CUDA.
+  ROCm remains an unsupported reserved value.
 
 ## Resources
 

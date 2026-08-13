@@ -70,7 +70,11 @@ When installation succeeds, keep these boundaries visible in generated examples 
 - Native positions use bohr, energy uses Hartree, forces use Hartree/bohr, and charge uses elementary-charge units.
 - The high-level Python `electronic_temperature` argument is in kelvin. At finite temperature, the reported variational energy is the electronic Helmholtz free energy.
 - A batch call can succeed while individual SCC or eigensolver results fail. Inspect per-system diagnostics; failed floating-point slices contain NaNs and successful peers remain valid.
-- Only GFN2-xTB is implemented. Do not claim GFN1-xTB, ROCm, lattice/PBC inputs, solvation, native geometry optimization, molecular dynamics, or Hessians.
+- GFN1-xTB is CPU-only; GFN2-xTB supports CPU and CUDA. Do not claim GFN1-xTB
+  on CUDA, or claim ROCm, lattice/PBC inputs, solvation, native geometry
+  optimization, molecular dynamics, or native/analytic Hessians. Python
+  `Calculator.hessian()` and `BatchCalculator.hessian()` provide numerical
+  QM-coordinate Hessians.
 - CUDA compilation, a visible GPU, or a loader stub is not by itself successful CUDA execution.
 
 ## Report the Narrow Result

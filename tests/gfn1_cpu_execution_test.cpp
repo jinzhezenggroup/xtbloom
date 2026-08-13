@@ -14,6 +14,7 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -97,6 +98,22 @@ std::atomic<std::int32_t> failed_eigensolver_dimension{0};
 std::atomic<std::size_t> injected_eigensolver_failures{0u};
 std::atomic<std::size_t> backend_cleanup_calls{0u};
 
+enum class InjectedInferenceException : std::uint8_t {
+  kNone,
+  kBadAlloc,
+  kStandard,
+  kEmptyDiagnostic,
+  kUnknown,
+};
+
+std::atomic<InjectedInferenceException> injected_inference_exception{
+    InjectedInferenceException::kNone};
+
+class EmptyDiagnosticError final : public std::exception {
+ public:
+  const char* what() const noexcept override { return ""; }
+};
+
 std::int32_t injected_dpotrf(std::int32_t layout, char uplo, std::int32_t n, double* matrix,
                              std::int32_t leading_dimension) {
   return LAPACKE_dpotrf_work(layout, uplo, n, matrix, leading_dimension);
@@ -114,6 +131,21 @@ std::int32_t injected_dsyevd(std::int32_t layout, char job_vectors, char uplo, s
                              double* matrix, std::int32_t leading_dimension, double* eigenvalues,
                              double* work, std::int32_t work_count, std::int32_t* integer_work,
                              std::int32_t integer_work_count) {
+  /* The backend is constructed while this mode is kNone, so its mandatory
+   * numerical self-test remains real. Tests enable one mode only after the
+   * verified callback has been installed in a GFN1 execution cache. */
+  switch (injected_inference_exception.load(std::memory_order_relaxed)) {
+    case InjectedInferenceException::kBadAlloc:
+      throw std::bad_alloc();
+    case InjectedInferenceException::kStandard:
+      throw std::runtime_error("injected CPU GFN1 inference failure");
+    case InjectedInferenceException::kEmptyDiagnostic:
+      throw EmptyDiagnosticError{};
+    case InjectedInferenceException::kUnknown:
+      throw 7;
+    case InjectedInferenceException::kNone:
+      break;
+  }
   if (n == failed_eigensolver_dimension.load(std::memory_order_relaxed)) {
     injected_eigensolver_failures.fetch_add(1u, std::memory_order_relaxed);
     return 1;
@@ -141,6 +173,7 @@ void injected_dgemm(int layout, int transpose_left, int transpose_right, std::in
 void injected_backend_cleanup() { backend_cleanup_calls.fetch_add(1u, std::memory_order_relaxed); }
 
 CpuLinearAlgebraBackend make_injected_backend() {
+  injected_inference_exception.store(InjectedInferenceException::kNone, std::memory_order_relaxed);
   CpuLinearAlgebraBackend backend;
   std::string error;
   if (xtbloom::detail::gfn2::make_internal_test_lp64_backend(
@@ -347,6 +380,7 @@ bool warm_rejected_atomically(xtbloom::detail::Gfn1CpuExecutionCache& cache, Req
 
 int test_mixed_ragged_warm_and_periodic() {
   using xtbloom::detail::execute_gfn1_cpu;
+  using xtbloom::detail::gfn1_cpu_execution_threads_for_testing;
   using xtbloom::detail::Gfn1CpuExecutionCache;
   using xtbloom::detail::persistent_workspace_bytes_gfn1_cpu;
   using xtbloom::detail::prepare_gfn1_cpu;
@@ -711,8 +745,11 @@ int test_injected_eigensolver_failure_isolated_and_backend_cleaned_up() {
   injected_eigensolver_failures.store(0u, std::memory_order_relaxed);
   const CpuLinearAlgebraBackend backend = make_injected_backend();
   failed_eigensolver_dimension.store(4, std::memory_order_relaxed);
+  std::size_t execution_threads = 0u;
   {
-    Gfn1CpuExecutionCache cache;
+    Gfn1CpuExecutionCache cache(2);
+    execution_threads = gfn1_cpu_execution_threads_for_testing(cache);
+    CHECK(execution_threads >= 1u && execution_threads <= 2u);
     Result result;
     result.bind(request);
     std::string error;
@@ -737,7 +774,74 @@ int test_injected_eigensolver_failure_isolated_and_backend_cleaned_up() {
     CHECK(backend_cleanup_calls.load(std::memory_order_relaxed) == 0u);
   }
   failed_eigensolver_dimension.store(0, std::memory_order_relaxed);
-  CHECK(backend_cleanup_calls.load(std::memory_order_relaxed) == 1u);
+  /* One callback runs on the owner thread from Impl::~Impl, and each worker
+   * runs one before it exits. A one-CPU cpuset or thread-resource limit may
+   * legally clamp the cache to its owner thread only. */
+  CHECK(backend_cleanup_calls.load(std::memory_order_relaxed) == execution_threads);
+  return 0;
+}
+
+int test_injected_inference_exceptions_are_atomic_and_recoverable() {
+  using xtbloom::detail::execute_gfn1_cpu;
+  using xtbloom::detail::Gfn1CpuExecutionCache;
+  using xtbloom::detail::set_gfn1_cpu_linear_algebra_backend_for_testing;
+
+  constexpr std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
+                                  XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+                                  XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+  Request request = mixed_request(flags);
+  Gfn1CpuExecutionCache cache(1);
+  std::string error;
+  const CpuLinearAlgebraBackend backend = make_injected_backend();
+  CHECK(set_gfn1_cpu_linear_algebra_backend_for_testing(cache, backend, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  Result result;
+  result.bind(request);
+  CHECK(execute_gfn1_cpu(cache, request.batch, request.options, result.result, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  struct FailureCase {
+    InjectedInferenceException mode;
+    xtbloom_status_t status;
+    const char* diagnostic;
+  };
+  const std::array<FailureCase, 4> cases{{
+      {InjectedInferenceException::kBadAlloc, XTBLOOM_STATUS_ALLOCATION_FAILED,
+       "failed to allocate CPU GFN1 per-system inference state"},
+      {InjectedInferenceException::kStandard, XTBLOOM_STATUS_INTERNAL_ERROR,
+       "injected CPU GFN1 inference failure"},
+      {InjectedInferenceException::kEmptyDiagnostic, XTBLOOM_STATUS_INTERNAL_ERROR,
+       "CPU GFN1 batch member failed without a diagnostic"},
+      {InjectedInferenceException::kUnknown, XTBLOOM_STATUS_INTERNAL_ERROR,
+       "unknown exception while executing a CPU GFN1 batch member"},
+  }};
+
+  for (const FailureCase& failure : cases) {
+    request.options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+    result.bind(request);
+    const ResultImage before(result);
+    injected_inference_exception.store(failure.mode, std::memory_order_release);
+    const xtbloom_status_t status =
+        execute_gfn1_cpu(cache, request.batch, request.options, result.result, error);
+    injected_inference_exception.store(InjectedInferenceException::kNone,
+                                       std::memory_order_release);
+    CHECK(status == failure.status);
+    CHECK(error == failure.diagnostic);
+    CHECK(before.matches(result));
+
+    /* An accepted FRESH attempt consumes the previous whole-batch checkpoint
+     * before execution. Any catastrophic member exception therefore makes the
+     * next strict WARM request fail without touching caller-owned outputs. */
+    CHECK(warm_rejected_atomically(cache, request, error));
+
+    request.options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+    result.bind(request);
+    CHECK(execute_gfn1_cpu(cache, request.batch, request.options, result.result, error) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(result.statuses ==
+          std::vector<std::int32_t>({XTBLOOM_STATUS_SUCCESS, XTBLOOM_STATUS_SUCCESS}));
+  }
   return 0;
 }
 
@@ -830,6 +934,10 @@ int main() {
   if (const int result = test_successful_peer_survives_scc_nonconvergence(); result != 0)
     return result;
   if (const int result = test_injected_eigensolver_failure_isolated_and_backend_cleaned_up();
+      result != 0) {
+    return result;
+  }
+  if (const int result = test_injected_inference_exceptions_are_atomic_and_recoverable();
       result != 0) {
     return result;
   }

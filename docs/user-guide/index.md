@@ -1,6 +1,6 @@
 # User guide
 
-xTBloom is designed for applications that evaluate GFN2-xTB over many small
+xTBloom is designed for applications that evaluate GFN1/GFN2-xTB over many small
 and medium molecular systems. It provides reusable CPU and CUDA contexts,
 native ragged batches, analytic forces and charges, and peer-local failure
 handling through one stable C ABI.
@@ -191,8 +191,10 @@ exception-oriented control flow.
 
 ## Scope and limitations
 
-Only GFN2-xTB is implemented. GFN1-xTB and ROCm have reserved ABI values but
-return unsupported or not-implemented statuses.
+GFN2-xTB is implemented on CPU and CUDA. GFN1-xTB is implemented on CPU only;
+CUDA requests return `NOT_SUPPORTED` without output publication. The high-level
+Python calculators, ASE, and dpdata expose GFN1 CPU, while Array API/DLPack,
+PyTorch autograd, and the browser demo remain GFN2-only. ROCm remains reserved.
 
 xTBloom's ABI-v4 batch descriptor reserves validated native 3D cell and
 periodic-axis input, but native periodic GFN2 execution and the Python

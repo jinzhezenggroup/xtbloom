@@ -393,15 +393,53 @@ def test_abi_struct_sizes() -> None:
     assert request_info.reserved == 0
 
 
-def test_unknown_method_rejected() -> None:
-    """Distinguish unknown methods from reserved unsupported GFN1-xTB."""
-    from xtbloom.exceptions import XTBloomNotSupportedError
-    from xtbloom.interface import Calculator
+def test_method_aliases_and_gfn1_backend_policy() -> None:
+    """Resolve both model aliases without silently selecting CUDA for GFN1."""
+    from xtbloom.interface import BatchCalculator, Calculator, Structure
 
     with pytest.raises(XTBloomValueError):
         Calculator("NoSuchMethod", np.array([1]), np.zeros((1, 3)))
-    with pytest.raises(XTBloomNotSupportedError):
-        Calculator("GFN1-xTB", np.array([1]), np.zeros((1, 3)))
+
+    for method in ("GFN1-xTB", "GFN1"):
+        calculator = Calculator(method, np.array([1]), np.zeros((1, 3)))
+        assert calculator._settings.model == library.MODEL_GFN1_XTB
+        assert calculator._context._requested == library.BACKEND_CPU
+
+    explicit_cuda = Calculator(
+        "GFN1-xTB", np.array([1]), np.zeros((1, 3)), backend="cuda"
+    )
+    assert explicit_cuda._context._requested == library.BACKEND_CUDA
+    with pytest.raises(XTBloomValueError, match="cannot use a CUDA device_id"):
+        Calculator(
+            "GFN1-xTB",
+            np.array([1]),
+            np.zeros((1, 3)),
+            device_id=0,
+        )
+
+    batch = BatchCalculator([Structure(np.array([1]), np.zeros((1, 3)))], method="GFN1")
+    assert batch._settings.model == library.MODEL_GFN1_XTB
+    assert batch._context._requested == library.BACKEND_CPU
+
+
+def test_gfn1_rejects_unpublished_field_and_dipole_path() -> None:
+    """Refuse GFN1 electric-field attachments before creating native state."""
+    from xtbloom.exceptions import XTBloomNotSupportedError
+    from xtbloom.interface import BatchCalculator, Calculator, Structure
+
+    with pytest.raises(XTBloomNotSupportedError, match=r"electric-field.*dipole"):
+        Calculator(
+            "GFN1-xTB",
+            np.array([1]),
+            np.zeros((1, 3)),
+            efield=np.array([0.001, 0.0, 0.0]),
+        )
+
+    structure = Structure(
+        np.array([1]), np.zeros((1, 3)), efield=np.array([0.001, 0.0, 0.0])
+    )
+    with pytest.raises(XTBloomNotSupportedError, match=r"electric-field.*dipole"):
+        BatchCalculator([structure], method="GFN1")
 
 
 def test_host_const_returns_consistent_buffer_and_owner() -> None:

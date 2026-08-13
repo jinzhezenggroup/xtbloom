@@ -2,13 +2,15 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/xtbloom.svg)](https://pypi.org/project/xtbloom/)
 
-xTBloom provides batched GFN2-xTB energies, analytic forces, and atomic charges
+xTBloom provides batched GFN1/GFN2-xTB energies, analytic forces, and charges
 through a NumPy-friendly interface backed by the same stable C ABI used by
 native C and C++ applications.
 
-It supports restricted and unrestricted GFN2-xTB, native ragged batches,
-explicit point charges with force output, caller-supplied periodic charge
-response, CPU and CUDA backends, ASE, dpdata, and eager Array API/DLPack arrays.
+GFN2-xTB supports CPU and CUDA. GFN1-xTB supports CPU through `Calculator`,
+`BatchCalculator`, ASE, and dpdata. Both models support native ragged batches,
+explicit point charges with force output, and caller-supplied periodic charge
+response. Array API/DLPack, PyTorch autograd, and the browser demo remain
+explicitly GFN2-only surfaces.
 
 ## Installation
 
@@ -136,6 +138,12 @@ does not change the narrower PyTorch autograd contract described below.
 Set `backend="cpu"` or `backend="cuda"` to require one backend. The CUDA
 quickstart above deliberately uses `"cuda"` so an unavailable GPU fails clearly
 instead of running on CPU. `"auto"` prefers CUDA but falls back to CPU.
+For GFN1-xTB, high-level `"auto"` selects CPU because CUDA support is not
+published; an explicit `backend="cuda"` request is not redirected. A
+CUDA-capable native build returns `NOT_SUPPORTED`, while a build without CUDA
+may return `BACKEND_UNAVAILABLE` when creating the context.
+Passing a nonnegative `device_id` with GFN1 `backend="auto"` is rejected instead
+of silently ignoring the requested GPU.
 Compatible calls can opt into electronic warm starts; the default is an
 independent fresh SCC solve.
 
@@ -176,7 +184,7 @@ conservative CUDA chunks while preserving input order.
 
 ## Advanced array and CUDA paths
 
-`ArrayBatch` accepts packed ragged descriptors from eager NumPy, CuPy, JAX, or
+`ArrayBatch` is currently GFN2-xTB-only. It accepts packed ragged descriptors from eager NumPy, CuPy, JAX, or
 PyTorch arrays through `__dlpack__` and `__dlpack_device__`. Host arrays map
 to host descriptors; CUDA arrays can remain device-resident. By default,
 results return as host NumPy arrays.
@@ -187,7 +195,7 @@ DLPack producers. Exact dtype, shape, layout, lifetime, stream, and ownership
 rules are documented in the
 [Python API guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/python.md#array-api-and-dlpack-input-arrays).
 
-`xtbloom_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
+`xtbloom_torch` is currently GFN2-xTB-only. `xtbloom_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
 unpaired_electrons, ...)` runs xTBloom inference on PyTorch tensors (host or
 CUDA) and is the only autograd entry point in the Python API. It supports
 exactly the positions gradient `dE/dR = -F`; autograd on any other input, or a
@@ -249,13 +257,14 @@ geometry optimization in the C ABI.
 
 ## Scope
 
-GFN1-xTB, ROCm, lattice/PBC inputs, solvation, native geometry optimization,
-molecular dynamics, native/analytic Hessians, vibrational analysis, and
+GFN1-xTB CUDA execution, GFN1 electric fields/dipoles, ROCm, lattice/PBC inputs,
+solvation, native geometry optimization, molecular dynamics, native/analytic
+Hessians, vibrational analysis, and
 higher-order autograd are not implemented. A numerical QM Cartesian Hessian is
 available through Python `Calculator.hessian()` and `BatchCalculator.hessian()`.
 The high-level `Calculator` and `BatchCalculator` APIs use host NumPy arrays;
-direct device and mixed descriptors are exposed through `ArrayBatch` and the
-low-level C ABI.
+direct device and mixed descriptors are exposed through the GFN2-only
+`ArrayBatch` surface and the low-level C ABI.
 
 ## More documentation
 

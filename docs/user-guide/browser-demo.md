@@ -84,8 +84,11 @@ xTBloom's published native benchmark evidence.
 - SMILES-to-3D and L-BFGS optimization are browser-adapter features, not
   stable C ABI capabilities.
 - The demo is for exploration, not a production scientific environment.
-- GFN1-xTB, solvation, molecular dynamics, Hessians, and lattice/PBC inputs
-  remain unsupported.
+- The browser adapter exposes GFN2-xTB only. CPU GFN1-xTB is available through
+  native APIs and the Python `Calculator`, `BatchCalculator`, ASE, and dpdata
+  interfaces, not through this WebAssembly demo.
+  Solvation, molecular dynamics, Hessians, and lattice/PBC inputs remain
+  unsupported here.
 
 Implementation, build, dependency, and parity details are documented in
 [`web/README.md`](../../web/README.md).

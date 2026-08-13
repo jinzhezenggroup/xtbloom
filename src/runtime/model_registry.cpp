@@ -10,7 +10,7 @@ namespace xtbloom::detail {
 namespace {
 
 constexpr std::array<ModelDescriptor, 2> kModels{{
-    {XTBLOOM_MODEL_GFN1_XTB, ModelFamily::kGfn1, "GFN1-xTB", ModelBackendRoute::kUnavailable,
+    {XTBLOOM_MODEL_GFN1_XTB, ModelFamily::kGfn1, "GFN1-xTB", ModelBackendRoute::kGfn1,
      ModelBackendRoute::kUnavailable},
     {XTBLOOM_MODEL_GFN2_XTB, ModelFamily::kGfn2, "GFN2-xTB", ModelBackendRoute::kGfn2,
      ModelBackendRoute::kGfn2},

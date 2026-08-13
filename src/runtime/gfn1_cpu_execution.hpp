@@ -4,6 +4,7 @@
 #define XTBLOOM_RUNTIME_GFN1_CPU_EXECUTION_HPP
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -16,16 +17,17 @@ class CpuLinearAlgebraBackend;
 namespace xtbloom::detail {
 
 /*
- * Internal-only CPU execution cache for the complete GFN1 model.
+ * Context- or plan-owned CPU execution cache for the complete GFN1 model.
  *
- * This type is deliberately not reachable from Context, the model registry,
- * installed headers, or libxtbloom.  Issue #384 uses it to prove the complete
- * CPU composition while the public GFN1 tag remains NOT_SUPPORTED until the
- * activation work in #385 passes its own ABI and packaging gates.
+ * The type stays private to libxtbloom, but the reserved public GFN1 tag now
+ * selects it on CPU. It owns model-specific topology, SCC/WARM state, and
+ * publication staging so no request can fall through to GFN2 equations.
  */
 class Gfn1CpuExecutionCache {
  public:
-  Gfn1CpuExecutionCache();
+  /* Direct internal tests default to the historical serial executor. Public
+   * contexts and plans always pass their resolved cpu_threads request. */
+  explicit Gfn1CpuExecutionCache(std::int32_t cpu_threads = 1);
   ~Gfn1CpuExecutionCache();
 
   Gfn1CpuExecutionCache(const Gfn1CpuExecutionCache&) = delete;
@@ -41,12 +43,13 @@ class Gfn1CpuExecutionCache {
                                            const xtbloom_compute_options_t&,
                                            xtbloom_batch_result_t&, std::string&);
   friend std::size_t persistent_workspace_bytes_gfn1_cpu(Gfn1CpuExecutionCache&) noexcept;
+  friend std::size_t gfn1_cpu_execution_threads_for_testing(Gfn1CpuExecutionCache&) noexcept;
   friend xtbloom_status_t set_gfn1_cpu_linear_algebra_backend_for_testing(
       Gfn1CpuExecutionCache&, const gfn2::CpuLinearAlgebraBackend&, std::string&);
 };
 
 /*
- * The hidden executor consumes already structurally validated HOST
+ * The model executor consumes already structurally validated HOST
  * descriptors. It still copies all input bytes, validates numerical values,
  * rejects unreleased GFN1 interactions/outputs, and publishes caller outputs
  * only after the complete batch reaches documented terminal states.
@@ -58,6 +61,12 @@ xtbloom_status_t execute_gfn1_cpu(Gfn1CpuExecutionCache& cache, const xtbloom_ba
                                   const xtbloom_compute_options_t& options,
                                   xtbloom_batch_result_t& result, std::string& error);
 std::size_t persistent_workspace_bytes_gfn1_cpu(Gfn1CpuExecutionCache& cache) noexcept;
+
+/* Actual execution concurrency after affinity clamping and any legal worker
+ * creation fallback. Hidden tests use it to distinguish one owner cleanup
+ * from owner-plus-worker cleanup without assuming the host can create a
+ * persistent thread. */
+std::size_t gfn1_cpu_execution_threads_for_testing(Gfn1CpuExecutionCache& cache) noexcept;
 
 /*
  * Install one verified internal-test LP64 backend before preparing or

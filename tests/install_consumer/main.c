@@ -277,7 +277,8 @@ static int run_installed_native_lattice_refusal(xtbloom_context_t* context) {
 /* Exercise actual inference through the installed C ABI without requiring a
  * CUDA compiler in the external consumer: the CUDA backend stages these host
  * descriptors and publishes the host result through its public transaction. */
-static int run_installed_inference(xtbloom_context_t* context, const char* mode_name) {
+static int run_installed_inference(xtbloom_context_t* context, const char* mode_name,
+                                   xtbloom_model_t model) {
   const int64_t atom_offsets[] = {0, 2};
   const int32_t atomic_numbers[] = {1, 1};
   double positions[] = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
@@ -303,6 +304,7 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
   batch.molecular_charges = input_buffer(molecular_charges, sizeof(molecular_charges));
   batch.unpaired_electrons = input_buffer(unpaired_electrons, sizeof(unpaired_electrons));
 
+  options.model = model;
   options.flags = XTBLOOM_COMPUTE_ENERGY;
 
   double energy = NAN;
@@ -380,13 +382,13 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
     options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
   }
 
-  /* Exercise the released ABI-v3 electric-field attachment and ABI-v2 dipole
+  /* Exercise the GFN2-only ABI-v3 electric-field attachment and ABI-v2 dipole
    * outlet through either installed backend. The CUDA coordinate deliberately
    * uses host descriptors and results so this C-only consumer also proves the
    * installed public staging/publication bridge without CUDA headers. The
    * released field block is 32 bytes: int32 block_version=1, int32 reserved=0,
    * and three doubles in atomic units. */
-  {
+  if (model == XTBLOOM_MODEL_GFN2_XTB) {
     const uint32_t field_flags =
         XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
     uint8_t payload[32];
@@ -506,6 +508,26 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
     xtbloom_plan_destroy(plan);
     return 16;
   }
+  /* The installed plan owns a cache distinct from the context convenience
+   * cache. Prove that both published CPU models establish and consume their
+   * own strict WARM checkpoint through the installed ABI. */
+  if (backend == XTBLOOM_BACKEND_CPU) {
+    positions[0] -= 0.002;
+    positions[3] += 0.002;
+    energy = NAN;
+    iterations = -1;
+    converged = 0;
+    system_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+    if (xtbloom_plan_compute(plan, &batch, &options, &result) != XTBLOOM_STATUS_SUCCESS ||
+        system_status != XTBLOOM_STATUS_SUCCESS || converged != 1 || iterations <= 0 ||
+        !isfinite(energy)) {
+      fprintf(stderr, "installed %s plan WARM inference failed: %s\n", mode_name,
+              xtbloom_get_last_error());
+      xtbloom_plan_destroy(plan);
+      return 26;
+    }
+  }
   xtbloom_plan_destroy(plan);
   return 0;
 }
@@ -585,8 +607,11 @@ int main(int argc, char** argv) {
 
   int inference_status = 0;
   if (mode != CONSUMER_MODE_SMOKE) {
-    inference_status =
-        run_installed_inference(context, mode == CONSUMER_MODE_CUDA ? "CUDA" : "CPU");
+    inference_status = run_installed_inference(
+        context, mode == CONSUMER_MODE_CUDA ? "CUDA GFN2" : "CPU GFN2", XTBLOOM_MODEL_GFN2_XTB);
+    if (inference_status == 0 && mode == CONSUMER_MODE_CPU) {
+      inference_status = run_installed_inference(context, "CPU GFN1", XTBLOOM_MODEL_GFN1_XTB);
+    }
   }
   xtbloom_context_destroy(context);
   if (inference_status != 0) {

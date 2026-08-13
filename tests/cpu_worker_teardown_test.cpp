@@ -2,8 +2,10 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <vector>
 
+#include "runtime/backend.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
 #include "xtbloom/xtbloom.h"
 
@@ -47,6 +49,37 @@ ContextHandle make_cpu_context(std::int32_t cpu_threads) {
     return {};
   }
   return ContextHandle(raw_context);
+}
+
+int test_context_model_caches_are_lazy_and_independent() {
+  xtbloom_context_options_t options{};
+  CHECK(xtbloom_context_options_init(&options, sizeof(options)) == XTBLOOM_STATUS_SUCCESS);
+  options.backend = XTBLOOM_BACKEND_CPU;
+  options.cpu_threads = 4;
+
+  xtbloom::detail::Context* gfn2_context = nullptr;
+  std::string error;
+  CHECK(xtbloom::detail::create_context(options, gfn2_context, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(gfn2_context != nullptr);
+  CHECK(gfn2_context->gfn1_cpu_execution_cache == nullptr);
+  CHECK(gfn2_context->gfn2_cpu_execution_cache == nullptr);
+  CHECK(xtbloom::detail::ensure_gfn2_cpu_execution_cache(*gfn2_context, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(gfn2_context->gfn2_cpu_execution_cache != nullptr);
+  CHECK(gfn2_context->gfn1_cpu_execution_cache == nullptr);
+  delete gfn2_context;
+
+  xtbloom::detail::Context* gfn1_context = nullptr;
+  CHECK(xtbloom::detail::create_context(options, gfn1_context, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(gfn1_context != nullptr);
+  CHECK(gfn1_context->gfn1_cpu_execution_cache == nullptr);
+  CHECK(gfn1_context->gfn2_cpu_execution_cache == nullptr);
+  CHECK(xtbloom::detail::ensure_gfn1_cpu_execution_cache(*gfn1_context, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(gfn1_context->gfn1_cpu_execution_cache != nullptr);
+  CHECK(gfn1_context->gfn2_cpu_execution_cache == nullptr);
+  delete gfn1_context;
+  return 0;
 }
 
 struct TwoSystemBatch {
@@ -114,6 +147,9 @@ int run_context(std::int32_t cpu_threads, bool expect_background_worker) {
 }  // namespace
 
 int main() {
+  if (const int line = test_context_model_caches_are_lazy_and_independent(); line != 0) {
+    return line;
+  }
   if (const int line = run_context(1, false); line != 0) {
     return line;
   }

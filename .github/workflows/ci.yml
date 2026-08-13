@@ -296,6 +296,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install uv and Python 3.11
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.10.7"
+          python-version: "3.11"
+          enable-cache: true
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
       - name: Restore ccache
@@ -307,8 +313,17 @@ jobs:
             ccache-static-
       - name: Configure static package
         run: |
+          uv sync --locked --no-install-project --no-default-groups --group wheel-build
+          openblas="$(
+            uv run --no-sync python python/ci/resolve-openblas-wheel.py \
+              --manifest cmake/3rdparty/scipy_openblas32_manifest.json | \
+              uv run --no-sync python -c \
+                'import json, sys; print(json.load(sys.stdin)["provider_path"])'
+          )"
+          test -f "${openblas}"
           cmake -S . -B build-static -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
+            -DXTBLOOM_CPU_LINALG_LIBRARY="${openblas}" \
             -DXTBLOOM_BUILD_TESTS=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
@@ -327,7 +342,7 @@ jobs:
           cmake -S tests/install_consumer -B build-static-consumer -G Ninja \
             -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/xtbloom-static-install"
           cmake --build build-static-consumer --parallel
-          "${PWD}/build-static-consumer/xtbloom_install_consumer" smoke
+          "${PWD}/build-static-consumer/xtbloom_install_consumer" cpu
 
   public-cpu-release:
     runs-on: ubuntu-24.04

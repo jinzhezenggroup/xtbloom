@@ -161,8 +161,8 @@ pinned reference engines rather than assumed to match GFN2.
 xTB contains distinct GFN1 point-charge potential and gradient paths. The
 existing GFN2 screened point-charge implementation therefore cannot be reused
 by naming alone. Explicit point charges and caller-supplied periodic `b + A*q`
-response must either have GFN1-specific oracle and derivative evidence or be
-rejected transactionally for GFN1 requests.
+response use the GFN1-specific oracle and derivative evidence recorded by the
+published CPU path; they must never route through the GFN2 screening executor.
 
 For a GFN1 shell hardness `g_i` and point-site hardness `g_p`, xTB's softened
 interaction uses `x = 2 / (1/g_i + 1/g_p)` and
@@ -171,10 +171,11 @@ requires a separate implementation and finite-difference gate.
 
 ## Publication boundary
 
-The stable C ABI already reserves `XTBLOOM_MODEL_GFN1_XTB`. While foundation
-work is incomplete, it remains a known but unsupported model: validated GFN1
-requests return `XTBLOOM_STATUS_NOT_SUPPORTED` before execution and leave all
-caller outputs unchanged. CPU support may be advertised only after complete
-energy, requested properties, analytic forces, ragged failure isolation, and
-installed public-API evidence pass. CUDA support additionally requires real
-GPU host/device/mixed parity and the repository sanitizer matrix.
+The stable C ABI model tag `XTBLOOM_MODEL_GFN1_XTB` is published on CPU for
+energy, analytic forces, atomic charges, explicit point charges and their
+forces, caller-supplied `b + A*q` response, ragged failure isolation, plans,
+and strict FRESH/WARM execution. CUDA requests remain transactionally
+`XTBLOOM_STATUS_NOT_SUPPORTED` and never substitute GFN2. Uniform electric
+field attachments and molecular dipole publication are not part of the GFN1
+surface. Future CUDA publication still requires real-GPU host/device/mixed
+parity and the repository sanitizer matrix.

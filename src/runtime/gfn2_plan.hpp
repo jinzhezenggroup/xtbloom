@@ -19,9 +19,11 @@ struct RequestSubmission;
 struct Context;
 
 /*
- * Opaque fixed-topology GFN2 plan.
+ * Opaque fixed-topology CPU/CUDA model plan.
  *
- * A plan is created from one validated batch descriptor and compute policy. It
+ * The historical class name is internal and retained to keep this activation
+ * patch narrow. A plan is created from one validated batch descriptor and
+ * compute policy. It
  * binds the immutable ragged topology (atom offsets, element numbers,
  * molecular charges, unpaired electrons, spin channels, point-charge and
  * response structure) and owns a prepared cache for the selected backend.
@@ -34,7 +36,9 @@ struct Context;
  * steady-state allocations. The plan must be destroyed before its context.
  * A plan is bound to the context that created it; using a plan with a batch
  * whose immutable topology differs, or with a different context, fails with
- * XTBLOOM_STATUS_INVALID_ARGUMENT before any caller output is modified.
+ * XTBLOOM_STATUS_INVALID_ARGUMENT before any caller output is modified. CPU
+ * plans select either the GFN1 or GFN2 cache from the registered route; CUDA
+ * remains GFN2-only until its separate model implementation is published.
  */
 class Gfn2Plan {
  public:

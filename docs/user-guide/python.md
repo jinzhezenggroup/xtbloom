@@ -33,6 +33,15 @@ page is [`python/README.md`](../../python/README.md).
 Use it as a context manager so native resources are released deterministically.
 Updating only positions reuses the context and immutable topology setup.
 
+`Calculator` and `BatchCalculator` accept `"GFN1-xTB"`/`"GFN1"` and
+`"GFN2-xTB"`/`"GFN2"`. GFN2 runs on CPU or CUDA. GFN1 is published on CPU;
+its high-level `backend="auto"` selects CPU even on a CUDA machine, while an
+explicit `backend="cuda"` request never falls back to GFN2. A CUDA-capable
+native build returns `NOT_SUPPORTED` for GFN1; a build without CUDA may reject
+the context first with `BACKEND_UNAVAILABLE`. Because GFN1 AUTO is CPU-only,
+pairing it with a nonnegative
+`device_id` is an input error rather than silently ignoring the GPU selection.
+
 ```python
 import numpy as np
 from xtbloom import BatchCalculator, Calculator, Structure
@@ -191,6 +200,9 @@ CuPy, JAX eager arrays, PyTorch tensors); xTBloom imports none of those
 libraries, consumed buffers are caller-owned, and interface devices are
 accepted without a host round trip on the CUDA backend.
 
+`ArrayBatch` and `compute_arrays` currently have no model selector and execute
+GFN2-xTB only. Use the host-NumPy `Calculator`/`BatchCalculator` APIs for GFN1.
+
 ```python
 from xtbloom import ArrayBatch
 
@@ -281,7 +293,8 @@ API semantics do not depend on one device's measured timing.
 
 ## PyTorch autograd op (positions gradient only)
 
-`xtbloom.xtbloom_torch` runs packed xtbloom inference on PyTorch tensors (host CPU
+`xtbloom.xtbloom_torch` is a GFN2-xTB-only adapter with no model selector. It
+runs packed xtbloom inference on PyTorch tensors (host CPU
 or CUDA device) and returns `(energies, forces)` as float64 tensors, with
 zero-copy tensor data plane. It is the only autograd entry point in the Python
 API, and its gradient contract is deliberately narrow: it supports exactly
@@ -376,7 +389,7 @@ radical = Structure(
 
 Set `spin_channels=1` only when the restricted open-shell formulation is
 intended. Both restricted and unrestricted GFN2-xTB are implemented on CPU and
-CUDA.
+CUDA; both GFN1 forms are implemented on CPU.
 
 ## Point charges and periodic response
 
@@ -396,6 +409,8 @@ embedded_system = Structure([1, 1], systems[0].positions, point_charges=embeddin
 
 When point charges are present, results include `point_charge_forces`. xTBloom
 does not include point-charge/point-charge energy or force.
+GFN1 and GFN2 use distinct model-specific screening equations; supplied GFN1
+gamma values are harmonic hardnesses, not GFN2 shell-hardness parameters.
 
 `ChargeResponse` adds a per-atom shift `b` and symmetric response matrix `A`:
 
@@ -428,6 +443,10 @@ enables warm start by default (`warm_start=True`), so an ASE dynamics run
 automatically seeds each step's SCC from the previous converged state and
 falls back to a fresh solve whenever the request's identity changes; pass
 `warm_start=False` for bit-reproducible independent steps.
+
+ASE and dpdata accept both model names. GFN1 follows the same CPU-only AUTO
+policy as the high-level calculators; its electric-field/dipole path is
+rejected rather than evaluated as GFN2.
 
 For geometry relaxation, `xtbloom` also registers a batch minimizer under the
 `"xtbloom"` key. It moves every frame of a dpdata system in lockstep and

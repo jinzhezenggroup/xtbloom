@@ -29,11 +29,18 @@ TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "xtbloom_conformance.py"
 PUBLIC_API_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "xtbloom_public_api.py"
 INVARIANTS_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "xtbloom_invariants.py"
 MANIFEST = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
+GFN1_TOOL = REPOSITORY_ROOT / "tools" / "conformance" / "gfn1_conformance.py"
+GFN1_MANIFEST = REPOSITORY_ROOT / "data" / "conformance" / "gfn1" / "manifest.json"
 SPEC = importlib.util.spec_from_file_location("xtbloom_conformance_tool", TOOL)
 assert SPEC is not None and SPEC.loader is not None
 CONFORMANCE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CONFORMANCE)
 sys.modules.setdefault("xtbloom_conformance", CONFORMANCE)
+GFN1_SPEC = importlib.util.spec_from_file_location("gfn1_conformance_tool", GFN1_TOOL)
+assert GFN1_SPEC is not None and GFN1_SPEC.loader is not None
+GFN1_CONFORMANCE = importlib.util.module_from_spec(GFN1_SPEC)
+GFN1_SPEC.loader.exec_module(GFN1_CONFORMANCE)
+sys.modules.setdefault("gfn1_conformance", GFN1_CONFORMANCE)
 PUBLIC_SPEC = importlib.util.spec_from_file_location(
     "xtbloom_public_api_tool", PUBLIC_API_TOOL
 )
@@ -194,6 +201,35 @@ class ConformanceToolTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 1)
         self.assertIn("shared library is missing", completed.stderr)
         self.assertNotIn("SKIP oh_radical", completed.stdout)
+
+    def test_public_runner_selects_gfn1_cpu_without_cuda_publication(self) -> None:
+        """GFN1 corpus defaults to CPU and preserves restricted open-shell input."""
+        manifest = json.loads(GFN1_MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(
+            PUBLIC_API.model_tag(manifest), PUBLIC_API.XTBLOOM_MODEL_GFN1_XTB
+        )
+        self.assertEqual(len(PUBLIC_API.supported_cases(manifest, None, "cpu")), 8)
+        self.assertEqual(PUBLIC_API.supported_cases(manifest, None, "cuda"), [])
+        cases = PUBLIC_API.supported_cases(manifest, ["gfn1_oh_radical"])
+        storage = PUBLIC_API.assemble_batch(GFN1_MANIFEST, manifest, cases)
+        self.assertEqual(storage.unpaired_electrons, [1])
+        self.assertEqual(storage.spin_channels, [1])
+
+    def test_gfn1_invariant_loader_uses_model_specific_inputs(self) -> None:
+        """GFN1 invariants load both coord and PCEM inputs without GFN2 parsers."""
+        manifest = json.loads(GFN1_MANIFEST.read_text(encoding="utf-8"))
+        cases = PUBLIC_API.supported_cases(
+            manifest,
+            ["gfn1_h3_plus", "gfn1_water_dimer_6pc_hardness"],
+            "cpu",
+        )
+        geometries = INVARIANTS.load_geometries(GFN1_MANIFEST, manifest, cases)
+        self.assertEqual(
+            [geometry.case_id for geometry in geometries],
+            ["gfn1_h3_plus", "gfn1_water_dimer_6pc_hardness"],
+        )
+        self.assertEqual(geometries[0].atomic_numbers, [1, 1, 1])
+        self.assertEqual(len(geometries[1].point_values), 6)
 
     def test_public_open_shell_comparison_requires_force_energy_and_charge(
         self,
@@ -807,6 +843,7 @@ class ConformanceToolTest(unittest.TestCase):
 
         options = PUBLIC_API.pinned_compute_options(
             FakeLibrary(),
+            PUBLIC_API.XTBLOOM_MODEL_GFN2_XTB,
             request_forces=True,
             request_charges=True,
             request_point_forces=False,

@@ -51,6 +51,16 @@ def ketene_atoms() -> Atoms:
     return atoms
 
 
+@pytest.fixture(scope="module")
+def gfn1_ketene_atoms() -> Atoms:
+    """Build the independent GFN1 ketene oracle structure in ASE units."""
+    case = _cases.gfn1_case_by_id("gfn1_ketene")
+    numbers, positions_bohr, _, _, _ = _cases.gfn1_structure_inputs(case)
+    return Atoms(
+        numbers=numbers, positions=np.asarray(positions_bohr) * _BOHR, pbc=False
+    )
+
+
 def test_ase_energy_matches_golden(ketene_atoms: Atoms) -> None:
     """Match the ASE energy and free-energy alias to the golden value."""
     case = _cases.case_by_id("ketene")
@@ -85,6 +95,27 @@ def test_ase_forces_and_charges(ketene_atoms: Atoms) -> None:
         assert charges == pytest.approx(
             golden["partial_charges_e"], abs=tolerance["charges"]["atol"]
         )
+
+
+def test_ase_gfn1_cpu_matches_independent_golden(gfn1_ketene_atoms: Atoms) -> None:
+    """Expose GFN1 CPU energy and forces through the ordinary ASE adapter."""
+    case = _cases.gfn1_case_by_id("gfn1_ketene")
+    golden = _cases.gfn1_golden(case)
+    tolerance = _cases.gfn1_tolerances()
+    atoms = gfn1_ketene_atoms.copy()
+    atoms.calc = XTBloom(method="GFN1-xTB")
+    assert atoms.get_potential_energy() == pytest.approx(
+        golden["energy_hartree"] * _HARTREE_TO_EV,
+        abs=tolerance["energy"]["atol"] * _HARTREE_TO_EV,
+    )
+    assert atoms.get_forces() == pytest.approx(
+        np.asarray(golden["forces_hartree_per_bohr"]).reshape(-1, 3)
+        * _HARTREE_TO_EV
+        / _BOHR,
+        abs=tolerance["forces"]["atol"] * _HARTREE_TO_EV / _BOHR,
+    )
+    assert atoms.calc._xtb is not None
+    assert atoms.calc._xtb.backend == _library.BACKEND_CPU
 
 
 def test_ase_charge_from_atoms(ketene_atoms: Atoms) -> None:

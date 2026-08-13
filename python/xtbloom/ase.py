@@ -30,7 +30,7 @@ from .interface import Calculator, Result, _resolve_uhf, _validated_compute_sett
 
 
 class XTBloom(ase.calculators.calculator.Calculator):
-    r"""ASE calculator for GFN2-xTB energies and analytic forces from xTBloom.
+    r"""ASE calculator for GFN1/GFN2-xTB energies and forces from xTBloom.
 
     Supported properties: ``energy`` (alias ``free_energy``), ``forces``, and
     ``charges``.
@@ -38,7 +38,7 @@ class XTBloom(ase.calculators.calculator.Calculator):
     ======================== ================= =========================================
      Keyword                  Default           Description
     ======================== ================= =========================================
-     method                   "GFN2-xTB"        Underlying tight-binding method
+     method                   "GFN2-xTB"        GFN1-xTB or GFN2-xTB
      charge                   None              Total charge (sum of initial charges)
      multiplicity             None              Total spin multiplicity
      electronic_temperature   300.0             Electronic temperature in kelvin
@@ -49,7 +49,7 @@ class XTBloom(ase.calculators.calculator.Calculator):
      scc_mixer_history        8                 Broyden history vectors (1..64)
      scc_mixer_damping        0.4               Broyden damping in (0, 1]
      determinism             "default"          default/reproducible execution policy
-     backend                  "auto"            Execution backend: auto/cpu/cuda
+     backend                  "auto"            Execution backend; GFN1 auto uses CPU
      device_id                None              CUDA device id
      cpu_threads              1                 CPU batch-parallelism ceiling
      cache_api                True              Reuse the underlying API calculator
