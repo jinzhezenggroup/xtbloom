@@ -45,6 +45,12 @@ SIMPLE_DFTD3_SOURCE_PATHS = (
     "src/dftd3/data/r4r2.f90",
     "src/dftd3/data/vdwrad.f90",
 )
+SIMPLE_DFTD3_EQUATION_PATHS = (
+    "src/dftd3/model.f90",
+    "src/dftd3/damping/rational.f90",
+    "src/dftd3/disp.f90",
+    "src/dftd3/cutoff.f90",
+)
 SIMPLE_DFTD3_LEGAL_PATHS = ("COPYING", "COPYING.LESSER")
 MCTC_SOURCE_PATHS = (
     "src/mctc/io/constants.f90",
@@ -57,7 +63,7 @@ MCTC_LEGAL_PATHS = ("LICENSE",)
 # offline regeneration.  Generated-output and generator hashes are refreshed
 # separately and therefore are intentionally excluded from this digest.
 PINNED_PROVENANCE_SHA256 = (
-    "2aa688be0fd1cb8609abaa3802a616178e1abe504d8b3c1dd56fcc37140005a0"
+    "958094427fc38b44675d125453fccbb4626399c500b6c3fdc5214c129f146146"
 )
 
 
@@ -642,6 +648,9 @@ def build_artifacts(
     d3_sources, d3_records = _source_records(
         d3_source, d3_revision, SIMPLE_DFTD3_SOURCE_PATHS
     )
+    _d3_equations, d3_equation_records = _source_records(
+        d3_source, d3_revision, SIMPLE_DFTD3_EQUATION_PATHS
+    )
     _legal_sources, legal_records = _source_records(
         d3_source, d3_revision, SIMPLE_DFTD3_LEGAL_PATHS
     )
@@ -673,6 +682,7 @@ def build_artifacts(
             "license": UPSTREAM_LICENSE,
             "source_digest": d3_digest,
             "parsed_sources": d3_records,
+            "equation_sources": d3_equation_records,
             "legal_files": legal_records,
         },
         "unit_conversion": {

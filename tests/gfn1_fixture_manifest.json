@@ -30,6 +30,27 @@
           "sha256": "d4b2168eae99a8bb51a580693d9766506c17728a4ee42cdc093d9de88f540058",
           "use": "H2 bohr geometry used by the H0 and overlap fixtures.",
           "consumers": ["tests/gfn1_h0_test.cpp", "tests/gfn1_integrals_test.cpp"]
+        },
+        {
+          "path": "test/test_singlepoint/mols/LiH/coord",
+          "git_blob": "9055b8d25df5151fccffd72c256e86e12142ab39",
+          "sha256": "66c5ff399efaf8da4e654b716f78a8ff5586db4d3ca3d63a4d3f6bef6351f5d8",
+          "use": "LiH bohr geometry used by the GFN1 D3 tblite energy/gradient fixture.",
+          "consumers": ["tests/gfn1_d3_test.cpp"]
+        },
+        {
+          "path": "test/test_singlepoint/mols/SiH4/coord",
+          "git_blob": "b8a5c55e80426f8375185f36a76f7c0e473d7a59",
+          "sha256": "8919b32136339021a44525328c34befcc8b3efb1057a267fc74309889d970f22",
+          "use": "SiH4 bohr geometry used by the GFN1 D3 tblite energy/gradient fixture.",
+          "consumers": ["tests/gfn1_d3_test.cpp"]
+        },
+        {
+          "path": "test/test_classical/test_dispersion/samples.py",
+          "git_blob": "dd1b5c10632636122fd2e47f2133e345f5274151",
+          "sha256": "429b028ecba85a077f795fa009757b1e5936c8c6ec9c7bd1c00c71db9392c66a",
+          "use": "Literal LiH and SiH4 GFN1 D3 atom-resolved energies and analytic gradients identified by dxtb as tblite reference values.",
+          "consumers": ["tests/gfn1_d3_test.cpp"]
         }
       ]
     },

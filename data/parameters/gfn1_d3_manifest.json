@@ -1,7 +1,7 @@
 {
   "generator": {
     "path": "tools/parameters/generate_gfn1_d3.py",
-    "sha256": "e4c33feb3c397245210d9a87b24c586ef5cfcb4e6e0e432865c401c55e6b7d1e"
+    "sha256": "81b520d111ff38c4f7171391014a646121fd364e531ff3f4586680147dc442bf"
   },
   "method": "gfn1-d3",
   "outputs": {
@@ -25,6 +25,32 @@
   },
   "schema_version": 1,
   "source": {
+    "equation_sources": [
+      {
+        "bytes": 10268,
+        "git_blob": "41d3eb76915c05c515ce1802efc8ba8213c0cd42",
+        "path": "src/dftd3/model.f90",
+        "sha256": "b4b2cad1f772263c979ea2674b6d5d78f4eec19fa91a13afd3a789d0a7e866df"
+      },
+      {
+        "bytes": 16796,
+        "git_blob": "a8edb7c50b08fde56f234750a2155053a0102bfa",
+        "path": "src/dftd3/damping/rational.f90",
+        "sha256": "d3a9fca2c45ebc4c3b88a49d7688774904f78b7fbacd2716f3756dc5f55521e8"
+      },
+      {
+        "bytes": 6195,
+        "git_blob": "413683f9a16b8621875bf1880af764f63e2ac02d",
+        "path": "src/dftd3/disp.f90",
+        "sha256": "cf2e68d8afb1c33b1f458dd09360e512c7171686d8e371a29d02501e0458edde"
+      },
+      {
+        "bytes": 5682,
+        "git_blob": "743774e355c6e99aac49c0288be8593b08237c9c",
+        "path": "src/dftd3/cutoff.f90",
+        "sha256": "c98c15fa8f38e961bf920cff176daa649b48f685b28a4b5dd04860ca0c19fd29"
+      }
+    ],
     "legal_files": [
       {
         "bytes": 35149,

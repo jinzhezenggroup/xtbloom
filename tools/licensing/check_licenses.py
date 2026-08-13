@@ -415,7 +415,7 @@ GFN1_PROVENANCE_SHA256 = (
     "422170e3d1beaa94be96488fc9303374a3b217e89e501823db894aa7fd17a9c5"
 )
 GFN1_D3_PROVENANCE_SHA256 = (
-    "2aa688be0fd1cb8609abaa3802a616178e1abe504d8b3c1dd56fcc37140005a0"
+    "958094427fc38b44675d125453fccbb4626399c500b6c3fdc5214c129f146146"
 )
 GFN1_D3_MCTC_LICENSE_RECORD = {
     "bytes": 11358,
@@ -1662,6 +1662,31 @@ def _check_gfn1_d3_provenance(
         raise LicenseCheckError("GFN1-D3 manifest is incomplete") from exc
     if _compact_canonical_json_sha256(retained) != GFN1_D3_PROVENANCE_SHA256:
         raise LicenseCheckError("GFN1-D3 manifest has unreviewed provenance")
+    source = gfn1_d3.get("source", {})
+    expected_equations = {
+        "src/dftd3/model.f90": (
+            "41d3eb76915c05c515ce1802efc8ba8213c0cd42",
+            "b4b2cad1f772263c979ea2674b6d5d78f4eec19fa91a13afd3a789d0a7e866df",
+        ),
+        "src/dftd3/damping/rational.f90": (
+            "a8edb7c50b08fde56f234750a2155053a0102bfa",
+            "d3a9fca2c45ebc4c3b88a49d7688774904f78b7fbacd2716f3756dc5f55521e8",
+        ),
+        "src/dftd3/disp.f90": (
+            "413683f9a16b8621875bf1880af764f63e2ac02d",
+            "cf2e68d8afb1c33b1f458dd09360e512c7171686d8e371a29d02501e0458edde",
+        ),
+        "src/dftd3/cutoff.f90": (
+            "743774e355c6e99aac49c0288be8593b08237c9c",
+            "c98c15fa8f38e961bf920cff176daa649b48f685b28a4b5dd04860ca0c19fd29",
+        ),
+    }
+    if not isinstance(source, dict) or {
+        entry.get("path"): (entry.get("git_blob"), entry.get("sha256"))
+        for entry in source.get("equation_sources", ())
+        if isinstance(entry, dict)
+    } != expected_equations:
+        raise LicenseCheckError("GFN1-D3 manifest has incomplete equation provenance")
     unit_conversion = gfn1_d3.get("unit_conversion", {})
     if not isinstance(unit_conversion, dict) or unit_conversion.get("legal_files") != [
         GFN1_D3_MCTC_LICENSE_RECORD
@@ -1695,6 +1720,18 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                 "test/test_singlepoint/mols/H2/coord": (
                     "1638f7ade742d9fe16156ec22c6cbad51b525546",
                     "d4b2168eae99a8bb51a580693d9766506c17728a4ee42cdc093d9de88f540058",
+                ),
+                "test/test_singlepoint/mols/LiH/coord": (
+                    "9055b8d25df5151fccffd72c256e86e12142ab39",
+                    "66c5ff399efaf8da4e654b716f78a8ff5586db4d3ca3d63a4d3f6bef6351f5d8",
+                ),
+                "test/test_singlepoint/mols/SiH4/coord": (
+                    "b8a5c55e80426f8375185f36a76f7c0e473d7a59",
+                    "8919b32136339021a44525328c34befcc8b3efb1057a267fc74309889d970f22",
+                ),
+                "test/test_classical/test_dispersion/samples.py": (
+                    "dd1b5c10632636122fd2e47f2133e345f5274151",
+                    "429b028ecba85a077f795fa009757b1e5936c8c6ec9c7bd1c00c71db9392c66a",
                 ),
             },
         },
@@ -1743,6 +1780,19 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
             "test/test_singlepoint/mols/H2/coord": (
                 "H2 bohr geometry used by the H0 and overlap fixtures.",
                 ("tests/gfn1_h0_test.cpp", "tests/gfn1_integrals_test.cpp"),
+            ),
+            "test/test_singlepoint/mols/LiH/coord": (
+                "LiH bohr geometry used by the GFN1 D3 tblite energy/gradient fixture.",
+                ("tests/gfn1_d3_test.cpp",),
+            ),
+            "test/test_singlepoint/mols/SiH4/coord": (
+                "SiH4 bohr geometry used by the GFN1 D3 tblite energy/gradient fixture.",
+                ("tests/gfn1_d3_test.cpp",),
+            ),
+            "test/test_classical/test_dispersion/samples.py": (
+                "Literal LiH and SiH4 GFN1 D3 atom-resolved energies and analytic "
+                "gradients identified by dxtb as tblite reference values.",
+                ("tests/gfn1_d3_test.cpp",),
             ),
         },
         "mstore": {

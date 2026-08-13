@@ -1279,6 +1279,13 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
             CHECKER._check_gfn1_d3_provenance(manifest, self.apache)
 
+    def test_gfn1_d3_equation_source_mutation_is_rejected(self) -> None:
+        """Reject a changed simple-dftd3 equation blob or digest."""
+        manifest = copy.deepcopy(self.gfn1_d3)
+        manifest["source"]["equation_sources"][0]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_d3_provenance(manifest, self.apache)
+
     def test_gfn1_d3_mctc_license_text_mutation_is_rejected(self) -> None:
         """Reject retained Apache license bytes outside the reviewed record."""
         with self.assertRaisesRegex(

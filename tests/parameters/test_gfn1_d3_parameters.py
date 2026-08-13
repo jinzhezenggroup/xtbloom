@@ -120,6 +120,31 @@ class Gfn1D3ParameterTests(unittest.TestCase):
                 }
             ],
         )
+        equations = {
+            record["path"]: (record["git_blob"], record["sha256"])
+            for record in self.manifest["source"]["equation_sources"]
+        }
+        self.assertEqual(
+            equations,
+            {
+                "src/dftd3/model.f90": (
+                    "41d3eb76915c05c515ce1802efc8ba8213c0cd42",
+                    "b4b2cad1f772263c979ea2674b6d5d78f4eec19fa91a13afd3a789d0a7e866df",
+                ),
+                "src/dftd3/damping/rational.f90": (
+                    "a8edb7c50b08fde56f234750a2155053a0102bfa",
+                    "d3a9fca2c45ebc4c3b88a49d7688774904f78b7fbacd2716f3756dc5f55521e8",
+                ),
+                "src/dftd3/disp.f90": (
+                    "413683f9a16b8621875bf1880af764f63e2ac02d",
+                    "cf2e68d8afb1c33b1f458dd09360e512c7171686d8e371a29d02501e0458edde",
+                ),
+                "src/dftd3/cutoff.f90": (
+                    "743774e355c6e99aac49c0288be8593b08237c9c",
+                    "c98c15fa8f38e961bf920cff176daa649b48f685b28a4b5dd04860ca0c19fd29",
+                ),
+            },
+        )
         output = (DATA_DIR / GENERATOR.HEADER_FILENAME).read_bytes()
         self.assertEqual(
             hashlib.sha256(output).hexdigest(),
