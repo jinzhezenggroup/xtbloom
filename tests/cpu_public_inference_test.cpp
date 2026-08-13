@@ -743,11 +743,17 @@ int test_concurrent_cross_model_calls_share_one_context_transaction() {
     CHECK(actual_gfn1.energies == reference_gfn1.energies);
     CHECK(actual_gfn1.forces == reference_gfn1.forces);
     CHECK(actual_gfn1.atomic_charges == reference_gfn1.atomic_charges);
+    CHECK(actual_gfn1.iterations == reference_gfn1.iterations);
+    CHECK(actual_gfn1.converged == reference_gfn1.converged);
     CHECK(actual_gfn1.statuses == reference_gfn1.statuses);
+    CHECK(actual_gfn1.result.flags == reference_gfn1.result.flags);
     CHECK(actual_gfn2.energies == reference_gfn2.energies);
     CHECK(actual_gfn2.forces == reference_gfn2.forces);
     CHECK(actual_gfn2.atomic_charges == reference_gfn2.atomic_charges);
+    CHECK(actual_gfn2.iterations == reference_gfn2.iterations);
+    CHECK(actual_gfn2.converged == reference_gfn2.converged);
     CHECK(actual_gfn2.statuses == reference_gfn2.statuses);
+    CHECK(actual_gfn2.result.flags == reference_gfn2.result.flags);
   }
   return 0;
 }
