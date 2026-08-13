@@ -262,6 +262,7 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
         attributes = (REPOSITORY / ".gitattributes").read_text(encoding="utf-8")
         for expected in (
             "data/parameters/gfn1.toml whitespace=-blank-at-eof",
+            "LICENSES/Apache-2.0.txt -text",
             "LICENSES/scipy-openblas32-0.3.34.0.0.txt -text",
             "LICENSES/openchemlib-BSD-3-Clause.txt -text",
             "LICENSES/pyodide-MPL-2.0.txt -text "
