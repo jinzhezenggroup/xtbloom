@@ -18,7 +18,7 @@
   },
   "generator": {
     "path": "tools/parameters/generate_gfn1.py",
-    "sha256": "7ae2e27490859567b634f84f727ba962b390a2654f9977819691579a04ab1e39",
+    "sha256": "8b84de922759f67e7bfd25d6a94431909663abf024c5a8da70e33dbac92a0df9",
     "shared_helper": {
       "path": "tools/parameters/generate_gfn2.py",
       "sha256": "4d05555ef2772878ec5cc472d73656312e4b3d6491061f029c8563b0d1327a93"
@@ -513,8 +513,8 @@
   "method": "gfn1-xtb",
   "outputs": {
     "gfn1.hpp": {
-      "bytes": 64677,
-      "sha256": "ae0a68458ea8620dd2af7ada9ca03fa206e73cacf0a01b98aa813c4fb02c4b2c"
+      "bytes": 64703,
+      "sha256": "671d349fa20694db46400b2e2080a237036a063548d6ce3b1029e47d003c1f1a"
     },
     "gfn1.json": {
       "bytes": 221328,

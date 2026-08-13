@@ -501,34 +501,36 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
      * the cache transaction before accessing caller storage. CPU retains the
      * historical complete host validation sequence here. */
     (void)validation.pending_offset_checks;
+
+    std::string route_error;
+    xtbloom::detail::ModelBackendRoute model_route =
+        xtbloom::detail::ModelBackendRoute::kUnavailable;
+    const xtbloom_status_t model_status = xtbloom::detail::validate_model_dispatch(
+        options->model, context->implementation->backend, route_error, &model_route);
+    if (model_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(model_status, std::move(route_error));
+    }
+    if (model_route != xtbloom::detail::ModelBackendRoute::kGfn2) {
+      return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                  context->implementation->backend == XTBLOOM_BACKEND_CPU
+                      ? "the registered model route has no synchronous CPU executor"
+                      : "the registered model route has no synchronous CUDA executor");
+    }
+    const xtbloom::detail::DescriptorValidationResult availability =
+        xtbloom::detail::validate_compute_execution_availability(context->implementation->backend,
+                                                                 *batch, *options);
+    if (!availability.ok()) {
+      return fail(availability.status, std::move(availability.error));
+    }
   } catch (const std::bad_alloc&) {
     return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
-                "failed to allocate temporary storage while validating a compute request");
+                "failed to allocate temporary storage while validating or dispatching a compute "
+                "request");
   } catch (const std::exception& exception) {
     return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
   } catch (...) {
     return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
-                "unknown exception while validating a compute request");
-  }
-
-  std::string route_error;
-  xtbloom::detail::ModelBackendRoute model_route = xtbloom::detail::ModelBackendRoute::kUnavailable;
-  const xtbloom_status_t model_status = xtbloom::detail::validate_model_dispatch(
-      options->model, context->implementation->backend, route_error, &model_route);
-  if (model_status != XTBLOOM_STATUS_SUCCESS) {
-    return fail(model_status, std::move(route_error));
-  }
-  if (model_route != xtbloom::detail::ModelBackendRoute::kGfn2) {
-    return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
-                context->implementation->backend == XTBLOOM_BACKEND_CPU
-                    ? "the registered model route has no synchronous CPU executor"
-                    : "the registered model route has no synchronous CUDA executor");
-  }
-  const xtbloom::detail::DescriptorValidationResult availability =
-      xtbloom::detail::validate_compute_execution_availability(context->implementation->backend,
-                                                               *batch, *options);
-  if (!availability.ok()) {
-    return fail(availability.status, std::move(availability.error));
+                "unknown exception while validating or dispatching a compute request");
   }
 
   if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {

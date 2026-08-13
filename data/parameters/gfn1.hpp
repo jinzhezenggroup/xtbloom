@@ -69,11 +69,11 @@ struct ShellParameters {
   std::uint8_t angular_momentum;
   std::uint8_t gaussian_count;
   bool is_valence;
-  double level;
+  double level_electronvolt;
   double slater;
   double reference_occupation;
   double shell_polynomial;
-  double coordination_number_scale;
+  double coordination_number_scale_electronvolt;
   double shell_hubbard_scale;
 };
 

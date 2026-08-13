@@ -108,7 +108,9 @@ MCTC_LEGAL_PATHS = ("LICENSE",)
 # This digest binds every retained offline provenance field.  It is intentionally
 # independent of the generated manifest's output hashes so a manual edit to a
 # tblite, dxtb, exporter, or mctc-lib record cannot bless itself during
-# ``--check`` regeneration.
+# ``--check`` regeneration. The retained object is serialized as UTF-8 pretty
+# JSON with sorted keys, two-space indentation, ``","`` and ``": "``
+# separators, no NaN values, and one trailing newline.
 PINNED_PROVENANCE_SHA256 = (
     "422170e3d1beaa94be96488fc9303374a3b217e89e501823db894aa7fd17a9c5"
 )
@@ -667,11 +669,11 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
         "  std::uint8_t angular_momentum;",
         "  std::uint8_t gaussian_count;",
         "  bool is_valence;",
-        "  double level;",
+        "  double level_electronvolt;",
         "  double slater;",
         "  double reference_occupation;",
         "  double shell_polynomial;",
-        "  double coordination_number_scale;",
+        "  double coordination_number_scale_electronvolt;",
         "  double shell_hubbard_scale;",
         "};",
         "",
@@ -1339,12 +1341,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if None in (
                 arguments.tblite,
                 arguments.tblite_source,
+                arguments.tblite_inspection_revision,
                 arguments.dxtb_source,
                 arguments.mctc_source,
             ):
                 raise ParameterError(
-                    "--refresh requires --tblite, --tblite-source, --dxtb-source, "
-                    "and --mctc-source"
+                    "--refresh requires --tblite, --tblite-source, "
+                    "--tblite-inspection-revision, --dxtb-source, and --mctc-source"
                 )
             if arguments.check:
                 raise ParameterError("--refresh and --check are mutually exclusive")
@@ -1364,8 +1367,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     arguments.mctc_source.resolve(), arguments.mctc_revision
                 ),
             }
-            if arguments.tblite_inspection_revision is None:
-                raise ParameterError("--refresh requires --tblite-inspection-revision")
             provenance["inspection"] = _inspection_provenance(
                 arguments.tblite_source.resolve(),
                 provenance["source"]["revision"],

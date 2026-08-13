@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import tomllib
 
@@ -289,6 +292,28 @@ class Gfn1ParameterTests(unittest.TestCase):
                 check=True,
             )
             subprocess.run((str(executable),), check=True)
+
+    def test_refresh_requires_inspection_revision_before_external_work(self) -> None:
+        """Fail the incomplete refresh contract before invoking any oracle."""
+        with (
+            mock.patch.object(GENERATOR, "_export_tblite") as exporter,
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            status = GENERATOR.main(
+                [
+                    "--refresh",
+                    "--tblite",
+                    "/unused/tblite",
+                    "--tblite-source",
+                    "/unused/tblite-source",
+                    "--dxtb-source",
+                    "/unused/dxtb-source",
+                    "--mctc-source",
+                    "/unused/mctc-source",
+                ]
+            )
+        self.assertEqual(status, 1)
+        exporter.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -181,6 +181,22 @@ class Gfn1D3ParameterTests(unittest.TestCase):
         with self.assertRaisesRegex(GENERATOR.D3DataError, "invalid C6 packing"):
             GENERATOR.validate_tables(normalized)
 
+    def test_upstream_array_unit_prefixes_are_exact(self) -> None:
+        """Reject an upstream unit-expression change before applying conversion."""
+        raw = "real(wp), parameter :: sample(2) = [1.0_wp, 2.0_wp]"
+        self.assertEqual(
+            GENERATOR._parameter_array(raw, "sample", 2, prefix=""), [1.0, 2.0]
+        )
+        with self.assertRaisesRegex(GENERATOR.D3DataError, "expected upstream"):
+            GENERATOR._parameter_array(raw, "sample", 2, prefix=r"aatoau\s*\*\s*")
+        scaled = "real(wp), parameter :: sample(2) = aatoau * [1.0_wp, 2.0_wp]"
+        self.assertEqual(
+            GENERATOR._parameter_array(scaled, "sample", 2, prefix=r"aatoau\s*\*\s*"),
+            [1.0, 2.0],
+        )
+        with self.assertRaisesRegex(GENERATOR.D3DataError, "expected upstream"):
+            GENERATOR._parameter_array(scaled, "sample", 2, prefix="")
+
     def test_generated_header_compiles(self) -> None:
         compiler = shutil.which("c++")
         if compiler is None:

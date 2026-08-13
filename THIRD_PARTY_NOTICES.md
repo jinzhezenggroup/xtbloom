@@ -118,7 +118,11 @@ derived from simple-dftd3 v1.4.0 revision
 mctc-lib v0.5.1 revision `aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5`
 under its Apache-2.0 license. `gfn1_d3_manifest.json` records the exact source,
 legal, and conversion blobs, Git trees, SHA-256 digests, representation, and
-generated-output hashes. No simple-dftd3 or mctc-lib binary is redistributed.
+generated-output hashes. The mctc-lib records verify the evaluated physical
+unit conversion; no mctc-lib source table or expressive implementation is
+copied into the generated D3 data, which retains the simple-dftd3
+`LGPL-3.0-or-later` classification. No simple-dftd3 or mctc-lib binary is
+redistributed.
 
 ## dftd4 and mctc-lib
 

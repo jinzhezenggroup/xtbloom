@@ -93,16 +93,23 @@ struct DescriptorValidationResult {
     const xtbloom_batch_t& batch);
 
 /*
- * Compatibility entry point for the complete ABI-v1 validation sequence. It
- * preserves the historical error order: descriptor headers/extents/tags,
- * followed by host topology semantics, followed by address-range and alias
- * checks. Call it directly only for CPU requests or after a CUDA bridge has
- * verified that every HOST-tagged topology pointer is CPU-accessible.
+ * Validate the ABI-v1 structural and host-topology sequence through model
+ * dispatch. This entry point deliberately stops before backend execution
+ * availability so a known reserved model can be refused without inheriting
+ * GFN2-specific output diagnostics. Call it directly only for CPU requests or
+ * after a CUDA bridge has verified that every HOST-tagged topology pointer is
+ * CPU-accessible.
  */
 [[nodiscard]] DescriptorValidationResult validate_compute_descriptors_for_dispatch(
     xtbloom_backend_t backend, const xtbloom_batch_t* batch,
     const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result);
 
+/*
+ * Compatibility entry point for the complete ABI-v1 validation sequence. It
+ * preserves the historical error order: descriptor headers/extents/tags,
+ * host topology semantics, address-range and alias checks, then backend
+ * execution availability.
+ */
 [[nodiscard]] DescriptorValidationResult validate_compute_descriptors(
     xtbloom_backend_t backend, const xtbloom_batch_t* batch,
     const xtbloom_compute_options_t* options, const xtbloom_batch_result_t* result);

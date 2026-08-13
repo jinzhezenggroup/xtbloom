@@ -13,12 +13,14 @@ The canonical GFN1 parameter export is independently pinned to the tblite
 the reviewed descendant `e9abc395...`, which includes later occupation and
 convergence fixes. The manifest records the exact role and hash of each
 artifact so the parameter-source and oracle revisions are not conflated.
-Pinned xTB 6.7.1 supplies the OH open-shell case, the exact GFN1 water-PCEM
-fixture with H/O hardnesses `0.470099`/`0.583349` Hartree, a `gamma=999`
-diagnostic, and the Br/Br/O/C/H/H halogen-bond fixture. Every live command uses
-`--acc 0.0001`, one thread, cleared `XTB*` variables, and hashed executables,
-shared libraries, GFN1 parameters, source inputs, materialized PCEM files, and
-normalized outputs.
+A version-reported xTB 6.7.1 build at pinned revision `edcfbbe39d...` supplies
+the OH open-shell case, the exact GFN1 water-PCEM fixture with H/O hardnesses
+`0.470099`/`0.583349` Hartree, a `gamma=999` diagnostic, and the
+Br/Br/O/C/H/H halogen-bond fixture. The exact revision and binary hashes,
+rather than the later v6.7.1 tag commit, define this oracle. Every live command
+uses `--acc 0.0001`, one thread, cleared `XTB*` variables, and hashed
+executables, shared libraries, GFN1 parameters, source inputs, materialized
+PCEM files, and normalized outputs.
 
 Verify the committed foundation offline:
 

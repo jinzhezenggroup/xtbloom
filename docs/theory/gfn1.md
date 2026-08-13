@@ -26,10 +26,11 @@ well as formatting and workflow maintenance. Those later runtime changes are
 non-authoritative and are not used to generate the canonical parameter bytes.
 Primary closed-shell goldens use the separately pinned live tblite revision
 `e9abc395b122018ed688aecb1c3a65cecaf97beb` with explicit `--method gfn1
---acc 0.0001 --grad --json`. xTB 6.7.1 revision
+--acc 0.0001 --grad --json`. A version-reported xTB 6.7.1 build at revision
 `edcfbbe39d411edc225e27315fbda3a204ddb023` supplies unrestricted,
-point-charge, and halogen-specific reference cases. The source, inspection,
-and live-oracle roles are intentionally distinct.
+point-charge, and halogen-specific reference cases; this exact revision and
+its binary hashes, rather than the later v6.7.1 tag commit, define the oracle.
+The source, inspection, and live-oracle roles are intentionally distinct.
 
 The non-TOML atomic and coordination inputs are pinned separately to mctc-lib
 v0.5.2 commit `e9de066d89f250d1cfb6de3a33f0c27c0e2f855d`. The generated GFN1 JSON/header
@@ -92,7 +93,11 @@ For shells `i` and `j`, the H0 off-diagonal scale has four branches:
 Pair overrides and the electronegativity factor apply only to the
 valence/valence branch. Shell levels, shell polynomials, and shell CN shifts
 come from the exact GFN1 shell table; they must not be interpreted through a
-GFN2 shell layout.
+GFN2 shell layout. The canonical TOML/JSON values remain in electronvolts; the
+generated C++ fields name that unit explicitly as `level_electronvolt` and
+`coordination_number_scale_electronvolt`. GFN1 setup must convert both with
+tblite's historical factor `1 / 27.21138505` before placing them in
+Hartree-valued runtime arrays.
 
 ## Electrostatics, spin, and classical terms
 

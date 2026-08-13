@@ -1591,12 +1591,29 @@ def _check_pyodide_openblas_provenance(root: Path) -> None:
         )
 
 
-def _canonical_json_sha256(value: object) -> str:
-    """Hash one provenance object with the generators' canonical encoding."""
+def _compact_canonical_json_sha256(value: object) -> str:
+    """Hash provenance with the compact encoding used by the D3 generator."""
     return hashlib.sha256(
         (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode(
             "utf-8"
         )
+    ).hexdigest()
+
+
+def _pretty_canonical_json_sha256(value: object) -> str:
+    """Hash provenance with the pretty encoding used by the GFN1 generator."""
+    return hashlib.sha256(
+        (
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                indent=2,
+                sort_keys=True,
+                separators=(",", ": "),
+            )
+            + "\n"
+        ).encode("utf-8")
     ).hexdigest()
 
 
@@ -1609,19 +1626,7 @@ def _check_gfn1_parameter_provenance(gfn1: dict[str, object]) -> None:
         }
     except KeyError as exc:
         raise LicenseCheckError("GFN1 parameter manifest is incomplete") from exc
-    retained_digest = hashlib.sha256(
-        (
-            json.dumps(
-                retained,
-                ensure_ascii=False,
-                allow_nan=False,
-                indent=2,
-                sort_keys=True,
-                separators=(",", ": "),
-            )
-            + "\n"
-        ).encode("utf-8")
-    ).hexdigest()
+    retained_digest = _pretty_canonical_json_sha256(retained)
     if retained_digest != GFN1_PROVENANCE_SHA256:
         raise LicenseCheckError("GFN1 parameter manifest has unreviewed provenance")
     mctc = gfn1.get("mctc", {})
@@ -1650,7 +1655,7 @@ def _check_gfn1_d3_provenance(
         }
     except KeyError as exc:
         raise LicenseCheckError("GFN1-D3 manifest is incomplete") from exc
-    if _canonical_json_sha256(retained) != GFN1_D3_PROVENANCE_SHA256:
+    if _compact_canonical_json_sha256(retained) != GFN1_D3_PROVENANCE_SHA256:
         raise LicenseCheckError("GFN1-D3 manifest has unreviewed provenance")
     unit_conversion = gfn1_d3.get("unit_conversion", {})
     if not isinstance(unit_conversion, dict) or unit_conversion.get("legal_files") != [

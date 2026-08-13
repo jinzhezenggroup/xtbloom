@@ -194,11 +194,14 @@ def _parse_reference(source: str) -> tuple[list[int], list[float], list[float]]:
     return counts, coordination, c6
 
 
-def _parameter_array(source: str, name: str, expected: int) -> list[float]:
+def _parameter_array(
+    source: str, name: str, expected: int, *, prefix: str
+) -> list[float]:
+    """Read one array only when its reviewed upstream unit prefix is exact."""
     values = _numeric_tokens(
         _array_body(
             source,
-            rf"{name}\s*\(.*?\)\s*=\s*(?:aatoau\s*\*)?\s*",
+            rf"{name}\s*\(.*?\)\s*=\s*{prefix}",
         )
     )
     if len(values) != expected:
@@ -255,11 +258,13 @@ def build_tables(
         d3_sources["src/dftd3/data/r4r2.f90"].decode("utf-8"),
         "r4_over_r2",
         118,
+        prefix="",
     )
     upstream_vdw = _parameter_array(
         d3_sources["src/dftd3/data/vdwrad.f90"].decode("utf-8"),
         "vdwrad",
         UPSTREAM_ELEMENT_COUNT * (UPSTREAM_ELEMENT_COUNT + 1) // 2,
+        prefix=r"aatoau\s*\*\s*",
     )
     angstrom_to_bohr = _angstrom_to_bohr(mctc_sources)
 

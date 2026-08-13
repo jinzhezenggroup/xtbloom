@@ -30,6 +30,7 @@ DEFAULT_TEMPLATE = REPOSITORY_ROOT / "data/conformance/gfn1/manifest.template.js
 ACCURACY = 1.0e-4
 ACCURACY_TEXT = "0.0001"
 MAX_PRIMARY_ATOL = ACCURACY
+ORACLE_TIMEOUT_SECONDS = 300
 QMMM_SCHEMA = "xtbloom-gfn1-xtb-pcem-cli-v1"
 QMMM_INPUT_UNITS = {
     "point_charge_gammas": "hartree",
@@ -506,6 +507,8 @@ def validate_golden_document(
         raise ConformanceError(f"{name} properties must be an object")
     atoms = exact_integer(case.get("atom_count"), f"case {case['id']} atom_count")
     engine = case.get("reference_engine")
+    if engine not in ("tblite", "xtb"):
+        raise ConformanceError(f"case {case['id']} has unsupported reference engine")
     expected_properties = {
         "energy_hartree",
         "forces_hartree_per_bohr",
@@ -603,8 +606,6 @@ def validate_golden_document(
             != reference["runtime_artifacts"]["gfn1_parameter_sha256"]
         ):
             raise ConformanceError(f"{name} has wrong xTB runtime provenance")
-    else:
-        raise ConformanceError(f"case {case['id']} has unsupported reference engine")
     if qmmm is not None:
         input_path = resolve_path(str(case["input"]))
         if provenance.get("materialized_input") != materialization_record(
@@ -735,15 +736,19 @@ def reference_environment(
     }
 
 
-def ldd_library(executable: Path, pattern: str) -> Path | None:
+def ldd_library(executable: Path, pattern: str, engine: str) -> Path | None:
     """Resolve one shared object from ldd output under the active loader environment."""
-    completed = subprocess.run(
-        ["ldd", str(executable)],
-        check=False,
-        text=True,
-        capture_output=True,
-        env={**os.environ, "LC_ALL": "C"},
-    )
+    try:
+        completed = subprocess.run(
+            ["ldd", str(executable)],
+            check=False,
+            text=True,
+            capture_output=True,
+            env={**os.environ, "LC_ALL": "C"},
+            timeout=ORACLE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ConformanceError(f"{engine} shared-library discovery timed out") from exc
     for line in completed.stdout.splitlines():
         match = re.search(pattern + r"\s+=>\s+(\S+)", line)
         if match and Path(match.group(1)).is_file():
@@ -758,13 +763,20 @@ def verify_executable(
     resolved = Path(shutil.which(str(executable)) or executable).resolve()
     if not resolved.is_file():
         raise ConformanceError(f"{engine} executable does not exist: {executable}")
-    completed = subprocess.run(
-        [str(resolved), "--version"],
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    digest = sha256_file(resolved)
+    if digest != reference["runtime_artifacts"]["executable_sha256"]:
+        raise ConformanceError(f"{engine} executable SHA-256 mismatch")
+    try:
+        completed = subprocess.run(
+            [str(resolved), "--version"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=ORACLE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ConformanceError(f"{engine} executable version check timed out") from exc
     version = completed.stdout.strip()
     expected = str(reference["version"])
     if engine == "tblite":
@@ -776,9 +788,6 @@ def verify_executable(
         )
     if not valid:
         raise ConformanceError(f"{engine} executable has the wrong version:\n{version}")
-    digest = sha256_file(resolved)
-    if digest != reference["runtime_artifacts"]["executable_sha256"]:
-        raise ConformanceError(f"{engine} executable SHA-256 mismatch")
     return resolved, version
 
 
@@ -862,7 +871,7 @@ def generate_tblite(
     ]
     reference = manifest["reference_engines"]["tblite"]
     executable, version = verify_executable(executable, reference, "tblite")
-    library = ldd_library(executable, r"\blibtblite\.so\S*")
+    library = ldd_library(executable, r"\blibtblite\.so\S*", "tblite")
     if (
         library is None
         or sha256_file(library) != reference["runtime_artifacts"]["libtblite_sha256"]
@@ -877,14 +886,18 @@ def generate_tblite(
         for case in cases:
             raw_path = work / f"{case['id']}.json"
             command = tblite_command(executable, case, raw_path)
-            completed = subprocess.run(
-                command,
-                cwd=work,
-                env=environment,
-                check=False,
-                text=True,
-                capture_output=True,
-            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=work,
+                    env=environment,
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                    timeout=ORACLE_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ConformanceError(f"tblite timed out for {case['id']}") from exc
             if completed.returncode:
                 diagnostic = f"{completed.stdout}\n{completed.stderr}"
                 raise ConformanceError(f"tblite failed for {case['id']}:\n{diagnostic}")
@@ -959,7 +972,7 @@ def generate_xtb(
     ]
     reference = manifest["reference_engines"]["xtb"]
     executable, version = verify_executable(executable, reference, "xtb")
-    library = ldd_library(executable, r"\blibxtb\.so\S*")
+    library = ldd_library(executable, r"\blibxtb\.so\S*", "xtb")
     if (
         library is None
         or sha256_file(library) != reference["runtime_artifacts"]["libxtb_sha256"]
@@ -989,14 +1002,18 @@ def generate_xtb(
             else:
                 shutil.copyfile(input_path, work / "coord")
             command = xtb_command(executable, case)
-            completed = subprocess.run(
-                command,
-                cwd=work,
-                env=environment,
-                check=False,
-                text=True,
-                capture_output=True,
-            )
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=work,
+                    env=environment,
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                    timeout=ORACLE_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ConformanceError(f"xTB timed out for {case['id']}") from exc
             if completed.returncode:
                 diagnostic = f"{completed.stdout}\n{completed.stderr}"
                 raise ConformanceError(f"xTB failed for {case['id']}:\n{diagnostic}")

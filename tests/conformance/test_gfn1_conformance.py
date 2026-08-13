@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOL_PATH = ROOT / "tools/conformance/gfn1_conformance.py"
@@ -56,7 +57,9 @@ class Gfn1ConformanceTest(unittest.TestCase):
             command = manifest["reference_engines"]["xtb"][key]
             self.assertEqual(command[command.index("--gfn") + 1], "1")
         self.assertNotIn("xtbloom_backends", json.dumps(manifest))
-        for case in manifest["cases"][:4]:
+        for case in (
+            case for case in manifest["cases"] if case.get("upstream_validation_case")
+        ):
             self.assertRegex(case["upstream_input_git_blob"], r"^[0-9a-f]{40}$")
             self.assertEqual(case["upstream_input_sha256"], case["input_sha256"])
 
@@ -157,6 +160,56 @@ class Gfn1ConformanceTest(unittest.TestCase):
                     )
                     self.assertIn(message, completed.stderr)
 
+    def test_compare_aggregates_missing_and_unknown_reference_engines(self) -> None:
+        """Malformed engine tags report case-scoped conformance errors, not KeyError."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        case = next(case for case in manifest["cases"] if case["id"] == "gfn1_h3_plus")
+        golden = json.loads((ROOT / case["golden"]).read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as temporary:
+            for replacement in (None, "unknown"):
+                with self.subTest(reference_engine=replacement):
+                    invalid_manifest = json.loads(json.dumps(manifest))
+                    invalid_case = next(
+                        item
+                        for item in invalid_manifest["cases"]
+                        if item["id"] == case["id"]
+                    )
+                    if replacement is None:
+                        invalid_case.pop("reference_engine")
+                    else:
+                        invalid_case["reference_engine"] = replacement
+                    manifest_path = Path(temporary, "manifest.json")
+                    actual_dir = Path(temporary, "actual")
+                    actual_dir.mkdir(exist_ok=True)
+                    manifest_path.write_text(
+                        json.dumps(invalid_manifest), encoding="utf-8"
+                    )
+                    Path(actual_dir, f"{case['id']}.json").write_text(
+                        json.dumps(golden), encoding="utf-8"
+                    )
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            str(TOOL_PATH),
+                            "--manifest",
+                            str(manifest_path),
+                            "compare",
+                            "--actual-dir",
+                            str(actual_dir),
+                            "--case",
+                            case["id"],
+                        ],
+                        cwd=ROOT,
+                        check=False,
+                        text=True,
+                        capture_output=True,
+                    )
+                    self.assertEqual(completed.returncode, 1)
+                    self.assertIn(
+                        f"{case['id']}: invalid committed golden", completed.stderr
+                    )
+                    self.assertIn("unsupported reference engine", completed.stderr)
+
     def test_qmmm_rejects_invalid_units_elements_shapes_and_numbers(self) -> None:
         """PCEM materialization accepts only one finite, typed physical schema."""
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -230,6 +283,40 @@ class Gfn1ConformanceTest(unittest.TestCase):
                     with self.assertRaisesRegex(TOOL.ConformanceError, message):
                         TOOL.load_qmmm(path, case, hardness)
 
+    def test_explicit_gamma_rejects_nonpositive_values_and_source_elements(
+        self,
+    ) -> None:
+        """Explicit screening values are positive and not element-derived."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        case = next(
+            case
+            for case in manifest["cases"]
+            if case["id"] == "gfn1_water_dimer_6pc_gamma999"
+        )
+        hardness = manifest["reference_engines"]["xtb"]["point_charge_hardness_hartree"]
+        source = json.loads((ROOT / case["input"]).read_text(encoding="utf-8"))
+        mutations = (
+            (
+                "nonpositive",
+                {"gammas_hartree": [0.0] * case["point_charge_count"]},
+                "non-positive explicit gamma",
+            ),
+            (
+                "source-elements",
+                {"source_atomic_numbers": [1] * case["point_charge_count"]},
+                "must not name source elements",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            for name, replacement, message in mutations:
+                with self.subTest(mutation=name):
+                    invalid = json.loads(json.dumps(source))
+                    invalid["external_point_charges"].update(replacement)
+                    path = Path(temporary, f"{name}.json")
+                    path.write_text(json.dumps(invalid), encoding="utf-8")
+                    with self.assertRaisesRegex(TOOL.ConformanceError, message):
+                        TOOL.load_qmmm(path, case, hardness)
+
     def test_hash_mutation_is_rejected(self) -> None:
         """Changing a canonical input without updating live evidence fails offline."""
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -285,7 +372,12 @@ class Gfn1ConformanceTest(unittest.TestCase):
             for index, (key, replacement) in enumerate(mutations):
                 with self.subTest(field=key):
                     invalid_data = json.loads(json.dumps(manifest))
-                    invalid_data["cases"][5]["scientific_source"][key] = replacement
+                    case = next(
+                        item
+                        for item in invalid_data["cases"]
+                        if item["id"] == "gfn1_halogen_bond"
+                    )
+                    case["scientific_source"][key] = replacement
                     invalid = Path(temporary, f"manifest-{index}.json")
                     invalid.write_text(json.dumps(invalid_data), encoding="utf-8")
                     with self.assertRaisesRegex(
@@ -377,6 +469,52 @@ class Gfn1ConformanceTest(unittest.TestCase):
             wrong.write_text("test", encoding="utf-8")
             with self.assertRaisesRegex(TOOL.ConformanceError, "named exactly"):
                 TOOL.find_gfn1_parameter(Path("/unused/xtb"), wrong)
+
+    def test_executable_hash_is_checked_before_execution(self) -> None:
+        """Never execute an oracle whose bytes differ from the pinned artifact."""
+        with tempfile.TemporaryDirectory() as temporary:
+            executable = Path(temporary, "tblite")
+            executable.write_text("not pinned", encoding="utf-8")
+            reference = {
+                "runtime_artifacts": {"executable_sha256": "0" * 64},
+                "version": "0.7.0",
+            }
+            with (
+                mock.patch.object(TOOL.subprocess, "run") as run,
+                self.assertRaisesRegex(
+                    TOOL.ConformanceError, "executable SHA-256 mismatch"
+                ),
+            ):
+                TOOL.verify_executable(executable, reference, "tblite")
+            run.assert_not_called()
+
+    def test_oracle_subprocess_timeouts_become_conformance_errors(self) -> None:
+        """Loader and version probes fail with bounded, contextual diagnostics."""
+        timeout = subprocess.TimeoutExpired(["oracle"], TOOL.ORACLE_TIMEOUT_SECONDS)
+        with (
+            mock.patch.object(TOOL.subprocess, "run", side_effect=timeout),
+            self.assertRaisesRegex(
+                TOOL.ConformanceError, "shared-library discovery timed out"
+            ),
+        ):
+            TOOL.ldd_library(Path("/unused/tblite"), r"libtblite", "tblite")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            executable = Path(temporary, "tblite")
+            executable.write_text("pinned", encoding="utf-8")
+            reference = {
+                "runtime_artifacts": {
+                    "executable_sha256": TOOL.sha256_file(executable)
+                },
+                "version": "0.7.0",
+            }
+            with (
+                mock.patch.object(TOOL.subprocess, "run", side_effect=timeout),
+                self.assertRaisesRegex(
+                    TOOL.ConformanceError, "version check timed out"
+                ),
+            ):
+                TOOL.verify_executable(executable, reference, "tblite")
 
 
 if __name__ == "__main__":
