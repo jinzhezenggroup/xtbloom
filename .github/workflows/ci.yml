@@ -57,9 +57,9 @@ jobs:
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
           CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
-          # Instrument the gcc build with gcov coverage flags so the same
-          # build+ctest run that validates correctness also produces coverage.
-          COVERAGE_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage' || '' }}
+          # Tests execute concurrently, so atomic profile updates prevent
+          # corrupt negative gcov counters in shared library objects.
+          COVERAGE_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage -fprofile-update=atomic' || '' }}
         run: |
           cmake -S . -B build -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
@@ -373,8 +373,8 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_C_FLAGS=--coverage \
-            -DCMAKE_CXX_FLAGS=--coverage \
+            -DCMAKE_C_FLAGS="--coverage -fprofile-update=atomic" \
+            -DCMAKE_CXX_FLAGS="--coverage -fprofile-update=atomic" \
             -DCMAKE_EXE_LINKER_FLAGS=--coverage \
             -DCMAKE_BUILD_TYPE=Release
       - name: Build
