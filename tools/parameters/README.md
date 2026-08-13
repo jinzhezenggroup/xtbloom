@@ -126,10 +126,14 @@ and byte diff before replacing canonical files:
 python3 tools/parameters/generate_gfn1_d3.py --refresh \
   --simple-dftd3-source /path/to/simple-dftd3 \
   --mctc-source /path/to/mctc-lib \
+  --tblite-source /path/to/tblite \
   --output-dir build/gfn1-d3-refresh
 ```
 
 The reviewed pins are simple-dftd3 v1.4.0 revision
 `6f0b06fbfa8653a23ca55c453772ce3af4420706` and mctc-lib v0.5.1 revision
-`aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5`. Generated files are retained
-under their upstream licenses and must not be edited by hand.
+`aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5`. The GFN1-specific 50-bohr
+two-body cutoff and 0.05-bohr smooth-switch width are pinned separately to
+tblite v0.7.0 revision `fa8a4416e8fe093d0075bc10ac875494c2a449a9`.
+Generated files are retained under their upstream licenses and must not be
+edited by hand.

@@ -10,9 +10,11 @@ LICENSES/scipy-openblas32-0.3.34.0.0-windows-amd64.txt -text whitespace=cr-at-eo
 LICENSES/scipy-openblas32-0.3.34.0.0-windows-arm64.txt -text whitespace=cr-at-eol
 LICENSES/scipy-openblas32-tools-LICENSE_win32.txt -text
 
-# GFN1 and GFN1-D3 provenance bind the upstream mctc-lib Apache license by
-# exact byte length and SHA-256. Preserve its LF bytes in Windows worktrees.
+# GFN1 and GFN1-D3 provenance bind the upstream mctc-lib Apache and tblite /
+# simple-dftd3 LGPL licenses by exact byte length and SHA-256. Preserve their
+# LF bytes in Windows worktrees so installed and wheel payloads remain canonical.
 LICENSES/Apache-2.0.txt -text
+LICENSES/LGPL-3.0-or-later.txt -text
 
 # The copied tblite STO table is licensed and checked against its exact
 # upstream SHA-256. Force LF checkouts so Windows wheels retain those bytes.
