@@ -90,6 +90,48 @@ int test_complete_element_topology() {
   const std::size_t carbon_p_primitive =
       static_cast<std::size_t>(plan.shell_primitive_offsets[carbon_p_shell]);
   CHECK(near(plan.primitive_exponents[carbon_p_primitive], 5.868285913 * 1.832096 * 1.832096));
+
+  /* GFN1 retains legacy xTB's STO-6G 4s/4p rows. This is model-scoped:
+   * common/GFN2 basis expansion continues to use tblite's newer Stewart rows. */
+  const std::size_t bromine_s_shell = static_cast<std::size_t>(plan.atom_shell_offsets[34]);
+  const std::size_t bromine_p_shell = bromine_s_shell + 1u;
+  const std::size_t bromine_s_primitive =
+      static_cast<std::size_t>(plan.shell_primitive_offsets[bromine_s_shell]);
+  const std::size_t bromine_p_primitive =
+      static_cast<std::size_t>(plan.shell_primitive_offsets[bromine_p_shell]);
+  CHECK(plan.principal_quantum_numbers[bromine_s_shell] == 4u);
+  CHECK(plan.angular_momenta[bromine_s_shell] == 0u);
+  CHECK(plan.principal_quantum_numbers[bromine_p_shell] == 4u);
+  CHECK(plan.angular_momenta[bromine_p_shell] == 1u);
+  CHECK(plan.shell_primitive_offsets[bromine_s_shell + 1u] -
+            plan.shell_primitive_offsets[bromine_s_shell] ==
+        6);
+  CHECK(plan.shell_primitive_offsets[bromine_p_shell + 1u] -
+            plan.shell_primitive_offsets[bromine_p_shell] ==
+        6);
+  constexpr std::array<double, 6> legacy_alpha{
+      1.365346e+00, 4.393213e-01, 1.877069e-01, 9.360270e-02, 5.052263e-02, 2.809354e-02,
+  };
+  constexpr std::array<double, 6> legacy_s_coefficients{
+      3.775056e-03, -5.585965e-02, -3.192946e-01, -2.764780e-02, 9.049199e-01, 3.406258e-01,
+  };
+  constexpr std::array<double, 6> legacy_p_coefficients{
+      -7.052075e-03, -5.259505e-02, -3.773450e-02, 3.874773e-01, 5.791672e-01, 1.221817e-01,
+  };
+  constexpr double pi = 3.141592653589793238462643383279502884;
+  for (std::size_t primitive = 0u; primitive < legacy_alpha.size(); ++primitive) {
+    const double s_exponent = legacy_alpha[primitive] * 2.886237 * 2.886237;
+    const double p_exponent = legacy_alpha[primitive] * 2.190987 * 2.190987;
+    CHECK(near(plan.primitive_exponents[bromine_s_primitive + primitive], s_exponent));
+    CHECK(near(plan.primitive_exponents[bromine_p_primitive + primitive], p_exponent));
+    const double s_normalization = std::pow(2.0 / pi * s_exponent, 0.75);
+    const double p_normalization =
+        std::pow(2.0 / pi * p_exponent, 0.75) * std::sqrt(4.0 * p_exponent);
+    CHECK(near(plan.primitive_coefficients[bromine_s_primitive + primitive],
+               legacy_s_coefficients[primitive] * s_normalization));
+    CHECK(near(plan.primitive_coefficients[bromine_p_primitive + primitive],
+               legacy_p_coefficients[primitive] * p_normalization));
+  }
   return 0;
 }
 

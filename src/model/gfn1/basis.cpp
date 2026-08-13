@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "data/parameters/gfn1.hpp"
+#include "data/parameters/gfn1_legacy_sto.hpp"
 #include "model/common/sto.hpp"
 
 namespace xtbloom::detail::gfn1 {
@@ -59,6 +60,31 @@ bool validate_shell(const parameters::gfn1::ShellParameters& shell) {
          shell.slater > 0.0 && std::isfinite(shell.slater) &&
          common::sto_table(shell.principal_quantum_number, shell.angular_momentum,
                            shell.gaussian_count, alpha, coeff);
+}
+
+bool expand_gfn1_sto_shell(const parameters::gfn1::ShellParameters& shell, double* alpha,
+                           double* coefficients) {
+  if (shell.gaussian_count == 6u && shell.principal_quantum_number == 4u &&
+      shell.angular_momentum <= 1u) {
+    const auto& source_coefficients = shell.angular_momentum == 0u
+                                          ? parameters::gfn1::kLegacyCoeff6_4s
+                                          : parameters::gfn1::kLegacyCoeff6_4p;
+    constexpr double kPi = 3.141592653589793238462643383279502884;
+    constexpr double kTwoOverPi = 2.0 / kPi;
+    constexpr std::array<double, 2> kDoubleFactorial{1.0, 1.0};
+    const double zeta_squared = shell.slater * shell.slater;
+    for (std::size_t primitive = 0u; primitive < shell.gaussian_count; ++primitive) {
+      alpha[primitive] = parameters::gfn1::kLegacyAlpha6_4sp[primitive] * zeta_squared;
+      const double normalization =
+          std::pow(kTwoOverPi * alpha[primitive], 0.75) *
+          std::pow(std::sqrt(4.0 * alpha[primitive]), static_cast<double>(shell.angular_momentum)) /
+          std::sqrt(kDoubleFactorial[shell.angular_momentum]);
+      coefficients[primitive] = source_coefficients[primitive] * normalization;
+    }
+    return true;
+  }
+  return common::expand_sto_shell(shell.principal_quantum_number, shell.angular_momentum,
+                                  shell.gaussian_count, shell.slater, alpha, coefficients);
 }
 
 }  // namespace
@@ -202,8 +228,7 @@ xtbloom_status_t make_basis_plan(std::int64_t batch_size, std::int64_t total_ato
 
         double* alpha = created.primitive_exponents.data() + current_primitive;
         double* coeff = created.primitive_coefficients.data() + current_primitive;
-        if (!common::expand_sto_shell(shell.principal_quantum_number, shell.angular_momentum,
-                                      shell.gaussian_count, shell.slater, alpha, coeff)) {
+        if (!expand_gfn1_sto_shell(shell, alpha, coeff)) {
           error = "GFN1 basis references an unavailable pinned STO table row";
           return XTBLOOM_STATUS_INTERNAL_ERROR;
         }

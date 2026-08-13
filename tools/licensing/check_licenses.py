@@ -201,6 +201,7 @@ SOURCE_FILES = (
     *WEB_SOURCE_FILES,
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
+    "data/parameters/gfn1_legacy_sto.hpp",
     "data/parameters/tblite_spin.hpp",
     "data/parameters/licenses/dftd4-COPYING",
     "data/parameters/licenses/dftd4-COPYING.LESSER",
@@ -211,6 +212,7 @@ SOURCE_FILES = (
     "data/parameters/d4_manifest.json",
     "data/parameters/gfn1_manifest.json",
     "data/parameters/gfn1_d3_manifest.json",
+    "data/parameters/gfn1_legacy_sto_manifest.json",
     GFN1_FIXTURE_MANIFEST_PATH,
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
@@ -238,6 +240,7 @@ COMMON_ARCHIVE_SUFFIXES = (
 SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
+    "data/parameters/gfn1_legacy_sto.hpp",
     "data/parameters/tblite_spin.hpp",
     "data/parameters/licenses/dftd4-COPYING",
     "data/parameters/licenses/dftd4-COPYING.LESSER",
@@ -248,6 +251,7 @@ SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/d4_manifest.json",
     "data/parameters/gfn1_manifest.json",
     "data/parameters/gfn1_d3_manifest.json",
+    "data/parameters/gfn1_legacy_sto_manifest.json",
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
@@ -266,6 +270,7 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/provenance/d4_manifest.json",
     "share/licenses/xtbloom/provenance/gfn1_manifest.json",
     "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_legacy_sto_manifest.json",
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
@@ -345,6 +350,7 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/provenance/d4_manifest.json",
     "share/licenses/xtbloom/provenance/gfn1_manifest.json",
     "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_legacy_sto_manifest.json",
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
@@ -358,6 +364,7 @@ INSTALL_FILES = (
 SPDX_FILES = {
     "data/parameters/gfn1.hpp": "LGPL-3.0-or-later AND Apache-2.0",
     "data/parameters/gfn1_d3.hpp": "LGPL-3.0-or-later",
+    "data/parameters/gfn1_legacy_sto.hpp": "LGPL-3.0-or-later",
     "data/parameters/gfn2.hpp": "LGPL-3.0-or-later",
     "data/parameters/d4.hpp": "LGPL-3.0-or-later",
     "data/parameters/tblite_sto.hpp": "LGPL-3.0-or-later",
@@ -1794,6 +1801,71 @@ def _check_gfn1_d3_provenance(
         raise LicenseCheckError("retained GFN1-D3 LGPL license differs from provenance")
 
 
+def _check_gfn1_legacy_sto_provenance(
+    manifest: object, lgpl_license: bytes, consumer: bytes | None = None
+) -> None:
+    """Pin the xTB GFN1-only legacy 4s/4p expansion and legal record."""
+    if not isinstance(manifest, dict):
+        raise LicenseCheckError("GFN1 legacy STO manifest has unreviewed provenance")
+    if set(manifest) != {
+        "schema_version",
+        "model",
+        "source",
+        "consumer",
+        "extraction",
+    }:
+        raise LicenseCheckError("GFN1 legacy STO manifest has unexpected fields")
+    source = manifest.get("source", {})
+    expected_legal = [
+        {
+            "bytes": 7652,
+            "git_blob": "0a041280bd00a9d068f503b8ee7ce35214bd24a1",
+            "path": "COPYING.LESSER",
+            "sha256": (
+                "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+            ),
+        }
+    ]
+    expected_consumer = {
+        "bytes": 1051,
+        "path": "data/parameters/gfn1_legacy_sto.hpp",
+        "sha256": "bb47a8f47d62c38306bb811b8900a1c9b0ccf1be4ebaf7162bf0b9deb984a19f",
+    }
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("model") != "xTB 6.7.1 GFN1 legacy STO-6G 4s/4p expansion"
+        or not isinstance(source, dict)
+        or source.get("repository") != "https://github.com/grimme-lab/xtb"
+        or source.get("revision") != "edcfbbe39d411edc225e27315fbda3a204ddb023"
+        or source.get("tree") != "e34d886052b7274849146db2dcd435acc05c9e5e"
+        or source.get("path") != "src/slater.f90"
+        or source.get("git_blob") != "b0eb607848c607daee595477f7afa794939fce68"
+        or source.get("bytes") != 22467
+        or source.get("sha256")
+        != "4b8fd61397eb46129217d0fe588cf663e87b85428a1a0c634226d8f746a431c6"
+        or source.get("license") != "LGPL-3.0-or-later"
+        or source.get("line_ranges") != ["286-299", "324-337"]
+        or source.get("legal_files") != expected_legal
+        or manifest.get("consumer") != expected_consumer
+        or manifest.get("extraction", {}).get("scope")
+        != (
+            "GFN1-specific 4s/4p override only; common and GFN2 tblite Stewart "
+            "rows remain unchanged"
+        )
+    ):
+        raise LicenseCheckError("GFN1 legacy STO manifest has unreviewed provenance")
+    if (
+        len(lgpl_license) != expected_legal[0]["bytes"]
+        or hashlib.sha256(lgpl_license).hexdigest() != expected_legal[0]["sha256"]
+    ):
+        raise LicenseCheckError("retained GFN1 legacy STO LGPL license differs")
+    if consumer is not None and (
+        len(consumer) != expected_consumer["bytes"]
+        or hashlib.sha256(consumer).hexdigest() != expected_consumer["sha256"]
+    ):
+        raise LicenseCheckError("GFN1 legacy STO consumer differs from provenance")
+
+
 def _check_gfn1_fixture_provenance(root: Path) -> None:
     """Pin repository-only copied GFN1 scientific fixture provenance."""
     expected_extractions = {
@@ -1827,6 +1899,19 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                 "The exact marker-delimited C++ fixture block contains the reviewed "
                 "halogen geometries, energies, dxtb/tblite force cross-check, and "
                 "derivative test contract."
+            ),
+        },
+        "gfn1-spin2-p10-tblite": {
+            "consumer": "tests/gfn1_cpu_conformance.py",
+            "bytes": 2040,
+            "sha256": (
+                "d33b89e59a45ed01b9efb78d710c6a2390ac07f769f2c187626b579be7ee47db"
+            ),
+            "sources": ["tblite:test/unit/test_spin.f90"],
+            "contract": (
+                "The exact marker-delimited Python fixture contains tblite's "
+                "unrestricted RSE43 P10 geometry, GFN1 total energy, analytic "
+                "gradient, and spin state."
             ),
         },
     }
@@ -1899,6 +1984,18 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                 ),
             },
         },
+        "tblite-gfn1-oracle": {
+            "repository": "https://github.com/tblite/tblite",
+            "license": "LGPL-3.0-or-later",
+            "revision": "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
+            "tree": "2cfe9e53c6413bd022e36346d62ba110c1c42f57",
+            "files": {
+                "test/unit/test_spin.f90": (
+                    "c932c91b1d55d317658cca61f68b6f4daf80f61a",
+                    "25873c35437419e35a97f9aad42b49ada313e23e9647a07402bfb788f27175f3",
+                ),
+            },
+        },
     }
     reviewed_extraction = {
         "dxtb": {
@@ -1967,6 +2064,14 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                 ("tests/gfn1_halogen_test.cpp",),
             ),
         },
+        "tblite-gfn1-oracle": {
+            "test/unit/test_spin.f90": (
+                "Literal unrestricted RSE43 P10 geometry, one-unpaired-electron "
+                "state, GFN1 total energy, and analytic gradient from test_g_p10 "
+                "and rse43_p10.",
+                ("tests/gfn1_cpu_conformance.py",),
+            ),
+        },
     }
     manifest = json.loads(
         (root / GFN1_FIXTURE_MANIFEST_PATH).read_text(encoding="utf-8")
@@ -2004,8 +2109,9 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
             # canonical-LF extraction digest; every scientific literal and
             # marker byte remains covered by the retained hash.
             payload = consumer.read_bytes().replace(b"\r\n", b"\n")
-            begin = f"// XTBLOOM_GFN1_FIXTURE_BEGIN {fixture_id}\n".encode()
-            end = f"// XTBLOOM_GFN1_FIXTURE_END {fixture_id}\n".encode()
+            marker = "#" if consumer.suffix == ".py" else "//"
+            begin = f"{marker} XTBLOOM_GFN1_FIXTURE_BEGIN {fixture_id}\n".encode()
+            end = f"{marker} XTBLOOM_GFN1_FIXTURE_END {fixture_id}\n".encode()
             if payload.count(begin) != 1 or payload.count(end) != 1:
                 raise ValueError
             extracted = payload.split(begin, 1)[1].split(end, 1)[0]
@@ -2302,6 +2408,11 @@ def check_source(root: Path) -> None:
     gfn1_d3 = json.loads(
         (root / "data/parameters/gfn1_d3_manifest.json").read_text(encoding="utf-8")
     )
+    gfn1_legacy_sto = json.loads(
+        (root / "data/parameters/gfn1_legacy_sto_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
     mctc = json.loads(
         (root / "data/parameters/mctc_manifest.json").read_text(encoding="utf-8")
     )
@@ -2311,6 +2422,11 @@ def check_source(root: Path) -> None:
         gfn1_d3,
         (root / "LICENSES/Apache-2.0.txt").read_bytes(),
         (root / "LICENSES/LGPL-3.0-or-later.txt").read_bytes(),
+    )
+    _check_gfn1_legacy_sto_provenance(
+        gfn1_legacy_sto,
+        (root / "LICENSES/LGPL-3.0-or-later.txt").read_bytes(),
+        (root / "data/parameters/gfn1_legacy_sto.hpp").read_bytes(),
     )
     _check_gfn1_fixture_provenance(root)
     if gfn2["source"]["license"]["spdx"] != "LGPL-3.0-or-later":
@@ -2468,6 +2584,17 @@ def check_install(prefix: Path) -> None:
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise LicenseCheckError("installed GFN1-D3 manifest is malformed") from exc
+    try:
+        installed_gfn1_legacy_sto = json.loads(
+            (
+                prefix
+                / "share/licenses/xtbloom/provenance/gfn1_legacy_sto_manifest.json"
+            ).read_text(encoding="utf-8")
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError(
+            "installed GFN1 legacy STO manifest is malformed"
+        ) from exc
     installed_apache = (
         prefix / "share/licenses/xtbloom/third-party/Apache-2.0.txt"
     ).read_bytes()
@@ -2475,6 +2602,7 @@ def check_install(prefix: Path) -> None:
         prefix / "share/licenses/xtbloom/third-party/LGPL-3.0-or-later.txt"
     ).read_bytes()
     _check_gfn1_d3_provenance(installed_gfn1_d3, installed_apache, installed_lgpl)
+    _check_gfn1_legacy_sto_provenance(installed_gfn1_legacy_sto, installed_lgpl)
     bundled = _find_bundled_vendor_libraries(
         {
             path.relative_to(prefix).as_posix()
@@ -2722,6 +2850,35 @@ def _check_archived_gfn1_d3(path: Path, names: set[str], wheel: bool) -> None:
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise LicenseCheckError("archived GFN1-D3 manifest is malformed") from exc
     _check_gfn1_d3_provenance(manifest, payloads[apache_name], payloads[lgpl_name])
+
+
+def _check_archived_gfn1_legacy_sto(path: Path, names: set[str], wheel: bool) -> None:
+    """Validate the exact xTB GFN1 legacy-STO provenance in a distribution."""
+    manifest_suffix = (
+        "share/licenses/xtbloom/provenance/gfn1_legacy_sto_manifest.json"
+        if wheel
+        else "data/parameters/gfn1_legacy_sto_manifest.json"
+    )
+    lgpl_suffix = "LICENSES/LGPL-3.0-or-later.txt"
+    manifest_name = _find_archive_name(names, manifest_suffix)
+    lgpl_name = _find_archive_name(names, lgpl_suffix)
+    selected = {manifest_name, lgpl_name}
+    header_name: str | None = None
+    if not wheel:
+        header_name = _find_archive_name(names, "data/parameters/gfn1_legacy_sto.hpp")
+        selected.add(header_name)
+    payloads = _read_archive_members(path, selected)
+    try:
+        manifest = json.loads(payloads[manifest_name].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError(
+            "archived GFN1 legacy STO manifest is malformed"
+        ) from exc
+    _check_gfn1_legacy_sto_provenance(
+        manifest,
+        payloads[lgpl_name],
+        None if header_name is None else payloads[header_name],
+    )
 
 
 def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:
@@ -3321,6 +3478,7 @@ def check_archive(path: Path, source_root: Path | None = None) -> None:
             f"{path} bundles a CUDA/MKL provider library: {bundled[0]}"
         )
     _check_archived_gfn1_d3(path, names, wheel=path.suffix == ".whl")
+    _check_archived_gfn1_legacy_sto(path, names, wheel=path.suffix == ".whl")
     _check_archived_implib(path, names, wheel=path.suffix == ".whl")
     if path.suffix != ".whl":
         if source_root is None:

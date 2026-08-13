@@ -25,6 +25,16 @@
         "dxtb:test/test_classical/test_halogen/samples.py"
       ],
       "contract": "The exact marker-delimited C++ fixture block contains the reviewed halogen geometries, energies, dxtb/tblite force cross-check, and derivative test contract."
+    },
+    {
+      "id": "gfn1-spin2-p10-tblite",
+      "consumer": "tests/gfn1_cpu_conformance.py",
+      "bytes": 2040,
+      "sha256": "d33b89e59a45ed01b9efb78d710c6a2390ac07f769f2c187626b579be7ee47db",
+      "sources": [
+        "tblite:test/unit/test_spin.f90"
+      ],
+      "contract": "The exact marker-delimited Python fixture contains tblite's unrestricted RSE43 P10 geometry, GFN1 total energy, analytic gradient, and spin state."
     }
   ],
   "sources": [
@@ -130,6 +140,22 @@
           "sha256": "f078b628b9eafa9dec75609d15a956aa33ae084a74b5de685f8262bb4389100c",
           "use": "Literal Br2-NH3, Br2-OCH2, and FI-NCH geometries and GFN1 halogen energies, plus the upstream derivative finite-difference contract.",
           "consumers": ["tests/gfn1_halogen_test.cpp"]
+        }
+      ]
+    },
+    {
+      "project": "tblite-gfn1-oracle",
+      "repository": "https://github.com/tblite/tblite",
+      "license": "LGPL-3.0-or-later",
+      "revision": "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
+      "tree": "2cfe9e53c6413bd022e36346d62ba110c1c42f57",
+      "files": [
+        {
+          "path": "test/unit/test_spin.f90",
+          "git_blob": "c932c91b1d55d317658cca61f68b6f4daf80f61a",
+          "sha256": "25873c35437419e35a97f9aad42b49ada313e23e9647a07402bfb788f27175f3",
+          "use": "Literal unrestricted RSE43 P10 geometry, one-unpaired-electron state, GFN1 total energy, and analytic gradient from test_g_p10 and rse43_p10.",
+          "consumers": ["tests/gfn1_cpu_conformance.py"]
         }
       ]
     }

@@ -861,6 +861,12 @@ endif()
 add_library(xtbloom_model_common_cpu_objects OBJECT
   src/model/common/sto.cpp
   src/model/common/integrals.cpp
+  src/model/common/scc_mixer.cpp
+  # The generalized eigensolver and fixed periodic charge-response algebra
+  # are model-neutral even though their established internal namespace is
+  # retained for source compatibility. Both GFN1 and GFN2 consume them.
+  src/model/gfn2/eigensolver.cpp
+  src/model/gfn2/periodic_embedding.cpp
   # The sealed ES2 implementation is shared by GFN2 arithmetic and GFN1
   # harmonic plan builders. Its legacy namespace remains internal and does
   # not make the rest of the GFN2 physics target a GFN1 dependency.
@@ -877,6 +883,51 @@ set_target_properties(xtbloom_model_common_cpu_objects PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   VISIBILITY_INLINES_HIDDEN YES
 )
+if(CMAKE_DL_LIBS)
+  target_link_libraries(xtbloom_model_common_cpu_objects PUBLIC ${CMAKE_DL_LIBS})
+endif()
+
+if(XTBLOOM_CPU_LINALG_RUNTIME)
+  target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+    "XTBLOOM_CONFIGURED_CPU_LINALG_RUNTIME=\"${XTBLOOM_CPU_LINALG_RUNTIME}\""
+  )
+endif()
+if(XTBLOOM_CPU_LINALG_RUNTIME_IS_MKL)
+  target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+    XTBLOOM_CONFIGURED_CPU_LINALG_MKL=1
+  )
+endif()
+if(XTBLOOM_CPU_LINALG_SHIM)
+  target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+    XTBLOOM_CONFIGURED_CPU_LINALG_SHIM=1
+  )
+  add_dependencies(xtbloom_model_common_cpu_objects xtbloom_mkl_lp64_shim)
+endif()
+if(XTBLOOM_WHEEL_OPENBLAS)
+  if(XTBLOOM_WHEEL_OPENBLAS_PYODIDE)
+    target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+      XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS=1
+      "XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
+      "XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_ADAPTER=\"${XTBLOOM_WHEEL_OPENBLAS_ADAPTER_NAME}\""
+    )
+    add_dependencies(xtbloom_model_common_cpu_objects xtbloom_pyodide_lapacke)
+  else()
+    target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+      XTBLOOM_CONFIGURED_WHEEL_OPENBLAS=1
+      "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
+    )
+    if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
+      target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+        "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME=\"${XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME}\""
+      )
+    endif()
+    if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
+      add_dependencies(xtbloom_model_common_cpu_objects xtbloom_openblas_lp64_shim)
+    elseif(APPLE)
+      add_dependencies(xtbloom_model_common_cpu_objects xtbloom_wheel_openblas_provider)
+    endif()
+  endif()
+endif()
 
 add_library(xtbloom_gfn2_cpu_objects OBJECT
   src/backends/common/gfn2_plan_schema.cpp
@@ -884,14 +935,12 @@ add_library(xtbloom_gfn2_cpu_objects OBJECT
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
   src/model/gfn2/d4.cpp
-  src/model/gfn2/eigensolver.cpp
   src/model/gfn2/es3.cpp
   src/model/gfn2/external_point_charges.cpp
   src/model/gfn2/force.cpp
   src/model/gfn2/h0.cpp
   src/model/gfn2/lattice.cpp
   src/model/gfn2/mulliken.cpp
-  src/model/gfn2/periodic_embedding.cpp
   src/model/gfn2/repulsion.cpp
   src/model/gfn2/scc_driver.cpp
   src/model/gfn2/scc_mixer.cpp
@@ -910,52 +959,6 @@ set_target_properties(xtbloom_gfn2_cpu_objects PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   VISIBILITY_INLINES_HIDDEN YES
 )
-if(CMAKE_DL_LIBS)
-  target_link_libraries(xtbloom_gfn2_cpu_objects PUBLIC ${CMAKE_DL_LIBS})
-endif()
-
-if(XTBLOOM_CPU_LINALG_RUNTIME)
-  target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
-    "XTBLOOM_CONFIGURED_CPU_LINALG_RUNTIME=\"${XTBLOOM_CPU_LINALG_RUNTIME}\""
-  )
-endif()
-if(XTBLOOM_CPU_LINALG_RUNTIME_IS_MKL)
-  target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
-    XTBLOOM_CONFIGURED_CPU_LINALG_MKL=1
-  )
-endif()
-if(XTBLOOM_CPU_LINALG_SHIM)
-  target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
-    XTBLOOM_CONFIGURED_CPU_LINALG_SHIM=1
-  )
-  add_dependencies(xtbloom_gfn2_cpu_objects xtbloom_mkl_lp64_shim)
-endif()
-if(XTBLOOM_WHEEL_OPENBLAS)
-  if(XTBLOOM_WHEEL_OPENBLAS_PYODIDE)
-    target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
-      XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS=1
-      "XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
-      "XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_ADAPTER=\"${XTBLOOM_WHEEL_OPENBLAS_ADAPTER_NAME}\""
-    )
-    add_dependencies(xtbloom_gfn2_cpu_objects xtbloom_pyodide_lapacke)
-  else()
-    target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
-      XTBLOOM_CONFIGURED_WHEEL_OPENBLAS=1
-      "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
-    )
-    if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
-      target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
-        "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME=\"${XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME}\""
-      )
-    endif()
-    if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
-      add_dependencies(xtbloom_gfn2_cpu_objects xtbloom_openblas_lp64_shim)
-    elseif(APPLE)
-      add_dependencies(xtbloom_gfn2_cpu_objects xtbloom_wheel_openblas_provider)
-    endif()
-  endif()
-endif()
-
 # GFN1 remains an internal, incomplete model until its full CPU execution
 # chain and public evidence land. Keep reviewed model-owned terms in one
 # object target that is deliberately absent from libxtbloom public dispatch.
@@ -965,10 +968,17 @@ add_library(xtbloom_gfn1_cpu_objects OBJECT
   src/model/gfn1/d3.cpp
   src/model/gfn1/es2.cpp
   src/model/gfn1/es3.cpp
+  src/model/gfn1/external_point_charges.cpp
+  src/model/gfn1/force.cpp
   src/model/gfn1/h0.cpp
   src/model/gfn1/halogen.cpp
+  src/model/gfn1/mulliken.cpp
   src/model/gfn1/repulsion.cpp
+  src/model/gfn1/scc_driver.cpp
+  src/model/gfn1/scc_mixer.cpp
   src/model/gfn1/spin.cpp
+  src/model/gfn1/wavefunction.cpp
+  src/runtime/gfn1_cpu_execution.cpp
 )
 target_compile_features(xtbloom_gfn1_cpu_objects PUBLIC cxx_std_17)
 target_include_directories(xtbloom_gfn1_cpu_objects PUBLIC
@@ -3346,6 +3356,13 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_gfn1_halogen_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn1.halogen COMMAND xtbloom_gfn1_halogen_test)
 
+  add_executable(xtbloom_gfn1_external_point_charges_test
+    tests/gfn1_external_point_charges_test.cpp)
+  target_link_libraries(xtbloom_gfn1_external_point_charges_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_external_point_charges_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.external_point_charges
+    COMMAND xtbloom_gfn1_external_point_charges_test)
+
   add_executable(xtbloom_d4_test tests/d4_test.cpp)
   target_link_libraries(xtbloom_d4_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_d4_test PRIVATE cxx_std_17)
@@ -3430,6 +3447,88 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_wavefunction_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_wavefunction_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.wavefunction COMMAND xtbloom_wavefunction_test)
+
+  add_executable(xtbloom_gfn1_wavefunction_test tests/gfn1_wavefunction_test.cpp)
+  target_link_libraries(xtbloom_gfn1_wavefunction_test PRIVATE xtbloom_gfn1_cpu)
+  if(XTBLOOM_CPU_LINALG_RUNTIME)
+    target_link_libraries(xtbloom_gfn1_wavefunction_test PRIVATE ${XTBLOOM_CPU_LINALG_RUNTIME})
+    target_compile_definitions(
+      xtbloom_gfn1_wavefunction_test PRIVATE XTBLOOM_TEST_HAS_CPU_LINALG=1
+    )
+    if(XTBLOOM_CPU_LINALG_SYMBOL_PREFIX STREQUAL "scipy_")
+      target_compile_definitions(
+        xtbloom_gfn1_wavefunction_test PRIVATE XTBLOOM_TEST_SCIPY_PREFIXED_BLAS=1
+      )
+    endif()
+  endif()
+  target_compile_features(xtbloom_gfn1_wavefunction_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.wavefunction COMMAND xtbloom_gfn1_wavefunction_test)
+  if(XTBLOOM_CPU_LINALG_RUNTIME)
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_gfn1_wavefunction_test xtbloom.gfn1.wavefunction
+    )
+  endif()
+
+  add_executable(xtbloom_common_scc_mixer_test tests/common_scc_mixer_test.cpp)
+  target_link_libraries(xtbloom_common_scc_mixer_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_common_scc_mixer_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.common.scc_mixer COMMAND xtbloom_common_scc_mixer_test)
+
+  add_executable(xtbloom_gfn1_scc_mixer_test tests/gfn1_scc_mixer_test.cpp)
+  target_link_libraries(xtbloom_gfn1_scc_mixer_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_scc_mixer_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.scc_mixer COMMAND xtbloom_gfn1_scc_mixer_test)
+
+  add_executable(xtbloom_gfn1_mulliken_test tests/gfn1_mulliken_test.cpp)
+  target_link_libraries(xtbloom_gfn1_mulliken_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_mulliken_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.mulliken COMMAND xtbloom_gfn1_mulliken_test)
+
+  add_executable(xtbloom_gfn1_force_test tests/gfn1_force_test.cpp)
+  target_link_libraries(xtbloom_gfn1_force_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_force_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.force COMMAND xtbloom_gfn1_force_test)
+
+  add_executable(xtbloom_gfn1_scc_driver_test tests/gfn1_scc_driver_test.cpp)
+  target_link_libraries(xtbloom_gfn1_scc_driver_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_scc_driver_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.scc_driver COMMAND xtbloom_gfn1_scc_driver_test)
+
+  if(XTBLOOM_CPU_LINALG_RUNTIME)
+    add_executable(xtbloom_gfn1_cpu_execution_test tests/gfn1_cpu_execution_test.cpp)
+    target_link_libraries(xtbloom_gfn1_cpu_execution_test PRIVATE
+      xtbloom_gfn1_cpu
+      ${XTBLOOM_CPU_LINALG_RUNTIME}
+    )
+    if(XTBLOOM_CPU_LINALG_SYMBOL_PREFIX STREQUAL "scipy_")
+      target_compile_definitions(
+        xtbloom_gfn1_cpu_execution_test PRIVATE XTBLOOM_TEST_SCIPY_PREFIXED_BLAS=1
+      )
+    endif()
+    target_compile_features(xtbloom_gfn1_cpu_execution_test PRIVATE cxx_std_17)
+    add_test(NAME xtbloom.gfn1.cpu_execution COMMAND xtbloom_gfn1_cpu_execution_test)
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_gfn1_cpu_execution_test xtbloom.gfn1.cpu_execution
+    )
+
+    # Drive the hidden executor from the immutable GFN1 corpus without adding
+    # a production JSON dependency or copying canonical fixture bytes into C++.
+    add_executable(xtbloom_gfn1_cpu_probe tests/gfn1_cpu_probe.cpp)
+    target_link_libraries(xtbloom_gfn1_cpu_probe PRIVATE
+      xtbloom_gfn1_cpu
+      ${XTBLOOM_CPU_LINALG_RUNTIME}
+    )
+    target_compile_features(xtbloom_gfn1_cpu_probe PRIVATE cxx_std_17)
+    add_test(
+      NAME xtbloom.gfn1.conformance_cpu
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/gfn1_cpu_conformance.py
+        --probe $<TARGET_FILE:xtbloom_gfn1_cpu_probe>
+        --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_gfn1_cpu_probe xtbloom.gfn1.conformance_cpu
+    )
+  endif()
 
   add_executable(xtbloom_mulliken_test tests/mulliken_test.cpp)
   target_link_libraries(xtbloom_mulliken_test PRIVATE xtbloom_gfn2_cpu)
@@ -4061,6 +4160,7 @@ install(FILES
   data/parameters/d4_manifest.json
   data/parameters/gfn1_manifest.json
   data/parameters/gfn1_d3_manifest.json
+  data/parameters/gfn1_legacy_sto_manifest.json
   data/parameters/mctc_manifest.json
   cmake/3rdparty/implib_manifest.json
   cmake/3rdparty/scipy_openblas32_manifest.json
