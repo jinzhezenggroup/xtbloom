@@ -328,7 +328,7 @@ struct FieldCanaries<std::uint8_t> {
 
 enum class Placement { kHost, kDevice };
 
-enum class InputLayout { kHost, kDevice, kMixed };
+enum class InputLayout { kHost, kDevice, kMixed, kMixedReverse };
 
 /* Own one stable direct-device input allocation. upload() preserves the
  * address while the extent is unchanged, which lets the repeated-call test
@@ -618,6 +618,10 @@ class ResultOwner {
     if (status != cudaSuccess) return status;
     status = point_forces_.initialize(3u * points, all);
     if (status != cudaSuccess) return status;
+    if ((flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+      status = dipoles_.initialize(3u * systems, all);
+      if (status != cudaSuccess) return status;
+    }
     status = iterations_.initialize(systems, iterations_placement);
     if (status != cudaSuccess) return status;
     status = converged_.initialize(systems, all);
@@ -636,6 +640,8 @@ class ResultOwner {
     descriptor.point_charge_forces = (flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u
                                          ? point_forces_.descriptor()
                                          : xtbloom_buffer_t{};
+    descriptor.dipole_moments =
+        (flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u ? dipoles_.descriptor() : xtbloom_buffer_t{};
     descriptor.scc_iterations = iterations_.descriptor();
     descriptor.scc_converged = converged_.descriptor();
     descriptor.per_system_status = statuses_.descriptor();
@@ -675,6 +681,11 @@ class ResultOwner {
     status = point_forces_.guards_intact(field);
     if (status != cudaSuccess) return status;
     intact = intact && field;
+    if (descriptor.dipole_moments.data != nullptr) {
+      status = dipoles_.guards_intact(field);
+      if (status != cudaSuccess) return status;
+      intact = intact && field;
+    }
     status = iterations_.guards_intact(field);
     if (status != cudaSuccess) return status;
     intact = intact && field;
@@ -702,6 +713,11 @@ class ResultOwner {
     status = point_forces_.unchanged(field);
     if (status != cudaSuccess) return status;
     same = same && field;
+    if (descriptor.dipole_moments.data != nullptr) {
+      status = dipoles_.unchanged(field);
+      if (status != cudaSuccess) return status;
+      same = same && field;
+    }
     status = iterations_.unchanged(field);
     if (status != cudaSuccess) return status;
     same = same && field;
@@ -742,6 +758,7 @@ class ResultOwner {
   GuardedOutput<double> forces_;
   GuardedOutput<double> charges_;
   GuardedOutput<double> point_forces_;
+  GuardedOutput<double> dipoles_;
   GuardedOutput<std::int32_t> iterations_;
   GuardedOutput<std::uint8_t> converged_;
   GuardedOutput<std::int32_t> statuses_;
@@ -1137,6 +1154,200 @@ int expect_strict_warm_rejection(xtbloom_context_t* context, PublicBatch& batch,
   bool guards = false;
   CUDA_CHECK(result.guards_intact(guards));
   CHECK(guards);
+  return 0;
+}
+
+int test_native_lattice_refusal_matrix(std::int32_t device) {
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+
+  PublicBatch batch;
+  CHECK(make_fixture_batch(2u, false, batch) == 0);
+  const std::vector<double> cells{
+      4.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 6.0, 4.5, 0.0, 0.0, 0.2, 5.5, 0.0, -0.1, 0.3, 6.5,
+  };
+  const std::vector<std::int32_t> axes(2u, XTBLOOM_PERIODIC_AXES_XYZ);
+  DeviceInputArray<double> device_cells;
+  DeviceInputArray<std::int32_t> device_axes;
+  CUDA_CHECK(device_cells.upload(cells));
+  CUDA_CHECK(device_axes.upload(axes));
+
+  xtbloom_compute_options_t options = make_compute_options();
+  const std::array<const char*, 3> names{{"host", "device", "mixed"}};
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    std::string scenario = std::string("native-lattice-refusal/") + names[index];
+    g_scenario = scenario.c_str();
+    batch.bind();
+    if (index == 0u) {
+      batch.descriptor.cell_matrices = host_input(cells);
+      batch.descriptor.periodic_axes = host_input(axes);
+    } else if (index == 1u) {
+      batch.descriptor.cell_matrices = device_cells.descriptor();
+      batch.descriptor.periodic_axes = device_axes.descriptor();
+    } else {
+      batch.descriptor.cell_matrices = device_cells.descriptor();
+      batch.descriptor.periodic_axes = host_input(axes);
+    }
+
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, static_cast<ResultLayout>(index), options.flags));
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &result.descriptor) ==
+          XTBLOOM_STATUS_NOT_IMPLEMENTED);
+    bool unchanged = false;
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    bool guards = false;
+    CUDA_CHECK(result.guards_intact(guards));
+    CHECK(guards);
+    CHECK(result.descriptor.flags == kResultFlagsCanary);
+  }
+
+  /* Cover the opposite mixed input placement independently: cell rows on the
+   * host and periodic-axis masks on the device. */
+  g_scenario = "native-lattice-refusal/mixed-reverse";
+  batch.bind();
+  batch.descriptor.cell_matrices = host_input(cells);
+  batch.descriptor.periodic_axes = device_axes.descriptor();
+  ResultOwner mixed_reverse_result;
+  CUDA_CHECK(mixed_reverse_result.bind(batch, ResultLayout::kMixed, options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options,
+                        &mixed_reverse_result.descriptor) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  bool unchanged = false;
+  CUDA_CHECK(mixed_reverse_result.unchanged(unchanged));
+  CHECK(unchanged);
+  bool guards = false;
+  CUDA_CHECK(mixed_reverse_result.guards_intact(guards));
+  CHECK(guards);
+  CHECK(mixed_reverse_result.descriptor.flags == kResultFlagsCanary);
+
+  /* DEVICE content must be staged and semantically rejected before the valid
+   * but unavailable execution status is reported. */
+  g_scenario = "native-lattice-refusal/device-invalid-mask";
+  const std::vector<std::int32_t> invalid_axes{XTBLOOM_PERIODIC_AXES_XYZ, 8};
+  CUDA_CHECK(device_axes.upload(invalid_axes));
+  batch.bind();
+  batch.descriptor.cell_matrices = device_cells.descriptor();
+  batch.descriptor.periodic_axes = device_axes.descriptor();
+  ResultOwner invalid_result;
+  CUDA_CHECK(invalid_result.bind(batch, ResultLayout::kDevice, options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &invalid_result.descriptor) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CUDA_CHECK(invalid_result.unchanged(unchanged));
+  CHECK(unchanged);
+
+  /* Pointer facts precede staging. A device pointer mislabeled as HOST must
+   * fail without host dereference or output publication. */
+  g_scenario = "native-lattice-refusal/mislabeled-device-cell";
+  CUDA_CHECK(device_axes.upload(axes));
+  batch.bind();
+  batch.descriptor.cell_matrices = device_cells.descriptor();
+  batch.descriptor.cell_matrices.memory_space = XTBLOOM_MEMORY_HOST;
+  batch.descriptor.periodic_axes = device_axes.descriptor();
+  ResultOwner mislabeled_result;
+  CUDA_CHECK(mislabeled_result.bind(batch, ResultLayout::kMixed, options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options,
+                        &mislabeled_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CUDA_CHECK(mislabeled_result.unchanged(unchanged));
+  CHECK(unchanged);
+
+  /* The device predicate must match the host scale-aware validator without
+   * overflowing an unscaled determinant or rejecting anisotropic cells. */
+  const std::array<std::pair<const char*, std::array<double, 9>>, 2> scaled_cells{{
+      {"extreme-uniform", {1.0e100, 0.0, 0.0, 0.0, 1.0e100, 0.0, 0.0, 0.0, 1.0e100}},
+      {"extreme-anisotropic", {1.0e5, 0.0, 0.0, 0.0, 1.0e-5, 0.0, 0.0, 0.0, 1.0}},
+  }};
+  for (const auto& [name, cell] : scaled_cells) {
+    std::string scenario = std::string("native-lattice-refusal/device-") + name;
+    g_scenario = scenario.c_str();
+    std::vector<double> scaled_batch_cells;
+    scaled_batch_cells.reserve(18u);
+    scaled_batch_cells.insert(scaled_batch_cells.end(), cell.begin(), cell.end());
+    scaled_batch_cells.insert(scaled_batch_cells.end(), cell.begin(), cell.end());
+    CUDA_CHECK(device_cells.upload(scaled_batch_cells));
+    CUDA_CHECK(device_axes.upload(axes));
+    batch.bind();
+    batch.descriptor.cell_matrices = device_cells.descriptor();
+    batch.descriptor.periodic_axes = device_axes.descriptor();
+    ResultOwner scaled_result;
+    CUDA_CHECK(scaled_result.bind(batch, ResultLayout::kDevice, options.flags));
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &scaled_result.descriptor) ==
+          XTBLOOM_STATUS_NOT_IMPLEMENTED);
+    CUDA_CHECK(scaled_result.unchanged(unchanged));
+    CHECK(unchanged);
+    bool scaled_guards = false;
+    CUDA_CHECK(scaled_result.guards_intact(scaled_guards));
+    CHECK(scaled_guards);
+    CHECK(scaled_result.descriptor.flags == kResultFlagsCanary);
+  }
+
+  const double maximum = std::numeric_limits<double>::max();
+  const std::array<double, 9> maximum_component_cell{
+      maximum, maximum, 0.0, -maximum, maximum, 0.0, 0.0, 0.0, maximum,
+  };
+  std::vector<double> maximum_component_cells;
+  maximum_component_cells.reserve(18u);
+  maximum_component_cells.insert(maximum_component_cells.end(), maximum_component_cell.begin(),
+                                 maximum_component_cell.end());
+  maximum_component_cells.insert(maximum_component_cells.end(), maximum_component_cell.begin(),
+                                 maximum_component_cell.end());
+  for (const InputLayout layout : {InputLayout::kHost, InputLayout::kDevice, InputLayout::kMixed}) {
+    g_scenario = "native-lattice-refusal/multi-dbl-max";
+    CUDA_CHECK(device_cells.upload(maximum_component_cells));
+    CUDA_CHECK(device_axes.upload(axes));
+    batch.bind();
+    batch.descriptor.cell_matrices = layout == InputLayout::kHost
+                                         ? host_input(maximum_component_cells)
+                                         : device_cells.descriptor();
+    batch.descriptor.periodic_axes =
+        layout == InputLayout::kDevice ? device_axes.descriptor() : host_input(axes);
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, ResultLayout::kDevice, options.flags));
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &result.descriptor) ==
+          XTBLOOM_STATUS_NOT_IMPLEMENTED);
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+  }
+
+  maximum_component_cells[8] = -maximum;
+  maximum_component_cells[17] = -maximum;
+  CUDA_CHECK(device_cells.upload(maximum_component_cells));
+  batch.bind();
+  batch.descriptor.cell_matrices = device_cells.descriptor();
+  batch.descriptor.periodic_axes = device_axes.descriptor();
+  ResultOwner mirrored_result;
+  CUDA_CHECK(mirrored_result.bind(batch, ResultLayout::kDevice, options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &mirrored_result.descriptor) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CUDA_CHECK(mirrored_result.unchanged(unchanged));
+  CHECK(unchanged);
+
+  /* Preserve the public byte-storage contract for interaction descriptors.
+   * The common validator loads their fields with memcpy, so under-aligned HOST
+   * bytes remain valid and must reach the CUDA availability refusal rather
+   * than acquiring a backend-only natural-alignment restriction. */
+  g_scenario = "native-lattice-refusal/unaligned-interaction-descriptor";
+  xtbloom_interaction_t interaction{};
+  interaction.type = XTBLOOM_INTERACTION_ELECTRIC_FIELD;
+  interaction.system_index = 0;
+  interaction.payload_size = 32u;
+  std::vector<std::uint8_t> descriptor_bytes(sizeof(interaction) + 1u, 0u);
+  std::memcpy(descriptor_bytes.data() + 1u, &interaction, sizeof(interaction));
+  std::vector<std::uint8_t> payload(32u, 0u);
+  const std::int32_t block_version = 1;
+  std::memcpy(payload.data(), &block_version, sizeof(block_version));
+  batch.bind();
+  batch.descriptor.total_interactions = 1;
+  batch.descriptor.interaction_descriptors =
+      {descriptor_bytes.data() + 1u, sizeof(interaction), XTBLOOM_MEMORY_HOST, 0u};
+  batch.descriptor.interaction_payload = host_input(payload);
+  xtbloom_plan_t* raw_interaction_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_interaction_plan) ==
+        XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(raw_interaction_plan == nullptr);
   return 0;
 }
 
@@ -1613,6 +1824,268 @@ struct PlanDeleter {
 };
 
 using PlanHandle = std::unique_ptr<xtbloom_plan_t, PlanDeleter>;
+
+int run_async_lattice_refusal_case(xtbloom_plan_t* plan, xtbloom_context_t* context,
+                                   cudaStream_t stream, PublicBatch& batch,
+                                   const xtbloom_compute_options_t& options,
+                                   const std::vector<double>& cells,
+                                   const std::vector<std::int32_t>& axes, InputLayout layout,
+                                   xtbloom_status_t expected_status, const char* name) {
+  std::string scenario = std::string("plan-async-lattice/") + name;
+  g_scenario = scenario.c_str();
+
+  DeviceInputArray<double> device_cells;
+  DeviceInputArray<std::int32_t> device_axes;
+  CUDA_CHECK(device_cells.upload(cells));
+  CUDA_CHECK(device_axes.upload(axes));
+  batch.bind();
+  if (layout == InputLayout::kHost) {
+    batch.descriptor.cell_matrices = host_input(cells);
+    batch.descriptor.periodic_axes = host_input(axes);
+  } else if (layout == InputLayout::kDevice) {
+    batch.descriptor.cell_matrices = device_cells.descriptor();
+    batch.descriptor.periodic_axes = device_axes.descriptor();
+  } else if (layout == InputLayout::kMixed) {
+    batch.descriptor.cell_matrices = device_cells.descriptor();
+    batch.descriptor.periodic_axes = host_input(axes);
+  } else {
+    batch.descriptor.cell_matrices = host_input(cells);
+    batch.descriptor.periodic_axes = device_axes.descriptor();
+  }
+
+  ResultOwner result;
+  CUDA_CHECK(result.bind(batch, ResultLayout::kDevice, options.flags));
+  xtbloom_request_t* raw_request = nullptr;
+  CHECK(xtbloom_request_create(context, &raw_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle request(raw_request);
+
+  BlockingStreamGate gate;
+  CUDA_CHECK(gate.arm(stream));
+  xtbloom_status_t enqueue_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  bool enqueue_returned = false;
+  std::mutex enqueue_mutex;
+  std::condition_variable enqueue_changed;
+  std::thread submitter([&] {
+    enqueue_status = xtbloom_plan_compute_enqueue(plan, &batch.descriptor, &options,
+                                                  &result.descriptor, request.get());
+    {
+      std::lock_guard<std::mutex> lock(enqueue_mutex);
+      enqueue_returned = true;
+    }
+    enqueue_changed.notify_one();
+  });
+  bool returned_while_blocked = false;
+  {
+    std::unique_lock<std::mutex> lock(enqueue_mutex);
+    returned_while_blocked =
+        enqueue_changed.wait_for(lock, kBlockedEnqueueWatchdog, [&] { return enqueue_returned; });
+  }
+  if (!returned_while_blocked) gate.release();
+  submitter.join();
+  CHECK(returned_while_blocked);
+  CHECK(enqueue_status == XTBLOOM_STATUS_SUCCESS);
+
+  xtbloom_request_info_t info{};
+  CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_PENDING);
+  CHECK(result.descriptor.flags == kResultFlagsCanary);
+
+  gate.release();
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+  CHECK(info.completion_status == expected_status);
+  CHECK(info.result_flags == 0u);
+  bool unchanged = false;
+  CUDA_CHECK(result.unchanged(unchanged));
+  CHECK(unchanged);
+  bool guards = false;
+  CUDA_CHECK(result.guards_intact(guards));
+  CHECK(guards);
+  CHECK(result.descriptor.flags == kResultFlagsCanary);
+  return 0;
+}
+
+int test_cuda_plan_lattice_request_gate(std::int32_t device) {
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+
+  PublicBatch batch;
+  CHECK(make_fixture_batch(2u, false, batch) == 0);
+  xtbloom_compute_options_t options = make_compute_options();
+  const std::vector<double> molecular_cells(18u, 0.0);
+  const std::vector<std::int32_t> molecular_axes(2u, XTBLOOM_PERIODIC_AXES_NONE);
+  DeviceInputArray<double> device_molecular_cells;
+  DeviceInputArray<std::int32_t> device_molecular_axes;
+  CUDA_CHECK(device_molecular_cells.upload(molecular_cells));
+  CUDA_CHECK(device_molecular_axes.upload(molecular_axes));
+  batch.bind();
+  batch.descriptor.cell_matrices = device_molecular_cells.descriptor();
+  batch.descriptor.periodic_axes = device_molecular_axes.descriptor();
+  xtbloom_plan_t* raw_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  PlanHandle plan(raw_plan);
+
+  xtbloom_workspace_query_t stable_workspace{};
+  CHECK(xtbloom_workspace_query_init(&stable_workspace, sizeof(stable_workspace)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  stable_workspace.compute_flags = options.flags;
+  CHECK(xtbloom_plan_query_workspace(plan.get(), &stable_workspace) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(stable_workspace.host_required_bytes > 0u);
+
+  /* Repeated molecular V4 calls remain the ordinary execution path. The
+   * plan-owned lattice staging and total reusable workspace stay fixed across
+   * both synchronous and asynchronous public entry points. */
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    batch.bind();
+    batch.descriptor.cell_matrices = device_molecular_cells.descriptor();
+    batch.descriptor.periodic_axes = device_molecular_axes.descriptor();
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, ResultLayout::kDevice, options.flags));
+    CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options, &result.descriptor) ==
+          XTBLOOM_STATUS_SUCCESS);
+    xtbloom_workspace_query_t after{};
+    CHECK(xtbloom_workspace_query_init(&after, sizeof(after)) == XTBLOOM_STATUS_SUCCESS);
+    after.compute_flags = options.flags;
+    CHECK(xtbloom_plan_query_workspace(plan.get(), &after) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(after.host_required_bytes == stable_workspace.host_required_bytes);
+    CHECK(after.device_required_bytes == stable_workspace.device_required_bytes);
+  }
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    batch.bind();
+    batch.descriptor.cell_matrices = device_molecular_cells.descriptor();
+    batch.descriptor.periodic_axes = device_molecular_axes.descriptor();
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, ResultLayout::kDevice, options.flags));
+    xtbloom_request_t* raw_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle request(raw_request);
+    CHECK(xtbloom_plan_compute_enqueue(plan.get(), &batch.descriptor, &options, &result.descriptor,
+                                       request.get()) == XTBLOOM_STATUS_SUCCESS);
+    xtbloom_request_info_t info{};
+    CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+    CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+    xtbloom_workspace_query_t after{};
+    CHECK(xtbloom_workspace_query_init(&after, sizeof(after)) == XTBLOOM_STATUS_SUCCESS);
+    after.compute_flags = options.flags;
+    CHECK(xtbloom_plan_query_workspace(plan.get(), &after) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(after.host_required_bytes == stable_workspace.host_required_bytes);
+    CHECK(after.device_required_bytes == stable_workspace.device_required_bytes);
+  }
+
+  const std::vector<double> valid_cells{
+      4.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 6.0, 4.5, 0.0, 0.0, 0.2, 5.5, 0.0, -0.1, 0.3, 6.5,
+  };
+  const std::vector<std::int32_t> xyz_axes(2u, XTBLOOM_PERIODIC_AXES_XYZ);
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       valid_cells, xyz_axes, InputLayout::kHost,
+                                       XTBLOOM_STATUS_NOT_IMPLEMENTED, "host-xyz") == 0);
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       valid_cells, xyz_axes, InputLayout::kDevice,
+                                       XTBLOOM_STATUS_NOT_IMPLEMENTED, "device-xyz") == 0);
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       valid_cells, xyz_axes, InputLayout::kMixed,
+                                       XTBLOOM_STATUS_NOT_IMPLEMENTED, "mixed-xyz") == 0);
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       valid_cells, xyz_axes, InputLayout::kMixedReverse,
+                                       XTBLOOM_STATUS_NOT_IMPLEMENTED, "mixed-reverse-xyz") == 0);
+  const std::array<double, 9> former_divergence_probe{
+      1.0, 0.0, 0.0, 1.0, 2.0097183471152322e-14, 0.0, 0.0, 0.0, 1.0,
+  };
+  std::vector<double> boundary_cells;
+  boundary_cells.reserve(18u);
+  boundary_cells.insert(boundary_cells.end(), former_divergence_probe.begin(),
+                        former_divergence_probe.end());
+  boundary_cells.insert(boundary_cells.end(), former_divergence_probe.begin(),
+                        former_divergence_probe.end());
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       boundary_cells, xyz_axes, InputLayout::kDevice,
+                                       XTBLOOM_STATUS_NOT_IMPLEMENTED,
+                                       "device-binary64-boundary-probe") == 0);
+  const std::array<double, 9> threshold_cell{
+      1.0, 0.0, 0.0, 1.0, 0x1p-46, 0.0, 0.0, 0.0, 1.0,
+  };
+  std::vector<double> threshold_cells;
+  threshold_cells.reserve(18u);
+  threshold_cells.insert(threshold_cells.end(), threshold_cell.begin(), threshold_cell.end());
+  threshold_cells.insert(threshold_cells.end(), threshold_cell.begin(), threshold_cell.end());
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       threshold_cells, xyz_axes, InputLayout::kHost,
+                                       XTBLOOM_STATUS_INVALID_ARGUMENT,
+                                       "host-binary64-threshold-equality") == 0);
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       threshold_cells, xyz_axes, InputLayout::kDevice,
+                                       XTBLOOM_STATUS_INVALID_ARGUMENT,
+                                       "device-binary64-threshold-equality") == 0);
+  const double above_threshold =
+      std::nextafter(0x1p-46, std::numeric_limits<double>::infinity());
+  threshold_cells[4] = above_threshold;
+  threshold_cells[13] = above_threshold;
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       threshold_cells, xyz_axes, InputLayout::kHost,
+                                       XTBLOOM_STATUS_NOT_IMPLEMENTED,
+                                       "host-binary64-threshold-nextafter") == 0);
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       threshold_cells, xyz_axes, InputLayout::kDevice,
+                                       XTBLOOM_STATUS_NOT_IMPLEMENTED,
+                                       "device-binary64-threshold-nextafter") == 0);
+  const std::array<std::pair<const char*, std::array<double, 9>>, 2> scaled_cells{{
+      {"device-extreme-uniform", {1.0e100, 0.0, 0.0, 0.0, 1.0e100, 0.0, 0.0, 0.0, 1.0e100}},
+      {"device-extreme-anisotropic", {1.0e5, 0.0, 0.0, 0.0, 1.0e-5, 0.0, 0.0, 0.0, 1.0}},
+  }};
+  for (const auto& [name, cell] : scaled_cells) {
+    std::vector<double> scaled_batch_cells;
+    scaled_batch_cells.reserve(18u);
+    scaled_batch_cells.insert(scaled_batch_cells.end(), cell.begin(), cell.end());
+    scaled_batch_cells.insert(scaled_batch_cells.end(), cell.begin(), cell.end());
+    CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                         scaled_batch_cells, xyz_axes, InputLayout::kDevice,
+                                         XTBLOOM_STATUS_NOT_IMPLEMENTED, name) == 0);
+  }
+
+  std::vector<std::int32_t> partial_axes = xyz_axes;
+  partial_axes[1] = XTBLOOM_PERIODIC_AXIS_X;
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       valid_cells, partial_axes, InputLayout::kDevice,
+                                       XTBLOOM_STATUS_NOT_SUPPORTED, "device-partial") == 0);
+  std::vector<std::int32_t> unknown_axes = xyz_axes;
+  unknown_axes[1] = 8;
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       valid_cells, unknown_axes, InputLayout::kMixed,
+                                       XTBLOOM_STATUS_INVALID_ARGUMENT, "mixed-unknown") == 0);
+  std::vector<double> invalid_molecular_cells = molecular_cells;
+  invalid_molecular_cells[9] = 1.0;
+  CHECK(run_async_lattice_refusal_case(plan.get(), context.get(), stream.get(), batch, options,
+                                       invalid_molecular_cells, molecular_axes, InputLayout::kHost,
+                                       XTBLOOM_STATUS_INVALID_ARGUMENT, "host-none-nonzero") == 0);
+  return 0;
+}
+
+int test_cuda_plan_dipole_request_gate(std::int32_t device) {
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+
+  PublicBatch batch;
+  CHECK(make_fixture_batch(2u, false, batch) == 0);
+  xtbloom_compute_options_t options = make_compute_options();
+  options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+  xtbloom_plan_t* raw_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+        XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(raw_plan == nullptr);
+  return 0;
+}
 
 enum class PlanTestMode { kFull, kRequestOnly, kSanitizer, kProfileSteadyState };
 
@@ -3527,12 +4000,14 @@ int main(int argc, char** argv) {
   const bool context_request_profile =
       argc == 2 && std::strcmp(argv[1], "--context-request-profile") == 0;
   const bool mixer_sanitizer = argc == 2 && std::strcmp(argv[1], "--mixer-sanitizer") == 0;
+  const bool lattice_only = argc == 2 && std::strcmp(argv[1], "--lattice-only") == 0;
   if (argc != 1 && !request_only && !request_sanitizer && !request_profile &&
-      !context_request_sanitizer && !context_request_profile && !mixer_sanitizer) {
+      !context_request_sanitizer && !context_request_profile && !mixer_sanitizer &&
+      !lattice_only) {
     std::fprintf(stderr,
                  "usage: %s [--request-only|--request-sanitizer|--request-profile|"
                  "--context-request-sanitizer|--context-request-profile|"
-                 "--mixer-sanitizer]\n",
+                 "--mixer-sanitizer|--lattice-only]\n",
                  argv[0]);
     return 2;
   }
@@ -3550,6 +4025,11 @@ int main(int argc, char** argv) {
   if (cudaGetDevice(&device) != cudaSuccess) {
     std::fprintf(stderr, "cudaGetDevice failed\n");
     return 1;
+  }
+  if (lattice_only) {
+    if (const int line = test_native_lattice_refusal_matrix(device); line != 0) return line;
+    if (const int line = test_cuda_plan_lattice_request_gate(device); line != 0) return line;
+    return test_cuda_plan_dipole_request_gate(device);
   }
 
   PublicBatch batch;
@@ -3618,6 +4098,7 @@ int main(int argc, char** argv) {
       line != 0) {
     return line;
   }
+  if (const int line = test_native_lattice_refusal_matrix(device); line != 0) return line;
   if (const int line = test_public_warm_start_transactions(device); line != 0) return line;
   if (const int line = test_input_descriptor_matrix(device, cpu_context.get(), options);
       line != 0) {

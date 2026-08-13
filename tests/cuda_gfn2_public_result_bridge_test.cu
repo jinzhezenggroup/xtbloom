@@ -575,7 +575,7 @@ bool run_success_case(std::int64_t batch,
 
 template <typename Mutator>
 bool run_aggregate_failure(Mutator&& mutate, Gfn2PublicResultBridgeError expected_error,
-                           cudaStream_t stream) {
+                           cudaStream_t stream, bool exercise_commit = false) {
   Fixture fixture(8, kAllProperties);
   CHECK(fixture.initialize());
   fixture.configure({Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
@@ -597,6 +597,10 @@ bool run_aggregate_failure(Mutator&& mutate, Gfn2PublicResultBridgeError expecte
   CUDA_CHECK(prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
                                               fixture.destinations, fixture.staging,
                                               fixture.diagnostics, stream));
+  if (exercise_commit) {
+    CUDA_CHECK(commit_gfn2_public_results_cuda(fixture.plan, fixture.device_staging,
+                                               fixture.destinations, fixture.diagnostics, stream));
+  }
   CUDA_CHECK(cudaStreamSynchronize(stream));
   if (fixture.host_control.get()->aggregate_error ==
       static_cast<std::uint32_t>(Gfn2PublicResultBridgeError::kSuccess)) {
@@ -618,6 +622,23 @@ bool run_aggregate_failure(Mutator&& mutate, Gfn2PublicResultBridgeError expecte
   return true;
 }
 
+bool set_aggregate_status_failure(Fixture& fixture) {
+  fixture.host_statuses[0] = XTBLOOM_STATUS_INTERNAL_ERROR;
+  return fixture.internal_statuses.upload(fixture.host_statuses);
+}
+
+bool set_request_error(Fixture& fixture, std::uint32_t request_error) {
+  return fixture.request_topology_error.upload(std::vector<std::uint32_t>{request_error});
+}
+
+/* Inject every failure below the request gate so each known request code has
+ * to win against publication, availability, epoch, and aggregate failures. */
+bool set_request_priority_failures(Fixture& fixture, std::uint32_t request_error) {
+  fixture.plan.requested_properties |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+  return set_request_error(fixture, request_error) && fixture.set_control_values(73u, 36u, 37u) &&
+         set_aggregate_status_failure(fixture);
+}
+
 bool test_success_matrix(cudaStream_t stream) {
   CHECK(run_success_case(1, uniform_routes(Gfn2PublicResultRoute::kHost), stream));
   CHECK(run_success_case(8, uniform_routes(Gfn2PublicResultRoute::kCudaDevice), stream));
@@ -636,51 +657,91 @@ bool test_success_matrix(cudaStream_t stream) {
   return true;
 }
 
-bool test_aggregate_gate(cudaStream_t stream) {
+bool test_preflight_priority_matrix(cudaStream_t stream) {
+  /* Static binding contract > request > publication plan > unpublished
+   * property > epoch > aggregate system status. */
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
         fixture.input.plan_token ^= UINT64_C(1);
-        return true;
+        return set_request_priority_failures(fixture, 4u);
       },
-      Gfn2PublicResultBridgeError::kPlanTokenMismatch, stream));
-  CHECK(run_aggregate_failure(
-      [](Fixture& fixture) { return fixture.set_control_values(73u, 37u, 37u); },
-      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream));
+      Gfn2PublicResultBridgeError::kPlanTokenMismatch, stream, true));
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
-        return fixture.request_topology_error.upload(std::vector<std::uint32_t>{1u});
+        fixture.plan.abi_version += 1u;
+        return set_request_priority_failures(fixture, 4u);
       },
-      Gfn2PublicResultBridgeError::kRequestTopologyMismatch, stream));
-  CHECK(run_aggregate_failure(
-      [](Fixture& fixture) {
-        fixture.host_statuses[0] = XTBLOOM_STATUS_INTERNAL_ERROR;
-        return fixture.internal_statuses.upload(fixture.host_statuses);
-      },
-      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream));
-  CHECK(run_aggregate_failure(
-      [](Fixture& fixture) { return fixture.set_control_values(0u, 36u, 37u); },
-      Gfn2PublicResultBridgeError::kInvalidEpoch, stream));
-  CHECK(
-      run_aggregate_failure([](Fixture& fixture) { return fixture.set_control_values(0u, 0u, 0u); },
-                            Gfn2PublicResultBridgeError::kInvalidEpoch, stream));
-  CHECK(run_aggregate_failure(
-      [](Fixture& fixture) {
-        fixture.input.energy_elements -= 1;
-        return true;
-      },
-      Gfn2PublicResultBridgeError::kInvalidExtents, stream));
+      Gfn2PublicResultBridgeError::kInvalidAbiVersion, stream));
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
         fixture.plan.requested_properties |= UINT32_C(1) << 29;
-        return true;
+        return set_request_priority_failures(fixture, 4u);
       },
       Gfn2PublicResultBridgeError::kInvalidFlags, stream));
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
+        fixture.input.energy_elements -= 1;
+        return set_request_priority_failures(fixture, 4u);
+      },
+      Gfn2PublicResultBridgeError::kInvalidExtents, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
         fixture.destinations.energies.elements += 1;
-        return true;
+        return set_request_priority_failures(fixture, 4u);
       },
       Gfn2PublicResultBridgeError::kInvalidDestinations, stream));
+
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) { return set_request_priority_failures(fixture, 4u); },
+      Gfn2PublicResultBridgeError::kRequestTopologyMismatch, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) { return set_request_priority_failures(fixture, 1u); },
+      Gfn2PublicResultBridgeError::kRequestNotImplemented, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) { return set_request_priority_failures(fixture, 2u); },
+      Gfn2PublicResultBridgeError::kRequestNotSupported, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) { return set_request_priority_failures(fixture, 3u); },
+      Gfn2PublicResultBridgeError::kRequestInvalidArgument, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) { return set_request_priority_failures(fixture, 99u); },
+      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream, true));
+
+  /* Publication-plan diagnostics precede property availability and epoch. */
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        fixture.plan.requested_properties |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+        return fixture.set_control_values(73u, 36u, 37u) &&
+               set_aggregate_status_failure(fixture);
+      },
+      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream, true));
+
+  /* A structurally admitted but unpublished property fails closed before an
+   * epoch or aggregate error can become the caller-visible reason. */
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        fixture.plan.requested_properties |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+        return fixture.set_control_values(0u, 36u, 37u) &&
+               set_aggregate_status_failure(fixture);
+      },
+      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream, true));
+
+  /* Epoch validation precedes the final aggregate-status scan. */
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        return fixture.set_control_values(0u, 36u, 37u) &&
+               set_aggregate_status_failure(fixture);
+      },
+      Gfn2PublicResultBridgeError::kInvalidEpoch, stream, true));
+
+  /* Aggregate status is the terminal gate once every earlier contract passes. */
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) { return set_aggregate_status_failure(fixture); },
+      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream, true));
+
+  CHECK(
+      run_aggregate_failure([](Fixture& fixture) { return fixture.set_control_values(0u, 0u, 0u); },
+                            Gfn2PublicResultBridgeError::kInvalidEpoch, stream, true));
   return true;
 }
 
@@ -789,7 +850,7 @@ int main(int argc, char** argv) {
   cudaStream_t stream = nullptr;
   if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess) return 1;
   const bool success =
-      test_success_matrix(stream) && test_aggregate_gate(stream) &&
+      test_success_matrix(stream) && test_preflight_priority_matrix(stream) &&
       test_unrequested_outputs(stream) &&
       test_prepare_submission_precedes_host_acceptance(stream) &&
       (skip_expected_api_error || test_staging_enqueue_failure_precedes_device_writes(stream));

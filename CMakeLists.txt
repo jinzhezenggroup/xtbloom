@@ -871,6 +871,7 @@ add_library(xtbloom_gfn2_cpu OBJECT
   src/model/gfn2/force.cpp
   src/model/gfn2/h0.cpp
   src/model/gfn2/integrals.cpp
+  src/model/gfn2/lattice.cpp
   src/model/gfn2/mulliken.cpp
   src/model/gfn2/periodic_embedding.cpp
   src/model/gfn2/repulsion.cpp
@@ -1749,6 +1750,7 @@ if(XTBLOOM_BUILD_TESTS)
     tests/batch_validation_test.cpp
     src/runtime/model_registry.cpp
     src/runtime/validation.cpp
+    src/model/gfn2/lattice.cpp
   )
   target_include_directories(xtbloom_batch_validation_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -2354,7 +2356,9 @@ if(XTBLOOM_BUILD_TESTS)
       ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
     target_compile_definitions(xtbloom_cuda_gfn2_runtime_owner_test
-      PRIVATE XTBLOOM_HAS_CUDA=1
+      PRIVATE
+        XTBLOOM_HAS_CUDA=1
+        XTBLOOM_CUDA_TEST_HOOKS=1
     )
     set_target_properties(xtbloom_cuda_gfn2_runtime_owner_test PROPERTIES
       CUDA_STANDARD 17
@@ -2363,6 +2367,18 @@ if(XTBLOOM_BUILD_TESTS)
     )
     add_test(NAME xtbloom.cuda.gfn2_runtime_owner
       COMMAND xtbloom_cuda_gfn2_runtime_owner_test
+    )
+    add_test(NAME xtbloom.cuda.gfn2_runtime_owner_native_lattice_lifecycle
+      COMMAND xtbloom_cuda_gfn2_runtime_owner_test --native-lattice-lifecycle
+    )
+    add_test(NAME xtbloom.cuda.gfn2_runtime_owner_bounded_fallback
+      COMMAND xtbloom_cuda_gfn2_runtime_owner_test --bounded-fallback
+    )
+    add_test(NAME xtbloom.cuda.gfn2_runtime_owner_request_state
+      COMMAND xtbloom_cuda_gfn2_runtime_owner_test --request-state
+    )
+    add_test(NAME xtbloom.cuda.gfn2_runtime_owner_refresh_chain
+      COMMAND xtbloom_cuda_gfn2_runtime_owner_test --refresh-chain
     )
 
     add_executable(xtbloom_cuda_gfn2_runtime_parity_test
@@ -3212,6 +3228,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_coordination_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_coordination_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.coordination COMMAND xtbloom_coordination_test)
+
+  add_executable(xtbloom_lattice_test tests/lattice_test.cpp)
+  target_link_libraries(xtbloom_lattice_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_lattice_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.lattice COMMAND xtbloom_lattice_test)
 
   add_executable(xtbloom_d4_test tests/d4_test.cpp)
   target_link_libraries(xtbloom_d4_test PRIVATE xtbloom_gfn2_cpu)

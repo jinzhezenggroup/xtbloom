@@ -284,10 +284,14 @@ def test_abi_struct_sizes() -> None:
     assert ctypes.sizeof(library.ContextOptions) == 32
     assert ctypes.sizeof(library.ConstBuffer) == 24
     assert ctypes.sizeof(library.Buffer) == 24
-    assert ctypes.sizeof(library.Batch) == 408
+    assert ctypes.sizeof(library.Batch) == 456
     assert library.Batch.total_interactions.offset == 352
     assert library.Batch.interaction_descriptors.offset == 360
     assert library.Batch.interaction_payload.offset == 384
+    assert library.Batch.cell_matrices.offset == 408
+    assert library.Batch.periodic_axes.offset == 432
+    assert library.PERIODIC_AXES_NONE == 0
+    assert library.PERIODIC_AXES_XYZ == 7
     assert ctypes.sizeof(library.ComputeOptions) == 80
     assert library.ComputeOptions.scc_start_mode.offset == 48
     assert library.ComputeOptions.reserved_v2.offset == 52

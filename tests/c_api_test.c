@@ -15,6 +15,9 @@
 #define EXPECTED_BATCH_TOTAL_INTERACTIONS_OFFSET 352
 #define EXPECTED_BATCH_DESCRIPTORS_OFFSET 360
 #define EXPECTED_BATCH_PAYLOAD_OFFSET 384
+#define EXPECTED_BATCH_V4_SIZE 456
+#define EXPECTED_BATCH_CELL_MATRICES_OFFSET 408
+#define EXPECTED_BATCH_PERIODIC_AXES_OFFSET 432
 #define EXPECTED_RESULT_V1_SIZE 184
 #define EXPECTED_RESULT_V2_SIZE 280
 #define EXPECTED_RESULT_DIPOLE_OFFSET 184
@@ -33,6 +36,9 @@
 #define EXPECTED_BATCH_TOTAL_INTERACTIONS_OFFSET 248
 #define EXPECTED_BATCH_DESCRIPTORS_OFFSET 256
 #define EXPECTED_BATCH_PAYLOAD_OFFSET 272
+#define EXPECTED_BATCH_V4_SIZE 320
+#define EXPECTED_BATCH_CELL_MATRICES_OFFSET 288
+#define EXPECTED_BATCH_PERIODIC_AXES_OFFSET 304
 #define EXPECTED_RESULT_V1_SIZE 128
 #define EXPECTED_RESULT_V2_SIZE 192
 #define EXPECTED_RESULT_DIPOLE_OFFSET 128
@@ -106,6 +112,16 @@ _Static_assert(offsetof(xtbloom_batch_t, interaction_descriptors) ==
                "batch ABI-v3 descriptors must follow the interaction count");
 _Static_assert(offsetof(xtbloom_batch_t, interaction_payload) == EXPECTED_BATCH_PAYLOAD_OFFSET,
                "batch ABI-v3 payload must begin after the descriptor buffers");
+_Static_assert(XTBLOOM_BATCH_V4_SIZE == EXPECTED_BATCH_V4_SIZE,
+               "batch ABI-v4 image must match the target pointer width");
+_Static_assert(offsetof(xtbloom_batch_t, cell_matrices) ==
+                   EXPECTED_BATCH_CELL_MATRICES_OFFSET,
+               "batch ABI-v4 cell matrices must follow the v3 image");
+_Static_assert(offsetof(xtbloom_batch_t, periodic_axes) ==
+                   EXPECTED_BATCH_PERIODIC_AXES_OFFSET,
+               "batch ABI-v4 periodic axes must follow the cell matrices");
+_Static_assert(sizeof(xtbloom_periodic_axes_t) == sizeof(int32_t),
+               "periodic-axis mask must remain fixed-width");
 _Static_assert(sizeof(xtbloom_interaction_t) == XTBLOOM_INTERACTION_V1_SIZE,
                "interaction descriptor public layout must end at its ABI-v1 suffix");
 _Static_assert(offsetof(xtbloom_interaction_t, type) == 0,
@@ -214,6 +230,25 @@ static int check_short_batch_init(size_t caller_size) {
   return ok;
 }
 
+static int check_future_batch_init(void) {
+  struct future_batch {
+    xtbloom_batch_t batch;
+    unsigned char suffix[16];
+  } value;
+  memset(&value, 0xa5, sizeof(value));
+  if (xtbloom_batch_init(&value.batch, sizeof(value)) != XTBLOOM_STATUS_SUCCESS ||
+      value.batch.struct_size != sizeof(value) ||
+      value.batch.api_version != XTBLOOM_API_VERSION) {
+    return 0;
+  }
+  for (size_t index = 0; index < sizeof(value.suffix); ++index) {
+    if (value.suffix[index] != 0xa5) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
 static int check_short_batch_result_init(size_t caller_size) {
   enum { CANARY_BYTES = 16 };
   unsigned char* storage = (unsigned char*)malloc(caller_size + CANARY_BYTES);
@@ -259,8 +294,8 @@ static int check_workspace_query_init(void) {
   return 1;
 }
 
-/* Exercise the ABI-v3 batch and ABI-v2 result initializers: full-size images
- * must zero the interaction suffix and the new result outlets, while a short
+/* Exercise the ABI-v4 batch and ABI-v2 result initializers: full-size images
+ * must zero the interaction/lattice suffixes and the result outlets, while a short
  * ABI-v1 prefix must still initialize without touching caller bytes it does
  * not own. */
 static int check_batch_result_suffix_init(void) {
@@ -268,14 +303,16 @@ static int check_batch_result_suffix_init(void) {
   if (xtbloom_batch_init(&batch, sizeof(batch)) != XTBLOOM_STATUS_SUCCESS) {
     return 0;
   }
-  if (batch.struct_size != XTBLOOM_BATCH_V3_SIZE || batch.api_version != XTBLOOM_API_VERSION ||
+  if (batch.struct_size != XTBLOOM_BATCH_V4_SIZE || batch.api_version != XTBLOOM_API_VERSION ||
       batch.total_interactions != 0 || batch.interaction_descriptors.data != NULL ||
-      batch.interaction_payload.data != NULL) {
+      batch.interaction_payload.data != NULL || batch.cell_matrices.data != NULL ||
+      batch.periodic_axes.data != NULL) {
     return 0;
   }
   if (!check_short_batch_init(XTBLOOM_BATCH_V1_SIZE) ||
       !check_short_batch_init(XTBLOOM_BATCH_V2_SIZE) ||
-      !check_short_batch_init(XTBLOOM_BATCH_V3_SIZE - 1)) {
+      !check_short_batch_init(XTBLOOM_BATCH_V3_SIZE) ||
+      !check_short_batch_init(XTBLOOM_BATCH_V4_SIZE - 1) || !check_future_batch_init()) {
     return 0;
   }
 
@@ -294,6 +331,64 @@ static int check_batch_result_suffix_init(void) {
     return 0;
   }
   return 1;
+}
+
+static xtbloom_const_buffer_t input_view(const void* data, size_t size_bytes) {
+  xtbloom_const_buffer_t buffer = {data, size_bytes, XTBLOOM_MEMORY_HOST, 0};
+  return buffer;
+}
+
+static xtbloom_buffer_t output_view(void* data, size_t size_bytes) {
+  xtbloom_buffer_t buffer = {data, size_bytes, XTBLOOM_MEMORY_HOST, 0};
+  return buffer;
+}
+
+/* Prove that a valid native 3D request is rejected before caller publication.
+ * No eigensolver provider is needed because the availability gate precedes
+ * model setup and execution. */
+static int check_periodic_refusal_is_atomic(xtbloom_context_t* context) {
+  const int64_t atom_offsets[2] = {0, 1};
+  const int32_t atomic_numbers[1] = {1};
+  const double positions[3] = {0.0, 0.0, 0.0};
+  const double molecular_charges[1] = {0.0};
+  const int32_t unpaired_electrons[1] = {0};
+  const double cell[9] = {4.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 6.0};
+  const xtbloom_periodic_axes_t axes[1] = {XTBLOOM_PERIODIC_AXES_XYZ};
+
+  double energy = 123.0;
+  double forces[3] = {11.0, 12.0, 13.0};
+  int32_t iterations = 17;
+  uint8_t converged = 9;
+  xtbloom_status_t system_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+
+  xtbloom_batch_t batch;
+  xtbloom_compute_options_t compute;
+  xtbloom_batch_result_t result;
+  if (xtbloom_batch_init(&batch, sizeof(batch)) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom_compute_options_init(&compute, sizeof(compute)) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom_batch_result_init(&result, sizeof(result)) != XTBLOOM_STATUS_SUCCESS) {
+    return 0;
+  }
+  batch.batch_size = 1;
+  batch.total_atoms = 1;
+  batch.atom_offsets = input_view(atom_offsets, sizeof(atom_offsets));
+  batch.atomic_numbers = input_view(atomic_numbers, sizeof(atomic_numbers));
+  batch.positions = input_view(positions, sizeof(positions));
+  batch.molecular_charges = input_view(molecular_charges, sizeof(molecular_charges));
+  batch.unpaired_electrons = input_view(unpaired_electrons, sizeof(unpaired_electrons));
+  batch.cell_matrices = input_view(cell, sizeof(cell));
+  batch.periodic_axes = input_view(axes, sizeof(axes));
+  result.flags = 0x5a5a5a5au;
+  result.energies = output_view(&energy, sizeof(energy));
+  result.forces = output_view(forces, sizeof(forces));
+  result.scc_iterations = output_view(&iterations, sizeof(iterations));
+  result.scc_converged = output_view(&converged, sizeof(converged));
+  result.per_system_status = output_view(&system_status, sizeof(system_status));
+
+  const xtbloom_status_t status = xtbloom_compute(context, &batch, &compute, &result);
+  return status == XTBLOOM_STATUS_NOT_IMPLEMENTED && result.flags == 0x5a5a5a5au &&
+         energy == 123.0 && forces[0] == 11.0 && forces[1] == 12.0 && forces[2] == 13.0 &&
+         iterations == 17 && converged == 9 && system_status == XTBLOOM_STATUS_INTERNAL_ERROR;
 }
 
 static int check_request_info_init(void) {
@@ -433,7 +528,8 @@ int main(void) {
       sizeof(xtbloom_compute_flag_t) != sizeof(int32_t) ||
       sizeof(xtbloom_result_flag_t) != sizeof(int32_t) ||
       sizeof(xtbloom_request_state_t) != sizeof(int32_t) ||
-      sizeof(xtbloom_interaction_type_t) != sizeof(int32_t)) {
+      sizeof(xtbloom_interaction_type_t) != sizeof(int32_t) ||
+      sizeof(xtbloom_periodic_axes_t) != sizeof(int32_t)) {
     fprintf(stderr, "public ABI tags and flags must all be 32-bit\n");
     return 1;
   }
@@ -517,6 +613,11 @@ int main(void) {
   if (!check_cpu_request_shell(context)) {
     fprintf(stderr, "CPU request ABI shell behavior is incorrect: %s\n", xtbloom_get_last_error());
     return 9;
+  }
+  if (!check_periodic_refusal_is_atomic(context)) {
+    fprintf(stderr, "native periodic refusal modified caller output: %s\n",
+            xtbloom_get_last_error());
+    return 10;
   }
 
   xtbloom_context_destroy(context);

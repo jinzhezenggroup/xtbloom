@@ -66,8 +66,15 @@ _Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V3_S
 _Static_assert(XTBLOOM_BATCH_V1_SIZE == 328, "installed ABI-v1 batch prefix must remain 328 bytes");
 _Static_assert(XTBLOOM_BATCH_V2_SIZE == 352, "installed ABI-v2 batch prefix must remain 352 bytes");
 _Static_assert(XTBLOOM_BATCH_V3_SIZE == 408, "installed ABI-v3 batch image must remain 408 bytes");
-_Static_assert(sizeof(xtbloom_batch_t) == XTBLOOM_BATCH_V3_SIZE,
-               "installed batch layout must include the ABI-v3 interaction suffix");
+_Static_assert(XTBLOOM_BATCH_V4_SIZE == 456, "installed ABI-v4 batch image must be 456 bytes");
+_Static_assert(offsetof(xtbloom_batch_t, cell_matrices) == 408,
+               "installed ABI-v4 cell matrices must follow ABI v3");
+_Static_assert(offsetof(xtbloom_batch_t, periodic_axes) == 432,
+               "installed ABI-v4 periodic axes must follow cell matrices");
+_Static_assert(sizeof(xtbloom_batch_t) == XTBLOOM_BATCH_V4_SIZE,
+               "installed batch layout must include the ABI-v4 lattice suffix");
+_Static_assert(sizeof(xtbloom_periodic_axes_t) == sizeof(int32_t),
+               "installed periodic-axis mask must remain fixed-width");
 _Static_assert(XTBLOOM_BATCH_RESULT_V1_SIZE == 184,
                "installed ABI-v1 batch-result prefix must remain 184 bytes");
 _Static_assert(XTBLOOM_BATCH_RESULT_V2_SIZE == 280,

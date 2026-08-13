@@ -100,6 +100,12 @@ INTERACTION_D3_DISPERSION = 0x0301
 INTERACTION_D4_VARIANT_DISPERSION = 0x0302
 INTERACTION_HALOGEN_BOND = 0x0401
 
+PERIODIC_AXES_NONE = 0
+PERIODIC_AXIS_X = 1 << 0
+PERIODIC_AXIS_Y = 1 << 1
+PERIODIC_AXIS_Z = 1 << 2
+PERIODIC_AXES_XYZ = PERIODIC_AXIS_X | PERIODIC_AXIS_Y | PERIODIC_AXIS_Z
+
 # DLPack device/dtype codes used by the xTBloom-owned result producer
 # (mirrors DLPack 1.0; see xtbloom._dlpack for the consumer-side constants).
 DLPACK_DEVICE_CPU = 1
@@ -154,7 +160,7 @@ class Buffer(ctypes.Structure):
 
 
 class Batch(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_batch_t`` through the ABI-v3 interaction suffix."""
+    """ctypes mirror of ``xtbloom_batch_t`` through the ABI-v4 lattice suffix."""
 
     _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
@@ -179,6 +185,8 @@ class Batch(ctypes.Structure):
         ("total_interactions", ctypes.c_int64),
         ("interaction_descriptors", ConstBuffer),
         ("interaction_payload", ConstBuffer),
+        ("cell_matrices", ConstBuffer),
+        ("periodic_axes", ConstBuffer),
     ]
 
 

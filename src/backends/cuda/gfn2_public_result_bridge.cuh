@@ -29,6 +29,9 @@ enum class Gfn2PublicResultBridgeError : std::uint32_t {
   kInvalidExtents = 6u,
   kInvalidDestinations = 7u,
   kRequestTopologyMismatch = 8u,
+  kRequestInvalidArgument = 9u,
+  kRequestNotSupported = 10u,
+  kRequestNotImplemented = 11u,
 };
 
 /* Host and CUDA outputs are both staged before the caller-visible commit. */
@@ -72,8 +75,10 @@ struct Gfn2PublicResultBridgeDeviceInput {
 
   /* Control values produced by internal inference publication. */
   const std::uint32_t* publication_plan_error = nullptr;
-  /* Stream-ordered fixed-plan validation. Nonzero suppresses every caller
-   * destination without requiring a host admission fence. */
+  /* Stream-ordered request validation. Zero means success; values 1..4 are
+   * internal atomicMax priority codes for NOT_IMPLEMENTED, NOT_SUPPORTED,
+   * INVALID_ARGUMENT, and topology mismatch respectively. Keeping topology
+   * mismatch highest matches the synchronous HOST descriptor contract. */
   const std::uint32_t* request_topology_error = nullptr;
   const std::uint64_t* publication_epoch_snapshot = nullptr;
   const std::uint64_t* current_geometry_epoch = nullptr;

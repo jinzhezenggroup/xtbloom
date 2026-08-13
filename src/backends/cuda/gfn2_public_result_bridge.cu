@@ -13,11 +13,18 @@ namespace {
 
 constexpr int kThreadsPerBlock = 256;
 constexpr int kMaximumCopyBlocks = 256;
-constexpr std::uint32_t kKnownProperties =
+/* Dipole output is a structurally admitted public request but is not yet a
+ * publishable CUDA bridge field. The stream-ordered request gate must reject
+ * it atomically after device-resident descriptor validation instead of this
+ * static contract turning it into an internal launch error. */
+constexpr std::uint32_t kAdmittedProperties =
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ENERGY) |
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_FORCES) |
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ATOMIC_CHARGES) |
-    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES);
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) |
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS);
+constexpr std::uint32_t kUnpublishedProperties =
+    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS);
 constexpr std::uint32_t kKnownResultFlags =
     static_cast<std::uint32_t>(XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES);
 
@@ -301,7 +308,7 @@ __host__ __device__ BridgeError static_contract_error(
     return BridgeError::kInvalidAbiVersion;
   }
   if (plan.reserved != 0u || plan.requested_properties == 0u ||
-      (plan.requested_properties & ~kKnownProperties) != 0u ||
+      (plan.requested_properties & ~kAdmittedProperties) != 0u ||
       (plan.result_flags & ~kKnownResultFlags) != 0u) {
     return BridgeError::kInvalidFlags;
   }
@@ -376,11 +383,37 @@ __global__ void public_result_preflight_kernel(
 
   BridgeError error =
       static_contract_error(plan, input, device_staging, destinations, staging, diagnostics);
+  /* Preserve one deterministic caller-visible reason when several stream-
+   * ordered gates fail: static binding, request validation, publication plan,
+   * property availability, epoch identity, then aggregate peer status. */
+  const std::uint32_t request_error = *input.request_topology_error;
+  if (error == BridgeError::kSuccess && request_error != 0u) {
+    switch (request_error) {
+      case 4u:
+        error = BridgeError::kRequestTopologyMismatch;
+        break;
+      case 3u:
+        error = BridgeError::kRequestInvalidArgument;
+        break;
+      case 2u:
+        error = BridgeError::kRequestNotSupported;
+        break;
+      case 1u:
+        error = BridgeError::kRequestNotImplemented;
+        break;
+      default:
+        error = BridgeError::kInternalPublicationFailure;
+        break;
+    }
+  }
   if (error == BridgeError::kSuccess && control.internal_publication_plan_error != 0u) {
     error = BridgeError::kInternalPublicationFailure;
   }
-  if (error == BridgeError::kSuccess && *input.request_topology_error != 0u) {
-    error = BridgeError::kRequestTopologyMismatch;
+  if (error == BridgeError::kSuccess &&
+      (plan.requested_properties & kUnpublishedProperties) != 0u) {
+    /* A CUDA availability omission must fail closed; the bridge cannot claim
+     * success for a public property for which it owns no publication field. */
+    error = BridgeError::kInternalPublicationFailure;
   }
   if (error == BridgeError::kSuccess &&
       (control.publication_epoch_snapshot == 0u || control.current_geometry_epoch == 0u ||
@@ -501,7 +534,7 @@ bool valid_commit_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
   ExpectedExtents extents;
   if (plan.plan_token == 0u || plan.abi_version != kGfn2PublicResultBridgeAbiVersion ||
       plan.reserved != 0u || plan.requested_properties == 0u ||
-      (plan.requested_properties & ~kKnownProperties) != 0u ||
+      (plan.requested_properties & ~kAdmittedProperties) != 0u ||
       (plan.result_flags & ~kKnownResultFlags) != 0u ||
       device_staging.plan_token != plan.plan_token || destinations.plan_token != plan.plan_token ||
       diagnostics.plan_token != plan.plan_token || diagnostics.control_elements != 1 ||

@@ -1306,6 +1306,69 @@ Gfn2SccLoopLaunchResult Gfn2SccLoopCudaGraphOwner::launch(cudaStream_t stream) c
   return result;
 }
 
+Gfn2SccLoopLaunchResult Gfn2SccLoopCudaGraphOwner::append_root_child_to_capture(
+    cudaStream_t stream) const noexcept {
+  if (state_ == nullptr || state_->root_graph == nullptr || state_->root_executable == nullptr) {
+    return reject_loop_binding(Gfn2SccIterationBindingError::kInvalidPlanToken);
+  }
+
+  cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+  cudaGraph_t captured_graph = nullptr;
+  const cudaGraphNode_t* dependencies = nullptr;
+  std::size_t dependency_count = 0u;
+  cudaError_t status = cudaStreamGetCaptureInfo(stream, &capture_status, nullptr, &captured_graph,
+                                                &dependencies, &dependency_count);
+  if (status != cudaSuccess || capture_status == cudaStreamCaptureStatusNone ||
+      captured_graph == nullptr || dependencies == nullptr || dependency_count == 0u) {
+    Gfn2SccLoopLaunchResult result{};
+    result.iteration.status = Gfn2SccIterationLaunchStatus::kCudaError;
+    result.iteration.cuda_status =
+        status == cudaSuccess ? cudaErrorStreamCaptureInvalidated : status;
+    return result;
+  }
+
+  cudaGraphNode_t child = nullptr;
+  Gfn2SccLoopLaunchResult result =
+      append_root_child(captured_graph, dependencies, dependency_count, child);
+  status = result.success() ? cudaSuccess : result.iteration.cuda_status;
+  if (result.success()) {
+    status = cudaStreamUpdateCaptureDependencies(stream, &child, 1u,
+                                                 cudaStreamSetCaptureDependencies);
+  }
+  if (status != cudaSuccess) {
+    result.iteration.status = Gfn2SccIterationLaunchStatus::kCudaError;
+    result.iteration.cuda_status = status;
+    return result;
+  }
+  result.submitted_graphs = 1u;
+  return result;
+}
+
+Gfn2SccLoopLaunchResult Gfn2SccLoopCudaGraphOwner::append_root_child(
+    cudaGraph_t graph, const cudaGraphNode_t* dependencies, std::size_t dependency_count,
+    cudaGraphNode_t& child) const noexcept {
+  child = nullptr;
+  if (state_ == nullptr || state_->root_graph == nullptr || state_->root_executable == nullptr) {
+    return reject_loop_binding(Gfn2SccIterationBindingError::kInvalidPlanToken);
+  }
+  Gfn2SccLoopLaunchResult result{};
+  result.execution_mode = state_->dispatch_chain_ready
+                              ? Gfn2SccLoopExecutionMode::kDeviceDispatchChain
+                              : Gfn2SccLoopExecutionMode::kDeviceTailGraph;
+  cudaGraphNodeParams parameters{};
+  parameters.type = cudaGraphNodeTypeGraph;
+  parameters.graph.graph = state_->root_graph;
+  const cudaError_t status =
+      cudaGraphAddNode(&child, graph, dependencies, dependency_count, &parameters);
+  if (status != cudaSuccess) {
+    result.iteration.status = Gfn2SccIterationLaunchStatus::kCudaError;
+    result.iteration.cuda_status = status;
+    return result;
+  }
+  result.submitted_graphs = 1u;
+  return result;
+}
+
 void Gfn2SccLoopCudaGraphOwner::reset() noexcept {
   destroy_graph_state(state_);
   state_ = nullptr;
