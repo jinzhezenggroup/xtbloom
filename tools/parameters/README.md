@@ -77,8 +77,14 @@ scientific source of truth and writes a separate `gfn1.toml`, normalized
 `gfn1.json`, generated `gfn1.hpp`, and `gfn1_manifest.json`. The generator
 validates GFN1-specific selectors such as exponential coordination numbers,
 harmonic hardness averaging, atomwise third order, repeated-angular-momentum
-shell masks, D3 damping, and the classical halogen parameters. The dxtb GFN1
-TOML is recorded only as a non-authoritative semantic cross-check.
+shell masks, D3 damping, and the classical halogen parameters. The method TOML
+does not contain every production input, so the same generator also extracts
+the 86-element Pauling electronegativities, Mantina atomic radii, scaled
+Pyykko--Atsumi covalent radii, CODATA binary64 Angstrom-to-bohr conversion, and
+complete exponential-CN count/derivative/pair-loop convention from mctc-lib
+v0.5.2. The mixed-source generated header is retained under
+`LGPL-3.0-or-later AND Apache-2.0`. The dxtb GFN1 TOML is recorded only as a
+non-authoritative semantic cross-check.
 
 The GFN1 D3(BJ) implementation also requires reference coordination numbers,
 C6 values, r4/r2 data, and pair vdW radii that are not part of the tblite
@@ -90,6 +96,27 @@ v1.4.0 and mctc-lib v0.5.1 into `gfn1_d3.json`, `gfn1_d3.hpp`, and
 python3 tools/parameters/generate_gfn1.py --check
 python3 tools/parameters/generate_gfn1_d3.py --check
 ```
+
+Refreshing the primary GFN1 bundle is an explicit Git-object provenance
+operation. The generator reads the requested commits rather than worktree
+bytes:
+
+```sh
+python3 tools/parameters/generate_gfn1.py --refresh \
+  --tblite /path/to/pinned/tblite-executable \
+  --tblite-source /path/to/tblite \
+  --tblite-revision fa8a4416e8fe093d0075bc10ac875494c2a449a9 \
+  --tblite-inspection-revision 133f91efb94b47f05848e1f86832f40a1accc385 \
+  --dxtb-source /path/to/dxtb \
+  --dxtb-revision b529b5ddb75c0554274955082a189f9f88437cb2 \
+  --mctc-source /path/to/mctc-lib \
+  --mctc-revision e9de066d89f250d1cfb6de3a33f0c27c0e2f855d \
+  --output-dir build/gfn1-refresh
+```
+
+Review the manifest and byte diff in that separate output directory before
+replacing canonical files. The mctc-lib revision is tag v0.5.2; its evaluated
+IEEE binary64 conversion is exactly `1.8897261246204404` bohr/Angstrom.
 
 Refreshing the D3 tables is an explicit provenance operation against reviewed
 Git objects. Generate into a separate directory first and review the manifest

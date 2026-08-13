@@ -3,6 +3,20 @@
     "average": "harmonic",
     "gexp": 2.0
   },
+  "coordination_number": {
+    "coincident_cutoff_inclusive": true,
+    "coincident_distance_squared_cutoff_bohr2": 1e-12,
+    "count_expression": "1 / (1 + exp(-k * ((r_cov_i + r_cov_j) / r - 1)))",
+    "covalent_radius_scale": 1.3333333333333333,
+    "cutoff_bohr": 25.0,
+    "cutoff_inclusive": true,
+    "derivative_expression": "(-k * (r_cov_i + r_cov_j) * expterm) / (r^2 * (expterm + 1)^2)",
+    "directed_factor": 1.0,
+    "maximum_cn_cutoff": null,
+    "model": "exp",
+    "pair_loop": "lower triangle including diagonal over lattice translations",
+    "steepness": 16.0
+  },
   "dispersion": {
     "a1": 0.63,
     "a2": 5.0,
@@ -16,6 +30,8 @@
     {
       "arep": 2.2097,
       "atomic_number": 1,
+      "atomic_radius_bohr": 0.604712359878541,
+      "covalent_radius_bohr": 0.8062831465047213,
       "dkernel": 0.0,
       "en": 2.2,
       "gam": 0.470099,
@@ -58,6 +74,8 @@
     {
       "arep": 1.382907,
       "atomic_number": 2,
+      "atomic_radius_bohr": 0.6991986661095629,
+      "covalent_radius_bohr": 1.1590320231005369,
       "dkernel": 0.0,
       "en": 3.0,
       "gam": 1.441379,
@@ -87,6 +105,8 @@
     {
       "arep": 0.671797,
       "atomic_number": 3,
+      "atomic_radius_bohr": 2.4566439620065728,
+      "covalent_radius_bohr": 3.0235617993927044,
       "dkernel": 0.0,
       "en": 0.98,
       "gam": 0.205342,
@@ -129,6 +149,8 @@
     {
       "arep": 0.865377,
       "atomic_number": 4,
+      "atomic_radius_bohr": 1.870828863374236,
+      "covalent_radius_bohr": 2.368456742857618,
       "dkernel": 0.0,
       "en": 1.57,
       "gam": 0.274022,
@@ -171,6 +193,8 @@
     {
       "arep": 1.093544,
       "atomic_number": 5,
+      "atomic_radius_bohr": 1.58736994468117,
+      "covalent_radius_bohr": 1.9401188212769855,
       "dkernel": 0.0,
       "en": 2.04,
       "gam": 0.34053,
@@ -213,6 +237,8 @@
     {
       "arep": 1.281954,
       "atomic_number": 6,
+      "atomic_radius_bohr": 1.4172945934653303,
+      "covalent_radius_bohr": 1.8897261246204402,
       "dkernel": 0.0,
       "en": 2.55,
       "gam": 0.479988,
@@ -255,6 +281,8 @@
     {
       "arep": 1.727773,
       "atomic_number": 7,
+      "atomic_radius_bohr": 1.3417055484805127,
+      "covalent_radius_bohr": 1.7889407313073502,
       "dkernel": 0.0,
       "en": 3.04,
       "gam": 0.476106,
@@ -297,6 +325,8 @@
     {
       "arep": 2.004253,
       "atomic_number": 8,
+      "atomic_radius_bohr": 1.209424719757082,
+      "covalent_radius_bohr": 1.5873699446811698,
       "dkernel": 0.0,
       "en": 3.44,
       "gam": 0.583349,
@@ -339,6 +369,8 @@
     {
       "arep": 2.507078,
       "atomic_number": 9,
+      "atomic_radius_bohr": 1.1338356747722642,
+      "covalent_radius_bohr": 1.6125662930094427,
       "dkernel": 0.0,
       "en": 3.98,
       "gam": 0.788194,
@@ -381,6 +413,8 @@
     {
       "arep": 3.038727,
       "atomic_number": 10,
+      "atomic_radius_bohr": 1.171630197264673,
+      "covalent_radius_bohr": 1.6881553379942602,
       "dkernel": 0.0,
       "en": 4.5,
       "gam": 0.612878,
@@ -436,6 +470,8 @@
     {
       "arep": 0.704472,
       "atomic_number": 11,
+      "atomic_radius_bohr": 3.023561799392705,
+      "covalent_radius_bohr": 3.5274887659581555,
       "dkernel": 0.0,
       "en": 0.93,
       "gam": 0.165908,
@@ -478,6 +514,8 @@
     {
       "arep": 0.862629,
       "atomic_number": 12,
+      "atomic_radius_bohr": 2.6456165744686166,
+      "covalent_radius_bohr": 3.1495435410340673,
       "dkernel": 0.0,
       "en": 1.31,
       "gam": 0.354151,
@@ -520,6 +558,8 @@
     {
       "arep": 0.929219,
       "atomic_number": 13,
+      "atomic_radius_bohr": 2.343260394529346,
+      "covalent_radius_bohr": 2.8471873610947966,
       "dkernel": 0.0,
       "en": 1.61,
       "gam": 0.221658,
@@ -575,6 +615,8 @@
     {
       "arep": 0.948165,
       "atomic_number": 14,
+      "atomic_radius_bohr": 2.154287782067302,
+      "covalent_radius_bohr": 2.620420226140344,
       "dkernel": 0.0,
       "en": 1.9,
       "gam": 0.438331,
@@ -630,6 +672,8 @@
     {
       "arep": 1.067197,
       "atomic_number": 15,
+      "atomic_radius_bohr": 2.0598014758362804,
+      "covalent_radius_bohr": 2.771598316109979,
       "dkernel": 0.0,
       "en": 2.19,
       "gam": 0.798319,
@@ -685,6 +729,8 @@
     {
       "arep": 1.200803,
       "atomic_number": 16,
+      "atomic_radius_bohr": 1.9653151696052582,
+      "covalent_radius_bohr": 2.5700275294837986,
       "dkernel": 0.0,
       "en": 2.58,
       "gam": 0.643959,
@@ -740,6 +786,8 @@
     {
       "arep": 1.404155,
       "atomic_number": 17,
+      "atomic_radius_bohr": 1.8897261246204404,
+      "covalent_radius_bohr": 2.494438484498981,
       "dkernel": 0.0,
       "en": 3.16,
       "gam": 0.519712,
@@ -795,6 +843,8 @@
     {
       "arep": 1.323756,
       "atomic_number": 18,
+      "atomic_radius_bohr": 1.9086233858666448,
+      "covalent_radius_bohr": 2.4188494395141635,
       "dkernel": 0.0,
       "en": 3.5,
       "gam": 0.529906,
@@ -850,6 +900,8 @@
     {
       "arep": 0.581529,
       "atomic_number": 19,
+      "atomic_radius_bohr": 3.779452249240881,
+      "covalent_radius_bohr": 4.434557305775966,
       "dkernel": 0.0,
       "en": 0.82,
       "gam": 0.114358,
@@ -892,6 +944,8 @@
     {
       "arep": 0.665588,
       "atomic_number": 20,
+      "atomic_radius_bohr": 3.2881234568395663,
+      "covalent_radius_bohr": 3.880237642553971,
       "dkernel": 0.0,
       "en": 1.0,
       "gam": 0.134187,
@@ -947,6 +1001,8 @@
     {
       "arep": 0.841357,
       "atomic_number": 21,
+      "atomic_radius_bohr": 3.0046645381465003,
+      "covalent_radius_bohr": 3.3511143276602473,
       "dkernel": 0.0,
       "en": 1.36,
       "gam": 0.778545,
@@ -1002,6 +1058,8 @@
     {
       "arep": 0.828638,
       "atomic_number": 22,
+      "atomic_radius_bohr": 2.7967946644382518,
+      "covalent_radius_bohr": 3.0739544960492493,
       "dkernel": 0.0,
       "en": 1.54,
       "gam": 1.044998,
@@ -1057,6 +1115,8 @@
     {
       "arep": 1.061627,
       "atomic_number": 23,
+      "atomic_radius_bohr": 2.721205619453434,
+      "covalent_radius_bohr": 3.048758147720977,
       "dkernel": 0.0,
       "en": 1.63,
       "gam": 0.985157,
@@ -1112,6 +1172,8 @@
     {
       "arep": 0.997051,
       "atomic_number": 24,
+      "atomic_radius_bohr": 2.4566439620065728,
+      "covalent_radius_bohr": 2.771598316109979,
       "dkernel": 0.0,
       "en": 1.66,
       "gam": 0.4681,
@@ -1167,6 +1229,8 @@
     {
       "arep": 1.019783,
       "atomic_number": 25,
+      "atomic_radius_bohr": 2.437746700760368,
+      "covalent_radius_bohr": 2.696009271125162,
       "dkernel": 0.0,
       "en": 1.55,
       "gam": 0.609868,
@@ -1222,6 +1286,8 @@
     {
       "arep": 1.137174,
       "atomic_number": 26,
+      "atomic_radius_bohr": 2.343260394529346,
+      "covalent_radius_bohr": 2.620420226140344,
       "dkernel": 0.0,
       "en": 1.83,
       "gam": 0.9,
@@ -1277,6 +1343,8 @@
     {
       "arep": 1.188538,
       "atomic_number": 27,
+      "atomic_radius_bohr": 2.2298768270521196,
+      "covalent_radius_bohr": 2.5196348328272538,
       "dkernel": 0.0,
       "en": 1.88,
       "gam": 0.42668,
@@ -1332,6 +1400,8 @@
     {
       "arep": 1.399197,
       "atomic_number": 28,
+      "atomic_radius_bohr": 2.210979565805915,
+      "covalent_radius_bohr": 2.494438484498981,
       "dkernel": 0.0,
       "en": 1.91,
       "gam": 0.367019,
@@ -1387,6 +1457,8 @@
     {
       "arep": 1.19923,
       "atomic_number": 29,
+      "atomic_radius_bohr": 2.305465872036937,
+      "covalent_radius_bohr": 2.5448311811555264,
       "dkernel": 0.0,
       "en": 1.9,
       "gam": 0.260192,
@@ -1442,6 +1514,8 @@
     {
       "arep": 1.145056,
       "atomic_number": 30,
+      "atomic_radius_bohr": 2.2676713495445284,
+      "covalent_radius_bohr": 2.746401967781707,
       "dkernel": 0.0,
       "en": 1.65,
       "gam": 0.209459,
@@ -1484,6 +1558,8 @@
     {
       "arep": 1.047536,
       "atomic_number": 31,
+      "atomic_radius_bohr": 2.324363133283142,
+      "covalent_radius_bohr": 2.8219910127665244,
       "dkernel": 0.0,
       "en": 1.81,
       "gam": 0.193302,
@@ -1539,6 +1615,8 @@
     {
       "arep": 1.12948,
       "atomic_number": 32,
+      "atomic_radius_bohr": 2.2676713495445284,
+      "covalent_radius_bohr": 2.746401967781707,
       "dkernel": 0.0,
       "en": 2.01,
       "gam": 0.8,
@@ -1594,6 +1672,8 @@
     {
       "arep": 1.233641,
       "atomic_number": 33,
+      "atomic_radius_bohr": 2.2676713495445284,
+      "covalent_radius_bohr": 2.8975800577513415,
       "dkernel": 0.0,
       "en": 2.18,
       "gam": 0.732367,
@@ -1649,6 +1729,8 @@
     {
       "arep": 1.270088,
       "atomic_number": 34,
+      "atomic_radius_bohr": 2.2298768270521196,
+      "covalent_radius_bohr": 2.771598316109979,
       "dkernel": 0.0,
       "en": 2.55,
       "gam": 0.714534,
@@ -1704,6 +1786,8 @@
     {
       "arep": 1.15358,
       "atomic_number": 35,
+      "atomic_radius_bohr": 2.210979565805915,
+      "covalent_radius_bohr": 2.8723837094230693,
       "dkernel": 0.0,
       "en": 2.96,
       "gam": 0.73253,
@@ -1759,6 +1843,8 @@
     {
       "arep": 1.335287,
       "atomic_number": 36,
+      "atomic_radius_bohr": 2.192082304559711,
+      "covalent_radius_bohr": 2.9479727544078864,
       "dkernel": 0.0,
       "en": 3.0,
       "gam": 0.820312,
@@ -1814,6 +1900,8 @@
     {
       "arep": 0.554032,
       "atomic_number": 37,
+      "atomic_radius_bohr": 4.0629111679339465,
+      "covalent_radius_bohr": 4.7621098340435095,
       "dkernel": 0.0,
       "en": 0.82,
       "gam": 0.075735,
@@ -1856,6 +1944,8 @@
     {
       "arep": 0.657904,
       "atomic_number": 38,
+      "atomic_radius_bohr": 3.5904796367788365,
+      "covalent_radius_bohr": 4.2077901708215135,
       "dkernel": 0.0,
       "en": 0.95,
       "gam": 0.122861,
@@ -1911,6 +2001,8 @@
     {
       "arep": 0.760144,
       "atomic_number": 39,
+      "atomic_radius_bohr": 3.325917979331975,
+      "covalent_radius_bohr": 3.7038632042560633,
       "dkernel": 0.0,
       "en": 1.22,
       "gam": 0.35129,
@@ -1966,6 +2058,8 @@
     {
       "arep": 0.73952,
       "atomic_number": 40,
+      "atomic_radius_bohr": 3.099150844377522,
+      "covalent_radius_bohr": 3.5022924176298824,
       "dkernel": 0.0,
       "en": 1.33,
       "gam": 0.168219,
@@ -2021,6 +2115,8 @@
     {
       "arep": 0.895357,
       "atomic_number": 41,
+      "atomic_radius_bohr": 2.9479727544078873,
+      "covalent_radius_bohr": 3.325917979331975,
       "dkernel": 0.0,
       "en": 1.6,
       "gam": 0.175875,
@@ -2076,6 +2172,8 @@
     {
       "arep": 0.944064,
       "atomic_number": 42,
+      "atomic_radius_bohr": 2.759000141945843,
+      "covalent_radius_bohr": 3.1243471927057946,
       "dkernel": 0.0,
       "en": 2.16,
       "gam": 0.384677,
@@ -2131,6 +2229,8 @@
     {
       "arep": 1.02824,
       "atomic_number": 43,
+      "atomic_radius_bohr": 2.6078220519762074,
+      "covalent_radius_bohr": 2.8975800577513415,
       "dkernel": 0.0,
       "en": 1.9,
       "gam": 0.405474,
@@ -2186,6 +2286,8 @@
     {
       "arep": 1.066144,
       "atomic_number": 44,
+      "atomic_radius_bohr": 2.570027529483799,
+      "covalent_radius_bohr": 2.8471873610947966,
       "dkernel": 0.0,
       "en": 2.2,
       "gam": 0.305394,
@@ -2241,6 +2343,8 @@
     {
       "arep": 1.13138,
       "atomic_number": 45,
+      "atomic_radius_bohr": 2.5322330069913903,
+      "covalent_radius_bohr": 2.8471873610947966,
       "dkernel": 0.0,
       "en": 2.28,
       "gam": 0.293973,
@@ -2296,6 +2400,8 @@
     {
       "arep": 1.206869,
       "atomic_number": 46,
+      "atomic_radius_bohr": 2.4566439620065728,
+      "covalent_radius_bohr": 2.721205619453434,
       "dkernel": 0.0,
       "en": 2.2,
       "gam": 0.280766,
@@ -2351,6 +2457,8 @@
     {
       "arep": 1.058886,
       "atomic_number": 47,
+      "atomic_radius_bohr": 2.570027529483799,
+      "covalent_radius_bohr": 2.8975800577513415,
       "dkernel": 0.0,
       "en": 1.93,
       "gam": 0.472978,
@@ -2406,6 +2514,8 @@
     {
       "arep": 1.026434,
       "atomic_number": 48,
+      "atomic_radius_bohr": 2.6456165744686166,
+      "covalent_radius_bohr": 3.0991508443775224,
       "dkernel": 0.0,
       "en": 1.69,
       "gam": 0.130828,
@@ -2448,6 +2558,8 @@
     {
       "arep": 0.898148,
       "atomic_number": 49,
+      "atomic_radius_bohr": 2.6834110969610254,
+      "covalent_radius_bohr": 3.2251325860188853,
       "dkernel": 0.0,
       "en": 1.78,
       "gam": 0.13212,
@@ -2503,6 +2615,8 @@
     {
       "arep": 1.008192,
       "atomic_number": 50,
+      "atomic_radius_bohr": 2.6456165744686166,
+      "covalent_radius_bohr": 3.1747398893623395,
       "dkernel": 0.0,
       "en": 1.96,
       "gam": 0.480655,
@@ -2558,6 +2672,8 @@
     {
       "arep": 0.982673,
       "atomic_number": 51,
+      "atomic_radius_bohr": 2.6456165744686166,
+      "covalent_radius_bohr": 3.1747398893623395,
       "dkernel": 0.0,
       "en": 2.05,
       "gam": 0.564406,
@@ -2613,6 +2729,8 @@
     {
       "arep": 0.97341,
       "atomic_number": 52,
+      "atomic_radius_bohr": 2.5889247907300037,
+      "covalent_radius_bohr": 3.0991508443775224,
       "dkernel": 0.0,
       "en": 2.1,
       "gam": 0.400301,
@@ -2668,6 +2786,8 @@
     {
       "arep": 0.949181,
       "atomic_number": 53,
+      "atomic_radius_bohr": 2.570027529483799,
+      "covalent_radius_bohr": 3.325917979331975,
       "dkernel": 0.0,
       "en": 2.66,
       "gam": 0.520472,
@@ -2723,6 +2843,8 @@
     {
       "arep": 1.074785,
       "atomic_number": 54,
+      "atomic_radius_bohr": 2.570027529483799,
+      "covalent_radius_bohr": 3.3007216310037024,
       "dkernel": 0.0,
       "en": 2.6,
       "gam": 0.935394,
@@ -2778,6 +2900,8 @@
     {
       "arep": 0.579919,
       "atomic_number": 55,
+      "atomic_radius_bohr": 4.497548176596648,
+      "covalent_radius_bohr": 5.26603680060896,
       "dkernel": 0.0,
       "en": 0.79,
       "gam": 0.08511,
@@ -2820,6 +2944,8 @@
     {
       "arep": 0.606485,
       "atomic_number": 56,
+      "atomic_radius_bohr": 3.892835816718107,
+      "covalent_radius_bohr": 4.434557305775966,
       "dkernel": 0.0,
       "en": 0.89,
       "gam": 0.137819,
@@ -2875,6 +3001,8 @@
     {
       "arep": 1.3112,
       "atomic_number": 57,
+      "atomic_radius_bohr": 3.6660686817636545,
+      "covalent_radius_bohr": 4.0818084291801515,
       "dkernel": 0.0,
       "en": 1.1,
       "gam": 0.495969,
@@ -2930,6 +3058,8 @@
     {
       "arep": 0.839861,
       "atomic_number": 58,
+      "atomic_radius_bohr": 3.4770960693016106,
+      "covalent_radius_bohr": 3.7038632042560633,
       "dkernel": 0.0,
       "en": 1.12,
       "gam": 0.35,
@@ -2985,6 +3115,8 @@
     {
       "arep": 0.847281,
       "atomic_number": 59,
+      "atomic_radius_bohr": 3.5904796367788365,
+      "covalent_radius_bohr": 3.9810230358670613,
       "dkernel": 0.0,
       "en": 1.13,
       "gam": 0.342306,
@@ -3040,6 +3172,8 @@
     {
       "arep": 0.854701,
       "atomic_number": 60,
+      "atomic_radius_bohr": 3.5526851142864277,
+      "covalent_radius_bohr": 3.9558266875387886,
       "dkernel": 0.0,
       "en": 1.14,
       "gam": 0.334612,
@@ -3095,6 +3229,8 @@
     {
       "arep": 0.862121,
       "atomic_number": 61,
+      "atomic_radius_bohr": 3.5148905917940194,
+      "covalent_radius_bohr": 3.9306303392105164,
       "dkernel": 0.0,
       "en": 1.15,
       "gam": 0.326917,
@@ -3150,6 +3286,8 @@
     {
       "arep": 0.869541,
       "atomic_number": 62,
+      "atomic_radius_bohr": 3.495993330547815,
+      "covalent_radius_bohr": 3.9054339908822433,
       "dkernel": 0.0,
       "en": 1.17,
       "gam": 0.319223,
@@ -3205,6 +3343,8 @@
     {
       "arep": 0.876961,
       "atomic_number": 63,
+      "atomic_radius_bohr": 3.458198808055406,
+      "covalent_radius_bohr": 3.8046485975691535,
       "dkernel": 0.0,
       "en": 1.18,
       "gam": 0.311529,
@@ -3260,6 +3400,8 @@
     {
       "arep": 0.884381,
       "atomic_number": 64,
+      "atomic_radius_bohr": 3.439301546809202,
+      "covalent_radius_bohr": 3.8298449458974257,
       "dkernel": 0.0,
       "en": 1.2,
       "gam": 0.303835,
@@ -3315,6 +3457,8 @@
     {
       "arep": 0.891801,
       "atomic_number": 65,
+      "atomic_radius_bohr": 3.4204042855629972,
+      "covalent_radius_bohr": 3.8046485975691535,
       "dkernel": 0.0,
       "en": 1.21,
       "gam": 0.29614,
@@ -3370,6 +3514,8 @@
     {
       "arep": 0.899221,
       "atomic_number": 66,
+      "atomic_radius_bohr": 3.4015070243167926,
+      "covalent_radius_bohr": 3.7794522492408804,
       "dkernel": 0.0,
       "en": 1.22,
       "gam": 0.288446,
@@ -3425,6 +3571,8 @@
     {
       "arep": 0.906641,
       "atomic_number": 67,
+      "atomic_radius_bohr": 3.3826097630705885,
+      "covalent_radius_bohr": 3.754255900912608,
       "dkernel": 0.0,
       "en": 1.23,
       "gam": 0.280752,
@@ -3480,6 +3628,8 @@
     {
       "arep": 0.914061,
       "atomic_number": 68,
+      "atomic_radius_bohr": 3.3448152405781797,
+      "covalent_radius_bohr": 3.754255900912608,
       "dkernel": 0.0,
       "en": 1.24,
       "gam": 0.273058,
@@ -3535,6 +3685,8 @@
     {
       "arep": 0.921481,
       "atomic_number": 69,
+      "atomic_radius_bohr": 3.3448152405781797,
+      "covalent_radius_bohr": 3.7290595525843355,
       "dkernel": 0.0,
       "en": 1.25,
       "gam": 0.265364,
@@ -3590,6 +3742,8 @@
     {
       "arep": 0.928901,
       "atomic_number": 70,
+      "atomic_radius_bohr": 3.363712501824384,
+      "covalent_radius_bohr": 3.8550412942256984,
       "dkernel": 0.0,
       "en": 1.26,
       "gam": 0.257669,
@@ -3645,6 +3799,8 @@
     {
       "arep": 0.936321,
       "atomic_number": 71,
+      "atomic_radius_bohr": 3.2881234568395663,
+      "covalent_radius_bohr": 3.6786668559277906,
       "dkernel": 0.0,
       "en": 1.27,
       "gam": 0.249975,
@@ -3700,6 +3856,8 @@
     {
       "arep": 0.853744,
       "atomic_number": 72,
+      "atomic_radius_bohr": 3.099150844377522,
+      "covalent_radius_bohr": 3.451899720973338,
       "dkernel": 0.0,
       "en": 1.3,
       "gam": 0.269977,
@@ -3755,6 +3913,8 @@
     {
       "arep": 0.971873,
       "atomic_number": 73,
+      "atomic_radius_bohr": 2.985767276900296,
+      "covalent_radius_bohr": 3.3007216310037024,
       "dkernel": 0.0,
       "en": 1.5,
       "gam": 0.239696,
@@ -3810,6 +3970,8 @@
     {
       "arep": 0.992643,
       "atomic_number": 74,
+      "atomic_radius_bohr": 2.8345891869306605,
+      "covalent_radius_bohr": 3.0991508443775224,
       "dkernel": 0.0,
       "en": 2.36,
       "gam": 0.243663,
@@ -3865,6 +4027,8 @@
     {
       "arep": 1.132106,
       "atomic_number": 75,
+      "atomic_radius_bohr": 2.664513835714821,
+      "covalent_radius_bohr": 2.9731691027361595,
       "dkernel": 0.0,
       "en": 1.9,
       "gam": 0.362512,
@@ -3920,6 +4084,8 @@
     {
       "arep": 1.118216,
       "atomic_number": 76,
+      "atomic_radius_bohr": 2.570027529483799,
+      "covalent_radius_bohr": 2.922776406079614,
       "dkernel": 0.0,
       "en": 2.2,
       "gam": 0.354318,
@@ -3975,6 +4141,8 @@
     {
       "arep": 1.245003,
       "atomic_number": 77,
+      "atomic_radius_bohr": 2.4944384844989815,
+      "covalent_radius_bohr": 2.796794664438252,
       "dkernel": 0.0,
       "en": 2.2,
       "gam": 0.290898,
@@ -4030,6 +4198,8 @@
     {
       "arep": 1.30459,
       "atomic_number": 78,
+      "atomic_radius_bohr": 2.4566439620065728,
+      "covalent_radius_bohr": 2.8219910127665244,
       "dkernel": 0.0,
       "en": 2.28,
       "gam": 0.370447,
@@ -4085,6 +4255,8 @@
     {
       "arep": 1.293034,
       "atomic_number": 79,
+      "atomic_radius_bohr": 2.4566439620065728,
+      "covalent_radius_bohr": 2.8471873610947966,
       "dkernel": 0.0,
       "en": 2.54,
       "gam": 0.49638,
@@ -4140,6 +4312,8 @@
     {
       "arep": 1.181865,
       "atomic_number": 80,
+      "atomic_radius_bohr": 2.4944384844989815,
+      "covalent_radius_bohr": 3.325917979331975,
       "dkernel": 0.0,
       "en": 2.0,
       "gam": 0.334997,
@@ -4182,6 +4356,8 @@
     {
       "arep": 0.976397,
       "atomic_number": 81,
+      "atomic_radius_bohr": 2.721205619453434,
+      "covalent_radius_bohr": 3.27552528267543,
       "dkernel": 0.0,
       "en": 1.62,
       "gam": 0.671316,
@@ -4224,6 +4400,8 @@
     {
       "arep": 0.988859,
       "atomic_number": 82,
+      "atomic_radius_bohr": 2.7401028806996384,
+      "covalent_radius_bohr": 3.27552528267543,
       "dkernel": 0.0,
       "en": 2.33,
       "gam": 1.0,
@@ -4266,6 +4444,8 @@
     {
       "arep": 1.047194,
       "atomic_number": 83,
+      "atomic_radius_bohr": 2.8345891869306605,
+      "covalent_radius_bohr": 3.4267033726450653,
       "dkernel": 0.0,
       "en": 2.02,
       "gam": 0.944879,
@@ -4308,6 +4488,8 @@
     {
       "arep": 1.013118,
       "atomic_number": 84,
+      "atomic_radius_bohr": 2.6834110969610254,
+      "covalent_radius_bohr": 3.3007216310037024,
       "dkernel": 0.0,
       "en": 2.0,
       "gam": 1.091248,
@@ -4363,6 +4545,8 @@
     {
       "arep": 0.964652,
       "atomic_number": 85,
+      "atomic_radius_bohr": 2.7967946644382518,
+      "covalent_radius_bohr": 3.4770960693016097,
       "dkernel": 0.0,
       "en": 2.2,
       "gam": 1.264162,
@@ -4418,6 +4602,8 @@
     {
       "arep": 0.998641,
       "atomic_number": 86,
+      "atomic_radius_bohr": 2.759000141945843,
+      "covalent_radius_bohr": 3.5778814626147004,
       "dkernel": 0.0,
       "en": 2.2,
       "gam": 0.79817,
@@ -10622,7 +10808,7 @@
     "kexp": 1.5,
     "klight": 1.5
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "thirdorder": {
     "mode": "atom",
     "shell_resolved": false

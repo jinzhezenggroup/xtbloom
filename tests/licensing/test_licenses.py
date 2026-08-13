@@ -1256,6 +1256,20 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
             CHECKER._check_gfn1_parameter_provenance(manifest)
 
+    def test_gfn1_mctc_source_mutation_is_rejected(self) -> None:
+        """Reject changed mctc-lib bytes used by the GFN1 generated header."""
+        manifest = copy.deepcopy(self.gfn1)
+        manifest["mctc"]["sources"][0]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_parameter_provenance(manifest)
+
+    def test_gfn1_mctc_legal_record_mutation_is_rejected(self) -> None:
+        """Reject an incomplete Apache-2.0 legal record for mixed-source data."""
+        manifest = copy.deepcopy(self.gfn1)
+        manifest["mctc"]["legal_files"] = []
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_parameter_provenance(manifest)
+
     def test_gfn1_d3_mctc_source_mutation_is_rejected(self) -> None:
         """Reject a changed mctc-lib source digest in the D3 manifest."""
         manifest = copy.deepcopy(self.gfn1_d3)

@@ -38,7 +38,10 @@ class Gfn1ParameterTests(unittest.TestCase):
         )
 
     def test_complete_export_round_trips(self) -> None:
-        self.assertEqual(GENERATOR.normalize_export(self.raw), self.normalized)
+        mctc_parameters = self.manifest["mctc"]["parameters"]
+        self.assertEqual(
+            GENERATOR.normalize_export(self.raw, mctc_parameters), self.normalized
+        )
         self.assertEqual(self.normalized["method"], "gfn1-xtb")
         self.assertEqual(len(self.normalized["elements"]), 86)
         self.assertEqual(
@@ -53,6 +56,62 @@ class Gfn1ParameterTests(unittest.TestCase):
         self.assertEqual(self.normalized["charge"]["average"], "harmonic")
         self.assertEqual(self.normalized["thirdorder"]["mode"], "atom")
         self.assertFalse(self.normalized["thirdorder"]["shell_resolved"])
+
+    def test_mctc_atomic_inputs_and_exponential_cn_are_complete(self) -> None:
+        """Bind the non-TOML H0, halogen, and CN inputs used by GFN1."""
+        coordination = self.normalized["coordination_number"]
+        self.assertEqual(coordination["model"], "exp")
+        self.assertEqual(coordination["steepness"], 16.0)
+        self.assertEqual(coordination["cutoff_bohr"], 25.0)
+        self.assertIsNone(coordination["maximum_cn_cutoff"])
+        self.assertEqual(coordination["directed_factor"], 1.0)
+        self.assertEqual(
+            coordination["coincident_distance_squared_cutoff_bohr2"], 1.0e-12
+        )
+        self.assertTrue(coordination["cutoff_inclusive"])
+        self.assertTrue(coordination["coincident_cutoff_inclusive"])
+        self.assertEqual(
+            coordination["pair_loop"],
+            "lower triangle including diagonal over lattice translations",
+        )
+        self.assertIn("r_cov_i + r_cov_j", coordination["count_expression"])
+        self.assertIn("expterm", coordination["derivative_expression"])
+
+        hydrogen = self.normalized["elements"][0]
+        radon = self.normalized["elements"][-1]
+        self.assertEqual(hydrogen["en"], 2.2)
+        self.assertEqual(hydrogen["atomic_radius_bohr"].hex(), "0x1.359cdbc254a45p-1")
+        self.assertEqual(hydrogen["covalent_radius_bohr"].hex(), "0x1.9cd125031b85cp-1")
+        self.assertEqual(radon["atomic_number"], 86)
+        self.assertGreater(radon["atomic_radius_bohr"], 0.0)
+        self.assertGreater(radon["covalent_radius_bohr"], 0.0)
+
+    def test_mctc_provenance_binds_sources_conversion_and_license(self) -> None:
+        """Require the reviewed v0.5.2 source and legal records."""
+        mctc = self.manifest["mctc"]
+        self.assertEqual(mctc["revision"], GENERATOR.MCTC_REVISION)
+        self.assertEqual(mctc["tree"], GENERATOR.MCTC_TREE)
+        self.assertEqual(mctc["license"], "Apache-2.0")
+        self.assertEqual(
+            mctc["parameters"]["angstrom_to_bohr"].hex(), "0x1.e3c5175fa440bp+0"
+        )
+        self.assertEqual(
+            {record["path"] for record in mctc["sources"]},
+            set(GENERATOR.MCTC_SOURCE_PATHS),
+        )
+        self.assertEqual(
+            mctc["legal_files"],
+            [
+                {
+                    "bytes": 11358,
+                    "git_blob": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+                    "path": "LICENSE",
+                    "sha256": (
+                        "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+                    ),
+                }
+            ],
+        )
         self.assertEqual(
             self.normalized["halogen"], {"damping": 0.44, "radius_scale": 1.3}
         )
@@ -125,7 +184,7 @@ class Gfn1ParameterTests(unittest.TestCase):
             "2cfe9e53c6413bd022e36346d62ba110c1c42f57",
         )
         source_records = self.manifest["source"]["parameter_sources"]
-        self.assertEqual(len(source_records), 21)
+        self.assertEqual(len(source_records), 26)
         self.assertEqual(
             source_records[0],
             {
@@ -141,9 +200,11 @@ class Gfn1ParameterTests(unittest.TestCase):
             self.manifest["inspection"]["revision"],
             "133f91efb94b47f05848e1f86832f40a1accc385",
         )
+        classification = self.manifest["inspection"]["reviewed_classification"]
+        self.assertIn("substantive later runtime-equation changes", classification)
+        self.assertIn("non-authoritative", classification)
         self.assertIn(
-            "formatting/style only",
-            self.manifest["inspection"]["reviewed_classification"],
+            "not used to generate the canonical parameter bytes", classification
         )
         cross_check = self.manifest["cross_check"]
         self.assertEqual(cross_check["role"], "non-authoritative semantic cross-check")
@@ -163,7 +224,7 @@ class Gfn1ParameterTests(unittest.TestCase):
     def test_offline_regeneration_is_byte_deterministic(self) -> None:
         provenance = {
             key: self.manifest[key]
-            for key in ("source", "inspection", "exporter", "cross_check")
+            for key in ("source", "inspection", "exporter", "cross_check", "mctc")
         }
         generated = GENERATOR.build_artifacts(self.raw_bytes, provenance)
         for filename, content in generated.items():
@@ -172,7 +233,7 @@ class Gfn1ParameterTests(unittest.TestCase):
     def test_stale_generated_file_is_rejected(self) -> None:
         provenance = {
             key: self.manifest[key]
-            for key in ("source", "inspection", "exporter", "cross_check")
+            for key in ("source", "inspection", "exporter", "cross_check", "mctc")
         }
         generated = GENERATOR.build_artifacts(self.raw_bytes, provenance)
         with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-stale-") as directory:
@@ -187,11 +248,18 @@ class Gfn1ParameterTests(unittest.TestCase):
         for section, field in (
             ("source", "parameter_sources_sha256"),
             ("cross_check", "sha256"),
+            ("mctc", "license_sha256"),
         ):
             with self.subTest(section=section, field=field):
                 provenance = {
                     key: copy.deepcopy(self.manifest[key])
-                    for key in ("source", "inspection", "exporter", "cross_check")
+                    for key in (
+                        "source",
+                        "inspection",
+                        "exporter",
+                        "cross_check",
+                        "mctc",
+                    )
                 }
                 provenance[section][field] = "0" * 64
                 with self.assertRaisesRegex(

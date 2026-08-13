@@ -354,7 +354,7 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE",
 )
 SPDX_FILES = {
-    "data/parameters/gfn1.hpp": "LGPL-3.0-or-later",
+    "data/parameters/gfn1.hpp": "LGPL-3.0-or-later AND Apache-2.0",
     "data/parameters/gfn1_d3.hpp": "LGPL-3.0-or-later",
     "data/parameters/gfn2.hpp": "LGPL-3.0-or-later",
     "data/parameters/d4.hpp": "LGPL-3.0-or-later",
@@ -407,7 +407,7 @@ NOTICE_TOKENS = (
 )
 
 GFN1_PROVENANCE_SHA256 = (
-    "9d181b35830f2c42ea57058c41e1277c25e29110560b8df8a0483b5521599674"
+    "422170e3d1beaa94be96488fc9303374a3b217e89e501823db894aa7fd17a9c5"
 )
 GFN1_D3_PROVENANCE_SHA256 = (
     "2aa688be0fd1cb8609abaa3802a616178e1abe504d8b3c1dd56fcc37140005a0"
@@ -1601,11 +1601,11 @@ def _canonical_json_sha256(value: object) -> str:
 
 
 def _check_gfn1_parameter_provenance(gfn1: dict[str, object]) -> None:
-    """Require every reviewed tblite/dxtb/exporter provenance field."""
+    """Require every reviewed tblite/dxtb/mctc/exporter provenance field."""
     try:
         retained = {
             key: gfn1[key]
-            for key in ("source", "inspection", "exporter", "cross_check")
+            for key in ("source", "inspection", "exporter", "cross_check", "mctc")
         }
     except KeyError as exc:
         raise LicenseCheckError("GFN1 parameter manifest is incomplete") from exc
@@ -1624,6 +1624,13 @@ def _check_gfn1_parameter_provenance(gfn1: dict[str, object]) -> None:
     ).hexdigest()
     if retained_digest != GFN1_PROVENANCE_SHA256:
         raise LicenseCheckError("GFN1 parameter manifest has unreviewed provenance")
+    mctc = gfn1.get("mctc", {})
+    if not isinstance(mctc, dict) or mctc.get("legal_files") != [
+        GFN1_D3_MCTC_LICENSE_RECORD
+    ]:
+        raise LicenseCheckError(
+            "GFN1 parameter manifest has incomplete mctc legal provenance"
+        )
 
 
 def _check_gfn1_d3_provenance(
@@ -1913,6 +1920,9 @@ def check_source(root: Path) -> None:
         != "https://github.com/grimme-lab/dxtb"
         or gfn1.get("cross_check", {}).get("role")
         != "non-authoritative semantic cross-check"
+        or gfn1.get("mctc", {}).get("license") != "Apache-2.0"
+        or gfn1.get("mctc", {}).get("revision")
+        != "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d"
     ):
         raise LicenseCheckError("GFN1 parameter manifest has incorrect provenance")
     if (
@@ -1949,9 +1959,41 @@ def check_source(root: Path) -> None:
             "b3cb9cefd702169d6be662eb438932525990a1ac",
             "fdbd599664a7f113633d96110531d810fdc8e54b6db26d4f584120d9c7cec314",
         ),
+        "src/mctc/data/paulingen.f90": (
+            "445c9d4a0bf643a045a6f9ce9240c032fecbc911",
+            "8ccd4c9688fbb733888e8a2622de0d8b67d6a348ed400b1a41686d6268f06d1b",
+        ),
+        "src/mctc/env.f90": (
+            "f4f2eb0a0ab661acd4f4f252609c60f3a75001ad",
+            "cb75b8a8344b708d8a4de5abe0ef726e7b3332bed78ab90c1b0915ad587cbe8e",
+        ),
+        "src/mctc/env/accuracy.f90": (
+            "52d195970efd2aa030f0d464c9b8b6e817ddc43c",
+            "17f5de4dc97a3240088540cf31627dc787dfb0628d691ec70cb2c0404dac21e8",
+        ),
         "src/mctc/io/constants.f90": (
             "2fd35c66ce80a47aa88d12952f0cce2886cd753f",
             "6ee2b599fc2d338f1a7e07b5b46e984e2612b4cfc58110d1203ecf19ebde2385",
+        ),
+        "src/mctc/io/codata2018.f90": (
+            "8db65943defc6cd3d9ce51751e1bdbe81173d132",
+            "47c4abbc7f9dddb3bba1c89563b45e792304bc56723f1c4b05fc978aa5d3704d",
+        ),
+        "src/mctc/io/convert.f90": (
+            "799d71c1f83cfa6522c4b9eb47df3f72e6a4b90f",
+            "b05d7b4821deb4abe448cf11d53df9b118747294b44f0d774f056bc3b28430b9",
+        ),
+        "src/mctc/ncoord.f90": (
+            "93e6ce2cd3a1a4463b22e858313d17f31deff9ec",
+            "93d705f1c018c646a8bc01385c5e8e918433fc76a670876b342f459a0002e723",
+        ),
+        "src/mctc/ncoord/exp.f90": (
+            "c41db6846cf2d694cac3e26634a0648ab4ded5e3",
+            "376eed0a25ad9c5c45a523294804e10fb02883bb7b26dfd2017c1b2f8c051b60",
+        ),
+        "src/mctc/ncoord/type.f90": (
+            "38eb682efa53b55070b39d8f68d09a8465f5d76f",
+            "b8b819f9ea1c0765632fdb4ea9046b0c79f2c1bb13d39555ac3059f498ba1bb5",
         ),
         "src/mctc/ncoord/dexp.f90": (
             "307e84898387fcddf77f54daecf24b6ce28a27b1",

@@ -16,6 +16,7 @@ import importlib.util
 import json
 import locale
 import math
+import re
 import subprocess
 import sys
 import tempfile
@@ -56,11 +57,22 @@ _cpp_string = COMMON._cpp_string
 _run = COMMON._run
 _git = COMMON._git
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 METHOD = "gfn1-xtb"
 UPSTREAM_REPOSITORY = "https://github.com/tblite/tblite"
 UPSTREAM_LICENSE = "LGPL-3.0-or-later"
 DXTB_REPOSITORY = "https://github.com/grimme-lab/dxtb"
+MCTC_REPOSITORY = "https://github.com/grimme-lab/mctc-lib"
+MCTC_REVISION = "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d"
+MCTC_TREE = "ff26e808ccd00be0ca221656c8de9ce0da4c9265"
+MCTC_TAG = "v0.5.2"
+MCTC_LICENSE = "Apache-2.0"
+MCTC_ELEMENT_COUNT = 118
+RETAINED_ELEMENT_COUNT = 86
+ANGSTROM_TO_BOHR = 1.8897261246204404
+COORDINATION_RADIUS_SCALE = 4.0 / 3.0
+COORDINATION_STEEPNESS = 16.0
+COORDINATION_CUTOFF_BOHR = 25.0
 RAW_FILENAME = "gfn1.toml"
 JSON_FILENAME = "gfn1.json"
 HEADER_FILENAME = "gfn1.hpp"
@@ -68,18 +80,37 @@ MANIFEST_FILENAME = "gfn1_manifest.json"
 
 SOURCE_PATHS = (
     "app/driver_param.f90",
+    "fpm.toml",
+    "subprojects/mctc-lib.wrap",
+    "src/tblite/classical/halogen.f90",
     "src/tblite/param.f90",
     "src/tblite/param",
     "src/tblite/xtb/gfn1.f90",
+    "src/tblite/xtb/h0.f90",
+    "src/tblite/xtb/spec.f90",
 )
 DEFAULT_DXTB_PATH = "src/dxtb/_src/param/gfn1/gfn1-xtb.toml"
+MCTC_SOURCE_PATHS = (
+    "src/mctc/data/atomicrad.f90",
+    "src/mctc/data/covrad.f90",
+    "src/mctc/data/paulingen.f90",
+    "src/mctc/env.f90",
+    "src/mctc/env/accuracy.f90",
+    "src/mctc/io/constants.f90",
+    "src/mctc/io/codata2018.f90",
+    "src/mctc/io/convert.f90",
+    "src/mctc/ncoord.f90",
+    "src/mctc/ncoord/exp.f90",
+    "src/mctc/ncoord/type.f90",
+)
+MCTC_LEGAL_PATHS = ("LICENSE",)
 
 # This digest binds every retained offline provenance field.  It is intentionally
 # independent of the generated manifest's output hashes so a manual edit to a
-# source, inspection, exporter, or cross-check record cannot bless itself during
+# tblite, dxtb, exporter, or mctc-lib record cannot bless itself during
 # ``--check`` regeneration.
 PINNED_PROVENANCE_SHA256 = (
-    "9d181b35830f2c42ea57058c41e1277c25e29110560b8df8a0483b5521599674"
+    "422170e3d1beaa94be96488fc9303374a3b217e89e501823db894aa7fd17a9c5"
 )
 
 
@@ -95,6 +126,209 @@ def _shell_scale(shell: Mapping[str, Any], first: int, second: int) -> float:
         shell[names[second] * 2], f"hamiltonian.xtb.shell.{names[second] * 2}"
     )
     return 0.5 * (diagonal_first + diagonal_second)
+
+
+def _fortran_number(token: str, location: str) -> float:
+    """Parse one finite Fortran binary64 literal used by the pinned tables."""
+    cleaned = token.strip().lower().replace("_wp", "").replace("d", "e")
+    try:
+        value = float(cleaned)
+    except ValueError as exc:
+        raise ParameterError(
+            f"invalid Fortran number at {location}: {token!r}"
+        ) from exc
+    if not math.isfinite(value):
+        raise ParameterError(f"non-finite Fortran number at {location}")
+    return value
+
+
+def _fortran_array(content: bytes, name: str) -> list[float]:
+    """Extract one bracket array from a reviewed mctc-lib Fortran source."""
+    text = content.decode("utf-8")
+    match = re.search(
+        rf"\b{name}\s*\([^)]*\)\s*=\s*(?:[^\[]*?)\[\s*&?(.*?)\]",
+        text,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise ParameterError(f"cannot find mctc-lib array {name}")
+    body = "\n".join(line.split("!", 1)[0] for line in match.group(1).splitlines())
+    tokens = re.findall(
+        r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[de][-+]?\d+)?(?:_wp)?",
+        body,
+        flags=re.IGNORECASE,
+    )
+    values = [_fortran_number(token, name) for token in tokens]
+    if len(values) != MCTC_ELEMENT_COUNT:
+        raise ParameterError(
+            f"mctc-lib array {name} has {len(values)} values, expected "
+            f"{MCTC_ELEMENT_COUNT}"
+        )
+    return values
+
+
+def _require_fortran_array_declaration(content: bytes, name: str, prefix: str) -> None:
+    """Bind a parsed table to its reviewed Fortran unit-conversion expression."""
+    compact = re.sub(r"\s+", " ", content.decode("utf-8"))
+    pattern = rf"\b{name}\s*\([^)]*\)\s*=\s*{re.escape(prefix)}\s*\["
+    if re.search(pattern, compact, flags=re.IGNORECASE) is None:
+        raise ParameterError(f"mctc-lib declaration for {name} differs")
+
+
+def _fortran_scalar(content: bytes, name: str) -> float:
+    """Extract one named scalar literal from a reviewed Fortran source."""
+    text = content.decode("utf-8")
+    match = re.search(
+        rf"\b{name}\s*=\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[de][-+]?\d+)?(?:_wp)?)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        raise ParameterError(f"cannot find mctc-lib scalar {name}")
+    return _fortran_number(match.group(1), name)
+
+
+def _normalize_mctc_parameters(
+    source: Mapping[str, Any], elements: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Validate retained mctc inputs and express every production value in bohr."""
+    _expect_keys(
+        source,
+        "mctc.parameters",
+        (
+            "angstrom_to_bohr",
+            "atomic_radii_angstrom",
+            "covalent_radii_angstrom",
+            "pauling_electronegativity",
+            "coordination_radius_scale",
+            "coordination_steepness",
+            "coordination_cutoff_bohr",
+            "coordination_maximum_cn_cutoff",
+            "coordination_directed_factor",
+            "coordination_coincident_distance_squared_cutoff_bohr2",
+            "coordination_count_expression",
+            "coordination_derivative_expression",
+            "coordination_pair_loop",
+            "coordination_cutoff_inclusive",
+            "coordination_coincident_cutoff_inclusive",
+        ),
+    )
+    angstrom_to_bohr = _number(source["angstrom_to_bohr"], "mctc.angstrom_to_bohr")
+    if angstrom_to_bohr != ANGSTROM_TO_BOHR:
+        raise ParameterError(
+            "mctc Angstrom-to-bohr factor differs from the pinned value"
+        )
+
+    arrays: dict[str, list[float]] = {}
+    for field in (
+        "atomic_radii_angstrom",
+        "covalent_radii_angstrom",
+        "pauling_electronegativity",
+    ):
+        values = source[field]
+        if not isinstance(values, list) or len(values) != MCTC_ELEMENT_COUNT:
+            raise ParameterError(
+                f"mctc.{field} must contain {MCTC_ELEMENT_COUNT} values"
+            )
+        arrays[field] = [_number(value, f"mctc.{field}") for value in values]
+
+    radius_scale = _number(
+        source["coordination_radius_scale"], "mctc.coordination_radius_scale"
+    )
+    steepness = _number(source["coordination_steepness"], "mctc.coordination_steepness")
+    cutoff = _number(
+        source["coordination_cutoff_bohr"], "mctc.coordination_cutoff_bohr"
+    )
+    maximum_cn_cutoff = source["coordination_maximum_cn_cutoff"]
+    directed_factor = _number(
+        source["coordination_directed_factor"],
+        "mctc.coordination_directed_factor",
+    )
+    coincident_cutoff = _number(
+        source["coordination_coincident_distance_squared_cutoff_bohr2"],
+        "mctc.coordination_coincident_distance_squared_cutoff_bohr2",
+    )
+    count_expression = _string(
+        source["coordination_count_expression"],
+        "mctc.coordination_count_expression",
+    )
+    derivative_expression = _string(
+        source["coordination_derivative_expression"],
+        "mctc.coordination_derivative_expression",
+    )
+    pair_loop = _string(source["coordination_pair_loop"], "mctc.coordination_pair_loop")
+    cutoff_inclusive = _boolean(
+        source["coordination_cutoff_inclusive"],
+        "mctc.coordination_cutoff_inclusive",
+    )
+    coincident_cutoff_inclusive = _boolean(
+        source["coordination_coincident_cutoff_inclusive"],
+        "mctc.coordination_coincident_cutoff_inclusive",
+    )
+    if radius_scale != COORDINATION_RADIUS_SCALE:
+        raise ParameterError("mctc coordination-radius scale differs from 4/3")
+    if steepness != COORDINATION_STEEPNESS or cutoff != COORDINATION_CUTOFF_BOHR:
+        raise ParameterError(
+            "mctc exponential-CN constants differ from the pinned convention"
+        )
+    if maximum_cn_cutoff is not None:
+        raise ParameterError("mctc exponential CN must not apply a maximum-CN cutoff")
+    if directed_factor != 1.0 or coincident_cutoff != 1.0e-12:
+        raise ParameterError("mctc exponential-CN pair conventions differ")
+    if count_expression != ("1 / (1 + exp(-k * ((r_cov_i + r_cov_j) / r - 1)))"):
+        raise ParameterError("mctc exponential-CN expression differs")
+    if derivative_expression != (
+        "(-k * (r_cov_i + r_cov_j) * expterm) / (r^2 * (expterm + 1)^2)"
+    ):
+        raise ParameterError("mctc exponential-CN derivative expression differs")
+    if pair_loop != "lower triangle including diagonal over lattice translations":
+        raise ParameterError("mctc exponential-CN pair loop differs")
+    if not cutoff_inclusive or not coincident_cutoff_inclusive:
+        raise ParameterError("mctc exponential-CN cutoff inclusivity differs")
+
+    retained = slice(0, RETAINED_ELEMENT_COUNT)
+    atomic_radii = arrays["atomic_radii_angstrom"][retained]
+    covalent_radii = arrays["covalent_radii_angstrom"][retained]
+    electronegativities = arrays["pauling_electronegativity"][retained]
+    for index, element in enumerate(elements):
+        if (
+            _number(element["en"], f"elements[{index}].en")
+            != electronegativities[index]
+        ):
+            raise ParameterError(
+                "tblite element electronegativity differs from mctc Pauling data "
+                f"for Z={index + 1}"
+            )
+        if atomic_radii[index] <= 0.0 or covalent_radii[index] <= 0.0:
+            raise ParameterError(f"mctc radii must be positive for Z={index + 1}")
+
+    normalized_elements = []
+    for index, element in enumerate(elements):
+        record = copy.deepcopy(dict(element))
+        record["atomic_radius_bohr"] = atomic_radii[index] * angstrom_to_bohr
+        record["covalent_radius_bohr"] = (
+            covalent_radii[index] * angstrom_to_bohr * radius_scale
+        )
+        normalized_elements.append(record)
+
+    return {
+        "angstrom_to_bohr": angstrom_to_bohr,
+        "coordination": {
+            "model": "exp",
+            "covalent_radius_scale": radius_scale,
+            "steepness": steepness,
+            "cutoff_bohr": cutoff,
+            "maximum_cn_cutoff": maximum_cn_cutoff,
+            "directed_factor": directed_factor,
+            "coincident_distance_squared_cutoff_bohr2": coincident_cutoff,
+            "count_expression": count_expression,
+            "derivative_expression": derivative_expression,
+            "pair_loop": pair_loop,
+            "cutoff_inclusive": cutoff_inclusive,
+            "coincident_cutoff_inclusive": coincident_cutoff_inclusive,
+        },
+        "elements": normalized_elements,
+    }
 
 
 def _normalize_hamiltonian(source: Mapping[str, Any]) -> dict[str, Any]:
@@ -240,7 +474,9 @@ def _normalize_elements(source: Mapping[str, Any]) -> list[dict[str, Any]]:
     return elements
 
 
-def normalize_export(document: Mapping[str, Any]) -> dict[str, Any]:
+def normalize_export(
+    document: Mapping[str, Any], mctc_parameters: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     """Validate and normalize a parsed tblite GFN1 TOML export."""
     source = _mapping(document, "root")
     _expect_keys(
@@ -294,7 +530,7 @@ def normalize_export(document: Mapping[str, Any]) -> dict[str, Any]:
     _expect_keys(halogen, "halogen.classical", ("damping", "rscale"))
 
     elements = _normalize_elements(_mapping(source["element"], "element"))
-    return {
+    normalized = {
         "schema_version": SCHEMA_VERSION,
         "method": METHOD,
         "meta": {
@@ -326,15 +562,22 @@ def normalize_export(document: Mapping[str, Any]) -> dict[str, Any]:
         },
         "elements": elements,
     }
+    if mctc_parameters is not None:
+        mctc = _normalize_mctc_parameters(mctc_parameters, elements)
+        normalized["coordination_number"] = mctc["coordination"]
+        normalized["elements"] = mctc["elements"]
+    return normalized
 
 
-def parse_and_normalize(raw_toml: bytes) -> dict[str, Any]:
+def parse_and_normalize(
+    raw_toml: bytes, mctc_parameters: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     """Parse a UTF-8 tblite export and return validated GFN1 parameters."""
     try:
         document = tomllib.loads(raw_toml.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ParameterError(f"invalid UTF-8 tblite TOML export: {exc}") from exc
-    return normalize_export(document)
+    return normalize_export(document, mctc_parameters)
 
 
 def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
@@ -342,6 +585,7 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
     elements = parameters["elements"]
     shells = [shell for element in elements for shell in element["shells"]]
     hamiltonian = parameters["hamiltonian"]
+    coordination = _mapping(parameters["coordination_number"], "coordination_number")
     entries = {
         tuple(entry["angular_momenta"]): entry["value"]
         for entry in hamiltonian["shell_pair_scale"]
@@ -353,8 +597,9 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
     ]
     lines = [
         "// Generated by tools/parameters/generate_gfn1.py; do not edit.",
-        "// SPDX-License-Identifier: LGPL-3.0-or-later",
+        "// SPDX-License-Identifier: LGPL-3.0-or-later AND Apache-2.0",
         "// Parameter source: tblite (LGPL-3.0-or-later).",
+        "// Atomic inputs: mctc-lib v0.5.2 (Apache-2.0), lengths in bohr.",
         f"// tblite revision: {source_revision}",
         "#pragma once",
         "",
@@ -386,7 +631,14 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
         "  double charge_gexp;",
         "  double halogen_damping;",
         "  double halogen_radius_scale;",
+        "  double coordination_steepness;",
+        "  double coordination_cutoff_bohr;",
+        "  double coordination_directed_factor;",
+        "  double coordination_coincident_distance_squared_cutoff_bohr2;",
         "  std::uint8_t coordination_number_model;  // 1 = exp",
+        "  bool coordination_has_maximum_cn_cutoff;",
+        "  bool coordination_cutoff_inclusive;",
+        "  bool coordination_coincident_cutoff_inclusive;",
         "  std::uint8_t charge_average;  // 1 = harmonic",
         "  std::uint8_t dispersion_model;  // 1 = D3",
         "  bool thirdorder_shell_resolved;",
@@ -406,6 +658,8 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
         "  double quadrupole_kernel;",
         "  double multipole_radius;",
         "  double multipole_valence_cn;",
+        "  double atomic_radius_bohr;",
+        "  double covalent_radius_bohr;",
         "};",
         "",
         "struct ShellParameters {",
@@ -447,7 +701,14 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
         f"  {_cpp_float(parameters['charge']['gexp'])},",
         f"  {_cpp_float(parameters['halogen']['damping'])},",
         f"  {_cpp_float(parameters['halogen']['radius_scale'])},",
+        f"  {_cpp_float(coordination['steepness'])},",
+        f"  {_cpp_float(coordination['cutoff_bohr'])},",
+        f"  {_cpp_float(coordination['directed_factor'])},",
+        f"  {_cpp_float(coordination['coincident_distance_squared_cutoff_bohr2'])},",
         "  1u,",
+        "  false,",
+        f"  {str(coordination['cutoff_inclusive']).lower()},",
+        f"  {str(coordination['coincident_cutoff_inclusive']).lower()},",
         "  1u,",
         "  1u,",
         "  false,",
@@ -471,6 +732,8 @@ def render_header(parameters: Mapping[str, Any], source_revision: str) -> bytes:
             _cpp_float(element["qkernel"]),
             _cpp_float(element["mprad"]),
             _cpp_float(element["mpvcn"]),
+            _cpp_float(element["atomic_radius_bohr"]),
+            _cpp_float(element["covalent_radius_bohr"]),
         )
         lines.append("  {" + ", ".join(values) + "},")
         shell_offset += len(element["shells"])
@@ -551,6 +814,22 @@ def _source_provenance(source_dir: Path, revision_spec: str) -> dict[str, Any]:
     )
     if not paths:
         raise ParameterError(f"no tblite GFN1 parameter sources found in {source_dir}")
+    gfn1_source = subprocess.run(
+        (
+            "git",
+            "-C",
+            str(source_dir),
+            "show",
+            f"{revision}:src/tblite/xtb/gfn1.f90",
+        ),
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout.decode("utf-8")
+    if (
+        "call new_ncoord(calc%ncoord, mol, cn_count_type=cn_count%exp, error=error)"
+        not in gfn1_source
+    ):
+        raise ParameterError("tblite GFN1 exponential-CN call differs")
     digest = hashlib.sha256()
     records = []
     for path in paths:
@@ -590,6 +869,178 @@ def _source_provenance(source_dir: Path, revision_spec: str) -> dict[str, Any]:
             "git_blob": _git(source_dir, "rev-parse", f"{revision}:COPYING.LESSER"),
             "sha256": sha256_bytes(license_content),
         },
+    }
+
+
+def _git_file_records(
+    source_dir: Path, revision: str, paths: Sequence[str]
+) -> tuple[list[dict[str, Any]], dict[str, bytes]]:
+    """Return immutable Git records and contents for an exact path set."""
+    records = []
+    contents = {}
+    for path in paths:
+        try:
+            content = subprocess.run(
+                ("git", "-C", str(source_dir), "show", f"{revision}:{path}"),
+                check=True,
+                stdout=subprocess.PIPE,
+            ).stdout
+        except subprocess.CalledProcessError as exc:
+            raise ParameterError(f"cannot read pinned source {path}") from exc
+        contents[path] = content
+        records.append(
+            {
+                "bytes": len(content),
+                "git_blob": _git(source_dir, "rev-parse", f"{revision}:{path}"),
+                "path": path,
+                "sha256": sha256_bytes(content),
+            }
+        )
+    return records, contents
+
+
+def _mctc_provenance(source_dir: Path, revision_spec: str) -> dict[str, Any]:
+    """Parse and bind the complete mctc-lib v0.5.2 GFN1 input contract."""
+    revision = _git(source_dir, "rev-parse", f"{revision_spec}^{{commit}}")
+    tree = _git(source_dir, "rev-parse", f"{revision}^{{tree}}")
+    if revision != MCTC_REVISION or tree != MCTC_TREE:
+        raise ParameterError(
+            "mctc-lib source does not match the reviewed v0.5.2 revision"
+        )
+    source_records, contents = _git_file_records(
+        source_dir, revision, MCTC_SOURCE_PATHS
+    )
+    legal_records, legal_contents = _git_file_records(
+        source_dir, revision, MCTC_LEGAL_PATHS
+    )
+
+    accuracy = contents["src/mctc/env/accuracy.f90"].decode("utf-8")
+    if "wp = dp" not in accuracy or "selected_real_kind(15)" not in accuracy:
+        raise ParameterError(
+            "mctc-lib wanted precision is not the reviewed binary64 kind"
+        )
+    constants = contents["src/mctc/io/constants.f90"]
+    codata = contents["src/mctc/io/codata2018.f90"]
+    convert = contents["src/mctc/io/convert.f90"].decode("utf-8")
+    pi = _fortran_scalar(constants, "pi")
+    planck = _fortran_scalar(codata, "Planck_constant")
+    electron_mass = _fortran_scalar(codata, "electron_mass")
+    speed_of_light = _fortran_scalar(codata, "speed_of_light_in_vacuum")
+    fine_structure = _fortran_scalar(codata, "fine_structure_constant")
+    constants_text = constants.decode("utf-8")
+    if not all(
+        fragment in constants_text
+        for fragment in (
+            "real(wp) :: h = planck_constant",
+            "real(wp) :: c = speed_of_light_in_vacuum",
+            "real(wp) :: alpha = fine_structure_constant",
+            "real(wp) :: me = electron_mass",
+        )
+    ):
+        raise ParameterError("mctc-lib CODATA field mapping differs")
+    if not all(
+        fragment in convert
+        for fragment in (
+            "hbar = codata%h/(2.0_wp*pi)",
+            "bohr = hbar/(codata%me*codata%c*codata%alpha)",
+            "autoaa = bohr * 1e10_wp",
+            "aatoau = 1.0_wp/autoaa",
+        )
+    ):
+        raise ParameterError("mctc-lib Angstrom conversion expression differs")
+    hbar = planck / (2.0 * pi)
+    bohr_metre = hbar / (electron_mass * speed_of_light * fine_structure)
+    angstrom_to_bohr = 1.0 / (bohr_metre * 1.0e10)
+    if angstrom_to_bohr != ANGSTROM_TO_BOHR:
+        raise ParameterError("evaluated mctc-lib Angstrom conversion differs")
+
+    _require_fortran_array_declaration(
+        contents["src/mctc/data/atomicrad.f90"], "atomic_rad", "aatoau *"
+    )
+    _require_fortran_array_declaration(
+        contents["src/mctc/data/covrad.f90"], "covalent_rad_2009", "aatoau *"
+    )
+    _require_fortran_array_declaration(
+        contents["src/mctc/data/paulingen.f90"], "pauling_en", ""
+    )
+    atomic = _fortran_array(contents["src/mctc/data/atomicrad.f90"], "atomic_rad")
+    covalent = _fortran_array(contents["src/mctc/data/covrad.f90"], "covalent_rad_2009")
+    pauling = _fortran_array(contents["src/mctc/data/paulingen.f90"], "pauling_en")
+    exp_source = contents["src/mctc/ncoord/exp.f90"].decode("utf-8")
+    ncoord_source = contents["src/mctc/ncoord.f90"].decode("utf-8")
+    ncoord_type_source = contents["src/mctc/ncoord/type.f90"].decode("utf-8")
+    covalent_source = contents["src/mctc/data/covrad.f90"].decode("utf-8")
+    steepness = _fortran_scalar(contents["src/mctc/ncoord/exp.f90"], "default_kcn")
+    cutoff = _fortran_scalar(contents["src/mctc/ncoord/exp.f90"], "default_cutoff")
+    if not all(
+        fragment in exp_source
+        for fragment in (
+            "self%rcov(:) = get_covalent_rad(mol%num)",
+            "rc = self%rcov(izp) + self%rcov(jzp)",
+            "1.0_wp/(1.0_wp+exp(-self%kcn*(rc/r-1.0_wp)))",
+            "(-self%kcn*rc*expterm)/(r**2.0_wp*((expterm+1.0_wp)**2.0_wp))",
+            "self%directed_factor = 1.0_wp",
+            "self%cut = -1.0_wp",
+        )
+    ):
+        raise ParameterError("mctc-lib exponential-CN convention differs")
+    if not all(
+        fragment in ncoord_source
+        for fragment in (
+            "case(cn_count%exp)",
+            "call new_exp_ncoord",
+        )
+    ):
+        raise ParameterError("mctc-lib exponential-CN dispatch differs")
+    if not all(
+        fragment in ncoord_type_source
+        for fragment in (
+            "do jat = 1, iat",
+            "do itr = 1, size(trans, dim=2)",
+            "r2 > cutoff2",
+            "r2 < 1.0e-12_wp",
+            "countf * self%directed_factor",
+            "en_factor = 1.0_wp",
+        )
+    ):
+        raise ParameterError("mctc-lib exponential-CN pair loop differs")
+    if "4.0_wp / 3.0_wp * covalent_rad_2009" not in covalent_source:
+        raise ParameterError("mctc-lib D3 covalent-radius scaling differs")
+    if steepness != COORDINATION_STEEPNESS or cutoff != COORDINATION_CUTOFF_BOHR:
+        raise ParameterError("mctc-lib exponential-CN defaults differ")
+
+    return {
+        "repository": MCTC_REPOSITORY,
+        "revision": revision,
+        "tag": MCTC_TAG,
+        "tree": tree,
+        "license": MCTC_LICENSE,
+        "sources": source_records,
+        "legal_files": legal_records,
+        "parameters": {
+            "angstrom_to_bohr": angstrom_to_bohr,
+            "atomic_radii_angstrom": atomic,
+            "covalent_radii_angstrom": covalent,
+            "pauling_electronegativity": pauling,
+            "coordination_radius_scale": COORDINATION_RADIUS_SCALE,
+            "coordination_steepness": steepness,
+            "coordination_cutoff_bohr": cutoff,
+            "coordination_maximum_cn_cutoff": None,
+            "coordination_directed_factor": 1.0,
+            "coordination_coincident_distance_squared_cutoff_bohr2": 1.0e-12,
+            "coordination_count_expression": (
+                "1 / (1 + exp(-k * ((r_cov_i + r_cov_j) / r - 1)))"
+            ),
+            "coordination_derivative_expression": (
+                "(-k * (r_cov_i + r_cov_j) * expterm) / (r^2 * (expterm + 1)^2)"
+            ),
+            "coordination_pair_loop": (
+                "lower triangle including diagonal over lattice translations"
+            ),
+            "coordination_cutoff_inclusive": True,
+            "coordination_coincident_cutoff_inclusive": True,
+        },
+        "license_sha256": sha256_bytes(legal_contents["LICENSE"]),
     }
 
 
@@ -731,8 +1182,10 @@ def _inspection_provenance(
         "changed_parameter_source_paths": changed,
         "source_diff_sha256": sha256_bytes(diff),
         "reviewed_classification": (
-            "formatting/style only; the tblite 0.7.0 release revision remains "
-            "the scientific source"
+            "inspection-only checkout containing substantive later runtime-equation "
+            "changes as well as formatting/workflow changes; those later changes are "
+            "non-authoritative and are not used to generate the canonical parameter "
+            "bytes, which remain pinned to the tblite 0.7.0 release revision"
         ),
     }
 
@@ -753,7 +1206,7 @@ def _validate_provenance(provenance: Mapping[str, Any]) -> dict[str, Any]:
     _expect_keys(
         provenance,
         "manifest provenance",
-        ("source", "inspection", "exporter", "cross_check"),
+        ("source", "inspection", "exporter", "cross_check", "mctc"),
     )
     normalized = copy.deepcopy(dict(provenance))
     observed = sha256_bytes(canonical_json_bytes(normalized))
@@ -767,7 +1220,10 @@ def _validate_provenance(provenance: Mapping[str, Any]) -> dict[str, Any]:
 def build_artifacts(raw_toml: bytes, provenance: Mapping[str, Any]) -> dict[str, bytes]:
     """Build deterministic GFN1 artifacts from an export and its provenance."""
     provenance = _validate_provenance(provenance)
-    parameters = parse_and_normalize(raw_toml)
+    mctc = _mapping(provenance.get("mctc"), "manifest.mctc")
+    parameters = parse_and_normalize(
+        raw_toml, _mapping(mctc.get("parameters"), "manifest.mctc.parameters")
+    )
     source = _mapping(provenance.get("source"), "manifest.source")
     revision = _string(source.get("revision"), "manifest.source.revision")
     normalized = canonical_json_bytes(parameters)
@@ -817,6 +1273,7 @@ def _existing_provenance(output_dir: Path) -> dict[str, Any]:
             "inspection",
             "exporter",
             "cross_check",
+            "mctc",
             "generator",
             "outputs",
         ),
@@ -826,6 +1283,7 @@ def _existing_provenance(output_dir: Path) -> dict[str, Any]:
         "inspection": manifest["inspection"],
         "exporter": manifest["exporter"],
         "cross_check": manifest["cross_check"],
+        "mctc": manifest["mctc"],
     }
     return _validate_provenance(provenance)
 
@@ -867,6 +1325,8 @@ def _arguments(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--dxtb-source", type=Path)
     parser.add_argument("--dxtb-revision", default="HEAD")
     parser.add_argument("--dxtb-path", default=DEFAULT_DXTB_PATH)
+    parser.add_argument("--mctc-source", type=Path)
+    parser.add_argument("--mctc-revision", default=MCTC_REVISION)
     return parser.parse_args(argv)
 
 
@@ -880,9 +1340,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 arguments.tblite,
                 arguments.tblite_source,
                 arguments.dxtb_source,
+                arguments.mctc_source,
             ):
                 raise ParameterError(
-                    "--refresh requires --tblite, --tblite-source, and --dxtb-source"
+                    "--refresh requires --tblite, --tblite-source, --dxtb-source, "
+                    "and --mctc-source"
                 )
             if arguments.check:
                 raise ParameterError("--refresh and --check are mutually exclusive")
@@ -897,6 +1359,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     arguments.dxtb_revision,
                     arguments.dxtb_path,
                     raw_toml,
+                ),
+                "mctc": _mctc_provenance(
+                    arguments.mctc_source.resolve(), arguments.mctc_revision
                 ),
             }
             if arguments.tblite_inspection_revision is None:

@@ -76,8 +76,13 @@ Redistributed or derived material:
   are recorded in `data/parameters/manifest.json`.
 - `data/parameters/gfn1.toml`, `gfn1.json`, and `gfn1.hpp` are deterministic
   representations of the GFN1 parameter export from the same tblite 0.7.0
-  revision. Exact source paths, hashes, exporter identity, and a diagnostic
-  dxtb semantic cross-check are recorded in `gfn1_manifest.json`.
+  revision. The JSON/header additionally retain mctc-lib v0.5.2 Pauling
+  electronegativities, Mantina atomic radii, scaled Pyykko--Atsumi covalent
+  radii, exponential coordination-number conventions, and the CODATA-derived
+  binary64 Angstrom-to-bohr factor. Exact tblite/mctc source and legal paths,
+  hashes, exporter identity, and a diagnostic dxtb semantic cross-check are
+  recorded in `gfn1_manifest.json`. The mixed-source generated header carries
+  `LGPL-3.0-or-later AND Apache-2.0`.
 - The Stewart STO-nG tables in `data/parameters/tblite_sto.hpp` come from
   `src/tblite/basis/slater.f90` at that revision.
 - The element spin constants in `data/parameters/tblite_spin.hpp` come from
@@ -127,15 +132,18 @@ mctc-lib license: `Apache-2.0` (`LICENSES/Apache-2.0.txt`).
 
 The packed GFN2-D4 reference data in `data/parameters/d4.hpp` is derived
 from dftd4 revision `6e1f59c3f39d919a2dbef0601d2576727c8b30e8`.
-The D4 electronegativity-weighted coordination data and implementation
-conventions also use mctc-lib revision
+The GFN1 atomic input and exponential coordination data, and the D4
+electronegativity-weighted coordination data and implementation conventions,
+also use mctc-lib revision
 `e9de066d89f250d1cfb6de3a33f0c27c0e2f855d`. The ordinary GFN2
 coordination implementation retains mctc-lib's covalent-radii data and
 double-exponential convention, while the H0 implementation retains its
-Mantina atomic-radii table. Exact dftd4 source blobs are recorded in
-`data/parameters/d4_manifest.json`; exact mctc-lib source paths, blobs, and
-hashes are recorded in `data/parameters/mctc_manifest.json`. The original
-focused notice and upstream license copies remain in
+Mantina atomic-radii table. GFN1 also retains the same atomic radii for H0 and
+halogen correction, Pauling electronegativities for H0, and the 4/3-scaled
+covalent radii and exponential CN convention. Exact dftd4 source blobs are
+recorded in `data/parameters/d4_manifest.json`; exact mctc-lib source paths,
+blobs, and hashes are recorded in `data/parameters/mctc_manifest.json`. The
+original focused notice and upstream license copies remain in
 `data/parameters/d4.NOTICE` and `data/parameters/licenses/`.
 
 ## xTB numerical oracle

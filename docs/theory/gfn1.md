@@ -20,14 +20,25 @@ readable implementation inspection:
 
 Canonical redistributed GFN1 parameter material is pinned to tblite 0.7.0
 commit `fa8a4416e8fe093d0075bc10ac875494c2a449a9`. It is an ancestor of the local
-tblite checkout; the intervening GFN1/export-source changes are formatting and
-workflow maintenance rather than parameter changes. Primary closed-shell
-goldens use the separately pinned live tblite revision
+tblite checkout. The later checkout was inspected for implementation context,
+but its intervening changes include substantive runtime-equation updates as
+well as formatting and workflow maintenance. Those later runtime changes are
+non-authoritative and are not used to generate the canonical parameter bytes.
+Primary closed-shell goldens use the separately pinned live tblite revision
 `e9abc395b122018ed688aecb1c3a65cecaf97beb` with explicit `--method gfn1
 --acc 0.0001 --grad --json`. xTB 6.7.1 revision
 `edcfbbe39d411edc225e27315fbda3a204ddb023` supplies unrestricted,
 point-charge, and halogen-specific reference cases. The source, inspection,
 and live-oracle roles are intentionally distinct.
+
+The non-TOML atomic and coordination inputs are pinned separately to mctc-lib
+v0.5.2 commit `e9de066d89f250d1cfb6de3a33f0c27c0e2f855d`. The generated GFN1 JSON/header
+retain the 86-element Pauling electronegativities, Mantina atomic radii, and
+4/3-scaled Pyykko--Atsumi covalent radii. Lengths are converted using the
+pinned CODATA 2018 expression at mctc working precision; its reviewed IEEE
+binary64 value is `1.8897261246204404` bohr/Angstrom. Because those header
+bytes derive from both tblite and mctc-lib, they carry
+`LGPL-3.0-or-later AND Apache-2.0`.
 
 Redistributed parameter bytes are generated from the reviewed tblite source
 and covered by its LGPL-3.0-or-later grant. xTB and dxtb are oracle and review
@@ -48,8 +59,25 @@ sequential Gram--Schmidt chain. The resulting first-shell valence mask is used
 by both reference occupations and H0 scaling.
 
 GFN1 uses the exponential coordination-number model selected by the canonical
-export, rather than GFN2's double-exponential convention. Its analytic
-coordinate derivative must feed every CN-dependent term, including H0 and D3.
+export, rather than GFN2's double-exponential convention. For covalent radii
+`r_cov,A` and `r_cov,B` and distance `r`, one pair contributes
+
+```math
+f_{AB}(r) = \frac{1}{1 + \exp\{-16[(r_{\mathrm{cov},A}+r_{\mathrm{cov},B})/r-1]\}}.
+```
+
+The default real-space cutoff is 25 bohr, the maximum-CN cutoff is disabled,
+the directed factor and base electronegativity factor are both one, and pairs
+are traversed over the lower triangle (including diagonal lattice images).
+Pairs are skipped only for `r^2 > 25^2` or `r^2 < 1e-12`; equality at either
+boundary remains included. Its analytic distance derivative is the negative
+upstream logistic derivative and must feed every CN-dependent term, including
+H0 and D3.
+
+GFN1 H0 uses the pinned Pauling electronegativities for the squared element
+difference below. The unscaled Mantina radius of each element is used by the
+shell-polynomial distance factor and, after the separate canonical halogen
+radius scale, by the classical halogen correction.
 
 For shells `i` and `j`, the H0 off-diagonal scale has four branches:
 
