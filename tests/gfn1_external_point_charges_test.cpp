@@ -398,7 +398,7 @@ int test_validation_transactionality_and_no_allocations() {
               plan, qm_positions.data(), point_positions.data(), point_charges.data(),
               hardness.data(), potentials.data(), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   }
-  const double maximum = std::numeric_limits<double>::max();
+  constexpr double maximum = std::numeric_limits<double>::max();
   const std::array<double, 6> overflow_positions{};
   const std::array<double, 2> overflow_charges{0.75 * maximum, 0.75 * maximum};
   const std::array<double, 2> overflow_hardness{maximum, maximum};
