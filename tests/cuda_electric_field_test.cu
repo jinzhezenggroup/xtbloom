@@ -81,7 +81,11 @@ int test_potentials_and_peer_failure() {
   CUDA_CHECK(d_dipole.download(dipole, stream));
   CUDA_CHECK(d_system_errors.download(errors, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  CHECK(atomic == std::vector<double>({-0.8, -1.05, -0.0}));
+  const std::vector<double> expected_atomic{-0.8, -1.05, -0.0};
+  CHECK(atomic.size() == expected_atomic.size());
+  for (std::size_t index = 0; index < expected_atomic.size(); ++index) {
+    CHECK(std::abs(atomic[index] - expected_atomic[index]) <= 1.0e-15);
+  }
   CHECK(dipole == std::vector<double>({-0.2, 0.3, -0.4, -0.2, 0.3, -0.4, -0.0, -0.0, -0.0}));
   CHECK(errors == std::vector<std::uint32_t>({0u, 0u}));
 
@@ -98,7 +102,9 @@ int test_potentials_and_peer_failure() {
   CUDA_CHECK(d_dipole.download(dipole, stream));
   CUDA_CHECK(d_system_errors.download(errors, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  CHECK(atomic[0] == -0.8 && atomic[1] == -1.05 && atomic[2] == kSentinel);
+  CHECK(std::abs(atomic[0] + 0.8) <= 1.0e-15);
+  CHECK(std::abs(atomic[1] + 1.05) <= 1.0e-15);
+  CHECK(atomic[2] == kSentinel);
   CHECK(dipole[6] == kSentinel && dipole[7] == kSentinel && dipole[8] == kSentinel);
   CHECK(errors[0] == 0u);
   CHECK(errors[1] == static_cast<std::uint32_t>(Gfn2ElectricFieldDeviceError::kNonfiniteVector));

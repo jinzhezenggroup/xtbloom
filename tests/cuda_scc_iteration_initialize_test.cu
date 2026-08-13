@@ -942,7 +942,7 @@ int test_conditional_restore_admission_validation_and_atomicity() {
   Stream stream;
   CHECK(stream.value != nullptr);
 
-  const std::uint32_t rejected = 3u;
+  const std::uint32_t rejected = kGfn2RequestErrorWarmIncompatible;
   CUDA_CHECK(cudaMemcpyAsync(admission.pointer, &rejected, sizeof(rejected), cudaMemcpyHostToDevice,
                              stream.value));
   CUDA_CHECK(cudaMemsetAsync(arena.allocation.pointer, 0x5a, arena.requirements.total_bytes,
@@ -966,6 +966,14 @@ int test_conditional_restore_admission_validation_and_atomicity() {
       static_cast<const std::uint32_t*>(admission.pointer), stream.value);
   CHECK(diagnostic.success());
   CHECK(copy_from_device(arena.state.raw_population.qsh, kShells, stream.value) == data.qsh);
+  std::vector<std::byte> restored(arena.requirements.total_bytes);
+  std::vector<std::byte> checkpoint(arena.requirements.total_bytes);
+  CUDA_CHECK(cudaMemcpyAsync(restored.data(), arena.allocation.pointer, restored.size(),
+                             cudaMemcpyDeviceToHost, stream.value));
+  CUDA_CHECK(cudaMemcpyAsync(checkpoint.data(), initializer.device_checkpoint(), checkpoint.size(),
+                             cudaMemcpyDeviceToHost, stream.value));
+  CUDA_CHECK(cudaStreamSynchronize(stream.value));
+  CHECK(restored == checkpoint);
 
   diagnostic = initializer.upload_if_admitted_async(
       arena.allocation.pointer, arena.requirements.total_bytes, ready,

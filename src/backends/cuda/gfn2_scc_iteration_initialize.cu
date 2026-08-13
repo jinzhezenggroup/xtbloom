@@ -1320,7 +1320,18 @@ __global__ void restore_initial_state_if_admitted_kernel(const std::byte* source
   if (*request_error != 0u) return;
   const std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
-  for (std::size_t byte = index; byte < bytes; byte += stride) destination[byte] = source[byte];
+  constexpr std::size_t kWordBytes = sizeof(uint4);
+  const std::size_t word_count = bytes / kWordBytes;
+  const auto* source_words = reinterpret_cast<const uint4*>(source);
+  auto* destination_words = reinterpret_cast<uint4*>(destination);
+  for (std::size_t word = index; word < word_count; word += stride) {
+    destination_words[word] = source_words[word];
+  }
+  /* Arena images are 256-byte aligned today, but retaining a byte tail keeps
+   * the copy correct if a future compatible checkpoint has a shorter suffix. */
+  for (std::size_t byte = word_count * kWordBytes + index; byte < bytes; byte += stride) {
+    destination[byte] = source[byte];
+  }
 }
 
 Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::upload_if_admitted_async(
@@ -1397,8 +1408,11 @@ Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::upload_if_
     }
   }
   constexpr int kThreads = 256;
+  constexpr std::size_t kWordBytes = sizeof(uint4);
+  const std::size_t work_items =
+      std::max<std::size_t>((impl_->image_bytes + kWordBytes - 1u) / kWordBytes, 1u);
   const auto blocks = static_cast<unsigned int>(
-      std::min<std::size_t>((impl_->image_bytes + kThreads - 1u) / kThreads, 65535u));
+      std::min<std::size_t>((work_items + kThreads - 1u) / kThreads, 65535u));
   restore_initial_state_if_admitted_kernel<<<blocks, kThreads, 0, stream>>>(
       static_cast<const std::byte*>(impl_->device_checkpoint),
       static_cast<std::byte*>(device_arena), impl_->image_bytes, request_error);

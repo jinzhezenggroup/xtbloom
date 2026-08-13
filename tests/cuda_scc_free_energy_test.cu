@@ -37,6 +37,7 @@ using xtbloom::detail::cuda::Gfn2SccFreeEnergyDeviceWorkspace;
 using xtbloom::detail::cuda::kGfn2SccClassicalAllComponents;
 using xtbloom::detail::cuda::kGfn2SccFreeEnergyDiagnosticComponents;
 using xtbloom::detail::cuda::kGfn2SccFreeEnergyInputComponents;
+using xtbloom::detail::cuda::kGfn2SccFreeEnergyStorageComponents;
 using xtbloom::detail::cuda::reset_gfn2_scc_classical_energy_device_errors_cuda;
 using xtbloom::detail::cuda::reset_gfn2_scc_energy_device_errors_cuda;
 using xtbloom::detail::cuda::reset_gfn2_scc_free_energy_device_errors_cuda;
@@ -212,8 +213,7 @@ struct DeviceCase {
 
   explicit DeviceCase(const HostCase& host)
       : active(host.active.size()),
-        scratch(host.active.size() *
-                static_cast<std::size_t>(kGfn2SccFreeEnergyDiagnosticComponents)),
+        scratch(host.active.size() * static_cast<std::size_t>(kGfn2SccFreeEnergyStorageComponents)),
         sequence_active(1u),
         system_errors(host.active.size()),
         device_error(1u) {
@@ -285,8 +285,8 @@ struct DeviceCase {
     diagnostics.free_energy = outputs[10].get();
     diagnostics.free_energy_elements = count;
     diagnostics.plan_token = kPlanToken;
-    workspace = {scratch.get(), static_cast<std::int64_t>(scratch.size()), sequence_active.get(), 1,
-                 kPlanToken};
+    workspace = {scratch.get(), count * kGfn2SccFreeEnergyDiagnosticComponents,
+                 sequence_active.get(), 1, kPlanToken};
   }
 
   cudaError_t fill_outputs(double value, cudaStream_t stream = nullptr) {

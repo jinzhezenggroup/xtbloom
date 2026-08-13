@@ -349,11 +349,15 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
     iterations = -1;
     converged = 0;
     system_status = XTBLOOM_STATUS_INTERNAL_ERROR;
-    if (xtbloom_compute(context, &field_batch, &field_options, &field_result) !=
-            XTBLOOM_STATUS_SUCCESS ||
-        system_status != XTBLOOM_STATUS_SUCCESS || converged != 1 || iterations <= 0 ||
-        !isfinite(energy)) {
-      fprintf(stderr, "installed %s electric-field inference failed: %s\n", mode_name,
+    const xtbloom_status_t field_status =
+        xtbloom_compute(context, &field_batch, &field_options, &field_result);
+    if (field_status != XTBLOOM_STATUS_SUCCESS || system_status != XTBLOOM_STATUS_SUCCESS ||
+        converged != 1 || iterations <= 0 || !isfinite(energy)) {
+      fprintf(stderr,
+              "installed %s electric-field inference failed: call=%d system=%d flags=0x%08x "
+              "converged=%u iterations=%d energy=%.17g force0=%.17g dipole0=%.17g error=%s\n",
+              mode_name, (int)field_status, (int)system_status, (unsigned int)field_result.flags,
+              (unsigned int)converged, (int)iterations, energy, field_forces[0], dipole[0],
               xtbloom_get_last_error());
       return 11;
     }

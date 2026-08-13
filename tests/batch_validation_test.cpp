@@ -983,6 +983,24 @@ bool test_interaction_abi_v3() {
          f.enable_interaction(entry, efield_block(0.0, 0.0, 0.0));
        },
        "extends past interaction_payload"},
+      {"payload block address overflow",
+       [](Fixture& f) {
+         xtbloom_interaction_t entry{};
+         entry.type = XTBLOOM_INTERACTION_ALPB_SOLVATION;
+         entry.system_index = 0;
+         entry.payload_offset = 16;
+         entry.payload_size = sizeof(std::int32_t);
+         f.interactions = {entry};
+         f.batch.struct_size = sizeof(f.batch);
+         f.batch.total_interactions = 1;
+         f.batch.interaction_descriptors = input_buffer(f.interactions);
+         /* The semantic pass must reject this address before forming or
+          * dereferencing the wrapped block pointer. */
+         f.batch.interaction_payload = {
+             reinterpret_cast<const void*>(std::numeric_limits<std::uintptr_t>::max() - 15u), 20u,
+             XTBLOOM_MEMORY_HOST, 0u};
+       },
+       "address overflows uintptr_t"},
       {"electric-field payload undersized",
        [](Fixture& f) {
          xtbloom_interaction_t entry{};

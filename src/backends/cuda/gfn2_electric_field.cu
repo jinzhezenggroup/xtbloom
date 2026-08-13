@@ -122,13 +122,21 @@ __global__ void preflight_values_kernel(Gfn2ElectricFieldDeviceBatch batch,
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (atomicAdd(const_cast<std::uint32_t*>(plan_error), 0u) != 0u) return;
   __shared__ double field[3];
+  __shared__ int finite_field;
+  if (threadIdx.x == 0) finite_field = 1;
+  __syncthreads();
   if (threadIdx.x < 3) {
     field[threadIdx.x] = input.vectors[system * 3 + threadIdx.x];
     if (!isfinite(field[threadIdx.x])) {
+      atomicExch(&finite_field, 0);
       record_system_error(system_errors, system, Gfn2ElectricFieldDeviceError::kNonfiniteVector);
     }
   }
   __syncthreads();
+  /* Preserve one deterministic classification for malformed field vectors.
+   * Arithmetic derived from an already-invalid vector must not race the
+   * primary kNonfiniteVector diagnostic. */
+  if (finite_field == 0) return;
   const std::int64_t begin = batch.atom_offsets[system];
   const std::int64_t end = batch.atom_offsets[system + 1];
   for (std::int64_t atom = begin + threadIdx.x; atom < end; atom += blockDim.x) {

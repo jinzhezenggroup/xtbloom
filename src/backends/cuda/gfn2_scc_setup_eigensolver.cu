@@ -1050,9 +1050,8 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
       (request_error == nullptr ||
        reinterpret_cast<std::uintptr_t>(request_error) % alignof(std::uint32_t) != 0u ||
        !cuda_accessible(request_error, request_error_attributes, cuda_status))) {
-    SetupDiagnostic diagnostic =
-        failure(XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidArenaMemory,
-                SetupField::kGeometryGeneration);
+    SetupDiagnostic diagnostic = failure(XTBLOOM_STATUS_INVALID_ARGUMENT,
+                                         SetupError::kInvalidArenaMemory, SetupField::kAdmission);
     diagnostic.cuda_status = cuda_status;
     return diagnostic;
   }
@@ -1068,7 +1067,7 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
   }
   if (dynamic_epoch && request_error_attributes.device != current_device) {
     return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidArenaMemory,
-                   SetupField::kGeometryGeneration);
+                   SetupField::kAdmission);
   }
 
   auto* const setup = static_cast<std::byte*>(setup_device_arena);
@@ -1185,7 +1184,11 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
       overlaps(request_error_range, setup_range) || overlaps(request_error_range, input_range) ||
       overlaps(request_error_range, epoch_range)) {
     return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidOverlap,
-                   SetupField::kOverlap);
+                   overlaps(request_error_range, setup_range) ||
+                           overlaps(request_error_range, input_range) ||
+                           overlaps(request_error_range, epoch_range)
+                       ? SetupField::kAdmission
+                       : SetupField::kOverlap);
   }
 
   std::array<AddressRange, 22> protected_ranges{};
@@ -1239,8 +1242,9 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
   for (const AddressRange& range : protected_ranges) {
     if (overlaps(input_range, range) || overlaps(epoch_range, range) ||
         overlaps(request_error_range, range)) {
-      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidOverlap,
-                     SetupField::kOverlap);
+      return failure(
+          XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidOverlap,
+          overlaps(request_error_range, range) ? SetupField::kAdmission : SetupField::kOverlap);
     }
   }
 

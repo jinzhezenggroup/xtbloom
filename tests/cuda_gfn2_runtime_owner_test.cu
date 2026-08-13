@@ -1841,6 +1841,11 @@ int test_electric_field_refresh_and_warm_identity(cudaStream_t stream, std::int3
     CHECK(rejected_snapshot.factors == before_rejection.factors);
     CHECK(rejected_snapshot.factor_statuses == before_rejection.factor_statuses);
     CHECK(rejected_snapshot.eligible == before_rejection.eligible);
+    if (kind == RejectionKind::kInvalidVersion) {
+      const std::int32_t valid_version = 1;
+      std::memcpy(batch.interaction_payload.data() + kGappedPayloadOffset, &valid_version,
+                  sizeof(valid_version));
+    }
     return 0;
   };
   CHECK(reject_without_mutation(RejectionKind::kReservedTag, true) == 0);

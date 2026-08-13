@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "backends/cuda/gfn2_device_admission.cuh"
 #include "backends/cuda/gfn2_scc_setup_eigensolver.cuh"
 #include "tests/support/gfn2_scc_test_case.hpp"
 
@@ -46,6 +47,7 @@ using xtbloom::detail::cuda::Gfn2SccSetupEigensolverBinding;
 using xtbloom::detail::cuda::Gfn2SccSetupEigensolverError;
 using xtbloom::detail::cuda::Gfn2SccSetupEigensolverField;
 using xtbloom::detail::cuda::Gfn2SccSetupTopology;
+using xtbloom::detail::cuda::kGfn2RequestErrorWarmIncompatible;
 using xtbloom::test::gfn2::HostSccCase;
 using xtbloom::test::gfn2::HostSccCaseOptions;
 using xtbloom::test::gfn2::SmallSystemKind;
@@ -942,7 +944,7 @@ int test_device_epoch_admission_validation_and_rejection() {
   CHECK(device_epoch.allocate(sizeof(std::uint64_t)));
   CHECK(request_error.allocate(sizeof(std::uint32_t)));
   const std::uint64_t epoch_value = kGeneration + 1u;
-  const std::uint32_t rejected = 3u;
+  const std::uint32_t rejected = kGfn2RequestErrorWarmIncompatible;
   CUDA_CHECK(cudaMemcpyAsync(device_overlap.get(), changed.data(), changed.size() * sizeof(double),
                              cudaMemcpyHostToDevice, fixture.handles.stream));
   CUDA_CHECK(cudaMemcpyAsync(device_epoch.get(), &epoch_value, sizeof(epoch_value),
@@ -975,7 +977,16 @@ int test_device_epoch_admission_validation_and_rejection() {
   CHECK(std::all_of(generations.begin(), generations.end(),
                     [](std::uint64_t value) { return value == kGeneration; }));
 
+  std::uint64_t host_epoch_value = epoch_value;
+  Gfn2GeometryEpochDevice host_epoch{&host_epoch_value, 1, kPlanToken};
   auto diagnostic = fixture.setup.refactor_overlap_from_device_epoch_async(
+      fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
+      static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
+      host_epoch, static_cast<const std::uint32_t*>(request_error.get()), fixture.handles.stream);
+  CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidArenaMemory);
+  CHECK(diagnostic.field == Gfn2SccSetupEigensolverField::kGeometryGeneration);
+
+  diagnostic = fixture.setup.refactor_overlap_from_device_epoch_async(
       fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
       static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
       epoch,
@@ -983,17 +994,20 @@ int test_device_epoch_admission_validation_and_rejection() {
                                              1u),
       fixture.handles.stream);
   CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidArenaMemory);
+  CHECK(diagnostic.field == Gfn2SccSetupEigensolverField::kAdmission);
   diagnostic = fixture.setup.refactor_overlap_from_device_epoch_async(
       fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
       static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
       epoch, reinterpret_cast<const std::uint32_t*>(fixture.setup_arena.get()),
       fixture.handles.stream);
   CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidOverlap);
+  CHECK(diagnostic.field == Gfn2SccSetupEigensolverField::kAdmission);
   diagnostic = fixture.setup.refactor_overlap_from_device_epoch_async(
       fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
       static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
       epoch, reinterpret_cast<const std::uint32_t*>(device_epoch.get()), fixture.handles.stream);
   CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidOverlap);
+  CHECK(diagnostic.field == Gfn2SccSetupEigensolverField::kAdmission);
   return 0;
 }
 

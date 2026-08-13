@@ -34,7 +34,7 @@ static_assert(std::is_standard_layout_v<Gfn2DeviceAdmission>);
 
 [[nodiscard]] inline __host__ __device__ bool gfn2_request_mutation_allowed(
     const Gfn2DeviceAdmission& admission) noexcept {
-  return admission.error == nullptr || *admission.error == kGfn2RequestErrorNone;
+  return gfn2_request_admitted(admission);
 }
 
 }  // namespace xtbloom::detail::cuda

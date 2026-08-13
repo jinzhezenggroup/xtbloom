@@ -342,6 +342,7 @@ struct ComposerFixture {
   Gfn2SccIterationInitializer initializer;
   DeviceAllocation topology_arena;
   DeviceAllocation input_arena;
+  DeviceAllocation electric_field_arena;
   DeviceAllocation iteration_arena;
   DeviceAllocation eigensolver_setup_arena;
   PinnedAllocation provider_host_workspace;
@@ -433,6 +434,38 @@ struct ComposerFixture {
                    static_cast<unsigned>(input_diagnostic.field));
       return false;
     }
+    /* These standalone SCC fixtures bypass the runtime numerical-refresh
+     * owner. Reproduce its always-present, address-stable zero-field
+     * transaction so field-free composition exercises the production binding
+     * contract without changing the expected physics. */
+    const std::int64_t field_vectors = 3 * host.batch_size();
+    const std::int64_t coordinates = 3 * host.total_atoms();
+    const std::int64_t field_storage_elements =
+        field_vectors + coordinates + host.total_atoms() + coordinates;
+    if (!electric_field_arena.allocate(static_cast<std::size_t>(field_storage_elements) *
+                                       sizeof(double))) {
+      std::fprintf(stderr, "composer electric-field backing allocation failed\n");
+      return false;
+    }
+    auto* const field_storage = static_cast<double*>(electric_field_arena.get());
+    double* const field_positions = field_storage + field_vectors;
+    double* const field_atomic_potentials = field_positions + coordinates;
+    double* const field_dipole_potentials = field_atomic_potentials + host.total_atoms();
+    if (cudaMemsetAsync(field_storage, 0, electric_field_arena.bytes(), handles.stream()) !=
+            cudaSuccess ||
+        cudaMemcpyAsync(field_positions, host.positions().data(),
+                        static_cast<std::size_t>(coordinates) * sizeof(double),
+                        cudaMemcpyHostToDevice, handles.stream()) != cudaSuccess) {
+      std::fprintf(stderr, "composer electric-field backing upload failed\n");
+      return false;
+    }
+    plan_seed.electric_field_batch = {host.batch_size(), host.total_atoms(), host.batch_size() + 1,
+                                      device_topology.atom_offsets, kPlanToken};
+    plan_seed.classical_energy_batch.electric_field = plan_seed.electric_field_batch;
+    input_seed.electric_field = {field_storage, field_vectors, field_positions, coordinates,
+                                 kPlanToken};
+    input_seed.electric_field_potentials = {field_atomic_potentials, host.total_atoms(),
+                                            field_dipole_potentials, coordinates, kPlanToken};
     if (host.d4_plan() != nullptr &&
         !d4_pairlist.bind(
             host.atom_offsets(), host.positions(), device_topology,
@@ -474,6 +507,26 @@ struct ComposerFixture {
                    static_cast<unsigned>(bind_arena_diagnostic.error));
       return false;
     }
+    input_seed.classical_energy.electric_field_multipoles = {
+        workspace_seed.physical_topology.atomic_charges,
+        workspace_seed.physical_topology.atom_elements,
+        workspace_seed.physical_topology.atomic_dipoles,
+        workspace_seed.physical_topology.dipole_elements, kPlanToken};
+    input_seed.classical_energy.electric_field_potentials = input_seed.electric_field_potentials;
+    input_seed.free_energy.electric_field = workspace_seed.staged_classical_energy.electric_field;
+    input_seed.free_energy.electric_field_elements =
+        workspace_seed.staged_classical_energy.electric_field_elements;
+    /* This fixture also validates the pre-projection arena seed directly.
+     * Mirror the report builder's zero-copy field projection in that seed so
+     * both views describe the same production transaction. */
+    workspace_seed.potential_components.electric_field_atomic =
+        input_seed.electric_field_potentials.atomic;
+    workspace_seed.potential_components.electric_field_atomic_elements =
+        input_seed.electric_field_potentials.atom_elements;
+    workspace_seed.potential_components.electric_field_dipole =
+        input_seed.electric_field_potentials.dipole;
+    workspace_seed.potential_components.electric_field_dipole_elements =
+        input_seed.electric_field_potentials.dipole_elements;
 
     eigensolver_diagnostic = eigensolver_owner.bind_and_factor_overlap_async(
         device_topology, plan_seed, arena_requirements, iteration_arena.get(),

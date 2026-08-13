@@ -29,6 +29,7 @@ using xtbloom::detail::cuda::Gfn2SccClassicalEnergyDeviceWorkspace;
 using xtbloom::detail::cuda::kGfn2SccClassicalAllComponents;
 using xtbloom::detail::cuda::kGfn2SccClassicalDiagnosticComponents;
 using xtbloom::detail::cuda::kGfn2SccClassicalInputComponents;
+using xtbloom::detail::cuda::kGfn2SccClassicalStorageComponents;
 using xtbloom::detail::cuda::reset_gfn2_scc_classical_energy_device_errors_cuda;
 
 #define CHECK(condition)                                                                   \
@@ -157,8 +158,7 @@ struct DeviceCase {
 
   explicit DeviceCase(const HostCase& host)
       : active(host.active.size()),
-        scratch(host.active.size() *
-                static_cast<std::size_t>(kGfn2SccClassicalDiagnosticComponents)),
+        scratch(host.active.size() * static_cast<std::size_t>(kGfn2SccClassicalStorageComponents)),
         sequence_active(1u),
         system_errors(host.active.size()),
         device_error(1u) {
@@ -201,8 +201,8 @@ struct DeviceCase {
     diagnostics = {outputs[0].get(), count, outputs[1].get(), count, outputs[2].get(), count,
                    outputs[3].get(), count, outputs[4].get(), count, outputs[5].get(), count,
                    outputs[6].get(), count, kPlanToken};
-    workspace = {scratch.get(), static_cast<std::int64_t>(scratch.size()), sequence_active.get(), 1,
-                 kPlanToken};
+    workspace = {scratch.get(), count * kGfn2SccClassicalDiagnosticComponents,
+                 sequence_active.get(), 1, kPlanToken};
   }
 
   cudaError_t fill_outputs(double value, cudaStream_t stream = nullptr) {

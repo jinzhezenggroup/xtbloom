@@ -4132,8 +4132,13 @@ int test_gfn1_rejected_transactionally(std::int32_t device, PublicBatch& batch,
   MaterializedResult dipole_actual;
   CUDA_CHECK(dipole_result.materialize(dipole_actual));
   CHECK((dipole_actual.flags & XTBLOOM_RESULT_DIPOLE_MOMENTS) != 0u);
-  CHECK(std::all_of(dipole_actual.dipole_moments.begin(), dipole_actual.dipole_moments.end(),
+  std::vector<double> published_dipoles;
+  CUDA_CHECK(dipoles.read_payload(published_dipoles));
+  CHECK(published_dipoles.size() == 3u * static_cast<std::size_t>(batch.descriptor.batch_size));
+  CHECK(std::all_of(published_dipoles.begin(), published_dipoles.end(),
                     [](double value) { return std::isfinite(value); }));
+  CUDA_CHECK(dipoles.guards_intact(guards));
+  CHECK(guards);
   CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &dipole_options,
                                 &dipole_result.descriptor,
                                 request.get()) == XTBLOOM_STATUS_SUCCESS);
