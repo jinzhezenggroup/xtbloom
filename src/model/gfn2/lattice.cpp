@@ -105,8 +105,7 @@ DoubleDouble scaled_dot_double_double(const std::array<DoubleDouble, 3>& coeffic
   exponent = std::numeric_limits<int>::min();
   for (std::size_t component = 0; component < 3u; ++component) {
     const double coefficient_magnitude =
-        std::max(std::abs(coefficients[component].high),
-                 std::abs(coefficients[component].low));
+        std::max(std::abs(coefficients[component].high), std::abs(coefficients[component].low));
     if (!(coefficient_magnitude > 0.0) || values[component] == 0.0) continue;
     int coefficient_exponent = 0;
     int value_exponent = 0;
@@ -126,8 +125,8 @@ DoubleDouble scaled_dot_double_double(const std::array<DoubleDouble, 3>& coeffic
   DoubleDouble result{};
   for (std::size_t component = 0; component < 3u; ++component) {
     if (active[component]) {
-      result = add(result, scale_double_double(
-                               products[component], product_exponents[component] - exponent));
+      result = add(result, scale_double_double(products[component],
+                                               product_exponents[component] - exponent));
     }
   }
   return result;
@@ -201,8 +200,7 @@ bool store_scaled_positive_lower_bound(long double value, int exponent, double& 
     rounded = std::nextafter(rounded, 0.0);
     recovered = wide_scalbn(static_cast<long double>(rounded), -exponent);
   }
-  if (!(rounded > 0.0) || !std::isfinite(rounded) || !wide_finite(recovered) ||
-      recovered > value) {
+  if (!(rounded > 0.0) || !std::isfinite(rounded) || !wide_finite(recovered) || recovered > value) {
     return false;
   }
   output = rounded;
@@ -230,18 +228,15 @@ LongDoubleInterval product_interval(long double lhs, long double rhs) {
   return {round_down(product), round_up(product)};
 }
 
-LongDoubleInterval subtract_interval(const LongDoubleInterval& lhs,
-                                     const LongDoubleInterval& rhs) {
+LongDoubleInterval subtract_interval(const LongDoubleInterval& lhs, const LongDoubleInterval& rhs) {
   return {round_down(lhs.lower - rhs.upper), round_up(lhs.upper - rhs.lower)};
 }
 
-LongDoubleInterval add_interval(const LongDoubleInterval& lhs,
-                                const LongDoubleInterval& rhs) {
+LongDoubleInterval add_interval(const LongDoubleInterval& lhs, const LongDoubleInterval& rhs) {
   return {round_down(lhs.lower + rhs.lower), round_up(lhs.upper + rhs.upper)};
 }
 
-LongDoubleInterval multiply_exact_interval(long double exact,
-                                           const LongDoubleInterval& interval) {
+LongDoubleInterval multiply_exact_interval(long double exact, const LongDoubleInterval& interval) {
   if (exact == 0.0L) return {0.0L, 0.0L};
   if (exact > 0.0L) {
     return {round_down(exact * interval.lower), round_up(exact * interval.upper)};
@@ -261,9 +256,8 @@ std::array<LongDoubleInterval, 3> cross_interval(const std::array<long double, 3
   };
 }
 
-LongDoubleInterval dot_exact_interval(
-    const std::array<long double, 3>& exact,
-    const std::array<LongDoubleInterval, 3>& interval) {
+LongDoubleInterval dot_exact_interval(const std::array<long double, 3>& exact,
+                                      const std::array<LongDoubleInterval, 3>& interval) {
   LongDoubleInterval result = multiply_exact_interval(exact[0], interval[0]);
   result = add_interval(result, multiply_exact_interval(exact[1], interval[1]));
   return add_interval(result, multiply_exact_interval(exact[2], interval[2]));
@@ -334,16 +328,14 @@ bool derive_lattice_geometry(const double* direct, ScaledLatticeDerivation& deri
       cross_interval(derived.normalized[0], derived.normalized[1])};
   const LongDoubleInterval determinant_interval =
       dot_exact_interval(derived.normalized[0], cofactor_intervals[0]);
-  if (!(determinant_interval.lower > 0.0L) ||
-      !wide_finite(determinant_interval.lower)) {
+  if (!(determinant_interval.lower > 0.0L) || !wide_finite(determinant_interval.lower)) {
     return false;
   }
 
   for (std::size_t vector = 0; vector < 3u; ++vector) {
     const long double cofactor_norm_upper = norm_upper_bound(cofactor_intervals[vector]);
     if (!(cofactor_norm_upper > 0.0L) || !wide_finite(cofactor_norm_upper)) return false;
-    const long double spacing_lower =
-        round_down(determinant_interval.lower / cofactor_norm_upper);
+    const long double spacing_lower = round_down(determinant_interval.lower / cofactor_norm_upper);
     if (!store_scaled_positive_lower_bound(spacing_lower, derived.row_exponents[vector],
                                            derived.plane_spacing[vector])) {
       return false;
@@ -482,10 +474,9 @@ xtbloom_status_t make_lattice_3d(const double* direct, Lattice3D& lattice, std::
   if (!valid_lattice_cell_3d(direct)) {
     std::array<std::array<long double, 3>, 3> normalized{};
     std::array<int, 3> row_exponents{};
-    const long double determinant =
-        normalize_lattice_rows(direct, normalized, row_exponents)
-            ? dot(normalized[0], cross(normalized[1], normalized[2]))
-            : 0.0L;
+    const long double determinant = normalize_lattice_rows(direct, normalized, row_exponents)
+                                        ? dot(normalized[0], cross(normalized[1], normalized[2]))
+                                        : 0.0L;
     error = determinant < 0.0L ? "direct lattice must be right-handed"
                                : "direct lattice is singular or numerically ill-conditioned";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -562,15 +553,13 @@ xtbloom_status_t cartesian_to_fractional(const Lattice3D& lattice, const double*
     int numerator_exponent = 0;
     const DoubleDouble numerator =
         scaled_dot_double_double(cofactor_double_double[vector], cartesian, numerator_exponent);
-    const double normalized_fractional =
-        divide_double_double(numerator, determinant_double_double);
+    const double normalized_fractional = divide_double_double(numerator, determinant_double_double);
     /* Reconstruct the inverse directly from the immutable direct cell. Going
      * through the stored 2*pi reciprocal and dividing by 2*pi adds two
      * binary64 rounding steps; for an exact lattice translation those steps
      * can turn integer 1 into nextafter(1, 0), defeating canonical wrapping. */
     if (!store_scaled_double(normalized_fractional,
-                             numerator_exponent - derived.row_exponents[vector],
-                             result[vector])) {
+                             numerator_exponent - derived.row_exponents[vector], result[vector])) {
       error = "Cartesian-to-fractional conversion overflowed binary64";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
@@ -585,8 +574,7 @@ xtbloom_status_t cartesian_to_fractional(const Lattice3D& lattice, const double*
   for (std::size_t component = 0; component < 3u; ++component) {
     const double lower =
         std::nextafter(result[component], -std::numeric_limits<double>::infinity());
-    const double upper =
-        std::nextafter(result[component], std::numeric_limits<double>::infinity());
+    const double upper = std::nextafter(result[component], std::numeric_limits<double>::infinity());
     fractional_candidates[component] = {
         std::nextafter(lower, -std::numeric_limits<double>::infinity()),
         lower,
@@ -600,8 +588,8 @@ xtbloom_status_t cartesian_to_fractional(const Lattice3D& lattice, const double*
     for (std::size_t second = 0; second < 5u && !certified; ++second) {
       for (std::size_t third = 0; third < 5u; ++third) {
         const std::array<double, 3> candidate{fractional_candidates[0][first],
-                                               fractional_candidates[1][second],
-                                               fractional_candidates[2][third]};
+                                              fractional_candidates[1][second],
+                                              fractional_candidates[2][third]};
         std::array<double, 3> reconstructed{};
         bool matches = true;
         for (std::size_t component = 0; component < 3u; ++component) {
@@ -686,8 +674,8 @@ xtbloom_status_t wrap_cartesian(const Lattice3D& lattice, const double* cartesia
     for (std::size_t second = 0; second < candidate_counts[1] && !certified_integer; ++second) {
       for (std::size_t third = 0; third < candidate_counts[2]; ++third) {
         const std::array<double, 3> candidate{integer_candidates[0][first],
-                                               integer_candidates[1][second],
-                                               integer_candidates[2][third]};
+                                              integer_candidates[1][second],
+                                              integer_candidates[2][third]};
         std::array<double, 3> reconstructed{};
         std::string reconstruction_error;
         if (fractional_to_cartesian(lattice, candidate.data(), reconstructed.data(),

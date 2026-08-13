@@ -1105,19 +1105,7 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
                                     vector_bytes(point_offsets) + vector_bytes(molecular_charges) +
                                     vector_bytes(unpaired_electrons) + vector_bytes(spin_channels) +
                                     vector_bytes(periodic_status);
-  const std::size_t basis_plan_vectors =
-      vector_bytes(basis.atom_offsets) + vector_bytes(basis.batch_shell_offsets) +
-      vector_bytes(basis.batch_orbital_offsets) +
-      vector_bytes(basis.batch_cartesian_orbital_offsets) +
-      vector_bytes(basis.batch_primitive_offsets) + vector_bytes(basis.atom_shell_offsets) +
-      vector_bytes(basis.atom_orbital_offsets) +
-      vector_bytes(basis.atom_cartesian_orbital_offsets) +
-      vector_bytes(basis.atom_primitive_offsets) + vector_bytes(basis.shell_orbital_offsets) +
-      vector_bytes(basis.shell_cartesian_orbital_offsets) +
-      vector_bytes(basis.shell_primitive_offsets) + vector_bytes(basis.shell_to_atom) +
-      vector_bytes(basis.principal_quantum_numbers) + vector_bytes(basis.angular_momenta) +
-      vector_bytes(basis.slater_exponents) + vector_bytes(basis.primitive_exponents) +
-      vector_bytes(basis.primitive_coefficients);
+  const std::size_t basis_plan_vectors = common::basis_plan_resident_bytes(basis);
   const std::size_t direct_plan_vectors =
       basis_plan_vectors + vector_bytes(integrals.matrix_offsets) +
       vector_bytes(coordination.atom_offsets) + vector_bytes(coordination.covalent_radius) +

@@ -213,9 +213,10 @@ class Gfn2SccLoopCudaGraphOwner {
 
   /* Append the root graph directly to a graph under construction. The caller
    * supplies the dependency frontier and owns the parent graph. */
-  [[nodiscard]] Gfn2SccLoopLaunchResult append_root_child(
-      cudaGraph_t graph, const cudaGraphNode_t* dependencies, std::size_t dependency_count,
-      cudaGraphNode_t& child) const noexcept;
+  [[nodiscard]] Gfn2SccLoopLaunchResult append_root_child(cudaGraph_t graph,
+                                                          const cudaGraphNode_t* dependencies,
+                                                          std::size_t dependency_count,
+                                                          cudaGraphNode_t& child) const noexcept;
 
   void reset() noexcept;
   [[nodiscard]] bool ready() const noexcept;

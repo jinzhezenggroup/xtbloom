@@ -194,11 +194,14 @@ exception-oriented control flow.
 Only GFN2-xTB is implemented. GFN1-xTB and ROCm have reserved ABI values but
 return unsupported or not-implemented statuses.
 
-xTBloom has no lattice input. Its periodic charge-response API consumes fields
-computed by another electrostatics program; it does not make the QM
-calculation periodic by itself. Native geometry optimization, molecular
-dynamics, solvation, vibrational analysis, and native/analytic Hessians are not
-implemented. Python `Calculator.hessian()` and `BatchCalculator.hessian()`
+xTBloom's ABI-v4 batch descriptor reserves validated native 3D cell and
+periodic-axis input, but native periodic GFN2 execution and the Python
+periodic adapters are not implemented yet. Valid `XYZ` requests therefore
+return `NOT_IMPLEMENTED` before output publication. The separate periodic
+charge-response API consumes fields computed by another electrostatics
+program; it does not make the QM calculation periodic by itself. Native
+geometry optimization, molecular dynamics, solvation, vibrational analysis,
+and native/analytic Hessians are not implemented. Python `Calculator.hessian()` and `BatchCalculator.hessian()`
 provide dense numerical QM-coordinate Hessians from batched analytic-force
 differences. The Hessian and
 the browser/dpdata optimizers are higher-level adapters built on repeated

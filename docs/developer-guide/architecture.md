@@ -173,9 +173,10 @@ restores the immutable setup state and is also the meaning of every ABI-v1 or sh
 prefix. CPU and CUDA both support strict `WARM`: it consumes the checkpoint from the latest fully
 converged compatible batch call on the same context and never falls back to a fresh solve. A
 compatible identity covers the complete topology and compute policy (requested-property flags;
-molecular charge, spin, and unpaired electrons; point-charge and periodic structure; SCC tolerances;
-iteration limit; electronic temperature; mixer algorithm, history, and damping; and determinism).
-Geometry is not part of the identity, so a WARM call
+molecular charge, spin, and unpaired electrons; point-charge, periodic, and interaction structure;
+SCC tolerances; iteration limit; electronic temperature; mixer algorithm, history, and damping;
+and determinism). Interaction identity includes both attachment presence and values, so an explicit
+zero field differs from no attachment. Geometry is not part of the identity, so a WARM call
 reuses the previous converged electronic state as the initial SCC guess for the new coordinates and
 reconverges;
 CUDA additionally keys its checkpoint to a geometry epoch and keeps modifying-Broyden history only
@@ -215,22 +216,17 @@ halogen-bond corrections) do not each regrow the batch layout. One
 `xtbloom_interaction_t` descriptor ties a versioned payload block to one batch
 item; block contents are versioned per tag through a leading `block_version`.
 
-Reserved attachments follow a strict validate-then-refuse policy: the common
-validator proves descriptor/payload extents, memory-space tags, and every
-semantic relationship available from host-resident storage, then the request
-is refused with `NOT_IMPLEMENTED` before any backend execution or caller-output
-commit. A caller can therefore never observe a result where a reserved
-interaction was silently ignored. Unknown or `NONE` tags and structurally
-malformed host-resident attachments are `INVALID_ARGUMENT`. Device-resident
-descriptor content is marked with `kInteractionDescriptorsNeedStaging`, while
-device payload content is marked independently with
-`kInteractionPayloadNeedsStaging`. P3 must stage and validate every marked
-interaction byte before enabling CUDA execution; the availability gate refuses
-the request on CUDA first because that backend cannot consume it yet.
-Host-resident electric-field blocks are byte-loaded and checked for version 1,
-a zero reserved field, and finite values before that gate.
+The common validator proves descriptor/payload extents and memory-space tags
+without dereferencing device pointers. CUDA then stages descriptor and payload
+bytes independently, validates the complete attachment image on device, and
+normalizes the released field into dense per-system presence and value storage.
+Unknown or `NONE` tags, duplicates, malformed payload ranges or field blocks,
+and non-finite components are rejected before caller-output commit. Well-formed
+reserved tags are refused with `NOT_IMPLEMENTED`, so an attachment can never be
+silently ignored. Host, device, and mixed descriptor/payload placement all use
+the same normalized execution state.
 
-The CPU backend executes the released uniform electric field
+Both backends execute the released uniform electric field
 (`XTBLOOM_INTERACTION_ELECTRIC_FIELD`). Each SCC iteration injects the field's
 per-atom scalar potential `-E . r_i` into the charge-channel atom potential and
 its per-atom dipolar potential `-E` into the charge-channel dipole potential,
@@ -239,13 +235,13 @@ mirroring tblite `field.f90`; the energy trace adds `-sum_i q_i (E . r_i)
 `+q_i E`. The stationary response of charges and atomic dipoles is already
 carried through the injected SCC potentials. The field is part of the strict
 warm-start identity, and the
-`dipole_moments` outlet is published on CPU as `sum_i (r_i * q_i + d_i)` with
-`XTBLOOM_RESULT_DIPOLE_MOMENTS` set. CUDA field execution, CUDA dipole
-publication, and every other reserved tag remain `NOT_IMPLEMENTED` until their
-focused PRs land. The pinned tblite 0.7.0 analytic field gradient uses `+E`
-per atom and is retained only as diagnostic provenance because it is not the
-derivative of the reported partial-charge energy; xTBloom field forces are
-gated against central differences of the reported energy. The ABI-v2 result
+`dipole_moments` outlet is published as `sum_i (r_i * q_i + d_i)` with
+`XTBLOOM_RESULT_DIPOLE_MOMENTS` set. Every other reserved tag remains
+`NOT_IMPLEMENTED`. The pinned tblite 0.7.0 analytic field result uses a
+`+E`-per-atom force (equivalently a `-E` gradient contribution) and is retained
+only as diagnostic provenance because it is not the derivative of the reported
+partial-charge energy; xTBloom field forces are gated against central
+differences of the reported energy. The ABI-v2 result
 suffix reserves the dipole-moment outlet and
 `XTBLOOM_RESULT_DIPOLE_MOMENTS` publication flag alongside `quadrupole_moments`,
 `wiberg_orders`, and `spin_populations`; the latter three have no released
@@ -263,7 +259,7 @@ tolerances, iteration limit, electronic temperature, mixer algorithm/history/dam
 determinism at creation time. `FRESH` versus `WARM`
 remains a per-call choice. Geometry is not part of the plan, so repeated `xtbloom_plan_compute`
 calls can change positions, point-charge positions and values, periodic `b/A`
-values, and CPU electric-field attachment values/presence freely on `FRESH`
+values, and electric-field attachment values/presence freely on `FRESH`
 calls. Field storage is preallocated for every system, so those changes do not
 rebuild the fixed plan; `WARM` still requires exact attachment presence and
 values.

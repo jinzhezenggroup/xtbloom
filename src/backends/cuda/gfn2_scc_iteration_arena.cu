@@ -191,9 +191,9 @@ struct ArenaShape {
       !checked_multiply(shape.atoms, kGfn2AES2PotentialElementsPerAtom,
                         shape.aes2_potential_elements) ||
       !checked_multiply(shape.atoms, kGfn2D4MaximumReferences, shape.d4_weight_elements) ||
-      !checked_multiply(shape.batch, kGfn2SccClassicalDiagnosticComponents,
+      !checked_multiply(shape.batch, kGfn2SccClassicalStorageComponents,
                         shape.classical_scratch_elements) ||
-      !checked_multiply(shape.batch, kGfn2SccFreeEnergyDiagnosticComponents,
+      !checked_multiply(shape.batch, kGfn2SccFreeEnergyStorageComponents,
                         shape.free_scratch_elements)) {
     error = Gfn2SccIterationArenaError::kSizeOverflow;
     return false;
@@ -726,6 +726,8 @@ void take_energy_trace(ArenaCursor& cursor, const ArenaShape& shape, double* ent
   free.d4_two_body_elements = shape.batch;
   free.explicit_point_charge = cursor.take<double>(shape.batch);
   free.explicit_point_charge_elements = shape.batch;
+  free.electric_field = cursor.take<double>(shape.batch);
+  free.electric_field_elements = shape.batch;
   free.periodic_embedding = cursor.take<double>(shape.batch);
   free.periodic_embedding_elements = shape.batch;
   /*
@@ -752,6 +754,8 @@ void take_energy_trace(ArenaCursor& cursor, const ArenaShape& shape, double* ent
   classical.d4_two_body_elements = shape.batch;
   classical.explicit_point_charge = free.explicit_point_charge;
   classical.explicit_point_charge_elements = shape.batch;
+  classical.electric_field = free.electric_field;
+  classical.electric_field_elements = shape.batch;
   classical.periodic_embedding = free.periodic_embedding;
   classical.periodic_embedding_elements = shape.batch;
   classical.classical_total = cursor.take<double>(shape.batch);

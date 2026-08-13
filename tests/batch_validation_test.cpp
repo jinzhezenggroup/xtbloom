@@ -76,6 +76,7 @@ struct Fixture {
   std::vector<std::uint8_t> interaction_payload;
   std::vector<double> cell_matrices;
   std::vector<std::int32_t> periodic_axes;
+  alignas(double) std::array<std::uint8_t, 36> misaligned_interaction_payload{};
 
   std::vector<double> energies{0.0, 0.0};
   std::vector<double> forces = std::vector<double>(9);
@@ -909,8 +910,8 @@ bool test_interaction_abi_v3() {
   interaction.payload_offset = 0;
   interaction.payload_size = 32;
 
-  /* A well-formed electric-field attachment passes CPU structural validation
-   * (P2 of #237 implements the electric field on the CPU backend). */
+  /* A well-formed electric-field attachment passes CPU structural validation;
+   * both released backends execute the field after their pointer gates. */
   {
     Fixture field;
     field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
@@ -920,15 +921,14 @@ bool test_interaction_abi_v3() {
     CHECK(!checked.requires_backend_staging_validation());
   }
 
-  /* The compatibility structure entry point retains main's established CUDA
-   * availability gate for interactions. Lattice staging uses the newer
-   * dispatch-only entry point inside the CUDA transaction. */
+  /* The CUDA structure-only entry point accepts a host-readable released field;
+   * the runtime performs pointer provenance and executes the term. */
   {
     Fixture field;
     field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
     checked = validate_compute_descriptor_structure(XTBLOOM_BACKEND_CUDA, &field.batch,
                                                     &field.options, &field.result);
-    CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+    CHECK(checked.ok());
   }
 
   const InvalidCase invalid_interactions[] = {
@@ -1003,6 +1003,24 @@ bool test_interaction_abi_v3() {
          f.enable_interaction(entry, efield_block(0.0, 0.0, 0.0));
        },
        "extends past interaction_payload"},
+      {"payload block address overflow",
+       [](Fixture& f) {
+         xtbloom_interaction_t entry{};
+         entry.type = XTBLOOM_INTERACTION_ALPB_SOLVATION;
+         entry.system_index = 0;
+         entry.payload_offset = 16;
+         entry.payload_size = sizeof(std::int32_t);
+         f.interactions = {entry};
+         f.batch.struct_size = sizeof(f.batch);
+         f.batch.total_interactions = 1;
+         f.batch.interaction_descriptors = input_buffer(f.interactions);
+         /* The semantic pass must reject this address before forming or
+          * dereferencing the wrapped block pointer. */
+         f.batch.interaction_payload = {
+             reinterpret_cast<const void*>(std::numeric_limits<std::uintptr_t>::max() - 15u), 20u,
+             XTBLOOM_MEMORY_HOST, 0u};
+       },
+       "address overflows uintptr_t"},
       {"electric-field payload undersized",
        [](Fixture& f) {
          xtbloom_interaction_t entry{};
@@ -1029,6 +1047,22 @@ bool test_interaction_abi_v3() {
          entry.payload_offset = 1;
          entry.payload_size = 32;
          f.enable_interaction(entry, std::vector<std::uint8_t>(64, 0));
+       },
+       "undersized or misaligned"},
+      {"electric-field payload view base misaligned",
+       [](Fixture& f) {
+         xtbloom_interaction_t entry{};
+         entry.type = XTBLOOM_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         const std::vector<std::uint8_t> payload = efield_block(0.0, 0.0, 0.0);
+         std::memcpy(f.misaligned_interaction_payload.data() + 4u, payload.data(), payload.size());
+         f.interactions = {entry};
+         f.batch.struct_size = sizeof(f.batch);
+         f.batch.total_interactions = 1;
+         f.batch.interaction_descriptors = input_buffer(f.interactions);
+         f.batch.interaction_payload = {f.misaligned_interaction_payload.data() + 4u, 32u,
+                                        XTBLOOM_MEMORY_HOST, 0u};
        },
        "undersized or misaligned"},
       {"electric-field payload version unsupported",
@@ -1123,7 +1157,8 @@ bool test_interaction_abi_v3() {
     CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
   }
 
-  /* Dipole availability follows the same separated CUDA gate. */
+  /* Dipole-moment publication is released on both GFN2 backends; requesting
+   * it with a correctly sized outlet is accepted structurally. */
   {
     Fixture dipole;
     dipole.options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
@@ -1141,11 +1176,10 @@ bool test_interaction_abi_v3() {
     cuda_dipole.result.dipole_moments = output_buffer(cuda_output);
     checked = validate_compute_descriptor_structure(XTBLOOM_BACKEND_CUDA, &cuda_dipole.batch,
                                                     &cuda_dipole.options, &cuda_dipole.result);
-    CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+    CHECK(checked.ok());
   }
 
-  /* Validate the released outlet shape before reporting that publication is
-   * not implemented. This keeps malformed requests distinguishable. */
+  /* Validate the released outlet shape before backend execution. */
   {
     Fixture missing_dipole;
     missing_dipole.options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
@@ -1189,15 +1223,17 @@ bool test_interaction_abi_v3() {
     CHECK(checked.error.find("reserved batch-result outlet") != std::string::npos);
   }
 
-  /* Device-resident descriptors defer content checks through the staging
-   * mask and are then refused by the availability gate. */
+  /* Device-resident descriptors defer content and reserved-tag checks through
+   * the CUDA runtime's stream-ordered interaction gate. */
   {
     Fixture device_field;
     device_field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
     device_field.batch.interaction_descriptors.memory_space = XTBLOOM_MEMORY_CUDA_DEVICE;
     checked = validate_compute_descriptors(XTBLOOM_BACKEND_CUDA, &device_field.batch,
                                            &device_field.options, &device_field.result);
-    CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+    CHECK(checked.ok());
+    CHECK((checked.pending_offset_checks & xtbloom::detail::kInteractionDescriptorsNeedStaging) !=
+          0u);
   }
   return true;
 }
@@ -1251,8 +1287,8 @@ bool test_lattice_abi_v4() {
   DescriptorValidationResult checked = validate_compute_descriptors(
       XTBLOOM_BACKEND_CPU, &molecular.batch, &molecular.options, &molecular.result);
   CHECK(checked.ok());
-  CHECK(xtbloom::detail::validate_plan_descriptor_structure(
-            XTBLOOM_BACKEND_CPU, &molecular.batch, &molecular.options)
+  CHECK(xtbloom::detail::validate_plan_descriptor_structure(XTBLOOM_BACKEND_CPU, &molecular.batch,
+                                                            &molecular.options)
             .ok());
 
   /* A valid released 3D request is fully validated, then refused atomically. */
@@ -1266,8 +1302,8 @@ bool test_lattice_abi_v4() {
   checked = validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &periodic.batch, &periodic.options,
                                          &periodic.result);
   CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
-  checked = xtbloom::detail::validate_plan_descriptor_structure(
-      XTBLOOM_BACKEND_CPU, &periodic.batch, &periodic.options);
+  checked = xtbloom::detail::validate_plan_descriptor_structure(XTBLOOM_BACKEND_CPU,
+                                                                &periodic.batch, &periodic.options);
   CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
   CHECK(checked.error.find("periodic GFN2 execution is not implemented") != std::string::npos);
   CHECK(checked.error.find("periodic GFN2 execution") != std::string::npos);

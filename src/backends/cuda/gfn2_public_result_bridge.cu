@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "backends/cuda/gfn2_device_admission.cuh"
 #include "backends/cuda/gfn2_public_result_bridge.cuh"
 
 namespace xtbloom::detail::cuda {
@@ -13,20 +14,15 @@ namespace {
 
 constexpr int kThreadsPerBlock = 256;
 constexpr int kMaximumCopyBlocks = 256;
-/* Dipole output is a structurally admitted public request but is not yet a
- * publishable CUDA bridge field. The stream-ordered request gate must reject
- * it atomically after device-resident descriptor validation instead of this
- * static contract turning it into an internal launch error. */
-constexpr std::uint32_t kAdmittedProperties =
+constexpr std::uint32_t kKnownProperties =
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ENERGY) |
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_FORCES) |
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ATOMIC_CHARGES) |
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) |
     static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS);
-constexpr std::uint32_t kUnpublishedProperties =
-    static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS);
 constexpr std::uint32_t kKnownResultFlags =
-    static_cast<std::uint32_t>(XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES);
+    static_cast<std::uint32_t>(XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES) |
+    static_cast<std::uint32_t>(XTBLOOM_RESULT_DIPOLE_MOMENTS);
 
 using BridgeError = Gfn2PublicResultBridgeError;
 using Route = Gfn2PublicResultRoute;
@@ -36,6 +32,7 @@ struct ExpectedExtents {
   std::int64_t qm_forces = 0;
   std::int64_t atomic_charges = 0;
   std::int64_t point_forces = 0;
+  std::int64_t dipole_moments = 0;
   std::int64_t diagnostics = 0;
 };
 
@@ -58,8 +55,10 @@ __host__ __device__ bool expected_extents(const Gfn2PublicResultBridgeDevicePlan
   }
   std::int64_t atom_coordinates = 0;
   std::int64_t point_coordinates = 0;
+  std::int64_t batch_coordinates = 0;
   if (!checked_times_three(plan.total_atoms, atom_coordinates) ||
-      !checked_times_three(plan.total_point_charges, point_coordinates)) {
+      !checked_times_three(plan.total_point_charges, point_coordinates) ||
+      !checked_times_three(plan.batch_size, batch_coordinates)) {
     return false;
   }
   extents.energies = property_requested(plan, XTBLOOM_COMPUTE_ENERGY) ? plan.batch_size : 0;
@@ -68,6 +67,8 @@ __host__ __device__ bool expected_extents(const Gfn2PublicResultBridgeDevicePlan
       property_requested(plan, XTBLOOM_COMPUTE_ATOMIC_CHARGES) ? plan.total_atoms : 0;
   extents.point_forces =
       property_requested(plan, XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) ? point_coordinates : 0;
+  extents.dipole_moments =
+      property_requested(plan, XTBLOOM_COMPUTE_DIPOLE_MOMENTS) ? batch_coordinates : 0;
   extents.diagnostics = plan.batch_size;
   return true;
 }
@@ -179,6 +180,8 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       structurally_safe_buffer(input.atomic_charges, input.atomic_charge_elements,
                                alignof(double)) &&
       structurally_safe_buffer(input.point_forces, input.point_force_elements, alignof(double)) &&
+      structurally_safe_buffer(input.dipole_moments, input.dipole_moment_elements,
+                               alignof(double)) &&
       structurally_safe_buffer(input.iterations, input.batch_elements, alignof(std::int32_t)) &&
       structurally_safe_buffer(input.converged, input.batch_elements, alignof(std::uint8_t)) &&
       structurally_safe_buffer(input.system_statuses, input.batch_elements,
@@ -195,6 +198,8 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
                                alignof(double)) &&
       structurally_safe_buffer(device_staging.point_forces, device_staging.point_force_elements,
                                alignof(double)) &&
+      structurally_safe_buffer(device_staging.dipole_moments, device_staging.dipole_moment_elements,
+                               alignof(double)) &&
       structurally_safe_buffer(device_staging.iterations, device_staging.batch_elements,
                                alignof(std::int32_t)) &&
       structurally_safe_buffer(device_staging.converged, device_staging.batch_elements,
@@ -205,6 +210,7 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       structurally_safe_destination(destinations.qm_forces, alignof(double)) &&
       structurally_safe_destination(destinations.atomic_charges, alignof(double)) &&
       structurally_safe_destination(destinations.point_forces, alignof(double)) &&
+      structurally_safe_destination(destinations.dipole_moments, alignof(double)) &&
       structurally_safe_destination(destinations.iterations, alignof(std::int32_t)) &&
       structurally_safe_destination(destinations.converged, alignof(std::uint8_t)) &&
       structurally_safe_destination(destinations.system_statuses, alignof(xtbloom_status_t)) &&
@@ -212,6 +218,7 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       structurally_safe_staging(staging.qm_forces, alignof(double)) &&
       structurally_safe_staging(staging.atomic_charges, alignof(double)) &&
       structurally_safe_staging(staging.point_forces, alignof(double)) &&
+      structurally_safe_staging(staging.dipole_moments, alignof(double)) &&
       structurally_safe_staging(staging.iterations, alignof(std::int32_t)) &&
       structurally_safe_staging(staging.converged, alignof(std::uint8_t)) &&
       structurally_safe_staging(staging.system_statuses, alignof(xtbloom_status_t)) &&
@@ -222,13 +229,14 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       diagnostics.control_elements >= 0;
   if (!fields_safe) return false;
 
-  RangeList<11> device_reads;
-  RangeList<8> device_writes;
+  RangeList<12> device_reads;
+  RangeList<9> device_writes;
   const bool device_ranges_valid =
       device_reads.add(input.energies, input.energy_elements, sizeof(double)) &&
       device_reads.add(input.qm_forces, input.qm_force_elements, sizeof(double)) &&
       device_reads.add(input.atomic_charges, input.atomic_charge_elements, sizeof(double)) &&
       device_reads.add(input.point_forces, input.point_force_elements, sizeof(double)) &&
+      device_reads.add(input.dipole_moments, input.dipole_moment_elements, sizeof(double)) &&
       device_reads.add(input.iterations, input.batch_elements, sizeof(std::int32_t)) &&
       device_reads.add(input.converged, input.batch_elements, sizeof(std::uint8_t)) &&
       device_reads.add(input.system_statuses, input.batch_elements, sizeof(xtbloom_status_t)) &&
@@ -243,6 +251,8 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
                         sizeof(double)) &&
       device_writes.add(device_staging.point_forces, device_staging.point_force_elements,
                         sizeof(double)) &&
+      device_writes.add(device_staging.dipole_moments, device_staging.dipole_moment_elements,
+                        sizeof(double)) &&
       device_writes.add(device_staging.iterations, device_staging.batch_elements,
                         sizeof(std::int32_t)) &&
       device_writes.add(device_staging.converged, device_staging.batch_elements,
@@ -252,13 +262,15 @@ bool valid_launch_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       device_writes.add(diagnostics.control, 1, sizeof(Gfn2PublicResultBridgeControl));
   if (!device_ranges_valid || !disjoint_writes(device_reads, device_writes)) return false;
 
-  RangeList<9> host_writes;
+  RangeList<10> host_writes;
   const bool host_ranges_valid =
       host_writes.add(staging.energies.data, staging.energies.elements, sizeof(double)) &&
       host_writes.add(staging.qm_forces.data, staging.qm_forces.elements, sizeof(double)) &&
       host_writes.add(staging.atomic_charges.data, staging.atomic_charges.elements,
                       sizeof(double)) &&
       host_writes.add(staging.point_forces.data, staging.point_forces.elements, sizeof(double)) &&
+      host_writes.add(staging.dipole_moments.data, staging.dipole_moments.elements,
+                      sizeof(double)) &&
       host_writes.add(staging.iterations.data, staging.iterations.elements, sizeof(std::int32_t)) &&
       host_writes.add(staging.converged.data, staging.converged.elements, sizeof(std::uint8_t)) &&
       host_writes.add(staging.system_statuses.data, staging.system_statuses.elements,
@@ -308,8 +320,10 @@ __host__ __device__ BridgeError static_contract_error(
     return BridgeError::kInvalidAbiVersion;
   }
   if (plan.reserved != 0u || plan.requested_properties == 0u ||
-      (plan.requested_properties & ~kAdmittedProperties) != 0u ||
-      (plan.result_flags & ~kKnownResultFlags) != 0u) {
+      (plan.requested_properties & ~kKnownProperties) != 0u ||
+      (plan.result_flags & ~kKnownResultFlags) != 0u ||
+      property_requested(plan, XTBLOOM_COMPUTE_DIPOLE_MOMENTS) !=
+          ((plan.result_flags & static_cast<std::uint32_t>(XTBLOOM_RESULT_DIPOLE_MOMENTS)) != 0u)) {
     return BridgeError::kInvalidFlags;
   }
 
@@ -323,6 +337,8 @@ __host__ __device__ BridgeError static_contract_error(
                           extents.atomic_charges, alignof(double)) ||
       !valid_input_buffer(input.point_forces, input.point_force_elements, extents.point_forces,
                           alignof(double)) ||
+      !valid_input_buffer(input.dipole_moments, input.dipole_moment_elements,
+                          extents.dipole_moments, alignof(double)) ||
       input.batch_elements != extents.diagnostics ||
       !canonical(input.iterations, extents.diagnostics, alignof(std::int32_t)) ||
       !canonical(input.converged, extents.diagnostics, alignof(std::uint8_t)) ||
@@ -337,6 +353,8 @@ __host__ __device__ BridgeError static_contract_error(
                           extents.atomic_charges, alignof(double)) ||
       !valid_input_buffer(device_staging.point_forces, device_staging.point_force_elements,
                           extents.point_forces, alignof(double)) ||
+      !valid_input_buffer(device_staging.dipole_moments, device_staging.dipole_moment_elements,
+                          extents.dipole_moments, alignof(double)) ||
       device_staging.batch_elements != extents.diagnostics ||
       !canonical(device_staging.iterations, extents.diagnostics, alignof(std::int32_t)) ||
       !canonical(device_staging.converged, extents.diagnostics, alignof(std::uint8_t)) ||
@@ -354,6 +372,9 @@ __host__ __device__ BridgeError static_contract_error(
                         alignof(double)) &&
       valid_destination(destinations.point_forces, staging.point_forces, extents.point_forces,
                         property_requested(plan, XTBLOOM_COMPUTE_POINT_CHARGE_FORCES),
+                        alignof(double)) &&
+      valid_destination(destinations.dipole_moments, staging.dipole_moments, extents.dipole_moments,
+                        property_requested(plan, XTBLOOM_COMPUTE_DIPOLE_MOMENTS),
                         alignof(double)) &&
       valid_destination(destinations.iterations, staging.iterations, extents.diagnostics, true,
                         alignof(std::int32_t)) &&
@@ -389,16 +410,19 @@ __global__ void public_result_preflight_kernel(
   const std::uint32_t request_error = *input.request_topology_error;
   if (error == BridgeError::kSuccess && request_error != 0u) {
     switch (request_error) {
-      case 4u:
+      case kGfn2RequestErrorTopologyMismatch:
         error = BridgeError::kRequestTopologyMismatch;
         break;
-      case 3u:
+      case kGfn2RequestErrorWarmIncompatible:
+        error = BridgeError::kRequestWarmIncompatible;
+        break;
+      case kGfn2RequestErrorInvalid:
         error = BridgeError::kRequestInvalidArgument;
         break;
-      case 2u:
+      case kGfn2RequestErrorNotSupported:
         error = BridgeError::kRequestNotSupported;
         break;
-      case 1u:
+      case kGfn2RequestErrorNotImplemented:
         error = BridgeError::kRequestNotImplemented;
         break;
       default:
@@ -407,12 +431,6 @@ __global__ void public_result_preflight_kernel(
     }
   }
   if (error == BridgeError::kSuccess && control.internal_publication_plan_error != 0u) {
-    error = BridgeError::kInternalPublicationFailure;
-  }
-  if (error == BridgeError::kSuccess &&
-      (plan.requested_properties & kUnpublishedProperties) != 0u) {
-    /* A CUDA availability omission must fail closed; the bridge cannot claim
-     * success for a public property for which it owns no publication field. */
     error = BridgeError::kInternalPublicationFailure;
   }
   if (error == BridgeError::kSuccess &&
@@ -459,6 +477,7 @@ __global__ void prepare_public_results_kernel(Gfn2PublicResultBridgeDevicePlan p
   copy_flat(input.qm_forces, device_staging.qm_forces, extents.qm_forces);
   copy_flat(input.atomic_charges, device_staging.atomic_charges, extents.atomic_charges);
   copy_flat(input.point_forces, device_staging.point_forces, extents.point_forces);
+  copy_flat(input.dipole_moments, device_staging.dipole_moments, extents.dipole_moments);
   copy_flat(input.iterations, device_staging.iterations, extents.diagnostics);
   copy_flat(input.converged, device_staging.converged, extents.diagnostics);
   copy_flat(input.system_statuses, device_staging.system_statuses, extents.diagnostics);
@@ -484,6 +503,7 @@ __global__ void commit_public_results_kernel(Gfn2PublicResultBridgeDevicePlan pl
   commit_flat(device_staging.qm_forces, destinations.qm_forces, extents.qm_forces);
   commit_flat(device_staging.atomic_charges, destinations.atomic_charges, extents.atomic_charges);
   commit_flat(device_staging.point_forces, destinations.point_forces, extents.point_forces);
+  commit_flat(device_staging.dipole_moments, destinations.dipole_moments, extents.dipole_moments);
   commit_flat(device_staging.iterations, destinations.iterations, extents.diagnostics);
   commit_flat(device_staging.converged, destinations.converged, extents.diagnostics);
   commit_flat(device_staging.system_statuses, destinations.system_statuses, extents.diagnostics);
@@ -498,6 +518,7 @@ int copy_block_count(const Gfn2PublicResultBridgeDevicePlan& plan) noexcept {
   if (extents.qm_forces > maximum) maximum = extents.qm_forces;
   if (extents.atomic_charges > maximum) maximum = extents.atomic_charges;
   if (extents.point_forces > maximum) maximum = extents.point_forces;
+  if (extents.dipole_moments > maximum) maximum = extents.dipole_moments;
   if (extents.diagnostics > maximum) maximum = extents.diagnostics;
   const std::int64_t blocks =
       maximum / kThreadsPerBlock + (maximum % kThreadsPerBlock == 0 ? 0 : 1);
@@ -534,8 +555,10 @@ bool valid_commit_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
   ExpectedExtents extents;
   if (plan.plan_token == 0u || plan.abi_version != kGfn2PublicResultBridgeAbiVersion ||
       plan.reserved != 0u || plan.requested_properties == 0u ||
-      (plan.requested_properties & ~kAdmittedProperties) != 0u ||
+      (plan.requested_properties & ~kKnownProperties) != 0u ||
       (plan.result_flags & ~kKnownResultFlags) != 0u ||
+      property_requested(plan, XTBLOOM_COMPUTE_DIPOLE_MOMENTS) !=
+          ((plan.result_flags & static_cast<std::uint32_t>(XTBLOOM_RESULT_DIPOLE_MOMENTS)) != 0u) ||
       device_staging.plan_token != plan.plan_token || destinations.plan_token != plan.plan_token ||
       diagnostics.plan_token != plan.plan_token || diagnostics.control_elements != 1 ||
       !canonical(diagnostics.control, 1, alignof(Gfn2PublicResultBridgeControl)) ||
@@ -548,6 +571,8 @@ bool valid_commit_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
                           extents.atomic_charges, alignof(double)) ||
       !valid_input_buffer(device_staging.point_forces, device_staging.point_force_elements,
                           extents.point_forces, alignof(double)) ||
+      !valid_input_buffer(device_staging.dipole_moments, device_staging.dipole_moment_elements,
+                          extents.dipole_moments, alignof(double)) ||
       device_staging.batch_elements != extents.diagnostics ||
       !canonical(device_staging.iterations, extents.diagnostics, alignof(std::int32_t)) ||
       !canonical(device_staging.converged, extents.diagnostics, alignof(std::uint8_t)) ||
@@ -564,6 +589,9 @@ bool valid_commit_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       !valid_commit_destination(destinations.point_forces, extents.point_forces,
                                 property_requested(plan, XTBLOOM_COMPUTE_POINT_CHARGE_FORCES),
                                 alignof(double)) ||
+      !valid_commit_destination(destinations.dipole_moments, extents.dipole_moments,
+                                property_requested(plan, XTBLOOM_COMPUTE_DIPOLE_MOMENTS),
+                                alignof(double)) ||
       !valid_commit_destination(destinations.iterations, extents.diagnostics, true,
                                 alignof(std::int32_t)) ||
       !valid_commit_destination(destinations.converged, extents.diagnostics, true,
@@ -573,14 +601,16 @@ bool valid_commit_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
     return false;
   }
 
-  RangeList<8> reads;
-  RangeList<7> writes;
+  RangeList<9> reads;
+  RangeList<8> writes;
   const bool ranges_valid =
       reads.add(device_staging.energies, device_staging.energy_elements, sizeof(double)) &&
       reads.add(device_staging.qm_forces, device_staging.qm_force_elements, sizeof(double)) &&
       reads.add(device_staging.atomic_charges, device_staging.atomic_charge_elements,
                 sizeof(double)) &&
       reads.add(device_staging.point_forces, device_staging.point_force_elements, sizeof(double)) &&
+      reads.add(device_staging.dipole_moments, device_staging.dipole_moment_elements,
+                sizeof(double)) &&
       reads.add(device_staging.iterations, device_staging.batch_elements, sizeof(std::int32_t)) &&
       reads.add(device_staging.converged, device_staging.batch_elements, sizeof(std::uint8_t)) &&
       reads.add(device_staging.system_statuses, device_staging.batch_elements,
@@ -593,6 +623,8 @@ bool valid_commit_binding(const Gfn2PublicResultBridgeDevicePlan& plan,
       writes.add(destinations.atomic_charges.device_data, destinations.atomic_charges.elements,
                  sizeof(double)) &&
       writes.add(destinations.point_forces.device_data, destinations.point_forces.elements,
+                 sizeof(double)) &&
+      writes.add(destinations.dipole_moments.device_data, destinations.dipole_moments.elements,
                  sizeof(double)) &&
       writes.add(destinations.iterations.device_data, destinations.iterations.elements,
                  sizeof(std::int32_t)) &&
@@ -643,6 +675,10 @@ cudaError_t prepare_gfn2_public_results_cuda(
     if (status == cudaSuccess) {
       status = stage_host_buffer(device_staging.point_forces, destinations.point_forces,
                                  staging.point_forces, extents.point_forces, stream);
+    }
+    if (status == cudaSuccess) {
+      status = stage_host_buffer(device_staging.dipole_moments, destinations.dipole_moments,
+                                 staging.dipole_moments, extents.dipole_moments, stream);
     }
     if (status == cudaSuccess) {
       status = stage_host_buffer(device_staging.iterations, destinations.iterations,

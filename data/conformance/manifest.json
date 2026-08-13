@@ -198,7 +198,7 @@
     },
     {
       "atom_count": 3,
-      "description": "One water molecule in the uniform electric field (0.003, -0.004, 0.005) Hartree per elementary charge per bohr is the ABI-v3 electric-field interaction pilot. The pinned tblite energy remains the independent primary oracle; its analytic field gradient applies +E per atom instead of +q_i E and is retained only as diagnostic provenance, while xtbloom forces are gated by public energy finite differences.",
+      "description": "One water molecule in the uniform electric field (0.003, -0.004, 0.005) Hartree per elementary charge per bohr is the ABI-v3 electric-field interaction pilot. The pinned tblite energy remains the independent primary oracle; its analytic field result applies a +E-per-atom force (equivalently a -E gradient contribution) instead of +q_i E and is retained only as diagnostic provenance, while xtbloom forces are gated by public energy finite differences.",
       "efield": [
         0.003,
         -0.004,
@@ -206,9 +206,6 @@
       ],
       "golden": "data/conformance/golden/water_efield.json",
       "golden_sha256": "d63a1dfc900190c9aeb7508c9a3cf9ab1be9e071578cc7df54abc314a58c7035",
-      "xtbloom_backends": [
-        "cpu"
-      ],
       "xtbloom_force_evidence": "public_energy_finite_difference",
       "xtbloom_oracle_properties": [
         "energy_hartree"
@@ -358,13 +355,13 @@
       "atol": 5e-07,
       "rtol": 0.0,
       "unit": "elementary_charge*bohr",
-      "justification": "Absolute atom-resolved dipole-moment component threshold for the SCC state stored in xtb primary goldens. The public C result ABI exposes no dipole output buffer yet, so this gates reference reproducibility rather than xtbloom agreement; it is conservatively aligned with the charge threshold."
+      "justification": "Absolute atom-resolved dipole-moment component threshold for the SCC state stored in xtb primary goldens. The public C result ABI exposes molecular dipoles but no atom-resolved dipole output, so this gates reference reproducibility rather than xtbloom agreement; it is conservatively aligned with the charge threshold."
     },
     "atomic_quadrupoles": {
       "atol": 5e-07,
       "rtol": 0.0,
       "unit": "elementary_charge*bohr^2",
-      "justification": "Absolute atom-resolved quadrupole-moment component threshold (xx, xy, yy, xz, yz, zz) for goldens that store the SCC state. As with dipoles, the public ABI cannot yet return quadrupoles, so this gate applies to reference-engine reproducibility and is aligned with the charge threshold."
+      "justification": "Absolute atom-resolved quadrupole-moment component threshold (xx, xy, yy, xz, yz, zz) for goldens that store the SCC state. Atom-resolved quadrupoles remain unexposed by the public ABI, so this gate applies to reference-engine reproducibility and is aligned with the charge threshold."
     },
     "point_charge_forces": {
       "atol": 5e-07,
@@ -378,7 +375,7 @@
     "atol": 1e-06,
     "rtol": 0.0,
     "unit": "hartree and hartree/bohr and elementary_charge",
-    "justification": "Both backends must match the same pinned golden within the primary energy, forces, and charges tolerances (5e-7 each in atomic units), so by the triangle inequality CPU-vs-CUDA deviation on identical inputs is bounded by twice the primary tolerance (1e-6). The per-backend invariance and batch-versus-sequential gates in tools/conformance/xtbloom_invariants.py further require each backend to reproduce its own exact symmetries, making the CPU/CUDA agreement threshold explicit and executable without a dedicated pair comparator."
+    "justification": "Both backends must match every property selected by each case's pinned-oracle property set within its primary tolerance (5e-7 in the corresponding atomic unit), so by the triangle inequality CPU-vs-CUDA deviation on identical gated properties is bounded by twice the primary tolerance (1e-6). The per-backend invariance and batch-versus-sequential gates in tools/conformance/xtbloom_invariants.py further require each backend to reproduce its own exact symmetries, making the CPU/CUDA agreement threshold explicit and executable without a dedicated pair comparator."
   },
   "units": {
     "coordinates": "bohr",

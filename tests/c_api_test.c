@@ -114,11 +114,9 @@ _Static_assert(offsetof(xtbloom_batch_t, interaction_payload) == EXPECTED_BATCH_
                "batch ABI-v3 payload must begin after the descriptor buffers");
 _Static_assert(XTBLOOM_BATCH_V4_SIZE == EXPECTED_BATCH_V4_SIZE,
                "batch ABI-v4 image must match the target pointer width");
-_Static_assert(offsetof(xtbloom_batch_t, cell_matrices) ==
-                   EXPECTED_BATCH_CELL_MATRICES_OFFSET,
+_Static_assert(offsetof(xtbloom_batch_t, cell_matrices) == EXPECTED_BATCH_CELL_MATRICES_OFFSET,
                "batch ABI-v4 cell matrices must follow the v3 image");
-_Static_assert(offsetof(xtbloom_batch_t, periodic_axes) ==
-                   EXPECTED_BATCH_PERIODIC_AXES_OFFSET,
+_Static_assert(offsetof(xtbloom_batch_t, periodic_axes) == EXPECTED_BATCH_PERIODIC_AXES_OFFSET,
                "batch ABI-v4 periodic axes must follow the cell matrices");
 _Static_assert(sizeof(xtbloom_periodic_axes_t) == sizeof(int32_t),
                "periodic-axis mask must remain fixed-width");
@@ -237,8 +235,7 @@ static int check_future_batch_init(void) {
   } value;
   memset(&value, 0xa5, sizeof(value));
   if (xtbloom_batch_init(&value.batch, sizeof(value)) != XTBLOOM_STATUS_SUCCESS ||
-      value.batch.struct_size != sizeof(value) ||
-      value.batch.api_version != XTBLOOM_API_VERSION) {
+      value.batch.struct_size != sizeof(value) || value.batch.api_version != XTBLOOM_API_VERSION) {
     return 0;
   }
   for (size_t index = 0; index < sizeof(value.suffix); ++index) {

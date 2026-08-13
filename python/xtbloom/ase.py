@@ -238,11 +238,12 @@ class XTBloom(ase.calculators.calculator.Calculator):
 
 
 def _validate_ase_atoms(atoms: ase.Atoms) -> None:
-    """Reject periodic ASE inputs that the public molecular ABI cannot model."""
+    """Reject periodic ASE inputs until native periodic execution is released."""
     if np.any(atoms.pbc):
         raise ase.calculators.calculator.InputError(
-            "xTBloom does not support periodic ASE systems; the public C ABI "
-            "has no lattice or periodic-boundary descriptor"
+            "xTBloom does not support periodic ASE systems yet; the ABI-v4 "
+            "lattice descriptor exists, but native periodic execution and "
+            "the ASE adapter are not implemented"
         )
 
 

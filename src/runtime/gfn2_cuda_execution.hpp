@@ -73,6 +73,12 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t eigensolver_owner = 0u;
   std::uintptr_t initializer_owner = 0u;
   std::uintptr_t scc_binding = 0u;
+  /* Stable public SCC state leaves. Runtime tests sample these addresses to
+   * prove rejected stream-ordered requests cannot mutate the prior attempt's
+   * canonical state even when the bounded fallback DAG was already captured. */
+  std::uintptr_t scc_state_iterations = 0u;
+  std::uintptr_t scc_state_converged = 0u;
+  std::uintptr_t scc_state_system_statuses = 0u;
   std::uintptr_t scc_loop_owner = 0u;
   std::uintptr_t scc_loop_active_count = 0u;
   std::uintptr_t scc_loop_numerical_body_count = 0u;
@@ -92,6 +98,11 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t force_immutable_arena = 0u;
   std::uintptr_t force_execution_arena = 0u;
   std::uintptr_t numerical_refresh_arena = 0u;
+  /* Fixed-capacity staging for ABI-v3 interaction bytes. Capacity is derived
+   * from the prepared batch size, so every fixed-topology refresh preserves
+   * both arena identities and performs no staging allocation. */
+  std::uintptr_t interaction_device_staging_arena = 0u;
+  std::uintptr_t interaction_host_staging_arena = 0u;
   std::uintptr_t numerical_refresh_binding = 0u;
   std::uintptr_t numerical_epoch = 0u;
   std::uintptr_t committed_generations = 0u;
@@ -164,6 +175,9 @@ struct Gfn2CudaExecutionIdentity {
   std::size_t numerical_refresh_arena_bytes = 0u;
   std::size_t inference_arena_bytes = 0u;
   std::size_t numerical_host_staging_arena_bytes = 0u;
+  std::size_t interaction_device_staging_arena_bytes = 0u;
+  std::size_t interaction_descriptor_capacity_bytes = 0u;
+  std::size_t interaction_payload_capacity_bytes = 0u;
   std::size_t public_result_device_arena_bytes = 0u;
   std::size_t public_result_host_arena_bytes = 0u;
   std::size_t candidate_validation_arena_bytes = 0u;
@@ -274,8 +288,26 @@ struct Gfn2CudaNumericalInputView {
   xtbloom_const_buffer_t point_charge_gammas{};
   xtbloom_const_buffer_t atomic_potential_shifts{};
   xtbloom_const_buffer_t charge_response_matrix{};
+  /* ABI-v3 interaction metadata remains numerical state: FRESH calls may
+   * attach, change, or detach a field without rebuilding the fixed topology.
+   * total_interactions is zero for short-prefix callers. */
+  std::int64_t total_interactions = 0;
+  xtbloom_const_buffer_t interaction_descriptors{};
+  xtbloom_const_buffer_t interaction_payload{};
   xtbloom_const_buffer_t requested_mask{};
 };
+
+#ifdef XTBLOOM_CUDA_TEST_HOOKS
+/* White-box construction faults used only by CUDA runtime-owner tests. The
+ * next prepared candidate consumes the selected hook and then resets it. */
+enum class Gfn2CudaAdmissionAliasTestHook : std::uint32_t {
+  kNone = 0u,
+  kNumericalCandidatePositions = 1u,
+  kStationaryAtomicCharges = 2u,
+};
+
+void set_gfn2_cuda_admission_alias_test_hook(Gfn2CudaAdmissionAliasTestHook hook) noexcept;
+#endif
 
 /*
  * Context-owned cache for complete restricted CUDA GFN2 setup state.

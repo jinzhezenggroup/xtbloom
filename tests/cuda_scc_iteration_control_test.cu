@@ -15,6 +15,7 @@ namespace {
 using xtbloom::detail::Gfn2GenerationScope;
 using xtbloom::detail::Gfn2GeometryCacheProvenanceView;
 using xtbloom::detail::Gfn2PlanMemorySpace;
+using xtbloom::detail::cuda::Gfn2DeviceAdmission;
 using xtbloom::detail::cuda::Gfn2GeometryEpochConsumerDevice;
 using xtbloom::detail::cuda::Gfn2GeometryEpochDevice;
 using xtbloom::detail::cuda::Gfn2SccCacheProvenanceBinding;
@@ -940,15 +941,25 @@ int test_graph_replay_resets_control() {
 
   cudaGraph_t graph = nullptr;
   cudaGraphExec_t executable = nullptr;
+  /* Settle fixture initialization submitted on the legacy default stream
+   * before capturing a nonblocking stream. Otherwise a late zero-image upload
+   * can race the first replay's test data. */
+  CUDA_CHECK(cudaDeviceSynchronize());
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
   CUDA_CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
       fixture.policy, fixture.state, fixture.provenance, fixture.ledger, stream));
   CUDA_CHECK(xtbloom::detail::cuda::normalize_gfn2_scc_stage_cuda(report, fixture.ledger, stream));
   CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
   CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0u));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
+  /* Update the stable device inputs on the same stream before replay. */
   codes[0] = 5u;
   CUDA_CHECK(fixture.install_stage(codes, 5u, 1u, stream));
+  std::vector<std::uint32_t> observed_codes(8u, 0u);
+  CUDA_CHECK(fixture.stage_codes.copy_to(observed_codes.data(), observed_codes.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(observed_codes[0] == 5u);
   CUDA_CHECK(cudaGraphLaunch(executable, stream));
   Snapshot first;
   CUDA_CHECK(fixture.snapshot(first, stream));
@@ -1216,6 +1227,79 @@ int test_host_validation() {
   return 0;
 }
 
+int test_request_admission_codes_and_descriptor_validation() {
+  constexpr std::size_t batch_size = 8u;
+  Fixture fixture(batch_size);
+  CHECK(fixture.valid());
+  std::vector<std::uint64_t> iterations(batch_size, 0u);
+  std::vector<xtbloom_status_t> statuses(batch_size, XTBLOOM_STATUS_SUCCESS);
+  std::vector<std::uint8_t> converged(batch_size, 0u);
+  std::vector<std::uint64_t> generations(batch_size, kGeometryGeneration);
+  std::vector<std::uint64_t> warm_generations(batch_size, kWarmStartGeneration);
+  std::vector<std::uint8_t> eligible(batch_size, 1u);
+  CUDA_CHECK(fixture.install_state(iterations, statuses, converged));
+  CUDA_CHECK(fixture.install_per_system_provenance(generations, warm_generations));
+  CUDA_CHECK(fixture.install_geometry_transaction(kGeometryGeneration, generations, eligible));
+  DeviceBuffer<std::uint32_t> admission_error(1u);
+  CHECK(admission_error.get() != nullptr);
+
+  for (const std::uint32_t code : {xtbloom::detail::cuda::kGfn2RequestErrorNone,
+                                   xtbloom::detail::cuda::kGfn2RequestErrorInvalid,
+                                   xtbloom::detail::cuda::kGfn2RequestErrorNotImplemented,
+                                   xtbloom::detail::cuda::kGfn2RequestErrorWarmIncompatible}) {
+    CUDA_CHECK(admission_error.copy_from(&code, 1u));
+    const Gfn2DeviceAdmission admission{admission_error.get(), 1, kPlanToken};
+    std::vector<std::uint8_t> before_active(batch_size, 0xa5u);
+    std::vector<xtbloom_status_t> before_statuses(batch_size, XTBLOOM_STATUS_NOT_SUPPORTED);
+    std::vector<std::uint64_t> before_failures(batch_size, 0x5a5a5a5a5a5a5a5aULL);
+    const std::uint64_t before_plan = 0x123456789abcdef0ULL;
+    const std::uint32_t before_sequence = 0x79u;
+    CUDA_CHECK(fixture.active.copy_from(before_active.data(), batch_size));
+    CUDA_CHECK(fixture.pending_statuses.copy_from(before_statuses.data(), batch_size));
+    CUDA_CHECK(fixture.failures.copy_from(before_failures.data(), batch_size));
+    CUDA_CHECK(fixture.plan_failure.copy_from(&before_plan, 1u));
+    CUDA_CHECK(fixture.sequence_active.copy_from(&before_sequence, 1u));
+    CUDA_CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+        fixture.policy, fixture.state, fixture.provenance, fixture.geometry_consumer(),
+        fixture.ledger, admission));
+    Snapshot observed;
+    CUDA_CHECK(fixture.snapshot(observed));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    if (code == xtbloom::detail::cuda::kGfn2RequestErrorNone) {
+      CHECK(std::all_of(observed.active.begin(), observed.active.end(),
+                        [](std::uint8_t value) { return value == 1u; }));
+      CHECK(observed.sequence_active == 1u && observed.plan_failure == 0u);
+    } else {
+      CHECK(std::all_of(observed.active.begin(), observed.active.end(),
+                        [](std::uint8_t value) { return value == 0u; }));
+      CHECK(observed.statuses == before_statuses);
+      CHECK(observed.failures == before_failures);
+      CHECK(observed.plan_failure == before_plan);
+      CHECK(observed.sequence_active == 0u);
+    }
+  }
+
+  Gfn2DeviceAdmission bad{admission_error.get(), 2, kPlanToken};
+  CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+            fixture.policy, fixture.state, fixture.provenance, fixture.geometry_consumer(),
+            fixture.ledger, bad) == cudaErrorInvalidValue);
+  bad = {admission_error.get(), 1, kPlanToken ^ 1u};
+  CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+            fixture.policy, fixture.state, fixture.provenance, fixture.geometry_consumer(),
+            fixture.ledger, bad) == cudaErrorInvalidValue);
+  bad = {reinterpret_cast<const std::uint32_t*>(
+             reinterpret_cast<const std::byte*>(admission_error.get()) + 1u),
+         1, kPlanToken};
+  CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+            fixture.policy, fixture.state, fixture.provenance, fixture.geometry_consumer(),
+            fixture.ledger, bad) == cudaErrorInvalidValue);
+  bad = {reinterpret_cast<const std::uint32_t*>(fixture.active.get()), 1, kPlanToken};
+  CHECK(xtbloom::detail::cuda::derive_gfn2_scc_iteration_activity_cuda(
+            fixture.policy, fixture.state, fixture.provenance, fixture.geometry_consumer(),
+            fixture.ledger, bad) == cudaErrorInvalidValue);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1254,6 +1338,9 @@ int main() {
     return status;
   }
   if (const int status = test_device_epoch_graph_replay_and_fail_closed_gates(); status != 0) {
+    return status;
+  }
+  if (const int status = test_request_admission_codes_and_descriptor_validation(); status != 0) {
     return status;
   }
   return test_host_validation();

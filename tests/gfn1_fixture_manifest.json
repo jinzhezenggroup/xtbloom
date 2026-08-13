@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "scope": "repository-only GFN1 CPU scientific fixtures",
+  "distribution": "Tracked Git repository source only. Tests and this manifest are excluded from native installs, PyPI sdists, and wheels.",
+  "sources": [
+    {
+      "project": "dxtb",
+      "repository": "https://github.com/grimme-lab/dxtb",
+      "license": "Apache-2.0",
+      "revision": "b529b5ddb75c0554274955082a189f9f88437cb2",
+      "tree": "502d629acb0a9b1f93e829ec6f467f0beeb129eb",
+      "files": [
+        {
+          "path": "test/test_hamiltonian/test_gfn1.py",
+          "git_blob": "0bd768b42e5cecee4f014d9063832a1e864aa751",
+          "sha256": "306eca70943447fa6b0972ed9af5667128064d5a8b3bacac2a0fb47adf15da13",
+          "use": "Literal H2 GFN1 Hamiltonian matrix from test_no_cn; dxtb identifies tblite 0.3.0 as the numerical generator.",
+          "consumers": ["tests/gfn1_h0_test.cpp"]
+        },
+        {
+          "path": "test/test_overlap/overlap.npz",
+          "git_blob": "8fd0e1ad61a2961e9242dc9c799cf2e180f5a2e2",
+          "sha256": "f2be66d19693cc932f2fb8d1b5b4ad8a6fe47bea4e999b401bb77115d71aa292",
+          "use": "H2 float32 overlap matrix extracted by array key; raw extracted array SHA-256 874375eb64c283f9c4061c56c40baf5b4f54dc936c44bfedf0f7296aaca0a98e.",
+          "consumers": ["tests/gfn1_integrals_test.cpp"]
+        },
+        {
+          "path": "test/test_singlepoint/mols/H2/coord",
+          "git_blob": "1638f7ade742d9fe16156ec22c6cbad51b525546",
+          "sha256": "d4b2168eae99a8bb51a580693d9766506c17728a4ee42cdc093d9de88f540058",
+          "use": "H2 bohr geometry used by the H0 and overlap fixtures.",
+          "consumers": ["tests/gfn1_h0_test.cpp", "tests/gfn1_integrals_test.cpp"]
+        }
+      ]
+    },
+    {
+      "project": "mstore",
+      "repository": "https://github.com/grimme-lab/mstore",
+      "license": "Apache-2.0",
+      "version": "0.3.0",
+      "revision": "663245d739be0123da61c917e55116b0c3db4c74",
+      "tree": "d141de6b486140e3a236286d642610627d0136f2",
+      "files": [
+        {
+          "path": "src/mstore/mb16_43.f90",
+          "git_blob": "ab4c27ce49fdd53003a1aff50e527354fafae64b",
+          "sha256": "4281f4e7f39c514ed449de49ee255b698b1a7d410f0625553e9b70c0893228a6",
+          "use": "MB16-43 structure 01 atomic numbers and Cartesian coordinates, transcribed from the first structure entry.",
+          "consumers": ["tests/gfn1_coordination_test.cpp", "tests/gfn1_repulsion_test.cpp"]
+        }
+      ]
+    },
+    {
+      "project": "tblite",
+      "repository": "https://github.com/tblite/tblite",
+      "license": "LGPL-3.0-or-later",
+      "revision": "133f91efb94b47f05848e1f86832f40a1accc385",
+      "tree": "008603bbf877b414f68208d3fe8393265f72b108",
+      "files": [
+        {
+          "path": "src/tblite/coulomb/charge/effective.f90",
+          "git_blob": "67b91d63e13803e5bc297597e7312404bb1e576c",
+          "sha256": "1d66415c1046e3b83bde1434f6e1ea5697a95362332c70a8db08b2668a07214a",
+          "use": "GFN1 harmonic pair-averaging and effective Coulomb equations independently expanded in the ES2 fixture; shell hardness parameters come from the separately pinned canonical GFN1 tables.",
+          "consumers": ["tests/gfn1_es_spin_test.cpp"]
+        },
+        {
+          "path": "test/unit/test_repulsion.f90",
+          "git_blob": "9cb9671606ccb3081ba798247791f088eb1ffa40",
+          "sha256": "a208f0847342ede9c68e5b54c5765ef421d844f9f94268334b7fcee15aa298a2",
+          "use": "Literal GFN1 effective-repulsion energy golden for mstore MB16-43 structure 01.",
+          "consumers": ["tests/gfn1_repulsion_test.cpp"]
+        }
+      ]
+    }
+  ]
+}

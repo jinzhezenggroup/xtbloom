@@ -230,26 +230,26 @@ components in Hartree per elementary charge per bohr. Its payload offset is
 The tag set is reserved for the xtb/tblite/dxtb interaction family: uniform
 electric field and field gradient, multipole point charges, atomic-potential
 grids, ALPB/GBSA/GB/GBE/ddX solvation, D3/D4 dispersion variants, and
-halogen-bond corrections. The **CPU backend executes the uniform electric
-field** (`XTBLOOM_INTERACTION_ELECTRIC_FIELD`): every other reserved tag is
-refused with `XTBLOOM_STATUS_NOT_IMPLEMENTED`, and the CUDA backend currently
-refuses all interaction execution with `XTBLOOM_STATUS_NOT_IMPLEMENTED`, both
-before any caller output is touched, so a reserved interaction can never
-silently contribute to a result. Unknown or `XTBLOOM_INTERACTION_NONE` tags,
+halogen-bond corrections. The CPU and CUDA backends execute the uniform
+electric field (`XTBLOOM_INTERACTION_ELECTRIC_FIELD`); every other reserved tag
+is refused with `XTBLOOM_STATUS_NOT_IMPLEMENTED` before any caller output is
+touched, so a reserved interaction can never silently contribute to a result.
+Unknown or `XTBLOOM_INTERACTION_NONE` tags,
 duplicate `(system_index, type)` attachments, descriptor flag bits, and payload
 blocks that are undersized, oversized, misaligned, or outside the payload view
 are `XTBLOOM_STATUS_INVALID_ARGUMENT`.
 
-On the CPU backend the uniform electric field contributes a per-atom scalar
+On both backends the uniform electric field contributes a per-atom scalar
 potential `vat_i = -E . r_i` and a per-atom dipolar potential `vdp = -E` to the
 charge channel of the SCC Hamiltonian on every iteration (matching the pinned
 tblite `field.f90` potential), an energy term `-sum_i q_i (E . r_i)
 - sum_i E . d_i` in the SCC trace, and the explicit Hellmann-Feynman force
 `+q_i E` on atom `i`. The stationary response of the converged charges and
 atomic dipoles is already carried by the field potentials. The pinned tblite
-0.7.0 analytic gradient applies `+E` per atom and is nonvariational for partial
-charges, so xTBloom validates field forces against central differences of its
-reported energy instead of treating that gradient as an oracle. Because the
+0.7.0 analytic result applies a `+E`-per-atom force (equivalently a `-E`
+gradient contribution) and is nonvariational for partial charges, so xTBloom
+validates field forces against central differences of its reported energy
+instead of treating that result as an oracle. Because the
 field participates in every SCC iteration it is part of
 the strict warm-start identity: a `WARM` call whose field differs from the
 latest fully converged compatible call is rejected like any other changed
@@ -258,10 +258,9 @@ compute policy.
 The ABI-v2 `xtbloom_batch_result_t` suffix adds the dipole outlet:
 `dipole_moments` holds `batch_size * 3` binary64 values in atomic units. It is
 reported when `XTBLOOM_COMPUTE_DIPOLE_MOMENTS` is set in `compute_options.flags`.
-The CPU backend publishes the molecular dipole `sum_i (r_i * q_i + d_i)` over
-the converged charge-channel SCC multipoles and sets `XTBLOOM_RESULT_DIPOLE_MOMENTS`;
-the CUDA backend currently returns `XTBLOOM_STATUS_NOT_IMPLEMENTED` for this
-output until its publication lands. `quadrupole_moments`, `wiberg_orders`, and
+Both backends publish the molecular dipole `sum_i (r_i * q_i + d_i)` over the
+converged charge-channel SCC multipoles and set `XTBLOOM_RESULT_DIPOLE_MOMENTS`.
+`quadrupole_moments`, `wiberg_orders`, and
 `spin_populations` are ABI-reserved outlets whose shape contract is not
 published: supplying bytes there is refused with
 `XTBLOOM_STATUS_NOT_SUPPORTED`.

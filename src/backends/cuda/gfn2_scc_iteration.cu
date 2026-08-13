@@ -20,6 +20,13 @@ constexpr std::uint32_t kMandatoryPotentialComponents =
     static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
     static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
 
+/* These exact aliases cross descriptor families, so they cannot use the
+ * per-function monotonically assigned groups below. Keep their identities
+ * stable and outside those local ranges. */
+constexpr std::uint32_t kFieldAtomicChargeAliasGroup = 0x10000u;
+constexpr std::uint32_t kFieldAtomicDipoleAliasGroup = 0x10001u;
+constexpr std::uint32_t kStagedFieldEnergyAliasGroup = 0x10002u;
+
 struct AddressRange {
   std::uintptr_t begin = 0u;
   std::uintptr_t end = 0u;
@@ -317,6 +324,8 @@ bool same_classical_diagnostics(const Gfn2SccClassicalEnergyDeviceDiagnostics& f
          first.d4_two_body_elements == second.d4_two_body_elements &&
          first.explicit_point_charge == second.explicit_point_charge &&
          first.explicit_point_charge_elements == second.explicit_point_charge_elements &&
+         first.electric_field == second.electric_field &&
+         first.electric_field_elements == second.electric_field_elements &&
          first.periodic_embedding == second.periodic_embedding &&
          first.periodic_embedding_elements == second.periodic_embedding_elements &&
          first.classical_total == second.classical_total &&
@@ -335,6 +344,8 @@ bool same_free_energy_diagnostics(const Gfn2SccFreeEnergyDeviceDiagnostics& firs
          first.d4_two_body_elements == second.d4_two_body_elements &&
          first.explicit_point_charge == second.explicit_point_charge &&
          first.explicit_point_charge_elements == second.explicit_point_charge_elements &&
+         first.electric_field == second.electric_field &&
+         first.electric_field_elements == second.electric_field_elements &&
          first.periodic_embedding == second.periodic_embedding &&
          first.periodic_embedding_elements == second.periodic_embedding_elements &&
          first.entropy == second.entropy && first.entropy_elements == second.entropy_elements &&
@@ -400,6 +411,13 @@ bool component_enabled(const Gfn2SccIterationDevicePlan& plan,
   return (plan.enabled_components & static_cast<std::uint32_t>(component)) != 0u;
 }
 
+bool same_electric_field_batch(const Gfn2ElectricFieldDeviceBatch& first,
+                               const Gfn2ElectricFieldDeviceBatch& second) noexcept {
+  return first.batch_size == second.batch_size && first.total_atoms == second.total_atoms &&
+         first.atom_offset_count == second.atom_offset_count &&
+         first.atom_offsets == second.atom_offsets && first.plan_token == second.plan_token;
+}
+
 bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
                           const Gfn2SccIterationDeviceInput& input,
                           const Gfn2SccIterationDeviceState& state,
@@ -440,6 +458,11 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   if (component_enabled(plan, Gfn2SccPotentialComponent::kPeriodicEmbedding)) {
     XTBLOOM_CHECK_TOKEN(plan.periodic_batch.plan_token, BindingField::kPeriodicEmbedding);
   }
+  /* Every fixed CUDA plan reserves the field transaction. An absent public
+   * attachment is represented by zero vectors, not by an optional descriptor. */
+  XTBLOOM_CHECK_TOKEN(plan.electric_field_batch.plan_token, BindingField::kElectricField);
+  XTBLOOM_CHECK_TOKEN(plan.classical_energy_batch.electric_field.plan_token,
+                      BindingField::kElectricField);
   XTBLOOM_CHECK_TOKEN(plan.scalar_bridge_batch.topology.plan_token, BindingField::kScalarBridge);
   XTBLOOM_CHECK_TOKEN(plan.hamiltonian_batch.plan_token, BindingField::kHamiltonian);
   XTBLOOM_CHECK_TOKEN(plan.eigensolver_batch.plan_token, BindingField::kEigensolver);
@@ -454,6 +477,15 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   XTBLOOM_CHECK_TOKEN(plan.publication_plan.plan_token, BindingField::kStatePublication);
 
   XTBLOOM_CHECK_TOKEN(input.plan_token, BindingField::kPlan);
+  const bool admission_disabled = input.admission.error == nullptr &&
+                                  input.admission.error_elements == 0 &&
+                                  input.admission.plan_token == 0u;
+  const bool admission_enabled = input.admission.error != nullptr &&
+                                 input.admission.error_elements == 1 &&
+                                 input.admission.plan_token == token;
+  if (!admission_disabled && !admission_enabled) {
+    return validator.fail(BindingError::kInvalidCount, BindingField::kActivity);
+  }
   XTBLOOM_CHECK_TOKEN(input.activity_state.plan_token, BindingField::kActivity);
   XTBLOOM_CHECK_TOKEN(input.mixed_fields.plan_token, BindingField::kPotential);
   XTBLOOM_CHECK_TOKEN(input.mixed_spin.plan_token, BindingField::kSpin);
@@ -465,6 +497,12 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   XTBLOOM_CHECK_TOKEN(input.classical_energy.plan_token, BindingField::kClassicalEnergy);
   XTBLOOM_CHECK_TOKEN(input.free_energy.plan_token, BindingField::kFreeEnergy);
   XTBLOOM_CHECK_TOKEN(input.raw_multipoles.plan_token, BindingField::kMulliken);
+  XTBLOOM_CHECK_TOKEN(input.electric_field.plan_token, BindingField::kElectricField);
+  XTBLOOM_CHECK_TOKEN(input.electric_field_potentials.plan_token, BindingField::kElectricField);
+  XTBLOOM_CHECK_TOKEN(input.classical_energy.electric_field_multipoles.plan_token,
+                      BindingField::kElectricField);
+  XTBLOOM_CHECK_TOKEN(input.classical_energy.electric_field_potentials.plan_token,
+                      BindingField::kElectricField);
 
   XTBLOOM_CHECK_TOKEN(state.plan_token, BindingField::kPlan);
   XTBLOOM_CHECK_TOKEN(state.eigenpairs.plan_token, BindingField::kEigensolver);
@@ -789,6 +827,14 @@ bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& val
        !exact(plan.periodic_batch.total_atoms, atoms, BindingField::kPeriodicEmbedding))) {
     return false;
   }
+  if (!exact(plan.electric_field_batch.batch_size, batch, BindingField::kElectricField) ||
+      !exact(plan.electric_field_batch.total_atoms, atoms, BindingField::kElectricField) ||
+      !exact(plan.electric_field_batch.atom_offset_count, batch + 1,
+             BindingField::kElectricField) ||
+      !same_electric_field_batch(plan.classical_energy_batch.electric_field,
+                                 plan.electric_field_batch)) {
+    return validator.fail(BindingError::kInvalidCount, BindingField::kElectricField);
+  }
   if (plan.scalar_bridge_batch.topology.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
       plan.scalar_bridge_batch.topology.batch_size != batch ||
       plan.scalar_bridge_batch.topology.total_atoms != atoms ||
@@ -881,6 +927,12 @@ bool validate_plan_pointer_shapes(const Gfn2SccIterationDevicePlan& plan,
                BindingField::kPotential, 5) ||
       !aligned(potential.shell_to_atom, shells, sizeof(std::int64_t), alignof(std::int64_t),
                BindingField::kPotential, 6)) {
+    return false;
+  }
+
+  const auto& field = plan.electric_field_batch;
+  if (!aligned(field.atom_offsets, field.atom_offset_count, sizeof(std::int64_t),
+               alignof(std::int64_t), BindingField::kElectricField, 0)) {
     return false;
   }
 
@@ -1177,6 +1229,10 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
   if (component_enabled(plan, Gfn2SccPotentialComponent::kPeriodicEmbedding) &&
       !same(plan.periodic_batch.atom_offsets, atom.atom_offsets,
             BindingField::kPeriodicEmbedding)) {
+    return false;
+  }
+  if (!same(plan.electric_field_batch.atom_offsets, atom.atom_offsets,
+            BindingField::kElectricField)) {
     return false;
   }
 
@@ -1754,7 +1810,9 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
                  components.aes2_dipole == storage.aes2_dipole_potential &&
                  components.aes2_quadrupole == storage.aes2_quadrupole_potential &&
                  components.d4_atomic == storage.d4_atomic_potential &&
-                 components.periodic_atomic == storage.periodic_atomic_potential,
+                 components.periodic_atomic == storage.periodic_atomic_potential &&
+                 components.electric_field_atomic == input.electric_field_potentials.atomic &&
+                 components.electric_field_dipole == input.electric_field_potentials.dipole,
              BindingField::kPotential)) {
     return false;
   }
@@ -1804,12 +1862,20 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
 
   const auto& classical = input.classical_energy;
   const auto& free = input.free_energy;
-  if (!equal(classical.es2 == storage.es2_energy && classical.es3 == storage.es3_energy &&
-                 classical.aes2 == storage.aes2_energy &&
-                 classical.d4_two_body == storage.d4_two_body_energy &&
-                 classical.explicit_point_charge == storage.explicit_point_charge_energy &&
-                 classical.periodic_embedding == storage.periodic_embedding_energy,
-             BindingField::kClassicalEnergy) ||
+  if (!equal(
+          classical.es2 == storage.es2_energy && classical.es3 == storage.es3_energy &&
+              classical.aes2 == storage.aes2_energy &&
+              classical.d4_two_body == storage.d4_two_body_energy &&
+              classical.explicit_point_charge == storage.explicit_point_charge_energy &&
+              classical.periodic_embedding == storage.periodic_embedding_energy &&
+              classical.electric_field_multipoles.atomic_charges ==
+                  workspace.physical_topology.atomic_charges &&
+              classical.electric_field_multipoles.atomic_dipoles ==
+                  workspace.physical_topology.atomic_dipoles &&
+              classical.electric_field_potentials.atomic ==
+                  input.electric_field_potentials.atomic &&
+              classical.electric_field_potentials.dipole == input.electric_field_potentials.dipole,
+          BindingField::kClassicalEnergy) ||
       !equal(free.core == storage.core_energy &&
                  free.entropy == workspace.staged_occupations.entropies &&
                  free.es2 == storage.es2_energy && free.es3 == storage.es3_energy &&
@@ -1817,6 +1883,7 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
                  free.d4_two_body == storage.d4_two_body_energy &&
                  free.explicit_point_charge == storage.explicit_point_charge_energy &&
                  free.periodic_embedding == storage.periodic_embedding_energy &&
+                 free.electric_field == workspace.staged_classical_energy.electric_field &&
                  input.complete_free_energies == workspace.staged_free_energy.free_energy,
              BindingField::kFreeEnergy)) {
     return false;
@@ -1836,6 +1903,7 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
               state.free_energy.d4_two_body == state.classical_energy.d4_two_body &&
               state.free_energy.explicit_point_charge ==
                   state.classical_energy.explicit_point_charge &&
+              state.free_energy.electric_field == state.classical_energy.electric_field &&
               state.free_energy.periodic_embedding == state.classical_energy.periodic_embedding &&
               workspace.staged_free_energy.es2 == workspace.staged_classical_energy.es2 &&
               workspace.staged_free_energy.es3 == workspace.staged_classical_energy.es3 &&
@@ -1845,6 +1913,8 @@ bool validate_zero_copy_views(const Gfn2SccIterationDevicePlan& plan,
                   workspace.staged_classical_energy.d4_two_body &&
               workspace.staged_free_energy.explicit_point_charge ==
                   workspace.staged_classical_energy.explicit_point_charge &&
+              workspace.staged_free_energy.electric_field ==
+                  workspace.staged_classical_energy.electric_field &&
               workspace.staged_free_energy.periodic_embedding ==
                   workspace.staged_classical_energy.periodic_embedding,
           BindingField::kFreeEnergy)) {
@@ -1903,6 +1973,7 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
                            std::int64_t two_orbitals, std::int64_t mixer_vector,
                            Validator& validator) noexcept {
   const std::int64_t batch = plan.topology.batch_size;
+  const std::int64_t atoms = plan.topology.total_atoms;
   const std::int64_t shells = plan.topology.total_shells;
   const std::int64_t matrices = plan.topology.total_matrix_elements;
   const std::int64_t spin_shells = plan.wavefunction_layout.total_spin_shells;
@@ -1912,8 +1983,10 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
   const bool mixed_spin = plan.wavefunction_layout.total_spin_channels != plan.topology.batch_size;
   std::int64_t spin_dipoles = 0;
   std::int64_t spin_quadrupoles = 0;
+  std::int64_t field_vectors = 0;
   if (!checked_multiply(spin_atoms, 3, spin_dipoles) ||
-      !checked_multiply(spin_atoms, 6, spin_quadrupoles)) {
+      !checked_multiply(spin_atoms, 6, spin_quadrupoles) ||
+      !checked_multiply(batch, 3, field_vectors)) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kSpin);
   }
   std::uint32_t group = 1u;
@@ -1944,6 +2017,24 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
       !exact(workspace.mulliken_activity.elements, batch, BindingField::kMulliken) ||
       !exact(workspace.classical_energy_activity.elements, batch, BindingField::kClassicalEnergy) ||
       !exact(workspace.free_energy_activity.elements, batch, BindingField::kFreeEnergy)) {
+    return false;
+  }
+
+  if (!exact(input.electric_field.vector_elements, field_vectors, BindingField::kElectricField,
+             0) ||
+      !exact(input.electric_field.position_elements, dipoles, BindingField::kElectricField, 1) ||
+      !exact(input.electric_field_potentials.atom_elements, atoms, BindingField::kElectricField,
+             2) ||
+      !exact(input.electric_field_potentials.dipole_elements, dipoles, BindingField::kElectricField,
+             3) ||
+      !read(input.electric_field.vectors, field_vectors, sizeof(double), alignof(double),
+            BindingField::kElectricField, 0) ||
+      !read(input.electric_field.positions, dipoles, sizeof(double), alignof(double),
+            BindingField::kElectricField, 1) ||
+      !read(input.electric_field_potentials.atomic, atoms, sizeof(double), alignof(double),
+            BindingField::kElectricField, 2) ||
+      !read(input.electric_field_potentials.dipole, dipoles, sizeof(double), alignof(double),
+            BindingField::kElectricField, 3)) {
     return false;
   }
   if (!write(workspace.ledger.active_mask, batch, sizeof(std::uint8_t), alignof(std::uint8_t),
@@ -1998,7 +2089,9 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
   }
 
   /* Immutable numerical arrays that do not originate in staged storage. */
-  if (!read(input.hamiltonian.h0, matrices, sizeof(double), alignof(double),
+  if (!read(input.admission.error, input.admission.error_elements, sizeof(std::uint32_t),
+            alignof(std::uint32_t), BindingField::kActivity, 0) ||
+      !read(input.hamiltonian.h0, matrices, sizeof(double), alignof(double),
             BindingField::kHamiltonian, 0) ||
       !read(input.hamiltonian.overlap, matrices, sizeof(double), alignof(double),
             BindingField::kHamiltonian, 1) ||
@@ -2201,9 +2294,16 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
                          std::int64_t index = -1) {
     return validator.exact_count(actual, expected, field, index);
   };
+  const auto read = [&](const void* pointer, std::int64_t count, std::size_t size,
+                        std::size_t alignment, BindingField field, std::int64_t index = -1,
+                        std::uint32_t alias_group = 0u) {
+    return validator.pointer(pointer, count, size, alignment, field, index, false, alias_group);
+  };
   const auto write = [&](const void* pointer, std::int64_t count, std::size_t size,
-                         std::size_t alignment, BindingField field, std::int64_t index = -1) {
-    return validator.pointer(pointer, count, size, alignment, field, index, true, group++);
+                         std::size_t alignment, BindingField field, std::int64_t index = -1,
+                         std::uint32_t alias_group = 0u) {
+    return validator.pointer(pointer, count, size, alignment, field, index, true,
+                             alias_group == 0u ? group++ : alias_group);
   };
 
   const auto component = [&](Gfn2SccPotentialComponent bit, double* pointer, std::int64_t elements,
@@ -2286,7 +2386,11 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
       !validate_component_projection(projection.periodic_atomic,
                                      projection.periodic_atomic_elements,
                                      Gfn2SccPotentialComponent::kPeriodicEmbedding, atoms,
-                                     BindingField::kPeriodicEmbedding, 4)) {
+                                     BindingField::kPeriodicEmbedding, 4) ||
+      !exact(projection.electric_field_atomic_elements, atoms, BindingField::kElectricField, 4) ||
+      projection.electric_field_atomic == nullptr ||
+      !exact(projection.electric_field_dipole_elements, dipoles, BindingField::kElectricField, 5) ||
+      projection.electric_field_dipole == nullptr) {
     return false;
   }
 
@@ -2305,9 +2409,9 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
       !write(workspace.physical_topology.shell_charges, shells, sizeof(double), alignof(double),
              BindingField::kPotential, 15) ||
       !write(workspace.physical_topology.atomic_charges, atoms, sizeof(double), alignof(double),
-             BindingField::kPotential, 16) ||
+             BindingField::kPotential, 16, kFieldAtomicChargeAliasGroup) ||
       !write(workspace.physical_topology.atomic_dipoles, dipoles, sizeof(double), alignof(double),
-             BindingField::kPotential, 17) ||
+             BindingField::kPotential, 17, kFieldAtomicDipoleAliasGroup) ||
       !write(workspace.physical_topology.atomic_quadrupoles, quadrupoles, sizeof(double),
              alignof(double), BindingField::kPotential, 18) ||
       !exact(workspace.complete_potentials.shell_elements, spin_shells, BindingField::kPotential) ||
@@ -2353,7 +2457,21 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
            check(values.explicit_point_charge, values.explicit_point_charge_elements,
                  Gfn2SccPotentialComponent::kExplicitPointCharge, 4) &&
            check(values.periodic_embedding, values.periodic_embedding_elements,
-                 Gfn2SccPotentialComponent::kPeriodicEmbedding, 5);
+                 Gfn2SccPotentialComponent::kPeriodicEmbedding, 5) &&
+           exact(values.electric_field_multipoles.atom_elements, atoms,
+                 BindingField::kElectricField, 6) &&
+           read(values.electric_field_multipoles.atomic_charges, atoms, sizeof(double),
+                alignof(double), BindingField::kElectricField, 6, kFieldAtomicChargeAliasGroup) &&
+           exact(values.electric_field_multipoles.dipole_elements, dipoles,
+                 BindingField::kElectricField, 7) &&
+           read(values.electric_field_multipoles.atomic_dipoles, dipoles, sizeof(double),
+                alignof(double), BindingField::kElectricField, 7, kFieldAtomicDipoleAliasGroup) &&
+           exact(values.electric_field_potentials.atom_elements, atoms,
+                 BindingField::kElectricField, 8) &&
+           values.electric_field_potentials.atomic != nullptr &&
+           exact(values.electric_field_potentials.dipole_elements, dipoles,
+                 BindingField::kElectricField, 9) &&
+           values.electric_field_potentials.dipole != nullptr;
   };
   if (!validate_classical_input(input.classical_energy)) {
     return false;
@@ -2379,7 +2497,10 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
            check(values.explicit_point_charge, values.explicit_point_charge_elements,
                  Gfn2SccPotentialComponent::kExplicitPointCharge, 7) &&
            check(values.periodic_embedding, values.periodic_embedding_elements,
-                 Gfn2SccPotentialComponent::kPeriodicEmbedding, 8);
+                 Gfn2SccPotentialComponent::kPeriodicEmbedding, 8) &&
+           exact(values.electric_field_elements, batch, BindingField::kElectricField, 9) &&
+           read(values.electric_field, batch, sizeof(double), alignof(double),
+                BindingField::kElectricField, 9, kStagedFieldEnergyAliasGroup);
   };
   if (!validate_free_input(input.free_energy)) {
     return false;
@@ -2387,7 +2508,7 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
 
   const auto validate_classical_diagnostics = [&](const Gfn2SccClassicalEnergyDeviceDiagnostics& d,
                                                   BindingField field) {
-    const std::array<std::pair<double*, std::int64_t>, 7> fields{{
+    const std::array<std::pair<double*, std::int64_t>, 8> fields{{
         {d.es2, d.es2_elements},
         {d.es3, d.es3_elements},
         {d.aes2, d.aes2_elements},
@@ -2395,13 +2516,16 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
         {d.explicit_point_charge, d.explicit_point_charge_elements},
         {d.periodic_embedding, d.periodic_embedding_elements},
         {d.classical_total, d.classical_total_elements},
+        {d.electric_field, d.electric_field_elements},
     }};
     for (std::size_t index = 0; index < fields.size(); ++index) {
-      if (!exact(fields[index].second, batch, field, static_cast<std::int64_t>(index))) {
+      const std::int64_t expected = batch;
+      if (!exact(fields[index].second, expected, field, static_cast<std::int64_t>(index)) ||
+          fields[index].first == nullptr) {
         return false;
       }
       /* Shared component arrays are registered through free diagnostics. */
-      if (index == fields.size() - 1u &&
+      if (index == fields.size() - 2u &&
           !write(fields[index].first, batch, sizeof(double), alignof(double), field,
                  static_cast<std::int64_t>(index))) {
         return false;
@@ -2411,7 +2535,7 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
   };
   const auto validate_free_diagnostics = [&](const Gfn2SccFreeEnergyDeviceDiagnostics& d,
                                              BindingField field, bool staged) {
-    const std::array<std::pair<double*, std::int64_t>, 11> fields{{
+    const std::array<std::pair<double*, std::int64_t>, 12> fields{{
         {d.core, d.core_elements},
         {d.es2, d.es2_elements},
         {d.es3, d.es3_elements},
@@ -2423,9 +2547,12 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
         {d.entropy, d.entropy_elements},
         {d.internal_energy, d.internal_energy_elements},
         {d.free_energy, d.free_energy_elements},
+        {d.electric_field, d.electric_field_elements},
     }};
     for (std::size_t index = 0; index < fields.size(); ++index) {
-      if (!exact(fields[index].second, batch, field, static_cast<std::int64_t>(index))) {
+      const std::int64_t expected = batch;
+      if (!exact(fields[index].second, expected, field, static_cast<std::int64_t>(index)) ||
+          fields[index].first == nullptr) {
         return false;
       }
       /* #99 deliberately reuses the staged occupation entropy as the
@@ -2438,8 +2565,10 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
         }
         continue;
       }
-      if (!write(fields[index].first, batch, sizeof(double), alignof(double), field,
-                 static_cast<std::int64_t>(index))) {
+      const std::uint32_t alias_group =
+          staged && index == fields.size() - 1u ? kStagedFieldEnergyAliasGroup : 0u;
+      if (!write(fields[index].first, expected, sizeof(double), alignof(double), field,
+                 static_cast<std::int64_t>(index), alias_group)) {
         return false;
       }
     }
@@ -2802,8 +2931,8 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
   const auto& electronic = workspace.electronic_energy_workspace;
   std::int64_t classical_scratch = 0;
   std::int64_t free_scratch = 0;
-  if (!checked_multiply(batch, kGfn2SccClassicalDiagnosticComponents, classical_scratch) ||
-      !checked_multiply(batch, kGfn2SccFreeEnergyDiagnosticComponents, free_scratch) ||
+  if (!checked_multiply(batch, kGfn2SccClassicalStorageComponents, classical_scratch) ||
+      !checked_multiply(batch, kGfn2SccFreeEnergyStorageComponents, free_scratch) ||
       !scratch(electronic.core_energy_scratch, electronic.batch_elements, batch, sizeof(double),
                alignof(double), BindingField::kElectronicEnergy, 20) ||
       !scratch(electronic.electronic_free_energy_scratch, electronic.batch_elements, batch,
@@ -3215,7 +3344,7 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
                                                       plan.provenance, workspace.ledger, stream)
             : derive_gfn2_scc_iteration_activity_cuda(plan.activity_policy, input.activity_state,
                                                       plan.provenance, *geometry, workspace.ledger,
-                                                      stream);
+                                                      input.admission, stream);
     if (!check_cuda(Gfn2SccStageId::kActivity, activity_status)) {
       return failure;
     }

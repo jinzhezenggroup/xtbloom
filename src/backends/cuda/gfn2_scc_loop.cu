@@ -1332,8 +1332,8 @@ Gfn2SccLoopLaunchResult Gfn2SccLoopCudaGraphOwner::append_root_child_to_capture(
       append_root_child(captured_graph, dependencies, dependency_count, child);
   status = result.success() ? cudaSuccess : result.iteration.cuda_status;
   if (result.success()) {
-    status = cudaStreamUpdateCaptureDependencies(stream, &child, 1u,
-                                                 cudaStreamSetCaptureDependencies);
+    status =
+        cudaStreamUpdateCaptureDependencies(stream, &child, 1u, cudaStreamSetCaptureDependencies);
   }
   if (status != cudaSuccess) {
     result.iteration.status = Gfn2SccIterationLaunchStatus::kCudaError;

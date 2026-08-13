@@ -67,9 +67,9 @@ XTBLOOM_LATTICE_HD inline bool finite(double value) noexcept {
 }
 
 XTBLOOM_LATTICE_HD inline double squared_norm(const double* row) noexcept {
-  return rounded_add(rounded_add(rounded_multiply(row[0], row[0]),
-                                 rounded_multiply(row[1], row[1])),
-                     rounded_multiply(row[2], row[2]));
+  return rounded_add(
+      rounded_add(rounded_multiply(row[0], row[0]), rounded_multiply(row[1], row[1])),
+      rounded_multiply(row[2], row[2]));
 }
 
 }  // namespace lattice_binary64_detail
@@ -107,19 +107,15 @@ XTBLOOM_LATTICE_HD inline bool valid_lattice_cell_3d_binary64(const double* dire
     }
   }
 
-  const double cross_x =
-      rounded_subtract(rounded_multiply(normalized[4], normalized[8]),
-                       rounded_multiply(normalized[5], normalized[7]));
-  const double cross_y =
-      rounded_subtract(rounded_multiply(normalized[5], normalized[6]),
-                       rounded_multiply(normalized[3], normalized[8]));
-  const double cross_z =
-      rounded_subtract(rounded_multiply(normalized[3], normalized[7]),
-                       rounded_multiply(normalized[4], normalized[6]));
-  const double determinant =
-      rounded_add(rounded_add(rounded_multiply(normalized[0], cross_x),
-                              rounded_multiply(normalized[1], cross_y)),
-                  rounded_multiply(normalized[2], cross_z));
+  const double cross_x = rounded_subtract(rounded_multiply(normalized[4], normalized[8]),
+                                          rounded_multiply(normalized[5], normalized[7]));
+  const double cross_y = rounded_subtract(rounded_multiply(normalized[5], normalized[6]),
+                                          rounded_multiply(normalized[3], normalized[8]));
+  const double cross_z = rounded_subtract(rounded_multiply(normalized[3], normalized[7]),
+                                          rounded_multiply(normalized[4], normalized[6]));
+  const double determinant = rounded_add(rounded_add(rounded_multiply(normalized[0], cross_x),
+                                                     rounded_multiply(normalized[1], cross_y)),
+                                         rounded_multiply(normalized[2], cross_z));
   if (!(determinant > 0.0) || !finite(determinant)) return false;
 
   /* 64 * DBL_EPSILON = 2^-46 exactly. */

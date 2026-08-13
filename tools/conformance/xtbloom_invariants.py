@@ -10,12 +10,14 @@ checking that the public C ABI reproduces the exact symmetries of an isolated
 finite GFN2-xTB system:
 
 * homogeneous/heterogeneous ragged-batch results match sequential solves;
-* total energy, atomic charges, and forces are invariant under a rigid
-  translation of the whole system (QM atoms and point charges together);
+* total energy, atomic charges, forces, and the molecular-dipole origin law are
+  preserved under a rigid translation of the whole system (QM atoms and point
+  charges together);
 * energy and atomic charges are invariant under a proper rotation while QM and
-  point-charge forces transform covariantly;
-* the total force vanishes for an isolated system and the net atomic charge
-  equals the declared molecular charge.
+  point-charge forces and molecular dipoles transform covariantly;
+* the total force equals ``Q E`` for a system in a uniform electric field (and
+  vanishes without a field), while the net atomic charge equals the declared
+  molecular charge.
 
 Every gate executes through the same public C ABI path as the golden runner
 (shared descriptor binding, memory placement, and failure semantics), and each
@@ -43,7 +45,7 @@ if TYPE_CHECKING:
 import xtbloom_conformance as conformance
 import xtbloom_public_api as public_api
 
-# Measured CPU margins on the committed 8-case corpus (fresh SCC, charge
+# Historical measured CPU margins on the then-current 8-case corpus (fresh SCC, charge
 # tolerance 1e-10, 300 K electronic temperature): batch-vs-sequential and
 # homogeneous replicates are bit-identical; translation changes energy by at
 # most ~1.3e-14 Ha and forces by at most ~6e-15 Ha/bohr; rotation covariance
@@ -59,13 +61,15 @@ INVARIANT_EXACT_ATOL = 1.0e-12  # batch/sequential and homogeneous replicate agr
 INVARIANT_ENERGY_ATOL = 1.0e-9  # translation and rotation energy invariance (hartree).
 INVARIANT_FORCE_ATOL = 1.0e-7  # translation force invariance and rotation covariance.
 INVARIANT_CHARGE_ATOL = 1.0e-7  # charge invariance under rotation (elementary charge).
+# Dipole translation law and rotation covariance (elementary-charge bohr).
+INVARIANT_DIPOLE_ATOL = 1.0e-7
 INVARIANT_NET_FORCE_ATOL = 1.0e-9  # isolated-system total-force conservation.
 INVARIANT_NET_CHARGE_ATOL = 1.0e-9  # net charge versus declared molecular charge.
 
 # Corpus-wide analytic-vs-numeric force gate. ``FINITE_DIFFERENCE_STEP`` is the
 # central-difference displacement in bohr applied to one Cartesian coordinate
 # of one atom (or one external point charge) at a time.  Measured on the
-# committed 8-case corpus through the public C ABI (fresh SCC, charge tolerance
+# then-current 8-case corpus through the public C ABI (fresh SCC, charge tolerance
 # 1e-10, 300 K): the numeric central difference agrees with the analytic force
 # to about 1e-7 Ha/bohr for QM atoms and about 1e-11 Ha/bohr for point charges
 # at this step, where the QM residual is dominated by SCC convergence noise
@@ -82,6 +86,17 @@ FINITE_DIFFERENCE_POINT_FORCE_ATOL = 1.0e-7  # point-charge analytic vs numeric 
 # and deliberately mix all Cartesian components; the 90-degree z rotation has
 # exact 0/1 entries and exercises integer-exact covariance as well.
 TRANSLATION_DELTAS = [(10.0, -7.0, 3.0), (-5.0, 2.5, 11.0)]
+
+# The committed uniform-field molecule is neutral, so it cannot execute the
+# nonzero charge branches of the exact translation and force laws. Derive this
+# diagnostic-only probe from the committed H3+ input in memory: it is public
+# invariant evidence on every backend/memory mode, not a new independent oracle.
+CHARGED_FIELD_PROBE_SOURCE_ID = "h3_plus"
+CHARGED_FIELD_PROBE_ID = "h3_plus_charged_field_probe"
+CHARGED_FIELD_PROBE_EFIELD = [0.003, -0.004, 0.005]
+CHARGED_FIELD_PROBE_DELTA = [2.0, -3.0, 5.0]
+CHARGED_FIELD_PROBE_ENERGY_ATOL = 1.0e-9
+CHARGED_FIELD_PROBE_VECTOR_ATOL = 1.0e-7
 
 HOMOGENEOUS_REPLICAS = 3
 
@@ -112,6 +127,8 @@ class InvariantResult:
     forces: list[float]  # flat atom-major, hartree/bohr
     charges: list[float]  # elementary charge
     point_forces: list[float]  # flat point-major, hartree/bohr; empty for gas
+    dipoles: list[float]  # molecular Cartesian dipole, elementary-charge bohr
+    efield: list[float] | None  # input uniform field, atomic units
 
 
 def select_homogeneous_case_ids(
@@ -283,6 +300,24 @@ def rotated(geometry: Geometry, matrix: Sequence[Sequence[float]]) -> Geometry:
     return result
 
 
+def charged_field_probe(geometries: Sequence[Geometry]) -> Geometry | None:
+    """Derive the charged uniform-field probe from the selected H3+ geometry."""
+    source = next(
+        (
+            geometry
+            for geometry in geometries
+            if geometry.case_id == CHARGED_FIELD_PROBE_SOURCE_ID
+        ),
+        None,
+    )
+    if source is None:
+        return None
+    result = copy.deepcopy(source)
+    result.case_id = CHARGED_FIELD_PROBE_ID
+    result.efield = list(CHARGED_FIELD_PROBE_EFIELD)
+    return result
+
+
 def _displaced_copy(
     geometry: Geometry, vertex_index: int, axis: int, delta: float, point: bool
 ) -> Geometry:
@@ -378,6 +413,7 @@ def xtbloom_solver(
             library,
             request_forces=True,
             request_charges=True,
+            request_dipoles=True,
             # Match the golden runner: a gas-only sequential call has no
             # point-force property or destination to request, while mixed and
             # QM/MM batches publish the complete nonempty point-force extent.
@@ -392,7 +428,11 @@ def xtbloom_solver(
             end = storage.slices[index].atom_end
             point_begin = storage.slices[index].point_begin
             point_end = storage.slices[index].point_end
-            assert outputs.forces is not None and outputs.charges is not None
+            assert (
+                outputs.forces is not None
+                and outputs.charges is not None
+                and outputs.dipoles is not None
+            )
             results.append(
                 InvariantResult(
                     case_id=geometry.case_id,
@@ -412,6 +452,11 @@ def xtbloom_solver(
                         if outputs.point_forces is not None
                         else []
                     ),
+                    dipoles=[
+                        float(value)
+                        for value in outputs.dipoles[3 * index : 3 * index + 3]
+                    ],
+                    efield=None if geometry.efield is None else list(geometry.efield),
                 )
             )
         return results
@@ -491,6 +536,7 @@ def gate_batch_versus_sequential(
                 expected.point_forces,
                 actual.point_forces,
             ),
+            ("molecular_dipole_e_bohr", expected.dipoles, actual.dipoles),
         ):
             passed, message = _compare(
                 actual.case_id,
@@ -519,6 +565,7 @@ def gate_homogeneous_replicates(
                 sequential.point_forces,
                 replica.point_forces,
             ),
+            ("molecular_dipole_e_bohr", sequential.dipoles, replica.dipoles),
         ):
             passed, message = _compare(
                 replica.case_id,
@@ -533,15 +580,35 @@ def gate_homogeneous_replicates(
 def gate_translation_invariance(
     baseline: list[InvariantResult],
     translated_results: list[InvariantResult],
+    delta: Sequence[float],
     atol_energy: float,
     atol_force: float,
     atol_charge: float,
+    atol_dipole: float,
     failures: list[str],
 ) -> None:
-    """Energy, forces, and charges must not change under a rigid translation."""
+    """Preserve scalar/vector outputs and the charged-system dipole origin law.
+
+    The public dipole is ``sum_i (r_i q_i + d_i)``. Translating every QM atom
+    and point charge by ``delta`` therefore leaves a neutral system's dipole
+    unchanged and shifts a charged system by ``Q * delta``. In a uniform field,
+    the reported energy correspondingly shifts by ``-Q * dot(E, delta)``.
+    """
     for expected, actual in zip(baseline, translated_results, strict=True):
+        expected_energy = expected.energy
+        if expected.efield is not None:
+            expected_energy -= expected.molecular_charge * sum(
+                expected.efield[axis] * float(delta[axis]) for axis in range(3)
+            )
+        passed, message = _compare(
+            actual.case_id,
+            "energy_hartree translation_covariant",
+            expected_energy,
+            actual.energy,
+            atol_energy,
+        )
+        _report(failures, passed, message)
         for label, expected_value, actual_value, tolerance in (
-            ("energy_hartree", expected.energy, actual.energy, atol_energy),
             ("forces_hartree_per_bohr", expected.forces, actual.forces, atol_force),
             ("partial_charges_e", expected.charges, actual.charges, atol_charge),
             (
@@ -559,6 +626,92 @@ def gate_translation_invariance(
                 tolerance,
             )
             _report(failures, passed, message)
+        translated_dipole = [
+            expected.dipoles[axis] + expected.molecular_charge * float(delta[axis])
+            for axis in range(3)
+        ]
+        passed, message = _compare(
+            actual.case_id,
+            "molecular_dipole_e_bohr translation_origin_shift",
+            translated_dipole,
+            actual.dipoles,
+            atol_dipole,
+        )
+        _report(failures, passed, message)
+
+
+def gate_charged_field_probe(
+    solver: Callable[[Sequence[Geometry]], list[InvariantResult]],
+    probe: Geometry,
+    failures: list[str],
+) -> None:
+    """Exercise the exact nonzero-Q field laws through two public singleton calls."""
+    shifted_probe = translated(probe, CHARGED_FIELD_PROBE_DELTA)
+    solved: list[InvariantResult] = []
+    for label, geometry in (("baseline", probe), ("translated", shifted_probe)):
+        results = solver([geometry])
+        if len(results) != 1 or results[0].case_id != CHARGED_FIELD_PROBE_ID:
+            raise conformance.ConformanceError(
+                "charged-field invariant solve returned an unexpected result set "
+                f"for {label} {CHARGED_FIELD_PROBE_ID}"
+            )
+        solved.append(results[0])
+
+    baseline, shifted = solved
+    field_dot_delta = sum(
+        CHARGED_FIELD_PROBE_EFIELD[axis] * CHARGED_FIELD_PROBE_DELTA[axis]
+        for axis in range(3)
+    )
+    expected_energy_shift = -probe.molecular_charge * field_dot_delta
+    passed, message = _compare(
+        probe.case_id,
+        "energy_hartree charged_field_translation_shift",
+        expected_energy_shift,
+        shifted.energy - baseline.energy,
+        CHARGED_FIELD_PROBE_ENERGY_ATOL,
+    )
+    _report(failures, passed, message)
+
+    expected_dipole_shift = [
+        probe.molecular_charge * component for component in CHARGED_FIELD_PROBE_DELTA
+    ]
+    actual_dipole_shift = [
+        shifted.dipoles[axis] - baseline.dipoles[axis] for axis in range(3)
+    ]
+    passed, message = _compare(
+        probe.case_id,
+        "molecular_dipole_e_bohr charged_field_origin_shift",
+        expected_dipole_shift,
+        actual_dipole_shift,
+        CHARGED_FIELD_PROBE_VECTOR_ATOL,
+    )
+    _report(failures, passed, message)
+
+    expected_net_force = [
+        probe.molecular_charge * component for component in CHARGED_FIELD_PROBE_EFIELD
+    ]
+    for label, result in (("baseline", baseline), ("translated", shifted)):
+        net_force = [
+            sum(result.forces[axis::3]) + sum(result.point_forces[axis::3])
+            for axis in range(3)
+        ]
+        passed, message = _compare(
+            probe.case_id,
+            f"total_force charged_field_{label}",
+            expected_net_force,
+            net_force,
+            CHARGED_FIELD_PROBE_VECTOR_ATOL,
+        )
+        _report(failures, passed, message)
+
+    passed, message = _compare(
+        probe.case_id,
+        "forces_hartree_per_bohr charged_field_translation_invariant",
+        baseline.forces,
+        shifted.forces,
+        CHARGED_FIELD_PROBE_VECTOR_ATOL,
+    )
+    _report(failures, passed, message)
 
 
 def gate_rotation_covariance(
@@ -568,10 +721,11 @@ def gate_rotation_covariance(
     atol_energy: float,
     atol_force: float,
     atol_charge: float,
+    atol_dipole: float,
     label_suffix: str,
     failures: list[str],
 ) -> None:
-    """Energy and charges are invariant; forces rotate with the structure."""
+    """Energy and charges are invariant; forces and dipoles rotate covariantly."""
     for expected, actual in zip(baseline, rotated_results, strict=True):
         passed, message = _compare(
             actual.case_id,
@@ -587,6 +741,14 @@ def gate_rotation_covariance(
             expected.charges,
             actual.charges,
             atol_charge,
+        )
+        _report(failures, passed, message)
+        passed, message = _compare(
+            actual.case_id,
+            f"molecular_dipole_e_bohr rotation_covariant_{label_suffix}",
+            rotate_vector(matrix, expected.dipoles),
+            actual.dipoles,
+            atol_dipole,
         )
         _report(failures, passed, message)
         atom_count = len(expected.charges)
@@ -626,7 +788,12 @@ def gate_rotation_covariance(
 def gate_force_conservation(
     results: Sequence[InvariantResult], atol: float, failures: list[str]
 ) -> None:
-    """Require total isolated-system force to vanish componentwise."""
+    """Require total force to equal the uniform-field force ``Q E``.
+
+    QM/point-charge internal forces cancel when both are published. The
+    external field acts on the QM system's declared net charge, leaving the
+    expected combined force at ``Q E`` (or zero when no field is attached).
+    """
     for result in results:
         axis_net: list[float] = [0.0, 0.0, 0.0]
         for atom in range(len(result.charges)):
@@ -636,12 +803,17 @@ def gate_force_conservation(
             for axis in range(3):
                 axis_net[axis] += result.point_forces[3 * point + axis]
         for axis, net in enumerate(axis_net):
-            passed = abs(net) <= atol
+            expected = (
+                result.molecular_charge * result.efield[axis]
+                if result.efield is not None
+                else 0.0
+            )
+            passed = abs(net - expected) <= atol
             _report(
                 failures,
                 passed,
                 f"{result.case_id} total_force_axis_{axis}: "
-                f"net={net:.6e} limit={atol:.6e}",
+                f"net={net:.6e} expected={expected:.6e} limit={atol:.6e}",
             )
 
 
@@ -765,6 +937,13 @@ def run_invariant_checks(
         sequential.append(single_result[0])
     baseline_by_id = {result.case_id: result for result in sequential}
 
+    probe = charged_field_probe(geometries)
+    if probe is not None:
+        print(  # noqa: T201 - CLI validation report
+            f"charged-field probe: source={CHARGED_FIELD_PROBE_SOURCE_ID}"
+        )
+        gate_charged_field_probe(solver, probe, failures)
+
     print(  # noqa: T201 - CLI validation report
         f"heterogeneous ragged batch: {len(geometries)} case(s)"
     )
@@ -790,9 +969,11 @@ def run_invariant_checks(
         gate_translation_invariance(
             sequential,
             translated_results,
+            delta,
             INVARIANT_ENERGY_ATOL,
             INVARIANT_FORCE_ATOL,
             INVARIANT_CHARGE_ATOL,
+            INVARIANT_DIPOLE_ATOL,
             failures,
         )
 
@@ -812,6 +993,7 @@ def run_invariant_checks(
             INVARIANT_ENERGY_ATOL,
             INVARIANT_FORCE_ATOL,
             INVARIANT_CHARGE_ATOL,
+            INVARIANT_DIPOLE_ATOL,
             label,
             failures,
         )

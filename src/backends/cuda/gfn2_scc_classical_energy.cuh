@@ -8,10 +8,13 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/cuda/gfn2_electric_field.cuh"
+
 namespace xtbloom::detail::cuda {
 
 inline constexpr std::int64_t kGfn2SccClassicalInputComponents = 6;
 inline constexpr std::int64_t kGfn2SccClassicalDiagnosticComponents = 7;
+inline constexpr std::int64_t kGfn2SccClassicalStorageComponents = 8;
 
 /* Bit positions used by Gfn2SccClassicalEnergyDeviceBatch::enabled_components. */
 enum class Gfn2SccClassicalEnergyComponent : std::uint32_t {
@@ -42,6 +45,7 @@ enum class Gfn2SccClassicalEnergyDeviceError : std::uint32_t {
   kNonfiniteExplicitPointCharge = 6u,
   kNonfinitePeriodicEmbedding = 7u,
   kNonfiniteTotalArithmetic = 8u,
+  kNonfiniteElectricField = 9u,
 };
 
 /*
@@ -53,6 +57,8 @@ struct Gfn2SccClassicalEnergyDeviceBatch {
   std::int64_t batch_size = 0;
   std::uint32_t enabled_components = 0u;
   std::uint64_t plan_token = 0u;
+  /* Zero plan_token keeps legacy field-free bindings valid. */
+  Gfn2ElectricFieldDeviceBatch electric_field{};
 };
 
 /*
@@ -82,6 +88,8 @@ struct Gfn2SccClassicalEnergyDeviceInput {
   const double* periodic_embedding = nullptr;
   std::int64_t periodic_embedding_elements = 0;
   std::uint64_t plan_token = 0u;
+  Gfn2ElectricFieldDeviceMultipoles electric_field_multipoles{};
+  Gfn2ElectricFieldDevicePotentialView electric_field_potentials{};
 };
 
 /*
@@ -113,12 +121,15 @@ struct Gfn2SccClassicalEnergyDeviceDiagnostics {
   double* classical_total = nullptr;
   std::int64_t classical_total_elements = 0;
   std::uint64_t plan_token = 0u;
+  double* electric_field = nullptr;
+  std::int64_t electric_field_elements = 0;
 };
 
 /*
  * Caller-owned unpublished storage. component_scratch is component-major in
- * diagnostic order [ES2, ES3, AES2, D4-2body, explicit-PC, periodic, total]
- * and therefore requires 7*batch_size doubles. sequence_active snapshots a
+ * diagnostic order [ES2, ES3, AES2, D4-2body, explicit-PC, periodic, total,
+ * field] and therefore requires 8*batch_size doubles. Keeping the field in the
+ * appended slot preserves every pre-field diagnostic offset. sequence_active snapshots a
  * clean incoming device_error before peer-local arithmetic can make it sticky.
  */
 struct Gfn2SccClassicalEnergyDeviceWorkspace {
@@ -148,7 +159,8 @@ cudaError_t reset_gfn2_scc_classical_energy_device_errors_cuda(
 /*
  * Validate, sum, and transactionally publish all enabled classical SCC energy
  * diagnostics. The total uses the CPU driver's fixed component order: ES2,
- * ES3, AES2, D4 two-body, explicit point charge, then periodic embedding.
+ * ES3, AES2, D4 two-body, explicit point charge, electric field, then
+ * periodic embedding.
  * Component inputs are all finite-preflighted before the first addition. A
  * failed active member publishes nothing, while healthy peers commit normally.
  *

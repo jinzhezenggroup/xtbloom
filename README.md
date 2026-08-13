@@ -49,9 +49,10 @@ for usage and scope.
 - **Failure isolation.** SCC or eigensolver failure is local to one batch
   member; successful peers remain valid and failed slices receive NaNs plus
   per-system diagnostics.
-- **Analytic derivatives and embedding.** The API returns energies, QM forces,
-  charges, optional point-charge forces, and molecular dipoles, with explicit
-  point charges and caller-supplied charge-response operators included in SCC.
+- **Analytic derivatives and embedding.** Both backends return energies, QM
+  forces, charges, optional point-charge forces, and molecular dipoles, with
+  explicit point charges, uniform electric fields, and caller-supplied
+  charge-response operators included in SCC.
 - **Reusable execution state.** Contexts retain CPU workers, CUDA workspaces,
   fixed-topology plans, and compatible electronic warm starts.
 - **One deployment boundary.** C, C++, Python, ASE, and dpdata all call the same
@@ -139,7 +140,7 @@ before reusing the numbers.
 | CUDA-device and mixed descriptors | Low-level C ABI |
 | Explicit point charges in SCC and point-charge forces | Supported |
 | Caller-supplied periodic charge response | Supported; no lattice descriptor |
-| Uniform electric field and molecular dipoles | CPU; CUDA ABI slots reserved |
+| Uniform electric field and molecular dipoles | CPU and CUDA |
 | ASE and dpdata integrations | Supported |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side adapter |

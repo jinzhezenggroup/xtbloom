@@ -178,11 +178,13 @@ __global__ void publish_energy_only_kernel(
     std::int64_t batch_size, Gfn2TotalEnergyDeviceSccState scc_state,
     Gfn2GeometryEpochConsumerDevice geometry, int dynamic_epoch, const std::uint32_t* energy_errors,
     const double* staged_energy, double* public_energy, const std::uint32_t* plan_failure,
-    std::uint32_t* execution_errors, std::uint32_t* execution_device_error) {
+    std::uint32_t* execution_errors, std::uint32_t* execution_device_error,
+    Gfn2DeviceAdmission admission) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (system >= batch_size || threadIdx.x != 0) {
     return;
   }
+  if (!gfn2_request_admitted(admission)) return;
   if (atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) != 0u) {
     return;
   }
@@ -469,8 +471,9 @@ __global__ void publish_execution_results_kernel(
     const std::uint8_t* final_success_mask, const std::uint32_t* energy_errors,
     const std::uint32_t* execution_errors, const std::uint32_t* plan_failure,
     Gfn2EnergyForceExecutionDeviceIntermediates intermediates,
-    Gfn2EnergyForceExecutionDeviceResults results) {
+    Gfn2EnergyForceExecutionDeviceResults results, Gfn2DeviceAdmission admission) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!gfn2_request_admitted(admission)) return;
   if (atomicAdd(const_cast<std::uint32_t*>(plan_failure), 0u) != 0u ||
       energy_errors[system] != 0u || scc_state.converged[system] != 1u ||
       scc_state.system_statuses[system] != XTBLOOM_STATUS_SUCCESS) {
@@ -605,6 +608,11 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
   if (!validate_restricted_physics_masks(plan) || input.plan_token != token ||
       results.plan_token != token || intermediates.plan_token != token ||
       workspace.plan_token != token || diagnostics.plan_token != token ||
+      (input.admission.error == nullptr
+           ? input.admission.error_elements != 0 || input.admission.plan_token != 0u
+           : input.admission.error_elements != 1 || input.admission.plan_token != token ||
+                 reinterpret_cast<std::uintptr_t>(input.admission.error) % alignof(std::uint32_t) !=
+                     0u) ||
       plan.integral_batch.plan_token != token || plan.post_scc_potential_plan.plan_token != token ||
       plan.h0_plan.plan_token != token || plan.hamiltonian_batch.plan_token != token ||
       plan.coordination_batch.plan_token != token || plan.coordination_cache.plan_token != token ||
@@ -681,6 +689,13 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
       input.classical.atomic_dipoles != input.post_scc_potential.raw_atomic_dipoles ||
       input.classical.atomic_quadrupoles != input.post_scc_potential.raw_atomic_quadrupoles ||
       input.external_shell_charges != input.post_scc_potential.raw_shell_charges ||
+      ((input.electric_field.plan_token == 0u) != (input.raw_atomic_charges == nullptr)) ||
+      (input.electric_field.plan_token != 0u &&
+       (input.electric_field.plan_token != token ||
+        input.electric_field.vector_elements != batch_size * 3 ||
+        input.electric_field.vectors == nullptr ||
+        input.raw_atomic_charge_elements != plan.integral_batch.total_atoms ||
+        input.raw_atomic_charges == nullptr)) ||
       input.h0.positions != input.classical.positions || plan.geometry_generation == 0u ||
       diagnostics.total_energy_system_errors == nullptr ||
       diagnostics.total_energy_device_error == nullptr ||
@@ -847,7 +862,12 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
     }
     const auto& d4_pairlist = plan.classical_plan.d4_pairlist_cache;
     const auto& d4_pairs = d4_pairlist.coordination_pairs;
-    AddressRangeList<176> live_ranges;
+    AddressRange admission_range{};
+    if (!make_address_range(input.admission.error, input.admission.error_elements,
+                            sizeof(std::uint32_t), &admission_range)) {
+      return cudaErrorInvalidValue;
+    }
+    AddressRangeList<177> live_ranges;
     const bool live_ranges_valid =
         live_ranges.add(results.energy.total_energy, results.energy.elements) &&
         live_ranges.add(results.forces.qm_forces, results.forces.qm_force_elements) &&
@@ -1073,7 +1093,8 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
         live_ranges.add(geometry == nullptr ? nullptr : geometry->eligible_mask,
                         geometry == nullptr ? 0 : batch_size);
     if (!live_ranges_valid || !live_ranges.disjoint_from(sparse_gradient) ||
-        !live_ranges.disjoint_from(sparse_sequence)) {
+        !live_ranges.disjoint_from(sparse_sequence) ||
+        !live_ranges.disjoint_from(admission_range)) {
       return cudaErrorInvalidValue;
     }
   }
@@ -1136,8 +1157,44 @@ static cudaError_t execute_energy_force_impl(
       workspace.plan_failure == nullptr || workspace.plan_failure_elements < 1 ||
       diagnostics.plan_token != plan.plan_token || diagnostics.batch_elements < batch_size ||
       diagnostics.total_energy_system_errors == nullptr ||
-      diagnostics.total_energy_device_error == nullptr) {
+      diagnostics.total_energy_device_error == nullptr ||
+      (input.admission.error == nullptr
+           ? input.admission.error_elements != 0 || input.admission.plan_token != 0u
+           : input.admission.error_elements != 1 || input.admission.plan_token != plan.plan_token ||
+                 reinterpret_cast<std::uintptr_t>(input.admission.error) % alignof(std::uint32_t) !=
+                     0u)) {
     return cudaErrorInvalidValue;
+  }
+  AddressRange admission_range{};
+  AddressRange plan_failure_range{};
+  AddressRange energy_result_range{};
+  AddressRange staged_energy_range{};
+  AddressRange execution_system_range{};
+  AddressRange execution_device_range{};
+  AddressRange energy_system_range{};
+  AddressRange energy_device_range{};
+  if (!make_address_range(input.admission.error, input.admission.error_elements,
+                          sizeof(std::uint32_t), &admission_range) ||
+      !make_address_range(workspace.plan_failure, workspace.plan_failure_elements,
+                          sizeof(std::uint32_t), &plan_failure_range) ||
+      !make_address_range(results.energy.total_energy, results.energy.elements, sizeof(double),
+                          &energy_result_range) ||
+      !make_address_range(intermediates.energy.total_energy, intermediates.energy.elements,
+                          sizeof(double), &staged_energy_range) ||
+      !make_address_range(diagnostics.execution_system_errors, diagnostics.batch_elements,
+                          sizeof(std::uint32_t), &execution_system_range) ||
+      !make_address_range(diagnostics.execution_device_error, 1, sizeof(std::uint32_t),
+                          &execution_device_range) ||
+      !make_address_range(diagnostics.total_energy_system_errors, diagnostics.batch_elements,
+                          sizeof(std::uint32_t), &energy_system_range) ||
+      !make_address_range(diagnostics.total_energy_device_error, 1, sizeof(std::uint32_t),
+                          &energy_device_range)) {
+    return cudaErrorInvalidValue;
+  }
+  for (const AddressRange& write :
+       {plan_failure_range, energy_result_range, staged_energy_range, execution_system_range,
+        execution_device_range, energy_system_range, energy_device_range}) {
+    if (ranges_overlap(admission_range, write)) return cudaErrorInvalidValue;
   }
   if (geometry != nullptr &&
       (geometry->plan_token != plan.plan_token || geometry->epoch.plan_token != plan.plan_token ||
@@ -1200,7 +1257,7 @@ static cudaError_t execute_energy_force_impl(
         batch_size, input.scc_state, consumer, geometry == nullptr ? 0 : 1,
         diagnostics.total_energy_system_errors, intermediates.energy.total_energy,
         results.energy.total_energy, workspace.plan_failure, diagnostics.execution_system_errors,
-        diagnostics.execution_device_error);
+        diagnostics.execution_device_error, input.admission);
     return check_launch();
   }
 
@@ -1475,7 +1532,11 @@ static cudaError_t execute_energy_force_impl(
       explicit_pc && plan.external_point_charge_batch.total_point_charges != 0
           ? intermediates.explicit_point_force_elements
           : 0,
-      plan.plan_token};
+      plan.plan_token,
+      input.electric_field.plan_token != 0u ? input.electric_field.vectors : nullptr,
+      input.electric_field.plan_token != 0u ? input.electric_field.vector_elements : 0,
+      input.electric_field.plan_token != 0u ? input.raw_atomic_charges : nullptr,
+      input.electric_field.plan_token != 0u ? input.raw_atomic_charge_elements : 0};
   status = compose_gfn2_forces_cuda(
       plan.force_composition_batch, composition_activity, composition_input, intermediates.forces,
       workspace.force_composition, diagnostics.force_composition_system_errors,
@@ -1499,7 +1560,7 @@ static cudaError_t execute_energy_force_impl(
       plan.integral_batch, plan.external_point_charge_batch, input.force_activity, input.scc_state,
       consumer, geometry == nullptr ? 0 : 1, workspace.energy_success_mask,
       diagnostics.total_energy_system_errors, diagnostics.execution_system_errors,
-      workspace.plan_failure, intermediates, results);
+      workspace.plan_failure, intermediates, results, input.admission);
   return check_launch();
 }
 
