@@ -158,12 +158,6 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t inference_publication_system_errors = 0u;
   std::uintptr_t inference_publication_plan_error = 0u;
   std::uintptr_t warm_checkpoint_generations = 0u;
-  /* Test-visible SCC state image. The addresses remain opaque and are used
-   * only for explicit device snapshots after owner-stream ordering. */
-  std::uintptr_t scc_state_image = 0u;
-  std::size_t scc_state_image_bytes = 0u;
-  std::uintptr_t scc_workspace_image = 0u;
-  std::size_t scc_workspace_image_bytes = 0u;
 
   std::size_t topology_arena_bytes = 0u;
   std::size_t input_arena_bytes = 0u;

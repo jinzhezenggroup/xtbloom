@@ -217,8 +217,9 @@ struct InferenceSnapshot {
 struct RequestStateSnapshot {
   RefreshSnapshot refresh;
   InferenceSnapshot inference;
-  std::vector<std::byte> scc_state;
-  std::vector<std::byte> scc_workspace;
+  std::vector<std::uint64_t> scc_iterations;
+  std::vector<std::uint8_t> scc_converged;
+  std::vector<xtbloom_status_t> scc_statuses;
   std::uint64_t numerical_body_count = 0u;
 };
 
@@ -288,18 +289,24 @@ int download_request_state_snapshot(const Gfn2CudaExecutionIdentity& identity, c
                                     bool force_mode, RequestStateSnapshot& snapshot) {
   CHECK(download_refresh_snapshot(identity, stream, snapshot.refresh) == 0);
   CHECK(download_inference_snapshot(identity, stream, force_mode, snapshot.inference) == 0);
-  snapshot.scc_state.resize(identity.scc_state_image_bytes);
-  snapshot.scc_workspace.resize(identity.scc_workspace_image_bytes);
-  if (!snapshot.scc_state.empty()) {
-    CUDA_CHECK(cudaMemcpyAsync(snapshot.scc_state.data(),
-                               reinterpret_cast<const void*>(identity.scc_state_image),
-                               snapshot.scc_state.size(), cudaMemcpyDeviceToHost, stream));
-  }
-  if (!snapshot.scc_workspace.empty()) {
-    CUDA_CHECK(cudaMemcpyAsync(snapshot.scc_workspace.data(),
-                               reinterpret_cast<const void*>(identity.scc_workspace_image),
-                               snapshot.scc_workspace.size(), cudaMemcpyDeviceToHost, stream));
-  }
+  const std::size_t batch = static_cast<std::size_t>(identity.batch_size);
+  snapshot.scc_iterations.resize(batch);
+  snapshot.scc_converged.resize(batch);
+  snapshot.scc_statuses.resize(batch);
+  /* Compare only canonical, semantically initialized SCC state. Copying the
+   * complete iteration or eigensolver allocation would read provider scratch,
+   * unused capacity, and alignment padding whose bytes are intentionally not
+   * part of the runtime contract; preinitializing those bytes would also hide
+   * genuine first-use-before-write defects from Compute Sanitizer. */
+  CUDA_CHECK(cudaMemcpyAsync(snapshot.scc_iterations.data(),
+                             reinterpret_cast<const void*>(identity.scc_state_iterations),
+                             batch * sizeof(std::uint64_t), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(snapshot.scc_converged.data(),
+                             reinterpret_cast<const void*>(identity.scc_state_converged),
+                             batch * sizeof(std::uint8_t), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(snapshot.scc_statuses.data(),
+                             reinterpret_cast<const void*>(identity.scc_state_system_statuses),
+                             batch * sizeof(xtbloom_status_t), cudaMemcpyDeviceToHost, stream));
   if (identity.scc_loop_numerical_body_count != 0u) {
     CUDA_CHECK(
         cudaMemcpyAsync(&snapshot.numerical_body_count,
@@ -538,10 +545,6 @@ bool same_identity(const Gfn2CudaExecutionIdentity& first,
          first.inference_publication_system_errors == second.inference_publication_system_errors &&
          first.inference_publication_plan_error == second.inference_publication_plan_error &&
          first.warm_checkpoint_generations == second.warm_checkpoint_generations &&
-         first.scc_state_image == second.scc_state_image &&
-         first.scc_state_image_bytes == second.scc_state_image_bytes &&
-         first.scc_workspace_image == second.scc_workspace_image &&
-         first.scc_workspace_image_bytes == second.scc_workspace_image_bytes &&
          first.topology_arena_bytes == second.topology_arena_bytes &&
          first.input_arena_bytes == second.input_arena_bytes &&
          first.iteration_arena_bytes == second.iteration_arena_bytes &&
@@ -2395,8 +2398,9 @@ int test_rejected_async_request_preserves_internal_state(cudaStream_t stream,
     CHECK(same_refresh_snapshot(after.refresh, baseline.refresh));
     CHECK(same_inference_without_warm(after.inference, baseline.inference));
     CHECK(after.inference.warm_generations == baseline.inference.warm_generations);
-    CHECK(after.scc_state == baseline.scc_state);
-    CHECK(after.scc_workspace == baseline.scc_workspace);
+    CHECK(after.scc_iterations == baseline.scc_iterations);
+    CHECK(after.scc_converged == baseline.scc_converged);
+    CHECK(after.scc_statuses == baseline.scc_statuses);
     CHECK(after.numerical_body_count == baseline.numerical_body_count);
     CHECK(after_identity.warm_checkpoint_ready == 1u);
     CHECK(cache->execute_inference_async(Gfn2CudaSccStartMode::kWarm, error) ==
@@ -2458,8 +2462,9 @@ int test_rejected_async_request_preserves_internal_state(cudaStream_t stream,
       } else {
         CHECK(same_refresh_snapshot(after.refresh, priority_baseline.refresh));
         CHECK(same_inference_without_warm(after.inference, priority_baseline.inference));
-        CHECK(after.scc_state == priority_baseline.scc_state);
-        CHECK(after.scc_workspace == priority_baseline.scc_workspace);
+        CHECK(after.scc_iterations == priority_baseline.scc_iterations);
+        CHECK(after.scc_converged == priority_baseline.scc_converged);
+        CHECK(after.scc_statuses == priority_baseline.scc_statuses);
         CHECK(after.numerical_body_count == priority_baseline.numerical_body_count);
       }
       CHECK(after.inference.warm_generations == baseline.inference.warm_generations);
@@ -2484,8 +2489,9 @@ int test_rejected_async_request_preserves_internal_state(cudaStream_t stream,
   CHECK(same_refresh_snapshot(unknown.refresh, baseline.refresh));
   CHECK(same_inference_without_warm(unknown.inference, baseline.inference));
   CHECK(unknown.inference.warm_generations == std::vector<std::uint64_t>{0u});
-  CHECK(unknown.scc_state == baseline.scc_state);
-  CHECK(unknown.scc_workspace == baseline.scc_workspace);
+  CHECK(unknown.scc_iterations == baseline.scc_iterations);
+  CHECK(unknown.scc_converged == baseline.scc_converged);
+  CHECK(unknown.scc_statuses == baseline.scc_statuses);
   CHECK(unknown.numerical_body_count == baseline.numerical_body_count);
   CHECK(cache->identity().warm_checkpoint_ready == 0u);
   CHECK(cache->execute_inference_async(Gfn2CudaSccStartMode::kWarm, error) ==
