@@ -445,9 +445,9 @@ xtbloom_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan,
       error = "GFN1 coordination gradient accumulators contain NaN or infinity";
       return XTBLOOM_STATUS_INTERNAL_ERROR;
     }
-    const std::size_t atom = coordinate / 3u;
-    const std::size_t axis = coordinate % 3u;
-    double candidate = gradients[coordinate];
+  }
+  for (std::size_t atom = 0; atom < atom_count; ++atom) {
+    double candidate[3]{gradients[atom * 3u], gradients[atom * 3u + 1u], gradients[atom * 3u + 2u]};
     status = for_each_active_pair_of_atom(
         plan, positions, atom,
         [&](std::size_t other, double dx, double dy, double dz,
@@ -458,10 +458,17 @@ xtbloom_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan,
           if (pair_status != XTBLOOM_STATUS_SUCCESS) {
             return pair_status;
           }
-          candidate += increments[axis];
-          if (!std::isfinite(candidate)) {
-            error = "GFN1 coordination gradient accumulation exceeded floating-point range";
-            return XTBLOOM_STATUS_INTERNAL_ERROR;
+          /*
+           * Advance all components together so the expensive pair kernel is
+           * evaluated once while preserving each component's publication
+           * order. This dry pass keeps caller accumulators transactional.
+           */
+          for (std::size_t axis = 0; axis < 3u; ++axis) {
+            candidate[axis] += increments[axis];
+            if (!std::isfinite(candidate[axis])) {
+              error = "GFN1 coordination gradient accumulation exceeded floating-point range";
+              return XTBLOOM_STATUS_INTERNAL_ERROR;
+            }
           }
           return XTBLOOM_STATUS_SUCCESS;
         },

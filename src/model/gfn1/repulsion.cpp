@@ -402,9 +402,9 @@ xtbloom_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* posi
         error = "GFN1 repulsion force accumulators contain NaN or infinity";
         return XTBLOOM_STATUS_INTERNAL_ERROR;
       }
-      const std::size_t atom = coordinate / 3u;
-      const std::size_t axis = coordinate % 3u;
-      double candidate = forces[coordinate];
+    }
+    for (std::size_t atom = 0; atom < atom_count; ++atom) {
+      double candidate[3]{forces[atom * 3u], forces[atom * 3u + 1u], forces[atom * 3u + 2u]};
       status = for_each_active_pair_of_atom(
           plan, positions, atom,
           [&](std::size_t other, double dx, double dy, double dz,
@@ -415,10 +415,16 @@ xtbloom_status_t add_repulsion_cpu(const RepulsionPlan& plan, const double* posi
             if (pair_status != XTBLOOM_STATUS_SUCCESS) {
               return pair_status;
             }
-            candidate += contribution.force[axis];
-            if (!std::isfinite(candidate)) {
-              error = "GFN1 repulsion force accumulation exceeded floating-point range";
-              return XTBLOOM_STATUS_INTERNAL_ERROR;
+            /*
+             * Evaluate the pair once for all axes while retaining the exact
+             * per-component accumulation order used by publication.
+             */
+            for (std::size_t axis = 0; axis < 3u; ++axis) {
+              candidate[axis] += contribution.force[axis];
+              if (!std::isfinite(candidate[axis])) {
+                error = "GFN1 repulsion force accumulation exceeded floating-point range";
+                return XTBLOOM_STATUS_INTERNAL_ERROR;
+              }
             }
             return XTBLOOM_STATUS_SUCCESS;
           },
