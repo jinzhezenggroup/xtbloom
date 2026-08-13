@@ -353,6 +353,9 @@ banned-module-level-imports = ["torch"]
 # benchmarks/run.py appends a tools path to sys.path before importing
 # xtbloom_conformance/xtbloom_public_api; those imports cannot move to the top.
 "benchmarks/run.py" = ["E402"]
+# Test method names already state their focused contract; class/module
+# docstrings provide the surrounding scientific intent.
+"tests/parameters/test_gfn1*.py" = ["D102"]
 
 [tool.ty.src]
 # The ty-pre-commit hook checks the whole project with no positional paths, so

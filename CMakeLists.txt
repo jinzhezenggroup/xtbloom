@@ -940,6 +940,8 @@ add_library(xtbloom
   src/runtime/backend.cpp
   src/runtime/gfn2_cpu_execution.cpp
   src/runtime/gfn2_plan.cpp
+  src/runtime/model_plan.cpp
+  src/runtime/model_registry.cpp
   src/runtime/request.cpp
   src/runtime/result_owner.cpp
   src/runtime/validation.cpp
@@ -1599,6 +1601,17 @@ if(XTBLOOM_BUILD_TESTS)
     xtbloom_configure_linalg_runtime_test(xtbloom_runtime_test xtbloom.runtime)
   endif()
 
+  add_executable(xtbloom_model_registry_test
+    tests/model_registry_test.cpp
+    src/runtime/model_registry.cpp
+  )
+  target_include_directories(xtbloom_model_registry_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_features(xtbloom_model_registry_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.model_registry COMMAND xtbloom_model_registry_test)
+
   if(XTBLOOM_HAS_CUDA)
     # This host-only test must compile in the provider-free configuration. It
     # verifies that provider status returns remain fixed-width integer domains
@@ -1639,6 +1652,8 @@ if(XTBLOOM_BUILD_TESTS)
       src/runtime/backend.cpp
       src/runtime/gfn2_cpu_execution.cpp
       src/runtime/gfn2_plan.cpp
+      src/runtime/model_plan.cpp
+      src/runtime/model_registry.cpp
       src/runtime/request.cpp
       src/runtime/result_owner.cpp
       src/runtime/validation.cpp
@@ -1732,6 +1747,7 @@ if(XTBLOOM_BUILD_TESTS)
 
   add_executable(xtbloom_batch_validation_test
     tests/batch_validation_test.cpp
+    src/runtime/model_registry.cpp
     src/runtime/validation.cpp
   )
   target_include_directories(xtbloom_batch_validation_test PRIVATE
@@ -3665,9 +3681,39 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_parameters_header_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.parameters.header COMMAND xtbloom_parameters_header_test)
 
+  add_executable(xtbloom_gfn1_parameters_header_test
+    tests/parameters/gfn1_header_test.cpp
+  )
+  target_include_directories(xtbloom_gfn1_parameters_header_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  target_compile_features(xtbloom_gfn1_parameters_header_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.parameters.gfn1_header
+    COMMAND xtbloom_gfn1_parameters_header_test
+  )
+
+  add_executable(xtbloom_gfn1_d3_parameters_header_test
+    tests/parameters/gfn1_d3_header_test.cpp
+  )
+  target_include_directories(xtbloom_gfn1_d3_parameters_header_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  target_compile_features(xtbloom_gfn1_d3_parameters_header_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.parameters.gfn1_d3_header
+    COMMAND xtbloom_gfn1_d3_parameters_header_test
+  )
+
   add_test(
     NAME xtbloom.parameters.generated
     COMMAND ${Python3_EXECUTABLE} tools/parameters/generate_gfn2.py --check
+  )
+  add_test(
+    NAME xtbloom.parameters.gfn1_generated
+    COMMAND ${Python3_EXECUTABLE} tools/parameters/generate_gfn1.py --check
+  )
+  add_test(
+    NAME xtbloom.parameters.gfn1_d3_generated
+    COMMAND ${Python3_EXECUTABLE} tools/parameters/generate_gfn1_d3.py --check
   )
   add_test(
     NAME xtbloom.parameters.python
@@ -3677,6 +3723,10 @@ if(XTBLOOM_BUILD_TESTS)
   add_test(
     NAME xtbloom.conformance.manifest
     COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_conformance.py check
+  )
+  add_test(
+    NAME xtbloom.conformance.gfn1_manifest
+    COMMAND ${Python3_EXECUTABLE} tools/conformance/gfn1_conformance.py check
   )
   add_test(
     NAME xtbloom.conformance.tmacl_evidence
@@ -3819,10 +3869,13 @@ if(XTBLOOM_BUILD_TESTS)
   )
   set_tests_properties(
     xtbloom.parameters.generated
+    xtbloom.parameters.gfn1_generated
+    xtbloom.parameters.gfn1_d3_generated
     xtbloom.parameters.python
     xtbloom.licensing
     xtbloom.licensing_unit
     xtbloom.conformance.manifest
+    xtbloom.conformance.gfn1_manifest
     xtbloom.conformance.tmacl_evidence
     xtbloom.conformance.python
     xtbloom.oracle.tblite_observer_patch
@@ -3853,6 +3906,8 @@ install(FILES
   data/parameters/sto_manifest.json
   data/parameters/spin_manifest.json
   data/parameters/d4_manifest.json
+  data/parameters/gfn1_manifest.json
+  data/parameters/gfn1_d3_manifest.json
   data/parameters/mctc_manifest.json
   cmake/3rdparty/implib_manifest.json
   cmake/3rdparty/scipy_openblas32_manifest.json

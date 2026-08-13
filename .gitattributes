@@ -1,5 +1,6 @@
 # Preserve the canonical tblite exporter byte stream, including its final blank line.
 data/parameters/gfn2.toml whitespace=-blank-at-eof
+data/parameters/gfn1.toml whitespace=-blank-at-eof
 
 # Preserve exact upstream scipy-openblas32 packaged-license bytes. The Windows
 # artifacts contain canonical CRLF or mixed line endings verified by SHA-256.
@@ -8,6 +9,10 @@ LICENSES/scipy-openblas32-0.3.34.0.0-macos.txt -text
 LICENSES/scipy-openblas32-0.3.34.0.0-windows-amd64.txt -text whitespace=cr-at-eol
 LICENSES/scipy-openblas32-0.3.34.0.0-windows-arm64.txt -text whitespace=cr-at-eol
 LICENSES/scipy-openblas32-tools-LICENSE_win32.txt -text
+
+# GFN1 and GFN1-D3 provenance bind the upstream mctc-lib Apache license by
+# exact byte length and SHA-256. Preserve its LF bytes in Windows worktrees.
+LICENSES/Apache-2.0.txt -text
 
 # These upstream license and vendored-source trees are checked byte-for-byte
 # against provenance manifests. Disable checkout newline conversion so a

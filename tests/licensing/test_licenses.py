@@ -129,6 +129,8 @@ class SourceDistributionBoundaryTests(unittest.TestCase):
             "cmake/3rdparty/pyodide_openblas_manifest.json",
             "cmake/3rdparty/pyodide-openblas/recipe/libopenblas/meta.yaml",
             "data/parameters/d4.hpp",
+            "data/parameters/gfn1.hpp",
+            "data/parameters/gfn1_d3.hpp",
             "data/parameters/gfn2.hpp",
             "LICENSES/pyodide-MPL-2.0.txt",
             "src/backends/cuda/gfn2_scc_loop.cu",
@@ -259,6 +261,8 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
         """Prevent Windows autocrlf from invalidating provenance digests."""
         attributes = (REPOSITORY / ".gitattributes").read_text(encoding="utf-8")
         for expected in (
+            "data/parameters/gfn1.toml whitespace=-blank-at-eof",
+            "LICENSES/Apache-2.0.txt -text",
             "LICENSES/scipy-openblas32-0.3.34.0.0.txt -text",
             "LICENSES/openchemlib-BSD-3-Clause.txt -text",
             "LICENSES/pyodide-MPL-2.0.txt -text "
@@ -388,14 +392,24 @@ class LicenseArchiveTests(unittest.TestCase):
 
     def test_wheel_must_retain_every_provenance_manifest(self) -> None:
         """Require all provenance manifests in wheel payloads."""
-        names = self._valid_wheel_names()
-        missing = "xtbloom/share/licenses/xtbloom/provenance/mctc_manifest.json"
-        names.remove(missing)
-        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
-            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
-            self._write_wheel(wheel, names)
-            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "mctc_manifest"):
-                CHECKER.check_archive(wheel)
+        for filename in (
+            "gfn1_manifest.json",
+            "gfn1_d3_manifest.json",
+            "mctc_manifest.json",
+        ):
+            with self.subTest(filename=filename):
+                names = self._valid_wheel_names()
+                missing = f"xtbloom/share/licenses/xtbloom/provenance/{filename}"
+                names.remove(missing)
+                with tempfile.TemporaryDirectory(
+                    prefix="xtbloom-license-test-"
+                ) as directory:
+                    wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+                    self._write_wheel(wheel, names)
+                    with self.assertRaisesRegex(
+                        CHECKER.LicenseCheckError, filename.split(".")[0]
+                    ):
+                        CHECKER.check_archive(wheel)
 
     def test_wheel_must_retain_implib_provenance_manifest(self) -> None:
         """Require the vendored implib provenance manifest in wheels."""
@@ -1204,6 +1218,74 @@ class LinkingExceptionTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "renewed review"):
                 CHECKER._require_exception_policy(root)
+
+
+class Gfn1ParameterProvenanceTests(unittest.TestCase):
+    """Pin every nested GFN1 source, diagnostic, and legal record."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Load the reviewed manifests and retained Apache license once."""
+        cls.gfn1 = json.loads(
+            (REPOSITORY / "data/parameters/gfn1_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        cls.gfn1_d3 = json.loads(
+            (REPOSITORY / "data/parameters/gfn1_d3_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        cls.apache = (REPOSITORY / "LICENSES/Apache-2.0.txt").read_bytes()
+
+    def test_current_gfn1_provenance_is_accepted(self) -> None:
+        """Accept the exact reviewed GFN1 and GFN1-D3 provenance records."""
+        CHECKER._check_gfn1_parameter_provenance(copy.deepcopy(self.gfn1))
+        CHECKER._check_gfn1_d3_provenance(copy.deepcopy(self.gfn1_d3), self.apache)
+
+    def test_gfn1_source_digest_mutation_is_rejected(self) -> None:
+        """Reject a modified aggregate digest for the tblite source set."""
+        manifest = copy.deepcopy(self.gfn1)
+        manifest["source"]["parameter_sources_sha256"] = "0" * 64
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_parameter_provenance(manifest)
+
+    def test_gfn1_cross_check_blob_mutation_is_rejected(self) -> None:
+        """Reject a dxtb cross-check record that names another Git blob."""
+        manifest = copy.deepcopy(self.gfn1)
+        manifest["cross_check"]["git_blob"] = "0" * 40
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_parameter_provenance(manifest)
+
+    def test_gfn1_mctc_source_mutation_is_rejected(self) -> None:
+        """Reject changed mctc-lib bytes used by the GFN1 generated header."""
+        manifest = copy.deepcopy(self.gfn1)
+        manifest["mctc"]["sources"][0]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_parameter_provenance(manifest)
+
+    def test_gfn1_mctc_legal_record_mutation_is_rejected(self) -> None:
+        """Reject an incomplete Apache-2.0 legal record for mixed-source data."""
+        manifest = copy.deepcopy(self.gfn1)
+        manifest["mctc"]["legal_files"] = []
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_parameter_provenance(manifest)
+
+    def test_gfn1_d3_mctc_source_mutation_is_rejected(self) -> None:
+        """Reject a changed mctc-lib source digest in the D3 manifest."""
+        manifest = copy.deepcopy(self.gfn1_d3)
+        manifest["unit_conversion"]["sources"][0]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_d3_provenance(manifest, self.apache)
+
+    def test_gfn1_d3_mctc_license_text_mutation_is_rejected(self) -> None:
+        """Reject retained Apache license bytes outside the reviewed record."""
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError, "Apache license differs"
+        ):
+            CHECKER._check_gfn1_d3_provenance(
+                copy.deepcopy(self.gfn1_d3), self.apache + b"changed\n"
+            )
 
 
 class ImplibProvenanceTests(unittest.TestCase):

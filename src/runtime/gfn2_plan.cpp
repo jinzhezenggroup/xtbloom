@@ -12,6 +12,7 @@
 
 #include "runtime/backend.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
+#include "runtime/model_registry.hpp"
 #include "runtime/request.hpp"
 #include "runtime/validation.hpp"
 #if defined(XTBLOOM_HAS_CUDA)
@@ -278,9 +279,15 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
     error = std::move(validation.error);
     return validation.status;
   }
-  if (options.model == XTBLOOM_MODEL_GFN1_XTB) {
-    error = "GFN1-xTB is reserved by the ABI but is not implemented yet";
-    return XTBLOOM_STATUS_NOT_SUPPORTED;
+  ModelBackendRoute model_route = ModelBackendRoute::kUnavailable;
+  const xtbloom_status_t model_status =
+      validate_model_dispatch(options.model, context.backend, error, &model_route);
+  if (model_status != XTBLOOM_STATUS_SUCCESS) {
+    return model_status;
+  }
+  if (model_route != ModelBackendRoute::kGfn2) {
+    error = "a GFN2 plan cannot be constructed for another registered model route";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
 
   impl_->backend = context.backend;

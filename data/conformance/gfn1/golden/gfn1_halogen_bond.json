@@ -1,0 +1,139 @@
+{
+  "case_id": "gfn1_halogen_bond",
+  "method": "GFN1-xTB",
+  "molecular_charge": 0,
+  "properties": {
+    "energy_hartree": -15.60623387797,
+    "forces_hartree_per_bohr": [
+      -0.0032897690977104,
+      -0.0063412974100775,
+      3.4681529709488e-18,
+      0.0029226873996775,
+      0.0049294641804563,
+      1.018327536444e-17,
+      0.010390018032324,
+      -0.00022680309482728,
+      9.2867435099806e-17,
+      -0.017228179009844,
+      0.0024827012316179,
+      2.9615567659323e-17,
+      0.0039000047485132,
+      0.0016170046669082,
+      -4.2478660668948e-17,
+      0.0033052379270398,
+      -0.0024610695740777,
+      -9.3655770425569e-17
+    ],
+    "gradient_hartree_per_bohr": [
+      0.0032897690977104,
+      0.0063412974100775,
+      -3.4681529709488e-18,
+      -0.0029226873996775,
+      -0.0049294641804563,
+      -1.018327536444e-17,
+      -0.010390018032324,
+      0.00022680309482728,
+      -9.2867435099806e-17,
+      0.017228179009844,
+      -0.0024827012316179,
+      -2.9615567659323e-17,
+      -0.0039000047485132,
+      -0.0016170046669082,
+      4.2478660668948e-17,
+      -0.0033052379270398,
+      0.0024610695740777,
+      9.3655770425569e-17
+    ],
+    "partial_charges_e": [
+      -0.03228893,
+      -0.00910348,
+      -0.41571677,
+      0.39352069,
+      0.03078734,
+      0.03280115
+    ]
+  },
+  "provenance": {
+    "accuracy": 0.0001,
+    "command": [
+      "{executable}",
+      "coord",
+      "--gfn",
+      "1",
+      "--acc",
+      "0.0001",
+      "--grad",
+      "--json",
+      "--norestart",
+      "--chrg",
+      "0",
+      "--uhf",
+      "0",
+      "-P",
+      "1"
+    ],
+    "command_template": [
+      "{executable}",
+      "coord",
+      "--gfn",
+      "1",
+      "--acc",
+      "0.0001",
+      "--grad",
+      "--json",
+      "--norestart",
+      "--chrg",
+      "{charge}",
+      "--uhf",
+      "{unpaired_electrons}",
+      "-P",
+      "1"
+    ],
+    "engine": "xtb",
+    "environment": {
+      "cleared_variable_prefixes": [
+        "XTB"
+      ],
+      "inherited_environment_boundary": "Non-XTB variables are inherited; executable, shared-library, parameter, input, and normalized-output hashes remain pinned.",
+      "set": {
+        "LC_ALL": "C",
+        "OMP_NUM_THREADS": "1",
+        "OMP_STACKSIZE": "4G",
+        "OPENBLAS_NUM_THREADS": "1",
+        "XTBPATH": "<directory-containing-pinned-param_gfn1-xtb.txt>"
+      }
+    },
+    "executable_sha256": "271dd6cdd5da127a8e39919e7e32d924790fb346f0057b4183769ba8b3411887",
+    "executable_version": "-----------------------------------------------------------      \n     |                   =====================                   |     \n     |                           x T B                           |     \n     |                   =====================                   |     \n     |                         S. Grimme                         |     \n     |          Mulliken Center for Theoretical Chemistry        |     \n     |                    University of Bonn                     |     \n      -----------------------------------------------------------      \n\n   * xtb version 6.7.1 (edcfbbe) compiled by 'conda@5dfe00f5fb80' on 2026-06-10\n\nnormal termination of xtb",
+    "generation_mode": "live-cli",
+    "input": "data/conformance/gfn1/inputs/gfn1_halogen_bond.coord",
+    "runtime": {
+      "gfn1_parameter": {
+        "filename": "param_gfn1-xtb.txt",
+        "selection": "XTBPATH",
+        "sha256": "81a9d7afdee31f5d8fd67a4d8ec966179317c7b100261c9c82d724bafb460399"
+      },
+      "libxtb": {
+        "filename": "libxtb.so.6.7.1",
+        "sha256": "c405797f34ed96470f23158406e6d8a8e102681d3c3cbbaea16692f514f22853"
+      }
+    },
+    "scientific_source": {
+      "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+      "path": "test/unit/test_gfn1.f90",
+      "section": "test_gfn1_xb",
+      "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99"
+    },
+    "source_output_sha256": "ccb70541e5354d4193535b4dfcedc98a99776cdd17b1da4eb63e291f58adfb56",
+    "source_revision": "edcfbbe39d411edc225e27315fbda3a204ddb023"
+  },
+  "schema_version": 1,
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  },
+  "unpaired_electrons": 0
+}

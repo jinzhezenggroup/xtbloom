@@ -12,7 +12,8 @@
 
 #include "runtime/backend.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
-#include "runtime/gfn2_plan.hpp"
+#include "runtime/model_plan.hpp"
+#include "runtime/model_registry.hpp"
 #include "xtbloom/xtbloom.h"
 #if defined(XTBLOOM_HAS_CUDA)
 #include "runtime/gfn2_cuda_execution.hpp"
@@ -26,7 +27,7 @@ struct xtbloom_context {
 };
 
 struct xtbloom_plan {
-  xtbloom::detail::Gfn2Plan* implementation;
+  xtbloom::detail::ModelPlan* implementation;
 };
 
 struct xtbloom_request {
@@ -406,14 +407,27 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
   try {
     std::string error;
     const xtbloom::detail::DescriptorValidationResult validation =
-        xtbloom::detail::validate_compute_descriptor_structure(context->implementation->backend,
-                                                               batch, options, result);
+        xtbloom::detail::validate_compute_descriptor_structure_for_dispatch(
+            context->implementation->backend, batch, options, result);
     if (!validation.ok()) {
       return fail(validation.status, validation.error);
     }
-    if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
-      return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
-                  "GFN1-xTB is reserved by the ABI but is not implemented yet");
+    xtbloom::detail::ModelBackendRoute model_route =
+        xtbloom::detail::ModelBackendRoute::kUnavailable;
+    const xtbloom_status_t model_status = xtbloom::detail::validate_model_dispatch(
+        options->model, context->implementation->backend, error, &model_route);
+    if (model_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(model_status, std::move(error));
+    }
+    if (model_route != xtbloom::detail::ModelBackendRoute::kGfn2) {
+      return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                  "the registered model route has no asynchronous CUDA executor");
+    }
+    const xtbloom::detail::DescriptorValidationResult availability =
+        xtbloom::detail::validate_compute_execution_availability(context->implementation->backend,
+                                                                 *batch, *options);
+    if (!availability.ok()) {
+      return fail(availability.status, availability.error);
     }
     const xtbloom_status_t reserve_status =
         request->implementation->reserve_submission(*context->implementation, error);
@@ -475,9 +489,9 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
   try {
     const bool cuda_backend = context->implementation->backend == XTBLOOM_BACKEND_CUDA;
     xtbloom::detail::DescriptorValidationResult validation =
-        cuda_backend ? xtbloom::detail::validate_compute_descriptor_structure(
+        cuda_backend ? xtbloom::detail::validate_compute_descriptor_structure_for_dispatch(
                            context->implementation->backend, batch, options, result)
-                     : xtbloom::detail::validate_compute_descriptors(
+                     : xtbloom::detail::validate_compute_descriptors_for_dispatch(
                            context->implementation->backend, batch, options, result);
     if (!validation.ok()) {
       return fail(validation.status, std::move(validation.error));
@@ -487,19 +501,36 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
      * the cache transaction before accessing caller storage. CPU retains the
      * historical complete host validation sequence here. */
     (void)validation.pending_offset_checks;
+
+    std::string route_error;
+    xtbloom::detail::ModelBackendRoute model_route =
+        xtbloom::detail::ModelBackendRoute::kUnavailable;
+    const xtbloom_status_t model_status = xtbloom::detail::validate_model_dispatch(
+        options->model, context->implementation->backend, route_error, &model_route);
+    if (model_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(model_status, std::move(route_error));
+    }
+    if (model_route != xtbloom::detail::ModelBackendRoute::kGfn2) {
+      return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                  context->implementation->backend == XTBLOOM_BACKEND_CPU
+                      ? "the registered model route has no synchronous CPU executor"
+                      : "the registered model route has no synchronous CUDA executor");
+    }
+    const xtbloom::detail::DescriptorValidationResult availability =
+        xtbloom::detail::validate_compute_execution_availability(context->implementation->backend,
+                                                                 *batch, *options);
+    if (!availability.ok()) {
+      return fail(availability.status, std::move(availability.error));
+    }
   } catch (const std::bad_alloc&) {
     return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
-                "failed to allocate temporary storage while validating a compute request");
+                "failed to allocate temporary storage while validating or dispatching a compute "
+                "request");
   } catch (const std::exception& exception) {
     return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
   } catch (...) {
     return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
-                "unknown exception while validating a compute request");
-  }
-
-  if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
-    return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
-                "GFN1-xTB is reserved by the ABI but is not implemented yet");
+                "unknown exception while validating or dispatching a compute request");
   }
 
   if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
@@ -572,8 +603,8 @@ xtbloom_status_t xtbloom_plan_create(xtbloom_context_t* context, const xtbloom_b
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "batch or compute options is NULL");
   }
   try {
-    std::unique_ptr<xtbloom::detail::Gfn2Plan> implementation(new (std::nothrow)
-                                                                  xtbloom::detail::Gfn2Plan{});
+    std::unique_ptr<xtbloom::detail::ModelPlan> implementation(new (std::nothrow)
+                                                                   xtbloom::detail::ModelPlan{});
     if (implementation == nullptr) {
       return fail(XTBLOOM_STATUS_ALLOCATION_FAILED, "failed to allocate a plan implementation");
     }

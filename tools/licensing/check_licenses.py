@@ -208,6 +208,8 @@ SOURCE_FILES = (
     "data/parameters/sto_manifest.json",
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
+    "data/parameters/gfn1_manifest.json",
+    "data/parameters/gfn1_d3_manifest.json",
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
@@ -242,6 +244,8 @@ SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/sto_manifest.json",
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
+    "data/parameters/gfn1_manifest.json",
+    "data/parameters/gfn1_d3_manifest.json",
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
@@ -258,6 +262,8 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/provenance/sto_manifest.json",
     "share/licenses/xtbloom/provenance/spin_manifest.json",
     "share/licenses/xtbloom/provenance/d4_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json",
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
@@ -335,6 +341,8 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/provenance/sto_manifest.json",
     "share/licenses/xtbloom/provenance/spin_manifest.json",
     "share/licenses/xtbloom/provenance/d4_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json",
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
@@ -346,6 +354,8 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE",
 )
 SPDX_FILES = {
+    "data/parameters/gfn1.hpp": "LGPL-3.0-or-later AND Apache-2.0",
+    "data/parameters/gfn1_d3.hpp": "LGPL-3.0-or-later",
     "data/parameters/gfn2.hpp": "LGPL-3.0-or-later",
     "data/parameters/d4.hpp": "LGPL-3.0-or-later",
     "data/parameters/tblite_sto.hpp": "LGPL-3.0-or-later",
@@ -357,6 +367,8 @@ SPDX_FILES = {
 }
 NOTICE_TOKENS = (
     "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
+    "6f0b06fbfa8653a23ca55c453772ce3af4420706",
+    "aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5",
     "6e1f59c3f39d919a2dbef0601d2576727c8b30e8",
     "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
     "edcfbbe39d411edc225e27315fbda3a204ddb023",
@@ -393,6 +405,19 @@ NOTICE_TOKENS = (
     "unsupported/",
     EXCEPTION_FILE,
 )
+
+GFN1_PROVENANCE_SHA256 = (
+    "422170e3d1beaa94be96488fc9303374a3b217e89e501823db894aa7fd17a9c5"
+)
+GFN1_D3_PROVENANCE_SHA256 = (
+    "2aa688be0fd1cb8609abaa3802a616178e1abe504d8b3c1dd56fcc37140005a0"
+)
+GFN1_D3_MCTC_LICENSE_RECORD = {
+    "bytes": 11358,
+    "git_blob": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+    "path": "LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+}
 EXCEPTION_TOKENS = (
     "Copyright (C) 2026 Jinzhe Zeng",
     "section 7",
@@ -1566,6 +1591,85 @@ def _check_pyodide_openblas_provenance(root: Path) -> None:
         )
 
 
+def _compact_canonical_json_sha256(value: object) -> str:
+    """Hash provenance with the compact encoding used by the D3 generator."""
+    return hashlib.sha256(
+        (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def _pretty_canonical_json_sha256(value: object) -> str:
+    """Hash provenance with the pretty encoding used by the GFN1 generator."""
+    return hashlib.sha256(
+        (
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                indent=2,
+                sort_keys=True,
+                separators=(",", ": "),
+            )
+            + "\n"
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _check_gfn1_parameter_provenance(gfn1: dict[str, object]) -> None:
+    """Require every reviewed tblite/dxtb/mctc/exporter provenance field."""
+    try:
+        retained = {
+            key: gfn1[key]
+            for key in ("source", "inspection", "exporter", "cross_check", "mctc")
+        }
+    except KeyError as exc:
+        raise LicenseCheckError("GFN1 parameter manifest is incomplete") from exc
+    retained_digest = _pretty_canonical_json_sha256(retained)
+    if retained_digest != GFN1_PROVENANCE_SHA256:
+        raise LicenseCheckError("GFN1 parameter manifest has unreviewed provenance")
+    mctc = gfn1.get("mctc", {})
+    if not isinstance(mctc, dict) or mctc.get("legal_files") != [
+        GFN1_D3_MCTC_LICENSE_RECORD
+    ]:
+        raise LicenseCheckError(
+            "GFN1 parameter manifest has incomplete mctc legal provenance"
+        )
+
+
+def _check_gfn1_d3_provenance(
+    gfn1_d3: dict[str, object], apache_license: bytes
+) -> None:
+    """Require complete D3 source/conversion/legal provenance and local text."""
+    try:
+        retained = {
+            key: gfn1_d3[key]
+            for key in (
+                "schema_version",
+                "method",
+                "source",
+                "unit_conversion",
+                "representation",
+            )
+        }
+    except KeyError as exc:
+        raise LicenseCheckError("GFN1-D3 manifest is incomplete") from exc
+    if _compact_canonical_json_sha256(retained) != GFN1_D3_PROVENANCE_SHA256:
+        raise LicenseCheckError("GFN1-D3 manifest has unreviewed provenance")
+    unit_conversion = gfn1_d3.get("unit_conversion", {})
+    if not isinstance(unit_conversion, dict) or unit_conversion.get("legal_files") != [
+        GFN1_D3_MCTC_LICENSE_RECORD
+    ]:
+        raise LicenseCheckError("GFN1-D3 manifest has incomplete mctc legal provenance")
+    if (
+        len(apache_license) != GFN1_D3_MCTC_LICENSE_RECORD["bytes"]
+        or hashlib.sha256(apache_license).hexdigest()
+        != GFN1_D3_MCTC_LICENSE_RECORD["sha256"]
+    ):
+        raise LicenseCheckError("retained mctc Apache license differs from provenance")
+
+
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
     _require_files(root, SOURCE_FILES, "source tree")
@@ -1785,9 +1889,18 @@ def check_source(root: Path) -> None:
     d4 = json.loads(
         (root / "data/parameters/d4_manifest.json").read_text(encoding="utf-8")
     )
+    gfn1 = json.loads(
+        (root / "data/parameters/gfn1_manifest.json").read_text(encoding="utf-8")
+    )
+    gfn1_d3 = json.loads(
+        (root / "data/parameters/gfn1_d3_manifest.json").read_text(encoding="utf-8")
+    )
     mctc = json.loads(
         (root / "data/parameters/mctc_manifest.json").read_text(encoding="utf-8")
     )
+
+    _check_gfn1_parameter_provenance(gfn1)
+    _check_gfn1_d3_provenance(gfn1_d3, (root / "LICENSES/Apache-2.0.txt").read_bytes())
     if gfn2["source"]["license"]["spdx"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("GFN2 parameter manifest has the wrong SPDX license")
     if spin["source"]["license"] != "LGPL-3.0-or-later":
@@ -1805,6 +1918,39 @@ def check_source(root: Path) -> None:
     if d4["license"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("D4 manifest has the wrong SPDX license")
     if (
+        gfn1.get("source", {}).get("license", {}).get("spdx") != "LGPL-3.0-or-later"
+        or gfn1.get("source", {}).get("revision")
+        != "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
+        or gfn1.get("cross_check", {}).get("repository")
+        != "https://github.com/grimme-lab/dxtb"
+        or gfn1.get("cross_check", {}).get("role")
+        != "non-authoritative semantic cross-check"
+        or gfn1.get("mctc", {}).get("license") != "Apache-2.0"
+        or gfn1.get("mctc", {}).get("revision")
+        != "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d"
+    ):
+        raise LicenseCheckError("GFN1 parameter manifest has incorrect provenance")
+    if (
+        gfn1_d3.get("source", {}).get("license") != "LGPL-3.0-or-later"
+        or gfn1_d3.get("source", {}).get("revision")
+        != "6f0b06fbfa8653a23ca55c453772ce3af4420706"
+        or gfn1_d3.get("unit_conversion", {}).get("license") != "Apache-2.0"
+        or gfn1_d3.get("unit_conversion", {}).get("revision")
+        != "aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5"
+    ):
+        raise LicenseCheckError("GFN1-D3 manifest has incorrect provenance")
+    expected_gfn1_d3_sources = {
+        "src/dftd3/reference.f90": "08dc42be7e1269fa4d1c99d3bc53863521f0a04d",
+        "src/dftd3/data/r4r2.f90": "f5798fb8ecea4d54ad439d2cd61c0e374bfa4e76",
+        "src/dftd3/data/vdwrad.f90": "405002bcf6dc7a5ba745ea791a4c112d6176076b",
+    }
+    observed_gfn1_d3_sources = {
+        entry.get("path"): entry.get("git_blob")
+        for entry in gfn1_d3.get("source", {}).get("parsed_sources", ())
+    }
+    if observed_gfn1_d3_sources != expected_gfn1_d3_sources:
+        raise LicenseCheckError("GFN1-D3 manifest has incomplete source coverage")
+    if (
         mctc["license"] != "Apache-2.0"
         or mctc["revision"] != "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d"
     ):
@@ -1818,9 +1964,41 @@ def check_source(root: Path) -> None:
             "b3cb9cefd702169d6be662eb438932525990a1ac",
             "fdbd599664a7f113633d96110531d810fdc8e54b6db26d4f584120d9c7cec314",
         ),
+        "src/mctc/data/paulingen.f90": (
+            "445c9d4a0bf643a045a6f9ce9240c032fecbc911",
+            "8ccd4c9688fbb733888e8a2622de0d8b67d6a348ed400b1a41686d6268f06d1b",
+        ),
+        "src/mctc/env.f90": (
+            "f4f2eb0a0ab661acd4f4f252609c60f3a75001ad",
+            "cb75b8a8344b708d8a4de5abe0ef726e7b3332bed78ab90c1b0915ad587cbe8e",
+        ),
+        "src/mctc/env/accuracy.f90": (
+            "52d195970efd2aa030f0d464c9b8b6e817ddc43c",
+            "17f5de4dc97a3240088540cf31627dc787dfb0628d691ec70cb2c0404dac21e8",
+        ),
         "src/mctc/io/constants.f90": (
             "2fd35c66ce80a47aa88d12952f0cce2886cd753f",
             "6ee2b599fc2d338f1a7e07b5b46e984e2612b4cfc58110d1203ecf19ebde2385",
+        ),
+        "src/mctc/io/codata2018.f90": (
+            "8db65943defc6cd3d9ce51751e1bdbe81173d132",
+            "47c4abbc7f9dddb3bba1c89563b45e792304bc56723f1c4b05fc978aa5d3704d",
+        ),
+        "src/mctc/io/convert.f90": (
+            "799d71c1f83cfa6522c4b9eb47df3f72e6a4b90f",
+            "b05d7b4821deb4abe448cf11d53df9b118747294b44f0d774f056bc3b28430b9",
+        ),
+        "src/mctc/ncoord.f90": (
+            "93e6ce2cd3a1a4463b22e858313d17f31deff9ec",
+            "93d705f1c018c646a8bc01385c5e8e918433fc76a670876b342f459a0002e723",
+        ),
+        "src/mctc/ncoord/exp.f90": (
+            "c41db6846cf2d694cac3e26634a0648ab4ded5e3",
+            "376eed0a25ad9c5c45a523294804e10fb02883bb7b26dfd2017c1b2f8c051b60",
+        ),
+        "src/mctc/ncoord/type.f90": (
+            "38eb682efa53b55070b39d8f68d09a8465f5d76f",
+            "b8b819f9ea1c0765632fdb4ea9046b0c79f2c1bb13d39555ac3059f498ba1bb5",
         ),
         "src/mctc/ncoord/dexp.f90": (
             "307e84898387fcddf77f54daecf24b6ce28a27b1",
