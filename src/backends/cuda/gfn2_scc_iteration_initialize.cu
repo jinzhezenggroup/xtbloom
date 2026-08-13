@@ -1314,4 +1314,130 @@ Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::upload_asy
   return {};
 }
 
+__global__ void restore_initial_state_if_admitted_kernel(const std::byte* source,
+                                                         std::byte* destination, std::size_t bytes,
+                                                         const std::uint32_t* request_error) {
+  if (*request_error != 0u) return;
+  const std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
+  constexpr std::size_t kWordBytes = sizeof(uint4);
+  const std::size_t word_count = bytes / kWordBytes;
+  const auto* source_words = reinterpret_cast<const uint4*>(source);
+  auto* destination_words = reinterpret_cast<uint4*>(destination);
+  for (std::size_t word = index; word < word_count; word += stride) {
+    destination_words[word] = source_words[word];
+  }
+  /* Arena images are 256-byte aligned today, but retaining a byte tail keeps
+   * the copy correct if a future compatible checkpoint has a shorter suffix. */
+  for (std::size_t byte = word_count * kWordBytes + index; byte < bytes; byte += stride) {
+    destination[byte] = source[byte];
+  }
+}
+
+Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::upload_if_admitted_async(
+    void* device_arena, std::size_t device_arena_bytes, Gfn2SccIterationInitializationReady& ready,
+    const std::uint32_t* request_error, cudaStream_t stream) const noexcept {
+  if (request_error == nullptr)
+    return upload_async(device_arena, device_arena_bytes, ready, stream);
+  ready = {};
+  if (impl_ == nullptr) return fail(Error::kInvalidPlan, Field::kPlan);
+  if (device_arena != impl_->device_arena || device_arena_bytes < impl_->image_bytes) {
+    return fail(Error::kInvalidArena, Field::kArena, -1, impl_->image_bytes, device_arena_bytes);
+  }
+
+  cudaPointerAttributes attributes{};
+  const cudaError_t attribute_status = cudaPointerGetAttributes(&attributes, device_arena);
+  if (attribute_status != cudaSuccess) {
+    (void)cudaGetLastError();
+    return fail(Error::kInvalidArenaMemory, Field::kArena, -1, impl_->image_bytes,
+                device_arena_bytes, attribute_status);
+  }
+  if (attributes.type != cudaMemoryTypeDevice && attributes.type != cudaMemoryTypeManaged) {
+    return fail(Error::kInvalidArenaMemory, Field::kArena, -1, impl_->image_bytes,
+                device_arena_bytes);
+  }
+  cudaPointerAttributes error_attributes{};
+  const cudaError_t error_attribute_status =
+      cudaPointerGetAttributes(&error_attributes, request_error);
+  if (error_attribute_status != cudaSuccess) {
+    (void)cudaGetLastError();
+    return fail(Error::kInvalidArenaMemory, Field::kArena, -1, sizeof(std::uint32_t),
+                sizeof(std::uint32_t), error_attribute_status);
+  }
+  if ((error_attributes.type != cudaMemoryTypeDevice &&
+       error_attributes.type != cudaMemoryTypeManaged) ||
+      reinterpret_cast<std::uintptr_t>(request_error) % alignof(std::uint32_t) != 0u) {
+    return fail(Error::kInvalidArenaMemory, Field::kAdmission, -1, sizeof(std::uint32_t),
+                sizeof(std::uint32_t));
+  }
+  int current_device = -1;
+  const cudaError_t device_status = cudaGetDevice(&current_device);
+  if (device_status != cudaSuccess) {
+    return fail(Error::kCudaError, Field::kAdmission, -1, sizeof(std::uint32_t),
+                sizeof(std::uint32_t), device_status);
+  }
+  if (error_attributes.device != current_device) {
+    return fail(Error::kInvalidArenaMemory, Field::kAdmission, -1, sizeof(std::uint32_t),
+                sizeof(std::uint32_t));
+  }
+  const std::uintptr_t request_begin = reinterpret_cast<std::uintptr_t>(request_error);
+  const std::uintptr_t request_end = request_begin + sizeof(std::uint32_t);
+  const auto overlaps_request = [&](const void* pointer, std::size_t bytes) noexcept {
+    const std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(pointer);
+    return bytes > std::numeric_limits<std::uintptr_t>::max() - begin ||
+           (request_begin < begin + bytes && begin < request_end);
+  };
+  if (request_end < request_begin || overlaps_request(device_arena, impl_->image_bytes) ||
+      overlaps_request(impl_->device_checkpoint, impl_->image_bytes)) {
+    return fail(Error::kInvalidArenaMemory, Field::kAdmission, -1, sizeof(std::uint32_t),
+                sizeof(std::uint32_t));
+  }
+
+  cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+  const cudaError_t capture_query_status = cudaStreamIsCapturing(stream, &capture_status);
+  if (capture_query_status != cudaSuccess) {
+    return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
+                capture_query_status);
+  }
+  const bool track_restore = capture_status == cudaStreamCaptureStatusNone;
+  if (track_restore && impl_->has_tracked_restore) {
+    const cudaError_t wait_status = cudaStreamWaitEvent(stream, impl_->restore_complete, 0u);
+    if (wait_status != cudaSuccess) {
+      return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
+                  wait_status);
+    }
+  }
+  constexpr int kThreads = 256;
+  constexpr std::size_t kWordBytes = sizeof(uint4);
+  const std::size_t work_items =
+      std::max<std::size_t>((impl_->image_bytes + kWordBytes - 1u) / kWordBytes, 1u);
+  const auto blocks = static_cast<unsigned int>(
+      std::min<std::size_t>((work_items + kThreads - 1u) / kThreads, 65535u));
+  restore_initial_state_if_admitted_kernel<<<blocks, kThreads, 0, stream>>>(
+      static_cast<const std::byte*>(impl_->device_checkpoint),
+      static_cast<std::byte*>(device_arena), impl_->image_bytes, request_error);
+  const cudaError_t status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {
+    return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
+                status);
+  }
+  if (track_restore) {
+    const cudaError_t record_status = cudaEventRecord(impl_->restore_complete, stream);
+    if (record_status != cudaSuccess) {
+      (void)cudaStreamSynchronize(stream);
+      return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
+                  record_status);
+    }
+    impl_->has_tracked_restore = true;
+  }
+  ready.abi_version = kGfn2SccIterationInitializationAbiVersion;
+  ready.mode = impl_->mode;
+  ready.plan_token = impl_->plan_token;
+  ready.initialization_generation = impl_->initialization_generation;
+  ready.device_arena = device_arena;
+  ready.arena_bytes = impl_->image_bytes;
+  ready.ready_on_stream = 1u;
+  return {};
+}
+
 }  // namespace xtbloom::detail::cuda

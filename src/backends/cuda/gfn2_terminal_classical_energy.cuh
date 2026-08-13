@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "backends/cuda/gfn2_d4.cuh"
+#include "backends/cuda/gfn2_device_admission.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_repulsion.cuh"
 
@@ -71,6 +72,7 @@ struct Gfn2TerminalClassicalEnergyDeviceActivity {
   const std::uint8_t* requested_mask = nullptr;
   std::int64_t batch_elements = 0;
   std::uint64_t plan_token = 0u;
+  Gfn2DeviceAdmission admission{};
 };
 
 /* Component values consumed by the total-energy composer. */

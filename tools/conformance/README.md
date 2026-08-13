@@ -243,28 +243,33 @@ shared-orbital (`spin_channels=1`) xTB semantics and gates energy, force, and
 atom-resolved charges on both backends. Spin-polarized (`spin_channels=2`)
 inference and analytic forces are exercised on CPU and CUDA separately until an
 independently generated spin-polarized golden is committed. Molecular dipoles
-are published for requested CPU calculations but are not yet part of the
-golden comparison; atomic dipoles and quadrupoles likewise remain diagnostic
-oracle state rather than public conformance outputs.
+are requested and recorded as `molecular_dipole_e_bohr` on both backends, but
+are not yet part of the golden comparison because the committed corpus has no
+independent molecular-dipole oracle. Atomic dipoles and quadrupoles likewise
+remain diagnostic oracle state rather than public conformance outputs.
 
-Case-level `xtbloom_backends` metadata keeps interactions on only the released
-public backends. The `water_efield` pilot is CPU-only until #237 P3 implements
-CUDA interaction execution, so CUDA host/device/mixed batches continue to run
-the thirteen otherwise supported cases instead of failing the whole ragged call
-with `NOT_IMPLEMENTED`. Its pinned tblite 0.7.0 energy remains an independent
-oracle. The tblite analytic field gradient uses `+E` per atom instead of the
-energy derivative `+q_i E`; that force array remains in the canonical golden
-as diagnostic provenance but is excluded from xTBloom oracle comparison.
-`xtbloom_invariants.py` central differences of the reported public energy are
-the mandatory force evidence for this case.
+Case-level `xtbloom_backends` metadata can keep future interactions on only
+their released public backends. The `water_efield` pilot is released on CPU and
+CUDA, so its pinned independent tblite 0.7.0 energy gates every
+host/device/mixed CUDA run as well as CPU. Tblite's analytic field result uses a
+`+E`-per-atom force (equivalently a `-E` gradient contribution) instead of the
+energy derivative `+q_i E`; that force array remains in the canonical golden as
+diagnostic provenance but is excluded from xTBloom oracle comparison.
+`xtbloom_invariants.py` central differences of xTBloom's reported public energy
+are the mandatory force evidence for this case on both backends. Molecular
+dipoles have CPU/CUDA parity and translation/rotation covariance evidence, but
+the committed corpus has no independent public molecular-dipole oracle.
 
-`--memory-mode device` places every nonempty input and output descriptor in
-CUDA memory. `mixed` leaves topology offsets, atomic numbers, energies,
-charges, SCC iterations, and per-system status on the host; numerical geometry
-and point-charge inputs plus QM/point-charge forces and `scc_converged` use
-CUDA pointers. The runner dynamically loads libcudart, performs explicit
-host/device copies, frees every allocation on success or failure, and restores
-the entry CUDA device. CPU inference accepts only `--memory-mode host`.
+`--memory-mode device` places every nonempty input and output descriptor,
+including the interaction descriptor image, payload bytes, and dipole outlet,
+in CUDA memory. `mixed` leaves topology offsets, atomic numbers, interaction
+payload bytes, energies, charges, SCC iterations, and per-system status on the
+host; numerical geometry and point-charge inputs, interaction descriptors,
+QM/point-charge forces, dipoles, and `scc_converged` use CUDA pointers. This
+split proves that the two ABI-v3 interaction buffers are staged independently.
+The runner dynamically loads libcudart, performs explicit host/device copies,
+frees every allocation on success or failure, and restores the entry CUDA
+device. CPU inference accepts only `--memory-mode host`.
 
 ## Numerical tolerances and CPU/CUDA agreement
 
@@ -282,12 +287,14 @@ relative scale would grant unphysical slack. Behavior gates:
   `cross_engine_tolerances` block is used only when both compared documents
   explicitly identify distinct independent reference engines; xTBloom results
   always use the primary tolerances.
-- For cases released on both backends, CPU and CUDA must both satisfy the
-  primary energy, forces, and charges thresholds (5e-7 each in atomic units),
-  so a CPU/CUDA pair on identical inputs can deviate by at most twice that
-  value (1e-6) by the triangle inequality. The manifest records this as
-  `cpu_cuda_agreement`. CPU-only cases acquire the same parity gate when their
-  CUDA execution path is released.
+- For cases released on both backends, CPU and CUDA must both satisfy every
+  property named by that case's primary-oracle set, so a CPU/CUDA pair on
+  identical inputs can deviate by at most the sum of the two primary
+  tolerances. The manifest records the common 1e-6 bound as
+  `cpu_cuda_agreement`. The electric-field case is included in this two-backend
+  energy gate for host, device, and mixed CUDA descriptors. Its analytic force
+  is independently gated by public finite differences; molecular dipoles have
+  CPU/CUDA and covariance evidence but no independent committed oracle yet.
 - Within one backend, execution is deterministic for identical descriptors and
   launch configuration: fresh-SCC results are bit-identical across repeated
   calls (the batch-versus-sequential gates below fail at 1e-12), which makes
@@ -306,7 +313,11 @@ geometries, so the gate tolerances measure one backend's numerical
 reproducibility (measured CPU margins are recorded in the tool header) rather
 than cross-engine physics differences. A genuine symmetry break produces errors
 orders of magnitude above the gates (for example a translation break shifts
-every force component by its full value).
+every force component by its full value). The corpus field case is neutral, so
+the invariant runner derives a charged H3+ field probe in memory from the
+committed geometry. It executes that probe through the exported ABI on CPU host
+and CUDA host/device/mixed descriptors to cover the nonzero ``Q E`` and dipole
+origin-shift branches without claiming a new independent golden.
 
 ```bash
 python3 tools/conformance/xtbloom_invariants.py \
@@ -321,17 +332,22 @@ The gates cover:
 - **Batch versus sequential**: one heterogeneous ragged batch of every selected
   case must reproduce each case's sequential single-system solve; identical
   systems duplicated in one homogeneous ragged batch must reproduce the
-  sequential solve.
+  sequential solve, including molecular dipoles.
 - **Translation invariance**: energy, atomic charges, and analytic forces are
   invariant when the whole system (QM atoms and external point charges
-  together) is displaced; tested for two deterministic translations.
+  together) is displaced, except that a charged system in a uniform field has
+  the exact energy shift ``-Q E.delta``. The molecular dipole follows its
+  origin law ``mu' = mu + Q delta``. Corpus cases use two deterministic
+  translations; the derived public H3+ probe checks the charged branch on CPU
+  and every CUDA memory mode.
 - **Rotation covariance**: energy and atomic charges are invariant under a
   proper rotation, while QM and point-charge forces rotate with the structure;
-  uniform electric fields rotate with the structure as Cartesian vectors;
-  tested with a 37-degree axis rotation and an integer-exact 90-degree rotation
-  about z.
-- **Force conservation**: the net force on an isolated system vanishes
-  componentwise (QM plus point-charge forces for QM/MM cases).
+  molecular dipoles and uniform electric fields also rotate with the structure
+  as Cartesian vectors; tested with a 37-degree axis rotation and an
+  integer-exact 90-degree rotation about z.
+- **Force balance**: the componentwise net QM plus point-charge force equals
+  ``Q E`` when a uniform field is present and vanishes otherwise. The derived
+  public H3+ probe checks the nonzero branch on CPU and every CUDA memory mode.
 - **Charge conservation**: the summed atomic charges reproduce the declared
   molecular charge.
 - **Central finite differences**: every selected case on each released

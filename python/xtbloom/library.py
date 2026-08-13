@@ -82,10 +82,10 @@ COMPUTE_DIPOLE_MOMENTS = 1 << 4
 RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1 << 0
 RESULT_DIPOLE_MOMENTS = 1 << 4
 
-# Reserved interaction-type tags (mirror of xtbloom_interaction_type_t).  No
-# backend executes any interaction yet: attaching one currently fails with
-# NOT_IMPLEMENTED at the C boundary.  Values are reserved so future
-# interactions never renumber an existing tag.
+# Interaction-type tags (mirror of xtbloom_interaction_type_t). Both released
+# backends execute the uniform electric field; the remaining values stay
+# reserved and return NOT_IMPLEMENTED so future interactions never renumber an
+# existing tag.
 INTERACTION_NONE = 0
 INTERACTION_ELECTRIC_FIELD = 0x0101
 INTERACTION_ELECTRIC_FIELD_GRADIENT = 0x0102

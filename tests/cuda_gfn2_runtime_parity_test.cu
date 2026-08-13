@@ -35,9 +35,9 @@ using xtbloom::test::gfn2::SmallSystemKind;
 namespace gfn2 = xtbloom::detail::gfn2;
 
 constexpr std::array<std::int64_t, 4> kBatchSizes{1, 8, 32, 128};
-constexpr std::uint32_t kAllResultFlags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
-                                          XTBLOOM_COMPUTE_ATOMIC_CHARGES |
-                                          XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+constexpr std::uint32_t kAllResultFlags =
+    XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+    XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
 
 /*
  * These bounds cover different reduction/eigensolver orders while remaining
@@ -154,6 +154,7 @@ struct PublicHostBatch {
   std::vector<double> positions;
   std::vector<double> molecular_charges;
   std::vector<std::int32_t> unpaired_electrons;
+  std::vector<std::int32_t> spin_channels;
   std::vector<std::int64_t> point_offsets;
   std::vector<double> point_positions;
   std::vector<double> point_values;
@@ -161,6 +162,8 @@ struct PublicHostBatch {
   std::vector<double> periodic_shifts;
   std::vector<std::int64_t> response_offsets;
   std::vector<double> response_matrix;
+  std::vector<xtbloom_interaction_t> interactions;
+  std::vector<std::uint8_t> interaction_payload;
   xtbloom_batch_t descriptor{};
 
   void bind() noexcept {
@@ -174,6 +177,7 @@ struct PublicHostBatch {
     descriptor.positions = input_buffer(positions);
     descriptor.molecular_charges = input_buffer(molecular_charges);
     descriptor.unpaired_electrons = input_buffer(unpaired_electrons);
+    descriptor.spin_channels = input_buffer(spin_channels);
     descriptor.point_charge_offsets = input_buffer(point_offsets);
     descriptor.point_charge_positions = input_buffer(point_positions);
     descriptor.point_charge_values = input_buffer(point_values);
@@ -181,6 +185,11 @@ struct PublicHostBatch {
     descriptor.atomic_potential_shifts = input_buffer(periodic_shifts);
     descriptor.charge_response_offsets = input_buffer(response_offsets);
     descriptor.charge_response_matrix = input_buffer(response_matrix);
+    if (!interactions.empty()) {
+      descriptor.total_interactions = static_cast<std::int64_t>(interactions.size());
+      descriptor.interaction_descriptors = input_buffer(interactions);
+      descriptor.interaction_payload = input_buffer(interaction_payload);
+    }
   }
 
   static PublicHostBatch from_fixture(const HostSccCase& host, bool periodic) {
@@ -190,6 +199,7 @@ struct PublicHostBatch {
     batch.positions = host.positions();
     batch.molecular_charges = host.molecular_charges();
     batch.unpaired_electrons = host.unpaired_electrons();
+    batch.spin_channels = host.spin_channels();
     batch.point_offsets = host.point_charge_offsets();
     batch.point_positions = host.point_charge_positions();
     batch.point_values = host.point_charge_charges();
@@ -207,6 +217,23 @@ struct PublicHostBatch {
     }
     batch.bind();
     return batch;
+  }
+
+  void set_electric_field(const std::array<double, 3>& field) {
+    const std::size_t systems = molecular_charges.size();
+    interactions.assign(systems, {});
+    interaction_payload.assign(32u * systems, 0u);
+    for (std::size_t system = 0; system < systems; ++system) {
+      const std::int32_t version = 1;
+      const std::size_t offset = 32u * system;
+      std::memcpy(interaction_payload.data() + offset, &version, sizeof(version));
+      std::memcpy(interaction_payload.data() + offset + 8u, field.data(), sizeof(field));
+      interactions[system].type = XTBLOOM_INTERACTION_ELECTRIC_FIELD;
+      interactions[system].system_index = static_cast<std::int64_t>(system);
+      interactions[system].payload_offset = offset;
+      interactions[system].payload_size = 32u;
+    }
+    bind();
   }
 
   /* Change each ragged member without changing any topology-defining bytes. */
@@ -232,6 +259,7 @@ struct ReferenceResult {
   std::vector<double> qm_forces;
   std::vector<double> atomic_charges;
   std::vector<double> point_forces;
+  std::vector<double> dipole_moments;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> statuses;
@@ -243,6 +271,7 @@ struct ReferenceResult {
     qm_forces.assign(3u * batch.atomic_numbers.size(), 0.0);
     atomic_charges.assign(batch.atomic_numbers.size(), 0.0);
     point_forces.assign(3u * batch.point_values.size(), 0.0);
+    dipole_moments.assign(3u * systems, 0.0);
     iterations.assign(systems, 0);
     converged.assign(systems, 0u);
     statuses.assign(systems, XTBLOOM_STATUS_INTERNAL_ERROR);
@@ -251,6 +280,7 @@ struct ReferenceResult {
     descriptor.forces = output_buffer(qm_forces);
     descriptor.atomic_charges = output_buffer(atomic_charges);
     descriptor.point_charge_forces = output_buffer(point_forces);
+    descriptor.dipole_moments = output_buffer(dipole_moments);
     descriptor.scc_iterations = output_buffer(iterations);
     descriptor.scc_converged = output_buffer(converged);
     descriptor.per_system_status = output_buffer(statuses);
@@ -262,6 +292,7 @@ struct DeviceResult {
   std::vector<double> qm_forces;
   std::vector<double> atomic_charges;
   std::vector<double> point_forces;
+  std::vector<double> dipole_moments;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<xtbloom_status_t> statuses;
@@ -302,6 +333,7 @@ int download_device_result(const Gfn2CudaExecutionIdentity& identity, cudaStream
   result.qm_forces.resize(3u * atoms);
   result.atomic_charges.resize(atoms);
   result.point_forces.resize(3u * points);
+  result.dipole_moments.resize(3u * batch);
   result.iterations.resize(batch);
   result.converged.resize(batch);
   result.statuses.resize(batch);
@@ -336,6 +368,14 @@ int download_device_result(const Gfn2CudaExecutionIdentity& identity, cudaStream
         result.point_forces.data(), reinterpret_cast<const void*>(identity.inference_point_forces),
         result.point_forces.size() * sizeof(double), cudaMemcpyDeviceToHost, stream));
   }
+  const auto* publication =
+      reinterpret_cast<const xtbloom::detail::cuda::Gfn2InferencePublicationDeviceResults*>(
+          identity.inference_results);
+  CHECK(publication != nullptr);
+  CHECK(publication->dipole_moment_elements == static_cast<std::int64_t>(3u * batch));
+  CUDA_CHECK(cudaMemcpyAsync(result.dipole_moments.data(), publication->dipole_moments,
+                             result.dipole_moments.size() * sizeof(double), cudaMemcpyDeviceToHost,
+                             stream));
   CUDA_CHECK(cudaMemcpyAsync(
       result.iterations.data(), reinterpret_cast<const void*>(identity.inference_iterations),
       result.iterations.size() * sizeof(std::int32_t), cudaMemcpyDeviceToHost, stream));
@@ -415,6 +455,9 @@ int compare_device_to_reference(const DeviceResult& actual, const ReferenceResul
   status = compare_values("QM force", actual.qm_forces, expected.qm_forces, kForceAbsoluteTolerance,
                           kForceRelativeTolerance);
   if (status != 0) return status;
+  status = compare_values("dipole moment", actual.dipole_moments, expected.dipole_moments,
+                          kForceAbsoluteTolerance, kForceRelativeTolerance);
+  if (status != 0) return status;
   return compare_values("point-charge force", actual.point_forces, expected.point_forces,
                         kForceAbsoluteTolerance, kForceRelativeTolerance);
 }
@@ -425,13 +468,18 @@ struct Configuration {
   bool enable_d4;
   bool enable_points;
   bool enable_periodic;
+  bool enable_field;
+  double molecular_charge;
+  std::int32_t unpaired_electrons;
+  std::int32_t spin_channels;
 };
 
-constexpr std::array<Configuration, 4> kConfigurations{{
-    {"base", SmallSystemKind::kHe, false, false, false},
-    {"d4", SmallSystemKind::kH2, true, false, false},
-    {"qm_mm", SmallSystemKind::kH2, true, true, false},
-    {"periodic", SmallSystemKind::kH2, true, false, true},
+constexpr std::array<Configuration, 5> kConfigurations{{
+    {"base", SmallSystemKind::kHe, false, false, false, false, 0.0, 0, 1},
+    {"d4", SmallSystemKind::kH2, true, false, false, false, 0.0, 0, 1},
+    {"qm_mm", SmallSystemKind::kH2, true, true, false, false, 0.0, 0, 1},
+    {"periodic", SmallSystemKind::kH2, true, false, true, false, 0.0, 0, 1},
+    {"field_unrestricted_cation", SmallSystemKind::kH2, true, false, false, true, 1.0, 1, 2},
 }};
 
 HostSccCaseOptions fixture_options(const Configuration& configuration, std::int64_t batch_size) {
@@ -440,6 +488,11 @@ HostSccCaseOptions fixture_options(const Configuration& configuration, std::int6
   options.enable_d4 = configuration.enable_d4;
   options.enable_explicit_point_charges = configuration.enable_points;
   options.enable_periodic_embedding = configuration.enable_periodic;
+  options.molecular_charges.assign(static_cast<std::size_t>(batch_size),
+                                   configuration.molecular_charge);
+  options.unpaired_electrons.assign(static_cast<std::size_t>(batch_size),
+                                    configuration.unpaired_electrons);
+  options.spin_channels.assign(static_cast<std::size_t>(batch_size), configuration.spin_channels);
   options.maximum_iterations = 64u;
   options.mixer_history = 8;
   options.residual_tolerance = 1.0e-8;
@@ -823,6 +876,17 @@ int run_cpu_reference(xtbloom_context_t* context, const Configuration& configura
   /* A missing optional production BLAS provider is an environment property,
    * not grounds to skip CUDA correctness. Recompute through the fixture's
    * deterministic LP64 backend and the same production model functions. */
+  if (configuration.enable_field) {
+    /* The portable reference does not compose the released interaction
+     * potentials, field energy/force, or molecular dipole. Failing this one
+     * matrix coordinate is safer than comparing CUDA field execution against
+     * an incomplete field-free reference on GPU-only hosts. */
+    std::fprintf(stderr,
+                 "field parity in %s requires the configured production CPU LP64 provider; "
+                 "portable fallback is intentionally disabled\n",
+                 g_scenario);
+    return public_status;
+  }
   return run_tiny_cpu_reference(configuration, batch, result);
 }
 
@@ -860,6 +924,7 @@ int run_matrix_member(xtbloom_context_t* cpu_context, cudaStream_t stream, std::
   CHECK(HostSccCase::create(fixture_options(configuration, batch_size), fixture, error) ==
         XTBLOOM_STATUS_SUCCESS);
   PublicHostBatch batch = PublicHostBatch::from_fixture(fixture, configuration.enable_periodic);
+  if (configuration.enable_field) batch.set_electric_field({0.003, -0.004, 0.005});
   const xtbloom_compute_options_t options = compute_options();
 
   ReferenceResult initial_reference;

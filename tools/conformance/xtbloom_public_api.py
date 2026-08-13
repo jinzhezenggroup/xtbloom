@@ -41,6 +41,8 @@ XTBLOOM_COMPUTE_ENERGY = 1 << 0
 XTBLOOM_COMPUTE_FORCES = 1 << 1
 XTBLOOM_COMPUTE_ATOMIC_CHARGES = 1 << 2
 XTBLOOM_COMPUTE_POINT_CHARGE_FORCES = 1 << 3
+XTBLOOM_COMPUTE_DIPOLE_MOMENTS = 1 << 4
+XTBLOOM_RESULT_DIPOLE_MOMENTS = 1 << 4
 XTBLOOM_KELVIN_TO_HARTREE = 3.166808578545117e-6
 
 XTBLOOM_INTERACTION_ELECTRIC_FIELD = 0x0101
@@ -87,7 +89,7 @@ class Buffer(ctypes.Structure):
 
 
 class Batch(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_batch_t`` including its ABI-v2 suffix."""
+    """ctypes mirror of ``xtbloom_batch_t`` through ABI version 3."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -151,7 +153,7 @@ class ComputeOptions(ctypes.Structure):
 
 
 class BatchResult(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_batch_result_t`` ABI version 1."""
+    """ctypes mirror of ``xtbloom_batch_result_t`` through ABI version 2."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -165,6 +167,10 @@ class BatchResult(ctypes.Structure):
         ("scc_iterations", Buffer),
         ("scc_converged", Buffer),
         ("per_system_status", Buffer),
+        ("dipole_moments", Buffer),
+        ("quadrupole_moments", Buffer),
+        ("wiberg_orders", Buffer),
+        ("spin_populations", Buffer),
     ]
 
 
@@ -374,10 +380,15 @@ MIXED_DEVICE_ROLES = {
     "point_charge_positions",
     "point_charge_values",
     "point_charge_gammas",
+    # Split the independent interaction buffers across memory spaces. Host and
+    # device modes still place both together, while mixed mode proves that a
+    # device descriptor image may reference payload bytes staged from host.
+    "interaction_descriptors",
     # Exercise mixed output publication too: large Cartesian results and one
     # diagnostic use device pointers while scalar/state outputs remain host.
     "forces",
     "point_charge_forces",
+    "dipole_moments",
     "scc_converged",
 }
 
@@ -878,6 +889,7 @@ def pinned_compute_options(
     request_forces: bool,
     request_charges: bool,
     request_point_forces: bool,
+    request_dipoles: bool = True,
 ) -> ComputeOptions:
     """Build the strict single-shot GFN2 options shared by every conformance run.
 
@@ -903,6 +915,8 @@ def pinned_compute_options(
         options.flags |= XTBLOOM_COMPUTE_ATOMIC_CHARGES
     if request_forces and request_point_forces:
         options.flags |= XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
+    if request_dipoles:
+        options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS
     options.max_scc_iterations = 500
     options.charge_tolerance = 1.0e-10
     options.energy_tolerance = 1.0e-12
@@ -918,6 +932,7 @@ class RawBatchOutputs:
     forces: Any | None
     charges: Any | None
     point_forces: Any | None
+    dipoles: Any | None
     iterations: Any
     converged: Any
     statuses: Any
@@ -945,12 +960,14 @@ def run_compute(
     request_forces = bool(options.flags & XTBLOOM_COMPUTE_FORCES)
     request_charges = bool(options.flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES)
     request_point_forces = bool(options.flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES)
+    request_dipoles = bool(options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS)
     energies = (ctypes.c_double * systems)()
     forces = (ctypes.c_double * (3 * atoms))() if request_forces else None
     charges = (ctypes.c_double * atoms)() if request_charges else None
     point_forces = (
         (ctypes.c_double * (3 * points))() if request_point_forces and points else None
     )
+    dipoles = (ctypes.c_double * (3 * systems))() if request_dipoles else None
     iterations = (ctypes.c_int32 * systems)()
     converged = (ctypes.c_uint8 * systems)()
     statuses = (ctypes.c_int32 * systems)()
@@ -980,6 +997,8 @@ def run_compute(
                 result.point_charge_forces = memory.output(
                     point_forces, "point_charge_forces"
                 )
+            if dipoles is not None:
+                result.dipole_moments = memory.output(dipoles, "dipole_moments")
             result.scc_iterations = memory.output(iterations, "scc_iterations")
             result.scc_converged = memory.output(converged, "scc_converged")
             result.per_system_status = memory.output(statuses, "per_system_status")
@@ -1005,11 +1024,25 @@ def run_compute(
                 f"{_decode(library.xtbloom_status_string(statuses[index]))}, "
                 f"scc_converged={converged[index]}, iterations={iterations[index]}"
             )
+    if request_dipoles and not (result.flags & XTBLOOM_RESULT_DIPOLE_MOMENTS):
+        raise conformance.ConformanceError(
+            f"{backend}/{memory_mode} public inference did not publish the "
+            "requested dipole result flag"
+        )
+    if dipoles is not None:
+        for index, item in enumerate(storage.slices):
+            values = dipoles[3 * index : 3 * index + 3]
+            if any(not math.isfinite(float(value)) for value in values):
+                raise conformance.ConformanceError(
+                    f"{backend}/{memory_mode} public inference produced a "
+                    f"non-finite dipole for {item.case['id']}"
+                )
     return RawBatchOutputs(
         energies=energies,
         forces=forces,
         charges=charges,
         point_forces=point_forces,
+        dipoles=dipoles,
         iterations=iterations,
         converged=converged,
         statuses=statuses,
@@ -1043,11 +1076,12 @@ def run_backend(
     outputs = run_compute(
         library, storage, options, backend, device_id, cpu_threads, memory_mode
     )
-    energies, forces, charges, point_forces = (
+    energies, forces, charges, point_forces, dipoles = (
         outputs.energies,
         outputs.forces,
         outputs.charges,
         outputs.point_forces,
+        outputs.dipoles,
     )
 
     artifact_name = backend if memory_mode == "host" else f"{backend}-{memory_mode}"
@@ -1072,6 +1106,10 @@ def run_backend(
             properties["point_charge_forces_hartree_per_bohr"] = [
                 float(value)
                 for value in point_forces[3 * item.point_begin : 3 * item.point_end]
+            ]
+        if dipoles is not None:
+            properties["molecular_dipole_e_bohr"] = [
+                float(value) for value in dipoles[3 * index : 3 * index + 3]
             ]
         document = {
             "backend": backend,

@@ -311,12 +311,13 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
     options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
   }
 
-  /* Exercise the CPU-released ABI-v3 electric-field attachment and ABI-v2
-   * dipole-moment outlet end to end. CUDA deliberately returns NOT_IMPLEMENTED
-   * for both until #237 P3, so its installed consumer retains the field-free
-   * inference and plan probes below. The released field block is 32 bytes:
-   * int32 block_version=1, int32 reserved=0, three doubles in atomic units. */
-  if (xtbloom_context_get_backend(context) == XTBLOOM_BACKEND_CPU) {
+  /* Exercise the released ABI-v3 electric-field attachment and ABI-v2 dipole
+   * outlet through either installed backend. The CUDA coordinate deliberately
+   * uses host descriptors and results so this C-only consumer also proves the
+   * installed public staging/publication bridge without CUDA headers. The
+   * released field block is 32 bytes: int32 block_version=1, int32 reserved=0,
+   * and three doubles in atomic units. */
+  {
     const uint32_t field_flags =
         XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
     uint8_t payload[32];
@@ -344,9 +345,19 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
     field_batch.interaction_payload = input_buffer(payload, sizeof(payload));
     field_result.forces = output_buffer(field_forces, sizeof(field_forces));
     field_result.dipole_moments = output_buffer(dipole, sizeof(dipole));
-    if (xtbloom_compute(context, &field_batch, &field_options, &field_result) !=
-        XTBLOOM_STATUS_SUCCESS) {
-      fprintf(stderr, "installed %s electric-field inference failed: %s\n", mode_name,
+    energy = NAN;
+    iterations = -1;
+    converged = 0;
+    system_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    const xtbloom_status_t field_status =
+        xtbloom_compute(context, &field_batch, &field_options, &field_result);
+    if (field_status != XTBLOOM_STATUS_SUCCESS || system_status != XTBLOOM_STATUS_SUCCESS ||
+        converged != 1 || iterations <= 0 || !isfinite(energy)) {
+      fprintf(stderr,
+              "installed %s electric-field inference failed: call=%d system=%d flags=0x%08x "
+              "converged=%u iterations=%d energy=%.17g force0=%.17g dipole0=%.17g error=%s\n",
+              mode_name, (int)field_status, (int)system_status, (unsigned int)field_result.flags,
+              (unsigned int)converged, (int)iterations, energy, field_forces[0], dipole[0],
               xtbloom_get_last_error());
       return 11;
     }

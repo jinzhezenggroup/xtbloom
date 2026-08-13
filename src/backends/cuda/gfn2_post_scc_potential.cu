@@ -92,7 +92,7 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
     }
   }
 
-  std::array<AddressRange, 44> protected_ranges{};
+  std::array<AddressRange, 46> protected_ranges{};
   std::size_t count = 0u;
   auto append = [&](const void* pointer, std::int64_t elements, std::size_t element_size) {
     return count < protected_ranges.size() &&
@@ -104,6 +104,10 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
       !append(input.raw_atomic_charges, input.atom_elements, sizeof(double)) ||
       !append(input.raw_atomic_dipoles, input.dipole_elements, sizeof(double)) ||
       !append(input.raw_atomic_quadrupoles, input.quadrupole_elements, sizeof(double)) ||
+      !append(input.electric_field_potentials.atomic, input.electric_field_potentials.atom_elements,
+              sizeof(double)) ||
+      !append(input.electric_field_potentials.dipole,
+              input.electric_field_potentials.dipole_elements, sizeof(double)) ||
       !append(intermediates.es2_shell, intermediates.es2_shell_elements, sizeof(double)) ||
       !append(intermediates.es3_shell, intermediates.es3_shell_elements, sizeof(double)) ||
       !append(intermediates.aes2_atomic, intermediates.aes2_atomic_elements, sizeof(double)) ||
@@ -482,6 +486,14 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
     }
   }
 
+  const auto& field = input.electric_field_potentials;
+  if (field.plan_token != 0u &&
+      (field.plan_token != plan.plan_token || field.atom_elements != batch.total_atoms ||
+       field.dipole_elements != batch.total_atoms * 3 || !aligned_pointer(field.atomic) ||
+       !aligned_pointer(field.dipole))) {
+    return false;
+  }
+
   return public_results_are_disjoint(plan, input, results, intermediates, workspace, diagnostics,
                                      geometry, batch.batch_size);
 }
@@ -777,6 +789,10 @@ static cudaError_t refresh_post_scc_potentials_impl(
     components.periodic_atomic_elements = intermediates.periodic_atomic_elements;
   }
   components.plan_token = plan.plan_token;
+  components.electric_field_atomic = input.electric_field_potentials.atomic;
+  components.electric_field_atomic_elements = input.electric_field_potentials.atom_elements;
+  components.electric_field_dipole = input.electric_field_potentials.dipole;
+  components.electric_field_dipole_elements = input.electric_field_potentials.dipole_elements;
 
   status = reset_gfn2_scc_potential_device_errors_cuda(batch_size, workspace.stage_system_errors,
                                                        workspace.stage_device_error, stream);

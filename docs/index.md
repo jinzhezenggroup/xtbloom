@@ -61,10 +61,11 @@ Repository contributors and coding agents must also follow
 ## Capability boundary
 
 xTBloom currently implements restricted and unrestricted GFN2-xTB on CPU and
-CUDA, native ragged batches, analytic forces and charges, explicit point
-charges, caller-supplied periodic charge response, a Python batched numerical
-QM Hessian, ASE, and dpdata. The low-level CUDA ABI accepts host, device, and
-mixed descriptors.
+CUDA, native ragged batches, analytic forces, charges, and molecular dipoles,
+explicit point charges, uniform electric fields, caller-supplied periodic
+charge response, a Python batched numerical QM Hessian, ASE, and dpdata. The
+low-level CUDA ABI accepts host, device, and mixed descriptors, including
+independently placed interaction descriptor and payload buffers.
 
 GFN1-xTB, ROCm, native geometry optimization, molecular dynamics, solvation,
 native/analytic Hessians, vibrational analysis, and lattice/PBC descriptors are

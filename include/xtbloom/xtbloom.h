@@ -160,11 +160,10 @@ enum xtbloom_result_flag_value {
 /*
  * Tag set for the generic interaction attachment slot (ABI-v3 batch suffix).
  * Tag values are intentionally spread over family ranges so future additions
- * never renumber an existing value. The GFN2 backends currently implement
- * none of these interactions: validating any present interaction returns
- * XTBLOOM_STATUS_NOT_IMPLEMENTED until the matching backend term lands, and
- * the enum values are reserved so later features do not churn the batch
- * layout. XTBLOOM_INTERACTION_NONE is not a valid attachment.
+ * never renumber an existing value. Both GFN2 backends implement the uniform
+ * electric field; every other tag remains reserved and returns
+ * XTBLOOM_STATUS_NOT_IMPLEMENTED. XTBLOOM_INTERACTION_NONE is not a valid
+ * attachment.
  */
 typedef int32_t xtbloom_interaction_type_t;
 enum xtbloom_interaction_type_value {
