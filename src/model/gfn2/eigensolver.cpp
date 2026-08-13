@@ -228,6 +228,43 @@ std::array<double*, kEigensolverFieldCount> eigensolver_view_fields(const Wavefu
            view.energy_weighted_density}};
 }
 
+std::array<double*, kEigensolverFieldCount> eigensolver_view_fields(
+    const EigensolverWavefunctionView& view) {
+  return {{view.coefficients, view.eigenvalues, view.occupations, view.density,
+           view.energy_weighted_density}};
+}
+
+EigensolverWavefunctionLayout make_eigensolver_wavefunction_layout(
+    const WavefunctionLayout& layout) {
+  EigensolverWavefunctionLayout projection;
+  projection.batch_size = layout.batch_size;
+  projection.workspace_size_bytes = layout.workspace_size_bytes;
+  projection.orbital_offsets = layout.batch_orbital_offsets.data();
+  projection.orbital_offset_count = layout.batch_orbital_offsets.size();
+  projection.spin_channels = layout.spin_channels.data();
+  projection.spin_channel_count = layout.spin_channels.size();
+  projection.alpha_electron_counts = layout.alpha_electron_counts.data();
+  projection.beta_electron_counts = layout.beta_electron_counts.data();
+  projection.electron_count_count = layout.alpha_electron_counts.size();
+  const auto fields = eigensolver_layout_fields(layout);
+  for (std::size_t field = 0u; field < fields.size(); ++field) {
+    projection.fields[field] = {fields[field]->offset_bytes, fields[field]->element_count,
+                                fields[field]->system_offsets.data(),
+                                fields[field]->system_offsets.size()};
+  }
+  return projection;
+}
+
+EigensolverWavefunctionView make_eigensolver_wavefunction_view(const WavefunctionView& view) {
+  return {view.workspace_base,
+          view.workspace_size_bytes,
+          view.coefficients,
+          view.eigenvalues,
+          view.occupations,
+          view.density,
+          view.energy_weighted_density};
+}
+
 xtbloom_status_t validate_plan(const EigensolverPlan& plan, std::string& error) {
   if (!plan.sealed()) {
     error = "eigensolver plan is default-constructed or moved-from";
@@ -714,8 +751,9 @@ xtbloom_status_t validate_workspace(const EigensolverPlan& plan,
   return XTBLOOM_STATUS_SUCCESS;
 }
 
+template <typename Wavefunction>
 xtbloom_status_t validate_wavefunction(const EigensolverPlan& plan,
-                                       const WavefunctionView& wavefunction, std::string& error) {
+                                       const Wavefunction& wavefunction, std::string& error) {
   const EigensolverPlanData& data = *plan.identity();
   if (wavefunction.workspace_base == nullptr ||
       wavefunction.workspace_size_bytes < data.wavefunction_workspace_size_bytes ||
@@ -1124,7 +1162,7 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
                                        const double* system_hamiltonians, double temperature,
                                        const CpuLinearAlgebraBackend& backend,
                                        const EigensolverWorkspace& workspace,
-                                       const WavefunctionView& wavefunction,
+                                       const EigensolverWavefunctionView& wavefunction,
                                        const EigensolverThermodynamicsView& thermodynamics) {
   if (overlap_cache.geometry_generations[system] != geometry_generation ||
       overlap_cache.system_statuses[system] != XTBLOOM_STATUS_SUCCESS) {
@@ -1259,8 +1297,8 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
   return NumericalResult::kSuccess;
 }
 
-WavefunctionView make_batch_staging_wavefunction(const EigensolverWorkspace& workspace) {
-  WavefunctionView staging;
+EigensolverWavefunctionView make_batch_staging_wavefunction(const EigensolverWorkspace& workspace) {
+  EigensolverWavefunctionView staging;
   staging.coefficients = workspace.batch_coefficients;
   staging.eigenvalues = workspace.batch_eigenvalues;
   staging.occupations = workspace.batch_occupations;
@@ -1279,7 +1317,7 @@ EigensolverThermodynamicsView make_batch_staging_thermodynamics(
 
 void commit_batch_solve_results(const EigensolverPlanData& data,
                                 const EigensolverWorkspace& workspace,
-                                const WavefunctionView& wavefunction,
+                                const EigensolverWavefunctionView& wavefunction,
                                 const EigensolverThermodynamicsView& thermodynamics) {
   const std::array<const double*, kEigensolverFieldCount> staged_fields{
       {workspace.batch_coefficients, workspace.batch_eigenvalues, workspace.batch_occupations,
@@ -1312,9 +1350,9 @@ void commit_batch_solve_results(const EigensolverPlanData& data,
 xtbloom_status_t validate_solve_bindings(
     const EigensolverPlan& plan, const EigensolverOverlapCache& overlap_cache,
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
-    const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
-    bool require_full_batch_staging, std::array<AddressRange, 5>& result_ranges,
-    std::string& error) {
+    const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics, bool require_full_batch_staging,
+    std::array<AddressRange, 5>& result_ranges, std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS ||
       (status = validate_backend(backend, error)) != XTBLOOM_STATUS_SUCCESS ||
@@ -1771,33 +1809,89 @@ xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigenso
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
   }
+  return make_eigensolver_plan(make_eigensolver_wavefunction_layout(layout), plan, error,
+                               minimum_overlap_rcond);
+}
+
+xtbloom_status_t make_eigensolver_plan(const EigensolverWavefunctionLayout& layout,
+                                       EigensolverPlan& plan, std::string& error,
+                                       double minimum_overlap_rcond) {
   if (!std::isfinite(minimum_overlap_rcond) || minimum_overlap_rcond <= 0.0 ||
       minimum_overlap_rcond >= 1.0) {
     error = "minimum overlap reciprocal condition must be finite and in (0, 1)";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (layout.batch_size <= 0 || layout.workspace_size_bytes == 0u ||
+      layout.workspace_size_bytes % kWavefunctionWorkspaceAlignment != 0u ||
+      static_cast<std::uint64_t>(layout.batch_size) >
+          static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() - 1u)) {
+    error = "eigensolver wavefunction projection has invalid batch or workspace metadata";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t batch = static_cast<std::size_t>(layout.batch_size);
+  if (layout.orbital_offsets == nullptr || layout.orbital_offset_count != batch + 1u ||
+      layout.spin_channels == nullptr || layout.spin_channel_count != batch ||
+      layout.alpha_electron_counts == nullptr || layout.beta_electron_counts == nullptr ||
+      layout.electron_count_count != batch) {
+    error = "eigensolver wavefunction projection arrays have inconsistent extents";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (layout.orbital_offsets[0] != 0) {
+    error = "eigensolver orbital offsets must begin at zero";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  std::size_t previous_end = 0u;
+  for (const auto& field : layout.fields) {
+    if (field.element_count <= 0 || field.system_offsets == nullptr ||
+        field.system_offset_count != batch + 1u || field.system_offsets[0] != 0 ||
+        field.system_offsets[batch] != field.element_count ||
+        field.offset_bytes % kWavefunctionWorkspaceAlignment != 0u ||
+        static_cast<std::uint64_t>(field.element_count) >
+            static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) / sizeof(double)) {
+      error = "eigensolver wavefunction field projection is incomplete or unrepresentable";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    const std::size_t size_bytes = static_cast<std::size_t>(field.element_count) * sizeof(double);
+    if (field.offset_bytes < previous_end || field.offset_bytes > layout.workspace_size_bytes ||
+        size_bytes > layout.workspace_size_bytes - field.offset_bytes) {
+      error = "eigensolver wavefunction field projection is overlapping or out of bounds";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    for (std::size_t system = 0u; system < batch; ++system) {
+      if (field.system_offsets[system] < 0 ||
+          field.system_offsets[system] > field.system_offsets[system + 1u]) {
+        error = "eigensolver wavefunction field offsets must be monotone";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+    }
+    previous_end = field.offset_bytes + size_bytes;
   }
 
   try {
     EigensolverPlanData created;
     created.batch_size = layout.batch_size;
     created.minimum_overlap_rcond = minimum_overlap_rcond;
-    created.orbital_offsets = layout.batch_orbital_offsets;
-    created.spin_channels = layout.spin_channels;
-    created.alpha_electron_counts = layout.alpha_electron_counts;
-    created.beta_electron_counts = layout.beta_electron_counts;
+    created.orbital_offsets.assign(layout.orbital_offsets,
+                                   layout.orbital_offsets + layout.orbital_offset_count);
+    created.spin_channels.assign(layout.spin_channels,
+                                 layout.spin_channels + layout.spin_channel_count);
+    created.alpha_electron_counts.assign(
+        layout.alpha_electron_counts, layout.alpha_electron_counts + layout.electron_count_count);
+    created.beta_electron_counts.assign(layout.beta_electron_counts,
+                                        layout.beta_electron_counts + layout.electron_count_count);
     created.wavefunction_workspace_size_bytes = layout.workspace_size_bytes;
-    const auto fields = eigensolver_layout_fields(layout);
-    for (std::size_t field = 0u; field < fields.size(); ++field) {
-      created.wavefunction_fields[field].offset_bytes = fields[field]->offset_bytes;
-      created.wavefunction_fields[field].element_count = fields[field]->element_count;
-      created.wavefunction_fields[field].system_offsets = fields[field]->system_offsets;
+    for (std::size_t field = 0u; field < layout.fields.size(); ++field) {
+      created.wavefunction_fields[field].offset_bytes = layout.fields[field].offset_bytes;
+      created.wavefunction_fields[field].element_count = layout.fields[field].element_count;
+      created.wavefunction_fields[field].system_offsets.assign(
+          layout.fields[field].system_offsets,
+          layout.fields[field].system_offsets + layout.fields[field].system_offset_count);
     }
 
-    const std::size_t batch = static_cast<std::size_t>(layout.batch_size);
     created.matrix_offsets.resize(batch + 1u, 0);
     for (std::size_t system = 0u; system < batch; ++system) {
       const std::int64_t orbitals =
-          layout.batch_orbital_offsets[system + 1u] - layout.batch_orbital_offsets[system];
+          layout.orbital_offsets[system + 1u] - layout.orbital_offsets[system];
       if (orbitals <= 0 || orbitals > std::numeric_limits<LapackInt>::max() ||
           (layout.spin_channels[system] != 1 && layout.spin_channels[system] != 2) ||
           !std::isfinite(layout.alpha_electron_counts[system]) ||
@@ -1810,6 +1904,25 @@ xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigenso
               std::numeric_limits<std::int64_t>::max() - orbitals * orbitals) {
         error = "wavefunction dimensions or electron counts exceed LP64 eigensolver limits";
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      const std::int64_t matrix_elements = orbitals * orbitals;
+      if (matrix_elements >
+          std::numeric_limits<std::int64_t>::max() / layout.spin_channels[system]) {
+        error = "wavefunction spin-resolved matrix dimensions overflow the index range";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      const std::int64_t spin_matrix_elements = matrix_elements * layout.spin_channels[system];
+      const std::int64_t spin_orbitals = orbitals * layout.spin_channels[system];
+      const std::array<std::int64_t, kEigensolverFieldCount> expected_counts{
+          {spin_matrix_elements, spin_orbitals, 2 * orbitals, spin_matrix_elements,
+           spin_matrix_elements}};
+      for (std::size_t field = 0u; field < layout.fields.size(); ++field) {
+        if (layout.fields[field].system_offsets[system + 1u] -
+                layout.fields[field].system_offsets[system] !=
+            expected_counts[field]) {
+          error = "eigensolver wavefunction fields do not match orbital and spin dimensions";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
       }
       created.total_matrix_elements += orbitals * orbitals;
       created.matrix_offsets[system + 1u] = created.total_matrix_elements;
@@ -2234,6 +2347,17 @@ xtbloom_status_t solve_eigensystems_cpu(
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     std::string& error) {
+  return solve_eigensystems_cpu(
+      plan, overlap_cache, geometry_generation, hamiltonians, temperature, backend, workspace,
+      make_eigensolver_wavefunction_view(wavefunction), thermodynamics, error);
+}
+
+xtbloom_status_t solve_eigensystems_cpu(
+    const EigensolverPlan& plan, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics, std::string& error) {
   std::array<AddressRange, 5> result_ranges{};
   xtbloom_status_t status =
       validate_solve_bindings(plan, overlap_cache, backend, workspace, wavefunction, thermodynamics,
@@ -2303,7 +2427,8 @@ xtbloom_status_t solve_eigensystems_cpu(
     }
   }
 
-  const WavefunctionView staging_wavefunction = make_batch_staging_wavefunction(workspace);
+  const EigensolverWavefunctionView staging_wavefunction =
+      make_batch_staging_wavefunction(workspace);
   const EigensolverThermodynamicsView staging_thermodynamics =
       make_batch_staging_thermodynamics(data, workspace);
   ScopedSequentialBlas sequential_blas(backend);
@@ -2329,6 +2454,17 @@ xtbloom_status_t solve_eigensystem_cpu(
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     std::string& error) {
+  return solve_eigensystem_cpu(
+      plan, system, overlap_cache, geometry_generation, system_hamiltonians, temperature, backend,
+      workspace, make_eigensolver_wavefunction_view(wavefunction), thermodynamics, error);
+}
+
+xtbloom_status_t solve_eigensystem_cpu(
+    const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics, std::string& error) {
   std::array<AddressRange, 5> result_ranges{};
   xtbloom_status_t status =
       validate_solve_bindings(plan, overlap_cache, backend, workspace, wavefunction, thermodynamics,

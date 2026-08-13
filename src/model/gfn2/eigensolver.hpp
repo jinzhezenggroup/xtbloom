@@ -3,6 +3,7 @@
 
 #define XTBLOOM_MODEL_GFN2_EIGENSOLVER_HPP
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -136,6 +137,41 @@ xtbloom_status_t make_internal_test_lp64_backend(
 struct EigensolverPlanData;
 
 /*
+ * Model-neutral projection of the five electronic arrays consumed by the
+ * generalized eigensolver. Model-specific SCC state may place other fields
+ * between these ranges; the solver records and validates only this projection.
+ */
+struct EigensolverWavefunctionFieldLayout {
+  std::size_t offset_bytes = 0u;
+  std::int64_t element_count = 0;
+  const std::int64_t* system_offsets = nullptr;
+  std::size_t system_offset_count = 0u;
+};
+
+struct EigensolverWavefunctionLayout {
+  std::int64_t batch_size = 0;
+  std::size_t workspace_size_bytes = 0u;
+  const std::int64_t* orbital_offsets = nullptr;
+  std::size_t orbital_offset_count = 0u;
+  const std::int32_t* spin_channels = nullptr;
+  std::size_t spin_channel_count = 0u;
+  const double* alpha_electron_counts = nullptr;
+  const double* beta_electron_counts = nullptr;
+  std::size_t electron_count_count = 0u;
+  std::array<EigensolverWavefunctionFieldLayout, 5> fields{};
+};
+
+struct EigensolverWavefunctionView {
+  void* workspace_base = nullptr;
+  std::size_t workspace_size_bytes = 0u;
+  double* coefficients = nullptr;
+  double* eigenvalues = nullptr;
+  double* occupations = nullptr;
+  double* density = nullptr;
+  double* energy_weighted_density = nullptr;
+};
+
+/*
  * Compact immutable handle for all topology, electronic, layout, and scratch
  * metadata required by the CPU eigensolver. Copies are O(1), remain cache-
  * compatible, and make hot-path plan validation O(1).
@@ -172,6 +208,9 @@ class EigensolverPlan {
   std::shared_ptr<const EigensolverPlanData> data_;
 
   friend xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout,
+                                                EigensolverPlan& plan, std::string& error,
+                                                double minimum_overlap_rcond);
+  friend xtbloom_status_t make_eigensolver_plan(const EigensolverWavefunctionLayout& layout,
                                                 EigensolverPlan& plan, std::string& error,
                                                 double minimum_overlap_rcond);
 };
@@ -242,6 +281,9 @@ struct EigensolverThermodynamicsView {
 
 xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,
                                        std::string& error, double minimum_overlap_rcond = 1.0e-12);
+xtbloom_status_t make_eigensolver_plan(const EigensolverWavefunctionLayout& layout,
+                                       EigensolverPlan& plan, std::string& error,
+                                       double minimum_overlap_rcond = 1.0e-12);
 
 xtbloom_status_t bind_eigensolver_overlap_cache(const EigensolverPlan& plan, void* workspace,
                                                 std::size_t workspace_size,
@@ -277,6 +319,12 @@ xtbloom_status_t solve_eigensystems_cpu(
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     std::string& error);
+xtbloom_status_t solve_eigensystems_cpu(
+    const EigensolverPlan& plan, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics, std::string& error);
 
 /*
  * Allocation-free one-system worker primitive. Runtime schedulers may invoke
@@ -292,6 +340,12 @@ xtbloom_status_t solve_eigensystem_cpu(
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     std::string& error);
+xtbloom_status_t solve_eigensystem_cpu(
+    const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics, std::string& error);
 
 /* Standalone tblite-compatible per-spin Aufbau/Fermi filling helper. */
 xtbloom_status_t fill_occupations_cpu(std::int64_t orbital_count, const double* eigenvalues,
