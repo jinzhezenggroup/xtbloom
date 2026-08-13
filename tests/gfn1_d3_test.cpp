@@ -22,7 +22,6 @@
 
 namespace {
 
-using xtbloom::detail::gfn1::CoordinationPlan;
 using xtbloom::detail::gfn1::D3Plan;
 using xtbloom::detail::gfn1::D3Workspace;
 
@@ -70,7 +69,6 @@ struct Fixture {
   std::vector<std::int32_t> numbers;
   std::vector<double> positions;
   D3Plan d3_plan;
-  CoordinationPlan coordination_plan;
   AlignedBuffer storage;
   D3Workspace workspace;
 
@@ -87,10 +85,6 @@ struct Fixture {
         xtbloom::detail::gfn1::make_d3_plan(batch_size, total_atoms, offsets.data(), numbers.data(),
                                             d3_plan, error) == XTBLOOM_STATUS_SUCCESS,
         "make D3 fixture plan");
-    expect(xtbloom::detail::gfn1::make_coordination_plan(batch_size, total_atoms, offsets.data(),
-                                                         numbers.data(), coordination_plan,
-                                                         error) == XTBLOOM_STATUS_SUCCESS,
-           "make D3 coordination fixture plan");
     expect(xtbloom::detail::gfn1::bind_d3_workspace(d3_plan, storage.data(), storage.size_bytes(),
                                                     workspace, error) == XTBLOOM_STATUS_SUCCESS,
            "bind D3 fixture workspace");
@@ -114,8 +108,9 @@ struct Fixture {
   [[nodiscard]] std::vector<double> coordination(const std::vector<double>& geometry) const {
     std::vector<double> values(numbers.size(), -1.0);
     std::string error;
-    expect(xtbloom::detail::gfn1::evaluate_coordination_cpu(
-               coordination_plan, geometry.data(), values.data(), error) == XTBLOOM_STATUS_SUCCESS,
+    expect(xtbloom::detail::gfn1::evaluate_coordination_cpu(d3_plan.coordination_plan(),
+                                                            geometry.data(), values.data(),
+                                                            error) == XTBLOOM_STATUS_SUCCESS,
            "evaluate fixture coordination");
     return values;
   }
@@ -240,7 +235,9 @@ double independent_pair_energy(std::uint32_t first, double first_cn, std::uint32
     const double x = (50.0 - distance) / 0.05;
     sw = x * x * x * (10.0 - 15.0 * x + 6.0 * x * x);
   }
-  const double damping = sw * (1.0 / (r4 * r2 + r0_6) + 2.4 * q / (r4 * r4 + r0_8));
+  const double damping =
+      sw * (xtbloom::parameters::gfn1::kGlobal.dispersion_s6 / (r4 * r2 + r0_6) +
+            xtbloom::parameters::gfn1::kGlobal.dispersion_s8 * q / (r4 * r4 + r0_8));
   return -coefficient.c6 * damping;
 }
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -203,6 +205,19 @@ class Gfn1D3ParameterTests(unittest.TestCase):
             ):
                 GENERATOR.build_offline_artifacts(output)
 
+    def test_offline_regeneration_maps_invalid_utf8_to_data_error(self) -> None:
+        """Keep malformed retained bytes on the controlled generator error path."""
+        with tempfile.TemporaryDirectory(
+            prefix="xtbloom-gfn1-d3-encoding-"
+        ) as directory:
+            output = Path(directory)
+            (output / GENERATOR.JSON_FILENAME).write_bytes(b"\xff\n")
+            shutil.copy2(DATA_DIR / GENERATOR.MANIFEST_FILENAME, output)
+            with self.assertRaisesRegex(
+                GENERATOR.D3DataError, "cannot load retained GFN1-D3"
+            ):
+                GENERATOR.build_offline_artifacts(output)
+
     def test_optional_upstream_refresh_matches_retained_bundle(self) -> None:
         """Recheck the pinned Git blobs when explicit local sources are supplied."""
         d3_source = os.environ.get("XTBLOOM_SIMPLE_DFTD3_SOURCE")
@@ -224,12 +239,54 @@ class Gfn1D3ParameterTests(unittest.TestCase):
         for filename, content in refreshed.items():
             self.assertEqual(content, (DATA_DIR / filename).read_bytes(), filename)
 
+    def test_cli_refresh_requires_every_source_checkout(self) -> None:
+        """Reject incomplete refresh inputs before reading any upstream checkout."""
+        source_flags = (
+            "--simple-dftd3-source",
+            "--mctc-source",
+            "--tblite-source",
+        )
+        for missing in source_flags:
+            arguments = ["--refresh"]
+            for flag in source_flags:
+                if flag != missing:
+                    arguments.extend((flag, "/does/not/exist"))
+            stderr = io.StringIO()
+            with self.subTest(missing=missing), contextlib.redirect_stderr(stderr):
+                self.assertEqual(GENERATOR.main(arguments), 1)
+            self.assertIn("--refresh requires", stderr.getvalue())
+
+    def test_cli_source_checkouts_require_refresh_mode(self) -> None:
+        """Reject each source checkout option when offline mode is selected."""
+        for flag in (
+            "--simple-dftd3-source",
+            "--mctc-source",
+            "--tblite-source",
+        ):
+            stderr = io.StringIO()
+            with self.subTest(flag=flag), contextlib.redirect_stderr(stderr):
+                self.assertEqual(GENERATOR.main([flag, "/does/not/exist"]), 1)
+            self.assertIn(
+                "source checkouts are accepted only with --refresh", stderr.getvalue()
+            )
+
     def test_normalized_schema_rejects_corrupt_pair_offsets(self) -> None:
         normalized = json.loads(
             (DATA_DIR / GENERATOR.JSON_FILENAME).read_text(encoding="utf-8")
         )
         normalized["pair_records"][1]["c6_offset"] += 1
         with self.assertRaisesRegex(GENERATOR.D3DataError, "invalid C6 packing"):
+            GENERATOR.validate_tables(normalized)
+
+    def test_normalized_schema_rejects_duplicate_reference_coordination(self) -> None:
+        """Keep the pinned max-CN exceptional fallback uniquely normalized."""
+        normalized = json.loads(
+            (DATA_DIR / GENERATOR.JSON_FILENAME).read_text(encoding="utf-8")
+        )
+        normalized["coordination_numbers"][1] = normalized["coordination_numbers"][0]
+        with self.assertRaisesRegex(
+            GENERATOR.D3DataError, "duplicate reference coordination numbers"
+        ):
             GENERATOR.validate_tables(normalized)
 
     def test_upstream_array_unit_prefixes_are_exact(self) -> None:

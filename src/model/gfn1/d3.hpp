@@ -16,6 +16,7 @@ namespace xtbloom::detail::gfn1 {
 inline constexpr std::size_t kD3WorkspaceAlignment = 64u;
 inline constexpr std::size_t kD3MaximumReferences = 7u;
 
+struct CoordinationPlan;
 struct D3PlanData;
 
 /*
@@ -45,6 +46,13 @@ class D3Plan {
   [[nodiscard]] bool overlaps_storage(const void* data, std::size_t size_bytes) const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
   [[nodiscard]] std::size_t resident_bytes() const noexcept;
+  /*
+   * Return the exact GFN1 coordination plan used by the D3 gradient VJP.
+   * Callers that reuse precomputed CN values must evaluate them with this
+   * plan so the interpolation energy and its coordinate derivative share one
+   * topology and parameter set.
+   */
+  [[nodiscard]] const CoordinationPlan& coordination_plan() const noexcept;
   [[nodiscard]] const D3PlanData* identity() const noexcept;
 
  private:

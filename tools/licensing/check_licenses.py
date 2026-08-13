@@ -423,6 +423,24 @@ GFN1_D3_MCTC_LICENSE_RECORD = {
     "path": "LICENSE",
     "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
 }
+GFN1_D3_LGPL_LICENSE_RECORD = {
+    "bytes": 7652,
+    "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+}
+GFN1_D3_GENERATOR_RECORD = {
+    "path": "tools/parameters/generate_gfn1_d3.py",
+    "sha256": "61c3ab96caf6eb57d262c1e472503fde71784517fd2aad729b3d483f9ed16079",
+}
+GFN1_D3_OUTPUT_RECORDS = {
+    "gfn1_d3.hpp": {
+        "bytes": 743567,
+        "sha256": "4819db4a0c2e3d7f55cc26eb4fd742761da87c0b14ae92d89da62f6e7d6a4127",
+    },
+    "gfn1_d3.json": {
+        "bytes": 598154,
+        "sha256": "9ff932ea598f690c1fb599a67762060ba1907102d5ec132164f2a7e8886cd22e",
+    },
+}
 EXCEPTION_TOKENS = (
     "Copyright (C) 2026 Jinzhe Zeng",
     "section 7",
@@ -1644,9 +1662,23 @@ def _check_gfn1_parameter_provenance(gfn1: dict[str, object]) -> None:
 
 
 def _check_gfn1_d3_provenance(
-    gfn1_d3: dict[str, object], apache_license: bytes
+    gfn1_d3: object, apache_license: bytes, lgpl_license: bytes
 ) -> None:
     """Require complete D3 source/conversion/legal provenance and local text."""
+    if not isinstance(gfn1_d3, dict):
+        raise LicenseCheckError("GFN1-D3 manifest root is not an object")
+    expected_fields = {
+        "schema_version",
+        "method",
+        "generator",
+        "source",
+        "unit_conversion",
+        "execution_contract",
+        "representation",
+        "outputs",
+    }
+    if set(gfn1_d3) != expected_fields:
+        raise LicenseCheckError("GFN1-D3 manifest has unexpected fields")
     try:
         retained = {
             key: gfn1_d3[key]
@@ -1663,6 +1695,12 @@ def _check_gfn1_d3_provenance(
         raise LicenseCheckError("GFN1-D3 manifest is incomplete") from exc
     if _compact_canonical_json_sha256(retained) != GFN1_D3_PROVENANCE_SHA256:
         raise LicenseCheckError("GFN1-D3 manifest has unreviewed provenance")
+    generator = gfn1_d3.get("generator")
+    outputs = gfn1_d3.get("outputs")
+    if generator != GFN1_D3_GENERATOR_RECORD or outputs != GFN1_D3_OUTPUT_RECORDS:
+        raise LicenseCheckError(
+            "GFN1-D3 manifest has invalid generated-output metadata"
+        )
     source = gfn1_d3.get("source", {})
     expected_equations = {
         "src/dftd3/model.f90": (
@@ -1748,6 +1786,12 @@ def _check_gfn1_d3_provenance(
         != GFN1_D3_MCTC_LICENSE_RECORD["sha256"]
     ):
         raise LicenseCheckError("retained mctc Apache license differs from provenance")
+    if (
+        len(lgpl_license) != GFN1_D3_LGPL_LICENSE_RECORD["bytes"]
+        or hashlib.sha256(lgpl_license).hexdigest()
+        != GFN1_D3_LGPL_LICENSE_RECORD["sha256"]
+    ):
+        raise LicenseCheckError("retained GFN1-D3 LGPL license differs from provenance")
 
 
 def _check_gfn1_fixture_provenance(root: Path) -> None:
@@ -2263,7 +2307,11 @@ def check_source(root: Path) -> None:
     )
 
     _check_gfn1_parameter_provenance(gfn1)
-    _check_gfn1_d3_provenance(gfn1_d3, (root / "LICENSES/Apache-2.0.txt").read_bytes())
+    _check_gfn1_d3_provenance(
+        gfn1_d3,
+        (root / "LICENSES/Apache-2.0.txt").read_bytes(),
+        (root / "LICENSES/LGPL-3.0-or-later.txt").read_bytes(),
+    )
     _check_gfn1_fixture_provenance(root)
     if gfn2["source"]["license"]["spdx"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("GFN2 parameter manifest has the wrong SPDX license")
@@ -2412,15 +2460,21 @@ def _file_starts_with(path: Path, prefix: bytes) -> bool:
 def check_install(prefix: Path) -> None:
     """Validate the legal payload installed by CMake."""
     _require_files(prefix, INSTALL_FILES, "install tree")
-    installed_gfn1_d3 = json.loads(
-        (prefix / "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json").read_text(
-            encoding="utf-8"
+    try:
+        installed_gfn1_d3 = json.loads(
+            (
+                prefix / "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json"
+            ).read_text(encoding="utf-8")
         )
-    )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError("installed GFN1-D3 manifest is malformed") from exc
     installed_apache = (
         prefix / "share/licenses/xtbloom/third-party/Apache-2.0.txt"
     ).read_bytes()
-    _check_gfn1_d3_provenance(installed_gfn1_d3, installed_apache)
+    installed_lgpl = (
+        prefix / "share/licenses/xtbloom/third-party/LGPL-3.0-or-later.txt"
+    ).read_bytes()
+    _check_gfn1_d3_provenance(installed_gfn1_d3, installed_apache, installed_lgpl)
     bundled = _find_bundled_vendor_libraries(
         {
             path.relative_to(prefix).as_posix()
@@ -2658,14 +2712,16 @@ def _check_archived_gfn1_d3(path: Path, names: set[str], wheel: bool) -> None:
     # The wheel's PEP 639 license payload is mandatory even if the installed
     # CMake license tree is later relocated by a repair tool.
     apache_suffix = "LICENSES/Apache-2.0.txt"
+    lgpl_suffix = "LICENSES/LGPL-3.0-or-later.txt"
     manifest_name = _find_archive_name(names, manifest_suffix)
     apache_name = _find_archive_name(names, apache_suffix)
-    payloads = _read_archive_members(path, {manifest_name, apache_name})
+    lgpl_name = _find_archive_name(names, lgpl_suffix)
+    payloads = _read_archive_members(path, {manifest_name, apache_name, lgpl_name})
     try:
         manifest = json.loads(payloads[manifest_name].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise LicenseCheckError("archived GFN1-D3 manifest is malformed") from exc
-    _check_gfn1_d3_provenance(manifest, payloads[apache_name])
+    _check_gfn1_d3_provenance(manifest, payloads[apache_name], payloads[lgpl_name])
 
 
 def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:

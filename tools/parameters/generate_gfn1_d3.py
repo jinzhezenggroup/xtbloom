@@ -438,6 +438,15 @@ def validate_tables(value: object) -> dict[str, Any]:
     coordination = finite_numbers(
         "coordination_numbers", reference_offset, positive=False
     )
+    for atomic_number, element in enumerate(normalized_elements, 1):
+        begin = element["reference_offset"]
+        end = begin + element["reference_count"]
+        reference_slice = coordination[begin:end]
+        if len(set(reference_slice)) != len(reference_slice):
+            raise D3DataError(
+                f"element {atomic_number} contains duplicate reference "
+                "coordination numbers"
+            )
 
     pair_count = ELEMENT_COUNT * (ELEMENT_COUNT + 1) // 2
     pairs = value["pair_records"]
@@ -847,7 +856,13 @@ def build_offline_artifacts(output_dir: Path) -> dict[str, bytes]:
         _provenance_fields(manifest)
         source_digest = manifest["source"]["source_digest"]
         mctc_digest = manifest["unit_conversion"]["source_digest"]
-    except (KeyError, json.JSONDecodeError, OSError, TypeError) as exc:
+    except (
+        KeyError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        OSError,
+        TypeError,
+    ) as exc:
         raise D3DataError("cannot load retained GFN1-D3 data and provenance") from exc
     if not isinstance(source_digest, str) or not isinstance(mctc_digest, str):
         raise D3DataError("GFN1-D3 manifest contains invalid source digests")

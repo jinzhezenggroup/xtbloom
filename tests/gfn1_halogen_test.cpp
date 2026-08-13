@@ -342,7 +342,7 @@ int test_element_sets_and_transactional_validation() {
         XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(energy == original_energy && forces == original_forces);
 
-  std::array<std::byte, sizeof(double) * 2u + 1u> misaligned_storage{};
+  alignas(double) std::array<std::byte, sizeof(double) * 2u + 1u> misaligned_storage{};
   double* misaligned = reinterpret_cast<double*>(misaligned_storage.data() + 1u);
   CHECK(evaluation.add(positions.data(), misaligned, nullptr, error) ==
         XTBLOOM_STATUS_INVALID_ARGUMENT);
@@ -364,6 +364,19 @@ int test_element_sets_and_transactional_validation() {
   CHECK(energy[0] == std::numeric_limits<double>::max());
   CHECK(std::all_of(forces.begin(), forces.end(),
                     [](double value) { return value == std::numeric_limits<double>::max(); }));
+
+  /* Force accumulation overflows only in caller-owned scratch, after the
+   * complete request has been validated. The transactional contract requires
+   * the original accumulators to remain byte-for-byte/value unchanged. */
+  const std::array<double, 9> overflow_positions{0.0, 1.0e-308, 0.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0};
+  energy = original_energy;
+  forces = original_forces;
+  forces[0] = std::numeric_limits<double>::max();
+  const auto overflow_energy_before = energy;
+  const auto overflow_forces_before = forces;
+  CHECK(evaluation.add(overflow_positions.data(), energy.data(), forces.data(), error) ==
+        XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(energy == overflow_energy_before && forces == overflow_forces_before);
 
   constexpr std::array<std::int32_t, 3> invalid_low{1, 0, 7};
   constexpr std::array<std::int32_t, 3> invalid_high{1, 87, 7};
@@ -430,7 +443,8 @@ int test_sealed_plan_workspace_contract_and_zero_allocation() {
                                                error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(energy[0] != 0.25);
 
-  std::array<std::byte, 256> raw_workspace{};
+  alignas(xtbloom::detail::gfn1::kHalogenWorkspaceAlignment) std::array<std::byte, 256>
+      raw_workspace{};
   HalogenWorkspace unchanged_workspace;
   const HalogenWorkspace workspace_before = unchanged_workspace;
   CHECK(xtbloom::detail::gfn1::bind_halogen_workspace(

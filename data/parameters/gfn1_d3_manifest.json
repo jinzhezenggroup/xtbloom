@@ -39,7 +39,7 @@
   },
   "generator": {
     "path": "tools/parameters/generate_gfn1_d3.py",
-    "sha256": "f29dae936f19f55bbb1327a421ead6a2aedc80b400cce7950a303243f9f0aa6a"
+    "sha256": "61c3ab96caf6eb57d262c1e472503fde71784517fd2aad729b3d483f9ed16079"
   },
   "method": "gfn1-d3",
   "outputs": {

@@ -56,6 +56,29 @@ static_assert(parameters::gfn1_d3::kElementCount == parameters::gfn1::kElementCo
 static_assert(kD3MaximumReferences == 7u,
               "simple-dftd3 v1.4.0 uses at most seven reference states");
 
+constexpr bool d3_reference_layout_fits_workspace() {
+  for (std::size_t element_index = 0u; element_index < parameters::gfn1_d3::kElements.size();
+       ++element_index) {
+    const auto& element = parameters::gfn1_d3::kElements[element_index];
+    if (element.reference_count == 0u || element.reference_count > kD3MaximumReferences) {
+      return false;
+    }
+    const auto atomic_number = static_cast<std::uint32_t>(element_index + 1u);
+    for (std::uint32_t first = 0u; first < element.reference_count; ++first) {
+      for (std::uint32_t second = first + 1u; second < element.reference_count; ++second) {
+        if (parameters::gfn1_d3::reference_cn(atomic_number, first) ==
+            parameters::gfn1_d3::reference_cn(atomic_number, second)) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
+static_assert(d3_reference_layout_fits_workspace(),
+              "GFN1 D3 reference slices must fit the workspace stride and have unique CNs");
+
 bool checked_add_size(std::size_t first, std::size_t second, std::size_t& result) {
   if (first > std::numeric_limits<std::size_t>::max() - second) {
     return false;
@@ -263,6 +286,7 @@ void prepare_weight_slice(const D3PlanData& data, const double* coordination,
       const double unnormalized = workspace.weights[weight_begin + reference];
       double weight = unnormalized * inverse_norm;
       if (!std::isfinite(weight)) {
+        /* Preserve simple-dftd3 v1.4.0's maxval-equality fallback exactly. */
         weight = reference_cn == maximum_cn ? 1.0 : 0.0;
       }
       double derivative = 2.0 * kReferenceWeightFactor * delta * unnormalized * inverse_norm -
@@ -446,6 +470,11 @@ std::size_t D3Plan::resident_bytes() const noexcept {
          data_->pair_damping_radii.capacity() * sizeof(double) +
          data_->coordination_plan.atom_offsets.capacity() * sizeof(std::int64_t) +
          data_->coordination_plan.covalent_radius.capacity() * sizeof(double);
+}
+
+const CoordinationPlan& D3Plan::coordination_plan() const noexcept {
+  static const CoordinationPlan empty;
+  return data_ ? data_->coordination_plan : empty;
 }
 
 const D3PlanData* D3Plan::identity() const noexcept { return data_.get(); }
