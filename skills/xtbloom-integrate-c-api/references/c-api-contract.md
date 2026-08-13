@@ -5,7 +5,8 @@
 - Include `<xtbloom/xtbloom.h>` from an installed package.
 - Link the exported CMake target `xtbloom::xtbloom`.
 - The public boundary is C-compatible even though the implementation is C++17.
-- Only GFN2-xTB is implemented. Treat GFN1-xTB and ROCm constants as reserved.
+- GFN1-xTB is implemented on CPU; GFN2-xTB is implemented on CPU and CUDA.
+  Treat ROCm as reserved, and never silently route GFN1-xTB to CUDA.
 - Prefer the symbols and size macros in the installed header over copied
   numeric values. Additive suffixes may appear without changing an older
   compatible prefix.

@@ -4,17 +4,26 @@
 #include "runtime/gfn1_cpu_execution.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <new>
+#include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(__linux__)
+#include <sched.h>
+#endif
 
 #if defined(_WIN32)
 #include <malloc.h>
@@ -44,9 +53,162 @@ using namespace xtbloom::detail::gfn1;
 constexpr std::size_t kHostAlignment = 64u;
 constexpr std::int32_t kDefaultMixerHistory = 8;
 constexpr double kDefaultMixerDamping = 0.4;
+constexpr std::size_t kMaximumAutomaticCpuThreads = 64u;
 constexpr std::uint32_t kSupportedFlags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
                                           XTBLOOM_COMPUTE_ATOMIC_CHARGES |
                                           XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+
+std::size_t process_cpu_count() noexcept {
+#if defined(__linux__)
+  cpu_set_t affinity;
+  CPU_ZERO(&affinity);
+  if (sched_getaffinity(0, sizeof(affinity), &affinity) == 0) {
+    std::size_t count = 0u;
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+      if (CPU_ISSET(cpu, &affinity)) ++count;
+    }
+    if (count != 0u) return count;
+  }
+#endif
+  const unsigned int hardware = std::thread::hardware_concurrency();
+  return hardware == 0u ? 1u : static_cast<std::size_t>(hardware);
+}
+
+std::size_t resolve_cpu_threads(std::int32_t requested) noexcept {
+  const std::size_t available = process_cpu_count();
+  if (requested == 0) {
+    return std::max<std::size_t>(1u, std::min(available, kMaximumAutomaticCpuThreads));
+  }
+  return std::max<std::size_t>(
+      1u, std::min<std::size_t>(available, static_cast<std::size_t>(requested)));
+}
+
+/* Each model cache owns its worker pool because the provider cleanup callback
+ * is tied to that cache's separately loaded backend namespace. Sharing a pool
+ * would let the second model overwrite the first model's TLS cleanup owner. */
+class CpuWorkerPool final {
+ public:
+  using Task = void (*)(void*, std::size_t) noexcept;
+  using ThreadCleanup = void (*)(void*) noexcept;
+
+  explicit CpuWorkerPool(std::size_t concurrency)
+      : concurrency_(std::max<std::size_t>(1u, concurrency)) {
+    workers_.reserve(concurrency_ - 1u);
+    for (std::size_t worker = 0u; worker + 1u < concurrency_; ++worker) {
+      try {
+        workers_.emplace_back([this] { worker_loop(); });
+      } catch (const std::system_error&) {
+        break;
+      }
+    }
+    concurrency_ = workers_.size() + 1u;
+  }
+
+  ~CpuWorkerPool() { stop_and_join(); }
+  CpuWorkerPool(const CpuWorkerPool&) = delete;
+  CpuWorkerPool& operator=(const CpuWorkerPool&) = delete;
+
+  void parallel_for(std::size_t task_count, void* context, Task task) noexcept {
+    if (task_count == 0u) return;
+    if (workers_.empty() || task_count == 1u) {
+      for (std::size_t index = 0u; index < task_count; ++index) task(context, index);
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      task_ = task;
+      task_context_ = context;
+      task_count_ = task_count;
+      next_task_.store(0u, std::memory_order_relaxed);
+      completed_workers_ = 0u;
+      ++generation_;
+    }
+    work_available_.notify_all();
+    drain_tasks(task, context, task_count);
+    std::unique_lock<std::mutex> lock(mutex_);
+    work_complete_.wait(lock, [this] { return completed_workers_ == workers_.size(); });
+    task_ = nullptr;
+    task_context_ = nullptr;
+    task_count_ = 0u;
+  }
+
+  [[nodiscard]] std::size_t resident_bytes() const noexcept {
+    return workers_.capacity() * sizeof(std::thread);
+  }
+
+  void set_thread_cleanup(void* context, ThreadCleanup cleanup) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    thread_cleanup_context_ = context;
+    thread_cleanup_ = cleanup;
+  }
+
+ private:
+  void drain_tasks(Task task, void* context, std::size_t task_count) noexcept {
+    for (;;) {
+      const std::size_t index = next_task_.fetch_add(1u, std::memory_order_relaxed);
+      if (index >= task_count) return;
+      task(context, index);
+    }
+  }
+
+  void worker_loop() noexcept {
+    std::uint64_t observed_generation = 0u;
+    for (;;) {
+      Task task = nullptr;
+      void* context = nullptr;
+      std::size_t task_count = 0u;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        work_available_.wait(lock, [this, observed_generation] {
+          return stopping_ || generation_ != observed_generation;
+        });
+        if (stopping_) {
+          void* cleanup_context = thread_cleanup_context_;
+          ThreadCleanup cleanup = thread_cleanup_;
+          lock.unlock();
+          if (cleanup != nullptr) cleanup(cleanup_context);
+          return;
+        }
+        observed_generation = generation_;
+        task = task_;
+        context = task_context_;
+        task_count = task_count_;
+      }
+      drain_tasks(task, context, task_count);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++completed_workers_;
+      }
+      work_complete_.notify_one();
+    }
+  }
+
+  void stop_and_join() noexcept {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stopping_ = true;
+    }
+    work_available_.notify_all();
+    for (std::thread& worker : workers_) {
+      if (worker.joinable()) worker.join();
+    }
+  }
+
+  std::size_t concurrency_ = 1u;
+  std::vector<std::thread> workers_;
+  std::mutex mutex_;
+  std::condition_variable work_available_;
+  std::condition_variable work_complete_;
+  std::atomic<std::size_t> next_task_{0u};
+  Task task_ = nullptr;
+  void* task_context_ = nullptr;
+  std::size_t task_count_ = 0u;
+  std::size_t completed_workers_ = 0u;
+  std::uint64_t generation_ = 0u;
+  bool stopping_ = false;
+  void* thread_cleanup_context_ = nullptr;
+  ThreadCleanup thread_cleanup_ = nullptr;
+};
 
 void* host_aligned_allocate(std::size_t alignment, std::size_t size) {
 #if defined(_WIN32)
@@ -904,10 +1066,14 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
 }  // namespace
 
 struct Gfn1CpuExecutionCache::Impl {
+  enum class TaskFailure : std::uint8_t { kNone, kAllocation, kException, kUnknown };
+
+  explicit Impl(std::int32_t requested_threads)
+      : cpu_threads(resolve_cpu_threads(requested_threads)), workers(cpu_threads) {}
+
   ~Impl() {
-    /* Backend verification and every hidden inference run execute on the
-     * cache owner thread. Release provider-owned thread-local state while the
-     * backend namespace remains alive, mirroring the public GFN2 CPU cache. */
+    /* Release owner-thread state before the backend namespace is destroyed.
+     * Persistent workers execute the matching callback from worker_loop. */
     backend.release_thread_resources();
   }
 
@@ -919,6 +1085,9 @@ struct Gfn1CpuExecutionCache::Impl {
   std::vector<SystemKey> requested_keys;
   std::vector<std::unique_ptr<SystemExecution>> systems;
   std::vector<SystemOutput> outputs;
+  std::vector<std::string> system_errors;
+  std::vector<xtbloom_status_t> inference_statuses;
+  std::vector<TaskFailure> task_failures;
   std::vector<double> energies;
   std::vector<double> forces;
   std::vector<double> atomic_charges;
@@ -927,11 +1096,22 @@ struct Gfn1CpuExecutionCache::Impl {
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> statuses;
   bool systems_ready_for_warm = false;
+  const std::size_t cpu_threads;
+  CpuWorkerPool workers;
+
+  static void release_backend_thread_resources(void* backend_context) noexcept {
+    static_cast<CpuLinearAlgebraBackend*>(backend_context)->release_thread_resources();
+  }
 
   xtbloom_status_t ensure_backend(std::string& error) {
     if (backend_initialized) return XTBLOOM_STATUS_SUCCESS;
     const xtbloom_status_t status = gfn2::make_mkl_rt_lp64_backend(backend, error);
-    if (status == XTBLOOM_STATUS_SUCCESS) backend_initialized = true;
+    if (status == XTBLOOM_STATUS_SUCCESS) {
+      if (backend.production_mkl_isolated()) {
+        workers.set_thread_cleanup(&backend, &release_backend_thread_resources);
+      }
+      backend_initialized = true;
+    }
     return status;
   }
 
@@ -964,6 +1144,9 @@ struct Gfn1CpuExecutionCache::Impl {
       outputs[index].atomic_charges.reserve(atoms);
       outputs[index].point_forces.reserve(3u * points);
     }
+    system_errors.resize(batch);
+    inference_statuses.assign(batch, XTBLOOM_STATUS_INTERNAL_ERROR);
+    task_failures.assign(batch, TaskFailure::kNone);
     energies.assign((flags & XTBLOOM_COMPUTE_ENERGY) != 0u ? batch : 0u, nan);
     forces.assign((flags & XTBLOOM_COMPUTE_FORCES) != 0u
                       ? 3u * static_cast<std::size_t>(request.total_atoms)
@@ -981,9 +1164,59 @@ struct Gfn1CpuExecutionCache::Impl {
     converged.assign(batch, 0u);
     statuses.assign(batch, XTBLOOM_STATUS_EIGENSOLVER_FAILED);
   }
+
+  struct InferenceJob {
+    Impl& owner;
+    const xtbloom_compute_options_t& options;
+  };
+
+  static void infer_system(void* opaque_job, std::size_t index) noexcept {
+    InferenceJob& job = *static_cast<InferenceJob*>(opaque_job);
+    Impl& owner = job.owner;
+    const HostRequest& request = owner.request;
+    SystemOutput& output = owner.outputs[index];
+    std::string& system_error = owner.system_errors[index];
+    output.reset();
+    system_error.clear();
+    const std::int64_t atom_begin = request.atom_offsets[index];
+    const std::int64_t point_begin = request.point_offsets[index];
+    const std::int64_t points = request.point_offsets[index + 1u] - point_begin;
+    const double* shifts =
+        request.shifts_enabled ? request.periodic_shifts.data() + atom_begin : nullptr;
+    const double* response = request.response_enabled ? request.response_matrices.data() +
+                                                            request.response_offsets[index]
+                                                      : nullptr;
+    try {
+      const bool warm = job.options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
+                        job.options.scc_start_mode == XTBLOOM_SCC_START_WARM;
+      owner.inference_statuses[index] = owner.systems[index]->infer(
+          owner.backend, request.positions.data() + 3 * atom_begin,
+          points == 0 ? nullptr : request.point_positions.data() + 3 * point_begin,
+          points == 0 ? nullptr : request.point_charges.data() + point_begin,
+          points == 0 ? nullptr : request.point_hardnesses.data() + point_begin, shifts, response,
+          warm, output, system_error);
+    } catch (const std::bad_alloc&) {
+      owner.inference_statuses[index] = XTBLOOM_STATUS_ALLOCATION_FAILED;
+      owner.task_failures[index] = TaskFailure::kAllocation;
+      system_error.clear();
+    } catch (const std::exception& exception) {
+      owner.inference_statuses[index] = XTBLOOM_STATUS_INTERNAL_ERROR;
+      owner.task_failures[index] = TaskFailure::kException;
+      try {
+        system_error = exception.what();
+      } catch (...) {
+        system_error.clear();
+      }
+    } catch (...) {
+      owner.inference_statuses[index] = XTBLOOM_STATUS_INTERNAL_ERROR;
+      owner.task_failures[index] = TaskFailure::kUnknown;
+      system_error.clear();
+    }
+  }
 };
 
-Gfn1CpuExecutionCache::Gfn1CpuExecutionCache() : impl_(std::make_unique<Impl>()) {}
+Gfn1CpuExecutionCache::Gfn1CpuExecutionCache(std::int32_t cpu_threads)
+    : impl_(std::make_unique<Impl>(cpu_threads)) {}
 Gfn1CpuExecutionCache::~Gfn1CpuExecutionCache() = default;
 
 xtbloom_status_t set_gfn1_cpu_linear_algebra_backend_for_testing(
@@ -1051,27 +1284,17 @@ xtbloom_status_t execute_gfn1_cpu(Gfn1CpuExecutionCache& cache, const xtbloom_ba
     }
 
     implementation.systems_ready_for_warm = false;
+    Gfn1CpuExecutionCache::Impl::InferenceJob job{implementation, options};
+    implementation.workers.parallel_for(static_cast<std::size_t>(implementation.request.batch_size),
+                                        &job, &Gfn1CpuExecutionCache::Impl::infer_system);
     bool all_composed = true;
     for (std::int64_t system = 0; system < implementation.request.batch_size; ++system) {
       const std::size_t index = static_cast<std::size_t>(system);
       SystemOutput& output = implementation.outputs[index];
-      output.reset();
       const std::int64_t atom_begin = implementation.request.atom_offsets[index];
       const std::int64_t point_begin = implementation.request.point_offsets[index];
       const std::int64_t points = implementation.request.point_offsets[index + 1u] - point_begin;
-      const double* shifts = implementation.request.shifts_enabled
-                                 ? implementation.request.periodic_shifts.data() + atom_begin
-                                 : nullptr;
-      const double* response = implementation.request.response_enabled
-                                   ? implementation.request.response_matrices.data() +
-                                         implementation.request.response_offsets[index]
-                                   : nullptr;
-      status = implementation.systems[index]->infer(
-          implementation.backend, implementation.request.positions.data() + 3 * atom_begin,
-          points == 0 ? nullptr : implementation.request.point_positions.data() + 3 * point_begin,
-          points == 0 ? nullptr : implementation.request.point_charges.data() + point_begin,
-          points == 0 ? nullptr : implementation.request.point_hardnesses.data() + point_begin,
-          shifts, response, warm, output, error);
+      status = implementation.inference_statuses[index];
       implementation.iterations[index] = output.iterations;
       if (status == XTBLOOM_STATUS_SCC_NOT_CONVERGED ||
           status == XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
@@ -1082,6 +1305,17 @@ xtbloom_status_t execute_gfn1_cpu(Gfn1CpuExecutionCache& cache, const xtbloom_ba
       }
       if (status != XTBLOOM_STATUS_SUCCESS) {
         for (auto& retained : implementation.systems) retained->invalidate_checkpoint();
+        if (!implementation.system_errors[index].empty()) {
+          error = implementation.system_errors[index];
+        } else if (implementation.task_failures[index] ==
+                   Gfn1CpuExecutionCache::Impl::TaskFailure::kAllocation) {
+          error = "failed to allocate CPU GFN1 per-system inference state";
+        } else if (implementation.task_failures[index] ==
+                   Gfn1CpuExecutionCache::Impl::TaskFailure::kUnknown) {
+          error = "unknown exception while executing a CPU GFN1 batch member";
+        } else {
+          error = "CPU GFN1 batch member failed without a diagnostic";
+        }
         return status;
       }
       implementation.statuses[index] = XTBLOOM_STATUS_SUCCESS;
@@ -1151,7 +1385,10 @@ std::size_t persistent_workspace_bytes_gfn1_cpu(Gfn1CpuExecutionCache& cache) no
            outputs_bytes(implementation.outputs) + vector_bytes(implementation.energies) +
            vector_bytes(implementation.forces) + vector_bytes(implementation.atomic_charges) +
            vector_bytes(implementation.point_forces) + vector_bytes(implementation.iterations) +
-           vector_bytes(implementation.converged) + vector_bytes(implementation.statuses);
+           vector_bytes(implementation.converged) + vector_bytes(implementation.statuses) +
+           vector_bytes(implementation.system_errors) +
+           vector_bytes(implementation.inference_statuses) +
+           vector_bytes(implementation.task_failures) + implementation.workers.resident_bytes();
   const HostRequest& request = implementation.request;
   total += vector_bytes(request.atom_offsets) + vector_bytes(request.atomic_numbers) +
            vector_bytes(request.positions) + vector_bytes(request.molecular_charges) +

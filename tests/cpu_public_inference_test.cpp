@@ -565,6 +565,34 @@ int test_parallel_qmmm_matches_serial() {
   return 0;
 }
 
+int test_gfn1_parallel_qmmm_matches_serial() {
+  const std::uint32_t flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
+                              XTBLOOM_COMPUTE_ATOMIC_CHARGES | XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+  ContextHandle serial_context = make_cpu_context(1);
+  ContextHandle parallel_context = make_cpu_context(4);
+  CHECK(serial_context != nullptr);
+  CHECK(parallel_context != nullptr);
+
+  PublicBatch serial = make_repeated_qmmm_batch(8u);
+  PublicBatch parallel = make_repeated_qmmm_batch(8u);
+  serial.bind(flags);
+  parallel.bind(flags);
+  serial.options.model = XTBLOOM_MODEL_GFN1_XTB;
+  parallel.options.model = XTBLOOM_MODEL_GFN1_XTB;
+  CHECK(xtbloom_compute(serial_context.get(), &serial.batch, &serial.options, &serial.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(parallel_context.get(), &parallel.batch, &parallel.options,
+                        &parallel.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(parallel.energies == serial.energies);
+  CHECK(parallel.forces == serial.forces);
+  CHECK(parallel.atomic_charges == serial.atomic_charges);
+  CHECK(parallel.point_forces == serial.point_forces);
+  CHECK(parallel.iterations == serial.iterations);
+  CHECK(parallel.converged == serial.converged);
+  CHECK(parallel.statuses == serial.statuses);
+  return 0;
+}
+
 int test_concurrent_calls_on_one_context_are_serialized_transactions() {
   const std::uint32_t flags =
       XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
@@ -635,6 +663,64 @@ int test_concurrent_calls_on_one_context_are_serialized_transactions() {
     CHECK(actual_second.converged == reference_second.converged);
     CHECK(actual_second.statuses == reference_second.statuses);
     CHECK(actual_second.result.flags == reference_second.result.flags);
+  }
+  return 0;
+}
+
+int test_concurrent_cross_model_calls_share_one_context_transaction() {
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  ContextHandle reference_context = make_cpu_context(1);
+  ContextHandle shared_context = make_cpu_context(4);
+  CHECK(reference_context != nullptr);
+  CHECK(shared_context != nullptr);
+
+  PublicBatch reference_gfn1 = make_repeated_h2_he_batch(3u);
+  PublicBatch reference_gfn2 = make_repeated_h2_he_batch(3u);
+  reference_gfn1.bind(flags);
+  reference_gfn2.bind(flags);
+  reference_gfn1.options.model = XTBLOOM_MODEL_GFN1_XTB;
+  CHECK(xtbloom_compute(reference_context.get(), &reference_gfn1.batch, &reference_gfn1.options,
+                        &reference_gfn1.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(reference_context.get(), &reference_gfn2.batch, &reference_gfn2.options,
+                        &reference_gfn2.result) == XTBLOOM_STATUS_SUCCESS);
+
+  for (int repetition = 0; repetition < 4; ++repetition) {
+    PublicBatch actual_gfn1 = make_repeated_h2_he_batch(3u);
+    PublicBatch actual_gfn2 = make_repeated_h2_he_batch(3u);
+    actual_gfn1.bind(flags);
+    actual_gfn2.bind(flags);
+    actual_gfn1.options.model = XTBLOOM_MODEL_GFN1_XTB;
+    std::atomic<int> ready{0};
+    std::atomic<bool> start{false};
+    xtbloom_status_t gfn1_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    xtbloom_status_t gfn2_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    std::thread gfn1([&] {
+      ready.fetch_add(1, std::memory_order_release);
+      while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+      gfn1_status = xtbloom_compute(shared_context.get(), &actual_gfn1.batch, &actual_gfn1.options,
+                                    &actual_gfn1.result);
+    });
+    std::thread gfn2([&] {
+      ready.fetch_add(1, std::memory_order_release);
+      while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+      gfn2_status = xtbloom_compute(shared_context.get(), &actual_gfn2.batch, &actual_gfn2.options,
+                                    &actual_gfn2.result);
+    });
+    while (ready.load(std::memory_order_acquire) != 2) std::this_thread::yield();
+    start.store(true, std::memory_order_release);
+    gfn1.join();
+    gfn2.join();
+    CHECK(gfn1_status == XTBLOOM_STATUS_SUCCESS);
+    CHECK(gfn2_status == XTBLOOM_STATUS_SUCCESS);
+    CHECK(actual_gfn1.energies == reference_gfn1.energies);
+    CHECK(actual_gfn1.forces == reference_gfn1.forces);
+    CHECK(actual_gfn1.atomic_charges == reference_gfn1.atomic_charges);
+    CHECK(actual_gfn1.statuses == reference_gfn1.statuses);
+    CHECK(actual_gfn2.energies == reference_gfn2.energies);
+    CHECK(actual_gfn2.forces == reference_gfn2.forces);
+    CHECK(actual_gfn2.atomic_charges == reference_gfn2.atomic_charges);
+    CHECK(actual_gfn2.statuses == reference_gfn2.statuses);
   }
   return 0;
 }
@@ -1894,16 +1980,16 @@ struct PlanDeleter {
 
 using PlanHandle = std::unique_ptr<xtbloom_plan_t, PlanDeleter>;
 
-int test_gfn1_status_precedes_cpu_interaction_availability() {
+int test_gfn1_capability_precedes_cpu_interaction_execution() {
   ContextHandle context = make_cpu_context(1);
   CHECK(context != nullptr);
 
   PublicBatch request = make_h2_he_batch();
   request.bind(XTBLOOM_COMPUTE_ENERGY);
 
-  /* ALPB is a known, structurally valid attachment whose CPU executor is not
-   * released. The reserved GFN1 model must win dispatch after descriptor
-   * validity is proven, without publishing into any caller-owned result. */
+  /* ALPB is structurally valid but not released. Once GFN1 CPU dispatch is
+   * available, the model-specific interaction capability is reported without
+   * publishing into any caller-owned result. */
   std::vector<std::uint8_t> payload(32u, 0u);
   std::int32_t block_version = 1;
   std::memcpy(payload.data(), &block_version, sizeof(block_version));
@@ -1918,13 +2004,13 @@ int test_gfn1_status_precedes_cpu_interaction_availability() {
 
   const PublicOutputImage before(request);
   CHECK(xtbloom_compute(context.get(), &request.batch, &request.options, &request.result) ==
-        XTBLOOM_STATUS_NOT_SUPPORTED);
-  CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
+        XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(std::strstr(xtbloom_get_last_error(), "interaction") != nullptr);
   CHECK(before.matches(request));
 
   xtbloom_plan_t* raw_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
   CHECK(xtbloom_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
-        XTBLOOM_STATUS_NOT_SUPPORTED);
+        XTBLOOM_STATUS_NOT_IMPLEMENTED);
   CHECK(raw_plan == nullptr);
 
   /* The split must not change GFN2's established feature-availability status. */
@@ -2016,14 +2102,67 @@ int test_plan_creation_model_and_abi_prefix_contracts() {
   CHECK(xtbloom_plan_compute(partial_plan.get(), &request.batch, &request.options,
                              &request.result) == XTBLOOM_STATUS_SUCCESS);
 
-  /* GFN1 is a reserved ABI value. Plan setup rejects it consistently on CPU
-   * before it creates a GFN2 cache that would fail only at execution time. */
+  /* GFN1 plan setup selects the GFN1 cache and must never construct or execute
+   * a GFN2 cache for the same public model identity. */
   xtbloom_compute_options_t gfn1 = request.options;
   gfn1.model = XTBLOOM_MODEL_GFN1_XTB;
   xtbloom_plan_t* raw_gfn1_plan = reinterpret_cast<xtbloom_plan_t*>(UINTPTR_MAX);
   CHECK(xtbloom_plan_create(context.get(), &request.batch, &gfn1, &raw_gfn1_plan) ==
-        XTBLOOM_STATUS_NOT_SUPPORTED);
-  CHECK(raw_gfn1_plan == nullptr);
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(raw_gfn1_plan != nullptr);
+  PlanHandle gfn1_plan(raw_gfn1_plan);
+  CHECK(xtbloom_plan_compute(gfn1_plan.get(), &request.batch, &gfn1, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(std::all_of(request.statuses.begin(), request.statuses.end(),
+                    [](std::int32_t status) { return status == XTBLOOM_STATUS_SUCCESS; }));
+  return 0;
+}
+
+int test_gfn1_plan_workspace_warm_and_topology_transactions() {
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  ContextHandle context = make_cpu_context(4);
+  CHECK(context != nullptr);
+  PublicBatch request = make_repeated_h2_he_batch(2u);
+  request.bind(flags);
+  request.options.model = XTBLOOM_MODEL_GFN1_XTB;
+
+  xtbloom_plan_t* raw_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &request.batch, &request.options, &raw_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  PlanHandle plan(raw_plan);
+  xtbloom_workspace_query_t query{};
+  CHECK(xtbloom_workspace_query_init(&query, sizeof(query)) == XTBLOOM_STATUS_SUCCESS);
+  query.compute_flags = flags;
+  CHECK(xtbloom_plan_query_workspace(plan.get(), &query) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(query.host_required_bytes > 0u);
+  CHECK(query.device_required_bytes == 0u);
+
+  /* Plan preparation does not manufacture a checkpoint: strict WARM remains
+   * transactional until one compatible whole-batch FRESH call converges. */
+  request.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  const PublicOutputImage before_warm(request);
+  CHECK(xtbloom_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(before_warm.matches(request));
+
+  request.options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+  CHECK(xtbloom_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  request.positions[0] -= 0.003;
+  request.positions[3] += 0.003;
+  request.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(std::all_of(request.statuses.begin(), request.statuses.end(),
+                    [](std::int32_t status) { return status == XTBLOOM_STATUS_SUCCESS; }));
+
+  request.atomic_numbers[0] = 2;
+  const PublicOutputImage before_mismatch(request);
+  CHECK(xtbloom_plan_compute(plan.get(), &request.batch, &request.options, &request.result) ==
+        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(std::strstr(xtbloom_get_last_error(), "topology") != nullptr);
+  CHECK(before_mismatch.matches(request));
   return 0;
 }
 
@@ -2414,7 +2553,14 @@ int main() {
   if (const int line = test_parallel_qmmm_matches_serial(); line != 0) {
     return line;
   }
+  if (const int line = test_gfn1_parallel_qmmm_matches_serial(); line != 0) {
+    return line;
+  }
   if (const int line = test_concurrent_calls_on_one_context_are_serialized_transactions();
+      line != 0) {
+    return line;
+  }
+  if (const int line = test_concurrent_cross_model_calls_share_one_context_transaction();
       line != 0) {
     return line;
   }
@@ -2459,10 +2605,13 @@ int main() {
       line != 0) {
     return line;
   }
-  if (const int line = test_gfn1_status_precedes_cpu_interaction_availability(); line != 0) {
+  if (const int line = test_gfn1_capability_precedes_cpu_interaction_execution(); line != 0) {
     return line;
   }
   if (const int line = test_plan_creation_model_and_abi_prefix_contracts(); line != 0) {
+    return line;
+  }
+  if (const int line = test_gfn1_plan_workspace_warm_and_topology_transactions(); line != 0) {
     return line;
   }
   if (const int line = test_plan_create_query_workspace_and_reuse(); line != 0) {

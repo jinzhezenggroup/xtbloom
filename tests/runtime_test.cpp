@@ -191,8 +191,10 @@ int main() {
 
   compute_options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
 
-  /* A registered but unfinished model is rejected before any GFN2 execution
-   * or caller-output publication, independent of LP64 provider availability. */
+  /* The reserved GFN1 tag selects its own CPU executor rather than falling
+   * through to GFN2. This always-registered smoke intentionally checks only
+   * public convergence/publication; independent goldens live in the dedicated
+   * GFN1 conformance gate. */
   energies[0] = 123.25;
   forces[0] = -4.0;
   forces[1] = -5.0;
@@ -206,18 +208,21 @@ int main() {
   per_system_status[0] = XTBLOOM_STATUS_INTERNAL_ERROR;
   result.flags = UINT32_C(0xa5a55a5a);
   compute_options.model = XTBLOOM_MODEL_GFN1_XTB;
-  CHECK(xtbloom_compute(context.get(), &batch, &compute_options, &result) ==
-        XTBLOOM_STATUS_NOT_SUPPORTED);
-  CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
-  CHECK(energies[0] == 123.25);
-  CHECK(forces[0] == -4.0 && forces[1] == -5.0 && forces[2] == -6.0);
-  CHECK(atomic_charges[0] == 71.25);
-  CHECK(point_charge_forces[0] == 81.0 && point_charge_forces[1] == 82.0 &&
-        point_charge_forces[2] == 83.0);
-  CHECK(scc_iterations[0] == 91);
-  CHECK(scc_converged[0] == 1u);
-  CHECK(per_system_status[0] == XTBLOOM_STATUS_INTERNAL_ERROR);
-  CHECK(result.flags == UINT32_C(0xa5a55a5a));
+  const xtbloom_status_t gfn1_status =
+      xtbloom_compute(context.get(), &batch, &compute_options, &result);
+  if (gfn1_status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE) {
+    CHECK(std::strstr(xtbloom_get_last_error(), "LP64") != nullptr);
+    CHECK(energies[0] == 123.25);
+    CHECK(result.flags == UINT32_C(0xa5a55a5a));
+  } else {
+    CHECK(gfn1_status == XTBLOOM_STATUS_SUCCESS);
+    CHECK(per_system_status[0] == XTBLOOM_STATUS_SUCCESS);
+    CHECK(scc_converged[0] == 1u);
+    CHECK(scc_iterations[0] > 0);
+    CHECK(std::isfinite(energies[0]));
+    CHECK(std::isfinite(forces[0]) && std::isfinite(forces[1]) && std::isfinite(forces[2]));
+    CHECK(std::isfinite(atomic_charges[0]));
+  }
 
   context.reset();
 

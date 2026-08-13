@@ -16,16 +16,17 @@ class CpuLinearAlgebraBackend;
 namespace xtbloom::detail {
 
 /*
- * Internal-only CPU execution cache for the complete GFN1 model.
+ * Context- or plan-owned CPU execution cache for the complete GFN1 model.
  *
- * This type is deliberately not reachable from Context, the model registry,
- * installed headers, or libxtbloom.  Issue #384 uses it to prove the complete
- * CPU composition while the public GFN1 tag remains NOT_SUPPORTED until the
- * activation work in #385 passes its own ABI and packaging gates.
+ * The type stays private to libxtbloom, but the reserved public GFN1 tag now
+ * selects it on CPU. It owns model-specific topology, SCC/WARM state, and
+ * publication staging so no request can fall through to GFN2 equations.
  */
 class Gfn1CpuExecutionCache {
  public:
-  Gfn1CpuExecutionCache();
+  /* Direct internal tests default to the historical serial executor. Public
+   * contexts and plans always pass their resolved cpu_threads request. */
+  explicit Gfn1CpuExecutionCache(std::int32_t cpu_threads = 1);
   ~Gfn1CpuExecutionCache();
 
   Gfn1CpuExecutionCache(const Gfn1CpuExecutionCache&) = delete;
@@ -46,7 +47,7 @@ class Gfn1CpuExecutionCache {
 };
 
 /*
- * The hidden executor consumes already structurally validated HOST
+ * The model executor consumes already structurally validated HOST
  * descriptors. It still copies all input bytes, validates numerical values,
  * rejects unreleased GFN1 interactions/outputs, and publishes caller outputs
  * only after the complete batch reaches documented terminal states.

@@ -1,11 +1,11 @@
-# GFN2-xTB conformance tools
+# GFN-xTB conformance tools
 
 ## Independent GFN1 foundation corpus
 
-GFN1 remains unimplemented in xTBloom. The separate corpus under
-`data/conformance/gfn1/` therefore records only independent reference-engine
-results; it is not wired to the public C API runner and does not claim CPU or
-CUDA support.
+The separate corpus under `data/conformance/gfn1/` records independent
+reference-engine results for the public CPU GFN1 implementation. The shared
+public C API and invariant runners accept this manifest explicitly; GFN1 CUDA
+remains unpublished and is never selected by default.
 
 Four closed-shell cases use the pinned tblite 0.7.0 GFN1 implementation.
 The canonical GFN1 parameter export is independently pinned to the tblite
@@ -62,8 +62,8 @@ python3 tools/conformance/gfn1_conformance.py finalize-manifest \
 ```
 
 The primary thresholds remain property-specific absolute tolerances. They are
-future xTBloom acceptance targets, not evidence that the current GFN2-only
-runtime meets them.
+public CPU GFN1 acceptance gates; the committed goldens remain independent of
+xTBloom and are never regenerated from the implementation under test.
 
 ## GFN2 production conformance corpus
 
@@ -238,12 +238,15 @@ srun --gres=gpu:1 env \
 Actual JSON is written before comparison. The primary manifest tolerances are
 used unchanged. Energy and QM forces are gated when named by each case's
 xTBloom oracle-property set; QM/MM goldens also gate atomic charges and
-point-charge forces. `oh_radical` uses the standard
-shared-orbital (`spin_channels=1`) xTB semantics and gates energy, force, and
-atom-resolved charges on both backends. Spin-polarized (`spin_channels=2`)
-inference and analytic forces are exercised on CPU and CUDA separately until an
-independently generated spin-polarized golden is committed. Molecular dipoles
-are requested and recorded as `molecular_dipole_e_bohr` on both backends, but
+point-charge forces. The GFN2 `oh_radical` case uses standard shared-orbital
+(`spin_channels=1`) xTB semantics and gates energy, force, and atom-resolved
+charges on CPU and CUDA. GFN2 spin-polarized (`spin_channels=2`) inference and
+analytic forces are exercised on CPU and CUDA separately until an independent
+spin-polarized golden is committed. The GFN1 corpus also retains shared-orbital
+OH; `xtbloom.conformance.gfn1_spin2_public_cpu` reuses the independent,
+hash-bound P10 fixture from `tests/gfn1_cpu_conformance.py` to gate singleton
+and heterogeneous-ragged public CPU two-channel energy and forces. Molecular dipoles are
+requested and recorded as `molecular_dipole_e_bohr` on both GFN2 backends, but
 are not yet part of the golden comparison because the committed corpus has no
 independent molecular-dipole oracle. Atomic dipoles and quadrupoles likewise
 remain diagnostic oracle state rather than public conformance outputs.

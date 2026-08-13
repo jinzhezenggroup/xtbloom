@@ -6,18 +6,18 @@ if one is added later, overrides this file only for its subtree.
 ## Project mission
 
 xTBloom is a C++17 library for high-throughput GFN-xTB inference through one
-stable C ABI. GFN2-xTB is implemented on CPU and CUDA, including restricted
-and unrestricted SCC, analytic forces, ragged batches, explicit point charges,
-and periodic charge response. Python, ASE, and dpdata interfaces all call the
-same public C ABI.
+stable C ABI. GFN2-xTB is implemented on CPU and CUDA; GFN1-xTB is implemented
+on CPU only. Both include restricted and unrestricted SCC, analytic forces,
+ragged batches, explicit point charges, and periodic charge response. Python,
+ASE, and dpdata interfaces all call the same public C ABI.
 
 Correctness, ABI stability, failure isolation, reproducible scientific
 evidence, and legal provenance take priority over small performance or code
 size improvements. Do not weaken an existing acceptance gate to make an
 implementation pass.
 
-GFN1-xTB and ROCm values are reserved in the ABI but are not implemented.
-Never report them as supported.
+GFN1-xTB remains unsupported on CUDA, and ROCm is reserved but unimplemented.
+Never report a capability outside its published backend or adapter surface.
 
 ## Start-of-task protocol and external memory
 

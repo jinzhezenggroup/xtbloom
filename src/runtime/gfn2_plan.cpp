@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "runtime/backend.hpp"
+#include "runtime/gfn1_cpu_execution.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
 #include "runtime/model_registry.hpp"
 #include "runtime/request.hpp"
@@ -221,10 +222,12 @@ bool topology_host_resident(const xtbloom_batch_t& batch) noexcept {
 
 struct Gfn2Plan::Impl {
   xtbloom_backend_t backend = XTBLOOM_BACKEND_CPU;
+  ModelBackendRoute route = ModelBackendRoute::kUnavailable;
   Context* context = nullptr;
   xtbloom_compute_options_t policy{};
   FixedTopology topology;
   std::shared_ptr<Gfn2CpuExecutionCache> cpu_cache;
+  std::shared_ptr<Gfn1CpuExecutionCache> gfn1_cpu_cache;
 #if defined(XTBLOOM_HAS_CUDA)
   std::shared_ptr<Gfn2CudaExecutionCache> cuda_cache;
 #endif
@@ -248,10 +251,12 @@ void Gfn2Plan::destroy() noexcept {
    * borrowed lifetime binding. Callers must still destroy the plan first. */
   impl_->context = nullptr;
   impl_->cpu_cache.reset();
+  impl_->gfn1_cpu_cache.reset();
 #if defined(XTBLOOM_HAS_CUDA)
   impl_->cuda_cache.reset();
 #endif
   impl_->policy = {};
+  impl_->route = ModelBackendRoute::kUnavailable;
   impl_->topology = {};
   impl_->cpu_persistent_bytes = 0u;
   impl_->cuda_host_workspace_bytes = 0u;
@@ -285,12 +290,17 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
   if (model_status != XTBLOOM_STATUS_SUCCESS) {
     return model_status;
   }
-  if (model_route != ModelBackendRoute::kGfn2) {
-    error = "a GFN2 plan cannot be constructed for another registered model route";
+  if (model_route != ModelBackendRoute::kGfn1 && model_route != ModelBackendRoute::kGfn2) {
+    error = "a fixed-topology plan requires a registered model executor route";
     return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  if (model_route == ModelBackendRoute::kGfn1 && context.backend != XTBLOOM_BACKEND_CPU) {
+    error = "GFN1-xTB fixed-topology plans are currently supported only on CPU";
+    return XTBLOOM_STATUS_NOT_SUPPORTED;
   }
 
   impl_->backend = context.backend;
+  impl_->route = model_route;
   impl_->context = &context;
   /* validate_plan_descriptor_structure above owns the complete public policy
    * validation. Normalization below only replaces an absent/incomplete V3
@@ -310,17 +320,24 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     impl_->topology.capture(batch);
-    impl_->cpu_cache = std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads);
     bool reused = false;
-    xtbloom_status_t status =
-        prepare_restricted_gfn2_cpu(*impl_->cpu_cache, batch, impl_->policy, reused, error);
+    xtbloom_status_t status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    if (model_route == ModelBackendRoute::kGfn1) {
+      impl_->gfn1_cpu_cache = std::make_shared<Gfn1CpuExecutionCache>(context.cpu_threads);
+      status = prepare_gfn1_cpu(*impl_->gfn1_cpu_cache, batch, impl_->policy, reused, error);
+    } else {
+      impl_->cpu_cache = std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads);
+      status = prepare_restricted_gfn2_cpu(*impl_->cpu_cache, batch, impl_->policy, reused, error);
+    }
     if (status != XTBLOOM_STATUS_SUCCESS) {
-      impl_->context = nullptr;
+      destroy();
       return status;
     }
     impl_->cpu_persistent_bytes =
-        persistent_workspace_bytes_restricted_gfn2_cpu(*impl_->cpu_cache) +
-        impl_->topology.retained_host_bytes();
+        impl_->topology.retained_host_bytes() +
+        (model_route == ModelBackendRoute::kGfn1
+             ? persistent_workspace_bytes_gfn1_cpu(*impl_->gfn1_cpu_cache)
+             : persistent_workspace_bytes_restricted_gfn2_cpu(*impl_->cpu_cache));
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
   }
@@ -443,11 +460,18 @@ xtbloom_status_t Gfn2Plan::compute(const xtbloom_batch_t& batch,
       error = "the batch topology does not match the fixed plan topology";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
-    if (impl_->cpu_cache == nullptr) {
-      error = "plan does not own a CPU GFN2 execution cache";
-      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    if (impl_->route == ModelBackendRoute::kGfn1) {
+      if (impl_->gfn1_cpu_cache == nullptr) {
+        error = "plan does not own a CPU GFN1 execution cache";
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+      return execute_gfn1_cpu(*impl_->gfn1_cpu_cache, batch, options, result, error);
     }
-    return execute_restricted_gfn2_cpu(*impl_->cpu_cache, batch, options, result, error);
+    if (impl_->route == ModelBackendRoute::kGfn2 && impl_->cpu_cache != nullptr) {
+      return execute_restricted_gfn2_cpu(*impl_->cpu_cache, batch, options, result, error);
+    }
+    error = "plan does not own the selected CPU model execution cache";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
 #if defined(XTBLOOM_HAS_CUDA)
   if (impl_->cuda_cache == nullptr) {

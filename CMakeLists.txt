@@ -959,9 +959,10 @@ set_target_properties(xtbloom_gfn2_cpu_objects PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   VISIBILITY_INLINES_HIDDEN YES
 )
-# GFN1 remains an internal, incomplete model until its full CPU execution
-# chain and public evidence land. Keep reviewed model-owned terms in one
-# object target that is deliberately absent from libxtbloom public dispatch.
+# Keep the complete CPU GFN1 implementation in its own object target so the
+# public library can publish the already-reserved model tag without merging
+# the model-owned source graph into GFN2. Both models share only the reviewed
+# CPU linear-algebra/provider boundary above.
 add_library(xtbloom_gfn1_cpu_objects OBJECT
   src/model/gfn1/basis.cpp
   src/model/gfn1/coordination.cpp
@@ -1022,6 +1023,7 @@ add_library(xtbloom
   src/runtime/result_owner.cpp
   src/runtime/validation.cpp
   $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+  $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
 )
 add_library(xtbloom::xtbloom ALIAS xtbloom)
@@ -1716,8 +1718,14 @@ if(XTBLOOM_BUILD_TESTS)
     )
     target_compile_features(xtbloom_cpu_public_inference_test PRIVATE cxx_std_17)
     add_test(NAME xtbloom.cpu.public_inference COMMAND xtbloom_cpu_public_inference_test)
+    # Keep a stable acceptance-gate name for the GFN1 cases hosted by the
+    # combined public CPU inference executable.
+    add_test(NAME xtbloom.gfn1.public_inference COMMAND xtbloom_cpu_public_inference_test)
     xtbloom_configure_linalg_runtime_test(
       xtbloom_cpu_public_inference_test xtbloom.cpu.public_inference
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_cpu_public_inference_test xtbloom.gfn1.public_inference
     )
 
     # Issue #360 regression: compile the public CPU runtime into a standalone
@@ -1736,6 +1744,7 @@ if(XTBLOOM_BUILD_TESTS)
       src/runtime/result_owner.cpp
       src/runtime/validation.cpp
       $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+      $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
       $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
     )
     target_include_directories(xtbloom_cpu_worker_teardown_test PRIVATE
@@ -4004,6 +4013,32 @@ if(XTBLOOM_BUILD_TESTS)
       LABELS "conformance;public-api"
     )
     add_test(
+      NAME xtbloom.conformance.gfn1_public_cpu
+      COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_public_api.py
+              --manifest ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/gfn1/manifest.json
+              --library $<TARGET_FILE:xtbloom> --backend cpu --memory-mode host
+              --actual-dir ${CMAKE_CURRENT_BINARY_DIR}/conformance/gfn1-public-api
+    )
+    set_tests_properties(xtbloom.conformance.gfn1_public_cpu PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+      ENVIRONMENT_MODIFICATION
+        "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+      LABELS "conformance;public-api;gfn1"
+    )
+    add_test(
+      NAME xtbloom.conformance.gfn1_spin2_public_cpu
+      COMMAND ${Python3_EXECUTABLE} tools/conformance/gfn1_public_spin2.py
+              --library $<TARGET_FILE:xtbloom>
+    )
+    set_tests_properties(xtbloom.conformance.gfn1_spin2_public_cpu PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+      ENVIRONMENT_MODIFICATION
+        "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+      LABELS "conformance;public-api;gfn1"
+    )
+    add_test(
       NAME xtbloom.conformance.invariants_cpu
       COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_invariants.py
               --library $<TARGET_FILE:xtbloom> --backend cpu --memory-mode host
@@ -4014,6 +4049,19 @@ if(XTBLOOM_BUILD_TESTS)
       ENVIRONMENT_MODIFICATION
         "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
       LABELS "conformance;public-api"
+    )
+    add_test(
+      NAME xtbloom.conformance.gfn1_invariants_cpu
+      COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_invariants.py
+              --manifest ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/gfn1/manifest.json
+              --library $<TARGET_FILE:xtbloom> --backend cpu --memory-mode host
+    )
+    set_tests_properties(xtbloom.conformance.gfn1_invariants_cpu PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+      ENVIRONMENT_MODIFICATION
+        "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+      LABELS "conformance;public-api;gfn1"
     )
     if(XTBLOOM_HAS_CUDA)
       add_test(

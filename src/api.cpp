@@ -6,11 +6,13 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <string>
 #include <utility>
 
 #include "runtime/backend.hpp"
+#include "runtime/gfn1_cpu_execution.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
 #include "runtime/model_plan.hpp"
 #include "runtime/model_registry.hpp"
@@ -486,6 +488,13 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
   if (context == nullptr || context->implementation == nullptr) {
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "context is NULL");
   }
+  std::unique_lock<std::mutex> cpu_transaction;
+  if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
+    /* Validation, model dispatch, cache mutation, and publication are one
+     * context transaction even when concurrent callers select different
+     * model caches. */
+    cpu_transaction = std::unique_lock<std::mutex>(context->implementation->cpu_transaction_mutex);
+  }
   try {
     const bool cuda_backend = context->implementation->backend == XTBLOOM_BACKEND_CUDA;
     xtbloom::detail::DescriptorValidationResult validation =
@@ -510,11 +519,10 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
     if (model_status != XTBLOOM_STATUS_SUCCESS) {
       return fail(model_status, std::move(route_error));
     }
-    if (model_route != xtbloom::detail::ModelBackendRoute::kGfn2) {
+    if (model_route != xtbloom::detail::ModelBackendRoute::kGfn1 &&
+        model_route != xtbloom::detail::ModelBackendRoute::kGfn2) {
       return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
-                  context->implementation->backend == XTBLOOM_BACKEND_CPU
-                      ? "the registered model route has no synchronous CPU executor"
-                      : "the registered model route has no synchronous CUDA executor");
+                  "the registered model route has no synchronous executor");
     }
     const xtbloom::detail::DescriptorValidationResult availability =
         xtbloom::detail::validate_compute_execution_availability(context->implementation->backend,
@@ -524,7 +532,7 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
     }
     if (!cuda_backend) {
       const xtbloom::detail::DescriptorValidationResult lattice_availability =
-          xtbloom::detail::validate_host_lattice_execution_availability(*batch);
+          xtbloom::detail::validate_host_lattice_execution_availability(*batch, options->model);
       if (!lattice_availability.ok()) {
         return fail(lattice_availability.status, std::move(lattice_availability.error));
       }
@@ -542,13 +550,39 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
 
   if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
     try {
+      if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
+        std::string error;
+        const xtbloom_status_t cache_status =
+            xtbloom::detail::ensure_gfn1_cpu_execution_cache(*context->implementation, error);
+        if (cache_status != XTBLOOM_STATUS_SUCCESS) {
+          return fail(cache_status, std::move(error));
+        }
+        const std::shared_ptr<xtbloom::detail::Gfn1CpuExecutionCache>& cache =
+            context->implementation->gfn1_cpu_execution_cache;
+        if (cache == nullptr) {
+          return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                      "CPU context does not own a GFN1 execution cache");
+        }
+        const xtbloom_status_t status =
+            xtbloom::detail::execute_gfn1_cpu(*cache, *batch, *options, *result, error);
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          return fail(status, std::move(error));
+        }
+        last_error.clear();
+        return XTBLOOM_STATUS_SUCCESS;
+      }
+      std::string error;
+      const xtbloom_status_t cache_status =
+          xtbloom::detail::ensure_gfn2_cpu_execution_cache(*context->implementation, error);
+      if (cache_status != XTBLOOM_STATUS_SUCCESS) {
+        return fail(cache_status, std::move(error));
+      }
       const std::shared_ptr<xtbloom::detail::Gfn2CpuExecutionCache>& cache =
           context->implementation->gfn2_cpu_execution_cache;
       if (cache == nullptr) {
         return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
                     "CPU context does not own a GFN2 execution cache");
       }
-      std::string error;
       const xtbloom_status_t status =
           xtbloom::detail::execute_restricted_gfn2_cpu(*cache, *batch, *options, *result, error);
       if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -557,12 +591,12 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
       last_error.clear();
       return XTBLOOM_STATUS_SUCCESS;
     } catch (const std::bad_alloc&) {
-      return fail(XTBLOOM_STATUS_ALLOCATION_FAILED, "failed to allocate CPU GFN2 execution state");
+      return fail(XTBLOOM_STATUS_ALLOCATION_FAILED, "failed to allocate CPU model execution state");
     } catch (const std::exception& exception) {
       return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
     } catch (...) {
       return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
-                  "unknown exception while executing CPU GFN2 inference");
+                  "unknown exception while executing CPU model inference");
     }
   }
 

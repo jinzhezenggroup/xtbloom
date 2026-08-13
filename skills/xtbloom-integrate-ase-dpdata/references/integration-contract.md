@@ -2,9 +2,9 @@
 
 ## Scope
 
-xTBloom implements molecular GFN2-xTB single-point inference. The ASE and dpdata integrations adapt that inference to their host frameworks. They do not add a lattice descriptor, periodic GFN2, or native xTBloom optimization and dynamics APIs.
+xTBloom implements molecular GFN1/GFN2-xTB single-point inference. The ASE and dpdata integrations adapt that inference to their host frameworks. GFN1-xTB is CPU-only; GFN2-xTB supports CPU and CUDA. The adapters do not add periodic execution or native xTBloom optimization and dynamics APIs.
 
-Only GFN2-xTB is implemented. GFN1-xTB, solvation, lattice/PBC calculations, Hessians, and native molecular dynamics are outside this contract.
+Solvation, lattice/PBC calculations, Hessians, and native molecular dynamics are outside this contract.
 
 ## Units at the Adapter Boundaries
 

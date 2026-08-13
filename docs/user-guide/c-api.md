@@ -41,6 +41,14 @@ Replace `89` with the target compute capability. Set
 CPU by default so it also runs with the CPU-only install; change its one backend
 line to `XTBLOOM_BACKEND_CUDA` to verify the CUDA build explicitly.
 
+`xtbloom_compute_options_init` defaults `compute_options.model` to
+`XTBLOOM_MODEL_GFN2_XTB`. Set it explicitly to `XTBLOOM_MODEL_GFN1_XTB` for
+GFN1 CPU execution. A GFN1 request on a CUDA context returns
+`XTBLOOM_STATUS_NOT_SUPPORTED` transactionally; the library never substitutes
+GFN2. GFN1 publishes energy, forces, charges, point-charge forces, and the
+caller-supplied `b + A*q` response, but not electric-field attachments or the
+molecular-dipole outlet.
+
 A consumer CMake project needs only the exported target:
 
 ```cmake
@@ -122,6 +130,8 @@ int main(void) {
 
   compute_options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
                           XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  /* The initializer defaults to GFN2. Select GFN1 explicitly when desired:
+   * compute_options.model = XTBLOOM_MODEL_GFN1_XTB; */
 
   double energy = NAN;
   double forces[6];

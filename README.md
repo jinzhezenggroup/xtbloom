@@ -13,7 +13,7 @@ README design principles:
 
 <img src="docs/assets/xtbloom-logo.svg" alt="xTBloom logo" width="440">
 
-**Native, batched GFN2-xTB inference for C, C++, Python, and CUDA.**
+**Native, batched GFN-xTB inference for C, C++, Python, and CUDA.**
 
 [Try it in your browser](https://xtbloom.jinzhezeng.group) ·
 [Python guide](docs/user-guide/python.md) ·
@@ -43,16 +43,15 @@ for usage and scope.
 
 - **Native ragged batches.** Differently sized molecules share one call without
   padding every system to the largest atom or orbital count.
-- **CPU and CUDA parity.** Restricted and unrestricted GFN2-xTB run through the
-  same public API. The low-level CUDA path accepts caller-owned host, device, or
-  mixed buffers.
+- **One model-aware API.** Restricted and unrestricted GFN2-xTB run on CPU and
+  CUDA; GFN1-xTB runs on CPU through the same stable public model selector.
+  The low-level CUDA path accepts caller-owned host, device, or mixed buffers.
 - **Failure isolation.** SCC or eigensolver failure is local to one batch
   member; successful peers remain valid and failed slices receive NaNs plus
   per-system diagnostics.
-- **Analytic derivatives and embedding.** Both backends return energies, QM
-  forces, charges, optional point-charge forces, and molecular dipoles, with
-  explicit point charges, uniform electric fields, and caller-supplied
-  charge-response operators included in SCC.
+- **Analytic derivatives and embedding.** Both models return CPU energies, QM
+  forces, charges, optional point-charge forces, and caller-supplied charge
+  response. GFN2 additionally publishes CUDA, uniform-field, and dipole paths.
 - **Reusable execution state.** Contexts retain CPU workers, CUDA workspaces,
   fixed-topology plans, and compatible electronic warm starts.
 - **One deployment boundary.** C, C++, Python, ASE, and dpdata all call the same
@@ -135,17 +134,19 @@ before reusing the numbers.
 | Capability | Status |
 | --- | --- |
 | Restricted and unrestricted GFN2-xTB energy, forces, and charges | CPU and CUDA |
+| Restricted and unrestricted GFN1-xTB energy, forces, and charges | CPU only; a CUDA-capable build returns `NOT_SUPPORTED` |
 | Ragged batches and peer-local numerical failures | Supported |
 | Host input/output descriptors | CPU and CUDA |
 | CUDA-device and mixed descriptors | Low-level C ABI |
-| Explicit point charges in SCC and point-charge forces | Supported |
-| Caller-supplied periodic charge response | Supported; separate from the native-cell ABI |
+| Explicit point charges in SCC and point-charge forces | GFN1 and GFN2 |
+| Caller-supplied periodic charge response | GFN1 and GFN2; separate from the native-cell ABI |
 | Native-cell descriptors | ABI-v4 validates `NONE`/`XYZ`; periodic execution returns `NOT_IMPLEMENTED` |
-| Uniform electric field and molecular dipoles | CPU and CUDA |
-| ASE and dpdata integrations | Supported |
+| Uniform electric field and molecular dipoles | GFN2 CPU and CUDA; not published for GFN1 |
+| ASE and dpdata integrations | GFN1 CPU and GFN2 |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
-| Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side adapter |
-| Native GFN1-xTB, ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN2 execution | Not implemented |
+| Array API/DLPack, PyTorch autograd, and browser demo | GFN2-only adapter surfaces |
+| Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN2 adapter |
+| ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN2 execution | Not implemented |
 
 Reserved ABI values are not reported as supported features. At finite
 electronic temperature, the reported variational energy is the electronic

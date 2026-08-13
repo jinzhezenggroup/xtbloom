@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run committed GFN2 conformance cases through the public xtbloom C ABI.
+"""Run committed GFN1/GFN2 conformance cases through the public C ABI.
 
 The runner deliberately uses :mod:`ctypes`: it validates the installed/shared-
 library surface rather than linking to implementation details. Cases are
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
     from types import TracebackType
 
+import gfn1_conformance
 import xtbloom_conformance as conformance
 
 XTBLOOM_STATUS_SUCCESS = 0
@@ -34,6 +35,7 @@ XTBLOOM_BACKEND_CPU = 1
 XTBLOOM_BACKEND_CUDA = 2
 XTBLOOM_MEMORY_HOST = 0
 XTBLOOM_MEMORY_CUDA_DEVICE = 1
+XTBLOOM_MODEL_GFN1_XTB = 1
 XTBLOOM_MODEL_GFN2_XTB = 2
 XTBLOOM_SCC_START_FRESH = 1
 XTBLOOM_SCC_START_WARM = 2
@@ -580,11 +582,26 @@ def supported_cases(
     cases = conformance.selected_cases(manifest, names)
     if backend is None:
         return cases
+    default_backends = (
+        ["cpu"] if model_tag(manifest) == XTBLOOM_MODEL_GFN1_XTB else ["cpu", "cuda"]
+    )
     return [
         case
         for case in cases
-        if backend in case.get("xtbloom_backends", ["cpu", "cuda"])
+        if backend in case.get("xtbloom_backends", default_backends)
     ]
+
+
+def model_tag(manifest: dict[str, Any]) -> int:
+    """Return the stable public tag for one validated corpus method."""
+    method = manifest.get("method")
+    if method == "GFN1-xTB":
+        return XTBLOOM_MODEL_GFN1_XTB
+    if method == "GFN2-xTB":
+        return XTBLOOM_MODEL_GFN2_XTB
+    raise conformance.ConformanceError(
+        f"unsupported public conformance method: {method!r}"
+    )
 
 
 def _flatten(matrix: Sequence[Sequence[float]]) -> list[float]:
@@ -645,6 +662,7 @@ def assemble_batch(
     point_charge_gammas: list[float] = []
     slices: list[CaseSlice] = []
     efields: list[list[float] | None] = []
+    is_gfn1 = model_tag(manifest) == XTBLOOM_MODEL_GFN1_XTB
     hardness = manifest["reference_engines"]["xtb"]["point_charge_hardness_hartree"]
 
     for case in cases:
@@ -662,7 +680,11 @@ def assemble_batch(
                 )
             efields.append([float(component) for component in efield])
         if case.get("input_schema") == "qmmm-v1":
-            document = conformance.load_qmmm_input(input_path, case, hardness)
+            document = (
+                gfn1_conformance.load_qmmm(input_path, case, hardness)
+                if is_gfn1
+                else conformance.load_qmmm_input(input_path, case, hardness)
+            )
             qm = document["qm"]
             points = document["external_point_charges"]
             atomic_numbers.extend(int(number) for number in qm["atomic_numbers"])
@@ -673,15 +695,30 @@ def assemble_batch(
                 float(value) for value in points["gammas_hartree"]
             )
         else:
-            document = conformance.load_turbomole_coord(input_path, case)
-            atomic_numbers.extend(document["atomic_numbers"])
-            positions.extend(_flatten(document["positions_bohr"]))
+            if is_gfn1:
+                symbols, coordinates = gfn1_conformance.load_coord(
+                    input_path, int(case["atom_count"])
+                )
+                symbol_numbers = {
+                    symbol: number
+                    for number, symbol in enumerate(gfn1_conformance.ELEMENT_SYMBOLS)
+                    if symbol
+                }
+                atomic_numbers.extend(symbol_numbers[symbol] for symbol in symbols)
+                positions.extend(_flatten(coordinates))
+            else:
+                document = conformance.load_turbomole_coord(input_path, case)
+                atomic_numbers.extend(document["atomic_numbers"])
+                positions.extend(_flatten(document["positions_bohr"]))
 
         atom_offsets.append(len(atomic_numbers))
         point_charge_offsets.append(len(point_charge_values))
         molecular_charges.append(float(case["molecular_charge"]))
         unpaired = int(case["unpaired_electrons"])
         unpaired_electrons.append(unpaired)
+        # A missing manifest field means the reference used one shared orbital
+        # channel, including xTB's restricted open-shell OH fixture. Dedicated
+        # two-channel evidence opts in explicitly with ``spin_channels: 2``.
         spin_channel_count = case.get("spin_channels", 1)
         if type(spin_channel_count) is not int or spin_channel_count not in (1, 2):
             raise conformance.ConformanceError(
@@ -888,12 +925,13 @@ def _compare_case(
 
 def pinned_compute_options(
     library: ctypes.CDLL,
+    model: int,
     request_forces: bool,
     request_charges: bool,
     request_point_forces: bool,
     request_dipoles: bool = True,
 ) -> ComputeOptions:
-    """Build the strict single-shot GFN2 options shared by every conformance run.
+    """Build strict single-shot model options shared by every conformance run.
 
     Conformance cases must remain independent so reference comparisons never
     depend on execution order or an earlier checkpoint. The SCC solve is pinned
@@ -909,7 +947,7 @@ def pinned_compute_options(
         "xtbloom_compute_options_init",
     )
     options.scc_start_mode = XTBLOOM_SCC_START_FRESH
-    options.model = XTBLOOM_MODEL_GFN2_XTB
+    options.model = model
     options.flags = XTBLOOM_COMPUTE_ENERGY
     if request_forces:
         options.flags |= XTBLOOM_COMPUTE_FORCES
@@ -1071,9 +1109,11 @@ def run_backend(
     )
     options = pinned_compute_options(
         library,
+        model_tag(manifest),
         request_forces,
         request_charges,
         request_point_forces=bool(storage.point_charge_values),
+        request_dipoles=model_tag(manifest) == XTBLOOM_MODEL_GFN2_XTB,
     )
     outputs = run_compute(
         library, storage, options, backend, device_id, cpu_threads, memory_mode
@@ -1208,7 +1248,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         }
         if not selected:
             print(  # noqa: T201 - CLI validation report
-                "no GFN2 conformance cases selected"
+                f"no {manifest.get('method', 'GFN-xTB')} conformance cases selected"
             )
             return 0
         if not any(cases_by_backend.values()):

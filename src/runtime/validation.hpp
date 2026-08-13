@@ -123,7 +123,7 @@ struct DescriptorValidationResult {
  * Call only after validate_host_lattice_semantics() has succeeded.
  */
 [[nodiscard]] DescriptorValidationResult validate_host_lattice_execution_availability(
-    const xtbloom_batch_t& batch);
+    const xtbloom_batch_t& batch, xtbloom_model_t model);
 
 /*
  * Compatibility entry point for the complete ABI-v1 validation sequence. It

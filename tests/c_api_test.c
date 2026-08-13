@@ -516,6 +516,10 @@ static int check_cpu_request_shell(xtbloom_context_t* context) {
 }
 
 int main(void) {
+  if (XTBLOOM_MODEL_GFN1_XTB != 1 || XTBLOOM_MODEL_GFN2_XTB != 2) {
+    fprintf(stderr, "public model tag values must remain stable\n");
+    return 1;
+  }
   if (sizeof(xtbloom_status_t) != sizeof(int32_t) || sizeof(xtbloom_backend_t) != sizeof(int32_t) ||
       sizeof(xtbloom_memory_space_t) != sizeof(int32_t) ||
       sizeof(xtbloom_model_t) != sizeof(int32_t) ||

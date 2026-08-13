@@ -1403,10 +1403,11 @@ bool test_lattice_abi_v4() {
 
   /* The staged-host helpers are independently callable by the CUDA bridge. */
   CHECK(validate_host_lattice_semantics(periodic.batch).ok());
-  CHECK(validate_host_lattice_execution_availability(periodic.batch).status ==
-        XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(
+      validate_host_lattice_execution_availability(periodic.batch, XTBLOOM_MODEL_GFN2_XTB).status ==
+      XTBLOOM_STATUS_NOT_IMPLEMENTED);
   CHECK(validate_host_lattice_semantics(molecular.batch).ok());
-  CHECK(validate_host_lattice_execution_availability(molecular.batch).ok());
+  CHECK(validate_host_lattice_execution_availability(molecular.batch, XTBLOOM_MODEL_GFN2_XTB).ok());
 
   /* Public validation and the reusable lattice builder share one scale-aware
    * predicate even for strongly anisotropic but linearly independent cells. */

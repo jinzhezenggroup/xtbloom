@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Exercise production GFN2 inference from an installed Pyodide wheel."""
+"""Exercise production GFN1/GFN2 inference from an installed Pyodide wheel."""
 
 from __future__ import annotations
 
@@ -446,14 +446,27 @@ def _run_load_order(source_root: Path, load_order: str, full: bool) -> None:
     ).singlepoint()
     np.testing.assert_allclose(repeated.energy, first.energy, rtol=0.0, atol=1.0e-12)
     np.testing.assert_allclose(repeated.forces, first.forces, rtol=0.0, atol=1.0e-12)
+    # The Pyodide package contains the same CPU model registry and generated
+    # parameter payload as native wheels. Exercise GFN1 explicitly so a wheel
+    # cannot pass solely through the default GFN2 selector.
+    gfn1 = Calculator(
+        "GFN1-xTB", water_numbers, water_positions, backend="cpu"
+    ).singlepoint()
+    if not gfn1.scc_converged or not np.isfinite(gfn1.energy):
+        raise RuntimeError(
+            "installed Pyodide wheel did not execute finite GFN1 inference"
+        )
+    if not np.isfinite(gfn1.forces).all():
+        raise RuntimeError("installed Pyodide wheel returned non-finite GFN1 forces")
     adapter, provider = _installed_private_paths()
     if Path(os.environ.get("XTBLOOM_PYODIDE_LAPACKE_SHIM", "")) != adapter:
         raise RuntimeError("native loader did not retain the exact adapter path")
     if Path(os.environ.get("XTBLOOM_PYODIDE_OPENBLAS", "")) != provider:
         raise RuntimeError("native loader did not retain the exact provider path")
     sys.stdout.write(
-        "Pyodide GFN2 wheel passed: "
+        "Pyodide GFN1/GFN2 wheel passed: "
         f"order={load_order}; full={full}; energy={reference_energy:.16g}; "
+        f"gfn1_energy={gfn1.energy:.16g}; "
         f"force_norm={np.linalg.norm(reference_forces):.16g}; "
         f"numpy={np.__version__}; scipy={importlib.metadata.version('scipy')}; "
         f"provider={provider.name}\n"

@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "xtbloom"
 dynamic = ["version"]
-description = "Batched CPU and GPU inference for GFN2-xTB through the public C ABI"
+description = "Batched GFN1/GFN2-xTB inference through the public C ABI"
 readme = { file = "python/README.md", content-type = "text/markdown" }
 license = "GPL-3.0-or-later"
 license-files = [

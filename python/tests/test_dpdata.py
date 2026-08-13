@@ -50,6 +50,27 @@ def _case_data_dict(
     }
 
 
+def _gfn1_case_data_dict(case_id: str) -> dict[str, object]:
+    """Build a dpdata data dict from the independent GFN1 oracle manifest."""
+    case = _cases.gfn1_case_by_id(case_id)
+    numbers, positions, _, _, _ = _cases.gfn1_structure_inputs(case)
+    atom_names = _cases.numbers_to_symbols(sorted({int(z) for z in numbers}))
+    type_map = {
+        number: index for index, number in enumerate(sorted({int(z) for z in numbers}))
+    }
+    return {
+        "atom_names": atom_names,
+        "atom_numbs": [
+            int(sum(int(z) == number for z in numbers)) for number in type_map
+        ],
+        "atom_types": np.array([type_map[int(z)] for z in numbers], dtype=np.int64),
+        "orig": np.zeros(3),
+        "cells": np.eye(3)[None, ...],
+        "coords": np.asarray(positions)[None, ...] * _BOHR,
+        "nopbc": True,
+    }
+
+
 def _ensure_driver_registered() -> type:
     """Load and return the registered xTBloom dpdata driver class."""
     # The entry point is registered after a normal wheel install; for a source
@@ -110,6 +131,45 @@ def test_driver_forwards_scc_policy_options(monkeypatch: pytest.MonkeyPatch) -> 
     assert captured["determinism"] == "reproducible"
 
 
+def test_driver_forwards_gfn1_method_and_cpu_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep model identity explicit across the dpdata generic keyword bridge."""
+    from xtbloom.dpdata import XTBloomDriver
+
+    captured: dict[str, object] = {}
+
+    class FakeBatchCalculator:
+        def __init__(
+            self, structures: list[Structure], method: str, **kwargs: object
+        ) -> None:
+            captured["method"] = method
+            captured["backend"] = kwargs.get("backend")
+            captured["structures"] = structures
+
+        def compute(self, *, raise_on_failure: bool) -> SimpleNamespace:
+            assert raise_on_failure
+            structures = captured["structures"]
+            assert isinstance(structures, list)
+            return SimpleNamespace(
+                energies=np.zeros(len(structures), dtype=np.float64),
+                forces=np.concatenate(
+                    [np.zeros_like(structure.positions) for structure in structures]
+                ),
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("xtbloom.dpdata.BatchCalculator", FakeBatchCalculator)
+    XTBloomDriver(method="GFN1", backend="cpu").label(
+        _gfn1_case_data_dict("gfn1_ketene")
+    )
+    assert captured["method"] == "GFN1"
+    assert captured["backend"] == "cpu"
+    assert isinstance(captured["structures"], list)
+
+
 def test_label_energies_match_golden() -> None:
     """Match dpdata labels to golden energies and forces in dpdata units."""
     _ensure_driver_registered()
@@ -117,6 +177,26 @@ def test_label_energies_match_golden() -> None:
     labeled = system.predict(driver="xtbloom")
     golden = _cases.golden(_cases.case_by_id("ketene"))
     tolerance = _cases.tolerances()
+    assert labeled.data["energies"][0] == pytest.approx(
+        golden["energy_hartree"] * _HARTREE_TO_EV,
+        abs=tolerance["energy"]["atol"] * _HARTREE_TO_EV,
+    )
+    assert labeled.data["forces"][0] == pytest.approx(
+        np.asarray(golden["forces_hartree_per_bohr"]).reshape(-1, 3)
+        * _HARTREE_TO_EV
+        / _BOHR,
+        abs=tolerance["forces"]["atol"] * _HARTREE_TO_EV / _BOHR,
+    )
+
+
+def test_label_gfn1_cpu_matches_independent_golden() -> None:
+    """Label dpdata frames with GFN1 without substituting the default GFN2 model."""
+    _ensure_driver_registered()
+    case = _cases.gfn1_case_by_id("gfn1_ketene")
+    system = dpdata.System(data=_gfn1_case_data_dict("gfn1_ketene"))
+    labeled = system.predict(driver="xtbloom", method="GFN1-xTB")
+    golden = _cases.gfn1_golden(case)
+    tolerance = _cases.gfn1_tolerances()
     assert labeled.data["energies"][0] == pytest.approx(
         golden["energy_hartree"] * _HARTREE_TO_EV,
         abs=tolerance["energy"]["atol"] * _HARTREE_TO_EV,

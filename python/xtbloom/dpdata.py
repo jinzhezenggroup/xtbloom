@@ -132,12 +132,13 @@ def _structures_from_data(
 
 @Driver.register("xtbloom")
 class XTBloomDriver(Driver):
-    """Label molecular frames with GFN2-xTB using the xTBloom library.
+    """Label molecular frames with GFN1/GFN2-xTB using the xTBloom library.
 
     Parameters
     ----------
     method : str, default "GFN2-xTB"
-        Underlying tight-binding method (only GFN2-xTB is currently supported).
+        Underlying tight-binding method. GFN1-xTB is CPU-only; its high-level
+        ``backend="auto"`` policy selects CPU, while explicit CUDA is refused.
     charge : float, optional
         Fixed total charge applied to every frame. When ``None`` the per-frame
         ``data["charge"]`` key (or 0) is used.

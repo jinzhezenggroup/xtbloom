@@ -7,7 +7,7 @@ remains the acceptance test (no optimized implementation is accepted solely on
 agreement with itself). The gates here instead reject physically impossible
 implementations that could happen to match a single reference geometry, by
 checking that the public C ABI reproduces the exact symmetries of an isolated
-finite GFN2-xTB system:
+finite GFN-xTB system:
 
 * homogeneous/heterogeneous ragged-batch results match sequential solves;
 * total energy, atomic charges, forces, and the molecular-dipole origin law are
@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     import ctypes
     from collections.abc import Callable, Iterable, Sequence
 
+import gfn1_conformance
 import xtbloom_conformance as conformance
 import xtbloom_public_api as public_api
 
@@ -159,6 +160,12 @@ def load_geometries(
 ) -> list[Geometry]:
     """Load selected corpus inputs into transformable in-memory geometries."""
     hardness = manifest["reference_engines"]["xtb"]["point_charge_hardness_hartree"]
+    is_gfn1 = public_api.model_tag(manifest) == public_api.XTBLOOM_MODEL_GFN1_XTB
+    symbol_numbers = {
+        symbol: number
+        for number, symbol in enumerate(gfn1_conformance.ELEMENT_SYMBOLS)
+        if symbol
+    }
     geometries: list[Geometry] = []
     for case in cases:
         input_path = conformance.resolve_manifest_path(manifest_path, case["input"])
@@ -175,7 +182,11 @@ def load_geometries(
             "point_gammas": [],
         }
         if case.get("input_schema") == "qmmm-v1":
-            document = conformance.load_qmmm_input(input_path, case, hardness)
+            document = (
+                gfn1_conformance.load_qmmm(input_path, case, hardness)
+                if is_gfn1
+                else conformance.load_qmmm_input(input_path, case, hardness)
+            )
             qm = document["qm"]
             points = document["external_point_charges"]
             gy["atomic_numbers"] = [int(number) for number in qm["atomic_numbers"]]
@@ -188,11 +199,18 @@ def load_geometries(
             gy["point_values"] = [float(value) for value in points["charges_e"]]
             gy["point_gammas"] = [float(value) for value in points["gammas_hartree"]]
         else:
-            document = conformance.load_turbomole_coord(input_path, case)
-            gy["atomic_numbers"] = document["atomic_numbers"]
-            gy["positions"] = [
-                float(value) for row in document["positions_bohr"] for value in row
-            ]
+            if is_gfn1:
+                symbols, coordinates = gfn1_conformance.load_coord(
+                    input_path, int(case["atom_count"])
+                )
+                gy["atomic_numbers"] = [symbol_numbers[symbol] for symbol in symbols]
+                gy["positions"] = [float(value) for row in coordinates for value in row]
+            else:
+                document = conformance.load_turbomole_coord(input_path, case)
+                gy["atomic_numbers"] = document["atomic_numbers"]
+                gy["positions"] = [
+                    float(value) for row in document["positions_bohr"] for value in row
+                ]
         efield = case.get("efield")
         if efield is not None:
             if (
@@ -400,6 +418,7 @@ def geometry_storage(geometries: Sequence[Geometry]) -> public_api.PublicBatchSt
 
 def xtbloom_solver(
     library: ctypes.CDLL,
+    model: int,
     backend: str,
     device_id: int,
     cpu_threads: int,
@@ -409,11 +428,13 @@ def xtbloom_solver(
 
     def solve(geometries: Sequence[Geometry]) -> list[InvariantResult]:
         storage = geometry_storage(geometries)
+        request_dipoles = model == public_api.XTBLOOM_MODEL_GFN2_XTB
         options = public_api.pinned_compute_options(
             library,
+            model,
             request_forces=True,
             request_charges=True,
-            request_dipoles=True,
+            request_dipoles=request_dipoles,
             # Match the golden runner: a gas-only sequential call has no
             # point-force property or destination to request, while mixed and
             # QM/MM batches publish the complete nonempty point-force extent.
@@ -428,11 +449,7 @@ def xtbloom_solver(
             end = storage.slices[index].atom_end
             point_begin = storage.slices[index].point_begin
             point_end = storage.slices[index].point_end
-            assert (
-                outputs.forces is not None
-                and outputs.charges is not None
-                and outputs.dipoles is not None
-            )
+            assert outputs.forces is not None and outputs.charges is not None
             results.append(
                 InvariantResult(
                     case_id=geometry.case_id,
@@ -452,10 +469,14 @@ def xtbloom_solver(
                         if outputs.point_forces is not None
                         else []
                     ),
-                    dipoles=[
-                        float(value)
-                        for value in outputs.dipoles[3 * index : 3 * index + 3]
-                    ],
+                    dipoles=(
+                        [
+                            float(value)
+                            for value in outputs.dipoles[3 * index : 3 * index + 3]
+                        ]
+                        if outputs.dipoles is not None
+                        else []
+                    ),
                     efield=None if geometry.efield is None else list(geometry.efield),
                 )
             )
@@ -626,18 +647,19 @@ def gate_translation_invariance(
                 tolerance,
             )
             _report(failures, passed, message)
-        translated_dipole = [
-            expected.dipoles[axis] + expected.molecular_charge * float(delta[axis])
-            for axis in range(3)
-        ]
-        passed, message = _compare(
-            actual.case_id,
-            "molecular_dipole_e_bohr translation_origin_shift",
-            translated_dipole,
-            actual.dipoles,
-            atol_dipole,
-        )
-        _report(failures, passed, message)
+        if expected.dipoles:
+            translated_dipole = [
+                expected.dipoles[axis] + expected.molecular_charge * float(delta[axis])
+                for axis in range(3)
+            ]
+            passed, message = _compare(
+                actual.case_id,
+                "molecular_dipole_e_bohr translation_origin_shift",
+                translated_dipole,
+                actual.dipoles,
+                atol_dipole,
+            )
+            _report(failures, passed, message)
 
 
 def gate_charged_field_probe(
@@ -743,14 +765,15 @@ def gate_rotation_covariance(
             atol_charge,
         )
         _report(failures, passed, message)
-        passed, message = _compare(
-            actual.case_id,
-            f"molecular_dipole_e_bohr rotation_covariant_{label_suffix}",
-            rotate_vector(matrix, expected.dipoles),
-            actual.dipoles,
-            atol_dipole,
-        )
-        _report(failures, passed, message)
+        if expected.dipoles:
+            passed, message = _compare(
+                actual.case_id,
+                f"molecular_dipole_e_bohr rotation_covariant_{label_suffix}",
+                rotate_vector(matrix, expected.dipoles),
+                actual.dipoles,
+                atol_dipole,
+            )
+            _report(failures, passed, message)
         atom_count = len(expected.charges)
         rotated_forces: list[float] = []
         for atom in range(atom_count):
@@ -1059,7 +1082,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         }
         if not selected:
             print(  # noqa: T201 - CLI validation report
-                "no GFN2 conformance cases selected"
+                f"no {manifest.get('method', 'GFN-xTB')} conformance cases selected"
             )
             return 0
         if not any(cases_by_backend.values()):
@@ -1086,6 +1109,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             homogeneous_case_ids = select_homogeneous_case_ids(geometries)
             solver = xtbloom_solver(
                 library,
+                public_api.model_tag(manifest),
                 backend,
                 args.device_id,
                 args.cpu_threads,

@@ -1,6 +1,6 @@
 # xTBloom documentation
 
-xTBloom provides native, batched GFN2-xTB energies, analytic forces, and
+xTBloom provides native, batched GFN1/GFN2-xTB energies, analytic forces, and
 charges through one stable C ABI and Python interfaces built on that ABI.
 
 [Try the browser demo](https://xtbloom.jinzhezeng.group) ·
@@ -42,6 +42,7 @@ The [theory guide](theory/index.md) explains the numerical meaning of public
 results and external interactions:
 
 - [GFN2-xTB model and SCC](theory/gfn2.md)
+- [GFN1-xTB model and publication contract](theory/gfn1.md)
 - [Explicit point charges and periodic response](theory/qmmm.md)
 
 ## Develop xTBloom
@@ -60,16 +61,19 @@ Repository contributors and coding agents must also follow
 
 ## Capability boundary
 
-xTBloom currently implements restricted and unrestricted GFN2-xTB on CPU and
-CUDA, native ragged batches, analytic forces, charges, and molecular dipoles,
-explicit point charges, uniform electric fields, caller-supplied periodic
-charge response, a Python batched numerical QM Hessian, ASE, and dpdata. The
+xTBloom implements restricted and unrestricted GFN2-xTB on CPU and CUDA and
+GFN1-xTB on CPU. Both models publish native ragged batches, analytic forces,
+charges, explicit point charges, caller-supplied periodic charge response, the
+high-level Python calculators, ASE, and dpdata. Uniform electric fields and
+molecular dipoles, Array API/DLPack, PyTorch autograd, and the browser demo are
+GFN2-only. The
 low-level CUDA ABI accepts host, device, and mixed descriptors, including
 independently placed interaction descriptor and payload buffers.
 
 The ABI-v4 native-cell descriptors validate molecular `NONE` and fully
 periodic `XYZ` inputs, but valid `XYZ` compute requests return
-`NOT_IMPLEMENTED` transactionally. GFN1-xTB, ROCm, native geometry
+`NOT_IMPLEMENTED` transactionally. GFN1 CUDA execution and field/dipole
+properties, ROCm, native geometry
 optimization, molecular dynamics, solvation, native/analytic Hessians,
 vibrational analysis, and periodic GFN2 execution are not implemented. The
 Python Hessian and the browser/dpdata optimizers are higher-level adapters

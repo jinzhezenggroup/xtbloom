@@ -144,6 +144,8 @@ def numbers_to_symbols(numbers: Sequence[int]) -> list[str]:
 # --- supported methods -------------------------------------------------------------
 
 _SUPPORTED_METHODS = {
+    "GFN1-xTB": library.MODEL_GFN1_XTB,
+    "GFN1": library.MODEL_GFN1_XTB,
     "GFN2-xTB": library.MODEL_GFN2_XTB,
     "GFN2": library.MODEL_GFN2_XTB,
 }
@@ -1752,20 +1754,54 @@ class _ComputeSettings:
 def _resolve_method(method: str) -> int:
     if not method:
         raise XTBloomValueError(
-            "a method must be provided (only GFN2-xTB is currently supported)"
+            "a method must be provided (GFN1-xTB and GFN2-xTB are supported)"
         )
     try:
         return _SUPPORTED_METHODS[method]
     except KeyError:
-        if method in ("GFN1-xTB", "GFN1"):
-            raise XTBloomNotSupportedError(
-                "GFN1-xTB is reserved by the xTBloom ABI but is not implemented yet"
-            ) from None
         raise XTBloomValueError(f"unknown method {method!r}") from None
 
 
+def _backend_for_model(
+    model: int, backend: str | int, device_id: int | None
+) -> str | int:
+    """Resolve high-level AUTO safely for a model with CPU-only publication.
+
+    The native AUTO policy prefers CUDA when a device is available. GFN1-xTB
+    is intentionally published on CPU only, so its high-level default must
+    select CPU explicitly. An explicit CUDA request is preserved: a
+    CUDA-capable build returns ``NOT_SUPPORTED`` from the model registry,
+    while a build without CUDA may reject context creation first.
+    """
+    if model == library.MODEL_GFN1_XTB and backend in (
+        "auto",
+        library.BACKEND_AUTO,
+    ):
+        if device_id is not None and int(device_id) >= 0:
+            raise XTBloomValueError(
+                "GFN1-xTB backend='auto' selects CPU and cannot use a CUDA "
+                "device_id; omit device_id or request backend='cuda' to receive "
+                "the native CUDA capability result"
+            )
+        return "cpu"
+    return backend
+
+
+def _reject_unsupported_model_features(
+    model: int, structures: Sequence[Structure]
+) -> None:
+    """Reject properties that have no published executor for one model."""
+    if model == library.MODEL_GFN1_XTB and any(
+        structure.efield is not None for structure in structures
+    ):
+        raise XTBloomNotSupportedError(
+            "GFN1-xTB does not support uniform electric-field attachments or "
+            "molecular dipole publication"
+        )
+
+
 class Calculator(Structure):
-    """Single-point GFN2-xTB calculator for one structure (tblite-like API).
+    """Single-point GFN1/GFN2-xTB calculator (tblite-like API).
 
     Example
     -------
@@ -1831,6 +1867,7 @@ class Calculator(Structure):
             efield=efield,
         )
         self._model = _resolve_method(method)
+        _reject_unsupported_model_features(self._model, [self])
         self._settings = _ComputeSettings(
             self._model,
             max_scc_iterations,
@@ -1842,7 +1879,11 @@ class Calculator(Structure):
             scc_mixer_damping,
             determinism,
         )
-        self._context = Context(backend, device_id, cpu_threads)
+        self._context = Context(
+            _backend_for_model(self._model, backend, device_id),
+            device_id,
+            cpu_threads,
+        )
         self._method = method
         self._warm_start = bool(warm_start)
 
@@ -1996,7 +2037,7 @@ class Calculator(Structure):
 
 
 class BatchCalculator:
-    """Batched GFN2-xTB calculator over many structures in one C call.
+    """Batched GFN1/GFN2-xTB calculator over many structures in one C call.
 
     The C API describes a ragged batch with flat arrays and offsets, so all
     systems are solved together while keeping per-system convergence state.
@@ -2027,8 +2068,10 @@ class BatchCalculator:
         if not structures:
             raise XTBloomValueError("a batch needs at least one structure")
         self._structures = list(structures)
+        model = _resolve_method(method)
+        _reject_unsupported_model_features(model, self._structures)
         self._settings = _ComputeSettings(
-            _resolve_method(method),
+            model,
             max_scc_iterations,
             charge_tolerance,
             energy_tolerance,
@@ -2038,7 +2081,9 @@ class BatchCalculator:
             scc_mixer_damping,
             determinism,
         )
-        self._context = Context(backend, device_id, cpu_threads)
+        self._context = Context(
+            _backend_for_model(model, backend, device_id), device_id, cpu_threads
+        )
         self._warm_start = bool(warm_start)
 
     def __len__(self) -> int:
@@ -2259,6 +2304,11 @@ _CHARGE_RESPONSE_FIELDS = (
 
 class ArrayBatch:
     """Packed ragged-batch inference over Array API/DLPack arrays.
+
+    This lower-level packed-array surface currently executes GFN2-xTB only;
+    unlike :class:`Calculator` and :class:`BatchCalculator`, it does not yet
+    expose a model selector. It never substitutes GFN2 for a requested GFN1
+    calculation because no method argument is accepted.
 
     This is the zero-copy entry point of the Python interface: every
     positional descriptor takes a dense, single-device array implementing the
@@ -3313,6 +3363,8 @@ def compute_arrays(
     Builds a temporary :class:`ArrayBatch` from the flat descriptor arrays,
     computes with the given options, and returns an :class:`ArrayBatchResult`.
     ``out=`` and ``result_memory`` follow :meth:`ArrayBatch.compute`.
+    This packed-array convenience surface is currently GFN2-xTB-only and has
+    no method selector.
     """
     batch = ArrayBatch(
         atom_offsets,
