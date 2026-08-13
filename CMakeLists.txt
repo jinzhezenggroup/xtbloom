@@ -860,6 +860,7 @@ endif()
 
 add_library(xtbloom_gfn2_cpu OBJECT
   src/backends/common/gfn2_plan_schema.cpp
+  src/model/common/sto.cpp
   src/model/gfn2/aes2.cpp
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
@@ -893,6 +894,23 @@ set_target_properties(xtbloom_gfn2_cpu PROPERTIES
 if(CMAKE_DL_LIBS)
   target_link_libraries(xtbloom_gfn2_cpu PUBLIC ${CMAKE_DL_LIBS})
 endif()
+
+# Model-owned GFN1 setup terms remain disconnected from public dispatch until
+# the complete CPU model is independently validated and activated.
+add_library(xtbloom_gfn1_cpu OBJECT
+  src/model/gfn1/basis.cpp
+)
+target_compile_features(xtbloom_gfn1_cpu PUBLIC cxx_std_17)
+target_include_directories(xtbloom_gfn1_cpu PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(xtbloom_gfn1_cpu PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
 if(XTBLOOM_CPU_LINALG_RUNTIME)
   target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
     "XTBLOOM_CONFIGURED_CPU_LINALG_RUNTIME=\"${XTBLOOM_CPU_LINALG_RUNTIME}\""
@@ -3256,6 +3274,22 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_integrals_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_integrals_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.integrals COMMAND xtbloom_integrals_test)
+
+  add_executable(xtbloom_gfn1_basis_test tests/gfn1_basis_test.cpp)
+  target_link_libraries(xtbloom_gfn1_basis_test PRIVATE
+    xtbloom_gfn1_cpu
+    xtbloom_gfn2_cpu
+  )
+  target_compile_features(xtbloom_gfn1_basis_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.basis COMMAND xtbloom_gfn1_basis_test)
+
+  add_executable(xtbloom_gfn1_integrals_test tests/gfn1_integrals_test.cpp)
+  target_link_libraries(xtbloom_gfn1_integrals_test PRIVATE
+    xtbloom_gfn1_cpu
+    xtbloom_gfn2_cpu
+  )
+  target_compile_features(xtbloom_gfn1_integrals_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.integrals COMMAND xtbloom_gfn1_integrals_test)
 
   add_executable(xtbloom_multipole_integrals_test tests/multipole_integrals_test.cpp)
   target_link_libraries(xtbloom_multipole_integrals_test PRIVATE xtbloom_gfn2_cpu)
