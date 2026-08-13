@@ -690,6 +690,8 @@ struct PublicationFixture {
   DeviceBuffer<double> qm_forces;
   DeviceBuffer<double> charges;
   DeviceBuffer<double> point_forces;
+  DeviceBuffer<double> positions;
+  DeviceBuffer<double> atomic_dipoles;
   DeviceBuffer<std::uint32_t> terminal_system_errors;
   DeviceBuffer<std::uint32_t> terminal_plan_error;
   DeviceBuffer<std::uint32_t> execution_system_errors;
@@ -698,6 +700,7 @@ struct PublicationFixture {
   DeviceBuffer<double> public_qm_forces;
   DeviceBuffer<double> public_charges;
   DeviceBuffer<double> public_point_forces;
+  DeviceBuffer<double> public_dipoles;
   DeviceBuffer<std::int32_t> public_iterations;
   DeviceBuffer<std::uint8_t> public_converged;
   DeviceBuffer<xtbloom_status_t> public_statuses;
@@ -713,16 +716,21 @@ struct PublicationFixture {
 
   std::vector<std::int64_t> host_atom_offsets{0, 2, 3, 4, 5, 6, 7};
   std::vector<std::int64_t> host_point_offsets{0, 1, 1, 2, 2, 3, 3};
-  std::vector<double> host_energies{1.0, 2.0, 3.0,
-                                    4.0, 5.0, std::numeric_limits<double>::quiet_NaN()};
+  std::vector<double> host_energies{1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
   std::vector<double> host_qm_forces;
   std::vector<double> host_charges;
   std::vector<double> host_point_forces;
+  std::vector<double> host_positions;
+  std::vector<double> host_atomic_dipoles;
+  std::vector<double> expected_dipoles;
 
   bool initialize(cudaStream_t stream) {
     host_qm_forces.resize(3u * static_cast<std::size_t>(kAtoms));
     host_charges.resize(static_cast<std::size_t>(kAtoms));
     host_point_forces.resize(3u * static_cast<std::size_t>(kPoints));
+    host_positions.resize(3u * static_cast<std::size_t>(kAtoms));
+    host_atomic_dipoles.resize(3u * static_cast<std::size_t>(kAtoms));
+    expected_dipoles.assign(3u * static_cast<std::size_t>(kBatch), 0.0);
     for (std::size_t index = 0u; index < host_qm_forces.size(); ++index) {
       host_qm_forces[index] = 0.01 * static_cast<double>(index + 1u);
     }
@@ -731,6 +739,24 @@ struct PublicationFixture {
     }
     for (std::size_t index = 0u; index < host_point_forces.size(); ++index) {
       host_point_forces[index] = -0.04 * static_cast<double>(index + 1u);
+    }
+    for (std::size_t index = 0u; index < host_positions.size(); ++index) {
+      host_positions[index] = -0.7 + 0.11 * static_cast<double>(index);
+      host_atomic_dipoles[index] = 0.03 - 0.002 * static_cast<double>(index);
+    }
+    /* A successful upstream peer with a nonfinite stationary multipole must
+     * be converted into one complete failed result, including the dipole. */
+    host_atomic_dipoles[3u * static_cast<std::size_t>(kAtoms - 1)] =
+        std::numeric_limits<double>::quiet_NaN();
+    for (std::int64_t system = 0; system < kBatch; ++system) {
+      for (std::int64_t atom = host_atom_offsets[system]; atom < host_atom_offsets[system + 1];
+           ++atom) {
+        for (std::int64_t component = 0; component < 3; ++component) {
+          expected_dipoles[3 * system + component] +=
+              host_positions[3 * atom + component] * host_charges[atom] +
+              host_atomic_dipoles[3 * atom + component];
+        }
+      }
     }
     const bool allocated =
         atom_offsets.allocate(host_atom_offsets.size()) == cudaSuccess &&
@@ -741,6 +767,8 @@ struct PublicationFixture {
         energies.allocate(kBatch) == cudaSuccess && qm_forces.allocate(3 * kAtoms) == cudaSuccess &&
         charges.allocate(kAtoms) == cudaSuccess &&
         point_forces.allocate(3 * kPoints) == cudaSuccess &&
+        positions.allocate(3 * kAtoms) == cudaSuccess &&
+        atomic_dipoles.allocate(3 * kAtoms) == cudaSuccess &&
         terminal_system_errors.allocate(kBatch) == cudaSuccess &&
         terminal_plan_error.allocate(1) == cudaSuccess &&
         execution_system_errors.allocate(kBatch) == cudaSuccess &&
@@ -749,6 +777,7 @@ struct PublicationFixture {
         public_qm_forces.allocate(3 * kAtoms) == cudaSuccess &&
         public_charges.allocate(kAtoms) == cudaSuccess &&
         public_point_forces.allocate(3 * kPoints) == cudaSuccess &&
+        public_dipoles.allocate(3 * kBatch) == cudaSuccess &&
         public_iterations.allocate(kBatch) == cudaSuccess &&
         public_converged.allocate(kBatch) == cudaSuccess &&
         public_statuses.allocate(kBatch) == cudaSuccess &&
@@ -778,6 +807,8 @@ struct PublicationFixture {
         qm_forces.upload(host_qm_forces, stream) != cudaSuccess ||
         charges.upload(host_charges, stream) != cudaSuccess ||
         point_forces.upload(host_point_forces, stream) != cudaSuccess ||
+        positions.upload(host_positions, stream) != cudaSuccess ||
+        atomic_dipoles.upload(host_atomic_dipoles, stream) != cudaSuccess ||
         terminal_system_errors.upload(zero_system_errors, stream) != cudaSuccess ||
         terminal_plan_error.upload(zero_plan_error, stream) != cudaSuccess ||
         execution_system_errors.upload(zero_system_errors, stream) != cudaSuccess ||
@@ -786,9 +817,9 @@ struct PublicationFixture {
     }
 
     constexpr std::uint64_t token = 0x123125ULL;
-    plan.requested_properties = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
-                                XTBLOOM_COMPUTE_ATOMIC_CHARGES |
-                                XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+    plan.requested_properties =
+        XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+        XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
     plan.plan_token = token;
     plan.maximum_iterations = 5u;
     plan.batch_size = kBatch;
@@ -799,27 +830,32 @@ struct PublicationFixture {
     plan.geometry_epoch = {epoch.get(), 1, token};
     plan.committed_generations = generations.get();
     plan.generation_elements = kBatch;
-    input = {eligible.get(),
-             kBatch,
-             iterations.get(),
-             converged.get(),
-             statuses.get(),
-             kBatch,
-             energies.get(),
-             kBatch,
-             qm_forces.get(),
-             3 * kAtoms,
-             charges.get(),
-             kAtoms,
-             point_forces.get(),
-             3 * kPoints,
-             terminal_system_errors.get(),
-             kBatch,
-             terminal_plan_error.get(),
-             execution_system_errors.get(),
-             kBatch,
-             execution_plan_error.get(),
-             token};
+    input = {};
+    input.eligible_mask = eligible.get();
+    input.eligible_elements = kBatch;
+    input.iterations = iterations.get();
+    input.converged = converged.get();
+    input.system_statuses = statuses.get();
+    input.scc_elements = kBatch;
+    input.energies = energies.get();
+    input.energy_elements = kBatch;
+    input.qm_forces = qm_forces.get();
+    input.qm_force_elements = 3 * kAtoms;
+    input.atomic_charges = charges.get();
+    input.atomic_charge_elements = kAtoms;
+    input.point_forces = point_forces.get();
+    input.point_force_elements = 3 * kPoints;
+    input.terminal_system_errors = terminal_system_errors.get();
+    input.terminal_system_error_elements = kBatch;
+    input.terminal_plan_error = terminal_plan_error.get();
+    input.execution_system_errors = execution_system_errors.get();
+    input.execution_system_error_elements = kBatch;
+    input.execution_plan_error = execution_plan_error.get();
+    input.plan_token = token;
+    input.positions = positions.get();
+    input.position_elements = 3 * kAtoms;
+    input.atomic_dipoles = atomic_dipoles.get();
+    input.atomic_dipole_elements = 3 * kAtoms;
     results = {public_energies.get(),
                kBatch,
                public_qm_forces.get(),
@@ -832,7 +868,9 @@ struct PublicationFixture {
                public_converged.get(),
                public_statuses.get(),
                kBatch,
-               token};
+               token,
+               public_dipoles.get(),
+               3 * kBatch};
     workspace = {epoch_snapshot.get(), 1, token};
     diagnostics = {system_errors.get(), kBatch, plan_error.get(), 1, token};
     return cudaStreamSynchronize(stream) == cudaSuccess;
@@ -843,6 +881,7 @@ struct PublicationFixture {
     if (status == cudaSuccess) status = public_qm_forces.fill(kSentinel, stream);
     if (status == cudaSuccess) status = public_charges.fill(kSentinel, stream);
     if (status == cudaSuccess) status = public_point_forces.fill(kSentinel, stream);
+    if (status == cudaSuccess) status = public_dipoles.fill(kSentinel, stream);
     if (status == cudaSuccess) status = public_iterations.fill(-73, stream);
     if (status == cudaSuccess) status = public_converged.fill(7u, stream);
     if (status == cudaSuccess)
@@ -872,6 +911,7 @@ int test_inference_publication_semantics() {
   std::vector<double> forces(static_cast<std::size_t>(3 * fixture.kAtoms));
   std::vector<double> charges(static_cast<std::size_t>(fixture.kAtoms));
   std::vector<double> point_forces(static_cast<std::size_t>(3 * fixture.kPoints));
+  std::vector<double> dipoles(static_cast<std::size_t>(3 * fixture.kBatch));
   std::vector<std::int32_t> iterations(static_cast<std::size_t>(fixture.kBatch));
   std::vector<std::uint8_t> converged(static_cast<std::size_t>(fixture.kBatch));
   std::vector<xtbloom_status_t> statuses(static_cast<std::size_t>(fixture.kBatch));
@@ -881,6 +921,7 @@ int test_inference_publication_semantics() {
   CUDA_CHECK(fixture.public_charges.download(charges.data(), charges.size(), stream));
   CUDA_CHECK(
       fixture.public_point_forces.download(point_forces.data(), point_forces.size(), stream));
+  CUDA_CHECK(fixture.public_dipoles.download(dipoles.data(), dipoles.size(), stream));
   CUDA_CHECK(fixture.public_iterations.download(iterations.data(), iterations.size(), stream));
   CUDA_CHECK(fixture.public_converged.download(converged.data(), converged.size(), stream));
   CUDA_CHECK(fixture.public_statuses.download(statuses.data(), statuses.size(), stream));
@@ -892,6 +933,9 @@ int test_inference_publication_semantics() {
   CHECK(near(forces[0], fixture.host_qm_forces[0]));
   CHECK(near(charges[0], fixture.host_charges[0]));
   CHECK(near(point_forces[0], fixture.host_point_forces[0]));
+  CHECK(near(dipoles[0], fixture.expected_dipoles[0]));
+  CHECK(near(dipoles[1], fixture.expected_dipoles[1]));
+  CHECK(near(dipoles[2], fixture.expected_dipoles[2]));
 
   CHECK(std::isnan(energies[1]) && iterations[1] == 5 && converged[1] == 0u &&
         statuses[1] == XTBLOOM_STATUS_SCC_NOT_CONVERGED);
@@ -917,6 +961,7 @@ int test_inference_publication_semantics() {
                                 fixture.host_atom_offsets[system + 1], 1));
     CHECK(floating_slice_is_nan(point_forces, fixture.host_point_offsets[system],
                                 fixture.host_point_offsets[system + 1], 3));
+    CHECK(floating_slice_is_nan(dipoles, system, system + 1, 3));
   }
 
   /* Malformed eligibility is plan-wide and leaves all public bytes untouched. */
@@ -927,6 +972,7 @@ int test_inference_publication_semantics() {
   std::vector<double> before_forces(static_cast<std::size_t>(3 * fixture.kAtoms), kSentinel);
   std::vector<double> before_charges(static_cast<std::size_t>(fixture.kAtoms), kSentinel);
   std::vector<double> before_point_forces(static_cast<std::size_t>(3 * fixture.kPoints), kSentinel);
+  std::vector<double> before_dipoles(static_cast<std::size_t>(3 * fixture.kBatch), kSentinel);
   std::vector<std::int32_t> before_iterations(static_cast<std::size_t>(fixture.kBatch), -73);
   std::vector<std::uint8_t> before_converged(static_cast<std::size_t>(fixture.kBatch), 7u);
   std::vector<xtbloom_status_t> before_statuses(static_cast<std::size_t>(fixture.kBatch),
@@ -939,6 +985,7 @@ int test_inference_publication_semantics() {
   CUDA_CHECK(fixture.public_charges.download(charges.data(), charges.size(), stream));
   CUDA_CHECK(
       fixture.public_point_forces.download(point_forces.data(), point_forces.size(), stream));
+  CUDA_CHECK(fixture.public_dipoles.download(dipoles.data(), dipoles.size(), stream));
   CUDA_CHECK(fixture.public_iterations.download(iterations.data(), iterations.size(), stream));
   CUDA_CHECK(fixture.public_converged.download(converged.data(), converged.size(), stream));
   CUDA_CHECK(fixture.public_statuses.download(statuses.data(), statuses.size(), stream));
@@ -948,6 +995,7 @@ int test_inference_publication_semantics() {
   CHECK(byte_equal(forces, before_forces));
   CHECK(byte_equal(charges, before_charges));
   CHECK(byte_equal(point_forces, before_point_forces));
+  CHECK(byte_equal(dipoles, before_dipoles));
   CHECK(byte_equal(iterations, before_iterations));
   CHECK(byte_equal(converged, before_converged));
   CHECK(byte_equal(statuses, before_statuses));

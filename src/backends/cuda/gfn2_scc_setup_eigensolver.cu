@@ -362,10 +362,11 @@ bool cuda_accessible(const void* pointer, cudaPointerAttributes& attributes,
 
 __global__ void snapshot_refactor_activity_kernel(std::int64_t batch_size,
                                                   const std::uint8_t* source,
+                                                  const std::uint32_t* request_error,
                                                   std::uint8_t* destination) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (system < batch_size) {
-    destination[system] = source[system];
+    destination[system] = request_error != nullptr && *request_error != 0u ? 0u : source[system];
   }
 }
 
@@ -987,7 +988,8 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
     void* setup_device_arena, std::size_t setup_device_arena_bytes,
     Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
     std::int64_t device_overlap_elements, std::uint64_t geometry_generation,
-    const Gfn2GeometryEpochDevice* geometry_epoch, cudaStream_t stream) const noexcept {
+    const Gfn2GeometryEpochDevice* geometry_epoch, const std::uint32_t* request_error,
+    cudaStream_t stream) const noexcept {
   if (impl_ == nullptr) {
     return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidProvider,
                    SetupField::kHandles);
@@ -1043,6 +1045,17 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
     diagnostic.cuda_status = cuda_status;
     return diagnostic;
   }
+  cudaPointerAttributes request_error_attributes{};
+  if (dynamic_epoch &&
+      (request_error == nullptr ||
+       reinterpret_cast<std::uintptr_t>(request_error) % alignof(std::uint32_t) != 0u ||
+       !cuda_accessible(request_error, request_error_attributes, cuda_status))) {
+    SetupDiagnostic diagnostic =
+        failure(XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidArenaMemory,
+                SetupField::kGeometryGeneration);
+    diagnostic.cuda_status = cuda_status;
+    return diagnostic;
+  }
   int current_device = -1;
   cuda_status = cudaGetDevice(&current_device);
   if (cuda_status != cudaSuccess) {
@@ -1052,6 +1065,10 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
       (dynamic_epoch && epoch_attributes.device != current_device)) {
     return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidArenaMemory,
                    SetupField::kOverlap);
+  }
+  if (dynamic_epoch && request_error_attributes.device != current_device) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidArenaMemory,
+                   SetupField::kGeometryGeneration);
   }
 
   auto* const setup = static_cast<std::byte*>(setup_device_arena);
@@ -1154,14 +1171,19 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
   AddressRange input_range{};
   AddressRange expected_input_range{};
   AddressRange epoch_range{};
+  AddressRange request_error_range{};
   if (!make_range(setup_device_arena, own.setup_device_bytes, setup_range) ||
       !make_elements_range(device_overlap, device_overlap_elements, input_range) ||
       !make_elements_range(expected_overlap, impl_->total_matrices, expected_input_range) ||
       !make_elements_range(dynamic_epoch ? geometry_epoch->value : nullptr, dynamic_epoch ? 1 : 0,
                            epoch_range) ||
+      !make_elements_range(dynamic_epoch ? request_error : nullptr, dynamic_epoch ? 1 : 0,
+                           request_error_range) ||
       (overlaps(setup_range, input_range) && (input_range.begin != expected_input_range.begin ||
                                               input_range.end != expected_input_range.end)) ||
-      overlaps(epoch_range, setup_range) || overlaps(epoch_range, input_range)) {
+      overlaps(epoch_range, setup_range) || overlaps(epoch_range, input_range) ||
+      overlaps(request_error_range, setup_range) || overlaps(request_error_range, input_range) ||
+      overlaps(request_error_range, epoch_range)) {
     return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidOverlap,
                    SetupField::kOverlap);
   }
@@ -1215,7 +1237,8 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
                    SetupField::kOverlapFactorization);
   }
   for (const AddressRange& range : protected_ranges) {
-    if (overlaps(input_range, range) || overlaps(epoch_range, range)) {
+    if (overlaps(input_range, range) || overlaps(epoch_range, range) ||
+        overlaps(request_error_range, range)) {
       return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, SetupError::kInvalidOverlap,
                      SetupField::kOverlap);
     }
@@ -1230,7 +1253,7 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_impl
     const auto activity_blocks =
         static_cast<unsigned int>((impl_->batch_size + kActivityThreads - 1) / kActivityThreads);
     snapshot_refactor_activity_kernel<<<activity_blocks, kActivityThreads, 0, stream>>>(
-        impl_->batch_size, binding.batch.active, setup_active);
+        impl_->batch_size, binding.batch.active, request_error, setup_active);
     cuda_status = cudaPeekAtLastError();
   } else {
     cuda_status =
@@ -1288,17 +1311,17 @@ Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from
     cudaStream_t stream) const noexcept {
   return refactor_overlap_impl(setup_device_arena, setup_device_arena_bytes, binding,
                                device_overlap, device_overlap_elements, geometry_generation,
-                               nullptr, stream);
+                               nullptr, nullptr, stream);
 }
 
 Gfn2SccSetupEigensolverDiagnostic Gfn2SccSetupEigensolver::refactor_overlap_from_device_epoch_async(
     void* setup_device_arena, std::size_t setup_device_arena_bytes,
     Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
     std::int64_t device_overlap_elements, const Gfn2GeometryEpochDevice& geometry_epoch,
-    cudaStream_t stream) const noexcept {
+    const std::uint32_t* request_error, cudaStream_t stream) const noexcept {
   return refactor_overlap_impl(setup_device_arena, setup_device_arena_bytes, binding,
                                device_overlap, device_overlap_elements, 0u, &geometry_epoch,
-                               stream);
+                               request_error, stream);
 }
 
 }  // namespace xtbloom::detail::cuda

@@ -297,6 +297,15 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
     potential.periodic_atomic = storage.periodic_atomic_potential;
     potential.periodic_atomic_elements = storage.periodic_atomic_elements;
   }
+  const bool electric_field = plan.electric_field_batch.plan_token != 0u;
+  potential.electric_field_atomic =
+      electric_field ? input.electric_field_potentials.atomic : nullptr;
+  potential.electric_field_atomic_elements =
+      electric_field ? input.electric_field_potentials.atom_elements : 0;
+  potential.electric_field_dipole =
+      electric_field ? input.electric_field_potentials.dipole : nullptr;
+  potential.electric_field_dipole_elements =
+      electric_field ? input.electric_field_potentials.dipole_elements : 0;
   potential.plan_token = token;
 
   workspace.scalar_bridge.fields = {
@@ -359,7 +368,9 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
                             0,
                             nullptr,
                             0,
-                            token};
+                            token,
+                            {},
+                            {}};
   input.free_energy = {storage.core_energy,
                        storage.core_energy_elements,
                        workspace.staged_occupations.entropies,
@@ -378,7 +389,19 @@ void project_zero_copy_views(Gfn2SccIterationProjectedDescriptors& candidate) no
                        0,
                        nullptr,
                        0,
-                       token};
+                       token,
+                       nullptr,
+                       0};
+  if (electric_field) {
+    input.classical_energy.electric_field_multipoles = {
+        workspace.physical_topology.atomic_charges, workspace.physical_topology.atom_elements,
+        workspace.physical_topology.atomic_dipoles, workspace.physical_topology.dipole_elements,
+        token};
+    input.classical_energy.electric_field_potentials = input.electric_field_potentials;
+    input.free_energy.electric_field = workspace.staged_classical_energy.electric_field;
+    input.free_energy.electric_field_elements =
+        workspace.staged_classical_energy.electric_field_elements;
+  }
   if (enabled(components, Gfn2SccPotentialComponent::kD4TwoBody)) {
     input.classical_energy.d4_two_body = storage.d4_two_body_energy;
     input.classical_energy.d4_two_body_elements = storage.d4_two_body_energy_elements;

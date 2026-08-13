@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -182,6 +183,8 @@ struct PublicBatch {
   std::vector<double> atomic_potential_shifts;
   std::vector<std::int64_t> charge_response_offsets;
   std::vector<double> charge_response_matrix;
+  std::vector<xtbloom_interaction_t> interactions;
+  std::vector<std::uint8_t> interaction_payload;
   xtbloom_batch_t descriptor{};
 
   void bind() noexcept {
@@ -210,6 +213,36 @@ struct PublicBatch {
       descriptor.charge_response_offsets = host_input(charge_response_offsets);
       descriptor.charge_response_matrix = host_input(charge_response_matrix);
     }
+    if (!interactions.empty()) {
+      descriptor.total_interactions = static_cast<std::int64_t>(interactions.size());
+      descriptor.interaction_descriptors = host_input(interactions);
+      descriptor.interaction_payload = host_input(interaction_payload);
+    }
+  }
+
+  /* Materialize one released ABI-v3 block per attached system. Keeping the
+   * descriptor offsets explicit lets the CUDA placement tests move descriptor
+   * and payload storage independently without assuming compact device input. */
+  void set_electric_fields(const std::vector<std::array<double, 3>>& fields) {
+    interactions.clear();
+    interaction_payload.clear();
+    interactions.reserve(fields.size());
+    interaction_payload.reserve(32u * fields.size());
+    for (std::size_t system = 0u; system < fields.size(); ++system) {
+      const std::size_t offset = interaction_payload.size();
+      interaction_payload.resize(offset + 32u, 0u);
+      const std::int32_t version = 1;
+      std::memcpy(interaction_payload.data() + offset, &version, sizeof(version));
+      std::memcpy(interaction_payload.data() + offset + 8u, fields[system].data(),
+                  sizeof(fields[system]));
+      xtbloom_interaction_t interaction{};
+      interaction.type = XTBLOOM_INTERACTION_ELECTRIC_FIELD;
+      interaction.system_index = static_cast<std::int64_t>(system);
+      interaction.payload_offset = offset;
+      interaction.payload_size = 32u;
+      interactions.push_back(interaction);
+    }
+    bind();
   }
 
   static PublicBatch from_fixture(const HostSccCase& fixture) {
@@ -407,7 +440,11 @@ class DeviceBatchInputs {
     if (status != cudaSuccess) return status;
     status = atomic_potential_shifts_.upload(batch.atomic_potential_shifts);
     if (status != cudaSuccess) return status;
-    return charge_response_matrix_.upload(batch.charge_response_matrix);
+    status = charge_response_matrix_.upload(batch.charge_response_matrix);
+    if (status != cudaSuccess) return status;
+    status = interactions_.upload(batch.interactions);
+    if (status != cudaSuccess) return status;
+    return interaction_payload_.upload(batch.interaction_payload);
   }
 
   cudaError_t upload_all(const PublicBatch& batch) noexcept {
@@ -416,7 +453,7 @@ class DeviceBatchInputs {
   }
 
   /* Pointer identity for every required or optional public input leaf. */
-  [[nodiscard]] std::array<std::uintptr_t, 13> identity() const noexcept {
+  [[nodiscard]] std::array<std::uintptr_t, 15> identity() const noexcept {
     return {atom_offsets_.address(),
             atomic_numbers_.address(),
             molecular_charges_.address(),
@@ -429,7 +466,9 @@ class DeviceBatchInputs {
             point_charge_values_.address(),
             point_charge_gammas_.address(),
             atomic_potential_shifts_.address(),
-            charge_response_matrix_.address()};
+            charge_response_matrix_.address(),
+            interactions_.address(),
+            interaction_payload_.address()};
   }
 
   DeviceInputArray<std::int64_t> atom_offsets_;
@@ -445,6 +484,8 @@ class DeviceBatchInputs {
   DeviceInputArray<double> point_charge_gammas_;
   DeviceInputArray<double> atomic_potential_shifts_;
   DeviceInputArray<double> charge_response_matrix_;
+  DeviceInputArray<xtbloom_interaction_t> interactions_;
+  DeviceInputArray<std::uint8_t> interaction_payload_;
 };
 
 void bind_inputs(PublicBatch& batch, const DeviceBatchInputs* device, InputLayout layout) noexcept {
@@ -483,6 +524,15 @@ void bind_inputs(PublicBatch& batch, const DeviceBatchInputs* device, InputLayou
   }
   if (all_device && !batch.charge_response_matrix.empty()) {
     batch.descriptor.charge_response_matrix = device->charge_response_matrix_.descriptor();
+  }
+  if (!batch.interactions.empty()) {
+    /* The standard mixed layout deliberately splits the two ABI-v3 leaves:
+     * device descriptors with a host payload. Dedicated interaction tests
+     * below also exercise the reverse split. */
+    batch.descriptor.interaction_descriptors = device->interactions_.descriptor();
+    if (all_device) {
+      batch.descriptor.interaction_payload = device->interaction_payload_.descriptor();
+    }
   }
 }
 
@@ -586,6 +636,7 @@ struct MaterializedResult {
   std::vector<double> forces;
   std::vector<double> atomic_charges;
   std::vector<double> point_charge_forces;
+  std::vector<double> dipole_moments;
   std::vector<std::int32_t> iterations;
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> statuses;
@@ -609,6 +660,8 @@ class ResultOwner {
     const Placement iterations_placement =
         layout == ResultLayout::kMixed ? Placement::kDevice : all;
     const Placement statuses_placement = layout == ResultLayout::kMixed ? Placement::kDevice : all;
+    const Placement dipoles_placement =
+        layout == ResultLayout::kHost ? Placement::kHost : Placement::kDevice;
 
     cudaError_t status = energies_.initialize(systems, energies_placement);
     if (status != cudaSuccess) return status;
@@ -617,6 +670,8 @@ class ResultOwner {
     status = charges_.initialize(atoms, all);
     if (status != cudaSuccess) return status;
     status = point_forces_.initialize(3u * points, all);
+    if (status != cudaSuccess) return status;
+    status = dipoles_.initialize(3u * systems, dipoles_placement);
     if (status != cudaSuccess) return status;
     status = iterations_.initialize(systems, iterations_placement);
     if (status != cudaSuccess) return status;
@@ -636,6 +691,8 @@ class ResultOwner {
     descriptor.point_charge_forces = (flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES) != 0u
                                          ? point_forces_.descriptor()
                                          : xtbloom_buffer_t{};
+    descriptor.dipole_moments =
+        (flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u ? dipoles_.descriptor() : xtbloom_buffer_t{};
     descriptor.scc_iterations = iterations_.descriptor();
     descriptor.scc_converged = converged_.descriptor();
     descriptor.per_system_status = statuses_.descriptor();
@@ -650,6 +707,8 @@ class ResultOwner {
     status = charges_.read_payload(result.atomic_charges);
     if (status != cudaSuccess) return status;
     status = point_forces_.read_payload(result.point_charge_forces);
+    if (status != cudaSuccess) return status;
+    status = dipoles_.read_payload(result.dipole_moments);
     if (status != cudaSuccess) return status;
     status = iterations_.read_payload(result.iterations);
     if (status != cudaSuccess) return status;
@@ -673,6 +732,9 @@ class ResultOwner {
     if (status != cudaSuccess) return status;
     intact = intact && field;
     status = point_forces_.guards_intact(field);
+    if (status != cudaSuccess) return status;
+    intact = intact && field;
+    status = dipoles_.guards_intact(field);
     if (status != cudaSuccess) return status;
     intact = intact && field;
     status = iterations_.guards_intact(field);
@@ -702,6 +764,9 @@ class ResultOwner {
     status = point_forces_.unchanged(field);
     if (status != cudaSuccess) return status;
     same = same && field;
+    status = dipoles_.unchanged(field);
+    if (status != cudaSuccess) return status;
+    same = same && field;
     status = iterations_.unchanged(field);
     if (status != cudaSuccess) return status;
     same = same && field;
@@ -723,6 +788,9 @@ class ResultOwner {
     status = point_forces_.unchanged(field);
     if (status != cudaSuccess) return status;
     same = same && field;
+    status = dipoles_.unchanged(field);
+    if (status != cudaSuccess) return status;
+    same = same && field;
     status = iterations_.unchanged(field);
     if (status != cudaSuccess) return status;
     same = same && field;
@@ -742,6 +810,7 @@ class ResultOwner {
   GuardedOutput<double> forces_;
   GuardedOutput<double> charges_;
   GuardedOutput<double> point_forces_;
+  GuardedOutput<double> dipoles_;
   GuardedOutput<std::int32_t> iterations_;
   GuardedOutput<std::uint8_t> converged_;
   GuardedOutput<std::int32_t> statuses_;
@@ -803,9 +872,15 @@ int compare_result(const ResultOwner& owner, const MaterializedResult& actual,
   line = compare_values("force", actual.forces, expected.forces, kForceAbsoluteTolerance,
                         kForceRelativeTolerance);
   if (line != 0) return line;
-  return compare_values("point-charge force", actual.point_charge_forces,
-                        expected.point_charge_forces, kForceAbsoluteTolerance,
-                        kForceRelativeTolerance);
+  line =
+      compare_values("point-charge force", actual.point_charge_forces, expected.point_charge_forces,
+                     kForceAbsoluteTolerance, kForceRelativeTolerance);
+  if (line != 0) return line;
+  if ((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u) {
+    return compare_values("dipole moment", actual.dipole_moments, expected.dipole_moments,
+                          kChargeAbsoluteTolerance, kChargeRelativeTolerance);
+  }
+  return 0;
 }
 
 int make_fixture_batch(std::size_t batch_size, bool enable_qmmm, PublicBatch& batch) {
@@ -1054,6 +1129,552 @@ int test_public_mixer_controls_and_reproducibility(std::int32_t device,
   bool rejected_unchanged = false;
   CUDA_CHECK(rejected_plan_owner.unchanged(rejected_unchanged));
   CHECK(rejected_unchanged);
+  return 0;
+}
+
+struct RequestDeleter {
+  void operator()(xtbloom_request_t* request) const noexcept { xtbloom_request_destroy(request); }
+};
+
+using RequestHandle = std::unique_ptr<xtbloom_request_t, RequestDeleter>;
+
+PublicBatch make_electric_field_water() {
+  PublicBatch batch;
+  batch.atom_offsets = {0, 3};
+  batch.atomic_numbers = {8, 1, 1};
+  batch.positions = {0.0,          0.0,           -0.7357858611, 1.4418315287, 0.0,
+                     0.3678929305, -1.4418315287, 0.0,           0.3678929305};
+  batch.molecular_charges = {0.0};
+  batch.unpaired_electrons = {0};
+  batch.spin_channels = {1};
+  batch.set_electric_fields({{{0.003, -0.004, 0.005}}});
+  return batch;
+}
+
+PublicBatch make_electric_field_h3_plus() {
+  PublicBatch batch;
+  batch.atom_offsets = {0, 3};
+  batch.atomic_numbers = {1, 1, 1};
+  batch.positions = {-0.47073898552969,
+                     0.81534384004086,
+                     0.0,
+                     -0.47073898552969,
+                     -0.81534384004086,
+                     0.0,
+                     0.94147797105939,
+                     0.0,
+                     0.0};
+  batch.molecular_charges = {1.0};
+  batch.unpaired_electrons = {0};
+  batch.spin_channels = {1};
+  batch.set_electric_fields({{{0.003, -0.004, 0.005}}});
+  return batch;
+}
+
+/* Exercise the released ABI-v3 field from every descriptor/payload placement,
+ * including the reverse mixed split, and publish the ABI-v2 dipole outlet to
+ * both host and CUDA-device destinations. CPU comparison covers energy,
+ * charges, forces, and dipoles; a public CUDA central difference independently
+ * gates the sign and q-dependent explicit force in the composed result. */
+int test_public_electric_field_execution(std::int32_t device, xtbloom_context_t* cpu_context) {
+  PublicBatch batch = make_electric_field_water();
+  xtbloom_compute_options_t options = make_compute_options();
+  options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+  options.max_scc_iterations = 500;
+  options.charge_tolerance = 1.0e-10;
+  options.energy_tolerance = 1.0e-12;
+
+  MaterializedResult reference;
+  g_scenario = "electric-field/CPU-reference";
+  CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
+  CHECK((reference.flags & XTBLOOM_RESULT_DIPOLE_MOMENTS) != 0u);
+  CHECK(std::all_of(reference.dipole_moments.begin(), reference.dipole_moments.end(),
+                    [](double value) { return std::isfinite(value); }));
+
+  DeviceBatchInputs device_inputs;
+  CUDA_CHECK(device_inputs.upload_all(batch));
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t custom_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle custom = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), custom_status);
+  CHECK(custom_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(custom != nullptr);
+  xtbloom_status_t default_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle default_stream =
+      make_context(XTBLOOM_BACKEND_CUDA, device, nullptr, default_status);
+  CHECK(default_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(default_stream != nullptr);
+
+  struct Coordinate {
+    const char* name;
+    InputLayout input;
+    bool reverse_mixed;
+    ResultLayout output;
+    xtbloom_context_t* context;
+  };
+  const Coordinate coordinates[] = {
+      {"host-host/custom", InputLayout::kHost, false, ResultLayout::kHost, custom.get()},
+      {"device-device/default", InputLayout::kDevice, false, ResultLayout::kDevice,
+       default_stream.get()},
+      {"descriptor-device-payload-host", InputLayout::kMixed, false, ResultLayout::kMixed,
+       custom.get()},
+      {"descriptor-host-payload-device", InputLayout::kMixed, true, ResultLayout::kDevice,
+       custom.get()},
+  };
+  for (const Coordinate& coordinate : coordinates) {
+    g_scenario = coordinate.name;
+    bind_inputs(batch, coordinate.input == InputLayout::kHost ? nullptr : &device_inputs,
+                coordinate.input);
+    if (coordinate.reverse_mixed) {
+      batch.descriptor.interaction_descriptors = host_input(batch.interactions);
+      batch.descriptor.interaction_payload = device_inputs.interaction_payload_.descriptor();
+    }
+    CHECK(execute_cuda_and_compare(coordinate.context, batch, options, coordinate.output,
+                                   reference) == 0);
+  }
+
+  /* Alignment belongs to the addressed payload block, not the view base.
+   * Exercise a HOST base at +4 with a compensating descriptor offset of +4;
+   * reverse-mixed staging must preserve that modulo-8 displacement. */
+  std::vector<std::uint8_t> compensated_payload(40u, UINT8_C(0x5a));
+  std::memcpy(compensated_payload.data() + 8u, batch.interaction_payload.data(), 32u);
+  batch.interaction_payload = compensated_payload;
+  batch.interactions[0].payload_offset = 4u;
+  batch.bind();
+  CUDA_CHECK(device_inputs.upload_numerical(batch));
+  batch.descriptor.interaction_descriptors = device_inputs.interactions_.descriptor();
+  batch.descriptor.interaction_payload.data = batch.interaction_payload.data() + 4u;
+  batch.descriptor.interaction_payload.size_bytes = batch.interaction_payload.size() - 4u;
+  batch.descriptor.interaction_payload.memory_space = XTBLOOM_MEMORY_HOST;
+  g_scenario = "electric-field/descriptor-device-payload-host-compensated-alignment";
+  CHECK(execute_cuda_and_compare(custom.get(), batch, options, ResultLayout::kMixed, reference) ==
+        0);
+  ResultOwner compensated_async_result;
+  CUDA_CHECK(compensated_async_result.bind(batch, ResultLayout::kMixed, options.flags));
+  xtbloom_request_t* raw_compensated_request = nullptr;
+  CHECK(xtbloom_request_create(custom.get(), &raw_compensated_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle compensated_request(raw_compensated_request);
+  CHECK(xtbloom_compute_enqueue(custom.get(), &batch.descriptor, &options,
+                                &compensated_async_result.descriptor,
+                                compensated_request.get()) == XTBLOOM_STATUS_SUCCESS);
+  xtbloom_request_info_t compensated_info{};
+  CHECK(xtbloom_request_info_init(&compensated_info, sizeof(compensated_info)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(compensated_request.get(), &compensated_info) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(compensated_info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult compensated_actual;
+  CUDA_CHECK(compensated_async_result.materialize(compensated_actual));
+  compensated_actual.flags = compensated_info.result_flags;
+  CHECK(compare_result(compensated_async_result, compensated_actual, reference, options) == 0);
+  batch = make_electric_field_water();
+  CUDA_CHECK(device_inputs.upload_numerical(batch));
+
+  /* Only descriptor-referenced released blocks consume CUDA staging.  A
+   * field at a legal nonzero offset inside a large host payload view must
+   * produce the same result for host and device descriptors. */
+  const std::vector<std::uint8_t> compact_payload = batch.interaction_payload;
+  constexpr std::size_t kGappedPayloadOffset = 4096u;
+  batch.interaction_payload.assign(64u * 1024u, UINT8_C(0x5a));
+  std::memcpy(batch.interaction_payload.data() + kGappedPayloadOffset, compact_payload.data(),
+              compact_payload.size());
+  batch.interactions[0].payload_offset = kGappedPayloadOffset;
+  batch.bind();
+  g_scenario = "electric-field/oversized-host-payload/host-descriptors";
+  CHECK(execute_cuda_and_compare(custom.get(), batch, options, ResultLayout::kHost, reference) ==
+        0);
+  CUDA_CHECK(device_inputs.upload_numerical(batch));
+  bind_inputs(batch, &device_inputs, InputLayout::kMixed);
+  g_scenario = "electric-field/oversized-host-payload/device-descriptors";
+  CHECK(execute_cuda_and_compare(custom.get(), batch, options, ResultLayout::kMixed, reference) ==
+        0);
+  batch.interaction_payload = compact_payload;
+  batch.interactions[0].payload_offset = 0u;
+  batch.bind();
+  CUDA_CHECK(device_inputs.upload_numerical(batch));
+
+  /* The asynchronous convenience entry point must retain the same mixed
+   * attachment and device-dipole publication contract. */
+  g_scenario = "electric-field/context-enqueue-mixed";
+  bind_inputs(batch, &device_inputs, InputLayout::kMixed);
+  ResultOwner async_result;
+  CUDA_CHECK(async_result.bind(batch, ResultLayout::kMixed, options.flags));
+  xtbloom_request_t* raw_request = nullptr;
+  CHECK(xtbloom_request_create(custom.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle request(raw_request);
+  CHECK(xtbloom_compute_enqueue(custom.get(), &batch.descriptor, &options, &async_result.descriptor,
+                                request.get()) == XTBLOOM_STATUS_SUCCESS);
+  /* Successful enqueue has fully consumed every HOST input byte.  Clobber the
+   * oversized-capable payload image before waiting to prove no queued kernel
+   * retains the caller-owned host pointer. */
+  std::fill(batch.interaction_payload.begin(), batch.interaction_payload.end(), UINT8_C(0xa5));
+  xtbloom_request_info_t info{};
+  CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult async_actual;
+  CUDA_CHECK(async_result.materialize(async_actual));
+  async_actual.flags = info.result_flags;
+  CHECK(compare_result(async_result, async_actual, reference, options) == 0);
+  batch.interaction_payload = compact_payload;
+  batch.bind();
+  CUDA_CHECK(device_inputs.upload_numerical(batch));
+
+  /* Central differences of the reported CUDA energy are independent of the
+   * analytic CUDA force path. Multiple stable steps make a sign error or an
+   * accidental +E-per-atom term visible. */
+  g_scenario = "electric-field/central-difference";
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  ResultOwner analytic_owner;
+  CUDA_CHECK(analytic_owner.bind(batch, ResultLayout::kHost, options.flags));
+  CHECK(xtbloom_compute(custom.get(), &batch.descriptor, &options, &analytic_owner.descriptor) ==
+        XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult analytic;
+  CUDA_CHECK(analytic_owner.materialize(analytic));
+  const std::vector<double> origin = batch.positions;
+  xtbloom_compute_options_t energy_only = options;
+  energy_only.flags = XTBLOOM_COMPUTE_ENERGY;
+  for (const double step : {1.0e-3, 5.0e-4}) {
+    for (std::size_t coordinate = 0u; coordinate < origin.size(); ++coordinate) {
+      batch.positions = origin;
+      batch.positions[coordinate] += step;
+      batch.bind();
+      ResultOwner plus_owner;
+      CUDA_CHECK(plus_owner.bind(batch, ResultLayout::kHost, energy_only.flags));
+      CHECK(xtbloom_compute(custom.get(), &batch.descriptor, &energy_only,
+                            &plus_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+      MaterializedResult plus;
+      CUDA_CHECK(plus_owner.materialize(plus));
+
+      batch.positions = origin;
+      batch.positions[coordinate] -= step;
+      batch.bind();
+      ResultOwner minus_owner;
+      CUDA_CHECK(minus_owner.bind(batch, ResultLayout::kHost, energy_only.flags));
+      CHECK(xtbloom_compute(custom.get(), &batch.descriptor, &energy_only,
+                            &minus_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+      MaterializedResult minus;
+      CUDA_CHECK(minus_owner.materialize(minus));
+      const double numerical_force = -(plus.energies[0] - minus.energies[0]) / (2.0 * step);
+      CHECK(std::abs(numerical_force - analytic.forces[coordinate]) < 1.5e-5);
+    }
+  }
+  batch.positions = origin;
+  batch.bind();
+
+  /* Neutral water cannot expose the charged-system origin laws. Exercise the
+   * same production public path with H3+ so every descriptor placement proves
+   * delta_energy = -Q E dot delta, delta_dipole = Q delta, and sum(F) = Q E.
+   * These checks are independent of CPU/CUDA comparison and would catch an
+   * otherwise self-consistent pair of backend sign or charge-factor bugs. */
+  constexpr std::array<double, 3> kField{{0.003, -0.004, 0.005}};
+  constexpr std::array<double, 3> kTranslation{{2.0, -3.0, 5.0}};
+  constexpr double kTranslationEnergyTolerance = 1.0e-9;
+  constexpr double kTranslationDipoleTolerance = 1.0e-8;
+  constexpr double kNetForceTolerance = 1.0e-7;
+  PublicBatch charged = make_electric_field_h3_plus();
+  DeviceBatchInputs charged_inputs;
+  CUDA_CHECK(charged_inputs.upload_all(charged));
+  const std::array<std::pair<InputLayout, ResultLayout>, 3> charged_layouts{{
+      {InputLayout::kHost, ResultLayout::kHost},
+      {InputLayout::kDevice, ResultLayout::kDevice},
+      {InputLayout::kMixed, ResultLayout::kMixed},
+  }};
+  const std::array<const char*, 3> charged_names{{"host", "device", "mixed"}};
+  for (std::size_t layout_index = 0u; layout_index < charged_layouts.size(); ++layout_index) {
+    const auto [input_layout, result_layout] = charged_layouts[layout_index];
+    std::string scenario =
+        std::string("electric-field/charged-laws/") + charged_names[layout_index] + "/baseline";
+    g_scenario = scenario.c_str();
+    bind_inputs(charged, input_layout == InputLayout::kHost ? nullptr : &charged_inputs,
+                input_layout);
+    ResultOwner baseline_owner;
+    CUDA_CHECK(baseline_owner.bind(charged, result_layout, options.flags));
+    CHECK(xtbloom_compute(custom.get(), &charged.descriptor, &options,
+                          &baseline_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult baseline;
+    CUDA_CHECK(baseline_owner.materialize(baseline));
+    CHECK(baseline.statuses == std::vector<std::int32_t>{XTBLOOM_STATUS_SUCCESS});
+    CHECK(baseline.converged == std::vector<std::uint8_t>{1u});
+
+    for (std::size_t atom = 0u; atom < charged.atomic_numbers.size(); ++atom) {
+      for (std::size_t axis = 0u; axis < 3u; ++axis) {
+        charged.positions[3u * atom + axis] += kTranslation[axis];
+      }
+    }
+    CUDA_CHECK(charged_inputs.upload_numerical(charged));
+    scenario =
+        std::string("electric-field/charged-laws/") + charged_names[layout_index] + "/translated";
+    g_scenario = scenario.c_str();
+    bind_inputs(charged, input_layout == InputLayout::kHost ? nullptr : &charged_inputs,
+                input_layout);
+    ResultOwner translated_owner;
+    CUDA_CHECK(translated_owner.bind(charged, result_layout, options.flags));
+    CHECK(xtbloom_compute(custom.get(), &charged.descriptor, &options,
+                          &translated_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult translated;
+    CUDA_CHECK(translated_owner.materialize(translated));
+    CHECK(translated.statuses == std::vector<std::int32_t>{XTBLOOM_STATUS_SUCCESS});
+    CHECK(translated.converged == std::vector<std::uint8_t>{1u});
+
+    const double expected_energy_shift =
+        -charged.molecular_charges[0] *
+        (kField[0] * kTranslation[0] + kField[1] * kTranslation[1] + kField[2] * kTranslation[2]);
+    CHECK(std::abs((translated.energies[0] - baseline.energies[0]) - expected_energy_shift) <
+          kTranslationEnergyTolerance);
+    for (std::size_t axis = 0u; axis < 3u; ++axis) {
+      CHECK(std::abs((translated.dipole_moments[axis] - baseline.dipole_moments[axis]) -
+                     charged.molecular_charges[0] * kTranslation[axis]) <
+            kTranslationDipoleTolerance);
+      double net_force = 0.0;
+      for (std::size_t atom = 0u; atom < charged.atomic_numbers.size(); ++atom) {
+        net_force += translated.forces[3u * atom + axis];
+      }
+      CHECK(std::abs(net_force - charged.molecular_charges[0] * kField[axis]) < kNetForceTolerance);
+    }
+
+    for (std::size_t atom = 0u; atom < charged.atomic_numbers.size(); ++atom) {
+      for (std::size_t axis = 0u; axis < 3u; ++axis) {
+        charged.positions[3u * atom + axis] -= kTranslation[axis];
+      }
+    }
+    CUDA_CHECK(charged_inputs.upload_numerical(charged));
+  }
+  return 0;
+}
+
+/* Device-staged interaction content is validated before caller-output commit.
+ * Cover malformed and reserved content plus pointer provenance/range failures
+ * for each new ABI-v3 leaf, retaining every output and result.flags canary. */
+int test_public_electric_field_rejection_is_transactional(std::int32_t device) {
+  PublicBatch batch = make_electric_field_water();
+  xtbloom_compute_options_t options = make_compute_options();
+  options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+  DeviceBatchInputs inputs;
+  CUDA_CHECK(inputs.upload_all(batch));
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
+  const std::vector<xtbloom_interaction_t> valid_interactions = batch.interactions;
+  const std::vector<std::uint8_t> valid_payload = batch.interaction_payload;
+
+  /* Seed a strict-WARM checkpoint before exercising device-content failures.
+   * A request-level rejection must preserve both its host readiness token and
+   * the device checkpoint/committed field identity. */
+  bind_inputs(batch, &inputs, InputLayout::kDevice);
+  ResultOwner seed_result;
+  CUDA_CHECK(seed_result.bind(batch, ResultLayout::kMixed, options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &seed_result.descriptor) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  const auto expect_retained_warm = [&](const char* scenario) -> int {
+    g_scenario = scenario;
+    batch.interactions = valid_interactions;
+    batch.interaction_payload = valid_payload;
+    CUDA_CHECK(inputs.interactions_.upload(batch.interactions));
+    CUDA_CHECK(inputs.interaction_payload_.upload(batch.interaction_payload));
+    bind_inputs(batch, &inputs, InputLayout::kDevice);
+    xtbloom_compute_options_t warm = options;
+    warm.scc_start_mode = XTBLOOM_SCC_START_WARM;
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, ResultLayout::kMixed, warm.flags));
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &warm, &result.descriptor) ==
+          XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult actual;
+    CUDA_CHECK(result.materialize(actual));
+    CHECK(actual.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+    CHECK(actual.converged[0] == 1u);
+    return 0;
+  };
+
+  const auto expect_rejected = [&](const char* scenario, xtbloom_status_t expected) -> int {
+    g_scenario = scenario;
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, ResultLayout::kMixed, options.flags));
+    CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &result.descriptor) ==
+          expected);
+    bool unchanged = false;
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    return 0;
+  };
+
+  const auto expect_async_rejected = [&](const char* scenario, xtbloom_status_t expected) -> int {
+    g_scenario = scenario;
+    ResultOwner result;
+    CUDA_CHECK(result.bind(batch, ResultLayout::kMixed, options.flags));
+    xtbloom_request_t* raw_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle request(raw_request);
+    CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &options, &result.descriptor,
+                                  request.get()) == XTBLOOM_STATUS_SUCCESS);
+    xtbloom_request_info_t info{};
+    CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+    CHECK(info.completion_status == expected);
+    CHECK(info.result_flags == 0u);
+    bool unchanged = false;
+    CUDA_CHECK(result.unchanged(unchanged));
+    CHECK(unchanged);
+    return 0;
+  };
+
+  /* A changed field is a strict-WARM semantic rejection, not a failed SCC
+   * attempt. The caller image and preceding valid checkpoint both survive. */
+  std::array<double, 3> changed_field{{0.003, -0.004, 0.005}};
+  changed_field[0] = std::nextafter(changed_field[0], 1.0);
+  std::memcpy(batch.interaction_payload.data() + 8u, changed_field.data(), sizeof(changed_field));
+  CUDA_CHECK(inputs.interaction_payload_.upload(batch.interaction_payload));
+  bind_inputs(batch, &inputs, InputLayout::kDevice);
+  xtbloom_compute_options_t changed_warm = options;
+  changed_warm.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  g_scenario = "electric-field/reject-changed-warm";
+  ResultOwner changed_warm_result;
+  CUDA_CHECK(changed_warm_result.bind(batch, ResultLayout::kMixed, changed_warm.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &changed_warm,
+                        &changed_warm_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  bool changed_warm_unchanged = false;
+  CUDA_CHECK(changed_warm_result.unchanged(changed_warm_unchanged));
+  CHECK(changed_warm_unchanged);
+  CHECK(expect_retained_warm("electric-field/reject-changed-warm-retains-warm") == 0);
+
+  /* Mislabeled and over-declared views fail the public CUDA pointer gate. */
+  bind_inputs(batch, &inputs, InputLayout::kDevice);
+  batch.descriptor.interaction_descriptors.memory_space = XTBLOOM_MEMORY_HOST;
+  CHECK(expect_rejected("electric-field/reject-descriptor-device-as-host",
+                        XTBLOOM_STATUS_INVALID_ARGUMENT) == 0);
+  bind_inputs(batch, &inputs, InputLayout::kDevice);
+  batch.descriptor.interaction_payload.memory_space = XTBLOOM_MEMORY_HOST;
+  CHECK(expect_rejected("electric-field/reject-payload-device-as-host",
+                        XTBLOOM_STATUS_INVALID_ARGUMENT) == 0);
+  batch.bind();
+  batch.descriptor.interaction_descriptors.memory_space = XTBLOOM_MEMORY_CUDA_DEVICE;
+  CHECK(expect_rejected("electric-field/reject-descriptor-host-as-device",
+                        XTBLOOM_STATUS_INVALID_ARGUMENT) == 0);
+  batch.bind();
+  batch.descriptor.interaction_payload.memory_space = XTBLOOM_MEMORY_CUDA_DEVICE;
+  CHECK(expect_rejected("electric-field/reject-payload-host-as-device",
+                        XTBLOOM_STATUS_INVALID_ARGUMENT) == 0);
+  bind_inputs(batch, &inputs, InputLayout::kDevice);
+  batch.descriptor.interaction_descriptors.size_bytes += 1u;
+  CHECK(expect_rejected("electric-field/reject-descriptor-allocation-overrun",
+                        XTBLOOM_STATUS_INVALID_ARGUMENT) == 0);
+  bind_inputs(batch, &inputs, InputLayout::kDevice);
+  batch.descriptor.interaction_payload.size_bytes += 1u;
+  CHECK(expect_rejected("electric-field/reject-payload-allocation-overrun",
+                        XTBLOOM_STATUS_INVALID_ARGUMENT) == 0);
+
+  /* Alignment applies to the addressed block, not merely its descriptor
+   * offset. cudaMalloc returns aligned storage, so exposing base + 4 with an
+   * offset of zero must be rejected before any double load or publication. */
+  std::vector<std::uint8_t> misaligned_payload(36u, 0u);
+  std::memcpy(misaligned_payload.data() + 4u, batch.interaction_payload.data(), 32u);
+  CUDA_CHECK(inputs.interaction_payload_.upload(misaligned_payload));
+  bind_inputs(batch, &inputs, InputLayout::kDevice);
+  batch.descriptor.interaction_payload.data =
+      reinterpret_cast<const void*>(inputs.interaction_payload_.address() + 4u);
+  batch.descriptor.interaction_payload.size_bytes = 32u;
+  CHECK(expect_rejected("electric-field/reject-device-payload-block-misaligned",
+                        XTBLOOM_STATUS_INVALID_ARGUMENT) == 0);
+  CUDA_CHECK(inputs.interaction_payload_.upload(batch.interaction_payload));
+
+  /* Content errors deliberately reside on device so structural validation
+   * cannot inspect them before the stream-ordered request gate. Run every
+   * case through both the synchronous facade and enqueue/wait, then restore
+   * the exact valid bytes and consume the preceding strict-WARM checkpoint.
+   * This proves rejection is atomic for caller outputs and persistent state. */
+  using InteractionMutation = void (*)(PublicBatch&);
+  struct DeviceContentCase {
+    const char* name;
+    xtbloom_status_t expected;
+    InteractionMutation mutate;
+    bool misaligned_payload_base;
+  };
+  const DeviceContentCase content_cases[] = {
+      {"flags", XTBLOOM_STATUS_INVALID_ARGUMENT,
+       [](PublicBatch& value) { value.interactions[0].flags = 1u; }, false},
+      {"duplicate", XTBLOOM_STATUS_INVALID_ARGUMENT,
+       [](PublicBatch& value) {
+         xtbloom_interaction_t duplicate = value.interactions[0];
+         duplicate.payload_offset = value.interaction_payload.size();
+         value.interactions.push_back(duplicate);
+         const std::size_t original_size = value.interaction_payload.size();
+         value.interaction_payload.resize(2u * original_size);
+         std::memcpy(value.interaction_payload.data() + original_size,
+                     value.interaction_payload.data(), original_size);
+       },
+       false},
+      {"unknown-tag", XTBLOOM_STATUS_INVALID_ARGUMENT,
+       [](PublicBatch& value) { value.interactions[0].type = INT32_C(0x7fffff); }, false},
+      {"none-tag", XTBLOOM_STATUS_INVALID_ARGUMENT,
+       [](PublicBatch& value) { value.interactions[0].type = XTBLOOM_INTERACTION_NONE; }, false},
+      {"system-index", XTBLOOM_STATUS_INVALID_ARGUMENT,
+       [](PublicBatch& value) { value.interactions[0].system_index = 1; }, false},
+      {"payload-range", XTBLOOM_STATUS_INVALID_ARGUMENT,
+       [](PublicBatch& value) { value.interactions[0].payload_offset = 16u; }, false},
+      {"payload-size", XTBLOOM_STATUS_INVALID_ARGUMENT,
+       [](PublicBatch& value) { value.interactions[0].payload_size = 16u; }, false},
+      {"payload-reserved", XTBLOOM_STATUS_INVALID_ARGUMENT,
+       [](PublicBatch& value) {
+         const std::int32_t reserved = 1;
+         std::memcpy(value.interaction_payload.data() + sizeof(std::int32_t), &reserved,
+                     sizeof(reserved));
+       },
+       false},
+      {"payload-nonfinite", XTBLOOM_STATUS_INVALID_ARGUMENT,
+       [](PublicBatch& value) {
+         const double infinity = std::numeric_limits<double>::infinity();
+         std::memcpy(value.interaction_payload.data() + 2u * sizeof(std::int32_t), &infinity,
+                     sizeof(infinity));
+       },
+       false},
+      {"payload-version", XTBLOOM_STATUS_INVALID_ARGUMENT,
+       [](PublicBatch& value) {
+         const std::int32_t bad_version = 2;
+         std::memcpy(value.interaction_payload.data(), &bad_version, sizeof(bad_version));
+       },
+       false},
+      {"reserved-tag", XTBLOOM_STATUS_NOT_IMPLEMENTED,
+       [](PublicBatch& value) { value.interactions[0].type = XTBLOOM_INTERACTION_ALPB_SOLVATION; },
+       false},
+      {"payload-base-plus-four", XTBLOOM_STATUS_INVALID_ARGUMENT, [](PublicBatch&) {}, true},
+  };
+  for (const DeviceContentCase& test : content_cases) {
+    for (const bool asynchronous : {false, true}) {
+      batch.interactions = valid_interactions;
+      batch.interaction_payload = valid_payload;
+      test.mutate(batch);
+      CUDA_CHECK(inputs.interactions_.upload(batch.interactions));
+      std::vector<std::uint8_t> padded_payload;
+      if (test.misaligned_payload_base) {
+        padded_payload.resize(batch.interaction_payload.size() + 4u, 0u);
+        std::memcpy(padded_payload.data() + 4u, batch.interaction_payload.data(),
+                    batch.interaction_payload.size());
+        CUDA_CHECK(inputs.interaction_payload_.upload(padded_payload));
+      } else {
+        CUDA_CHECK(inputs.interaction_payload_.upload(batch.interaction_payload));
+      }
+      bind_inputs(batch, &inputs, InputLayout::kDevice);
+      if (test.misaligned_payload_base) {
+        batch.descriptor.interaction_payload.data =
+            reinterpret_cast<const void*>(inputs.interaction_payload_.address() + 4u);
+        batch.descriptor.interaction_payload.size_bytes = batch.interaction_payload.size();
+      }
+
+      const std::string scenario = std::string("electric-field/reject-device-") + test.name +
+                                   (asynchronous ? "-async" : "-sync");
+      if (asynchronous) {
+        CHECK(expect_async_rejected(scenario.c_str(), test.expected) == 0);
+      } else {
+        CHECK(expect_rejected(scenario.c_str(), test.expected) == 0);
+      }
+      const std::string recovery = scenario + "-retains-warm";
+      CHECK(expect_retained_warm(recovery.c_str()) == 0);
+    }
+  }
   return 0;
 }
 
@@ -1371,12 +1992,6 @@ int test_host_device_mixed_and_streams(std::int32_t device, PublicBatch& batch,
   return 0;
 }
 
-struct RequestDeleter {
-  void operator()(xtbloom_request_t* request) const noexcept { xtbloom_request_destroy(request); }
-};
-
-using RequestHandle = std::unique_ptr<xtbloom_request_t, RequestDeleter>;
-
 /* A data-level numerical failure belongs to one ragged member, not the whole
  * public call. Use geometries from the pinned H3+ and OH trace corpus, then
  * establish the mixed terminal outcome independently through the public CPU
@@ -1392,6 +2007,7 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
   failure_options.charge_tolerance = 2.0e-5;
   failure_options.energy_tolerance = 1.0e-6;
   failure_options.electronic_temperature = XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
+  failure_options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
 
   PublicBatch healthy;
   healthy.atom_offsets = {0, 3};
@@ -1410,7 +2026,7 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
   healthy.molecular_charges = {1.0};
   healthy.unpaired_electrons = {0};
   healthy.spin_channels = {1};
-  healthy.bind();
+  healthy.set_electric_fields({{{0.0, 0.0, 0.0}}});
   MaterializedResult healthy_reference;
   g_scenario = "peer-failure/CPU-reference";
   CHECK(run_cpu_reference(cpu_context, healthy, failure_options, healthy_reference) == 0);
@@ -1439,7 +2055,7 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
   batch.molecular_charges = {1.0, 0.0};
   batch.unpaired_electrons = {0, 1};
   batch.spin_channels = {1, 2};
-  batch.bind();
+  batch.set_electric_fields({{{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}});
 
   MaterializedResult failure_reference;
   {
@@ -1472,6 +2088,10 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
   CHECK(failure_reference.converged[1] == 0u);
   CHECK(failure_reference.iterations[1] == failure_options.max_scc_iterations);
   CHECK(is_quiet_nan(failure_reference.energies[1]));
+  CHECK(failure_reference.dipole_moments.size() == 6u);
+  CHECK(is_quiet_nan(failure_reference.dipole_moments[3]));
+  CHECK(is_quiet_nan(failure_reference.dipole_moments[4]));
+  CHECK(is_quiet_nan(failure_reference.dipole_moments[5]));
   for (std::size_t atom = 3u; atom < 5u; ++atom) {
     CHECK(is_quiet_nan(failure_reference.atomic_charges[atom]));
     for (std::size_t axis = 0u; axis < 3u; ++axis) {
@@ -1531,6 +2151,9 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
     }
 
     CHECK(is_quiet_nan(actual.energies[1]));
+    CHECK(is_quiet_nan(actual.dipole_moments[3]));
+    CHECK(is_quiet_nan(actual.dipole_moments[4]));
+    CHECK(is_quiet_nan(actual.dipole_moments[5]));
     for (std::size_t atom = 3u; atom < 5u; ++atom) {
       CHECK(is_quiet_nan(actual.atomic_charges[atom]));
       for (std::size_t axis = 0u; axis < 3u; ++axis) {
@@ -1564,6 +2187,9 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
   CHECK(near(async_actual.energies[0], failure_reference.energies[0], kEnergyAbsoluteTolerance,
              kEnergyRelativeTolerance));
   CHECK(is_quiet_nan(async_actual.energies[1]));
+  CHECK(is_quiet_nan(async_actual.dipole_moments[3]));
+  CHECK(is_quiet_nan(async_actual.dipole_moments[4]));
+  CHECK(is_quiet_nan(async_actual.dipole_moments[5]));
   for (std::size_t atom = 3u; atom < 5u; ++atom) {
     CHECK(is_quiet_nan(async_actual.atomic_charges[atom]));
     for (std::size_t axis = 0u; axis < 3u; ++axis) {
@@ -1635,7 +2261,10 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
   CHECK(make_fixture_batch(4u, true, batch) == 0);
   batch.spin_channels.back() = 2;
   batch.unpaired_electrons.back() = 2;
-  batch.bind();
+  std::vector<std::array<double, 3>> context_fields(
+      static_cast<std::size_t>(batch.descriptor.batch_size),
+      std::array<double, 3>{{0.001, -0.0005, 0.00025}});
+  batch.set_electric_fields(context_fields);
   xtbloom_compute_options_t options = base_options;
   options.flags |= XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
   MaterializedResult reference;
@@ -1749,6 +2378,75 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
         XTBLOOM_STATUS_SUCCESS);
   xtbloom_compute_options_t warm_options = options;
   warm_options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+
+  if (mode != PlanTestMode::kSanitizer) {
+    /* An oversized reverse-mixed payload cannot be compacted without reading
+     * device descriptor offsets. Reject it before the same-topology comparison
+     * is queued, even when earlier owner-stream work is deliberately blocked. */
+    PublicBatch oversized = batch;
+    constexpr std::size_t kContextPayloadOffset = 4096u;
+    const std::vector<std::uint8_t> compact_payload = oversized.interaction_payload;
+    oversized.interaction_payload.assign(64u * 1024u, UINT8_C(0x5a));
+    for (std::size_t system = 0; system < oversized.interactions.size(); ++system) {
+      const std::size_t compact_offset = system * 32u;
+      const std::size_t gapped_offset = kContextPayloadOffset + system * 64u;
+      std::memcpy(oversized.interaction_payload.data() + gapped_offset,
+                  compact_payload.data() + compact_offset, 32u);
+      oversized.interactions[system].payload_offset = gapped_offset;
+    }
+    oversized.bind();
+    DeviceBatchInputs oversized_inputs;
+    CUDA_CHECK(oversized_inputs.upload_all(oversized));
+    oversized.descriptor.interaction_descriptors = oversized_inputs.interactions_.descriptor();
+    ResultOwner oversized_result;
+    CUDA_CHECK(oversized_result.bind(oversized, ResultLayout::kDevice, options.flags));
+    xtbloom_request_t* raw_oversized_request = nullptr;
+    CHECK(xtbloom_request_create(context.get(), &raw_oversized_request) == XTBLOOM_STATUS_SUCCESS);
+    RequestHandle oversized_request(raw_oversized_request);
+    BlockingStreamGate oversized_gate;
+    CUDA_CHECK(oversized_gate.arm(stream.get()));
+    xtbloom_status_t oversized_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    bool oversized_returned = false;
+    bool oversized_diagnostic_matches = false;
+    std::mutex oversized_mutex;
+    std::condition_variable oversized_changed;
+    std::thread oversized_submitter([&] {
+      oversized_status =
+          xtbloom_compute_enqueue(context.get(), &oversized.descriptor, &options,
+                                  &oversized_result.descriptor, oversized_request.get());
+      const char* const diagnostic = xtbloom_get_last_error();
+      const bool diagnostic_matches =
+          diagnostic != nullptr &&
+          std::strstr(diagnostic, "fixed released payload capacity") != nullptr;
+      {
+        std::lock_guard<std::mutex> lock(oversized_mutex);
+        oversized_diagnostic_matches = diagnostic_matches;
+        oversized_returned = true;
+      }
+      oversized_changed.notify_one();
+    });
+    bool oversized_returned_while_blocked = false;
+    {
+      std::unique_lock<std::mutex> lock(oversized_mutex);
+      oversized_returned_while_blocked = oversized_changed.wait_for(
+          lock, kBlockedEnqueueWatchdog, [&] { return oversized_returned; });
+    }
+    if (!oversized_returned_while_blocked) oversized_gate.release();
+    oversized_submitter.join();
+    CHECK(oversized_returned_while_blocked);
+    CHECK(oversized_status == XTBLOOM_STATUS_NOT_SUPPORTED);
+    CHECK(oversized_diagnostic_matches);
+    xtbloom_request_info_t oversized_info{};
+    CHECK(xtbloom_request_info_init(&oversized_info, sizeof(oversized_info)) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_query(oversized_request.get(), &oversized_info) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(oversized_info.state == XTBLOOM_REQUEST_IDLE);
+    bool oversized_unchanged = false;
+    CUDA_CHECK(oversized_result.unchanged(oversized_unchanged));
+    CHECK(oversized_unchanged);
+    oversized_gate.release();
+  }
 
   for (const auto [layout, name] :
        {std::pair{InputLayout::kDevice, "device"}, std::pair{InputLayout::kMixed, "mixed"}}) {
@@ -1891,6 +2589,12 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
 
   batch.perturb(0.003);
   CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
+  DeviceBatchInputs blocked_interaction_inputs;
+  CUDA_CHECK(blocked_interaction_inputs.upload_numerical(batch));
+  /* Keep topology and the field payload on host while borrowing only the
+   * interaction descriptors from device memory. The blocked request below
+   * therefore covers compact reverse-mixed context enqueue. */
+  batch.descriptor.interaction_descriptors = blocked_interaction_inputs.interactions_.descriptor();
   ResultOwner result;
   CUDA_CHECK(result.bind(batch, ResultLayout::kDevice, options.flags));
   xtbloom_batch_result_t submitted_result = result.descriptor;
@@ -1928,15 +2632,16 @@ int test_cuda_context_enqueue(std::int32_t device, xtbloom_context_t* cpu_contex
   xtbloom_request_info_t info{};
   CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
 
-  /* The deferred topology mismatch above consumed the preceding checkpoint.
-   * Strict WARM therefore rejects at admission and leaves the reusable request
-   * and every output sentinel untouched. */
-  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &warm_options, &submitted_result,
-                                request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(std::strstr(xtbloom_get_last_error(), "preceding successful public checkpoint") != nullptr);
-  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
-  CHECK(submitted_result.flags == kResultFlagsCanary);
+  /* Deferred topology rejection is semantic and preserves the preceding
+   * checkpoint. Restore the valid topology, then consume it successfully. */
+  g_scenario = "request-lifecycle/topology-rejection-retains-warm";
+  ResultOwner retained_warm_result;
+  CUDA_CHECK(retained_warm_result.bind(batch, ResultLayout::kDevice, warm_options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &warm_options,
+                        &retained_warm_result.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult retained_warm;
+  CUDA_CHECK(retained_warm_result.materialize(retained_warm));
+  CHECK(retained_warm.statuses[0] == XTBLOOM_STATUS_SUCCESS);
 
   /* Exact ABI-v1 storage ensures asynchronous settlement cannot read the
    * optional suffixes after enqueue has returned. */
@@ -2257,6 +2962,47 @@ int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
     CHECK(query.host_required_alignment >= 8u);
     CHECK(query.device_required_bytes > 0u);
     CHECK(query.device_required_alignment >= 8u);
+
+    /* Topology-only preparation reserves the released compact field image.
+     * Attaching one device-backed field per peer on the first compute must not
+     * grow the fixed plan or change either retained workspace query. */
+    std::vector<std::array<double, 3>> plan_fields(
+        static_cast<std::size_t>(batch.descriptor.batch_size),
+        std::array<double, 3>{{0.001, -0.0005, 0.00025}});
+    batch.set_electric_fields(plan_fields);
+    CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
+    CUDA_CHECK(device_inputs.upload_numerical(batch));
+    const std::vector<std::uint8_t> compact_plan_payload = batch.interaction_payload;
+    constexpr std::size_t kPlanPayloadOffset = 4096u;
+    batch.interaction_payload.assign(64u * 1024u, UINT8_C(0x3c));
+    for (std::size_t system = 0; system < plan_fields.size(); ++system) {
+      const std::size_t compact_offset = system * 32u;
+      const std::size_t gapped_offset = kPlanPayloadOffset + system * 64u;
+      std::memcpy(batch.interaction_payload.data() + gapped_offset,
+                  compact_plan_payload.data() + compact_offset, 32u);
+      batch.interactions[system].payload_offset = gapped_offset;
+    }
+    batch.bind();
+    CUDA_CHECK(device_inputs.upload_numerical(batch));
+    bind_inputs(batch, &device_inputs, InputLayout::kMixed);
+    {
+      ResultOwner field_owner;
+      CUDA_CHECK(field_owner.bind(batch, ResultLayout::kHost, options.flags));
+      CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options,
+                                 &field_owner.descriptor) == XTBLOOM_STATUS_SUCCESS);
+      MaterializedResult field_actual;
+      CUDA_CHECK(field_owner.materialize(field_actual));
+      CHECK(compare_result(field_owner, field_actual, reference, options) == 0);
+    }
+    xtbloom_workspace_query_t field_query{};
+    CHECK(xtbloom_workspace_query_init(&field_query, sizeof(field_query)) ==
+          XTBLOOM_STATUS_SUCCESS);
+    field_query.compute_flags = options.flags;
+    CHECK(xtbloom_plan_query_workspace(plan.get(), &field_query) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(field_query.host_required_bytes == query.host_required_bytes);
+    CHECK(field_query.host_required_alignment == query.host_required_alignment);
+    CHECK(field_query.device_required_bytes == query.device_required_bytes);
+    CHECK(field_query.device_required_alignment == query.device_required_alignment);
 
     xtbloom_compute_options_t energy_options = options;
     energy_options.flags = XTBLOOM_COMPUTE_ENERGY;
@@ -2594,6 +3340,15 @@ int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
      * even electron count, so two unpaired electrons form a valid triplet. */
     device_async_batch.spin_channels.back() = 2;
     device_async_batch.unpaired_electrons.back() = 2;
+    if (layout == InputLayout::kMixed) {
+      /* The standard mixed binding places interaction descriptors on device
+       * and keeps payload bytes on host.  Enqueue must snapshot that compact
+       * payload and return while earlier owner-stream work remains blocked;
+       * synchronizing to inspect device offsets would deadlock this gate. */
+      std::vector<std::array<double, 3>> fields(request_batch_size,
+                                                std::array<double, 3>{{0.001, -0.0005, 0.00025}});
+      device_async_batch.set_electric_fields(fields);
+    }
     device_async_batch.bind();
     xtbloom_compute_options_t device_async_options = options;
     device_async_options.flags |= XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
@@ -2617,6 +3372,65 @@ int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
     CHECK(xtbloom_request_create(context.get(), &raw_device_async_request) ==
           XTBLOOM_STATUS_SUCCESS);
     RequestHandle device_async_request(raw_device_async_request);
+
+    if (mode != PlanTestMode::kSanitizer && layout == InputLayout::kMixed) {
+      /* A sparse reverse-mixed payload larger than the fixed released image
+       * cannot be consumed without reading device offsets back to the host.
+       * Reject it before fixed-topology comparison is queued; the blocked
+       * stream makes accidental readback or failure settlement visible. */
+      const std::vector<std::uint8_t> compact_payload = device_async_batch.interaction_payload;
+      device_async_batch.interaction_payload.resize(64u * 1024u, UINT8_C(0x5a));
+      std::memcpy(device_async_batch.interaction_payload.data(), compact_payload.data(),
+                  compact_payload.size());
+      device_async_batch.bind();
+      bind_inputs(device_async_batch, &device_async_inputs, layout);
+      BlockingStreamGate rejected_gate;
+      CUDA_CHECK(rejected_gate.arm(stream.get()));
+      xtbloom_status_t rejected_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+      bool rejected_returned = false;
+      bool rejected_diagnostic_matches = false;
+      std::mutex rejected_mutex;
+      std::condition_variable rejected_changed;
+      std::thread rejected_submitter([&] {
+        rejected_status = xtbloom_plan_compute_enqueue(
+            device_async_plan.get(), &device_async_batch.descriptor, &device_async_options,
+            &device_async_result.descriptor, device_async_request.get());
+        const char* const diagnostic = xtbloom_get_last_error();
+        const bool diagnostic_matches =
+            diagnostic != nullptr &&
+            std::strstr(diagnostic, "fixed released payload capacity") != nullptr;
+        {
+          std::lock_guard<std::mutex> lock(rejected_mutex);
+          rejected_diagnostic_matches = diagnostic_matches;
+          rejected_returned = true;
+        }
+        rejected_changed.notify_one();
+      });
+      bool rejected_returned_while_blocked = false;
+      {
+        std::unique_lock<std::mutex> lock(rejected_mutex);
+        rejected_returned_while_blocked = rejected_changed.wait_for(
+            lock, kBlockedEnqueueWatchdog, [&] { return rejected_returned; });
+      }
+      if (!rejected_returned_while_blocked) rejected_gate.release();
+      rejected_submitter.join();
+      CHECK(rejected_returned_while_blocked);
+      CHECK(rejected_status == XTBLOOM_STATUS_NOT_SUPPORTED);
+      CHECK(rejected_diagnostic_matches);
+      xtbloom_request_info_t rejected_info{};
+      CHECK(xtbloom_request_info_init(&rejected_info, sizeof(rejected_info)) ==
+            XTBLOOM_STATUS_SUCCESS);
+      CHECK(xtbloom_request_query(device_async_request.get(), &rejected_info) ==
+            XTBLOOM_STATUS_SUCCESS);
+      CHECK(rejected_info.state == XTBLOOM_REQUEST_IDLE);
+      bool rejected_unchanged = false;
+      CUDA_CHECK(device_async_result.unchanged(rejected_unchanged));
+      CHECK(rejected_unchanged);
+      rejected_gate.release();
+      device_async_batch.interaction_payload = compact_payload;
+      device_async_batch.bind();
+      bind_inputs(device_async_batch, &device_async_inputs, layout);
+    }
 
     xtbloom_status_t enqueue_status = XTBLOOM_STATUS_INTERNAL_ERROR;
     BlockingStreamGate device_gate;
@@ -2798,22 +3612,18 @@ int test_cuda_plan_api(std::int32_t device, xtbloom_context_t* cpu_context,
     CUDA_CHECK(mismatch_result.unchanged(mismatch_unchanged));
     CHECK(mismatch_unchanged);
 
-    /* Admission of this strict-WARM request consumed the preceding successful
-     * checkpoint before its deferred topology failure became visible. Restore
-     * the borrowed topology bytes, then prove another WARM rejects instead of
-     * silently consuming stale electronic state from the earlier success. */
+    /* Restore the borrowed topology bytes and prove the deferred semantic
+     * rejection preserved the preceding strict-WARM checkpoint. */
     CUDA_CHECK(device_async_inputs.spin_channels_.upload(device_async_batch.spin_channels));
     ResultOwner stale_warm_result;
     CUDA_CHECK(stale_warm_result.bind(device_async_batch, ResultLayout::kDevice,
                                       device_warm_options.flags));
     CHECK(xtbloom_plan_compute(device_async_plan.get(), &device_async_batch.descriptor,
                                &device_warm_options,
-                               &stale_warm_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-    CHECK(std::strstr(xtbloom_get_last_error(), "preceding successful public checkpoint") !=
-          nullptr);
-    bool stale_warm_unchanged = false;
-    CUDA_CHECK(stale_warm_result.unchanged(stale_warm_unchanged));
-    CHECK(stale_warm_unchanged);
+                               &stale_warm_result.descriptor) == XTBLOOM_STATUS_SUCCESS);
+    MaterializedResult retained;
+    CUDA_CHECK(stale_warm_result.materialize(retained));
+    CHECK(retained.statuses[0] == XTBLOOM_STATUS_SUCCESS);
   }
 
   g_scenario = "plan-api";
@@ -3279,9 +4089,9 @@ int test_gfn1_rejected_transactionally(std::int32_t device, PublicBatch& batch,
     CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
   }
 
-  /* CUDA dipole publication is not released for GFN2. Once descriptor shape
-   * is valid, unavailable GFN1 model dispatch must take precedence and remain
-   * transactional for both synchronous and asynchronous public calls. */
+  /* CUDA dipole publication is released for GFN2. Once descriptor shape is
+   * valid, unavailable GFN1 model dispatch must still take precedence and
+   * remain transactional for both synchronous and asynchronous public calls. */
   bind_inputs(batch, nullptr, InputLayout::kHost);
   xtbloom_compute_options_t dipole_options = gfn1_options;
   dipole_options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
@@ -3318,24 +4128,35 @@ int test_gfn1_rejected_transactionally(std::int32_t device, PublicBatch& batch,
 
   dipole_options.model = XTBLOOM_MODEL_GFN2_XTB;
   CHECK(xtbloom_compute(context.get(), &batch.descriptor, &dipole_options,
-                        &dipole_result.descriptor) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
-  CUDA_CHECK(dipole_result.unchanged(unchanged));
-  CHECK(unchanged);
-  CUDA_CHECK(dipoles.unchanged(unchanged));
-  CHECK(unchanged);
+                        &dipole_result.descriptor) == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult dipole_actual;
+  CUDA_CHECK(dipole_result.materialize(dipole_actual));
+  CHECK((dipole_actual.flags & XTBLOOM_RESULT_DIPOLE_MOMENTS) != 0u);
+  CHECK(std::all_of(dipole_actual.dipole_moments.begin(), dipole_actual.dipole_moments.end(),
+                    [](double value) { return std::isfinite(value); }));
   CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &dipole_options,
                                 &dipole_result.descriptor,
-                                request.get()) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+                                request.get()) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK((info.result_flags & XTBLOOM_RESULT_DIPOLE_MOMENTS) != 0u);
   CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
+  CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
   raw_dipole_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
   CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &dipole_options, &raw_dipole_plan) ==
-        XTBLOOM_STATUS_NOT_IMPLEMENTED);
-  CHECK(raw_dipole_plan == nullptr);
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(raw_dipole_plan != nullptr);
+  PlanHandle dipole_plan(raw_dipole_plan);
 
   /* A valid reserved interaction has the same precedence. A structurally
    * malformed attachment (missing payload) remains INVALID_ARGUMENT before
-   * model dispatch for sync, enqueue, and plan creation. */
+   * model dispatch for sync, enqueue, and plan creation. Use a fresh request
+   * so the rejection proves that pre-submission validation leaves an IDLE
+   * request untouched rather than retaining the preceding GFN2 completion. */
+  xtbloom_request_t* raw_interaction_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_interaction_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle interaction_request(raw_interaction_request);
   xtbloom_interaction_t interaction{};
   interaction.type = XTBLOOM_INTERACTION_ALPB_SOLVATION;
   interaction.system_index = 0;
@@ -3356,10 +4177,10 @@ int test_gfn1_rejected_transactionally(std::int32_t device, PublicBatch& batch,
   CHECK(unchanged);
   CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn1_options,
                                 &interaction_result.descriptor,
-                                request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
+                                interaction_request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
   CUDA_CHECK(interaction_result.unchanged(unchanged));
   CHECK(unchanged);
-  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_query(interaction_request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
   CHECK(info.state == XTBLOOM_REQUEST_IDLE);
   xtbloom_plan_t* raw_interaction_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
   CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn1_options,
@@ -3370,14 +4191,46 @@ int test_gfn1_rejected_transactionally(std::int32_t device, PublicBatch& batch,
   gfn2_interaction_options.model = XTBLOOM_MODEL_GFN2_XTB;
   CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn2_interaction_options,
                         &interaction_result.descriptor) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  /* CUDA interaction content is admitted on the owner stream, so enqueue
+   * accepts the transaction and reports a valid reserved tag at completion. */
   CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn2_interaction_options,
                                 &interaction_result.descriptor,
-                                request.get()) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
-  raw_interaction_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
+                                interaction_request.get()) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(interaction_request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+  CHECK(info.completion_status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(info.result_flags == 0u);
+  CUDA_CHECK(interaction_result.unchanged(unchanged));
+  CHECK(unchanged);
+  /* CUDA plan creation binds topology and capacity, not one numerical
+   * attachment image. The reserved interaction is therefore rejected by
+   * each plan execution through the same stream-ordered admission gate. */
+  raw_interaction_plan = nullptr;
   CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn2_interaction_options,
-                            &raw_interaction_plan) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
-  CHECK(raw_interaction_plan == nullptr);
+                            &raw_interaction_plan) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(raw_interaction_plan != nullptr);
+  PlanHandle interaction_plan(raw_interaction_plan);
+  CHECK(xtbloom_plan_compute(interaction_plan.get(), &batch.descriptor, &gfn2_interaction_options,
+                             &interaction_result.descriptor) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CUDA_CHECK(interaction_result.unchanged(unchanged));
+  CHECK(unchanged);
+  xtbloom_request_t* raw_plan_interaction_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_plan_interaction_request) ==
+        XTBLOOM_STATUS_SUCCESS);
+  RequestHandle plan_interaction_request(raw_plan_interaction_request);
+  CHECK(xtbloom_plan_compute_enqueue(interaction_plan.get(), &batch.descriptor,
+                                     &gfn2_interaction_options, &interaction_result.descriptor,
+                                     plan_interaction_request.get()) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(plan_interaction_request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+  CHECK(info.completion_status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(info.result_flags == 0u);
+  CUDA_CHECK(interaction_result.unchanged(unchanged));
+  CHECK(unchanged);
 
+  xtbloom_request_t* raw_malformed_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_malformed_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle malformed_request(raw_malformed_request);
   batch.descriptor.interaction_payload = {};
   CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn1_options,
                         &interaction_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
@@ -3385,8 +4238,8 @@ int test_gfn1_rejected_transactionally(std::int32_t device, PublicBatch& batch,
   CHECK(unchanged);
   CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn1_options,
                                 &interaction_result.descriptor,
-                                request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+                                malformed_request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom_request_query(malformed_request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
   CHECK(info.state == XTBLOOM_REQUEST_IDLE);
   raw_interaction_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
   CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn1_options,
@@ -3527,12 +4380,14 @@ int main(int argc, char** argv) {
   const bool context_request_profile =
       argc == 2 && std::strcmp(argv[1], "--context-request-profile") == 0;
   const bool mixer_sanitizer = argc == 2 && std::strcmp(argv[1], "--mixer-sanitizer") == 0;
+  const bool electric_field_only = argc == 2 && std::strcmp(argv[1], "--electric-field-only") == 0;
   if (argc != 1 && !request_only && !request_sanitizer && !request_profile &&
-      !context_request_sanitizer && !context_request_profile && !mixer_sanitizer) {
+      !context_request_sanitizer && !context_request_profile && !mixer_sanitizer &&
+      !electric_field_only) {
     std::fprintf(stderr,
                  "usage: %s [--request-only|--request-sanitizer|--request-profile|"
                  "--context-request-sanitizer|--context-request-profile|"
-                 "--mixer-sanitizer]\n",
+                 "--mixer-sanitizer|--electric-field-only]\n",
                  argv[0]);
     return 2;
   }
@@ -3595,6 +4450,13 @@ int main(int argc, char** argv) {
   if (mixer_sanitizer) {
     return test_public_mixer_controls_and_reproducibility(device, cpu_context.get());
   }
+  if (electric_field_only) {
+    if (const int line = test_public_electric_field_execution(device, cpu_context.get());
+        line != 0) {
+      return line;
+    }
+    return test_public_electric_field_rejection_is_transactional(device);
+  }
 
   if (const int line = test_host_device_mixed_and_streams(device, batch, options, reference);
       line != 0) {
@@ -3619,6 +4481,12 @@ int main(int argc, char** argv) {
     return line;
   }
   if (const int line = test_public_warm_start_transactions(device); line != 0) return line;
+  if (const int line = test_public_electric_field_execution(device, cpu_context.get()); line != 0) {
+    return line;
+  }
+  if (const int line = test_public_electric_field_rejection_is_transactional(device); line != 0) {
+    return line;
+  }
   if (const int line = test_input_descriptor_matrix(device, cpu_context.get(), options);
       line != 0) {
     return line;

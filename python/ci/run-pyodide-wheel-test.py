@@ -136,7 +136,15 @@ def _run_complete_invariants(source_root: Path) -> None:
                     uhf=geometry.unpaired_electrons,
                     spin_channels=geometry.spin_channels,
                     point_charges=points,
-                    efield=geometry.efield,
+                    # The high-level interface requests dipoles whenever a
+                    # field attachment is present. Attach an explicit zero
+                    # field to field-free invariant calls so their dipoles are
+                    # retained in singleton as well as heterogeneous batches.
+                    efield=(
+                        geometry.efield
+                        if geometry.efield is not None
+                        else [0.0, 0.0, 0.0]
+                    ),
                 )
             )
 
@@ -160,6 +168,8 @@ def _run_complete_invariants(source_root: Path) -> None:
                 if item.point_charge_forces is None
                 else np.asarray(item.point_charge_forces).reshape(-1).tolist()
             )
+            if item.dipole_moments is None:
+                raise RuntimeError("Pyodide invariant solve omitted dipoles")
             results.append(
                 invariants.InvariantResult(
                     case_id=geometry.case_id,
@@ -168,6 +178,8 @@ def _run_complete_invariants(source_root: Path) -> None:
                     forces=np.asarray(item.forces).reshape(-1).tolist(),
                     charges=np.asarray(item.charges).reshape(-1).tolist(),
                     point_forces=point_forces,
+                    dipoles=np.asarray(item.dipole_moments).reshape(-1).tolist(),
+                    efield=None if geometry.efield is None else list(geometry.efield),
                 )
             )
         return results

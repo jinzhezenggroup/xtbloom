@@ -6,6 +6,7 @@ xtbloom physics implementation or either Fortran reference package is built.
 
 from __future__ import annotations
 
+import ctypes
 import importlib.util
 import io
 import itertools
@@ -160,6 +161,17 @@ class ConformanceToolTest(unittest.TestCase):
                 "interaction_payload",
             ],
         )
+        self.assertEqual(
+            [name for name, _ in PUBLIC_API.BatchResult._fields_[-4:]],
+            [
+                "dipole_moments",
+                "quadrupole_moments",
+                "wiberg_orders",
+                "spin_populations",
+            ],
+        )
+        self.assertEqual(ctypes.sizeof(PUBLIC_API.BatchResult), 280)
+        self.assertEqual(PUBLIC_API.BatchResult.dipole_moments.offset, 184)
 
         completed = subprocess.run(
             [
@@ -586,14 +598,14 @@ class ConformanceToolTest(unittest.TestCase):
         cases = {case["id"]: case for case in manifest["cases"]}
         case = cases["water_efield"]
         self.assertEqual(case["efield"], [0.003, -0.004, 0.005])
-        self.assertEqual(case["xtbloom_backends"], ["cpu"])
+        self.assertNotIn("xtbloom_backends", case)
         self.assertEqual(case["xtbloom_oracle_properties"], ["energy_hartree"])
         self.assertEqual(
             case["xtbloom_force_evidence"], "public_energy_finite_difference"
         )
         self.assertEqual(
             [item["id"] for item in PUBLIC_API.supported_cases(manifest, None, "cuda")],
-            [item["id"] for item in manifest["cases"] if item["id"] != "water_efield"],
+            [item["id"] for item in manifest["cases"]],
         )
         self.assertIn(case, PUBLIC_API.supported_cases(manifest, None, "cpu"))
 
@@ -754,8 +766,8 @@ class ConformanceToolTest(unittest.TestCase):
         )
         self.assertEqual(batch.total_interactions, 0)
 
-    def test_cuda_field_selection_skips_before_loading_a_library(self) -> None:
-        """The CPU-only field case cannot poison a CUDA conformance batch."""
+    def test_cuda_field_selection_reaches_the_public_runner(self) -> None:
+        """The released CUDA field case proceeds to shared-library loading."""
         completed = subprocess.run(
             [
                 sys.executable,
@@ -772,9 +784,32 @@ class ConformanceToolTest(unittest.TestCase):
             text=True,
             capture_output=True,
         )
-        self.assertEqual(completed.returncode, 0)
-        self.assertIn("SKIP water_efield", completed.stdout)
-        self.assertNotIn("shared library is missing", completed.stderr)
+        self.assertEqual(completed.returncode, 1)
+        self.assertNotIn("SKIP water_efield", completed.stdout)
+        self.assertIn("shared library is missing", completed.stderr)
+
+    def test_mixed_mode_splits_interactions_and_publishes_dipoles(self) -> None:
+        """Mixed conformance covers independent attachment and result placement."""
+        memory = object.__new__(PUBLIC_API.DescriptorMemory)
+        memory.mode = "mixed"
+        memory.cuda = object()
+        memory.device_outputs = []
+        self.assertTrue(memory._is_device("interaction_descriptors"))
+        self.assertFalse(memory._is_device("interaction_payload"))
+        self.assertTrue(memory._is_device("dipole_moments"))
+
+        class FakeLibrary:
+            @staticmethod
+            def xtbloom_compute_options_init(_options: object, _size: int) -> int:
+                return PUBLIC_API.XTBLOOM_STATUS_SUCCESS
+
+        options = PUBLIC_API.pinned_compute_options(
+            FakeLibrary(),
+            request_forces=True,
+            request_charges=True,
+            request_point_forces=False,
+        )
+        self.assertTrue(options.flags & PUBLIC_API.XTBLOOM_COMPUTE_DIPOLE_MOMENTS)
 
     def test_generate_xtb_normalizes_gradient_and_scc_multipoles(self) -> None:
         """The xtb adapter joins its gradient artifact with atom-resolved JSON."""
@@ -999,6 +1034,8 @@ def _zero_invariant_result(
         forces=[0.0] * (3 * len(geometry.atomic_numbers)),
         charges=[0.0] * len(geometry.atomic_numbers),
         point_forces=[0.0] * (3 * len(geometry.point_values)),
+        dipoles=[0.0, 0.0, 0.0],
+        efield=None if geometry.efield is None else list(geometry.efield),
     )
 
 
@@ -1040,6 +1077,8 @@ def linear_energy_solver() -> Callable[
                     forces=forces,
                     charges=[0.0] * atom_count,
                     point_forces=[0.0] * (3 * len(item.point_values)),
+                    dipoles=[0.0, 0.0, 0.0],
+                    efield=None if item.efield is None else list(item.efield),
                 )
             )
         return results
@@ -1161,6 +1200,121 @@ class InvarianceToolTest(unittest.TestCase):
             [0.004, 0.003, 0.005],
         )
 
+    def test_charged_field_probe_is_derived_from_committed_h3_plus(self) -> None:
+        """The charged public probe changes only the diagnostic ID and field."""
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        case = next(case for case in manifest["cases"] if case["id"] == "h3_plus")
+        source = INVARIANTS.load_geometries(MANIFEST, manifest, [case])[0]
+        probe = INVARIANTS.charged_field_probe([source])
+        self.assertIsNotNone(probe)
+        assert probe is not None
+        self.assertEqual(probe.case_id, INVARIANTS.CHARGED_FIELD_PROBE_ID)
+        self.assertEqual(probe.atomic_numbers, source.atomic_numbers)
+        self.assertEqual(probe.positions, source.positions)
+        self.assertEqual(probe.molecular_charge, 1)
+        self.assertEqual(probe.unpaired_electrons, 0)
+        self.assertEqual(probe.spin_channels, 1)
+        self.assertEqual(probe.point_positions, source.point_positions)
+        self.assertEqual(probe.point_values, source.point_values)
+        self.assertEqual(probe.point_gammas, source.point_gammas)
+        self.assertEqual(probe.efield, [0.003, -0.004, 0.005])
+        self.assertIsNone(source.efield)
+        self.assertAlmostEqual(
+            sum(
+                field * delta
+                for field, delta in zip(
+                    INVARIANTS.CHARGED_FIELD_PROBE_EFIELD,
+                    INVARIANTS.CHARGED_FIELD_PROBE_DELTA,
+                    strict=True,
+                )
+            ),
+            0.043,
+        )
+        self.assertIsNone(INVARIANTS.charged_field_probe(_invariant_geometries()))
+
+    def test_charged_field_probe_public_singleton_laws_and_failures(self) -> None:
+        """The charged H3+ gate makes two singleton calls and diagnoses each law."""
+        probe = INVARIANTS.Geometry(
+            case_id=INVARIANTS.CHARGED_FIELD_PROBE_ID,
+            atomic_numbers=[1, 1, 1],
+            positions=[
+                -0.47073898552969,
+                0.81534384004086,
+                0.0,
+                -0.47073898552969,
+                -0.81534384004086,
+                0.0,
+                0.94147797105939,
+                0.0,
+                0.0,
+            ],
+            molecular_charge=1,
+            unpaired_electrons=0,
+            spin_channels=1,
+            efield=list(INVARIANTS.CHARGED_FIELD_PROBE_EFIELD),
+        )
+
+        def run(perturbation: str | None) -> tuple[list[str], list[list[float]]]:
+            calls: list[list[float]] = []
+
+            def solver(
+                items: list[INVARIANTS.Geometry],
+            ) -> list[INVARIANTS.InvariantResult]:
+                self.assertEqual(len(items), 1)
+                item = items[0]
+                calls.append(list(item.positions))
+                translated_call = len(calls) == 2
+                energy = 1.25 - (0.043 if translated_call else 0.0)
+                dipole = [0.4, -0.2, 0.1]
+                if translated_call:
+                    dipole = [
+                        dipole[axis] + INVARIANTS.CHARGED_FIELD_PROBE_DELTA[axis]
+                        for axis in range(3)
+                    ]
+                force = [component / 3.0 for component in item.efield or ()] * 3
+                if perturbation == "energy" and translated_call:
+                    energy += 0.5
+                if perturbation == "dipole" and translated_call:
+                    dipole[0] += 0.5
+                if perturbation == "force":
+                    force[0] += 0.5
+                return [
+                    INVARIANTS.InvariantResult(
+                        case_id=item.case_id,
+                        molecular_charge=item.molecular_charge,
+                        energy=energy,
+                        forces=force,
+                        charges=[1.0 / 3.0] * 3,
+                        point_forces=[],
+                        dipoles=dipole,
+                        efield=list(item.efield or ()),
+                    )
+                ]
+
+            with redirect_stdout(io.StringIO()):
+                failures: list[str] = []
+                INVARIANTS.gate_charged_field_probe(solver, probe, failures)
+            return failures, calls
+
+        failures, calls = run(None)
+        self.assertEqual(failures, [])
+        self.assertEqual(calls[0], probe.positions)
+        self.assertEqual(
+            calls[1],
+            INVARIANTS.translated(
+                probe, INVARIANTS.CHARGED_FIELD_PROBE_DELTA
+            ).positions,
+        )
+        expected_labels = {
+            "energy": "charged_field_translation_shift",
+            "dipole": "charged_field_origin_shift",
+            "force": "total_force charged_field_",
+        }
+        for perturbation, label in expected_labels.items():
+            with self.subTest(perturbation=perturbation):
+                failures, _ = run(perturbation)
+                self.assertTrue(any(label in failure for failure in failures))
+
     def test_zero_solver_passes_every_gate(self) -> None:
         """A trivially symmetric solver satisfies all self-consistency gates."""
         geometries = _invariant_geometries()
@@ -1189,10 +1343,65 @@ class InvarianceToolTest(unittest.TestCase):
 
         failures = self.run_invariant_checks(solver, geometries)
         translation_failures = [
-            failure for failure in failures if "translation_invariant" in failure
+            failure
+            for failure in failures
+            if "translation_invariant" in failure or "translation_covariant" in failure
         ]
         self.assertTrue(translation_failures)
         self.assertTrue(any("energy_hartree" in item for item in translation_failures))
+
+    def test_charged_field_translation_laws_pass(self) -> None:
+        """Charged field energy and dipole acquire their exact origin shifts."""
+        delta = (2.0, -3.0, 5.0)
+        field = [0.1, -0.2, 0.3]
+        baseline = INVARIANTS.InvariantResult(
+            case_id="charged_field",
+            molecular_charge=-1,
+            energy=4.0,
+            forces=[-0.1, 0.2, -0.3],
+            charges=[-1.0],
+            point_forces=[],
+            dipoles=[0.4, 0.5, 0.6],
+            efield=field,
+        )
+        shifted = INVARIANTS.InvariantResult(
+            case_id="charged_field",
+            molecular_charge=-1,
+            energy=4.0 + sum(field[axis] * delta[axis] for axis in range(3)),
+            forces=list(baseline.forces),
+            charges=list(baseline.charges),
+            point_forces=[],
+            dipoles=[baseline.dipoles[axis] - delta[axis] for axis in range(3)],
+            efield=field,
+        )
+        with redirect_stdout(io.StringIO()):
+            failures: list[str] = []
+            INVARIANTS.gate_translation_invariance(
+                [baseline],
+                [shifted],
+                delta,
+                INVARIANTS.INVARIANT_ENERGY_ATOL,
+                INVARIANTS.INVARIANT_FORCE_ATOL,
+                INVARIANTS.INVARIANT_CHARGE_ATOL,
+                INVARIANTS.INVARIANT_DIPOLE_ATOL,
+                failures,
+            )
+        self.assertEqual(failures, [])
+
+        shifted.dipoles[0] += 0.5
+        with redirect_stdout(io.StringIO()):
+            failures = []
+            INVARIANTS.gate_translation_invariance(
+                [baseline],
+                [shifted],
+                delta,
+                INVARIANTS.INVARIANT_ENERGY_ATOL,
+                INVARIANTS.INVARIANT_FORCE_ATOL,
+                INVARIANTS.INVARIANT_CHARGE_ATOL,
+                INVARIANTS.INVARIANT_DIPOLE_ATOL,
+                failures,
+            )
+        self.assertTrue(any("translation_origin_shift" in item for item in failures))
 
     def test_rotation_break_is_detected(self) -> None:
         """A lab-frame force cannot pass the rotation-covariance gate."""
@@ -1220,6 +1429,26 @@ class InvarianceToolTest(unittest.TestCase):
             "symmetric constant forces must still conserve net force",
         )
 
+    def test_dipole_rotation_break_is_detected(self) -> None:
+        """A lab-frame molecular dipole cannot pass rotation covariance."""
+        geometries = _invariant_geometries()
+
+        def solver(
+            items: list[INVARIANTS.Geometry],
+        ) -> list[INVARIANTS.InvariantResult]:
+            results = [_zero_invariant_result(item) for item in items]
+            for result in results:
+                result.dipoles = [1.0, 0.0, 0.0]
+            return results
+
+        failures = self.run_invariant_checks(solver, geometries)
+        self.assertTrue(
+            any(
+                "molecular_dipole_e_bohr rotation_covariant" in failure
+                for failure in failures
+            )
+        )
+
     def test_force_conservation_break_is_detected(self) -> None:
         """A nonzero net force cannot pass the conservation gate."""
         geometries = _invariant_geometries()
@@ -1237,6 +1466,33 @@ class InvarianceToolTest(unittest.TestCase):
 
         failures = self.run_invariant_checks(solver, geometries)
         self.assertTrue(any("total_force" in failure for failure in failures))
+
+    def test_field_force_balance_includes_q_times_e_and_point_forces(self) -> None:
+        """The combined QM/point force balances the external ``Q E`` force."""
+        result = INVARIANTS.InvariantResult(
+            case_id="charged_field_with_point",
+            molecular_charge=2,
+            energy=0.0,
+            forces=[0.25, -0.30, 0.50],
+            charges=[2.0],
+            point_forces=[-0.05, 0.10, 0.10],
+            dipoles=[0.0, 0.0, 0.0],
+            efield=[0.10, -0.10, 0.30],
+        )
+        with redirect_stdout(io.StringIO()):
+            failures: list[str] = []
+            INVARIANTS.gate_force_conservation(
+                [result], INVARIANTS.INVARIANT_NET_FORCE_ATOL, failures
+            )
+        self.assertEqual(failures, [])
+
+        result.forces[0] -= 0.2
+        with redirect_stdout(io.StringIO()):
+            failures = []
+            INVARIANTS.gate_force_conservation(
+                [result], INVARIANTS.INVARIANT_NET_FORCE_ATOL, failures
+            )
+        self.assertTrue(any("total_force_axis_0" in failure for failure in failures))
 
     def test_nonfinite_array_component_is_detected(self) -> None:
         """A non-leading NaN cannot be hidden by maximum-error reduction."""
@@ -1265,12 +1521,41 @@ class InvarianceToolTest(unittest.TestCase):
                     forces=[0.0] * (3 * len(item.atomic_numbers)),
                     charges=[0.0] * len(item.atomic_numbers),
                     point_forces=[0.0] * (3 * len(item.point_values)),
+                    dipoles=[1.0e-6, 0.0, 0.0] if len(items) > 1 else [0.0, 0.0, 0.0],
+                    efield=None if item.efield is None else list(item.efield),
                 )
                 for item in items
             ]
 
         failures = self.run_invariant_checks(solver, geometries)
         self.assertTrue(any("batch_vs_sequential" in failure for failure in failures))
+
+    def test_dipole_batch_and_homogeneous_mismatches_are_detected(self) -> None:
+        """Both ragged consistency gates compare the molecular dipole outlet."""
+        geometry = _invariant_geometries()[0]
+        sequential = _zero_invariant_result(geometry)
+        mismatch = _zero_invariant_result(geometry)
+        mismatch.dipoles[2] = 1.0e-6
+        with redirect_stdout(io.StringIO()):
+            failures: list[str] = []
+            INVARIANTS.gate_batch_versus_sequential(
+                [sequential], [mismatch], INVARIANTS.INVARIANT_EXACT_ATOL, failures
+            )
+            INVARIANTS.gate_homogeneous_replicates(
+                sequential, [mismatch], INVARIANTS.INVARIANT_EXACT_ATOL, failures
+            )
+        self.assertTrue(
+            any(
+                "molecular_dipole_e_bohr batch_vs_sequential" in item
+                for item in failures
+            )
+        )
+        self.assertTrue(
+            any(
+                "molecular_dipole_e_bohr homogeneous_replica" in item
+                for item in failures
+            )
+        )
 
     def test_sequential_baseline_uses_single_system_calls(self) -> None:
         """Each baseline result comes from its own public-style solver call."""

@@ -11,7 +11,7 @@
 
 namespace xtbloom::detail::cuda {
 
-inline constexpr std::uint32_t kGfn2SccIterationArenaAbiVersion = 4u;
+inline constexpr std::uint32_t kGfn2SccIterationArenaAbiVersion = 5u;
 inline constexpr std::size_t kGfn2SccIterationArenaAlignment = 256u;
 
 /* Synchronous setup failure; no allocation, transfer, or device work occurs. */

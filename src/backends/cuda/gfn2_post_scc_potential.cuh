@@ -10,6 +10,7 @@
 
 #include "backends/cuda/gfn2_aes2.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
+#include "backends/cuda/gfn2_electric_field.cuh"
 #include "backends/cuda/gfn2_es2.cuh"
 #include "backends/cuda/gfn2_es3.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
@@ -88,6 +89,7 @@ struct Gfn2PostSccPotentialDeviceInput {
   const double* raw_atomic_quadrupoles = nullptr;
   std::int64_t quadrupole_elements = 0;
   std::uint64_t plan_token = 0u;
+  Gfn2ElectricFieldDevicePotentialView electric_field_potentials{};
 };
 
 /*

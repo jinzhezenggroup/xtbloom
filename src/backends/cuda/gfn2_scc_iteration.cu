@@ -317,6 +317,8 @@ bool same_classical_diagnostics(const Gfn2SccClassicalEnergyDeviceDiagnostics& f
          first.d4_two_body_elements == second.d4_two_body_elements &&
          first.explicit_point_charge == second.explicit_point_charge &&
          first.explicit_point_charge_elements == second.explicit_point_charge_elements &&
+         first.electric_field == second.electric_field &&
+         first.electric_field_elements == second.electric_field_elements &&
          first.periodic_embedding == second.periodic_embedding &&
          first.periodic_embedding_elements == second.periodic_embedding_elements &&
          first.classical_total == second.classical_total &&
@@ -335,6 +337,8 @@ bool same_free_energy_diagnostics(const Gfn2SccFreeEnergyDeviceDiagnostics& firs
          first.d4_two_body_elements == second.d4_two_body_elements &&
          first.explicit_point_charge == second.explicit_point_charge &&
          first.explicit_point_charge_elements == second.explicit_point_charge_elements &&
+         first.electric_field == second.electric_field &&
+         first.electric_field_elements == second.electric_field_elements &&
          first.periodic_embedding == second.periodic_embedding &&
          first.periodic_embedding_elements == second.periodic_embedding_elements &&
          first.entropy == second.entropy && first.entropy_elements == second.entropy_elements &&
@@ -454,6 +458,15 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   XTBLOOM_CHECK_TOKEN(plan.publication_plan.plan_token, BindingField::kStatePublication);
 
   XTBLOOM_CHECK_TOKEN(input.plan_token, BindingField::kPlan);
+  const bool admission_disabled = input.admission.error == nullptr &&
+                                  input.admission.error_elements == 0 &&
+                                  input.admission.plan_token == 0u;
+  const bool admission_enabled = input.admission.error != nullptr &&
+                                 input.admission.error_elements == 1 &&
+                                 input.admission.plan_token == token;
+  if (!admission_disabled && !admission_enabled) {
+    return validator.fail(BindingError::kInvalidCount, BindingField::kActivity);
+  }
   XTBLOOM_CHECK_TOKEN(input.activity_state.plan_token, BindingField::kActivity);
   XTBLOOM_CHECK_TOKEN(input.mixed_fields.plan_token, BindingField::kPotential);
   XTBLOOM_CHECK_TOKEN(input.mixed_spin.plan_token, BindingField::kSpin);
@@ -1998,7 +2011,9 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
   }
 
   /* Immutable numerical arrays that do not originate in staged storage. */
-  if (!read(input.hamiltonian.h0, matrices, sizeof(double), alignof(double),
+  if (!read(input.admission.error, input.admission.error_elements, sizeof(std::uint32_t),
+            alignof(std::uint32_t), BindingField::kActivity, 0) ||
+      !read(input.hamiltonian.h0, matrices, sizeof(double), alignof(double),
             BindingField::kHamiltonian, 0) ||
       !read(input.hamiltonian.overlap, matrices, sizeof(double), alignof(double),
             BindingField::kHamiltonian, 1) ||
@@ -2802,8 +2817,15 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
   const auto& electronic = workspace.electronic_energy_workspace;
   std::int64_t classical_scratch = 0;
   std::int64_t free_scratch = 0;
-  if (!checked_multiply(batch, kGfn2SccClassicalDiagnosticComponents, classical_scratch) ||
-      !checked_multiply(batch, kGfn2SccFreeEnergyDiagnosticComponents, free_scratch) ||
+  const bool electric_field = plan.electric_field_batch.plan_token != 0u;
+  if (!checked_multiply(batch,
+                        electric_field ? kGfn2SccClassicalStorageComponents
+                                       : kGfn2SccClassicalDiagnosticComponents,
+                        classical_scratch) ||
+      !checked_multiply(batch,
+                        electric_field ? kGfn2SccFreeEnergyStorageComponents
+                                       : kGfn2SccFreeEnergyDiagnosticComponents,
+                        free_scratch) ||
       !scratch(electronic.core_energy_scratch, electronic.batch_elements, batch, sizeof(double),
                alignof(double), BindingField::kElectronicEnergy, 20) ||
       !scratch(electronic.electronic_free_energy_scratch, electronic.batch_elements, batch,
@@ -3215,7 +3237,7 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
                                                       plan.provenance, workspace.ledger, stream)
             : derive_gfn2_scc_iteration_activity_cuda(plan.activity_policy, input.activity_state,
                                                       plan.provenance, *geometry, workspace.ledger,
-                                                      stream);
+                                                      input.admission, stream);
     if (!check_cuda(Gfn2SccStageId::kActivity, activity_status)) {
       return failure;
     }

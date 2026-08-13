@@ -14,11 +14,12 @@
 #include "backends/cuda/gfn2_scc_setup_eigensolver.cuh"
 #include "tests/support/gfn2_scc_test_case.hpp"
 
-#define CHECK(condition) \
-  do {                   \
-    if (!(condition)) {  \
-      return __LINE__;   \
-    }                    \
+#define CHECK(condition)                                                                   \
+  do {                                                                                     \
+    if (!(condition)) {                                                                    \
+      std::fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #condition); \
+      return __LINE__;                                                                     \
+    }                                                                                      \
   } while (false)
 
 #define CUDA_CHECK(expression) CHECK((expression) == cudaSuccess)
@@ -628,13 +629,18 @@ int test_device_overlap_refactor_peer_failure() {
   changed[static_cast<std::size_t>(failed_begin)] = std::numeric_limits<double>::quiet_NaN();
   DeviceAllocation device_overlap;
   DeviceAllocation device_epoch;
+  DeviceAllocation request_error;
   CHECK(device_overlap.allocate(changed.size() * sizeof(double)));
   CHECK(device_epoch.allocate(sizeof(std::uint64_t)));
+  CHECK(request_error.allocate(sizeof(std::uint32_t)));
   const std::uint64_t attempted_epoch = kGeneration + 2u;
+  const std::uint32_t admitted = 0u;
   std::vector<std::uint8_t> active(static_cast<std::size_t>(fixture.host.batch_size()), 1u);
   CUDA_CHECK(cudaMemcpyAsync(device_overlap.get(), changed.data(), changed.size() * sizeof(double),
                              cudaMemcpyHostToDevice, fixture.handles.stream));
   CUDA_CHECK(cudaMemcpyAsync(device_epoch.get(), &attempted_epoch, sizeof(attempted_epoch),
+                             cudaMemcpyHostToDevice, fixture.handles.stream));
+  CUDA_CHECK(cudaMemcpyAsync(request_error.get(), &admitted, sizeof(admitted),
                              cudaMemcpyHostToDevice, fixture.handles.stream));
   CUDA_CHECK(cudaMemcpyAsync(const_cast<std::uint8_t*>(fixture.binding.batch.active), active.data(),
                              active.size(), cudaMemcpyHostToDevice, fixture.handles.stream));
@@ -644,7 +650,8 @@ int test_device_overlap_refactor_peer_failure() {
             .refactor_overlap_from_device_epoch_async(
                 fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes,
                 fixture.binding, static_cast<const double*>(device_overlap.get()),
-                static_cast<std::int64_t>(changed.size()), epoch, fixture.handles.stream)
+                static_cast<std::int64_t>(changed.size()), epoch,
+                static_cast<const std::uint32_t*>(request_error.get()), fixture.handles.stream)
             .success());
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
 
@@ -692,7 +699,8 @@ int test_device_overlap_refactor_peer_failure() {
             .refactor_overlap_from_device_epoch_async(
                 fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes,
                 fixture.binding, static_cast<const double*>(device_overlap.get()),
-                static_cast<std::int64_t>(changed.size()), epoch, fixture.handles.stream)
+                static_cast<std::int64_t>(changed.size()), epoch,
+                static_cast<const std::uint32_t*>(request_error.get()), fixture.handles.stream)
             .success());
   std::vector<double> stale_factors;
   std::vector<std::uint32_t> stale_errors;
@@ -729,11 +737,16 @@ int test_device_overlap_refactor_graph_replay() {
     const std::vector<double> second = changed_overlap(fixture.host, fixture.topology, 0.009);
     DeviceAllocation device_overlap;
     DeviceAllocation device_epoch;
+    DeviceAllocation request_error;
     CHECK(device_overlap.allocate(first.size() * sizeof(double)));
     CHECK(device_epoch.allocate(sizeof(std::uint64_t)));
+    CHECK(request_error.allocate(sizeof(std::uint32_t)));
     const std::uint64_t initial_epoch = kGeneration;
+    const std::uint32_t admitted = 0u;
     std::vector<std::uint8_t> active(static_cast<std::size_t>(batch_size), 1u);
     CUDA_CHECK(cudaMemcpyAsync(device_epoch.get(), &initial_epoch, sizeof(initial_epoch),
+                               cudaMemcpyHostToDevice, fixture.handles.stream));
+    CUDA_CHECK(cudaMemcpyAsync(request_error.get(), &admitted, sizeof(admitted),
                                cudaMemcpyHostToDevice, fixture.handles.stream));
     CUDA_CHECK(cudaMemcpyAsync(const_cast<std::uint8_t*>(fixture.binding.batch.active),
                                active.data(), active.size(), cudaMemcpyHostToDevice,
@@ -748,7 +761,7 @@ int test_device_overlap_refactor_graph_replay() {
     const auto diagnostic = fixture.setup.refactor_overlap_from_device_epoch_async(
         fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
         static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(first.size()),
-        epoch, fixture.handles.stream);
+        epoch, static_cast<const std::uint32_t*>(request_error.get()), fixture.handles.stream);
     const cudaError_t end_capture = cudaStreamEndCapture(fixture.handles.stream, &graph.graph);
     CHECK(diagnostic.success());
     CUDA_CHECK(end_capture);
@@ -917,6 +930,73 @@ int test_fail_closed_plan_generation_and_provenance() {
   return 0;
 }
 
+int test_device_epoch_admission_validation_and_rejection() {
+  ProductionFixture fixture;
+  CHECK(fixture.create());
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+  const std::vector<double> changed = changed_overlap(fixture.host, fixture.topology, 0.004);
+  DeviceAllocation device_overlap;
+  DeviceAllocation device_epoch;
+  DeviceAllocation request_error;
+  CHECK(device_overlap.allocate(changed.size() * sizeof(double)));
+  CHECK(device_epoch.allocate(sizeof(std::uint64_t)));
+  CHECK(request_error.allocate(sizeof(std::uint32_t)));
+  const std::uint64_t epoch_value = kGeneration + 1u;
+  const std::uint32_t rejected = 3u;
+  CUDA_CHECK(cudaMemcpyAsync(device_overlap.get(), changed.data(), changed.size() * sizeof(double),
+                             cudaMemcpyHostToDevice, fixture.handles.stream));
+  CUDA_CHECK(cudaMemcpyAsync(device_epoch.get(), &epoch_value, sizeof(epoch_value),
+                             cudaMemcpyHostToDevice, fixture.handles.stream));
+  CUDA_CHECK(cudaMemcpyAsync(request_error.get(), &rejected, sizeof(rejected),
+                             cudaMemcpyHostToDevice, fixture.handles.stream));
+  std::vector<std::uint8_t> active(static_cast<std::size_t>(fixture.host.batch_size()), 1u);
+  CUDA_CHECK(cudaMemcpyAsync(const_cast<std::uint8_t*>(fixture.binding.batch.active), active.data(),
+                             active.size(), cudaMemcpyHostToDevice, fixture.handles.stream));
+  const Gfn2GeometryEpochDevice epoch{static_cast<std::uint64_t*>(device_epoch.get()), 1,
+                                      kPlanToken};
+  std::vector<double> before;
+  CHECK(download(fixture.binding.cache.cholesky_factors, changed.size(), before,
+                 fixture.handles.stream));
+  CHECK(fixture.setup
+            .refactor_overlap_from_device_epoch_async(
+                fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes,
+                fixture.binding, static_cast<const double*>(device_overlap.get()),
+                static_cast<std::int64_t>(changed.size()), epoch,
+                static_cast<const std::uint32_t*>(request_error.get()), fixture.handles.stream)
+            .success());
+  std::vector<double> after;
+  std::vector<std::uint64_t> generations;
+  CHECK(download(fixture.binding.cache.cholesky_factors, changed.size(), after,
+                 fixture.handles.stream));
+  CHECK(download(fixture.binding.cache.geometry_generations, active.size(), generations,
+                 fixture.handles.stream));
+  CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream));
+  CHECK(after == before);
+  CHECK(std::all_of(generations.begin(), generations.end(),
+                    [](std::uint64_t value) { return value == kGeneration; }));
+
+  auto diagnostic = fixture.setup.refactor_overlap_from_device_epoch_async(
+      fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
+      static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
+      epoch,
+      reinterpret_cast<const std::uint32_t*>(static_cast<const std::byte*>(request_error.get()) +
+                                             1u),
+      fixture.handles.stream);
+  CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidArenaMemory);
+  diagnostic = fixture.setup.refactor_overlap_from_device_epoch_async(
+      fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
+      static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
+      epoch, reinterpret_cast<const std::uint32_t*>(fixture.setup_arena.get()),
+      fixture.handles.stream);
+  CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidOverlap);
+  diagnostic = fixture.setup.refactor_overlap_from_device_epoch_async(
+      fixture.setup_arena.get(), fixture.setup.requirements().setup_device_bytes, fixture.binding,
+      static_cast<const double*>(device_overlap.get()), static_cast<std::int64_t>(changed.size()),
+      epoch, reinterpret_cast<const std::uint32_t*>(device_epoch.get()), fixture.handles.stream);
+  CHECK(diagnostic.error == Gfn2SccSetupEigensolverError::kInvalidOverlap);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -954,5 +1034,9 @@ int main() {
   if (status != 0) {
     return status;
   }
-  return test_fail_closed_plan_generation_and_provenance();
+  status = test_fail_closed_plan_generation_and_provenance();
+  if (status != 0) {
+    return status;
+  }
+  return test_device_epoch_admission_validation_and_rejection();
 }

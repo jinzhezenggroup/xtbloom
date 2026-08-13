@@ -1342,6 +1342,7 @@ if(XTBLOOM_HAS_CUDA)
     src/backends/cuda/gfn2_classical_force.cu
     src/backends/cuda/gfn2_d4.cu
     src/backends/cuda/gfn2_density.cu
+    src/backends/cuda/gfn2_electric_field.cu
     src/backends/cuda/gfn2_electronic_gradient.cu
     src/backends/cuda/gfn2_energy_force_execution.cu
     src/backends/cuda/gfn2_eigensolver.cu
@@ -2045,6 +2046,30 @@ if(XTBLOOM_BUILD_TESTS)
       COMMAND xtbloom_cuda_force_composition_test
     )
 
+    add_executable(xtbloom_cuda_electric_field_test
+      tests/cuda_electric_field_test.cu
+    )
+    target_link_libraries(xtbloom_cuda_electric_field_test PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+    )
+    target_include_directories(xtbloom_cuda_electric_field_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_electric_field_test
+      PRIVATE XTBLOOM_HAS_CUDA=1
+    )
+    set_target_properties(xtbloom_cuda_electric_field_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.electric_field
+      COMMAND xtbloom_cuda_electric_field_test
+    )
+
     add_executable(xtbloom_cuda_geometry_test tests/cuda_geometry_test.cu)
     target_link_libraries(xtbloom_cuda_geometry_test PRIVATE
       xtbloom::xtbloom
@@ -2354,7 +2379,9 @@ if(XTBLOOM_BUILD_TESTS)
       ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
     target_compile_definitions(xtbloom_cuda_gfn2_runtime_owner_test
-      PRIVATE XTBLOOM_HAS_CUDA=1
+      PRIVATE
+        XTBLOOM_HAS_CUDA=1
+        XTBLOOM_CUDA_TEST_HOOKS=1
     )
     set_target_properties(xtbloom_cuda_gfn2_runtime_owner_test PROPERTIES
       CUDA_STANDARD 17

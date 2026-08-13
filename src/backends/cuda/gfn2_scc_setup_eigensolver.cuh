@@ -230,14 +230,15 @@ class Gfn2SccSetupEigensolver {
       void* setup_device_arena, std::size_t setup_device_arena_bytes,
       Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
       std::int64_t device_overlap_elements, const Gfn2GeometryEpochDevice& geometry_epoch,
-      cudaStream_t stream = nullptr) const noexcept;
+      const std::uint32_t* request_error, cudaStream_t stream = nullptr) const noexcept;
 
  private:
   [[nodiscard]] Gfn2SccSetupEigensolverDiagnostic refactor_overlap_impl(
       void* setup_device_arena, std::size_t setup_device_arena_bytes,
       Gfn2SccSetupEigensolverBinding& binding, const double* device_overlap,
       std::int64_t device_overlap_elements, std::uint64_t geometry_generation,
-      const Gfn2GeometryEpochDevice* geometry_epoch, cudaStream_t stream) const noexcept;
+      const Gfn2GeometryEpochDevice* geometry_epoch, const std::uint32_t* request_error,
+      cudaStream_t stream) const noexcept;
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

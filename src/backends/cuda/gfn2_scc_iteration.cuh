@@ -13,7 +13,9 @@
 #include "backends/cuda/gfn2_aes2.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
 #include "backends/cuda/gfn2_density.cuh"
+#include "backends/cuda/gfn2_device_admission.cuh"
 #include "backends/cuda/gfn2_eigensolver.cuh"
+#include "backends/cuda/gfn2_electric_field.cuh"
 #include "backends/cuda/gfn2_es2.cuh"
 #include "backends/cuda/gfn2_es3.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
@@ -43,7 +45,7 @@ namespace xtbloom::detail::cuda {
  * borrowing authority for every plan leaf; leaf identity is proven against
  * these projections in one place instead of re-deriving the master topology.
  * ABI v4 replaces the dense D4 pair cache with Gfn2D4PairListDeviceCache. */
-inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 4u;
+inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 5u;
 
 /*
  * Which numerical-body stages one launch runs. The production device-tail loop
@@ -119,6 +121,7 @@ enum class Gfn2SccIterationBindingField : std::uint32_t {
   kStageReports = 23u,
   kWorkspace = 24u,
   kSpin = 25u,
+  kElectricField = 26u,
 };
 
 struct Gfn2SccIterationBindingDiagnostic {
@@ -293,6 +296,7 @@ struct Gfn2SccIterationDevicePlan {
   Gfn2ExternalPointChargeDeviceBatch explicit_point_charge_batch{};
   Gfn2ExternalPointChargeDeviceCache explicit_point_charge_cache{};
   Gfn2PeriodicEmbeddingDeviceBatch periodic_batch{};
+  Gfn2ElectricFieldDeviceBatch electric_field_batch{};
   Gfn2SccBridgeDeviceBatch scalar_bridge_batch{};
   Gfn2HamiltonianDeviceBatch hamiltonian_batch{};
   Gfn2EigensolverDeviceBatch eigensolver_batch{};
@@ -318,6 +322,11 @@ struct Gfn2SccIterationDevicePlan {
  * zero-copy edges once so the hot composer never rebuilds a descriptor.
  */
 struct Gfn2SccIterationDeviceInput {
+  Gfn2DeviceAdmission admission{};
+  /* Runtime-refreshed, address-stable field data. vectors/positions feed the
+   * numerical refresh leaf; potentials are its committed SCC outputs. */
+  Gfn2ElectricFieldDeviceInput electric_field{};
+  Gfn2ElectricFieldDevicePotentialView electric_field_potentials{};
   Gfn2SccIterationDeviceStateInput activity_state{};
   Gfn2SccPotentialDeviceMixedFields mixed_fields{};
   /* Mixed qsh drives the Hamiltonian spin potential; raw qsh drives energy. */

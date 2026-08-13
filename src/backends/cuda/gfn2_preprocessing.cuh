@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "backends/cuda/gfn2_aes2.cuh"
+#include "backends/cuda/gfn2_device_admission.cuh"
 #include "backends/cuda/gfn2_es2.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_integrals.cuh"
@@ -254,6 +255,7 @@ struct Gfn2PreprocessingDeviceBinding {
   /* Optional for the scalar API and required by the replay-safe epoch API.
    * The descriptor is covered by binding_seal, including its stable address. */
   Gfn2GeometryEpochDevice geometry_epoch{};
+  Gfn2DeviceAdmission admission{};
   std::uint64_t binding_seal = 0u;
   std::uint64_t plan_token = 0u;
 };
