@@ -1,10 +1,9 @@
-#include "model/gfn2/scc_mixer.hpp"
+#include "model/gfn1/scc_mixer.hpp"
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#include <array>
 #include <utility>
 
-namespace xtbloom::detail::gfn2 {
+namespace xtbloom::detail::gfn1 {
 namespace {
 
 common::SccMixerVectorLayoutView make_common_layout(const WavefunctionLayout& layout) {
@@ -12,16 +11,12 @@ common::SccMixerVectorLayoutView make_common_layout(const WavefunctionLayout& la
   common_layout.batch_size = layout.batch_size;
   common_layout.workspace_size_bytes = layout.workspace_size_bytes;
   common_layout.workspace_alignment = kWavefunctionWorkspaceAlignment;
-  common_layout.field_count = 3u;
-  const std::array<const WavefunctionFieldLayout*, 3> fields{
-      {&layout.qsh, &layout.dipole, &layout.quadrupole}};
-  for (std::size_t field = 0u; field < fields.size(); ++field) {
-    common_layout.fields[field] = {fields[field]->offset_bytes,
-                                   fields[field]->size_bytes,
-                                   fields[field]->element_count,
-                                   fields[field]->system_offsets.data(),
-                                   fields[field]->system_offsets.size()};
-  }
+  common_layout.field_count = 1u;
+  common_layout.fields[0] = {layout.qsh.offset_bytes,
+                             layout.qsh.size_bytes,
+                             layout.qsh.element_count,
+                             layout.qsh.system_offsets.data(),
+                             layout.qsh.system_offsets.size()};
   return common_layout;
 }
 
@@ -29,8 +24,8 @@ common::SccMixerVectorView make_common_view(const WavefunctionView& wavefunction
   common::SccMixerVectorView vector;
   vector.workspace_base = wavefunction.workspace_base;
   vector.workspace_size_bytes = wavefunction.workspace_size_bytes;
-  vector.fields = {{wavefunction.qsh, wavefunction.dipole, wavefunction.quadrupole, nullptr}};
-  vector.field_count = 3u;
+  vector.fields[0] = wavefunction.qsh;
+  vector.field_count = 1u;
   return vector;
 }
 
@@ -72,15 +67,10 @@ xtbloom_status_t make_scc_mixer_plan(const WavefunctionLayout& layout,
                                      std::int64_t history_size, double damping,
                                      double rms_tolerance, double maximum_tolerance,
                                      SccMixerPlan& plan, std::string& error) {
-  WavefunctionWarmStartIdentity validated_layout;
-  xtbloom_status_t status =
-      make_wavefunction_warm_start_identity(layout, 0u, validated_layout, error);
-  if (status != XTBLOOM_STATUS_SUCCESS) {
-    return status;
-  }
   common::SccMixerPlan created;
-  status = common::make_scc_mixer_plan(make_common_layout(layout), history_size, damping,
-                                       rms_tolerance, maximum_tolerance, created, error);
+  const xtbloom_status_t status = common::make_scc_mixer_plan(
+      make_common_layout(layout), history_size, damping, rms_tolerance,
+      maximum_tolerance, created, error);
   if (status == XTBLOOM_STATUS_SUCCESS) {
     plan.engine_ = std::move(created);
   }
@@ -151,4 +141,4 @@ xtbloom_status_t commit_scc_mixer_system_transaction_cpu(
                                                          destination, error);
 }
 
-}  // namespace xtbloom::detail::gfn2
+}  // namespace xtbloom::detail::gfn1

@@ -1,7 +1,7 @@
-#ifndef XTBLOOM_MODEL_GFN2_SCC_MIXER_HPP
+#ifndef XTBLOOM_MODEL_GFN1_SCC_MIXER_HPP
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
-#define XTBLOOM_MODEL_GFN2_SCC_MIXER_HPP
+#define XTBLOOM_MODEL_GFN1_SCC_MIXER_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -9,9 +9,9 @@
 #include <vector>
 
 #include "model/common/scc_mixer.hpp"
-#include "model/gfn2/wavefunction.hpp"
+#include "model/gfn1/wavefunction.hpp"
 
-namespace xtbloom::detail::gfn2 {
+namespace xtbloom::detail::gfn1 {
 
 inline constexpr std::size_t kSccMixerWorkspaceAlignment =
     common::kSccMixerWorkspaceAlignment;
@@ -21,9 +21,9 @@ using SccMixerState = common::SccMixerState;
 using SccMixerWorkspace = common::SccMixerWorkspace;
 
 /*
- * GFN2 compatibility wrapper over the model-neutral ragged Broyden engine.
- * Its mixed vector remains byte-for-byte the established qsh, dipole,
- * quadrupole concatenation; no GFN2 caller or numerical convention changes.
+ * GFN1 mixes only shell populations. For unrestricted systems qsh already
+ * contains charge followed by magnetization through its nspin-expanded
+ * ragged field offsets; atomic dipoles and quadrupoles never enter this plan.
  */
 class SccMixerPlan {
  public:
@@ -106,6 +106,6 @@ xtbloom_status_t commit_scc_mixer_system_transaction_cpu(
     const SccMixerPlan& plan, std::int64_t system, const SccMixerState& staged,
     const SccMixerState& destination, std::string& error);
 
-}  // namespace xtbloom::detail::gfn2
+}  // namespace xtbloom::detail::gfn1
 
-#endif  // XTBLOOM_MODEL_GFN2_SCC_MIXER_HPP
+#endif  // XTBLOOM_MODEL_GFN1_SCC_MIXER_HPP
