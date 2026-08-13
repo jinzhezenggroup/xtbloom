@@ -264,6 +264,7 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
             "data/parameters/gfn1.toml whitespace=-blank-at-eof",
             "data/parameters/tblite_sto.hpp text eol=lf",
             "LICENSES/Apache-2.0.txt -text",
+            "LICENSES/LGPL-3.0-or-later.txt -text",
             "LICENSES/scipy-openblas32-0.3.34.0.0.txt -text",
             "LICENSES/openchemlib-BSD-3-Clause.txt -text",
             "LICENSES/pyodide-MPL-2.0.txt -text "
@@ -305,6 +306,10 @@ class LicenseArchiveTests(unittest.TestCase):
             for name in sorted(names):
                 if name in overrides:
                     payload = overrides[name]
+                elif name.endswith("/provenance/gfn1_d3_manifest.json"):
+                    payload = (
+                        REPOSITORY / "data/parameters/gfn1_d3_manifest.json"
+                    ).read_bytes()
                 elif name.endswith("/provenance/implib_manifest.json"):
                     payload = (REPOSITORY / CHECKER.IMPLIB_MANIFEST_PATH).read_bytes()
                 elif name.endswith("/provenance/scipy_openblas32_manifest.json"):
@@ -339,6 +344,16 @@ class LicenseArchiveTests(unittest.TestCase):
                         if Path(name).name == Path(relative).name
                     )
                     payload = (REPOSITORY / relative).read_bytes()
+                elif name.endswith("/third-party/Apache-2.0.txt") or name.endswith(
+                    "/LICENSES/Apache-2.0.txt"
+                ):
+                    payload = (REPOSITORY / "LICENSES/Apache-2.0.txt").read_bytes()
+                elif name.endswith(
+                    "/third-party/LGPL-3.0-or-later.txt"
+                ) or name.endswith("/LICENSES/LGPL-3.0-or-later.txt"):
+                    payload = (
+                        REPOSITORY / "LICENSES/LGPL-3.0-or-later.txt"
+                    ).read_bytes()
                 else:
                     payload = b"test\n"
                 archive.writestr(name, payload)
@@ -411,6 +426,52 @@ class LicenseArchiveTests(unittest.TestCase):
                         CHECKER.LicenseCheckError, filename.split(".")[0]
                     ):
                         CHECKER.check_archive(wheel)
+
+    def test_wheel_rejects_corrupt_gfn1_d3_provenance(self) -> None:
+        """Validate archived D3 provenance bytes, not only its filename."""
+        names = self._valid_wheel_names()
+        manifest = "xtbloom/share/licenses/xtbloom/provenance/gfn1_d3_manifest.json"
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+            self._write_wheel(wheel, names, {manifest: b"{}\n"})
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "GFN1-D3"):
+                CHECKER.check_archive(wheel)
+
+    def test_wheel_rejects_changed_gfn1_d3_generated_metadata(self) -> None:
+        """Enforce exact generator/output records in the distributed manifest."""
+        names = self._valid_wheel_names()
+        manifest_name = (
+            "xtbloom/share/licenses/xtbloom/provenance/gfn1_d3_manifest.json"
+        )
+        manifest = json.loads(
+            (REPOSITORY / "data/parameters/gfn1_d3_manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        manifest["outputs"]["gfn1_d3.hpp"]["sha256"] = "0" * 64
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+            self._write_wheel(
+                wheel,
+                names,
+                {manifest_name: (json.dumps(manifest) + "\n").encode("utf-8")},
+            )
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "generated-output metadata"
+            ):
+                CHECKER.check_archive(wheel)
+
+    def test_wheel_rejects_changed_gfn1_d3_lgpl_text(self) -> None:
+        """Require exact upstream LGPL bytes in the wheel legal payload."""
+        names = self._valid_wheel_names()
+        lgpl_name = f"{WHEEL_DIST_INFO}/licenses/LICENSES/LGPL-3.0-or-later.txt"
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+            self._write_wheel(wheel, names, {lgpl_name: b"changed\n"})
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "LGPL license differs"
+            ):
+                CHECKER.check_archive(wheel)
 
     def test_wheel_must_retain_implib_provenance_manifest(self) -> None:
         """Require the vendored implib provenance manifest in wheels."""
@@ -720,6 +781,26 @@ class PyodideOpenBlasProvenanceTests(unittest.TestCase):
 class InstallPayloadTests(unittest.TestCase):
     """Keep wheel-only provider binaries out of native CMake installs."""
 
+    def _write_required_install_files(self, root: Path) -> None:
+        """Create a minimal install tree with authentic reviewed D3 provenance."""
+        for relative in CHECKER.INSTALL_FILES:
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if relative.endswith("provenance/gfn1_d3_manifest.json"):
+                destination.write_bytes(
+                    (REPOSITORY / "data/parameters/gfn1_d3_manifest.json").read_bytes()
+                )
+            elif relative.endswith("third-party/Apache-2.0.txt"):
+                destination.write_bytes(
+                    (REPOSITORY / "LICENSES/Apache-2.0.txt").read_bytes()
+                )
+            elif relative.endswith("third-party/LGPL-3.0-or-later.txt"):
+                destination.write_bytes(
+                    (REPOSITORY / "LICENSES/LGPL-3.0-or-later.txt").read_bytes()
+                )
+            else:
+                destination.write_bytes(b"test\n")
+
     def test_install_rejects_unrenamed_desktop_openblas_cohort(self) -> None:
         """Recognize upstream macOS/Windows provider and support filenames."""
         candidates = (
@@ -738,10 +819,7 @@ class InstallPayloadTests(unittest.TestCase):
                 ) as directory,
             ):
                 root = Path(directory)
-                for relative in CHECKER.INSTALL_FILES:
-                    destination = root / relative
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(b"test\n")
+                self._write_required_install_files(root)
                 bundled = root / candidate
                 bundled.parent.mkdir(parents=True, exist_ok=True)
                 bundled.write_bytes(b"native provider")
@@ -756,10 +834,7 @@ class InstallPayloadTests(unittest.TestCase):
             prefix="xtbloom-install-license-test-"
         ) as directory:
             root = Path(directory)
-            for relative in CHECKER.INSTALL_FILES:
-                destination = root / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(b"test\n")
+            self._write_required_install_files(root)
             renamed = root / "lib" / "libinnocent_math.so"
             renamed.parent.mkdir(parents=True, exist_ok=True)
             renamed.write_bytes(CHECKER.WASM_V1_MAGIC + b"renamed provider")
@@ -782,10 +857,7 @@ class InstallPayloadTests(unittest.TestCase):
                 ) as directory,
             ):
                 root = Path(directory)
-                for relative in CHECKER.INSTALL_FILES:
-                    destination = root / relative
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(b"test\n")
+                self._write_required_install_files(root)
                 bundled = root / candidate
                 bundled.parent.mkdir(parents=True, exist_ok=True)
                 bundled.write_bytes(b"Web-only Eigen payload")
@@ -793,6 +865,53 @@ class InstallPayloadTests(unittest.TestCase):
                     CHECKER.LicenseCheckError, "Web-only Eigen"
                 ):
                     CHECKER.check_install(root)
+
+    def test_install_rejects_corrupt_gfn1_d3_provenance(self) -> None:
+        """Validate the installed D3 provenance manifest contents."""
+        with tempfile.TemporaryDirectory(
+            prefix="xtbloom-install-license-test-"
+        ) as directory:
+            root = Path(directory)
+            self._write_required_install_files(root)
+            manifest = root / "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json"
+            manifest.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "GFN1-D3"):
+                CHECKER.check_install(root)
+
+    def test_install_maps_malformed_gfn1_d3_manifest_to_checker_error(self) -> None:
+        """Keep malformed installed JSON and UTF-8 on the controlled error path."""
+        for content in (b"{\n", b"\xff\n"):
+            with (
+                self.subTest(content=content),
+                tempfile.TemporaryDirectory(
+                    prefix="xtbloom-install-license-test-"
+                ) as directory,
+            ):
+                root = Path(directory)
+                self._write_required_install_files(root)
+                manifest = (
+                    root / "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json"
+                )
+                manifest.write_bytes(content)
+                with self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError,
+                    "installed GFN1-D3 manifest is malformed",
+                ):
+                    CHECKER.check_install(root)
+
+    def test_install_rejects_changed_gfn1_d3_lgpl_text(self) -> None:
+        """Require exact upstream LGPL bytes in native install trees."""
+        with tempfile.TemporaryDirectory(
+            prefix="xtbloom-install-license-test-"
+        ) as directory:
+            root = Path(directory)
+            self._write_required_install_files(root)
+            lgpl = root / "share/licenses/xtbloom/third-party/LGPL-3.0-or-later.txt"
+            lgpl.write_bytes(b"changed\n")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "LGPL license differs"
+            ):
+                CHECKER.check_install(root)
 
 
 class WebSiteLicenseTests(unittest.TestCase):
@@ -1238,11 +1357,14 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
             )
         )
         cls.apache = (REPOSITORY / "LICENSES/Apache-2.0.txt").read_bytes()
+        cls.lgpl = (REPOSITORY / "LICENSES/LGPL-3.0-or-later.txt").read_bytes()
 
     def test_current_gfn1_provenance_is_accepted(self) -> None:
         """Accept the exact reviewed GFN1 and GFN1-D3 provenance records."""
         CHECKER._check_gfn1_parameter_provenance(copy.deepcopy(self.gfn1))
-        CHECKER._check_gfn1_d3_provenance(copy.deepcopy(self.gfn1_d3), self.apache)
+        CHECKER._check_gfn1_d3_provenance(
+            copy.deepcopy(self.gfn1_d3), self.apache, self.lgpl
+        )
 
     def test_gfn1_source_digest_mutation_is_rejected(self) -> None:
         """Reject a modified aggregate digest for the tblite source set."""
@@ -1277,7 +1399,21 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
         manifest = copy.deepcopy(self.gfn1_d3)
         manifest["unit_conversion"]["sources"][0]["sha256"] = "0" * 64
         with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
-            CHECKER._check_gfn1_d3_provenance(manifest, self.apache)
+            CHECKER._check_gfn1_d3_provenance(manifest, self.apache, self.lgpl)
+
+    def test_gfn1_d3_equation_source_mutation_is_rejected(self) -> None:
+        """Reject a changed simple-dftd3 equation blob or digest."""
+        manifest = copy.deepcopy(self.gfn1_d3)
+        manifest["source"]["equation_sources"][0]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_d3_provenance(manifest, self.apache, self.lgpl)
+
+    def test_gfn1_d3_execution_contract_mutation_is_rejected(self) -> None:
+        """Reject changed tblite cutoff or switch-width provenance."""
+        manifest = copy.deepcopy(self.gfn1_d3)
+        manifest["execution_contract"]["smooth_cutoff_width_bohr"] = 0.0
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed provenance"):
+            CHECKER._check_gfn1_d3_provenance(manifest, self.apache, self.lgpl)
 
     def test_gfn1_d3_mctc_license_text_mutation_is_rejected(self) -> None:
         """Reject retained Apache license bytes outside the reviewed record."""
@@ -1285,7 +1421,39 @@ class Gfn1ParameterProvenanceTests(unittest.TestCase):
             CHECKER.LicenseCheckError, "Apache license differs"
         ):
             CHECKER._check_gfn1_d3_provenance(
-                copy.deepcopy(self.gfn1_d3), self.apache + b"changed\n"
+                copy.deepcopy(self.gfn1_d3), self.apache + b"changed\n", self.lgpl
+            )
+
+    def test_gfn1_d3_generated_metadata_mutation_is_rejected(self) -> None:
+        """Bind generator and output metadata at every distribution boundary."""
+        for field in ("generator", "outputs"):
+            manifest = copy.deepcopy(self.gfn1_d3)
+            if field == "generator":
+                manifest[field]["sha256"] = "0" * 64
+            else:
+                manifest[field]["gfn1_d3.hpp"]["sha256"] = "0" * 64
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError, "generated-output metadata"
+                ),
+            ):
+                CHECKER._check_gfn1_d3_provenance(manifest, self.apache, self.lgpl)
+
+    def test_gfn1_d3_non_object_and_extra_fields_are_rejected(self) -> None:
+        """Reject schema changes and non-object JSON through controlled errors."""
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "root is not an object"):
+            CHECKER._check_gfn1_d3_provenance([], self.apache, self.lgpl)
+        manifest = copy.deepcopy(self.gfn1_d3)
+        manifest["unexpected"] = True
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unexpected fields"):
+            CHECKER._check_gfn1_d3_provenance(manifest, self.apache, self.lgpl)
+
+    def test_gfn1_d3_lgpl_text_mutation_is_rejected(self) -> None:
+        """Require the exact reviewed simple-dftd3/tblite LGPL grant."""
+        with self.assertRaisesRegex(CHECKER.LicenseCheckError, "LGPL license differs"):
+            CHECKER._check_gfn1_d3_provenance(
+                copy.deepcopy(self.gfn1_d3), self.apache, self.lgpl + b"changed\n"
             )
 
 
@@ -1295,6 +1463,16 @@ class Gfn1FixtureProvenanceTests(unittest.TestCase):
     def test_current_fixture_provenance_is_accepted(self) -> None:
         """Accept the exact reviewed dxtb, mstore, and tblite records."""
         CHECKER._check_gfn1_fixture_provenance(REPOSITORY)
+
+    def test_windows_crlf_fixture_checkout_is_accepted(self) -> None:
+        """Hash canonical fixture text across Git's Windows CRLF checkout."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            for relative in ("tests/gfn1_d3_test.cpp", "tests/gfn1_halogen_test.cpp"):
+                consumer = root / relative
+                consumer.write_bytes(consumer.read_bytes().replace(b"\n", b"\r\n"))
+            CHECKER._check_gfn1_fixture_provenance(root)
 
     def test_fixture_source_digest_mutation_is_rejected(self) -> None:
         """Reject a changed upstream digest even when the local tests remain."""
@@ -1306,6 +1484,35 @@ class Gfn1FixtureProvenanceTests(unittest.TestCase):
             manifest["sources"][0]["files"][0]["sha256"] = "0" * 64
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source files"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_extracted_fixture_literal_mutation_is_rejected(self) -> None:
+        """Bind copied numerical literals, not only their upstream source files."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            consumer = root / "tests/gfn1_d3_test.cpp"
+            consumer.write_text(
+                consumer.read_text(encoding="utf-8").replace(
+                    "-8.2108039012179698e-5", "-8.2108039012179697e-5", 1
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "fixture bytes"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_extracted_fixture_digest_mutation_is_rejected(self) -> None:
+        """Keep marker-delimited extraction digests immutable."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["extracted_fixtures"][0]["sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "unreviewed extracted"
+            ):
                 CHECKER._check_gfn1_fixture_provenance(root)
 
     def test_fixture_required_source_file_is_rejected_when_missing(self) -> None:
@@ -1324,6 +1531,27 @@ class Gfn1FixtureProvenanceTests(unittest.TestCase):
                 item
                 for item in tblite["files"]
                 if item["path"] != "src/tblite/coulomb/charge/effective.f90"
+            ]
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source files"):
+                CHECKER._check_gfn1_fixture_provenance(root)
+
+    def test_halogen_fixture_source_is_rejected_when_missing(self) -> None:
+        """Keep the tblite halogen geometries and energies provenance-pinned."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-gfn1-fixture-") as directory:
+            root = Path(directory)
+            shutil.copytree(REPOSITORY / "tests", root / "tests")
+            manifest_path = root / CHECKER.GFN1_FIXTURE_MANIFEST_PATH
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            tblite = next(
+                source
+                for source in manifest["sources"]
+                if source["project"] == "tblite"
+            )
+            tblite["files"] = [
+                item
+                for item in tblite["files"]
+                if item["path"] != "test/unit/test_halogen.f90"
             ]
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source files"):

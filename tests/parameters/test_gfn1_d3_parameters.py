@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -120,6 +122,54 @@ class Gfn1D3ParameterTests(unittest.TestCase):
                 }
             ],
         )
+        equations = {
+            record["path"]: (record["git_blob"], record["sha256"])
+            for record in self.manifest["source"]["equation_sources"]
+        }
+        self.assertEqual(
+            equations,
+            {
+                "src/dftd3/model.f90": (
+                    "41d3eb76915c05c515ce1802efc8ba8213c0cd42",
+                    "b4b2cad1f772263c979ea2674b6d5d78f4eec19fa91a13afd3a789d0a7e866df",
+                ),
+                "src/dftd3/damping/rational.f90": (
+                    "a8edb7c50b08fde56f234750a2155053a0102bfa",
+                    "d3a9fca2c45ebc4c3b88a49d7688774904f78b7fbacd2716f3756dc5f55521e8",
+                ),
+                "src/dftd3/disp.f90": (
+                    "413683f9a16b8621875bf1880af764f63e2ac02d",
+                    "cf2e68d8afb1c33b1f458dd09360e512c7171686d8e371a29d02501e0458edde",
+                ),
+                "src/dftd3/cutoff.f90": (
+                    "743774e355c6e99aac49c0288be8593b08237c9c",
+                    "c98c15fa8f38e961bf920cff176daa649b48f685b28a4b5dd04860ca0c19fd29",
+                ),
+            },
+        )
+        execution = self.manifest["execution_contract"]
+        self.assertEqual(execution["two_body_cutoff_bohr"], 50.0)
+        self.assertEqual(execution["smooth_cutoff_width_bohr"], 0.05)
+        self.assertEqual(
+            {
+                record["path"]: (record["git_blob"], record["sha256"])
+                for record in execution["sources"]
+            },
+            {
+                "src/tblite/disp/d3.f90": (
+                    "df1b9cfe8e45078c021c55359c758506efae7210",
+                    "b4a8d386fd30723cc7bebf7ced4f5a08c1ed4bae58ca753e4e2dcdaf92a4029c",
+                ),
+                "src/tblite/xtb/calculator.f90": (
+                    "31e1394455e0f1fc77f3dfc0dfd7cc14abd36e38",
+                    "40a44bfe99b0d6aa11d6d9de18ae1f12cfbd32e73eaf344c88492de46927818d",
+                ),
+                "src/tblite/xtb/gfn1.f90": (
+                    "dc96235fa5bd0ece28f9a7e3672716cfea3633b6",
+                    "0df0d3eca4b69efa445733a2fda269220cb203fb325acf0f6f06c21c55feb630",
+                ),
+            },
+        )
         output = (DATA_DIR / GENERATOR.HEADER_FILENAME).read_bytes()
         self.assertEqual(
             hashlib.sha256(output).hexdigest(),
@@ -155,23 +205,70 @@ class Gfn1D3ParameterTests(unittest.TestCase):
             ):
                 GENERATOR.build_offline_artifacts(output)
 
+    def test_offline_regeneration_maps_invalid_utf8_to_data_error(self) -> None:
+        """Keep malformed retained bytes on the controlled generator error path."""
+        with tempfile.TemporaryDirectory(
+            prefix="xtbloom-gfn1-d3-encoding-"
+        ) as directory:
+            output = Path(directory)
+            (output / GENERATOR.JSON_FILENAME).write_bytes(b"\xff\n")
+            shutil.copy2(DATA_DIR / GENERATOR.MANIFEST_FILENAME, output)
+            with self.assertRaisesRegex(
+                GENERATOR.D3DataError, "cannot load retained GFN1-D3"
+            ):
+                GENERATOR.build_offline_artifacts(output)
+
     def test_optional_upstream_refresh_matches_retained_bundle(self) -> None:
         """Recheck the pinned Git blobs when explicit local sources are supplied."""
         d3_source = os.environ.get("XTBLOOM_SIMPLE_DFTD3_SOURCE")
         mctc_source = os.environ.get("XTBLOOM_MCTC_SOURCE")
-        if not d3_source or not mctc_source:
+        tblite_source = os.environ.get("XTBLOOM_TBLITE_SOURCE")
+        if not d3_source or not mctc_source or not tblite_source:
             self.skipTest(
-                "set XTBLOOM_SIMPLE_DFTD3_SOURCE and XTBLOOM_MCTC_SOURCE "
-                "to audit upstream Git blobs"
+                "set XTBLOOM_SIMPLE_DFTD3_SOURCE, XTBLOOM_MCTC_SOURCE, and "
+                "XTBLOOM_TBLITE_SOURCE to audit upstream Git blobs"
             )
         refreshed = GENERATOR.build_artifacts(
             Path(d3_source),
             GENERATOR.UPSTREAM_REVISION,
             Path(mctc_source),
             GENERATOR.MCTC_REVISION,
+            Path(tblite_source),
+            GENERATOR.TBLITE_REVISION,
         )
         for filename, content in refreshed.items():
             self.assertEqual(content, (DATA_DIR / filename).read_bytes(), filename)
+
+    def test_cli_refresh_requires_every_source_checkout(self) -> None:
+        """Reject incomplete refresh inputs before reading any upstream checkout."""
+        source_flags = (
+            "--simple-dftd3-source",
+            "--mctc-source",
+            "--tblite-source",
+        )
+        for missing in source_flags:
+            arguments = ["--refresh"]
+            for flag in source_flags:
+                if flag != missing:
+                    arguments.extend((flag, "/does/not/exist"))
+            stderr = io.StringIO()
+            with self.subTest(missing=missing), contextlib.redirect_stderr(stderr):
+                self.assertEqual(GENERATOR.main(arguments), 1)
+            self.assertIn("--refresh requires", stderr.getvalue())
+
+    def test_cli_source_checkouts_require_refresh_mode(self) -> None:
+        """Reject each source checkout option when offline mode is selected."""
+        for flag in (
+            "--simple-dftd3-source",
+            "--mctc-source",
+            "--tblite-source",
+        ):
+            stderr = io.StringIO()
+            with self.subTest(flag=flag), contextlib.redirect_stderr(stderr):
+                self.assertEqual(GENERATOR.main([flag, "/does/not/exist"]), 1)
+            self.assertIn(
+                "source checkouts are accepted only with --refresh", stderr.getvalue()
+            )
 
     def test_normalized_schema_rejects_corrupt_pair_offsets(self) -> None:
         normalized = json.loads(
@@ -179,6 +276,17 @@ class Gfn1D3ParameterTests(unittest.TestCase):
         )
         normalized["pair_records"][1]["c6_offset"] += 1
         with self.assertRaisesRegex(GENERATOR.D3DataError, "invalid C6 packing"):
+            GENERATOR.validate_tables(normalized)
+
+    def test_normalized_schema_rejects_duplicate_reference_coordination(self) -> None:
+        """Keep the pinned max-CN exceptional fallback uniquely normalized."""
+        normalized = json.loads(
+            (DATA_DIR / GENERATOR.JSON_FILENAME).read_text(encoding="utf-8")
+        )
+        normalized["coordination_numbers"][1] = normalized["coordination_numbers"][0]
+        with self.assertRaisesRegex(
+            GENERATOR.D3DataError, "duplicate reference coordination numbers"
+        ):
             GENERATOR.validate_tables(normalized)
 
     def test_upstream_array_unit_prefixes_are_exact(self) -> None:
