@@ -17,7 +17,18 @@ namespace xtbloom::detail::gfn2 {
 struct ES2PlanData;
 
 /*
- * Geometry-independent GFN2 shell-resolved second-order electrostatics data.
+ * Model-selected shell-hardness averaging for the isotropic effective-Coulomb
+ * kernel. Keeping this choice in the sealed plan lets GFN1 and GFN2 share the
+ * same geometry/cache/evaluation implementation without reinterpreting either
+ * model's parameter table.
+ */
+enum class ES2HardnessAverage : std::uint8_t {
+  kArithmetic = 0,
+  kHarmonic = 1,
+};
+
+/*
+ * Geometry-independent shell-resolved second-order electrostatics data.
  *
  * shell_hardness contains gamma_s = gamma_element * shell_hubbard_scale in
  * Hartree, in BasisPlan shell order. matrix_offsets packs one dense row-major
@@ -49,6 +60,7 @@ class ES2Plan {
   [[nodiscard]] const std::vector<std::int64_t>& matrix_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& shell_to_atom() const noexcept;
   [[nodiscard]] const std::vector<double>& shell_hardness() const noexcept;
+  [[nodiscard]] ES2HardnessAverage hardness_average() const noexcept;
 
   /* True when a byte range aliases this plan's immutable object or backing storage. */
   [[nodiscard]] bool overlaps_storage(const void* data, std::size_t size_bytes) const noexcept;
@@ -63,6 +75,11 @@ class ES2Plan {
 
   friend xtbloom_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomic_numbers,
                                         ES2Plan& plan, std::string& error);
+  friend xtbloom_status_t make_es2_plan_from_shell_hardness(const BasisPlan& basis,
+                                                            ES2HardnessAverage average,
+                                                            const double* shell_hardness,
+                                                            std::int64_t shell_hardness_count,
+                                                            ES2Plan& plan, std::string& error);
 };
 
 /*
@@ -101,13 +118,26 @@ xtbloom_status_t make_es2_plan(const BasisPlan& basis, const std::int32_t* atomi
                                ES2Plan& plan, std::string& error);
 
 /*
+ * Seal already expanded model-specific shell hardnesses into the shared ES2
+ * kernel. Model builders remain responsible for validating their own element
+ * and shell metadata before calling this lower-level constructor.
+ */
+xtbloom_status_t make_es2_plan_from_shell_hardness(const BasisPlan& basis,
+                                                   ES2HardnessAverage average,
+                                                   const double* shell_hardness,
+                                                   std::int64_t shell_hardness_count, ES2Plan& plan,
+                                                   std::string& error);
+
+/*
  * Overwrite caller-owned matrix_storage and bind cache to it. Positions use
  * atom-major xyz coordinates in bohr. For shells s,t on different atoms,
  *
  *   Gamma_st = [ R_AB^2 + gamma_st^(-2) ]^(-1/2),
- *   gamma_st = (gamma_s + gamma_t)/2,
+ *   gamma_st = plan-selected average(gamma_s, gamma_t),
  *
  * while every same-atom element is Gamma_st = gamma_st. Gamma is in Hartree.
+ * The ordinary GFN2 builder selects arithmetic averaging; GFN1 selects the
+ * harmonic average through make_es2_plan_from_shell_hardness.
  * matrix_storage and workspace.matrix_scratch must each contain at least
  * plan.total_matrix_elements() doubles. They must not overlap one another,
  * positions, or immutable plan storage; an existing active cache must not
