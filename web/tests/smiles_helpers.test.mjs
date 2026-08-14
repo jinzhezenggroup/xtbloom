@@ -108,8 +108,9 @@ test("OpenChemLib retries the complete pinned provider pair after one artifact f
   });
   assert.equal(runtime.provider, "jsdelivr");
   assert.deepEqual(registrations, [{ "/resource": "value" }]);
-  assert.equal(attempts.some((url) => url.includes("cdn.jsdmirror.com")), true);
-  assert.equal(attempts.some((url) => url.includes("cdn.jsdelivr.net")), true);
+  const attemptedHosts = new Set(attempts.map((url) => new URL(url).hostname));
+  assert.equal(attemptedHosts.has("cdn.jsdmirror.com"), true);
+  assert.equal(attemptedHosts.has("cdn.jsdelivr.net"), true);
 });
 
 test("SMILES conversion publishes explicit XYZ and total formal charge", () => {
