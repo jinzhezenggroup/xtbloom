@@ -272,9 +272,9 @@
   </details>
 </footer>
 
-<div class="overlay" id="overlay" hidden>
+<div class="overlay" id="overlay" role="status" aria-live="polite" aria-atomic="true" hidden>
   <div class="overlay-box">
-    <div class="spinner"></div>
+    <div class="spinner" aria-hidden="true"></div>
     <p id="overlay-text" data-i18n="overlay_loading">正在加载 WASM 引擎…</p>
     <div class="loadbar" id="load-bar-wrap" hidden>
       <div class="loadbar-track"><div class="loadbar-fill" id="load-bar-fill"></div></div>

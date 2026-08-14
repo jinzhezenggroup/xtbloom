@@ -41,7 +41,7 @@
     }
   ],
   "runtime_selection": {
-    "probe": "The browser measures the first 65536 bytes of the pinned 3Dmol.js asset from JSDMirror, jsDelivr, and the site origin, then orders the two CDN providers by the observed result for OpenChemLib.",
+    "probe": "The browser starts the region-preferred verified 3Dmol.js download immediately. Only if it fails, the browser measures at most the first 65536 bytes of each remaining 3Dmol.js candidate under a 400 ms total budget; OpenChemLib independently uses the synchronously published regional CDN order.",
     "close_tie_default": {
       "mainland_china_time_zones": [
         "Asia/Shanghai",
