@@ -1,0 +1,1012 @@
+{
+  "metadata": {
+    "command": [
+      "benchmarks/run.py",
+      "--library",
+      "build/issue404-clean-cpu/libxtbloom.so",
+      "--engines",
+      "xtbloom",
+      "--backends",
+      "cpu",
+      "--workloads",
+      "gas,qmmm,heterogeneous-gas,heterogeneous-qmmm",
+      "--properties",
+      "energy",
+      "--batch-sizes",
+      "1,8",
+      "--warmups",
+      "10",
+      "--repetitions",
+      "31",
+      "--cpu-threads",
+      "1",
+      "--output-json",
+      "build/issue404-pairs-pinned-off.json",
+      "--output-csv",
+      "build/issue404-pairs-pinned-off.csv",
+      "--fail-on-correctness"
+    ],
+    "cuda": {
+      "driver": "580.95.05",
+      "nvcc_version": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2025 NVIDIA Corporation\nBuilt on Tue_May_27_02:21:03_PDT_2025\nCuda compilation tools, release 12.9, V12.9.86\nBuild cuda_12.9.r12.9/compiler.36037853_0",
+      "root": "/group/software/cuda-12.9.1"
+    },
+    "environment": {
+      "CUDA_VISIBLE_DEVICES": "",
+      "LD_LIBRARY_PATH": null,
+      "MKL_INTERFACE_LAYER": null,
+      "MKL_THREADING_LAYER": null,
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1"
+    },
+    "generated_at_utc": "2026-08-14T09:02:03.711776+00:00",
+    "hardware": {
+      "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+      "hostname": "node3",
+      "logical_cpu_count": 48,
+      "nvidia_smi": "GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8)"
+    },
+    "references": {
+      "dxtb": {
+        "adapter": "persistent in-process PyTorch API",
+        "command_template": [
+          "{python}",
+          "-m",
+          "dxtb",
+          "{input}",
+          "--method",
+          "gfn2",
+          "[--forces]",
+          "--dtype",
+          "float64",
+          "--device",
+          "{device}"
+        ],
+        "executable": null,
+        "executable_sha256": null,
+        "process_model": "one runner process with persistent Calculator/tensors; CLI template is provenance only",
+        "requested_backends": [
+          "cpu",
+          "cuda"
+        ],
+        "source": {
+          "dirty": false,
+          "path": "/home/jzzeng/codes/dxtb",
+          "revision": "b529b5ddb75c0554274955082a189f9f88437cb2"
+        },
+        "thread_contract": {
+          "MKL_NUM_THREADS": "1",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "torch_threads": 1
+        },
+        "version_output": null
+      },
+      "tblite": {
+        "adapter": "persistent public C API",
+        "command_template": [
+          "env",
+          "OMP_NUM_THREADS=1",
+          "OPENBLAS_NUM_THREADS=1",
+          "{tblite}",
+          "{input}",
+          "--no-restart",
+          "--method",
+          "gfn2",
+          "--acc",
+          "0.0001",
+          "[--grad gradient]",
+          "--json",
+          "result.json"
+        ],
+        "executable": null,
+        "executable_sha256": null,
+        "library": null,
+        "library_sha256": null,
+        "process_model": "persistent in-process public C API; CLI template is provenance only",
+        "source": {
+          "dirty": false,
+          "path": "/home/jzzeng/codes/tblite",
+          "revision": "133f91efb94b47f05848e1f86832f40a1accc385"
+        },
+        "thread_contract": {
+          "MKL_NUM_THREADS": 1,
+          "OMP_NUM_THREADS": 1,
+          "OPENBLAS_NUM_THREADS": 1
+        },
+        "version_output": null
+      },
+      "xtb": {
+        "adapter": "persistent public C API",
+        "command_template": [
+          "env",
+          "OMP_NUM_THREADS=1",
+          "OPENBLAS_NUM_THREADS=1",
+          "{xtb}",
+          "{input}",
+          "--gfn",
+          "2",
+          "--acc",
+          "0.0001",
+          "[--grad]",
+          "--json",
+          "--norestart",
+          "--chrg",
+          "{charge}",
+          "--uhf",
+          "{uhf}",
+          "-P",
+          "1"
+        ],
+        "executable": null,
+        "executable_sha256": null,
+        "library": null,
+        "library_sha256": null,
+        "process_model": "persistent in-process public C API; CLI template is provenance only",
+        "source": {
+          "dirty": false,
+          "path": "/home/jzzeng/codes/xtb",
+          "revision": "b31754bf3c7cccf8c242c469b03ae675e04bd608"
+        },
+        "thread_contract": {
+          "MKL_NUM_THREADS": 1,
+          "OMP_NUM_THREADS": 1,
+          "OPENBLAS_NUM_THREADS": 1
+        },
+        "version_output": null
+      }
+    },
+    "runner": {
+      "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+      "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:16:10) [GCC 11.2.0]",
+      "xtbloom_library": "/tmp/xtbloom-issue404-clean.zeGTp4/build/issue404-clean-cpu/libxtbloom.so.0.1.1",
+      "xtbloom_library_sha256": "6d0cf92d9420a32431293919f47a48d1e4704469f1953119c2d1253e9b30f99f",
+      "xtbloom_source": {
+        "dirty": false,
+        "path": "/tmp/xtbloom-issue404-clean.zeGTp4",
+        "revision": "645422264815f4d70fe7cc9928e4290bdcb5efc1"
+      }
+    },
+    "schema_version": 1
+  },
+  "protocol": {
+    "batch_sizes": [
+      1,
+      8
+    ],
+    "properties": [
+      "energy"
+    ],
+    "repeated_call_semantics": "same_geometry_repeated_compute",
+    "repetitions": 31,
+    "units": {
+      "latency": "ms",
+      "throughput": "systems/s"
+    },
+    "warmups": 10,
+    "workloads": {
+      "gas": "ketene",
+      "heterogeneous-gas": [
+        "h3_plus",
+        "ketene",
+        "nenacl",
+        "sif5_minus"
+      ],
+      "heterogeneous-qmmm": [
+        "water_one_pc_gamma999",
+        "water_dimer_6pc_hardness",
+        "water_dimer_6pc_gamma999"
+      ],
+      "qmmm": "water_dimer_6pc_hardness"
+    }
+  },
+  "rows": [
+    {
+      "availability": "available",
+      "backend": "cpu",
+      "batch_size": 1,
+      "case_id": "ketene",
+      "cold_latency_ms": 3.1626659999999998,
+      "correctness": {
+        "energy_atol_hartree": 5e-07,
+        "force_atol_hartree_per_bohr": null,
+        "max_abs_energy_error_hartree": 0.0,
+        "max_abs_force_error_hartree_per_bohr": null,
+        "max_abs_point_charge_force_error_hartree_per_bohr": null,
+        "point_charge_force_atol_hartree_per_bohr": null,
+        "reference": "committed independent conformance golden",
+        "status": "pass",
+        "tolerance_profile": "tolerances"
+      },
+      "diagnostics": {
+        "scc_iterations_max": 12,
+        "scc_iterations_min": 12
+      },
+      "engine": "xtbloom",
+      "engine_options": {
+        "charge_tolerance": 1e-06,
+        "cpu_threads": 1,
+        "device_id": 0,
+        "electronic_temperature_hartree": 0.000950042573563535,
+        "energy_tolerance": 1e-08,
+        "max_scc_iterations": 250,
+        "model": "GFN2-xTB"
+      },
+      "memory": {
+        "after_measurement": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 37986304
+        },
+        "after_setup": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 33423360,
+          "host_rss_bytes": 33255424
+        },
+        "host_rss_before_setup_bytes": 31420416
+      },
+      "memory_mode": "host",
+      "property": "energy",
+      "setup_ms": 2.2528729999999997,
+      "timing_scope": {
+        "cold": "first xtbloom_compute plus explicit CUDA synchronize",
+        "excluded": "post-timing device-to-host download and correctness comparison",
+        "repeated_call_note": "unchanged coordinates still execute the full public compute path; this is not proof of pair-list no-refresh reuse",
+        "repeated_call_semantics": "same_geometry_repeated_compute",
+        "setup": "shared-library load, context create, descriptor allocation/upload",
+        "warm": "xtbloom_compute plus explicit CUDA synchronize"
+      },
+      "warm": {
+        "count": 31,
+        "mean_ms": 0.9125539677419354,
+        "median_ms": 0.9120079999999999,
+        "min_ms": 0.905756,
+        "p95_ms": 0.9192819999999999,
+        "samples_ms": [
+          0.9192819999999999,
+          0.9134209999999999,
+          0.9143129999999999,
+          0.91274,
+          0.911196,
+          0.910335,
+          0.905756,
+          0.9110959999999999,
+          0.9107449999999999,
+          0.910675,
+          0.9131699999999999,
+          0.9124589999999999,
+          0.9117679999999999,
+          0.911868,
+          0.9105449999999999,
+          0.911497,
+          0.9110969999999999,
+          0.911588,
+          0.9076489999999999,
+          0.9108459999999999,
+          0.9122889999999999,
+          0.913111,
+          0.914443,
+          0.932066,
+          0.914573,
+          0.912609,
+          0.912408,
+          0.913061,
+          0.9120079999999999,
+          0.907509,
+          0.9130499999999999
+        ],
+        "systems_per_second_at_median": 1096.4816098104404
+      },
+      "workload": "gas"
+    },
+    {
+      "availability": "available",
+      "backend": "cpu",
+      "batch_size": 8,
+      "case_id": "ketene",
+      "cold_latency_ms": 7.655908999999999,
+      "correctness": {
+        "energy_atol_hartree": 5e-07,
+        "force_atol_hartree_per_bohr": null,
+        "max_abs_energy_error_hartree": 0.0,
+        "max_abs_force_error_hartree_per_bohr": null,
+        "max_abs_point_charge_force_error_hartree_per_bohr": null,
+        "point_charge_force_atol_hartree_per_bohr": null,
+        "reference": "committed independent conformance golden",
+        "status": "pass",
+        "tolerance_profile": "tolerances"
+      },
+      "diagnostics": {
+        "scc_iterations_max": 12,
+        "scc_iterations_min": 12
+      },
+      "engine": "xtbloom",
+      "engine_options": {
+        "charge_tolerance": 1e-06,
+        "cpu_threads": 1,
+        "device_id": 0,
+        "electronic_temperature_hartree": 0.000950042573563535,
+        "energy_tolerance": 1e-08,
+        "max_scc_iterations": 250,
+        "model": "GFN2-xTB"
+      },
+      "memory": {
+        "after_measurement": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 37986304
+        },
+        "after_setup": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 37986304
+        },
+        "host_rss_before_setup_bytes": 37986304
+      },
+      "memory_mode": "host",
+      "property": "energy",
+      "setup_ms": 1.2280469999999999,
+      "timing_scope": {
+        "cold": "first xtbloom_compute plus explicit CUDA synchronize",
+        "excluded": "post-timing device-to-host download and correctness comparison",
+        "repeated_call_note": "unchanged coordinates still execute the full public compute path; this is not proof of pair-list no-refresh reuse",
+        "repeated_call_semantics": "same_geometry_repeated_compute",
+        "setup": "shared-library load, context create, descriptor allocation/upload",
+        "warm": "xtbloom_compute plus explicit CUDA synchronize"
+      },
+      "warm": {
+        "count": 31,
+        "mean_ms": 7.225508967741935,
+        "median_ms": 7.224938,
+        "min_ms": 7.215478999999999,
+        "p95_ms": 7.238553,
+        "samples_ms": [
+          7.223154,
+          7.224938,
+          7.227543,
+          7.216621,
+          7.220758999999999,
+          7.221721,
+          7.221661,
+          7.232131,
+          7.235408,
+          7.236097999999999,
+          7.224616999999999,
+          7.221209999999999,
+          7.21624,
+          7.217873,
+          7.225047,
+          7.218004,
+          7.227713,
+          7.2260599999999995,
+          7.240628,
+          7.2180539999999995,
+          7.238553,
+          7.227111,
+          7.221271,
+          7.225929,
+          7.219987,
+          7.233594,
+          7.2222409999999995,
+          7.229556,
+          7.2315499999999995,
+          7.230027,
+          7.215478999999999
+        ],
+        "systems_per_second_at_median": 1107.2759378696398
+      },
+      "workload": "gas"
+    },
+    {
+      "availability": "available",
+      "backend": "cpu",
+      "batch_size": 1,
+      "case_id": "water_dimer_6pc_hardness",
+      "cold_latency_ms": 0.777268,
+      "correctness": {
+        "energy_atol_hartree": 5e-07,
+        "force_atol_hartree_per_bohr": null,
+        "max_abs_energy_error_hartree": 4.92013363384558e-09,
+        "max_abs_force_error_hartree_per_bohr": null,
+        "max_abs_point_charge_force_error_hartree_per_bohr": null,
+        "point_charge_force_atol_hartree_per_bohr": null,
+        "reference": "committed independent conformance golden",
+        "status": "pass",
+        "tolerance_profile": "tolerances"
+      },
+      "diagnostics": {
+        "scc_iterations_max": 11,
+        "scc_iterations_min": 11
+      },
+      "engine": "xtbloom",
+      "engine_options": {
+        "charge_tolerance": 1e-06,
+        "cpu_threads": 1,
+        "device_id": 0,
+        "electronic_temperature_hartree": 0.000950042573563535,
+        "energy_tolerance": 1e-08,
+        "max_scc_iterations": 250,
+        "model": "GFN2-xTB"
+      },
+      "memory": {
+        "after_measurement": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 37990400
+        },
+        "after_setup": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 37990400
+        },
+        "host_rss_before_setup_bytes": 37986304
+      },
+      "memory_mode": "host",
+      "property": "energy",
+      "setup_ms": 0.49231899999999995,
+      "timing_scope": {
+        "cold": "first xtbloom_compute plus explicit CUDA synchronize",
+        "excluded": "post-timing device-to-host download and correctness comparison",
+        "repeated_call_note": "unchanged coordinates still execute the full public compute path; this is not proof of pair-list no-refresh reuse",
+        "repeated_call_semantics": "same_geometry_repeated_compute",
+        "setup": "shared-library load, context create, descriptor allocation/upload",
+        "warm": "xtbloom_compute plus explicit CUDA synchronize"
+      },
+      "warm": {
+        "count": 31,
+        "mean_ms": 0.6829610967741935,
+        "median_ms": 0.683327,
+        "min_ms": 0.678608,
+        "p95_ms": 0.686283,
+        "samples_ms": [
+          0.687516,
+          0.686283,
+          0.683798,
+          0.6848909999999999,
+          0.684279,
+          0.679851,
+          0.682585,
+          0.683537,
+          0.683789,
+          0.683658,
+          0.6827559999999999,
+          0.6790889999999999,
+          0.683357,
+          0.683488,
+          0.6799109999999999,
+          0.6843589999999999,
+          0.682916,
+          0.6836979999999999,
+          0.6849999999999999,
+          0.6832269999999999,
+          0.683327,
+          0.678608,
+          0.6828259999999999,
+          0.6830069999999999,
+          0.67965,
+          0.682997,
+          0.683708,
+          0.67913,
+          0.683327,
+          0.6830569999999999,
+          0.6841689999999999
+        ],
+        "systems_per_second_at_median": 1463.4281976271975
+      },
+      "workload": "qmmm"
+    },
+    {
+      "availability": "available",
+      "backend": "cpu",
+      "batch_size": 8,
+      "case_id": "water_dimer_6pc_hardness",
+      "cold_latency_ms": 5.767017,
+      "correctness": {
+        "energy_atol_hartree": 5e-07,
+        "force_atol_hartree_per_bohr": null,
+        "max_abs_energy_error_hartree": 4.92013363384558e-09,
+        "max_abs_force_error_hartree_per_bohr": null,
+        "max_abs_point_charge_force_error_hartree_per_bohr": null,
+        "point_charge_force_atol_hartree_per_bohr": null,
+        "reference": "committed independent conformance golden",
+        "status": "pass",
+        "tolerance_profile": "tolerances"
+      },
+      "diagnostics": {
+        "scc_iterations_max": 11,
+        "scc_iterations_min": 11
+      },
+      "engine": "xtbloom",
+      "engine_options": {
+        "charge_tolerance": 1e-06,
+        "cpu_threads": 1,
+        "device_id": 0,
+        "electronic_temperature_hartree": 0.000950042573563535,
+        "energy_tolerance": 1e-08,
+        "max_scc_iterations": 250,
+        "model": "GFN2-xTB"
+      },
+      "memory": {
+        "after_measurement": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 37990400
+        },
+        "after_setup": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 37990400
+        },
+        "host_rss_before_setup_bytes": 37990400
+      },
+      "memory_mode": "host",
+      "property": "energy",
+      "setup_ms": 1.624572,
+      "timing_scope": {
+        "cold": "first xtbloom_compute plus explicit CUDA synchronize",
+        "excluded": "post-timing device-to-host download and correctness comparison",
+        "repeated_call_note": "unchanged coordinates still execute the full public compute path; this is not proof of pair-list no-refresh reuse",
+        "repeated_call_semantics": "same_geometry_repeated_compute",
+        "setup": "shared-library load, context create, descriptor allocation/upload",
+        "warm": "xtbloom_compute plus explicit CUDA synchronize"
+      },
+      "warm": {
+        "count": 31,
+        "mean_ms": 5.408365129032258,
+        "median_ms": 5.407073,
+        "min_ms": 5.398396,
+        "p95_ms": 5.418695,
+        "samples_ms": [
+          5.404097,
+          5.4161399999999995,
+          5.404247,
+          5.417542999999999,
+          5.407203,
+          5.411141,
+          5.4030759999999995,
+          5.410139,
+          5.409307,
+          5.41097,
+          5.407634,
+          5.404799,
+          5.407073,
+          5.406712,
+          5.402664,
+          5.41036,
+          5.406031,
+          5.404849,
+          5.422893999999999,
+          5.402164,
+          5.405851,
+          5.416271,
+          5.406963,
+          5.412071999999999,
+          5.402794999999999,
+          5.414027,
+          5.398396,
+          5.411922,
+          5.4000889999999995,
+          5.403195,
+          5.418695
+        ],
+        "systems_per_second_at_median": 1479.5435534160536
+      },
+      "workload": "qmmm"
+    },
+    {
+      "availability": "available",
+      "backend": "cpu",
+      "batch_size": 1,
+      "case_ids": [
+        "h3_plus"
+      ],
+      "cold_latency_ms": 0.166241,
+      "correctness": {
+        "energy_atol_hartree": 5e-07,
+        "force_atol_hartree_per_bohr": null,
+        "max_abs_energy_error_hartree": 4.440892098500626e-16,
+        "max_abs_force_error_hartree_per_bohr": null,
+        "max_abs_point_charge_force_error_hartree_per_bohr": null,
+        "point_charge_force_atol_hartree_per_bohr": null,
+        "reference": "committed independent conformance golden",
+        "status": "pass",
+        "tolerance_profile": "tolerances"
+      },
+      "diagnostics": {
+        "scc_iterations_max": 4,
+        "scc_iterations_min": 4
+      },
+      "engine": "xtbloom",
+      "engine_options": {
+        "charge_tolerance": 1e-06,
+        "cpu_threads": 1,
+        "device_id": 0,
+        "electronic_temperature_hartree": 0.000950042573563535,
+        "energy_tolerance": 1e-08,
+        "max_scc_iterations": 250,
+        "model": "GFN2-xTB"
+      },
+      "memory": {
+        "after_measurement": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 37990400
+        },
+        "after_setup": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 37990400
+        },
+        "host_rss_before_setup_bytes": 37990400
+      },
+      "memory_mode": "host",
+      "property": "energy",
+      "setup_ms": 0.388258,
+      "timing_scope": {
+        "cold": "first xtbloom_compute plus explicit CUDA synchronize",
+        "excluded": "post-timing device-to-host download and correctness comparison",
+        "repeated_call_note": "unchanged coordinates still execute the full public compute path; this is not proof of pair-list no-refresh reuse",
+        "repeated_call_semantics": "same_geometry_repeated_compute",
+        "setup": "shared-library load, context create, descriptor allocation/upload",
+        "warm": "xtbloom_compute plus explicit CUDA synchronize"
+      },
+      "warm": {
+        "count": 31,
+        "mean_ms": 0.08201070967741936,
+        "median_ms": 0.08141699999999999,
+        "min_ms": 0.080816,
+        "p95_ms": 0.086987,
+        "samples_ms": [
+          0.08133599999999999,
+          0.086987,
+          0.082299,
+          0.081397,
+          0.08115599999999999,
+          0.08112699999999999,
+          0.081427,
+          0.08162799999999999,
+          0.081477,
+          0.081296,
+          0.081367,
+          0.08130699999999999,
+          0.081137,
+          0.086296,
+          0.08286,
+          0.081277,
+          0.081597,
+          0.08133699999999999,
+          0.081507,
+          0.08141699999999999,
+          0.081246,
+          0.081056,
+          0.080816,
+          0.081327,
+          0.081638,
+          0.081858,
+          0.08826099999999999,
+          0.081457,
+          0.081287,
+          0.081567,
+          0.08158699999999999
+        ],
+        "systems_per_second_at_median": 12282.447154771118
+      },
+      "workload": "heterogeneous-gas"
+    },
+    {
+      "availability": "available",
+      "backend": "cpu",
+      "batch_size": 8,
+      "case_ids": [
+        "h3_plus",
+        "ketene",
+        "nenacl",
+        "sif5_minus",
+        "h3_plus",
+        "ketene",
+        "nenacl",
+        "sif5_minus"
+      ],
+      "cold_latency_ms": 11.150884999999999,
+      "correctness": {
+        "energy_atol_hartree": 5e-07,
+        "force_atol_hartree_per_bohr": null,
+        "max_abs_energy_error_hartree": 4.618527782440651e-14,
+        "max_abs_force_error_hartree_per_bohr": null,
+        "max_abs_point_charge_force_error_hartree_per_bohr": null,
+        "point_charge_force_atol_hartree_per_bohr": null,
+        "reference": "committed independent conformance golden",
+        "status": "pass",
+        "tolerance_profile": "tolerances"
+      },
+      "diagnostics": {
+        "scc_iterations_max": 14,
+        "scc_iterations_min": 4
+      },
+      "engine": "xtbloom",
+      "engine_options": {
+        "charge_tolerance": 1e-06,
+        "cpu_threads": 1,
+        "device_id": 0,
+        "electronic_temperature_hartree": 0.000950042573563535,
+        "energy_tolerance": 1e-08,
+        "max_scc_iterations": 250,
+        "model": "GFN2-xTB"
+      },
+      "memory": {
+        "after_measurement": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 38064128
+        },
+        "after_setup": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 37990400
+        },
+        "host_rss_before_setup_bytes": 37990400
+      },
+      "memory_mode": "host",
+      "property": "energy",
+      "setup_ms": 1.108787,
+      "timing_scope": {
+        "cold": "first xtbloom_compute plus explicit CUDA synchronize",
+        "excluded": "post-timing device-to-host download and correctness comparison",
+        "repeated_call_note": "unchanged coordinates still execute the full public compute path; this is not proof of pair-list no-refresh reuse",
+        "repeated_call_semantics": "same_geometry_repeated_compute",
+        "setup": "shared-library load, context create, descriptor allocation/upload",
+        "warm": "xtbloom_compute plus explicit CUDA synchronize"
+      },
+      "warm": {
+        "count": 31,
+        "mean_ms": 10.646968032258064,
+        "median_ms": 10.642054,
+        "min_ms": 10.622967,
+        "p95_ms": 10.680729,
+        "samples_ms": [
+          10.657594,
+          10.654809,
+          10.646842999999999,
+          10.630222,
+          10.637886,
+          10.643137,
+          10.642145,
+          10.639598999999999,
+          10.680729,
+          10.760342999999999,
+          10.646562999999999,
+          10.640692,
+          10.654639,
+          10.637736,
+          10.644549,
+          10.622967,
+          10.657344,
+          10.642054,
+          10.6345,
+          10.654798999999999,
+          10.644529,
+          10.633268,
+          10.63459,
+          10.65029,
+          10.626954999999999,
+          10.655761,
+          10.635221,
+          10.640170999999999,
+          10.635512,
+          10.636773999999999,
+          10.633788
+        ],
+        "systems_per_second_at_median": 751.7345805612338
+      },
+      "workload": "heterogeneous-gas"
+    },
+    {
+      "availability": "available",
+      "backend": "cpu",
+      "batch_size": 1,
+      "case_ids": [
+        "water_one_pc_gamma999"
+      ],
+      "cold_latency_ms": 0.367909,
+      "correctness": {
+        "energy_atol_hartree": 5e-07,
+        "force_atol_hartree_per_bohr": null,
+        "max_abs_energy_error_hartree": 2.6170701161731813e-09,
+        "max_abs_force_error_hartree_per_bohr": null,
+        "max_abs_point_charge_force_error_hartree_per_bohr": null,
+        "point_charge_force_atol_hartree_per_bohr": null,
+        "reference": "committed independent conformance golden",
+        "status": "pass",
+        "tolerance_profile": "tolerances"
+      },
+      "diagnostics": {
+        "scc_iterations_max": 10,
+        "scc_iterations_min": 10
+      },
+      "engine": "xtbloom",
+      "engine_options": {
+        "charge_tolerance": 1e-06,
+        "cpu_threads": 1,
+        "device_id": 0,
+        "electronic_temperature_hartree": 0.000950042573563535,
+        "energy_tolerance": 1e-08,
+        "max_scc_iterations": 250,
+        "model": "GFN2-xTB"
+      },
+      "memory": {
+        "after_measurement": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 38064128
+        },
+        "after_setup": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 38064128
+        },
+        "host_rss_before_setup_bytes": 38064128
+      },
+      "memory_mode": "host",
+      "property": "energy",
+      "setup_ms": 0.405873,
+      "timing_scope": {
+        "cold": "first xtbloom_compute plus explicit CUDA synchronize",
+        "excluded": "post-timing device-to-host download and correctness comparison",
+        "repeated_call_note": "unchanged coordinates still execute the full public compute path; this is not proof of pair-list no-refresh reuse",
+        "repeated_call_semantics": "same_geometry_repeated_compute",
+        "setup": "shared-library load, context create, descriptor allocation/upload",
+        "warm": "xtbloom_compute plus explicit CUDA synchronize"
+      },
+      "warm": {
+        "count": 31,
+        "mean_ms": 0.2895998064516129,
+        "median_ms": 0.284879,
+        "min_ms": 0.283236,
+        "p95_ms": 0.317833,
+        "samples_ms": [
+          0.283787,
+          0.314656,
+          0.286251,
+          0.283657,
+          0.283236,
+          0.291081,
+          0.285541,
+          0.283666,
+          0.336399,
+          0.284879,
+          0.285661,
+          0.283667,
+          0.29497799999999996,
+          0.28446899999999997,
+          0.283807,
+          0.290269,
+          0.28446899999999997,
+          0.284007,
+          0.291773,
+          0.317833,
+          0.284688,
+          0.283877,
+          0.289518,
+          0.284989,
+          0.28337599999999996,
+          0.288556,
+          0.28523,
+          0.28426799999999997,
+          0.284228,
+          0.290049,
+          0.284729
+        ],
+        "systems_per_second_at_median": 3510.262251692824
+      },
+      "workload": "heterogeneous-qmmm"
+    },
+    {
+      "availability": "available",
+      "backend": "cpu",
+      "batch_size": 8,
+      "case_ids": [
+        "water_one_pc_gamma999",
+        "water_dimer_6pc_hardness",
+        "water_dimer_6pc_gamma999",
+        "water_one_pc_gamma999",
+        "water_dimer_6pc_hardness",
+        "water_dimer_6pc_gamma999",
+        "water_one_pc_gamma999",
+        "water_dimer_6pc_hardness"
+      ],
+      "cold_latency_ms": 4.585469,
+      "correctness": {
+        "energy_atol_hartree": 5e-07,
+        "force_atol_hartree_per_bohr": null,
+        "max_abs_energy_error_hartree": 4.92013363384558e-09,
+        "max_abs_force_error_hartree_per_bohr": null,
+        "max_abs_point_charge_force_error_hartree_per_bohr": null,
+        "point_charge_force_atol_hartree_per_bohr": null,
+        "reference": "committed independent conformance golden",
+        "status": "pass",
+        "tolerance_profile": "tolerances"
+      },
+      "diagnostics": {
+        "scc_iterations_max": 11,
+        "scc_iterations_min": 10
+      },
+      "engine": "xtbloom",
+      "engine_options": {
+        "charge_tolerance": 1e-06,
+        "cpu_threads": 1,
+        "device_id": 0,
+        "electronic_temperature_hartree": 0.000950042573563535,
+        "energy_tolerance": 1e-08,
+        "max_scc_iterations": 250,
+        "model": "GFN2-xTB"
+      },
+      "memory": {
+        "after_measurement": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 38064128
+        },
+        "after_setup": {
+          "host_hwm_scope": "entire benchmark runner process",
+          "host_process_hwm_bytes": 37638144,
+          "host_rss_bytes": 38064128
+        },
+        "host_rss_before_setup_bytes": 38064128
+      },
+      "memory_mode": "host",
+      "property": "energy",
+      "setup_ms": 1.4914749999999999,
+      "timing_scope": {
+        "cold": "first xtbloom_compute plus explicit CUDA synchronize",
+        "excluded": "post-timing device-to-host download and correctness comparison",
+        "repeated_call_note": "unchanged coordinates still execute the full public compute path; this is not proof of pair-list no-refresh reuse",
+        "repeated_call_semantics": "same_geometry_repeated_compute",
+        "setup": "shared-library load, context create, descriptor allocation/upload",
+        "warm": "xtbloom_compute plus explicit CUDA synchronize"
+      },
+      "warm": {
+        "count": 31,
+        "mean_ms": 4.234804838709677,
+        "median_ms": 4.233241,
+        "min_ms": 4.225385,
+        "p95_ms": 4.244242,
+        "samples_ms": [
+          4.2429689999999995,
+          4.227599,
+          4.232248,
+          4.231567,
+          4.229984,
+          4.226838,
+          4.231236,
+          4.230445,
+          4.2390419999999995,
+          4.232457999999999,
+          4.233099999999999,
+          4.237849,
+          4.240494,
+          4.247377,
+          4.244242,
+          4.241086,
+          4.236567,
+          4.239682,
+          4.228311,
+          4.225385,
+          4.234643,
+          4.226798,
+          4.234082,
+          4.237208,
+          4.232539,
+          4.233241,
+          4.23315,
+          4.243348999999999,
+          4.232248,
+          4.2397029999999996,
+          4.23351
+        ],
+        "systems_per_second_at_median": 1889.8049981090142
+      },
+      "workload": "heterogeneous-qmmm"
+    }
+  ],
+  "schema_version": 1
+}

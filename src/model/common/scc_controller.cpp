@@ -63,8 +63,8 @@ SccControllerConfig make_scc_controller_config(double baseline_damping) noexcept
   /* The middle level is the caller's exact mixer damping. The controller may
    * retreat below it and later recover to it, but must not silently reinterpret
    * a valid public damping value such as 0.9 or 1.0. */
-  config.damping_levels =
-      {{0.5 * baseline_damping, baseline_damping, std::min(1.0, 1.5 * baseline_damping)}};
+  config.damping_levels = {
+      {0.5 * baseline_damping, baseline_damping, std::min(1.0, 1.5 * baseline_damping)}};
   return config;
 }
 
@@ -80,9 +80,8 @@ bool compute_scc_controller_trust_radius(const SccControllerConfig& config,
       std::numeric_limits<double>::max() / config.trust_radius_multiplier) {
     maximum_step_norm = std::numeric_limits<double>::max();
   } else {
-    maximum_step_norm =
-        std::max(config.minimum_trust_radius,
-                 config.trust_radius_multiplier * weighted_residual_norm);
+    maximum_step_norm = std::max(config.minimum_trust_radius,
+                                 config.trust_radius_multiplier * weighted_residual_norm);
   }
   return true;
 }

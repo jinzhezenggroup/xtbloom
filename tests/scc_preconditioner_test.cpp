@@ -226,9 +226,14 @@ int test_previous_weighted_angle_uses_effective_history() {
             fixture.wavefunction, fixture.state, fixture.scratch, diagnostics,
             error) == XTBLOOM_STATUS_SUCCESS);
   const xtbloom::detail::gfn2::SccMixerPreparedStepView prepared{
-      fixture.scratch.residual,         dimension, diagnostics.raw_residual_rms,
-      diagnostics.raw_residual_maximum, 0.4,       false,
-      fixture.preconditioner.metric_weights().data(), std::numeric_limits<double>::max()};
+      fixture.scratch.residual,
+      dimension,
+      diagnostics.raw_residual_rms,
+      diagnostics.raw_residual_maximum,
+      0.4,
+      false,
+      fixture.preconditioner.metric_weights().data(),
+      std::numeric_limits<double>::max()};
   CHECK(xtbloom::detail::gfn2::mix_scc_broyden_system_cpu_prepared(
             fixture.mixer, 0, fixture.wavefunction, fixture.state, fixture.scratch, prepared,
             error) == XTBLOOM_STATUS_SUCCESS);
