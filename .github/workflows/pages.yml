@@ -317,4 +317,4 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           github-environment: cloudflare-pages
           branch: main
-          wrangler-version: '3.114.17'
+          wrangler-version: '4.86.0'

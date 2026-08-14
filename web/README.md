@@ -87,7 +87,8 @@ permission is granted because Cloudflare deployment runs only on `main`.
 
 The requested Marketplace action is a maintained third-party project rather
 than an official Cloudflare action. The workflow pins its signed v3.5.0 commit
-and an exact Wrangler v3 release. Re-audit both pins before upgrading them.
+and the exact Wrangler 4.86.0 default tested by that Action release. Re-audit
+both pins before upgrading them.
 
 Attaching a custom domain is a separate Cloudflare Pages configuration step.
 Add the hostname through the project's **Custom domains** screen before

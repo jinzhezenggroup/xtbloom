@@ -330,14 +330,15 @@ The action runs only inside the disposable GitHub-hosted deployment job; it is
 not vendored into the repository or redistributed in xTBloom source archives,
 native installs, wheels, or the deployed site.
 
-The action invokes Wrangler 3.114.17 from npm. That release corresponds to
+The action invokes Wrangler 4.86.0 from npm. That is the exact default tested
+by the pinned Action release and corresponds to
 Cloudflare Workers SDK tag commit
-`f21ee75d09f24e655574e9bae920585e1a31b15e`, is offered under
-`MIT OR Apache-2.0` ([upstream MIT license](https://github.com/cloudflare/workers-sdk/blob/f21ee75d09f24e655574e9bae920585e1a31b15e/LICENSE-MIT)
-and [upstream Apache-2.0 license](https://github.com/cloudflare/workers-sdk/blob/f21ee75d09f24e655574e9bae920585e1a31b15e/LICENSE-APACHE)), and has npm integrity
-`sha512-tAvf7ly+tB+zwwrmjsCyJ2pJnnc7SZhbnNwXbH+OIdVas3zTSmjcZOjmLKcGGptssAA3RyTKhcF9BvKZzMUycA==`.
+`87b094e7c96df8f5359ba0a4089396be762c2db8`, is offered under
+`MIT OR Apache-2.0` ([upstream MIT license](https://github.com/cloudflare/workers-sdk/blob/87b094e7c96df8f5359ba0a4089396be762c2db8/LICENSE-MIT)
+and [upstream Apache-2.0 license](https://github.com/cloudflare/workers-sdk/blob/87b094e7c96df8f5359ba0a4089396be762c2db8/LICENSE-APACHE)), and has npm integrity
+`sha512-9aa/gbF/HiUeeUEwyQpW5LDPBEzyt7iaE6xHwm0vk2Ly8A6J+jh03pzchqVnCCWR832mNyA28MD8oAYt0Kfvlw==`.
 The published npm tarball has SHA-256
-`e8e0028a83a3ca86a4ac5f27048c4602bdb368a01bd0486225dc7df6341fdb32`.
+`8c528c821ad0f9bf0b73b04b3b719e2baa654886b25b1425cff2507bccabec6b`.
 The exact version input makes the reviewed runtime explicit instead of
 inheriting the Action release's default. The action still lets npm resolve
 Wrangler's declared transitive ranges at job runtime, so future Action or
