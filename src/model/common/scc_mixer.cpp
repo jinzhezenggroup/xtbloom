@@ -40,6 +40,7 @@ struct SccMixerPlanData final {
   std::size_t residual_rms_offset_bytes = 0u;
   std::size_t residual_maximum_offset_bytes = 0u;
   std::size_t iteration_offset_bytes = 0u;
+  std::size_t history_age_offset_bytes = 0u;
   std::size_t restart_count_offset_bytes = 0u;
   std::size_t system_status_offset_bytes = 0u;
   std::size_t initialized_offset_bytes = 0u;
@@ -232,6 +233,7 @@ xtbloom_status_t validate_state(const SccMixerPlan& plan, const SccMixerState& s
       !exact_pointer(state.workspace_base, data.residual_maximum_offset_bytes,
                      state.residual_maximum) ||
       !exact_pointer(state.workspace_base, data.iteration_offset_bytes, state.iterations) ||
+      !exact_pointer(state.workspace_base, data.history_age_offset_bytes, state.history_ages) ||
       !exact_pointer(state.workspace_base, data.restart_count_offset_bytes, state.restart_counts) ||
       !exact_pointer(state.workspace_base, data.system_status_offset_bytes,
                      state.system_statuses) ||
@@ -476,6 +478,7 @@ void copy_mixer_system_state(const SccMixerPlanData& data, std::size_t system,
   destination.residual_rms[system] = source.residual_rms[system];
   destination.residual_maximum[system] = source.residual_maximum[system];
   destination.iterations[system] = source.iterations[system];
+  destination.history_ages[system] = source.history_ages[system];
   destination.restart_counts[system] = source.restart_counts[system];
   destination.system_statuses[system] = source.system_statuses[system];
   destination.initialized[system] = source.initialized[system];
@@ -736,9 +739,289 @@ xtbloom_status_t mix_system_unchecked(const SccMixerPlanData& data, std::size_t 
   state.residual_rms[system] = residual_rms;
   state.residual_maximum[system] = residual_maximum;
   state.iterations[system] = new_iteration;
+  state.history_ages[system] = new_iteration;
   state.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
   state.converged[system] =
       residual_rms < data.rms_tolerance && residual_maximum < data.maximum_tolerance ? 1u : 0u;
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t cap_prepared_step(const SccMixerState& state, std::size_t system,
+                                   std::size_t dimension, const double* current,
+                                   const SccMixerWorkspace& workspace,
+                                   const SccMixerPreparedStepView& prepared, std::string& error) {
+  long double weighted_norm = 0.0L;
+  for (std::size_t component = 0u; component < dimension; ++component) {
+    const double weight = prepared.step_metric_weights[component];
+    if (!std::isfinite(weight) || weight <= 0.0) {
+      error = "prepared SCC mixer step metric is invalid";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    /* Both endpoints are binary64-finite, but their difference need not fit
+     * in binary64 when they have opposite signs. Keep the complete candidate
+     * calculation in extended precision; platforms without a wider long
+     * double report a peer-local numerical failure instead of misclassifying
+     * this as a structural whole-call error. */
+    const long double step = static_cast<long double>(workspace.mixed[component]) -
+                             static_cast<long double>(current[component]);
+    if (!std::isfinite(step)) {
+      return record_numeric_failure(
+          state, system, "prepared SCC mixer candidate step is not representable", error);
+    }
+    const long double weighted_component =
+        std::sqrt(static_cast<long double>(weight)) * std::abs(step);
+    weighted_norm = std::hypot(weighted_norm, weighted_component);
+    if (!std::isfinite(weighted_norm)) {
+      return record_numeric_failure(state, system,
+                                    "prepared SCC mixer weighted step norm is not finite", error);
+    }
+  }
+
+  const long double maximum = static_cast<long double>(prepared.maximum_weighted_step_norm);
+  if (weighted_norm <= maximum) {
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  const long double scale = maximum / weighted_norm;
+  if (!std::isfinite(scale) || scale <= 0.0L || scale >= 1.0L) {
+    return record_numeric_failure(state, system, "prepared SCC mixer trust-radius scaling failed",
+                                  error);
+  }
+  for (std::size_t component = 0u; component < dimension; ++component) {
+    const long double step = static_cast<long double>(workspace.mixed[component]) -
+                             static_cast<long double>(current[component]);
+    const long double bounded = static_cast<long double>(current[component]) + scale * step;
+    const double value = static_cast<double>(bounded);
+    if (!std::isfinite(value)) {
+      return record_numeric_failure(state, system, "prepared SCC mixer bounded step is not finite",
+                                    error);
+    }
+    workspace.mixed[component] = value;
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t mix_prepared_system_unchecked(const SccMixerPlanData& data, std::size_t system,
+                                               const SccMixerVectorView& wavefunction,
+                                               const SccMixerState& state,
+                                               const SccMixerWorkspace& workspace,
+                                               const SccMixerPreparedStepView& prepared,
+                                               std::string& error) {
+  const std::size_t dimension = system_dimension(data, system);
+  const std::size_t vector_offset = system_vector_offset(data, system);
+  const std::size_t history_offset = system_history_offset(data, system);
+  const std::size_t memory = static_cast<std::size_t>(data.history_size);
+  const double* const current = state.current_inputs + vector_offset;
+  const double* const previous = state.previous_inputs + vector_offset;
+  const double* const previous_residual = state.previous_residuals + vector_offset;
+
+  if (prepared.effective_residual != workspace.residual ||
+      prepared.residual_elements != dimension || !std::isfinite(prepared.raw_residual_rms) ||
+      prepared.raw_residual_rms < 0.0 || !std::isfinite(prepared.raw_residual_maximum) ||
+      prepared.raw_residual_maximum < 0.0 || !std::isfinite(prepared.runtime_damping) ||
+      prepared.runtime_damping <= 0.0 || prepared.runtime_damping > 1.0 ||
+      prepared.step_metric_weights == nullptr ||
+      !std::isfinite(prepared.maximum_weighted_step_norm) ||
+      prepared.maximum_weighted_step_norm <= 0.0 ||
+      !raw_components_are_finite(data, wavefunction, system)) {
+    error = "prepared SCC mixer residual or numerical policy is invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  double residual_square = 0.0;
+  for (std::size_t component = 0u; component < dimension; ++component) {
+    const double residual = prepared.effective_residual[component];
+    residual_square += residual * residual;
+    if (!std::isfinite(residual) || !std::isfinite(residual_square)) {
+      return record_numeric_failure(state, system, "prepared SCC mixer residual is not finite",
+                                    error);
+    }
+  }
+  const double residual_norm = std::sqrt(residual_square);
+  if (!std::isfinite(residual_norm)) {
+    return record_numeric_failure(state, system, "prepared SCC mixer residual norm is not finite",
+                                  error);
+  }
+
+  const std::uint64_t old_iteration = state.iterations[system];
+  if (old_iteration == std::numeric_limits<std::uint64_t>::max()) {
+    return record_numeric_failure(state, system, "SCC mixer iteration counter cannot be advanced",
+                                  error);
+  }
+  const std::uint64_t old_history_age = prepared.restart_history ? 0u : state.history_ages[system];
+  if (old_history_age == std::numeric_limits<std::uint64_t>::max()) {
+    return record_numeric_failure(state, system, "SCC mixer history age cannot be advanced", error);
+  }
+  const std::uint64_t new_iteration = old_iteration + 1u;
+  const std::uint64_t new_history_age = old_history_age + 1u;
+
+  if (new_history_age == 1u) {
+    for (std::size_t component = 0u; component < dimension; ++component) {
+      const double value =
+          current[component] + prepared.runtime_damping * prepared.effective_residual[component];
+      if (!std::isfinite(value)) {
+        return record_numeric_failure(
+            state, system, "prepared SCC mixer damped startup produced NaN or infinity", error);
+      }
+      workspace.mixed[component] = value;
+    }
+    if (const xtbloom_status_t cap_status =
+            cap_prepared_step(state, system, dimension, current, workspace, prepared, error);
+        cap_status != XTBLOOM_STATUS_SUCCESS) {
+      return cap_status;
+    }
+  } else {
+    double delta_f_square = 0.0;
+    for (std::size_t component = 0u; component < dimension; ++component) {
+      const double value = prepared.effective_residual[component] - previous_residual[component];
+      workspace.delta_f[component] = value;
+      delta_f_square += value * value;
+      if (!std::isfinite(value) || !std::isfinite(delta_f_square)) {
+        return record_numeric_failure(
+            state, system, "prepared SCC mixer residual difference is not finite", error);
+      }
+    }
+    const double delta_f_norm = std::sqrt(delta_f_square);
+    const double denominator = std::max(delta_f_norm, std::numeric_limits<double>::epsilon());
+    const double inverse = 1.0 / denominator;
+    if (!std::isfinite(inverse)) {
+      return record_numeric_failure(state, system,
+                                    "prepared SCC mixer residual normalization failed", error);
+    }
+    for (std::size_t component = 0u; component < dimension; ++component) {
+      workspace.delta_f[component] *= inverse;
+      const double value = prepared.runtime_damping * workspace.delta_f[component] +
+                           inverse * (current[component] - previous[component]);
+      if (!std::isfinite(workspace.delta_f[component]) || !std::isfinite(value)) {
+        return record_numeric_failure(
+            state, system, "prepared SCC mixer Broyden update vector is not finite", error);
+      }
+      workspace.new_u[component] = value;
+    }
+
+    const double omega = residual_norm > kOmegaFactor / kMaximumOmega
+                             ? std::max(kMinimumOmega, kOmegaFactor / residual_norm)
+                             : kMaximumOmega;
+    if (!std::isfinite(omega)) {
+      return record_numeric_failure(state, system,
+                                    "prepared SCC mixer Broyden weight is not finite", error);
+    }
+
+    const std::size_t history_count = static_cast<std::size_t>(
+        std::min<std::uint64_t>(static_cast<std::uint64_t>(memory), old_history_age));
+    const std::uint64_t first_age =
+        old_history_age - static_cast<std::uint64_t>(history_count) + 1u;
+    const std::size_t new_slot =
+        static_cast<std::size_t>((old_history_age - 1u) % static_cast<std::uint64_t>(memory));
+    for (std::size_t history = 0u; history < history_count; ++history) {
+      const std::uint64_t represented_age = first_age + static_cast<std::uint64_t>(history);
+      workspace.history_slots[history] =
+          static_cast<std::int64_t>((represented_age - 1u) % static_cast<std::uint64_t>(memory));
+    }
+
+    const auto df_vector = [&](std::size_t slot) {
+      return slot == new_slot ? workspace.delta_f
+                              : state.df_history + history_offset + slot * dimension;
+    };
+    const auto u_vector = [&](std::size_t slot) {
+      return slot == new_slot ? workspace.new_u
+                              : state.u_history + history_offset + slot * dimension;
+    };
+    const auto slot_omega = [&](std::size_t slot) {
+      return slot == new_slot ? omega : state.omega[system * memory + slot];
+    };
+
+    for (std::size_t row = 0u; row < history_count; ++row) {
+      const std::size_t row_slot = static_cast<std::size_t>(workspace.history_slots[row]);
+      const double row_omega = slot_omega(row_slot);
+      double coefficient_dot = 0.0;
+      if (!std::isfinite(row_omega) ||
+          !dot_product(df_vector(row_slot), prepared.effective_residual, dimension,
+                       coefficient_dot)) {
+        return record_numeric_failure(
+            state, system, "prepared SCC mixer Broyden coefficient is not finite", error);
+      }
+      workspace.coefficients[row] = row_omega * coefficient_dot;
+      if (!std::isfinite(workspace.coefficients[row])) {
+        return record_numeric_failure(state, system,
+                                      "prepared SCC mixer Broyden coefficient overflowed", error);
+      }
+      for (std::size_t column = 0u; column < history_count; ++column) {
+        const std::size_t column_slot = static_cast<std::size_t>(workspace.history_slots[column]);
+        const double column_omega = slot_omega(column_slot);
+        double overlap = 0.0;
+        if (!std::isfinite(column_omega) ||
+            !dot_product(df_vector(row_slot), df_vector(column_slot), dimension, overlap)) {
+          return record_numeric_failure(
+              state, system, "prepared SCC mixer Broyden history overlap is not finite", error);
+        }
+        double value = row_omega * column_omega * overlap;
+        if (row == column) {
+          value += kOmegaZero * kOmegaZero;
+        }
+        if (!std::isfinite(value)) {
+          return record_numeric_failure(state, system,
+                                        "prepared SCC mixer Broyden matrix overflowed", error);
+        }
+        workspace.beta[row * history_count + column] = value;
+      }
+    }
+    if (!cholesky_solve(workspace.beta, workspace.coefficients, history_count)) {
+      return record_numeric_failure(state, system,
+                                    "prepared SCC mixer Broyden system is not usable", error);
+    }
+
+    for (std::size_t component = 0u; component < dimension; ++component) {
+      double value =
+          current[component] + prepared.runtime_damping * prepared.effective_residual[component];
+      for (std::size_t history = 0u; history < history_count; ++history) {
+        const std::size_t slot = static_cast<std::size_t>(workspace.history_slots[history]);
+        value -= slot_omega(slot) * workspace.coefficients[history] * u_vector(slot)[component];
+      }
+      if (!std::isfinite(value)) {
+        return record_numeric_failure(state, system,
+                                      "prepared SCC mixer Broyden result is not finite", error);
+      }
+      workspace.mixed[component] = value;
+    }
+
+    if (const xtbloom_status_t cap_status =
+            cap_prepared_step(state, system, dimension, current, workspace, prepared, error);
+        cap_status != XTBLOOM_STATUS_SUCCESS) {
+      return cap_status;
+    }
+
+    std::copy_n(workspace.delta_f, dimension,
+                state.df_history + history_offset + new_slot * dimension);
+    std::copy_n(workspace.new_u, dimension,
+                state.u_history + history_offset + new_slot * dimension);
+    state.omega[system * memory + new_slot] = omega;
+  }
+
+  /* A damping transition invalidates every prior secant. Clear them only
+   * after all potentially failing arithmetic completed, preserving the common
+   * mixer's failure-isolation contract. */
+  if (prepared.restart_history) {
+    const std::size_t history_elements = dimension * memory;
+    std::fill_n(state.df_history + history_offset, history_elements, 0.0);
+    std::fill_n(state.u_history + history_offset, history_elements, 0.0);
+    std::fill_n(state.omega + system * memory, memory, 0.0);
+  }
+
+  /* No operation below this point can fail: publish one complete system. */
+  std::copy_n(current, dimension, state.previous_inputs + vector_offset);
+  std::copy_n(prepared.effective_residual, dimension, state.previous_residuals + vector_offset);
+  std::copy_n(workspace.mixed, dimension, state.current_inputs + vector_offset);
+  publish_mixed_components(data, wavefunction, system, workspace.mixed);
+  state.residual_rms[system] = prepared.raw_residual_rms;
+  state.residual_maximum[system] = prepared.raw_residual_maximum;
+  state.iterations[system] = new_iteration;
+  state.history_ages[system] = new_history_age;
+  state.system_statuses[system] = XTBLOOM_STATUS_SUCCESS;
+  state.converged[system] = prepared.raw_residual_rms < data.rms_tolerance &&
+                                    prepared.raw_residual_maximum < data.maximum_tolerance
+                                ? 1u
+                                : 0u;
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }
@@ -981,6 +1264,8 @@ xtbloom_status_t make_scc_mixer_plan(const SccMixerVectorLayoutView& layout,
         !append_segment(batch_u64_bytes, alignof(std::uint64_t), cursor,
                         created.iteration_offset_bytes) ||
         !append_segment(batch_u64_bytes, alignof(std::uint64_t), cursor,
+                        created.history_age_offset_bytes) ||
+        !append_segment(batch_u64_bytes, alignof(std::uint64_t), cursor,
                         created.restart_count_offset_bytes) ||
         !append_segment(batch_status_bytes, alignof(xtbloom_status_t), cursor,
                         created.system_status_offset_bytes) ||
@@ -1061,6 +1346,7 @@ xtbloom_status_t bind_scc_mixer_state(const SccMixerPlan& plan, void* workspace,
   created.residual_rms = offset_pointer<double>(workspace, data.residual_rms_offset_bytes);
   created.residual_maximum = offset_pointer<double>(workspace, data.residual_maximum_offset_bytes);
   created.iterations = offset_pointer<std::uint64_t>(workspace, data.iteration_offset_bytes);
+  created.history_ages = offset_pointer<std::uint64_t>(workspace, data.history_age_offset_bytes);
   created.restart_counts =
       offset_pointer<std::uint64_t>(workspace, data.restart_count_offset_bytes);
   created.system_statuses =
@@ -1200,6 +1486,7 @@ xtbloom_status_t restart_scc_mixer_system_cpu(const SccMixerPlan& plan, std::int
   state.residual_rms[index] = 0.0;
   state.residual_maximum[index] = 0.0;
   state.iterations[index] = 0u;
+  state.history_ages[index] = 0u;
   ++state.restart_counts[index];
   state.system_statuses[index] = XTBLOOM_STATUS_SUCCESS;
   state.converged[index] = 0u;
@@ -1227,6 +1514,30 @@ xtbloom_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan, std::int64
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   return mix_system_unchecked(data, index, wavefunction, state, workspace, error);
+}
+
+xtbloom_status_t mix_scc_broyden_system_cpu_prepared(const SccMixerPlan& plan, std::int64_t system,
+                                                     const SccMixerVectorView& wavefunction,
+                                                     const SccMixerState& state,
+                                                     const SccMixerWorkspace& workspace,
+                                                     const SccMixerPreparedStepView& prepared,
+                                                     std::string& error) {
+  xtbloom_status_t status = validate_call(plan, wavefunction, state, &workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    return status;
+  }
+  const SccMixerPlanData& data = *plan.identity();
+  if (system < 0 || system >= data.batch_size) {
+    error = "prepared SCC mixer worker requires a valid system index";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t index = system_index(system);
+  if (state.initialized[index] != 1u) {
+    error = "prepared SCC mixer worker requires initialized per-system state";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  return mix_prepared_system_unchecked(data, index, wavefunction, state, workspace, prepared,
+                                       error);
 }
 
 xtbloom_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,

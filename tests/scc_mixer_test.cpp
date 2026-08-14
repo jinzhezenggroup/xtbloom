@@ -243,6 +243,8 @@ bool states_equal(const Fixture& first, const Fixture& second) {
          equal_double_arrays(first.state.residual_maximum, second.state.residual_maximum, batch) &&
          std::equal(first.state.iterations, first.state.iterations + batch,
                     second.state.iterations) &&
+         std::equal(first.state.history_ages, first.state.history_ages + batch,
+                    second.state.history_ages) &&
          std::equal(first.state.restart_counts, first.state.restart_counts + batch,
                     second.state.restart_counts) &&
          std::equal(first.state.system_statuses, first.state.system_statuses + batch,

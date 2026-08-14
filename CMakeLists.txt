@@ -861,6 +861,7 @@ endif()
 add_library(xtbloom_model_common_cpu_objects OBJECT
   src/model/common/sto.cpp
   src/model/common/integrals.cpp
+  src/model/common/scc_controller.cpp
   src/model/common/scc_mixer.cpp
   # The generalized eigensolver and fixed periodic charge-response algebra
   # are model-neutral even though their established internal namespace is
@@ -942,6 +943,7 @@ add_library(xtbloom_gfn2_cpu_objects OBJECT
   src/model/gfn2/lattice.cpp
   src/model/gfn2/mulliken.cpp
   src/model/gfn2/repulsion.cpp
+  src/model/gfn2/scc_preconditioner.cpp
   src/model/gfn2/scc_driver.cpp
   src/model/gfn2/scc_mixer.cpp
   src/model/gfn2/spin.cpp
@@ -3493,6 +3495,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_common_scc_mixer_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.common.scc_mixer COMMAND xtbloom_common_scc_mixer_test)
 
+  add_executable(xtbloom_common_scc_controller_test tests/common_scc_controller_test.cpp)
+  target_link_libraries(xtbloom_common_scc_controller_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_common_scc_controller_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.common.scc_controller COMMAND xtbloom_common_scc_controller_test)
+
   add_executable(xtbloom_gfn1_scc_mixer_test tests/gfn1_scc_mixer_test.cpp)
   target_link_libraries(xtbloom_gfn1_scc_mixer_test PRIVATE xtbloom_gfn1_cpu)
   target_compile_features(xtbloom_gfn1_scc_mixer_test PRIVATE cxx_std_17)
@@ -3558,6 +3565,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_scc_mixer_test PRIVATE xtbloom_gfn2_cpu Threads::Threads)
   target_compile_features(xtbloom_scc_mixer_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.scc_mixer COMMAND xtbloom_scc_mixer_test)
+
+  add_executable(xtbloom_scc_preconditioner_test tests/scc_preconditioner_test.cpp)
+  target_link_libraries(xtbloom_scc_preconditioner_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_scc_preconditioner_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.scc_preconditioner COMMAND xtbloom_scc_preconditioner_test)
 
   add_executable(xtbloom_scc_driver_test tests/scc_driver_test.cpp)
   target_link_libraries(xtbloom_scc_driver_test PRIVATE xtbloom_gfn2_cpu)

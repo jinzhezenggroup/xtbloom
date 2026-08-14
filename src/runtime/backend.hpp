@@ -16,12 +16,21 @@ class Gfn1CpuExecutionCache;
 class Gfn2CpuExecutionCache;
 class Gfn2CudaExecutionCache;
 
+/* Process-wide experimental GFN2 CPU policy captured when the public context
+ * is created. The numerical cache remains lazy, but it receives this immutable
+ * snapshot instead of re-reading the environment on first model use. */
+struct Gfn2CpuContextPolicy {
+  std::uint8_t pairs_scc_policy = 0u;  // 0=off, 1=controller, 2=local-v1
+  bool pairs_scc_policy_valid = true;
+};
+
 /* Runtime state is opaque at the ABI boundary so backend internals can evolve. */
 struct Context {
   xtbloom_backend_t backend = XTBLOOM_BACKEND_CPU;
   std::int32_t device_id = -1;
   std::int32_t cpu_threads = 0;
   void* stream = nullptr;
+  Gfn2CpuContextPolicy gfn2_cpu_policy;
 
   /* One CPU context is one public transaction domain, independent of model.
    * GFN1 and GFN2 keep separate topology/WARM caches and worker pools, but a

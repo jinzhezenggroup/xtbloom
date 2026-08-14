@@ -112,12 +112,36 @@ struct SccMixerState {
   double* residual_rms = nullptr;
   double* residual_maximum = nullptr;
   std::uint64_t* iterations = nullptr;
+  /* Number of successful transitions represented by the current secant
+   * history. Unlike iterations, this counter may restart when a numerical
+   * controller changes damping. */
+  std::uint64_t* history_ages = nullptr;
   std::uint64_t* restart_counts = nullptr;
   xtbloom_status_t* system_statuses = nullptr;
   std::uint8_t* initialized = nullptr;
   std::uint8_t* converged = nullptr;
 
   const SccMixerPlanData* plan_identity = nullptr;
+};
+
+/*
+ * Experimental internal seam for a model-provided effective residual.
+ * Public convergence diagnostics remain the raw, unmodified values supplied
+ * here. The effective residual must occupy the mixer's residual scratch and
+ * may be preconditioned, but it must represent the same physical fixed point.
+ */
+struct SccMixerPreparedStepView {
+  const double* effective_residual = nullptr;
+  std::size_t residual_elements = 0u;
+  double raw_residual_rms = 0.0;
+  double raw_residual_maximum = 0.0;
+  double runtime_damping = 0.0;
+  bool restart_history = false;
+  /* Positive per-component weights for the model's invariant step metric.
+   * The complete damped-plus-Broyden candidate is scaled uniformly when its
+   * weighted norm exceeds maximum_weighted_step_norm. */
+  const double* step_metric_weights = nullptr;
+  double maximum_weighted_step_norm = 0.0;
 };
 
 /* Compact scratch reusable by one worker or the serial batch wrapper. */
@@ -174,6 +198,13 @@ xtbloom_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan, std::int64
                                             const SccMixerVectorView& vector,
                                             const SccMixerState& state,
                                             const SccMixerWorkspace& workspace, std::string& error);
+
+xtbloom_status_t mix_scc_broyden_system_cpu_prepared(const SccMixerPlan& plan, std::int64_t system,
+                                                     const SccMixerVectorView& vector,
+                                                     const SccMixerState& state,
+                                                     const SccMixerWorkspace& workspace,
+                                                     const SccMixerPreparedStepView& prepared,
+                                                     std::string& error);
 
 /* Serial wrapper retaining peer-local numerical failure isolation. */
 xtbloom_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,

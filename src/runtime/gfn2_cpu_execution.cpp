@@ -64,6 +64,17 @@ constexpr std::size_t kHostAlignment = 64u;
 constexpr std::int32_t kDefaultMixerHistory = 8;
 constexpr double kDefaultMixerDamping = 0.4;
 constexpr std::size_t kMaximumAutomaticCpuThreads = 64u;
+struct FrozenPairsSccPolicy {
+  SccAccelerationPolicy policy = SccAccelerationPolicy::kOff;
+  bool valid = true;
+};
+
+FrozenPairsSccPolicy make_frozen_pairs_scc_policy(std::uint8_t encoded, bool valid) noexcept {
+  if (!valid || encoded > static_cast<std::uint8_t>(SccAccelerationPolicy::kLocalV1)) {
+    return {SccAccelerationPolicy::kOff, false};
+  }
+  return {static_cast<SccAccelerationPolicy>(encoded), true};
+}
 
 /* ``std::aligned_alloc`` is not provided by MSVC; wrap the platform primitive
  * so AlignedBuffer can allocate and free without per-platform guards. */
@@ -581,6 +592,7 @@ struct SystemKey {
   std::int32_t scc_mixer_history = kDefaultMixerHistory;
   double scc_mixer_damping = kDefaultMixerDamping;
   xtbloom_determinism_t determinism = XTBLOOM_DETERMINISM_DEFAULT;
+  SccAccelerationPolicy acceleration_policy = SccAccelerationPolicy::kOff;
 
   friend bool operator==(const SystemKey& lhs, const SystemKey& rhs) {
     return lhs.atomic_numbers == rhs.atomic_numbers &&
@@ -595,7 +607,8 @@ struct SystemKey {
            lhs.energy_tolerance == rhs.energy_tolerance &&
            lhs.electronic_temperature == rhs.electronic_temperature &&
            lhs.scc_mixer == rhs.scc_mixer && lhs.scc_mixer_history == rhs.scc_mixer_history &&
-           lhs.scc_mixer_damping == rhs.scc_mixer_damping && lhs.determinism == rhs.determinism;
+           lhs.scc_mixer_damping == rhs.scc_mixer_damping && lhs.determinism == rhs.determinism &&
+           lhs.acceleration_policy == rhs.acceleration_policy;
   }
 };
 
@@ -621,7 +634,7 @@ NormalizedExecutionPolicy normalize_execution_policy(
 }
 
 void make_system_keys(const HostRequest& request, const xtbloom_compute_options_t& options,
-                      std::vector<SystemKey>& keys) {
+                      SccAccelerationPolicy acceleration_policy, std::vector<SystemKey>& keys) {
   keys.resize(static_cast<std::size_t>(request.batch_size));
   const bool periodic_enabled = request.shifts_enabled || request.response_enabled;
   const NormalizedExecutionPolicy policy = normalize_execution_policy(options);
@@ -650,6 +663,7 @@ void make_system_keys(const HostRequest& request, const xtbloom_compute_options_
     key.scc_mixer_history = policy.scc_mixer_history;
     key.scc_mixer_damping = policy.scc_mixer_damping;
     key.determinism = policy.determinism;
+    key.acceleration_policy = acceleration_policy;
   }
 }
 
@@ -667,7 +681,8 @@ bool same_prepared_layout(const SystemKey& lhs, const SystemKey& rhs) {
          lhs.energy_tolerance == rhs.energy_tolerance &&
          lhs.electronic_temperature == rhs.electronic_temperature &&
          lhs.scc_mixer == rhs.scc_mixer && lhs.scc_mixer_history == rhs.scc_mixer_history &&
-         lhs.scc_mixer_damping == rhs.scc_mixer_damping && lhs.determinism == rhs.determinism;
+         lhs.scc_mixer_damping == rhs.scc_mixer_damping && lhs.determinism == rhs.determinism &&
+         lhs.acceleration_policy == rhs.acceleration_policy;
 }
 
 struct SystemOutput {
@@ -924,11 +939,11 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
     status = make_periodic_embedding_plan(1, atoms, atom_offsets.data(), periodic, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
   }
-  status =
-      make_scc_driver_plan(wavefunction_layout, mulliken, es2, es3, aes2, eigensolver, mixer,
-                           d4_enabled ? &d4 : nullptr, key.periodic_enabled ? &periodic : nullptr,
-                           static_cast<std::uint64_t>(key.maximum_iterations),
-                           key.electronic_temperature, key.energy_tolerance, driver, error);
+  status = make_scc_driver_plan(
+      wavefunction_layout, mulliken, es2, es3, aes2, eigensolver, mixer, d4_enabled ? &d4 : nullptr,
+      key.periodic_enabled ? &periodic : nullptr,
+      static_cast<std::uint64_t>(key.maximum_iterations), key.electronic_temperature,
+      key.energy_tolerance, key.acceleration_policy, driver, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   const std::size_t atom_count = static_cast<std::size_t>(atoms);
@@ -1585,8 +1600,10 @@ xtbloom_status_t SystemExecution::infer(
 struct Gfn2CpuExecutionCache::Impl {
   enum class TaskFailure : std::uint8_t { kNone, kAllocation, kException, kUnknown };
 
-  explicit Impl(std::int32_t requested_threads)
-      : cpu_threads(resolve_cpu_threads(requested_threads)), workers(cpu_threads) {}
+  Impl(std::int32_t requested_threads, std::uint8_t pairs_policy, bool pairs_policy_valid)
+      : pairs_scc_policy(make_frozen_pairs_scc_policy(pairs_policy, pairs_policy_valid)),
+        cpu_threads(resolve_cpu_threads(requested_threads)),
+        workers(cpu_threads) {}
 
   ~Impl() {
     /* backend_self_test and serial/batch participation may initialize MKL
@@ -1598,6 +1615,7 @@ struct Gfn2CpuExecutionCache::Impl {
   }
 
   std::mutex mutex;
+  const FrozenPairsSccPolicy pairs_scc_policy;
   CpuLinearAlgebraBackend backend;
   bool backend_initialized = false;
   std::vector<SystemKey> keys;
@@ -1825,8 +1843,10 @@ struct Gfn2CpuExecutionCache::Impl {
   }
 };
 
-Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads)
-    : impl_(std::make_unique<Impl>(cpu_threads)) {}
+Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads,
+                                             std::uint8_t pairs_scc_policy,
+                                             bool pairs_scc_policy_valid)
+    : impl_(std::make_unique<Impl>(cpu_threads, pairs_scc_policy, pairs_scc_policy_valid)) {}
 Gfn2CpuExecutionCache::~Gfn2CpuExecutionCache() = default;
 
 xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
@@ -1841,7 +1861,12 @@ xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
     if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
-    make_system_keys(implementation.request, options, implementation.requested_keys);
+    if (!implementation.pairs_scc_policy.valid) {
+      error = "XTBLOOM_EXPERIMENTAL_GFN2_PAIRS_SCC must be off, controller, or local-v1";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    make_system_keys(implementation.request, options, implementation.pairs_scc_policy.policy,
+                     implementation.requested_keys);
 
     const bool warm_requested = options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
                                 options.scc_start_mode == XTBLOOM_SCC_START_WARM;
@@ -1986,7 +2011,12 @@ xtbloom_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
     if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
-    make_system_keys(implementation.request, options, implementation.requested_keys);
+    if (!implementation.pairs_scc_policy.valid) {
+      error = "XTBLOOM_EXPERIMENTAL_GFN2_PAIRS_SCC must be off, controller, or local-v1";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    make_system_keys(implementation.request, options, implementation.pairs_scc_policy.policy,
+                     implementation.requested_keys);
     reused = implementation.requested_keys == implementation.keys;
     status = implementation.ensure_backend(error);
     if (status != XTBLOOM_STATUS_SUCCESS) {

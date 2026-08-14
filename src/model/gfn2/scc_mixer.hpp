@@ -16,6 +16,7 @@ namespace xtbloom::detail::gfn2 {
 inline constexpr std::size_t kSccMixerWorkspaceAlignment = common::kSccMixerWorkspaceAlignment;
 
 using SccMixerPlanData = common::SccMixerPlanData;
+using SccMixerPreparedStepView = common::SccMixerPreparedStepView;
 using SccMixerState = common::SccMixerState;
 using SccMixerWorkspace = common::SccMixerWorkspace;
 
@@ -83,6 +84,13 @@ xtbloom_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan, std::int64
                                             const WavefunctionView& wavefunction,
                                             const SccMixerState& state,
                                             const SccMixerWorkspace& workspace, std::string& error);
+
+xtbloom_status_t mix_scc_broyden_system_cpu_prepared(const SccMixerPlan& plan, std::int64_t system,
+                                                     const WavefunctionView& wavefunction,
+                                                     const SccMixerState& state,
+                                                     const SccMixerWorkspace& workspace,
+                                                     const SccMixerPreparedStepView& prepared,
+                                                     std::string& error);
 
 xtbloom_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,
                                            const WavefunctionView& wavefunction,

@@ -1,6 +1,8 @@
 #include "runtime/backend.hpp"
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <new>
 #include <utility>
@@ -13,6 +15,22 @@
 
 namespace xtbloom::detail {
 namespace {
+
+constexpr const char* kExperimentalPairsSccEnvironment = "XTBLOOM_EXPERIMENTAL_GFN2_PAIRS_SCC";
+
+Gfn2CpuContextPolicy capture_gfn2_cpu_policy() noexcept {
+  const char* const value = std::getenv(kExperimentalPairsSccEnvironment);
+  if (value == nullptr || value[0] == '\0' || std::strcmp(value, "off") == 0) {
+    return {};
+  }
+  if (std::strcmp(value, "controller") == 0) {
+    return {1u, true};
+  }
+  if (std::strcmp(value, "local-v1") == 0) {
+    return {2u, true};
+  }
+  return {0u, false};
+}
 
 bool resolve_cuda(std::int32_t requested_device, std::int32_t& resolved_device,
                   std::string& error) {
@@ -87,6 +105,9 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
   created->device_id = resolved_device;
   created->cpu_threads = options.cpu_threads;
   created->stream = options.stream;
+  if (selected == XTBLOOM_BACKEND_CPU) {
+    created->gfn2_cpu_policy = capture_gfn2_cpu_policy();
+  }
 #if defined(XTBLOOM_HAS_CUDA)
   if (selected == XTBLOOM_BACKEND_CUDA) {
     try {
@@ -132,7 +153,9 @@ xtbloom_status_t ensure_gfn2_cpu_execution_cache(Context& context, std::string& 
     /* Keep the established GFN2 pool context-owned, but construct it only when
      * GFN2 is selected so publishing GFN1 does not double every CPU context's
      * resident thread count. */
-    context.gfn2_cpu_execution_cache = std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads);
+    context.gfn2_cpu_execution_cache = std::make_shared<Gfn2CpuExecutionCache>(
+        context.cpu_threads, context.gfn2_cpu_policy.pairs_scc_policy,
+        context.gfn2_cpu_policy.pairs_scc_policy_valid);
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the CPU GFN2 execution cache";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;

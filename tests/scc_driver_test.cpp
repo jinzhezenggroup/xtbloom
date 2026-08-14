@@ -423,6 +423,7 @@ struct MixerSystemSnapshot {
   double residual_rms = 0.0;
   double residual_maximum = 0.0;
   std::uint64_t iterations = 0u;
+  std::uint64_t history_age = 0u;
   std::uint64_t restart_counts = 0u;
   xtbloom_status_t system_status = XTBLOOM_STATUS_SUCCESS;
   std::uint8_t initialized = 0u;
@@ -456,6 +457,7 @@ MixerSystemSnapshot snapshot_mixer_system(const Fixture& fixture, std::size_t sy
   snapshot.residual_rms = fixture.mixer_state.residual_rms[system];
   snapshot.residual_maximum = fixture.mixer_state.residual_maximum[system];
   snapshot.iterations = fixture.mixer_state.iterations[system];
+  snapshot.history_age = fixture.mixer_state.history_ages[system];
   snapshot.restart_counts = fixture.mixer_state.restart_counts[system];
   snapshot.system_status = fixture.mixer_state.system_statuses[system];
   snapshot.initialized = fixture.mixer_state.initialized[system];
@@ -470,9 +472,74 @@ bool mixer_snapshots_equal(const MixerSystemSnapshot& first, const MixerSystemSn
          first.df_history == second.df_history && first.u_history == second.u_history &&
          first.omega == second.omega && first.residual_rms == second.residual_rms &&
          first.residual_maximum == second.residual_maximum &&
-         first.iterations == second.iterations && first.restart_counts == second.restart_counts &&
+         first.iterations == second.iterations && first.history_age == second.history_age &&
+         first.restart_counts == second.restart_counts &&
          first.system_status == second.system_status && first.initialized == second.initialized &&
          first.converged == second.converged;
+}
+
+/* Every numerical wavefunction field belonging to one ragged member. */
+struct WavefunctionSystemSnapshot {
+  std::array<std::vector<double>, 9u> fields;
+};
+
+WavefunctionSystemSnapshot snapshot_wavefunction_system(const Fixture& fixture,
+                                                        std::size_t system) {
+  const std::array<const double*, 9u> values{{
+      fixture.wavefunction.coefficients,
+      fixture.wavefunction.eigenvalues,
+      fixture.wavefunction.occupations,
+      fixture.wavefunction.density,
+      fixture.wavefunction.qsh,
+      fixture.wavefunction.qat,
+      fixture.wavefunction.dipole,
+      fixture.wavefunction.quadrupole,
+      fixture.wavefunction.energy_weighted_density,
+  }};
+  const std::array<const WavefunctionFieldLayout*, 9u> layouts{{
+      &fixture.wavefunction_layout.coefficients,
+      &fixture.wavefunction_layout.eigenvalues,
+      &fixture.wavefunction_layout.occupations,
+      &fixture.wavefunction_layout.density,
+      &fixture.wavefunction_layout.qsh,
+      &fixture.wavefunction_layout.qat,
+      &fixture.wavefunction_layout.dipole,
+      &fixture.wavefunction_layout.quadrupole,
+      &fixture.wavefunction_layout.energy_weighted_density,
+  }};
+  WavefunctionSystemSnapshot snapshot;
+  for (std::size_t field = 0u; field < values.size(); ++field) {
+    const std::size_t begin = static_cast<std::size_t>(layouts[field]->system_offsets[system]);
+    const std::size_t end = static_cast<std::size_t>(layouts[field]->system_offsets[system + 1u]);
+    snapshot.fields[field].assign(values[field] + begin, values[field] + end);
+  }
+  return snapshot;
+}
+
+bool wavefunction_snapshots_equal(const WavefunctionSystemSnapshot& first,
+                                  const WavefunctionSystemSnapshot& second) {
+  return first.fields == second.fields;
+}
+
+bool controller_states_equal(const xtbloom::detail::common::SccControllerState& first,
+                             const xtbloom::detail::common::SccControllerState& second) {
+  return first.damping_level == second.damping_level &&
+         first.contraction_count == second.contraction_count &&
+         first.stagnation_count == second.stagnation_count &&
+         first.two_cycle_count == second.two_cycle_count &&
+         first.cooldown_remaining == second.cooldown_remaining &&
+         first.restart_count == second.restart_count &&
+         first.fallback_to_baseline == second.fallback_to_baseline;
+}
+
+void force_controller_divergence(Fixture& fixture, std::size_t system) {
+  const std::vector<std::int64_t>& offsets = fixture.mixer_plan.vector_offsets();
+  const std::size_t begin = static_cast<std::size_t>(offsets[system]);
+  const std::size_t end = static_cast<std::size_t>(offsets[system + 1u]);
+  fixture.mixer_state.current_inputs[begin] += 0.1;
+  std::fill(fixture.mixer_state.previous_residuals + begin,
+            fixture.mixer_state.previous_residuals + end, 1.0e-12);
+  fixture.mixer_state.history_ages[system] = 1u;
 }
 
 bool make_component_plans(std::vector<std::int32_t> atomic_numbers, double molecular_charge,
@@ -510,7 +577,8 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
                   bool enable_periodic_embedding = false, const FixtureTopology* topology = nullptr,
                   bool use_nullable_driver_overload = false, bool enable_d4 = false,
                   double energy_tolerance = 1.0e100, double electronic_temperature = 0.0,
-                  bool use_compatibility_driver_overload = false) {
+                  bool use_compatibility_driver_overload = false,
+                  SccAccelerationPolicy acceleration_policy = SccAccelerationPolicy::kOff) {
   fixture.batch_size = batch_size;
   if (topology == nullptr) {
     fixture.atom_offsets.resize(static_cast<std::size_t>(batch_size) + 1u);
@@ -584,7 +652,18 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
     return false;
   }
   xtbloom_status_t driver_status = XTBLOOM_STATUS_SUCCESS;
-  if (!use_compatibility_driver_overload) {
+  if (acceleration_policy != SccAccelerationPolicy::kOff) {
+    if (use_compatibility_driver_overload || use_nullable_driver_overload) {
+      error = "experimental SCC policy requires the explicit driver overload";
+      return false;
+    }
+    driver_status = make_scc_driver_plan(
+        fixture.wavefunction_layout, fixture.mulliken_plan, fixture.es2_plan, fixture.es3_plan,
+        fixture.aes2_plan, fixture.eigensolver_plan, fixture.mixer_plan,
+        enable_d4 ? &fixture.d4_plan : nullptr,
+        enable_periodic_embedding ? &fixture.periodic_plan : nullptr, maximum_iterations,
+        electronic_temperature, energy_tolerance, acceleration_policy, fixture.driver_plan, error);
+  } else if (!use_compatibility_driver_overload) {
     driver_status = make_scc_driver_plan(
         fixture.wavefunction_layout, fixture.mulliken_plan, fixture.es2_plan, fixture.es3_plan,
         fixture.aes2_plan, fixture.eigensolver_plan, fixture.mixer_plan,
@@ -1208,7 +1287,9 @@ int test_mixer_failure_preserves_public_history_and_counts_attempt() {
 int test_ragged_mixer_failure_isolated_from_peer_commit() {
   Fixture fixture;
   std::string error;
-  CHECK(make_fixture(2, fixture, error));
+  CHECK(make_fixture(2, fixture, error, 5u, 1.0e-10, false, nullptr, false, false, 1.0e100, 0.0,
+                     false, SccAccelerationPolicy::kLocalV1));
+  CHECK(fixture.driver_state.controller_states != nullptr);
   /* A converged-peer reference: system 0 converges on the first attempt and
    * then stays inactive, so it must never be copied by a later transaction
    * that only touches the restarted system 1. */
@@ -1223,14 +1304,21 @@ int test_ragged_mixer_failure_isolated_from_peer_commit() {
                                       fixture.mixer_state, fixture.driver_state,
                                       error) == XTBLOOM_STATUS_SUCCESS);
   const MixerSystemSnapshot peer_before = snapshot_mixer_system(fixture, 0u);
+  const xtbloom::detail::common::SccControllerState peer_controller_before =
+      fixture.driver_state.controller_states[0];
   const double peer_qsh_before = fixture.wavefunction.qsh[0];
   CHECK(fixture.driver_state.iterations[0] == 1u);
   const std::uint64_t peer_driver_iterations_before = fixture.driver_state.iterations[0];
 
   /* Force system 1's mixer transition to fail while system 0 remains a
-   * converged, inactive peer. */
+   * converged, inactive peer. The synthetic previous residual also forces a
+   * real controller restart and local-v1 fallback decision before the mixer
+   * detects the overflowing iteration counter; neither decision may commit. */
+  force_controller_divergence(fixture, 1u);
   fixture.mixer_state.iterations[1] = std::numeric_limits<std::uint64_t>::max();
   const MixerSystemSnapshot failed_before = snapshot_mixer_system(fixture, 1u);
+  const xtbloom::detail::common::SccControllerState failed_controller_before =
+      fixture.driver_state.controller_states[1];
   CHECK(iterate_scc_driver_batch_cpu(
             fixture.driver_plan, fixture.geometry, backend(), fixture.overlap_cache,
             fixture.wavefunction, fixture.mixer_state, fixture.driver_state, fixture.driver_scratch,
@@ -1258,6 +1346,9 @@ int test_ragged_mixer_failure_isolated_from_peer_commit() {
   CHECK(failed_after.converged == failed_before.converged);
   CHECK(failed_after.system_status == XTBLOOM_STATUS_INTERNAL_ERROR);
   CHECK(mixer_snapshots_equal(peer_before, snapshot_mixer_system(fixture, 0u)));
+  CHECK(controller_states_equal(peer_controller_before, fixture.driver_state.controller_states[0]));
+  CHECK(
+      controller_states_equal(failed_controller_before, fixture.driver_state.controller_states[1]));
   CHECK(fixture.wavefunction.qsh[0] == peer_qsh_before);
 
   /* Restart the failed system from its unchanged public state and let the
@@ -1272,6 +1363,74 @@ int test_ragged_mixer_failure_isolated_from_peer_commit() {
   CHECK(fixture.driver_state.iterations[1] == 1u);
   CHECK(fixture.driver_state.converged[1] == 1u);
   CHECK(mixer_snapshots_equal(peer_before, snapshot_mixer_system(fixture, 0u)));
+  return 0;
+}
+
+int test_local_v1_restart_commits_only_the_active_ragged_lane() {
+  const FixtureTopology topology{
+      {0, 2, 4},  {6, 8, 6, 8}, {-1.1, 0.0, 0.0, 1.1, 0.0, 0.0, -1.1, 0.0, 0.0, 1.1, 0.0, 0.0},
+      {0.0, 0.0}, {},           {}};
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(2, fixture, error, 5u, 1.0e100, false, &topology, false, false, 1.0e100, 0.0,
+                     false, SccAccelerationPolicy::kLocalV1));
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.converged[0] == 1u);
+  CHECK(fixture.driver_state.converged[1] == 1u);
+  CHECK(restart_scc_driver_system_cpu(fixture.driver_plan, 1, fixture.wavefunction,
+                                      fixture.mixer_state, fixture.driver_state,
+                                      error) == XTBLOOM_STATUS_SUCCESS);
+  const MixerSystemSnapshot peer_before = snapshot_mixer_system(fixture, 0u);
+  const WavefunctionSystemSnapshot peer_wavefunction_before =
+      snapshot_wavefunction_system(fixture, 0u);
+  const auto peer_controller_before = fixture.driver_state.controller_states[0];
+  const std::uint64_t explicit_restart_count = fixture.mixer_state.restart_counts[1];
+  force_controller_divergence(fixture, 1u);
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.controller_states[1].restart_count == 1u);
+  CHECK(fixture.driver_state.controller_states[1].damping_level == 0u);
+  CHECK(fixture.mixer_state.history_ages[1] == 1u);
+  CHECK(fixture.mixer_state.restart_counts[1] == explicit_restart_count);
+  CHECK(mixer_snapshots_equal(peer_before, snapshot_mixer_system(fixture, 0u)));
+  CHECK(wavefunction_snapshots_equal(peer_wavefunction_before,
+                                     snapshot_wavefunction_system(fixture, 0u)));
+  CHECK(controller_states_equal(peer_controller_before, fixture.driver_state.controller_states[0]));
+
+  /* A converged driver publishes the raw q/d/Q state. Repack it relative to
+   * the mixer's stored previous input and prove the committed secant residual
+   * is raw, while the local-v1 map for this heterogeneous-shell CO system is
+   * observably different. */
+  SccPreconditionerPlan reference_preconditioner;
+  CHECK(make_scc_preconditioner_plan(fixture.wavefunction_layout, fixture.es2_plan,
+                                     fixture.aes2_plan, reference_preconditioner,
+                                     error) == XTBLOOM_STATUS_SUCCESS);
+  SccMixerState reference_state = fixture.mixer_state;
+  reference_state.current_inputs = fixture.mixer_state.previous_inputs;
+  SccResidualDiagnostics diagnostics;
+  CHECK(prepare_scc_residual_system_cpu(reference_preconditioner,
+                                        SccResidualPolicy::kControllerOnly, 1, fixture.wavefunction,
+                                        reference_state, fixture.driver_scratch.mixer_workspace,
+                                        diagnostics, error) == XTBLOOM_STATUS_SUCCESS);
+  const std::size_t vector_begin = static_cast<std::size_t>(fixture.mixer_plan.vector_offsets()[1]);
+  const std::size_t dimension = static_cast<std::size_t>(fixture.mixer_plan.vector_offsets()[2] -
+                                                         fixture.mixer_plan.vector_offsets()[1]);
+  const std::vector<double> raw_residual(
+      fixture.driver_scratch.mixer_workspace.residual,
+      fixture.driver_scratch.mixer_workspace.residual + dimension);
+  CHECK(std::equal(raw_residual.begin(), raw_residual.end(),
+                   fixture.mixer_state.previous_residuals + vector_begin));
+  CHECK(prepare_scc_residual_system_cpu(reference_preconditioner, SccResidualPolicy::kLocalV1, 1,
+                                        fixture.wavefunction, reference_state,
+                                        fixture.driver_scratch.mixer_workspace, diagnostics,
+                                        error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(!std::equal(raw_residual.begin(), raw_residual.end(),
+                    fixture.driver_scratch.mixer_workspace.residual));
   return 0;
 }
 
@@ -2109,6 +2268,59 @@ int test_control_descriptors_cannot_alias_numerical_storage() {
   return 0;
 }
 
+int test_experimental_controller_and_local_v1_driver_paths() {
+  const FixtureTopology topology{{0, 2}, {6, 8}, {-1.1, 0.0, 0.0, 1.1, 0.0, 0.0}, {0.0}, {}, {}};
+  std::string error;
+  Fixture baseline;
+  Fixture controller;
+  CHECK(make_fixture(1, baseline, error, 2u, 1.0e100, false, &topology, false, false, 1.0e100));
+  CHECK(make_fixture(1, controller, error, 2u, 1.0e100, false, &topology, false, false, 1.0e100,
+                     0.0, false, SccAccelerationPolicy::kController));
+  CHECK(baseline.driver_plan.acceleration_policy() == SccAccelerationPolicy::kOff);
+  CHECK(controller.driver_plan.acceleration_policy() == SccAccelerationPolicy::kController);
+  CHECK(baseline.driver_state.controller_states == nullptr);
+  CHECK(controller.driver_state.controller_states != nullptr);
+  CHECK(controller.driver_state.controller_states[0].damping_level == 1u);
+
+  CHECK(iterate_scc_driver_batch_cpu(baseline.driver_plan, baseline.geometry, backend(),
+                                     baseline.overlap_cache, baseline.wavefunction,
+                                     baseline.mixer_state, baseline.driver_state,
+                                     baseline.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(iterate_scc_driver_batch_cpu(controller.driver_plan, controller.geometry, backend(),
+                                     controller.overlap_cache, controller.wavefunction,
+                                     controller.mixer_state, controller.driver_state,
+                                     controller.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(std::memcmp(baseline.wavefunction_storage->data, controller.wavefunction_storage->data,
+                    baseline.wavefunction_layout.workspace_size_bytes) == 0);
+  CHECK(std::memcmp(baseline.mixer_state_storage->data, controller.mixer_state_storage->data,
+                    baseline.mixer_plan.state_size_bytes()) == 0);
+  CHECK(baseline.driver_state.free_energies[0] == controller.driver_state.free_energies[0]);
+  CHECK(baseline.driver_state.internal_energies[0] == controller.driver_state.internal_energies[0]);
+
+  controller.driver_state.controller_states[0].stagnation_count = 2u;
+  CHECK(restart_scc_driver_system_cpu(controller.driver_plan, 0, controller.wavefunction,
+                                      controller.mixer_state, controller.driver_state,
+                                      error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(controller.driver_state.controller_states[0].damping_level == 1u);
+  CHECK(controller.driver_state.controller_states[0].stagnation_count == 0u);
+
+  Fixture local;
+  CHECK(make_fixture(1, local, error, 2u, 1.0e100, false, &topology, false, false, 1.0e100, 0.0,
+                     false, SccAccelerationPolicy::kLocalV1));
+  CHECK(local.driver_plan.acceleration_policy() == SccAccelerationPolicy::kLocalV1);
+  CHECK(iterate_scc_driver_batch_cpu(local.driver_plan, local.geometry, backend(),
+                                     local.overlap_cache, local.wavefunction, local.mixer_state,
+                                     local.driver_state, local.driver_scratch,
+                                     error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(std::isfinite(local.driver_state.free_energies[0]));
+  CHECK(local.mixer_state.residual_rms[0] == baseline.mixer_state.residual_rms[0]);
+  CHECK(!std::equal(local.mixer_state.current_inputs,
+                    local.mixer_state.current_inputs +
+                        static_cast<std::size_t>(local.mixer_plan.total_vector_elements()),
+                    baseline.mixer_state.current_inputs));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -2144,6 +2356,9 @@ int main() {
     return status;
   }
   if (const int status = test_ragged_mixer_failure_isolated_from_peer_commit(); status != 0) {
+    return status;
+  }
+  if (const int status = test_local_v1_restart_commits_only_the_active_ragged_lane(); status != 0) {
     return status;
   }
   if (const int status = test_energy_history_failure_isolated_from_peer_commit(); status != 0) {
@@ -2196,5 +2411,8 @@ int main() {
       status != 0) {
     return status;
   }
-  return test_structural_failure_atomicity_and_zero_allocation();
+  if (const int status = test_structural_failure_atomicity_and_zero_allocation(); status != 0) {
+    return status;
+  }
+  return test_experimental_controller_and_local_v1_driver_paths();
 }

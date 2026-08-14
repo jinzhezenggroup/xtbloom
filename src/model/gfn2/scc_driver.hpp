@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "model/common/scc_controller.hpp"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/d4.hpp"
 #include "model/gfn2/eigensolver.hpp"
@@ -17,11 +18,18 @@
 #include "model/gfn2/parallel_executor.hpp"
 #include "model/gfn2/periodic_embedding.hpp"
 #include "model/gfn2/scc_mixer.hpp"
+#include "model/gfn2/scc_preconditioner.hpp"
 #include "model/gfn2/spin.hpp"
 #include "model/gfn2/wavefunction.hpp"
 #include "xtbloom/xtbloom.h"
 
 namespace xtbloom::detail::gfn2 {
+
+enum class SccAccelerationPolicy : std::uint8_t {
+  kOff = 0,
+  kController = 1,
+  kLocalV1 = 2,
+};
 
 inline constexpr std::size_t kSccDriverWorkspaceAlignment = 64u;
 inline constexpr double kDefaultSccEnergyTolerance = 1.0e-8;
@@ -59,6 +67,7 @@ class SccDriverPlan {
   [[nodiscard]] double energy_tolerance() const noexcept;
   [[nodiscard]] bool d4_enabled() const noexcept;
   [[nodiscard]] bool periodic_embedding_enabled() const noexcept;
+  [[nodiscard]] SccAccelerationPolicy acceleration_policy() const noexcept;
   [[nodiscard]] std::size_t state_size_bytes() const noexcept;
   [[nodiscard]] std::size_t workspace_size_bytes() const noexcept;
   [[nodiscard]] std::size_t resident_bytes() const noexcept;
@@ -85,6 +94,12 @@ class SccDriverPlan {
       const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
       std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
       SccDriverPlan& plan, std::string& error);
+  friend xtbloom_status_t make_scc_driver_plan(
+      const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+      const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+      const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+      std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
+      SccAccelerationPolicy acceleration_policy, SccDriverPlan& plan, std::string& error);
 };
 
 /*
@@ -173,6 +188,7 @@ struct SccDriverState {
   double* periodic_embedding_energies = nullptr;
   double* internal_energies = nullptr;
   std::uint64_t* iterations = nullptr;
+  common::SccControllerState* controller_states = nullptr;
   xtbloom_status_t* system_statuses = nullptr;
   std::uint8_t* initialized = nullptr;
   std::uint8_t* converged = nullptr;
@@ -279,6 +295,14 @@ xtbloom_status_t make_scc_driver_plan(
     const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
     std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
     SccDriverPlan& plan, std::string& error);
+
+/* Internal CPU experiment policy. Existing overloads always select kOff. */
+xtbloom_status_t make_scc_driver_plan(
+    const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+    const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+    const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+    std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
+    SccAccelerationPolicy acceleration_policy, SccDriverPlan& plan, std::string& error);
 
 /*
  * Enable the validated CPU periodic charge response. A non-null pointer must

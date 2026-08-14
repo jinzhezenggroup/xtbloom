@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "model/common/scc_controller.hpp"
+
 namespace xtbloom::detail::gfn2 {
 
 struct SccDriverPlanData {
@@ -26,7 +28,11 @@ struct SccDriverPlanData {
   D4Plan d4;
   EigensolverPlan eigensolver;
   SccMixerPlan mixer;
+  SccPreconditionerPlan preconditioner;
   PeriodicEmbeddingPlan periodic_embedding;
+
+  common::SccControllerConfig controller_config;
+  SccAccelerationPolicy acceleration_policy = SccAccelerationPolicy::kOff;
 
   std::uint64_t maximum_iterations = 0u;
   double electronic_temperature = 0.0;
@@ -48,6 +54,7 @@ struct SccDriverPlanData {
   std::size_t state_periodic_energy_offset = 0u;
   std::size_t state_internal_energy_offset = 0u;
   std::size_t state_iteration_offset = 0u;
+  std::size_t state_controller_offset = 0u;
   std::size_t state_status_offset = 0u;
   std::size_t state_initialized_offset = 0u;
   std::size_t state_converged_offset = 0u;
@@ -186,6 +193,11 @@ bool overlaps_vector(const AddressRange& range, const std::vector<T>& values) {
 bool overlaps_plan_storage(const SccDriverPlanData& data, const AddressRange& range) {
   AddressRange descriptor;
   if (!make_range(&data, sizeof(data), descriptor) || ranges_overlap(range, descriptor)) {
+    return true;
+  }
+  if (data.preconditioner.sealed() &&
+      data.preconditioner.overlaps_storage(reinterpret_cast<const void*>(range.begin),
+                                           range.end - range.begin)) {
     return true;
   }
   const WavefunctionLayout& wavefunction = data.wavefunction;
@@ -463,6 +475,11 @@ bool exact_state_binding(const SccDriverPlanData& data, const SccDriverState& st
              offset_pointer<double>(state.workspace_base, data.state_internal_energy_offset) &&
          state.iterations ==
              offset_pointer<std::uint64_t>(state.workspace_base, data.state_iteration_offset) &&
+         ((data.acceleration_policy == SccAccelerationPolicy::kOff &&
+           state.controller_states == nullptr) ||
+          (data.acceleration_policy != SccAccelerationPolicy::kOff &&
+           state.controller_states == offset_pointer<common::SccControllerState>(
+                                          state.workspace_base, data.state_controller_offset))) &&
          state.system_statuses ==
              offset_pointer<xtbloom_status_t>(state.workspace_base, data.state_status_offset) &&
          state.initialized ==
@@ -814,6 +831,7 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
     if (workspace.active_systems[system] != 1u) {
       continue;
     }
+
     status = evaluate_scc_energy_system(data, geometry, system, workspace, error);
     if (status == XTBLOOM_STATUS_INVALID_ARGUMENT || status == XTBLOOM_STATUS_NOT_SUPPORTED) {
       return status;
@@ -841,6 +859,9 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
       continue;
     }
 
+    common::SccControllerState controller_candidate{};
+    bool controller_candidate_is_valid = false;
+
     status =
         prepare_scc_mixer_system_transaction_cpu(data.mixer, static_cast<std::int64_t>(system),
                                                  mixer_state, workspace.staged_mixer_state, error);
@@ -850,9 +871,90 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
     }
 
     copy_raw_population_system(data.wavefunction, system, workspace);
-    status = mix_scc_broyden_system_cpu(data.mixer, static_cast<std::int64_t>(system),
-                                        workspace.staged_wavefunction, workspace.staged_mixer_state,
-                                        workspace.mixer_workspace, error);
+    if (data.acceleration_policy == SccAccelerationPolicy::kOff) {
+      status = mix_scc_broyden_system_cpu(
+          data.mixer, static_cast<std::int64_t>(system), workspace.staged_wavefunction,
+          workspace.staged_mixer_state, workspace.mixer_workspace, error);
+    } else {
+      SccResidualDiagnostics diagnostics;
+      const bool local_preconditioner_active =
+          data.acceleration_policy == SccAccelerationPolicy::kLocalV1 &&
+          state.controller_states[system].restart_count == 0u;
+      const SccResidualPolicy residual_policy = local_preconditioner_active
+                                                    ? SccResidualPolicy::kLocalV1
+                                                    : SccResidualPolicy::kControllerOnly;
+      status = prepare_scc_residual_system_cpu(
+          data.preconditioner, residual_policy, static_cast<std::int64_t>(system),
+          workspace.staged_wavefunction, workspace.staged_mixer_state, workspace.mixer_workspace,
+          diagnostics, error);
+      if (status == XTBLOOM_STATUS_INVALID_ARGUMENT) {
+        /* Defensive, unreachable after plan and runtime binding validation. */
+        return status;
+      }
+      if (status != XTBLOOM_STATUS_SUCCESS) {
+        workspace.staged_mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+        mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+        workspace.active_systems[system] = 3u;
+        continue;
+      }
+
+      const common::SccControllerObservation observation{
+          diagnostics.weighted_residual_norm, diagnostics.previous_weighted_residual_norm,
+          diagnostics.weighted_residual_cosine, diagnostics.has_previous_residual,
+          diagnostics.cosine_is_valid};
+      common::SccControllerDecision decision;
+      if (!common::advance_scc_controller(data.controller_config, state.controller_states[system],
+                                          observation, decision)) {
+        workspace.staged_mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+        mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+        workspace.active_systems[system] = 3u;
+        continue;
+      }
+      controller_candidate = decision.next_state;
+      controller_candidate_is_valid = true;
+      if (local_preconditioner_active && decision.restart_history) {
+        /* The first instability event is also a deterministic preconditioner
+         * fallback. Rebuild the same raw residual as identity before the
+         * requested history restart, so no secant spans two residual maps. */
+        status = prepare_scc_residual_system_cpu(
+            data.preconditioner, SccResidualPolicy::kControllerOnly,
+            static_cast<std::int64_t>(system), workspace.staged_wavefunction,
+            workspace.staged_mixer_state, workspace.mixer_workspace, diagnostics, error);
+        if (status == XTBLOOM_STATUS_INVALID_ARGUMENT) {
+          return status;
+        }
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          workspace.staged_mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+          mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+          workspace.active_systems[system] = 3u;
+          continue;
+        }
+        if (!common::compute_scc_controller_trust_radius(data.controller_config,
+                                                         diagnostics.weighted_residual_norm,
+                                                         decision.maximum_weighted_step_norm)) {
+          workspace.staged_mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+          mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+          workspace.active_systems[system] = 3u;
+          continue;
+        }
+      }
+      const std::size_t dimension = static_cast<std::size_t>(
+          data.mixer.vector_offsets()[system + 1u] - data.mixer.vector_offsets()[system]);
+      const std::size_t vector_begin =
+          static_cast<std::size_t>(data.mixer.vector_offsets()[system]);
+      const SccMixerPreparedStepView prepared{
+          workspace.mixer_workspace.residual,
+          dimension,
+          diagnostics.raw_residual_rms,
+          diagnostics.raw_residual_maximum,
+          decision.damping,
+          decision.restart_history,
+          data.preconditioner.metric_weights().data() + vector_begin,
+          decision.maximum_weighted_step_norm};
+      status = mix_scc_broyden_system_cpu_prepared(
+          data.mixer, static_cast<std::int64_t>(system), workspace.staged_wavefunction,
+          workspace.staged_mixer_state, workspace.mixer_workspace, prepared, error);
+    }
     if (status == XTBLOOM_STATUS_INVALID_ARGUMENT) {
       /* Defensive, unreachable after validate_iteration_bindings. Earlier peers
        * were already committed per system; only the failing system's staged
@@ -909,6 +1011,9 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
     if (status != XTBLOOM_STATUS_SUCCESS) {
       /* Defensive, unreachable after validate_iteration_bindings. */
       return status;
+    }
+    if (controller_candidate_is_valid) {
+      state.controller_states[system] = controller_candidate;
     }
   }
 
@@ -1039,6 +1144,9 @@ bool SccDriverPlan::d4_enabled() const noexcept { return data_ != nullptr && dat
 bool SccDriverPlan::periodic_embedding_enabled() const noexcept {
   return data_ != nullptr && data_->periodic_embedding.sealed();
 }
+SccAccelerationPolicy SccDriverPlan::acceleration_policy() const noexcept {
+  return data_ == nullptr ? SccAccelerationPolicy::kOff : data_->acceleration_policy;
+}
 std::size_t SccDriverPlan::state_size_bytes() const noexcept {
   return data_ == nullptr ? 0u : data_->state_size_bytes;
 }
@@ -1085,6 +1193,9 @@ std::size_t SccDriverPlan::resident_bytes() const noexcept {
            data_->spin.spin_channels.capacity() * sizeof(std::int32_t) +
            data_->spin.coupling_offsets.capacity() * sizeof(std::int64_t) +
            data_->spin.coupling_matrices.capacity() * sizeof(double);
+  if (data_->preconditioner.sealed()) {
+    total += data_->preconditioner.resident_bytes() - sizeof(SccPreconditionerPlan);
+  }
   return total;
 }
 const SccDriverPlanData* SccDriverPlan::identity() const noexcept { return data_.get(); }
@@ -1131,6 +1242,17 @@ xtbloom_status_t make_scc_driver_plan(
     const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
     std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
     SccDriverPlan& plan, std::string& error) {
+  return make_scc_driver_plan(wavefunction, mulliken, es2, es3, aes2, eigensolver, mixer, d4,
+                              periodic_embedding, maximum_iterations, electronic_temperature,
+                              energy_tolerance, SccAccelerationPolicy::kOff, plan, error);
+}
+
+xtbloom_status_t make_scc_driver_plan(
+    const WavefunctionLayout& wavefunction, const MullikenPlan& mulliken, const ES2Plan& es2,
+    const ES3Plan& es3, const AES2Plan& aes2, const EigensolverPlan& eigensolver,
+    const SccMixerPlan& mixer, const D4Plan* d4, const PeriodicEmbeddingPlan* periodic_embedding,
+    std::uint64_t maximum_iterations, double electronic_temperature, double energy_tolerance,
+    SccAccelerationPolicy acceleration_policy, SccDriverPlan& plan, std::string& error) {
   WavefunctionWarmStartIdentity validated_wavefunction;
   xtbloom_status_t status =
       make_wavefunction_warm_start_identity(wavefunction, 0u, validated_wavefunction, error);
@@ -1141,7 +1263,10 @@ xtbloom_status_t make_scc_driver_plan(
       !mixer.sealed() || maximum_iterations == 0u || !std::isfinite(electronic_temperature) ||
       electronic_temperature < 0.0 || !std::isfinite(energy_tolerance) ||
       !(energy_tolerance > 0.0) || (d4 != nullptr && !d4->sealed()) ||
-      (periodic_embedding != nullptr && !periodic_embedding->sealed())) {
+      (periodic_embedding != nullptr && !periodic_embedding->sealed()) ||
+      (acceleration_policy != SccAccelerationPolicy::kOff &&
+       acceleration_policy != SccAccelerationPolicy::kController &&
+       acceleration_policy != SccAccelerationPolicy::kLocalV1)) {
     error = "SCC driver components or numerical policy are invalid";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -1201,6 +1326,14 @@ xtbloom_status_t make_scc_driver_plan(
   }
   if (status != XTBLOOM_STATUS_SUCCESS) {
     return status;
+  }
+  SccPreconditionerPlan experimental_preconditioner;
+  if (acceleration_policy != SccAccelerationPolicy::kOff) {
+    status =
+        make_scc_preconditioner_plan(wavefunction, es2, aes2, experimental_preconditioner, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) {
+      return status;
+    }
   }
   if (!same_wavefunction_layout(wavefunction, expected_wavefunction) ||
       !same_mulliken_plan(mulliken, expected_mulliken) || !same_es2_plan(es2, expected_es2) ||
@@ -1297,6 +1430,7 @@ xtbloom_status_t make_scc_driver_plan(
   std::size_t batch_u64_bytes = 0u;
   std::size_t batch_status_bytes = 0u;
   std::size_t batch_byte_bytes = 0u;
+  std::size_t batch_controller_bytes = 0u;
   std::size_t chemical_potential_bytes = 0u;
   std::size_t hamiltonian_bytes = 0u;
   std::size_t shell_bytes = 0u;
@@ -1317,6 +1451,8 @@ xtbloom_status_t make_scc_driver_plan(
       !bytes_for(wavefunction.batch_size, sizeof(std::uint64_t), batch_u64_bytes) ||
       !bytes_for(wavefunction.batch_size, sizeof(xtbloom_status_t), batch_status_bytes) ||
       !bytes_for(wavefunction.batch_size, sizeof(std::uint8_t), batch_byte_bytes) ||
+      !bytes_for(acceleration_policy == SccAccelerationPolicy::kOff ? 0 : wavefunction.batch_size,
+                 sizeof(common::SccControllerState), batch_controller_bytes) ||
       !bytes_for(wavefunction.density.element_count, sizeof(double), hamiltonian_bytes) ||
       !bytes_for(wavefunction.total_shells, sizeof(double), shell_bytes) ||
       !bytes_for(wavefunction.total_atoms, sizeof(double), atom_bytes) ||
@@ -1356,6 +1492,9 @@ xtbloom_status_t make_scc_driver_plan(
     }
     created.eigensolver = eigensolver;
     created.mixer = mixer;
+    created.preconditioner = std::move(experimental_preconditioner);
+    created.controller_config = common::make_scc_controller_config(mixer.damping());
+    created.acceleration_policy = acceleration_policy;
     if (periodic_embedding != nullptr) {
       created.periodic_embedding = *periodic_embedding;
     }
@@ -1393,6 +1532,8 @@ xtbloom_status_t make_scc_driver_plan(
                         created.state_internal_energy_offset) ||
         !append_segment(batch_u64_bytes, alignof(std::uint64_t), cursor,
                         created.state_iteration_offset) ||
+        !append_segment(batch_controller_bytes, alignof(common::SccControllerState), cursor,
+                        created.state_controller_offset) ||
         !append_segment(batch_status_bytes, alignof(xtbloom_status_t), cursor,
                         created.state_status_offset) ||
         !append_segment(batch_byte_bytes, alignof(std::uint8_t), cursor,
@@ -1544,6 +1685,10 @@ xtbloom_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspac
   }
   created.internal_energies = offset_pointer<double>(workspace, data.state_internal_energy_offset);
   created.iterations = offset_pointer<std::uint64_t>(workspace, data.state_iteration_offset);
+  if (data.acceleration_policy != SccAccelerationPolicy::kOff) {
+    created.controller_states =
+        offset_pointer<common::SccControllerState>(workspace, data.state_controller_offset);
+  }
   created.system_statuses = offset_pointer<xtbloom_status_t>(workspace, data.state_status_offset);
   created.initialized = offset_pointer<std::uint8_t>(workspace, data.state_initialized_offset);
   created.converged = offset_pointer<std::uint8_t>(workspace, data.state_converged_offset);
@@ -1570,6 +1715,9 @@ xtbloom_status_t bind_scc_driver_state(const SccDriverPlan& plan, void* workspac
     std::fill_n(created.periodic_embedding_energies, batch, nan);
   }
   std::fill_n(created.internal_energies, batch, nan);
+  if (created.controller_states != nullptr) {
+    std::fill_n(created.controller_states, batch, common::SccControllerState{});
+  }
   std::fill_n(created.system_statuses, batch, XTBLOOM_STATUS_INVALID_ARGUMENT);
   state = created;
   error.clear();
@@ -1782,6 +1930,9 @@ xtbloom_status_t initialize_scc_driver_state_cpu(const SccDriverPlan& plan,
     std::fill_n(state.periodic_embedding_energies, batch, nan);
   }
   std::fill_n(state.internal_energies, batch, nan);
+  if (state.controller_states != nullptr) {
+    std::fill_n(state.controller_states, batch, common::SccControllerState{});
+  }
   std::fill_n(state.system_statuses, batch, XTBLOOM_STATUS_SUCCESS);
   std::fill_n(state.initialized, batch, static_cast<std::uint8_t>(1u));
   error.clear();
@@ -1850,6 +2001,9 @@ xtbloom_status_t restart_scc_driver_system_cpu(const SccDriverPlan& plan, std::i
   }
   state.internal_energies[index] = nan;
   state.iterations[index] = 0u;
+  if (state.controller_states != nullptr) {
+    state.controller_states[index] = common::SccControllerState{};
+  }
   state.system_statuses[index] = XTBLOOM_STATUS_SUCCESS;
   state.converged[index] = 0u;
   error.clear();

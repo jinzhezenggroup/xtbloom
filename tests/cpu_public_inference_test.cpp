@@ -10,6 +10,8 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -54,6 +56,34 @@ void operator delete[](void* pointer, std::size_t) noexcept { ::operator delete[
   } while (false)
 
 namespace {
+
+constexpr const char* kPairsSccEnvironment = "XTBLOOM_EXPERIMENTAL_GFN2_PAIRS_SCC";
+
+bool set_pairs_scc_environment(const char* value) {
+#if defined(_WIN32)
+  return _putenv_s(kPairsSccEnvironment, value == nullptr ? "" : value) == 0;
+#else
+  return value == nullptr ? unsetenv(kPairsSccEnvironment) == 0
+                          : setenv(kPairsSccEnvironment, value, 1) == 0;
+#endif
+}
+
+class ScopedPairsSccEnvironment {
+ public:
+  ScopedPairsSccEnvironment() {
+    if (const char* value = std::getenv(kPairsSccEnvironment); value != nullptr) {
+      original_ = value;
+    }
+  }
+  ScopedPairsSccEnvironment(const ScopedPairsSccEnvironment&) = delete;
+  ScopedPairsSccEnvironment& operator=(const ScopedPairsSccEnvironment&) = delete;
+  ~ScopedPairsSccEnvironment() {
+    (void)set_pairs_scc_environment(original_.has_value() ? original_->c_str() : nullptr);
+  }
+
+ private:
+  std::optional<std::string> original_;
+};
 
 template <typename T>
 xtbloom_const_buffer_t input_buffer(const std::vector<T>& values) {
@@ -217,6 +247,15 @@ struct PublicOutputImage {
            same_bytes(dipole_moments, request.dipole_moments) &&
            same_bytes(iterations, request.iterations) && same_bytes(converged, request.converged) &&
            same_bytes(statuses, request.statuses) && flags == request.result.flags;
+  }
+
+  bool same_as(const PublicOutputImage& other) const {
+    return same_bytes(energies, other.energies) && same_bytes(forces, other.forces) &&
+           same_bytes(atomic_charges, other.atomic_charges) &&
+           same_bytes(point_forces, other.point_forces) &&
+           same_bytes(dipole_moments, other.dipole_moments) &&
+           same_bytes(iterations, other.iterations) && same_bytes(converged, other.converged) &&
+           same_bytes(statuses, other.statuses) && flags == other.flags;
   }
 
   std::vector<double> energies;
@@ -2621,6 +2660,90 @@ int test_plan_multi_threaded_reuse() {
   return 0;
 }
 
+int test_experimental_pairs_policy_is_frozen_per_cpu_context() {
+  ScopedPairsSccEnvironment restore_environment;
+  const std::uint32_t flags =
+      XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+
+  /* The absent environment and explicit `off` spelling are the same complete
+   * numerical policy, including a geometry-changing strict WARM sequence. */
+  CHECK(set_pairs_scc_environment(nullptr));
+  ContextHandle unset_context = make_cpu_context(1);
+  CHECK(unset_context != nullptr);
+  PublicBatch unset_request = make_repeated_h2_he_batch(2u);
+  unset_request.bind(flags);
+  CHECK(xtbloom_compute(unset_context.get(), &unset_request.batch, &unset_request.options,
+                        &unset_request.result) == XTBLOOM_STATUS_SUCCESS);
+  const PublicOutputImage unset_fresh(unset_request);
+
+  CHECK(set_pairs_scc_environment("off"));
+  ContextHandle explicit_off_context = make_cpu_context(1);
+  CHECK(explicit_off_context != nullptr);
+  PublicBatch explicit_off_request = make_repeated_h2_he_batch(2u);
+  explicit_off_request.bind(flags);
+  CHECK(xtbloom_compute(explicit_off_context.get(), &explicit_off_request.batch,
+                        &explicit_off_request.options,
+                        &explicit_off_request.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(unset_fresh.same_as(PublicOutputImage(explicit_off_request)));
+
+  unset_request.positions[0] -= 0.01;
+  unset_request.positions[3] += 0.01;
+  explicit_off_request.positions = unset_request.positions;
+  unset_request.bind(flags);
+  explicit_off_request.bind(flags);
+  unset_request.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  explicit_off_request.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute(unset_context.get(), &unset_request.batch, &unset_request.options,
+                        &unset_request.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(explicit_off_context.get(), &explicit_off_request.batch,
+                        &explicit_off_request.options,
+                        &explicit_off_request.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(PublicOutputImage(unset_request).same_as(PublicOutputImage(explicit_off_request)));
+
+  /* Changing the process environment after context creation must not change
+   * the compute policy or invalidate a strict WARM checkpoint. */
+  CHECK(set_pairs_scc_environment("off"));
+  ContextHandle frozen_off = make_cpu_context(1);
+  CHECK(frozen_off != nullptr);
+  PublicBatch warm = make_h2_he_batch();
+  warm.bind(flags);
+  CHECK(xtbloom_compute(frozen_off.get(), &warm.batch, &warm.options, &warm.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  warm.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(set_pairs_scc_environment("controller"));
+  CHECK(xtbloom_compute(frozen_off.get(), &warm.batch, &warm.options, &warm.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  /* Invalid values are also frozen. Correcting the environment later cannot
+   * silently make an already-created context adopt a different policy. */
+  CHECK(set_pairs_scc_environment("invalid-policy"));
+  ContextHandle frozen_invalid = make_cpu_context(1);
+  CHECK(frozen_invalid != nullptr);
+  CHECK(set_pairs_scc_environment("off"));
+  PublicBatch rejected = make_h2_he_batch();
+  rejected.bind(flags);
+  const PublicOutputImage rejected_before(rejected);
+  CHECK(xtbloom_compute(frozen_invalid.get(), &rejected.batch, &rejected.options,
+                        &rejected.result) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(rejected_before.matches(rejected));
+  CHECK(std::strstr(xtbloom_get_last_error(), kPairsSccEnvironment) != nullptr);
+
+  /* Fixed plans inherit the creating context's frozen policy as well. */
+  CHECK(set_pairs_scc_environment("controller"));
+  ContextHandle frozen_controller = make_cpu_context(1);
+  CHECK(frozen_controller != nullptr);
+  PublicBatch planned = make_h2_he_batch();
+  planned.bind(flags);
+  xtbloom_plan_t* raw_plan = nullptr;
+  CHECK(xtbloom_plan_create(frozen_controller.get(), &planned.batch, &planned.options, &raw_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  PlanHandle plan(raw_plan);
+  CHECK(set_pairs_scc_environment("invalid-policy"));
+  CHECK(xtbloom_plan_compute(plan.get(), &planned.batch, &planned.options, &planned.result) ==
+        XTBLOOM_STATUS_SUCCESS);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -2708,6 +2831,9 @@ int main() {
     return line;
   }
   if (const int line = test_plan_multi_threaded_reuse(); line != 0) {
+    return line;
+  }
+  if (const int line = test_experimental_pairs_policy_is_frozen_per_cpu_context(); line != 0) {
     return line;
   }
   if (const int line = test_electric_field_golden_energy_and_scc_state(); line != 0) {

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +23,7 @@
 namespace {
 
 using xtbloom::detail::common::SccMixerPlan;
+using xtbloom::detail::common::SccMixerPreparedStepView;
 using xtbloom::detail::common::SccMixerState;
 using xtbloom::detail::common::SccMixerVectorLayoutView;
 using xtbloom::detail::common::SccMixerVectorView;
@@ -60,6 +62,7 @@ struct Fixture {
   static constexpr std::size_t kSuffixBytes = kVectorBytes - kQshEndOffset;
 
   std::int64_t qsh_offsets[3]{0, 2, 6};
+  std::array<double, 4u> unit_metric{{1.0, 1.0, 1.0, 1.0}};
   SccMixerVectorLayoutView layout;
   SccMixerPlan plan;
   AlignedBuffer vector_storage{kVectorBytes};
@@ -112,6 +115,32 @@ struct Fixture {
 
 bool equal(const double* first, const double* second, std::size_t count) {
   return std::equal(first, first + count, second);
+}
+
+SccMixerPreparedStepView prepare_raw_residual(Fixture& fixture, std::size_t system, double damping,
+                                              bool restart_history = false) {
+  const std::size_t begin = static_cast<std::size_t>(fixture.plan.vector_offsets()[system]);
+  const std::size_t end = static_cast<std::size_t>(fixture.plan.vector_offsets()[system + 1u]);
+  const std::size_t dimension = end - begin;
+  const std::size_t field_begin = static_cast<std::size_t>(fixture.qsh_offsets[system]);
+  double square = 0.0;
+  double maximum = 0.0;
+  for (std::size_t component = 0u; component < dimension; ++component) {
+    const double residual = fixture.vector.fields[0][field_begin + component] -
+                            fixture.state.current_inputs[begin + component];
+    fixture.scratch.residual[component] = residual;
+    square += residual * residual;
+    maximum = std::max(maximum, std::abs(residual));
+  }
+  const double rms = std::sqrt(square) / std::sqrt(static_cast<double>(dimension));
+  return {fixture.scratch.residual,
+          dimension,
+          rms,
+          maximum,
+          damping,
+          restart_history,
+          fixture.unit_metric.data(),
+          std::numeric_limits<double>::max()};
 }
 
 int test_qsh_only_ragged_mix_restart_and_transaction() {
@@ -219,11 +248,194 @@ int test_layout_rejects_fake_or_overlapping_fields() {
   return 0;
 }
 
+int test_prepared_identity_path_matches_baseline_bitwise() {
+  std::string first_error;
+  std::string second_error;
+  Fixture baseline(first_error);
+  Fixture prepared(second_error);
+  CHECK(baseline.plan.sealed() && prepared.plan.sealed());
+  const double initial[6]{0.10, -0.20, 0.30, -0.40, 0.05, -0.06};
+  std::copy(std::begin(initial), std::end(initial), baseline.vector.fields[0]);
+  std::copy(std::begin(initial), std::end(initial), prepared.vector.fields[0]);
+  CHECK(xtbloom::detail::common::initialize_scc_mixer_state_cpu(
+            baseline.plan, baseline.vector, baseline.state, first_error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom::detail::common::initialize_scc_mixer_state_cpu(prepared.plan, prepared.vector,
+                                                                prepared.state, second_error) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    baseline.vector.fields[0][0] += 0.02 + 0.01 * iteration;
+    baseline.vector.fields[0][1] -= 0.01 + 0.005 * iteration;
+    prepared.vector.fields[0][0] = baseline.vector.fields[0][0];
+    prepared.vector.fields[0][1] = baseline.vector.fields[0][1];
+    const SccMixerPreparedStepView view = prepare_raw_residual(prepared, 0u, 0.4);
+    CHECK(xtbloom::detail::common::mix_scc_broyden_system_cpu(
+              baseline.plan, 0, baseline.vector, baseline.state, baseline.scratch, first_error) ==
+          XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::common::mix_scc_broyden_system_cpu_prepared(
+              prepared.plan, 0, prepared.vector, prepared.state, prepared.scratch, view,
+              second_error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(equal(baseline.state.current_inputs, prepared.state.current_inputs, 6u));
+    CHECK(equal(baseline.state.previous_inputs, prepared.state.previous_inputs, 6u));
+    CHECK(equal(baseline.state.previous_residuals, prepared.state.previous_residuals, 6u));
+    CHECK(equal(baseline.state.df_history, prepared.state.df_history, 18u));
+    CHECK(equal(baseline.state.u_history, prepared.state.u_history, 18u));
+    CHECK(equal(baseline.state.omega, prepared.state.omega, 6u));
+    CHECK(equal(baseline.state.residual_rms, prepared.state.residual_rms, 2u));
+    CHECK(equal(baseline.state.residual_maximum, prepared.state.residual_maximum, 2u));
+    CHECK(std::equal(baseline.state.iterations, baseline.state.iterations + 2u,
+                     prepared.state.iterations));
+    CHECK(std::equal(baseline.state.history_ages, baseline.state.history_ages + 2u,
+                     prepared.state.history_ages));
+    CHECK(std::memcmp(baseline.state.workspace_base, prepared.state.workspace_base,
+                      baseline.plan.state_size_bytes()) == 0);
+    CHECK(std::memcmp(baseline.vector.workspace_base, prepared.vector.workspace_base,
+                      Fixture::kVectorBytes) == 0);
+  }
+  return 0;
+}
+
+int test_prepared_damping_change_restarts_only_secant_history() {
+  std::string error;
+  Fixture fixture(error);
+  CHECK(fixture.plan.sealed());
+  const double initial[6]{0.10, -0.20, 0.30, -0.40, 0.05, -0.06};
+  std::copy(std::begin(initial), std::end(initial), fixture.vector.fields[0]);
+  CHECK(xtbloom::detail::common::initialize_scc_mixer_state_cpu(
+            fixture.plan, fixture.vector, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
+  for (int iteration = 0; iteration < 2; ++iteration) {
+    fixture.vector.fields[0][0] += 0.02;
+    fixture.vector.fields[0][1] -= 0.01;
+    CHECK(xtbloom::detail::common::mix_scc_broyden_system_cpu(fixture.plan, 0, fixture.vector,
+                                                              fixture.state, fixture.scratch,
+                                                              error) == XTBLOOM_STATUS_SUCCESS);
+  }
+  CHECK(fixture.state.history_ages[0] == 2u);
+  const std::uint64_t iterations_before = fixture.state.iterations[0];
+  const std::uint64_t explicit_restarts_before = fixture.state.restart_counts[0];
+  const double current_before[2]{fixture.state.current_inputs[0], fixture.state.current_inputs[1]};
+  fixture.vector.fields[0][0] += 0.04;
+  fixture.vector.fields[0][1] -= 0.02;
+  SccMixerPreparedStepView view = prepare_raw_residual(fixture, 0u, 0.2, true);
+  const double residual[2]{view.effective_residual[0], view.effective_residual[1]};
+  view.raw_residual_rms = 7.0;
+  view.raw_residual_maximum = 8.0;
+  CHECK(xtbloom::detail::common::mix_scc_broyden_system_cpu_prepared(
+            fixture.plan, 0, fixture.vector, fixture.state, fixture.scratch, view, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.state.iterations[0] == iterations_before + 1u);
+  CHECK(fixture.state.history_ages[0] == 1u);
+  CHECK(fixture.state.restart_counts[0] == explicit_restarts_before);
+  CHECK(fixture.state.residual_rms[0] == 7.0);
+  CHECK(fixture.state.residual_maximum[0] == 8.0);
+  CHECK(fixture.state.converged[0] == 0u);
+  CHECK(fixture.vector.fields[0][0] == current_before[0] + 0.2 * residual[0]);
+  CHECK(fixture.vector.fields[0][1] == current_before[1] + 0.2 * residual[1]);
+  CHECK(std::all_of(fixture.state.df_history, fixture.state.df_history + 6u,
+                    [](double value) { return value == 0.0; }));
+  CHECK(std::all_of(fixture.state.u_history, fixture.state.u_history + 6u,
+                    [](double value) { return value == 0.0; }));
+  CHECK(std::all_of(fixture.state.omega, fixture.state.omega + 3u,
+                    [](double value) { return value == 0.0; }));
+  return 0;
+}
+
+int test_prepared_trust_radius_caps_complete_broyden_step() {
+  std::string error;
+  Fixture fixture(error);
+  CHECK(fixture.plan.sealed());
+  std::fill_n(fixture.vector.fields[0], Fixture::kQshElements, 0.0);
+  CHECK(xtbloom::detail::common::initialize_scc_mixer_state_cpu(
+            fixture.plan, fixture.vector, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
+
+  /* Construct a finite but very large Broyden correction through the previous
+   * input displacement. The cap must apply to the complete candidate, not only
+   * to damping * residual. */
+  fixture.state.iterations[0] = 1u;
+  fixture.state.history_ages[0] = 1u;
+  fixture.state.previous_inputs[0] = -1000.0;
+  fixture.state.previous_residuals[0] = 0.0;
+  fixture.vector.fields[0][0] = 1.0;
+  SccMixerPreparedStepView view = prepare_raw_residual(fixture, 0u, 0.4);
+  view.maximum_weighted_step_norm = 0.5;
+  CHECK(xtbloom::detail::common::mix_scc_broyden_system_cpu_prepared(
+            fixture.plan, 0, fixture.vector, fixture.state, fixture.scratch, view, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const double step0 = fixture.state.current_inputs[0];
+  const double step1 = fixture.state.current_inputs[1];
+  CHECK(std::abs(std::hypot(step0, step1) - 0.5) < 1.0e-14);
+  CHECK(step0 < 0.0);
+  CHECK(fixture.state.history_ages[0] == 2u);
+  CHECK(fixture.state.iterations[0] == 2u);
+  return 0;
+}
+
+int test_prepared_trust_radius_handles_finite_endpoints_with_overflowing_double_difference() {
+  std::string error;
+  Fixture fixture(error);
+  CHECK(fixture.plan.sealed());
+  std::fill_n(fixture.vector.fields[0], Fixture::kQshElements, 0.0);
+  CHECK(xtbloom::detail::common::initialize_scc_mixer_state_cpu(
+            fixture.plan, fixture.vector, fixture.state, error) == XTBLOOM_STATUS_SUCCESS);
+
+  /* Two orthogonal secant corrections move a finite +0.75*DBL_MAX current
+   * input to a finite negative candidate. Their difference exceeds DBL_MAX,
+   * so the trust-radius calculation must not form it in binary64 or classify
+   * it as a structural INVALID_ARGUMENT. */
+  const double maximum = std::numeric_limits<double>::max();
+  const double current = 0.75 * maximum;
+  const double radius = 0.125 * maximum;
+  fixture.state.current_inputs[0] = current;
+  fixture.state.previous_inputs[0] = 0.0;
+  fixture.state.previous_residuals[0] = 1.0;
+  fixture.state.previous_residuals[1] = 0.0;
+  fixture.state.df_history[0] = 1.0;
+  fixture.state.df_history[1] = 0.0;
+  fixture.state.u_history[0] = current;
+  fixture.state.u_history[1] = 0.0;
+  fixture.state.omega[0] = 1.0;
+  fixture.state.iterations[0] = 2u;
+  fixture.state.history_ages[0] = 2u;
+  fixture.scratch.residual[0] = 1.0;
+  fixture.scratch.residual[1] = 1.0;
+
+  const std::vector<double> peer_inputs(fixture.state.current_inputs + 2,
+                                        fixture.state.current_inputs + 6);
+  const std::vector<double> peer_wavefunction(fixture.vector.fields[0] + 2,
+                                              fixture.vector.fields[0] + 6);
+  const SccMixerPreparedStepView view{fixture.scratch.residual,   2u,    1.0, 1.0, 0.4, false,
+                                      fixture.unit_metric.data(), radius};
+  CHECK(xtbloom::detail::common::mix_scc_broyden_system_cpu_prepared(
+            fixture.plan, 0, fixture.vector, fixture.state, fixture.scratch, view, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+  const double bounded_step = current - fixture.state.current_inputs[0];
+  CHECK(std::isfinite(fixture.state.current_inputs[0]));
+  CHECK(std::abs(bounded_step / radius - 1.0) < 1.0e-12);
+  CHECK(std::equal(peer_inputs.begin(), peer_inputs.end(), fixture.state.current_inputs + 2));
+  CHECK(
+      std::equal(peer_wavefunction.begin(), peer_wavefunction.end(), fixture.vector.fields[0] + 2));
+  CHECK(fixture.state.iterations[0] == 3u);
+  CHECK(fixture.state.history_ages[0] == 3u);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   if (const int status = test_qsh_only_ragged_mix_restart_and_transaction(); status != 0) {
     return status;
   }
-  return test_layout_rejects_fake_or_overlapping_fields();
+  if (const int status = test_layout_rejects_fake_or_overlapping_fields(); status != 0) {
+    return status;
+  }
+  if (const int status = test_prepared_identity_path_matches_baseline_bitwise(); status != 0) {
+    return status;
+  }
+  if (const int status = test_prepared_damping_change_restarts_only_secant_history(); status != 0) {
+    return status;
+  }
+  if (const int status = test_prepared_trust_radius_caps_complete_broyden_step(); status != 0) {
+    return status;
+  }
+  return test_prepared_trust_radius_handles_finite_endpoints_with_overflowing_double_difference();
 }

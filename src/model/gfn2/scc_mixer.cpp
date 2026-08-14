@@ -118,6 +118,16 @@ xtbloom_status_t mix_scc_broyden_system_cpu(const SccMixerPlan& plan, std::int64
       common_plan(plan), system, make_common_view(wavefunction), state, workspace, error);
 }
 
+xtbloom_status_t mix_scc_broyden_system_cpu_prepared(const SccMixerPlan& plan, std::int64_t system,
+                                                     const WavefunctionView& wavefunction,
+                                                     const SccMixerState& state,
+                                                     const SccMixerWorkspace& workspace,
+                                                     const SccMixerPreparedStepView& prepared,
+                                                     std::string& error) {
+  return common::mix_scc_broyden_system_cpu_prepared(
+      common_plan(plan), system, make_common_view(wavefunction), state, workspace, prepared, error);
+}
+
 xtbloom_status_t mix_scc_broyden_batch_cpu(const SccMixerPlan& plan,
                                            const WavefunctionView& wavefunction,
                                            const SccMixerState& state,

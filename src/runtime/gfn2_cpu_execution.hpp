@@ -29,7 +29,8 @@ class Gfn2CpuExecutionCache {
    * execution path serial. The implementation owns persistent workers so a
    * steady-state compute call never creates or destroys threads.
    */
-  explicit Gfn2CpuExecutionCache(std::int32_t cpu_threads);
+  Gfn2CpuExecutionCache(std::int32_t cpu_threads, std::uint8_t pairs_scc_policy,
+                        bool pairs_scc_policy_valid);
   ~Gfn2CpuExecutionCache();
 
   Gfn2CpuExecutionCache(const Gfn2CpuExecutionCache&) = delete;
