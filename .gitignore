@@ -34,3 +34,5 @@ __pycache__/
 
 # WASM web demo build artifacts (site output lives under any /build*/ ; see web/CMakeLists.txt)
 /web/node_modules/
+/web/playwright-report/
+/web/test-results/

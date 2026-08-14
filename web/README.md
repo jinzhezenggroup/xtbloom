@@ -21,16 +21,17 @@ The deployment runs entirely in the browser:
   ledger, retries transient startup failures with generation-safe cleanup, and
   passes the wasm and Emscripten data bytes into the Worker;
 - `c60_case.js` supplies the visible C60 preset and the independent native-CPU
-  checkpoints used by the browser scientific regression;
+  GFN2 checkpoints used by the browser scientific regression;
 - `smiles_worker.js` independently loads the pinned OpenChemLib release,
   generates explicit-hydrogen 3D conformers, and applies MMFF94
   pre-relaxation;
 - `3dmol` renders the current geometry; and
-- `app.js` provides single-point calculation and an adapter-local L-BFGS
-  optimization loop. It validates the coordinates box independently of the
-  compute path: valid input is previewed live (debounced while typing),
-  malformed input keeps the last valid preview and is flagged inline, and the
-  calculate actions stay disabled until a valid structure is present.
+- `app.js` provides a GFN1/GFN2 method selector, single-point calculation, and
+  an adapter-local L-BFGS optimization loop. GFN2 is the UI default. It
+  validates the coordinates box independently of the compute path: valid input
+  is previewed live (debounced while typing), malformed input keeps the last
+  valid preview and is flagged inline, and the calculate actions stay disabled
+  until a valid structure is present.
 
 The optional SMILES worker never gates ordinary XYZ calculations. The
 optimizer repeatedly calls the same single-point adapter and is not part of the
@@ -103,11 +104,19 @@ WebAssembly loading require an origin.
 
 ```console
 python3 tools/eigen_dependency.py check
-bun install --frozen-lockfile --cwd web
-bun test --cwd web
-bun web/tests/openchemlib_smoke.mjs
+npm ci --prefix web --ignore-scripts --no-audit --no-fund
+npm --prefix web test
+node web/tests/openchemlib_smoke.mjs
 node web/tests/wasm_smoke.mjs build/wasm32-web/web/site
+npm --prefix web run browser:install
+XTBLOOM_WEB_SITE="$PWD/build/wasm32-web/web/site" \
+  npm --prefix web run test:browser
 ```
+
+Set `XTBLOOM_WEB_PORT` when port 4173 is unavailable. The Playwright test serves
+the staged site itself, blocks every non-local request, and therefore proves
+that ordinary XYZ calculations do not depend on the optional OpenChemLib CDN
+path.
 
 The provider target independently checks LAPACKE workspace and failure
 behavior, Cholesky factorization and condition estimation, eigensolve, all
@@ -115,17 +124,26 @@ accepted GEMM transpose combinations, and the TRSM side/triangle/transpose/
 diagonal matrix. The Web smoke suite includes the visible neutral-singlet C60
 preset (60 atoms, 240 orbitals) and compares energy, charges, forces, SCC
 status, iterations, total charge, and total force with native public-C-ABI
-checkpoints.
+GFN2 checkpoints. It also runs GFN2 → GFN1 → GFN2 through one context, compares
+the GFN1 H3+ energy and forces with the independent conformance golden, and
+exercises a GFN1 optimization step.
 
 CI additionally compiles wasm64, runs the same provider and C60 gates, checks C
 ABI layout for both pointer widths, compares wasm32/wasm64 public results, and
-audits the exact deployed legal payload.
+audits the exact deployed legal payload. Chromium covers 320, 360, 375, 390,
+430, 768, and 1024 CSS-pixel viewports; WebKit covers representative phone
+widths. Both languages, initial/completed states, disclosures, touch targets,
+and result-panel movement are deployment gates, with traces, screenshots, DOM,
+and layout diagnostics retained on failure.
 
 ## Dependencies and provenance
 
-`web/package.json` pins 3Dmol.js for the built site. The optional SMILES worker
-loads exact OpenChemLib 9.21.0 CDN URLs whose revisions, file sizes, and
-SHA-256 digests are recorded in `web/openchemlib_manifest.json`. Eigen 5.0.1 is
+`web/package.json` pins 3Dmol.js for the built site and Playwright 1.62.1 for
+developer/CI-only browser regression. Playwright's browser runtimes and its
+macOS-only optional `fsevents` dependency remain outside all distributed
+artifacts. The optional SMILES worker loads exact OpenChemLib 9.21.0 CDN URLs
+whose revisions, file sizes, and SHA-256 digests are recorded in
+`web/openchemlib_manifest.json`. Eigen 5.0.1 is
 obtained from tag revision `bc3b39870ecb690a623a3f49149a358b95c5781d`;
 the official release archive has SHA-256
 `e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec`.

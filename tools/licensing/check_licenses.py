@@ -374,6 +374,15 @@ SPDX_FILES = {
     "src/model/gfn2/coordination.cpp": "GPL-3.0-or-later",
     "src/model/gfn2/h0.cpp": "GPL-3.0-or-later",
 }
+PLAYWRIGHT_NOTICE_TOKENS = (
+    "`@playwright/test`, `playwright`, and `playwright-core`",
+    "009534220efd98c0361d8c4ee7e3db1ed510ab88a23e98b5081ef1c8fed64965",
+    "1982556a882b246ccb7c16337fab5e4e790292b69f835a2db1011dddc440ed98",
+    "954be1e183d0ddb9748fe0d2d08b0b66a9210c74dd75c397aeb70303b9f08a00",
+    "151.0.7922.34 revision 1234",
+    "WebKit 26.5 revision 2336",
+    "FFmpeg revision 1011",
+)
 NOTICE_TOKENS = (
     "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
     "6f0b06fbfa8653a23ca55c453772ce3af4420706",
@@ -404,7 +413,13 @@ NOTICE_TOKENS = (
     "netcdfjs 3.0.0",
     "UPNG.js 2.1.0",
     "pako 2.2.0 and pako 1.0.11",
-    "475e2213ac02fbf2d4a8c4fc287b570fc476da2fda9de3f5a72a2554b5716e71",
+    "2d35a2618bb734b61c442fb775c0a7a669f800be63f6ac0d029b656598581de6",
+    *PLAYWRIGHT_NOTICE_TOKENS,
+    "26a9e470a7b3c7822084b09fb7f13902c5f37b51",
+    "fsevents` 2.3.2",
+    "a7f5d00939b74e141a73131468c4ce48ee0f2197",
+    "e17ade950c193fe09adfc7915fe29ac26166c8782d00e7c3879e7e9de02c5428",
+    "Chromium/Chrome-for-Testing",
     "OpenChemLib 9.21.0",
     "36aec7791ac38e7fdc23a37ba07e19514eb1e5c9",
     "27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf",
@@ -492,6 +507,15 @@ PYODIDE_OPENBLAS_BINARY_RE = re.compile(
     r"libxtbloom_openblas-[0-9a-f]{8}\.so)$"
 )
 WASM_V1_MAGIC = b"\0asm\x01\0\0\0"
+REQUIRED_GFN1_WEB_SOURCE_MAP = {
+    "provenance/parameters/gfn1_manifest.json": "data/parameters/gfn1_manifest.json",
+    "provenance/parameters/gfn1_d3_manifest.json": (
+        "data/parameters/gfn1_d3_manifest.json"
+    ),
+    "provenance/parameters/gfn1_legacy_sto_manifest.json": (
+        "data/parameters/gfn1_legacy_sto_manifest.json"
+    ),
+}
 WEB_SITE_SOURCE_MAP = {
     "LICENSE": "LICENSE",
     EXCEPTION_FILE: EXCEPTION_FILE,
@@ -511,6 +535,7 @@ WEB_SITE_SOURCE_MAP = {
         "data/parameters/licenses/mctc-lib-LICENSE"
     ),
     "provenance/parameters/manifest.json": "data/parameters/manifest.json",
+    **REQUIRED_GFN1_WEB_SOURCE_MAP,
     "provenance/parameters/sto_manifest.json": "data/parameters/sto_manifest.json",
     "provenance/parameters/spin_manifest.json": "data/parameters/spin_manifest.json",
     "provenance/parameters/d4_manifest.json": "data/parameters/d4_manifest.json",
@@ -2183,6 +2208,23 @@ def _check_gfn1_fixture_provenance(root: Path) -> None:
                     )
 
 
+def _require_notice_tokens(notice: str, tokens: tuple[str, ...]) -> None:
+    """Require every reviewed notice locator without accepting partial records."""
+    for token in tokens:
+        if token not in notice:
+            raise LicenseCheckError(f"THIRD_PARTY_NOTICES.md omits {token}")
+
+
+def _require_gfn1_web_source_map() -> None:
+    """Keep every shipped GFN1 parameter provenance file byte-mapped to source."""
+    for site_relative, source_relative in REQUIRED_GFN1_WEB_SOURCE_MAP.items():
+        if WEB_SITE_SOURCE_MAP.get(site_relative) != source_relative:
+            raise LicenseCheckError(
+                "Web site source map omits or changes required GFN1 provenance "
+                f"{site_relative}"
+            )
+
+
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
     _require_files(root, SOURCE_FILES, "source tree")
@@ -2217,9 +2259,8 @@ def check_source(root: Path) -> None:
         raise LicenseCheckError("CUDA device link must pass --cudadevrt=none")
 
     notice = (root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
-    for token in NOTICE_TOKENS:
-        if token not in notice:
-            raise LicenseCheckError(f"THIRD_PARTY_NOTICES.md omits {token}")
+    _require_notice_tokens(notice, NOTICE_TOKENS)
+    _require_gfn1_web_source_map()
 
     web_lock = json.loads((root / "web/package-lock.json").read_text(encoding="utf-8"))
     web_packages = web_lock.get("packages", {})
@@ -2227,6 +2268,14 @@ def check_source(root: Path) -> None:
         "node_modules/3dmol": (
             "2.5.5",
             "sha512-kqNHouGqq3YfW58174tdERvm0XYTmP0tavQKOqIw1ouc2OJ7epkXEFrtEkVXV0clBZT2Ze2xHRC/qxX0u0qCdw==",
+        ),
+        "node_modules/@playwright/test": (
+            "1.62.1",
+            "sha512-DTcUc8qii+cpHvtOwggMtBRMjKZHXYWdw8syRYu2vtzuq4Wxphqq4NfCs5Zt44L6mA8rfDfj+PHnxFc/FeK6mQ==",
+        ),
+        "node_modules/fsevents": (
+            "2.3.2",
+            "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==",
         ),
         "node_modules/iobuffer": (
             "5.4.0",
@@ -2239,6 +2288,14 @@ def check_source(root: Path) -> None:
         "node_modules/pako": (
             "2.2.0",
             "sha512-zJq6RP/5q+TO2OpFV3FHzlPnFjmkb7Nc99a5SNjJE+uu/PkpChs+NIZSSzbBoD+6kjiISXjfYdwj1ZRQ81dz/w==",
+        ),
+        "node_modules/playwright": (
+            "1.62.1",
+            "sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==",
+        ),
+        "node_modules/playwright-core": (
+            "1.62.1",
+            "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==",
         ),
         "node_modules/upng-js": (
             "2.1.0",
