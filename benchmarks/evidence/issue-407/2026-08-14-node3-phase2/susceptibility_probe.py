@@ -304,7 +304,8 @@ def main() -> int:
     document = {
         "schema_version": 1,
         "claim": (
-            "Descriptively compare the frozen bare QEq proxy with fully reconverged public "
+            "Descriptively compare the frozen bare QEq proxy with fully "
+            "reconverged public "
             "dq/db; the mismatch is non-decisive and is not a susceptibility fit"
         ),
         "model": {
@@ -312,7 +313,8 @@ def main() -> int:
             "bare_qeq_proxy": "D - D11^TD/(1^TD1), D_ss=alpha/gamma_s",
             "measured_policy": "off",
             "interpretation_limit": (
-                "public dq/db includes self-consistent ES2/AES2/band response and is not "
+                "public dq/db includes self-consistent ES2/AES2/band response "
+                "and is not "
                 "the bare -TCT^T electronic susceptibility; this script also does not "
                 "evaluate the implemented screened pair operator"
             ),
