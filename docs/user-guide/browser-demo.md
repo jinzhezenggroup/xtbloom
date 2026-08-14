@@ -51,7 +51,8 @@ writes the final coordinates back to the editor. Encode a literal `+` in a
 charged SMILES as `%2B`.
 
 The engine loader reports completed files and received bytes across the full
-Worker, JavaScript, WebAssembly, and data resource set. A dependency-free
+Worker, JavaScript, main WebAssembly module, and `.wasm`-named preload package.
+A dependency-free
 bootstrap first verifies the versioned app/helper module graph. The optional
 SMILES Worker/helper pair shares that graph's content version but remains lazy,
 so a SMILES failure never blocks XYZ calculations. The page itself retries a

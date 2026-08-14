@@ -69,6 +69,12 @@ official release archive; the filename and loader contract remain unchanged,
 and the compatibility filename does not mean the browser module contains
 OpenBLAS. Eigen does not become a native xTBloom dependency.
 
+Emscripten internally emits that preload package as `xtbloom_web.data`. The
+staged site publishes the exact package bytes as `xtbloom_web.side.wasm`, and the
+manifest retains the logical asset ID `data`. The loader supplies the verified
+bytes through `getPreloadedPackage`, while the WebAssembly suffix lets static
+hosts apply their normal Wasm content type and transport compression.
+
 The deployed build is wasm32 so it works without browser Memory64 support. CI
 also builds wasm64 and compares its public results with wasm32 as a
 pointer-width and numerical parity gate; wasm64 is not deployed.

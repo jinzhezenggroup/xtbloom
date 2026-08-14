@@ -14,7 +14,7 @@ set(_asset_specs
     "smiles_helpers|smiles_helpers.js"
     "module|xtbloom_web.js"
     "wasm|xtbloom_web.wasm"
-    "data|xtbloom_web.data")
+    "data|xtbloom_web.side.wasm")
 set(_entries "")
 set(_version_material "")
 set(_separator "")

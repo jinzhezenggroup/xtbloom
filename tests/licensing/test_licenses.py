@@ -1162,6 +1162,17 @@ class WebSiteLicenseTests(unittest.TestCase):
             ):
                 CHECKER.check_web_site(root, REPOSITORY)
 
+    def test_web_site_rejects_legacy_data_payload(self) -> None:
+        """Do not retain the MIME-opaque preload URL beside its Wasm replacement."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "xtbloom_web.data").write_bytes(b"legacy preload package")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "unexpected or orphaned files"
+            ):
+                CHECKER.check_web_site(root, REPOSITORY)
+
     def test_web_site_rejects_stale_engine_manifest(self) -> None:
         """Do not let cached URLs describe different JS/WASM/data bytes."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
