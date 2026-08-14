@@ -245,6 +245,31 @@ test("verified 3Dmol loading falls through ranked sources", async () => {
   ]);
 });
 
+test("verified 3Dmol loading rejects a complete source with the wrong size", async () => {
+  await assert.rejects(
+    loadThreeDmol([
+      { source: { id: "jsdelivr", url: "https://jsdelivr.test/3dmol.js" } },
+    ], {
+      baseUrl: "https://site.test/",
+      globalImpl: {},
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      }),
+      cryptoImpl: webcrypto,
+      executeScriptImpl: async () => {
+        assert.fail("unverified 3Dmol bytes must not execute");
+      },
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.match(error.errors[0].message, /expected 537792 bytes/);
+      return true;
+    },
+  );
+});
+
 test("browser CDN routing shares measured provider order with optional workers", async () => {
   const globalImpl = {};
   const rankedSources = [
@@ -267,6 +292,25 @@ test("browser CDN routing shares measured provider order with optional workers",
     ok: true,
     source: "local",
   });
+});
+
+test("browser CDN routing uses the regional order when ranking throws", async () => {
+  const globalImpl = {};
+  let attemptedOrder = null;
+  const routing = await initializeBrowserCdnRouting({
+    intlImpl: {
+      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "Asia/Shanghai" }) }),
+    },
+    globalImpl,
+    rankImpl: async () => { throw new Error("probe setup failed"); },
+    loadThreeDmolImpl: async (rankedSources) => {
+      attemptedOrder = rankedSources.map((entry) => entry.source.id);
+      return { source: "local" };
+    },
+  });
+  assert.deepEqual(routing.providers, ["jsdmirror", "jsdelivr"]);
+  assert.deepEqual(await routing.ready, { ok: true, source: "local" });
+  assert.deepEqual(attemptedOrder, ["jsdmirror", "jsdelivr", "local"]);
 });
 
 test("browser application starts while CDN routing remains in flight", async () => {

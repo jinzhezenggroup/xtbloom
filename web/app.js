@@ -1110,6 +1110,12 @@ function xyzTo3Dmol(xyz) {
   return lines.length + "\n" + "xTBloom\n" + lines.join("\n") + "\n";
 }
 
+function markMoleculeViewerUnavailable() {
+  molLoaderSettled = true;
+  molUnavailable = true;
+  $("mol").innerHTML = `<div class="mol-placeholder">${t("mol_unavailable")}</div>`;
+}
+
 function initMoleculeViewer() {
   if (typeof window.$3Dmol === "undefined" && !molLoaderSettled) {
     const ready = globalThis.__XTBLOOM_3DMOL_READY;
@@ -1128,30 +1134,33 @@ function initMoleculeViewer() {
           },
           () => {
             molLoaderObserved = false;
-            molLoaderSettled = true;
-            molUnavailable = true;
-            $("mol").innerHTML = `<div class="mol-placeholder">${t("mol_unavailable")}</div>`;
+            markMoleculeViewerUnavailable();
           },
         );
       }
       return;
     }
-    if (!molLoaderObserved && ready && typeof ready.then === "function") {
-      molLoaderObserved = true;
-      void ready.then((result) => {
-        molLoaderSettled = true;
-        if (!result?.ok || typeof window.$3Dmol === "undefined") {
-          molUnavailable = true;
-          $("mol").innerHTML = `<div class="mol-placeholder">${t("mol_unavailable")}</div>`;
-          return;
-        }
-        molUnavailable = false;
-        initMoleculeViewer();
-        if (previewState.status === "valid") {
-          updateMoleculeViewer(previewState.canonicalXyz);
-        }
-      });
+    if (ready && typeof ready.then === "function") {
+      if (!molLoaderObserved) {
+        molLoaderObserved = true;
+        void ready.then((result) => {
+          molLoaderSettled = true;
+          if (!result?.ok || typeof window.$3Dmol === "undefined") {
+            markMoleculeViewerUnavailable();
+            return;
+          }
+          molUnavailable = false;
+          initMoleculeViewer();
+          if (previewState.status === "valid") {
+            updateMoleculeViewer(previewState.canonicalXyz);
+          }
+        });
+      }
+      return;
     }
+    /* A verified app normally receives both globals from bootstrap. Preserve a
+     * useful failure state if app.js is embedded or launched without it. */
+    markMoleculeViewerUnavailable();
     return;
   }
   if (typeof window.$3Dmol === "undefined") { molUnavailable = true; }

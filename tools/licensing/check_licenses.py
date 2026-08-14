@@ -2477,7 +2477,12 @@ def check_source(root: Path) -> None:
         )
     if re.search(r"openchemlib@(?:latest|[^\"'`]*\+esm)", smiles_helpers):
         raise LicenseCheckError("SMILES helper uses a floating/transformed CDN URL")
-    for token in (*THREEDMOL_URLS, THREEDMOL_SHA256, "vendor/3Dmol-min.js"):
+    for token in (
+        *THREEDMOL_URLS,
+        THREEDMOL_SHA256,
+        str(THREEDMOL_SIZE_BYTES),
+        "vendor/3Dmol-min.js",
+    ):
         if token not in bootstrap:
             raise LicenseCheckError(f"3Dmol loader omits pinned source token: {token}")
 
