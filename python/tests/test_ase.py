@@ -51,6 +51,16 @@ def ketene_atoms() -> Atoms:
     return atoms
 
 
+@pytest.fixture(scope="module")
+def gfn1_ketene_atoms() -> Atoms:
+    """Build the independent GFN1 ketene oracle structure in ASE units."""
+    case = _cases.gfn1_case_by_id("gfn1_ketene")
+    numbers, positions_bohr, _, _, _ = _cases.gfn1_structure_inputs(case)
+    return Atoms(
+        numbers=numbers, positions=np.asarray(positions_bohr) * _BOHR, pbc=False
+    )
+
+
 def test_ase_energy_matches_golden(ketene_atoms: Atoms) -> None:
     """Match the ASE energy and free-energy alias to the golden value."""
     case = _cases.case_by_id("ketene")
@@ -85,6 +95,27 @@ def test_ase_forces_and_charges(ketene_atoms: Atoms) -> None:
         assert charges == pytest.approx(
             golden["partial_charges_e"], abs=tolerance["charges"]["atol"]
         )
+
+
+def test_ase_gfn1_cpu_matches_independent_golden(gfn1_ketene_atoms: Atoms) -> None:
+    """Expose GFN1 CPU energy and forces through the ordinary ASE adapter."""
+    case = _cases.gfn1_case_by_id("gfn1_ketene")
+    golden = _cases.gfn1_golden(case)
+    tolerance = _cases.gfn1_tolerances()
+    atoms = gfn1_ketene_atoms.copy()
+    atoms.calc = XTBloom(method="GFN1-xTB")
+    assert atoms.get_potential_energy() == pytest.approx(
+        golden["energy_hartree"] * _HARTREE_TO_EV,
+        abs=tolerance["energy"]["atol"] * _HARTREE_TO_EV,
+    )
+    assert atoms.get_forces() == pytest.approx(
+        np.asarray(golden["forces_hartree_per_bohr"]).reshape(-1, 3)
+        * _HARTREE_TO_EV
+        / _BOHR,
+        abs=tolerance["forces"]["atol"] * _HARTREE_TO_EV / _BOHR,
+    )
+    assert atoms.calc._xtb is not None
+    assert atoms.calc._xtb.backend == _library.BACKEND_CPU
 
 
 def test_ase_charge_from_atoms(ketene_atoms: Atoms) -> None:
@@ -122,6 +153,52 @@ def test_ase_set_rejects_invalid_settings_transactionally(
     with pytest.raises(XTBloomValueError):
         calculator.set(max_scc_iterations=0)
     assert calculator.parameters.max_scc_iterations == 250
+
+
+def test_ase_scc_policy_parameters_are_validated() -> None:
+    """Expose the frozen ABI-v3 controls through ASE's parameter mapping."""
+    calculator = XTBloom(
+        method="GFN2-xTB",
+        scc_mixer="modified_broyden",
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    )
+    assert calculator.parameters.scc_mixer_history == 16
+    with pytest.raises(XTBloomValueError, match="scc_mixer_history"):
+        calculator.set(scc_mixer_history=65)
+
+
+def test_ase_updates_cached_scc_policy_in_place() -> None:
+    """Push all numerical V3 policy changes into an existing API calculator."""
+
+    class FakeCalculator:
+        def __init__(self) -> None:
+            self.updates: list[tuple[str, object]] = []
+
+        def set(self, name: str, value: object) -> None:
+            self.updates.append((name, value))
+
+        def close(self) -> None:
+            pass
+
+    calculator = XTBloom(method="GFN2-xTB")
+    fake = FakeCalculator()
+    calculator._xtb = fake  # type: ignore[assignment]
+    calculator.set(
+        scc_mixer=_library.SCC_MIXER_MODIFIED_BROYDEN,
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    )
+
+    assert fake.updates == [
+        ("scc_mixer", _library.SCC_MIXER_MODIFIED_BROYDEN),
+        ("scc_mixer_history", 16),
+        ("scc_mixer_damping", 0.25),
+        ("determinism", "reproducible"),
+    ]
+    calculator.close()
 
 
 def test_ase_rejects_fractional_multiplicity() -> None:

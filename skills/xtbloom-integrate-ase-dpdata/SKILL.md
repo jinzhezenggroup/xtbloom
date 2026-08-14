@@ -7,6 +7,22 @@ description: Integrate xTBloom with ASE or dpdata for molecular energy, force, c
 
 Use xTBloom's public adapters instead of duplicating their unit conversion, charge/spin resolution, batching, or failure handling. Keep the surrounding framework responsible for its workflow: ASE owns optimizers and dynamics, while dpdata owns dataset containers and invokes xTBloom's driver or minimizer plugin.
 
+## Run Standalone Programs Ephemerally
+
+For an agent-generated standalone program, add PEP 723 metadata and run it with
+`uv run --script workflow.py`. Declare only the adapter being used:
+
+```python
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["xtbloom[ase]>=0.1.1"]
+# ///
+```
+
+Use `xtbloom[dpdata]>=0.1.1` instead for dpdata. Add `cuda12` to the same extra
+list only when the selected Linux CUDA environment needs those user-space
+libraries. Do not install ASE and dpdata together unless the program uses both.
+
 ## Load the Relevant References
 
 - Read [integration-contract.md](references/integration-contract.md) before changing an ASE or dpdata integration. It is the self-contained behavioral contract.
@@ -36,7 +52,8 @@ Never infer a nonzero charge, multiplicity, or periodic interpretation from geom
 ## Implement an ASE Workflow
 
 1. Import `XTBloom` from `xtbloom.ase` and attach it to `atoms.calc`.
-2. Pass `method="GFN2-xTB"` explicitly in generated examples. Only GFN2-xTB is implemented.
+2. Pass `method="GFN1-xTB"` or `method="GFN2-xTB"` explicitly in generated
+   examples. GFN1-xTB is CPU-only; GFN2-xTB supports CPU and CUDA.
 3. Set `backend` explicitly when silently changing backend would violate the request.
 4. Set `charge` and `multiplicity` explicitly when known. Otherwise document ASE's fallback to initial charges and magnetic moments.
 5. Choose `warm_start=True` for compatible geometry sequences such as optimization or dynamics. Choose `warm_start=False` for independent calls whose SCC initialization must not depend on an earlier step.

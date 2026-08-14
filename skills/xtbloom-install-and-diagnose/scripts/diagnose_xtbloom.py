@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "xtbloom>=0.1.1",
+# ]
+# ///
 """Report xTBloom package, native-library, and backend availability as JSON.
 
 The script performs no installation, filesystem writes, environment changes, or

@@ -1,13 +1,31 @@
 # Python API
 
+[![PyPI version](https://img.shields.io/pypi/v/xtbloom.svg)](https://pypi.org/project/xtbloom/)
+
 The Python package wraps the public xTBloom C ABI with `ctypes`. There is no
 separate CPython extension API, and every high-level calculation owns or shares
 a native xTBloom context.
 
-For Python and native toolchain versions, BLAS/CUDA requirements, and the
-source-build versus wheel boundary, start with the
-[installation prerequisites](index.md#prerequisites). The concise package page
-and install commands are in [`python/README.md`](../../python/README.md).
+## Installation
+
+Install the published package from PyPI:
+
+```console
+pip install xtbloom
+```
+
+For supported Linux CUDA 12 environments or optional adapters, install the
+matching extras:
+
+```console
+pip install "xtbloom[cuda12]"
+pip install "xtbloom[ase,dpdata]"
+```
+
+Python 3.10 or newer is required. For platform details, native toolchain and
+CUDA requirements, and the secondary source-build path, see the
+[installation guide](index.md#installation). The concise PyPI-facing package
+page is [`python/README.md`](../../python/README.md).
 
 ## Single systems and context reuse
 
@@ -15,9 +33,18 @@ and install commands are in [`python/README.md`](../../python/README.md).
 Use it as a context manager so native resources are released deterministically.
 Updating only positions reuses the context and immutable topology setup.
 
+`Calculator` and `BatchCalculator` accept `"GFN1-xTB"`/`"GFN1"` and
+`"GFN2-xTB"`/`"GFN2"`. GFN2 runs on CPU or CUDA. GFN1 is published on CPU;
+its high-level `backend="auto"` selects CPU even on a CUDA machine, while an
+explicit `backend="cuda"` request never falls back to GFN2. A CUDA-capable
+native build returns `NOT_SUPPORTED` for GFN1; a build without CUDA may reject
+the context first with `BACKEND_UNAVAILABLE`. Because GFN1 AUTO is CPU-only,
+pairing it with a nonnegative
+`device_id` is an input error rather than silently ignoring the GPU selection.
+
 ```python
 import numpy as np
-from xtbloom import Calculator
+from xtbloom import BatchCalculator, Calculator, Structure
 
 numbers = np.array([1, 1])
 positions = np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]])
@@ -45,8 +72,14 @@ back to a fresh solve. Geometry is not part of the native identity, so a
 dynamics or optimization loop that reuses one `Calculator` reconverges from
 each previous step's state.
 
-`Calculator.set()` updates `max_scc_iterations`, `charge_tolerance`,
-`energy_tolerance`, or `electronic_temperature` in kelvin.
+`Calculator.set()` also accepts `scc_mixer="modified_broyden"`,
+`scc_mixer_history` in `1..64`, `scc_mixer_damping` in `(0, 1]`, and
+`determinism="default"` or `"reproducible"`, in addition to
+`max_scc_iterations`, `charge_tolerance`, `energy_tolerance`, and
+`electronic_temperature` in kelvin. Reproducible mode is an exact-repeat
+contract only for an unchanged build/backend/provider-or-toolkit/device,
+descriptor/options, launch geometry, and FRESH/WARM sequence; it does not
+promise cross-backend or cross-machine bitwise identity.
 
 ## Results
 
@@ -63,6 +96,60 @@ iterations = first.scc_iterations
 Single-system `Calculator.singlepoint()` raises when its one system does not
 converge or its eigensolver fails. A batch preserves successful peers by
 default.
+
+## Numerical Cartesian Hessians
+
+`Calculator.hessian()` returns one dense QM-coordinate energy Hessian, while
+`BatchCalculator.hessian()` returns one matrix per input structure. Both use a
+central difference of analytic forces,
+
+\[
+H_{:,j} = -\frac{F(R + h e_j) - F(R - h e_j)}{2h}.
+\]
+
+```python
+systems = [Structure(numbers, positions), Structure(numbers, positions * 1.01)]
+with Calculator("GFN2-xTB", numbers, positions, backend="cuda") as calc:
+    raw = calc.hessian(step=0.005)
+    symmetric = calc.hessian(step=0.005, symmetrize=True)
+
+with BatchCalculator(systems, backend="cuda", cpu_threads=16) as calc:
+    hessians = calc.hessian(step=0.005)
+```
+
+The single-system output is a C-contiguous NumPy `float64` matrix with shape
+`(3 * natoms, 3 * natoms)` and units Hartree/bohr². The batch output is an
+input-ordered list of such matrices, so ragged atom counts need no padding.
+Batch size does not alter the calculator's `cpu_threads` budget. The default
+step is `0.005` bohr. The default `symmetrize=False` preserves the raw
+antisymmetric residual as a finite-difference/SCC convergence diagnostic;
+`symmetrize=True` applies `0.5 * (H + H.T)` independently to every matrix.
+
+One dense Hessian requires `6 * natoms` independent force calculations. For a
+batch, displacement tasks from different Hessians are interleaved in the same
+native ragged force calls rather than evaluating one complete Hessian at a
+time.
+`auto_batch_size=True` is the default: it chooses a conservative atom limit,
+creates only one displacement chunk at a time, and retries recoverable native
+allocation failures at smaller automatic chunks. A positive integer sets an
+explicit maximum atom count per native call; `False` or `None` submits every
+displacement at once. For CUDA, these high-level descriptors are host NumPy
+inputs and the Hessian returns to host as NumPy.
+
+The method displaces only QM atoms. Explicit point-charge coordinates,
+point-charge values/gammas, the uniform electric field, and caller-owned
+charge-response `b/A` operators stay fixed. The returned matrix is therefore
+only the QM–QM block at that external environment: it excludes QM–point-charge
+and point-charge–point-charge blocks, and still excludes `db/dR` and `dA/dR`.
+Any displacement SCC/eigensolver failure aborts the call with its batch member,
+atom, axis, sign, status, and iteration count. A temporary fresh-SCC context
+leaves every calculator geometry and any original warm checkpoint unchanged.
+
+These are explicit numerical Python methods, not analytic coupled-response
+Hessians or native C ABI outputs. xTBloom does not yet perform mass weighting,
+translation/rotation projection, normal-mode analysis, or thermochemistry.
+They do not change the compiled autograd operator, so PyTorch higher-order
+autograd remains unsupported.
 
 ## Ragged batches
 
@@ -112,6 +199,9 @@ the Array API `__dlpack__`/`__dlpack_device__` producer protocols (NumPy,
 CuPy, JAX eager arrays, PyTorch tensors); xTBloom imports none of those
 libraries, consumed buffers are caller-owned, and interface devices are
 accepted without a host round trip on the CUDA backend.
+
+`ArrayBatch` and `compute_arrays` currently have no model selector and execute
+GFN2-xTB only. Use the host-NumPy `Calculator`/`BatchCalculator` APIs for GFN1.
 
 ```python
 from xtbloom import ArrayBatch
@@ -203,7 +293,8 @@ API semantics do not depend on one device's measured timing.
 
 ## PyTorch autograd op (positions gradient only)
 
-`xtbloom.xtbloom_torch` runs packed xtbloom inference on PyTorch tensors (host CPU
+`xtbloom.xtbloom_torch` is a GFN2-xTB-only adapter with no model selector. It
+runs packed xtbloom inference on PyTorch tensors (host CPU
 or CUDA device) and returns `(energies, forces)` as float64 tensors, with
 zero-copy tensor data plane. It is the only autograd entry point in the Python
 API, and its gradient contract is deliberately narrow: it supports exactly
@@ -298,7 +389,7 @@ radical = Structure(
 
 Set `spin_channels=1` only when the restricted open-shell formulation is
 intended. Both restricted and unrestricted GFN2-xTB are implemented on CPU and
-CUDA.
+CUDA; both GFN1 forms are implemented on CPU.
 
 ## Point charges and periodic response
 
@@ -318,6 +409,8 @@ embedded_system = Structure([1, 1], systems[0].positions, point_charges=embeddin
 
 When point charges are present, results include `point_charge_forces`. xTBloom
 does not include point-charge/point-charge energy or force.
+GFN1 and GFN2 use distinct model-specific screening equations; supplied GFN1
+gamma values are harmonic hardnesses, not GFN2 shell-hardness parameters.
 
 `ChargeResponse` adds a per-atom shift `b` and symmetric response matrix `A`:
 
@@ -340,14 +433,20 @@ The caller owns coordinate derivatives of `b` and `A`. See the
 
 ## ASE and dpdata
 
-Install the corresponding extra and use `xtbloom.ase.XTBloom` as an ASE
+Install `xtbloom[ase]`, `xtbloom[dpdata]`, or both with
+`pip install "xtbloom[ase,dpdata]"`, then use `xtbloom.ase.XTBloom` as an ASE
 calculator or `driver="xtbloom"` with dpdata. These integrations convert native
 atomic units to eV and Angstrom conventions. dpdata periodic systems are
-rejected because the native ABI has no lattice descriptor. The ASE calculator
+rejected because the adapters do not yet expose the ABI-v4 lattice descriptor
+and native periodic GFN2 execution is not implemented. The ASE calculator
 enables warm start by default (`warm_start=True`), so an ASE dynamics run
 automatically seeds each step's SCC from the previous converged state and
 falls back to a fresh solve whenever the request's identity changes; pass
 `warm_start=False` for bit-reproducible independent steps.
+
+ASE and dpdata accept both model names. GFN1 follows the same CPU-only AUTO
+policy as the high-level calculators; its electric-field/dipole path is
+rejected rather than evaluated as GFN2.
 
 For geometry relaxation, `xtbloom` also registers a batch minimizer under the
 `"xtbloom"` key. It moves every frame of a dpdata system in lockstep and

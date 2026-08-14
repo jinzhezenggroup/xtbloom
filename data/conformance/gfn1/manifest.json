@@ -1,0 +1,262 @@
+{
+  "cases": [
+    {
+      "atom_count": 3,
+      "description": "Planar H3+ is a charged and symmetry-sensitive GFN1 SCC case.",
+      "golden": "data/conformance/gfn1/golden/gfn1_h3_plus.json",
+      "golden_sha256": "20ff680384aa7e8b486c7971d9624eecd44b2478c2977e3ba3fc70ba611a23d7",
+      "id": "gfn1_h3_plus",
+      "input": "data/conformance/gfn1/inputs/gfn1_h3_plus.coord",
+      "input_sha256": "b8fd190d7713b5247e6e12803c804adca9438b52bc02d64999d1d634ae857e37",
+      "molecular_charge": 1,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "4de3e07fd2e5eeaad8b2c02aad44f71c7d4f7f99fbacc0a94ae650ba43ebe37f",
+      "unpaired_electrons": 0,
+      "upstream_input_git_blob": "40859ae8bd76e930be0f900d5c04212eb5605444",
+      "upstream_input_sha256": "b8fd190d7713b5247e6e12803c804adca9438b52bc02d64999d1d634ae857e37",
+      "upstream_validation_case": "test/validation/01_h3+"
+    },
+    {
+      "atom_count": 5,
+      "description": "Ketene covers H/C/O, repeated hydrogen s shells, and a non-equilibrium force.",
+      "golden": "data/conformance/gfn1/golden/gfn1_ketene.json",
+      "golden_sha256": "a0a78b3214f92f5b61b544a699bc0849eda68aa7918a9043d7016480df168854",
+      "id": "gfn1_ketene",
+      "input": "data/conformance/gfn1/inputs/gfn1_ketene.coord",
+      "input_sha256": "df51094bedadc80e7aac3966a6fb0656f8b907850bbdf717a9b0b5d55eb6201e",
+      "molecular_charge": 0,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "38f3fa070c0801603bc09c4618d478d187a44f39453ff4d0b4f72dcc4958a484",
+      "unpaired_electrons": 0,
+      "upstream_input_git_blob": "e3b940decd0a19e074413b44ba333a861578830f",
+      "upstream_input_sha256": "df51094bedadc80e7aac3966a6fb0656f8b907850bbdf717a9b0b5d55eb6201e",
+      "upstream_validation_case": "test/validation/08_ketene"
+    },
+    {
+      "atom_count": 3,
+      "description": "Ne-Na-Cl covers third-row parameters and a weak mixed-element interaction.",
+      "golden": "data/conformance/gfn1/golden/gfn1_nenacl.json",
+      "golden_sha256": "775fd9ca50c98d1c46667bcfa9ec2acc8f6e1b6da5a0aeb9322a2f4a600b27cb",
+      "id": "gfn1_nenacl",
+      "input": "data/conformance/gfn1/inputs/gfn1_nenacl.coord",
+      "input_sha256": "3415aead6aaea22db84922d46ed4f62dae86ddc8319ad3c55404949bca2b873a",
+      "molecular_charge": 0,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "130bee4fd8db0486667d51468d1d99d854a01c67e6a8169d4a3612bd38b2b0bd",
+      "unpaired_electrons": 0,
+      "upstream_input_git_blob": "1d796c5d003f979d190eed0d5eb2e69b24f52da8",
+      "upstream_input_sha256": "3415aead6aaea22db84922d46ed4f62dae86ddc8319ad3c55404949bca2b873a",
+      "upstream_validation_case": "test/validation/10_nenacl"
+    },
+    {
+      "atom_count": 6,
+      "description": "SiF5- covers an anion and p-block hypercoordination.",
+      "golden": "data/conformance/gfn1/golden/gfn1_sif5_minus.json",
+      "golden_sha256": "205851b957b80213a69c9899a352d1714017587f400d0cd808683dad932f0345",
+      "id": "gfn1_sif5_minus",
+      "input": "data/conformance/gfn1/inputs/gfn1_sif5_minus.coord",
+      "input_sha256": "c959cf7302441fe18401618ef2fe04eaa0f92b192f511f9691b3212d0b157fc2",
+      "molecular_charge": -1,
+      "reference_engine": "tblite",
+      "reference_output_sha256": "6ee5b5a2a704e8f7c205d20fc1c2b6fe2ad901c56b9f38f5b4a9633f73001bac",
+      "unpaired_electrons": 0,
+      "upstream_input_git_blob": "d968dbe2f579a93636b5b570f8c36de9f7d10757",
+      "upstream_input_sha256": "c959cf7302441fe18401618ef2fe04eaa0f92b192f511f9691b3212d0b157fc2",
+      "upstream_validation_case": "test/validation/14_sif5-"
+    },
+    {
+      "atom_count": 2,
+      "description": "Neutral OH exercises unrestricted GFN1 occupations and atom-resolved charges.",
+      "golden": "data/conformance/gfn1/golden/gfn1_oh_radical.json",
+      "golden_sha256": "57a4ce2ef8affb9a587728770d11a8f675aa2778bf9746e5a8ac4ef7a627259e",
+      "id": "gfn1_oh_radical",
+      "input": "data/conformance/gfn1/inputs/gfn1_oh_radical.coord",
+      "input_sha256": "6dd67aab2bce7e68a391b3dffbf106818235d5b09ccbcea5ed377e5684192975",
+      "molecular_charge": 0,
+      "reference_engine": "xtb",
+      "reference_output_sha256": "51d033722a089a3a97a70c4124093d6df853345d9a143f7037a836c4136d6554",
+      "unpaired_electrons": 1
+    },
+    {
+      "atom_count": 6,
+      "description": "The xTB GFN1 PCEM water-tetramer fixture represented as six QM atoms and six sites with GFN1 H/O hardnesses.",
+      "golden": "data/conformance/gfn1/golden/gfn1_water_dimer_6pc_hardness.json",
+      "golden_sha256": "a8fcbb7af5243fba52729b1279f2e3cc5adc8fdb1f981202fb42b37f84796403",
+      "id": "gfn1_water_dimer_6pc_hardness",
+      "input": "data/conformance/gfn1/inputs/gfn1_water_dimer_6pc_hardness.qmmm.json",
+      "input_schema": "qmmm-v1",
+      "input_sha256": "87d41e9b9185d855c54b5c71be1227b510199af62c9755661decdd30951b0706",
+      "molecular_charge": 0,
+      "point_charge_count": 6,
+      "reference_engine": "xtb",
+      "reference_output_sha256": "a0526acc38c1ae9192e09de891b04475192883a5892dab39e966de4d10d421df",
+      "scientific_source": {
+        "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+        "path": "test/unit/test_gfn1.f90",
+        "section": "test_gfn1_pcem_api",
+        "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99"
+      },
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 6,
+      "description": "The same PCEM geometry with gamma=999 isolates the near-point-charge limit as an independent diagnostic.",
+      "golden": "data/conformance/gfn1/golden/gfn1_water_dimer_6pc_gamma999.json",
+      "golden_sha256": "f9c33d1ac1d9b05d4d7de590b2acccd8460d3266e6734bd04ba55a2bd946b353",
+      "id": "gfn1_water_dimer_6pc_gamma999",
+      "input": "data/conformance/gfn1/inputs/gfn1_water_dimer_6pc_gamma999.qmmm.json",
+      "input_schema": "qmmm-v1",
+      "input_sha256": "bcc3818316181c3d2c9c7c2260a9b962aab6c2ee4e1734e453f47bc5b323863f",
+      "molecular_charge": 0,
+      "point_charge_count": 6,
+      "reference_engine": "xtb",
+      "reference_output_sha256": "d0f2533150a6287e7f1509df5da6bbb4db70fb5d12339132dddbfd9391b058b2",
+      "scientific_source": {
+        "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+        "path": "test/unit/test_gfn1.f90",
+        "section": "test_gfn1_pcem_api",
+        "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99"
+      },
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 6,
+      "description": "The pinned Br/Br/O/C/H/H fixture exercises the GFN1 classical halogen-bond correction and its analytic force.",
+      "golden": "data/conformance/gfn1/golden/gfn1_halogen_bond.json",
+      "golden_sha256": "2b77cf40e1f4723818ac1327ebb525488a8087c61a749910623e3d24b43b3d58",
+      "id": "gfn1_halogen_bond",
+      "input": "data/conformance/gfn1/inputs/gfn1_halogen_bond.coord",
+      "input_sha256": "2b101e953c285b850c6affe6602bddd9ffeba6a8dbc62f3f1b26987b4cce26bf",
+      "molecular_charge": 0,
+      "reference_engine": "xtb",
+      "reference_output_sha256": "ccb70541e5354d4193535b4dfcedc98a99776cdd17b1da4eb63e291f58adfb56",
+      "scientific_source": {
+        "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+        "path": "test/unit/test_gfn1.f90",
+        "section": "test_gfn1_xb",
+        "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99"
+      },
+      "unpaired_electrons": 0
+    }
+  ],
+  "golden_schema_version": 1,
+  "method": "GFN1-xTB",
+  "reference_engines": {
+    "tblite": {
+      "accuracy": 0.0001,
+      "cli_command_template": [
+        "{executable}",
+        "{input}",
+        "--no-restart",
+        "--method",
+        "gfn1",
+        "--acc",
+        "0.0001",
+        "--grad",
+        "{gradient_output}",
+        "[--charge {signed_charge}]",
+        "--json",
+        "{json_output}"
+      ],
+      "repository": "https://github.com/tblite/tblite",
+      "revision": "e9abc395b122018ed688aecb1c3a65cecaf97beb",
+      "runtime_artifacts": {
+        "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+        "libtblite_sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725"
+      },
+      "version": "0.7.0"
+    },
+    "xtb": {
+      "accuracy": 0.0001,
+      "cli_command_template": [
+        "{executable}",
+        "coord",
+        "--gfn",
+        "1",
+        "--acc",
+        "0.0001",
+        "--grad",
+        "--json",
+        "--norestart",
+        "--chrg",
+        "{charge}",
+        "--uhf",
+        "{unpaired_electrons}",
+        "-P",
+        "1"
+      ],
+      "gfn1_test_source": {
+        "git_blob_sha1": "37972be0d5a47e1e1362a392eb251d39dd0a4a74",
+        "path": "test/unit/test_gfn1.f90",
+        "sha256": "bc88003688e69f78139721343c71c025fe516121e2af37155c13605f7b49dd99"
+      },
+      "point_charge_hardness_hartree": {
+        "1": 0.470099,
+        "8": 0.583349
+      },
+      "point_charge_hardness_source": "test/unit/test_gfn1.f90 at the pinned xTB revision",
+      "qmmm_cli_command_template": [
+        "{executable}",
+        "coord",
+        "--gfn",
+        "1",
+        "--acc",
+        "0.0001",
+        "--grad",
+        "--json",
+        "--norestart",
+        "--chrg",
+        "{charge}",
+        "--uhf",
+        "{unpaired_electrons}",
+        "-P",
+        "1",
+        "--input",
+        "xcontrol"
+      ],
+      "qmmm_materialization_schema": "xtbloom-gfn1-xtb-pcem-cli-v1",
+      "repository": "https://github.com/grimme-lab/xtb",
+      "revision": "edcfbbe39d411edc225e27315fbda3a204ddb023",
+      "runtime_artifacts": {
+        "executable_sha256": "271dd6cdd5da127a8e39919e7e32d924790fb346f0057b4183769ba8b3411887",
+        "gfn1_parameter_sha256": "81a9d7afdee31f5d8fd67a4d8ec966179317c7b100261c9c82d724bafb460399",
+        "libxtb_sha256": "c405797f34ed96470f23158406e6d8a8e102681d3c3cbbaea16692f514f22853"
+      },
+      "version": "6.7.1"
+    }
+  },
+  "schema_version": 1,
+  "tolerances": {
+    "charges": {
+      "atol": 5e-07,
+      "justification": "The primary atomic-charge gate matches the established live-oracle SCC-state threshold; xTB reproducibility is expected to be substantially tighter.",
+      "rtol": 0.0,
+      "unit": "elementary_charge"
+    },
+    "energy": {
+      "atol": 5e-07,
+      "justification": "The primary total-energy gate allows the explicitly pinned 0.0001 oracle SCC truncation without approaching chemical significance.",
+      "rtol": 0.0,
+      "unit": "hartree"
+    },
+    "forces": {
+      "atol": 5e-07,
+      "justification": "The primary analytic-force gate matches the established xTBloom oracle threshold and remains independent of future CPU/CUDA agreement.",
+      "rtol": 0.0,
+      "unit": "hartree/bohr"
+    },
+    "point_charge_forces": {
+      "atol": 5e-07,
+      "justification": "The PC force gate accommodates xTB's text pcgrad precision while remaining strict enough to catch the GFN1-specific screening formula and sign errors.",
+      "rtol": 0.0,
+      "unit": "hartree/bohr"
+    }
+  },
+  "units": {
+    "coordinates": "bohr",
+    "energy": "hartree",
+    "forces": "hartree/bohr",
+    "gradient": "hartree/bohr",
+    "molecular_charge": "elementary_charge"
+  }
+}

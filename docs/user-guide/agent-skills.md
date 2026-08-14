@@ -3,11 +3,19 @@
 User-facing skills live in [`skills/`](../../skills). Contributor workflows
 remain separate under [`.agents/skills/`](../../.agents/skills).
 
+These user skills are intentionally task-scoped rather than one monolithic
+skill. Each `SKILL.md` is a small router that loads only the references needed
+for Python inference, adapters, ML arrays, the C API, QM/MM, or installation.
+For standalone Python tasks, they prefer PEP 723 metadata and execute it with
+`uv run --script`. Framework integrations add only the adapter or ML framework
+the user actually selected. Native C/C++ workflows continue to use the
+installed CMake package and compiler toolchain.
+
 ## Choose a skill
 
 | Skill | Use it for |
 | --- | --- |
-| `xtbloom-install-and-diagnose` | Install from a source checkout, select CPU or CUDA deliberately, inspect native-library discovery, and prove which backend actually executes. |
+| `xtbloom-install-and-diagnose` | Use the PyPI package by default or a source checkout when required, select CPU or CUDA deliberately, inspect native-library discovery, and prove which backend actually executes. |
 | `xtbloom-run-python-inference` | Write single-system or native ragged-batch Python calculations with correct units, spin, warm-start, and per-system failure handling. |
 | `xtbloom-integrate-ase-dpdata` | Attach xTBloom to ASE or dpdata for energies, forces, dataset labeling, or adapter-level relaxation. |
 | `xtbloom-use-zero-copy-ml` | Connect NumPy, CuPy, JAX, or PyTorch arrays through Array API and DLPack, including caller-owned outputs and the positions-only PyTorch gradient. |
@@ -32,5 +40,6 @@ Repository: jinzhezenggroup/xtbloom
 Path: skills/xtbloom-run-python-inference
 ```
 
-Each skill directory is self-contained. Clients may ignore
-`agents/openai.yaml` when they use only the portable `SKILL.md` convention.
+Each skill directory is self-contained and uses its `references/` directory for
+progressive disclosure. Clients may ignore `agents/openai.yaml` when they use
+only the portable `SKILL.md` convention.

@@ -65,6 +65,20 @@ assert np.isfinite(result.energy)
 assert np.isfinite(result.forces).all()
 print(f"xTBloom CPU wheel smoke energy: {result.energy:.16g}")
 
+# GFN1 uses a separate native executor and parameter payload. An installed
+# wheel must exercise it explicitly; a successful default-model call proves
+# only GFN2.
+gfn1 = Calculator(
+    "GFN1-xTB",
+    calculator.numbers,
+    calculator.positions,
+    backend="cpu",
+).singlepoint()
+assert gfn1.scc_converged
+assert np.isfinite(gfn1.energy)
+assert np.isfinite(gfn1.forces).all()
+print(f"xTBloom GFN1 CPU wheel smoke energy: {gfn1.energy:.16g}")
+
 # Exercise the repaired wheel's stable-ABI extension and its external
 # libtorch_cpu.so resolution on native aarch64 as well as x86_64.
 torch_positions = torch.tensor(

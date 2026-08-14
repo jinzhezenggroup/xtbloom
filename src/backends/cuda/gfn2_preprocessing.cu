@@ -258,6 +258,15 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   if (!epoch_disabled && !epoch_enabled) {
     return binding_failure(BindingError::kInvalidEpoch, BindingField::kEpoch);
   }
+  const bool admission_disabled = binding.admission.error == nullptr &&
+                                  binding.admission.error_elements == 0 &&
+                                  binding.admission.plan_token == 0u;
+  const bool admission_enabled = binding.admission.error_elements == 1 &&
+                                 binding.admission.plan_token == binding.plan_token &&
+                                 canonical_pointer(binding.admission.error, 1);
+  if (!admission_disabled && !admission_enabled) {
+    return binding_failure(BindingError::kInvalidExtent, BindingField::kActivity);
+  }
 
   const Gfn2GeometryDeviceBatch& geometry = binding.plan.geometry;
   const Gfn2IntegralDeviceBatch& integrals = binding.plan.integrals;
@@ -495,8 +504,8 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
         pairlist_capacity_products && pairlist.plan_token == binding.plan_token &&
         pairlist.batch_size == batch && pairlist.total_atoms == atoms &&
         pairlist.atom_offset_elements == batch + 1 &&
-        pairlist.atom_offsets == geometry.atom_offsets &&
-        pairlist.cutoff == kDefaultPairlistCutoffBohr && pairlist.max_cells_per_system > 0 &&
+        pairlist.atom_offsets == geometry.atom_offsets && std::isfinite(pairlist.cutoff) &&
+        pairlist.cutoff >= kDefaultPairlistCutoffBohr && pairlist.max_cells_per_system > 0 &&
         pairlist.max_neighbors_per_atom > 0 && pairlist.max_pairs_per_system > 0 &&
         (pairlist.mode == Gfn2PairListMode::kSparse || pairlist.mode == Gfn2PairListMode::kDense) &&
         (pairlist.flags & ~kGfn2PairListAllowDenseFallback) == 0u &&
@@ -596,7 +605,7 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
     }
   }
 
-  RangeList<40> reads;
+  RangeList<41> reads;
   RangeList<80> writes;
   const bool ranges_valid =
       reads.add(geometry.atom_offsets, batch + 1) && reads.add(geometry.pair_offsets, batch + 1) &&
@@ -618,6 +627,7 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       reads.add(aes2.dipole_kernel, atoms) && reads.add(aes2.quadrupole_kernel, atoms) &&
       reads.add(aes2.multipole_radius, atoms) && reads.add(aes2.multipole_valence_cn, atoms) &&
       reads.add(binding.input.positions, coordinates) &&
+      reads.add(binding.admission.error, binding.admission.error_elements) &&
       reads.add(binding.activity.requested_mask, batch) &&
       (!pairlist_enabled ||
        reads.add(binding.plan.pairlist.system_modes, binding.plan.pairlist.system_mode_elements)) &&
@@ -732,8 +742,10 @@ __device__ std::uint64_t load_geometry_generation(GeometryGenerationSource sourc
  * single-flight contract. Concurrent use still has no inference-level
  * ordering guarantee, but it cannot publish a duplicate or zero epoch. */
 __global__ void advance_geometry_epoch_kernel(Gfn2GeometryEpochDevice epoch,
+                                              Gfn2DeviceAdmission admission,
                                               std::uint32_t* plan_error) {
-  if (threadIdx.x != 0 || blockIdx.x != 0 || read_u32(plan_error) != 0u) {
+  if (threadIdx.x != 0 || blockIdx.x != 0 || !gfn2_request_admitted(admission) ||
+      read_u32(plan_error) != 0u) {
     return;
   }
   auto* const value = reinterpret_cast<unsigned long long*>(epoch.value);
@@ -1003,8 +1015,10 @@ __global__ void promote_sparse_coordination_kernel(Gfn2GeometryDeviceBatch geome
  */
 __global__ void initialize_committed_pairlist_metadata_kernel(Gfn2PairListDeviceBatch pairlist,
                                                               Gfn2PairListConsumerView committed,
+                                                              Gfn2DeviceAdmission admission,
                                                               const std::uint32_t* plan_error) {
-  if (atomicAdd(const_cast<std::uint32_t*>(plan_error), 0u) != 0u) {
+  if (!gfn2_request_admitted(admission) ||
+      atomicAdd(const_cast<std::uint32_t*>(plan_error), 0u) != 0u) {
     return;
   }
   const std::int64_t index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -1023,11 +1037,13 @@ __global__ void commit_pairlist_kernel(Gfn2PairListDeviceBatch pairlist,
                                        Gfn2PairListConsumerView committed,
                                        GeometryGenerationSource generation_source,
                                        Gfn2PreprocessingDeviceActivity activity,
+                                       Gfn2DeviceAdmission admission,
                                        const std::uint32_t* plan_error) {
   /* A plan-wide failure is transactional for every committed array.  In
    * particular, do not clear generations or eligibility after the metadata
    * initializer has already declined to run. */
-  if (atomicAdd(const_cast<std::uint32_t*>(plan_error), 0u) != 0u) {
+  if (!gfn2_request_admitted(admission) ||
+      atomicAdd(const_cast<std::uint32_t*>(plan_error), 0u) != 0u) {
     return;
   }
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
@@ -1127,8 +1143,10 @@ __global__ void publish_preprocessing_kernel(Gfn2PreprocessingDevicePlan plan,
                                              Gfn2PreprocessingDeviceOutput output,
                                              Gfn2PreprocessingDeviceWorkspace workspace,
                                              Gfn2PreprocessingDeviceDiagnostics diagnostics,
+                                             Gfn2DeviceAdmission admission,
                                              GeometryGenerationSource generation_source) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  if (!gfn2_request_admitted(admission)) return;
   const bool requested = activity.requested_mask[system] == 1u;
   const std::uint32_t geometry_error = diagnostics.geometry_system_errors[system];
   const std::uint32_t integral_error = diagnostics.integral_system_errors[system];
@@ -1286,7 +1304,7 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
   status = cudaMemsetAsync(binding.diagnostics.plan_error, 0, sizeof(std::uint32_t), stream);
   if (status != cudaSuccess) return launch_failure({}, status);
   if (advance_epoch) {
-    advance_geometry_epoch_kernel<<<1, 1, 0, stream>>>(binding.geometry_epoch,
+    advance_geometry_epoch_kernel<<<1, 1, 0, stream>>>(binding.geometry_epoch, binding.admission,
                                                        binding.diagnostics.plan_error);
     status = check_launch();
     if (status != cudaSuccess) return launch_failure({}, status);
@@ -1414,7 +1432,7 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
   if (status != cudaSuccess) return launch_failure({}, status);
   publish_preprocessing_kernel<<<static_cast<unsigned int>(batch), kThreadsPerBlock, 0, stream>>>(
       binding.plan, binding.activity, binding.output, binding.workspace, binding.diagnostics,
-      generation_source);
+      binding.admission, generation_source);
   status = check_launch();
   if (status != cudaSuccess) return launch_failure({}, status);
 
@@ -1427,12 +1445,12 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
     initialize_committed_pairlist_metadata_kernel<<<
         static_cast<unsigned int>((metadata_elements + kThreadsPerBlock - 1) / kThreadsPerBlock),
         kThreadsPerBlock, 0, stream>>>(binding.plan.pairlist, binding.output.pairlist,
-                                       binding.diagnostics.plan_error);
+                                       binding.admission, binding.diagnostics.plan_error);
     status = check_launch();
     if (status != cudaSuccess) return launch_failure({}, status);
     commit_pairlist_kernel<<<static_cast<unsigned int>(batch), kThreadsPerBlock, 0, stream>>>(
         binding.plan.pairlist, binding.workspace.pairlist_candidate, binding.output.pairlist,
-        generation_source, binding.activity, binding.diagnostics.plan_error);
+        generation_source, binding.activity, binding.admission, binding.diagnostics.plan_error);
     status = check_launch();
     if (status != cudaSuccess) return launch_failure({}, status);
   }

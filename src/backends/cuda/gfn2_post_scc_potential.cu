@@ -92,7 +92,7 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
     }
   }
 
-  std::array<AddressRange, 44> protected_ranges{};
+  std::array<AddressRange, 46> protected_ranges{};
   std::size_t count = 0u;
   auto append = [&](const void* pointer, std::int64_t elements, std::size_t element_size) {
     return count < protected_ranges.size() &&
@@ -104,6 +104,10 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
       !append(input.raw_atomic_charges, input.atom_elements, sizeof(double)) ||
       !append(input.raw_atomic_dipoles, input.dipole_elements, sizeof(double)) ||
       !append(input.raw_atomic_quadrupoles, input.quadrupole_elements, sizeof(double)) ||
+      !append(input.electric_field_potentials.atomic, input.electric_field_potentials.atom_elements,
+              sizeof(double)) ||
+      !append(input.electric_field_potentials.dipole,
+              input.electric_field_potentials.dipole_elements, sizeof(double)) ||
       !append(intermediates.es2_shell, intermediates.es2_shell_elements, sizeof(double)) ||
       !append(intermediates.es3_shell, intermediates.es3_shell_elements, sizeof(double)) ||
       !append(intermediates.aes2_atomic, intermediates.aes2_atomic_elements, sizeof(double)) ||
@@ -191,6 +195,20 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
     }
     return true;
   };
+  const auto no_public_overlap_pair_list = [&](const Gfn2PairListConsumerView& view) {
+    return no_public_overlap(view.pair_offsets, view.pair_offset_count, sizeof(std::int64_t)) &&
+           no_public_overlap(view.pairs, view.pair_count, sizeof(Gfn2AtomPair)) &&
+           no_public_overlap(view.pair_counts, view.pair_count_elements, sizeof(std::int64_t)) &&
+           no_public_overlap(view.neighbor_counts, view.neighbor_count_elements,
+                             sizeof(std::int64_t)) &&
+           no_public_overlap(view.neighbor_offsets, view.neighbor_offset_count,
+                             sizeof(std::int64_t)) &&
+           no_public_overlap(view.neighbors, view.neighbor_count, sizeof(std::int64_t)) &&
+           no_public_overlap(view.committed_generations, view.committed_generation_count,
+                             sizeof(std::uint64_t)) &&
+           no_public_overlap(view.eligible_mask, view.eligible_mask_count, sizeof(std::uint8_t)) &&
+           no_public_overlap(view.active_mask, view.active_mask_count, sizeof(std::uint8_t));
+  };
   const auto& batch = plan.potential_batch;
   if (!no_public_overlap(batch.atom_offsets, batch.atom_offset_count, sizeof(std::int64_t)) ||
       !no_public_overlap(batch.batch_shell_offsets, batch.batch_shell_offset_count,
@@ -248,10 +266,17 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
                           sizeof(Gfn2D4DeviceReferenceData)) ||
        !no_public_overlap(plan.d4_parameters.reference_c6, plan.d4_parameters.reference_c6_elements,
                           sizeof(double)) ||
-       !no_public_overlap(plan.d4_cache.pair_data, plan.d4_cache.pair_data_elements,
+       !no_public_overlap(plan.d4_cache.positions, plan.d4_cache.position_elements,
                           sizeof(double)) ||
        !no_public_overlap(plan.d4_cache.coordination_numbers, plan.d4_cache.coordination_elements,
-                          sizeof(double)))) {
+                          sizeof(double)) ||
+       !no_public_overlap(plan.d4_cache.coordination_generations,
+                          plan.d4_cache.coordination_generation_elements, sizeof(std::uint64_t)) ||
+       !no_public_overlap(plan.d4_cache.coordination_eligible_mask,
+                          plan.d4_cache.coordination_eligible_elements, sizeof(std::uint8_t)) ||
+       !no_public_overlap_pair_list(plan.d4_cache.coordination_pairs) ||
+       !no_public_overlap_pair_list(plan.d4_cache.two_body_pairs) ||
+       !no_public_overlap_pair_list(plan.d4_cache.atm_pairs))) {
     return false;
   }
   if (component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kExplicitPointCharge) &&
@@ -407,11 +432,32 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
         plan.d4_batch.batch_size != batch.batch_size ||
         plan.d4_batch.total_atoms != batch.total_atoms ||
         plan.d4_cache.plan_token != plan.plan_token ||
-        plan.d4_cache.geometry_generation != plan.geometry_generation ||
         intermediates.d4_atomic_elements != batch.total_atoms ||
         !aligned_pointer(intermediates.d4_atomic) ||
         workspace.d4.system_errors != workspace.stage_system_errors ||
         workspace.d4.system_error_elements != batch.batch_size) {
+      return false;
+    }
+    if (geometry != nullptr &&
+        (plan.d4_cache.coordination_generations != geometry->committed_generations ||
+         plan.d4_cache.coordination_eligible_mask != geometry->eligible_mask)) {
+      return false;
+    }
+    const cudaError_t d4_validation =
+        geometry == nullptr
+            ? validate_gfn2_d4_scc_potential_pairlist_cuda(
+                  plan.d4_batch, plan.d4_parameters, plan.geometry_generation, plan.d4_cache,
+                  input.raw_atomic_charges,
+                  Gfn2SccIterationDeviceActivity{workspace.active_mask, workspace.sequence_active,
+                                                 batch.batch_size, 1, plan.plan_token},
+                  intermediates.d4_atomic, workspace.d4, workspace.stage_device_error)
+            : validate_gfn2_d4_scc_potential_pairlist_cuda(
+                  plan.d4_batch, plan.d4_parameters, geometry->epoch, plan.d4_cache,
+                  input.raw_atomic_charges,
+                  Gfn2SccIterationDeviceActivity{workspace.active_mask, workspace.sequence_active,
+                                                 batch.batch_size, 1, plan.plan_token},
+                  intermediates.d4_atomic, workspace.d4, workspace.stage_device_error);
+    if (d4_validation != cudaSuccess) {
       return false;
     }
   }
@@ -438,6 +484,14 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
         !aligned_pointer(intermediates.periodic_atomic)) {
       return false;
     }
+  }
+
+  const auto& field = input.electric_field_potentials;
+  if (field.plan_token != 0u &&
+      (field.plan_token != plan.plan_token || field.atom_elements != batch.total_atoms ||
+       field.dipole_elements != batch.total_atoms * 3 || !aligned_pointer(field.atomic) ||
+       !aligned_pointer(field.dipole))) {
+    return false;
   }
 
   return public_results_are_disjoint(plan, input, results, intermediates, workspace, diagnostics,
@@ -674,10 +728,15 @@ static cudaError_t refresh_post_scc_potentials_impl(
     status = reset_gfn2_d4_device_errors_cuda(batch_size, workspace.stage_system_errors,
                                               workspace.stage_device_error, stream);
     if (status == cudaSuccess) {
-      status = evaluate_gfn2_d4_scc_potential_cuda(
-          plan.d4_batch, plan.d4_parameters, plan.d4_cache, plan.geometry_generation,
-          input.raw_atomic_charges, activity, intermediates.d4_atomic, workspace.d4,
-          workspace.stage_device_error, stream);
+      status = geometry == nullptr
+                   ? evaluate_gfn2_d4_scc_potential_pairlist_cuda(
+                         plan.d4_batch, plan.d4_parameters, plan.geometry_generation, plan.d4_cache,
+                         input.raw_atomic_charges, activity, intermediates.d4_atomic, workspace.d4,
+                         workspace.stage_device_error, stream)
+                   : evaluate_gfn2_d4_scc_potential_pairlist_cuda(
+                         plan.d4_batch, plan.d4_parameters, geometry->epoch, plan.d4_cache,
+                         input.raw_atomic_charges, activity, intermediates.d4_atomic, workspace.d4,
+                         workspace.stage_device_error, stream);
     }
     if (status == cudaSuccess) {
       status = merge_stage(Gfn2PostSccPotentialStage::kD4, false, nullptr);
@@ -730,6 +789,10 @@ static cudaError_t refresh_post_scc_potentials_impl(
     components.periodic_atomic_elements = intermediates.periodic_atomic_elements;
   }
   components.plan_token = plan.plan_token;
+  components.electric_field_atomic = input.electric_field_potentials.atomic;
+  components.electric_field_atomic_elements = input.electric_field_potentials.atom_elements;
+  components.electric_field_dipole = input.electric_field_potentials.dipole;
+  components.electric_field_dipole_elements = input.electric_field_potentials.dipole_elements;
 
   status = reset_gfn2_scc_potential_device_errors_cuda(batch_size, workspace.stage_system_errors,
                                                        workspace.stage_device_error, stream);

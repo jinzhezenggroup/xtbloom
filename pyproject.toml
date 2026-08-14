@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "xtbloom"
 dynamic = ["version"]
-description = "Batched CPU and GPU inference for GFN2-xTB through the public C ABI"
+description = "Batched GFN1/GFN2-xTB inference through the public C ABI"
 readme = { file = "python/README.md", content-type = "text/markdown" }
 license = "GPL-3.0-or-later"
 license-files = [
@@ -104,8 +104,8 @@ default-groups = ["typechecking"]
 provider = "scikit_build_core.metadata.setuptools_scm"
 
 [tool.setuptools_scm]
-version_scheme = "only-version"
-local_scheme = "no-local-version"
+version_scheme = "no-guess-dev"
+local_scheme = "node-and-date"
 
 [tool.setuptools_scm.tag]
 regex = '^v(?P<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))$'
@@ -135,6 +135,8 @@ sdist.include = [
   "cmake/3rdparty/torch-stable/**",
   "cmake/3rdparty/eigen_manifest.json",
   "cmake/3rdparty/scipy_openblas32_manifest.json",
+  "cmake/3rdparty/pyodide_openblas_manifest.json",
+  "cmake/3rdparty/pyodide-openblas/**",
   "LICENSES/eigen/**",
   "tools/eigen_dependency.py",
   "data/parameters/*_manifest.json",
@@ -160,8 +162,10 @@ sdist.exclude = [
   "skills/**",
   "tests/**",
   "tools/conformance/**",
+  "tools/check_benchmark_evidence_size.py",
   "tools/licensing/**",
   "tools/oracle/**",
+  "tools/scc_reuse/**",
   "web/**",
   ".clang-format",
   ".gitattributes",
@@ -213,9 +217,12 @@ build.requires = ["scipy-openblas32==0.3.34.0.0"]
 [tool.scikit-build.cmake.define]
 XTBLOOM_ENABLE_CUDA = { env = "XTBLOOM_ENABLE_CUDA", default = "AUTO" }
 XTBLOOM_BUNDLE_WHEEL_OPENBLAS = { env = "XTBLOOM_BUNDLE_WHEEL_OPENBLAS", default = "OFF" }
-# Ship optimized SASS for the main data-center/consumer generations plus
-# Blackwell instead of relying on nvcc's legacy default architecture/PTX JIT.
-CMAKE_CUDA_ARCHITECTURES = { env = "XTBLOOM_CUDA_ARCHITECTURES", default = "80;89;90;120" }
+# Compile for every major CUDA architecture generation the toolkit supports
+# (CMake's `all-major` keyword: one representative arch per computed-major
+# family), so wheels run on any NVIDIA GPU generation the build toolkit covers
+# with far less fat SASS than `all`. Set XTBLOOM_CUDA_ARCHITECTURES to a
+# narrower list to trade coverage for faster builds/smaller artifacts.
+CMAKE_CUDA_ARCHITECTURES = { env = "XTBLOOM_CUDA_ARCHITECTURES", default = "all-major" }
 # ccache compiler launchers: CI sets the XTBLOOM_*_COMPILER_LAUNCHER variables to
 # "ccache" (see ci.yml and wheels.yml) to reuse compiled C, C++, and CUDA
 # objects across runs. An empty default keeps local builds launcher-free when
@@ -232,8 +239,8 @@ CMAKE_CUDA_COMPILER_LAUNCHER = { env = "XTBLOOM_CUDA_COMPILER_LAUNCHER", default
 # also run the compiled Torch op against the separately installed official
 # runtime; Windows ARM64 and macOS x86_64 retain CPU-only tests because PyTorch
 # 2.10+ publishes no supported runtime wheels for those architectures. Pyodide
-# runs only its native import/version smoke until a production WASM eigensolver
-# provider exists.
+# 314.x repairs the reviewed official OpenBLAS side module into the wheel and
+# runs installed-wheel GFN2 conformance plus NumPy/SciPy coexistence.
 [tool.cibuildwheel]
 build = ["cp311-*"]
 # Use uv for the isolated build environment (via `build --installer=uv`) and
@@ -281,6 +288,16 @@ before-build = "bash {package}/python/ci/prepare-wheel-build.sh"
 # it defensively while also resolving and vendoring the reviewed private
 # OpenBLAS cohort.
 repair-wheel-command = "bash {package}/python/ci/repair-wheel.sh {dest_dir} {wheel}"
+
+[tool.cibuildwheel.pyodide]
+# The hook prepares the hash-pinned Pyodide 314.0.4 provider after cibuildwheel
+# installs its xbuildenv. auditwheel-emscripten then follows the adapter's
+# content-qualified NEEDED edge and writes relocation-safe runtime paths.
+before-build = "bash {package}/python/ci/prepare-wheel-build.sh"
+repair-wheel-command = "bash {package}/python/ci/repair-wheel.sh {dest_dir} {wheel}"
+# SciPy is a coexistence oracle only. It remains absent from project metadata
+# and proves both load orders against Pyodide's separately installed package.
+test-requires = ["scipy==1.18.0"]
 
 [tool.ruff]
 # Ruff owns both formatting and import ordering so those policies cannot drift.
@@ -336,6 +353,9 @@ banned-module-level-imports = ["torch"]
 # benchmarks/run.py appends a tools path to sys.path before importing
 # xtbloom_conformance/xtbloom_public_api; those imports cannot move to the top.
 "benchmarks/run.py" = ["E402"]
+# Test method names already state their focused contract; class/module
+# docstrings provide the surrounding scientific intent.
+"tests/parameters/test_gfn1*.py" = ["D102"]
 
 [tool.ty.src]
 # The ty-pre-commit hook checks the whole project with no positional paths, so

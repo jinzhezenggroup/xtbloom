@@ -2,6 +2,16 @@
 set -euo pipefail
 
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+
+if [[ ${CIBUILDWHEEL_BUILD_IDENTIFIER:-} == *-pyodide_wasm32 ]]; then
+  # cibuildwheel has already installed the reviewed Pyodide xbuildenv. Prepare
+  # the exact official OpenBLAS side module without installing native
+  # scipy-openblas32 into the host build environment.
+  exec python "$project_dir/python/ci/resolve-pyodide-openblas.py" \
+    --manifest "$project_dir/cmake/3rdparty/pyodide_openblas_manifest.json" \
+    --cache-dir "$project_dir/build/pyodide-openblas-provider"
+fi
+
 bash "$project_dir/python/ci/install-ccache.sh"
 
 # Keep the provenance-reviewed provider available after PEP 517's temporary

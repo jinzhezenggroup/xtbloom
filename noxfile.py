@@ -26,9 +26,13 @@ CPU_REQUIRED_TESTS = {
     "xtbloom.batch_validation",
     "xtbloom.c_api",
     "xtbloom.conformance.invariants_cpu",
+    "xtbloom.conformance.gfn1_invariants_cpu",
+    "xtbloom.conformance.gfn1_public_cpu",
+    "xtbloom.conformance.gfn1_spin2_public_cpu",
     "xtbloom.conformance.public_cpu",
     "xtbloom.cpu.public_inference",
     "xtbloom.gfn2.eigensolver",
+    "xtbloom.gfn1.public_inference",
     "xtbloom.runtime",
 }
 
@@ -290,6 +294,7 @@ def _run_python_tests(session: nox.Session) -> None:
         "benchmarks.test_natoms_scaling",
         "benchmarks.test_natoms_cross_engine",
         "benchmarks.test_dxtb_adapter",
+        "benchmarks.test_evidence_size",
         env=test_environment,
     )
 
@@ -311,7 +316,34 @@ def _run_canonical(session: nox.Session) -> None:
         "run",
         "--no-sync",
         "python",
+        "tools/parameters/generate_gfn1_d3.py",
+        "--check",
+    )
+    _run(
+        session,
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "tools/parameters/generate_gfn1.py",
+        "--check",
+    )
+    _run(
+        session,
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
         "tools/conformance/xtbloom_conformance.py",
+        "check",
+    )
+    _run(
+        session,
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "tools/conformance/gfn1_conformance.py",
         "check",
     )
     _run(
@@ -390,11 +422,13 @@ def _run_package(session: nox.Session) -> None:
         mode="cpu",
     )
 
+    runtime = _resolve_cpu_linalg(session)
     static_dir = BUILD_ROOT / "cpu-static"
     _configure(
         session,
         static_dir,
         "-DXTBLOOM_ENABLE_CUDA=OFF",
+        f"-DXTBLOOM_CPU_LINALG_LIBRARY={runtime}",
         "-DXTBLOOM_BUILD_TESTS=OFF",
         "-DBUILD_SHARED_LIBS=OFF",
         "-DCMAKE_BUILD_TYPE=Release",
@@ -405,7 +439,7 @@ def _run_package(session: nox.Session) -> None:
         build_dir=static_dir,
         install_dir=BUILD_ROOT / "cpu-static-install",
         consumer_dir=BUILD_ROOT / "cpu-static-consumer",
-        mode="smoke",
+        mode="cpu",
     )
 
     dist_dir = BUILD_ROOT / "dist-license"

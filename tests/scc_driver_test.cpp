@@ -1979,6 +1979,27 @@ int test_component_chemistry_and_layout_mismatches_are_rejected() {
   CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, hc.es2, ch.es3, ch.aes2, ch.eigensolver,
                              ch.mixer, 5u, 0.0, output, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == sentinel_identity);
+
+  /* Hold every ES2 topology and hardness byte fixed while changing only the
+   * model-owned averaging selector. A harmonic GFN1-style plan must never be
+   * accepted as the canonical arithmetic GFN2 component. */
+  ES2Plan harmonic_es2;
+  CHECK(make_es2_plan_from_shell_hardness(ch.basis, ES2HardnessAverage::kHarmonic,
+                                          ch.es2.shell_hardness().data(), ch.es2.total_shells(),
+                                          harmonic_es2, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(harmonic_es2.atom_offsets() == ch.es2.atom_offsets());
+  CHECK(harmonic_es2.batch_shell_offsets() == ch.es2.batch_shell_offsets());
+  CHECK(harmonic_es2.atom_shell_offsets() == ch.es2.atom_shell_offsets());
+  CHECK(harmonic_es2.matrix_offsets() == ch.es2.matrix_offsets());
+  CHECK(harmonic_es2.shell_to_atom() == ch.es2.shell_to_atom());
+  CHECK(harmonic_es2.shell_hardness() == ch.es2.shell_hardness());
+  CHECK(harmonic_es2.hardness_average() == ES2HardnessAverage::kHarmonic);
+  CHECK(ch.es2.hardness_average() == ES2HardnessAverage::kArithmetic);
+  CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, harmonic_es2, ch.es3, ch.aes2,
+                             ch.eigensolver, ch.mixer, 5u, 0.0, output,
+                             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(output.identity() == sentinel_identity);
+
   CHECK(make_scc_driver_plan(ch.wavefunction, ch.mulliken, ch.es2, hc.es3, ch.aes2, ch.eigensolver,
                              ch.mixer, 5u, 0.0, output, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(output.identity() == sentinel_identity);

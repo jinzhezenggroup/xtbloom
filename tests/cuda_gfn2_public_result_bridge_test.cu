@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "backends/cuda/gfn2_device_admission.cuh"
 #include "backends/cuda/gfn2_public_result_bridge.cuh"
 
 namespace {
@@ -27,6 +28,11 @@ using xtbloom::detail::cuda::Gfn2PublicResultBridgeError;
 using xtbloom::detail::cuda::Gfn2PublicResultBridgeHostBuffer;
 using xtbloom::detail::cuda::Gfn2PublicResultBridgeHostStaging;
 using xtbloom::detail::cuda::Gfn2PublicResultRoute;
+using xtbloom::detail::cuda::kGfn2RequestErrorInvalid;
+using xtbloom::detail::cuda::kGfn2RequestErrorNotImplemented;
+using xtbloom::detail::cuda::kGfn2RequestErrorNotSupported;
+using xtbloom::detail::cuda::kGfn2RequestErrorTopologyMismatch;
+using xtbloom::detail::cuda::kGfn2RequestErrorWarmIncompatible;
 using xtbloom::detail::cuda::prepare_gfn2_public_results_cuda;
 
 #define CHECK(condition)                                                                           \
@@ -46,9 +52,9 @@ constexpr std::int32_t kIterationSentinel = -123456789;
 constexpr std::uint8_t kConvergedSentinel = UINT8_C(0xa5);
 constexpr xtbloom_status_t kStatusSentinel = INT32_C(0x5a5a5a5a);
 constexpr std::uint32_t kFlagsSentinel = UINT32_C(0xc35aa53c);
-constexpr std::uint32_t kAllProperties = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
-                                         XTBLOOM_COMPUTE_ATOMIC_CHARGES |
-                                         XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+constexpr std::uint32_t kAllProperties =
+    XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
+    XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
 
 __global__ void hold_result_stream_kernel(unsigned long long clock_cycles) {
   if (blockIdx.x != 0 || threadIdx.x != 0) return;
@@ -155,10 +161,11 @@ enum Field : std::size_t {
   kForces = 1,
   kCharges = 2,
   kPointForces = 3,
-  kIterations = 4,
-  kConverged = 5,
-  kStatuses = 6,
-  kFieldCount = 7,
+  kDipoles = 4,
+  kIterations = 5,
+  kConverged = 6,
+  kStatuses = 7,
+  kFieldCount = 8,
 };
 
 struct Fixture {
@@ -175,6 +182,7 @@ struct Fixture {
   std::vector<double> host_forces;
   std::vector<double> host_charges;
   std::vector<double> host_point_forces;
+  std::vector<double> host_dipoles;
   std::vector<std::int32_t> host_iterations;
   std::vector<std::uint8_t> host_converged;
   std::vector<xtbloom_status_t> host_statuses;
@@ -183,6 +191,7 @@ struct Fixture {
   DeviceBuffer<double> internal_forces;
   DeviceBuffer<double> internal_charges;
   DeviceBuffer<double> internal_point_forces;
+  DeviceBuffer<double> internal_dipoles;
   DeviceBuffer<std::int32_t> internal_iterations;
   DeviceBuffer<std::uint8_t> internal_converged;
   DeviceBuffer<xtbloom_status_t> internal_statuses;
@@ -195,6 +204,7 @@ struct Fixture {
   DeviceBuffer<double> shadow_forces;
   DeviceBuffer<double> shadow_charges;
   DeviceBuffer<double> shadow_point_forces;
+  DeviceBuffer<double> shadow_dipoles;
   DeviceBuffer<std::int32_t> shadow_iterations;
   DeviceBuffer<std::uint8_t> shadow_converged;
   DeviceBuffer<xtbloom_status_t> shadow_statuses;
@@ -203,6 +213,7 @@ struct Fixture {
   DeviceBuffer<double> output_forces;
   DeviceBuffer<double> output_charges;
   DeviceBuffer<double> output_point_forces;
+  DeviceBuffer<double> output_dipoles;
   DeviceBuffer<std::int32_t> output_iterations;
   DeviceBuffer<std::uint8_t> output_converged;
   DeviceBuffer<xtbloom_status_t> output_statuses;
@@ -212,6 +223,7 @@ struct Fixture {
   PinnedBuffer<double> staging_forces;
   PinnedBuffer<double> staging_charges;
   PinnedBuffer<double> staging_point_forces;
+  PinnedBuffer<double> staging_dipoles;
   PinnedBuffer<std::int32_t> staging_iterations;
   PinnedBuffer<std::uint8_t> staging_converged;
   PinnedBuffer<xtbloom_status_t> staging_statuses;
@@ -248,6 +260,7 @@ struct Fixture {
     if (requested(XTBLOOM_COMPUTE_POINT_CHARGE_FORCES)) {
       host_point_forces.resize(3 * total_points);
     }
+    if (requested(XTBLOOM_COMPUTE_DIPOLE_MOMENTS)) host_dipoles.resize(3 * batch_size);
     host_iterations.resize(batch_size);
     host_converged.resize(batch_size);
     host_statuses.resize(batch_size);
@@ -263,6 +276,9 @@ struct Fixture {
     }
     for (std::size_t index = 0; index < host_point_forces.size(); ++index) {
       host_point_forces[index] = -0.002 * static_cast<double>(index + 1u);
+    }
+    for (std::size_t index = 0; index < host_dipoles.size(); ++index) {
+      host_dipoles[index] = 0.15 - 0.007 * static_cast<double>(index);
     }
     for (std::int64_t system = 0; system < batch_size; ++system) {
       host_iterations[static_cast<std::size_t>(system)] =
@@ -291,6 +307,9 @@ struct Fixture {
             host_point_forces.begin() + 3 * point_offsets[static_cast<std::size_t>(failed + 1)],
             nan);
       }
+      if (!host_dipoles.empty()) {
+        std::fill(host_dipoles.begin() + 3 * failed, host_dipoles.begin() + 3 * (failed + 1), nan);
+      }
       host_converged[static_cast<std::size_t>(failed)] = 0u;
       host_statuses[static_cast<std::size_t>(failed)] = XTBLOOM_STATUS_SCC_NOT_CONVERGED;
     }
@@ -302,6 +321,7 @@ struct Fixture {
         internal_forces.allocate(host_forces.size()) &&
         internal_charges.allocate(host_charges.size()) &&
         internal_point_forces.allocate(host_point_forces.size()) &&
+        internal_dipoles.allocate(host_dipoles.size()) &&
         internal_iterations.allocate(host_iterations.size()) &&
         internal_converged.allocate(host_converged.size()) &&
         internal_statuses.allocate(host_statuses.size()) && publication_plan_error.allocate(1) &&
@@ -310,6 +330,7 @@ struct Fixture {
         shadow_forces.allocate(host_forces.size()) &&
         shadow_charges.allocate(host_charges.size()) &&
         shadow_point_forces.allocate(host_point_forces.size()) &&
+        shadow_dipoles.allocate(host_dipoles.size()) &&
         shadow_iterations.allocate(host_iterations.size()) &&
         shadow_converged.allocate(host_converged.size()) &&
         shadow_statuses.allocate(host_statuses.size()) &&
@@ -317,6 +338,7 @@ struct Fixture {
         output_forces.allocate(atom_coordinates) &&
         output_charges.allocate(static_cast<std::size_t>(total_atoms)) &&
         output_point_forces.allocate(point_coordinates) &&
+        output_dipoles.allocate(static_cast<std::size_t>(3 * batch_size)) &&
         output_iterations.allocate(static_cast<std::size_t>(batch_size)) &&
         output_converged.allocate(static_cast<std::size_t>(batch_size)) &&
         output_statuses.allocate(static_cast<std::size_t>(batch_size)) &&
@@ -325,6 +347,7 @@ struct Fixture {
         staging_forces.allocate(atom_coordinates) &&
         staging_charges.allocate(static_cast<std::size_t>(total_atoms)) &&
         staging_point_forces.allocate(point_coordinates) &&
+        staging_dipoles.allocate(static_cast<std::size_t>(3 * batch_size)) &&
         staging_iterations.allocate(static_cast<std::size_t>(batch_size)) &&
         staging_converged.allocate(static_cast<std::size_t>(batch_size)) &&
         staging_statuses.allocate(static_cast<std::size_t>(batch_size)) &&
@@ -334,7 +357,7 @@ struct Fixture {
     if (!internal_energies.upload(host_energies) || !internal_forces.upload(host_forces) ||
         !internal_charges.upload(host_charges) ||
         !internal_point_forces.upload(host_point_forces) ||
-        !internal_iterations.upload(host_iterations) ||
+        !internal_dipoles.upload(host_dipoles) || !internal_iterations.upload(host_iterations) ||
         !internal_converged.upload(host_converged) || !internal_statuses.upload(host_statuses) ||
         !request_topology_error.upload(std::vector<std::uint32_t>{0u}) ||
         !set_control_values(0u, 37u, 37u) || !reset_outputs()) {
@@ -343,6 +366,9 @@ struct Fixture {
 
     plan.requested_properties = flags;
     plan.result_flags = XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES;
+    if (requested(XTBLOOM_COMPUTE_DIPOLE_MOMENTS)) {
+      plan.result_flags |= XTBLOOM_RESULT_DIPOLE_MOMENTS;
+    }
     plan.plan_token = kPlanToken;
     plan.batch_size = batch_size;
     plan.total_atoms = total_atoms;
@@ -365,6 +391,8 @@ struct Fixture {
     input.publication_epoch_snapshot = publication_epoch.get();
     input.current_geometry_epoch = current_epoch.get();
     input.plan_token = kPlanToken;
+    input.dipole_moments = internal_dipoles.get();
+    input.dipole_moment_elements = static_cast<std::int64_t>(host_dipoles.size());
 
     device_staging.energies = shadow_energies.get();
     device_staging.energy_elements = static_cast<std::int64_t>(host_energies.size());
@@ -379,6 +407,8 @@ struct Fixture {
     device_staging.system_statuses = shadow_statuses.get();
     device_staging.batch_elements = batch_size;
     device_staging.plan_token = kPlanToken;
+    device_staging.dipole_moments = shadow_dipoles.get();
+    device_staging.dipole_moment_elements = static_cast<std::int64_t>(host_dipoles.size());
 
     staging.control = host_control.get();
     staging.control_elements = 1;
@@ -404,14 +434,14 @@ struct Fixture {
     control_sentinel.plan_token = UINT64_MAX;
     if (!output_energies.fill(kDoubleSentinel) || !output_forces.fill(kDoubleSentinel) ||
         !output_charges.fill(kDoubleSentinel) || !output_point_forces.fill(kDoubleSentinel) ||
-        !output_iterations.fill(kIterationSentinel) || !output_converged.fill(kConvergedSentinel) ||
-        !output_statuses.fill(kStatusSentinel)) {
+        !output_dipoles.fill(kDoubleSentinel) || !output_iterations.fill(kIterationSentinel) ||
+        !output_converged.fill(kConvergedSentinel) || !output_statuses.fill(kStatusSentinel)) {
       return false;
     }
     if (!shadow_energies.fill(kDoubleSentinel) || !shadow_forces.fill(kDoubleSentinel) ||
         !shadow_charges.fill(kDoubleSentinel) || !shadow_point_forces.fill(kDoubleSentinel) ||
-        !shadow_iterations.fill(kIterationSentinel) || !shadow_converged.fill(kConvergedSentinel) ||
-        !shadow_statuses.fill(kStatusSentinel)) {
+        !shadow_dipoles.fill(kDoubleSentinel) || !shadow_iterations.fill(kIterationSentinel) ||
+        !shadow_converged.fill(kConvergedSentinel) || !shadow_statuses.fill(kStatusSentinel)) {
       return false;
     }
     if (!device_control.fill(control_sentinel)) return false;
@@ -419,6 +449,7 @@ struct Fixture {
     staging_forces.fill(kDoubleSentinel);
     staging_charges.fill(kDoubleSentinel);
     staging_point_forces.fill(kDoubleSentinel);
+    staging_dipoles.fill(kDoubleSentinel);
     staging_iterations.fill(kIterationSentinel);
     staging_converged.fill(kConvergedSentinel);
     staging_statuses.fill(kStatusSentinel);
@@ -474,6 +505,12 @@ struct Fixture {
     } else {
       bind_absent(destinations.point_forces, staging.point_forces);
     }
+    if (requested(XTBLOOM_COMPUTE_DIPOLE_MOMENTS)) {
+      bind_field(destinations.dipole_moments, staging.dipole_moments, routes[kDipoles],
+                 3 * batch_size, output_dipoles, staging_dipoles);
+    } else {
+      bind_absent(destinations.dipole_moments, staging.dipole_moments);
+    }
     bind_field(destinations.iterations, staging.iterations, routes[kIterations], batch_size,
                output_iterations, staging_iterations);
     bind_field(destinations.converged, staging.converged, routes[kConverged], batch_size,
@@ -518,6 +555,8 @@ struct Fixture {
                               kDoubleSentinel));
     CHECK(verify_routed_field(kPointForces, host_point_forces, output_point_forces,
                               staging_point_forces, kDoubleSentinel));
+    CHECK(verify_routed_field(kDipoles, host_dipoles, output_dipoles, staging_dipoles,
+                              kDoubleSentinel));
     CHECK(verify_routed_field(kIterations, host_iterations, output_iterations, staging_iterations,
                               kIterationSentinel));
     CHECK(verify_routed_field(kConverged, host_converged, output_converged, staging_converged,
@@ -532,6 +571,7 @@ struct Fixture {
            bit_equal(shadow_forces.download(), host_forces) &&
            bit_equal(shadow_charges.download(), host_charges) &&
            bit_equal(shadow_point_forces.download(), host_point_forces) &&
+           bit_equal(shadow_dipoles.download(), host_dipoles) &&
            bit_equal(shadow_iterations.download(), host_iterations) &&
            bit_equal(shadow_converged.download(), host_converged) &&
            bit_equal(shadow_statuses.download(), host_statuses);
@@ -542,6 +582,7 @@ struct Fixture {
            all_equal(output_forces.download(), kDoubleSentinel) &&
            all_equal(output_charges.download(), kDoubleSentinel) &&
            all_equal(output_point_forces.download(), kDoubleSentinel) &&
+           all_equal(output_dipoles.download(), kDoubleSentinel) &&
            all_equal(output_iterations.download(), kIterationSentinel) &&
            all_equal(output_converged.download(), kConvergedSentinel) &&
            all_equal(output_statuses.download(), kStatusSentinel);
@@ -575,13 +616,13 @@ bool run_success_case(std::int64_t batch,
 
 template <typename Mutator>
 bool run_aggregate_failure(Mutator&& mutate, Gfn2PublicResultBridgeError expected_error,
-                           cudaStream_t stream) {
+                           cudaStream_t stream, bool exercise_commit = false) {
   Fixture fixture(8, kAllProperties);
   CHECK(fixture.initialize());
   fixture.configure({Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
                      Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
                      Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
-                     Gfn2PublicResultRoute::kHost});
+                     Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice});
   CHECK(mutate(fixture));
 
   std::vector<double> host_caller_energy(static_cast<std::size_t>(fixture.batch_size),
@@ -597,6 +638,10 @@ bool run_aggregate_failure(Mutator&& mutate, Gfn2PublicResultBridgeError expecte
   CUDA_CHECK(prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
                                               fixture.destinations, fixture.staging,
                                               fixture.diagnostics, stream));
+  if (exercise_commit) {
+    CUDA_CHECK(commit_gfn2_public_results_cuda(fixture.plan, fixture.device_staging,
+                                               fixture.destinations, fixture.diagnostics, stream));
+  }
   CUDA_CHECK(cudaStreamSynchronize(stream));
   if (fixture.host_control.get()->aggregate_error ==
       static_cast<std::uint32_t>(Gfn2PublicResultBridgeError::kSuccess)) {
@@ -618,6 +663,23 @@ bool run_aggregate_failure(Mutator&& mutate, Gfn2PublicResultBridgeError expecte
   return true;
 }
 
+bool set_aggregate_status_failure(Fixture& fixture) {
+  fixture.host_statuses[0] = XTBLOOM_STATUS_INTERNAL_ERROR;
+  return fixture.internal_statuses.upload(fixture.host_statuses);
+}
+
+bool set_request_error(Fixture& fixture, std::uint32_t request_error) {
+  return fixture.request_topology_error.upload(std::vector<std::uint32_t>{request_error});
+}
+
+/* Inject every failure below the request gate so each known request code has
+ * to win against publication, availability, epoch, and aggregate failures. */
+bool set_request_priority_failures(Fixture& fixture, std::uint32_t request_error) {
+  fixture.plan.requested_properties |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+  return set_request_error(fixture, request_error) && fixture.set_control_values(73u, 36u, 37u) &&
+         set_aggregate_status_failure(fixture);
+}
+
 bool test_success_matrix(cudaStream_t stream) {
   CHECK(run_success_case(1, uniform_routes(Gfn2PublicResultRoute::kHost), stream));
   CHECK(run_success_case(8, uniform_routes(Gfn2PublicResultRoute::kCudaDevice), stream));
@@ -625,62 +687,120 @@ bool test_success_matrix(cudaStream_t stream) {
                          {Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
                           Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
                           Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
-                          Gfn2PublicResultRoute::kHost},
+                          Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice},
                          stream));
   CHECK(run_success_case(128,
                          {Gfn2PublicResultRoute::kCudaDevice, Gfn2PublicResultRoute::kHost,
                           Gfn2PublicResultRoute::kCudaDevice, Gfn2PublicResultRoute::kHost,
                           Gfn2PublicResultRoute::kCudaDevice, Gfn2PublicResultRoute::kHost,
-                          Gfn2PublicResultRoute::kCudaDevice},
+                          Gfn2PublicResultRoute::kCudaDevice, Gfn2PublicResultRoute::kHost},
                          stream));
   return true;
 }
 
-bool test_aggregate_gate(cudaStream_t stream) {
+bool test_preflight_priority_matrix(cudaStream_t stream) {
+  /* Static binding contract > request > publication plan > epoch > aggregate
+   * system status. */
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
         fixture.input.plan_token ^= UINT64_C(1);
-        return true;
+        return set_request_priority_failures(fixture, kGfn2RequestErrorTopologyMismatch);
       },
-      Gfn2PublicResultBridgeError::kPlanTokenMismatch, stream));
-  CHECK(run_aggregate_failure(
-      [](Fixture& fixture) { return fixture.set_control_values(73u, 37u, 37u); },
-      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream));
+      Gfn2PublicResultBridgeError::kPlanTokenMismatch, stream, true));
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
-        return fixture.request_topology_error.upload(std::vector<std::uint32_t>{1u});
+        fixture.plan.abi_version += 1u;
+        return set_request_priority_failures(fixture, kGfn2RequestErrorTopologyMismatch);
       },
-      Gfn2PublicResultBridgeError::kRequestTopologyMismatch, stream));
+      Gfn2PublicResultBridgeError::kInvalidAbiVersion, stream));
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
-        fixture.host_statuses[0] = XTBLOOM_STATUS_INTERNAL_ERROR;
-        return fixture.internal_statuses.upload(fixture.host_statuses);
-      },
-      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream));
-  CHECK(run_aggregate_failure(
-      [](Fixture& fixture) { return fixture.set_control_values(0u, 36u, 37u); },
-      Gfn2PublicResultBridgeError::kInvalidEpoch, stream));
-  CHECK(
-      run_aggregate_failure([](Fixture& fixture) { return fixture.set_control_values(0u, 0u, 0u); },
-                            Gfn2PublicResultBridgeError::kInvalidEpoch, stream));
-  CHECK(run_aggregate_failure(
-      [](Fixture& fixture) {
-        fixture.input.energy_elements -= 1;
+        fixture.input.dipole_moment_elements -= 1;
         return true;
       },
       Gfn2PublicResultBridgeError::kInvalidExtents, stream));
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
         fixture.plan.requested_properties |= UINT32_C(1) << 29;
-        return true;
+        return set_request_priority_failures(fixture, kGfn2RequestErrorTopologyMismatch);
       },
       Gfn2PublicResultBridgeError::kInvalidFlags, stream));
   CHECK(run_aggregate_failure(
       [](Fixture& fixture) {
+        fixture.input.energy_elements -= 1;
+        return set_request_priority_failures(fixture, kGfn2RequestErrorTopologyMismatch);
+      },
+      Gfn2PublicResultBridgeError::kInvalidExtents, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
         fixture.destinations.energies.elements += 1;
+        return set_request_priority_failures(fixture, kGfn2RequestErrorTopologyMismatch);
+      },
+      Gfn2PublicResultBridgeError::kInvalidDestinations, stream));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        fixture.destinations.dipole_moments.elements += 1;
         return true;
       },
       Gfn2PublicResultBridgeError::kInvalidDestinations, stream));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        fixture.plan.result_flags &= ~static_cast<std::uint32_t>(XTBLOOM_RESULT_DIPOLE_MOMENTS);
+        return true;
+      },
+      Gfn2PublicResultBridgeError::kInvalidFlags, stream));
+
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        return set_request_priority_failures(fixture, kGfn2RequestErrorTopologyMismatch);
+      },
+      Gfn2PublicResultBridgeError::kRequestTopologyMismatch, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        return set_request_priority_failures(fixture, kGfn2RequestErrorNotImplemented);
+      },
+      Gfn2PublicResultBridgeError::kRequestNotImplemented, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        return set_request_priority_failures(fixture, kGfn2RequestErrorNotSupported);
+      },
+      Gfn2PublicResultBridgeError::kRequestNotSupported, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        return set_request_priority_failures(fixture, kGfn2RequestErrorInvalid);
+      },
+      Gfn2PublicResultBridgeError::kRequestInvalidArgument, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        return set_request_priority_failures(fixture, kGfn2RequestErrorWarmIncompatible);
+      },
+      Gfn2PublicResultBridgeError::kRequestWarmIncompatible, stream, true));
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) { return set_request_priority_failures(fixture, 99u); },
+      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream, true));
+
+  /* Publication-plan diagnostics precede epoch and aggregate status. */
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        return fixture.set_control_values(73u, 36u, 37u) && set_aggregate_status_failure(fixture);
+      },
+      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream, true));
+
+  /* Epoch validation precedes the final aggregate-status scan. */
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) {
+        return fixture.set_control_values(0u, 36u, 37u) && set_aggregate_status_failure(fixture);
+      },
+      Gfn2PublicResultBridgeError::kInvalidEpoch, stream, true));
+
+  /* Aggregate status is the terminal gate once every earlier contract passes. */
+  CHECK(run_aggregate_failure(
+      [](Fixture& fixture) { return set_aggregate_status_failure(fixture); },
+      Gfn2PublicResultBridgeError::kInternalPublicationFailure, stream, true));
+
+  CHECK(
+      run_aggregate_failure([](Fixture& fixture) { return fixture.set_control_values(0u, 0u, 0u); },
+                            Gfn2PublicResultBridgeError::kInvalidEpoch, stream, true));
   return true;
 }
 
@@ -689,8 +809,8 @@ bool test_unrequested_outputs(cudaStream_t stream) {
   CHECK(fixture.initialize());
   fixture.configure({Gfn2PublicResultRoute::kCudaDevice, Gfn2PublicResultRoute::kAbsent,
                      Gfn2PublicResultRoute::kAbsent, Gfn2PublicResultRoute::kAbsent,
-                     Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
-                     Gfn2PublicResultRoute::kHost});
+                     Gfn2PublicResultRoute::kAbsent, Gfn2PublicResultRoute::kHost,
+                     Gfn2PublicResultRoute::kCudaDevice, Gfn2PublicResultRoute::kHost});
   CUDA_CHECK(prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
                                               fixture.destinations, fixture.staging,
                                               fixture.diagnostics, stream));
@@ -703,6 +823,7 @@ bool test_unrequested_outputs(cudaStream_t stream) {
   CHECK(all_equal(fixture.output_forces.download(), kDoubleSentinel));
   CHECK(all_equal(fixture.output_charges.download(), kDoubleSentinel));
   CHECK(all_equal(fixture.output_point_forces.download(), kDoubleSentinel));
+  CHECK(all_equal(fixture.output_dipoles.download(), kDoubleSentinel));
   return true;
 }
 
@@ -727,13 +848,11 @@ bool test_prepare_submission_precedes_host_acceptance(cudaStream_t stream) {
   CHECK(query_status == cudaErrorNotReady || query_status == cudaSuccess);
 
   /* Submission owns the pending flag image immediately, but the downloaded
-   * aggregate is not host-readable as an acceptance decision until the owner
-   * observes stream completion. Instrumented CUDA runtimes may serialize the
-   * delay; in an ordinary run the not-ready branch proves that separation. */
+   * aggregate is not an acceptance decision until the owner observes stream
+   * completion. The control transfer can finish immediately before a not-ready
+   * query observes a later queued operation, especially under instrumentation,
+   * so its bytes must not be interpreted until the synchronization below. */
   CHECK(*fixture.pending_flags.get() == fixture.plan.result_flags);
-  if (query_status == cudaErrorNotReady) {
-    CHECK(fixture.host_control.get()->aggregate_error == UINT32_MAX);
-  }
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(fixture.host_control.get()->aggregate_error ==
@@ -743,13 +862,33 @@ bool test_prepare_submission_precedes_host_acceptance(cudaStream_t stream) {
   return true;
 }
 
+bool test_dipole_aliases_are_rejected(cudaStream_t stream) {
+  Fixture fixture(8, kAllProperties);
+  CHECK(fixture.initialize());
+  fixture.configure(uniform_routes(Gfn2PublicResultRoute::kCudaDevice));
+
+  /* Internal inputs, the sealed shadow image, and caller destinations are
+   * distinct transaction phases. Aliasing any two would allow publication to
+   * overwrite unread source bytes or bypass the aggregate commit gate. */
+  fixture.device_staging.dipole_moments = const_cast<double*>(fixture.input.dipole_moments);
+  CHECK(prepare_gfn2_public_results_cuda(fixture.plan, fixture.input, fixture.device_staging,
+                                         fixture.destinations, fixture.staging, fixture.diagnostics,
+                                         stream) == cudaErrorInvalidValue);
+
+  fixture.device_staging.dipole_moments = fixture.shadow_dipoles.get();
+  fixture.destinations.dipole_moments.device_data = fixture.shadow_dipoles.get();
+  CHECK(commit_gfn2_public_results_cuda(fixture.plan, fixture.device_staging, fixture.destinations,
+                                        fixture.diagnostics, stream) == cudaErrorInvalidValue);
+  return true;
+}
+
 bool test_staging_enqueue_failure_precedes_device_writes(cudaStream_t stream) {
   Fixture fixture(8, kAllProperties);
   CHECK(fixture.initialize());
   fixture.configure({Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
                      Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
                      Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice,
-                     Gfn2PublicResultRoute::kHost});
+                     Gfn2PublicResultRoute::kHost, Gfn2PublicResultRoute::kCudaDevice});
 
   /*
    * The binding is structurally aligned and logically sealed, but starts one
@@ -789,9 +928,10 @@ int main(int argc, char** argv) {
   cudaStream_t stream = nullptr;
   if (cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking) != cudaSuccess) return 1;
   const bool success =
-      test_success_matrix(stream) && test_aggregate_gate(stream) &&
+      test_success_matrix(stream) && test_preflight_priority_matrix(stream) &&
       test_unrequested_outputs(stream) &&
       test_prepare_submission_precedes_host_acceptance(stream) &&
+      test_dipole_aliases_are_rejected(stream) &&
       (skip_expected_api_error || test_staging_enqueue_failure_precedes_device_writes(stream));
   const cudaError_t destroy_status = cudaStreamDestroy(stream);
   return success && destroy_status == cudaSuccess ? 0 : 1;

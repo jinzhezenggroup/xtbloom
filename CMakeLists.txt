@@ -344,16 +344,17 @@ function(xtbloom_validate_cpu_linalg_runtime candidate result symbol_prefix_resu
   endif()
 endfunction()
 
-# Native wheels carry a reviewed private OpenBLAS cohort rather than requiring
-# end users to install scipy-openblas32. The provider package exists only in
-# the isolated PEP 517 build environment; this configure-time step verifies
-# every redistributed byte without importing its side-effectful Python module.
-# Linux uses a private shim so auditwheel follows and collision-renames the ELF
-# dependency closure. macOS and Windows copy the already self-contained native
-# cohort under xTBloom-private names and load it only by absolute sibling path.
+# Wheels carry a reviewed private OpenBLAS cohort rather than requiring an end
+# user provider. Native builds use scipy-openblas32 from the isolated PEP 517
+# environment. Pyodide uses the exact official 314.0.4 WebAssembly artifact and
+# a narrow LAPACKE adapter; its retained recipe and libf2c source closure are
+# verified before CMake accepts the binary. Linux uses a private shim so
+# auditwheel follows and collision-renames the ELF dependency closure. macOS
+# and Windows copy the already self-contained native cohort under private names.
 set(XTBLOOM_WHEEL_OPENBLAS OFF)
 set(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM OFF)
 set(XTBLOOM_WHEEL_OPENBLAS_DESKTOP OFF)
+set(XTBLOOM_WHEEL_OPENBLAS_PYODIDE OFF)
 if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS AND NOT XTBLOOM_PYTHON_WHEEL)
   message(FATAL_ERROR
     "XTBLOOM_BUNDLE_WHEEL_OPENBLAS requires XTBLOOM_PYTHON_WHEEL=ON")
@@ -366,7 +367,10 @@ if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS)
   endif()
 
   string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" xtbloom_wheel_processor)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(XTBLOOM_WHEEL_OPENBLAS_PLATFORM pyodide)
+    set(XTBLOOM_WHEEL_OPENBLAS_ARCH wasm32)
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(XTBLOOM_WHEEL_OPENBLAS_PLATFORM linux)
     if(xtbloom_wheel_processor MATCHES "^(x86_64|amd64)$")
       set(XTBLOOM_WHEEL_OPENBLAS_ARCH x86_64)
@@ -431,22 +435,38 @@ if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS)
   endif()
 
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
-  set(XTBLOOM_OPENBLAS_PROVENANCE
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/scipy_openblas32_manifest.json")
-  execute_process(
-    COMMAND "${Python3_EXECUTABLE}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/python/ci/resolve-openblas-wheel.py"
-      --manifest "${XTBLOOM_OPENBLAS_PROVENANCE}"
-      --platform "${XTBLOOM_WHEEL_OPENBLAS_PLATFORM}"
-      --architecture "${XTBLOOM_WHEEL_OPENBLAS_ARCH}"
-    RESULT_VARIABLE xtbloom_openblas_resolve_status
-    OUTPUT_VARIABLE xtbloom_openblas_resolve_output
-    ERROR_VARIABLE xtbloom_openblas_resolve_error
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(XTBLOOM_OPENBLAS_PROVENANCE
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/pyodide_openblas_manifest.json")
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/python/ci/resolve-pyodide-openblas.py"
+        --manifest "${XTBLOOM_OPENBLAS_PROVENANCE}"
+        --cache-dir "${CMAKE_CURRENT_SOURCE_DIR}/build/pyodide-openblas-provider"
+        --require-existing
+      RESULT_VARIABLE xtbloom_openblas_resolve_status
+      OUTPUT_VARIABLE xtbloom_openblas_resolve_output
+      ERROR_VARIABLE xtbloom_openblas_resolve_error
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+  else()
+    set(XTBLOOM_OPENBLAS_PROVENANCE
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/3rdparty/scipy_openblas32_manifest.json")
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/python/ci/resolve-openblas-wheel.py"
+        --manifest "${XTBLOOM_OPENBLAS_PROVENANCE}"
+        --platform "${XTBLOOM_WHEEL_OPENBLAS_PLATFORM}"
+        --architecture "${XTBLOOM_WHEEL_OPENBLAS_ARCH}"
+      RESULT_VARIABLE xtbloom_openblas_resolve_status
+      OUTPUT_VARIABLE xtbloom_openblas_resolve_output
+      ERROR_VARIABLE xtbloom_openblas_resolve_error
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+  endif()
   if(NOT xtbloom_openblas_resolve_status EQUAL 0)
     message(FATAL_ERROR
-      "failed to resolve the reviewed scipy-openblas32 build input:\n"
+      "failed to resolve the reviewed wheel OpenBLAS build input:\n"
       "${xtbloom_openblas_resolve_error}")
   endif()
   string(JSON XTBLOOM_WHEEL_OPENBLAS_LIBRARY GET
@@ -455,10 +475,16 @@ if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS)
     "${xtbloom_openblas_resolve_output}" expected_config_prefix)
   string(JSON XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME GET
     "${xtbloom_openblas_resolve_output}" provider_install_name)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    string(JSON XTBLOOM_WHEEL_OPENBLAS_ADAPTER_NAME GET
+      "${xtbloom_openblas_resolve_output}" adapter_install_name)
+  endif()
   get_filename_component(XTBLOOM_WHEEL_OPENBLAS_DIRECTORY
     "${XTBLOOM_WHEEL_OPENBLAS_LIBRARY}" DIRECTORY)
   set(XTBLOOM_WHEEL_OPENBLAS ON)
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(XTBLOOM_WHEEL_OPENBLAS_PYODIDE ON)
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM ON)
   else()
     set(XTBLOOM_WHEEL_OPENBLAS_DESKTOP ON)
@@ -669,6 +695,33 @@ if(XTBLOOM_CPU_LINALG_RUNTIME)
   endif()
 endif()
 
+if(XTBLOOM_WHEEL_OPENBLAS_PYODIDE)
+  if(NOT XTBLOOM_WHEEL_OPENBLAS_ADAPTER_NAME STREQUAL
+      "libxtbloom_pyodide_lapacke.so")
+    message(FATAL_ERROR "reviewed Pyodide LAPACKE adapter name differs")
+  endif()
+  add_library(xtbloom_pyodide_lapacke SHARED
+    src/runtime/pyodide_lapacke_lp64_shim.c
+  )
+  target_compile_definitions(xtbloom_pyodide_lapacke PRIVATE
+    "XTBLOOM_PYODIDE_OPENBLAS_FILENAME=\"${XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME}\""
+  )
+  # The exported dependency anchor preserves a unique dylink NEEDED edge so
+  # pyodide auditwheel can vendor the reviewed provider. Actual dispatch uses
+  # dlsym on the exact absolute provider path supplied by the wheel loader.
+  target_link_libraries(xtbloom_pyodide_lapacke PRIVATE
+    "${XTBLOOM_WHEEL_OPENBLAS_LIBRARY}"
+  )
+  set_target_properties(xtbloom_pyodide_lapacke PROPERTIES
+    OUTPUT_NAME xtbloom_pyodide_lapacke
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    INSTALL_RPATH ""
+  )
+  install(TARGETS xtbloom_pyodide_lapacke
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+endif()
+
 if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
   add_library(xtbloom_openblas_lp64_shim SHARED
     src/runtime/openblas_lp64_shim.c
@@ -805,83 +858,173 @@ if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
   endif()
 endif()
 
-add_library(xtbloom_gfn2_cpu OBJECT
+add_library(xtbloom_model_common_cpu_objects OBJECT
+  src/model/common/sto.cpp
+  src/model/common/integrals.cpp
+  src/model/common/scc_mixer.cpp
+  # The generalized eigensolver and fixed periodic charge-response algebra
+  # are model-neutral even though their established internal namespace is
+  # retained for source compatibility. Both GFN1 and GFN2 consume them.
+  src/model/gfn2/eigensolver.cpp
+  src/model/gfn2/periodic_embedding.cpp
+  # The sealed ES2 implementation is shared by GFN2 arithmetic and GFN1
+  # harmonic plan builders. Its legacy namespace remains internal and does
+  # not make the rest of the GFN2 physics target a GFN1 dependency.
+  src/model/gfn2/es2.cpp
+)
+target_compile_features(xtbloom_model_common_cpu_objects PUBLIC cxx_std_17)
+target_include_directories(xtbloom_model_common_cpu_objects PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(xtbloom_model_common_cpu_objects PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+if(CMAKE_DL_LIBS)
+  target_link_libraries(xtbloom_model_common_cpu_objects PUBLIC ${CMAKE_DL_LIBS})
+endif()
+
+if(XTBLOOM_CPU_LINALG_RUNTIME)
+  target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+    "XTBLOOM_CONFIGURED_CPU_LINALG_RUNTIME=\"${XTBLOOM_CPU_LINALG_RUNTIME}\""
+  )
+endif()
+if(XTBLOOM_CPU_LINALG_RUNTIME_IS_MKL)
+  target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+    XTBLOOM_CONFIGURED_CPU_LINALG_MKL=1
+  )
+endif()
+if(XTBLOOM_CPU_LINALG_SHIM)
+  target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+    XTBLOOM_CONFIGURED_CPU_LINALG_SHIM=1
+  )
+  add_dependencies(xtbloom_model_common_cpu_objects xtbloom_mkl_lp64_shim)
+endif()
+if(XTBLOOM_WHEEL_OPENBLAS)
+  if(XTBLOOM_WHEEL_OPENBLAS_PYODIDE)
+    target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+      XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS=1
+      "XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
+      "XTBLOOM_CONFIGURED_PYODIDE_OPENBLAS_ADAPTER=\"${XTBLOOM_WHEEL_OPENBLAS_ADAPTER_NAME}\""
+    )
+    add_dependencies(xtbloom_model_common_cpu_objects xtbloom_pyodide_lapacke)
+  else()
+    target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+      XTBLOOM_CONFIGURED_WHEEL_OPENBLAS=1
+      "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
+    )
+    if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
+      target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+        "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME=\"${XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME}\""
+      )
+    endif()
+    if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
+      add_dependencies(xtbloom_model_common_cpu_objects xtbloom_openblas_lp64_shim)
+    elseif(APPLE)
+      add_dependencies(xtbloom_model_common_cpu_objects xtbloom_wheel_openblas_provider)
+    endif()
+  endif()
+endif()
+
+add_library(xtbloom_gfn2_cpu_objects OBJECT
   src/backends/common/gfn2_plan_schema.cpp
   src/model/gfn2/aes2.cpp
   src/model/gfn2/basis.cpp
   src/model/gfn2/coordination.cpp
   src/model/gfn2/d4.cpp
-  src/model/gfn2/eigensolver.cpp
-  src/model/gfn2/es2.cpp
   src/model/gfn2/es3.cpp
   src/model/gfn2/external_point_charges.cpp
   src/model/gfn2/force.cpp
   src/model/gfn2/h0.cpp
-  src/model/gfn2/integrals.cpp
+  src/model/gfn2/lattice.cpp
   src/model/gfn2/mulliken.cpp
-  src/model/gfn2/periodic_embedding.cpp
   src/model/gfn2/repulsion.cpp
   src/model/gfn2/scc_driver.cpp
   src/model/gfn2/scc_mixer.cpp
   src/model/gfn2/spin.cpp
   src/model/gfn2/wavefunction.cpp
 )
-target_compile_features(xtbloom_gfn2_cpu PUBLIC cxx_std_17)
-target_include_directories(xtbloom_gfn2_cpu PUBLIC
+
+target_compile_features(xtbloom_gfn2_cpu_objects PUBLIC cxx_std_17)
+target_include_directories(xtbloom_gfn2_cpu_objects PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-set_target_properties(xtbloom_gfn2_cpu PROPERTIES
+set_target_properties(xtbloom_gfn2_cpu_objects PROPERTIES
   CXX_VISIBILITY_PRESET hidden
   POSITION_INDEPENDENT_CODE ON
   VISIBILITY_INLINES_HIDDEN YES
 )
-if(CMAKE_DL_LIBS)
-  target_link_libraries(xtbloom_gfn2_cpu PUBLIC ${CMAKE_DL_LIBS})
-endif()
-if(XTBLOOM_CPU_LINALG_RUNTIME)
-  target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
-    "XTBLOOM_CONFIGURED_CPU_LINALG_RUNTIME=\"${XTBLOOM_CPU_LINALG_RUNTIME}\""
-  )
-endif()
-if(XTBLOOM_CPU_LINALG_RUNTIME_IS_MKL)
-  target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
-    XTBLOOM_CONFIGURED_CPU_LINALG_MKL=1
-  )
-endif()
-if(XTBLOOM_CPU_LINALG_SHIM)
-  target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
-    XTBLOOM_CONFIGURED_CPU_LINALG_SHIM=1
-  )
-  add_dependencies(xtbloom_gfn2_cpu xtbloom_mkl_lp64_shim)
-endif()
-if(XTBLOOM_WHEEL_OPENBLAS)
-  target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
-    XTBLOOM_CONFIGURED_WHEEL_OPENBLAS=1
-    "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_CONFIG_PREFIX=\"${XTBLOOM_WHEEL_OPENBLAS_CONFIG_PREFIX}\""
-  )
-  if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
-    target_compile_definitions(xtbloom_gfn2_cpu PRIVATE
-      "XTBLOOM_CONFIGURED_WHEEL_OPENBLAS_FILENAME=\"${XTBLOOM_WHEEL_OPENBLAS_INSTALL_NAME}\""
-    )
-  endif()
-  if(XTBLOOM_WHEEL_OPENBLAS_LINUX_SHIM)
-    add_dependencies(xtbloom_gfn2_cpu xtbloom_openblas_lp64_shim)
-  elseif(APPLE)
-    add_dependencies(xtbloom_gfn2_cpu xtbloom_wheel_openblas_provider)
-  endif()
-endif()
+# Keep the complete CPU GFN1 implementation in its own object target so the
+# public library can publish the already-reserved model tag without merging
+# the model-owned source graph into GFN2. Both models share only the reviewed
+# CPU linear-algebra/provider boundary above.
+add_library(xtbloom_gfn1_cpu_objects OBJECT
+  src/model/gfn1/basis.cpp
+  src/model/gfn1/coordination.cpp
+  src/model/gfn1/d3.cpp
+  src/model/gfn1/es2.cpp
+  src/model/gfn1/es3.cpp
+  src/model/gfn1/external_point_charges.cpp
+  src/model/gfn1/force.cpp
+  src/model/gfn1/h0.cpp
+  src/model/gfn1/halogen.cpp
+  src/model/gfn1/mulliken.cpp
+  src/model/gfn1/repulsion.cpp
+  src/model/gfn1/scc_driver.cpp
+  src/model/gfn1/scc_mixer.cpp
+  src/model/gfn1/spin.cpp
+  src/model/gfn1/wavefunction.cpp
+  src/runtime/gfn1_cpu_execution.cpp
+)
+target_compile_features(xtbloom_gfn1_cpu_objects PUBLIC cxx_std_17)
+target_include_directories(xtbloom_gfn1_cpu_objects PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(xtbloom_gfn1_cpu_objects PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+
+# Interface wrappers include object files as link inputs while propagating the
+# object targets' include paths and provider requirements. GFN1 deliberately
+# receives only its own terms plus the small shared-model target.
+add_library(xtbloom_gfn2_cpu INTERFACE)
+target_link_libraries(xtbloom_gfn2_cpu INTERFACE
+  xtbloom_model_common_cpu_objects
+  xtbloom_gfn2_cpu_objects
+  $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+  $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
+)
+
+add_library(xtbloom_gfn1_cpu INTERFACE)
+target_link_libraries(xtbloom_gfn1_cpu INTERFACE
+  xtbloom_model_common_cpu_objects
+  xtbloom_gfn1_cpu_objects
+  $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+  $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
+)
 
 add_library(xtbloom
   src/api.cpp
   src/runtime/backend.cpp
   src/runtime/gfn2_cpu_execution.cpp
   src/runtime/gfn2_plan.cpp
+  src/runtime/model_plan.cpp
+  src/runtime/model_registry.cpp
   src/runtime/request.cpp
   src/runtime/result_owner.cpp
   src/runtime/validation.cpp
-  $<TARGET_OBJECTS:xtbloom_gfn2_cpu>
+  $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+  $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
+  $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
 )
 add_library(xtbloom::xtbloom ALIAS xtbloom)
 
@@ -1278,6 +1421,7 @@ if(XTBLOOM_HAS_CUDA)
     src/backends/cuda/gfn2_classical_force.cu
     src/backends/cuda/gfn2_d4.cu
     src/backends/cuda/gfn2_density.cu
+    src/backends/cuda/gfn2_electric_field.cu
     src/backends/cuda/gfn2_electronic_gradient.cu
     src/backends/cuda/gfn2_energy_force_execution.cu
     src/backends/cuda/gfn2_eigensolver.cu
@@ -1419,6 +1563,46 @@ if(XTBLOOM_BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/version_resolution_test.cmake
   )
 
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The production adapter is platform-neutral C. A tiny fake provider gives
+    # native CI deterministic coverage of LAPACKE argument translation and the
+    # exact-handle CBLAS path without committing any upstream WebAssembly bytes.
+    add_library(xtbloom_pyodide_openblas_fake SHARED
+      tests/pyodide_openblas_fake_provider.c
+    )
+    set_target_properties(xtbloom_pyodide_openblas_fake PROPERTIES
+      OUTPUT_NAME xtbloom_pyodide_openblas_fake
+    )
+    add_executable(xtbloom_pyodide_lapacke_lp64_shim_test
+      src/runtime/pyodide_lapacke_lp64_shim.c
+      tests/pyodide_lapacke_lp64_shim_test.c
+    )
+    target_compile_definitions(xtbloom_pyodide_lapacke_lp64_shim_test PRIVATE
+      XTBLOOM_PYODIDE_OPENBLAS_FILENAME="libxtbloom_pyodide_openblas_fake.so"
+    )
+    target_link_libraries(xtbloom_pyodide_lapacke_lp64_shim_test PRIVATE
+      xtbloom_pyodide_openblas_fake
+      ${CMAKE_DL_LIBS}
+    )
+    add_test(
+      NAME xtbloom.cpu.pyodide_lapacke_lp64_shim
+      COMMAND xtbloom_pyodide_lapacke_lp64_shim_test
+    )
+    set_tests_properties(xtbloom.cpu.pyodide_lapacke_lp64_shim PROPERTIES
+      ENVIRONMENT
+        "XTBLOOM_PYODIDE_OPENBLAS=$<TARGET_FILE:xtbloom_pyodide_openblas_fake>"
+    )
+    add_test(
+      NAME xtbloom.cpu.pyodide_lapacke_lp64_shim_rejects_relative_provider
+      COMMAND xtbloom_pyodide_lapacke_lp64_shim_test
+    )
+    set_tests_properties(
+      xtbloom.cpu.pyodide_lapacke_lp64_shim_rejects_relative_provider
+      PROPERTIES ENVIRONMENT
+        "XTBLOOM_PYODIDE_OPENBLAS=libxtbloom_pyodide_openblas_fake.so;XTBLOOM_EXPECT_PYODIDE_PROVIDER_UNAVAILABLE=1"
+    )
+  endif()
+
   if(XTBLOOM_CPU_LINALG_RUNTIME)
     get_filename_component(XTBLOOM_CPU_LINALG_DIRECTORY
       "${XTBLOOM_CPU_LINALG_RUNTIME}" DIRECTORY
@@ -1497,6 +1681,27 @@ if(XTBLOOM_BUILD_TESTS)
     xtbloom_configure_linalg_runtime_test(xtbloom_runtime_test xtbloom.runtime)
   endif()
 
+  add_executable(xtbloom_model_registry_test
+    tests/model_registry_test.cpp
+    src/runtime/model_registry.cpp
+  )
+  target_include_directories(xtbloom_model_registry_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_features(xtbloom_model_registry_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.model_registry COMMAND xtbloom_model_registry_test)
+
+  add_executable(xtbloom_gfn1_cpu_execution_header_test
+    tests/gfn1_cpu_execution_header_test.cpp
+  )
+  target_include_directories(xtbloom_gfn1_cpu_execution_header_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_features(xtbloom_gfn1_cpu_execution_header_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.execution_header COMMAND xtbloom_gfn1_cpu_execution_header_test)
+
   if(XTBLOOM_HAS_CUDA)
     # This host-only test must compile in the provider-free configuration. It
     # verifies that provider status returns remain fixed-width integer domains
@@ -1523,8 +1728,57 @@ if(XTBLOOM_BUILD_TESTS)
     )
     target_compile_features(xtbloom_cpu_public_inference_test PRIVATE cxx_std_17)
     add_test(NAME xtbloom.cpu.public_inference COMMAND xtbloom_cpu_public_inference_test)
+    # Keep a stable acceptance-gate name for the GFN1 cases hosted by the
+    # combined public CPU inference executable.
+    add_test(NAME xtbloom.gfn1.public_inference COMMAND xtbloom_cpu_public_inference_test)
     xtbloom_configure_linalg_runtime_test(
       xtbloom_cpu_public_inference_test xtbloom.cpu.public_inference
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_cpu_public_inference_test xtbloom.gfn1.public_inference
+    )
+
+    # Issue #360 regression: compile the public CPU runtime into a standalone
+    # test binary with deterministic worker observability. The production
+    # shared library remains free of test hooks, while this binary still calls
+    # the real public C API and the configured production LP64 provider.
+    add_executable(xtbloom_cpu_worker_teardown_test
+      tests/cpu_worker_teardown_test.cpp
+      src/api.cpp
+      src/runtime/backend.cpp
+      src/runtime/gfn2_cpu_execution.cpp
+      src/runtime/gfn2_plan.cpp
+      src/runtime/model_plan.cpp
+      src/runtime/model_registry.cpp
+      src/runtime/request.cpp
+      src/runtime/result_owner.cpp
+      src/runtime/validation.cpp
+      $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
+      $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
+      $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
+    )
+    target_include_directories(xtbloom_cpu_worker_teardown_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${XTBLOOM_GENERATED_INCLUDE_DIR}
+    )
+    target_compile_definitions(xtbloom_cpu_worker_teardown_test PRIVATE
+      XTBLOOM_BUILDING_LIBRARY
+      XTBLOOM_CPU_WORKER_TEARDOWN_TESTING=1
+    )
+    target_compile_features(xtbloom_cpu_worker_teardown_test PRIVATE cxx_std_17)
+    target_link_libraries(xtbloom_cpu_worker_teardown_test PRIVATE
+      Threads::Threads
+      ${CMAKE_DL_LIBS}
+    )
+    add_test(NAME xtbloom.cpu.worker_teardown COMMAND xtbloom_cpu_worker_teardown_test)
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_cpu_worker_teardown_test xtbloom.cpu.worker_teardown
+    )
+    set_property(TEST xtbloom.cpu.worker_teardown APPEND PROPERTY ENVIRONMENT
+      "MALLOC_CHECK_=3"
+      "GLIBC_TUNABLES=glibc.malloc.tcache_count=0"
     )
   endif()
 
@@ -1591,7 +1845,9 @@ if(XTBLOOM_BUILD_TESTS)
 
   add_executable(xtbloom_batch_validation_test
     tests/batch_validation_test.cpp
+    src/runtime/model_registry.cpp
     src/runtime/validation.cpp
+    src/model/gfn2/lattice.cpp
   )
   target_include_directories(xtbloom_batch_validation_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -1888,6 +2144,30 @@ if(XTBLOOM_BUILD_TESTS)
       COMMAND xtbloom_cuda_force_composition_test
     )
 
+    add_executable(xtbloom_cuda_electric_field_test
+      tests/cuda_electric_field_test.cu
+    )
+    target_link_libraries(xtbloom_cuda_electric_field_test PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+    )
+    target_include_directories(xtbloom_cuda_electric_field_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_electric_field_test
+      PRIVATE XTBLOOM_HAS_CUDA=1
+    )
+    set_target_properties(xtbloom_cuda_electric_field_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.electric_field
+      COMMAND xtbloom_cuda_electric_field_test
+    )
+
     add_executable(xtbloom_cuda_geometry_test tests/cuda_geometry_test.cu)
     target_link_libraries(xtbloom_cuda_geometry_test PRIVATE
       xtbloom::xtbloom
@@ -1932,6 +2212,7 @@ if(XTBLOOM_BUILD_TESTS)
       xtbloom::xtbloom
       xtbloom_cuda_backend
       xtbloom_gfn2_cpu
+      CUDA::cudart
     )
     target_include_directories(xtbloom_cuda_pairlist_benchmark PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
@@ -2196,7 +2477,9 @@ if(XTBLOOM_BUILD_TESTS)
       ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
     target_compile_definitions(xtbloom_cuda_gfn2_runtime_owner_test
-      PRIVATE XTBLOOM_HAS_CUDA=1
+      PRIVATE
+        XTBLOOM_HAS_CUDA=1
+        XTBLOOM_CUDA_TEST_HOOKS=1
     )
     set_target_properties(xtbloom_cuda_gfn2_runtime_owner_test PROPERTIES
       CUDA_STANDARD 17
@@ -2205,6 +2488,18 @@ if(XTBLOOM_BUILD_TESTS)
     )
     add_test(NAME xtbloom.cuda.gfn2_runtime_owner
       COMMAND xtbloom_cuda_gfn2_runtime_owner_test
+    )
+    add_test(NAME xtbloom.cuda.gfn2_runtime_owner_native_lattice_lifecycle
+      COMMAND xtbloom_cuda_gfn2_runtime_owner_test --native-lattice-lifecycle
+    )
+    add_test(NAME xtbloom.cuda.gfn2_runtime_owner_bounded_fallback
+      COMMAND xtbloom_cuda_gfn2_runtime_owner_test --bounded-fallback
+    )
+    add_test(NAME xtbloom.cuda.gfn2_runtime_owner_request_state
+      COMMAND xtbloom_cuda_gfn2_runtime_owner_test --request-state
+    )
+    add_test(NAME xtbloom.cuda.gfn2_runtime_owner_refresh_chain
+      COMMAND xtbloom_cuda_gfn2_runtime_owner_test --refresh-chain
     )
 
     add_executable(xtbloom_cuda_gfn2_runtime_parity_test
@@ -2409,6 +2704,30 @@ if(XTBLOOM_BUILD_TESTS)
     )
     add_test(NAME xtbloom.cuda.aes2 COMMAND xtbloom_cuda_aes2_test)
 
+    # Focused #220 benchmark-only executable.  It reuses the scientific AES2
+    # fixture but times individual production leaves with CUDA events; it is
+    # intentionally not registered as a CTest and never changes the test main.
+    add_executable(xtbloom_cuda_aes2_term_benchmark tests/cuda_aes2_test.cu)
+    target_link_libraries(xtbloom_cuda_aes2_term_benchmark PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+      CUDA::cudart
+    )
+    target_include_directories(xtbloom_cuda_aes2_term_benchmark PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_aes2_term_benchmark PRIVATE
+      XTBLOOM_HAS_CUDA=1
+      XTBLOOM_AES2_TERM_BENCHMARK_ONLY=1
+    )
+    set_target_properties(xtbloom_cuda_aes2_term_benchmark PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+
     add_executable(xtbloom_cuda_d4_test tests/cuda_d4_test.cu)
     target_link_libraries(xtbloom_cuda_d4_test PRIVATE
       xtbloom::xtbloom
@@ -2426,6 +2745,30 @@ if(XTBLOOM_BUILD_TESTS)
       CUDA_SEPARABLE_COMPILATION ON
     )
     add_test(NAME xtbloom.cuda.d4 COMMAND xtbloom_cuda_d4_test)
+
+    # Focused #220 committed-pair-list D4 term benchmark. Compact and open
+    # topologies share the production entry points; error reset, output seeds,
+    # and CPU-parity downloads stay outside every measured event range.
+    add_executable(xtbloom_cuda_d4_term_benchmark tests/cuda_d4_test.cu)
+    target_link_libraries(xtbloom_cuda_d4_term_benchmark PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+      CUDA::cudart
+    )
+    target_include_directories(xtbloom_cuda_d4_term_benchmark PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_d4_term_benchmark PRIVATE
+      XTBLOOM_HAS_CUDA=1
+      XTBLOOM_D4_TERM_BENCHMARK_ONLY=1
+    )
+    set_target_properties(xtbloom_cuda_d4_term_benchmark PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
 
     add_executable(xtbloom_cuda_periodic_embedding_test
       tests/cuda_periodic_embedding_test.cu
@@ -2762,6 +3105,9 @@ if(XTBLOOM_BUILD_TESTS)
     add_test(NAME xtbloom.cuda.scc_iteration_large_singleton
       COMMAND xtbloom_cuda_scc_iteration_production_test --large-singleton-tridiagonal
     )
+    add_test(NAME xtbloom.cuda.scc_iteration_deterministic_debug
+      COMMAND xtbloom_cuda_scc_iteration_production_test --deterministic-debug
+    )
 
     # Focused #130 benchmark. It reuses the production SCC fixture but runs a
     # one-remaining-iteration state so the conditional WHILE body count and
@@ -3004,6 +3350,38 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_coordination_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.coordination COMMAND xtbloom_coordination_test)
 
+  add_executable(xtbloom_lattice_test tests/lattice_test.cpp)
+  target_link_libraries(xtbloom_lattice_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_lattice_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.lattice COMMAND xtbloom_lattice_test)
+
+  add_executable(xtbloom_gfn1_coordination_test tests/gfn1_coordination_test.cpp)
+  target_link_libraries(xtbloom_gfn1_coordination_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_coordination_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.coordination COMMAND xtbloom_gfn1_coordination_test)
+
+  add_executable(xtbloom_gfn1_repulsion_test tests/gfn1_repulsion_test.cpp)
+  target_link_libraries(xtbloom_gfn1_repulsion_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_repulsion_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.repulsion COMMAND xtbloom_gfn1_repulsion_test)
+
+  add_executable(xtbloom_gfn1_d3_test tests/gfn1_d3_test.cpp)
+  target_link_libraries(xtbloom_gfn1_d3_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_d3_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.d3 COMMAND xtbloom_gfn1_d3_test)
+
+  add_executable(xtbloom_gfn1_halogen_test tests/gfn1_halogen_test.cpp)
+  target_link_libraries(xtbloom_gfn1_halogen_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_halogen_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.halogen COMMAND xtbloom_gfn1_halogen_test)
+
+  add_executable(xtbloom_gfn1_external_point_charges_test
+    tests/gfn1_external_point_charges_test.cpp)
+  target_link_libraries(xtbloom_gfn1_external_point_charges_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_external_point_charges_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.external_point_charges
+    COMMAND xtbloom_gfn1_external_point_charges_test)
+
   add_executable(xtbloom_d4_test tests/d4_test.cpp)
   target_link_libraries(xtbloom_d4_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_d4_test PRIVATE cxx_std_17)
@@ -3019,6 +3397,16 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_integrals_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.integrals COMMAND xtbloom_integrals_test)
 
+  add_executable(xtbloom_gfn1_basis_test tests/gfn1_basis_test.cpp)
+  target_link_libraries(xtbloom_gfn1_basis_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_basis_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.basis COMMAND xtbloom_gfn1_basis_test)
+
+  add_executable(xtbloom_gfn1_integrals_test tests/gfn1_integrals_test.cpp)
+  target_link_libraries(xtbloom_gfn1_integrals_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_integrals_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.integrals COMMAND xtbloom_gfn1_integrals_test)
+
   add_executable(xtbloom_multipole_integrals_test tests/multipole_integrals_test.cpp)
   target_link_libraries(xtbloom_multipole_integrals_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_multipole_integrals_test PRIVATE cxx_std_17)
@@ -3028,6 +3416,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_h0_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_h0_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.h0 COMMAND xtbloom_h0_test)
+
+  add_executable(xtbloom_gfn1_h0_test tests/gfn1_h0_test.cpp)
+  target_link_libraries(xtbloom_gfn1_h0_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_h0_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.h0 COMMAND xtbloom_gfn1_h0_test)
 
   add_executable(xtbloom_force_test tests/force_test.cpp)
   target_link_libraries(xtbloom_force_test PRIVATE xtbloom_gfn2_cpu)
@@ -3049,6 +3442,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_es3_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.es3 COMMAND xtbloom_es3_test)
 
+  add_executable(xtbloom_gfn1_es_spin_test tests/gfn1_es_spin_test.cpp)
+  target_link_libraries(xtbloom_gfn1_es_spin_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_es_spin_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.es_spin COMMAND xtbloom_gfn1_es_spin_test)
+
   add_executable(xtbloom_spin_test tests/spin_test.cpp)
   target_link_libraries(xtbloom_spin_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_spin_test PRIVATE cxx_std_17)
@@ -3068,6 +3466,88 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_wavefunction_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_wavefunction_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.wavefunction COMMAND xtbloom_wavefunction_test)
+
+  add_executable(xtbloom_gfn1_wavefunction_test tests/gfn1_wavefunction_test.cpp)
+  target_link_libraries(xtbloom_gfn1_wavefunction_test PRIVATE xtbloom_gfn1_cpu)
+  if(XTBLOOM_CPU_LINALG_RUNTIME)
+    target_link_libraries(xtbloom_gfn1_wavefunction_test PRIVATE ${XTBLOOM_CPU_LINALG_RUNTIME})
+    target_compile_definitions(
+      xtbloom_gfn1_wavefunction_test PRIVATE XTBLOOM_TEST_HAS_CPU_LINALG=1
+    )
+    if(XTBLOOM_CPU_LINALG_SYMBOL_PREFIX STREQUAL "scipy_")
+      target_compile_definitions(
+        xtbloom_gfn1_wavefunction_test PRIVATE XTBLOOM_TEST_SCIPY_PREFIXED_BLAS=1
+      )
+    endif()
+  endif()
+  target_compile_features(xtbloom_gfn1_wavefunction_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.wavefunction COMMAND xtbloom_gfn1_wavefunction_test)
+  if(XTBLOOM_CPU_LINALG_RUNTIME)
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_gfn1_wavefunction_test xtbloom.gfn1.wavefunction
+    )
+  endif()
+
+  add_executable(xtbloom_common_scc_mixer_test tests/common_scc_mixer_test.cpp)
+  target_link_libraries(xtbloom_common_scc_mixer_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_common_scc_mixer_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.common.scc_mixer COMMAND xtbloom_common_scc_mixer_test)
+
+  add_executable(xtbloom_gfn1_scc_mixer_test tests/gfn1_scc_mixer_test.cpp)
+  target_link_libraries(xtbloom_gfn1_scc_mixer_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_scc_mixer_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.scc_mixer COMMAND xtbloom_gfn1_scc_mixer_test)
+
+  add_executable(xtbloom_gfn1_mulliken_test tests/gfn1_mulliken_test.cpp)
+  target_link_libraries(xtbloom_gfn1_mulliken_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_mulliken_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.mulliken COMMAND xtbloom_gfn1_mulliken_test)
+
+  add_executable(xtbloom_gfn1_force_test tests/gfn1_force_test.cpp)
+  target_link_libraries(xtbloom_gfn1_force_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_force_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.force COMMAND xtbloom_gfn1_force_test)
+
+  add_executable(xtbloom_gfn1_scc_driver_test tests/gfn1_scc_driver_test.cpp)
+  target_link_libraries(xtbloom_gfn1_scc_driver_test PRIVATE xtbloom_gfn1_cpu)
+  target_compile_features(xtbloom_gfn1_scc_driver_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn1.scc_driver COMMAND xtbloom_gfn1_scc_driver_test)
+
+  if(XTBLOOM_CPU_LINALG_RUNTIME)
+    add_executable(xtbloom_gfn1_cpu_execution_test tests/gfn1_cpu_execution_test.cpp)
+    target_link_libraries(xtbloom_gfn1_cpu_execution_test PRIVATE
+      xtbloom_gfn1_cpu
+      ${XTBLOOM_CPU_LINALG_RUNTIME}
+    )
+    if(XTBLOOM_CPU_LINALG_SYMBOL_PREFIX STREQUAL "scipy_")
+      target_compile_definitions(
+        xtbloom_gfn1_cpu_execution_test PRIVATE XTBLOOM_TEST_SCIPY_PREFIXED_BLAS=1
+      )
+    endif()
+    target_compile_features(xtbloom_gfn1_cpu_execution_test PRIVATE cxx_std_17)
+    add_test(NAME xtbloom.gfn1.cpu_execution COMMAND xtbloom_gfn1_cpu_execution_test)
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_gfn1_cpu_execution_test xtbloom.gfn1.cpu_execution
+    )
+
+    # Drive the hidden executor from the immutable GFN1 corpus without adding
+    # a production JSON dependency or copying canonical fixture bytes into C++.
+    add_executable(xtbloom_gfn1_cpu_probe tests/gfn1_cpu_probe.cpp)
+    target_link_libraries(xtbloom_gfn1_cpu_probe PRIVATE
+      xtbloom_gfn1_cpu
+      ${XTBLOOM_CPU_LINALG_RUNTIME}
+    )
+    target_compile_features(xtbloom_gfn1_cpu_probe PRIVATE cxx_std_17)
+    add_test(
+      NAME xtbloom.gfn1.conformance_cpu
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/gfn1_cpu_conformance.py
+        --probe $<TARGET_FILE:xtbloom_gfn1_cpu_probe>
+        --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_gfn1_cpu_probe xtbloom.gfn1.conformance_cpu
+    )
+  endif()
 
   add_executable(xtbloom_mulliken_test tests/mulliken_test.cpp)
   target_link_libraries(xtbloom_mulliken_test PRIVATE xtbloom_gfn2_cpu)
@@ -3238,8 +3718,8 @@ if(XTBLOOM_BUILD_TESTS)
       xtbloom_scc_temperature_continuation_test xtbloom.gfn2.scc_temperature_continuation
     )
 
-    # Issues #49/#50: harnesses that drive the production CPU GFN2 SCC driver
-    # through the pinned restricted corpus and compare against the goldens.
+    # Issues #49/#50/#51: harnesses that drive the production CPU GFN2 SCC
+    # driver through the pinned restricted and unrestricted corpora.
     # These are now passing acceptance gates:
     #   * xtbloom_scc_trace_capture drives one case sequentially and compares the
     #     complete closed-loop trajectory with the cpu_closed_loop_v1 profile;
@@ -3315,8 +3795,8 @@ if(XTBLOOM_BUILD_TESTS)
       xtbloom_scc_trace_harness_native_test xtbloom.gfn2.scc_trace_ragged_batch_native
     )
 
-    # Sequential closed-loop gate: all five restricted goldens must match the
-    # full per-iteration trajectory within the cpu_closed_loop_v1 profile.
+    # Sequential closed-loop gates keep the versioned restricted and
+    # unrestricted contracts independently visible in CTest output.
     add_test(
       NAME xtbloom.gfn2.scc_trace_cpu_closed_loop
       COMMAND ${Python3_EXECUTABLE}
@@ -3327,6 +3807,18 @@ if(XTBLOOM_BUILD_TESTS)
     )
     xtbloom_configure_linalg_runtime_test(
       xtbloom_scc_trace_capture xtbloom.gfn2.scc_trace_cpu_closed_loop
+    )
+    add_test(
+      NAME xtbloom.gfn2.scc_trace_unrestricted_cpu_closed_loop
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/xtbloom_scc_cpu_trace.py
+              --capture $<TARGET_FILE:xtbloom_scc_trace_capture>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-unrestricted-capture
+              --cases oh_radical
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_scc_trace_capture xtbloom.gfn2.scc_trace_unrestricted_cpu_closed_loop
     )
 
     # Ragged batch gate: h3_plus (converges early), nenacl (slowest), and the
@@ -3345,6 +3837,18 @@ if(XTBLOOM_BUILD_TESTS)
     xtbloom_configure_linalg_runtime_test(
       xtbloom_scc_trace_batch_capture xtbloom.gfn2.scc_trace_ragged_batch
     )
+    add_test(
+      NAME xtbloom.gfn2.scc_trace_mixed_spin_ragged_batch
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/xtbloom_scc_cpu_trace.py
+              --batch-capture $<TARGET_FILE:xtbloom_scc_trace_batch_capture>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-mixed-spin-batch
+              --batch-cases h3_plus oh_radical nenacl
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_scc_trace_batch_capture xtbloom.gfn2.scc_trace_mixed_spin_ragged_batch
+    )
 
     # Single-iteration replay gate: every golden iteration replayed from its
     # injected mixed state must equal the pinned iteration snapshot.
@@ -3359,6 +3863,18 @@ if(XTBLOOM_BUILD_TESTS)
     )
     xtbloom_configure_linalg_runtime_test(
       xtbloom_scc_trace_replay xtbloom.gfn2.scc_trace_cpu_replay
+    )
+    add_test(
+      NAME xtbloom.gfn2.scc_trace_unrestricted_cpu_replay
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/xtbloom_scc_cpu_trace.py
+              --replay $<TARGET_FILE:xtbloom_scc_trace_replay>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-unrestricted-replay
+              --replay-cases oh_radical
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_scc_trace_replay xtbloom.gfn2.scc_trace_unrestricted_cpu_replay
     )
 
     # Independent Broyden mixer gate: replay the pinned golden residual
@@ -3376,6 +3892,59 @@ if(XTBLOOM_BUILD_TESTS)
     xtbloom_configure_linalg_runtime_test(
       xtbloom_scc_trace_mixer xtbloom.gfn2.scc_trace_mixer_replay
     )
+    add_test(
+      NAME xtbloom.gfn2.scc_trace_unrestricted_mixer_replay
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/xtbloom_scc_cpu_trace.py
+              --mixer $<TARGET_FILE:xtbloom_scc_trace_mixer>
+              --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+              --work-dir ${CMAKE_CURRENT_BINARY_DIR}/scc-trace-unrestricted-mixer
+              --mixer-cases oh_radical
+    )
+    xtbloom_configure_linalg_runtime_test(
+      xtbloom_scc_trace_mixer xtbloom.gfn2.scc_trace_unrestricted_mixer_replay
+    )
+
+    # Issue #343 Phase 1: experimental SCC subspace-reuse diagnostic. Builds
+    # the internal capture executable that drives the production CPU driver
+    # and streams per-iteration H, C, eps, occupations, density, and timing.
+    # tools/scc_reuse/scc_reuse_analyze.py consumes the stream. This is
+    # investigation tooling, not a conformance gate.
+    add_executable(xtbloom_scc_reuse_capture
+      tools/scc_reuse/scc_reuse_capture.cpp
+    )
+    target_link_libraries(xtbloom_scc_reuse_capture PRIVATE
+      xtbloom_gfn2_cpu
+      Threads::Threads
+    )
+    target_compile_features(xtbloom_scc_reuse_capture PRIVATE cxx_std_17)
+    # The analyzer intentionally uses NumPy for stable dense linear algebra.
+    # A bare native CMake environment guarantees only an interpreter, so never
+    # register a test that will fail later merely because that interpreter has
+    # no project dependencies. Required CI selects the locked project Python.
+    execute_process(
+      COMMAND "${Python3_EXECUTABLE}" -c "import numpy"
+      RESULT_VARIABLE xtbloom_scc_reuse_numpy_status
+      OUTPUT_QUIET
+      ERROR_QUIET
+    )
+    if(xtbloom_scc_reuse_numpy_status EQUAL 0)
+      add_test(
+        NAME xtbloom.gfn2.scc_reuse_smoke
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/scc_reuse/smoke_test.py
+                --capture $<TARGET_FILE:xtbloom_scc_reuse_capture>
+                --spec ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces/specs/h3_plus.spec
+                --analyzer ${CMAKE_CURRENT_SOURCE_DIR}/tools/scc_reuse/scc_reuse_analyze.py
+      )
+      xtbloom_configure_linalg_runtime_test(
+        xtbloom_scc_reuse_capture xtbloom.gfn2.scc_reuse_smoke
+      )
+    else()
+      message(STATUS
+        "Skipping xtbloom.gfn2.scc_reuse_smoke: ${Python3_EXECUTABLE} cannot import NumPy"
+      )
+    endif()
   endif()
 
   add_executable(xtbloom_parameters_header_test tests/parameters/gfn2_header_test.cpp)
@@ -3383,9 +3952,39 @@ if(XTBLOOM_BUILD_TESTS)
   target_compile_features(xtbloom_parameters_header_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.parameters.header COMMAND xtbloom_parameters_header_test)
 
+  add_executable(xtbloom_gfn1_parameters_header_test
+    tests/parameters/gfn1_header_test.cpp
+  )
+  target_include_directories(xtbloom_gfn1_parameters_header_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  target_compile_features(xtbloom_gfn1_parameters_header_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.parameters.gfn1_header
+    COMMAND xtbloom_gfn1_parameters_header_test
+  )
+
+  add_executable(xtbloom_gfn1_d3_parameters_header_test
+    tests/parameters/gfn1_d3_header_test.cpp
+  )
+  target_include_directories(xtbloom_gfn1_d3_parameters_header_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  target_compile_features(xtbloom_gfn1_d3_parameters_header_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.parameters.gfn1_d3_header
+    COMMAND xtbloom_gfn1_d3_parameters_header_test
+  )
+
   add_test(
     NAME xtbloom.parameters.generated
     COMMAND ${Python3_EXECUTABLE} tools/parameters/generate_gfn2.py --check
+  )
+  add_test(
+    NAME xtbloom.parameters.gfn1_generated
+    COMMAND ${Python3_EXECUTABLE} tools/parameters/generate_gfn1.py --check
+  )
+  add_test(
+    NAME xtbloom.parameters.gfn1_d3_generated
+    COMMAND ${Python3_EXECUTABLE} tools/parameters/generate_gfn1_d3.py --check
   )
   add_test(
     NAME xtbloom.parameters.python
@@ -3395,6 +3994,10 @@ if(XTBLOOM_BUILD_TESTS)
   add_test(
     NAME xtbloom.conformance.manifest
     COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_conformance.py check
+  )
+  add_test(
+    NAME xtbloom.conformance.gfn1_manifest
+    COMMAND ${Python3_EXECUTABLE} tools/conformance/gfn1_conformance.py check
   )
   add_test(
     NAME xtbloom.conformance.tmacl_evidence
@@ -3420,6 +4023,32 @@ if(XTBLOOM_BUILD_TESTS)
       LABELS "conformance;public-api"
     )
     add_test(
+      NAME xtbloom.conformance.gfn1_public_cpu
+      COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_public_api.py
+              --manifest ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/gfn1/manifest.json
+              --library $<TARGET_FILE:xtbloom> --backend cpu --memory-mode host
+              --actual-dir ${CMAKE_CURRENT_BINARY_DIR}/conformance/gfn1-public-api
+    )
+    set_tests_properties(xtbloom.conformance.gfn1_public_cpu PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+      ENVIRONMENT_MODIFICATION
+        "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+      LABELS "conformance;public-api;gfn1"
+    )
+    add_test(
+      NAME xtbloom.conformance.gfn1_spin2_public_cpu
+      COMMAND ${Python3_EXECUTABLE} tools/conformance/gfn1_public_spin2.py
+              --library $<TARGET_FILE:xtbloom>
+    )
+    set_tests_properties(xtbloom.conformance.gfn1_spin2_public_cpu PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+      ENVIRONMENT_MODIFICATION
+        "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+      LABELS "conformance;public-api;gfn1"
+    )
+    add_test(
       NAME xtbloom.conformance.invariants_cpu
       COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_invariants.py
               --library $<TARGET_FILE:xtbloom> --backend cpu --memory-mode host
@@ -3430,6 +4059,19 @@ if(XTBLOOM_BUILD_TESTS)
       ENVIRONMENT_MODIFICATION
         "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
       LABELS "conformance;public-api"
+    )
+    add_test(
+      NAME xtbloom.conformance.gfn1_invariants_cpu
+      COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_invariants.py
+              --manifest ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/gfn1/manifest.json
+              --library $<TARGET_FILE:xtbloom> --backend cpu --memory-mode host
+    )
+    set_tests_properties(xtbloom.conformance.gfn1_invariants_cpu PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+      ENVIRONMENT_MODIFICATION
+        "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+      LABELS "conformance;public-api;gfn1"
     )
     if(XTBLOOM_HAS_CUDA)
       add_test(
@@ -3523,12 +4165,27 @@ if(XTBLOOM_BUILD_TESTS)
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     LABELS "conformance;oracle"
   )
+  add_test(
+    NAME xtbloom.oracle.scc_corpus_v2
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/tblite_scc_trace/generate_unrestricted_scc_corpus.py
+            --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+            --corpus-dir ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/scc-traces
+            --check
+  )
+  set_tests_properties(xtbloom.oracle.scc_corpus_v2 PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    LABELS "conformance;oracle"
+  )
   set_tests_properties(
     xtbloom.parameters.generated
+    xtbloom.parameters.gfn1_generated
+    xtbloom.parameters.gfn1_d3_generated
     xtbloom.parameters.python
     xtbloom.licensing
     xtbloom.licensing_unit
     xtbloom.conformance.manifest
+    xtbloom.conformance.gfn1_manifest
     xtbloom.conformance.tmacl_evidence
     xtbloom.conformance.python
     xtbloom.oracle.tblite_observer_patch
@@ -3559,9 +4216,13 @@ install(FILES
   data/parameters/sto_manifest.json
   data/parameters/spin_manifest.json
   data/parameters/d4_manifest.json
+  data/parameters/gfn1_manifest.json
+  data/parameters/gfn1_d3_manifest.json
+  data/parameters/gfn1_legacy_sto_manifest.json
   data/parameters/mctc_manifest.json
   cmake/3rdparty/implib_manifest.json
   cmake/3rdparty/scipy_openblas32_manifest.json
+  cmake/3rdparty/pyodide_openblas_manifest.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/xtbloom/provenance
 )
 install(FILES cmake/3rdparty/torch-stable/manifest.json

@@ -70,6 +70,79 @@ class HarnessTest(unittest.TestCase):
             {("cpu", "host"), ("cuda", "host"), ("cuda", "device"), ("cuda", "mixed")},
         )
 
+    def test_heterogeneous_case_sequences_cycle_by_workload_class(self) -> None:
+        """Cycle committed gas and QM/MM cases deterministically for large B."""
+        gas = run.workload_case_ids("heterogeneous-gas", 8)
+        qmmm = run.workload_case_ids("heterogeneous-qmmm", 8)
+        self.assertEqual(
+            gas,
+            (
+                *run.HETEROGENEOUS_WORKLOAD_CASES["heterogeneous-gas"],
+                "h3_plus",
+                "ketene",
+                "nenacl",
+                "sif5_minus",
+            ),
+        )
+        self.assertEqual(
+            qmmm,
+            (
+                *run.HETEROGENEOUS_WORKLOAD_CASES["heterogeneous-qmmm"],
+                "water_one_pc_gamma999",
+                "water_dimer_6pc_hardness",
+                "water_dimer_6pc_gamma999",
+                "water_one_pc_gamma999",
+                "water_dimer_6pc_hardness",
+            ),
+        )
+        self.assertTrue(all("water" not in case_id for case_id in gas))
+        self.assertTrue(all(case_id.startswith("water_") for case_id in qmmm))
+
+    def test_homogeneous_defaults_and_row_identity_remain_unchanged(self) -> None:
+        """Retain scalar case IDs for the original default matrix coordinates."""
+        self.assertEqual(run.DEFAULT_WORKLOADS, ("gas", "qmmm"))
+        self.assertEqual(run.workload_case_ids("gas", 3), ("ketene",) * 3)
+        row = run.base_row(run.Cell("xtbloom", "cpu", "host", "gas", "force", 3))
+        self.assertEqual(row["case_id"], "ketene")
+        self.assertNotIn("case_ids", row)
+
+    def test_heterogeneous_rows_and_csv_preserve_every_case_id(self) -> None:
+        """Serialize the exact ragged case sequence instead of one misleading ID."""
+        cell = run.Cell("xtbloom", "cuda", "host", "heterogeneous-gas", "energy", 8)
+        row = run.unavailable_row(cell, "test")
+        self.assertNotIn("case_id", row)
+        self.assertEqual(row["case_ids"], list(run.workload_case_ids(cell.workload, 8)))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "matrix.csv"
+            run.write_csv(path, [row])
+            with path.open(newline="", encoding="utf-8") as handle:
+                written = next(csv.DictReader(handle))
+        self.assertEqual(json.loads(written["case_ids"]), row["case_ids"])
+
+    def test_xtbloom_adapter_receives_exact_case_sequence(self) -> None:
+        """Pass heterogeneous cases to the public batch assembler without repetition."""
+        sequence = tuple({"id": value} for value in ("a", "b", "c"))
+        cell = run.Cell("xtbloom", "cpu", "host", "heterogeneous-gas", "energy", 3)
+        fake_library = SimpleNamespace()
+        with (
+            mock.patch.object(
+                run.public_api, "_configure_library", return_value=fake_library
+            ),
+            mock.patch.object(
+                run.public_api, "assemble_batch", side_effect=RuntimeError("stop")
+            ) as assemble,
+            self.assertRaisesRegex(RuntimeError, "stop"),
+        ):
+            run.XTBloomAdapter(
+                Path("lib.so"), Path("manifest.json"), {}, sequence, cell, 0, 1
+            )
+        self.assertEqual(assemble.call_args.args[2], sequence)
+
+    def test_public_timing_semantics_label_is_exact(self) -> None:
+        """Use the agreed repeated-compute term and avoid a list-cache claim."""
+        self.assertEqual(run.REPEATED_CALL_SEMANTICS, "same_geometry_repeated_compute")
+        self.assertNotIn("reuse", run.REPEATED_CALL_SEMANTICS)
+
     def test_xtb_matrix_is_serial_cpu_host_and_templates_are_strict(self) -> None:
         """Keep reference matrices serial and command templates reproducible."""
         args = SimpleNamespace(

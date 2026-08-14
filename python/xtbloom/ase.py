@@ -30,7 +30,7 @@ from .interface import Calculator, Result, _resolve_uhf, _validated_compute_sett
 
 
 class XTBloom(ase.calculators.calculator.Calculator):
-    r"""ASE calculator for GFN2-xTB energies and analytic forces from xTBloom.
+    r"""ASE calculator for GFN1/GFN2-xTB energies and forces from xTBloom.
 
     Supported properties: ``energy`` (alias ``free_energy``), ``forces``, and
     ``charges``.
@@ -38,14 +38,18 @@ class XTBloom(ase.calculators.calculator.Calculator):
     ======================== ================= =========================================
      Keyword                  Default           Description
     ======================== ================= =========================================
-     method                   "GFN2-xTB"        Underlying tight-binding method
+     method                   "GFN2-xTB"        GFN1-xTB or GFN2-xTB
      charge                   None              Total charge (sum of initial charges)
      multiplicity             None              Total spin multiplicity
      electronic_temperature   300.0             Electronic temperature in kelvin
      max_scc_iterations       250               SCC iteration ceiling
      charge_tolerance         1e-6              SCC charge tolerance (e)
      energy_tolerance         1e-8              SCC energy tolerance (Hartree)
-     backend                  "auto"            Execution backend: auto/cpu/cuda
+     scc_mixer               "modified_broyden" SCC mixing algorithm
+     scc_mixer_history        8                 Broyden history vectors (1..64)
+     scc_mixer_damping        0.4               Broyden damping in (0, 1]
+     determinism             "default"          default/reproducible execution policy
+     backend                  "auto"            Execution backend; GFN1 auto uses CPU
      device_id                None              CUDA device id
      cpu_threads              1                 CPU batch-parallelism ceiling
      cache_api                True              Reuse the underlying API calculator
@@ -76,6 +80,10 @@ class XTBloom(ase.calculators.calculator.Calculator):
         "max_scc_iterations": 250,
         "charge_tolerance": 1.0e-6,
         "energy_tolerance": 1.0e-8,
+        "scc_mixer": "modified_broyden",
+        "scc_mixer_history": 8,
+        "scc_mixer_damping": 0.4,
+        "determinism": "default",
         "backend": "auto",
         "device_id": None,
         "cpu_threads": 1,
@@ -116,6 +124,10 @@ class XTBloom(ase.calculators.calculator.Calculator):
             "charge_tolerance",
             "energy_tolerance",
             "electronic_temperature",
+            "scc_mixer",
+            "scc_mixer_history",
+            "scc_mixer_damping",
+            "determinism",
         ):
             if attribute in kwargs:
                 _validated_compute_setting(attribute, kwargs[attribute])
@@ -145,6 +157,14 @@ class XTBloom(ase.calculators.calculator.Calculator):
                 self._xtb.set("charge_tolerance", parameters.charge_tolerance)
             if "energy_tolerance" in changed:
                 self._xtb.set("energy_tolerance", parameters.energy_tolerance)
+            if "scc_mixer" in changed:
+                self._xtb.set("scc_mixer", parameters.scc_mixer)
+            if "scc_mixer_history" in changed:
+                self._xtb.set("scc_mixer_history", parameters.scc_mixer_history)
+            if "scc_mixer_damping" in changed:
+                self._xtb.set("scc_mixer_damping", parameters.scc_mixer_damping)
+            if "determinism" in changed:
+                self._xtb.set("determinism", parameters.determinism)
         else:
             self._close_api_calculator()
             self._res = None
@@ -218,11 +238,12 @@ class XTBloom(ase.calculators.calculator.Calculator):
 
 
 def _validate_ase_atoms(atoms: ase.Atoms) -> None:
-    """Reject periodic ASE inputs that the public molecular ABI cannot model."""
+    """Reject periodic ASE inputs until native periodic execution is released."""
     if np.any(atoms.pbc):
         raise ase.calculators.calculator.InputError(
-            "xTBloom does not support periodic ASE systems; the public C ABI "
-            "has no lattice or periodic-boundary descriptor"
+            "xTBloom does not support periodic ASE systems yet; the ABI-v4 "
+            "lattice descriptor exists, but native periodic execution and "
+            "the ASE adapter are not implemented"
         )
 
 
@@ -244,6 +265,10 @@ def _create_api_calculator(
             charge_tolerance=parameters.charge_tolerance,
             energy_tolerance=parameters.energy_tolerance,
             electronic_temperature=parameters.electronic_temperature,
+            scc_mixer=parameters.scc_mixer,
+            scc_mixer_history=parameters.scc_mixer_history,
+            scc_mixer_damping=parameters.scc_mixer_damping,
+            determinism=parameters.determinism,
             warm_start=bool(parameters.warm_start),
         )
     except XTBloomValueError as e:

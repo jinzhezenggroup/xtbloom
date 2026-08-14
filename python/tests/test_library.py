@@ -3,16 +3,47 @@
 from __future__ import annotations
 
 import ctypes
+import os
+import re
 import site
+import subprocess
+import sys
+from importlib.metadata import version as distribution_version
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
+from _legacy_core import build_legacy_core
 from xtbloom import __version__, library
 from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def test_pyodide_private_provider_paths_are_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolve one repaired provider and overwrite untrusted environment paths."""
+    package = tmp_path / "site-packages" / "xtbloom"
+    native_dir = package / "lib"
+    provider_dir = tmp_path / "site-packages" / "xtbloom.libs"
+    native_dir.mkdir(parents=True)
+    provider_dir.mkdir()
+    native = native_dir / "libxtbloom.so"
+    adapter = native_dir / "libxtbloom_pyodide_lapacke.so"
+    provider = provider_dir / "libxtbloom_openblas-deadbeef.so"
+    for path in (native, adapter, provider):
+        path.write_bytes(b"wasm")
+
+    monkeypatch.setattr(library.sys, "platform", "emscripten")
+    monkeypatch.setattr(library, "__file__", str(package / "library.py"))
+    monkeypatch.setenv("XTBLOOM_PYODIDE_LAPACKE_SHIM", "/untrusted/adapter.so")
+    monkeypatch.setenv("XTBLOOM_PYODIDE_OPENBLAS", "/untrusted/provider.so")
+    library._configure_pyodide_openblas_paths(native)
+
+    assert os.environ["XTBLOOM_PYODIDE_LAPACKE_SHIM"] == str(adapter.resolve())
+    assert os.environ["XTBLOOM_PYODIDE_OPENBLAS"] == str(provider.resolve())
 
 
 class _FakeSymbol:
@@ -26,6 +57,28 @@ class _FakeLibrary:
     """Weak-referenceable fake shared-library handle for symbol probing."""
 
 
+class _FakeComputeOptionsInit:
+    """Initialize either the frozen V3 image or only the legacy V2 prefix."""
+
+    def __init__(self, supports_v3: bool) -> None:
+        self.supports_v3 = supports_v3
+
+    def __call__(self, pointer: object, struct_size: int) -> int:
+        options = ctypes.cast(pointer, ctypes.POINTER(library.ComputeOptions)).contents
+        ctypes.memset(pointer, 0, min(struct_size, 56))
+        options.struct_size = struct_size
+        options.api_version = library.API_VERSION
+        if self.supports_v3:
+            ctypes.memset(pointer, 0, min(struct_size, ctypes.sizeof(options)))
+            options.struct_size = struct_size
+            options.api_version = library.API_VERSION
+            options.scc_mixer = library.SCC_MIXER_MODIFIED_BROYDEN
+            options.scc_mixer_history = library.DEFAULT_SCC_MIXER_HISTORY
+            options.scc_mixer_damping = library.DEFAULT_SCC_MIXER_DAMPING
+            options.determinism = library.DETERMINISM_DEFAULT
+        return library.STATUS_SUCCESS
+
+
 def _fake_request_library(*, omit: str | None = None) -> _FakeLibrary:
     """Build a fake library with all but an optional request ABI symbol."""
     fake = _FakeLibrary()
@@ -35,9 +88,32 @@ def _fake_request_library(*, omit: str | None = None) -> _FakeLibrary:
     return fake
 
 
+def _expected_native_version(python_version: str) -> str:
+    """Map a release or setuptools-scm development version to its base tag."""
+    public = python_version.partition("+")[0]
+    release = re.fullmatch(
+        r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
+        public,
+    )
+    if release is not None:
+        return public
+    development = re.fullmatch(
+        r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\."
+        r"(0|[1-9][0-9]*)\.post1\.dev(0|[1-9][0-9]*)",
+        public,
+    )
+    if development is None:
+        raise AssertionError(
+            f"unexpected Python distribution version: {python_version}"
+        )
+    major, minor, patch, _distance = development.groups()
+    return f"{major}.{minor}.{patch}"
+
+
 def test_version_string() -> None:
-    """Keep Python distribution metadata and the native C API in lockstep."""
-    assert library.get_version() == __version__
+    """Expose SCM identity in Python without changing the native product tag."""
+    assert __version__ == distribution_version("xtbloom")
+    assert library.get_version() == _expected_native_version(__version__)
 
 
 def test_request_api_is_optional_as_a_complete_symbol_group() -> None:
@@ -65,6 +141,96 @@ def test_partial_request_api_is_incompatible() -> None:
 
     with pytest.raises(XTBloomRuntimeError, match="xtbloom_request_wait"):
         library._configure_request_api(fake)
+
+
+@pytest.mark.parametrize("supports_v3", [False, True])
+def test_compute_options_v3_capability_probe(supports_v3: bool) -> None:
+    """Distinguish a legacy future-size initializer from a complete V3 one."""
+    fake = _FakeLibrary()
+    fake.xtbloom_compute_options_init = _FakeComputeOptionsInit(supports_v3)
+
+    assert library._probe_compute_options_v3(fake) is supports_v3
+    assert library.compute_options_v3_available(fake) is supports_v3
+
+
+def test_compute_options_v3_capability_probe_reports_initializer_failure() -> None:
+    """Surface a failed native initializer instead of guessing V3 support."""
+    fake = _FakeLibrary()
+    fake.xtbloom_compute_options_init = lambda pointer, struct_size: (
+        library.STATUS_INTERNAL_ERROR
+    )
+
+    with pytest.raises(XTBloomRuntimeError, match="probing ABI-v3 support"):
+        library._probe_compute_options_v3(fake)
+
+
+def test_legacy_core_accepts_defaults_but_rejects_nondefault_v3_policy() -> None:
+    """Never silently ignore a user-requested mixer or determinism policy."""
+    fake = _FakeLibrary()
+    fake.xtbloom_compute_options_init = _FakeComputeOptionsInit(False)
+    assert not library._probe_compute_options_v3(fake)
+
+    library.require_compute_options_v3(1, 8, 0.4, 0, fake)
+    with pytest.raises(XTBloomRuntimeError, match=r"does not support.*ABI v3"):
+        library.require_compute_options_v3(1, 16, 0.25, 1, fake)
+
+
+def test_library_override_fails_closed_for_legacy_core_policy(tmp_path: Path) -> None:
+    """Exercise the real loader handshake against a V2-only override library."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("the legacy shared-library fixture currently targets ELF")
+    legacy = build_legacy_core(tmp_path)
+    script = r"""
+import numpy as np
+import xtbloom.library as library
+from xtbloom import BatchCalculator, Calculator, Structure, compute_arrays
+from xtbloom.exceptions import XTBloomRuntimeError
+
+assert not library.compute_options_v3_available()
+library.require_compute_options_v3(1, 8, 0.4, 0)
+Calculator("GFN2-xTB", np.array([1]), np.zeros((1, 3)))
+BatchCalculator([Structure(np.array([1]), np.zeros((1, 3)))])
+
+for factory in (
+    lambda: Calculator(
+        "GFN2-xTB", np.array([1]), np.zeros((1, 3)), scc_mixer_history=16
+    ),
+    lambda: BatchCalculator(
+        [Structure(np.array([1]), np.zeros((1, 3)))], determinism="reproducible"
+    ),
+):
+    try:
+        factory()
+    except XTBloomRuntimeError as exc:
+        assert "ABI v3" in str(exc)
+    else:
+        raise AssertionError("legacy core silently accepted nondefault V3 policy")
+
+arrays = dict(
+    atom_offsets=np.array([0, 1], dtype=np.int64),
+    atomic_numbers=np.array([1], dtype=np.int32),
+    positions=np.zeros((1, 3), dtype=np.float64),
+    molecular_charges=np.zeros(1, dtype=np.float64),
+    unpaired_electrons=np.zeros(1, dtype=np.int32),
+)
+compute_arrays(**arrays)
+try:
+    compute_arrays(**arrays, scc_mixer_damping=0.25)
+except XTBloomRuntimeError as exc:
+    assert "ABI v3" in str(exc)
+else:
+    raise AssertionError("legacy core silently accepted Array V3 policy")
+"""
+    env = os.environ.copy()
+    env["XTBLOOM_LIBRARY"] = str(legacy)
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_runtime_search_includes_user_site_packages(
@@ -118,13 +284,46 @@ def test_abi_struct_sizes() -> None:
     assert ctypes.sizeof(library.ContextOptions) == 32
     assert ctypes.sizeof(library.ConstBuffer) == 24
     assert ctypes.sizeof(library.Buffer) == 24
-    assert ctypes.sizeof(library.Batch) == 408
+    assert ctypes.sizeof(library.Batch) == 456
     assert library.Batch.total_interactions.offset == 352
     assert library.Batch.interaction_descriptors.offset == 360
     assert library.Batch.interaction_payload.offset == 384
-    assert ctypes.sizeof(library.ComputeOptions) == 56
+    assert library.Batch.cell_matrices.offset == 408
+    assert library.Batch.periodic_axes.offset == 432
+    assert library.PERIODIC_AXES_NONE == 0
+    assert library.PERIODIC_AXES_XYZ == 7
+    assert {
+        "PERIODIC_AXES_NONE",
+        "PERIODIC_AXES_XYZ",
+        "PERIODIC_AXIS_X",
+        "PERIODIC_AXIS_Y",
+        "PERIODIC_AXIS_Z",
+    }.issubset(library.__all__)
+    batch = library.Batch()
+    assert (
+        library.load_library().xtbloom_batch_init(
+            ctypes.byref(batch), ctypes.sizeof(batch)
+        )
+        == library.STATUS_SUCCESS
+    )
+    assert batch.struct_size == ctypes.sizeof(batch)
+    assert batch.api_version == library.API_VERSION
+    assert batch.cell_matrices.data is None
+    assert batch.cell_matrices.size_bytes == 0
+    assert batch.cell_matrices.memory_space == library.MEMORY_HOST
+    assert batch.cell_matrices.reserved == 0
+    assert batch.periodic_axes.data is None
+    assert batch.periodic_axes.size_bytes == 0
+    assert batch.periodic_axes.memory_space == library.MEMORY_HOST
+    assert batch.periodic_axes.reserved == 0
+    assert ctypes.sizeof(library.ComputeOptions) == 80
     assert library.ComputeOptions.scc_start_mode.offset == 48
     assert library.ComputeOptions.reserved_v2.offset == 52
+    assert library.ComputeOptions.scc_mixer.offset == 56
+    assert library.ComputeOptions.scc_mixer_history.offset == 60
+    assert library.ComputeOptions.scc_mixer_damping.offset == 64
+    assert library.ComputeOptions.determinism.offset == 72
+    assert library.ComputeOptions.reserved_v3.offset == 76
     assert ctypes.sizeof(library.BatchResult) == 280
     assert library.BatchResult.dipole_moments.offset == 184
     assert library.BatchResult.quadrupole_moments.offset == 208
@@ -155,6 +354,11 @@ def test_abi_struct_sizes() -> None:
     assert options.max_scc_iterations == 250
     assert options.scc_start_mode == library.SCC_START_FRESH
     assert options.reserved_v2 == 0
+    assert options.scc_mixer == library.SCC_MIXER_MODIFIED_BROYDEN
+    assert options.scc_mixer_history == library.DEFAULT_SCC_MIXER_HISTORY
+    assert options.scc_mixer_damping == library.DEFAULT_SCC_MIXER_DAMPING
+    assert options.determinism == library.DETERMINISM_DEFAULT
+    assert options.reserved_v3 == 0
     assert library.SCC_START_WARM == 2
     # xtbloom_workspace_query_t: struct_size/api_version/flags/reserved (16) +
     # host bytes (8) + host alignment (4) + device bytes (8) + device alignment
@@ -189,15 +393,53 @@ def test_abi_struct_sizes() -> None:
     assert request_info.reserved == 0
 
 
-def test_unknown_method_rejected() -> None:
-    """Distinguish unknown methods from reserved unsupported GFN1-xTB."""
-    from xtbloom.exceptions import XTBloomNotSupportedError
-    from xtbloom.interface import Calculator
+def test_method_aliases_and_gfn1_backend_policy() -> None:
+    """Resolve both model aliases without silently selecting CUDA for GFN1."""
+    from xtbloom.interface import BatchCalculator, Calculator, Structure
 
     with pytest.raises(XTBloomValueError):
         Calculator("NoSuchMethod", np.array([1]), np.zeros((1, 3)))
-    with pytest.raises(XTBloomNotSupportedError):
-        Calculator("GFN1-xTB", np.array([1]), np.zeros((1, 3)))
+
+    for method in ("GFN1-xTB", "GFN1"):
+        calculator = Calculator(method, np.array([1]), np.zeros((1, 3)))
+        assert calculator._settings.model == library.MODEL_GFN1_XTB
+        assert calculator._context._requested == library.BACKEND_CPU
+
+    explicit_cuda = Calculator(
+        "GFN1-xTB", np.array([1]), np.zeros((1, 3)), backend="cuda"
+    )
+    assert explicit_cuda._context._requested == library.BACKEND_CUDA
+    with pytest.raises(XTBloomValueError, match="cannot use a CUDA device_id"):
+        Calculator(
+            "GFN1-xTB",
+            np.array([1]),
+            np.zeros((1, 3)),
+            device_id=0,
+        )
+
+    batch = BatchCalculator([Structure(np.array([1]), np.zeros((1, 3)))], method="GFN1")
+    assert batch._settings.model == library.MODEL_GFN1_XTB
+    assert batch._context._requested == library.BACKEND_CPU
+
+
+def test_gfn1_rejects_unpublished_field_and_dipole_path() -> None:
+    """Refuse GFN1 electric-field attachments before creating native state."""
+    from xtbloom.exceptions import XTBloomNotSupportedError
+    from xtbloom.interface import BatchCalculator, Calculator, Structure
+
+    with pytest.raises(XTBloomNotSupportedError, match=r"electric-field.*dipole"):
+        Calculator(
+            "GFN1-xTB",
+            np.array([1]),
+            np.zeros((1, 3)),
+            efield=np.array([0.001, 0.0, 0.0]),
+        )
+
+    structure = Structure(
+        np.array([1]), np.zeros((1, 3)), efield=np.array([0.001, 0.0, 0.0])
+    )
+    with pytest.raises(XTBloomNotSupportedError, match=r"electric-field.*dipole"):
+        BatchCalculator([structure], method="GFN1")
 
 
 def test_host_const_returns_consistent_buffer_and_owner() -> None:

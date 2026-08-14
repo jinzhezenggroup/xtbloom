@@ -1,0 +1,9 @@
+engine,backend,memory_mode,workload,case_id,property,batch_size,availability,correctness_status,per_system_status,scc_converged,scc_iterations_min,scc_iterations_max,warm_samples
+xtbloom,cuda,device,gas,ketene,energy,1,available,pass,SUCCESS,true,12,12,20
+xtbloom,cuda,device,gas,ketene,energy,8,available,pass,SUCCESS,true,12,12,20
+xtbloom,cuda,device,gas,ketene,energy,32,available,pass,SUCCESS,true,12,12,20
+xtbloom,cuda,device,gas,ketene,energy,128,available,pass,SUCCESS,true,12,12,20
+xtbloom,cuda,device,gas,ketene,force,1,available,pass,SUCCESS,true,12,12,20
+xtbloom,cuda,device,gas,ketene,force,8,available,pass,SUCCESS,true,12,12,20
+xtbloom,cuda,device,gas,ketene,force,32,available,pass,SUCCESS,true,12,12,20
+xtbloom,cuda,device,gas,ketene,force,128,available,pass,SUCCESS,true,12,12,20

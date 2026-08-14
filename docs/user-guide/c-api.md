@@ -41,6 +41,14 @@ Replace `89` with the target compute capability. Set
 CPU by default so it also runs with the CPU-only install; change its one backend
 line to `XTBLOOM_BACKEND_CUDA` to verify the CUDA build explicitly.
 
+`xtbloom_compute_options_init` defaults `compute_options.model` to
+`XTBLOOM_MODEL_GFN2_XTB`. Set it explicitly to `XTBLOOM_MODEL_GFN1_XTB` for
+GFN1 CPU execution. A GFN1 request on a CUDA context returns
+`XTBLOOM_STATUS_NOT_SUPPORTED` transactionally; the library never substitutes
+GFN2. GFN1 publishes energy, forces, charges, and point-charge forces, and
+accepts caller-supplied `b` and `A` fields for the `b + A*q` response. It does
+not support electric-field attachments or the molecular-dipole outlet.
+
 A consumer CMake project needs only the exported target:
 
 ```cmake
@@ -122,6 +130,8 @@ int main(void) {
 
   compute_options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
                           XTBLOOM_COMPUTE_ATOMIC_CHARGES;
+  /* The initializer defaults to GFN2. Select GFN1 explicitly when desired:
+   * compute_options.model = XTBLOOM_MODEL_GFN1_XTB; */
 
   double energy = NAN;
   double forces[6];
@@ -186,6 +196,26 @@ Required batch topology uses flat arrays:
 
 See the public header for every optional field and its exact element type.
 
+## Native cell descriptors (ABI-v4 foundation)
+
+The ABI-v4 `xtbloom_batch_t` suffix appends `cell_matrices` and
+`periodic_axes`. Both are caller-owned borrowed buffers with one entry per
+system: each cell is nine row-major binary64 values in bohr whose rows are the
+direct vectors `a`, `b`, and `c`; each periodicity entry is a fixed-width
+`int32_t` mask. This release accepts `XTBLOOM_PERIODIC_AXES_NONE` for a
+molecular item and reserves the X/Y/Z bits, with `XTBLOOM_PERIODIC_AXES_XYZ`
+describing three-dimensional periodicity. One- and two-dimensional masks are
+reserved but not supported.
+
+The two buffers must be supplied together. A `NONE` item uses an all-zero cell;
+an `XYZ` item requires a finite, right-handed, nonsingular cell. V1/V2/V3
+callers and V4 batches containing only `NONE` items keep molecular behavior.
+Native periodic GFN2 physics is not released yet: after complete host/CUDA
+descriptor, pointer, and cell validation, any `XYZ` item returns
+`XTBLOOM_STATUS_NOT_IMPLEMENTED` before output publication. This descriptor is
+not the caller-supplied periodic `b + A*q` embedding operator and does not make
+solvation periodic.
+
 ## External interaction attachments (ABI-v3)
 
 The ABI-v3 `xtbloom_batch_t` suffix carries a generic, versioned attachment
@@ -210,26 +240,26 @@ components in Hartree per elementary charge per bohr. Its payload offset is
 The tag set is reserved for the xtb/tblite/dxtb interaction family: uniform
 electric field and field gradient, multipole point charges, atomic-potential
 grids, ALPB/GBSA/GB/GBE/ddX solvation, D3/D4 dispersion variants, and
-halogen-bond corrections. The **CPU backend executes the uniform electric
-field** (`XTBLOOM_INTERACTION_ELECTRIC_FIELD`): every other reserved tag is
-refused with `XTBLOOM_STATUS_NOT_IMPLEMENTED`, and the CUDA backend currently
-refuses all interaction execution with `XTBLOOM_STATUS_NOT_IMPLEMENTED`, both
-before any caller output is touched, so a reserved interaction can never
-silently contribute to a result. Unknown or `XTBLOOM_INTERACTION_NONE` tags,
+halogen-bond corrections. The CPU and CUDA backends execute the uniform
+electric field (`XTBLOOM_INTERACTION_ELECTRIC_FIELD`); every other reserved tag
+is refused with `XTBLOOM_STATUS_NOT_IMPLEMENTED` before any caller output is
+touched, so a reserved interaction can never silently contribute to a result.
+Unknown or `XTBLOOM_INTERACTION_NONE` tags,
 duplicate `(system_index, type)` attachments, descriptor flag bits, and payload
 blocks that are undersized, oversized, misaligned, or outside the payload view
 are `XTBLOOM_STATUS_INVALID_ARGUMENT`.
 
-On the CPU backend the uniform electric field contributes a per-atom scalar
+On both backends the uniform electric field contributes a per-atom scalar
 potential `vat_i = -E . r_i` and a per-atom dipolar potential `vdp = -E` to the
 charge channel of the SCC Hamiltonian on every iteration (matching the pinned
 tblite `field.f90` potential), an energy term `-sum_i q_i (E . r_i)
 - sum_i E . d_i` in the SCC trace, and the explicit Hellmann-Feynman force
 `+q_i E` on atom `i`. The stationary response of the converged charges and
 atomic dipoles is already carried by the field potentials. The pinned tblite
-0.7.0 analytic gradient applies `+E` per atom and is nonvariational for partial
-charges, so xTBloom validates field forces against central differences of its
-reported energy instead of treating that gradient as an oracle. Because the
+0.7.0 analytic result applies a `+E`-per-atom force (equivalently a `-E`
+gradient contribution) and is nonvariational for partial charges, so xTBloom
+validates field forces against central differences of its reported energy
+instead of treating that result as an oracle. Because the
 field participates in every SCC iteration it is part of
 the strict warm-start identity: a `WARM` call whose field differs from the
 latest fully converged compatible call is rejected like any other changed
@@ -238,10 +268,9 @@ compute policy.
 The ABI-v2 `xtbloom_batch_result_t` suffix adds the dipole outlet:
 `dipole_moments` holds `batch_size * 3` binary64 values in atomic units. It is
 reported when `XTBLOOM_COMPUTE_DIPOLE_MOMENTS` is set in `compute_options.flags`.
-The CPU backend publishes the molecular dipole `sum_i (r_i * q_i + d_i)` over
-the converged charge-channel SCC multipoles and sets `XTBLOOM_RESULT_DIPOLE_MOMENTS`;
-the CUDA backend currently returns `XTBLOOM_STATUS_NOT_IMPLEMENTED` for this
-output until its publication lands. `quadrupole_moments`, `wiberg_orders`, and
+Both backends publish the molecular dipole `sum_i (r_i * q_i + d_i)` over the
+converged charge-channel SCC multipoles and set `XTBLOOM_RESULT_DIPOLE_MOMENTS`.
+`quadrupole_moments`, `wiberg_orders`, and
 `spin_populations` are ABI-reserved outlets whose shape contract is not
 published: supplying bytes there is refused with
 `XTBLOOM_STATUS_NOT_SUPPORTED`.
@@ -277,6 +306,25 @@ valid. Pointer ownership and the selected device are validated.
 `xtbloom_compute` is synchronous with respect to the caller even when a custom
 stream is supplied. Active CUDA stream capture is rejected. xTBloom attempts to
 restore the caller's current device on every exit.
+
+For native asynchronous CUDA submission, create a reusable
+`xtbloom_request_t` and call either `xtbloom_compute_enqueue` or the
+fixed-topology `xtbloom_plan_compute_enqueue`. A successful enqueue copies the
+descriptor images and every host input needed after return; CUDA inputs and all
+outputs must remain alive until the request is `COMPLETE`. Query is
+nonblocking, while wait and request destruction settle that exact submission.
+Completion flags are returned by `xtbloom_request_info_t.result_flags`; the
+copied `xtbloom_batch_result_t.flags` field is deliberately not modified.
+Context enqueue may do bounded setup work for a first or changed topology,
+whereas a prepared same-topology path leaves inference and result publication
+ordered only on the context stream. CPU enqueue is a capability probe that
+returns `NOT_SUPPORTED` before inspecting descriptors. ABI-v2 strict `WARM` is
+available on both CUDA enqueue entry points and obeys the same one-checkpoint
+contract as synchronous compute: it never falls back to `FRESH`, consumes the
+checkpoint in stream order, and publishes a replacement only after the complete
+batch succeeds. A deferred topology or execution failure invalidates the
+consumed checkpoint while preserving caller outputs under the normal
+transactional publication rules.
 
 ## xTBloom-owned result arenas and DLPack export
 
@@ -331,3 +379,11 @@ restarts its mixing window from the converged electronic state; CUDA preserves
 only epoch-compatible mixer history. See
 [architecture](../developer-guide/architecture.md) for the full identity and
 cache contract.
+
+ABI-v3 callers may select the modified-Broyden history depth (`1..64`) and
+damping (`0 < damping <= 1`); history 8 and damping 0.4 preserve the earlier
+behavior. `XTBLOOM_DETERMINISM_REPRODUCIBLE` requests bitwise replay only when
+the complete execution environment and start-mode sequence are unchanged. It
+is not a CPU/CUDA or cross-provider/toolkit/architecture equivalence promise.
+All three mixer fields and the determinism tag are part of fixed-plan,
+cache/Graph, and strict-WARM identity.

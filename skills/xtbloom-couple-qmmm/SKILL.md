@@ -5,9 +5,17 @@ description: Couple xTBloom GFN2-xTB calculations to QM/MM electrostatics using 
 
 # Couple xTBloom to QM/MM
 
-Treat xTBloom as the variational GFN2 subsystem and make the calling
-electrostatics or simulation program own every external term that xTBloom does
-not calculate.
+Treat xTBloom as the selected variational GFN1-xTB or GFN2-xTB subsystem and
+make the calling electrostatics or simulation program own every external term
+that xTBloom does not calculate.
+
+## Choose the Host Environment
+
+For an agent-generated standalone Python coupling example, add PEP 723 metadata
+with `dependencies = ["xtbloom>=0.1.1"]`, then run it with `uv run --script
+qmmm.py`. Add only the host package the user actually selected. Preserve an
+existing simulation environment when integrating into one; do not impose uv on
+a C/C++ or native simulation workflow.
 
 ## Workflow
 
@@ -52,7 +60,8 @@ not calculate.
 - A point-charge `gamma` is a screening parameter, not an optimizable spatial
   degree of freedom. Coincident QM and point-charge positions remain finite and
   have zero direct pair force at exact coincidence.
-- GFN1-xTB and ROCm remain unsupported reserved values.
+- GFN1-xTB QM/MM is supported on CPU only; GFN2-xTB supports CPU and CUDA.
+  ROCm remains an unsupported reserved value.
 
 ## Resources
 

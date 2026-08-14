@@ -368,6 +368,7 @@ bool same_es2_plan(const ES2Plan& first, const ES2Plan& second) {
          first.atom_shell_offsets() == second.atom_shell_offsets() &&
          first.matrix_offsets() == second.matrix_offsets() &&
          first.shell_to_atom() == second.shell_to_atom() &&
+         first.hardness_average() == second.hardness_average() &&
          first.shell_hardness() == second.shell_hardness();
 }
 

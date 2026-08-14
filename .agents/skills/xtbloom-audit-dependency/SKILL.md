@@ -55,14 +55,17 @@ Use structured tools from `tools/licensing/`, `tests/licensing/`, `tests/abi/`, 
 
 ## Run the Required Gates
 
-At minimum, run the relevant subset and return the results to the caller's validation ledger:
+At minimum, run the relevant subset and return the results to the caller's
+validation ledger. Use the locked project sessions so the current checkout and
+its reviewed dependencies are tested without requiring globally installed
+Python tools:
 
 ```bash
-python3 tools/licensing/check_licenses.py --source-root .
-python3 -m unittest discover -s tests/licensing -p 'test_*.py' -v
-uv lock --check
+UV_DEFAULT_INDEX=https://pypi.org/simple \
+  uv run --isolated --locked --only-group nox nox -s canonical
+UV_DEFAULT_INDEX=https://pypi.org/simple uv lock --check
 uv build --sdist --out-dir build/dist-license
-python3 tools/licensing/check_licenses.py --source-root . \
+uv run --no-sync python tools/licensing/check_licenses.py --source-root . \
   build/dist-license/*.tar.gz
 ```
 

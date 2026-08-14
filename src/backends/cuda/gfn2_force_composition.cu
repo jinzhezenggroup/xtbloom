@@ -106,6 +106,9 @@ bool validate_launch(const Gfn2ForceCompositionDeviceBatch& batch,
       component_enabled(batch.enabled_components, Gfn2ForceCompositionComponent::kClassicalForce);
   const bool explicit_pc = component_enabled(
       batch.enabled_components, Gfn2ForceCompositionComponent::kExplicitPointChargeForce);
+  const bool electric_field = input.electric_field_vectors != nullptr ||
+                              input.electric_field_vector_elements != 0 ||
+                              input.atomic_charges != nullptr || input.atomic_charge_elements != 0;
   if ((!qm_output && !point_output) || (!qm_output && (electronic || classical)) ||
       (point_output && !explicit_pc) || (qm_output && !(electronic || classical || explicit_pc)) ||
       !valid_optional(output.qm_forces, output.qm_force_elements, qm_elements, alignof(double),
@@ -124,11 +127,15 @@ bool validate_launch(const Gfn2ForceCompositionDeviceBatch& batch,
                       alignof(double),
                       qm_output && explicit_pc && batch.total_point_charges != 0) ||
       !valid_optional(input.explicit_point_forces, input.explicit_point_force_elements,
-                      point_elements, alignof(double), point_output && explicit_pc)) {
+                      point_elements, alignof(double), point_output && explicit_pc) ||
+      !valid_optional(input.electric_field_vectors, input.electric_field_vector_elements,
+                      batch.batch_size * 3, alignof(double), electric_field) ||
+      !valid_optional(input.atomic_charges, input.atomic_charge_elements, batch.total_atoms,
+                      alignof(double), electric_field)) {
     return false;
   }
 
-  std::array<AddressRange, 8> reads{};
+  std::array<AddressRange, 10> reads{};
   std::array<AddressRange, 5> writes{};
   if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(std::int64_t), &reads[0]) ||
       !make_range(batch.point_charge_offsets, batch.point_charge_offset_count, sizeof(std::int64_t),
@@ -145,6 +152,9 @@ bool validate_launch(const Gfn2ForceCompositionDeviceBatch& batch,
                   &reads[6]) ||
       !make_range(input.explicit_point_forces, input.explicit_point_force_elements, sizeof(double),
                   &reads[7]) ||
+      !make_range(input.electric_field_vectors, input.electric_field_vector_elements,
+                  sizeof(double), &reads[8]) ||
+      !make_range(input.atomic_charges, input.atomic_charge_elements, sizeof(double), &reads[9]) ||
       !make_range(output.qm_forces, output.qm_force_elements, sizeof(double), &writes[0]) ||
       !make_range(output.point_forces, output.point_force_elements, sizeof(double), &writes[1]) ||
       !make_range(workspace.qm_force_scratch, workspace.qm_force_elements, sizeof(double),
@@ -272,6 +282,7 @@ __global__ void compose_force_kernel(Gfn2ForceCompositionDeviceBatch batch,
       component_enabled(batch.enabled_components, Gfn2ForceCompositionComponent::kClassicalForce);
   const bool explicit_pc = component_enabled(
       batch.enabled_components, Gfn2ForceCompositionComponent::kExplicitPointChargeForce);
+  const bool electric_field = input.electric_field_vectors != nullptr;
 
   if (output.qm_forces != nullptr) {
     for (std::int64_t coordinate = atom_begin * 3 + threadIdx.x; coordinate < atom_end * 3;
@@ -308,6 +319,26 @@ __global__ void compose_force_kernel(Gfn2ForceCompositionDeviceBatch batch,
         if (!isfinite(force)) {
           record_system_error(system_errors, system,
                               Gfn2ForceCompositionDeviceError::kNonfiniteExplicitQmForce);
+          atomicExch(&active, 0);
+          continue;
+        }
+        value += force;
+        if (!isfinite(value)) {
+          record_system_error(system_errors, system,
+                              Gfn2ForceCompositionDeviceError::kNonfiniteForceArithmetic);
+          atomicExch(&active, 0);
+          continue;
+        }
+      }
+      if (electric_field) {
+        const std::int64_t atom = coordinate / 3;
+        const std::int64_t axis = coordinate % 3;
+        const double charge = input.atomic_charges[atom];
+        const double field = input.electric_field_vectors[system * 3 + axis];
+        const double force = charge * field;
+        if (!isfinite(charge) || !isfinite(field) || !isfinite(force)) {
+          record_system_error(system_errors, system,
+                              Gfn2ForceCompositionDeviceError::kNonfiniteElectricFieldForce);
           atomicExch(&active, 0);
           continue;
         }

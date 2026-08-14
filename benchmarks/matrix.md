@@ -3,6 +3,10 @@
 `run.py` measures end-to-end inference through the public interfaces of
 xTBloom, xTB, tblite, and dxtb. It covers gas-phase and QM/MM workloads,
 energy/force property sets, CPU/CUDA backends, and multiple batch sizes.
+The default workloads remain homogeneous `gas,qmmm`. The optional
+`heterogeneous-gas,heterogeneous-qmmm` rows construct one real ragged batch by
+cycling named committed conformance cases in manifest order defined by the
+runner; batches longer than the candidate list wrap deterministically.
 
 ## Timing boundary
 
@@ -11,6 +15,10 @@ between calls. Setup, first-call, and steady-state timings are reported
 separately. CUDA calls are explicitly synchronized at the end of every measured
 interval; result downloads used only for correctness checking remain outside
 timing.
+
+Steady-state samples keep coordinates unchanged and are labeled
+`same_geometry_repeated_compute`. They still execute the full public compute
+path and do not, by themselves, prove pair-list no-refresh reuse.
 
 For QM/MM force rows, the timed xTBloom call requests and validates both QM
 forces and external-point-charge forces.
@@ -46,7 +54,23 @@ python3 benchmarks/run.py \
   --properties energy,force \
   --workloads gas,qmmm \
   --fail-on-correctness
+
+python3 benchmarks/run.py \
+  --library /absolute/path/to/libxtbloom.so \
+  --engines xtbloom,xtb,tblite,dxtb \
+  --backends cuda --cuda-memory-modes host \
+  --batch-sizes 8,32 \
+  --properties energy,force \
+  --workloads heterogeneous-gas,heterogeneous-qmmm \
+  --fail-on-correctness
 ```
+
+Homogeneous JSON/CSV rows retain scalar `case_id`. Heterogeneous rows retain
+the complete ordered `case_ids` vector. xTB receives per-system source atomic
+numbers when every selected QM/MM case exposes the element-hardness mapping;
+gamma-only QM/MM cases remain explicit `unavailable` coordinates. tblite and
+dxtb likewise remain explicit `unavailable` for any row containing point
+charges because their adapters cannot express that public coordinate.
 
 The default outputs are `build/benchmarks/matrix.json` and
 `build/benchmarks/matrix.csv`. Artifacts are written before the runner returns

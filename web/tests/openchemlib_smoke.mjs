@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 
 import {
   OPEN_CHEMLIB_MODULE_URL,
@@ -16,6 +17,9 @@ const EXPECTED_MODULE_SHA256 =
   "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3";
 const EXPECTED_RESOURCES_SHA256 =
   "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14";
+const REMDESIVIR_SMILES =
+  "Nc3ncnn2c3ccc2C(C#N)(C1O)OC(C1O)CO[P](=O)(NC(C)C(=O)OCC(CC)CC)Oc4ccccc4";
+const GENERATION_TIMEOUT_MS = 120000;
 
 async function fetchPinned(url) {
   const response = await fetch(url, { signal: AbortSignal.timeout(60000) });
@@ -42,6 +46,57 @@ function inspectGeometry(result, expectedAtoms, expectedCharge) {
   }
   return symbols;
 }
+
+async function generateRemdesivirWithTimeout(moduleUrl, resources) {
+  const worker = new Worker(new URL(import.meta.url), {
+    workerData: { moduleUrl, resources },
+  });
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
+    const timer = setTimeout(() => {
+      void worker.terminate();
+      finish(
+        reject,
+        new Error(`OpenChemLib remdesivir generation exceeded ${GENERATION_TIMEOUT_MS} ms`),
+      );
+    }, GENERATION_TIMEOUT_MS);
+    worker.once("message", (message) => {
+      if (message?.ok) {
+        finish(resolve, message.result);
+      } else {
+        const error = new Error(message?.error?.message || "OpenChemLib worker failed");
+        error.name = message?.error?.name || "Error";
+        error.code = message?.error?.code;
+        finish(reject, error);
+      }
+    });
+    worker.once("error", (error) => finish(reject, error));
+    worker.once("exit", (code) => {
+      if (code !== 0) finish(reject, new Error(`OpenChemLib worker exited with code ${code}`));
+    });
+  });
+}
+
+if (!isMainThread) {
+  try {
+    const OCL = await import(workerData.moduleUrl);
+    OCL.Resources.register(workerData.resources);
+    parentPort.postMessage({ ok: true, result: smilesToGeometry(OCL, REMDESIVIR_SMILES) });
+  } catch (error) {
+    parentPort.postMessage({
+      ok: false,
+      error: { name: error?.name, message: error?.message, code: error?.code },
+    });
+  } finally {
+    parentPort.close();
+  }
+} else {
 
 const [moduleBytes, resourcesBytes] = await Promise.all([
   fetchPinned(OPEN_CHEMLIB_MODULE_URL),
@@ -79,6 +134,15 @@ try {
   const acetate = smilesToGeometry(OCL, "CC(=O)[O-]");
   assert.equal(inspectGeometry(acetate, 7, -1).filter((x) => x === "H").length, 3);
 
+  /* Regression for issue #369: this flexible drug-sized molecule is valid and
+   * must not be treated as a parse/conformer failure merely because slower
+   * browsers need longer than the old fixed 30-second page budget. */
+  const remdesivir = await generateRemdesivirWithTimeout(
+    pathToFileURL(modulePath).href,
+    resources,
+  );
+  assert.equal(inspectGeometry(remdesivir, 77, 0).filter((x) => x === "H").length, 35);
+
   assert.throws(
     () => smilesToGeometry(OCL, "not-a-smiles"),
     (error) => error && error.code === "smiles_err_parse",
@@ -100,3 +164,4 @@ try {
 }
 
 console.log("OpenChemLib pinned-CDN SMILES smoke passed");
+}

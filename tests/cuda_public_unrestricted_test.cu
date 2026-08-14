@@ -72,6 +72,11 @@ class DeviceBuffer {
 struct ContextOwner {
   xtbloom_context_t* context = nullptr;
   ~ContextOwner() { xtbloom_context_destroy(context); }
+
+  void reset() noexcept {
+    xtbloom_context_destroy(context);
+    context = nullptr;
+  }
 };
 
 struct BatchOwner {
@@ -370,6 +375,9 @@ int main() {
   if (const int status = test_abi_v1_restricted_fallback(owner.context); status != 0) {
     return status;
   }
+  /* The CUDA context borrows the caller stream and may synchronize it during
+   * teardown. Release that borrower before destroying the stream itself. */
+  owner.reset();
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }

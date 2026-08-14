@@ -132,12 +132,13 @@ def _structures_from_data(
 
 @Driver.register("xtbloom")
 class XTBloomDriver(Driver):
-    """Label molecular frames with GFN2-xTB using the xTBloom library.
+    """Label molecular frames with GFN1/GFN2-xTB using the xTBloom library.
 
     Parameters
     ----------
     method : str, default "GFN2-xTB"
-        Underlying tight-binding method (only GFN2-xTB is currently supported).
+        Underlying tight-binding method. GFN1-xTB is CPU-only; its high-level
+        ``backend="auto"`` policy selects CPU, while explicit CUDA is refused.
     charge : float, optional
         Fixed total charge applied to every frame. When ``None`` the per-frame
         ``data["charge"]`` key (or 0) is used.
@@ -152,7 +153,9 @@ class XTBloomDriver(Driver):
     **kwargs
         Forwarded to :class:`xtbloom.interface.BatchCalculator`: ``backend``,
         ``device_id``, ``cpu_threads``, ``max_scc_iterations``,
-        ``charge_tolerance``, ``energy_tolerance``, ``electronic_temperature``.
+        ``charge_tolerance``, ``energy_tolerance``, ``electronic_temperature``,
+        ``scc_mixer``, ``scc_mixer_history``, ``scc_mixer_damping``, and
+        ``determinism``.
     """
 
     def __init__(
@@ -530,11 +533,12 @@ class XTBloomMinimizer(Minimizer):
 
 
 def _reject_periodic(data: dict) -> None:
-    """Raise for periodic systems the molecular ABI cannot represent."""
+    """Raise until the ABI-v4 lattice foundation has a periodic adapter."""
     if not bool(np.asarray(data.get("nopbc", True)).all()):
         raise XTBloomNotSupportedError(
-            "the xTBloom Python driver does not support periodic systems "
-            "(the public C ABI has no lattice input)"
+            "the xTBloom Python driver does not support periodic systems yet "
+            "(the ABI-v4 lattice descriptor exists, but native periodic "
+            "execution and the dpdata adapter are not implemented)"
         )
 
 

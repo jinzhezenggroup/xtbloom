@@ -55,7 +55,9 @@ struct Gfn2SccSetupD4Source {
   Gfn2SccSetupHostArray<Gfn2D4DeviceElementData> elements{};
   Gfn2SccSetupHostArray<Gfn2D4DeviceReferenceData> references{};
   Gfn2SccSetupHostArray<double> reference_c6{};
-  Gfn2SccSetupHostArray<double> pair_data{};
+  /* Initial contents for the small setup-owned CN outlet. Runtime refreshes
+   * this storage from the committed pair-list transaction before consumers
+   * can observe it; no dense five-value D4 pair data crosses this boundary. */
   Gfn2SccSetupHostArray<double> coordination_numbers{};
 };
 

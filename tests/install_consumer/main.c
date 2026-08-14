@@ -48,16 +48,33 @@ _Static_assert(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE == 48,
                "installed ABI-v1 compute-options prefix must remain 48 bytes");
 _Static_assert(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE == 56,
                "installed ABI-v2 compute-options prefix must remain 56 bytes");
+_Static_assert(XTBLOOM_COMPUTE_OPTIONS_V3_SIZE == 80,
+               "installed ABI-v3 compute-options image must remain 80 bytes");
 _Static_assert(offsetof(xtbloom_compute_options_t, scc_start_mode) == 48,
                "installed ABI-v2 start mode offset must remain stable");
-_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
-               "installed compute-options layout must include the ABI-v2 suffix");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer) == 56,
+               "installed ABI-v3 mixer offset must remain stable");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_history) == 60,
+               "installed ABI-v3 mixer-history offset must remain stable");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_damping) == 64,
+               "installed ABI-v3 mixer-damping offset must remain stable");
+_Static_assert(offsetof(xtbloom_compute_options_t, determinism) == 72,
+               "installed ABI-v3 determinism offset must remain stable");
+_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V3_SIZE,
+               "installed compute-options layout must include the ABI-v3 suffix");
 
 _Static_assert(XTBLOOM_BATCH_V1_SIZE == 328, "installed ABI-v1 batch prefix must remain 328 bytes");
 _Static_assert(XTBLOOM_BATCH_V2_SIZE == 352, "installed ABI-v2 batch prefix must remain 352 bytes");
 _Static_assert(XTBLOOM_BATCH_V3_SIZE == 408, "installed ABI-v3 batch image must remain 408 bytes");
-_Static_assert(sizeof(xtbloom_batch_t) == XTBLOOM_BATCH_V3_SIZE,
-               "installed batch layout must include the ABI-v3 interaction suffix");
+_Static_assert(XTBLOOM_BATCH_V4_SIZE == 456, "installed ABI-v4 batch image must be 456 bytes");
+_Static_assert(offsetof(xtbloom_batch_t, cell_matrices) == 408,
+               "installed ABI-v4 cell matrices must follow ABI v3");
+_Static_assert(offsetof(xtbloom_batch_t, periodic_axes) == 432,
+               "installed ABI-v4 periodic axes must follow cell matrices");
+_Static_assert(sizeof(xtbloom_batch_t) == XTBLOOM_BATCH_V4_SIZE,
+               "installed batch layout must include the ABI-v4 lattice suffix");
+_Static_assert(sizeof(xtbloom_periodic_axes_t) == sizeof(int32_t),
+               "installed periodic-axis mask must remain fixed-width");
 _Static_assert(XTBLOOM_BATCH_RESULT_V1_SIZE == 184,
                "installed ABI-v1 batch-result prefix must remain 184 bytes");
 _Static_assert(XTBLOOM_BATCH_RESULT_V2_SIZE == 280,
@@ -195,13 +212,76 @@ static xtbloom_buffer_t output_buffer(void* data, size_t size_bytes) {
   return buffer;
 }
 
+/* Exercise the installed ABI-v4 availability boundary without a linear-
+ * algebra provider. Complete descriptor validation must precede the explicit
+ * periodic-execution refusal, and that call-level refusal must not publish a
+ * single caller-owned byte. This runs in smoke mode for both shared and
+ * static install consumers. */
+static int run_installed_native_lattice_refusal(xtbloom_context_t* context) {
+  const int64_t atom_offsets[] = {0, 1};
+  const int32_t atomic_numbers[] = {1};
+  const double positions[] = {0.0, 0.0, 0.0};
+  const double molecular_charges[] = {0.0};
+  const int32_t unpaired_electrons[] = {1};
+  const double cell[] = {8.0, 0.0, 0.0, 0.0, 9.0, 0.0, 0.0, 0.0, 10.0};
+  const int32_t periodic_axes[] = {XTBLOOM_PERIODIC_AXES_XYZ};
+  const uint32_t flags_canary = UINT32_C(0xa55a39c6);
+  const double energy_canary = -9182.625;
+  const int32_t iterations_canary = -123456789;
+  const uint8_t converged_canary = UINT8_C(0xa5);
+  const xtbloom_status_t status_canary = XTBLOOM_STATUS_INTERNAL_ERROR;
+
+  xtbloom_batch_t batch;
+  xtbloom_compute_options_t options;
+  xtbloom_batch_result_t result;
+  if (xtbloom_batch_init(&batch, sizeof(batch)) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom_compute_options_init(&options, sizeof(options)) != XTBLOOM_STATUS_SUCCESS ||
+      xtbloom_batch_result_init(&result, sizeof(result)) != XTBLOOM_STATUS_SUCCESS) {
+    return 40;
+  }
+  batch.batch_size = 1;
+  batch.total_atoms = 1;
+  batch.atom_offsets = input_buffer(atom_offsets, sizeof(atom_offsets));
+  batch.atomic_numbers = input_buffer(atomic_numbers, sizeof(atomic_numbers));
+  batch.positions = input_buffer(positions, sizeof(positions));
+  batch.molecular_charges = input_buffer(molecular_charges, sizeof(molecular_charges));
+  batch.unpaired_electrons = input_buffer(unpaired_electrons, sizeof(unpaired_electrons));
+  batch.cell_matrices = input_buffer(cell, sizeof(cell));
+  batch.periodic_axes = input_buffer(periodic_axes, sizeof(periodic_axes));
+  options.flags = XTBLOOM_COMPUTE_ENERGY;
+
+  double energy = energy_canary;
+  int32_t iterations = iterations_canary;
+  uint8_t converged = converged_canary;
+  xtbloom_status_t system_status = status_canary;
+  result.flags = flags_canary;
+  result.energies = output_buffer(&energy, sizeof(energy));
+  result.scc_iterations = output_buffer(&iterations, sizeof(iterations));
+  result.scc_converged = output_buffer(&converged, sizeof(converged));
+  result.per_system_status = output_buffer(&system_status, sizeof(system_status));
+
+  const xtbloom_status_t call_status = xtbloom_compute(context, &batch, &options, &result);
+  if (call_status != XTBLOOM_STATUS_NOT_IMPLEMENTED || result.flags != flags_canary ||
+      energy != energy_canary || iterations != iterations_canary || converged != converged_canary ||
+      system_status != status_canary) {
+    fprintf(stderr,
+            "installed native-lattice refusal is not transactional: call=%d flags=0x%08x "
+            "energy=%.17g iterations=%d converged=%u system=%d error=%s\n",
+            (int)call_status, (unsigned int)result.flags, energy, (int)iterations,
+            (unsigned int)converged, (int)system_status, xtbloom_get_last_error());
+    return 41;
+  }
+  return 0;
+}
+
 /* Exercise actual inference through the installed C ABI without requiring a
  * CUDA compiler in the external consumer: the CUDA backend stages these host
  * descriptors and publishes the host result through its public transaction. */
-static int run_installed_inference(xtbloom_context_t* context, const char* mode_name) {
+static int run_installed_inference(xtbloom_context_t* context, const char* mode_name,
+                                   xtbloom_model_t model) {
   const int64_t atom_offsets[] = {0, 2};
   const int32_t atomic_numbers[] = {1, 1};
-  const double positions[] = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
+  double positions[] = {-0.70, 0.0, 0.0, 0.70, 0.0, 0.0};
   const double molecular_charges[] = {0.0};
   const int32_t unpaired_electrons[] = {0};
 
@@ -224,6 +304,7 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
   batch.molecular_charges = input_buffer(molecular_charges, sizeof(molecular_charges));
   batch.unpaired_electrons = input_buffer(unpaired_electrons, sizeof(unpaired_electrons));
 
+  options.model = model;
   options.flags = XTBLOOM_COMPUTE_ENERGY;
 
   double energy = NAN;
@@ -246,12 +327,68 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
     return 11;
   }
 
-  /* Exercise the CPU-released ABI-v3 electric-field attachment and ABI-v2
-   * dipole-moment outlet end to end. CUDA deliberately returns NOT_IMPLEMENTED
-   * for both until #237 P3, so its installed consumer retains the field-free
-   * inference and plan probes below. The released field block is 32 bytes:
-   * int32 block_version=1, int32 reserved=0, three doubles in atomic units. */
-  if (xtbloom_context_get_backend(context) == XTBLOOM_BACKEND_CPU) {
+  if (xtbloom_context_get_backend(context) == XTBLOOM_BACKEND_CUDA) {
+    const uint32_t result_flags_canary = UINT32_C(0xa55a39c6);
+    xtbloom_request_t* request = NULL;
+    xtbloom_request_info_t info;
+    energy = NAN;
+    iterations = -1;
+    converged = 0;
+    system_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    result.flags = result_flags_canary;
+    if (xtbloom_request_info_init(&info, sizeof(info)) != XTBLOOM_STATUS_SUCCESS ||
+        xtbloom_request_create(context, &request) != XTBLOOM_STATUS_SUCCESS || request == NULL ||
+        xtbloom_compute_enqueue(context, &batch, &options, &result, request) !=
+            XTBLOOM_STATUS_SUCCESS ||
+        xtbloom_request_wait(request, &info) != XTBLOOM_STATUS_SUCCESS ||
+        info.state != XTBLOOM_REQUEST_COMPLETE ||
+        info.completion_status != XTBLOOM_STATUS_SUCCESS || info.result_flags != 0u ||
+        result.flags != result_flags_canary || system_status != XTBLOOM_STATUS_SUCCESS ||
+        converged != 1 || iterations <= 0 || !isfinite(energy)) {
+      fprintf(stderr, "installed %s context enqueue failed: call_error=%s request_error=%s\n",
+              mode_name, xtbloom_get_last_error(),
+              request == NULL ? "request is NULL" : xtbloom_request_get_error(request));
+      xtbloom_request_destroy(request);
+      return 18;
+    }
+
+    /* A successful async FRESH publishes the strict checkpoint consumed by
+     * the next changed-geometry WARM request. Keep the C-only installed
+     * consumer independent of CUDA headers while exercising the public ABI. */
+    positions[0] -= 0.01;
+    positions[3] += 0.0075;
+    energy = NAN;
+    iterations = -1;
+    converged = 0;
+    system_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+    if (xtbloom_compute_enqueue(context, &batch, &options, &result, request) !=
+            XTBLOOM_STATUS_SUCCESS ||
+        xtbloom_request_wait(request, &info) != XTBLOOM_STATUS_SUCCESS ||
+        info.state != XTBLOOM_REQUEST_COMPLETE ||
+        info.completion_status != XTBLOOM_STATUS_SUCCESS || info.result_flags != 0u ||
+        result.flags != result_flags_canary || system_status != XTBLOOM_STATUS_SUCCESS ||
+        converged != 1 || iterations <= 0 || !isfinite(energy)) {
+      fprintf(stderr, "installed %s context async WARM failed: call_error=%s\n", mode_name,
+              xtbloom_get_last_error());
+      fprintf(stderr, "installed %s context async WARM request_error=%s\n", mode_name,
+              xtbloom_request_get_error(request));
+      xtbloom_request_destroy(request);
+      return 25;
+    }
+    xtbloom_request_destroy(request);
+    /* Plan creation below owns an independent cache. Reset the per-call
+     * policy so its first compute establishes that cache with FRESH. */
+    options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+  }
+
+  /* Exercise the GFN2-only ABI-v3 electric-field attachment and ABI-v2 dipole
+   * outlet through either installed backend. The CUDA coordinate deliberately
+   * uses host descriptors and results so this C-only consumer also proves the
+   * installed public staging/publication bridge without CUDA headers. The
+   * released field block is 32 bytes: int32 block_version=1, int32 reserved=0,
+   * and three doubles in atomic units. */
+  if (model == XTBLOOM_MODEL_GFN2_XTB) {
     const uint32_t field_flags =
         XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
     uint8_t payload[32];
@@ -279,9 +416,19 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
     field_batch.interaction_payload = input_buffer(payload, sizeof(payload));
     field_result.forces = output_buffer(field_forces, sizeof(field_forces));
     field_result.dipole_moments = output_buffer(dipole, sizeof(dipole));
-    if (xtbloom_compute(context, &field_batch, &field_options, &field_result) !=
-        XTBLOOM_STATUS_SUCCESS) {
-      fprintf(stderr, "installed %s electric-field inference failed: %s\n", mode_name,
+    energy = NAN;
+    iterations = -1;
+    converged = 0;
+    system_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    const xtbloom_status_t field_status =
+        xtbloom_compute(context, &field_batch, &field_options, &field_result);
+    if (field_status != XTBLOOM_STATUS_SUCCESS || system_status != XTBLOOM_STATUS_SUCCESS ||
+        converged != 1 || iterations <= 0 || !isfinite(energy)) {
+      fprintf(stderr,
+              "installed %s electric-field inference failed: call=%d system=%d flags=0x%08x "
+              "converged=%u iterations=%d energy=%.17g force0=%.17g dipole0=%.17g error=%s\n",
+              mode_name, (int)field_status, (int)system_status, (unsigned int)field_result.flags,
+              (unsigned int)converged, (int)iterations, energy, field_forces[0], dipole[0],
               xtbloom_get_last_error());
       return 11;
     }
@@ -361,6 +508,26 @@ static int run_installed_inference(xtbloom_context_t* context, const char* mode_
     xtbloom_plan_destroy(plan);
     return 16;
   }
+  /* The installed plan owns a cache distinct from the context convenience
+   * cache. Prove that both published CPU models establish and consume their
+   * own strict WARM checkpoint through the installed ABI. */
+  if (backend == XTBLOOM_BACKEND_CPU) {
+    positions[0] -= 0.002;
+    positions[3] += 0.002;
+    energy = NAN;
+    iterations = -1;
+    converged = 0;
+    system_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+    if (xtbloom_plan_compute(plan, &batch, &options, &result) != XTBLOOM_STATUS_SUCCESS ||
+        system_status != XTBLOOM_STATUS_SUCCESS || converged != 1 || iterations <= 0 ||
+        !isfinite(energy)) {
+      fprintf(stderr, "installed %s plan WARM inference failed: %s\n", mode_name,
+              xtbloom_get_last_error());
+      xtbloom_plan_destroy(plan);
+      return 26;
+    }
+  }
   xtbloom_plan_destroy(plan);
   return 0;
 }
@@ -397,8 +564,12 @@ int main(int argc, char** argv) {
   if (xtbloom_compute_options_init(&compute_options, sizeof(compute_options)) !=
           XTBLOOM_STATUS_SUCCESS ||
       compute_options.scc_start_mode != XTBLOOM_SCC_START_FRESH ||
-      compute_options.reserved_v2 != 0) {
-    fprintf(stderr, "installed compute-options ABI-v2 defaults are incorrect\n");
+      compute_options.reserved_v2 != 0 ||
+      compute_options.scc_mixer != XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN ||
+      compute_options.scc_mixer_history != 8 || compute_options.scc_mixer_damping != 0.4 ||
+      compute_options.determinism != XTBLOOM_DETERMINISM_DEFAULT ||
+      compute_options.reserved_v3 != 0) {
+    fprintf(stderr, "installed compute-options ABI-v3 defaults are incorrect\n");
     return 1;
   }
 
@@ -420,6 +591,12 @@ int main(int argc, char** argv) {
     return 4;
   }
 
+  const int lattice_status = run_installed_native_lattice_refusal(context);
+  if (lattice_status != 0) {
+    xtbloom_context_destroy(context);
+    return lattice_status;
+  }
+
   const int request_status = run_installed_request_shell(context);
   if (request_status != 0) {
     fprintf(stderr, "installed request ABI shell failed (%d): %s\n", request_status,
@@ -430,8 +607,11 @@ int main(int argc, char** argv) {
 
   int inference_status = 0;
   if (mode != CONSUMER_MODE_SMOKE) {
-    inference_status =
-        run_installed_inference(context, mode == CONSUMER_MODE_CUDA ? "CUDA" : "CPU");
+    inference_status = run_installed_inference(
+        context, mode == CONSUMER_MODE_CUDA ? "CUDA GFN2" : "CPU GFN2", XTBLOOM_MODEL_GFN2_XTB);
+    if (inference_status == 0 && mode == CONSUMER_MODE_CPU) {
+      inference_status = run_installed_inference(context, "CPU GFN1", XTBLOOM_MODEL_GFN1_XTB);
+    }
   }
   xtbloom_context_destroy(context);
   if (inference_status != 0) {

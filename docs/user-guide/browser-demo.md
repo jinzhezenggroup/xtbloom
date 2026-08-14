@@ -14,6 +14,30 @@ browser; the site does not upload a calculation to a server.
 4. Select **Optimize geometry** to run the demo's L-BFGS adapter and inspect
    its energy trajectory.
 
+SMILES conformer generation is bounded to two minutes. Flexible drug-sized
+molecules can take substantially longer than small examples such as ethanol,
+especially on phones. If that limit is reached, the page terminates the
+uninterruptible OpenChemLib task and restores a clean generator automatically;
+retry after the generator reports that it is ready. Editing the SMILES or
+selecting **Reset** also cancels the old task, so its coordinates cannot replace
+newer input.
+
+Each optimization step after the first is seeded from the previous step's
+converged electronic state (native SCC warm start), reusing electronic state
+across successive geometries. A new optimization or a standalone single-point
+calculation always starts fresh and never inherits another run's electronic
+state.
+
+The 3D view is an input-validation preview, independent of the calculation
+path. Valid XYZ coordinates render automatically about 400 ms after you stop
+typing, and a generated SMILES structure renders immediately. Malformed input
+(invalid element symbols, missing or non-numeric coordinates, more than 512
+atoms) is flagged inline beside the coordinates box while the last valid
+structure stays on screen, and **Compute energy** / **Optimize geometry**
+remain disabled until a valid structure is present. **Reset** clears the
+SMILES box, coordinates, settings, preview, results, and errors, then restores
+the water template.
+
 The URL
 [`?smiles=CCO`](https://xtbloom.jinzhezeng.group/?smiles=CCO) waits for the
 SMILES and xTBloom workers, generates ethanol, runs the demo optimizer, and
@@ -60,8 +84,11 @@ xTBloom's published native benchmark evidence.
 - SMILES-to-3D and L-BFGS optimization are browser-adapter features, not
   stable C ABI capabilities.
 - The demo is for exploration, not a production scientific environment.
-- GFN1-xTB, solvation, molecular dynamics, Hessians, and lattice/PBC inputs
-  remain unsupported.
+- The browser adapter exposes GFN2-xTB only. CPU GFN1-xTB is available through
+  native APIs and the Python `Calculator`, `BatchCalculator`, ASE, and dpdata
+  interfaces, not through this WebAssembly demo.
+  Solvation, molecular dynamics, Hessians, and lattice/PBC inputs remain
+  unsupported here.
 
 Implementation, build, dependency, and parity details are documented in
 [`web/README.md`](../../web/README.md).

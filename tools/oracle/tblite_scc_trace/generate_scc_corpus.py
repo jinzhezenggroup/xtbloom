@@ -228,7 +228,14 @@ def dependency_revisions(source_root: Path) -> dict[str, str]:
     return dict(PINNED_DEPENDENCIES)
 
 
-def probe_meson_project(lapack: str, custom_libraries: list[str]) -> str:
+def probe_meson_project(
+    lapack: str,
+    custom_libraries: list[str],
+    *,
+    recorder_basename: str = "scc_trace_recorder.f90",
+    main_basename: str = "scc_trace_main.f90",
+    executable_name: str = "xtbloom-tblite-scc-trace",
+) -> str:
     """Return the disposable outer Meson project building the trace recorder."""
     custom_option = ""
     if custom_libraries:
@@ -255,9 +262,9 @@ tblite_project = subproject(
 tblite_dep = tblite_project.get_variable('tblite_dep')
 
 scc_trace = executable(
-  'xtbloom-tblite-scc-trace',
-  'scc_trace_recorder.f90',
-  'scc_trace_main.f90',
+  '{executable_name}',
+  '{recorder_basename}',
+  '{main_basename}',
   dependencies: tblite_dep,
 )
 """
@@ -462,6 +469,9 @@ def build_oracle(
     lapack: str,
     wrap_mode: str,
     custom_libraries: list[str],
+    recorder_path: Path = RECORDER_PATH,
+    main_path: Path = MAIN_PATH,
+    executable_name: str = "xtbloom-tblite-scc-trace",
 ) -> tuple[Path, dict[str, object]]:
     """Build the recorder oracle and return its executable and toolchain.
 
@@ -477,10 +487,17 @@ def build_oracle(
         subprojects.mkdir(parents=True)
         os.symlink(checkout, subprojects / "tblite", target_is_directory=True)
         (outer / "meson.build").write_text(
-            probe_meson_project(lapack, custom_libraries), encoding="utf-8"
+            probe_meson_project(
+                lapack,
+                custom_libraries,
+                recorder_basename=recorder_path.name,
+                main_basename=main_path.name,
+                executable_name=executable_name,
+            ),
+            encoding="utf-8",
         )
-        shutil.copy2(RECORDER_PATH, outer / "scc_trace_recorder.f90")
-        shutil.copy2(MAIN_PATH, outer / "scc_trace_main.f90")
+        shutil.copy2(recorder_path, outer / recorder_path.name)
+        shutil.copy2(main_path, outer / main_path.name)
         clone_pinned_dependencies(outer, source_root, dependency_pins)
 
         environment = os.environ.copy()
@@ -503,11 +520,11 @@ def build_oracle(
                 f"{sorted(actual_subprojects)}, expected {sorted(expected_subprojects)}"
             )
         validator.run(
-            [*meson_command, "compile", "-C", str(build), "xtbloom-tblite-scc-trace"],
+            [*meson_command, "compile", "-C", str(build), executable_name],
             cwd=outer,
             env=environment,
         )
-        binary_path = build / "xtbloom-tblite-scc-trace"
+        binary_path = build / executable_name
         if not binary_path.is_file():
             raise CorpusError("recorder oracle executable was not produced")
         meson_version = subprocess.run(
@@ -1139,83 +1156,8 @@ def require_sha256(value: object, field: str) -> str:
     return value
 
 
-def validate_manifest_document(manifest: object, case_dir: Path) -> None:
-    """Validate the complete offline corpus and its repository-owned provenance."""
-    require_manifest(isinstance(manifest, dict), "manifest root must be an object")
-    expected_fields = {
-        "cases",
-        "command",
-        "dependencies",
-        "environment",
-        "format",
-        "generated_at",
-        "host",
-        "oracle_patch_sha256",
-        "oracle_sources",
-        "revision",
-        "schema",
-        "toolchain",
-    }
-    require_manifest(
-        set(manifest) == expected_fields,
-        f"manifest fields {sorted(manifest)} do not match {sorted(expected_fields)}",
-    )
-    require_manifest(manifest["schema"] == MANIFEST_SCHEMA, "manifest schema mismatch")
-    require_manifest(manifest["format"] == FORMAT, "manifest format mismatch")
-    require_manifest(manifest["revision"] == REVISION, "manifest revision mismatch")
-
-    patch_digest = require_sha256(
-        manifest["oracle_patch_sha256"], "oracle_patch_sha256"
-    )
-    require_manifest(
-        patch_digest == validator.sha256_file(PATCH_PATH),
-        "oracle patch digest does not match the current patch bytes",
-    )
-    sources = manifest["oracle_sources"]
-    expected_sources = {
-        RECORDER_PATH.name: sha256_file(RECORDER_PATH),
-        MAIN_PATH.name: sha256_file(MAIN_PATH),
-    }
-    require_manifest(isinstance(sources, dict), "oracle_sources must be an object")
-    for name, digest in sources.items():
-        require_sha256(digest, f"oracle_sources.{name}")
-    require_manifest(
-        sources == expected_sources,
-        "oracle source digests do not match the compiled repository bytes",
-    )
-
-    dependencies = manifest["dependencies"]
-    require_manifest(isinstance(dependencies, dict), "dependencies must be an object")
-    for name, revision in dependencies.items():
-        require_manifest(
-            isinstance(name, str)
-            and isinstance(revision, str)
-            and LOWER_HEX_40.fullmatch(revision) is not None,
-            f"dependency {name!r} is not pinned to a lowercase commit",
-        )
-    require_manifest(
-        dependencies == PINNED_DEPENDENCIES,
-        "dependency pins do not match the reviewed oracle inputs",
-    )
-    require_manifest(
-        manifest["environment"] == DETERMINISTIC_ENVIRONMENT,
-        "deterministic oracle environment mismatch",
-    )
-    command = manifest["command"]
-    require_manifest(isinstance(command, str) and command, "command must be nonempty")
-    host = manifest["host"]
-    require_manifest(isinstance(host, str) and host, "host must be nonempty")
-    generated_at = manifest["generated_at"]
-    require_manifest(isinstance(generated_at, str), "generated_at must be a string")
-    try:
-        timestamp = datetime.datetime.fromisoformat(generated_at)
-    except ValueError as error:
-        raise CorpusError(f"generated_at is not ISO-8601: {error}") from error
-    require_manifest(
-        timestamp.tzinfo is not None, "generated_at must include a timezone"
-    )
-
-    toolchain = manifest["toolchain"]
+def validate_toolchain_provenance(toolchain: object) -> None:
+    """Validate the exact compiler, Meson, and LP64 provider provenance."""
     require_manifest(
         isinstance(toolchain, dict)
         and set(toolchain) == {"blas_lapack", "compiler", "meson"},
@@ -1311,6 +1253,85 @@ def validate_manifest_document(manifest: object, case_dir: Path) -> None:
         )
         seen_sonames.add(soname)
         require_sha256(library["sha256"], f"blas_lapack.libraries[{index}].sha256")
+
+
+def validate_manifest_document(manifest: object, case_dir: Path) -> None:
+    """Validate the complete offline corpus and its repository-owned provenance."""
+    require_manifest(isinstance(manifest, dict), "manifest root must be an object")
+    expected_fields = {
+        "cases",
+        "command",
+        "dependencies",
+        "environment",
+        "format",
+        "generated_at",
+        "host",
+        "oracle_patch_sha256",
+        "oracle_sources",
+        "revision",
+        "schema",
+        "toolchain",
+    }
+    require_manifest(
+        set(manifest) == expected_fields,
+        f"manifest fields {sorted(manifest)} do not match {sorted(expected_fields)}",
+    )
+    require_manifest(manifest["schema"] == MANIFEST_SCHEMA, "manifest schema mismatch")
+    require_manifest(manifest["format"] == FORMAT, "manifest format mismatch")
+    require_manifest(manifest["revision"] == REVISION, "manifest revision mismatch")
+
+    patch_digest = require_sha256(
+        manifest["oracle_patch_sha256"], "oracle_patch_sha256"
+    )
+    require_manifest(
+        patch_digest == validator.sha256_file(PATCH_PATH),
+        "oracle patch digest does not match the current patch bytes",
+    )
+    sources = manifest["oracle_sources"]
+    expected_sources = {
+        RECORDER_PATH.name: sha256_file(RECORDER_PATH),
+        MAIN_PATH.name: sha256_file(MAIN_PATH),
+    }
+    require_manifest(isinstance(sources, dict), "oracle_sources must be an object")
+    for name, digest in sources.items():
+        require_sha256(digest, f"oracle_sources.{name}")
+    require_manifest(
+        sources == expected_sources,
+        "oracle source digests do not match the compiled repository bytes",
+    )
+
+    dependencies = manifest["dependencies"]
+    require_manifest(isinstance(dependencies, dict), "dependencies must be an object")
+    for name, revision in dependencies.items():
+        require_manifest(
+            isinstance(name, str)
+            and isinstance(revision, str)
+            and LOWER_HEX_40.fullmatch(revision) is not None,
+            f"dependency {name!r} is not pinned to a lowercase commit",
+        )
+    require_manifest(
+        dependencies == PINNED_DEPENDENCIES,
+        "dependency pins do not match the reviewed oracle inputs",
+    )
+    require_manifest(
+        manifest["environment"] == DETERMINISTIC_ENVIRONMENT,
+        "deterministic oracle environment mismatch",
+    )
+    command = manifest["command"]
+    require_manifest(isinstance(command, str) and command, "command must be nonempty")
+    host = manifest["host"]
+    require_manifest(isinstance(host, str) and host, "host must be nonempty")
+    generated_at = manifest["generated_at"]
+    require_manifest(isinstance(generated_at, str), "generated_at must be a string")
+    try:
+        timestamp = datetime.datetime.fromisoformat(generated_at)
+    except ValueError as error:
+        raise CorpusError(f"generated_at is not ISO-8601: {error}") from error
+    require_manifest(
+        timestamp.tzinfo is not None, "generated_at must include a timezone"
+    )
+
+    validate_toolchain_provenance(manifest["toolchain"])
 
     cases = manifest["cases"]
     require_manifest(isinstance(cases, dict), "cases must be an object")

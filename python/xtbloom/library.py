@@ -28,8 +28,10 @@ import numpy.typing as npt
 from .exceptions import XTBloomRuntimeError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
     from types import ModuleType
+
+_cuda_driver_handle: ctypes.CDLL | None = None
 
 # --- ABI constants (kept in sync with include/xtbloom/xtbloom.h) ----------------
 
@@ -64,6 +66,15 @@ MODEL_GFN2_XTB = 2
 SCC_START_FRESH = 1
 SCC_START_WARM = 2
 
+SCC_MIXER_MODIFIED_BROYDEN = 1
+
+DETERMINISM_DEFAULT = 0
+DETERMINISM_REPRODUCIBLE = 1
+
+DEFAULT_SCC_MIXER_HISTORY = 8
+DEFAULT_SCC_MIXER_DAMPING = 0.4
+MAX_SCC_MIXER_HISTORY = 64
+
 COMPUTE_ENERGY = 1 << 0
 COMPUTE_FORCES = 1 << 1
 COMPUTE_ATOMIC_CHARGES = 1 << 2
@@ -73,10 +84,10 @@ COMPUTE_DIPOLE_MOMENTS = 1 << 4
 RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1 << 0
 RESULT_DIPOLE_MOMENTS = 1 << 4
 
-# Reserved interaction-type tags (mirror of xtbloom_interaction_type_t).  No
-# backend executes any interaction yet: attaching one currently fails with
-# NOT_IMPLEMENTED at the C boundary.  Values are reserved so future
-# interactions never renumber an existing tag.
+# Interaction-type tags (mirror of xtbloom_interaction_type_t). Both released
+# backends execute the uniform electric field; the remaining values stay
+# reserved and return NOT_IMPLEMENTED so future interactions never renumber an
+# existing tag.
 INTERACTION_NONE = 0
 INTERACTION_ELECTRIC_FIELD = 0x0101
 INTERACTION_ELECTRIC_FIELD_GRADIENT = 0x0102
@@ -90,6 +101,12 @@ INTERACTION_DDX_SOLVATION = 0x0205
 INTERACTION_D3_DISPERSION = 0x0301
 INTERACTION_D4_VARIANT_DISPERSION = 0x0302
 INTERACTION_HALOGEN_BOND = 0x0401
+
+PERIODIC_AXES_NONE = 0
+PERIODIC_AXIS_X = 1 << 0
+PERIODIC_AXIS_Y = 1 << 1
+PERIODIC_AXIS_Z = 1 << 2
+PERIODIC_AXES_XYZ = PERIODIC_AXIS_X | PERIODIC_AXIS_Y | PERIODIC_AXIS_Z
 
 # DLPack device/dtype codes used by the xTBloom-owned result producer
 # (mirrors DLPack 1.0; see xtbloom._dlpack for the consumer-side constants).
@@ -145,7 +162,7 @@ class Buffer(ctypes.Structure):
 
 
 class Batch(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_batch_t`` through the ABI-v3 interaction suffix."""
+    """ctypes mirror of ``xtbloom_batch_t`` through the ABI-v4 lattice suffix."""
 
     _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
@@ -170,6 +187,8 @@ class Batch(ctypes.Structure):
         ("total_interactions", ctypes.c_int64),
         ("interaction_descriptors", ConstBuffer),
         ("interaction_payload", ConstBuffer),
+        ("cell_matrices", ConstBuffer),
+        ("periodic_axes", ConstBuffer),
     ]
 
 
@@ -186,7 +205,7 @@ class Interaction(ctypes.Structure):
 
 
 class ComputeOptions(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_compute_options_t`` through ABI version 2."""
+    """ctypes mirror of ``xtbloom_compute_options_t`` through ABI version 3."""
 
     _fields_: ClassVar[list[tuple[str, object]]] = [
         ("struct_size", ctypes.c_uint32),
@@ -200,6 +219,11 @@ class ComputeOptions(ctypes.Structure):
         ("electronic_temperature", ctypes.c_double),
         ("scc_start_mode", ctypes.c_int32),
         ("reserved_v2", ctypes.c_uint32),
+        ("scc_mixer", ctypes.c_int32),
+        ("scc_mixer_history", ctypes.c_int32),
+        ("scc_mixer_damping", ctypes.c_double),
+        ("determinism", ctypes.c_int32),
+        ("reserved_v3", ctypes.c_uint32),
     ]
 
 
@@ -358,6 +382,38 @@ def library_path() -> str | Path:
     )
 
 
+def _configure_pyodide_openblas_paths(path: str | Path) -> None:
+    """Publish exact private WebAssembly provider paths to the native loader.
+
+    Emscripten has neither ``dladdr``-based sibling discovery nor isolated
+    dynamic-linker namespaces. The repaired wheel layout is authoritative: one
+    adapter lives beside ``libxtbloom`` and one content-qualified provider
+    lives in auditwheel's top-level ``xtbloom.libs`` directory. These internal
+    environment values are overwritten from installed paths on every first
+    load, so user-supplied generic OpenBLAS names cannot become a fallback.
+    """
+    if sys.platform != "emscripten":
+        return
+    library = Path(path)
+    if not library.is_absolute() or not library.is_file():
+        raise XTBloomRuntimeError(
+            "Pyodide requires the bundled xTBloom library at an absolute path"
+        )
+    adapter = library.parent / "libxtbloom_pyodide_lapacke.so"
+    provider_dir = Path(__file__).resolve().parent.parent / "xtbloom.libs"
+    providers = sorted(provider_dir.glob("libxtbloom_openblas-*.so"))
+    if not adapter.is_file():
+        raise XTBloomRuntimeError(
+            f"private Pyodide LAPACKE adapter is missing: {adapter}"
+        )
+    if len(providers) != 1 or not providers[0].is_file():
+        raise XTBloomRuntimeError(
+            f"private Pyodide OpenBLAS provider is missing or ambiguous: {providers}"
+        )
+    os.environ["XTBLOOM_PYODIDE_LAPACKE_SHIM"] = str(adapter.resolve())
+    os.environ["XTBLOOM_PYODIDE_OPENBLAS"] = str(providers[0].resolve())
+
+
 def _configure_library(library: ctypes.CDLL) -> None:
     """Declare every C symbol signature the Python package calls."""
     library.xtbloom_get_last_error.argtypes = []
@@ -469,6 +525,68 @@ _REQUEST_API_SYMBOLS = (
 _REQUEST_API_AVAILABILITY: weakref.WeakKeyDictionary[object, bool] = (
     weakref.WeakKeyDictionary()
 )
+_COMPUTE_OPTIONS_V3_AVAILABILITY: weakref.WeakKeyDictionary[object, bool] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _probe_compute_options_v3(library: ctypes.CDLL) -> bool:
+    """Detect whether the selected core initializes the complete ABI-v3 suffix.
+
+    Future-larger structures are accepted by older cores, so a successful init
+    does not itself prove support. A sentinel-filled suffix distinguishes an
+    older 56-byte initializer from the frozen V3 defaults without requiring a
+    new public symbol.
+    """
+    options = ComputeOptions()
+    ctypes.memset(ctypes.byref(options), 0xA5, ctypes.sizeof(options))
+    status = library.xtbloom_compute_options_init(
+        ctypes.byref(options), ctypes.sizeof(options)
+    )
+    if status != STATUS_SUCCESS:
+        raise XTBloomRuntimeError(
+            "xtbloom_compute_options_init failed while probing ABI-v3 support",
+            status,
+        )
+    available = (
+        options.scc_mixer == SCC_MIXER_MODIFIED_BROYDEN
+        and options.scc_mixer_history == DEFAULT_SCC_MIXER_HISTORY
+        and options.scc_mixer_damping == DEFAULT_SCC_MIXER_DAMPING
+        and options.determinism == DETERMINISM_DEFAULT
+        and options.reserved_v3 == 0
+    )
+    _COMPUTE_OPTIONS_V3_AVAILABILITY[library] = available
+    return available
+
+
+def compute_options_v3_available(library: ctypes.CDLL | None = None) -> bool:
+    """Return whether the resolved core supports the complete options V3 suffix."""
+    handle = load_library() if library is None else library
+    return _COMPUTE_OPTIONS_V3_AVAILABILITY.get(handle, False)
+
+
+def require_compute_options_v3(
+    scc_mixer: int,
+    scc_mixer_history: int,
+    scc_mixer_damping: float,
+    determinism: int,
+    library: ctypes.CDLL | None = None,
+) -> None:
+    """Fail closed when an older core would ignore a nondefault V3 policy."""
+    if (
+        scc_mixer == SCC_MIXER_MODIFIED_BROYDEN
+        and scc_mixer_history == DEFAULT_SCC_MIXER_HISTORY
+        and scc_mixer_damping == DEFAULT_SCC_MIXER_DAMPING
+        and determinism == DETERMINISM_DEFAULT
+    ):
+        return
+    handle = load_library() if library is None else library
+    if not compute_options_v3_available(handle):
+        raise XTBloomRuntimeError(
+            "the loaded xTBloom core does not support compute-options ABI v3; "
+            "nondefault scc_mixer_history, scc_mixer_damping, or determinism "
+            "would be ignored"
+        )
 
 
 def _configure_request_api(library: ctypes.CDLL) -> bool:
@@ -610,6 +728,140 @@ def _runtime_search_dirs() -> list[Path]:
     return dirs
 
 
+def _load_cuda_driver() -> ctypes.CDLL | None:
+    """Load the process-global NVIDIA driver used to scope DLPack export.
+
+    The driver API is independent of the CUDA runtime major used by an array
+    producer.  Keeping this handle alive avoids mixing xTBloom's CUDA-12
+    runtime cohort with a producer such as a CUDA-13 PyTorch build merely to
+    select the producer's current device.
+    """
+    global _cuda_driver_handle
+    if _cuda_driver_handle is not None:
+        return _cuda_driver_handle
+    try:
+        driver = ctypes.CDLL("libcuda.so.1")
+    except OSError:
+        return None
+    _cuda_driver_handle = driver
+    return driver
+
+
+@contextlib.contextmanager
+def _cuda_device_scope(device_id: int) -> Iterator[None]:
+    """Push one CUDA primary context temporarily and restore the caller state.
+
+    Some conforming DLPack producers, notably PyTorch, require their array's
+    device to be current while ``__dlpack__`` exports the capsule.  The driver
+    context stack is runtime-major-neutral and thread-local; using it avoids
+    importing an array backend or calling one CUDA runtime's ``cudaSetDevice``
+    inside a producer built against another runtime major.  The scope performs
+    no synchronization.  A CUDA-less process is a no-op so protocol fakes
+    remain testable without a driver.
+    """
+    driver = _load_cuda_driver()
+    if driver is None:
+        yield
+        return
+
+    try:
+        cu_init = driver.cuInit
+        cu_device_get = driver.cuDeviceGet
+        cu_primary_retain = driver.cuDevicePrimaryCtxRetain
+        cu_primary_release = driver.cuDevicePrimaryCtxRelease
+        cu_context_push = driver.cuCtxPushCurrent_v2
+        cu_context_pop = driver.cuCtxPopCurrent_v2
+    except AttributeError:
+        yield
+        return
+    cu_init.argtypes = [ctypes.c_uint]
+    cu_init.restype = ctypes.c_int
+    cu_device_get.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+    cu_device_get.restype = ctypes.c_int
+    cu_primary_retain.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_int]
+    cu_primary_retain.restype = ctypes.c_int
+    cu_primary_release.argtypes = [ctypes.c_int]
+    cu_primary_release.restype = ctypes.c_int
+    cu_context_push.argtypes = [ctypes.c_void_p]
+    cu_context_push.restype = ctypes.c_int
+    cu_context_pop.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    cu_context_pop.restype = ctypes.c_int
+
+    init_status = int(cu_init(0))
+    if init_status != 0:
+        # A loader stub or CUDA-less host cannot establish a meaningful
+        # context stack.  Let the producer provide its normal diagnostic.
+        yield
+        return
+
+    target = int(device_id)
+    device = ctypes.c_int()
+    device_status = int(cu_device_get(ctypes.byref(device), target))
+    if device_status != 0:
+        raise XTBloomRuntimeError(
+            f"could not resolve CUDA device {target} for DLPack export "
+            f"(cuDeviceGet status {device_status})"
+        )
+    context = ctypes.c_void_p()
+    retain_status = int(cu_primary_retain(ctypes.byref(context), device.value))
+    if retain_status != 0:
+        raise XTBloomRuntimeError(
+            f"could not retain CUDA device {target}'s primary context for "
+            f"DLPack export (cuDevicePrimaryCtxRetain status {retain_status})"
+        )
+    push_status = int(cu_context_push(context))
+    if push_status != 0:
+        release_status = int(cu_primary_release(device.value))
+        suffix = (
+            f"; primary-context release status {release_status}"
+            if release_status != 0
+            else ""
+        )
+        raise XTBloomRuntimeError(
+            f"could not make CUDA device {target} current for DLPack export "
+            f"(cuCtxPushCurrent status {push_status}{suffix})"
+        )
+
+    try:
+        yield
+    except BaseException as export_error:
+        popped = ctypes.c_void_p()
+        restore_status = int(cu_context_pop(ctypes.byref(popped)))
+        release_status = (
+            int(cu_primary_release(device.value)) if restore_status == 0 else None
+        )
+        if restore_status != 0 or release_status != 0:
+            release_diagnostic = (
+                str(release_status)
+                if release_status is not None
+                else "not attempted after pop failure"
+            )
+            raise XTBloomRuntimeError(
+                f"DLPack export failed ({export_error}); additionally could "
+                "not restore the caller's CUDA context after DLPack export "
+                f"(cuCtxPopCurrent status {restore_status}, "
+                f"cuDevicePrimaryCtxRelease status {release_diagnostic})"
+            ) from export_error
+        raise
+    else:
+        popped = ctypes.c_void_p()
+        restore_status = int(cu_context_pop(ctypes.byref(popped)))
+        release_status = (
+            int(cu_primary_release(device.value)) if restore_status == 0 else None
+        )
+        if restore_status != 0 or release_status != 0:
+            release_diagnostic = (
+                str(release_status)
+                if release_status is not None
+                else "not attempted after pop failure"
+            )
+            raise XTBloomRuntimeError(
+                "could not restore the caller's CUDA context after DLPack export "
+                f"(cuCtxPopCurrent status {restore_status}, "
+                f"cuDevicePrimaryCtxRelease status {release_diagnostic})"
+            )
+
+
 # Exact dependency groups in load order.  Prefix-scanning every NVIDIA package
 # can load unused CUDA stacks (and even conflicting major versions), inflating
 # startup time and RSS.  ``libcuda`` is deliberately absent: the NVIDIA kernel
@@ -673,6 +925,7 @@ def load_library() -> ctypes.CDLL:
     global _lib
     if _lib is None:
         path = library_path()
+        _configure_pyodide_openblas_paths(path)
         _preload_runtime_libraries()
         try:
             library = ctypes.CDLL(str(path))
@@ -681,6 +934,7 @@ def load_library() -> ctypes.CDLL:
                 f"cannot load xTBloom shared library {path}: {exc}"
             ) from exc
         _configure_library(library)
+        _probe_compute_options_v3(library)
         _lib = library
     return _lib
 
@@ -998,6 +1252,10 @@ __all__ = [
     "COMPUTE_FORCES",
     "COMPUTE_POINT_CHARGE_FORCES",
     "DEFAULT_ELECTRONIC_TEMPERATURE",
+    "DEFAULT_SCC_MIXER_DAMPING",
+    "DEFAULT_SCC_MIXER_HISTORY",
+    "DETERMINISM_DEFAULT",
+    "DETERMINISM_REPRODUCIBLE",
     "DLPACK_DEVICE_CPU",
     "DLPACK_DEVICE_CUDA",
     "DLPACK_DTYPE_BFLOAT",
@@ -1020,16 +1278,23 @@ __all__ = [
     "INTERACTION_NONE",
     "INTERACTION_POINT_CHARGES_MULTIPOLE",
     "KELVIN_TO_HARTREE",
+    "MAX_SCC_MIXER_HISTORY",
     "MEMORY_CUDA_DEVICE",
     "MEMORY_HOST",
     "MEMORY_ROCM_DEVICE",
     "MODEL_GFN1_XTB",
     "MODEL_GFN2_XTB",
+    "PERIODIC_AXES_NONE",
+    "PERIODIC_AXES_XYZ",
+    "PERIODIC_AXIS_X",
+    "PERIODIC_AXIS_Y",
+    "PERIODIC_AXIS_Z",
     "REQUEST_COMPLETE",
     "REQUEST_IDLE",
     "REQUEST_PENDING",
     "RESULT_DIPOLE_MOMENTS",
     "RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES",
+    "SCC_MIXER_MODIFIED_BROYDEN",
     "SCC_START_FRESH",
     "SCC_START_WARM",
     "STATUS_ALLOCATION_FAILED",
@@ -1054,6 +1319,7 @@ __all__ = [
     "ResultOwnerOptions",
     "WorkspaceQuery",
     "compute_checked",
+    "compute_options_v3_available",
     "device_memory_info",
     "empty_result_shape",
     "get_last_error",
@@ -1062,5 +1328,6 @@ __all__ = [
     "host_const",
     "library_path",
     "load_library",
+    "require_compute_options_v3",
     "status_string",
 ]

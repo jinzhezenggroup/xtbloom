@@ -1,0 +1,41 @@
+Captured public iterations: 10
+Start policy: strict XTBLOOM_SCC_START_WARM
+
+Required execution/completion:
+cudaGraphLaunch_v10000: 10
+cudaEventSynchronize: 10
+
+Expected inspection/ordering:
+cudaStreamIsCapturing_v10000: 30
+cudaStreamGetDevice_v12080: 10
+cudaEventRecord: 30
+cudaStreamWaitEvent: 10
+cudaLaunchHostFunc_v10000: 10
+
+Forbidden steady-state resource/synchronization APIs:
+cudaMalloc/cudaMallocAsync/cudaHostAlloc: 0
+cudaFree/cudaFreeAsync/cudaFreeHost: 0
+cudaEventCreate/cudaEventDestroy: 0
+cudaStreamCreate/cudaStreamDestroy: 0
+cudaGraphCreate/cudaGraphDestroy/cudaGraphInstantiate: 0
+cudaEventQuery/cudaStreamQuery: 0
+cudaStreamSynchronize: 0
+cudaDeviceSynchronize: 0
+
+Expected transfer/memory operations:
+cudaMemcpyAsync: 100
+  Device-to-Host copies: 70
+  Host-to-Device copies: 30
+cudaMemsetAsync: 820
+cudaLaunchKernel: 2660
+
+Raw identities before deletion:
+context-warm.nsys-rep sha256: c4328687573b1d868036ff0a176e4bed8577cf79bd16f8453778e1ef90e6055d
+context-warm.sqlite sha256: 719d8889c743ad4cb0c21edf3ee5ff228f863c579fa4a18eb5908eb6e85fac0a
+
+topology_resource_rebuild: 0
+host_progress_polling: 0
+device_wide_synchronization: 0
+result_descriptor_flags_canary: PASS
+cpu_reference_comparison: PASS
+conclusion: PASS: ten clean-commit strict-WARM context request reuses wait on ten exact completion events with no steady-state allocation, resource churn, host progress polling, stream synchronization, or device-wide synchronization.

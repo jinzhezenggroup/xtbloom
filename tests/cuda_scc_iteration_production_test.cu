@@ -21,6 +21,7 @@
 #include "data/parameters/d4.hpp"
 #include "model/gfn2/coordination.hpp"
 #include "runtime/nvidia_host_api.h"
+#include "tests/support/cuda_d4_pairlist_fixture.cuh"
 #include "tests/support/gfn2_scc_test_case.hpp"
 
 #define CHECK(condition)                                                                          \
@@ -289,7 +290,6 @@ struct InputBacking {
       result.d4.reference_c6 = {
           xtbloom::parameters::d4::kReferenceC6.data(),
           static_cast<std::int64_t>(xtbloom::parameters::d4::kReferenceC6.size())};
-      result.d4.pair_data = {host.d4_cache()->pair_data, host.d4_cache()->pair_data_elements};
       result.d4.coordination_numbers = {host.d4_cache()->coordination_numbers,
                                         host.d4_cache()->coordination_elements};
     }
@@ -847,6 +847,7 @@ int compare_energy_mixer_and_scc_trace(const HostSccCase& host,
 struct ProductionFixture {
   HostSccCase host;
   InputBacking backing;
+  xtbloom::test::cuda::D4CommittedPairListFixture d4_pairlist;
   ProviderHandles handles;
   Gfn2SccSetupTopology topology_owner;
   Gfn2SccSetupInputs inputs_owner;
@@ -854,6 +855,7 @@ struct ProductionFixture {
   Gfn2SccIterationInitializer initializer;
   DeviceAllocation topology_arena;
   DeviceAllocation input_arena;
+  DeviceAllocation electric_field_arena;
   DeviceAllocation iteration_arena;
   DeviceAllocation eigensolver_setup_arena;
   PinnedAllocation provider_host_workspace;
@@ -872,7 +874,7 @@ struct ProductionFixture {
               bool mixed_spin_batch = false, const std::vector<SmallSystemKind>& systems = {},
               double electronic_temperature = 0.0, CouplingSelection coupling = {},
               std::uint64_t maximum_iterations = 8u, double residual_tolerance = 1.0e-10,
-              double energy_tolerance = 1.0e-8) {
+              double energy_tolerance = 1.0e-8, bool deterministic_debug = false) {
     if (batch_size <= 0) {
       return false;
     }
@@ -953,7 +955,11 @@ struct ProductionFixture {
       return false;
     }
 
-    const Gfn2SccSetupInputSources sources = backing.sources(host);
+    Gfn2SccSetupInputSources sources = backing.sources(host);
+    /* The production setup owner seals eigensolver policy before Graph
+     * construction, so deterministic-debug coverage must opt in here rather
+     * than mutating the already-bound iteration plan. */
+    sources.eigensolver_options.deterministic_debug = deterministic_debug;
     auto input_diagnostic = Gfn2SccSetupInputs::create(sources, topology_owner.host_topology(),
                                                        kPlanToken, inputs_owner);
     if (!input_diagnostic.success() ||
@@ -973,6 +979,45 @@ struct ProductionFixture {
       std::fprintf(stderr, "production SCC immutable-input upload failed: error=%u field=%u\n",
                    static_cast<unsigned>(input_diagnostic.error),
                    static_cast<unsigned>(input_diagnostic.field));
+      return false;
+    }
+    /* The direct production fixture has no runtime numerical-refresh owner.
+     * Bind its field-free case through the same fixed zero-field transaction
+     * used by public execution so the sealed SCC descriptor remains complete. */
+    const std::int64_t field_vectors = 3 * host.batch_size();
+    const std::int64_t coordinates = 3 * host.total_atoms();
+    const std::int64_t field_storage_elements =
+        field_vectors + coordinates + host.total_atoms() + coordinates;
+    if (!electric_field_arena.allocate(static_cast<std::size_t>(field_storage_elements) *
+                                       sizeof(double))) {
+      std::fprintf(stderr, "production SCC electric-field backing allocation failed\n");
+      return false;
+    }
+    auto* const field_storage = static_cast<double*>(electric_field_arena.get());
+    double* const field_positions = field_storage + field_vectors;
+    double* const field_atomic_potentials = field_positions + coordinates;
+    double* const field_dipole_potentials = field_atomic_potentials + host.total_atoms();
+    if (cudaMemsetAsync(field_storage, 0, electric_field_arena.bytes(), handles.stream()) !=
+            cudaSuccess ||
+        cudaMemcpyAsync(field_positions, host.positions().data(),
+                        static_cast<std::size_t>(coordinates) * sizeof(double),
+                        cudaMemcpyHostToDevice, handles.stream()) != cudaSuccess) {
+      std::fprintf(stderr, "production SCC electric-field backing upload failed\n");
+      return false;
+    }
+    plan_seed.electric_field_batch = {host.batch_size(), host.total_atoms(), host.batch_size() + 1,
+                                      device_topology.atom_offsets, kPlanToken};
+    plan_seed.classical_energy_batch.electric_field = plan_seed.electric_field_batch;
+    input_seed.electric_field = {field_storage, field_vectors, field_positions, coordinates,
+                                 kPlanToken};
+    input_seed.electric_field_potentials = {field_atomic_potentials, host.total_atoms(),
+                                            field_dipole_potentials, coordinates, kPlanToken};
+    if (host.d4_plan() != nullptr &&
+        !d4_pairlist.bind(
+            host.atom_offsets(), host.positions(), device_topology,
+            plan_seed.d4_pairlist_cache.positions, plan_seed.d4_pairlist_cache.coordination_numbers,
+            host.options().geometry_generation, plan_seed.d4_pairlist_cache, handles.stream())) {
+      std::fprintf(stderr, "production SCC D4 committed pair-list setup failed\n");
       return false;
     }
 
@@ -1008,6 +1053,15 @@ struct ProductionFixture {
                    static_cast<unsigned>(bind_arena_diagnostic.error));
       return false;
     }
+    input_seed.classical_energy.electric_field_multipoles = {
+        workspace_seed.physical_topology.atomic_charges,
+        workspace_seed.physical_topology.atom_elements,
+        workspace_seed.physical_topology.atomic_dipoles,
+        workspace_seed.physical_topology.dipole_elements, kPlanToken};
+    input_seed.classical_energy.electric_field_potentials = input_seed.electric_field_potentials;
+    input_seed.free_energy.electric_field = workspace_seed.staged_classical_energy.electric_field;
+    input_seed.free_energy.electric_field_elements =
+        workspace_seed.staged_classical_energy.electric_field_elements;
 
     eigensolver_diagnostic = eigensolver_owner.bind_and_factor_overlap_async(
         device_topology, plan_seed, arena_requirements, iteration_arena.get(),
@@ -1821,11 +1875,13 @@ int run_host_until_globally_terminal(HostSccCase& host, std::uint64_t& body_coun
 }
 
 int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIterationBinding& binding,
-                                  cudaStream_t observation_stream) {
+                                  cudaStream_t observation_stream,
+                                  bool compare_eigenvectors = false) {
   constexpr double kTolerance = 1.0e-8;
   const auto& layout = host.wavefunction_layout();
   const auto& state = binding.state;
   std::vector<double> eigenvalues;
+  std::vector<double> coefficients;
   std::vector<double> occupations;
   std::vector<double> density;
   std::vector<double> weighted_density;
@@ -1839,6 +1895,10 @@ int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIteratio
 
   CHECK(download(state.eigenpairs.eigenvalues, state.eigenpairs.eigenvalue_elements, eigenvalues,
                  observation_stream));
+  if (compare_eigenvectors) {
+    CHECK(download(state.eigenpairs.coefficients, state.eigenpairs.coefficient_elements,
+                   coefficients, observation_stream));
+  }
   CHECK(download(state.occupations.occupations, state.occupations.occupation_elements, occupations,
                  observation_stream));
   CHECK(
@@ -1861,6 +1921,9 @@ int compare_graph_loop_cpu_parity(const HostSccCase& host, const Gfn2SccIteratio
 
   CHECK(compare_doubles("Graph eigenvalues", eigenvalues, host.wavefunction().eigenvalues,
                         layout.eigenvalues.element_count, kTolerance));
+  if (compare_eigenvectors) {
+    CHECK(compare_coefficients(host, eigenvalues, coefficients, kTolerance, 3.0e-8));
+  }
   CHECK(compare_doubles("Graph occupations", occupations, host.wavefunction().occupations,
                         layout.occupations.element_count, kTolerance));
   CHECK(compare_doubles("Graph density", density, host.wavefunction().density,
@@ -1971,6 +2034,116 @@ int test_conditional_graph_exact_body_count(std::int64_t batch_size,
                           fixture.handles.stream())
             .success());
   CHECK(run_and_compare() == 0);
+  return 0;
+}
+
+struct DeterministicDebugSnapshot {
+  std::vector<double> free_energies;
+  std::vector<double> qsh;
+  std::vector<double> qat;
+  std::vector<double> dipoles;
+  std::vector<double> quadrupoles;
+  std::vector<std::uint64_t> iterations;
+  std::vector<xtbloom_status_t> statuses;
+  std::vector<std::uint8_t> converged;
+};
+
+bool download_deterministic_debug_snapshot(const Gfn2SccIterationBinding& binding,
+                                           cudaStream_t stream,
+                                           DeterministicDebugSnapshot& snapshot) {
+  const auto& state = binding.state;
+  return download(state.scc.free_energies, state.scc.batch_elements, snapshot.free_energies,
+                  stream) &&
+         download(state.raw_population.qsh, state.raw_population.qsh_elements, snapshot.qsh,
+                  stream) &&
+         download(state.raw_population.qat, state.raw_population.qat_elements, snapshot.qat,
+                  stream) &&
+         download(state.raw_population.dipole, state.raw_population.dipole_elements,
+                  snapshot.dipoles, stream) &&
+         download(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
+                  snapshot.quadrupoles, stream) &&
+         download(state.scc.iterations, state.scc.batch_elements, snapshot.iterations, stream) &&
+         download(state.scc.system_statuses, state.scc.batch_elements, snapshot.statuses, stream) &&
+         download(state.scc.converged, state.scc.batch_elements, snapshot.converged, stream);
+}
+
+bool same_deterministic_debug_snapshot(const DeterministicDebugSnapshot& first,
+                                       const DeterministicDebugSnapshot& second) {
+  return first.free_energies == second.free_energies && first.qsh == second.qsh &&
+         first.qat == second.qat && first.dipoles == second.dipoles &&
+         first.quadrupoles == second.quadrupoles && first.iterations == second.iterations &&
+         first.statuses == second.statuses && first.converged == second.converged;
+}
+
+/* Exercise the complete restricted SCC Graph with pedantic cuBLAS math, not
+ * merely an isolated eigensolver call. Homogeneous CH2 batches keep this gate
+ * bounded while providing a nontrivial 6-AO eigensystem and covering singleton
+ * device-tail plus multi-system dispatch-chain execution at every release
+ * batch size. */
+int test_deterministic_debug_restricted_scc_gate() {
+  for (const std::int64_t batch_size : {1, 8, 32, 128}) {
+#if CUDART_VERSION >= 12080
+    const bool expected_dispatch_chain = batch_size > 1;
+#else
+    /* Device-dispatched Graph executables require CUDA 12.8; older supported
+     * toolkits use the monolithic device-tail Graph for every batch size. */
+    constexpr bool expected_dispatch_chain = false;
+#endif
+    ProductionFixture fixture;
+    CHECK(fixture.create(false, batch_size, false, false, {SmallSystemKind::kCH2}, 0.0, {}, 64u,
+                         1.0e-8, 1.0e-8, true));
+    CHECK(fixture.binding.plan.eigensolver_options.deterministic_debug);
+    CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+    const HostSccCheckpoint initial = fixture.host.checkpoint();
+
+    Gfn2SccLoopCudaGraphOwner graph;
+    const Gfn2SccLoopGraphBuildResult build = graph.build(fixture.binding);
+    CHECK(build.success());
+    CHECK(build.conditional_graph_ready());
+    CHECK(expected_dispatch_chain ? build.device_dispatch_chain_ready()
+                                  : build.device_tail_graph_ready());
+    CHECK(expected_dispatch_chain ? !build.device_tail_graph_ready()
+                                  : !build.device_dispatch_chain_ready());
+
+    const auto run_and_compare = [&](DeterministicDebugSnapshot& snapshot) -> int {
+      const Gfn2SccLoopLaunchResult launch = graph.launch(fixture.handles.stream());
+      CHECK(launch.success());
+      CHECK(launch.execution_mode == (expected_dispatch_chain
+                                          ? Gfn2SccLoopExecutionMode::kDeviceDispatchChain
+                                          : Gfn2SccLoopExecutionMode::kDeviceTailGraph));
+      CHECK(launch.submitted_graphs == 1u);
+      CHECK(launch.submitted_iterations == 0u);
+      CHECK(download_deterministic_debug_snapshot(fixture.binding, fixture.handles.stream(),
+                                                  snapshot));
+      CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
+
+      std::uint64_t reference_body_count = 0u;
+      CHECK(run_host_until_globally_terminal(fixture.host, reference_body_count) == 0);
+      CHECK(reference_body_count > 0u);
+      CHECK(std::all_of(snapshot.statuses.begin(), snapshot.statuses.end(),
+                        [](xtbloom_status_t status) { return status == XTBLOOM_STATUS_SUCCESS; }));
+      CHECK(std::all_of(snapshot.converged.begin(), snapshot.converged.end(),
+                        [](std::uint8_t converged) { return converged == 1u; }));
+      CHECK(compare_graph_loop_cpu_parity(fixture.host, fixture.binding, fixture.handles.stream(),
+                                          true) == 0);
+      return 0;
+    };
+
+    DeterministicDebugSnapshot first;
+    CHECK(run_and_compare(first) == 0);
+
+    std::string error;
+    CHECK(fixture.host.restore(initial, error) == XTBLOOM_STATUS_SUCCESS);
+    Gfn2SccIterationInitializationReady ready{};
+    CHECK(fixture.initializer
+              .upload_async(fixture.iteration_arena.get(), fixture.iteration_arena.bytes(), ready,
+                            fixture.handles.stream())
+              .success());
+
+    DeterministicDebugSnapshot second;
+    CHECK(run_and_compare(second) == 0);
+    CHECK(same_deterministic_debug_snapshot(first, second));
+  }
   return 0;
 }
 
@@ -3794,13 +3967,16 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--large-singleton-sanitizer") == 0) {
     return test_large_singleton_tridiagonal_sanitizer_smoke();
   }
+  if (argc == 2 && std::strcmp(argv[1], "--deterministic-debug") == 0) {
+    return test_deterministic_debug_restricted_scc_gate();
+  }
   if (argc != 1) {
     std::fprintf(stderr,
                  "usage: %s "
                  "[--benchmark|--unrestricted-smoke|--unrestricted-parity|--mixed-parity|"
                  "--mixed-acceptance|--mixed-bounded|--mixed-conditional|"
                  "--dispatch-chain|--finite-temperature-parity|--large-singleton-tridiagonal|"
-                 "--large-singleton-sanitizer]\n",
+                 "--large-singleton-sanitizer|--deterministic-debug]\n",
                  argv[0]);
     return 2;
   }

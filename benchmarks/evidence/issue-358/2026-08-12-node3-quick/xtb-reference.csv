@@ -1,0 +1,3 @@
+engine,natoms,hessian_batch_size,nthreads,requested_cpu_threads,availability,median_ms,amortized_ms_per_hessian_at_median,mean_ms,p95_ms,min_ms,max_ms,hessians_per_hour_at_median,correctness_status,max_abs_delta_hartree_per_bohr2,rms_delta_hartree_per_bohr2,max_abs_antisymmetry_hartree_per_bohr2,max_abs_acoustic_residual_hartree_per_bohr2,unavailable_reason
+xtb,62,1,16,16,available,2858.988247,2858.988247,2858.454603333333,3174.3934828,2506.937054,3209.438509,1259.1867083670456,pass,,,0.0,3.836949515334531e-07,
+xtb,62,128,16,16,unavailable,,,,,,,,,,,,,xtb has no complete-Hessian batch API; batch 128 would require that many sequential full-Hessian calls and exceeds --max-serial-hessian-batch-size=1

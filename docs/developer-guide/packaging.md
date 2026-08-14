@@ -8,16 +8,22 @@ xTBloom has three related distribution surfaces:
 
 Changing one surface does not prove the other two remain correct.
 
-## Authoritative product version
+## Python and native product versions
 
 Release tags use the strict form `vMAJOR.MINOR.PATCH`, with each component
-written canonically (`0` or a non-zero digit followed by digits). The latest
-tag reachable from `HEAD` is the product version until another release tag is
-created; setuptools-scm's `only-version` scheme deliberately ignores commit
-distance, object IDs, and worktree dirtiness. The tag without its leading `v`
-feeds Python metadata, Python `__version__`, `xtbloom_version_string()`, CMake
-`project(VERSION)`, target filenames, the installed CMake package version, and
-the generated public version macros.
+written canonically (`0` or a non-zero digit followed by digits). Native CMake
+packages, target filenames, generated public macros, and
+`xtbloom_version_string()` use the latest reachable tag without its leading
+`v` until another release tag is created.
+
+Python distributions identify the source revision independently. An exact
+clean release tag produces the same `MAJOR.MINOR.PATCH` value as the native
+library. A post-tag build uses setuptools-scm's `no-guess-dev` and
+`node-and-date` schemes, for example
+`0.0.0.post1.dev20+ge7c20f0ff` for the twentieth commit after native tag
+`v0.0.0`. Python `__version__`, sdist/wheel metadata, and distribution
+filenames use that revision-aware value; it does not change the native product
+version embedded in the wheel.
 
 `XTBLOOM_API_VERSION`, the Linux symbol-version node, and the ELF `SOVERSION`
 are ABI contracts, not product versions. They change only after an explicit ABI
@@ -25,24 +31,29 @@ decision; a product tag never changes them automatically.
 
 Native Git checkouts read the nearest reachable strict tag from complete tag
 history. Python package metadata comes directly from scikit-build-core's
-built-in setuptools-scm provider; CMake consumes `SKBUILD_PROJECT_VERSION` in
-wheel builds and resolves the same tag itself for native builds. Native CMake
-configuration rejects shallow history; automated Python builds also fetch
-complete history so branch builds can find the true nearest tag. An exact-tag
-Python build may use that tag from a shallow checkout, following setuptools-scm
-semantics. Repositories without a reachable strict tag fail configuration. An
-sdist consumes the version frozen from that tag into `PKG-INFO`, while a Git
-archive consumes the nearest tag expanded into `.git_archival.txt`. The `v*`
-namespace is reserved for product versions, so a nearer malformed tag such as
-`v1.2` is rejected instead of being silently skipped. There is intentionally no
-fallback version.
+built-in setuptools-scm provider. During Python builds, CMake validates the
+full SCM version and uses its unchanged release tuple as the native tag;
+exact-tag builds map directly. Native CMake configuration rejects shallow
+history, while automated Python builds fetch complete history so branch
+artifacts include the real commit distance. An exact-tag Python build may use
+that tag from a shallow checkout, following setuptools-scm semantics.
+Repositories without a reachable strict tag fail configuration.
+
+An sdist freezes the Python version into `PKG-INFO`; an unpacked-sdist wheel
+build validates that metadata and reconstructs the unchanged native tag.
+`.git_archival.txt` records a full describe value for Python SCM identity;
+native CMake builds recover the unchanged nearest tag from that same value.
+The `v*` namespace is reserved for product versions, so a nearer malformed tag
+such as `v1.2` is rejected instead of being silently skipped. There is
+intentionally no fallback version.
 
 Release automation must check out complete history and require a clean exact
-tag. Wheel jobs build directly from that checkout and therefore resolve the
-tag themselves. The independent sdist job verifies the frozen `PKG-INFO` path
-used by unpacked source archives. Validate that the sdist/wheel metadata,
-generated public header, CMake package, C API string, and Python `__version__`
-agree before publishing artifacts.
+tag, so published PyPI artifacts use the exact release version without a local
+identifier. Branch wheel jobs build directly from their checkout and retain
+the revision-aware Python version. The independent sdist job verifies the
+frozen `PKG-INFO` path used by unpacked source archives. Validate Python
+metadata against Python `__version__`, and independently validate the generated
+public header, CMake package, and C API string against the native release tag.
 
 ## PyPI documentation
 
@@ -129,11 +140,15 @@ two wheel cohorts; their payload checks require its absence. Pyodide likewise
 has no LibTorch runtime and contains no Torch extension.
 
 The Pyodide `cp314-pyodide_wasm32` wheel targets Pyodide 314.x and its stable
-`pyemscripten_2026_0_wasm32` ABI, then is smoke-tested as a CI-only artifact.
-PyPI accepts this platform tag, but xTBloom excludes the wheel from the PyPI
-artifact prefix until the Python wheel has a production WebAssembly eigensolver
-path; the existing Web demo uses its separate preloaded Eigen LAPACKE/CBLAS
-side-module design.
+`pyemscripten_2026_0_wasm32` ABI. It carries the reviewed official Pyodide
+OpenBLAS side module under a content-qualified private name plus xTBloom's
+narrow LAPACKE adapter. Release builds repair that dependency with Pyodide's
+supported auditwheel path, then run installed-wheel conformance, invariance,
+finite-difference, failure-isolation, and NumPy/SciPy coexistence tests. The
+wheel is release-eligible and enters the same PyPI artifact prefix as the
+validated native wheels; the existing Web demo continues to use its separate
+preloaded Eigen LAPACKE/CBLAS side-module design.
+
 Eigen is acquired only by Web-enabled CMake configurations from the fixed
 official archive (or `XTBLOOM_WEB_EIGEN_ARCHIVE` for offline builds). The
 repository and sdist retain the provenance manifest and exact legal records,
@@ -167,14 +182,18 @@ provenance and legal records stay distributed. Excluding repository-only files
 does not claim that the corresponding validation passed inside the sdist;
 release evidence remains in the repository and its issue/CI records.
 
-The sdist supports ordinary PEP 517 CPU or CUDA source builds. The project's
-release-wheel orchestration, repair scripts, and locked private-provider setup
-remain checkout-only; official cibuildwheel jobs build from the exact release
-tag rather than using the sdist as their input. The one `python/ci` helper kept
-in the archive is the OpenBLAS manifest resolver that CMake invokes directly
-when a source build explicitly requests that reviewed provider input.
-Repository tests and the Web demo are likewise checkout-only. A native CMake
-consumer unpacking the sdist must configure with
+The sdist supports ordinary PEP 517 CPU or CUDA source builds. It retains the
+Pyodide OpenBLAS provenance manifest, exact 13-file recipe source closure, and
+five corresponding legal texts as auditable source material. The Pyodide
+resolver, downloaded ZIP and provider binary, repair scripts, and installed-
+wheel test orchestration remain release-tag checkout or wheel-only; ordinary
+sdist builds do not enable Pyodide provider bundling. Official cibuildwheel
+jobs therefore build from the exact release tag rather than using the sdist as
+their input. The one `python/ci` helper kept in the archive is the desktop/Linux
+OpenBLAS manifest resolver that CMake invokes directly when a source build
+explicitly requests that reviewed provider input. Repository tests and the Web
+demo are likewise checkout-only. A native CMake consumer unpacking the sdist
+must configure with
 `-DXTBLOOM_BUILD_TESTS=OFF`; ordinary PEP 517 builds set that option already.
 
 Build and inspect a source archive with:

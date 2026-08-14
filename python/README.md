@@ -1,16 +1,50 @@
 # xTBloom for Python
 
-xTBloom provides batched GFN2-xTB energies, analytic forces, and atomic charges
+[![PyPI version](https://img.shields.io/pypi/v/xtbloom.svg)](https://pypi.org/project/xtbloom/)
+
+xTBloom provides batched GFN1/GFN2-xTB energies, analytic forces, and charges
 through a NumPy-friendly interface backed by the same stable C ABI used by
 native C and C++ applications.
 
-It supports restricted and unrestricted GFN2-xTB, native ragged batches,
-explicit point charges with force output, caller-supplied periodic charge
-response, CPU and CUDA backends, ASE, dpdata, and eager Array API/DLPack arrays.
+GFN2-xTB supports CPU and CUDA. GFN1-xTB supports CPU through `Calculator`,
+`BatchCalculator`, ASE, and dpdata. Both models support native ragged batches,
+explicit point charges with force output, and caller-supplied periodic charge
+response. Array API/DLPack, PyTorch autograd, and the browser demo remain
+explicitly GFN2-only surfaces.
 
 ## Installation
 
-xTBloom is not yet published on PyPI. From a source checkout, sync the locked,
+Install xTBloom from PyPI. Python 3.10 or newer is required:
+
+```console
+pip install xtbloom
+```
+
+Linux x86_64 and aarch64 wheels include the CUDA backend. Add the supported
+CUDA 12 user-space libraries when the environment does not already provide
+them:
+
+```console
+pip install "xtbloom[cuda12]"
+```
+
+Optional integrations can be combined with either backend. For example, add
+ASE and dpdata to the CUDA environment with:
+
+```console
+pip install "xtbloom[cuda12,ase,dpdata]"
+```
+
+Published Linux, macOS, and Windows wheels include a private LP64 OpenBLAS
+provider for CPU inference; `scipy-openblas32` is used only while building the
+wheels and is not installed as a runtime dependency. CUDA execution additionally
+needs a real NVIDIA GPU and compatible driver. The `cuda12` extra supplies the
+supported `nvidia-*` user-space packages but cannot install the driver.
+
+## Build from source
+
+Use a source build only when developing xTBloom or when a published wheel does
+not cover the target. From a complete source checkout, sync the locked,
 non-editable package into uv's project environment:
 
 ```console
@@ -18,25 +52,9 @@ uv sync --locked --no-editable --no-default-groups --reinstall-package xtbloom
 ```
 
 CUDA build selection defaults to `AUTO`: an available `nvcc` enables CUDA;
-otherwise the package is CPU-only. Add `--extra cuda12` to the command when the
-supported CUDA 12 host libraries are not supplied by the system.
-
-Optional integrations can be combined with either backend. For example, add
-ASE and dpdata to the CUDA environment with:
-
-```console
-uv sync --locked --no-editable --no-default-groups \
-  --extra cuda12 --extra ase --extra dpdata --reinstall-package xtbloom
-```
-
-Run commands with `uv run --no-sync` or activate `.venv` directly.
-
-Python 3.10 or newer is required. Linux wheels include a private LP64 OpenBLAS
-provider for CPU inference; `scipy-openblas32` is used only while building the
-wheel and is not installed as a runtime dependency. A CUDA-enabled wheel
-additionally needs an NVIDIA driver and compatible CUDA 12 host libraries; the
-`cuda12` extra supplies the supported `nvidia-*` packages. CUDA libraries are
-not bundled inside the xTBloom wheel.
+otherwise the source build is CPU-only. Add `--extra cuda12` when the supported
+CUDA 12 host libraries are not supplied by the system. Run commands with
+`uv run --no-sync` or activate `.venv` directly.
 
 Ordinary source builds do not bundle OpenBLAS. They auto-discover a compatible
 system monolithic LP64 LAPACKE+CBLAS runtime; if none is discoverable, add
@@ -64,7 +82,7 @@ Hartree, forces in Hartree/bohr, and charges in elementary-charge units.
 
 ```python
 import numpy as np
-from xtbloom import Calculator
+from xtbloom import BatchCalculator, Calculator, Structure
 
 numbers = np.array([8, 1, 1])
 positions = np.array(
@@ -88,9 +106,44 @@ print(result["charges"])
 electronic temperature, the reported variational energy is the electronic
 Helmholtz free energy.
 
+`Calculator.hessian()` evaluates one dense numerical QM-coordinate energy
+Hessian as central differences of analytic forces. `BatchCalculator.hessian()`
+returns one matrix per structure and interleaves their displacement tasks in
+native ragged force calls under one fixed thread/device budget:
+
+```python
+with Calculator("GFN2-xTB", numbers, positions, backend="cuda") as calc:
+    hessian = calc.hessian(step=0.005, symmetrize=True)
+
+structures = [Structure(numbers, positions), Structure(numbers, positions * 1.01)]
+with BatchCalculator(structures, backend="cuda", cpu_threads=16) as calc:
+    hessians = calc.hessian(step=0.005, symmetrize=True)
+```
+
+Each result is a NumPy `float64` array with shape `(3 * natoms, 3 * natoms)` and
+units Hartree/bohr²; the batch method returns an input-ordered list for ragged
+atom counts. By default, the methods automatically chunk the displaced
+geometries; a positive `auto_batch_size` sets the same atom-count limit accepted
+by `BatchCalculator.compute()`, while `False` or `None` submits all
+displacements at once. The raw finite-difference matrices are returned by
+default so antisymmetric numerical error remains visible, while
+`symmetrize=True` applies `0.5 * (H + H.T)` to each matrix.
+
+Only QM coordinates are displaced. Point-charge coordinates and values,
+electric fields, and caller-supplied charge-response `b/A` operators remain
+fixed, so no QM–point-charge or point-charge–point-charge blocks are included
+and derivatives of `b/A` remain caller-owned. This explicit numerical method
+does not change the narrower PyTorch autograd contract described below.
+
 Set `backend="cpu"` or `backend="cuda"` to require one backend. The CUDA
 quickstart above deliberately uses `"cuda"` so an unavailable GPU fails clearly
 instead of running on CPU. `"auto"` prefers CUDA but falls back to CPU.
+For GFN1-xTB, high-level `"auto"` selects CPU because CUDA support is not
+published; an explicit `backend="cuda"` request is not redirected. A
+CUDA-capable native build returns `NOT_SUPPORTED`, while a build without CUDA
+may return `BACKEND_UNAVAILABLE` when creating the context.
+Passing a nonnegative `device_id` with GFN1 `backend="auto"` is rejected instead
+of silently ignoring the requested GPU.
 Compatible calls can opt into electronic warm starts; the default is an
 independent fresh SCC solve.
 
@@ -131,7 +184,7 @@ conservative CUDA chunks while preserving input order.
 
 ## Advanced array and CUDA paths
 
-`ArrayBatch` accepts packed ragged descriptors from eager NumPy, CuPy, JAX, or
+`ArrayBatch` is currently GFN2-xTB-only. It accepts packed ragged descriptors from eager NumPy, CuPy, JAX, or
 PyTorch arrays through `__dlpack__` and `__dlpack_device__`. Host arrays map
 to host descriptors; CUDA arrays can remain device-resident. By default,
 results return as host NumPy arrays.
@@ -142,7 +195,7 @@ DLPack producers. Exact dtype, shape, layout, lifetime, stream, and ownership
 rules are documented in the
 [Python API guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/python.md#array-api-and-dlpack-input-arrays).
 
-`xtbloom_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
+`xtbloom_torch` is currently GFN2-xTB-only. `xtbloom_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
 unpaired_electrons, ...)` runs xTBloom inference on PyTorch tensors (host or
 CUDA) and is the only autograd entry point in the Python API. It supports
 exactly the positions gradient `dE/dR = -F`; autograd on any other input, or a
@@ -204,14 +257,18 @@ geometry optimization in the C ABI.
 
 ## Scope
 
-GFN1-xTB, ROCm, lattice/PBC inputs, solvation, native geometry optimization,
-molecular dynamics, Hessians, and higher-order autograd are not implemented.
+GFN1-xTB CUDA execution, GFN1 electric fields/dipoles, ROCm, lattice/PBC inputs,
+solvation, native geometry optimization, molecular dynamics, native/analytic
+Hessians, vibrational analysis, and
+higher-order autograd are not implemented. A numerical QM Cartesian Hessian is
+available through Python `Calculator.hessian()` and `BatchCalculator.hessian()`.
 The high-level `Calculator` and `BatchCalculator` APIs use host NumPy arrays;
-direct device and mixed descriptors are exposed through `ArrayBatch` and the
-low-level C ABI.
+direct device and mixed descriptors are exposed through the GFN2-only
+`ArrayBatch` surface and the low-level C ABI.
 
 ## More documentation
 
+- [PyPI project](https://pypi.org/project/xtbloom/)
 - [Documentation home](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/index.md)
 - [Python API guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/python.md)
 - [Units and result meaning](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/index.md#units-and-result-meaning)

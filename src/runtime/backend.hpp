@@ -5,12 +5,14 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "xtbloom/xtbloom.h"
 
 namespace xtbloom::detail {
 
+class Gfn1CpuExecutionCache;
 class Gfn2CpuExecutionCache;
 class Gfn2CudaExecutionCache;
 
@@ -21,15 +23,22 @@ struct Context {
   std::int32_t cpu_threads = 0;
   void* stream = nullptr;
 
-  /*
-   * CPU contexts eagerly construct this execution state so the first compute
-   * call cannot race cache initialization. The cache owns the fixed worker
-   * pool selected by cpu_threads. shared_ptr permits the cache type to remain
-   * incomplete here while Context is destroyed through the opaque C handle.
-   * The executor serializes transactions while workers process independent
-   * systems inside one transaction.
-   */
+  /* One CPU context is one public transaction domain, independent of model.
+   * GFN1 and GFN2 keep separate topology/WARM caches and worker pools, but a
+   * caller cannot run them concurrently and observe two overlapping context
+   * state transitions. Plan create/compute uses this same lock. */
+  std::mutex cpu_transaction_mutex;
+
+  /* Lazily constructed on the first GFN2 call while cpu_transaction_mutex is
+   * held. This preserves one context-owned fixed worker pool for GFN2 without
+   * making GFN1-only contexts reserve an unused second pool. shared_ptr keeps
+   * the implementation type incomplete at this opaque lifetime boundary. */
   std::shared_ptr<Gfn2CpuExecutionCache> gfn2_cpu_execution_cache;
+
+  /* Lazily constructed on first GFN1 use. GFN1 owns distinct topology,
+   * WARM state, worker threads, and provider TLS cleanup, but existing GFN2
+   * callers pay none of those resources unless they actually select GFN1. */
+  std::shared_ptr<Gfn1CpuExecutionCache> gfn1_cpu_execution_cache;
 
   /*
    * CUDA contexts likewise own one reusable fixed-topology GFN2 runtime.
@@ -43,6 +52,12 @@ struct Context {
 
 xtbloom_status_t create_context(const xtbloom_context_options_t& options, Context*& context,
                                 std::string& error);
+
+/* Call only while holding context.cpu_transaction_mutex. These helpers make
+ * first-use cache initialization part of the same transaction as validation,
+ * execution, and publication. */
+xtbloom_status_t ensure_gfn1_cpu_execution_cache(Context& context, std::string& error);
+xtbloom_status_t ensure_gfn2_cpu_execution_cache(Context& context, std::string& error);
 
 #if defined(XTBLOOM_HAS_CUDA)
 bool resolve_cuda_device(std::int32_t requested_device, std::int32_t& resolved_device,

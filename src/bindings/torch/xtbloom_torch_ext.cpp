@@ -47,6 +47,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -121,6 +122,7 @@ struct XTBloomApi {
   const char* (*status_string)(int32_t);
   bool request_api_available = false;
   bool request_api_incomplete = false;
+  bool compute_options_v3_available = false;
 };
 
 // dladdr anchor: must keep default visibility so dladdr() can resolve this
@@ -346,6 +348,15 @@ const XTBloomApi& xtbloom_api() {
         api->status_string == nullptr) {
       return nullptr;
     }
+    xtbloom_compute_options_t probe;
+    std::memset(&probe, 0xA5, sizeof(probe));
+    if (api->compute_options_init(&probe, sizeof(probe)) != XTBLOOM_STATUS_SUCCESS) {
+      return nullptr;
+    }
+    api->compute_options_v3_available =
+        probe.scc_mixer == XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN && probe.scc_mixer_history == 8 &&
+        probe.scc_mixer_damping == 0.4 && probe.determinism == XTBLOOM_DETERMINISM_DEFAULT &&
+        probe.reserved_v3 == 0u;
     return api;
   }();
   if (table == nullptr) {
@@ -501,13 +512,19 @@ struct PlanKey {
   std::uint64_t charge_tolerance = 0;
   std::uint64_t energy_tolerance = 0;
   std::uint64_t electronic_temperature = 0;
+  int64_t scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  int64_t scc_mixer_history = 8;
+  std::uint64_t scc_mixer_damping = 0;
+  int64_t determinism = XTBLOOM_DETERMINISM_DEFAULT;
 
   bool operator==(const PlanKey& other) const noexcept {
     return nsystems == other.nsystems && natoms == other.natoms && topology == other.topology &&
            max_scc_iterations == other.max_scc_iterations &&
            charge_tolerance == other.charge_tolerance &&
            energy_tolerance == other.energy_tolerance &&
-           electronic_temperature == other.electronic_temperature;
+           electronic_temperature == other.electronic_temperature && scc_mixer == other.scc_mixer &&
+           scc_mixer_history == other.scc_mixer_history &&
+           scc_mixer_damping == other.scc_mixer_damping && determinism == other.determinism;
   }
 };
 
@@ -1496,12 +1513,32 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
     int64_t molecular_charges_version, int64_t unpaired_electrons_version,
     int64_t spin_channels_version, Tensor out_energies, Tensor out_forces, int64_t backend,
     int64_t device_id, int64_t cpu_threads, int64_t stream, int64_t max_scc_iterations,
-    double charge_tolerance, double energy_tolerance, double electronic_temperature) {
+    double charge_tolerance, double energy_tolerance, double electronic_temperature,
+    int64_t scc_mixer, int64_t scc_mixer_history, double scc_mixer_damping, int64_t determinism) {
   const XTBloomApi& api = xtbloom_api();
   // Fail fast when the torch extension was built against an incompatible
   // ABI level, before any tensor contract is assumed.
   STD_TORCH_CHECK(TORCH_FEATURE_VERSION >= TORCH_VERSION_2_10_0,
                   "xtbloom_torch requires the torch stable ABI (torch >= 2.10)");
+  // The dispatcher exposes int64 scalars. Validate before narrowing them into
+  // the fixed-width public ABI so direct private-op callers cannot wrap a
+  // hostile value into an otherwise valid tag or history length.
+  STD_TORCH_CHECK(scc_mixer == XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN,
+                  "xtbloom_torch: scc_mixer must select modified Broyden");
+  STD_TORCH_CHECK(scc_mixer_history >= 1 && scc_mixer_history <= 64,
+                  "xtbloom_torch: scc_mixer_history must be between 1 and 64");
+  STD_TORCH_CHECK(
+      std::isfinite(scc_mixer_damping) && scc_mixer_damping > 0.0 && scc_mixer_damping <= 1.0,
+      "xtbloom_torch: scc_mixer_damping must be finite and in (0, 1]");
+  STD_TORCH_CHECK(
+      determinism == XTBLOOM_DETERMINISM_DEFAULT || determinism == XTBLOOM_DETERMINISM_REPRODUCIBLE,
+      "xtbloom_torch: determinism has an unknown value");
+  const bool default_v3_policy = scc_mixer == XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN &&
+                                 scc_mixer_history == 8 && scc_mixer_damping == 0.4 &&
+                                 determinism == XTBLOOM_DETERMINISM_DEFAULT;
+  STD_TORCH_CHECK(api.compute_options_v3_available || default_v3_policy,
+                  "xtbloom_torch: the loaded xTBloom core does not support "
+                  "compute-options ABI v3; nondefault SCC policy would be ignored");
 
   // --- validate shapes/dtypes (mirror of the Python preflight) --------------
   STD_TORCH_CHECK(positions.is_contiguous(), "xtbloom_torch: positions must be C-contiguous");
@@ -1580,6 +1617,10 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
   options.charge_tolerance = charge_tolerance;
   options.energy_tolerance = energy_tolerance;
   options.electronic_temperature = electronic_temperature * XTBLOOM_KELVIN_TO_HARTREE;
+  options.scc_mixer = static_cast<xtbloom_scc_mixer_t>(scc_mixer);
+  options.scc_mixer_history = static_cast<int32_t>(scc_mixer_history);
+  options.scc_mixer_damping = scc_mixer_damping;
+  options.determinism = static_cast<xtbloom_determinism_t>(determinism);
 
   if (use_request_path) {
     STD_TORCH_CHECK(any_cuda && cuda_device_index >= 0,
@@ -1605,6 +1646,10 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
         double_bits(charge_tolerance),
         double_bits(energy_tolerance),
         double_bits(options.electronic_temperature),
+        scc_mixer,
+        scc_mixer_history,
+        double_bits(scc_mixer_damping),
+        determinism,
     };
     const std::array<Tensor, 13> retained = {
         positions,
@@ -1721,7 +1766,8 @@ STABLE_TORCH_LIBRARY(xtbloom, m) {
       "Tensor(a!) out_energies, Tensor(b!) out_forces, int backend, int device_id, "
       "int cpu_threads, "
       "int stream, int max_scc_iterations, float charge_tolerance, float energy_tolerance, "
-      "float electronic_temperature) -> (Tensor(a!), Tensor(b!), int)");
+      "float electronic_temperature, int scc_mixer, int scc_mixer_history, "
+      "float scc_mixer_damping, int determinism) -> (Tensor(a!), Tensor(b!), int)");
   m.def("_xtbloom_torch_wait(int submission_id) -> ()");
 }
 STABLE_TORCH_LIBRARY_IMPL(xtbloom, CompositeExplicitAutograd, m) {

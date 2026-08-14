@@ -91,6 +91,7 @@ struct CaseSpec {
   std::vector<double> positions;
   double molecular_charge = 0.0;
   std::int32_t unpaired_electrons = 0;
+  std::int32_t spin_channels = 1;
   double temperature_kelvin = 300.0;
   std::int64_t mixer_memory = 2;
   double mixer_damping = 0.4;
@@ -158,12 +159,27 @@ inline bool load_spec(const std::string& path, CaseSpec& spec, std::string& err)
       return false;
     }
   }
+  // v2 specs append an explicit spin-channel selector.  EOF here is the
+  // backward-compatible v1 representation and therefore means restricted.
+  std::int32_t spin_channels = 1;
+  if (file >> spin_channels) {
+    if (spin_channels != 1 && spin_channels != 2) {
+      err = "spin channels must be one or two";
+      return false;
+    }
+    spec.spin_channels = spin_channels;
+  } else if (!file.eof()) {
+    err = "malformed optional spin-channel selector";
+    return false;
+  }
   return true;
 }
 
 // One captured iteration in the raw stream section order.  The logical index
 // matches the golden's iterations[i].index.
 struct CapturedIteration {
+  // Production stores the Hamiltonian passed to the solver.  v2 additionally
+  // emits the tblite assembled representation as exactly one half of it.
   std::vector<double> hamiltonian, eigenvalues, occupations_alpha, occupations_beta, density;
   std::vector<double> mixed_qsh, mixed_qat, mixed_dipoles, mixed_quadrupoles;
   std::vector<double> raw_qsh, raw_qat, raw_dipoles, raw_quadrupoles;
@@ -360,8 +376,8 @@ bool TraceBatch::system_converged(std::int64_t index) const {
 }
 std::vector<std::vector<double>> TraceBatch::live_state(std::int64_t system) const {
   const Geometry& g = *geometry_;
-  const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
-  const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
+  const std::int64_t shell_begin = g.layout.qsh.system_offsets[system];
+  const std::int64_t shell_end = g.layout.qsh.system_offsets[system + 1u];
   const std::int64_t qat_begin = g.layout.qat.system_offsets[system];
   const std::int64_t qat_end = g.layout.qat.system_offsets[system + 1u];
   const std::int64_t dip_begin = g.layout.dipole.system_offsets[system];
@@ -391,7 +407,7 @@ xtbloom_status_t TraceBatch::build_geometry(std::string& err) {
   g.pc_offsets.assign(static_cast<std::size_t>(g.batch_size) + 1u, 0);
   g.molecular_charges.resize(static_cast<std::size_t>(g.batch_size));
   g.unpaired.resize(static_cast<std::size_t>(g.batch_size));
-  g.spins.assign(static_cast<std::size_t>(g.batch_size), 1);
+  g.spins.resize(static_cast<std::size_t>(g.batch_size));
   for (std::int64_t system = 0; system < g.batch_size; ++system) {
     const CaseSpec& spec = specs_[static_cast<std::size_t>(system)];
     g.atom_offsets[static_cast<std::size_t>(system + 1)] =
@@ -401,6 +417,7 @@ xtbloom_status_t TraceBatch::build_geometry(std::string& err) {
         static_cast<std::int64_t>(spec.pc_rows.size() / 5u);
     g.molecular_charges[static_cast<std::size_t>(system)] = spec.molecular_charge;
     g.unpaired[static_cast<std::size_t>(system)] = spec.unpaired_electrons;
+    g.spins[static_cast<std::size_t>(system)] = spec.spin_channels;
   }
   total_atoms = g.atom_offsets[static_cast<std::size_t>(g.batch_size)];
   total_point_charges = g.pc_offsets[static_cast<std::size_t>(g.batch_size)];
@@ -652,16 +669,14 @@ void TraceBatch::poison_eigensolver(std::int64_t system) {
 xtbloom_status_t TraceBatch::inject_mixed_state(std::int64_t system, const std::string& state_path,
                                                 std::string& err) {
   Geometry& g = *geometry_;
-  const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
-  const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
+  const std::int64_t shell_begin = g.layout.qsh.system_offsets[system];
+  const std::int64_t shell_end = g.layout.qsh.system_offsets[system + 1u];
   const std::int64_t qat_begin = g.layout.qat.system_offsets[system];
   const std::int64_t qat_end = g.layout.qat.system_offsets[system + 1u];
-  const std::int64_t atom_begin = g.layout.atom_offsets[system];
-  const std::int64_t atom_end = g.layout.atom_offsets[system + 1u];
   const std::int64_t dip_base = g.layout.dipole.system_offsets[system];
   const std::int64_t quad_base = g.layout.quadrupole.system_offsets[system];
   const std::int64_t shells = shell_end - shell_begin;
-  const std::int64_t atoms = atom_end - atom_begin;
+  const std::int64_t atoms = qat_end - qat_begin;
 
   std::ifstream file(state_path);
   if (!file) {
@@ -757,14 +772,15 @@ xtbloom_status_t TraceBatch::write_multipoles(std::int64_t system, const std::ve
                                               const std::vector<double>& dpat,
                                               const std::vector<double>& qpat, std::string& err) {
   Geometry& g = *geometry_;
-  const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
-  const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
+  const std::int64_t shell_begin = g.layout.qsh.system_offsets[system];
+  const std::int64_t shell_end = g.layout.qsh.system_offsets[system + 1u];
   const std::int64_t atom_begin = g.layout.atom_offsets[system];
   const std::int64_t atom_end = g.layout.atom_offsets[system + 1u];
   const std::int64_t dip_base = g.layout.dipole.system_offsets[system];
   const std::int64_t quad_base = g.layout.quadrupole.system_offsets[system];
   const std::int64_t shells = shell_end - shell_begin;
-  const std::int64_t atoms = atom_end - atom_begin;
+  const std::int64_t atoms =
+      g.layout.qat.system_offsets[system + 1u] - g.layout.qat.system_offsets[system];
   if (static_cast<std::int64_t>(qsh.size()) != shells ||
       static_cast<std::int64_t>(dpat.size()) != 3 * atoms ||
       static_cast<std::int64_t>(qpat.size()) != 6 * atoms) {
@@ -791,8 +807,8 @@ xtbloom_status_t TraceBatch::mixer_mix(std::int64_t system, std::string& err) {
 
 std::vector<double> TraceBatch::next_mixed_flattened(std::int64_t system) const {
   const Geometry& g = *geometry_;
-  const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
-  const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
+  const std::int64_t shell_begin = g.layout.qsh.system_offsets[system];
+  const std::int64_t shell_end = g.layout.qsh.system_offsets[system + 1u];
   const std::int64_t atom_begin = g.layout.atom_offsets[system];
   const std::int64_t atom_end = g.layout.atom_offsets[system + 1u];
   const std::int64_t dip_base = g.layout.dipole.system_offsets[system];
@@ -800,9 +816,9 @@ std::vector<double> TraceBatch::next_mixed_flattened(std::int64_t system) const 
   std::vector<double> flattened;
   flattened.insert(flattened.end(), g.wfn.qsh + shell_begin, g.wfn.qsh + shell_end);
   flattened.insert(flattened.end(), g.wfn.dipole + dip_base,
-                   g.wfn.dipole + dip_base + 3 * (atom_end - atom_begin));
+                   g.wfn.dipole + g.layout.dipole.system_offsets[system + 1u]);
   flattened.insert(flattened.end(), g.wfn.quadrupole + quad_base,
-                   g.wfn.quadrupole + quad_base + 6 * (atom_end - atom_begin));
+                   g.wfn.quadrupole + g.layout.quadrupole.system_offsets[system + 1u]);
   return flattened;
 }
 
@@ -842,8 +858,8 @@ void TraceBatch::capture_mixed_pre_step() {
         stage_->driver_state.converged[system] != 0u) {
       continue;
     }
-    const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
-    const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
+    const std::int64_t shell_begin = g.layout.qsh.system_offsets[system];
+    const std::int64_t shell_end = g.layout.qsh.system_offsets[system + 1u];
     const std::int64_t qat_begin = g.layout.qat.system_offsets[system];
     const std::int64_t qat_end = g.layout.qat.system_offsets[system + 1u];
     const std::int64_t dip_begin = g.layout.dipole.system_offsets[system];
@@ -880,20 +896,18 @@ void TraceBatch::record_iteration_snapshots() {
 
     const xtbloom_status_t lane_status = st.driver_state.system_statuses[system];
     if (lane_status == XTBLOOM_STATUS_EIGENSOLVER_FAILED) {
-      const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
-      const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
+      const std::int64_t shell_begin = g.layout.qsh.system_offsets[system];
+      const std::int64_t shell_end = g.layout.qsh.system_offsets[system + 1u];
       const std::int64_t density_base = g.layout.density.system_offsets[system];
-      const std::int64_t matrix_begin = g.mulliken_plan.matrix_offsets()[system];
-      const std::int64_t matrix_end = g.mulliken_plan.matrix_offsets()[system + 1u];
+      const std::int64_t density_end = g.layout.density.system_offsets[system + 1u];
 
       // An eigensolver failure is the only driver failure that maps to the
       // observer's before_solve-without-after_iteration lifecycle.  Preserve
       // exactly the assembled Hamiltonian and pre-solve mixed q/d/Q, and never
       // read staged eigenvectors, density, populations, energy, or convergence.
       failed_attempt.present = true;
-      failed_attempt.hamiltonian.assign(
-          st.drv_ws.hamiltonian + density_base,
-          st.drv_ws.hamiltonian + density_base + (matrix_end - matrix_begin));
+      failed_attempt.hamiltonian.assign(st.drv_ws.hamiltonian + density_base,
+                                        st.drv_ws.hamiltonian + density_end);
       failed_attempt.mixed_qsh = std::move(pending_mixed_[static_cast<std::size_t>(system)][0u]);
       failed_attempt.mixed_qat = std::move(pending_mixed_[static_cast<std::size_t>(system)][1u]);
       failed_attempt.mixed_dipoles =
@@ -906,8 +920,8 @@ void TraceBatch::record_iteration_snapshots() {
       continue;
     }
     CapturedIteration row;
-    const std::int64_t shell_begin = g.basis.batch_shell_offsets[system];
-    const std::int64_t shell_end = g.basis.batch_shell_offsets[system + 1u];
+    const std::int64_t shell_begin = g.layout.qsh.system_offsets[system];
+    const std::int64_t shell_end = g.layout.qsh.system_offsets[system + 1u];
     const std::int64_t qat_begin = g.layout.qat.system_offsets[system];
     const std::int64_t qat_end = g.layout.qat.system_offsets[system + 1u];
     const std::int64_t dip_begin = g.layout.dipole.system_offsets[system];
@@ -925,16 +939,15 @@ void TraceBatch::record_iteration_snapshots() {
     row.mixed_dipoles = std::move(pending_mixed_[static_cast<std::size_t>(system)][2u]);
     row.mixed_quadrupoles = std::move(pending_mixed_[static_cast<std::size_t>(system)][3u]);
 
-    const std::int64_t matrix_begin = g.mulliken_plan.matrix_offsets()[system];
-    const std::int64_t matrix_end = g.mulliken_plan.matrix_offsets()[system + 1u];
-    const std::int64_t system_nao = g.layout.eigenvalues.system_offsets[system + 1u] - eig_begin;
+    const std::int64_t density_end = g.layout.density.system_offsets[system + 1u];
+    const std::int64_t eig_end = g.layout.eigenvalues.system_offsets[system + 1u];
+    const std::int64_t system_nao = (eig_end - eig_begin) / g.layout.spin_channels[system];
     row.hamiltonian.assign(st.drv_ws.hamiltonian + density_base,
-                           st.drv_ws.hamiltonian + density_base + (matrix_end - matrix_begin));
-    row.density.assign(
-        st.drv_ws.staged_wavefunction.density + density_base,
-        st.drv_ws.staged_wavefunction.density + density_base + (matrix_end - matrix_begin));
+                           st.drv_ws.hamiltonian + density_end);
+    row.density.assign(st.drv_ws.staged_wavefunction.density + density_base,
+                       st.drv_ws.staged_wavefunction.density + density_end);
     row.eigenvalues.assign(st.drv_ws.staged_wavefunction.eigenvalues + eig_begin,
-                           st.drv_ws.staged_wavefunction.eigenvalues + eig_begin + system_nao);
+                           st.drv_ws.staged_wavefunction.eigenvalues + eig_end);
     row.occupations_alpha.assign(
         st.drv_ws.staged_wavefunction.occupations + occ_begin,
         st.drv_ws.staged_wavefunction.occupations + occ_begin + system_nao);
@@ -953,12 +966,15 @@ void TraceBatch::record_iteration_snapshots() {
                                st.drv_ws.raw_quadrupoles + quad_end);
 
     if (!g.pc_shell_potential.empty()) {
-      row.point_charge_shell_potential.assign(g.pc_shell_potential.begin() + shell_begin,
-                                              g.pc_shell_potential.begin() + shell_end);
-      row.point_charge_energy.resize(static_cast<std::size_t>(shell_end - shell_begin));
-      for (std::int64_t sh = shell_begin; sh < shell_end; ++sh) {
-        row.point_charge_energy[static_cast<std::size_t>(sh - shell_begin)] =
-            row.raw_qsh[static_cast<std::size_t>(sh - shell_begin)] *
+      const std::int64_t physical_shell_begin = g.basis.batch_shell_offsets[system];
+      const std::int64_t physical_shell_end = g.basis.batch_shell_offsets[system + 1u];
+      row.point_charge_shell_potential.assign(g.pc_shell_potential.begin() + physical_shell_begin,
+                                              g.pc_shell_potential.begin() + physical_shell_end);
+      row.point_charge_energy.resize(
+          static_cast<std::size_t>(physical_shell_end - physical_shell_begin));
+      for (std::int64_t sh = physical_shell_begin; sh < physical_shell_end; ++sh) {
+        row.point_charge_energy[static_cast<std::size_t>(sh - physical_shell_begin)] =
+            row.raw_qsh[static_cast<std::size_t>(sh - physical_shell_begin)] *
             g.pc_shell_potential[static_cast<std::size_t>(sh)];
       }
     }
@@ -989,10 +1005,10 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   const std::int64_t nat = spec.nat;
   const std::int64_t nsh =
       g.basis.batch_shell_offsets[system + 1] - g.basis.batch_shell_offsets[system];
-  // Eigenvalue system offsets are per-orbital, so their span is nao (the
-  // density offsets are matrix elements, nao*nao).
-  const std::int64_t nao =
-      g.layout.eigenvalues.system_offsets[system + 1] - g.layout.eigenvalues.system_offsets[system];
+  const std::int64_t nspin = spec.spin_channels;
+  const std::int64_t nao = (g.layout.eigenvalues.system_offsets[system + 1] -
+                            g.layout.eigenvalues.system_offsets[system]) /
+                           nspin;
   const std::int64_t matrix_begin = g.mulliken_plan.matrix_offsets()[system];
   const std::int64_t matrix_end = g.mulliken_plan.matrix_offsets()[system + 1u];
   const std::int64_t atom_begin = g.layout.atom_offsets[system];
@@ -1029,6 +1045,10 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   emit_value(output, spec.molecular_charge);
   output << "unpaired_electrons\n";
   emit_int(output, spec.unpaired_electrons);
+  if (nspin == 2) {
+    output << "spin_channels\n";
+    emit_int(output, nspin);
+  }
   output << "temperature\n";
   emit_value(output, spec.temperature_kelvin);
   output << "n_point_charges\n";
@@ -1058,19 +1078,24 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
     const CapturedIteration& row = rows[static_cast<std::size_t>(i)];
     output << "iteration\n";
     emit_int(output, i + 1);
-    output << "hamiltonian\n";
-    for (std::int64_t col = 0; col < nao; ++col)
-      for (std::int64_t r = 0; r < nao; ++r)
-        emit_value(output, row.hamiltonian[static_cast<std::size_t>(col * nao + r)]);
+    if (nspin == 1) {
+      output << "hamiltonian\n";
+      for (std::int64_t col = 0; col < nao; ++col)
+        for (std::int64_t r = 0; r < nao; ++r)
+          emit_value(output, row.hamiltonian[static_cast<std::size_t>(col * nao + r)]);
+    } else {
+      output << "assembled_hamiltonian\n";
+      for (double value : row.hamiltonian) emit_value(output, 0.5 * value);
+      output << "solver_hamiltonian\n";
+      for (double value : row.hamiltonian) emit_value(output, value);
+    }
     output << "eigenvalues\n";
     for (double v : row.eigenvalues) emit_value(output, v);
     output << "occupations\n";
     for (double v : row.occupations_alpha) emit_value(output, v);
     for (double v : row.occupations_beta) emit_value(output, v);
     output << "density\n";
-    for (std::int64_t col = 0; col < nao; ++col)
-      for (std::int64_t r = 0; r < nao; ++r)
-        emit_value(output, row.density[static_cast<std::size_t>(col * nao + r)]);
+    for (double value : row.density) emit_value(output, value);
     output << "mixed_qsh\n";
     for (double v : row.mixed_qsh) emit_value(output, v);
     output << "mixed_qat\n";
@@ -1108,10 +1133,15 @@ void TraceBatch::emit(std::ostream& output, std::int64_t system) const {
   if (failed_attempt.present) {
     output << "failed_attempt\n";
     emit_int(output, niterations + 1);
-    output << "hamiltonian\n";
-    for (std::int64_t col = 0; col < nao; ++col)
-      for (std::int64_t row = 0; row < nao; ++row)
-        emit_value(output, failed_attempt.hamiltonian[static_cast<std::size_t>(col * nao + row)]);
+    if (nspin == 1) {
+      output << "hamiltonian\n";
+      for (double value : failed_attempt.hamiltonian) emit_value(output, value);
+    } else {
+      output << "assembled_hamiltonian\n";
+      for (double value : failed_attempt.hamiltonian) emit_value(output, 0.5 * value);
+      output << "solver_hamiltonian\n";
+      for (double value : failed_attempt.hamiltonian) emit_value(output, value);
+    }
     output << "mixed_qsh\n";
     for (double v : failed_attempt.mixed_qsh) emit_value(output, v);
     output << "mixed_qat\n";

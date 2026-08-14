@@ -10,6 +10,7 @@
 
 #include "backends/cuda/gfn2_aes2.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
+#include "backends/cuda/gfn2_electric_field.cuh"
 #include "backends/cuda/gfn2_es2.cuh"
 #include "backends/cuda/gfn2_es3.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
@@ -70,7 +71,7 @@ struct Gfn2PostSccPotentialDevicePlan {
   Gfn2AES2DeviceCache aes2_cache{};
   Gfn2D4DeviceBatch d4_batch{};
   Gfn2D4DeviceParameters d4_parameters{};
-  Gfn2D4DeviceCache d4_cache{};
+  Gfn2D4PairListDeviceCache d4_cache{};
   Gfn2ExternalPointChargeDeviceBatch external_point_charge_batch{};
   Gfn2ExternalPointChargeDeviceCache external_point_charge_cache{};
   Gfn2PeriodicEmbeddingDeviceBatch periodic_batch{};
@@ -88,6 +89,7 @@ struct Gfn2PostSccPotentialDeviceInput {
   const double* raw_atomic_quadrupoles = nullptr;
   std::int64_t quadrupole_elements = 0;
   std::uint64_t plan_token = 0u;
+  Gfn2ElectricFieldDevicePotentialView electric_field_potentials{};
 };
 
 /*

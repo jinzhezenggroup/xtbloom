@@ -29,13 +29,17 @@ POSITIONS = np.array(
 )
 
 
-def _singlepoint() -> tuple[float, np.ndarray]:
-    calculator = Calculator("GFN2-xTB", NUMBERS, POSITIONS, backend="cpu")
+def _singlepoint(model: str = "GFN2-xTB") -> tuple[float, np.ndarray]:
+    calculator = Calculator(model, NUMBERS, POSITIONS, backend="cpu")
     result = calculator.singlepoint()
     if not result.scc_converged:
-        raise RuntimeError("installed desktop wheel did not converge water")
+        raise RuntimeError(
+            f"installed desktop wheel did not converge water with {model}"
+        )
     if not np.isfinite(result.energy) or not np.isfinite(result.forces).all():
-        raise RuntimeError("installed desktop wheel returned non-finite results")
+        raise RuntimeError(
+            f"installed desktop wheel returned non-finite {model} results"
+        )
     return float(result.energy), np.asarray(result.forces)
 
 
@@ -263,6 +267,7 @@ def main() -> int:
     host_matrix = np.array([[2.0, 0.5], [0.5, 1.0]])
     host_before = np.linalg.eigvalsh(host_matrix)
     reference_energy, reference_forces = _singlepoint()
+    gfn1_energy, gfn1_forces = _singlepoint("GFN1-xTB")
     host_after = np.linalg.eigvalsh(host_matrix)
     np.testing.assert_allclose(host_after, host_before, rtol=0.0, atol=0.0)
 
@@ -277,6 +282,8 @@ def main() -> int:
 
     print(  # noqa: T201 - CI validation report
         f"xTBloom desktop wheel CPU inference passed: energy={reference_energy:.16g}; "
+        f"gfn1_energy={gfn1_energy:.16g}; "
+        f"gfn1_force_norm={np.linalg.norm(gfn1_forces):.16g}; "
         f"provider={provider.name}"
     )
     return 0

@@ -163,21 +163,25 @@ struct Fixture {
   }
 
   Gfn2SccClassicalEnergyDeviceDiagnostics classical_diagnostics() {
-    return {ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            ptr<double>(kBatch),
-            kBatch,
-            kToken};
+    Gfn2SccClassicalEnergyDeviceDiagnostics result{};
+    result.es2 = ptr<double>(kBatch);
+    result.es2_elements = kBatch;
+    result.es3 = ptr<double>(kBatch);
+    result.es3_elements = kBatch;
+    result.aes2 = ptr<double>(kBatch);
+    result.aes2_elements = kBatch;
+    result.d4_two_body = ptr<double>(kBatch);
+    result.d4_two_body_elements = kBatch;
+    result.explicit_point_charge = ptr<double>(kBatch);
+    result.explicit_point_charge_elements = kBatch;
+    result.periodic_embedding = ptr<double>(kBatch);
+    result.periodic_embedding_elements = kBatch;
+    result.classical_total = ptr<double>(kBatch);
+    result.classical_total_elements = kBatch;
+    result.plan_token = kToken;
+    result.electric_field = ptr<double>(kBatch);
+    result.electric_field_elements = kBatch;
+    return result;
   }
 
   Gfn2SccFreeEnergyDeviceDiagnostics free_diagnostics(
@@ -207,7 +211,32 @@ struct Fixture {
     result.free_energy = ptr<double>(kBatch);
     result.free_energy_elements = kBatch;
     result.plan_token = kToken;
+    result.electric_field = classical.electric_field;
+    result.electric_field_elements = kBatch;
     return result;
+  }
+
+  void enable_electric_field() {
+    plan.electric_field_batch = {kBatch, kAtoms, kBatch + 1, plan.topology.atom_offsets, kToken};
+    plan.classical_energy_batch.electric_field = plan.electric_field_batch;
+    input.electric_field = {ptr<double>(3 * kBatch), 3 * kBatch, ptr<double>(3 * kAtoms),
+                            3 * kAtoms, kToken};
+    input.electric_field_potentials = {ptr<double>(kAtoms), kAtoms, ptr<double>(kDipoles), kDipoles,
+                                       kToken};
+    workspace.potential_components.electric_field_atomic = input.electric_field_potentials.atomic;
+    workspace.potential_components.electric_field_atomic_elements = kAtoms;
+    workspace.potential_components.electric_field_dipole = input.electric_field_potentials.dipole;
+    workspace.potential_components.electric_field_dipole_elements = kDipoles;
+    input.classical_energy.electric_field_multipoles = {
+        workspace.physical_topology.atomic_charges, kAtoms,
+        workspace.physical_topology.atomic_dipoles, kDipoles, kToken};
+    input.classical_energy.electric_field_potentials = input.electric_field_potentials;
+    input.free_energy.electric_field = workspace.staged_classical_energy.electric_field;
+    input.free_energy.electric_field_elements = kBatch;
+    workspace.classical_energy_workspace.component_elements =
+        kGfn2SccClassicalStorageComponents * kBatch;
+    workspace.free_energy_workspace.diagnostic_elements =
+        kGfn2SccFreeEnergyStorageComponents * kBatch;
   }
 
   void make_topology() {
@@ -885,10 +914,10 @@ struct Fixture {
     workspace.electronic_energy_workspace = {
         ptr<double>(kBatch), ptr<double>(kBatch), ptr<std::uint32_t>(1), kBatch, 1, kToken};
     workspace.classical_energy_workspace = {
-        ptr<double>(kGfn2SccClassicalDiagnosticComponents * kBatch),
-        kGfn2SccClassicalDiagnosticComponents * kBatch, ptr<std::uint32_t>(1), 1, kToken};
-    workspace.free_energy_workspace = {ptr<double>(kGfn2SccFreeEnergyDiagnosticComponents * kBatch),
-                                       kGfn2SccFreeEnergyDiagnosticComponents * kBatch,
+        ptr<double>(kGfn2SccClassicalStorageComponents * kBatch),
+        kGfn2SccClassicalStorageComponents * kBatch, ptr<std::uint32_t>(1), 1, kToken};
+    workspace.free_energy_workspace = {ptr<double>(kGfn2SccFreeEnergyStorageComponents * kBatch),
+                                       kGfn2SccFreeEnergyStorageComponents * kBatch,
                                        ptr<std::uint32_t>(1), 1, kToken};
     workspace.mixer_workspace.residual = ptr<double>(kMixerVector);
     workspace.mixer_workspace.mixed = ptr<double>(kMixerVector);
@@ -1160,6 +1189,7 @@ struct Fixture {
     make_plan();
     make_state_and_workspace();
     make_input();
+    enable_electric_field();
     make_reports();
   }
 };
@@ -1478,15 +1508,93 @@ int test_projection_authority_rejection() {
   return 0;
 }
 
+int test_electric_field_binding_contract() {
+  Fixture fixture;
+  const auto validate = [&fixture]() {
+    return validate_gfn2_scc_iteration_binding_cuda(fixture.plan, fixture.input, fixture.state,
+                                                    fixture.workspace);
+  };
+  CHECK(validate().error == Gfn2SccIterationBindingError::kSuccess);
+
+  fixture.plan.electric_field_batch.plan_token = Fixture::kToken + 1u;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kCrossPlan);
+  CHECK(validate().field == Gfn2SccIterationBindingField::kElectricField);
+  fixture.plan.electric_field_batch.plan_token = Fixture::kToken;
+
+  fixture.input.electric_field.vectors = reinterpret_cast<const double*>(
+      reinterpret_cast<std::uintptr_t>(fixture.input.electric_field.vectors) + 1u);
+  CHECK(validate().error == Gfn2SccIterationBindingError::kMisalignedPointer);
+  fixture.input.electric_field.vectors = fixture.ptr<double>(3 * Fixture::kBatch);
+
+  fixture.plan.classical_energy_batch.electric_field.atom_offsets =
+      fixture.plan.topology.batch_shell_offsets;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidCount);
+  fixture.plan.classical_energy_batch.electric_field = fixture.plan.electric_field_batch;
+
+  fixture.input.electric_field.plan_token = Fixture::kToken + 1u;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kCrossPlan);
+  fixture.input.electric_field.plan_token = Fixture::kToken;
+
+  fixture.input.electric_field.vector_elements = 2;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidCount);
+  fixture.input.electric_field.vector_elements = 3 * Fixture::kBatch;
+
+  fixture.input.electric_field_potentials.plan_token = Fixture::kToken + 1u;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kCrossPlan);
+  fixture.input.electric_field_potentials.plan_token = Fixture::kToken;
+
+  fixture.input.classical_energy.electric_field_multipoles.atom_elements = 0;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidCount);
+  fixture.input.classical_energy.electric_field_multipoles.atom_elements = Fixture::kAtoms;
+
+  fixture.input.classical_energy.electric_field_multipoles.atomic_charges =
+      fixture.workspace.mixed_topology.atomic_charges;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.input.classical_energy.electric_field_multipoles.atomic_charges =
+      fixture.workspace.physical_topology.atomic_charges;
+
+  fixture.input.classical_energy.electric_field_potentials.dipole =
+      fixture.workspace.complete_potentials.dipole;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.input.classical_energy.electric_field_potentials.dipole =
+      fixture.input.electric_field_potentials.dipole;
+
+  fixture.input.free_energy.electric_field = fixture.state.classical_energy.classical_total;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.input.free_energy.electric_field =
+      fixture.workspace.staged_classical_energy.electric_field;
+
+  fixture.state.free_energy.electric_field = fixture.state.classical_energy.classical_total;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.state.free_energy.electric_field = fixture.state.classical_energy.electric_field;
+
+  fixture.workspace.staged_free_energy.electric_field =
+      fixture.workspace.staged_classical_energy.classical_total;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kInvalidZeroCopyView);
+  fixture.workspace.staged_free_energy.electric_field =
+      fixture.workspace.staged_classical_energy.electric_field;
+
+  fixture.input.electric_field_potentials.atomic = fixture.workspace.complete_potentials.atomic;
+  fixture.workspace.potential_components.electric_field_atomic =
+      fixture.input.electric_field_potentials.atomic;
+  fixture.input.classical_energy.electric_field_potentials.atomic =
+      fixture.input.electric_field_potentials.atomic;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kForbiddenAlias);
+
+  fixture.input.electric_field.vectors = fixture.workspace.complete_potentials.dipole;
+  CHECK(validate().error == Gfn2SccIterationBindingError::kForbiddenAlias);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 7> tests{
+  const std::array<int (*)(), 8> tests{
       {test_valid_binding_and_fail_closed_copy, test_capacity_alignment_alias_and_bucket_rejection,
        test_unrestricted_layout_and_spin_projection_rejection,
        test_optional_canonical_null_and_report_extension_capacity,
        test_convergence_policy_has_one_rms_authority, test_launch_result_preserves_provider_domains,
-       test_projection_authority_rejection}};
+       test_projection_authority_rejection, test_electric_field_binding_contract}};
   for (const auto test : tests) {
     if (const int line = test(); line != 0) {
       std::fprintf(stderr, "CUDA SCC iteration binding test failed at line %d\n", line);

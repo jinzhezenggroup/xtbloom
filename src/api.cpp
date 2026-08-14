@@ -6,13 +6,16 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <string>
 #include <utility>
 
 #include "runtime/backend.hpp"
+#include "runtime/gfn1_cpu_execution.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
-#include "runtime/gfn2_plan.hpp"
+#include "runtime/model_plan.hpp"
+#include "runtime/model_registry.hpp"
 #include "xtbloom/xtbloom.h"
 #if defined(XTBLOOM_HAS_CUDA)
 #include "runtime/gfn2_cuda_execution.hpp"
@@ -26,7 +29,7 @@ struct xtbloom_context {
 };
 
 struct xtbloom_plan {
-  xtbloom::detail::Gfn2Plan* implementation;
+  xtbloom::detail::ModelPlan* implementation;
 };
 
 struct xtbloom_request {
@@ -159,6 +162,12 @@ xtbloom_status_t xtbloom_compute_options_init(xtbloom_compute_options_t* options
   options->electronic_temperature = XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
   if (struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE) {
     options->scc_start_mode = XTBLOOM_SCC_START_FRESH;
+  }
+  if (struct_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE) {
+    options->scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+    options->scc_mixer_history = 8;
+    options->scc_mixer_damping = 0.4;
+    options->determinism = XTBLOOM_DETERMINISM_DEFAULT;
   }
   return XTBLOOM_STATUS_SUCCESS;
 }
@@ -376,17 +385,101 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
   if (request->implementation->context() != context->implementation) {
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "request was created by a different context");
   }
+#if !defined(XTBLOOM_HAS_CUDA)
+  (void)batch;
+  (void)options;
+  (void)result;
+  /* A CPU-only library can create only CPU contexts, so this is the complete
+   * public behavior rather than a fallback after an unreachable CUDA path. */
+  return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
+              "asynchronous compute enqueue is not supported by the CPU backend");
+#else
   if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
     /* Do not inspect descriptors or touch request/result state: callers may
      * probe capability with sentinels and then fall back to xtbloom_compute. */
     return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
                 "asynchronous compute enqueue is not supported by the CPU backend");
   }
-  (void)batch;
-  (void)options;
-  (void)result;
-  return fail(XTBLOOM_STATUS_NOT_IMPLEMENTED,
-              "CUDA asynchronous compute enqueue is not connected in this build");
+
+  if (batch == nullptr || options == nullptr || result == nullptr) {
+    return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "batch, compute options, or batch result is NULL");
+  }
+
+  bool reserved = false;
+  try {
+    std::string error;
+    const xtbloom::detail::DescriptorValidationResult validation =
+        xtbloom::detail::validate_compute_descriptor_structure_for_dispatch(
+            context->implementation->backend, batch, options, result);
+    if (!validation.ok()) {
+      return fail(validation.status, validation.error);
+    }
+    xtbloom::detail::ModelBackendRoute model_route =
+        xtbloom::detail::ModelBackendRoute::kUnavailable;
+    const xtbloom_status_t model_status = xtbloom::detail::validate_model_dispatch(
+        options->model, context->implementation->backend, error, &model_route);
+    if (model_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(model_status, std::move(error));
+    }
+    if (model_route != xtbloom::detail::ModelBackendRoute::kGfn2) {
+      return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                  "the registered model route has no asynchronous CUDA executor");
+    }
+    const xtbloom::detail::DescriptorValidationResult availability =
+        xtbloom::detail::validate_compute_execution_availability(context->implementation->backend,
+                                                                 *batch, *options);
+    if (!availability.ok()) {
+      return fail(availability.status, availability.error);
+    }
+    const xtbloom_status_t reserve_status =
+        request->implementation->reserve_submission(*context->implementation, error);
+    if (reserve_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(reserve_status, std::move(error));
+    }
+    reserved = true;
+
+    const std::shared_ptr<xtbloom::detail::Gfn2CudaExecutionCache>& cache =
+        context->implementation->gfn2_cuda_execution_cache;
+    if (cache == nullptr) {
+      request->implementation->rollback_submission();
+      return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                  "CUDA context does not own a GFN2 execution cache");
+    }
+    xtbloom::detail::RequestSubmission submission;
+    const xtbloom_status_t enqueue_status = xtbloom::detail::enqueue_restricted_gfn2_cuda(
+        cache, *batch, *options, *result, submission, error);
+    if (enqueue_status != XTBLOOM_STATUS_SUCCESS) {
+      request->implementation->rollback_submission();
+      return fail(enqueue_status, std::move(error));
+    }
+    /* Publication is the ownership handoff from the API stack to the request.
+     * If an invariant or mutex operation fails here, settle the already
+     * accepted CUDA transaction instead of leaving borrowed buffers in use. */
+    CompletionSettlementGuard completion_guard(submission.pending);
+    const xtbloom_status_t publish_status =
+        request->implementation->publish_submission(std::move(submission), error);
+    if (publish_status != XTBLOOM_STATUS_SUCCESS) {
+      request->implementation->rollback_submission();
+      reserved = false;
+      return fail(publish_status, std::move(error));
+    }
+    completion_guard.dismiss();
+    reserved = false;
+    last_error.clear();
+    return XTBLOOM_STATUS_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
+                "failed to allocate temporary storage while enqueueing CUDA GFN2 inference");
+  } catch (const std::exception& exception) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
+  } catch (...) {
+    if (reserved) request->implementation->rollback_submission();
+    return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                "unknown exception while enqueueing CUDA GFN2 inference");
+  }
+#endif
 }
 
 xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch_t* batch,
@@ -395,12 +488,21 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
   if (context == nullptr || context->implementation == nullptr) {
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "context is NULL");
   }
+  std::unique_lock<std::mutex> cpu_transaction;
   try {
+    if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
+      /* Validation, model dispatch, cache mutation, and publication are one
+       * context transaction even when concurrent callers select different
+       * model caches. Keep acquisition inside the C ABI exception boundary:
+       * std::mutex::lock may report an operating-system failure by throwing. */
+      cpu_transaction =
+          std::unique_lock<std::mutex>(context->implementation->cpu_transaction_mutex);
+    }
     const bool cuda_backend = context->implementation->backend == XTBLOOM_BACKEND_CUDA;
     xtbloom::detail::DescriptorValidationResult validation =
-        cuda_backend ? xtbloom::detail::validate_compute_descriptor_structure(
+        cuda_backend ? xtbloom::detail::validate_compute_descriptor_structure_for_dispatch(
                            context->implementation->backend, batch, options, result)
-                     : xtbloom::detail::validate_compute_descriptors(
+                     : xtbloom::detail::validate_compute_descriptors_for_dispatch(
                            context->implementation->backend, batch, options, result);
     if (!validation.ok()) {
       return fail(validation.status, std::move(validation.error));
@@ -410,30 +512,79 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
      * the cache transaction before accessing caller storage. CPU retains the
      * historical complete host validation sequence here. */
     (void)validation.pending_offset_checks;
+
+    std::string route_error;
+    xtbloom::detail::ModelBackendRoute model_route =
+        xtbloom::detail::ModelBackendRoute::kUnavailable;
+    const xtbloom_status_t model_status = xtbloom::detail::validate_model_dispatch(
+        options->model, context->implementation->backend, route_error, &model_route);
+    if (model_status != XTBLOOM_STATUS_SUCCESS) {
+      return fail(model_status, std::move(route_error));
+    }
+    if (model_route != xtbloom::detail::ModelBackendRoute::kGfn1 &&
+        model_route != xtbloom::detail::ModelBackendRoute::kGfn2) {
+      return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                  "the registered model route has no synchronous executor");
+    }
+    const xtbloom::detail::DescriptorValidationResult availability =
+        xtbloom::detail::validate_compute_execution_availability(context->implementation->backend,
+                                                                 *batch, *options);
+    if (!availability.ok()) {
+      return fail(availability.status, std::move(availability.error));
+    }
+    if (!cuda_backend) {
+      const xtbloom::detail::DescriptorValidationResult lattice_availability =
+          xtbloom::detail::validate_host_lattice_execution_availability(*batch, options->model);
+      if (!lattice_availability.ok()) {
+        return fail(lattice_availability.status, std::move(lattice_availability.error));
+      }
+    }
   } catch (const std::bad_alloc&) {
     return fail(XTBLOOM_STATUS_ALLOCATION_FAILED,
-                "failed to allocate temporary storage while validating a compute request");
+                "failed to allocate temporary storage while validating or dispatching a compute "
+                "request");
   } catch (const std::exception& exception) {
     return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
   } catch (...) {
     return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
-                "unknown exception while validating a compute request");
-  }
-
-  if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
-    return fail(XTBLOOM_STATUS_NOT_SUPPORTED,
-                "GFN1-xTB is reserved by the ABI but is not implemented yet");
+                "unknown exception while validating or dispatching a compute request");
   }
 
   if (context->implementation->backend == XTBLOOM_BACKEND_CPU) {
     try {
+      if (options->model == XTBLOOM_MODEL_GFN1_XTB) {
+        std::string error;
+        const xtbloom_status_t cache_status =
+            xtbloom::detail::ensure_gfn1_cpu_execution_cache(*context->implementation, error);
+        if (cache_status != XTBLOOM_STATUS_SUCCESS) {
+          return fail(cache_status, std::move(error));
+        }
+        const std::shared_ptr<xtbloom::detail::Gfn1CpuExecutionCache>& cache =
+            context->implementation->gfn1_cpu_execution_cache;
+        if (cache == nullptr) {
+          return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
+                      "CPU context does not own a GFN1 execution cache");
+        }
+        const xtbloom_status_t status =
+            xtbloom::detail::execute_gfn1_cpu(*cache, *batch, *options, *result, error);
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          return fail(status, std::move(error));
+        }
+        last_error.clear();
+        return XTBLOOM_STATUS_SUCCESS;
+      }
+      std::string error;
+      const xtbloom_status_t cache_status =
+          xtbloom::detail::ensure_gfn2_cpu_execution_cache(*context->implementation, error);
+      if (cache_status != XTBLOOM_STATUS_SUCCESS) {
+        return fail(cache_status, std::move(error));
+      }
       const std::shared_ptr<xtbloom::detail::Gfn2CpuExecutionCache>& cache =
           context->implementation->gfn2_cpu_execution_cache;
       if (cache == nullptr) {
         return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
                     "CPU context does not own a GFN2 execution cache");
       }
-      std::string error;
       const xtbloom_status_t status =
           xtbloom::detail::execute_restricted_gfn2_cpu(*cache, *batch, *options, *result, error);
       if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -442,12 +593,12 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
       last_error.clear();
       return XTBLOOM_STATUS_SUCCESS;
     } catch (const std::bad_alloc&) {
-      return fail(XTBLOOM_STATUS_ALLOCATION_FAILED, "failed to allocate CPU GFN2 execution state");
+      return fail(XTBLOOM_STATUS_ALLOCATION_FAILED, "failed to allocate CPU model execution state");
     } catch (const std::exception& exception) {
       return fail(XTBLOOM_STATUS_INTERNAL_ERROR, exception.what());
     } catch (...) {
       return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
-                  "unknown exception while executing CPU GFN2 inference");
+                  "unknown exception while executing CPU model inference");
     }
   }
 
@@ -495,8 +646,8 @@ xtbloom_status_t xtbloom_plan_create(xtbloom_context_t* context, const xtbloom_b
     return fail(XTBLOOM_STATUS_INVALID_ARGUMENT, "batch or compute options is NULL");
   }
   try {
-    std::unique_ptr<xtbloom::detail::Gfn2Plan> implementation(new (std::nothrow)
-                                                                  xtbloom::detail::Gfn2Plan{});
+    std::unique_ptr<xtbloom::detail::ModelPlan> implementation(new (std::nothrow)
+                                                                   xtbloom::detail::ModelPlan{});
     if (implementation == nullptr) {
       return fail(XTBLOOM_STATUS_ALLOCATION_FAILED, "failed to allocate a plan implementation");
     }

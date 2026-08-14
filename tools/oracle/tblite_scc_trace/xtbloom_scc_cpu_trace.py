@@ -38,6 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import generate_scc_corpus as generator
+import generate_unrestricted_scc_corpus as unrestricted_generator
 import xtbloom_scc_trace as writer
 
 TOOL_DIR = Path(__file__).resolve().parent
@@ -54,8 +55,38 @@ STATUS_SCC_NOT_CONVERGED = 7
 
 def canonicalize_capture(raw: str, case_id: str) -> dict:
     """Convert one captured CPU raw stream into a canonical trace document."""
+    if case_id in unrestricted_generator.CASES:
+        spec = unrestricted_generator.CASES[case_id]
+        return unrestricted_generator.canonicalize(
+            raw, spec, "xtbloom_scc_cpu_trace.py (capture)"
+        )
     spec = generator.CASES[case_id]
     return generator.canonicalize(raw, spec, "xtbloom_scc_cpu_trace.py (capture)")
+
+
+def load_golden_catalog(corpus_dir: Path) -> dict[str, dict]:
+    """Merge the disjoint pinned v1 and v2 manifests by case identifier."""
+    catalog: dict[str, dict] = {}
+    for manifest_name in ("manifest.json", "manifest-v2.json"):
+        manifest_path = corpus_dir / manifest_name
+        if not manifest_path.is_file():
+            continue
+        cases = json.loads(manifest_path.read_text(encoding="utf-8"))["cases"]
+        overlap = set(catalog).intersection(cases)
+        if overlap:
+            raise generator.CorpusError(
+                f"duplicate case identifiers across corpus manifests: {sorted(overlap)}"
+            )
+        catalog.update(cases)
+    return catalog
+
+
+def profile_for_trace(trace: dict, mode: str, requested: str) -> str:
+    """Select the versioned tolerance profile without reinterpreting a trace."""
+    if requested != "auto":
+        return requested
+    suffix = "v2" if trace["format"] == writer.FORMAT_V2 else "v1"
+    return f"cpu_{mode}_{suffix}"
 
 
 def validate_replay_lifecycle(trace: dict, expected_iteration: dict) -> None:
@@ -143,6 +174,7 @@ def compare_iteration_with_comparator(
     golden: Path,
     logical_index: int,
     golden_sha256: str,
+    profile: str,
 ) -> tuple[int, str]:
     """Compare one replayed iteration snapshot with the golden via the CLI."""
     command = [
@@ -154,7 +186,7 @@ def compare_iteration_with_comparator(
         "--iteration",
         str(logical_index),
         "--profile",
-        "cpu_replay_v1",
+        profile,
         "--golden-sha256",
         golden_sha256,
         "--max-reported",
@@ -216,19 +248,20 @@ def run_capture(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
             continue
         actual_path.write_text(canonical, encoding="utf-8")
 
+        profile = profile_for_trace(trace, "closed_loop", arguments.profile)
         return_code, report = compare_with_comparator(
             actual_path,
             golden_path,
-            arguments.profile,
+            profile,
             golden_entry["sha256"],
             metadata_only=arguments.metadata_only,
         )
         if return_code == 0:
-            print(f"{case_id}: PASS ({arguments.profile})")  # noqa: T201
+            print(f"{case_id}: PASS ({profile})")  # noqa: T201
         else:
             failures += 1
             summary = report.strip().splitlines()
-            print(f"{case_id}: FAIL ({arguments.profile})")  # noqa: T201
+            print(f"{case_id}: FAIL ({profile})")  # noqa: T201
             for line in summary[:6]:
                 print(f"  {line}")  # noqa: T201
 
@@ -366,22 +399,23 @@ def run_batch(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
             print(f"batch lane {index} {case_id}: FAIL cannot canonicalize: {error}")  # noqa: T201
             continue
 
+        profile = profile_for_trace(trace, "closed_loop", arguments.profile)
         return_code, report = compare_with_comparator(
             actual_path,
             golden_path,
-            arguments.profile,
+            profile,
             golden_entry["sha256"],
         )
         if return_code == 0:
             print(  # noqa: T201
-                f"batch lane {index} {case_id}: PASS ({arguments.profile}, "
+                f"batch lane {index} {case_id}: PASS ({profile}, "
                 f"{banner_iterations} iterations)"
             )
         else:
             failures += 1
             summary = report.strip().splitlines()
             print(  # noqa: T201
-                f"batch lane {index} {case_id}: FAIL ({arguments.profile})"
+                f"batch lane {index} {case_id}: FAIL ({profile})"
             )
             for line in summary[:6]:
                 print(f"  {line}")  # noqa: T201
@@ -390,16 +424,21 @@ def run_batch(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
 
 def write_mixed_state(state_path: Path, iteration: dict, nat: int, nsh: int) -> None:
     """Write one golden iteration's mixed q/d/Q in the replay state layout."""
-    lines = [f"qsh {nsh}"]
-    lines.extend(repr(value) for value in iteration["mixed_qsh"][0])
-    lines.append(f"qat {nat}")
-    lines.extend(repr(value) for value in iteration["mixed_qat"][0])
-    lines.append(f"dipoles {3 * nat}")
-    for atom in iteration["mixed_dipoles"][0]:
-        lines.extend(repr(value) for value in atom)
-    lines.append(f"quadrupoles {6 * nat}")
-    for atom in iteration["mixed_quadrupoles"][0]:
-        lines.extend(repr(value) for value in atom)
+    channels = len(iteration["mixed_qsh"])
+    lines = [f"qsh {channels * nsh}"]
+    for channel in iteration["mixed_qsh"]:
+        lines.extend(repr(value) for value in channel)
+    lines.append(f"qat {channels * nat}")
+    for channel in iteration["mixed_qat"]:
+        lines.extend(repr(value) for value in channel)
+    lines.append(f"dipoles {channels * 3 * nat}")
+    for channel in iteration["mixed_dipoles"]:
+        for atom in channel:
+            lines.extend(repr(value) for value in atom)
+    lines.append(f"quadrupoles {channels * 6 * nat}")
+    for channel in iteration["mixed_quadrupoles"]:
+        for atom in channel:
+            lines.extend(repr(value) for value in atom)
     state_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -491,21 +530,23 @@ def run_replay(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
             snapshot = trace["iterations"][0]
             snapshot["index"] = logical_index
             snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+            profile = profile_for_trace(golden, "replay", "auto")
             return_code, report = compare_iteration_with_comparator(
                 snapshot_path,
                 golden_path,
                 logical_index,
                 golden_entry["sha256"],
+                profile,
             )
             if return_code == 0:
                 print(  # noqa: T201
-                    f"{case_id} iteration {logical_index}: PASS (cpu_replay_v1)"
+                    f"{case_id} iteration {logical_index}: PASS ({profile})"
                 )
             else:
                 failures += 1
                 summary = report.strip().splitlines()
                 print(  # noqa: T201
-                    f"{case_id} iteration {logical_index}: FAIL (cpu_replay_v1)"
+                    f"{case_id} iteration {logical_index}: FAIL ({profile})"
                 )
                 for line in summary[:6]:
                     print(f"  {line}")  # noqa: T201
@@ -520,18 +561,38 @@ def run_replay(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
 def flatten_multipoles(iteration: dict) -> list[float]:
     """Flatten one iteration's multipoles in the canonical residual order."""
     return [
-        *iteration["mixed_qsh"][0],
-        *[value for atom in iteration["mixed_dipoles"][0] for value in atom],
-        *[value for atom in iteration["mixed_quadrupoles"][0] for value in atom],
+        *[value for channel in iteration["mixed_qsh"] for value in channel],
+        *[
+            value
+            for channel in iteration["mixed_dipoles"]
+            for atom in channel
+            for value in atom
+        ],
+        *[
+            value
+            for channel in iteration["mixed_quadrupoles"]
+            for atom in channel
+            for value in atom
+        ],
     ]
 
 
 def flatten_raw(iteration: dict) -> list[float]:
     """Flatten one iteration's raw multipoles in the canonical residual order."""
     return [
-        *iteration["raw_qsh"][0],
-        *[value for atom in iteration["raw_dipoles"][0] for value in atom],
-        *[value for atom in iteration["raw_quadrupoles"][0] for value in atom],
+        *[value for channel in iteration["raw_qsh"] for value in channel],
+        *[
+            value
+            for channel in iteration["raw_dipoles"]
+            for atom in channel
+            for value in atom
+        ],
+        *[
+            value
+            for channel in iteration["raw_quadrupoles"]
+            for atom in channel
+            for value in atom
+        ],
     ]
 
 
@@ -560,8 +621,11 @@ def run_mixer(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
             continue
         nat = golden["basis"]["n_atoms"]
         nsh = golden["basis"]["n_shells"]
-        lines = [f"nat {nat} nsh {nsh} steps {len(iterations)}"]
-        dimension = nsh + 9 * nat
+        channels = golden["input"]["spin_channels"]
+        lines = [
+            f"nat {nat} nsh {nsh} spin_channels {channels} steps {len(iterations)}"
+        ]
+        dimension = channels * (nsh + 9 * nat)
         for logical_index, iteration in enumerate(iterations, start=1):
             lines.append(f"step {logical_index}")
             lines.append(
@@ -644,7 +708,7 @@ def run_mixer(arguments: argparse.Namespace, goldens: dict[str, dict]) -> int:
             if worst_absolute < 0.0:
                 print(  # noqa: T201
                     f"{case_id} transition {logical_index - 1}->{logical_index}: "
-                    "PASS (cpu_replay_v1)"
+                    f"PASS (cpu_replay_v{'2' if channels == 2 else '1'})"
                 )
             else:
                 failures += 1
@@ -685,8 +749,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--profile",
-        default="cpu_closed_loop_v1",
-        choices=("cpu_closed_loop_v1", "cpu_replay_v1", "cuda_replay_v1"),
+        default="auto",
+        choices=(
+            "auto",
+            "cpu_closed_loop_v1",
+            "cpu_replay_v1",
+            "cuda_replay_v1",
+            "cpu_closed_loop_v2",
+            "cpu_replay_v2",
+            "cuda_replay_v2",
+        ),
         help="comparator tolerance profile for closed-loop trace comparison",
     )
     parser.add_argument(
@@ -710,22 +782,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--cases",
         default=sorted(generator.CASES),
         nargs="*",
-        help="restricted cases to compare sequentially (default: all)",
+        help="case identifiers to compare sequentially (default: all restricted v1)",
     )
     parser.add_argument(
         "--batch-cases",
         nargs="*",
-        help="restricted cases to run in one ragged batch (default: none)",
+        help="case identifiers to run in one ragged batch (default: none)",
     )
     parser.add_argument(
         "--replay-cases",
         nargs="*",
-        help="restricted cases whose every iteration is replayed (default: none)",
+        help="case identifiers whose every iteration is replayed (default: none)",
     )
     parser.add_argument(
         "--mixer-cases",
         nargs="*",
-        help="restricted cases whose golden residual sequence is mixer-replayed "
+        help="case identifiers whose golden residual sequence is mixer-replayed "
         "(default: none)",
     )
     return parser
@@ -748,9 +820,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     corpus_dir = arguments.corpus_dir
-    goldens = json.loads((corpus_dir / "manifest.json").read_text(encoding="utf-8"))[
-        "cases"
-    ]
+    goldens = load_golden_catalog(corpus_dir)
+    requested_cases = set(arguments.cases)
+    requested_cases.update(arguments.batch_cases or ())
+    requested_cases.update(arguments.replay_cases or ())
+    requested_cases.update(arguments.mixer_cases or ())
+    unknown = requested_cases.difference(goldens)
+    if unknown:
+        print(f"unknown corpus case identifiers: {sorted(unknown)}")  # noqa: T201
+        return 2
     if arguments.capture is not None:
         return run_capture(arguments, goldens)
     if arguments.batch_capture is not None:

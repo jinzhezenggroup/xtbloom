@@ -2,28 +2,28 @@
 # See https://pre-commit.com/hooks.html for more hooks
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
+    rev: v6.0.0 # v6.0.0
     hooks:
       - id: trailing-whitespace
         # These exact generated or hash-pinned artifacts have canonical bytes.
-        # The retained Eigen legal records are byte-pinned by their manifest;
-        # in other artifacts, unified-diff blank context lines may retain one
-        # leading space. Read-only integrity tests still cover them.
-        exclude: ^(?:LICENSES/eigen/.*|data/parameters/(?:gfn2\.(?:toml|json|hpp)|manifest\.json|d4\.hpp|d4_manifest\.json)|tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer\.patch|LICENSES/scipy-openblas32-(?:0\.3\.34\.0\.0-(?:macos|windows-amd64|windows-arm64)|tools-LICENSE_win32)\.txt)$
+        # Retained Eigen legal records and Pyodide recipe/license bytes are
+        # pinned by manifests. Read-only integrity tests still cover them.
+        exclude: ^(?:cmake/3rdparty/pyodide-openblas/recipe/.*|LICENSES/eigen/.*|data/parameters/(?:(?:gfn1|gfn2)\.(?:toml|json|hpp)|gfn1_(?:manifest|d3(?:_manifest)?)\.json|gfn1_d3\.hpp|manifest\.json|d4\.hpp|d4_manifest\.json)|data/conformance/scc-traces/(?:manifest-v2\.json|oh_radical\.json|specs/oh_radical\.spec)|tools/oracle/tblite_scc_trace/(?:tblite-e9abc395-scc-observer(?:-v2)?\.patch|scc_trace_(?:main|recorder)_v2\.f90|xtbloom-scc-trace-v2\.schema\.json)|LICENSES/(?:scipy-openblas32-(?:0\.3\.34\.0\.0-(?:macos|windows-amd64|windows-arm64)|tools-LICENSE_win32)|pyodide-MPL-2\.0|OpenBLAS-0\.3\.28-BSD-3-Clause|LAPACK-OpenBLAS-0\.3\.28-BSD-3-Clause|CLAPACK-3\.2\.1-BSD-3-Clause|libf2c-AT&T-Lucent-Bellcore)\.txt)$
       - id: end-of-file-fixer
-        exclude: ^(?:LICENSES/eigen/.*|data/parameters/(?:gfn2\.(?:toml|json|hpp)|manifest\.json|d4\.hpp|d4_manifest\.json)|tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer\.patch|LICENSES/scipy-openblas32-(?:0\.3\.34\.0\.0-(?:macos|windows-amd64|windows-arm64)|tools-LICENSE_win32)\.txt)$
+        exclude: ^(?:cmake/3rdparty/pyodide-openblas/recipe/.*|LICENSES/eigen/.*|data/parameters/(?:(?:gfn1|gfn2)\.(?:toml|json|hpp)|gfn1_(?:manifest|d3(?:_manifest)?)\.json|gfn1_d3\.hpp|manifest\.json|d4\.hpp|d4_manifest\.json)|data/conformance/scc-traces/(?:manifest-v2\.json|oh_radical\.json|specs/oh_radical\.spec)|tools/oracle/tblite_scc_trace/(?:tblite-e9abc395-scc-observer(?:-v2)?\.patch|scc_trace_(?:main|recorder)_v2\.f90|xtbloom-scc-trace-v2\.schema\.json)|LICENSES/(?:scipy-openblas32-(?:0\.3\.34\.0\.0-(?:macos|windows-amd64|windows-arm64)|tools-LICENSE_win32)|pyodide-MPL-2\.0|OpenBLAS-0\.3\.28-BSD-3-Clause|LAPACK-OpenBLAS-0\.3\.28-BSD-3-Clause|CLAPACK-3\.2\.1-BSD-3-Clause|libf2c-AT&T-Lucent-Bellcore)\.txt)$
       - id: check-yaml
       - id: check-json
       - id: check-added-large-files
         args: ["--maxkb=1024", "--enforce-all"]
-        # Canonical generated or raw evidence artifacts; each exact file is
-        # tracked with a committed SHA-256 manifest.
-        exclude: ^(?:data/parameters/d4\.hpp|benchmarks/evidence/issue-168/2026-08-06-epyc7k62/(?:xtbloom-fresh|xtbloom-warm|tblite-persistent)\.json|benchmarks/evidence/issue-256/2026-08-09-node3-stage-a/xtbloom-warm\.json|benchmarks/evidence/issue-13/2026-08-09-node3-pr231/(?:dxtb-cpu-b512|xtbloom-(?:cpu|cuda)-b(?:128|512)|ref-tblite-b512|xtb-b512)\.json)$
+        # This generated table is canonical and covered by its manifest.
+        # Benchmark evidence has no exception: keep reproducible oversized raw
+        # samples untracked and commit compact results plus provenance.
+        exclude: ^data/parameters/d4\.hpp$
       - id: check-merge-conflict
       - id: check-symlinks
       - id: check-toml
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: cb8c523fd4835aba42af70f4cad5568db4df0b6c # v0.16.0
+    rev: v0.16.2 # v0.16.0
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -34,7 +34,7 @@ repos:
         types_or: [python, pyi, jupyter]
         exclude: ^cmake/3rdparty/implib/implib-gen\.py$
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: a4405bd34b6505ed51226ba2a5b5428625177d6a # v0.0.69
+    rev: v0.0.69 # v0.0.69
     hooks:
       - id: ty
         # --isolated stops uv from rewriting the pinned uv.lock or the local
@@ -43,14 +43,14 @@ repos:
         # needed for `uv check` to resolve it.
         args: [--isolated]
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: f4d7745e17a28aad7eed2f4874ca8d1568c11c4c # v22.1.8
+    rev: v22.1.8 # v22.1.8
     hooks:
       - id: clang-format
         types_or: [c++, c, cuda]
         # Only generated parameter headers, retained notice copies, and the
         # LibTorch header tree are canonical upstream bytes. Future hand-written
         # C/C++ files in their parent directories must still be formatted.
-        exclude: ^(?:data/parameters/(?:gfn2|d4)\.hpp|LICENSES/eigen/notices/|cmake/3rdparty/torch-stable/include/)
+        exclude: ^(?:data/parameters/(?:gfn1(?:_d3)?|gfn2|d4|tblite_sto)\.hpp|LICENSES/eigen/notices/|cmake/3rdparty/torch-stable/include/)
   - repo: local
     hooks:
       - id: forbid-retired-project-name-content
@@ -75,6 +75,12 @@ repos:
         # *.sqlite / *.sqlite.dbb / *.csv.db / *.qdstrm / *.prof block in
         # .gitignore.
         files: '\.(nsys-rep|qdstrm|sqlite|ncu-rep|sqlite\.dbb|csv\.db|prof)$'
+      - id: check-benchmark-evidence-size
+        name: Enforce the tracked benchmark evidence budget
+        entry: python3 tools/check_benchmark_evidence_size.py
+        language: system
+        pass_filenames: false
+        always_run: true
 
 # pre-commit.ci blocks network access for hooks, but ty-pre-commit needs to
 # resolve dependencies, so it must be skipped there. The repository's own

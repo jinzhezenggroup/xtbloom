@@ -1,25 +1,81 @@
 {
   "consumers": [
     {
-      "description": "Mantina atomic radii used by the GFN2 H0 shell polynomial",
+      "description": "Mantina atomic radii used by the GFN1/GFN2 H0 shell polynomial and the GFN1 halogen correction",
       "git_blob": "f72b137328f24dc2abb0b709f8803be0cb616fef",
       "path": "src/mctc/data/atomicrad.f90",
       "sha256": "2c25924d89215c1810e61a1f38f67781e5083d15678de4bf326a071bc27d827c",
-      "used_by": "src/model/gfn2/h0.cpp"
+      "used_by": "data/parameters/gfn1.hpp; src/model/gfn2/h0.cpp"
     },
     {
-      "description": "Pyykko-Atsumi covalent radii used by GFN2 coordination numbers",
+      "description": "Pyykko-Atsumi covalent radii used by GFN1 exponential and GFN2 double-exponential coordination numbers",
       "git_blob": "b3cb9cefd702169d6be662eb438932525990a1ac",
       "path": "src/mctc/data/covrad.f90",
       "sha256": "fdbd599664a7f113633d96110531d810fdc8e54b6db26d4f584120d9c7cec314",
-      "used_by": "src/model/gfn2/coordination.cpp"
+      "used_by": "data/parameters/gfn1.hpp; src/model/gfn2/coordination.cpp"
     },
     {
-      "description": "CODATA conversion constants used to pin evaluated binary64 factors",
+      "description": "Pauling electronegativities used by the GFN1 zeroth-order Hamiltonian",
+      "git_blob": "445c9d4a0bf643a045a6f9ce9240c032fecbc911",
+      "path": "src/mctc/data/paulingen.f90",
+      "sha256": "8ccd4c9688fbb733888e8a2622de0d8b67d6a348ed400b1a41686d6268f06d1b",
+      "used_by": "data/parameters/gfn1.hpp"
+    },
+    {
+      "description": "Numerical pi used with CODATA 2018 constants to pin evaluated binary64 conversion factors",
       "git_blob": "2fd35c66ce80a47aa88d12952f0cce2886cd753f",
       "path": "src/mctc/io/constants.f90",
       "sha256": "6ee2b599fc2d338f1a7e07b5b46e984e2612b4cfc58110d1203ecf19ebde2385",
-      "used_by": "src/model/gfn2/coordination.cpp"
+      "used_by": "data/parameters/gfn1.hpp; src/model/gfn2/coordination.cpp"
+    },
+    {
+      "description": "Working-precision selection used for the reviewed binary64 conversion path",
+      "git_blob": "52d195970efd2aa030f0d464c9b8b6e817ddc43c",
+      "path": "src/mctc/env/accuracy.f90",
+      "sha256": "17f5de4dc97a3240088540cf31627dc787dfb0628d691ec70cb2c0404dac21e8",
+      "used_by": "data/parameters/gfn1.hpp"
+    },
+    {
+      "description": "Public mctc environment module re-exporting the reviewed working precision",
+      "git_blob": "f4f2eb0a0ab661acd4f4f252609c60f3a75001ad",
+      "path": "src/mctc/env.f90",
+      "sha256": "cb75b8a8344b708d8a4de5abe0ef726e7b3332bed78ab90c1b0915ad587cbe8e",
+      "used_by": "data/parameters/gfn1.hpp"
+    },
+    {
+      "description": "CODATA 2018 h, c, alpha, and electron-mass values used for the Angstrom-to-bohr factor",
+      "git_blob": "8db65943defc6cd3d9ce51751e1bdbe81173d132",
+      "path": "src/mctc/io/codata2018.f90",
+      "sha256": "47c4abbc7f9dddb3bba1c89563b45e792304bc56723f1c4b05fc978aa5d3704d",
+      "used_by": "data/parameters/gfn1.hpp"
+    },
+    {
+      "description": "CODATA expression defining the evaluated Angstrom-to-bohr conversion factor",
+      "git_blob": "799d71c1f83cfa6522c4b9eb47df3f72e6a4b90f",
+      "path": "src/mctc/io/convert.f90",
+      "sha256": "b05d7b4821deb4abe448cf11d53df9b118747294b44f0d774f056bc3b28430b9",
+      "used_by": "data/parameters/gfn1.hpp"
+    },
+    {
+      "description": "Coordination-number selector dispatch for the GFN1 exponential convention",
+      "git_blob": "93e6ce2cd3a1a4463b22e858313d17f31deff9ec",
+      "path": "src/mctc/ncoord.f90",
+      "sha256": "93d705f1c018c646a8bc01385c5e8e918433fc76a670876b342f459a0002e723",
+      "used_by": "data/parameters/gfn1.hpp"
+    },
+    {
+      "description": "GFN1 exponential coordination-number defaults, count equation, and derivative",
+      "git_blob": "c41db6846cf2d694cac3e26634a0648ab4ded5e3",
+      "path": "src/mctc/ncoord/exp.f90",
+      "sha256": "376eed0a25ad9c5c45a523294804e10fb02883bb7b26dfd2017c1b2f8c051b60",
+      "used_by": "data/parameters/gfn1.hpp"
+    },
+    {
+      "description": "GFN1 exponential coordination-number pair loop, cutoff, and symmetric accumulation convention",
+      "git_blob": "38eb682efa53b55070b39d8f68d09a8465f5d76f",
+      "path": "src/mctc/ncoord/type.f90",
+      "sha256": "b8b819f9ea1c0765632fdb4ea9046b0c79f2c1bb13d39555ac3059f498ba1bb5",
+      "used_by": "data/parameters/gfn1.hpp"
     },
     {
       "description": "Double-exponential coordination-number convention",

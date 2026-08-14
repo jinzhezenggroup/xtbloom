@@ -87,6 +87,15 @@ xtbloom_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
  */
 std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache) noexcept;
 
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+/* Test-only observability for the standalone public-runtime teardown binary.
+ * These functions are not compiled into the production shared library. */
+void reset_gfn2_cpu_worker_teardown_test_counters() noexcept;
+std::size_t gfn2_cpu_test_background_eigensolver_runs() noexcept;
+std::size_t gfn2_cpu_test_background_thread_cleanups() noexcept;
+bool gfn2_cpu_test_provider_requires_thread_cleanup() noexcept;
+#endif
+
 }  // namespace xtbloom::detail
 
 #endif  // XTBLOOM_RUNTIME_GFN2_CPU_EXECUTION_HPP

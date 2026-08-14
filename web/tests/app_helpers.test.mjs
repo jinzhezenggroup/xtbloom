@@ -11,23 +11,29 @@ import {
 
 import {
   BOHR_PER_ANGSTROM,
+  ELEMENT_SYMBOLS,
   aggregateResourceProgress,
   angstromToBohr,
   canStartUrlSmiles,
   clampProgressPercent,
   comparableContentLength,
   copyFloat64FromMemory,
+  createDebouncedPublisher,
+  createRevisionOwner,
+  createSmilesWorkerClient,
   delayWithSignal,
   fetchResourceBatch,
   downloadProgressPercent,
   initializeDownloadedEngineModule,
   initializeWorker,
   isRetryableLoadError,
+  parseXyzCoordinates,
   postToReadyWorker,
   readSmilesQuery,
   runWithRetries,
   validateEngineManifest,
   withTimeout,
+  xyzAtomsToText,
 } from "../app_helpers.js";
 
 class FakeWorker {
@@ -49,6 +55,28 @@ class FakeWorker {
   terminate() {
     this.terminated = true;
   }
+}
+
+function createManualTimers() {
+  let sequence = 0;
+  const callbacks = new Map();
+  return {
+    setTimer(callback, delayMs) {
+      const id = ++sequence;
+      callbacks.set(id, { callback, delayMs });
+      return id;
+    },
+    clearTimer(id) { callbacks.delete(id); },
+    delayOf: (id) => callbacks.get(id)?.delayMs,
+    run(id) {
+      const entry = callbacks.get(id);
+      assert.equal(typeof entry?.callback, "function", `missing timer ${id}`);
+      callbacks.delete(id);
+      entry.callback();
+    },
+    ids: () => Array.from(callbacks.keys()),
+    get size() { return callbacks.size; },
+  };
 }
 
 function createBootstrapDocument() {
@@ -613,6 +641,144 @@ test("URL SMILES starts once only when both workers are ready and idle", () => {
   }
 });
 
+test("SMILES generation timeout restarts the worker and permits a one-click retry", async () => {
+  const timers = createManualTimers();
+  const workers = [];
+  const states = [];
+  const client = createSmilesWorkerClient({
+    createWorker: () => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    },
+    onStateChange: (event) => states.push(event),
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    loadTimeoutMs: 60,
+    generationTimeoutMs: 120,
+  });
+
+  client.start();
+  assert.equal(workers.length, 1);
+  workers[0].emit({ type: "ready", version: "9.21.0" });
+  const first = client.request("complex");
+  assert.deepEqual(workers[0].messages[0].message, {
+    type: "generate",
+    id: 1,
+    smiles: "complex",
+  });
+  const generationTimer = timers.ids()[0];
+  assert.equal(timers.delayOf(generationTimer), 120);
+  timers.run(generationTimer);
+  await assert.rejects(first, (error) => error.code === "smiles_err_timeout");
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+  assert.equal(client.getState(), "loading");
+  assert.equal(states.at(-1).reason, "generation-timeout");
+  assert.deepEqual(states.at(-1).recoveryStatus, {
+    key: "smiles_err_timeout",
+    tone: "err",
+  });
+
+  /* A queued event from the terminated instance must not publish readiness for
+   * or otherwise alter the replacement Worker. */
+  workers[0].emit({ type: "ready", version: "stale" });
+  workers[0].onerror({ message: "stale failure" });
+  assert.equal(client.getState(), "loading");
+  assert.equal(workers[1].terminated, false);
+
+  workers[1].emit({ type: "ready", version: "9.21.0" });
+  assert.deepEqual(states.at(-1).recoveryStatus, {
+    key: "smiles_err_timeout",
+    tone: "err",
+  });
+  const retry = client.request("complex");
+  workers[1].emit({ type: "result", id: 2, ok: true, result: { atomCount: 77 } });
+  assert.deepEqual(await retry, { atomCount: 77 });
+  assert.equal(client.getState(), "ready");
+  client.dispose();
+});
+
+test("cancelling SMILES work terminates abandoned synchronous work", async () => {
+  const timers = createManualTimers();
+  const workers = [];
+  const client = createSmilesWorkerClient({
+    createWorker: () => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  client.start();
+  workers[0].emit({ type: "ready", version: "9.21.0" });
+  const abandoned = client.request("old-smiles");
+  const cancelled = client.cancel(new DOMException("superseded", "AbortError"));
+  assert.equal(cancelled, true);
+  await assert.rejects(abandoned, (error) => error.name === "AbortError");
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+
+  workers[0].emit({
+    type: "result",
+    id: 1,
+    ok: true,
+    result: { atomCount: 1 },
+  });
+  assert.equal(client.getState(), "loading");
+  workers[1].emit({ type: "ready", version: "9.21.0" });
+  assert.equal(client.getState(), "ready");
+  assert.equal(client.cancel(), false);
+
+  const replacement = client.request("new-smiles");
+  workers[1].emit({
+    type: "result",
+    id: 2,
+    ok: true,
+    result: { atomCount: 2 },
+  });
+  assert.deepEqual(await replacement, { atomCount: 2 });
+  assert.equal(timers.size, 0, "cancelled work must not leave a timer ahead of the retry");
+  client.dispose();
+});
+
+test("SMILES postMessage failure rejects locally and rebuilds the worker", async () => {
+  const timers = createManualTimers();
+  const workers = [];
+  const client = createSmilesWorkerClient({
+    createWorker: () => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  client.start();
+  workers[0].emit({ type: "ready", version: "9.21.0" });
+  const cause = new DOMException("clone failed", "DataCloneError");
+  workers[0].postMessage = () => { throw cause; };
+
+  await assert.rejects(client.request("CCO"), (error) => {
+    assert.equal(error.code, "smiles_err_library");
+    assert.equal(error.cause, cause);
+    return true;
+  });
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+  assert.equal(client.getState(), "loading");
+  assert.equal(timers.size, 1, "only the replacement load timer should remain");
+
+  workers[1].emit({ type: "ready", version: "9.21.0" });
+  const retry = client.request("CCO");
+  workers[1].emit({ type: "result", id: 2, ok: true, result: { atomCount: 9 } });
+  assert.deepEqual(await retry, { atomCount: 9 });
+  client.dispose();
+});
+
 test("worker initialization remains pending until ready", async () => {
   const worker = new FakeWorker();
   const wasmBinary = new Uint8Array([0, 1, 2]);
@@ -717,7 +883,7 @@ test("page bootstraps pinned SMILES loading and applies URL-optimized geometry",
   assert.match(appSource, /startSmilesWorker\(\);/);
   assert.match(appSource, /readSmilesQuery\(window\.location\.href\)/);
   assert.match(appSource, /applyFinalGeometry:\s*true/);
-  assert.match(appSource, /\$\("xyz"\)\.value = d\.geometry/);
+  assert.match(appSource, /setCoordinateInput\(d\.geometry, \{ preserveOptimization: true \}\)/);
   assert.doesNotMatch(appSource, /smiles-alert/);
   assert.match(indexSource, /id="smiles"/);
   assert.match(indexSource, /id="smiles-generate"/);
@@ -815,4 +981,242 @@ test("timeout covers a worker that never becomes ready", async () => {
     /TIME_OUT/,
   );
   assert.equal(worker.terminated, true);
+});
+
+test("element symbols cover the same period-1..103 table as the C adapter", () => {
+  assert.equal(ELEMENT_SYMBOLS.length, 104);
+  assert.equal(ELEMENT_SYMBOLS[0], "");
+  assert.equal(ELEMENT_SYMBOLS[6], "C");
+  assert.equal(ELEMENT_SYMBOLS[17], "Cl");
+  assert.equal(ELEMENT_SYMBOLS[103], "Lr");
+});
+
+const WATER_XYZ =
+  "O  0.00000000  0.00000000  0.00000000\n" +
+  "H  0.00000000  0.00000000  0.95720000\n" +
+  "H  0.00000000  0.75718000 -0.58552000";
+
+test("valid XYZ preview parsing keeps canonical symbols and coordinates", () => {
+  const parsed = parseXyzCoordinates(WATER_XYZ);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.atomCount, 3);
+  assert.deepEqual(parsed.atoms.map((atom) => atom.symbol), ["O", "H", "H"]);
+  assert.deepEqual(parsed.atoms.map((atom) => atom.z), [0, 0.9572, -0.58552]);
+  assert.equal(parsed.atoms[2].y, 0.75718);
+  assert.equal(parsed.atoms[2].z, -0.58552);
+
+  const text = xyzAtomsToText(parsed.atoms);
+  assert.match(text, /^O 0 0 0\nH 0 0 0\.9572\nH 0 0\.75718 -0\.58552$/);
+  assert.deepEqual(parseXyzCoordinates(text), parsed);
+});
+
+test("XYZ preview accepts atomic numbers and case-insensitive symbols like the engine", () => {
+  const numeric = parseXyzCoordinates("8 0 0 0\n1 0 0 0.9572");
+  assert.equal(numeric.ok, true);
+  assert.deepEqual(numeric.atoms.map((atom) => atom.symbol), ["O", "H"]);
+  const mixedCase = parseXyzCoordinates("o 0 0 0\ncl 0 0 1\nNA 0 0 2\nmg 0 0 3");
+  assert.equal(mixedCase.ok, true);
+  assert.deepEqual(mixedCase.atoms.map((atom) => atom.symbol), ["O", "Cl", "Na", "Mg"]);
+});
+
+test("XYZ preview accepts extra trailing tokens the engine parser ignores", () => {
+  const parsed = parseXyzCoordinates("O 0 0 0 trailing\nH 0 0 0.9 x");
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.atomCount, 2);
+});
+
+test("XYZ preview canonicalizes whitespace the C parser rejects raw", () => {
+  const parsed = parseXyzCoordinates("  O 0 0 0\n \t \n\tH 0 0 0.9");
+  assert.equal(parsed.ok, true);
+  assert.equal(xyzAtomsToText(parsed.atoms), "O 0 0 0\nH 0 0 0.9");
+});
+
+test("revision ownership supersedes stale callbacks without clearing newer busy work", () => {
+  const owner = createRevisionOwner();
+  const oldToken = owner.capture();
+  assert.equal(owner.claim(oldToken), true);
+  assert.equal(owner.claim(oldToken), false);
+  assert.equal(owner.isBusy(), true);
+
+  owner.advance(); /* Reset or an XYZ edit supersedes the old operation. */
+  const newToken = owner.capture();
+  assert.equal(owner.claim(newToken), true);
+  assert.equal(owner.isCurrent(oldToken), false);
+  assert.equal(owner.release(oldToken), false);
+  assert.equal(owner.isBusy(), true);
+  assert.equal(owner.release(newToken), true);
+  assert.equal(owner.isBusy(), false);
+});
+
+test("debounced publication ignores cancelled and superseded callbacks", () => {
+  const callbacks = new Map();
+  const delays = [];
+  let nextTimer = 0;
+  const published = [];
+  const publisher = createDebouncedPublisher((value) => published.push(value), {
+    delayMs: 400,
+    setTimer: (callback, delay) => {
+      const id = ++nextTimer;
+      callbacks.set(id, callback);
+      delays.push(delay);
+      return id;
+    },
+    /* Keep callbacks callable to model a timer already queued by the event loop. */
+    clearTimer: () => {},
+  });
+
+  publisher.schedule("old-valid");
+  const oldCallback = callbacks.get(1);
+  publisher.cancel(); /* Invalid input retains the old viewer content. */
+  oldCallback();
+  assert.deepEqual(published, []);
+
+  publisher.schedule("valid-a");
+  const supersededCallback = callbacks.get(2);
+  publisher.schedule("valid-b");
+  supersededCallback();
+  callbacks.get(3)();
+  assert.deepEqual(published, ["valid-b"]);
+  assert.deepEqual(delays, [400, 400, 400]);
+});
+
+test("XYZ preview rejects malformed lines, bad numbers, and incomplete rows", () => {
+  for (const bad of [
+    "O 0 0",
+    "O  0  0  0\nH  0  0", /* missing z */
+    "O a 0 0",
+    "O 0 0 x",
+    "O 1e999 0 0", /* overflows to Infinity */
+    "O nan 0 0",
+  ]) {
+    assert.equal(parseXyzCoordinates(bad).ok, false, `should reject: ${bad}`);
+    assert.equal(parseXyzCoordinates(bad).errorCode, "err_xyz_parse");
+  }
+});
+
+test("XYZ preview rejects unknown or out-of-range element symbols", () => {
+  for (const bad of ["Xx 0 0 0", "Hx 0 0 0", "104 0 0 0", "-1 0 0 0", "0 0 0 0"]) {
+    const parsed = parseXyzCoordinates(bad);
+    assert.equal(parsed.ok, false, `should reject: ${bad}`);
+    assert.equal(parsed.errorCode, "err_xyz_element");
+  }
+});
+
+test("XYZ preview enforces the 512-atom engine limit with the same boundary", () => {
+  const block = "C 0 0 0\n";
+  assert.equal(parseXyzCoordinates(block.repeat(512)).ok, true);
+  const tooMany = parseXyzCoordinates(block.repeat(513));
+  assert.equal(tooMany.ok, false);
+  assert.equal(tooMany.errorCode, "err_xyz_too_many");
+});
+
+test("XYZ preview treats whitespace-only input as absent structure", () => {
+  const parsed = parseXyzCoordinates("  \n\t\n");
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.errorCode, "no_xyz");
+});
+
+test("live preview is debounced and gates calculate on the current structure", async () => {
+  const [appSource, indexSource] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+  ]);
+  /* Debounced auto-preview: editing XYZ updates the 3D view without compute. */
+  assert.match(appSource, /PREVIEW_DEBOUNCE_MS = 400/);
+  assert.match(appSource, /\$\("xyz"\)\.addEventListener\("input", schedulePreviewUpdate\)/);
+  assert.match(
+    appSource,
+    /function schedulePreviewUpdate\(\) \{[\s\S]*?const parsed = refreshPreview\(\{ renderViewer: false \}\);[\s\S]*?if \(!parsed\.ok\)[\s\S]*?previewPublisher\.schedule/,
+  );
+  assert.match(appSource, /refreshPreview\(\)/);
+  assert.match(
+    appSource,
+    /parsed\.errorCode === "no_xyz" \? "empty" : "error"/,
+  );
+  /* Malformed input keeps the last valid preview. */
+  assert.match(appSource, /Malformed input never replaces the last valid preview/);
+  assert.match(appSource, /updateMoleculeViewer\(previewState\.canonicalXyz\)/);
+  assert.match(appSource, /if \(molViewer && !molUnavailable\) updateMoleculeViewer/);
+  /* Calculate/optimize are gated on a valid structure. */
+  assert.match(appSource, /!engineBusy && !smilesBusy && previewState\.status === "valid"/);
+  assert.match(appSource, /parseXyzCoordinates\(\$\("xyz"\)\.value\)/);
+  assert.equal(
+    (appSource.match(/const xyz = xyzAtomsToText\(parsed\.atoms\);/g) || []).length,
+    2,
+  );
+  assert.doesNotMatch(appSource, /const xyz = \$\("xyz"\)\.value/);
+  /* SMILES import renders immediately through the preview path. */
+  assert.match(appSource, /function applyGeneratedGeometry\(result\)/);
+  /* Reset clears SMILES and restores the documented water template. */
+  assert.match(appSource, /\$\("smiles"\)\.value = ""/);
+  assert.match(appSource, /clearSmilesStatus\(\)/);
+  assert.match(appSource, /setCoordinateInput\(PRESETS\.water\.xyz\)/);
+  assert.match(indexSource, /id="xyz-hint"/);
+});
+
+test("stale calculations and SMILES workflows cannot overwrite newer input or Reset", async () => {
+  const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  /* Both streamed optimization frames and the final result are revision-gated. */
+  assert.match(
+    appSource,
+    /\(step\) => \{\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) return;/,
+  );
+  assert.match(
+    appSource,
+    /const dt = performance\.now\(\) - t0;\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) \{\s*throw supersededCoordinateError\(\);/,
+  );
+  /* Reset invalidates in-flight generation and a URL workflow waiting on either worker. */
+  assert.match(
+    appSource,
+    /function invalidateSmilesWork\(\) \{[\s\S]*?smilesWorkflow\.advance\(\);[\s\S]*?urlSmiles = null;[\s\S]*?urlSmilesStarted = true;[\s\S]*?smilesClient\.cancel/,
+  );
+  assert.match(
+    appSource,
+    /\$\("reset"\)\.addEventListener\("click", \(\) => \{[\s\S]*?invalidateSmilesWork\(\);[\s\S]*?setCoordinateInput\(PRESETS\.water\.xyz\)/,
+  );
+  assert.match(
+    appSource,
+    /const result = await requestSmilesGeometry\(smiles\);\s*requireCurrentSmilesWorkflow\(workflowRevision\);/,
+  );
+  assert.match(
+    appSource,
+    /if \(\$\("smiles"\)\.value\.trim\(\) !== smiles\) throw supersededSmilesError\(\);/,
+  );
+  assert.match(
+    appSource,
+    /\$\("smiles"\)\.addEventListener\("input", \(\) => \{[\s\S]*?invalidateSmilesWork\(\);[\s\S]*?syncEngineControls\(\);/,
+  );
+  /* URL optimization must share the SMILES workflow's publication token, not
+   * merely check it after runOptimize has already rendered final geometry. */
+  assert.match(
+    appSource,
+    /runOptimize\(\{[\s\S]*?canPublish: \(\) => smilesWorkflow\.isCurrent\(workflowRevision\)/,
+  );
+  assert.match(
+    appSource,
+    /if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) return;/,
+  );
+  assert.match(
+    appSource,
+    /if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) \{\s*throw supersededCoordinateError\(\);/,
+  );
+  assert.match(appSource, /if \(hasCurrentResult\("optimize"\)\) renderOptimize/);
+  assert.match(appSource, /if \(hasCurrentResult\("optimize"\) && d\.geometry\)/);
+  assert.match(
+    appSource,
+    /if \(!smilesWorkflow\.isCurrent\(workflowRevision\) \|\| error\?\.name === "AbortError"\) return;/,
+  );
+});
+
+test("UI copy describes the real-time preview and retains it on bad input", async () => {
+  const [appSource, indexSource] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /有效坐标实时预览/);
+  assert.match(appSource, /Valid coordinates preview live as you type/);
+  assert.match(appSource, /err_xyz_element: "含无法识别的元素符号/);
+  assert.match(appSource, /err_xyz_element: "Unknown element symbol/);
+  /* The static HTML hint must match the zh dictionary text. */
+  assert.match(indexSource, /有效坐标实时预览/);
 });

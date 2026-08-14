@@ -104,6 +104,14 @@ ELEMENT_SYMBOLS = [
 
 SYMBOL_TO_NUMBER = {symbol: number + 1 for number, symbol in enumerate(ELEMENT_SYMBOLS)}
 
+_SCC_MIXER_ALIASES = {
+    "modified_broyden": library.SCC_MIXER_MODIFIED_BROYDEN,
+}
+_DETERMINISM_ALIASES = {
+    "default": library.DETERMINISM_DEFAULT,
+    "reproducible": library.DETERMINISM_REPRODUCIBLE,
+}
+
 
 def _as_integer(name: str, value: object) -> int:
     """Return an exact integer without silently truncating floats."""
@@ -136,6 +144,8 @@ def numbers_to_symbols(numbers: Sequence[int]) -> list[str]:
 # --- supported methods -------------------------------------------------------------
 
 _SUPPORTED_METHODS = {
+    "GFN1-xTB": library.MODEL_GFN1_XTB,
+    "GFN1": library.MODEL_GFN1_XTB,
     "GFN2-xTB": library.MODEL_GFN2_XTB,
     "GFN2": library.MODEL_GFN2_XTB,
 }
@@ -842,6 +852,19 @@ def _resolve_auto_batch_limit(
     are handled by splitting multi-system chunks in :meth:`BatchCalculator.compute`.
     """
     total_atoms = sum(len(structure) for structure in structures)
+    return _resolve_auto_batch_limit_for_total_atoms(context, total_atoms)
+
+
+def _resolve_auto_batch_limit_for_total_atoms(
+    context: Context,
+    total_atoms: int,
+) -> int:
+    """Choose an automatic atom limit without materializing input structures.
+
+    Hessian displacements all have the same atom count. Accepting their total
+    atom count directly lets that path decide a safe chunk size before it
+    creates any of the ``6 * natoms`` temporary geometries.
+    """
     if int(context.backend) != library.BACKEND_CUDA:
         return min(total_atoms, _AUTO_BATCH_FALLBACK_MAX_ATOMS)
 
@@ -858,6 +881,241 @@ def _resolve_auto_batch_limit(
     return min(total_atoms, estimated_limit, _AUTO_BATCH_MAX_ATOMS)
 
 
+def _validated_auto_batch_size(
+    auto_batch_size: bool | int | None,
+) -> bool | int | None:
+    """Validate and normalize one public automatic batch-size request."""
+    if auto_batch_size is None or auto_batch_size is False:
+        return auto_batch_size
+    if auto_batch_size is True:
+        return True
+    limit = _as_integer("auto_batch_size", auto_batch_size)
+    if limit <= 0:
+        raise XTBloomValueError("auto_batch_size must be a positive integer")
+    return limit
+
+
+def _hessian_displacement_chunks(
+    context: Context,
+    structures: Sequence[Structure],
+    auto_batch_size: bool | int | None,
+) -> list[list[tuple[int, int]]]:
+    """Return lazy task chunks for one or more numerical Hessians.
+
+    Each task identifies ``(system_index, displacement_index)``. The atom-count
+    limit has the same meaning as :meth:`BatchCalculator.compute`, so the same
+    chunking policy applies whether the caller requests one Hessian or a true
+    batch of independent Hessians. Only task identifiers are retained here;
+    displaced :class:`Structure` objects are materialized immediately before
+    their native call.
+    """
+    auto_batch_size = _validated_auto_batch_size(auto_batch_size)
+    total_displaced_atoms = sum(6 * len(structure) ** 2 for structure in structures)
+    if auto_batch_size is None or auto_batch_size is False:
+        limit = total_displaced_atoms
+    elif auto_batch_size is True:
+        limit = _resolve_auto_batch_limit_for_total_atoms(
+            context, total_displaced_atoms
+        )
+    else:
+        limit = auto_batch_size
+
+    chunks: list[list[tuple[int, int]]] = []
+    current: list[tuple[int, int]] = []
+    current_atoms = 0
+    max_displacement_count = max(6 * len(structure) for structure in structures)
+    # Interleave by displacement so a homogeneous complete-Hessian batch sends
+    # the same coordinate/sign task from many independent systems together.
+    # This preserves ragged members by skipping coordinates they do not own.
+    for displacement_index in range(max_displacement_count):
+        for system_index, structure in enumerate(structures):
+            atom_count = len(structure)
+            if displacement_index >= 6 * atom_count:
+                continue
+            if current and current_atoms + atom_count > limit:
+                chunks.append(current)
+                current = []
+                current_atoms = 0
+            current.append((system_index, displacement_index))
+            current_atoms += atom_count
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _validated_hessian_step(step: object) -> float:
+    """Return one finite positive Cartesian displacement in bohr."""
+    if isinstance(step, bool | np.bool_):
+        raise XTBloomValueError("Hessian step must be a finite positive number")
+    try:
+        displacement = float(typing.cast("SupportsFloat | SupportsIndex", step))
+    except (TypeError, ValueError, OverflowError):
+        raise XTBloomValueError(
+            "Hessian step must be a finite positive number"
+        ) from None
+    if not math.isfinite(displacement) or displacement <= 0.0:
+        raise XTBloomValueError("Hessian step must be a finite positive number")
+    return displacement
+
+
+def _compute_numerical_hessians(
+    structures: Sequence[Structure],
+    *,
+    owner_context: Context,
+    settings: _ComputeSettings,
+    step: object,
+    symmetrize: bool,
+    auto_batch_size: bool | int | None,
+) -> list[np.ndarray]:
+    """Evaluate independent fresh-SCC Cartesian Hessians for *structures*.
+
+    A separate temporary context owns all displacement work. This preserves the
+    caller's geometry and any warm checkpoint while allowing displacement tasks
+    from different Hessians to share native ragged force calls under one fixed
+    CPU-thread or CUDA-device budget.
+    """
+    displacement = _validated_hessian_step(step)
+    resolved_auto_batch_size = _validated_auto_batch_size(auto_batch_size)
+
+    resolved_backend = owner_context.backend
+    device_id = (
+        owner_context.device_id if resolved_backend == library.BACKEND_CUDA else None
+    )
+    references = [np.array(structure.positions, copy=True) for structure in structures]
+    hessians = [
+        np.zeros((reference.size, reference.size), dtype=np.float64)
+        for reference in references
+    ]
+
+    def make_displaced_structures(
+        tasks: Sequence[tuple[int, int]],
+    ) -> list[Structure]:
+        """Materialize only the displacement geometries for one native call."""
+        displaced = []
+        for system_index, displacement_index in tasks:
+            source = structures[system_index]
+            positions = references[system_index].copy().reshape(-1)
+            coordinate, direction_index = divmod(displacement_index, 2)
+            positions[coordinate] += (
+                displacement if direction_index == 0 else -displacement
+            )
+            displaced.append(
+                Structure(
+                    source.numbers,
+                    positions.reshape(references[system_index].shape),
+                    charge=source.charge,
+                    uhf=source.uhf,
+                    spin_channels=source.spin_channels,
+                    point_charges=source.point_charges,
+                    charge_response=source.charge_response,
+                    efield=source.efield,
+                )
+            )
+        return displaced
+
+    def publish_forces(
+        computed: _ComputedBatch,
+        tasks: Sequence[tuple[int, int]],
+    ) -> None:
+        """Validate one chunk and accumulate force rows into Hessian columns."""
+        axes = ("x", "y", "z")
+        failed = []
+        first_local: int | None = None
+        for local_index, (system_index, displacement_index) in enumerate(tasks):
+            status = int(computed.per_system_status[local_index])
+            converged = int(computed.scc_converged[local_index])
+            if status == library.STATUS_SUCCESS and converged == 1:
+                continue
+            if first_local is None:
+                first_local = local_index
+            coordinate = displacement_index // 2
+            atom, axis = divmod(coordinate, 3)
+            sign = "+" if displacement_index % 2 == 0 else "-"
+            failed.append(
+                f"system {system_index}, atom {atom}, axis {axes[axis]}, "
+                f"displacement {sign}step: {library.status_string(status)}, "
+                f"scc_converged={converged}, "
+                f"iterations={int(computed.scc_iterations[local_index])}"
+            )
+        if first_local is not None:
+            raise XTBloomRuntimeError(
+                "xTBloom Hessian displacement calculations failed: "
+                + "; ".join(failed),
+                int(computed.per_system_status[first_local]),
+            )
+
+        scale = 1.0 / (2.0 * displacement)
+        for local_index, (system_index, displacement_index) in enumerate(tasks):
+            begin = int(computed.atom_offsets[local_index])
+            end = int(computed.atom_offsets[local_index + 1])
+            force_row = computed.forces[begin:end].reshape(-1)
+            coordinate, direction_index = divmod(displacement_index, 2)
+            # H[:, j] = (F(R-h e_j) - F(R+h e_j)) / (2h).
+            sign = -scale if direction_index == 0 else scale
+            hessians[system_index][:, coordinate] += sign * force_row
+
+    with Context(
+        resolved_backend,
+        device_id=device_id,
+        cpu_threads=owner_context._cpu_threads,
+    ) as context:
+        chunks = _hessian_displacement_chunks(
+            context, structures, resolved_auto_batch_size
+        )
+
+        def run_chunk(tasks: Sequence[tuple[int, int]]) -> None:
+            """Evaluate one task chunk, bisecting automatic allocation failures."""
+            displaced = make_displaced_structures(tasks)
+            try:
+                flags = library.COMPUTE_FORCES
+                if any(structure.point_charges is not None for structure in displaced):
+                    # Point-charge forces are an auxiliary output required by
+                    # the native embedded-force plan, not a Hessian coordinate.
+                    flags |= library.COMPUTE_POINT_CHARGE_FORCES
+                computed = _compute_batch(
+                    context,
+                    displaced,
+                    model=settings.model,
+                    max_scc_iterations=settings.max_scc_iterations,
+                    charge_tolerance=settings.charge_tolerance,
+                    energy_tolerance=settings.energy_tolerance,
+                    electronic_temperature=settings.electronic_temperature,
+                    scc_mixer=settings.scc_mixer,
+                    scc_mixer_history=settings.scc_mixer_history,
+                    scc_mixer_damping=settings.scc_mixer_damping,
+                    determinism=settings.determinism,
+                    flags=flags,
+                    warm_start=False,
+                )
+            except XTBloomRuntimeError as error:
+                if (
+                    resolved_auto_batch_size is not True
+                    or error.status != library.STATUS_ALLOCATION_FAILED
+                    or len(tasks) == 1
+                ):
+                    raise
+            else:
+                publish_forces(computed, tasks)
+                return
+
+            # Leave the exception handler and release the failed displaced
+            # structures before recursively rebuilding smaller halves.
+            del displaced
+            midpoint = len(tasks) // 2
+            run_chunk(tasks[:midpoint])
+            run_chunk(tasks[midpoint:])
+
+        for chunk in chunks:
+            run_chunk(chunk)
+
+    results = [np.ascontiguousarray(hessian) for hessian in hessians]
+    if symmetrize:
+        results = [
+            np.ascontiguousarray(0.5 * (hessian + hessian.T)) for hessian in results
+        ]
+    return results
+
+
 def _compute_batch(
     context: Context,
     structures: Sequence[Structure],
@@ -867,6 +1125,10 @@ def _compute_batch(
     charge_tolerance: float,
     energy_tolerance: float,
     electronic_temperature: float,
+    scc_mixer: int,
+    scc_mixer_history: int,
+    scc_mixer_damping: float,
+    determinism: int,
     flags: int,
     warm_start: bool = False,
 ) -> _ComputedBatch:
@@ -1026,6 +1288,17 @@ def _compute_batch(
     options.energy_tolerance = float(energy_tolerance)
     options.electronic_temperature = (
         float(electronic_temperature) * library.KELVIN_TO_HARTREE
+    )
+    options.scc_mixer = int(scc_mixer)
+    options.scc_mixer_history = int(scc_mixer_history)
+    options.scc_mixer_damping = float(scc_mixer_damping)
+    options.determinism = int(determinism)
+    library.require_compute_options_v3(
+        options.scc_mixer,
+        options.scc_mixer_history,
+        options.scc_mixer_damping,
+        options.determinism,
+        library_instance,
     )
 
     # --- result buffers --------------------------------------------------------
@@ -1355,16 +1628,70 @@ def _validated_compute_setting(attribute: str, value: object) -> int | float:
                 "electronic_temperature must be finite and nonnegative"
             )
         return candidate
+    if attribute == "scc_mixer":
+        if isinstance(value, str):
+            try:
+                candidate = _SCC_MIXER_ALIASES[value]
+            except KeyError:
+                raise XTBloomValueError(
+                    "scc_mixer must be 'modified_broyden' or SCC_MIXER_MODIFIED_BROYDEN"
+                ) from None
+        else:
+            candidate = _as_integer(attribute, value)
+        if candidate != library.SCC_MIXER_MODIFIED_BROYDEN:
+            raise XTBloomValueError(
+                "scc_mixer must be 'modified_broyden' or SCC_MIXER_MODIFIED_BROYDEN"
+            )
+        return candidate
+    if attribute == "scc_mixer_history":
+        candidate = _as_integer(attribute, value)
+        if not 1 <= candidate <= library.MAX_SCC_MIXER_HISTORY:
+            raise XTBloomValueError(
+                f"scc_mixer_history must lie between 1 and "
+                f"{library.MAX_SCC_MIXER_HISTORY}"
+            )
+        return candidate
+    if attribute == "scc_mixer_damping":
+        candidate = float(typing.cast("SupportsFloat | SupportsIndex", value))
+        if not math.isfinite(candidate) or not 0.0 < candidate <= 1.0:
+            raise XTBloomValueError(
+                "scc_mixer_damping must be finite and lie in (0, 1]"
+            )
+        return candidate
+    if attribute == "determinism":
+        if isinstance(value, str):
+            try:
+                candidate = _DETERMINISM_ALIASES[value]
+            except KeyError:
+                raise XTBloomValueError(
+                    "determinism must be 'default', 'reproducible', "
+                    "DETERMINISM_DEFAULT, or DETERMINISM_REPRODUCIBLE"
+                ) from None
+        else:
+            candidate = _as_integer(attribute, value)
+        if candidate not in (
+            library.DETERMINISM_DEFAULT,
+            library.DETERMINISM_REPRODUCIBLE,
+        ):
+            raise XTBloomValueError(
+                "determinism must be 'default', 'reproducible', "
+                "DETERMINISM_DEFAULT, or DETERMINISM_REPRODUCIBLE"
+            )
+        return candidate
     raise XTBloomValueError(f"unsupported calculator setting {attribute!r}")
 
 
 class _ComputeSettings:
     __slots__ = (
         "charge_tolerance",
+        "determinism",
         "electronic_temperature",
         "energy_tolerance",
         "max_scc_iterations",
         "model",
+        "scc_mixer",
+        "scc_mixer_damping",
+        "scc_mixer_history",
     )
 
     model: int
@@ -1372,6 +1699,10 @@ class _ComputeSettings:
     charge_tolerance: float
     energy_tolerance: float
     electronic_temperature: float
+    scc_mixer: int
+    scc_mixer_history: int
+    scc_mixer_damping: float
+    determinism: int
 
     def __init__(
         self,
@@ -1380,35 +1711,97 @@ class _ComputeSettings:
         charge_tolerance: float,
         energy_tolerance: float,
         electronic_temperature: float,
+        scc_mixer: str | int,
+        scc_mixer_history: int,
+        scc_mixer_damping: float,
+        determinism: str | int,
     ) -> None:
         self.model = model
         self.set("max_scc_iterations", max_scc_iterations)
         self.set("charge_tolerance", charge_tolerance)
         self.set("energy_tolerance", energy_tolerance)
         self.set("electronic_temperature", electronic_temperature)
+        self.set("scc_mixer", scc_mixer)
+        self.set("scc_mixer_history", scc_mixer_history)
+        self.set("scc_mixer_damping", scc_mixer_damping)
+        self.set("determinism", determinism)
 
     def set(self, attribute: str, value: object) -> None:
         """Validate and transactionally update one public compute option."""
-        setattr(self, attribute, _validated_compute_setting(attribute, value))
+        normalized = _validated_compute_setting(attribute, value)
+        policy_names = {
+            "scc_mixer",
+            "scc_mixer_history",
+            "scc_mixer_damping",
+            "determinism",
+        }
+        if attribute in policy_names and all(
+            hasattr(self, name) or name == attribute for name in policy_names
+        ):
+            policy = {
+                name: normalized if name == attribute else getattr(self, name)
+                for name in policy_names
+            }
+            library.require_compute_options_v3(
+                int(policy["scc_mixer"]),
+                int(policy["scc_mixer_history"]),
+                float(policy["scc_mixer_damping"]),
+                int(policy["determinism"]),
+            )
+        setattr(self, attribute, normalized)
 
 
 def _resolve_method(method: str) -> int:
     if not method:
         raise XTBloomValueError(
-            "a method must be provided (only GFN2-xTB is currently supported)"
+            "a method must be provided (GFN1-xTB and GFN2-xTB are supported)"
         )
     try:
         return _SUPPORTED_METHODS[method]
     except KeyError:
-        if method in ("GFN1-xTB", "GFN1"):
-            raise XTBloomNotSupportedError(
-                "GFN1-xTB is reserved by the xTBloom ABI but is not implemented yet"
-            ) from None
         raise XTBloomValueError(f"unknown method {method!r}") from None
 
 
+def _backend_for_model(
+    model: int, backend: str | int, device_id: int | None
+) -> str | int:
+    """Resolve high-level AUTO safely for a model with CPU-only publication.
+
+    The native AUTO policy prefers CUDA when a device is available. GFN1-xTB
+    is intentionally published on CPU only, so its high-level default must
+    select CPU explicitly. An explicit CUDA request is preserved: a
+    CUDA-capable build returns ``NOT_SUPPORTED`` from the model registry,
+    while a build without CUDA may reject context creation first.
+    """
+    if model == library.MODEL_GFN1_XTB and backend in (
+        "auto",
+        library.BACKEND_AUTO,
+    ):
+        if device_id is not None and int(device_id) >= 0:
+            raise XTBloomValueError(
+                "GFN1-xTB backend='auto' selects CPU and cannot use a CUDA "
+                "device_id; omit device_id or request backend='cuda' to receive "
+                "the native CUDA capability result"
+            )
+        return "cpu"
+    return backend
+
+
+def _reject_unsupported_model_features(
+    model: int, structures: Sequence[Structure]
+) -> None:
+    """Reject properties that have no published executor for one model."""
+    if model == library.MODEL_GFN1_XTB and any(
+        structure.efield is not None for structure in structures
+    ):
+        raise XTBloomNotSupportedError(
+            "GFN1-xTB does not support uniform electric-field attachments or "
+            "molecular dipole publication"
+        )
+
+
 class Calculator(Structure):
-    """Single-point GFN2-xTB calculator for one structure (tblite-like API).
+    """Single-point GFN1/GFN2-xTB calculator (tblite-like API).
 
     Example
     -------
@@ -1455,6 +1848,10 @@ class Calculator(Structure):
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
+        scc_mixer: str | int = "modified_broyden",
+        scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+        scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
+        determinism: str | int = "default",
         warm_start: bool = False,
     ) -> None:
         Structure.__init__(
@@ -1470,14 +1867,23 @@ class Calculator(Structure):
             efield=efield,
         )
         self._model = _resolve_method(method)
+        _reject_unsupported_model_features(self._model, [self])
         self._settings = _ComputeSettings(
             self._model,
             max_scc_iterations,
             charge_tolerance,
             energy_tolerance,
             electronic_temperature,
+            scc_mixer,
+            scc_mixer_history,
+            scc_mixer_damping,
+            determinism,
         )
-        self._context = Context(backend, device_id, cpu_threads)
+        self._context = Context(
+            _backend_for_model(self._model, backend, device_id),
+            device_id,
+            cpu_threads,
+        )
         self._method = method
         self._warm_start = bool(warm_start)
 
@@ -1513,7 +1919,9 @@ class Calculator(Structure):
         """Update a compute setting by name.
 
         Supported settings are ``max_scc_iterations``, ``charge_tolerance``,
-        ``energy_tolerance``, and ``electronic_temperature`` (kelvin).
+        ``energy_tolerance``, ``electronic_temperature`` (kelvin),
+        ``scc_mixer``, ``scc_mixer_history``, ``scc_mixer_damping``, and
+        ``determinism``.
         """
         self._settings.set(attribute, value)
 
@@ -1536,11 +1944,79 @@ class Calculator(Structure):
             charge_tolerance=self._settings.charge_tolerance,
             energy_tolerance=self._settings.energy_tolerance,
             electronic_temperature=self._settings.electronic_temperature,
+            scc_mixer=self._settings.scc_mixer,
+            scc_mixer_history=self._settings.scc_mixer_history,
+            scc_mixer_damping=self._settings.scc_mixer_damping,
+            determinism=self._settings.determinism,
             flags=flags,
             warm_start=self._warm_start,
         )
         _raise_on_failure(computed)
         return Result(computed, index=0)
+
+    def hessian(
+        self,
+        step: float = 5.0e-3,
+        *,
+        symmetrize: bool = False,
+        auto_batch_size: bool | int | None = True,
+    ) -> np.ndarray:
+        """Return the numerical QM-coordinate energy Hessian.
+
+        The Hessian is a central finite difference of xTBloom's analytic QM
+        forces,
+
+        ``H[:, j] = -(F(R + step * e_j) - F(R - step * e_j)) / (2 * step)``.
+
+        The ``6 * natoms`` displaced geometries are submitted through native
+        ragged batches. ``auto_batch_size`` has the same atom-count chunking
+        semantics as :meth:`BatchCalculator.compute`; displacement structures
+        are created lazily per chunk so its default bounds both native and
+        Python-side working memory.
+
+        Parameters
+        ----------
+        step : float, optional
+            Positive Cartesian displacement in bohr. The default is 0.005
+            bohr, matching the mature xTB numerical-Hessian convention.
+        symmetrize : bool, optional
+            Return ``0.5 * (H + H.T)``. The default returns the raw finite-
+            difference matrix so its antisymmetric numerical residual remains
+            available as a convergence diagnostic.
+        auto_batch_size : bool | int | None, optional
+            ``True`` chooses a conservative chunk atom count, a positive
+            integer supplies that count explicitly, and ``False`` or ``None``
+            submits the complete displacement set in one native call.
+
+        Returns
+        -------
+        numpy.ndarray
+            Float64 array with shape ``(3 * natoms, 3 * natoms)`` and units
+            Hartree/bohr\N{SUPERSCRIPT TWO}.
+
+        Notes
+        -----
+        Only QM atoms are displaced. Explicit point-charge coordinates and
+        values, the uniform electric field, and caller-supplied periodic
+        ``b/A`` operators remain fixed. The result is therefore the QM--QM
+        block at that fixed external environment; it does not contain
+        QM--point-charge or point-charge--point-charge blocks. As for analytic
+        forces, derivatives of caller-owned ``b/A`` operators are excluded.
+
+        A separate temporary context evaluates the displacement batches, so
+        this method neither changes :attr:`positions` nor consumes or replaces
+        a warm-start checkpoint held by this calculator. Every displacement
+        uses an independent fresh SCC solve. Any SCC or eigensolver failure
+        aborts the complete Hessian and identifies its atom, axis, and sign.
+        """
+        return _compute_numerical_hessians(
+            [self],
+            owner_context=self._context,
+            settings=self._settings,
+            step=step,
+            symmetrize=symmetrize,
+            auto_batch_size=auto_batch_size,
+        )[0]
 
     def close(self) -> None:
         """Release this calculator's native context."""
@@ -1561,7 +2037,7 @@ class Calculator(Structure):
 
 
 class BatchCalculator:
-    """Batched GFN2-xTB calculator over many structures in one C call.
+    """Batched GFN1/GFN2-xTB calculator over many structures in one C call.
 
     The C API describes a ragged batch with flat arrays and offsets, so all
     systems are solved together while keeping per-system convergence state.
@@ -1583,19 +2059,31 @@ class BatchCalculator:
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
+        scc_mixer: str | int = "modified_broyden",
+        scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+        scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
+        determinism: str | int = "default",
         warm_start: bool = False,
     ) -> None:
         if not structures:
             raise XTBloomValueError("a batch needs at least one structure")
         self._structures = list(structures)
+        model = _resolve_method(method)
+        _reject_unsupported_model_features(model, self._structures)
         self._settings = _ComputeSettings(
-            _resolve_method(method),
+            model,
             max_scc_iterations,
             charge_tolerance,
             energy_tolerance,
             electronic_temperature,
+            scc_mixer,
+            scc_mixer_history,
+            scc_mixer_damping,
+            determinism,
         )
-        self._context = Context(backend, device_id, cpu_threads)
+        self._context = Context(
+            _backend_for_model(model, backend, device_id), device_id, cpu_threads
+        )
         self._warm_start = bool(warm_start)
 
     def __len__(self) -> int:
@@ -1676,6 +2164,10 @@ class BatchCalculator:
                 charge_tolerance=self._settings.charge_tolerance,
                 energy_tolerance=self._settings.energy_tolerance,
                 electronic_temperature=self._settings.electronic_temperature,
+                scc_mixer=self._settings.scc_mixer,
+                scc_mixer_history=self._settings.scc_mixer_history,
+                scc_mixer_damping=self._settings.scc_mixer_damping,
+                determinism=self._settings.determinism,
                 flags=flags,
                 warm_start=self._warm_start,
             )
@@ -1717,6 +2209,41 @@ class BatchCalculator:
         if raise_on_failure:
             batch_result.raise_for_status()
         return batch_result
+
+    def hessian(
+        self,
+        step: float = 5.0e-3,
+        *,
+        symmetrize: bool = False,
+        auto_batch_size: bool | int | None = True,
+    ) -> list[np.ndarray]:
+        """Return one numerical QM-coordinate Hessian per batch member.
+
+        Every Hessian is a central finite difference of analytic forces. Tasks
+        from all members share native ragged force calls under this
+        calculator's one backend, device, and ``cpu_threads`` budget; batch size
+        never changes that resource budget. The result list preserves input
+        order and supports ragged atom counts.
+
+        ``auto_batch_size`` is an independent atom-count limit for internal
+        displacement chunks. ``True`` applies the same conservative automatic
+        policy for a one-Hessian or many-Hessian call; a positive integer sets
+        the limit explicitly, and ``False`` or ``None`` submits every
+        displacement task in one native call.
+
+        The calculations use independent fresh SCC states in a temporary
+        context, leaving input geometries and any compatible warm checkpoint on
+        this calculator unchanged. A failed displacement aborts the complete
+        call and identifies its batch member, atom, Cartesian axis, and sign.
+        """
+        return _compute_numerical_hessians(
+            self._structures,
+            owner_context=self._context,
+            settings=self._settings,
+            step=step,
+            symmetrize=symmetrize,
+            auto_batch_size=auto_batch_size,
+        )
 
     def close(self) -> None:
         """Release this batch calculator's native context."""
@@ -1777,6 +2304,11 @@ _CHARGE_RESPONSE_FIELDS = (
 
 class ArrayBatch:
     """Packed ragged-batch inference over Array API/DLPack arrays.
+
+    This lower-level packed-array surface currently executes GFN2-xTB only;
+    unlike :class:`Calculator` and :class:`BatchCalculator`, it does not yet
+    expose a model selector. It never substitutes GFN2 for a requested GFN1
+    calculation because no method argument is accepted.
 
     This is the zero-copy entry point of the Python interface: every
     positional descriptor takes a dense, single-device array implementing the
@@ -1912,6 +2444,10 @@ class ArrayBatch:
         charge_tolerance: float = 1.0e-6,
         energy_tolerance: float = 1.0e-8,
         electronic_temperature: float = 300.0,
+        scc_mixer: str | int = "modified_broyden",
+        scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+        scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
+        determinism: str | int = "default",
         compute_energy: bool = True,
         compute_forces: bool = True,
         compute_charges: bool = True,
@@ -1953,6 +2489,10 @@ class ArrayBatch:
             charge_tolerance=charge_tolerance,
             energy_tolerance=energy_tolerance,
             electronic_temperature=electronic_temperature,
+            scc_mixer=scc_mixer,
+            scc_mixer_history=scc_mixer_history,
+            scc_mixer_damping=scc_mixer_damping,
+            determinism=determinism,
             compute_energy=compute_energy,
             compute_forces=compute_forces,
             compute_charges=compute_charges,
@@ -2000,6 +2540,41 @@ def _array_shape(array: object) -> tuple[int, ...]:
     return _probe_shape(array)
 
 
+def _validate_array_devices_before_export(
+    arrays: Sequence[object], context: Context
+) -> None:
+    """Reject CUDA arrays on a foreign device before exporting any capsule.
+
+    A custom context stream belongs to the context's resolved CUDA device.
+    Passing that handle to ``__dlpack__`` on a foreign producer device would
+    be unsafe, so this metadata-only preflight runs before the first producer
+    is exported.  The later descriptor check remains defense in depth against
+    a malformed capsule whose embedded device disagrees with its producer.
+    """
+    resolved_backend = int(context.backend)
+    resolved_device = int(context.device_id)
+    for array in arrays:
+        device_type, device_id = _dlpack.dlpack_device(array)
+        memory_space = _dlpack.memory_space_for_device(device_type)
+        if memory_space is None:
+            raise XTBloomNotSupportedError(
+                f"DLPack device type {device_type} is not supported by xTBloom "
+                "(only CPU, CPU-pinned host memory, and CUDA device memory are "
+                "usable)"
+            )
+        if memory_space != library.MEMORY_CUDA_DEVICE:
+            continue
+        if resolved_backend != library.BACKEND_CUDA:
+            raise XTBloomNotSupportedError(
+                "CUDA device arrays require the CUDA backend"
+            )
+        if not _same_device(device_id, resolved_device):
+            raise XTBloomNotSupportedError(
+                f"CUDA array on device {device_id} does not match the "
+                f"context's resolved device {resolved_device}"
+            )
+
+
 def _compute_array_batch(
     batch: ArrayBatch,
     *,
@@ -2007,6 +2582,10 @@ def _compute_array_batch(
     charge_tolerance: float,
     energy_tolerance: float,
     electronic_temperature: float,
+    scc_mixer: str | int,
+    scc_mixer_history: int,
+    scc_mixer_damping: float,
+    determinism: str | int,
     compute_energy: bool,
     compute_forces: bool,
     compute_charges: bool,
@@ -2037,6 +2616,14 @@ def _compute_array_batch(
     nsystems, natoms, npoints, response_elements = counts
 
     out_spec = _normalize_out_spec(out)
+
+    # Device metadata is safe to inspect before capsule export.  Validate the
+    # entire request here so a foreign-device array cannot observe a custom
+    # stream handle owned by the context device, and no earlier producer is
+    # consumed before a later mismatch is diagnosed.
+    requested_arrays = [array for array in arrays.values() if array is not None]
+    requested_arrays.extend(out_spec.values())
+    _validate_array_devices_before_export(requested_arrays, context)
 
     views: list[_dlpack.DLPackView] = []
     keepalive: list[object] = []
@@ -2069,6 +2656,7 @@ def _compute_array_batch(
                 expected_dtype=_dlpack.EXPECTED_INPUT_DTYPES[name],
                 expected_shape=shape,
                 stream=context.stream,
+                expected_cuda_device=context.device_id,
                 copy=batch._copy,
             )
             views.append(view)
@@ -2104,6 +2692,10 @@ def _compute_array_batch(
             charge_tolerance=charge_tolerance,
             energy_tolerance=energy_tolerance,
             electronic_temperature=electronic_temperature,
+            scc_mixer=scc_mixer,
+            scc_mixer_history=scc_mixer_history,
+            scc_mixer_damping=scc_mixer_damping,
+            determinism=determinism,
             compute_energy=compute_energy,
             compute_forces=compute_forces,
             compute_charges=compute_charges,
@@ -2124,6 +2716,7 @@ def _compute_array_batch(
             keepalive,
             output_owners,
             context.stream,
+            context.device_id,
             nsystems,
             natoms,
             npoints,
@@ -2259,6 +2852,10 @@ def _build_compute_options(
     charge_tolerance: float,
     energy_tolerance: float,
     electronic_temperature: float,
+    scc_mixer: str | int,
+    scc_mixer_history: int,
+    scc_mixer_damping: float,
+    determinism: str | int,
     compute_energy: bool,
     compute_forces: bool,
     compute_charges: bool,
@@ -2290,11 +2887,29 @@ def _build_compute_options(
     options.electronic_temperature = (
         float(electronic_temperature) * library.KELVIN_TO_HARTREE
     )
+    options.scc_mixer = int(_validated_compute_setting("scc_mixer", scc_mixer))
+    options.scc_mixer_history = int(
+        _validated_compute_setting("scc_mixer_history", scc_mixer_history)
+    )
+    options.scc_mixer_damping = float(
+        _validated_compute_setting("scc_mixer_damping", scc_mixer_damping)
+    )
+    options.determinism = int(_validated_compute_setting("determinism", determinism))
+    library.require_compute_options_v3(
+        options.scc_mixer,
+        options.scc_mixer_history,
+        options.scc_mixer_damping,
+        options.determinism,
+    )
     return options
 
 
 def _normalize_out_spec(out: object | None) -> dict[str, object]:
-    """Validate and normalize the ``out=`` output-policy mapping."""
+    """Validate and normalize the ``out=`` output-policy mapping.
+
+    A known output mapped to ``None`` is equivalent to omitting that entry,
+    so the selected ``result_memory`` policy still owns its allocation.
+    """
     if out is None:
         return {}
     if not isinstance(out, dict):
@@ -2305,6 +2920,8 @@ def _normalize_out_spec(out: object | None) -> dict[str, object]:
         canonical = aliases.get(name, name)
         if canonical not in _dlpack.EXPECTED_OUTPUT_DTYPES:
             raise XTBloomValueError(f"unknown output name {name!r}")
+        if array is None:
+            continue
         if canonical in normalized:
             raise XTBloomValueError(f"output {name!r} was supplied more than once")
         if _array_adapter.is_lazy(array):
@@ -2351,6 +2968,7 @@ def _bind_outputs(
     keepalive: list[object],
     output_owners: dict[str, object],
     stream: int | None,
+    expected_cuda_device: int,
     nsystems: int,
     natoms: int,
     npoints: int,
@@ -2433,6 +3051,7 @@ def _bind_outputs(
             views,
             keepalive,
             stream,
+            expected_cuda_device,
         )
         if owner is not None:
             output_owners[public_name] = owner
@@ -2521,6 +3140,7 @@ def _bind_one_output(
     views: list[_dlpack.DLPackView],
     keepalive: list[object],
     stream: int | None,
+    expected_cuda_device: int,
 ) -> object | None:
     """Bind one output descriptor and return the array the result must expose.
 
@@ -2540,6 +3160,7 @@ def _bind_one_output(
             expected_dtype=resolved_dtype,
             expected_shape=shape,
             stream=stream,
+            expected_cuda_device=expected_cuda_device,
             # Outputs must always alias the caller's buffer. Allowing the
             # batch input copy policy here would make a producer-side temporary
             # receive the result while the advertised ``out=`` array stays
@@ -2730,6 +3351,10 @@ def compute_arrays(
     charge_tolerance: float = 1.0e-6,
     energy_tolerance: float = 1.0e-8,
     electronic_temperature: float = 300.0,
+    scc_mixer: str | int = "modified_broyden",
+    scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+    scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
+    determinism: str | int = "default",
     out: object | None = None,
     result_memory: str = "host",
 ) -> ArrayBatchResult:
@@ -2738,6 +3363,8 @@ def compute_arrays(
     Builds a temporary :class:`ArrayBatch` from the flat descriptor arrays,
     computes with the given options, and returns an :class:`ArrayBatchResult`.
     ``out=`` and ``result_memory`` follow :meth:`ArrayBatch.compute`.
+    This packed-array convenience surface is currently GFN2-xTB-only and has
+    no method selector.
     """
     batch = ArrayBatch(
         atom_offsets,
@@ -2765,6 +3392,10 @@ def compute_arrays(
             charge_tolerance=charge_tolerance,
             energy_tolerance=energy_tolerance,
             electronic_temperature=electronic_temperature,
+            scc_mixer=scc_mixer,
+            scc_mixer_history=scc_mixer_history,
+            scc_mixer_damping=scc_mixer_damping,
+            determinism=determinism,
             out=out,
             result_memory=result_memory,
         )

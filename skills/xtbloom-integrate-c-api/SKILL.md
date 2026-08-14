@@ -8,6 +8,14 @@ description: Integrate xTBloom's stable public C ABI into installed C or C++ app
 Build against the installed `xtbloom::xtbloom` target and treat the public
 header as a borrowed-buffer ABI, not as a C++ object API.
 
+## Use the Native Toolchain
+
+Use CMake and the target project's compiler environment for native consumers;
+uv does not replace an installed xTBloom CMake package, headers, linker inputs,
+or a CUDA toolkit. Do not invent a temporary native SDK from a Python wheel or
+an unrelated Python environment. If the task instead needs a Python helper,
+route it to the matching Python skill and use its ephemeral `uv run` guidance.
+
 ## Workflow
 
 1. Inspect the installed `xtbloom/xtbloom.h` and CMake package before coding.
@@ -43,7 +51,8 @@ header as a borrowed-buffer ABI, not as a C++ object API.
 
 ## Non-negotiable boundaries
 
-- Use GFN2-xTB only. GFN1-xTB and ROCm values are reserved, not supported.
+- Use GFN1-xTB only with a CPU context. GFN2-xTB supports CPU and CUDA; ROCm
+  remains reserved and unsupported.
 - Use binary64 and atomic units: bohr, Hartree, Hartree/bohr, and `k_B T` in
   Hartree at the C boundary.
 - Never omit `scc_iterations`, `scc_converged`, or `per_system_status` for a

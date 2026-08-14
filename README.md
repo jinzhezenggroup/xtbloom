@@ -1,15 +1,26 @@
+<!--
+README design principles:
+- Keep this page a concise project entry point: identity, differentiating
+  capabilities, minimal installation and quickstart, measured headline
+  evidence, supported scope, and navigation.
+- Keep examples runnable and centered on the primary workflow. Do not
+  accumulate feature tutorials, implementation notes, or exhaustive options.
+- Put detailed behavior, caveats, theory, validation, and workflow-specific
+  guidance in the linked documentation.
+-->
+
 # xTBloom
 
 <img src="docs/assets/xtbloom-logo.svg" alt="xTBloom logo" width="440">
 
-**Native, batched GFN2-xTB inference for C, C++, Python, and CUDA.**
+**Native, batched GFN-xTB inference for C, C++, Python, and CUDA.**
 
 [Try it in your browser](https://xtbloom.jinzhezeng.group) ·
 [Python guide](docs/user-guide/python.md) ·
 [C/C++ guide](docs/user-guide/c-api.md) ·
 [Documentation](docs/index.md)
 
-xTBloom is a pre-release C++17 library for applications that need energies,
+xTBloom is a C++17 library for applications that need energies,
 analytic forces, and atomic charges for many small and medium molecular
 systems. Its CPU and CUDA backends share one stable C ABI, with Python, ASE,
 and dpdata interfaces built on the same native execution path.
@@ -32,15 +43,15 @@ for usage and scope.
 
 - **Native ragged batches.** Differently sized molecules share one call without
   padding every system to the largest atom or orbital count.
-- **CPU and CUDA parity.** Restricted and unrestricted GFN2-xTB run through the
-  same public API. The low-level CUDA path accepts caller-owned host, device, or
-  mixed buffers.
+- **One model-aware API.** Restricted and unrestricted GFN2-xTB run on CPU and
+  CUDA; GFN1-xTB runs on CPU through the same stable public model selector.
+  The low-level CUDA path accepts caller-owned host, device, or mixed buffers.
 - **Failure isolation.** SCC or eigensolver failure is local to one batch
   member; successful peers remain valid and failed slices receive NaNs plus
   per-system diagnostics.
-- **Analytic derivatives and embedding.** The API returns energies, QM forces,
-  charges, optional point-charge forces, and molecular dipoles, with explicit
-  point charges and caller-supplied charge-response operators included in SCC.
+- **Analytic derivatives and embedding.** Both models return CPU energies, QM
+  forces, charges, optional point-charge forces, and caller-supplied charge
+  response. GFN2 additionally publishes CUDA, uniform-field, and dipole paths.
 - **Reusable execution state.** Contexts retain CPU workers, CUDA workspaces,
   fixed-topology plans, and compatible electronic warm starts.
 - **One deployment boundary.** C, C++, Python, ASE, and dpdata all call the same
@@ -48,23 +59,21 @@ for usage and scope.
 
 ## Python quickstart
 
-xTBloom is not yet published on PyPI. Sync a source checkout into uv's locked,
-non-editable project environment:
+[![PyPI version](https://img.shields.io/pypi/v/xtbloom.svg)](https://pypi.org/project/xtbloom/)
 
-Python 3.10 or newer is required. See the
-[prerequisites matrix](docs/user-guide/index.md#prerequisites) for native and
-CUDA build requirements.
+Install from PyPI with Python 3.10 or newer:
 
 ```console
-uv sync --locked --no-editable --no-default-groups --reinstall-package xtbloom
+pip install xtbloom
+# Or add CUDA 12 user-space libraries on supported Linux systems:
+pip install "xtbloom[cuda12]"
 ```
 
-Run commands from that environment with `uv run --no-sync` or activate
-`.venv` directly. Ordinary source builds auto-discover a compatible system
-LP64 LAPACKE+CBLAS runtime; when none is discoverable, set
-`CMAKE_ARGS="-DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/provider.so"` on the
-sync command. Official Linux wheels instead contain their reviewed private
-OpenBLAS provider.
+Wheels support Linux, macOS, and Windows; CUDA is available on Linux x86_64 and
+aarch64 and still requires an NVIDIA driver and GPU. See the
+[Python guide](docs/user-guide/python.md) for extras and the
+[installation guide](docs/user-guide/index.md#installation) for platform and
+source-build details.
 
 Positions use bohr; energies and forces are returned in Hartree and
 Hartree/bohr. The high-level Python `electronic_temperature` argument is in
@@ -92,11 +101,8 @@ print(result["forces"])
 print(result["charges"])
 ```
 
-`BatchCalculator` submits multiple `Structure` objects in one native ragged
-call. `ArrayBatch` additionally accepts packed NumPy, CuPy, JAX, or PyTorch
-arrays through Array API and DLPack protocols. See the
-[Python guide](docs/user-guide/python.md) for batching, spin, direct device
-buffers, point charges, ASE, dpdata, and the positions-gradient PyTorch op.
+See the [Python guide](docs/user-guide/python.md) for ragged batches, direct
+device arrays, point charges, ASE, dpdata, and PyTorch integration.
 
 Native consumers can install the CMake package and link
 `xtbloom::xtbloom`. The [C/C++ guide](docs/user-guide/c-api.md) contains a
@@ -128,15 +134,19 @@ before reusing the numbers.
 | Capability | Status |
 | --- | --- |
 | Restricted and unrestricted GFN2-xTB energy, forces, and charges | CPU and CUDA |
+| Restricted and unrestricted GFN1-xTB energy, forces, and charges | CPU only; a CUDA-capable build returns `NOT_SUPPORTED` |
 | Ragged batches and peer-local numerical failures | Supported |
 | Host input/output descriptors | CPU and CUDA |
 | CUDA-device and mixed descriptors | Low-level C ABI |
-| Explicit point charges in SCC and point-charge forces | Supported |
-| Caller-supplied periodic charge response | Supported; no lattice descriptor |
-| Uniform electric field and molecular dipoles | CPU; CUDA ABI slots reserved |
-| ASE and dpdata integrations | Supported |
-| Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side adapter |
-| Native GFN1-xTB, ROCm, solvation, optimization, MD, Hessians, lattice/PBC | Not implemented |
+| Explicit point charges in SCC and point-charge forces | GFN1 and GFN2 |
+| Caller-supplied periodic charge response | GFN1 and GFN2; separate from the native-cell ABI |
+| Native-cell descriptors | ABI-v4 validates `NONE`/`XYZ`; periodic execution returns `NOT_IMPLEMENTED` |
+| Uniform electric field and molecular dipoles | GFN2 CPU and CUDA; not published for GFN1 |
+| ASE and dpdata integrations | GFN1 CPU and GFN2 |
+| Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
+| Array API/DLPack, PyTorch autograd, and browser demo | GFN2-only adapter surfaces |
+| Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN2 adapter |
+| ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN2 execution | Not implemented |
 
 Reserved ABI values are not reported as supported features. At finite
 electronic temperature, the reported variational energy is the electronic

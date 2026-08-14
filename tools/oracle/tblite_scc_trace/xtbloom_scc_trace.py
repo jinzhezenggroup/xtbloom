@@ -1,16 +1,18 @@
-"""Canonical ``xtbloom-scc-trace-v1`` writer and structural validation.
+"""Canonical SCC-trace writer and structural validation.
 
-The format is the restricted GFN2 SCC interchange contract defined by issue
-#47.  The writer is deliberately standard-library only so it can run before
-either Fortran reference is built.
+The writer supports the restricted v1 contract from issue #47 and the
+unrestricted v2 contract from issue #51.  It is deliberately standard-library
+only so it can run before either Fortran reference is built.
 
-Version 1 invariants:
+Shared invariants:
 
-- ``format`` is exactly ``xtbloom-scc-trace-v1``.
-- Restricted matrices use logical ``[spin=1][row][column]`` order, while
+- v1 restricted matrices use logical ``[spin=1][row][column]`` order, while
   occupations retain tblite's two alpha/beta channels.
-- Multipoles use ``[spin=1][atom][component]`` order; quadrupoles pack
-  ``xx, xy, yy, xz, yz, zz``.
+- v2 population arrays use charge/magnetization channel order, while orbital
+  arrays use alpha/beta order.  It records both the half-scaled assembled
+  Hamiltonian and the doubled Hamiltonian actually passed to the unrestricted
+  eigensolver.
+- Quadrupoles pack ``xx, xy, yy, xz, yz, zz``.
 - Mixer residuals flatten raw-minus-mixed shell charges, atomic dipoles, then
   atomic quadrupoles in tblite order.
 - Only attempts that reach ``after_iteration`` appear in ``iterations``.  A
@@ -26,7 +28,10 @@ import math
 from collections.abc import Iterator, Mapping
 from typing import Any
 
-FORMAT = "xtbloom-scc-trace-v1"
+FORMAT_V1 = "xtbloom-scc-trace-v1"
+FORMAT_V2 = "xtbloom-scc-trace-v2"
+FORMAT = FORMAT_V1
+SUPPORTED_FORMATS = frozenset((FORMAT_V1, FORMAT_V2))
 
 # tblite qpat uses six symmetric Cartesian components in this exact order.
 QUADRUPOLE_COMPONENTS: tuple[str, ...] = ("xx", "xy", "yy", "xz", "yz", "zz")
@@ -235,47 +240,97 @@ def _spectrum(path: str, value: object, channels: int, length: int) -> None:
             _as_float(element, f"{channel_path}[{element_index}]")
 
 
-def _multipoles(path: str, value: object, atoms: int, components: int) -> None:
-    """Validate restricted ``[spin=1][atom][component]`` multipoles."""
+def _multipoles(
+    path: str, value: object, channels: int, atoms: int, components: int
+) -> None:
+    """Validate logical ``[channel][atom][component]`` multipoles."""
     spin_values = _as_list(value, path)
     _require(
-        len(spin_values) == 1,
-        f"{path} needs 1 spin channel, got {len(spin_values)}",
+        len(spin_values) == channels,
+        f"{path} needs {channels} channels, got {len(spin_values)}",
     )
-    atom_values = _as_list(spin_values[0], path + "[0]")
-    _require(
-        len(atom_values) == atoms,
-        f"{path}[0] needs {atoms} atoms, got {len(atom_values)}",
-    )
-    for atom_index, atom in enumerate(atom_values):
-        atom_path = f"{path}[0][{atom_index}]"
-        values = _as_list(atom, atom_path)
+    for channel_index, channel in enumerate(spin_values):
+        channel_path = f"{path}[{channel_index}]"
+        atom_values = _as_list(channel, channel_path)
         _require(
-            len(values) == components,
-            f"{atom_path} needs {components} components, got {len(values)}",
+            len(atom_values) == atoms,
+            f"{channel_path} needs {atoms} atoms, got {len(atom_values)}",
         )
-        for component_index, element in enumerate(values):
-            _as_float(element, f"{atom_path}[{component_index}]")
+        for atom_index, atom in enumerate(atom_values):
+            atom_path = f"{channel_path}[{atom_index}]"
+            values = _as_list(atom, atom_path)
+            _require(
+                len(values) == components,
+                f"{atom_path} needs {components} components, got {len(values)}",
+            )
+            for component_index, element in enumerate(values):
+                _as_float(element, f"{atom_path}[{component_index}]")
 
 
 def _pre_solve_state(
-    entry: dict[str, Any], path: str, nao: int, n_shells: int, n_atoms: int
+    entry: dict[str, Any],
+    path: str,
+    trace_format: str,
+    channels: int,
+    nao: int,
+    n_shells: int,
+    n_atoms: int,
 ) -> None:
     """Validate fields captured by the observer's ``before_solve`` hook."""
-    _matrix(path + ".hamiltonian", entry["hamiltonian"], 1, nao, nao)
-    _spectrum(path + ".mixed_qsh", entry["mixed_qsh"], 1, n_shells)
-    _spectrum(path + ".mixed_qat", entry["mixed_qat"], 1, n_atoms)
-    _multipoles(path + ".mixed_dipoles", entry["mixed_dipoles"], n_atoms, 3)
-    _multipoles(path + ".mixed_quadrupoles", entry["mixed_quadrupoles"], n_atoms, 6)
+    if trace_format == FORMAT_V1:
+        _matrix(path + ".hamiltonian", entry["hamiltonian"], 1, nao, nao)
+    else:
+        _matrix(
+            path + ".assembled_hamiltonian",
+            entry["assembled_hamiltonian"],
+            channels,
+            nao,
+            nao,
+        )
+        _matrix(
+            path + ".solver_hamiltonian",
+            entry["solver_hamiltonian"],
+            channels,
+            nao,
+            nao,
+        )
+        for channel in range(channels):
+            for row in range(nao):
+                for column in range(nao):
+                    assembled = float(
+                        entry["assembled_hamiltonian"][channel][row][column]
+                    )
+                    solver = float(entry["solver_hamiltonian"][channel][row][column])
+                    _require(
+                        solver == 2.0 * assembled,
+                        f"{path}.solver_hamiltonian[{channel}][{row}][{column}] "
+                        "must equal twice assembled_hamiltonian",
+                    )
+    _spectrum(path + ".mixed_qsh", entry["mixed_qsh"], channels, n_shells)
+    _spectrum(path + ".mixed_qat", entry["mixed_qat"], channels, n_atoms)
+    _multipoles(path + ".mixed_dipoles", entry["mixed_dipoles"], channels, n_atoms, 3)
+    _multipoles(
+        path + ".mixed_quadrupoles",
+        entry["mixed_quadrupoles"],
+        channels,
+        n_atoms,
+        6,
+    )
 
 
-def _flatten_population(entry: dict[str, Any], prefix: str) -> list[float]:
-    """Flatten restricted q/d/Q into the exact tblite mixer order."""
-    values = [float(value) for value in entry[prefix + "_qsh"][0]]
-    for atom in entry[prefix + "_dipoles"][0]:
-        values.extend(float(value) for value in atom)
-    for atom in entry[prefix + "_quadrupoles"][0]:
-        values.extend(float(value) for value in atom)
+def _flatten_population(
+    entry: dict[str, Any], prefix: str, channels: int
+) -> list[float]:
+    """Flatten q/d/Q in tblite's channel-major Fortran array order."""
+    values: list[float] = []
+    for channel in range(channels):
+        values.extend(float(value) for value in entry[prefix + "_qsh"][channel])
+    for channel in range(channels):
+        for atom in entry[prefix + "_dipoles"][channel]:
+            values.extend(float(value) for value in atom)
+    for channel in range(channels):
+        for atom in entry[prefix + "_quadrupoles"][channel]:
+            values.extend(float(value) for value in atom)
     return values
 
 
@@ -290,27 +345,32 @@ def _within_roundoff(actual: float, expected: float, ulps: int = 8) -> bool:
 
 
 def _validate_atomic_charges(
-    entry: dict[str, Any], prefix: str, shell_counts: list[int], path: str
+    entry: dict[str, Any],
+    prefix: str,
+    shell_counts: list[int],
+    channels: int,
+    path: str,
 ) -> None:
     """Check that qat is the per-atom reduction of contiguous qsh values."""
-    shell_charges = entry[prefix + "_qsh"][0]
-    atomic_charges = entry[prefix + "_qat"][0]
-    shell_offset = 0
-    for atom_index, shell_count in enumerate(shell_counts):
-        derived = 0.0
-        for shell_index in range(shell_offset, shell_offset + shell_count):
-            derived += float(shell_charges[shell_index])
-        actual = float(atomic_charges[atom_index])
-        _require(
-            _within_roundoff(actual, derived),
-            f"{path}.{prefix}_qat[0][{atom_index}] must equal the atom's reduced "
-            f"{prefix}_qsh (expected {derived!r}, got {actual!r})",
-        )
-        shell_offset += shell_count
+    for channel in range(channels):
+        shell_charges = entry[prefix + "_qsh"][channel]
+        atomic_charges = entry[prefix + "_qat"][channel]
+        shell_offset = 0
+        for atom_index, shell_count in enumerate(shell_counts):
+            derived = 0.0
+            for shell_index in range(shell_offset, shell_offset + shell_count):
+                derived += float(shell_charges[shell_index])
+            actual = float(atomic_charges[atom_index])
+            _require(
+                _within_roundoff(actual, derived),
+                f"{path}.{prefix}_qat[{channel}][{atom_index}] must equal the "
+                f"atom's reduced {prefix}_qsh (expected {derived!r}, got {actual!r})",
+            )
+            shell_offset += shell_count
 
 
 def validate(trace: object) -> None:
-    """Validate a candidate restricted ``xtbloom-scc-trace-v1`` document.
+    """Validate a candidate versioned SCC trace document.
 
     The JSON Schema carries the machine-readable static contract; this runtime
     validation additionally enforces dynamic dimensions and observer lifecycle
@@ -332,9 +392,11 @@ def validate(trace: object) -> None:
         },
         optional={"failed_attempt"},
     )
+    trace_format = root["format"]
     _require(
-        root["format"] == FORMAT,
-        f"unsupported trace format {root['format']!r} (expected {FORMAT!r})",
+        trace_format in SUPPORTED_FORMATS,
+        f"unsupported trace format {trace_format!r} "
+        f"(expected one of {sorted(SUPPORTED_FORMATS)!r})",
     )
 
     provenance = _object_fields(
@@ -402,10 +464,19 @@ def validate(trace: object) -> None:
         "input.unpaired_electrons must be nonnegative",
     )
     spin_channels = _as_int(molecule["spin_channels"], "input.spin_channels")
-    _require(
-        spin_channels == 1,
-        "xtbloom-scc-trace-v1 is restricted-only; input.spin_channels must be 1",
+    expected_spin_channels = 1 if trace_format == FORMAT_V1 else 2
+    spin_error = (
+        "xtbloom-scc-trace-v1 is restricted-only; input.spin_channels must be 1"
+        if trace_format == FORMAT_V1
+        else "xtbloom-scc-trace-v2 is unrestricted; input.spin_channels must be 2"
     )
+    _require(spin_channels == expected_spin_channels, spin_error)
+    if trace_format == FORMAT_V2:
+        _require(
+            unpaired > 0,
+            "xtbloom-scc-trace-v2 is unrestricted; input.unpaired_electrons "
+            "must be positive",
+        )
     temperature = _as_float(molecule["temperature"], "input.temperature")
     _require(temperature >= 0.0, "input.temperature must be nonnegative")
 
@@ -505,9 +576,9 @@ def validate(trace: object) -> None:
         required={"shell_charges", "atomic_dipoles", "atomic_quadrupoles"},
     )
     expected_layout = {
-        "shell_charges": n_shells,
-        "atomic_dipoles": 3 * n_atoms,
-        "atomic_quadrupoles": 6 * n_atoms,
+        "shell_charges": spin_channels * n_shells,
+        "atomic_dipoles": spin_channels * 3 * n_atoms,
+        "atomic_quadrupoles": spin_channels * 6 * n_atoms,
     }
     for field, expected in expected_layout.items():
         actual = _as_int(residual_layout[field], f"residual_layout.{field}")
@@ -519,7 +590,6 @@ def validate(trace: object) -> None:
 
     iteration_required = {
         "index",
-        "hamiltonian",
         "eigenvalues",
         "occupations",
         "density",
@@ -537,6 +607,10 @@ def validate(trace: object) -> None:
         "energy_delta",
         "convergence",
     }
+    if trace_format == FORMAT_V1:
+        iteration_required.add("hamiltonian")
+    else:
+        iteration_required.update({"assembled_hamiltonian", "solver_hamiltonian"})
     iteration_optional = {
         # Point-charge (PCEM) primary fields recorded by the oracle (issue #46).
         "point_charge_shell_potential",
@@ -554,16 +628,38 @@ def validate(trace: object) -> None:
             index == expected_index,
             f"{path} has out-of-order index {index} (expected {expected_index})",
         )
-        _pre_solve_state(entry, path, nao, n_shells, n_atoms)
-        _validate_atomic_charges(entry, "mixed", validated_shell_counts, path)
-        _matrix(path + ".density", entry["density"], 1, nao, nao)
-        _spectrum(path + ".eigenvalues", entry["eigenvalues"], 1, nao)
+        _pre_solve_state(
+            entry,
+            path,
+            trace_format,
+            spin_channels,
+            nao,
+            n_shells,
+            n_atoms,
+        )
+        _validate_atomic_charges(
+            entry, "mixed", validated_shell_counts, spin_channels, path
+        )
+        _matrix(path + ".density", entry["density"], spin_channels, nao, nao)
+        _spectrum(path + ".eigenvalues", entry["eigenvalues"], spin_channels, nao)
         # tblite focc is [nao,max(2,nspin)]; restricted traces retain both.
         _spectrum(path + ".occupations", entry["occupations"], 2, nao)
-        _spectrum(path + ".raw_qsh", entry["raw_qsh"], 1, n_shells)
-        _spectrum(path + ".raw_qat", entry["raw_qat"], 1, n_atoms)
-        _multipoles(path + ".raw_dipoles", entry["raw_dipoles"], n_atoms, 3)
-        _multipoles(path + ".raw_quadrupoles", entry["raw_quadrupoles"], n_atoms, 6)
+        _spectrum(path + ".raw_qsh", entry["raw_qsh"], spin_channels, n_shells)
+        _spectrum(path + ".raw_qat", entry["raw_qat"], spin_channels, n_atoms)
+        _multipoles(
+            path + ".raw_dipoles",
+            entry["raw_dipoles"],
+            spin_channels,
+            n_atoms,
+            3,
+        )
+        _multipoles(
+            path + ".raw_quadrupoles",
+            entry["raw_quadrupoles"],
+            spin_channels,
+            n_atoms,
+            6,
+        )
         if "point_charge_shell_potential" in entry:
             _spectrum(
                 path + ".point_charge_shell_potential",
@@ -578,7 +674,9 @@ def validate(trace: object) -> None:
                 1,
                 n_shells,
             )
-        _validate_atomic_charges(entry, "raw", validated_shell_counts, path)
+        _validate_atomic_charges(
+            entry, "raw", validated_shell_counts, spin_channels, path
+        )
 
         residual = _as_list(entry["residual"], path + ".residual")
         _require(
@@ -589,8 +687,8 @@ def validate(trace: object) -> None:
             _as_float(value, f"{path}.residual[{index}]")
             for index, value in enumerate(residual)
         ]
-        mixed = _flatten_population(entry, "mixed")
-        raw = _flatten_population(entry, "raw")
+        mixed = _flatten_population(entry, "mixed", spin_channels)
+        raw = _flatten_population(entry, "raw", spin_channels)
         reconstructed = [
             raw_value - mixed_value
             for raw_value, mixed_value in zip(raw, mixed, strict=True)
@@ -648,17 +746,21 @@ def validate(trace: object) -> None:
 
     failed_attempt: dict[str, Any] | None = None
     if "failed_attempt" in root:
+        failed_required = {
+            "index",
+            "mixed_qsh",
+            "mixed_qat",
+            "mixed_dipoles",
+            "mixed_quadrupoles",
+        }
+        if trace_format == FORMAT_V1:
+            failed_required.add("hamiltonian")
+        else:
+            failed_required.update({"assembled_hamiltonian", "solver_hamiltonian"})
         failed_attempt = _object_fields(
             root["failed_attempt"],
             "failed_attempt",
-            required={
-                "index",
-                "hamiltonian",
-                "mixed_qsh",
-                "mixed_qat",
-                "mixed_dipoles",
-                "mixed_quadrupoles",
-            },
+            required=failed_required,
         )
         expected_failed_index = len(iterations) + 1
         failed_index = _as_int(failed_attempt["index"], "failed_attempt.index")
@@ -666,9 +768,21 @@ def validate(trace: object) -> None:
             failed_index == expected_failed_index,
             f"failed_attempt.index must be {expected_failed_index}, got {failed_index}",
         )
-        _pre_solve_state(failed_attempt, "failed_attempt", nao, n_shells, n_atoms)
+        _pre_solve_state(
+            failed_attempt,
+            "failed_attempt",
+            trace_format,
+            spin_channels,
+            nao,
+            n_shells,
+            n_atoms,
+        )
         _validate_atomic_charges(
-            failed_attempt, "mixed", validated_shell_counts, "failed_attempt"
+            failed_attempt,
+            "mixed",
+            validated_shell_counts,
+            spin_channels,
+            "failed_attempt",
         )
 
     terminal = _object_fields(
@@ -721,10 +835,13 @@ def dumps(trace: object) -> str:
 
 __all__ = [
     "FORMAT",
+    "FORMAT_V1",
+    "FORMAT_V2",
     "QUADRUPOLE_COMPONENTS",
     "STATUS_CONVERGED",
     "STATUS_FAILED",
     "STATUS_MAX_ITERATIONS",
+    "SUPPORTED_FORMATS",
     "TraceError",
     "dumps",
     "validate",
