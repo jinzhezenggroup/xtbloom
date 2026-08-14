@@ -52,11 +52,14 @@ charged SMILES as `%2B`.
 
 The engine loader reports completed files and received bytes across the full
 Worker, JavaScript, WebAssembly, and data resource set. A dependency-free
-bootstrap first verifies the versioned app/helper module graph, while the page
-itself retries a transient failure loading that bootstrap. A small version
-manifest is revalidated on refresh; unchanged versioned resources stay in the
-browser cache, while a changed manifest pulls the new generation. The manifest
-also provides exact decoded sizes for byte progress. Transient startup network
+bootstrap first verifies the versioned app/helper module graph. The optional
+SMILES Worker/helper pair shares that graph's content version but remains lazy,
+so a SMILES failure never blocks XYZ calculations. The page itself retries a
+transient failure loading that bootstrap. A small version manifest is
+revalidated on refresh; unchanged versioned resources stay in the browser
+cache, while a changed manifest pulls one coherent generation, including both
+SMILES modules. The manifest also
+provides exact decoded sizes for byte progress. Transient startup network
 failures are retried automatically as one coherent resource generation; the
 manual retry keeps the current molecule and settings instead of reloading the
 page.

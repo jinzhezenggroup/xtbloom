@@ -651,10 +651,12 @@ test("engine manifests provide safe versioned paths and exact decoded sizes", ()
   }, ["worker", "data"]), /missing data/);
 });
 
-test("bootstrap prefetches and verifies one coherent versioned module graph", async () => {
+test("bootstrap verifies the core graph and leaves versioned SMILES assets lazy", async () => {
   const app = new TextEncoder().encode("export const app = true;\n");
   const c60 = new TextEncoder().encode("export const C60_XYZ = 'C 0 0 0';\n");
   const helpers = new TextEncoder().encode("export const helper = true;\n");
+  const smilesWorker = new TextEncoder().encode("export const worker = true;\n");
+  const smilesHelpers = new TextEncoder().encode("export const smiles = true;\n");
   const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const assets = [
     { id: "app", path: "app.js", bytes: app.byteLength, sha256: digest(app) },
@@ -664,6 +666,18 @@ test("bootstrap prefetches and verifies one coherent versioned module graph", as
       path: "app_helpers.js",
       bytes: helpers.byteLength,
       sha256: digest(helpers),
+    },
+    {
+      id: "smiles_worker",
+      path: "smiles_worker.js",
+      bytes: smilesWorker.byteLength,
+      sha256: digest(smilesWorker),
+    },
+    {
+      id: "smiles_helpers",
+      path: "smiles_helpers.js",
+      bytes: smilesHelpers.byteLength,
+      sha256: digest(smilesHelpers),
     },
   ];
   const manifest = {
@@ -687,6 +701,7 @@ test("bootstrap prefetches and verifies one coherent versioned module graph", as
       }
       if (href.includes("c60_case.js")) return new Response(c60, { status: 200 });
       if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
+      if (href.includes("smiles_")) throw new Error("optional SMILES assets must remain lazy");
       if (href.includes("app.js")) return new Response(app, { status: 200 });
       return new Response(null, { status: 404 });
     },
@@ -712,6 +727,8 @@ test("bootstrap manifest validation rejects unsafe partial metadata", () => {
       { id: "app", path: "app.js", bytes: 10, sha256: digest },
       { id: "c60", path: "c60_case.js", bytes: 15, sha256: digest },
       { id: "helpers", path: "app_helpers.js", bytes: 20, sha256: digest },
+      { id: "smiles_worker", path: "smiles_worker.js", bytes: 25, sha256: digest },
+      { id: "smiles_helpers", path: "smiles_helpers.js", bytes: 30, sha256: digest },
     ],
   };
   assert.throws(() => validateBootstrapManifest(null), /unsupported/);
@@ -744,6 +761,10 @@ test("bootstrap manifest validation rejects unsafe partial metadata", () => {
     ...valid,
     assets: [valid.assets[0], valid.assets[1]],
   }), /missing helpers/);
+  assert.throws(() => validateBootstrapManifest({
+    ...valid,
+    assets: valid.assets.filter((asset) => asset.id !== "smiles_worker"),
+  }), /missing smiles_worker/);
 });
 
 test("bootstrap UI exposes retry progress and clears stale recovery state", async () => {
@@ -797,6 +818,8 @@ test("application import timeout retries with a distinct guarded module URL", as
   const app = new TextEncoder().encode("export const app = true;\n");
   const c60 = new TextEncoder().encode("export const C60_XYZ = 'C 0 0 0';\n");
   const helpers = new TextEncoder().encode("export const helper = true;\n");
+  const smilesWorker = new TextEncoder().encode("export const worker = true;\n");
+  const smilesHelpers = new TextEncoder().encode("export const smiles = true;\n");
   const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const manifest = {
     schema_version: 1,
@@ -809,6 +832,18 @@ test("application import timeout retries with a distinct guarded module URL", as
         path: "app_helpers.js",
         bytes: helpers.byteLength,
         sha256: digest(helpers),
+      },
+      {
+        id: "smiles_worker",
+        path: "smiles_worker.js",
+        bytes: smilesWorker.byteLength,
+        sha256: digest(smilesWorker),
+      },
+      {
+        id: "smiles_helpers",
+        path: "smiles_helpers.js",
+        bytes: smilesHelpers.byteLength,
+        sha256: digest(smilesHelpers),
       },
     ],
   };
@@ -830,6 +865,8 @@ test("application import timeout retries with a distinct guarded module URL", as
       }
       if (href.includes("c60_case.js")) return new Response(c60, { status: 200 });
       if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
+      if (href.includes("smiles_worker.js")) return new Response(smilesWorker, { status: 200 });
+      if (href.includes("smiles_helpers.js")) return new Response(smilesHelpers, { status: 200 });
       if (href.includes("app.js")) return new Response(app, { status: 200 });
       return new Response(null, { status: 404 });
     },
@@ -853,6 +890,8 @@ test("aborting a hanging application import invalidates its execution token", as
   const app = new TextEncoder().encode("export const app = true;\n");
   const c60 = new TextEncoder().encode("export const C60_XYZ = 'C 0 0 0';\n");
   const helpers = new TextEncoder().encode("export const helper = true;\n");
+  const smilesWorker = new TextEncoder().encode("export const worker = true;\n");
+  const smilesHelpers = new TextEncoder().encode("export const smiles = true;\n");
   const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const manifest = {
     schema_version: 1,
@@ -865,6 +904,18 @@ test("aborting a hanging application import invalidates its execution token", as
         path: "app_helpers.js",
         bytes: helpers.byteLength,
         sha256: digest(helpers),
+      },
+      {
+        id: "smiles_worker",
+        path: "smiles_worker.js",
+        bytes: smilesWorker.byteLength,
+        sha256: digest(smilesWorker),
+      },
+      {
+        id: "smiles_helpers",
+        path: "smiles_helpers.js",
+        bytes: smilesHelpers.byteLength,
+        sha256: digest(smilesHelpers),
       },
     ],
   };
@@ -886,6 +937,8 @@ test("aborting a hanging application import invalidates its execution token", as
       }
       if (href.includes("c60_case.js")) return new Response(c60, { status: 200 });
       if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
+      if (href.includes("smiles_worker.js")) return new Response(smilesWorker, { status: 200 });
+      if (href.includes("smiles_helpers.js")) return new Response(smilesHelpers, { status: 200 });
       if (href.includes("app.js")) return new Response(app, { status: 200 });
       return new Response(null, { status: 404 });
     },
@@ -1346,11 +1399,22 @@ test("page bootstraps pinned SMILES loading and applies URL-optimized geometry",
 });
 
 test("engine bootstrap retries a coherent versioned generation without reloading the page", async () => {
-  const [appSource, bootstrapSource, helperSource, workerSource, manifestSource, indexSource] = await Promise.all([
+  const [
+    appSource,
+    bootstrapSource,
+    helperSource,
+    workerSource,
+    smilesHelperSource,
+    smilesWorkerSource,
+    manifestSource,
+    indexSource,
+  ] = await Promise.all([
     readFile(new URL("../app.js", import.meta.url), "utf8"),
     readFile(new URL("../bootstrap.js", import.meta.url), "utf8"),
     readFile(new URL("../app_helpers.js", import.meta.url), "utf8"),
     readFile(new URL("../worker.js", import.meta.url), "utf8"),
+    readFile(new URL("../smiles_helpers.js", import.meta.url), "utf8"),
+    readFile(new URL("../smiles_worker.js", import.meta.url), "utf8"),
     readFile(new URL("../write_engine_manifest.cmake", import.meta.url), "utf8"),
     readFile(new URL("../index.html", import.meta.url), "utf8"),
   ]);
@@ -1359,6 +1423,8 @@ test("engine bootstrap retries a coherent versioned generation without reloading
     "c60_case.js",
     "worker.js",
     "app_helpers.js",
+    "smiles_worker.js",
+    "smiles_helpers.js",
     "xtbloom_web.js",
     "xtbloom_web.wasm",
     "xtbloom_web.data",
@@ -1371,6 +1437,8 @@ test("engine bootstrap retries a coherent versioned generation without reloading
   assert.match(appSource, /xtbloom_version/);
   assert.match(appSource, /c60CaseUrl\.searchParams\.set\("xtbloom_bootstrap"/);
   assert.match(appSource, /manifest\.version !== appContentVersion/);
+  assert.match(appSource, /smilesWorkerModuleUrl\.searchParams\.set\("xtbloom_version"/);
+  assert.match(appSource, /new URL\(smilesWorkerModuleUrl\.href\)/);
   assert.match(appSource, /Invalid engine manifest response/);
   assert.match(appSource, /currentLoadOrAbort\(generation, masterSignal, attemptController\.signal\)/);
   assert.match(appSource, /filter\(\(asset\) => engineIds\.has\(asset\.id\)\)/);
@@ -1384,6 +1452,13 @@ test("engine bootstrap retries a coherent versioned generation without reloading
   assert.match(workerSource, /await import\(msg\.moduleUrl\)/);
   assert.match(workerSource, /initializeDownloadedEngineModule/);
   assert.doesNotMatch(workerSource, /from "\.\/xtbloom_web\.js"/);
+  assert.match(smilesHelperSource, /export async function loadOpenChemLibRuntime/);
+  assert.match(smilesWorkerSource, /await import\(smilesHelpersUrl\.href\)/);
+  assert.match(smilesWorkerSource, /contentVersion = workerModuleUrl\.searchParams\.get\("xtbloom_version"\)/);
+  assert.match(smilesWorkerSource, /\^\[0-9a-f\]\{64\}\$/);
+  assert.match(smilesWorkerSource, /requires a 64-character SHA-256 content version/);
+  assert.doesNotMatch(smilesWorkerSource, /xtbloom_bootstrap/);
+  assert.doesNotMatch(smilesWorkerSource, /from "\.\/smiles_helpers\.js"/);
   assert.match(indexSource, /<script type="module">/);
   assert.match(indexSource, /prefetchBootstrap/);
   assert.match(indexSource, /await import\(url\.href\)/);

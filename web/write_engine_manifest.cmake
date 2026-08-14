@@ -10,6 +10,8 @@ set(_asset_specs
     "c60|c60_case.js"
     "worker|worker.js"
     "helpers|app_helpers.js"
+    "smiles_worker|smiles_worker.js"
+    "smiles_helpers|smiles_helpers.js"
     "module|xtbloom_web.js"
     "wasm|xtbloom_web.wasm"
     "data|xtbloom_web.data")

@@ -2,9 +2,9 @@
  *
  * Keep this file dependency-free: it runs pinned 3Dmol source ranking and its
  * verified loader alongside content-manifest revalidation, warms and verifies
- * the versioned application module graph, and only then imports app.js. That
- * prevents a deployment from linking a new app.js against stale helpers or
- * preset data before the normal retry UI can start.
+ * the versioned application module graph, and only then imports app.js. The
+ * optional SMILES graph participates in the same content version but remains
+ * lazily loaded, so OpenChemLib availability never gates ordinary XYZ startup.
  */
 
 const BOOTSTRAP_MAX_ATTEMPTS = 3;
@@ -341,6 +341,8 @@ export function validateBootstrapManifest(manifest) {
     app: validateManifestAsset(byId.get("app"), "app"),
     c60: validateManifestAsset(byId.get("c60"), "c60"),
     helpers: validateManifestAsset(byId.get("helpers"), "helpers"),
+    smilesWorker: validateManifestAsset(byId.get("smiles_worker"), "smiles_worker"),
+    smilesHelpers: validateManifestAsset(byId.get("smiles_helpers"), "smiles_helpers"),
   };
 }
 
@@ -431,7 +433,12 @@ async function loadBootstrapAttempt({
     fetchVerifiedAsset(validated.c60, c60Url, { fetchImpl, cryptoImpl, signal, cache }),
     fetchVerifiedAsset(validated.helpers, helpersUrl, { fetchImpl, cryptoImpl, signal, cache }),
   ]);
-  return { manifest: rawManifest, appUrl, c60Url, helpersUrl };
+  return {
+    manifest: rawManifest,
+    appUrl,
+    c60Url,
+    helpersUrl,
+  };
 }
 
 function withAttemptTimeout(operation, timeoutMs, controller, onTimeout = () => {}) {

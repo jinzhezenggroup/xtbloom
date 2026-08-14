@@ -17,8 +17,10 @@ The deployment runs entirely in the browser:
   JSDMirror, jsDelivr, and the site origin, then loads the fastest verified
   source with ranked fallback. That optional routing runs in parallel with
   manifest revalidation and verification of the versioned app/helper module
-  graph; the small inline loader in `index.html` also retries a transient
-  failure fetching `bootstrap.js`;
+  graph. The manifest gives the lazily loaded SMILES Worker/helper graph the
+  same content version without making it gate the core app; the small inline
+  loader in `index.html` also retries a transient failure fetching
+  `bootstrap.js`;
 - `app.js` downloads the five engine resources under one file/byte progress
   ledger, retries transient startup failures with generation-safe cleanup, and
   passes the wasm and Emscripten data bytes into the Worker;
@@ -44,16 +46,21 @@ fully converged electronic state (ABI-v2 `SCC_START_WARM`), while standalone
 single-point calculations always start SCC fresh, so user calculations cannot
 inherit electronic state from an unrelated request.
 
-The build hashes the application module graph and the five engine files into
-`engine-manifest.json`. The browser revalidates only that small manifest on
-refresh, verifies `app.js`, `app_helpers.js`, and `c60_case.js` before linking
-them, then addresses every application/engine asset with the shared content
-version. An unchanged version stays cacheable; a transient failure reloads the
-complete resource set under that same content version, replacing rather than
-abandoning the reusable cache entries. Digest verification prevents the UI,
-Worker glue, wasm, and preloaded data from being mixed across attempts. Late
-messages from a failed Worker are ignored by a monotonically increasing loader
-generation.
+The build hashes the application module graph, optional SMILES Worker/helper
+graph, and five engine files into `engine-manifest.json`. The browser
+revalidates only that small manifest on refresh, verifies `app.js`,
+`app_helpers.js`, and `c60_case.js` before linking them, while leaving the
+optional SMILES pair lazy so it cannot delay the core app. Every manifest asset
+is addressed with the shared SHA-256-derived content version, and the SMILES
+Worker refuses to import a helper unless that 64-character hash is present.
+It therefore imports the helper from the same cache generation instead of an
+older stable URL. An unchanged version stays cacheable; a transient failure
+reloads the complete resource set under that same content version, replacing
+rather than abandoning reusable cache entries. Digest verification prevents the UI,
+Worker glue, wasm, and preloaded data from being mixed across attempts; the
+digest-derived shared cache key provides the corresponding generation boundary
+for the lazy SMILES modules. Late messages from a failed Worker are ignored by
+a monotonically increasing loader generation.
 
 The CPU eigensolver still discovers the same LP64 LAPACKE/CBLAS symbols from a
 preloaded side module named `libscipy_openblas.so`. For the Web build those
