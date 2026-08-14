@@ -1,0 +1,813 @@
+{
+  "claim": "Descriptively compare the frozen bare QEq proxy with fully reconverged public dq/db; the mismatch is non-decisive and is not a susceptibility fit",
+  "metadata": {
+    "git_revision": "f10549511cc16a16650e39ad56aec094aa3fff12",
+    "git_status_porcelain": "",
+    "library": "/tmp/xtbloom-issue407-clean.pIjFDO/repo/build/issue407-clean-cpu/libxtbloom.so.0.1.1",
+    "library_sha256": "5109d6a49e4e00ccd7020c5db98b1755e8d6e96d2f8343d41222bb12d97696be",
+    "parameter_file": "data/parameters/gfn2.json",
+    "parameter_sha256": "de0f20e90b592b7b92f107eb672bd3dd29c1096f904d7a472b05693f9238ed1a",
+    "platform": "Linux-6.8.0-110-generic-x86_64-with-glibc2.35",
+    "processor": "x86_64",
+    "python": "3.13.9",
+    "repository": "/tmp/xtbloom-issue407-clean.pIjFDO/repo",
+    "steps_hartree": [
+      0.001,
+      0.0003,
+      0.0001,
+      3e-05
+    ],
+    "xtbloom_python_version": "0.1.1.post1.dev38+gf10549511"
+  },
+  "model": {
+    "alpha": 0.08,
+    "bare_qeq_proxy": "D - D11^TD/(1^TD1), D_ss=alpha/gamma_s",
+    "interpretation_limit": "public dq/db includes self-consistent ES2/AES2/band response and is not the bare -TCT^T electronic susceptibility; this script also does not evaluate the implemented screened pair operator",
+    "measured_policy": "off"
+  },
+  "rows": [
+    {
+      "case_id": "h2",
+      "charge": 0.0,
+      "direction_index": 0,
+      "normalized_atomic_potential_direction": [
+        -0.7071067811865475,
+        0.7071067811865475
+      ],
+      "numbers": [
+        1,
+        1
+      ],
+      "positions_bohr": [
+        [
+          -0.71,
+          0.0,
+          0.0
+        ],
+        [
+          0.71,
+          0.0,
+          0.0
+        ]
+      ],
+      "predicted_atomic_response_e_per_hartree": [
+        0.13941001819973287,
+        -0.13941001819973287
+      ],
+      "samples": [
+        {
+          "actual_atomic_response_e_per_hartree": [
+            3.0092055279024588,
+            -3.0092055279023477
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 1.2585456588109668e-05,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 4.255659269527667,
+            "actual_to_predicted_norm_ratio": 21.58528896819389,
+            "charge_sum_e_per_hartree": 1.1102230246251565e-13,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.19715553846874223,
+            "relative_vector_error": 0.9536721513678366
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            6,
+            6
+          ],
+          "step_hartree": 0.001
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            3.0092133579284757,
+            -3.00921335792755
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 1.5121281771893065e-06,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 4.255670342856079,
+            "actual_to_predicted_norm_ratio": 21.585345133638175,
+            "charge_sum_e_per_hartree": 9.254819133275305e-13,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.19715553846874223,
+            "relative_vector_error": 0.953672271913706
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            6,
+            6
+          ],
+          "step_hartree": 0.0003
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            3.0092140462884,
+            -3.009214046284514
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 5.386423298795065e-07,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 4.2556713163419255,
+            "actual_to_predicted_norm_ratio": 21.585350071292243,
+            "charge_sum_e_per_hartree": 3.885780586188048e-12,
+            "direction_cosine": 1.0000000000000002,
+            "predicted_norm_e_per_hartree": 0.19715553846874223,
+            "relative_vector_error": 0.9536722825111851
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            6,
+            6
+          ],
+          "step_hartree": 0.0001
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            3.009214427165026,
+            -3.009214427163176
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 0.0,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 4.255671854984255,
+            "actual_to_predicted_norm_ratio": 21.585352803360202,
+            "charge_sum_e_per_hartree": 1.850075648235361e-12,
+            "direction_cosine": 1.0000000000000002,
+            "predicted_norm_e_per_hartree": 0.19715553846874223,
+            "relative_vector_error": 0.9536722883749054
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            5,
+            5
+          ],
+          "step_hartree": 3e-05
+        }
+      ],
+      "smallest_valid_step_index": 3,
+      "spin_channels": 1,
+      "uhf": 0
+    },
+    {
+      "case_id": "co",
+      "charge": 0.0,
+      "direction_index": 0,
+      "normalized_atomic_potential_direction": [
+        -0.7071067811865475,
+        0.7071067811865475
+      ],
+      "numbers": [
+        6,
+        8
+      ],
+      "positions_bohr": [
+        [
+          -1.1,
+          0.0,
+          0.0
+        ],
+        [
+          1.1,
+          0.0,
+          0.0
+        ]
+      ],
+      "predicted_atomic_response_e_per_hartree": [
+        0.21583394563372643,
+        -0.2158339456337264
+      ],
+      "samples": [
+        {
+          "actual_atomic_response_e_per_hartree": [
+            2.3708942467232097,
+            -2.3708942467230987
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 3.8860907207653986e-07,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 3.352950798668228,
+            "actual_to_predicted_norm_ratio": 10.984807045813817,
+            "charge_sum_e_per_hartree": 1.1102230246251565e-13,
+            "direction_cosine": 0.9999999999999998,
+            "predicted_norm_e_per_hartree": 0.3052352931357132,
+            "relative_vector_error": 0.9089651738233228
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            13,
+            13
+          ],
+          "step_hartree": 0.001
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            2.3708939964299054,
+            -2.3708939964243543
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 3.463720354678898e-08,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 3.3529504446961953,
+            "actual_to_predicted_norm_ratio": 10.984805886144406,
+            "charge_sum_e_per_hartree": 5.551115123125783e-12,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.3052352931357132,
+            "relative_vector_error": 0.9089651642127475
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            13,
+            13
+          ],
+          "step_hartree": 0.0003
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            2.3708939744582214,
+            -2.370893974465993
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 3.5752414549624407e-09,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 3.3529504136329624,
+            "actual_to_predicted_norm_ratio": 10.98480578437625,
+            "charge_sum_e_per_hartree": -7.771561172376096e-12,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.3052352931357132,
+            "relative_vector_error": 0.9089651633693601
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            13,
+            13
+          ],
+          "step_hartree": 0.0001
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            2.3708939718591893,
+            -2.37089397201092
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 0.0,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 3.3529504100591705,
+            "actual_to_predicted_norm_ratio": 10.984805772667931,
+            "charge_sum_e_per_hartree": -1.5173062806184134e-10,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.3052352931357132,
+            "relative_vector_error": 0.9089651632723292
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            13,
+            13
+          ],
+          "step_hartree": 3e-05
+        }
+      ],
+      "smallest_valid_step_index": 3,
+      "spin_channels": 1,
+      "uhf": 0
+    },
+    {
+      "case_id": "water",
+      "charge": 0.0,
+      "direction_index": 0,
+      "normalized_atomic_potential_direction": [
+        0.8164965809277261,
+        -0.4082482904638631,
+        -0.4082482904638631
+      ],
+      "numbers": [
+        8,
+        1,
+        1
+      ],
+      "positions_bohr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.4,
+          0.0,
+          1.1
+        ],
+        [
+          -1.4,
+          0.0,
+          1.1
+        ]
+      ],
+      "predicted_atomic_response_e_per_hartree": [
+        -0.22039271970007296,
+        0.11019635985003648,
+        0.11019635985003648
+      ],
+      "samples": [
+        {
+          "actual_atomic_response_e_per_hartree": [
+            -3.155246690322633,
+            1.5776233451607058,
+            1.5776233451606503
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 4.3551341503012643e-07,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 3.8643722019474085,
+            "actual_to_predicted_norm_ratio": 14.316474222089118,
+            "charge_sum_e_per_hartree": -1.27675647831893e-12,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.2699248531447084,
+            "relative_vector_error": 0.9301503998479539
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            11,
+            11
+          ],
+          "step_hartree": 0.001
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            -3.1552470141845332,
+            1.5776235070881959,
+            1.5776235070883808
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 3.886794807777109e-08,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 3.864372598592883,
+            "actual_to_predicted_norm_ratio": 14.316475691555416,
+            "charge_sum_e_per_hartree": -7.956524328278647e-12,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.2699248531447084,
+            "relative_vector_error": 0.9301504070174302
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            11,
+            11
+          ],
+          "step_hartree": 0.0003
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            -3.1552470426299273,
+            1.5776235213332823,
+            1.5776235213332823
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 4.01171205232912e-09,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 3.864372633449439,
+            "actual_to_predicted_norm_ratio": 14.316475820689712,
+            "charge_sum_e_per_hartree": 3.6637359812630166e-11,
+            "direction_cosine": 1.0000000000000002,
+            "predicted_norm_e_per_hartree": 0.2699248531447084,
+            "relative_vector_error": 0.9301504076474721
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            11,
+            11
+          ],
+          "step_hartree": 0.0001
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            -3.155247045934691,
+            1.577623522945141,
+            1.5776235229377396
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 0.0,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 3.8643726374608227,
+            "actual_to_predicted_norm_ratio": 14.316475835550825,
+            "charge_sum_e_per_hartree": -5.181033380097233e-11,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.2699248531447084,
+            "relative_vector_error": 0.930150407719979
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            11,
+            11
+          ],
+          "step_hartree": 3e-05
+        }
+      ],
+      "smallest_valid_step_index": 3,
+      "spin_channels": 1,
+      "uhf": 0
+    },
+    {
+      "case_id": "water",
+      "charge": 0.0,
+      "direction_index": 1,
+      "normalized_atomic_potential_direction": [
+        0.0,
+        0.7071067811865475,
+        -0.7071067811865475
+      ],
+      "numbers": [
+        8,
+        1,
+        1
+      ],
+      "positions_bohr": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          1.4,
+          0.0,
+          1.1
+        ],
+        [
+          -1.4,
+          0.0,
+          1.1
+        ]
+      ],
+      "predicted_atomic_response_e_per_hartree": [
+        0.0,
+        -0.13941001819973287,
+        0.13941001819973287
+      ],
+      "samples": [
+        {
+          "actual_atomic_response_e_per_hartree": [
+            4.440892098500626e-13,
+            -1.268674487440724,
+            1.2686744874393363
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 9.706736163001477e-07,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 1.7941766663744256,
+            "actual_to_predicted_norm_ratio": 9.100310751142713,
+            "charge_sum_e_per_hartree": -9.43689570931383e-13,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.19715553846874223,
+            "relative_vector_error": 0.8901136425616639
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            13,
+            13
+          ],
+          "step_hartree": 0.001
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            -1.8873791418627664e-11,
+            -1.2686745279396248,
+            1.268674527945731
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 1.027953010603118e-06,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 1.794176723653819,
+            "actual_to_predicted_norm_ratio": 9.100311041671672,
+            "charge_sum_e_per_hartree": -1.27675647831893e-11,
+            "direction_cosine": 1.0000000000000002,
+            "predicted_norm_e_per_hartree": 0.19715553846874223,
+            "relative_vector_error": 0.8901136460698045
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            13,
+            13
+          ],
+          "step_hartree": 0.0003
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            -1.3322676295501878e-11,
+            -1.2686744510936876,
+            1.2686744511092307
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 9.192831171226766e-07,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 1.7941766149839256,
+            "actual_to_predicted_norm_ratio": 9.10031049048303,
+            "charge_sum_e_per_hartree": 2.220446049250313e-12,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.19715553846874223,
+            "relative_vector_error": 0.8901136394141952
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            13,
+            13
+          ],
+          "step_hartree": 0.0001
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            1.850371707708594e-11,
+            -1.268673801089563,
+            1.2686738010507053
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 0.0,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 1.7941756957008097,
+            "actual_to_predicted_norm_ratio": 9.100305827752665,
+            "charge_sum_e_per_hartree": -2.0354162799662845e-11,
+            "direction_cosine": 1.0000000000000002,
+            "predicted_norm_e_per_hartree": 0.19715553846874223,
+            "relative_vector_error": 0.8901135831116401
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            12,
+            12
+          ],
+          "step_hartree": 3e-05
+        }
+      ],
+      "smallest_valid_step_index": 3,
+      "spin_channels": 1,
+      "uhf": 0
+    },
+    {
+      "case_id": "oxygen_triplet",
+      "charge": 0.0,
+      "direction_index": 0,
+      "normalized_atomic_potential_direction": [
+        -0.7071067811865475,
+        0.7071067811865475
+      ],
+      "numbers": [
+        8,
+        8
+      ],
+      "positions_bohr": [
+        [
+          -1.15,
+          0.0,
+          0.0
+        ],
+        [
+          1.15,
+          0.0,
+          0.0
+        ]
+      ],
+      "predicted_atomic_response_e_per_hartree": [
+        0.23406122069367996,
+        -0.23406122069367996
+      ],
+      "samples": [
+        {
+          "actual_atomic_response_e_per_hartree": [
+            3.1530747371899537,
+            -3.1530747371881773
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 1.990678045417243e-06,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 4.459121056508759,
+            "actual_to_predicted_norm_ratio": 13.471153947862001,
+            "charge_sum_e_per_hartree": 1.7763568394002505e-12,
+            "direction_cosine": 0.9999999999999999,
+            "predicted_norm_e_per_hartree": 0.3310125527306043,
+            "relative_vector_error": 0.9257673096254155
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            11,
+            11
+          ],
+          "step_hartree": 0.001
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            3.1530759349511035,
+            -3.153075934943332
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 2.967922250715899e-07,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 4.459122750394582,
+            "actual_to_predicted_norm_ratio": 13.471159065147761,
+            "charge_sum_e_per_hartree": 7.771561172376096e-12,
+            "direction_cosine": 1.0000000000000002,
+            "predicted_norm_e_per_hartree": 0.3310125527306043,
+            "relative_vector_error": 0.9257673378241689
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            10,
+            10
+          ],
+          "step_hartree": 0.0003
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            3.1530762113662902,
+            -3.1530762113718414
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 9.412731141884776e-08,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 4.459123141314108,
+            "actual_to_predicted_norm_ratio": 13.471160246128733,
+            "charge_sum_e_per_hartree": -5.551115123125783e-12,
+            "direction_cosine": 1.0000000000000002,
+            "predicted_norm_e_per_hartree": 0.3310125527306043,
+            "relative_vector_error": 0.92576734433195
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            10,
+            10
+          ],
+          "step_hartree": 0.0001
+        },
+        {
+          "actual_atomic_response_e_per_hartree": [
+            3.1530761447832547,
+            -3.153076144838766
+          ],
+          "converged": [
+            true,
+            true
+          ],
+          "difference_from_smallest_valid_step_norm_e_per_hartree": 0.0,
+          "eligible_for_descriptive_metrics": true,
+          "metrics": {
+            "actual_norm_e_per_hartree": 4.459123047186804,
+            "actual_to_predicted_norm_ratio": 13.471159961766997,
+            "charge_sum_e_per_hartree": -5.551115123125783e-11,
+            "direction_cosine": 1.0,
+            "predicted_norm_e_per_hartree": 0.3310125527306043,
+            "relative_vector_error": 0.9257673427649782
+          },
+          "per_system_status": [
+            0,
+            0
+          ],
+          "scc_iterations": [
+            10,
+            10
+          ],
+          "step_hartree": 3e-05
+        }
+      ],
+      "smallest_valid_step_index": 3,
+      "spin_channels": 2,
+      "uhf": 2
+    }
+  ],
+  "schema_version": 1,
+  "summary_at_smallest_step": {
+    "eligible_row_count": 5,
+    "maximum_actual_to_predicted_norm_ratio": 21.585352803360202,
+    "maximum_relative_vector_error": 0.9536722883749054,
+    "minimum_actual_to_predicted_norm_ratio": 9.100305827752665,
+    "minimum_direction_cosine": 1.0,
+    "total_row_count": 5
+  }
+}
