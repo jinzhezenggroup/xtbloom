@@ -1,7 +1,7 @@
 # Builds the xtbloom WASM web demo and publishes it to GitHub Pages and
 # Cloudflare Pages.
 #
-# The artifact is a fully client-side GFN2-xTB single-point + geometry
+# The artifact is a fully client-side GFN1-xTB/GFN2-xTB single-point + geometry
 # optimization page: a single-threaded wasm32 module (so no COOP/COEP headers
 # are needed, which GitHub Pages cannot configure anyway) that dlopens a
 # preloaded Eigen LAPACKE/CBLAS side module. A separate wasm64 build is retained
@@ -100,7 +100,7 @@ jobs:
         run: ccache --zero-stats
 
       - name: Install web build dependencies
-        run: npm ci --prefix web --ignore-scripts --no-audit --no-fund
+        run: npm ci --prefix web --omit=dev --ignore-scripts --no-audit --no-fund
 
       - name: Check pinned Eigen dependency metadata
         run: python3 tools/eigen_dependency.py check
@@ -227,7 +227,7 @@ jobs:
 
   validate:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -239,6 +239,12 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
+
+      - name: Install pinned browser regression dependencies
+        run: npm ci --prefix web --ignore-scripts --no-audit --no-fund
+
+      - name: Install pinned Chromium and WebKit runtimes
+        run: npm --prefix web run browser:install
 
       - name: Restore wasm32 site
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -256,6 +262,22 @@ jobs:
         run: >-
           node web/tests/wasm_parity.mjs
           build/wasm32-web/web/site build/wasm64-web/web/site
+
+      - name: Test responsive layout in Chromium and WebKit
+        env:
+          XTBLOOM_WEB_SITE: ${{ github.workspace }}/build/wasm32-web/web/site
+        run: npm --prefix web run test:browser
+
+      - name: Preserve browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: web-responsive-failure-${{ github.run_attempt }}
+          path: |
+            web/test-results/browser
+            web/playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
 
       # Install and verify the exact Linux deployment graph before any
       # deployment secret is available. Optional packages and lifecycle

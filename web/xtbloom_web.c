@@ -5,8 +5,8 @@
  * front end never has to marshal the ABI structs by hand:
  *
  *   const char* xtbloom_web_version(void);
- *   const char* xtbloom_web_compute(xyz, charge, unpaired, etemp_eh, etol, qtol,
- *                                   max_iter, forces, *ok_out);
+ *   const char* xtbloom_web_compute(xyz, model, charge, unpaired, etemp_eh,
+ *                                   etol, qtol, max_iter, forces);
  *
  * Input is plain XYZ ("Symbol x y z" or "Z x y z", one atom per line, values
  * in angstrom -- converted to bohr internally, since xtbloom positions are in
@@ -270,6 +270,17 @@ static int parse_xyz(const char* xyz, Atom* atoms, int max_atoms) {
 static StrBuf g_result;
 static xtbloom_context_t* g_context = NULL;
 
+/* The Web protocol carries the stable public model tag explicitly so the
+ * adapter never relies on an initializer default or silently substitutes one
+ * GFN-xTB method for another. */
+static int valid_model_tag(int model) {
+  return model == XTBLOOM_MODEL_GFN1_XTB || model == XTBLOOM_MODEL_GFN2_XTB;
+}
+
+static const char* model_name(int model) {
+  return model == XTBLOOM_MODEL_GFN1_XTB ? "GFN1-xTB" : "GFN2-xTB";
+}
+
 /* Whether the adapter's most recent compute left a fully converged
  * compatible state on the shared context that a strict WARM SCC request may
  * consume. Mirrors the native gate so the browser optimizer can reuse the
@@ -348,9 +359,12 @@ static const char* error_json(const char* code, const char* raw) {
 const char* xtbloom_web_version(void) { return xtbloom_version_string(); }
 
 /* Parse/compute and return a JSON document in a static reused buffer. */
-const char* xtbloom_web_compute(const char* xyz, double charge, int unpaired,
+const char* xtbloom_web_compute(const char* xyz, int model, double charge, int unpaired,
                                 double electronic_temperature_eh, double energy_tolerance,
                                 double charge_tolerance, int max_iterations, int compute_forces) {
+  if (!valid_model_tag(model)) {
+    return error_json("err_model", NULL);
+  }
   /* --- parse geometry --- */
   Atom atoms[512];
   const int n_atoms = parse_xyz(xyz, atoms, 512);
@@ -441,6 +455,7 @@ const char* xtbloom_web_compute(const char* xyz, double charge, int unpaired,
   if (xtbloom_compute_options_init(&options, sizeof(options)) != XTBLOOM_STATUS_SUCCESS) {
     return error_json("err_init", NULL);
   }
+  options.model = (xtbloom_model_t)model;
   options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_ATOMIC_CHARGES;
   if (compute_forces != 0) {
     options.flags |= XTBLOOM_COMPUTE_FORCES;
@@ -510,7 +525,11 @@ const char* xtbloom_web_compute(const char* xyz, double charge, int unpaired,
     return sb_finish(&g_result);
   }
 
-  sb_puts(&g_result, "{\"ok\":1,\"energy_Eh\":");
+  sb_puts(&g_result, "{\"ok\":1,\"model\":");
+  sb_puti(&g_result, model);
+  sb_puts(&g_result, ",\"method\":");
+  sb_put_json_string(&g_result, model_name(model));
+  sb_puts(&g_result, ",\"energy_Eh\":");
   sb_putd(&g_result, energies[0]);
   sb_puts(&g_result, ",\"scc_iterations\":");
   sb_puti(&g_result, scc_iterations[0]);
@@ -567,7 +586,7 @@ const char* xtbloom_web_compute(const char* xyz, double charge, int unpaired,
 /* ------------------------------------------------------------------ */
 /* Minimal L-BFGS geometry optimizer (demo quality)                    */
 /*                                                                     */
-/* Minimizes the GFN2-xTB energy by moving nuclear coordinates (bohr)  */
+/* Minimizes the selected GFN-xTB energy by moving coordinates (bohr) */
 /* along an L-BFGS search direction with an Armijo backtracking line   */
 /* search. Each trial reads the analytic energy and force from         */
 /* xtbloom_compute on a cached context, so convergence is driven by the */
@@ -635,10 +654,13 @@ static XTBloomOptimizeStepFn g_optimize_step_fn = NULL;
 
 void xtbloom_web_set_optimize_step_cb(XTBloomOptimizeStepFn fn) { g_optimize_step_fn = fn; }
 
-const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
+const char* xtbloom_web_optimize(const char* xyz, int model, double charge, int unpaired,
                                  double electronic_temperature_eh, double energy_tolerance,
                                  double charge_tolerance, int scc_max_iterations,
                                  int opt_max_iterations, double grad_tol, double max_move) {
+  if (!valid_model_tag(model)) {
+    return error_json("err_model", NULL);
+  }
   Atom atoms[512];
   const int n_atoms = parse_xyz(xyz, atoms, 512);
   if (n_atoms <= 0) {
@@ -764,6 +786,7 @@ const char* xtbloom_web_optimize(const char* xyz, double charge, int unpaired,
 
   xtbloom_compute_options_t options;
   xtbloom_compute_options_init(&options, sizeof(options));
+  options.model = (xtbloom_model_t)model;
   options.flags = XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_ATOMIC_CHARGES | XTBLOOM_COMPUTE_FORCES;
   if (scc_max_iterations > 0) {
     options.max_scc_iterations = scc_max_iterations;
@@ -962,7 +985,11 @@ done:
     error_json(fail_code, fail_reason != NULL && *fail_reason ? fail_reason : NULL);
   } else {
     g_result.len = 0;
-    sb_puts(&g_result, "{\"ok\":1,\"converged\":");
+    sb_puts(&g_result, "{\"ok\":1,\"model\":");
+    sb_puti(&g_result, model);
+    sb_puts(&g_result, ",\"method\":");
+    sb_put_json_string(&g_result, model_name(model));
+    sb_puts(&g_result, ",\"converged\":");
     sb_puti(&g_result, converged);
     sb_puts(&g_result, ",\"iterations\":");
     sb_puti(&g_result, steps);

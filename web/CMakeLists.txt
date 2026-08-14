@@ -96,7 +96,7 @@ set(_xtbloom_web_3dmol
     "${CMAKE_CURRENT_SOURCE_DIR}/node_modules/3dmol/build/3Dmol-min.js")
 add_custom_command(
   OUTPUT "${_xtbloom_web_3dmol}"
-  COMMAND npm ci --ignore-scripts --no-audit --no-fund
+  COMMAND npm ci --omit=dev --ignore-scripts --no-audit --no-fund
   WORKING_DIRECTORY "${_xtbloom_web_src}"
   DEPENDS
     "${_xtbloom_web_src}/package.json"
@@ -345,6 +345,9 @@ set(_xtbloom_web_legal_sources
     "${CMAKE_SOURCE_DIR}/data/parameters/licenses/dftd4-COPYING.LESSER"
     "${CMAKE_SOURCE_DIR}/data/parameters/licenses/mctc-lib-LICENSE"
     "${CMAKE_SOURCE_DIR}/data/parameters/manifest.json"
+    "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_manifest.json"
+    "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_d3_manifest.json"
+    "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_legacy_sto_manifest.json"
     "${CMAKE_SOURCE_DIR}/data/parameters/sto_manifest.json"
     "${CMAKE_SOURCE_DIR}/data/parameters/spin_manifest.json"
     "${CMAKE_SOURCE_DIR}/data/parameters/d4_manifest.json"
@@ -381,6 +384,9 @@ set(_xtbloom_web_legal_outputs
     "${_xtbloom_web_site}/LICENSES/parameters/dftd4-COPYING.LESSER"
     "${_xtbloom_web_site}/LICENSES/parameters/mctc-lib-LICENSE"
     "${_xtbloom_web_site}/provenance/parameters/manifest.json"
+    "${_xtbloom_web_site}/provenance/parameters/gfn1_manifest.json"
+    "${_xtbloom_web_site}/provenance/parameters/gfn1_d3_manifest.json"
+    "${_xtbloom_web_site}/provenance/parameters/gfn1_legacy_sto_manifest.json"
     "${_xtbloom_web_site}/provenance/parameters/sto_manifest.json"
     "${_xtbloom_web_site}/provenance/parameters/spin_manifest.json"
     "${_xtbloom_web_site}/provenance/parameters/d4_manifest.json"
@@ -423,6 +429,9 @@ add_custom_command(
           "${_xtbloom_web_site}/LICENSES/parameters/d4.NOTICE"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${CMAKE_SOURCE_DIR}/data/parameters/manifest.json"
+          "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_manifest.json"
+          "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_d3_manifest.json"
+          "${CMAKE_SOURCE_DIR}/data/parameters/gfn1_legacy_sto_manifest.json"
           "${CMAKE_SOURCE_DIR}/data/parameters/sto_manifest.json"
           "${CMAKE_SOURCE_DIR}/data/parameters/spin_manifest.json"
           "${CMAKE_SOURCE_DIR}/data/parameters/d4_manifest.json"

@@ -32,5 +32,9 @@ __pycache__/
 *.csv.db
 *.prof
 
-# WASM web demo build artifacts (site output lives under any /build*/ ; see web/CMakeLists.txt)
+# WASM web demo and CI-only deployment-tool artifacts.
+# Site output lives under any /build*/; see web/CMakeLists.txt.
 /web/node_modules/
+/web/playwright-report/
+/web/test-results/
+/tools/cloudflare-pages/node_modules/

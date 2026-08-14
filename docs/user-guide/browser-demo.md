@@ -1,18 +1,24 @@
 # Browser demo
 
-The [xTBloom browser demo](https://xtbloom.jinzhezeng.group) runs GFN2-xTB
-entirely on the client. Molecular coordinates and results remain in the
-browser; the site does not upload a calculation to a server.
+The [xTBloom browser demo](https://xtbloom.jinzhezeng.group) runs GFN1-xTB or
+GFN2-xTB entirely on the client. GFN2-xTB is selected by default. Molecular
+coordinates and results remain in the browser; the site does not upload a
+calculation to a server.
 
 ## Try a molecule
 
-1. Choose a preset such as **C₆₀ fullerene**, paste XYZ coordinates in
+1. Choose **GFN2-xTB** (the default) or **GFN1-xTB**.
+2. Choose a preset such as **C₆₀ fullerene**, paste XYZ coordinates in
    angstrom, or enter a SMILES such as `CCO`.
-2. For SMILES, select **Generate 3D** to add explicit hydrogens and create a
+3. For SMILES, select **Generate 3D** to add explicit hydrogens and create a
    pre-relaxed conformer.
-3. Select **Compute energy** for a single point with optional analytic forces.
-4. Select **Optimize geometry** to run the demo's L-BFGS adapter and inspect
+4. Select **Compute energy** for a single point with optional analytic forces.
+5. Select **Optimize geometry** to run the demo's L-BFGS adapter and inspect
    its energy trajectory.
+
+On phones, SCC and optimizer controls are grouped under **Advanced settings**
+without changing their values. Completed calculations and failures bring the
+result panel into view; reduced-motion preferences disable animated scrolling.
 
 SMILES conformer generation is bounded to two minutes. Flexible drug-sized
 molecules can take substantially longer than small examples such as ethanol,
@@ -62,10 +68,12 @@ state, elapsed browser time, and an interactive molecular view. Geometry
 optimization additionally exposes the energy trajectory and optimized
 coordinates.
 
-The C60 preset is also a scientific regression for the deployed engine. It
-exercises a 60-atom, 240-orbital neutral singlet and is checked against native
+The C60 preset remains the deployed engine's GFN2-xTB regression. It exercises
+a 60-atom, 240-orbital neutral singlet and is checked against native
 public-C-ABI energy, charge, force, SCC-status, and iteration references in
-both wasm32 and wasm64 CI builds.
+both wasm32 and wasm64 CI builds. A charged H3 structure independently checks
+GFN1-xTB energy and forces against the hash-pinned tblite golden, including a
+GFN2-to-GFN1-to-GFN2 sequence through one Web context.
 
 Browser timing is for interactivity only. It depends on the device, browser,
 download cache, and single-threaded WebAssembly execution through the
@@ -75,6 +83,8 @@ xTBloom's published native benchmark evidence.
 ## Scope
 
 - The deployed engine is the single-threaded CPU backend compiled to wasm32.
+- The method selector exposes GFN1-xTB and GFN2-xTB; GFN2-xTB is the default.
+  This does not add GFN1 CUDA support.
 - Its Web-only LP64 LAPACKE/CBLAS side module uses pinned Eigen 5.0.1 while
   preserving the same loader symbols and public xTBloom C ABI as before.
 - Eigen is downloaded only when building the Web demo, with a fixed archive
@@ -84,10 +94,7 @@ xTBloom's published native benchmark evidence.
 - SMILES-to-3D and L-BFGS optimization are browser-adapter features, not
   stable C ABI capabilities.
 - The demo is for exploration, not a production scientific environment.
-- The browser adapter exposes GFN2-xTB only. CPU GFN1-xTB is available through
-  native APIs and the Python `Calculator`, `BatchCalculator`, ASE, and dpdata
-  interfaces, not through this WebAssembly demo.
-  Solvation, molecular dynamics, Hessians, and lattice/PBC inputs remain
+- Solvation, molecular dynamics, Hessians, and lattice/PBC inputs remain
   unsupported here.
 
 Implementation, build, dependency, and parity details are documented in

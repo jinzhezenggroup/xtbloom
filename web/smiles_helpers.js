@@ -10,7 +10,9 @@ export const OPEN_CHEMLIB_RESOURCES_URL =
 export const MAX_SMILES_LENGTH = 2048;
 export const MAX_WEB_ATOMS = 512;
 
-const GFN2_SYMBOLS = [
+/* The browser-exposed GFN1 and GFN2 parameter sets share the same supported
+ * element range (H through Rn). Keep SMILES validation model-neutral. */
+const GFN_XTB_SYMBOLS = [
   "", "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar",
   "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se", "Br", "Kr",
   "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe",
@@ -73,10 +75,10 @@ export function smilesToGeometry(OCL, smiles, options = {}) {
   }
   for (let atom = 0; atom < inputAtomCount; atom += 1) {
     const atomicNumber = molecule.getAtomicNo(atom);
-    if (!Number.isInteger(atomicNumber) || atomicNumber < 1 || atomicNumber >= GFN2_SYMBOLS.length) {
+    if (!Number.isInteger(atomicNumber) || atomicNumber < 1 || atomicNumber >= GFN_XTB_SYMBOLS.length) {
       throw codedError(
         "smiles_err_element",
-        `GFN2-xTB does not support atomic number ${atomicNumber}`,
+        `GFN-xTB does not support atomic number ${atomicNumber}`,
       );
     }
     if (molecule.getAtomRadical(atom) !== 0) {
@@ -108,10 +110,10 @@ export function smilesToGeometry(OCL, smiles, options = {}) {
   let formalCharge = 0;
   for (let atom = 0; atom < atomCount; atom += 1) {
     const atomicNumber = conformer.getAtomicNo(atom);
-    if (!Number.isInteger(atomicNumber) || atomicNumber < 1 || atomicNumber >= GFN2_SYMBOLS.length) {
+    if (!Number.isInteger(atomicNumber) || atomicNumber < 1 || atomicNumber >= GFN_XTB_SYMBOLS.length) {
       throw codedError(
         "smiles_err_element",
-        `GFN2-xTB does not support atomic number ${atomicNumber}`,
+        `GFN-xTB does not support atomic number ${atomicNumber}`,
       );
     }
     formalCharge += conformer.getAtomCharge(atom);
@@ -152,7 +154,7 @@ export function smilesToGeometry(OCL, smiles, options = {}) {
       throw codedError("smiles_err_coords", `atom ${atom + 1} has non-finite coordinates`);
     }
     lines.push(
-      `${GFN2_SYMBOLS[atomicNumber]} ${coordinates.map((value) => value.toFixed(10)).join(" ")}`,
+      `${GFN_XTB_SYMBOLS[atomicNumber]} ${coordinates.map((value) => value.toFixed(10)).join(" ")}`,
     );
   }
 

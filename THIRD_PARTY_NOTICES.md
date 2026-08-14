@@ -587,6 +587,44 @@ side module inside `xtbloom_web.data`, the five exact upstream license records,
 the four notice-bearing headers above, and the provenance manifest so browser
 recipients can identify and obtain the corresponding source.
 
+## Playwright browser regression tool
+
+Repository: <https://github.com/microsoft/playwright>
+
+License: `Apache-2.0` (`LICENSES/Apache-2.0.txt`).
+
+The rendered Web-demo regression installs exact npm release 1.62.1 of
+`@playwright/test`, `playwright`, and `playwright-core` in developer and CI
+environments only. Playwright also declares optional macOS dependency
+`fsevents` 2.3.2 under the MIT license; its reviewed upstream commit is
+`a7f5d00939b74e141a73131468c4ce48ee0f2197`. The reviewed Playwright release
+commit is
+`26a9e470a7b3c7822084b09fb7f13902c5f37b51`. The three locked npm integrities
+are, respectively,
+`sha512-DTcUc8qii+cpHvtOwggMtBRMjKZHXYWdw8syRYu2vtzuq4Wxphqq4NfCs5Zt44L6mA8rfDfj+PHnxFc/FeK6mQ==`,
+`sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==`,
+and
+`sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==`.
+The optional `fsevents` integrity is
+`sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==`.
+The corresponding npm tarball SHA-256 values are
+`009534220efd98c0361d8c4ee7e3db1ed510ab88a23e98b5081ef1c8fed64965`,
+`1982556a882b246ccb7c16337fab5e4e790292b69f835a2db1011dddc440ed98`,
+`954be1e183d0ddb9748fe0d2d08b0b66a9210c74dd75c397aeb70303b9f08a00`,
+and `e17ade950c193fe09adfc7915fe29ac26166c8782d00e7c3879e7e9de02c5428`
+for `fsevents`.
+
+The locked Playwright metadata selects Chromium/Chrome-for-Testing
+151.0.7922.34 revision 1234, WebKit 26.5 revision 2336, and
+FFmpeg revision 1011. The CI runner downloads those browser-test runtimes
+through Playwright's installer. They remain inside the disposable validation
+environment: no
+Playwright package, `fsevents` package, browser executable, codec binary, or
+browser license payload is vendored into the repository or redistributed in
+source archives, native installs, Python wheels, or the deployed Pages site.
+The browser archives are therefore a CI-only download boundary, not a
+distributed xTBloom dependency.
+
 ## 3Dmol.js
 
 Repository: <https://github.com/3Dmol/3Dmol.js>
@@ -634,10 +672,12 @@ are distributed inside `vendor/3Dmol-min.js`, rather than as separate files:
   pako 1.0.11 records zlib 1.2.8.
 
 `web/package-lock.json` (SHA-256
-`475e2213ac02fbf2d4a8c4fc287b570fc476da2fda9de3f5a72a2554b5716e71`)
-is the reviewed resolution. Every Pages artifact carries the project GPL,
-this notice, the additional permission, the 3Dmol license, all transitive npm
-license texts above, and the parameter-data licenses and provenance manifests.
+`2d35a2618bb734b61c442fb775c0a7a669f800be63f6ac0d029b656598581de6`)
+is the reviewed resolution for both the distributed 3Dmol build input and the
+CI-only Playwright tools described above. Every Pages artifact carries the
+project GPL, this notice, the additional permission, the 3Dmol license, all
+transitive npm license texts above, and the parameter-data licenses and
+provenance manifests.
 
 ## OpenChemLib JS
 

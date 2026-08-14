@@ -194,7 +194,9 @@ exception-oriented control flow.
 GFN2-xTB is implemented on CPU and CUDA. GFN1-xTB is implemented on CPU only;
 CUDA requests return `NOT_SUPPORTED` without output publication. The high-level
 Python calculators, ASE, and dpdata expose GFN1 CPU, while Array API/DLPack,
-PyTorch autograd, and the browser demo remain GFN2-only. ROCm remains reserved.
+and PyTorch autograd remain GFN2-only. The single-threaded CPU/WebAssembly
+browser demo exposes both GFN1 and GFN2 and defaults to GFN2. ROCm remains
+reserved.
 
 xTBloom's ABI-v4 batch descriptor reserves validated native 3D cell and
 periodic-axis input, but native periodic GFN2 execution and the Python
