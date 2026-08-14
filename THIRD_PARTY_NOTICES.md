@@ -325,7 +325,7 @@ GitHub Deployment. The workflow pins the signed v3.5.0 release commit
 that revision, `action.yml` has SHA-256
 `77f3fdafc9ad4e8ff66d8007d3d68bc8b0272f61f33b7e3322e6b318e610c0fb` and
 the executed `dist/deploy/index.js` bundle has SHA-256
-`2a0558e74fbbd8a1080140cf90bade769c9bdadf6f632afd8581c42802616b22`.
+`d876024627f911765a00a7ac611518e1d5939c2678a8392369a39986621eac3d`.
 The action runs only inside the disposable GitHub-hosted deployment job; it is
 not vendored into the repository or redistributed in xTBloom source archives,
 native installs, wheels, or the deployed site.
