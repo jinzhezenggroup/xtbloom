@@ -226,6 +226,38 @@ bool same_bytes(const std::vector<T>& lhs, const std::vector<T>& rhs) {
          (lhs.empty() || std::memcmp(lhs.data(), rhs.data(), lhs.size() * sizeof(T)) == 0);
 }
 
+bool successful_finite_batch(const PublicBatch& request) {
+  return std::all_of(request.statuses.begin(), request.statuses.end(),
+                     [](std::int32_t status) { return status == XTBLOOM_STATUS_SUCCESS; }) &&
+         std::all_of(request.converged.begin(), request.converged.end(),
+                     [](std::uint8_t converged) { return converged == 1u; }) &&
+         std::all_of(request.iterations.begin(), request.iterations.end(),
+                     [](std::int32_t iterations) { return iterations > 0; }) &&
+         std::all_of(request.energies.begin(), request.energies.end(),
+                     [](double value) { return std::isfinite(value); }) &&
+         std::all_of(request.forces.begin(), request.forces.end(),
+                     [](double value) { return std::isfinite(value); }) &&
+         std::all_of(request.atomic_charges.begin(), request.atomic_charges.end(),
+                     [](double value) { return std::isfinite(value); });
+}
+
+constexpr std::uint64_t pair_response_workspace_increment_for_one_system(
+    std::uint64_t atom_count, std::uint64_t shell_count) {
+  /* SystemExecution already contains the inline SccPreconditionerPlan object.
+   * The pair policy adds only its heap-backed metadata plus two copies of the
+   * dense factor, constraint vector, denominator, and lane-enable flag. */
+  constexpr std::uint64_t kTwoEntryInt64OffsetVectors = 7u;
+  const std::uint64_t matrix_elements = shell_count * shell_count;
+  const std::uint64_t mixer_vector_elements = shell_count + 9u * atom_count;
+  const std::uint64_t dynamic_plan_bytes =
+      (2u * kTwoEntryInt64OffsetVectors + shell_count) * sizeof(std::int64_t) +
+      sizeof(std::int32_t) + (mixer_vector_elements + 2u * shell_count) * sizeof(double);
+  const std::uint64_t cache_and_scratch_bytes = 2u * matrix_elements * sizeof(double) +
+                                                2u * shell_count * sizeof(double) +
+                                                2u * sizeof(double) + 2u * sizeof(std::uint8_t);
+  return dynamic_plan_bytes + cache_and_scratch_bytes;
+}
+
 /* Snapshot every caller-owned output so rejected WARM identities can be
  * checked against the public no-publication contract byte for byte. */
 struct PublicOutputImage {
@@ -2727,6 +2759,77 @@ int test_experimental_pairs_policy_is_frozen_per_cpu_context() {
                         &rejected.result) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(rejected_before.matches(rejected));
   CHECK(std::strstr(xtbloom_get_last_error(), kPairsSccEnvironment) != nullptr);
+  CHECK(std::strstr(xtbloom_get_last_error(), "pair-response-v1") != nullptr);
+
+  /* The constrained pair-response experiment is also frozen in the context
+   * identity and supports the same geometry-changing strict WARM protocol. */
+  CHECK(set_pairs_scc_environment("pair-response-v1"));
+  ContextHandle pair_response_context = make_cpu_context(1);
+  CHECK(pair_response_context != nullptr);
+  PublicBatch pair_response = make_repeated_h2_he_batch(2u);
+  pair_response.bind(flags);
+  CHECK(xtbloom_compute(pair_response_context.get(), &pair_response.batch, &pair_response.options,
+                        &pair_response.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(successful_finite_batch(pair_response));
+  pair_response.positions[0] -= 0.005;
+  pair_response.positions[3] += 0.005;
+  pair_response.bind(flags);
+  pair_response.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute(pair_response_context.get(), &pair_response.batch, &pair_response.options,
+                        &pair_response.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(successful_finite_batch(pair_response));
+
+  /* A caller-owned b shift has no dq derivative and therefore must not disable
+   * the pair operator. An explicitly present zero b field follows the same
+   * numerical path as the molecular calculation; only the public force flag
+   * records that the caller owns external-operator coordinate derivatives. */
+  ContextHandle molecular_pair_context = make_cpu_context(1);
+  ContextHandle shift_only_pair_context = make_cpu_context(1);
+  CHECK(molecular_pair_context != nullptr);
+  CHECK(shift_only_pair_context != nullptr);
+  PublicBatch molecular_pair = slice_system(make_h2_he_batch(), 0u);
+  PublicBatch shift_only_pair = molecular_pair;
+  shift_only_pair.periodic_shifts.assign(shift_only_pair.atomic_numbers.size(), 0.0);
+  molecular_pair.bind(flags);
+  shift_only_pair.bind(flags);
+  CHECK(xtbloom_compute(molecular_pair_context.get(), &molecular_pair.batch,
+                        &molecular_pair.options, &molecular_pair.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_compute(shift_only_pair_context.get(), &shift_only_pair.batch,
+                        &shift_only_pair.options,
+                        &shift_only_pair.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(successful_finite_batch(molecular_pair));
+  CHECK(successful_finite_batch(shift_only_pair));
+  CHECK(molecular_pair.energies == shift_only_pair.energies);
+  CHECK(molecular_pair.forces == shift_only_pair.forces);
+  CHECK(molecular_pair.atomic_charges == shift_only_pair.atomic_charges);
+  CHECK(molecular_pair.iterations == shift_only_pair.iterations);
+  CHECK(molecular_pair.converged == shift_only_pair.converged);
+  CHECK(molecular_pair.statuses == shift_only_pair.statuses);
+  CHECK(molecular_pair.result.flags == 0u);
+  CHECK(shift_only_pair.result.flags ==
+        XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES);
+
+  /* Adding even a zero A matrix changes whether the pair Jacobian is complete.
+   * Preserve that distinction in strict WARM identity instead of reusing the
+   * b-only checkpoint under a different residual map. */
+  PublicBatch with_response = shift_only_pair;
+  with_response.response_offsets = {0, 4};
+  with_response.response_matrix.assign(4u, 0.0);
+  with_response.bind(flags);
+  with_response.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(warm_rejection_is_atomic(shift_only_pair_context.get(), with_response));
+  with_response.options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+  CHECK(xtbloom_compute(shift_only_pair_context.get(), &with_response.batch, &with_response.options,
+                        &with_response.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(successful_finite_batch(with_response));
+  CHECK(with_response.result.flags == XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES);
+  with_response.positions[0] -= 0.002;
+  with_response.positions[3] += 0.002;
+  with_response.bind(flags);
+  with_response.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  CHECK(xtbloom_compute(shift_only_pair_context.get(), &with_response.batch, &with_response.options,
+                        &with_response.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(successful_finite_batch(with_response));
 
   /* Fixed plans inherit the creating context's frozen policy as well. */
   CHECK(set_pairs_scc_environment("controller"));
@@ -2738,9 +2841,48 @@ int test_experimental_pairs_policy_is_frozen_per_cpu_context() {
   CHECK(xtbloom_plan_create(frozen_controller.get(), &planned.batch, &planned.options, &raw_plan) ==
         XTBLOOM_STATUS_SUCCESS);
   PlanHandle plan(raw_plan);
+  xtbloom_workspace_query_t controller_query{};
+  CHECK(xtbloom_workspace_query_init(&controller_query, sizeof(controller_query)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  controller_query.compute_flags = flags;
+  CHECK(xtbloom_plan_query_workspace(plan.get(), &controller_query) == XTBLOOM_STATUS_SUCCESS);
   CHECK(set_pairs_scc_environment("invalid-policy"));
   CHECK(xtbloom_plan_compute(plan.get(), &planned.batch, &planned.options, &planned.result) ==
         XTBLOOM_STATUS_SUCCESS);
+
+  /* Pair-response plans retain their geometry cache, factorization buffers,
+   * and plan metadata in the workspace query. The count is stable across
+   * compute and exceeds the otherwise identical controller plan. */
+  CHECK(set_pairs_scc_environment("pair-response-v1"));
+  ContextHandle pair_plan_context = make_cpu_context(1);
+  CHECK(pair_plan_context != nullptr);
+  PublicBatch pair_planned = make_h2_he_batch();
+  pair_planned.bind(flags);
+  xtbloom_plan_t* raw_pair_plan = nullptr;
+  CHECK(xtbloom_plan_create(pair_plan_context.get(), &pair_planned.batch, &pair_planned.options,
+                            &raw_pair_plan) == XTBLOOM_STATUS_SUCCESS);
+  PlanHandle pair_plan(raw_pair_plan);
+  xtbloom_workspace_query_t pair_query_before{};
+  CHECK(xtbloom_workspace_query_init(&pair_query_before, sizeof(pair_query_before)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  pair_query_before.compute_flags = flags;
+  CHECK(xtbloom_plan_query_workspace(pair_plan.get(), &pair_query_before) ==
+        XTBLOOM_STATUS_SUCCESS);
+  /* The generated GFN2 basis has one shell per H and two shells for He. */
+  const std::uint64_t expected_pair_increment =
+      pair_response_workspace_increment_for_one_system(2u, 2u) +
+      pair_response_workspace_increment_for_one_system(1u, 2u);
+  CHECK(pair_query_before.host_required_bytes - controller_query.host_required_bytes ==
+        expected_pair_increment);
+  CHECK(xtbloom_plan_compute(pair_plan.get(), &pair_planned.batch, &pair_planned.options,
+                             &pair_planned.result) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(successful_finite_batch(pair_planned));
+  xtbloom_workspace_query_t pair_query_after{};
+  CHECK(xtbloom_workspace_query_init(&pair_query_after, sizeof(pair_query_after)) ==
+        XTBLOOM_STATUS_SUCCESS);
+  pair_query_after.compute_flags = flags;
+  CHECK(xtbloom_plan_query_workspace(pair_plan.get(), &pair_query_after) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(pair_query_after.host_required_bytes == pair_query_before.host_required_bytes);
   return 0;
 }
 

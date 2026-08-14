@@ -29,6 +29,7 @@ enum class SccAccelerationPolicy : std::uint8_t {
   kOff = 0,
   kController = 1,
   kLocalV1 = 2,
+  kPairResponseV1 = 3,
 };
 
 inline constexpr std::size_t kSccDriverWorkspaceAlignment = 64u;
@@ -127,6 +128,7 @@ struct SccDriverGeometryView {
   MullikenIntegralView integrals;
   ES2GeometryCache es2_cache;
   AES2GeometryCache aes2_cache;
+  SccPairResponseGeometryCache pair_response_cache;
   D4GeometryCache d4_cache;
   std::uint64_t geometry_generation = 0u;
 

@@ -271,6 +271,7 @@ struct Fixture {
   SccMixerPlan mixer_plan;
   D4Plan d4_plan;
   PeriodicEmbeddingPlan periodic_plan;
+  SccPreconditionerPlan pair_response_plan;
   SccDriverPlan driver_plan;
 
   std::vector<double> periodic_shifts;
@@ -286,6 +287,16 @@ struct Fixture {
   std::unique_ptr<AlignedBuffer> es2_scratch_storage;
   ES2GeometryCache es2_cache;
   ES2Workspace es2_scratch;
+  std::vector<double> pair_response_factors;
+  std::vector<double> pair_response_factor_scratch;
+  std::vector<double> pair_response_constraints;
+  std::vector<double> pair_response_constraint_scratch;
+  std::vector<double> pair_response_denominators;
+  std::vector<double> pair_response_denominator_scratch;
+  std::vector<std::uint8_t> pair_response_enabled;
+  std::vector<std::uint8_t> pair_response_enabled_scratch;
+  SccPairResponseWorkspace pair_response_workspace;
+  SccPairResponseGeometryCache pair_response_cache;
   std::unique_ptr<AlignedBuffer> aes2_storage;
   std::unique_ptr<AlignedBuffer> aes2_scratch_storage;
   AES2GeometryCache aes2_cache;
@@ -651,6 +662,11 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
                                 error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
+  if (acceleration_policy == SccAccelerationPolicy::kPairResponseV1 &&
+      make_scc_preconditioner_plan(fixture.wavefunction_layout, fixture.es2_plan, fixture.aes2_plan,
+                                   fixture.pair_response_plan, error) != XTBLOOM_STATUS_SUCCESS) {
+    return false;
+  }
   xtbloom_status_t driver_status = XTBLOOM_STATUS_SUCCESS;
   if (acceleration_policy != SccAccelerationPolicy::kOff) {
     if (use_compatibility_driver_overload || use_nullable_driver_overload) {
@@ -731,6 +747,45 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
           fixture.es2_cache, error) != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
+  if (acceleration_policy == SccAccelerationPolicy::kPairResponseV1) {
+    const std::size_t pair_matrix_elements =
+        static_cast<std::size_t>(fixture.es2_plan.total_matrix_elements());
+    const std::size_t pair_shell_elements =
+        static_cast<std::size_t>(fixture.es2_plan.total_shells());
+    const std::size_t pair_batch = static_cast<std::size_t>(batch_size);
+    fixture.pair_response_factors.resize(pair_matrix_elements);
+    fixture.pair_response_factor_scratch.resize(pair_matrix_elements);
+    fixture.pair_response_constraints.resize(pair_shell_elements);
+    fixture.pair_response_constraint_scratch.resize(pair_shell_elements);
+    fixture.pair_response_denominators.resize(pair_batch);
+    fixture.pair_response_denominator_scratch.resize(pair_batch);
+    fixture.pair_response_enabled.resize(pair_batch);
+    fixture.pair_response_enabled_scratch.resize(pair_batch);
+    fixture.pair_response_workspace = {
+        fixture.pair_response_factor_scratch.data(),      fixture.es2_plan.total_matrix_elements(),
+        fixture.pair_response_constraint_scratch.data(),  fixture.es2_plan.total_shells(),
+        fixture.pair_response_denominator_scratch.data(), batch_size,
+        fixture.pair_response_enabled_scratch.data(),     batch_size,
+    };
+    fixture.pair_response_cache = {
+        fixture.pair_response_factors.data(),
+        fixture.es2_plan.total_matrix_elements(),
+        fixture.pair_response_constraints.data(),
+        fixture.es2_plan.total_shells(),
+        fixture.pair_response_denominators.data(),
+        batch_size,
+        fixture.pair_response_enabled.data(),
+        batch_size,
+        0u,
+        nullptr,
+    };
+    if (update_scc_pair_response_geometry_cache_cpu(
+            fixture.pair_response_plan, fixture.es2_cache, enable_periodic_embedding,
+            fixture.pair_response_workspace, fixture.pair_response_cache,
+            error) != XTBLOOM_STATUS_SUCCESS) {
+      return false;
+    }
+  }
 
   fixture.aes2_storage = std::make_unique<AlignedBuffer>(
       static_cast<std::size_t>(fixture.aes2_plan.pair_data_elements()) * sizeof(double));
@@ -795,6 +850,9 @@ bool make_fixture(std::int64_t batch_size, Fixture& fixture, std::string& error,
       fixture.integral_plan.total_matrix_elements, fixture.mulliken_plan.identity()};
   fixture.geometry.es2_cache = fixture.es2_cache;
   fixture.geometry.aes2_cache = fixture.aes2_cache;
+  if (acceleration_policy == SccAccelerationPolicy::kPairResponseV1) {
+    fixture.geometry.pair_response_cache = fixture.pair_response_cache;
+  }
   fixture.geometry.geometry_generation = 1u;
   if (enable_d4) {
     const std::size_t pair_elements =
@@ -1413,10 +1471,10 @@ int test_local_v1_restart_commits_only_the_active_ragged_lane() {
   SccMixerState reference_state = fixture.mixer_state;
   reference_state.current_inputs = fixture.mixer_state.previous_inputs;
   SccResidualDiagnostics diagnostics;
-  CHECK(prepare_scc_residual_system_cpu(reference_preconditioner,
-                                        SccResidualPolicy::kControllerOnly, 1, fixture.wavefunction,
-                                        reference_state, fixture.driver_scratch.mixer_workspace,
-                                        diagnostics, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(prepare_scc_residual_system_cpu(
+            reference_preconditioner, SccResidualPolicy::kControllerOnly, 1, fixture.wavefunction,
+            SccPairResponseGeometryCache{}, reference_state, fixture.driver_scratch.mixer_workspace,
+            diagnostics, error) == XTBLOOM_STATUS_SUCCESS);
   const std::size_t vector_begin = static_cast<std::size_t>(fixture.mixer_plan.vector_offsets()[1]);
   const std::size_t dimension = static_cast<std::size_t>(fixture.mixer_plan.vector_offsets()[2] -
                                                          fixture.mixer_plan.vector_offsets()[1]);
@@ -1426,9 +1484,9 @@ int test_local_v1_restart_commits_only_the_active_ragged_lane() {
   CHECK(std::equal(raw_residual.begin(), raw_residual.end(),
                    fixture.mixer_state.previous_residuals + vector_begin));
   CHECK(prepare_scc_residual_system_cpu(reference_preconditioner, SccResidualPolicy::kLocalV1, 1,
-                                        fixture.wavefunction, reference_state,
-                                        fixture.driver_scratch.mixer_workspace, diagnostics,
-                                        error) == XTBLOOM_STATUS_SUCCESS);
+                                        fixture.wavefunction, SccPairResponseGeometryCache{},
+                                        reference_state, fixture.driver_scratch.mixer_workspace,
+                                        diagnostics, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(!std::equal(raw_residual.begin(), raw_residual.end(),
                     fixture.driver_scratch.mixer_workspace.residual));
   return 0;
@@ -2318,6 +2376,219 @@ int test_experimental_controller_and_local_v1_driver_paths() {
                     local.mixer_state.current_inputs +
                         static_cast<std::size_t>(local.mixer_plan.total_vector_elements()),
                     baseline.mixer_state.current_inputs));
+
+  Fixture pair_response;
+  CHECK(make_fixture(1, pair_response, error, 2u, 1.0e100, false, &topology, false, false, 1.0e100,
+                     0.0, false, SccAccelerationPolicy::kPairResponseV1));
+  CHECK(pair_response.driver_plan.acceleration_policy() == SccAccelerationPolicy::kPairResponseV1);
+  CHECK(pair_response.pair_response_enabled == std::vector<std::uint8_t>{1u});
+  diagonalizations.store(0, std::memory_order_relaxed);
+  allocation_test::count.store(0u, std::memory_order_relaxed);
+  allocation_test::enabled.store(true, std::memory_order_relaxed);
+  const xtbloom_status_t pair_status = iterate_scc_driver_batch_cpu(
+      pair_response.driver_plan, pair_response.geometry, backend(), pair_response.overlap_cache,
+      pair_response.wavefunction, pair_response.mixer_state, pair_response.driver_state,
+      pair_response.driver_scratch, error);
+  allocation_test::enabled.store(false, std::memory_order_relaxed);
+  CHECK(pair_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(allocation_test::count.load(std::memory_order_relaxed) == 0u);
+  CHECK(diagonalizations.load(std::memory_order_relaxed) == 1);
+  CHECK(std::isfinite(pair_response.driver_state.free_energies[0]));
+  CHECK(pair_response.mixer_state.residual_rms[0] == baseline.mixer_state.residual_rms[0]);
+  CHECK(!pair_response.driver_state.controller_states[0].fallback_to_baseline);
+  CHECK(!std::equal(pair_response.mixer_state.current_inputs,
+                    pair_response.mixer_state.current_inputs +
+                        static_cast<std::size_t>(pair_response.mixer_plan.total_vector_elements()),
+                    baseline.mixer_state.current_inputs));
+
+  Fixture periodic_pair_response;
+  CHECK(make_fixture(1, periodic_pair_response, error, 2u, 1.0e100, true, &topology, false, false,
+                     1.0e100, 0.0, false, SccAccelerationPolicy::kPairResponseV1));
+  CHECK(periodic_pair_response.pair_response_enabled == std::vector<std::uint8_t>{0u});
+  CHECK(iterate_scc_driver_batch_cpu(
+            periodic_pair_response.driver_plan, periodic_pair_response.geometry, backend(),
+            periodic_pair_response.overlap_cache, periodic_pair_response.wavefunction,
+            periodic_pair_response.mixer_state, periodic_pair_response.driver_state,
+            periodic_pair_response.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(periodic_pair_response.driver_state.controller_states[0].fallback_to_baseline);
+  CHECK(periodic_pair_response.driver_state.controller_states[0].restart_count == 1u);
+  return 0;
+}
+
+int test_pair_response_geometry_cache_validation_is_transactional() {
+  const FixtureTopology topology{{0, 2}, {6, 8}, {-1.1, 0.0, 0.0, 1.1, 0.0, 0.0}, {0.0}, {}, {}};
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(1, fixture, error, 3u, 1.0e-12, false, &topology, false, false, 1.0e100, 0.0,
+                     false, SccAccelerationPolicy::kPairResponseV1));
+  const std::vector<unsigned char> wavefunction_before(
+      static_cast<unsigned char*>(fixture.wavefunction_storage->data),
+      static_cast<unsigned char*>(fixture.wavefunction_storage->data) +
+          fixture.wavefunction_storage->size);
+  const std::vector<unsigned char> mixer_before(
+      static_cast<unsigned char*>(fixture.mixer_state_storage->data),
+      static_cast<unsigned char*>(fixture.mixer_state_storage->data) +
+          fixture.mixer_state_storage->size);
+  const std::vector<unsigned char> state_before(
+      static_cast<unsigned char*>(fixture.driver_state_storage->data),
+      static_cast<unsigned char*>(fixture.driver_state_storage->data) +
+          fixture.driver_state_storage->size);
+  const std::vector<unsigned char> scratch_before(
+      static_cast<unsigned char*>(fixture.driver_scratch_storage->data),
+      static_cast<unsigned char*>(fixture.driver_scratch_storage->data) +
+          fixture.driver_scratch_storage->size);
+  const auto rejected_without_mutation = [&](const SccDriverGeometryView& malformed) {
+    const xtbloom_status_t status = iterate_scc_driver_batch_cpu(
+        fixture.driver_plan, malformed, backend(), fixture.overlap_cache, fixture.wavefunction,
+        fixture.mixer_state, fixture.driver_state, fixture.driver_scratch, error);
+    return status == XTBLOOM_STATUS_INVALID_ARGUMENT &&
+           std::memcmp(wavefunction_before.data(), fixture.wavefunction_storage->data,
+                       wavefunction_before.size()) == 0 &&
+           std::memcmp(mixer_before.data(), fixture.mixer_state_storage->data,
+                       mixer_before.size()) == 0 &&
+           std::memcmp(state_before.data(), fixture.driver_state_storage->data,
+                       state_before.size()) == 0 &&
+           std::memcmp(scratch_before.data(), fixture.driver_scratch_storage->data,
+                       scratch_before.size()) == 0;
+  };
+
+  SccDriverGeometryView malformed = fixture.geometry;
+  ++malformed.pair_response_cache.geometry_generation;
+  CHECK(rejected_without_mutation(malformed));
+  malformed = fixture.geometry;
+  malformed.pair_response_cache.plan_identity = nullptr;
+  CHECK(rejected_without_mutation(malformed));
+  malformed = fixture.geometry;
+  --malformed.pair_response_cache.factor_elements;
+  CHECK(rejected_without_mutation(malformed));
+  malformed = fixture.geometry;
+  --malformed.pair_response_cache.constraint_elements;
+  CHECK(rejected_without_mutation(malformed));
+  malformed = fixture.geometry;
+  --malformed.pair_response_cache.denominator_elements;
+  CHECK(rejected_without_mutation(malformed));
+  malformed = fixture.geometry;
+  --malformed.pair_response_cache.enabled_elements;
+  CHECK(rejected_without_mutation(malformed));
+  malformed = fixture.geometry;
+  malformed.pair_response_cache.cholesky_factors = reinterpret_cast<double*>(
+      reinterpret_cast<std::uintptr_t>(malformed.pair_response_cache.cholesky_factors) + 1u);
+  CHECK(rejected_without_mutation(malformed));
+  malformed = fixture.geometry;
+  malformed.pair_response_cache.cholesky_factors =
+      static_cast<double*>(fixture.driver_state.workspace_base);
+  CHECK(rejected_without_mutation(malformed));
+
+  Fixture disabled;
+  CHECK(make_fixture(1, disabled, error, 3u, 1.0e-12, false, &topology));
+  SccDriverGeometryView unexpected = disabled.geometry;
+  unexpected.pair_response_cache = fixture.pair_response_cache;
+  const double disabled_qsh_before = disabled.wavefunction.qsh[0];
+  CHECK(iterate_scc_driver_batch_cpu(
+            disabled.driver_plan, unexpected, backend(), disabled.overlap_cache,
+            disabled.wavefunction, disabled.mixer_state, disabled.driver_state,
+            disabled.driver_scratch, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(disabled.wavefunction.qsh[0] == disabled_qsh_before);
+  CHECK(disabled.driver_state.iterations[0] == 0u);
+  return 0;
+}
+
+int test_pair_response_fallback_restarts_only_the_active_ragged_lane() {
+  const FixtureTopology topology{
+      {0, 1, 3}, {2, 6, 8}, {0.0, 0.0, 0.0, -1.1, 0.0, 0.0, 1.1, 0.0, 0.0}, {0.0, 0.0}, {}, {}};
+  Fixture fixture;
+  std::string error;
+  CHECK(make_fixture(2, fixture, error, 8u, 1.0e-12, false, &topology, false, false, 1.0e100, 0.0,
+                     false, SccAccelerationPolicy::kPairResponseV1));
+  CHECK(fixture.pair_response_enabled == std::vector<std::uint8_t>({1u, 1u}));
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.converged[0] == 1u);
+  CHECK(fixture.driver_state.converged[1] == 0u);
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.converged[0] == 1u);
+  CHECK(fixture.driver_state.converged[1] == 0u);
+  CHECK(fixture.mixer_state.history_ages[1] >= 2u);
+  CHECK(fixture.driver_state.controller_states[1].restart_count == 0u);
+
+  const MixerSystemSnapshot peer_before = snapshot_mixer_system(fixture, 0u);
+  const WavefunctionSystemSnapshot peer_wavefunction_before =
+      snapshot_wavefunction_system(fixture, 0u);
+  const auto peer_controller_before = fixture.driver_state.controller_states[0];
+  const MixerSystemSnapshot pair_history_before = snapshot_mixer_system(fixture, 1u);
+
+  const std::size_t shell_begin =
+      static_cast<std::size_t>(fixture.es2_plan.batch_shell_offsets()[1]);
+  const std::size_t shell_end = static_cast<std::size_t>(fixture.es2_plan.batch_shell_offsets()[2]);
+  const std::size_t shell_count = shell_end - shell_begin;
+  const std::size_t matrix_begin = static_cast<std::size_t>(fixture.es2_plan.matrix_offsets()[1]);
+  std::size_t coupled_column = 1u;
+  while (coupled_column < shell_count &&
+         fixture.es2_plan.shell_to_atom()[shell_begin] ==
+             fixture.es2_plan.shell_to_atom()[shell_begin + coupled_column]) {
+    ++coupled_column;
+  }
+  CHECK(coupled_column < shell_count);
+  double* const es2_matrix = static_cast<double*>(fixture.es2_storage->data);
+  const double diagonal =
+      fixture.es2_plan.shell_hardness()[shell_begin] / xtbloom::detail::gfn2::kSccPairResponseScale;
+  es2_matrix[matrix_begin + coupled_column] = 2.0 * diagonal;
+  es2_matrix[matrix_begin + coupled_column * shell_count] = 2.0 * diagonal;
+
+  const std::size_t first_factor_end =
+      static_cast<std::size_t>(fixture.es2_plan.matrix_offsets()[1]);
+  const std::size_t first_constraint_end = shell_begin;
+  const std::vector<double> first_factors_before(
+      fixture.pair_response_factors.begin(),
+      fixture.pair_response_factors.begin() + first_factor_end);
+  const std::vector<double> first_constraints_before(
+      fixture.pair_response_constraints.begin(),
+      fixture.pair_response_constraints.begin() + first_constraint_end);
+  const double first_denominator_before = fixture.pair_response_denominators[0];
+  CHECK(update_scc_pair_response_geometry_cache_cpu(
+            fixture.pair_response_plan, fixture.es2_cache, false, fixture.pair_response_workspace,
+            fixture.pair_response_cache, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.pair_response_enabled == std::vector<std::uint8_t>({1u, 0u}));
+  CHECK(std::equal(first_factors_before.begin(), first_factors_before.end(),
+                   fixture.pair_response_factors.begin()));
+  CHECK(std::equal(first_constraints_before.begin(), first_constraints_before.end(),
+                   fixture.pair_response_constraints.begin()));
+  CHECK(fixture.pair_response_denominators[0] == first_denominator_before);
+
+  fixture.driver_state.controller_states[1].contraction_count = 5u;
+  fixture.driver_state.controller_states[1].stagnation_count = 6u;
+  fixture.driver_state.controller_states[1].two_cycle_count = 7u;
+  fixture.driver_state.controller_states[1].cooldown_remaining = 2u;
+  CHECK(iterate_scc_driver_batch_cpu(fixture.driver_plan, fixture.geometry, backend(),
+                                     fixture.overlap_cache, fixture.wavefunction,
+                                     fixture.mixer_state, fixture.driver_state,
+                                     fixture.driver_scratch, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(fixture.driver_state.controller_states[1].fallback_to_baseline);
+  CHECK(fixture.driver_state.controller_states[1].restart_count == 1u);
+  CHECK(fixture.driver_state.controller_states[1].contraction_count == 0u);
+  CHECK(fixture.driver_state.controller_states[1].stagnation_count == 0u);
+  CHECK(fixture.driver_state.controller_states[1].two_cycle_count == 0u);
+  CHECK(fixture.driver_state.controller_states[1].cooldown_remaining == 0u);
+  CHECK(fixture.mixer_state.history_ages[1] == 1u);
+  CHECK(fixture.mixer_state.restart_counts[1] == pair_history_before.restart_counts);
+  const std::size_t vector_begin = static_cast<std::size_t>(fixture.mixer_plan.vector_offsets()[1]);
+  const std::size_t dimension = static_cast<std::size_t>(fixture.mixer_plan.vector_offsets()[2] -
+                                                         fixture.mixer_plan.vector_offsets()[1]);
+  CHECK(std::equal(fixture.driver_scratch.mixer_workspace.residual,
+                   fixture.driver_scratch.mixer_workspace.residual + dimension,
+                   fixture.mixer_state.previous_residuals + vector_begin));
+  CHECK(!std::equal(pair_history_before.previous_residuals.begin(),
+                    pair_history_before.previous_residuals.end(),
+                    fixture.mixer_state.previous_residuals + vector_begin));
+  CHECK(mixer_snapshots_equal(peer_before, snapshot_mixer_system(fixture, 0u)));
+  CHECK(wavefunction_snapshots_equal(peer_wavefunction_before,
+                                     snapshot_wavefunction_system(fixture, 0u)));
+  CHECK(controller_states_equal(peer_controller_before, fixture.driver_state.controller_states[0]));
   return 0;
 }
 
@@ -2412,6 +2683,14 @@ int main() {
     return status;
   }
   if (const int status = test_structural_failure_atomicity_and_zero_allocation(); status != 0) {
+    return status;
+  }
+  if (const int status = test_pair_response_geometry_cache_validation_is_transactional();
+      status != 0) {
+    return status;
+  }
+  if (const int status = test_pair_response_fallback_restarts_only_the_active_ragged_lane();
+      status != 0) {
     return status;
   }
   return test_experimental_controller_and_local_v1_driver_paths();

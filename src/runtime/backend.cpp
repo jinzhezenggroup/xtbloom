@@ -29,6 +29,9 @@ Gfn2CpuContextPolicy capture_gfn2_cpu_policy() noexcept {
   if (std::strcmp(value, "local-v1") == 0) {
     return {2u, true};
   }
+  if (std::strcmp(value, "pair-response-v1") == 0) {
+    return {3u, true};
+  }
   return {0u, false};
 }
 

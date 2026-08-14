@@ -70,7 +70,7 @@ struct FrozenPairsSccPolicy {
 };
 
 FrozenPairsSccPolicy make_frozen_pairs_scc_policy(std::uint8_t encoded, bool valid) noexcept {
-  if (!valid || encoded > static_cast<std::uint8_t>(SccAccelerationPolicy::kLocalV1)) {
+  if (!valid || encoded > static_cast<std::uint8_t>(SccAccelerationPolicy::kPairResponseV1)) {
     return {SccAccelerationPolicy::kOff, false};
   }
   return {static_cast<SccAccelerationPolicy>(encoded), true};
@@ -578,6 +578,7 @@ struct SystemKey {
   std::int32_t spin_channels = 1;
   std::int64_t point_count = 0;
   bool periodic_enabled = false;
+  bool periodic_response_enabled = false;
   /* Uniform external electric field in atomic units. Presence is recorded
    * separately because an explicit zero field remains part of the interaction
    * set and therefore differs from no attachment for strict WARM identity. */
@@ -600,6 +601,7 @@ struct SystemKey {
            lhs.unpaired_electrons == rhs.unpaired_electrons &&
            lhs.spin_channels == rhs.spin_channels && lhs.point_count == rhs.point_count &&
            lhs.periodic_enabled == rhs.periodic_enabled &&
+           lhs.periodic_response_enabled == rhs.periodic_response_enabled &&
            lhs.field_attached == rhs.field_attached && lhs.field == rhs.field &&
            lhs.compute_flags == rhs.compute_flags &&
            lhs.maximum_iterations == rhs.maximum_iterations &&
@@ -652,6 +654,7 @@ void make_system_keys(const HostRequest& request, const xtbloom_compute_options_
     key.spin_channels = request.spin_channels[index];
     key.point_count = point_end - point_begin;
     key.periodic_enabled = periodic_enabled;
+    key.periodic_response_enabled = request.response_enabled;
     key.field_attached = request.field_attached_by_system[index] != 0u;
     key.field = request.field_by_system[index];
     key.compute_flags = options.flags;
@@ -675,7 +678,9 @@ bool same_prepared_layout(const SystemKey& lhs, const SystemKey& rhs) {
   return lhs.atomic_numbers == rhs.atomic_numbers && lhs.molecular_charge == rhs.molecular_charge &&
          lhs.unpaired_electrons == rhs.unpaired_electrons &&
          lhs.spin_channels == rhs.spin_channels && lhs.point_count == rhs.point_count &&
-         lhs.periodic_enabled == rhs.periodic_enabled && lhs.compute_flags == rhs.compute_flags &&
+         lhs.periodic_enabled == rhs.periodic_enabled &&
+         lhs.periodic_response_enabled == rhs.periodic_response_enabled &&
+         lhs.compute_flags == rhs.compute_flags &&
          lhs.maximum_iterations == rhs.maximum_iterations &&
          lhs.charge_tolerance == rhs.charge_tolerance &&
          lhs.energy_tolerance == rhs.energy_tolerance &&
@@ -737,6 +742,7 @@ struct SystemExecution {
   bool d4_enabled = false;
   ExternalPointChargePlan external;
   PeriodicEmbeddingPlan periodic;
+  SccPreconditionerPlan pair_response_plan;
   SccDriverPlan driver;
 
   /* Optional intra-system parallel dispatch for a single-system batch. Set by
@@ -767,6 +773,17 @@ struct SystemExecution {
   std::vector<double> es2_gradient_scratch;
   ES2Workspace es2_workspace;
   ES2GeometryCache es2_cache;
+
+  std::vector<double> pair_response_factors;
+  std::vector<double> pair_response_factor_scratch;
+  std::vector<double> pair_response_constraints;
+  std::vector<double> pair_response_constraint_scratch;
+  std::vector<double> pair_response_denominators;
+  std::vector<double> pair_response_denominator_scratch;
+  std::vector<std::uint8_t> pair_response_enabled;
+  std::vector<std::uint8_t> pair_response_enabled_scratch;
+  SccPairResponseWorkspace pair_response_workspace;
+  SccPairResponseGeometryCache pair_response_cache;
 
   std::vector<double> aes2_pairs;
   std::vector<double> aes2_pair_scratch;
@@ -918,6 +935,11 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_aes2_plan(basis, key.atomic_numbers.data(), aes2, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (key.acceleration_policy == SccAccelerationPolicy::kPairResponseV1) {
+    status =
+        make_scc_preconditioner_plan(wavefunction_layout, es2, aes2, pair_response_plan, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  }
   status = make_mulliken_plan(basis, integrals, wavefunction_layout, mulliken, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_eigensolver_plan(wavefunction_layout, eigensolver, error);
@@ -978,6 +1000,35 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
                    es2_shell_scratch.data(),    es2.total_shells(),
                    es2_batch_scratch.data(),    1,
                    es2_gradient_scratch.data(), atoms * 3};
+
+  if (key.acceleration_policy == SccAccelerationPolicy::kPairResponseV1) {
+    pair_response_factors.resize(es2_matrix.size());
+    pair_response_factor_scratch.resize(es2_matrix.size());
+    pair_response_constraints.resize(shells);
+    pair_response_constraint_scratch.resize(shells);
+    pair_response_denominators.resize(1u);
+    pair_response_denominator_scratch.resize(1u);
+    pair_response_enabled.resize(1u);
+    pair_response_enabled_scratch.resize(1u);
+    pair_response_workspace = {
+        pair_response_factor_scratch.data(),      es2.total_matrix_elements(),
+        pair_response_constraint_scratch.data(),  es2.total_shells(),
+        pair_response_denominator_scratch.data(), 1,
+        pair_response_enabled_scratch.data(),     1,
+    };
+    pair_response_cache = {
+        pair_response_factors.data(),
+        es2.total_matrix_elements(),
+        pair_response_constraints.data(),
+        es2.total_shells(),
+        pair_response_denominators.data(),
+        1,
+        pair_response_enabled.data(),
+        1,
+        0u,
+        nullptr,
+    };
+  }
 
   aes2_pairs.resize(static_cast<std::size_t>(aes2.pair_data_elements()));
   aes2_pair_scratch.resize(aes2_pairs.size());
@@ -1116,10 +1167,11 @@ std::size_t sum_double_vectors(std::initializer_list<const std::vector<double>*>
 }  // namespace
 
 std::size_t SystemExecution::resident_bytes() const noexcept {
-  const std::size_t small_vectors = vector_bytes(key.atomic_numbers) + vector_bytes(atom_offsets) +
-                                    vector_bytes(point_offsets) + vector_bytes(molecular_charges) +
-                                    vector_bytes(unpaired_electrons) + vector_bytes(spin_channels) +
-                                    vector_bytes(periodic_status);
+  const std::size_t small_vectors =
+      vector_bytes(key.atomic_numbers) + vector_bytes(atom_offsets) + vector_bytes(point_offsets) +
+      vector_bytes(molecular_charges) + vector_bytes(unpaired_electrons) +
+      vector_bytes(spin_channels) + vector_bytes(periodic_status) +
+      vector_bytes(pair_response_enabled) + vector_bytes(pair_response_enabled_scratch);
   const std::size_t basis_plan_vectors = common::basis_plan_resident_bytes(basis);
   const std::size_t direct_plan_vectors =
       basis_plan_vectors + vector_bytes(integrals.matrix_offsets) +
@@ -1160,10 +1212,12 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       vector_bytes(wavefunction_layout.dipole.system_offsets) +
       vector_bytes(wavefunction_layout.quadrupole.system_offsets) +
       vector_bytes(wavefunction_layout.energy_weighted_density.system_offsets);
-  const std::size_t opaque_plan_storage = es2.resident_bytes() + aes2.resident_bytes() +
-                                          mulliken.resident_bytes() + eigensolver.resident_bytes() +
-                                          mixer.resident_bytes() + d4.resident_bytes() +
-                                          periodic.resident_bytes() + driver.resident_bytes();
+  const std::size_t pair_response_plan_storage =
+      pair_response_plan.resident_bytes() - sizeof(SccPreconditionerPlan);
+  const std::size_t opaque_plan_storage =
+      es2.resident_bytes() + aes2.resident_bytes() + mulliken.resident_bytes() +
+      eigensolver.resident_bytes() + mixer.resident_bytes() + d4.resident_bytes() +
+      periodic.resident_bytes() + driver.resident_bytes() + pair_response_plan_storage;
   const std::size_t planar_vectors = sum_double_vectors({
       &positions,
       &point_positions,
@@ -1183,6 +1237,12 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
       &es2_shell_scratch,
       &es2_batch_scratch,
       &es2_gradient_scratch,
+      &pair_response_factors,
+      &pair_response_factor_scratch,
+      &pair_response_constraints,
+      &pair_response_constraint_scratch,
+      &pair_response_denominators,
+      &pair_response_denominator_scratch,
       &aes2_pairs,
       &aes2_pair_scratch,
       &aes2_potential_scratch,
@@ -1253,6 +1313,12 @@ xtbloom_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend
                                           geometry_generation, aes2_pairs.data(), aes2_pairs.size(),
                                           aes2_workspace, aes2_cache, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (key.acceleration_policy == SccAccelerationPolicy::kPairResponseV1) {
+    status = update_scc_pair_response_geometry_cache_cpu(
+        pair_response_plan, es2_cache, key.periodic_response_enabled, pair_response_workspace,
+        pair_response_cache, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  }
   if (d4_enabled) {
     status = update_d4_geometry_cache_cpu(d4, positions.data(), geometry_generation,
                                           d4_pairs.data(), d4_pairs.size(), d4_coordination.data(),
@@ -1286,6 +1352,9 @@ xtbloom_status_t SystemExecution::refresh_geometry(const CpuLinearAlgebraBackend
                         integrals.total_matrix_elements, mulliken.identity()};
   geometry.es2_cache = es2_cache;
   geometry.aes2_cache = aes2_cache;
+  if (key.acceleration_policy == SccAccelerationPolicy::kPairResponseV1) {
+    geometry.pair_response_cache = pair_response_cache;
+  }
   if (d4_enabled) {
     geometry.d4_cache = d4_cache;
   }
@@ -1862,7 +1931,9 @@ xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
       return status;
     }
     if (!implementation.pairs_scc_policy.valid) {
-      error = "XTBLOOM_EXPERIMENTAL_GFN2_PAIRS_SCC must be off, controller, or local-v1";
+      error =
+          "XTBLOOM_EXPERIMENTAL_GFN2_PAIRS_SCC must be off, controller, local-v1, or "
+          "pair-response-v1";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     make_system_keys(implementation.request, options, implementation.pairs_scc_policy.policy,
@@ -2012,7 +2083,9 @@ xtbloom_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
       return status;
     }
     if (!implementation.pairs_scc_policy.valid) {
-      error = "XTBLOOM_EXPERIMENTAL_GFN2_PAIRS_SCC must be off, controller, or local-v1";
+      error =
+          "XTBLOOM_EXPERIMENTAL_GFN2_PAIRS_SCC must be off, controller, local-v1, or "
+          "pair-response-v1";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     make_system_keys(implementation.request, options, implementation.pairs_scc_policy.policy,

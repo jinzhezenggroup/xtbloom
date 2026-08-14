@@ -877,16 +877,20 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
           workspace.staged_mixer_state, workspace.mixer_workspace, error);
     } else {
       SccResidualDiagnostics diagnostics;
-      const bool local_preconditioner_active =
-          data.acceleration_policy == SccAccelerationPolicy::kLocalV1 &&
+      const bool preconditioner_active =
+          (data.acceleration_policy == SccAccelerationPolicy::kLocalV1 ||
+           data.acceleration_policy == SccAccelerationPolicy::kPairResponseV1) &&
           state.controller_states[system].restart_count == 0u;
-      const SccResidualPolicy residual_policy = local_preconditioner_active
-                                                    ? SccResidualPolicy::kLocalV1
-                                                    : SccResidualPolicy::kControllerOnly;
+      SccResidualPolicy residual_policy = SccResidualPolicy::kControllerOnly;
+      if (preconditioner_active) {
+        residual_policy = data.acceleration_policy == SccAccelerationPolicy::kLocalV1
+                              ? SccResidualPolicy::kLocalV1
+                              : SccResidualPolicy::kPairResponseV1;
+      }
       status = prepare_scc_residual_system_cpu(
           data.preconditioner, residual_policy, static_cast<std::int64_t>(system),
-          workspace.staged_wavefunction, workspace.staged_mixer_state, workspace.mixer_workspace,
-          diagnostics, error);
+          workspace.staged_wavefunction, geometry.pair_response_cache, workspace.staged_mixer_state,
+          workspace.mixer_workspace, diagnostics, error);
       if (status == XTBLOOM_STATUS_INVALID_ARGUMENT) {
         /* Defensive, unreachable after plan and runtime binding validation. */
         return status;
@@ -898,28 +902,70 @@ xtbloom_status_t iterate_scc_driver_batch_cpu(
         continue;
       }
 
-      const common::SccControllerObservation observation{
-          diagnostics.weighted_residual_norm, diagnostics.previous_weighted_residual_norm,
-          diagnostics.weighted_residual_cosine, diagnostics.has_previous_residual,
-          diagnostics.cosine_is_valid};
       common::SccControllerDecision decision;
-      if (!common::advance_scc_controller(data.controller_config, state.controller_states[system],
-                                          observation, decision)) {
-        workspace.staged_mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
-        mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
-        workspace.active_systems[system] = 3u;
-        continue;
+      const bool residual_map_fell_back = diagnostics.preconditioner_fell_back;
+      if (residual_map_fell_back) {
+        /* Cache, conditioning, or non-tangent failures switch the residual
+         * map. Rebuild raw diagnostics before advancing the controller so no
+         * contraction, angle, cooldown, or event counter observes a norm from
+         * one map beside history from another. */
+        const bool restart_incompatible_history = diagnostics.has_previous_residual;
+        status = prepare_scc_residual_system_cpu(
+            data.preconditioner, SccResidualPolicy::kControllerOnly,
+            static_cast<std::int64_t>(system), workspace.staged_wavefunction,
+            geometry.pair_response_cache, workspace.staged_mixer_state, workspace.mixer_workspace,
+            diagnostics, error);
+        if (status == XTBLOOM_STATUS_INVALID_ARGUMENT) {
+          return status;
+        }
+        if (status != XTBLOOM_STATUS_SUCCESS) {
+          workspace.staged_mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+          mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+          workspace.active_systems[system] = 3u;
+          continue;
+        }
+        common::SccControllerState fallback_state = state.controller_states[system];
+        fallback_state.damping_level = 1u;
+        fallback_state.contraction_count = 0u;
+        fallback_state.stagnation_count = 0u;
+        fallback_state.two_cycle_count = 0u;
+        fallback_state.cooldown_remaining = 0u;
+        fallback_state.restart_count = std::max<std::uint32_t>(fallback_state.restart_count, 1u);
+        fallback_state.fallback_to_baseline = true;
+        const common::SccControllerObservation raw_observation{diagnostics.weighted_residual_norm,
+                                                               0.0, 0.0, false, false};
+        if (!common::advance_scc_controller(data.controller_config, fallback_state, raw_observation,
+                                            decision)) {
+          workspace.staged_mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+          mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+          workspace.active_systems[system] = 3u;
+          continue;
+        }
+        decision.restart_history = restart_incompatible_history;
+      } else {
+        const common::SccControllerObservation observation{
+            diagnostics.weighted_residual_norm, diagnostics.previous_weighted_residual_norm,
+            diagnostics.weighted_residual_cosine, diagnostics.has_previous_residual,
+            diagnostics.cosine_is_valid};
+        if (!common::advance_scc_controller(data.controller_config, state.controller_states[system],
+                                            observation, decision)) {
+          workspace.staged_mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+          mixer_state.system_statuses[system] = XTBLOOM_STATUS_INTERNAL_ERROR;
+          workspace.active_systems[system] = 3u;
+          continue;
+        }
       }
       controller_candidate = decision.next_state;
       controller_candidate_is_valid = true;
-      if (local_preconditioner_active && decision.restart_history) {
+      if (preconditioner_active && decision.restart_history && !residual_map_fell_back) {
         /* The first instability event is also a deterministic preconditioner
          * fallback. Rebuild the same raw residual as identity before the
          * requested history restart, so no secant spans two residual maps. */
         status = prepare_scc_residual_system_cpu(
             data.preconditioner, SccResidualPolicy::kControllerOnly,
             static_cast<std::int64_t>(system), workspace.staged_wavefunction,
-            workspace.staged_mixer_state, workspace.mixer_workspace, diagnostics, error);
+            geometry.pair_response_cache, workspace.staged_mixer_state, workspace.mixer_workspace,
+            diagnostics, error);
         if (status == XTBLOOM_STATUS_INVALID_ARGUMENT) {
           return status;
         }
@@ -1266,7 +1312,8 @@ xtbloom_status_t make_scc_driver_plan(
       (periodic_embedding != nullptr && !periodic_embedding->sealed()) ||
       (acceleration_policy != SccAccelerationPolicy::kOff &&
        acceleration_policy != SccAccelerationPolicy::kController &&
-       acceleration_policy != SccAccelerationPolicy::kLocalV1)) {
+       acceleration_policy != SccAccelerationPolicy::kLocalV1 &&
+       acceleration_policy != SccAccelerationPolicy::kPairResponseV1)) {
     error = "SCC driver components or numerical policy are invalid";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -2082,6 +2129,33 @@ xtbloom_status_t validate_iteration_bindings(
     error = "SCC driver geometry supplies D4 data to a plan without D4";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
+  if (data.acceleration_policy == SccAccelerationPolicy::kPairResponseV1) {
+    if (geometry.pair_response_cache.factor_elements != data.es2.total_matrix_elements() ||
+        geometry.pair_response_cache.constraint_elements != data.wavefunction.total_shells ||
+        geometry.pair_response_cache.denominator_elements != data.wavefunction.batch_size ||
+        geometry.pair_response_cache.enabled_elements != data.wavefunction.batch_size ||
+        !aligned(geometry.pair_response_cache.cholesky_factors, alignof(double)) ||
+        !aligned(geometry.pair_response_cache.constraint_solutions, alignof(double)) ||
+        !aligned(geometry.pair_response_cache.constraint_denominators, alignof(double)) ||
+        geometry.pair_response_cache.enabled == nullptr ||
+        geometry.pair_response_cache.geometry_generation != geometry.geometry_generation ||
+        geometry.pair_response_cache.plan_identity != data.es2.identity()) {
+      error = "SCC driver pair-response cache is stale, malformed, or belongs to another plan";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+  } else if (geometry.pair_response_cache.cholesky_factors != nullptr ||
+             geometry.pair_response_cache.factor_elements != 0 ||
+             geometry.pair_response_cache.constraint_solutions != nullptr ||
+             geometry.pair_response_cache.constraint_elements != 0 ||
+             geometry.pair_response_cache.constraint_denominators != nullptr ||
+             geometry.pair_response_cache.denominator_elements != 0 ||
+             geometry.pair_response_cache.enabled != nullptr ||
+             geometry.pair_response_cache.enabled_elements != 0 ||
+             geometry.pair_response_cache.geometry_generation != 0u ||
+             geometry.pair_response_cache.plan_identity != nullptr) {
+    error = "SCC driver geometry supplies pair-response data to a different acceleration policy";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
   if (geometry.explicit_point_charge_shell_elements != 0 &&
       (geometry.explicit_point_charge_shell_elements != data.wavefunction.total_shells ||
        !aligned(geometry.explicit_point_charge_shell_potential, alignof(double)))) {
@@ -2178,6 +2252,10 @@ xtbloom_status_t validate_iteration_bindings(
   std::size_t quadrupole_integral_bytes = 0u;
   std::size_t es2_cache_bytes = 0u;
   std::size_t aes2_cache_bytes = 0u;
+  std::size_t pair_factor_bytes = 0u;
+  std::size_t pair_constraint_bytes = 0u;
+  std::size_t pair_denominator_bytes = 0u;
+  std::size_t pair_enabled_bytes = 0u;
   std::size_t d4_pair_cache_bytes = 0u;
   std::size_t d4_coordination_cache_bytes = 0u;
   std::size_t point_potential_bytes = 0u;
@@ -2190,6 +2268,13 @@ xtbloom_status_t validate_iteration_bindings(
       !checked_multiply_size(matrix_bytes, 6u, quadrupole_integral_bytes) ||
       !bytes_for(data.es2.total_matrix_elements(), sizeof(double), es2_cache_bytes) ||
       !bytes_for(data.aes2.pair_data_elements(), sizeof(double), aes2_cache_bytes) ||
+      !bytes_for(geometry.pair_response_cache.factor_elements, sizeof(double), pair_factor_bytes) ||
+      !bytes_for(geometry.pair_response_cache.constraint_elements, sizeof(double),
+                 pair_constraint_bytes) ||
+      !bytes_for(geometry.pair_response_cache.denominator_elements, sizeof(double),
+                 pair_denominator_bytes) ||
+      !bytes_for(geometry.pair_response_cache.enabled_elements, sizeof(std::uint8_t),
+                 pair_enabled_bytes) ||
       !bytes_for(geometry.d4_cache.pair_data_elements, sizeof(double), d4_pair_cache_bytes) ||
       !bytes_for(geometry.d4_cache.coordination_elements, sizeof(double),
                  d4_coordination_cache_bytes) ||
@@ -2204,25 +2289,32 @@ xtbloom_status_t validate_iteration_bindings(
     error = "SCC driver geometry storage extents are not representable";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  std::array<AddressRange, 13> geometry_ranges{};
+  std::array<AddressRange, 17> geometry_ranges{};
   if (!make_range(geometry.h0, matrix_bytes, geometry_ranges[0]) ||
       !make_range(geometry.integrals.overlap, matrix_bytes, geometry_ranges[1]) ||
       !make_range(geometry.integrals.dipole, dipole_integral_bytes, geometry_ranges[2]) ||
       !make_range(geometry.integrals.quadrupole, quadrupole_integral_bytes, geometry_ranges[3]) ||
       !make_range(geometry.es2_cache.coulomb_matrix, es2_cache_bytes, geometry_ranges[4]) ||
       !make_range(geometry.aes2_cache.pair_data, aes2_cache_bytes, geometry_ranges[5]) ||
-      !make_range(geometry.d4_cache.pair_data, d4_pair_cache_bytes, geometry_ranges[6]) ||
-      !make_range(geometry.d4_cache.coordination_numbers, d4_coordination_cache_bytes,
+      !make_range(geometry.pair_response_cache.cholesky_factors, pair_factor_bytes,
+                  geometry_ranges[6]) ||
+      !make_range(geometry.pair_response_cache.constraint_solutions, pair_constraint_bytes,
                   geometry_ranges[7]) ||
-      !make_range(geometry.explicit_point_charge_shell_potential, point_potential_bytes,
+      !make_range(geometry.pair_response_cache.constraint_denominators, pair_denominator_bytes,
                   geometry_ranges[8]) ||
-      !make_range(geometry.periodic_shifts, periodic_shift_bytes, geometry_ranges[9]) ||
-      !make_range(geometry.periodic_response_matrices, periodic_response_bytes,
-                  geometry_ranges[10]) ||
-      !make_range(geometry.field_atomic_potential, field_atomic_potential_bytes,
+      !make_range(geometry.pair_response_cache.enabled, pair_enabled_bytes, geometry_ranges[9]) ||
+      !make_range(geometry.d4_cache.pair_data, d4_pair_cache_bytes, geometry_ranges[10]) ||
+      !make_range(geometry.d4_cache.coordination_numbers, d4_coordination_cache_bytes,
                   geometry_ranges[11]) ||
+      !make_range(geometry.explicit_point_charge_shell_potential, point_potential_bytes,
+                  geometry_ranges[12]) ||
+      !make_range(geometry.periodic_shifts, periodic_shift_bytes, geometry_ranges[13]) ||
+      !make_range(geometry.periodic_response_matrices, periodic_response_bytes,
+                  geometry_ranges[14]) ||
+      !make_range(geometry.field_atomic_potential, field_atomic_potential_bytes,
+                  geometry_ranges[15]) ||
       !make_range(geometry.field_dipole_potential, field_dipole_potential_bytes,
-                  geometry_ranges[12])) {
+                  geometry_ranges[16])) {
     error = "SCC driver geometry buffers have invalid address ranges";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }

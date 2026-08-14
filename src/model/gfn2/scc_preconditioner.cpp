@@ -14,6 +14,8 @@ namespace {
 
 constexpr double kMinimumChargeShellScale = 0.5;
 constexpr double kMaximumChargeShellScale = 2.0;
+constexpr double kConstraintRoundoffFactor = 128.0;
+constexpr double kMinimumGershgorinReciprocalCondition = 1.4901161193847656e-8;
 
 struct AddressRange {
   std::uintptr_t begin = 0u;
@@ -36,6 +38,18 @@ bool ranges_overlap(const AddressRange& first, const AddressRange& second) noexc
   return first.begin < second.end && second.begin < first.end;
 }
 
+template <std::size_t N>
+bool pairwise_disjoint(const std::array<AddressRange, N>& ranges) noexcept {
+  for (std::size_t first = 0u; first < N; ++first) {
+    for (std::size_t second = first + 1u; second < N; ++second) {
+      if (ranges_overlap(ranges[first], ranges[second])) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 template <typename T>
 bool vector_overlaps(const std::vector<T>& values, const AddressRange& range) noexcept {
   if (values.empty()) {
@@ -48,6 +62,64 @@ bool vector_overlaps(const std::vector<T>& values, const AddressRange& range) no
 
 bool finite_positive(double value) noexcept { return std::isfinite(value) && value > 0.0; }
 
+bool aligned_double(const void* pointer) noexcept {
+  return pointer != nullptr && reinterpret_cast<std::uintptr_t>(pointer) % alignof(double) == 0u;
+}
+
+bool cholesky_factor_in_place(double* matrix, std::size_t dimension) noexcept {
+  for (std::size_t row = 0u; row < dimension; ++row) {
+    for (std::size_t column = 0u; column <= row; ++column) {
+      double value = matrix[row * dimension + column];
+      for (std::size_t inner = 0u; inner < column; ++inner) {
+        value -= matrix[row * dimension + inner] * matrix[column * dimension + inner];
+      }
+      if (row == column) {
+        if (!finite_positive(value)) {
+          return false;
+        }
+        value = std::sqrt(value);
+      } else {
+        value /= matrix[column * dimension + column];
+      }
+      if (!std::isfinite(value)) {
+        return false;
+      }
+      matrix[row * dimension + column] = value;
+    }
+    for (std::size_t column = row + 1u; column < dimension; ++column) {
+      matrix[row * dimension + column] = 0.0;
+    }
+  }
+  return true;
+}
+
+bool cholesky_solve_in_place(const double* factor, std::size_t dimension, double* values) noexcept {
+  for (std::size_t row = 0u; row < dimension; ++row) {
+    double value = values[row];
+    for (std::size_t column = 0u; column < row; ++column) {
+      value -= factor[row * dimension + column] * values[column];
+    }
+    value /= factor[row * dimension + row];
+    if (!std::isfinite(value)) {
+      return false;
+    }
+    values[row] = value;
+  }
+  for (std::size_t reverse = dimension; reverse > 0u; --reverse) {
+    const std::size_t row = reverse - 1u;
+    double value = values[row];
+    for (std::size_t column = row + 1u; column < dimension; ++column) {
+      value -= factor[column * dimension + row] * values[column];
+    }
+    value /= factor[row * dimension + row];
+    if (!std::isfinite(value)) {
+      return false;
+    }
+    values[row] = value;
+  }
+  return true;
+}
+
 }  // namespace
 
 std::size_t SccPreconditionerPlan::resident_bytes() const noexcept {
@@ -57,9 +129,12 @@ std::size_t SccPreconditionerPlan::resident_bytes() const noexcept {
          quadrupole_system_offsets_.capacity() * sizeof(std::int64_t) +
          atom_offsets_.capacity() * sizeof(std::int64_t) +
          shell_offsets_.capacity() * sizeof(std::int64_t) +
+         matrix_offsets_.capacity() * sizeof(std::int64_t) +
+         shell_to_atom_.capacity() * sizeof(std::int64_t) +
          spin_channels_.capacity() * sizeof(std::int32_t) +
          metric_weights_.capacity() * sizeof(double) +
-         charge_shell_scales_.capacity() * sizeof(double);
+         charge_shell_scales_.capacity() * sizeof(double) +
+         shell_hardness_.capacity() * sizeof(double);
 }
 
 bool SccPreconditionerPlan::overlaps_storage(const void* data,
@@ -76,8 +151,9 @@ bool SccPreconditionerPlan::overlaps_storage(const void* data,
          vector_overlaps(dipole_system_offsets_, range) ||
          vector_overlaps(quadrupole_system_offsets_, range) ||
          vector_overlaps(atom_offsets_, range) || vector_overlaps(shell_offsets_, range) ||
+         vector_overlaps(matrix_offsets_, range) || vector_overlaps(shell_to_atom_, range) ||
          vector_overlaps(spin_channels_, range) || vector_overlaps(metric_weights_, range) ||
-         vector_overlaps(charge_shell_scales_, range);
+         vector_overlaps(charge_shell_scales_, range) || vector_overlaps(shell_hardness_, range);
 }
 
 xtbloom_status_t make_scc_preconditioner_plan(const WavefunctionLayout& wavefunction,
@@ -106,7 +182,12 @@ xtbloom_status_t make_scc_preconditioner_plan(const WavefunctionLayout& wavefunc
     created.quadrupole_system_offsets_ = wavefunction.quadrupole.system_offsets;
     created.atom_offsets_ = wavefunction.atom_offsets;
     created.shell_offsets_ = wavefunction.batch_shell_offsets;
+    created.matrix_offsets_ = es2.matrix_offsets();
+    created.shell_to_atom_ = es2.shell_to_atom();
     created.spin_channels_ = wavefunction.spin_channels;
+    created.es2_plan_identity_ = es2.identity();
+    created.es2_matrix_elements_ = es2.total_matrix_elements();
+    created.shell_hardness_ = es2.shell_hardness();
     created.charge_shell_scales_.assign(static_cast<std::size_t>(wavefunction.qsh.element_count),
                                         1.0);
     created.vector_offsets_.assign(static_cast<std::size_t>(wavefunction.batch_size) + 1u, 0);
@@ -216,19 +297,172 @@ xtbloom_status_t make_scc_preconditioner_plan(const WavefunctionLayout& wavefunc
   }
 }
 
-xtbloom_status_t prepare_scc_residual_system_cpu(const SccPreconditionerPlan& plan,
-                                                 SccResidualPolicy policy, std::int64_t system,
-                                                 const WavefunctionView& raw_wavefunction,
-                                                 const SccMixerState& mixer_state,
-                                                 const SccMixerWorkspace& mixer_workspace,
-                                                 SccResidualDiagnostics& diagnostics,
-                                                 std::string& error) {
+xtbloom_status_t update_scc_pair_response_geometry_cache_cpu(
+    const SccPreconditionerPlan& plan, const ES2GeometryCache& es2_cache,
+    bool periodic_response_enabled, const SccPairResponseWorkspace& workspace,
+    SccPairResponseGeometryCache& cache, std::string& error) {
+  const std::size_t matrix_elements = static_cast<std::size_t>(plan.es2_matrix_elements_);
+  const std::size_t shell_elements = static_cast<std::size_t>(plan.total_shells());
+  const std::size_t batch = static_cast<std::size_t>(plan.batch_size_);
+  if (!plan.sealed_ || es2_cache.coulomb_matrix == nullptr ||
+      es2_cache.matrix_elements != plan.es2_matrix_elements_ ||
+      es2_cache.plan_identity != plan.es2_plan_identity_ ||
+      !aligned_double(es2_cache.coulomb_matrix) || !aligned_double(workspace.factor_scratch) ||
+      !aligned_double(workspace.constraint_scratch) ||
+      !aligned_double(workspace.denominator_scratch) || workspace.enabled_scratch == nullptr ||
+      workspace.factor_elements < plan.es2_matrix_elements_ ||
+      workspace.constraint_elements < plan.total_shells() ||
+      workspace.denominator_elements < plan.batch_size_ ||
+      workspace.enabled_elements < plan.batch_size_ || !aligned_double(cache.cholesky_factors) ||
+      !aligned_double(cache.constraint_solutions) ||
+      !aligned_double(cache.constraint_denominators) || cache.enabled == nullptr ||
+      cache.factor_elements < plan.es2_matrix_elements_ ||
+      cache.constraint_elements < plan.total_shells() ||
+      cache.denominator_elements < plan.batch_size_ || cache.enabled_elements < plan.batch_size_) {
+    error = "PAIRS-SCC pair-response cache binding is invalid or belongs to another ES2 plan";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  std::array<AddressRange, 9u> ranges{};
+  std::array<AddressRange, 5u> controls{};
+  if (!make_range(es2_cache.coulomb_matrix, matrix_elements * sizeof(double), ranges[0]) ||
+      !make_range(workspace.factor_scratch, matrix_elements * sizeof(double), ranges[1]) ||
+      !make_range(workspace.constraint_scratch, shell_elements * sizeof(double), ranges[2]) ||
+      !make_range(workspace.denominator_scratch, batch * sizeof(double), ranges[3]) ||
+      !make_range(workspace.enabled_scratch, batch * sizeof(std::uint8_t), ranges[4]) ||
+      !make_range(cache.cholesky_factors, matrix_elements * sizeof(double), ranges[5]) ||
+      !make_range(cache.constraint_solutions, shell_elements * sizeof(double), ranges[6]) ||
+      !make_range(cache.constraint_denominators, batch * sizeof(double), ranges[7]) ||
+      !make_range(cache.enabled, batch * sizeof(std::uint8_t), ranges[8]) ||
+      !make_range(&plan, sizeof(plan), controls[0]) ||
+      !make_range(&es2_cache, sizeof(es2_cache), controls[1]) ||
+      !make_range(&workspace, sizeof(workspace), controls[2]) ||
+      !make_range(&cache, sizeof(cache), controls[3]) ||
+      !make_range(&error, sizeof(error), controls[4]) || !pairwise_disjoint(ranges) ||
+      !pairwise_disjoint(controls) ||
+      plan.overlaps_storage(es2_cache.coulomb_matrix, matrix_elements * sizeof(double)) ||
+      plan.overlaps_storage(workspace.factor_scratch, matrix_elements * sizeof(double)) ||
+      plan.overlaps_storage(workspace.constraint_scratch, shell_elements * sizeof(double)) ||
+      plan.overlaps_storage(workspace.denominator_scratch, batch * sizeof(double)) ||
+      plan.overlaps_storage(workspace.enabled_scratch, batch * sizeof(std::uint8_t)) ||
+      plan.overlaps_storage(cache.cholesky_factors, matrix_elements * sizeof(double)) ||
+      plan.overlaps_storage(cache.constraint_solutions, shell_elements * sizeof(double)) ||
+      plan.overlaps_storage(cache.constraint_denominators, batch * sizeof(double)) ||
+      plan.overlaps_storage(cache.enabled, batch * sizeof(std::uint8_t))) {
+    error = "PAIRS-SCC pair-response cache buffers overlap active source, scratch, or plan storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  for (const AddressRange& range : ranges) {
+    for (const AddressRange& control : controls) {
+      if (ranges_overlap(range, control)) {
+        error = "PAIRS-SCC pair-response buffers overlap a live descriptor or diagnostic object";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+    }
+  }
+
+  std::fill_n(workspace.factor_scratch, matrix_elements, 0.0);
+  std::fill_n(workspace.constraint_scratch, shell_elements, 0.0);
+  std::fill_n(workspace.denominator_scratch, batch, 0.0);
+  std::fill_n(workspace.enabled_scratch, batch, std::uint8_t{0});
+  for (std::size_t system = 0u; system < batch; ++system) {
+    if (periodic_response_enabled) {
+      continue;
+    }
+    const std::size_t shell_begin = static_cast<std::size_t>(plan.shell_offsets_[system]);
+    const std::size_t shell_end = static_cast<std::size_t>(plan.shell_offsets_[system + 1u]);
+    const std::size_t shell_count = shell_end - shell_begin;
+    const std::size_t matrix_begin = static_cast<std::size_t>(plan.matrix_offsets_[system]);
+    double* const factor = workspace.factor_scratch + matrix_begin;
+    bool usable = shell_count > 0u;
+    double gershgorin_lower = std::numeric_limits<double>::infinity();
+    double gershgorin_upper = 0.0;
+    for (std::size_t row = 0u; usable && row < shell_count; ++row) {
+      double row_sum = 0.0;
+      const std::size_t global_row = shell_begin + row;
+      const double diagonal = plan.shell_hardness_[global_row] / kSccPairResponseScale;
+      usable = finite_positive(diagonal);
+      for (std::size_t column = 0u; usable && column < shell_count; ++column) {
+        const std::size_t global_column = shell_begin + column;
+        double value = 0.0;
+        if (row == column) {
+          value = diagonal;
+        } else if (plan.shell_to_atom_[global_row] != plan.shell_to_atom_[global_column]) {
+          const double forward =
+              es2_cache.coulomb_matrix[matrix_begin + row * shell_count + column];
+          const double reverse =
+              es2_cache.coulomb_matrix[matrix_begin + column * shell_count + row];
+          usable = std::isfinite(forward) && forward > 0.0 && forward == reverse;
+          value = forward;
+          row_sum += std::abs(value);
+        }
+        factor[row * shell_count + column] = value;
+      }
+      const double row_lower = diagonal - row_sum;
+      const double row_upper = diagonal + row_sum;
+      usable = usable && std::isfinite(row_sum) && finite_positive(row_lower) &&
+               finite_positive(row_upper);
+      gershgorin_lower = std::min(gershgorin_lower, row_lower);
+      gershgorin_upper = std::max(gershgorin_upper, row_upper);
+    }
+    usable = usable && finite_positive(gershgorin_lower) && finite_positive(gershgorin_upper) &&
+             gershgorin_lower >= kMinimumGershgorinReciprocalCondition * gershgorin_upper;
+    if (!usable || !cholesky_factor_in_place(factor, shell_count)) {
+      continue;
+    }
+
+    double* const constraint = workspace.constraint_scratch + shell_begin;
+    std::fill_n(constraint, shell_count, 1.0);
+    if (!cholesky_solve_in_place(factor, shell_count, constraint)) {
+      continue;
+    }
+    double denominator = 0.0;
+    for (std::size_t shell = 0u; shell < shell_count; ++shell) {
+      denominator += constraint[shell];
+    }
+    const double denominator_floor =
+        kMinimumGershgorinReciprocalCondition * static_cast<double>(shell_count) / gershgorin_upper;
+    if (!finite_positive(denominator) || !finite_positive(denominator_floor) ||
+        denominator <= denominator_floor) {
+      continue;
+    }
+    workspace.denominator_scratch[system] = denominator;
+    workspace.enabled_scratch[system] = 1u;
+  }
+
+  std::copy_n(workspace.factor_scratch, matrix_elements, cache.cholesky_factors);
+  std::copy_n(workspace.constraint_scratch, shell_elements, cache.constraint_solutions);
+  std::copy_n(workspace.denominator_scratch, batch, cache.constraint_denominators);
+  std::copy_n(workspace.enabled_scratch, batch, cache.enabled);
+  cache.geometry_generation = es2_cache.geometry_generation;
+  cache.plan_identity = plan.es2_plan_identity_;
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t prepare_scc_residual_system_cpu(
+    const SccPreconditionerPlan& plan, SccResidualPolicy policy, std::int64_t system,
+    const WavefunctionView& raw_wavefunction, const SccPairResponseGeometryCache& pair_cache,
+    const SccMixerState& mixer_state, const SccMixerWorkspace& mixer_workspace,
+    SccResidualDiagnostics& diagnostics, std::string& error) {
   if (!plan.sealed_ || system < 0 || system >= plan.batch_size_ ||
       raw_wavefunction.qsh == nullptr || raw_wavefunction.dipole == nullptr ||
       raw_wavefunction.quadrupole == nullptr || mixer_state.current_inputs == nullptr ||
       mixer_state.previous_residuals == nullptr || mixer_state.history_ages == nullptr ||
       mixer_workspace.residual == nullptr) {
     error = "PAIRS-SCC residual preparation received an invalid binding";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (policy == SccResidualPolicy::kPairResponseV1 &&
+      (pair_cache.cholesky_factors == nullptr ||
+       pair_cache.factor_elements < plan.es2_matrix_elements_ ||
+       pair_cache.constraint_solutions == nullptr ||
+       pair_cache.constraint_elements < plan.total_shells() ||
+       pair_cache.constraint_denominators == nullptr ||
+       pair_cache.denominator_elements < plan.batch_size_ || pair_cache.enabled == nullptr ||
+       pair_cache.enabled_elements < plan.batch_size_ ||
+       pair_cache.plan_identity != plan.es2_plan_identity_ || mixer_workspace.delta_f == nullptr)) {
+    error = "PAIRS-SCC pair response requires the matching factor cache and mixer scratch";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   const std::size_t index = static_cast<std::size_t>(system);
@@ -265,6 +499,8 @@ xtbloom_status_t prepare_scc_residual_system_cpu(const SccPreconditionerPlan& pl
     return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
 
+  bool preconditioner_applied = false;
+  bool preconditioner_fell_back = false;
   if (policy == SccResidualPolicy::kLocalV1) {
     const std::size_t shell_count =
         static_cast<std::size_t>(plan.shell_offsets_[index + 1u] - plan.shell_offsets_[index]);
@@ -300,6 +536,109 @@ xtbloom_status_t prepare_scc_residual_system_cpu(const SccPreconditionerPlan& pl
         mixer_workspace.residual[packed_shell] -= scale * correction;
       }
     }
+    preconditioner_applied = true;
+  } else if (policy == SccResidualPolicy::kPairResponseV1) {
+    const std::size_t shell_begin = static_cast<std::size_t>(plan.shell_offsets_[index]);
+    const std::size_t shell_end = static_cast<std::size_t>(plan.shell_offsets_[index + 1u]);
+    const std::size_t shell_count = shell_end - shell_begin;
+    const std::size_t matrix_begin = static_cast<std::size_t>(plan.matrix_offsets_[index]);
+    if (shell_count == 0u || dimension < shell_count) {
+      error = "PAIRS-SCC pair response scratch dimensions are inconsistent";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+
+    preconditioner_fell_back =
+        pair_cache.enabled[index] != 1u || pair_cache.geometry_generation == 0u;
+    double raw_charge_sum = 0.0;
+    double raw_charge_absolute_sum = 0.0;
+    for (std::size_t shell = 0u; shell < shell_count; ++shell) {
+      const double value = mixer_workspace.residual[shell];
+      raw_charge_sum += value;
+      raw_charge_absolute_sum += std::abs(value);
+    }
+    const double constraint_tolerance = kConstraintRoundoffFactor *
+                                        std::numeric_limits<double>::epsilon() *
+                                        std::max(1.0, raw_charge_absolute_sum);
+    if (!std::isfinite(raw_charge_sum) || !std::isfinite(raw_charge_absolute_sum) ||
+        std::abs(raw_charge_sum) > constraint_tolerance) {
+      preconditioner_fell_back = true;
+    }
+
+    if (!preconditioner_fell_back) {
+      const double* const factor = pair_cache.cholesky_factors + matrix_begin;
+      const double* const constraint = pair_cache.constraint_solutions + shell_begin;
+      const double denominator = pair_cache.constraint_denominators[index];
+      double* const response = mixer_workspace.delta_f;
+      for (std::size_t shell = 0u; shell < shell_count; ++shell) {
+        const double diagonal = plan.shell_hardness_[shell_begin + shell] / kSccPairResponseScale;
+        response[shell] = diagonal * mixer_workspace.residual[shell];
+        if (!finite_positive(diagonal) || !std::isfinite(response[shell])) {
+          preconditioner_fell_back = true;
+          break;
+        }
+      }
+      if (!preconditioner_fell_back && !cholesky_solve_in_place(factor, shell_count, response)) {
+        preconditioner_fell_back = true;
+      }
+
+      double response_sum = 0.0;
+      double recomputed_denominator = 0.0;
+      double constraint_absolute_sum = 0.0;
+      if (!preconditioner_fell_back) {
+        for (std::size_t shell = 0u; shell < shell_count; ++shell) {
+          response_sum += response[shell];
+          recomputed_denominator += constraint[shell];
+          constraint_absolute_sum += std::abs(constraint[shell]);
+        }
+        const double denominator_scale = std::max(
+            {std::abs(denominator), std::abs(recomputed_denominator), constraint_absolute_sum});
+        const double denominator_tolerance =
+            kConstraintRoundoffFactor * std::numeric_limits<double>::epsilon() * denominator_scale;
+        if (!std::isfinite(response_sum) || !finite_positive(denominator) ||
+            !finite_positive(recomputed_denominator) || !std::isfinite(constraint_absolute_sum) ||
+            !finite_positive(denominator_scale) || !std::isfinite(denominator_tolerance) ||
+            std::abs(recomputed_denominator - denominator) > denominator_tolerance) {
+          preconditioner_fell_back = true;
+        }
+      }
+
+      if (!preconditioner_fell_back) {
+        const double multiplier = response_sum / denominator;
+        double constrained_prefix_sum = 0.0;
+        double constrained_absolute_sum = 0.0;
+        for (std::size_t shell = 0u; shell < shell_count; ++shell) {
+          response[shell] -= constraint[shell] * multiplier;
+          constrained_absolute_sum += std::abs(response[shell]);
+          if (shell + 1u < shell_count) {
+            constrained_prefix_sum += response[shell];
+          }
+        }
+        const double constrained_sum = constrained_prefix_sum + response[shell_count - 1u];
+        const double publication_tolerance = kConstraintRoundoffFactor *
+                                             std::numeric_limits<double>::epsilon() *
+                                             std::max(1.0, constrained_absolute_sum);
+        if (!std::isfinite(multiplier) || !std::isfinite(constrained_sum) ||
+            !std::isfinite(constrained_absolute_sum) ||
+            std::abs(constrained_sum) > publication_tolerance) {
+          preconditioner_fell_back = true;
+        } else {
+          /* Publish an exactly tangent binary64 vector. Reconstructing the
+           * last component from the identically ordered prefix makes the same
+           * left-to-right sum exactly zero instead of merely close to zero. */
+          response[shell_count - 1u] = -constrained_prefix_sum;
+          double exact_sum = 0.0;
+          for (std::size_t shell = 0u; shell < shell_count; ++shell) {
+            exact_sum += response[shell];
+          }
+          if (exact_sum != 0.0) {
+            preconditioner_fell_back = true;
+          } else {
+            std::copy_n(response, shell_count, mixer_workspace.residual);
+            preconditioner_applied = true;
+          }
+        }
+      }
+    }
   } else if (policy != SccResidualPolicy::kControllerOnly) {
     error = "PAIRS-SCC residual policy is not supported";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
@@ -331,6 +670,8 @@ xtbloom_status_t prepare_scc_residual_system_cpu(const SccPreconditionerPlan& pl
   diagnostics.weighted_residual_norm = std::sqrt(weighted_square);
   diagnostics.previous_weighted_residual_norm = std::sqrt(previous_weighted_square);
   diagnostics.has_previous_residual = has_previous;
+  diagnostics.preconditioner_applied = preconditioner_applied;
+  diagnostics.preconditioner_fell_back = preconditioner_fell_back;
   if (has_previous && diagnostics.weighted_residual_norm > 0.0 &&
       diagnostics.previous_weighted_residual_norm > 0.0) {
     diagnostics.weighted_residual_cosine = std::clamp(

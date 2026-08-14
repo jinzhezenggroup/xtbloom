@@ -20,7 +20,7 @@ class Gfn2CudaExecutionCache;
  * is created. The numerical cache remains lazy, but it receives this immutable
  * snapshot instead of re-reading the environment on first model use. */
 struct Gfn2CpuContextPolicy {
-  std::uint8_t pairs_scc_policy = 0u;  // 0=off, 1=controller, 2=local-v1
+  std::uint8_t pairs_scc_policy = 0u;  // 0=off, 1=controller, 2=local-v1, 3=pair-response-v1
   bool pairs_scc_policy_valid = true;
 };
 
