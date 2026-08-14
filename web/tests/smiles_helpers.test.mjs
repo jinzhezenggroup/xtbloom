@@ -5,12 +5,20 @@ import {
   CDN_REGION_GLOBAL,
   CDN_REGION_MAINLAND_CHINA,
   OPEN_CHEMLIB_CDN_URLS,
+  OPEN_CHEMLIB_MODULE_BYTES,
+  OPEN_CHEMLIB_MODULE_SHA256,
+  OPEN_CHEMLIB_RESOURCES_BYTES,
+  OPEN_CHEMLIB_RESOURCES_SHA256,
   OPEN_CHEMLIB_VERSION,
   loadOpenChemLibRuntime,
   normalizeCdnProviderOrder,
   openChemLibUrlsForProviders,
   smilesToGeometry,
 } from "../smiles_helpers.js";
+
+function digestBytes(hexDigest) {
+  return Uint8Array.from(Buffer.from(hexDigest, "hex")).buffer;
+}
 
 function fakeOcl(atoms, options = {}) {
   class Molecule {
@@ -111,6 +119,170 @@ test("OpenChemLib retries the complete pinned provider pair after one artifact f
   const attemptedHosts = new Set(attempts.map((url) => new URL(url).hostname));
   assert.equal(attemptedHosts.has("cdn.jsdmirror.com"), true);
   assert.equal(attemptedHosts.has("cdn.jsdelivr.net"), true);
+});
+
+test("OpenChemLib verifies pinned byte counts and digests before Blob import", async () => {
+  const moduleBytes = new Uint8Array(OPEN_CHEMLIB_MODULE_BYTES).buffer;
+  const resourcesPrefix = '{"padding":"';
+  const resourcesSuffix = '"}';
+  const resourcesText = resourcesPrefix + "x".repeat(
+    OPEN_CHEMLIB_RESOURCES_BYTES - resourcesPrefix.length - resourcesSuffix.length,
+  ) + resourcesSuffix;
+  const resourcesBytes = new TextEncoder().encode(resourcesText);
+  const signals = [];
+  const registrations = [];
+  const runtime = await loadOpenChemLibRuntime(["jsdmirror"], {
+    fetchImpl: async (url, options) => {
+      signals.push(options.signal);
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => url.endsWith("resources.json")
+          ? resourcesBytes.buffer
+          : moduleBytes,
+      };
+    },
+    cryptoImpl: {
+      subtle: {
+        digest: async (_algorithm, bytes) => digestBytes(
+          bytes.byteLength === OPEN_CHEMLIB_MODULE_BYTES
+            ? OPEN_CHEMLIB_MODULE_SHA256
+            : OPEN_CHEMLIB_RESOURCES_SHA256,
+        ),
+      },
+    },
+    importModule: async (url) => {
+      assert.match(url, /^blob:/);
+      return {
+        version: OPEN_CHEMLIB_VERSION,
+        Resources: { register: (resources) => registrations.push(resources) },
+      };
+    },
+  });
+  assert.equal(runtime.provider, "jsdmirror");
+  assert.equal(registrations.length, 1);
+  assert.equal(registrations[0].padding.length, OPEN_CHEMLIB_RESOURCES_BYTES - 14);
+  assert.equal(signals.length, 2);
+  assert.equal(signals.every((signal) => signal.aborted), true);
+});
+
+test("OpenChemLib rejects unavailable fetch and unverified provider bytes", async () => {
+  await assert.rejects(
+    loadOpenChemLibRuntime([], { fetchImpl: null }),
+    /fetch is unavailable/,
+  );
+
+  for (const fixture of [
+    {
+      name: "HTTP failure",
+      fetchImpl: async () => ({ ok: false, status: 503 }),
+      message: /HTTP 503/,
+    },
+    {
+      name: "wrong size",
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      }),
+      message: /expected \d+ bytes, received 3/,
+    },
+    {
+      name: "missing SHA-256",
+      fetchImpl: async (url) => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array(
+          url.endsWith("resources.json")
+            ? OPEN_CHEMLIB_RESOURCES_BYTES
+            : OPEN_CHEMLIB_MODULE_BYTES,
+        ).buffer,
+      }),
+      cryptoImpl: {},
+      message: /SHA-256 verification is unavailable/,
+    },
+    {
+      name: "SHA-256 mismatch",
+      fetchImpl: async (url) => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array(
+          url.endsWith("resources.json")
+            ? OPEN_CHEMLIB_RESOURCES_BYTES
+            : OPEN_CHEMLIB_MODULE_BYTES,
+        ).buffer,
+      }),
+      cryptoImpl: {
+        subtle: {
+          digest: async () => new Uint8Array(32).buffer,
+        },
+      },
+      message: /SHA-256 mismatch/,
+    },
+  ]) {
+    await assert.rejects(
+      loadOpenChemLibRuntime(["jsdelivr"], {
+        fetchImpl: fixture.fetchImpl,
+        cryptoImpl: fixture.cryptoImpl,
+      }),
+      (error) => {
+        assert.equal(error instanceof AggregateError, true, fixture.name);
+        assert.equal(error.errors.length, 2, fixture.name);
+        assert.equal(error.errors.every((inner) => fixture.message.test(inner.message)), true);
+        return true;
+      },
+    );
+  }
+});
+
+test("OpenChemLib rejects incompatible modules and malformed resource registries", async () => {
+  const validResources = new TextEncoder().encode(JSON.stringify({ value: 17 })).buffer;
+  const cases = [
+    {
+      name: "version",
+      OCL: { version: "0.0.0", Resources: { register() {} } },
+      resourcesBytes: validResources,
+      message: /unexpected OpenChemLib version/,
+    },
+    {
+      name: "registry API",
+      OCL: { version: OPEN_CHEMLIB_VERSION, Resources: {} },
+      resourcesBytes: validResources,
+      message: /resource registry API is unavailable/,
+    },
+    {
+      name: "resource JSON",
+      OCL: { version: OPEN_CHEMLIB_VERSION, Resources: { register() {} } },
+      resourcesBytes: new TextEncoder().encode("not JSON").buffer,
+      message: /JSON/,
+    },
+  ];
+
+  for (const fixture of cases) {
+    let revocations = 0;
+    await assert.rejects(
+      loadOpenChemLibRuntime(["jsdmirror"], {
+        fetchImpl: async () => {
+          throw new Error("injected fetch helper should be used");
+        },
+        fetchPinnedBytesImpl: async (url) => url.endsWith("resources.json")
+          ? fixture.resourcesBytes
+          : new Uint8Array([1]).buffer,
+        importModule: async () => fixture.OCL,
+        createModuleUrl: () => ({
+          url: "blob:verified-openchemlib",
+          revoke: () => { revocations += 1; },
+        }),
+      }),
+      (error) => {
+        assert.equal(error instanceof AggregateError, true, fixture.name);
+        assert.equal(error.errors.length, 2, fixture.name);
+        assert.equal(error.errors.every((inner) => fixture.message.test(inner.message)), true);
+        return true;
+      },
+    );
+    assert.equal(revocations, 2, fixture.name);
+  }
 });
 
 test("SMILES conversion publishes explicit XYZ and total formal charge", () => {

@@ -184,6 +184,24 @@ test("CDN probes choose the measured fastest source and use region only for clos
   ]);
 });
 
+test("CDN ranking keeps failed probes behind measured sources in regional order", async () => {
+  const ranked = await rankCdnSources(THREE_DMOL_SOURCES, {
+    region: "mainland-china",
+    probeImpl: async (source) => {
+      if (source.id === "jsdelivr") return { id: source.id, elapsedMs: 30 };
+      if (source.id === "jsdmirror") throw new Error("mirror probe failed");
+      return { id: source.id, elapsedMs: Number.NaN };
+    },
+  });
+  assert.deepEqual(ranked.map((entry) => entry.source.id), [
+    "jsdelivr",
+    "jsdmirror",
+    "local",
+  ]);
+  assert.match(ranked[1].error.message, /mirror probe failed/);
+  assert.equal(ranked[2].measurement.elapsedMs, Number.NaN);
+});
+
 test("CDN probes read and cancel only the bounded prefix", async () => {
   const chunks = [new Uint8Array(32768), new Uint8Array(32768)];
   const requests = [];
@@ -219,6 +237,46 @@ test("CDN probes read and cancel only the bounded prefix", async () => {
   assert.equal(requests[0].options.cache, "no-store");
   assert.equal(requests[0].options.headers.Range, "bytes=0-65535");
   assert.equal(requests[0].options.signal.aborted, true);
+});
+
+test("CDN probes reject unavailable, failed, non-streaming, and empty responses", async () => {
+  const source = { id: "local", url: "vendor/3Dmol-min.js" };
+  const options = { baseUrl: "https://site.test/demo/", timeoutMs: 100 };
+
+  await assert.rejects(
+    probeSourceSpeed(source, { ...options, fetchImpl: null }),
+    /fetch is unavailable/,
+  );
+  await assert.rejects(
+    probeSourceSpeed(source, {
+      ...options,
+      fetchImpl: async () => ({ ok: false, status: 503 }),
+    }),
+    /HTTP 503/,
+  );
+  await assert.rejects(
+    probeSourceSpeed(source, {
+      ...options,
+      fetchImpl: async () => ({ ok: true, status: 200, body: null }),
+    }),
+    /streaming response is unavailable/,
+  );
+  await assert.rejects(
+    probeSourceSpeed(source, {
+      ...options,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 206,
+        body: {
+          getReader: () => ({
+            read: async () => ({ done: true, value: undefined }),
+            cancel: async () => {},
+          }),
+        },
+      }),
+    }),
+    /empty probe response/,
+  );
 });
 
 test("verified 3Dmol loading falls through ranked sources", async () => {
@@ -270,6 +328,115 @@ test("verified 3Dmol loading rejects a complete source with the wrong size", asy
   );
 });
 
+test("verified 3Dmol loading rejects a complete source with the wrong digest", async () => {
+  await assert.rejects(
+    loadThreeDmol([
+      { source: { id: "jsdelivr", url: "https://jsdelivr.test/3dmol.js" } },
+    ], {
+      baseUrl: "https://site.test/",
+      globalImpl: {},
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array(537792).buffer,
+      }),
+      cryptoImpl: webcrypto,
+      executeScriptImpl: async () => {
+        assert.fail("digest-mismatched 3Dmol bytes must not execute");
+      },
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.match(error.errors[0].message, /SHA-256 mismatch/);
+      return true;
+    },
+  );
+});
+
+test("verified 3Dmol loading hashes and executes the pinned local bundle", async () => {
+  const fileBytes = await readFile(new URL(
+    "../node_modules/3dmol/build/3Dmol-min.js",
+    import.meta.url,
+  ));
+  const pinnedBytes = Uint8Array.from(fileBytes).buffer;
+  const globalImpl = {};
+  let requestSignal = null;
+  let appendedScript = null;
+  const documentImpl = {
+    createElement: (tagName) => {
+      assert.equal(tagName, "script");
+      return {};
+    },
+    head: {
+      appendChild(script) {
+        appendedScript = script;
+        globalImpl.$3Dmol = { version: "2.5.5" };
+        script.onload();
+      },
+    },
+  };
+  const result = await loadThreeDmol([
+    { source: { id: "local", url: "vendor/3Dmol-min.js" } },
+  ], {
+    baseUrl: "https://site.test/demo/",
+    documentImpl,
+    globalImpl,
+    fetchImpl: async (_url, options) => {
+      requestSignal = options.signal;
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => pinnedBytes,
+      };
+    },
+    cryptoImpl: webcrypto,
+  });
+  assert.equal(result.source, "local");
+  assert.equal(result.url, "https://site.test/demo/vendor/3Dmol-min.js");
+  assert.equal(appendedScript.async, true);
+  assert.match(appendedScript.src, /^blob:/);
+  assert.equal(requestSignal.aborted, true);
+});
+
+test("3Dmol loading preserves existing globals and reports script/global failures", async () => {
+  assert.deepEqual(await loadThreeDmol([], { globalImpl: { $3Dmol: {} } }), {
+    source: "existing",
+  });
+
+  await assert.rejects(
+    loadThreeDmol([
+      { source: { id: "local", url: "vendor/3Dmol-min.js" } },
+    ], {
+      baseUrl: "https://site.test/",
+      globalImpl: {},
+      fetchBytesImpl: async () => new Uint8Array([1]).buffer,
+      documentImpl: {
+        createElement: () => ({}),
+        head: { appendChild: (script) => script.onerror() },
+      },
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.match(error.errors[0].message, /script execution failed/);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    loadThreeDmol([
+      { source: { id: "jsdelivr", url: "https://cdn.test/3dmol.js" } },
+    ], {
+      globalImpl: {},
+      fetchBytesImpl: async () => new Uint8Array([1]).buffer,
+      executeScriptImpl: async () => {},
+    }),
+    (error) => {
+      assert.match(error.errors[0].message, /3Dmol global is unavailable/);
+      return true;
+    },
+  );
+});
+
 test("browser CDN routing shares measured provider order with optional workers", async () => {
   const globalImpl = {};
   const rankedSources = [
@@ -313,6 +480,22 @@ test("browser CDN routing uses the regional order when ranking throws", async ()
   assert.deepEqual(attemptedOrder, ["jsdmirror", "jsdelivr", "local"]);
 });
 
+test("browser CDN routing defaults globally when time-zone lookup or loading fails", async () => {
+  const loadError = new Error("all 3Dmol sources failed");
+  const globalImpl = {};
+  const routing = await initializeBrowserCdnRouting({
+    intlImpl: {
+      DateTimeFormat: () => { throw new Error("time-zone database unavailable"); },
+    },
+    globalImpl,
+    rankImpl: async (sources) => sources.map((source) => ({ source })),
+    loadThreeDmolImpl: async () => { throw loadError; },
+  });
+  assert.equal(routing.region, "global");
+  assert.deepEqual(routing.providers, ["jsdelivr", "jsdmirror"]);
+  assert.deepEqual(await routing.ready, { ok: false, error: loadError });
+});
+
 test("browser application starts while CDN routing remains in flight", async () => {
   let resolveRouting;
   let applicationStarts = 0;
@@ -345,6 +528,30 @@ test("browser application startup observes unexpected promise rejection", async 
     error: startupError,
   });
   assert.deepEqual(logged, [["xTBloom application startup failed", startupError]]);
+});
+
+test("browser startup publishes global fallbacks after synchronous setup failures", async () => {
+  const routingError = new Error("routing setup failed");
+  const applicationError = new Error("application setup failed");
+  const logged = [];
+  const globalImpl = {
+    console: { error: (...values) => logged.push(values) },
+  };
+  const routing = startBrowserCdnAndApplication({
+    globalImpl,
+    initializeRouting: () => { throw routingError; },
+    startApplication: () => { throw applicationError; },
+  });
+  const fallback = await routing;
+  assert.equal(fallback.region, "global");
+  assert.deepEqual(fallback.providers, ["jsdelivr", "jsdmirror"]);
+  assert.deepEqual(fallback.rankedSources, []);
+  assert.deepEqual(await fallback.ready, { ok: false, error: routingError });
+  assert.deepEqual(await globalImpl.__XTBLOOM_APPLICATION_START, {
+    ok: false,
+    error: applicationError,
+  });
+  assert.deepEqual(logged, [["xTBloom application startup failed", applicationError]]);
 });
 
 test("angstrom controls are converted to optimizer bohr", () => {
