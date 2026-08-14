@@ -26,6 +26,11 @@ endif()
 set(_xtbloom_web_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_xtbloom_web_site "${CMAKE_CURRENT_BINARY_DIR}/site")
 set(_xtbloom_web_obj "${CMAKE_CURRENT_BINARY_DIR}/xtbloom_web.o")
+set(_xtbloom_web_engine_dir "${CMAKE_CURRENT_BINARY_DIR}/engine")
+set(_xtbloom_web_engine_js "${_xtbloom_web_engine_dir}/xtbloom_web.js")
+set(_xtbloom_web_engine_wasm "${_xtbloom_web_engine_dir}/xtbloom_web.wasm")
+set(_xtbloom_web_engine_data "${_xtbloom_web_engine_dir}/xtbloom_web.data")
+set(_xtbloom_web_package "${_xtbloom_web_site}/xtbloom_web.side.wasm")
 
 # Eigen is needed only when the browser target is enabled. Keep its 7.6 MB
 # header tree out of the repository and source distribution: FetchContent
@@ -188,16 +193,17 @@ add_custom_command(
 # ---------------------------------------------------------------------------
 add_custom_command(
   OUTPUT
-    "${_xtbloom_web_site}/xtbloom_web.js"
-    "${_xtbloom_web_site}/xtbloom_web.wasm"
-    "${_xtbloom_web_site}/xtbloom_web.data"
+    "${_xtbloom_web_engine_js}"
+    "${_xtbloom_web_engine_wasm}"
+    "${_xtbloom_web_engine_data}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${_xtbloom_web_engine_dir}"
   COMMAND ${CMAKE_COMMAND} -E env "EMCC_FORCE_STDLIBS=1"
           ${CMAKE_CXX_COMPILER}
           "${_xtbloom_web_obj}"
           $<TARGET_FILE:xtbloom>
           "${_xtbloom_web_generated_include}"
           "${_xtbloom_web_source_include}"
-          -o "${_xtbloom_web_site}/xtbloom_web.js"
+          -o "${_xtbloom_web_engine_js}"
           "${_xtbloom_web_arch_flag}" -O2 -sMAIN_MODULE=2
           -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createXTBloomModule
           -sSTACK_SIZE=8MB -sALLOW_MEMORY_GROWTH
@@ -214,6 +220,38 @@ add_custom_command(
     "${_xtbloom_web_side}"
     "${_xtbloom_web_obj}"
   COMMENT "Linking ${_xtbloom_web_arch} main module (xtbloom_web.js)"
+  VERBATIM)
+
+# Emscripten names preload packages after the JavaScript output and therefore
+# writes xtbloom_web.data. The browser loader supplies those exact bytes through
+# getPreloadedPackage, so the network URL does not need that suffix. Keep the
+# generated trio private to the build tree, then stage the package under a .wasm
+# path so static hosts apply their WebAssembly compression policy.
+add_custom_command(
+  OUTPUT
+    "${_xtbloom_web_site}/xtbloom_web.js"
+    "${_xtbloom_web_site}/xtbloom_web.wasm"
+    "${_xtbloom_web_package}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${_xtbloom_web_site}"
+  COMMAND ${CMAKE_COMMAND} -E rm -f
+          "${_xtbloom_web_site}/xtbloom_web.data"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_xtbloom_web_engine_js}"
+          "${_xtbloom_web_site}/xtbloom_web.js"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_xtbloom_web_engine_wasm}"
+          "${_xtbloom_web_site}/xtbloom_web.wasm"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${_xtbloom_web_engine_data}"
+          "${_xtbloom_web_package}"
+  COMMAND ${CMAKE_COMMAND} -E compare_files
+          "${_xtbloom_web_engine_data}"
+          "${_xtbloom_web_package}"
+  DEPENDS
+    "${_xtbloom_web_engine_js}"
+    "${_xtbloom_web_engine_wasm}"
+    "${_xtbloom_web_engine_data}"
+  COMMENT "Staging compressible ${_xtbloom_web_arch} engine resources"
   VERBATIM)
 
 # ---------------------------------------------------------------------------
@@ -298,7 +336,7 @@ add_custom_command(
     "${_xtbloom_web_site}/smiles_helpers.js"
     "${_xtbloom_web_site}/xtbloom_web.js"
     "${_xtbloom_web_site}/xtbloom_web.wasm"
-    "${_xtbloom_web_site}/xtbloom_web.data"
+    "${_xtbloom_web_package}"
     "${_xtbloom_web_src}/write_engine_manifest.cmake"
   COMMENT "Generating versioned web-engine asset manifest"
   VERBATIM)
@@ -458,7 +496,7 @@ add_custom_target(
   DEPENDS
     "${_xtbloom_web_site}/xtbloom_web.js"
     "${_xtbloom_web_site}/xtbloom_web.wasm"
-    "${_xtbloom_web_site}/xtbloom_web.data"
+    "${_xtbloom_web_package}"
     "${_xtbloom_web_engine_manifest}"
     "${_xtbloom_web_site}/index.html"
     "${_xtbloom_web_site}/style.css"

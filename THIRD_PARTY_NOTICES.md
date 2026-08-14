@@ -583,7 +583,7 @@ acquisition policy, and every retained legal file's exact size and digest. The
 repository and source distribution retain that compact provenance/legal
 payload but not the archive or header tree. Native CMake installs and Python
 wheels exclude all Eigen material. The Pages artifact carries the compiled
-side module inside `xtbloom_web.data`, the five exact upstream license records,
+side module as `xtbloom_web.side.wasm`, the five exact upstream license records,
 the four notice-bearing headers above, and the provenance manifest so browser
 recipients can identify and obtain the corresponding source.
 

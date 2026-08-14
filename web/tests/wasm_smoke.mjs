@@ -33,7 +33,7 @@ export async function runWebCases(sitePath) {
   const createModule = (await import(moduleUrl)).default;
   const [wasmBinary, dataBinary] = await Promise.all([
     readFile(path.join(site, "xtbloom_web.wasm")),
-    readFile(path.join(site, "xtbloom_web.data")),
+    readFile(path.join(site, "xtbloom_web.side.wasm")),
   ]);
   const Module = await initializeDownloadedEngineModule(
     createModule,

@@ -1431,10 +1431,11 @@ test("engine bootstrap retries a coherent versioned generation without reloading
     "smiles_helpers.js",
     "xtbloom_web.js",
     "xtbloom_web.wasm",
-    "xtbloom_web.data",
+    "xtbloom_web.side.wasm",
   ]) {
     assert.match(manifestSource, new RegExp(asset.replaceAll(".", "\\.")));
   }
+  assert.doesNotMatch(manifestSource, /xtbloom_web\.data/);
   assert.match(appSource, /runWithRetries\(/);
   assert.match(appSource, /engineLoadGeneration/);
   assert.match(appSource, /engine-manifest\.json/);

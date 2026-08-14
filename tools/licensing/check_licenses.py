@@ -566,7 +566,7 @@ WEB_SITE_RUNTIME_FILES = (
     "engine-manifest.json",
     "xtbloom_web.js",
     "xtbloom_web.wasm",
-    "xtbloom_web.data",
+    "xtbloom_web.side.wasm",
     "vendor/3Dmol-min.js",
 )
 WEB_VERSIONED_ASSETS = (
@@ -578,7 +578,7 @@ WEB_VERSIONED_ASSETS = (
     ("smiles_helpers", "smiles_helpers.js"),
     ("module", "xtbloom_web.js"),
     ("wasm", "xtbloom_web.wasm"),
-    ("data", "xtbloom_web.data"),
+    ("data", "xtbloom_web.side.wasm"),
 )
 
 
@@ -2813,7 +2813,7 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
     if (site / "libscipy_openblas.so").exists():
         raise LicenseCheckError(
             "web site contains the raw Eigen LAPACKE/CBLAS side module; "
-            "it must only be conveyed inside xtbloom_web.data"
+            "it must only be conveyed as xtbloom_web.side.wasm"
         )
     # Pages uploads the complete site directory, so accepting arbitrary extra
     # files would allow an obsolete JS/WASM variant or unreviewed payload to be

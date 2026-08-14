@@ -295,9 +295,47 @@ test("SMILES Worker requires a hash version and ignores a stale helper", async (
 
 test("mobile and desktop layouts survive both methods and completed states", async ({ page }, testInfo) => {
   const widths = widthsFor(testInfo.project.name);
+  const enginePackageRequests = [];
+  const sideModuleResponses = [];
+  /* Observe the real application fetches without intercepting or replacing
+   * them. Register before navigation because the engine resources begin
+   * downloading as soon as the module graph finishes bootstrap. */
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (
+      url.pathname.endsWith("/xtbloom_web.side.wasm") ||
+      url.pathname.endsWith("/xtbloom_web.data")
+    ) {
+      enginePackageRequests.push({
+        pathname: url.pathname,
+        version: url.searchParams.get("xtbloom_version"),
+      });
+    }
+  });
+  page.on("response", (response) => {
+    const url = new URL(response.url());
+    if (url.pathname.endsWith("/xtbloom_web.side.wasm")) {
+      sideModuleResponses.push({
+        contentType: response.headers()["content-type"] || "",
+        ok: response.ok(),
+      });
+    }
+  });
   await page.setViewportSize({ width: widths[0], height: VIEWPORT_HEIGHT });
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.locator("#engine-badge")).toHaveClass(/ok/, { timeout: 180_000 });
+  await expect.poll(() => sideModuleResponses.length).toBe(1);
+  const sideModuleRequests = enginePackageRequests.filter(
+    ({ pathname }) => pathname.endsWith("/xtbloom_web.side.wasm"),
+  );
+  const legacyDataRequests = enginePackageRequests.filter(
+    ({ pathname }) => pathname.endsWith("/xtbloom_web.data"),
+  );
+  expect(sideModuleRequests).toHaveLength(1);
+  expect(sideModuleRequests[0].version).toMatch(/^[0-9a-f]{64}$/);
+  expect(legacyDataRequests).toHaveLength(0);
+  expect(sideModuleResponses[0]).toMatchObject({ ok: true });
+  expect(sideModuleResponses[0].contentType).toMatch(/^application\/wasm(?:\s*;|$)/i);
   /* Every non-local request is blocked by beforeEach, so this explicitly
    * proves that CDN probing falls through to the verified site-local bundle. */
   await expect.poll(() => page.evaluate(() => Boolean(window.$3Dmol))).toBe(true);
