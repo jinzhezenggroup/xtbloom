@@ -61,6 +61,15 @@ failures are retried automatically as one coherent resource generation; the
 manual retry keeps the current molecule and settings instead of reloading the
 page.
 
+The molecular viewer separately probes a small prefix of the pinned 3Dmol.js
+bundle from JSDMirror, jsDelivr, and the site origin, then downloads the fastest
+verified source with ranked fallback. The optional SMILES worker reuses the
+measured JSDMirror/jsDelivr order for its pinned OpenChemLib module and resource
+pair. Close probe results prefer JSDMirror for recognized mainland-China time
+zones and jsDelivr elsewhere. Provider failures do not prevent the core WASM
+engine from loading; 3Dmol retains a site-local fallback, while ordinary XYZ
+calculations never require OpenChemLib.
+
 ## Results
 
 The page reports energy, atomic charges, optional analytic forces, convergence

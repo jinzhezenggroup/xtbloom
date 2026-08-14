@@ -7,8 +7,7 @@ import { pathToFileURL } from "node:url";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 
 import {
-  OPEN_CHEMLIB_MODULE_URL,
-  OPEN_CHEMLIB_RESOURCES_URL,
+  OPEN_CHEMLIB_CDN_URLS,
   OPEN_CHEMLIB_VERSION,
   smilesToGeometry,
 } from "../smiles_helpers.js";
@@ -98,12 +97,20 @@ if (!isMainThread) {
   }
 } else {
 
-const [moduleBytes, resourcesBytes] = await Promise.all([
-  fetchPinned(OPEN_CHEMLIB_MODULE_URL),
-  fetchPinned(OPEN_CHEMLIB_RESOURCES_URL),
-]);
-assert.equal(sha256(moduleBytes), EXPECTED_MODULE_SHA256);
-assert.equal(sha256(resourcesBytes), EXPECTED_RESOURCES_SHA256);
+const providerBytes = Object.fromEntries(await Promise.all(
+  Object.entries(OPEN_CHEMLIB_CDN_URLS).map(async ([provider, urls]) => {
+    const [moduleBytes, resourcesBytes] = await Promise.all([
+      fetchPinned(urls.module),
+      fetchPinned(urls.resources),
+    ]);
+    assert.equal(sha256(moduleBytes), EXPECTED_MODULE_SHA256, `${provider} module`);
+    assert.equal(sha256(resourcesBytes), EXPECTED_RESOURCES_SHA256, `${provider} resources`);
+    return [provider, { moduleBytes, resourcesBytes }];
+  }),
+));
+const { moduleBytes, resourcesBytes } = providerBytes.jsdelivr;
+assert.deepEqual(providerBytes.jsdmirror.moduleBytes, moduleBytes);
+assert.deepEqual(providerBytes.jsdmirror.resourcesBytes, resourcesBytes);
 
 const resources = JSON.parse(new TextDecoder().decode(resourcesBytes));
 assert.equal(Object.keys(resources).length, 35);

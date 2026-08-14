@@ -162,12 +162,20 @@ PYODIDE_OPENBLAS_LICENSES = (
 OPEN_CHEMLIB_LICENSE = "LICENSES/openchemlib-BSD-3-Clause.txt"
 OPEN_CHEMLIB_MANIFEST = "web/openchemlib_manifest.json"
 OPEN_CHEMLIB_VERSION = "9.21.0"
-OPEN_CHEMLIB_MODULE_URL = (
-    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js"
+OPEN_CHEMLIB_MODULE_URLS = (
+    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js",
+    "https://cdn.jsdmirror.com/npm/openchemlib@9.21.0/dist/openchemlib.js",
 )
-OPEN_CHEMLIB_RESOURCES_URL = (
-    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json"
+OPEN_CHEMLIB_RESOURCES_URLS = (
+    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json",
+    "https://cdn.jsdmirror.com/npm/openchemlib@9.21.0/dist/resources.json",
 )
+THREEDMOL_URLS = (
+    "https://cdn.jsdelivr.net/npm/3dmol@2.5.5/build/3Dmol-min.js",
+    "https://cdn.jsdmirror.com/npm/3dmol@2.5.5/build/3Dmol-min.js",
+)
+THREEDMOL_SHA256 = "f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016"
+THREEDMOL_SIZE_BYTES = 537792
 WEB_LICENSE_FILES = (
     "LICENSES/3Dmol.js-BSD-3-Clause.txt",
     OPEN_CHEMLIB_LICENSE,
@@ -2346,7 +2354,7 @@ def check_source(root: Path) -> None:
     source = openchemlib.get("source", {})
     license_info = openchemlib.get("license", {})
     if (
-        openchemlib.get("schema_version") != 1
+        openchemlib.get("schema_version") != 2
         or dependency.get("npm_package") != "openchemlib"
         or dependency.get("version") != OPEN_CHEMLIB_VERSION
         or dependency.get("classification") != "runtime-provided browser dependency"
@@ -2366,32 +2374,68 @@ def check_source(root: Path) -> None:
         raise LicenseCheckError(
             "OpenChemLib license differs from pinned upstream bytes"
         )
+    runtime_selection = openchemlib.get("runtime_selection", {})
+    close_tie_default = runtime_selection.get("close_tie_default", {})
+    if (
+        "65536 bytes" not in runtime_selection.get("probe", "")
+        or close_tie_default.get("mainland_china") != ["jsdmirror", "jsdelivr"]
+        or close_tie_default.get("global") != ["jsdelivr", "jsdmirror"]
+        or close_tie_default.get("mainland_china_time_zones")
+        != [
+            "Asia/Shanghai",
+            "Asia/Urumqi",
+            "Asia/Chongqing",
+            "Asia/Chungking",
+            "Asia/Harbin",
+            "Asia/Kashgar",
+            "PRC",
+        ]
+        or "SHA-256-verified" not in runtime_selection.get("verification", "")
+    ):
+        raise LicenseCheckError("OpenChemLib manifest has unreviewed CDN routing")
 
     artifacts = {
-        artifact.get("url"): artifact
+        artifact.get("role"): artifact
         for artifact in openchemlib.get("cdn_artifacts", [])
         if isinstance(artifact, dict)
     }
     expected_artifacts = {
-        OPEN_CHEMLIB_MODULE_URL: (
+        "ES module runtime": (
+            dict(
+                zip(
+                    ("jsdelivr", "jsdmirror"),
+                    OPEN_CHEMLIB_MODULE_URLS,
+                    strict=True,
+                )
+            ),
             "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
             1097449,
         ),
-        OPEN_CHEMLIB_RESOURCES_URL: (
+        "conformer and MMFF resource registry": (
+            dict(
+                zip(
+                    ("jsdelivr", "jsdmirror"),
+                    OPEN_CHEMLIB_RESOURCES_URLS,
+                    strict=True,
+                )
+            ),
             "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
             1351963,
         ),
     }
     if set(artifacts) != set(expected_artifacts):
         raise LicenseCheckError("OpenChemLib manifest has unreviewed CDN URLs")
-    for url, (digest, size) in expected_artifacts.items():
-        artifact = artifacts[url]
+    for role, (provider_urls, digest, size) in expected_artifacts.items():
+        artifact = artifacts[role]
         if (
-            artifact.get("sha256") != digest
+            artifact.get("provider_urls") != provider_urls
+            or artifact.get("sha256") != digest
             or artifact.get("size_bytes") != size
             or artifact.get("redistributed_by_xtbloom") is not False
         ):
-            raise LicenseCheckError(f"OpenChemLib manifest has unreviewed bytes: {url}")
+            raise LicenseCheckError(
+                f"OpenChemLib manifest has unreviewed bytes: {role}"
+            )
 
     resource_payload = openchemlib.get("resource_payload", {})
     groups = resource_payload.get("groups", [])
@@ -2414,21 +2458,33 @@ def check_source(root: Path) -> None:
 
     smiles_helpers = (root / "web/smiles_helpers.js").read_text(encoding="utf-8")
     smiles_worker = (root / "web/smiles_worker.js").read_text(encoding="utf-8")
+    bootstrap = (root / "web/bootstrap.js").read_text(encoding="utf-8")
     for token in (
         OPEN_CHEMLIB_VERSION,
-        OPEN_CHEMLIB_MODULE_URL,
-        OPEN_CHEMLIB_RESOURCES_URL,
+        *OPEN_CHEMLIB_MODULE_URLS,
+        *OPEN_CHEMLIB_RESOURCES_URLS,
     ):
         if token not in smiles_helpers:
             raise LicenseCheckError(
                 f"SMILES helper omits pinned OpenChemLib token: {token}"
             )
-    if "Resources.registerFromUrl(OPEN_CHEMLIB_RESOURCES_URL)" not in smiles_worker:
+    if (
+        "loadOpenChemLibRuntime" not in smiles_worker
+        or "OCL.Resources.register(resources)" not in smiles_helpers
+    ):
         raise LicenseCheckError(
-            "SMILES worker does not register the pinned resources URL"
+            "SMILES worker does not verify and register a pinned provider pair"
         )
     if re.search(r"openchemlib@(?:latest|[^\"'`]*\+esm)", smiles_helpers):
         raise LicenseCheckError("SMILES helper uses a floating/transformed CDN URL")
+    for token in (
+        *THREEDMOL_URLS,
+        THREEDMOL_SHA256,
+        str(THREEDMOL_SIZE_BYTES),
+        "vendor/3Dmol-min.js",
+    ):
+        if token not in bootstrap:
+            raise LicenseCheckError(f"3Dmol loader omits pinned source token: {token}")
 
     array_compat_license = (root / ARRAY_API_COMPAT_LICENSE).read_text(encoding="utf-8")
     for token in (
@@ -2786,6 +2842,17 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
             raise LicenseCheckError(f"web site index does not expose {token}")
 
     if source_root is not None:
+        source_threedmol = source_root / "web/node_modules/3dmol/build/3Dmol-min.js"
+        if source_threedmol.is_file():
+            threedmol = (site / "vendor/3Dmol-min.js").read_bytes()
+            if (
+                len(threedmol) != THREEDMOL_SIZE_BYTES
+                or hashlib.sha256(threedmol).hexdigest() != THREEDMOL_SHA256
+                or threedmol != source_threedmol.read_bytes()
+            ):
+                raise LicenseCheckError(
+                    "web site has an unreviewed 3Dmol fallback bundle"
+                )
         for site_relative, source_relative in WEB_SITE_SOURCE_MAP.items():
             if (site / site_relative).read_bytes() != (
                 source_root / source_relative

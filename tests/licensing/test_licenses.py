@@ -987,7 +987,11 @@ class WebSiteLicenseTests(unittest.TestCase):
         for relative in CHECKER.WEB_SITE_RUNTIME_FILES:
             destination = root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(b"test\n")
+            source_threedmol = REPOSITORY / "web/node_modules/3dmol/build/3Dmol-min.js"
+            if relative == "vendor/3Dmol-min.js" and source_threedmol.is_file():
+                shutil.copy2(source_threedmol, destination)
+            else:
+                destination.write_bytes(b"test\n")
         entries = []
         version_material = ""
         for asset_id, relative in CHECKER.WEB_VERSIONED_ASSETS:
@@ -1048,6 +1052,19 @@ class WebSiteLicenseTests(unittest.TestCase):
             self._write_valid_site(root)
             (root / "LICENSES/pako-Zlib.txt").unlink()
             with self.assertRaisesRegex(CHECKER.LicenseCheckError, "pako-Zlib"):
+                CHECKER.check_web_site(root, REPOSITORY)
+
+    @unittest.skipUnless(
+        (REPOSITORY / "web/node_modules/3dmol/build/3Dmol-min.js").is_file(),
+        "requires the pinned npm build input",
+    )
+    def test_web_site_rejects_changed_3dmol_fallback(self) -> None:
+        """Require the deployed local fallback to match the reviewed CDN bytes."""
+        with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
+            root = Path(directory)
+            self._write_valid_site(root)
+            (root / "vendor/3Dmol-min.js").write_bytes(b"changed\n")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "3Dmol"):
                 CHECKER.check_web_site(root, REPOSITORY)
 
     def test_web_site_requires_torch_bsd_license(self) -> None:

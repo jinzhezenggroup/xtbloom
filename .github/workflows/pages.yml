@@ -155,9 +155,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Verify pinned OpenChemLib CDN integration
+      - name: Verify pinned browser CDN integration
         if: matrix.architecture == 'wasm32'
-        run: node web/tests/openchemlib_smoke.mjs
+        run: |
+          node web/tests/3dmol_smoke.mjs
+          node web/tests/openchemlib_smoke.mjs
 
       - name: Run public C ABI layout and short-initializer checks
         run: |

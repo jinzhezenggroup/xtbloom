@@ -3,21 +3,31 @@
  * independent xtbloom WASM worker. */
 
 import {
-  OPEN_CHEMLIB_MODULE_URL,
-  OPEN_CHEMLIB_RESOURCES_URL,
+  CDN_REGION_GLOBAL,
+  CDN_REGION_MAINLAND_CHINA,
+  loadOpenChemLibRuntime,
   smilesToGeometry,
 } from "./smiles_helpers.js";
 
 let OCL = null;
+const requestedRegion = new URL(import.meta.url).searchParams.get("xtbloom_cdn_region");
+const cdnRegion = requestedRegion === CDN_REGION_MAINLAND_CHINA
+  ? CDN_REGION_MAINLAND_CHINA
+  : CDN_REGION_GLOBAL;
+const requestedProviders = new URL(import.meta.url).searchParams
+  .get("xtbloom_cdn_providers")
+  ?.split(",");
 
 async function initialize() {
   try {
-    OCL = await import(OPEN_CHEMLIB_MODULE_URL);
-    if (String(OCL.version) !== "9.21.0") {
-      throw new Error(`unexpected OpenChemLib version ${String(OCL.version)}`);
-    }
-    await OCL.Resources.registerFromUrl(OPEN_CHEMLIB_RESOURCES_URL);
-    self.postMessage({ type: "ready", version: OCL.version });
+    const runtime = await loadOpenChemLibRuntime(requestedProviders, { region: cdnRegion });
+    OCL = runtime.OCL;
+    self.postMessage({
+      type: "ready",
+      version: OCL.version,
+      moduleUrl: runtime.moduleUrl,
+      resourcesUrl: runtime.resourcesUrl,
+    });
   } catch (error) {
     self.postMessage({
       type: "load-error",
