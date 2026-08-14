@@ -765,6 +765,10 @@ test("bootstrap manifest validation rejects unsafe partial metadata", () => {
     ...valid,
     assets: valid.assets.filter((asset) => asset.id !== "smiles_worker"),
   }), /missing smiles_worker/);
+  assert.throws(() => validateBootstrapManifest({
+    ...valid,
+    assets: valid.assets.filter((asset) => asset.id !== "smiles_helpers"),
+  }), /missing smiles_helpers/);
 });
 
 test("bootstrap UI exposes retry progress and clears stale recovery state", async () => {

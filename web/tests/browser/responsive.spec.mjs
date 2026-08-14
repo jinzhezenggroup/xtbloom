@@ -224,8 +224,11 @@ test("SMILES Worker requires a hash version and ignores a stale helper", async (
   });
   expect(helperRequests.filter((request) => request.version === null)).toHaveLength(1);
   expect(helperRequests.filter((request) => request.version === contentVersion)).toHaveLength(1);
-  expect(helperRequests.find((request) => request.version === contentVersion)?.resourceType)
-    .toBe("script");
+  /* Chromium labels a module Worker's dynamic import as script, while WebKit
+   * exposes the same successful module request to Playwright as xhr. */
+  expect(["script", "xhr"]).toContain(
+    helperRequests.find((request) => request.version === contentVersion)?.resourceType,
+  );
 
   const unversionedResult = await page.evaluate(async () => {
     const worker = new Worker(new URL("smiles_worker.js", window.location.href), {
@@ -252,6 +255,32 @@ test("SMILES Worker requires a hash version and ignores a stale helper", async (
     error: "SMILES Worker requires a 64-character SHA-256 content version",
   });
   expect(helperRequests.filter((request) => request.version === null)).toHaveLength(1);
+
+  const invalidVersionResult = await page.evaluate(async () => {
+    const workerUrl = new URL("smiles_worker.js", window.location.href);
+    workerUrl.searchParams.set("xtbloom_version", "latest");
+    const worker = new Worker(workerUrl, { type: "module" });
+    return new Promise((resolve) => {
+      const finish = (value) => {
+        clearTimeout(timer);
+        worker.terminate();
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish({ type: "timeout", error: "" }), 30000);
+      worker.onmessage = (event) => {
+        if (event.data?.type === "load-error") finish(event.data);
+      };
+      worker.onerror = (event) => {
+        event.preventDefault();
+        finish({ type: "worker-error", error: event.message });
+      };
+    });
+  });
+  expect(invalidVersionResult).toMatchObject({
+    type: "load-error",
+    error: "SMILES Worker requires a 64-character SHA-256 content version",
+  });
+  expect(helperRequests.filter((request) => request.version === "latest")).toHaveLength(0);
 });
 
 test("mobile and desktop layouts survive both methods and completed states", async ({ page }, testInfo) => {
