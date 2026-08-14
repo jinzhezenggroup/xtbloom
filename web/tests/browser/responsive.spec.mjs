@@ -143,6 +143,156 @@ test.afterEach(async ({ page }, testInfo) => {
   });
 });
 
+test("SMILES Worker requires a hash version and ignores a stale helper", async ({ context, page }) => {
+  const contentVersion = "d".repeat(64);
+  const helperRequests = [];
+  /* Isolate the Worker contract from the application, which starts its own
+   * optional SMILES Worker asynchronously and would make request counts race. */
+  await context.route("**/smiles-worker-contract.html", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<!doctype html><title>SMILES Worker contract</title>",
+    });
+  });
+  await context.route("**/smiles_helpers.js*", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    helperRequests.push({
+      url: url.href,
+      resourceType: request.resourceType(),
+      version: url.searchParams.get("xtbloom_version"),
+    });
+    if (!url.searchParams.has("xtbloom_version")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/javascript",
+        body: [
+          'export const OPEN_CHEMLIB_VERSION = "stale-cache-fixture";',
+          'export const CDN_REGION_MAINLAND_CHINA = "mainland-china";',
+          'export const CDN_REGION_GLOBAL = "global";',
+          "export function smilesToGeometry() { return {}; }",
+        ].join("\n"),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/javascript",
+      body: [
+        'export const CDN_REGION_MAINLAND_CHINA = "mainland-china";',
+        'export const CDN_REGION_GLOBAL = "global";',
+        "export function smilesToGeometry() { return {}; }",
+        "export async function loadOpenChemLibRuntime() {",
+        "  return {",
+        '    OCL: { version: "9.21.0" },',
+        '    moduleUrl: "stub:openchemlib",',
+        '    resourcesUrl: "stub:resources",',
+        "  };",
+        "}",
+      ].join("\n"),
+    });
+  });
+
+  await page.goto("/smiles-worker-contract.html", { waitUntil: "domcontentloaded" });
+  const staleVersion = await page.evaluate(async () => {
+    const stale = await import(new URL("smiles_helpers.js", window.location.href).href);
+    return stale.OPEN_CHEMLIB_VERSION;
+  });
+  expect(staleVersion).toBe("stale-cache-fixture");
+
+  const result = await page.evaluate(async (version) => {
+    const workerUrl = new URL("smiles_worker.js", window.location.href);
+    workerUrl.searchParams.set("xtbloom_version", version);
+    workerUrl.searchParams.set("xtbloom_cdn_region", "global");
+    const worker = new Worker(workerUrl, { type: "module" });
+    return new Promise((resolve) => {
+      const finish = (value) => {
+        clearTimeout(timer);
+        worker.terminate();
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish({ type: "timeout", error: "" }), 30000);
+      worker.onmessage = (event) => {
+        if (event.data?.type === "load-error" || event.data?.type === "ready") {
+          finish(event.data);
+        }
+      };
+      worker.onerror = (event) => {
+        event.preventDefault();
+        finish({ type: "worker-error", error: event.message });
+      };
+    });
+  }, contentVersion);
+
+  expect(result).toMatchObject({
+    type: "ready",
+    version: "9.21.0",
+    moduleUrl: "stub:openchemlib",
+    resourcesUrl: "stub:resources",
+  });
+  expect(helperRequests.filter((request) => request.version === null)).toHaveLength(1);
+  expect(helperRequests.filter((request) => request.version === contentVersion)).toHaveLength(1);
+  /* Chromium labels a module Worker's dynamic import as script, while WebKit
+   * exposes the same successful module request to Playwright as xhr. */
+  expect(["script", "xhr"]).toContain(
+    helperRequests.find((request) => request.version === contentVersion)?.resourceType,
+  );
+
+  const unversionedResult = await page.evaluate(async () => {
+    const worker = new Worker(new URL("smiles_worker.js", window.location.href), {
+      type: "module",
+    });
+    return new Promise((resolve) => {
+      const finish = (value) => {
+        clearTimeout(timer);
+        worker.terminate();
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish({ type: "timeout", error: "" }), 30000);
+      worker.onmessage = (event) => {
+        if (event.data?.type === "load-error") finish(event.data);
+      };
+      worker.onerror = (event) => {
+        event.preventDefault();
+        finish({ type: "worker-error", error: event.message });
+      };
+    });
+  });
+  expect(unversionedResult).toMatchObject({
+    type: "load-error",
+    error: "SMILES Worker requires a 64-character SHA-256 content version",
+  });
+  expect(helperRequests.filter((request) => request.version === null)).toHaveLength(1);
+
+  const helperRequestsBeforeInvalidVersion = helperRequests.length;
+  const invalidVersionResult = await page.evaluate(async () => {
+    const workerUrl = new URL("smiles_worker.js", window.location.href);
+    workerUrl.searchParams.set("xtbloom_version", "latest");
+    const worker = new Worker(workerUrl, { type: "module" });
+    return new Promise((resolve) => {
+      const finish = (value) => {
+        clearTimeout(timer);
+        worker.terminate();
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish({ type: "timeout", error: "" }), 30000);
+      worker.onmessage = (event) => {
+        if (event.data?.type === "load-error") finish(event.data);
+      };
+      worker.onerror = (event) => {
+        event.preventDefault();
+        finish({ type: "worker-error", error: event.message });
+      };
+    });
+  });
+  expect(invalidVersionResult).toMatchObject({
+    type: "load-error",
+    error: "SMILES Worker requires a 64-character SHA-256 content version",
+  });
+  expect(helperRequests).toHaveLength(helperRequestsBeforeInvalidVersion);
+});
+
 test("mobile and desktop layouts survive both methods and completed states", async ({ page }, testInfo) => {
   const widths = widthsFor(testInfo.project.name);
   await page.setViewportSize({ width: widths[0], height: VIEWPORT_HEIGHT });

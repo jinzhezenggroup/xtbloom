@@ -9,8 +9,12 @@ const appContentVersion = appModuleUrl.searchParams.get("xtbloom_version");
 const appBootstrapToken = appModuleUrl.searchParams.get("xtbloom_bootstrap");
 const appHelpersUrl = new URL("./app_helpers.js", import.meta.url);
 const c60CaseUrl = new URL("./c60_case.js", import.meta.url);
+const smilesWorkerModuleUrl = new URL("./smiles_worker.js", import.meta.url);
 if (appContentVersion) appHelpersUrl.searchParams.set("xtbloom_version", appContentVersion);
 if (appContentVersion) c60CaseUrl.searchParams.set("xtbloom_version", appContentVersion);
+if (appContentVersion) {
+  smilesWorkerModuleUrl.searchParams.set("xtbloom_version", appContentVersion);
+}
 if (appBootstrapToken) appHelpersUrl.searchParams.set("xtbloom_bootstrap", appBootstrapToken);
 if (appBootstrapToken) c60CaseUrl.searchParams.set("xtbloom_bootstrap", appBootstrapToken);
 
@@ -538,7 +542,9 @@ function startSmilesWorker() {
   if (!smilesClient) {
     smilesClient = createSmilesWorkerClient({
       createWorker: () => {
-        const workerUrl = new URL("./smiles_worker.js", import.meta.url);
+        /* The content version covers both this Worker and its dynamically
+         * imported helper; CDN routing parameters do not identify code. */
+        const workerUrl = new URL(smilesWorkerModuleUrl.href);
         const providers = Array.isArray(globalThis.__XTBLOOM_CDN_PROVIDERS)
           ? globalThis.__XTBLOOM_CDN_PROVIDERS
           : [];
@@ -758,7 +764,12 @@ async function loadEngineManifest(attempt, forceReload, signal) {
 }
 
 function validateManifestForLoadedApp(rawManifest) {
-  const manifest = validateEngineManifest(rawManifest, ["app", ...ENGINE_ASSET_IDS]);
+  const manifest = validateEngineManifest(rawManifest, [
+    "app",
+    "smiles_worker",
+    "smiles_helpers",
+    ...ENGINE_ASSET_IDS,
+  ]);
   // A deployment may finish between retry attempts. Never combine an already
   // evaluated app/helper graph with a newer Worker/WASM/data generation.
   if (appContentVersion && manifest.version !== appContentVersion) {

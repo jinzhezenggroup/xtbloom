@@ -279,7 +279,8 @@ add_custom_command(
 # The browser revalidates this small manifest on each page load. An unchanged
 # content version keeps the application graph and engine resources cacheable
 # across refreshes; a changed version gives the complete JS/wasm/data generation
-# new URLs before the app/helper/preset module graph is linked.
+# new URLs before the core app/helper/preset graph and optional SMILES
+# Worker/helper graph are linked.
 set(_xtbloom_web_engine_manifest
     "${_xtbloom_web_site}/engine-manifest.json")
 add_custom_command(
@@ -293,6 +294,8 @@ add_custom_command(
     "${_xtbloom_web_site}/c60_case.js"
     "${_xtbloom_web_site}/worker.js"
     "${_xtbloom_web_site}/app_helpers.js"
+    "${_xtbloom_web_site}/smiles_worker.js"
+    "${_xtbloom_web_site}/smiles_helpers.js"
     "${_xtbloom_web_site}/xtbloom_web.js"
     "${_xtbloom_web_site}/xtbloom_web.wasm"
     "${_xtbloom_web_site}/xtbloom_web.data"
