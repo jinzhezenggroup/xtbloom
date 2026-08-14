@@ -1107,6 +1107,22 @@ class WebSiteLicenseTests(unittest.TestCase):
                 with self.assertRaisesRegex(CHECKER.LicenseCheckError, "gfn1|GFN1"):
                     CHECKER.check_web_site(root, REPOSITORY)
 
+    def test_web_site_rejects_changed_gfn1_parameter_provenance(self) -> None:
+        """Reject deployed GFN1 provenance that no longer matches its source."""
+        for relative in CHECKER.REQUIRED_GFN1_WEB_SOURCE_MAP:
+            with (
+                self.subTest(relative=relative),
+                tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory,
+            ):
+                root = Path(directory)
+                self._write_valid_site(root)
+                path = root / relative
+                path.write_bytes(path.read_bytes() + b"\nchanged\n")
+                with self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError, "legal file differs from source"
+                ):
+                    CHECKER.check_web_site(root, REPOSITORY)
+
     def test_web_site_rejects_raw_lapack_side_module(self) -> None:
         """Do not deploy a second untracked copy of the preloaded side module."""
         with tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory:
