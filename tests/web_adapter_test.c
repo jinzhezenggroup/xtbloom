@@ -362,6 +362,16 @@ static int test_gfn1_optimization_starts_fresh_and_stays_gfn1(void) {
   return 0;
 }
 
+static int test_invalid_model_optimization_is_rejected_before_compute(void) {
+  reset_adapter();
+  const int calls_before_invalid = mock_call_count;
+  const char* actual =
+      xtbloom_web_optimize("H 0 0 0", 99, 0.0, 0, 0.0, 1e-8, 1e-5, 20, 3, 1e-12, 0.4);
+  CHECK(strcmp(actual, "{\"ok\":0,\"error_code\":\"err_model\"}") == 0);
+  CHECK(mock_call_count == calls_before_invalid);
+  return 0;
+}
+
 /* When the strict native gate refuses a WARM request (incompatible identity or
  * no fully converged predecessor), the adapter must transparently retry FRESH
  * and keep the optimization going. */
@@ -415,6 +425,7 @@ int main(void) {
   CHECK(test_failed_step_does_not_poison_next_calculation() == 0);
   CHECK(test_model_tags_are_explicit_and_published() == 0);
   CHECK(test_gfn1_optimization_starts_fresh_and_stays_gfn1() == 0);
+  CHECK(test_invalid_model_optimization_is_rejected_before_compute() == 0);
   free(g_result.data);
   return 0;
 }

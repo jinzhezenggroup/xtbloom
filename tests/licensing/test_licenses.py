@@ -926,6 +926,56 @@ class InstallPayloadTests(unittest.TestCase):
                 CHECKER.check_install(root)
 
 
+class WebDependencySourceTests(unittest.TestCase):
+    """Keep CI-only browser tooling and deployed GFN1 provenance fully pinned."""
+
+    def test_playwright_notice_record_is_complete(self) -> None:
+        """Accept the complete reviewed package, tarball, and browser record."""
+        notice = (REPOSITORY / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        CHECKER._require_notice_tokens(notice, CHECKER.PLAYWRIGHT_NOTICE_TOKENS)
+
+    def test_playwright_notice_rejects_every_omitted_record(self) -> None:
+        """Reject removal of any package, tarball, browser, or codec locator."""
+        notice = (REPOSITORY / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        for token in CHECKER.PLAYWRIGHT_NOTICE_TOKENS:
+            with self.subTest(token=token):
+                changed = notice.replace(token, "", 1)
+                with self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError, "THIRD_PARTY_NOTICES.md omits"
+                ):
+                    CHECKER._require_notice_tokens(
+                        changed, CHECKER.PLAYWRIGHT_NOTICE_TOKENS
+                    )
+
+    def test_gfn1_web_source_map_is_complete(self) -> None:
+        """Accept exact source mappings for all three deployed GFN1 manifests."""
+        CHECKER._require_gfn1_web_source_map()
+
+    def test_gfn1_web_source_map_rejects_omissions_and_changes(self) -> None:
+        """Do not let a deployed GFN1 manifest lose its byte-exact source owner."""
+        for site_relative in CHECKER.REQUIRED_GFN1_WEB_SOURCE_MAP:
+            with (
+                self.subTest(site_relative=site_relative, mutation="missing"),
+                mock.patch.dict(CHECKER.WEB_SITE_SOURCE_MAP),
+            ):
+                CHECKER.WEB_SITE_SOURCE_MAP.pop(site_relative)
+                with self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError, "required GFN1 provenance"
+                ):
+                    CHECKER._require_gfn1_web_source_map()
+            with (
+                self.subTest(site_relative=site_relative, mutation="changed"),
+                mock.patch.dict(
+                    CHECKER.WEB_SITE_SOURCE_MAP,
+                    {site_relative: "data/parameters/wrong-manifest.json"},
+                ),
+                self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError, "required GFN1 provenance"
+                ),
+            ):
+                CHECKER._require_gfn1_web_source_map()
+
+
 class WebSiteLicenseTests(unittest.TestCase):
     """Require the Pages artifact to retain its complete legal boundary."""
 
@@ -1042,6 +1092,19 @@ class WebSiteLicenseTests(unittest.TestCase):
                 self._write_valid_site(root)
                 (root / relative).unlink()
                 with self.assertRaisesRegex(CHECKER.LicenseCheckError, "Eigen|eigen"):
+                    CHECKER.check_web_site(root, REPOSITORY)
+
+    def test_web_site_requires_all_gfn1_parameter_provenance(self) -> None:
+        """Ship every GFN1 parameter source manifest exposed by the method UI."""
+        for relative in CHECKER.REQUIRED_GFN1_WEB_SOURCE_MAP:
+            with (
+                self.subTest(relative=relative),
+                tempfile.TemporaryDirectory(prefix="xtbloom-web-license-") as directory,
+            ):
+                root = Path(directory)
+                self._write_valid_site(root)
+                (root / relative).unlink()
+                with self.assertRaisesRegex(CHECKER.LicenseCheckError, "gfn1|GFN1"):
                     CHECKER.check_web_site(root, REPOSITORY)
 
     def test_web_site_rejects_raw_lapack_side_module(self) -> None:

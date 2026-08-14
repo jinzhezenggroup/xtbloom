@@ -581,9 +581,10 @@ and `e17ade950c193fe09adfc7915fe29ac26166c8782d00e7c3879e7e9de02c5428`
 for `fsevents`.
 
 The locked Playwright metadata selects Chromium/Chrome-for-Testing
-151.0.7922.34 revision 1234, WebKit 26.5 revision 2336, and FFmpeg revision
-1011. The CI runner downloads those browser-test runtimes through Playwright's
-installer. They remain inside the disposable validation environment: no
+151.0.7922.34 revision 1234, WebKit 26.5 revision 2336, and
+FFmpeg revision 1011. The CI runner downloads those browser-test runtimes
+through Playwright's installer. They remain inside the disposable validation
+environment: no
 Playwright package, `fsevents` package, browser executable, codec binary, or
 browser license payload is vendored into the repository or redistributed in
 source archives, native installs, Python wheels, or the deployed Pages site.
