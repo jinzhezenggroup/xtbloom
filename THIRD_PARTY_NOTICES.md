@@ -310,6 +310,40 @@ archives, installs, or wheels, and does not alter the licensing of build
 outputs (the project is itself `GPL-3.0-or-later`, so building with ccache
 introduces no incompatibility).
 
+## Cloudflare Pages deployment tools
+
+The `wasm-web-pages` workflow uses Wrangler 4.123.0 from npm to upload the
+validated wasm32 site to a pre-existing Cloudflare Pages Direct Upload
+project. That release corresponds to
+Cloudflare Workers SDK tag commit
+`c576a8271503cc51babc1a8d0f2ef7d384f78742`, is offered under
+`MIT OR Apache-2.0` ([upstream MIT license](https://github.com/cloudflare/workers-sdk/blob/c576a8271503cc51babc1a8d0f2ef7d384f78742/LICENSE-MIT)
+and [upstream Apache-2.0 license](https://github.com/cloudflare/workers-sdk/blob/c576a8271503cc51babc1a8d0f2ef7d384f78742/LICENSE-APACHE)), and has npm integrity
+`sha512-VXo2I1oa0x9aGAKIFPRSQPqTh0RBY5Ktl44YOhNmsJQFUdJKDA2vVTU6Xj+FC2koll6orJqWZN8jbXVIk9O67Q==`.
+The published npm tarball has SHA-256
+`762e002dae5fb41027855065aafd8f6703bdf358437cf37946aafe5092add9cc`.
+`tools/cloudflare-pages/package-lock.json` pins the complete CI-only transitive
+dependency graph and npm registry integrity values. The Linux CI installation
+also declares exact `@cloudflare/workerd-linux-64` 1.20260811.1 (Apache-2.0;
+npm integrity
+`sha512-sdYq2jL1AD1supa3fsi5O4zTB28wSjvTHj7Migh6/ts8EROPdvrSwv+rdGHhv8HJNAz/wbIAY3wZsi1Rw4uUIg==`;
+tarball SHA-256
+`f46c887624f4e33a9cae83c3dfce4bb0899c4eb49ee418247681ebfed0627256`)
+and `@esbuild/linux-x64` 0.28.1 (MIT; npm integrity
+`sha512-u/anNYF2mmVOEDwLtnQ1wOr3EZ9sTNGLWrsYGYwHWzGA3Si84IOkHXlbWTD1NB+9/1lcnweYKO54uhxZydNzfA==`;
+tarball SHA-256
+`9ed00ab5330c94386f3273eda99a1fb0e8f37cfd6cb5270e4ad2fe3527da3546`).
+
+The validation job runs `npm ci --omit=optional --ignore-scripts`, verifies the
+exact Wrangler version, and archives that minimal installation. Omitting
+optional packages avoids shipping unused platform binaries, including
+Sharp/libvips, and ignoring lifecycle scripts removes install-time executable
+code. The production job does not check out repository code or invoke npm; its
+credential-bearing step only invokes the locked Wrangler installation. The
+short-lived tool artifact is not vendored into the repository or redistributed
+in xTBloom source archives, native installs, wheels, or the deployed site. Any
+lockfile or deployment-package change requires a renewed audit.
+
 ## Nox validation orchestrator
 
 Repository: <https://github.com/wntrblm/nox>

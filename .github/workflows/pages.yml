@@ -1,4 +1,5 @@
-# Builds the xtbloom WASM web demo and publishes it to GitHub Pages.
+# Builds the xtbloom WASM web demo and publishes it to GitHub Pages and
+# Cloudflare Pages.
 #
 # The artifact is a fully client-side GFN1-xTB/GFN2-xTB single-point + geometry
 # optimization page: a single-threaded wasm32 module (so no COOP/COEP headers
@@ -230,12 +231,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Node for dual-width parity
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
 
@@ -278,6 +279,35 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      # Install and verify the exact Linux deployment graph before any
+      # deployment secret is available. Optional packages and lifecycle
+      # scripts are unnecessary for a static Pages upload; the explicit
+      # workerd/esbuild packages keep Wrangler executable without them.
+      - name: Install locked Cloudflare Pages deployer
+        run: >-
+          npm ci --prefix tools/cloudflare-pages
+          --omit=optional --ignore-scripts --no-audit --no-fund
+
+      - name: Verify locked Wrangler version
+        run: >-
+          test "$(node
+          tools/cloudflare-pages/node_modules/wrangler/bin/wrangler.js
+          --version)" = "4.123.0"
+
+      - name: Archive locked Cloudflare Pages deployer
+        run: >-
+          tar -czf build/cloudflare-pages-deployer.tar.gz
+          -C tools/cloudflare-pages
+          node_modules package.json package-lock.json
+
+      - name: Preserve locked Cloudflare Pages deployer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: xtbloom-cloudflare-pages-deployer
+          path: build/cloudflare-pages-deployer.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Upload trusted main site artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v5
@@ -304,3 +334,60 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+
+  deploy-cloudflare:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      deployments: write
+    environment:
+      name: cloudflare-pages
+      url: https://${{ vars.CLOUDFLARE_PROJECT_NAME }}.pages.dev
+    steps:
+      # Keep repository code and package installation outside the
+      # credential-bearing job. These immutable artifacts contain the wasm32
+      # site that passed parity and the exact lockfile-installed deployer.
+      - name: Restore validated wasm32 site
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: xtbloom-web-wasm32
+          path: build/wasm32-web/web/site
+
+      - name: Set up Node for locked Wrangler
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Restore locked Cloudflare Pages deployer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: xtbloom-cloudflare-pages-deployer
+          path: build/cloudflare-pages-deployer-archive
+
+      - name: Extract locked Cloudflare Pages deployer
+        run: |
+          mkdir -p build/cloudflare-pages-deployer
+          tar -xzf \
+            build/cloudflare-pages-deployer-archive/cloudflare-pages-deployer.tar.gz \
+            -C build/cloudflare-pages-deployer
+
+      - name: Deploy to Cloudflare Pages
+        # This credential-bearing step invokes only the already-installed
+        # locked Wrangler graph. It performs no npm resolution or lifecycle
+        # scripts while the Cloudflare token is available.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PROJECT_NAME: ${{ vars.CLOUDFLARE_PROJECT_NAME }}
+          WRANGLER_SEND_METRICS: 'false'
+        run: >-
+          node
+          build/cloudflare-pages-deployer/node_modules/wrangler/bin/wrangler.js
+          pages deploy build/wasm32-web/web/site
+          --project-name "${CLOUDFLARE_PROJECT_NAME}"
+          --branch main
+          --commit-dirty=true
+          --commit-hash "${GITHUB_SHA}"
