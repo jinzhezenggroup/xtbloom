@@ -30,9 +30,10 @@ and dpdata interfaces built on the same native execution path.
 [![xTBloom browser demo running an ethanol calculation](docs/assets/web-demo-ethanol.png)](https://xtbloom.jinzhezeng.group/?smiles=CCO)
 
 The [fully client-side demo](https://xtbloom.jinzhezeng.group) turns SMILES or
-XYZ coordinates into an interactive GFN2-xTB calculation without an install or
-server upload. The screenshot shows ethanol generated from `CCO`, optimized,
-and evaluated in the browser build prepared by this repository.
+XYZ coordinates into an interactive GFN1-xTB or GFN2-xTB calculation without
+an install or server upload. GFN2-xTB remains the default. The screenshot shows
+ethanol generated from `CCO`, optimized, and evaluated with GFN2-xTB in the
+browser build prepared by this repository.
 
 The browser's SMILES-to-3D workflow and L-BFGS optimizer are demonstration
 adapter features. The native library API remains focused on reusable
@@ -144,8 +145,8 @@ before reusing the numbers.
 | Uniform electric field and molecular dipoles | GFN2 CPU and CUDA; not published for GFN1 |
 | ASE and dpdata integrations | GFN1 CPU and GFN2 |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
-| Array API/DLPack, PyTorch autograd, and browser demo | GFN2-only adapter surfaces |
-| Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN2 adapter |
+| Array API/DLPack and PyTorch autograd | GFN2-only adapter surfaces |
+| Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN1/GFN2 CPU/WASM adapter; GFN2 is the default |
 | ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN2 execution | Not implemented |
 
 Reserved ABI values are not reported as supported features. At finite

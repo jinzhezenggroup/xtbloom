@@ -13,9 +13,10 @@ charges through one stable C ABI and Python interfaces built on that ABI.
 [![xTBloom browser demo running an ethanol calculation](assets/web-demo-ethanol.png)](https://xtbloom.jinzhezeng.group/?smiles=CCO)
 
 The browser demo runs entirely on the client: enter SMILES or XYZ coordinates,
-inspect the 3D structure, and calculate GFN2-xTB results without uploading the
-molecule. Its SMILES-to-3D and geometry-optimization workflow belongs to the
-demo adapter, not the native single-point API.
+inspect the 3D structure, and calculate GFN1-xTB or GFN2-xTB results without
+uploading the molecule. GFN2-xTB remains the default. Its SMILES-to-3D and
+geometry-optimization workflow belongs to the demo adapter, not the native
+single-point API.
 
 [Open the demo](https://xtbloom.jinzhezeng.group) ·
 [Browser usage and limitations](user-guide/browser-demo.md)
@@ -65,10 +66,11 @@ xTBloom implements restricted and unrestricted GFN2-xTB on CPU and CUDA and
 GFN1-xTB on CPU. Both models publish native ragged batches, analytic forces,
 charges, explicit point charges, caller-supplied periodic charge response, the
 high-level Python calculators, ASE, and dpdata. Uniform electric fields and
-molecular dipoles, Array API/DLPack, PyTorch autograd, and the browser demo are
-GFN2-only. The
-low-level CUDA ABI accepts host, device, and mixed descriptors, including
-independently placed interaction descriptor and payload buffers.
+molecular dipoles, Array API/DLPack, and PyTorch autograd are GFN2-only. The
+single-threaded CPU/WebAssembly browser demo exposes both GFN1 and GFN2, with
+GFN2 selected by default. The low-level CUDA ABI accepts host, device, and
+mixed descriptors, including independently placed interaction descriptor and
+payload buffers.
 
 The ABI-v4 native-cell descriptors validate molecular `NONE` and fully
 periodic `XYZ` inputs, but valid `XYZ` compute requests return

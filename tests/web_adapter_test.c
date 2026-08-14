@@ -30,6 +30,7 @@ enum MockComputeMode {
  * tests can prove which native policy the adapter asked for on each compute. */
 #define MOCK_CALL_LOG_CAP 128
 static int32_t mock_call_modes[MOCK_CALL_LOG_CAP];
+static int32_t mock_call_models[MOCK_CALL_LOG_CAP];
 static uint32_t mock_call_struct_sizes[MOCK_CALL_LOG_CAP];
 static int mock_call_count = 0;
 
@@ -130,6 +131,7 @@ xtbloom_status_t xtbloom_compute(xtbloom_context_t* context, const xtbloom_batch
                                  : XTBLOOM_SCC_START_FRESH;
   if (mock_call_count < MOCK_CALL_LOG_CAP) {
     mock_call_modes[mock_call_count] = start_mode;
+    mock_call_models[mock_call_count] = options->model;
     mock_call_struct_sizes[mock_call_count] = options->struct_size;
   }
   ++mock_call_count;
@@ -208,7 +210,8 @@ static int test_error_json_escapes_diagnostics(void) {
 static int test_system_failure_is_not_success(void) {
   reset_adapter();
   mock_compute_mode = MOCK_COMPUTE_SYSTEM_FAILURE;
-  const char* actual = xtbloom_web_compute("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 1, 1);
+  const char* actual =
+      xtbloom_web_compute("H 0 0 0", XTBLOOM_MODEL_GFN2_XTB, 0.0, 0, 0.0, 1e-8, 1e-5, 1, 1);
   CHECK(strstr(actual, "\"ok\":0") != NULL);
   CHECK(strstr(actual, "\"error_code\":\"err_compute\"") != NULL);
   CHECK(strstr(actual, "SCC not converged") != NULL);
@@ -218,7 +221,8 @@ static int test_system_failure_is_not_success(void) {
 
 static int test_disabled_forces_are_omitted(void) {
   reset_adapter();
-  const char* actual = xtbloom_web_compute("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 20, 0);
+  const char* actual =
+      xtbloom_web_compute("H 0 0 0", XTBLOOM_MODEL_GFN2_XTB, 0.0, 0, 0.0, 1e-8, 1e-5, 20, 0);
   CHECK(strstr(actual, "\"ok\":1") != NULL);
   CHECK(strstr(actual, "\"forces\"") == NULL);
   CHECK(mock_saw_force_buffer == 0);
@@ -229,7 +233,8 @@ static int test_disabled_forces_are_omitted(void) {
 static int test_initial_optimizer_failure_is_defined(void) {
   reset_adapter();
   mock_compute_mode = MOCK_COMPUTE_SYSTEM_FAILURE;
-  const char* actual = xtbloom_web_optimize("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 1, 2, 4.5e-4, 0.4);
+  const char* actual = xtbloom_web_optimize("H 0 0 0", XTBLOOM_MODEL_GFN2_XTB, 0.0, 0, 0.0, 1e-8,
+                                            1e-5, 1, 2, 4.5e-4, 0.4);
   CHECK(strstr(actual, "\"ok\":0") != NULL);
   CHECK(strstr(actual, "\"error_code\":\"err_initial_calc\"") != NULL);
   CHECK(strstr(actual, "SCC not converged") != NULL);
@@ -253,9 +258,13 @@ static int test_lbfgs_invariants(void) {
 
 /* The quadratic mock model lets the optimizer take several steps. Helpers
  * share the "run a multi-step optimization starting at x=0" setup. */
+static const char* run_optimize_model(int model, int opt_max_iterations) {
+  return xtbloom_web_optimize("H 0 0 0", model, 0.0, 0, 0.0, 1e-8, 1e-5, 20, opt_max_iterations,
+                              1e-12, 0.4);
+}
+
 static const char* run_optimize(int opt_max_iterations) {
-  return xtbloom_web_optimize("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 20, opt_max_iterations, 1e-12,
-                              0.4);
+  return run_optimize_model(XTBLOOM_MODEL_GFN2_XTB, opt_max_iterations);
 }
 
 /* First evaluation of an optimization run must be FRESH; every later
@@ -311,10 +320,45 @@ static int test_single_point_stays_fresh(void) {
   CHECK(strstr(opt, "\"ok\":1") != NULL);
   CHECK(mock_call_modes[mock_call_count - 1] == XTBLOOM_SCC_START_WARM);
   const int before_single = mock_call_count;
-  const char* single = xtbloom_web_compute("H 0 0 0", 0.0, 0, 0.0, 1e-8, 1e-5, 20, 1);
+  const char* single =
+      xtbloom_web_compute("H 0 0 0", XTBLOOM_MODEL_GFN2_XTB, 0.0, 0, 0.0, 1e-8, 1e-5, 20, 1);
   CHECK(strstr(single, "\"ok\":1") != NULL);
   CHECK(mock_call_count == before_single + 1);
   CHECK(mock_call_modes[before_single] == XTBLOOM_SCC_START_FRESH);
+  return 0;
+}
+
+static int test_model_tags_are_explicit_and_published(void) {
+  reset_adapter();
+  const char* gfn1 =
+      xtbloom_web_compute("H 0 0 0", XTBLOOM_MODEL_GFN1_XTB, 0.0, 0, 0.0, 1e-8, 1e-5, 20, 1);
+  CHECK(strstr(gfn1, "\"model\":1") != NULL);
+  CHECK(strstr(gfn1, "\"method\":\"GFN1-xTB\"") != NULL);
+  CHECK(mock_call_models[0] == XTBLOOM_MODEL_GFN1_XTB);
+
+  const char* gfn2 =
+      xtbloom_web_compute("H 0 0 0", XTBLOOM_MODEL_GFN2_XTB, 0.0, 0, 0.0, 1e-8, 1e-5, 20, 1);
+  CHECK(strstr(gfn2, "\"model\":2") != NULL);
+  CHECK(strstr(gfn2, "\"method\":\"GFN2-xTB\"") != NULL);
+  CHECK(mock_call_models[1] == XTBLOOM_MODEL_GFN2_XTB);
+
+  const int calls_before_invalid = mock_call_count;
+  const char* invalid = xtbloom_web_compute("H 0 0 0", 99, 0.0, 0, 0.0, 1e-8, 1e-5, 20, 1);
+  CHECK(strcmp(invalid, "{\"ok\":0,\"error_code\":\"err_model\"}") == 0);
+  CHECK(mock_call_count == calls_before_invalid);
+  return 0;
+}
+
+static int test_gfn1_optimization_starts_fresh_and_stays_gfn1(void) {
+  reset_adapter();
+  const char* actual = run_optimize_model(XTBLOOM_MODEL_GFN1_XTB, 3);
+  CHECK(strstr(actual, "\"ok\":1") != NULL);
+  CHECK(strstr(actual, "\"model\":1") != NULL);
+  CHECK(strstr(actual, "\"method\":\"GFN1-xTB\"") != NULL);
+  CHECK(mock_call_modes[0] == XTBLOOM_SCC_START_FRESH);
+  for (int i = 0; i < mock_call_count; ++i) {
+    CHECK(mock_call_models[i] == XTBLOOM_MODEL_GFN1_XTB);
+  }
   return 0;
 }
 
@@ -369,6 +413,8 @@ int main(void) {
   CHECK(test_single_point_stays_fresh() == 0);
   CHECK(test_warm_rejection_falls_back_to_fresh() == 0);
   CHECK(test_failed_step_does_not_poison_next_calculation() == 0);
+  CHECK(test_model_tags_are_explicit_and_published() == 0);
+  CHECK(test_gfn1_optimization_starts_fresh_and_stays_gfn1() == 0);
   free(g_result.data);
   return 0;
 }

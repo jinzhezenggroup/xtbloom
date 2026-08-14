@@ -51,6 +51,9 @@ const EH2EV = 27.211386245988;
 const EH2KCAL = 627.509474063;
 const EHB2EVA = EH2EV / 0.529177210903;
 const K2EH = 3.166811563e-6;
+/* These are stable public C ABI tag values, not UI-local ordinal choices. */
+const MODEL_GFN1_XTB = 1;
+const MODEL_GFN2_XTB = 2;
 
 const PRESETS = {
   water: { xyz: "O  0.00000000  0.00000000  0.00000000\nH  0.00000000  0.00000000  0.95720000\nH  0.00000000  0.75718000 -0.58552000", charge: 0, unpaired: 0 },
@@ -63,7 +66,7 @@ const PRESETS = {
 
 const I18N = {
   zh: {
-    tagline: "无需安装或上传，在浏览器中运行 GFN2-xTB 单点与几何优化",
+    tagline: "无需安装或上传，在浏览器中运行 GFN1-xTB 或 GFN2-xTB",
     engine_loading: "引擎加载中…",
     panel_input: "输入",
     presets_label: "模板分子",
@@ -93,8 +96,13 @@ const I18N = {
     opt_done: "完成 ✓",
     xyz_label: "坐标（XYZ，单位：埃 Å）",
     xyz_placeholder: "每行：元素符号 x y z（埃，Å）",
+    method_label: "计算方法",
+    method_hint: "默认 GFN2-xTB；两种方法均在浏览器内使用单线程 CPU/WASM。",
     charge_label: "分子电荷 q / e",
     unpaired_label: "未配对电子数",
+    advanced_settings: "高级设置",
+    scc_settings: "SCC 设置",
+    optimizer_settings: "优化器设置",
     etemp_label: "电子温度 K",
     etemp_tip: "电子温度即 k_B·T 能量标度；0 = 精确 0 K（默认）",
     maxiter_label: "最大 SCC 迭代",
@@ -127,7 +135,12 @@ const I18N = {
     tag_done: "已支持",
     roadmap_opt_desc: "内置 L-BFGS 优化器，使用解析力收敛到稳定结构。在左侧“优化”区配置后点击“几何优化”。",
     opt_go: "去优化",
-    footer: "由 xTBloom 驱动 —— 同一套 C ABI 的 C++17 原生库编译为不依赖 Memory64 的 wasm32；可选的 SMILES 三维结构由固定版本的 OpenChemLib 在浏览器中生成并以 MMFF94 预优化。WebAssembly LP64 LAPACKE/CBLAS 兼容层由固定版本的 Eigen 5.0.1 支撑。仅供演示，非科学计算生产环境。",
+    footer: "由 xTBloom 驱动 —— 同一套 C ABI 的 GFN1-xTB/GFN2-xTB CPU 库编译为不依赖 Memory64 的 wasm32；可选的 SMILES 三维结构由固定版本的 OpenChemLib 在浏览器中生成并以 MMFF94 预优化。WebAssembly LP64 LAPACKE/CBLAS 兼容层由固定版本的 Eigen 5.0.1 支撑。仅供演示，非科学计算生产环境。",
+    legal_web_demo: "网页演示",
+    legal_source: "源代码",
+    legal_more: "第三方许可与来源",
+    legal_notices: "第三方声明",
+    legal_permission: "附加许可",
     overlay_loading: "正在加载 WASM 引擎…",
     overlay_compute: "正在计算单点能…",
     overlay_opt: "正在几何优化（逐梯度迭代，可能需要几秒）…",
@@ -158,6 +171,7 @@ const I18N = {
     err_alloc: "内存分配失败",
     err_init: "内部初始化失败",
     err_compute: "计算失败：{{e}}",
+    err_model: "不支持的计算方法。",
     err_scc_initial: "SCC / 特征求解失败（初始结构）",
     err_nan_initial: "初始能量为非有限值",
     err_nan_step: "优化中出现非有限能量",
@@ -172,7 +186,7 @@ const I18N = {
     smiles_err_fragments: "暂不支持用点号连接的盐或多片段 SMILES；其片段间相对位置没有定义。",
     smiles_err_atoms: "SMILES 没有生成有效原子。",
     smiles_err_too_many: "补氢后原子数超过 512 上限。",
-    smiles_err_element: "SMILES 含有 GFN2-xTB 不支持的元素。",
+    smiles_err_element: "SMILES 含有所选 GFN-xTB 方法不支持的元素。",
     smiles_err_radical: "自动流程不猜测自旋：自由基请改用 XYZ，并手动填写未配对电子数。",
     smiles_err_mmff: "MMFF94 预优化失败。",
     smiles_err_coords: "结构生成器返回了非有限坐标。",
@@ -182,7 +196,7 @@ const I18N = {
     err_unknown: "未知错误",
   },
   en: {
-    tagline: "Run GFN2-xTB in your browser—no install or uploads",
+    tagline: "Run GFN1-xTB or GFN2-xTB in your browser—no install or uploads",
     engine_loading: "engine loading…",
     panel_input: "Input",
     presets_label: "Preset molecules",
@@ -212,8 +226,13 @@ const I18N = {
     opt_done: "done ✓",
     xyz_label: "Coordinates (XYZ, angstrom)",
     xyz_placeholder: "One atom per line: Symbol x y z (Å)",
+    method_label: "Method",
+    method_hint: "GFN2-xTB is the default; both methods use the single-threaded CPU/WASM engine.",
     charge_label: "Molecular charge q / e",
     unpaired_label: "Unpaired electrons",
+    advanced_settings: "Advanced settings",
+    scc_settings: "SCC settings",
+    optimizer_settings: "Optimizer settings",
     etemp_label: "Electronic temperature K",
     etemp_tip: "Electronic temperature is the k_B·T energy scale; 0 = exact 0 K (default)",
     maxiter_label: "Max SCC iterations",
@@ -246,7 +265,12 @@ const I18N = {
     tag_done: "supported",
     roadmap_opt_desc: "Built-in L-BFGS optimizer using analytic forces. Configure it in the left panel, then click “Optimize geometry”.",
     opt_go: "Try it",
-    footer: "Powered by xTBloom — the same native C ABI library compiled to wasm32 without requiring Memory64. Optional SMILES 3D structures are generated in-browser by a pinned OpenChemLib release and pre-relaxed with MMFF94. The WebAssembly LP64 LAPACKE/CBLAS compatibility layer is backed by pinned Eigen 5.0.1. Demo only, not a production scientific environment.",
+    footer: "Powered by xTBloom — the same GFN1-xTB/GFN2-xTB CPU C ABI library compiled to wasm32 without requiring Memory64. Optional SMILES 3D structures are generated in-browser by a pinned OpenChemLib release and pre-relaxed with MMFF94. The WebAssembly LP64 LAPACKE/CBLAS compatibility layer is backed by pinned Eigen 5.0.1. Demo only, not a production scientific environment.",
+    legal_web_demo: "Web demo",
+    legal_source: "Source",
+    legal_more: "Third-party licenses and provenance",
+    legal_notices: "Third-party notices",
+    legal_permission: "Additional permission",
     overlay_loading: "Loading the WASM engine…",
     overlay_compute: "Computing single point…",
     overlay_opt: "Optimizing geometry (gradient steps, may take a few seconds)…",
@@ -277,6 +301,7 @@ const I18N = {
     err_alloc: "Out of memory",
     err_init: "Internal initialization failed",
     err_compute: "Compute failed: {{e}}",
+    err_model: "Unsupported calculation method.",
     err_scc_initial: "SCC / eigensolver failed (initial structure)",
     err_nan_initial: "Non-finite initial energy",
     err_nan_step: "Non-finite energy during optimization",
@@ -291,7 +316,7 @@ const I18N = {
     smiles_err_fragments: "Dot-disconnected salts or multi-fragment SMILES are not supported because their relative placement is undefined.",
     smiles_err_atoms: "The SMILES produced no valid atoms.",
     smiles_err_too_many: "The explicit-hydrogen structure exceeds the 512-atom limit.",
-    smiles_err_element: "The SMILES contains an element unsupported by GFN2-xTB.",
+    smiles_err_element: "The SMILES contains an element unsupported by the selected GFN-xTB method.",
     smiles_err_radical: "Spin is not guessed: use XYZ for radicals and enter the unpaired-electron count explicitly.",
     smiles_err_mmff: "MMFF94 pre-optimization failed.",
     smiles_err_coords: "The structure generator returned non-finite coordinates.",
@@ -324,9 +349,31 @@ const t = (key, vars) => {
 
 function tf(key, vars) { return t(key, vars); }
 
+/* Desktop keeps expert/legal material directly visible. Native details
+ * elements start closed on phones, preserve their form state, and retain a
+ * user's explicit choice across language changes and viewport resizing. */
+function setupResponsiveDisclosure(id) {
+  const disclosure = $(id);
+  const summary = disclosure?.querySelector("summary");
+  if (!disclosure || !summary) return;
+  const phone = window.matchMedia("(max-width: 600px)");
+  let userChanged = false;
+  summary.addEventListener("click", () => { userChanged = true; });
+  const syncDefault = () => {
+    if (!userChanged) disclosure.open = !phone.matches;
+  };
+  phone.addEventListener("change", syncDefault);
+  syncDefault();
+}
+
+function setupResponsiveDisclosures() {
+  setupResponsiveDisclosure("advanced-settings");
+  setupResponsiveDisclosure("footer-legal");
+}
+
 function applyI18n() {
   document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
-  document.title = lang === "zh" ? "xTBloom · 浏览器内运行 GFN2-xTB" : "xTBloom · Run GFN2-xTB in your browser";
+  document.title = lang === "zh" ? "xTBloom · 浏览器内运行 GFN-xTB" : "xTBloom · Run GFN-xTB in your browser";
   document.querySelectorAll("[data-i18n]").forEach((el) => {
     if (el.id === "engine-badge") return; /* state-managed separately */
     el.textContent = t(el.dataset.i18n);
@@ -500,6 +547,10 @@ function syncEngineControls() {
     !engineBusy && !smilesBusy && previewState.status === "valid";
   $("run").disabled = !enabled;
   $("opt-run").disabled = !enabled;
+  /* Method changes are calculation-identity changes. Freeze the selector
+   * while either worker owns a user/URL workflow so an in-flight result cannot
+   * be mislabeled or published under a newer selection. */
+  $("method").disabled = engineBusy || smilesBusy;
 }
 
 function refreshBadge() {
@@ -761,11 +812,28 @@ function hasCurrentResult(mode = null) {
 }
 
 function invalidateRenderedResult() {
+  /* A method or coordinate change invalidates the scientific identity of every
+   * visible value. Restore neutral placeholders rather than leaving old
+   * numbers on screen after their ownership metadata has been discarded. */
   window.__lastResult = null;
   window.__lastMode = null;
   window.__lastCoordinateRevision = null;
+  $("energy").textContent = "—";
+  $("energy-ev").textContent = "—";
+  $("energy-kcal").textContent = "—";
+  $("stat-atoms").textContent = "–";
+  $("stat-iter").textContent = "–";
+  $("stat-iter-label").textContent = t("stat_iter");
+  $("stat-conv").textContent = "–";
+  $("stat-ms").textContent = "–";
+  $("atom-table").querySelector("tbody").replaceChildren();
+  $("table-wrap").hidden = true;
+  $("traj-svg").replaceChildren();
+  $("traj").hidden = true;
   $("output-tools").hidden = true;
   $("opt-apply").hidden = true;
+  $("copy-done").hidden = true;
+  $("result-method").hidden = true;
 }
 
 function supersededCoordinateError() {
@@ -863,6 +931,19 @@ function setError(msg) {
   }
 }
 
+function revealResultPanelAfterUserAction() {
+  if (!window.matchMedia("(max-width: 600px)").matches) return;
+  const panel = $("result-panel");
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  requestAnimationFrame(() => {
+    panel.focus({ preventScroll: true });
+    panel.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "start",
+    });
+  });
+}
+
 function errorText(d) {
   if (d && d.error_code) {
     return t(d.error_code, { e: d.error ? d.error : "" });
@@ -874,8 +955,16 @@ function energyParts(eh) {
   return { eh, ev: eh * EH2EV, kcal: eh * EH2KCAL };
 }
 
+function renderResultMethod(d) {
+  const model = Number(d.model);
+  const name = d.method || (model === MODEL_GFN1_XTB ? "GFN1-xTB" : "GFN2-xTB");
+  $("result-method").textContent = name;
+  $("result-method").hidden = false;
+}
+
 function renderCompute(d) {
   setError(null);
+  renderResultMethod(d);
   const e = energyParts(d.energy_Eh);
   $("energy").textContent = fmt(e.eh, 10) + " Eh";
   $("energy-ev").textContent = fmt(e.ev, 6) + " eV";
@@ -908,6 +997,7 @@ function renderCompute(d) {
 
 function renderOptimize(d) {
   setError(null);
+  renderResultMethod(d);
   const e0 = energyParts(d.energy_initial_Eh);
   const e1 = energyParts(d.energy_final_Eh);
   $("energy").textContent = fmt(e1.eh, 10) + " Eh";
@@ -1088,6 +1178,18 @@ Object.entries(PRESETS).forEach(([key, p]) => {
 
 $("xyz").addEventListener("input", schedulePreviewUpdate);
 
+$("method").addEventListener("change", () => {
+  /* Model identity is part of the calculation input even though coordinates
+   * and the live molecular preview do not change. */
+  coordinateRevisions.advance();
+  invalidateRenderedResult();
+  stopReplay();
+  optFrames = [];
+  $("replay").hidden = true;
+  setError(null);
+  syncEngineControls();
+});
+
 function applyGeneratedGeometry(result) {
   document.querySelectorAll(".chip").forEach((chip) => chip.classList.remove("active"));
   setCoordinateInput(result.xyz);
@@ -1205,6 +1307,7 @@ $("smiles-generate").addEventListener("click", () => void handleManualSmiles());
 
 function collectOptions() {
   return {
+    model: parseInt($("method").value, 10) || MODEL_GFN2_XTB,
     charge: parseFloat($("charge").value) || 0,
     unpaired: parseInt($("unpaired").value, 10) || 0,
     etempK: parseFloat($("etemp").value) || 0,
@@ -1229,11 +1332,15 @@ async function withPending(fn) {
   }
 }
 
-async function runCompute() {
+async function runCompute({ revealOutcome = false } = {}) {
   /* Re-validate at call time so a change made inside the preview debounce
    * window can never reach the engine as an invalid structure. */
   const parsed = parseXyzCoordinates($("xyz").value);
-  if (!parsed.ok) { setError(t(parsed.errorCode, parsed.messageVars || undefined)); return; }
+  if (!parsed.ok) {
+    setError(t(parsed.errorCode, parsed.messageVars || undefined));
+    if (revealOutcome) revealResultPanelAfterUserAction();
+    return;
+  }
   const requestRevision = coordinateRevisions.capture();
   /* Submit the canonical parsed form. The preview intentionally accepts
    * surrounding whitespace that the C line scanner does not accept raw. */
@@ -1243,17 +1350,23 @@ async function runCompute() {
   try {
     const t0 = performance.now();
     const m = await callWorker("compute",
-      [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, o.forces ? 1 : 0]);
+      [xyz, o.model, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, o.forces ? 1 : 0]);
     const dt = performance.now() - t0;
     if (!coordinateRevisions.isCurrent(requestRevision)) return;
     const d = JSON.parse(m.raw);
-    if (!d.ok) { setError(errorText(d)); return; }
+    if (!d.ok) {
+      setError(errorText(d));
+      if (revealOutcome) revealResultPanelAfterUserAction();
+      return;
+    }
     renderCompute(d);
     updateMoleculeViewer(xyzAtomsToText(parsed.atoms));
     $("stat-ms").textContent = fmt(dt, 1);
+    if (revealOutcome) revealResultPanelAfterUserAction();
   } catch (e) {
     if (coordinateRevisions.isCurrent(requestRevision)) {
       setError(t("engine_call_fail") + e.message);
+      if (revealOutcome) revealResultPanelAfterUserAction();
     }
   } finally {
     hideOverlay();
@@ -1264,12 +1377,14 @@ async function runOptimize({
   applyFinalGeometry = false,
   throwOnFailure = false,
   canPublish = () => true,
+  revealOutcome = false,
 } = {}) {
   const parsed = parseXyzCoordinates($("xyz").value);
   if (!parsed.ok) {
     const error = new Error(t(parsed.errorCode, parsed.messageVars || undefined));
     if (throwOnFailure) throw error;
     setError(error.message);
+    if (revealOutcome) revealResultPanelAfterUserAction();
     return null;
   }
   const requestRevision = coordinateRevisions.capture();
@@ -1292,7 +1407,7 @@ async function runOptimize({
   try {
     const t0 = performance.now();
     const m = await callWorker("optimize",
-      [xyz, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, angstromToBohr(maxMoveAngstrom)],
+      [xyz, o.model, o.charge, o.unpaired, o.etempK * K2EH, o.etol, o.qtol, o.maxiter, optMax, gradTol, angstromToBohr(maxMoveAngstrom)],
       (step) => {
         if (!coordinateRevisions.isCurrent(requestRevision) || !canPublish()) return;
         $("mol-status").textContent = tf("opt_running", { n: step.iter, max: optMax, e: fmt(step.energy, 6) });
@@ -1313,6 +1428,7 @@ async function runOptimize({
       error.code = d.error_code || "err_opt";
       if (throwOnFailure) throw error;
       setError(error.message);
+      if (revealOutcome) revealResultPanelAfterUserAction();
       return null;
     }
     renderOptimize(d);
@@ -1327,6 +1443,7 @@ async function runOptimize({
       refreshPreview();
       $("opt-apply").hidden = true;
     }
+    if (revealOutcome) revealResultPanelAfterUserAction();
     return d;
   } catch (e) {
     if (
@@ -1341,6 +1458,7 @@ async function runOptimize({
       : new Error(t("engine_call_fail") + (e && e.message ? e.message : String(e)));
     if (throwOnFailure) throw error;
     setError(error.message);
+    if (revealOutcome) revealResultPanelAfterUserAction();
     return null;
   } finally {
     $("mol-hint").textContent = t("mol_hint");
@@ -1352,8 +1470,8 @@ async function runOptimize({
   }
 }
 
-$("run").addEventListener("click", () => withPending(runCompute));
-$("opt-run").addEventListener("click", () => withPending(runOptimize));
+$("run").addEventListener("click", () => withPending(() => runCompute({ revealOutcome: true })));
+$("opt-run").addEventListener("click", () => withPending(() => runOptimize({ revealOutcome: true })));
 $("opt-apply").addEventListener("click", () => {
   const d = window.__lastResult;
   if (hasCurrentResult("optimize") && d.geometry) {
@@ -1369,6 +1487,7 @@ $("reset").addEventListener("click", () => {
   $("smiles").value = "";
   clearSmilesStatus();
   setCoordinateInput(PRESETS.water.xyz);
+  $("method").value = String(MODEL_GFN2_XTB);
   $("charge").value = 0;
   $("unpaired").value = 0;
   $("etemp").value = 0;
@@ -1383,15 +1502,7 @@ $("reset").addEventListener("click", () => {
   $("replay").hidden = true;
   $("mol-status").hidden = true;
   setError(null);
-  $("energy").textContent = "—";
-  $("energy-ev").textContent = "—";
-  $("energy-kcal").textContent = "—";
-  $("table-wrap").hidden = true;
-  $("output-tools").hidden = true;
-  $("opt-apply").hidden = true;
-  window.__lastResult = null;
-  window.__lastMode = null;
-  window.__lastCoordinateRevision = null;
+  invalidateRenderedResult();
 });
 
 $("copy-json").addEventListener("click", async () => {
@@ -1539,6 +1650,7 @@ async function startEngineLoad({ forceReload = false } = {}) {
 
 /* ---- bootstrap ---- */
 (async () => {
+  setupResponsiveDisclosures();
   applyI18n();
   /* Start the optional CDN dependency immediately, but never await it here:
    * wasm32 startup and the ordinary XYZ workflow remain independent. */
