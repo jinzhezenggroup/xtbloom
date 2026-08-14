@@ -1555,8 +1555,11 @@ test("page bootstraps pinned SMILES loading and applies URL-optimized geometry",
     appSource.indexOf("function requestSmilesGeometry"),
   );
   assert.doesNotMatch(smilesStartup, /__XTBLOOM_CDN_ROUTING/);
-  assert.ok(appSource.indexOf("const engineLoad = startEngineLoad();") <
-    appSource.lastIndexOf("startSmilesWorker();"));
+  const engineLoadIndex = appSource.indexOf("const engineLoad = startEngineLoad();");
+  const smilesStartIndex = appSource.lastIndexOf("startSmilesWorker();");
+  assert.ok(engineLoadIndex >= 0, "engine load must start before the SMILES worker");
+  assert.ok(smilesStartIndex >= 0, "the eager SMILES Worker start must remain present");
+  assert.ok(engineLoadIndex < smilesStartIndex);
   assert.match(appSource, /readSmilesQuery\(window\.location\.href\)/);
   assert.match(appSource, /applyFinalGeometry:\s*true/);
   assert.match(appSource, /setCoordinateInput\(d\.geometry, \{ preserveOptimization: true \}\)/);

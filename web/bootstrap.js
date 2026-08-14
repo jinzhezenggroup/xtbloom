@@ -154,6 +154,12 @@ function regionallyOrderedSources(sources, region) {
       (fallbackRank.get(right.source.id) ?? 99));
 }
 
+function regionalProviderIds(sources, region) {
+  return regionallyOrderedSources(sources, region)
+    .map((ranked) => ranked.source.id)
+    .filter((id) => id === "jsdelivr" || id === "jsdmirror");
+}
+
 async function rankFallbackSources(sources, {
   region,
   rankImpl,
@@ -380,9 +386,7 @@ export function initializeBrowserCdnRouting({
 } = {}) {
   const region = cdnRegionForTimeZone(currentTimeZone(intlImpl));
   const rankedSources = regionallyOrderedSources(sources, region);
-  const providers = rankedSources
-    .map((ranked) => (ranked.source || ranked).id)
-    .filter((id) => id === "jsdelivr" || id === "jsdmirror");
+  const providers = regionalProviderIds(sources, region);
   globalImpl.__XTBLOOM_CDN_REGION = region;
   globalImpl.__XTBLOOM_CDN_PROVIDERS = providers;
   const ready = Promise.resolve()
@@ -409,8 +413,10 @@ export function startBrowserCdnAndApplication({
 } = {}) {
   const initialRegion = cdnRegionForTimeZone(currentTimeZone(intlImpl));
   globalImpl.__XTBLOOM_CDN_REGION = initialRegion;
-  globalImpl.__XTBLOOM_CDN_PROVIDERS = regionalSourceIds(initialRegion)
-    .filter((id) => id !== "local");
+  globalImpl.__XTBLOOM_CDN_PROVIDERS = regionalProviderIds(
+    THREE_DMOL_SOURCES,
+    initialRegion,
+  );
   let routingStart;
   try {
     routingStart = initializeRouting({ globalImpl, intlImpl });
@@ -420,7 +426,7 @@ export function startBrowserCdnAndApplication({
   const routing = Promise.resolve(routingStart)
     .catch((error) => {
       const region = initialRegion;
-      const providers = regionalSourceIds(region).filter((id) => id !== "local");
+      const providers = regionalProviderIds(THREE_DMOL_SOURCES, region);
       const ready = Promise.resolve({ ok: false, error });
       globalImpl.__XTBLOOM_CDN_REGION = region;
       globalImpl.__XTBLOOM_CDN_PROVIDERS = providers;
