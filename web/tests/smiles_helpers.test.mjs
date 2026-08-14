@@ -58,6 +58,16 @@ function fakeOcl(atoms, options = {}) {
 
 test("OpenChemLib runtime URLs pin byte-identical reviewed CDN releases", () => {
   assert.equal(OPEN_CHEMLIB_VERSION, "9.21.0");
+  assert.equal(OPEN_CHEMLIB_MODULE_BYTES, 1097449);
+  assert.equal(
+    OPEN_CHEMLIB_MODULE_SHA256,
+    "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
+  );
+  assert.equal(OPEN_CHEMLIB_RESOURCES_BYTES, 1351963);
+  assert.equal(
+    OPEN_CHEMLIB_RESOURCES_SHA256,
+    "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
+  );
   for (const [provider, urls] of Object.entries(OPEN_CHEMLIB_CDN_URLS)) {
     assert.match(urls.module, /openchemlib@9\.21\.0\/dist\/openchemlib\.js$/, provider);
     assert.match(urls.resources, /openchemlib@9\.21\.0\/dist\/resources\.json$/, provider);
