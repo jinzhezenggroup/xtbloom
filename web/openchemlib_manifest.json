@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "dependency": {
     "name": "OpenChemLib JS",
     "npm_package": "openchemlib",
@@ -21,19 +21,42 @@
   "cdn_artifacts": [
     {
       "role": "ES module runtime",
-      "url": "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js",
+      "provider_urls": {
+        "jsdelivr": "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js",
+        "jsdmirror": "https://cdn.jsdmirror.com/npm/openchemlib@9.21.0/dist/openchemlib.js"
+      },
       "sha256": "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
       "size_bytes": 1097449,
       "redistributed_by_xtbloom": false
     },
     {
       "role": "conformer and MMFF resource registry",
-      "url": "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json",
+      "provider_urls": {
+        "jsdelivr": "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json",
+        "jsdmirror": "https://cdn.jsdmirror.com/npm/openchemlib@9.21.0/dist/resources.json"
+      },
       "sha256": "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
       "size_bytes": 1351963,
       "redistributed_by_xtbloom": false
     }
   ],
+  "runtime_selection": {
+    "probe": "The browser measures the first 65536 bytes of the pinned 3Dmol.js asset from JSDMirror, jsDelivr, and the site origin, then orders the two CDN providers by the observed result for OpenChemLib.",
+    "close_tie_default": {
+      "mainland_china_time_zones": [
+        "Asia/Shanghai",
+        "Asia/Urumqi",
+        "Asia/Chongqing",
+        "Asia/Chungking",
+        "Asia/Harbin",
+        "Asia/Kashgar",
+        "PRC"
+      ],
+      "mainland_china": ["jsdmirror", "jsdelivr"],
+      "global": ["jsdelivr", "jsdmirror"]
+    },
+    "verification": "The complete module and resources are size- and SHA-256-verified as one provider pair before import and registration; a failed pair falls through to the other provider."
+  },
   "resource_payload": {
     "entry_count": 35,
     "groups": [
@@ -114,6 +137,6 @@
       "resources.json"
     ],
     "native_library_or_python_payload": false,
-    "notes": "The browser fetches the exact jsDelivr URLs at runtime. xtbloom does not vendor these two CDN artifacts or add OpenChemLib to xtbloom_web.wasm, native installs, sdists, or wheels."
+    "notes": "The browser fetches one complete verified provider pair from the exact JSDMirror or jsDelivr URLs at runtime. xtbloom does not vendor these two CDN artifacts or add OpenChemLib to xtbloom_web.wasm, native installs, sdists, or wheels."
   }
 }

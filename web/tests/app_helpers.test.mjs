@@ -4,8 +4,15 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  cdnRegionForTimeZone,
+  initializeBrowserCdnRouting,
+  loadThreeDmol,
   prepareVersionedApplication,
+  probeSourceSpeed,
+  rankCdnSources,
+  startBrowserCdnAndApplication,
   startBrowserApplication,
+  THREE_DMOL_SOURCES,
   validateBootstrapManifest,
 } from "../bootstrap.js";
 
@@ -98,6 +105,203 @@ function createBootstrapDocument() {
     element: (id) => elements.get(id),
   };
 }
+
+test("CDN regional defaults identify mainland time zones without using language", () => {
+  for (const timeZone of [
+    "Asia/Shanghai",
+    "Asia/Urumqi",
+    "Asia/Chongqing",
+    "Asia/Chungking",
+    "Asia/Harbin",
+    "Asia/Kashgar",
+    "PRC",
+  ]) {
+    assert.equal(cdnRegionForTimeZone(timeZone), "mainland-china", timeZone);
+  }
+  for (const timeZone of [
+    "UTC",
+    "Asia/Hong_Kong",
+    "Asia/Macau",
+    "Asia/Taipei",
+    "Asia/Singapore",
+    "Etc/GMT-8",
+    "",
+  ]) {
+    assert.equal(cdnRegionForTimeZone(timeZone), "global", timeZone);
+  }
+});
+
+test("CDN probes choose the measured fastest source and use region only for close ties", async () => {
+  const timings = new Map([
+    ["jsdelivr", 40],
+    ["jsdmirror", 100],
+    ["local", 70],
+  ]);
+  const fastest = await rankCdnSources(THREE_DMOL_SOURCES, {
+    region: "mainland-china",
+    probeImpl: async (source) => ({ id: source.id, elapsedMs: timings.get(source.id) }),
+  });
+  assert.deepEqual(fastest.map((entry) => entry.source.id), [
+    "jsdelivr",
+    "local",
+    "jsdmirror",
+  ]);
+
+  timings.set("jsdelivr", 100);
+  timings.set("jsdmirror", 110);
+  timings.set("local", 200);
+  const mainlandTie = await rankCdnSources(THREE_DMOL_SOURCES, {
+    region: "mainland-china",
+    probeImpl: async (source) => ({ id: source.id, elapsedMs: timings.get(source.id) }),
+  });
+  assert.deepEqual(mainlandTie.map((entry) => entry.source.id), [
+    "jsdmirror",
+    "jsdelivr",
+    "local",
+  ]);
+
+  const globalTie = await rankCdnSources(THREE_DMOL_SOURCES, {
+    region: "global",
+    probeImpl: async (source) => ({ id: source.id, elapsedMs: timings.get(source.id) }),
+  });
+  assert.deepEqual(globalTie.map((entry) => entry.source.id), [
+    "jsdelivr",
+    "jsdmirror",
+    "local",
+  ]);
+
+  timings.set("jsdelivr", 35);
+  timings.set("jsdmirror", 15);
+  timings.set("local", 10);
+  const chainedTie = await rankCdnSources(THREE_DMOL_SOURCES, {
+    region: "global",
+    probeImpl: async (source) => ({ id: source.id, elapsedMs: timings.get(source.id) }),
+  });
+  assert.deepEqual(chainedTie.map((entry) => entry.source.id), [
+    "jsdmirror",
+    "local",
+    "jsdelivr",
+  ]);
+});
+
+test("CDN probes read and cancel only the bounded prefix", async () => {
+  const chunks = [new Uint8Array(32768), new Uint8Array(32768)];
+  const requests = [];
+  let cancelled = false;
+  let reads = 0;
+  const result = await probeSourceSpeed(
+    { id: "local", url: "vendor/3Dmol-min.js" },
+    {
+      baseUrl: "https://site.test/demo/",
+      fetchImpl: async (url, options) => {
+        requests.push({ url, options });
+        return {
+          ok: true,
+          status: 206,
+          body: {
+            getReader: () => ({
+              read: async () => ({ done: false, value: chunks[reads++] }),
+              cancel: async () => { cancelled = true; },
+            }),
+          },
+        };
+      },
+      now: (() => {
+        const values = [100, 125];
+        return () => values.shift();
+      })(),
+    },
+  );
+  assert.equal(result.elapsedMs, 25);
+  assert.equal(reads, 2);
+  assert.equal(cancelled, true);
+  assert.equal(requests[0].url, "https://site.test/demo/vendor/3Dmol-min.js");
+  assert.equal(requests[0].options.cache, "no-store");
+  assert.equal(requests[0].options.headers.Range, "bytes=0-65535");
+  assert.equal(requests[0].options.signal.aborted, true);
+});
+
+test("verified 3Dmol loading falls through ranked sources", async () => {
+  const attempted = [];
+  const globalImpl = {};
+  const result = await loadThreeDmol([
+    { source: { id: "jsdmirror", url: "https://mirror.test/3dmol.js" } },
+    { source: { id: "jsdelivr", url: "https://jsdelivr.test/3dmol.js" } },
+    { source: { id: "local", url: "vendor/3Dmol-min.js" } },
+  ], {
+    baseUrl: "https://site.test/",
+    globalImpl,
+    fetchBytesImpl: async (url) => {
+      attempted.push(url);
+      if (url.includes("mirror.test")) throw new Error("mirror unavailable");
+      return new Uint8Array([1, 2, 3]).buffer;
+    },
+    executeScriptImpl: async () => { globalImpl.$3Dmol = { version: "2.5.5" }; },
+  });
+  assert.equal(result.source, "jsdelivr");
+  assert.deepEqual(attempted, [
+    "https://mirror.test/3dmol.js",
+    "https://jsdelivr.test/3dmol.js",
+  ]);
+});
+
+test("browser CDN routing shares measured provider order with optional workers", async () => {
+  const globalImpl = {};
+  const rankedSources = [
+    { source: { id: "local", url: "vendor/3Dmol-min.js" } },
+    { source: { id: "jsdmirror", url: "https://mirror.test/3dmol.js" } },
+    { source: { id: "jsdelivr", url: "https://jsdelivr.test/3dmol.js" } },
+  ];
+  const routing = await initializeBrowserCdnRouting({
+    intlImpl: {
+      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "Asia/Shanghai" }) }),
+    },
+    globalImpl,
+    rankImpl: async () => rankedSources,
+    loadThreeDmolImpl: async () => ({ source: "local" }),
+  });
+  assert.equal(routing.region, "mainland-china");
+  assert.deepEqual(routing.providers, ["jsdmirror", "jsdelivr"]);
+  assert.deepEqual(globalImpl.__XTBLOOM_CDN_PROVIDERS, ["jsdmirror", "jsdelivr"]);
+  assert.deepEqual(await globalImpl.__XTBLOOM_3DMOL_READY, {
+    ok: true,
+    source: "local",
+  });
+});
+
+test("browser application starts while CDN routing remains in flight", async () => {
+  let resolveRouting;
+  let applicationStarts = 0;
+  const globalImpl = {};
+  const routing = startBrowserCdnAndApplication({
+    globalImpl,
+    initializeRouting: () => new Promise((resolve) => { resolveRouting = resolve; }),
+    startApplication: () => { applicationStarts += 1; },
+  });
+  assert.equal(applicationStarts, 1);
+  assert.equal(globalImpl.__XTBLOOM_CDN_ROUTING, routing);
+  await Promise.resolve();
+  resolveRouting({ region: "global" });
+  assert.deepEqual(await routing, { region: "global" });
+});
+
+test("browser application startup observes unexpected promise rejection", async () => {
+  const startupError = new Error("application failed");
+  const logged = [];
+  const globalImpl = {
+    console: { error: (...values) => logged.push(values) },
+  };
+  startBrowserCdnAndApplication({
+    globalImpl,
+    initializeRouting: async () => ({ region: "global" }),
+    startApplication: () => Promise.reject(startupError),
+  });
+  assert.deepEqual(await globalImpl.__XTBLOOM_APPLICATION_START, {
+    ok: false,
+    error: startupError,
+  });
+  assert.deepEqual(logged, [["xTBloom application startup failed", startupError]]);
+});
 
 test("angstrom controls are converted to optimizer bohr", () => {
   assert.equal(angstromToBohr(1), BOHR_PER_ANGSTROM);

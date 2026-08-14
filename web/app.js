@@ -417,6 +417,7 @@ let smilesBusy = false;
 let smilesStatusKey = "smiles_download_status";
 let smilesStatusVars = null;
 let smilesStatusTone = "";
+let smilesRoutingObserved = false;
 let urlSmiles = null;
 let urlSmilesStarted = false;
 const smilesWorkflow = createRevisionOwner();
@@ -513,12 +514,45 @@ function handleSmilesClientState(event) {
 }
 
 function startSmilesWorker() {
+  const routing = globalThis.__XTBLOOM_CDN_ROUTING;
+  if (
+    !Array.isArray(globalThis.__XTBLOOM_CDN_PROVIDERS) &&
+    routing &&
+    typeof routing.then === "function"
+  ) {
+    if (!smilesRoutingObserved) {
+      smilesRoutingObserved = true;
+      void routing.then(
+        () => {
+          smilesRoutingObserved = false;
+          startSmilesWorker();
+        },
+        () => {
+          smilesRoutingObserved = false;
+          startSmilesWorker();
+        },
+      );
+    }
+    return;
+  }
   if (!smilesClient) {
     smilesClient = createSmilesWorkerClient({
-      createWorker: () => new Worker(
-        new URL("./smiles_worker.js", import.meta.url),
-        { type: "module" },
-      ),
+      createWorker: () => {
+        const workerUrl = new URL("./smiles_worker.js", import.meta.url);
+        const providers = Array.isArray(globalThis.__XTBLOOM_CDN_PROVIDERS)
+          ? globalThis.__XTBLOOM_CDN_PROVIDERS
+          : [];
+        if (providers.length > 0) {
+          workerUrl.searchParams.set("xtbloom_cdn_providers", providers.join(","));
+        }
+        workerUrl.searchParams.set(
+          "xtbloom_cdn_region",
+          globalThis.__XTBLOOM_CDN_REGION === "mainland-china"
+            ? "mainland-china"
+            : "global",
+        );
+        return new Worker(workerUrl, { type: "module" });
+      },
       onStateChange: handleSmilesClientState,
       /* The adapter accepts up to 512 explicit-H atoms. Flexible molecules can
        * legitimately exceed 30 seconds on phones, while two minutes still
@@ -1068,6 +1102,8 @@ function renderTrajectory(d) {
 /* ---- 3Dmol molecular viewer ---- */
 let molViewer = null;
 let molUnavailable = false;
+let molLoaderObserved = false;
+let molLoaderSettled = false;
 
 function xyzTo3Dmol(xyz) {
   const lines = xyz.split(/\r?\n/).filter((l) => l.trim());
@@ -1075,6 +1111,49 @@ function xyzTo3Dmol(xyz) {
 }
 
 function initMoleculeViewer() {
+  if (typeof window.$3Dmol === "undefined" && !molLoaderSettled) {
+    const ready = globalThis.__XTBLOOM_3DMOL_READY;
+    const routing = globalThis.__XTBLOOM_CDN_ROUTING;
+    if (
+      !ready &&
+      routing &&
+      typeof routing.then === "function"
+    ) {
+      if (!molLoaderObserved) {
+        molLoaderObserved = true;
+        void routing.then(
+          () => {
+            molLoaderObserved = false;
+            initMoleculeViewer();
+          },
+          () => {
+            molLoaderObserved = false;
+            molLoaderSettled = true;
+            molUnavailable = true;
+            $("mol").innerHTML = `<div class="mol-placeholder">${t("mol_unavailable")}</div>`;
+          },
+        );
+      }
+      return;
+    }
+    if (!molLoaderObserved && ready && typeof ready.then === "function") {
+      molLoaderObserved = true;
+      void ready.then((result) => {
+        molLoaderSettled = true;
+        if (!result?.ok || typeof window.$3Dmol === "undefined") {
+          molUnavailable = true;
+          $("mol").innerHTML = `<div class="mol-placeholder">${t("mol_unavailable")}</div>`;
+          return;
+        }
+        molUnavailable = false;
+        initMoleculeViewer();
+        if (previewState.status === "valid") {
+          updateMoleculeViewer(previewState.canonicalXyz);
+        }
+      });
+    }
+    return;
+  }
   if (typeof window.$3Dmol === "undefined") { molUnavailable = true; }
   if (molUnavailable) return;
   try {
@@ -1652,8 +1731,8 @@ async function startEngineLoad({ forceReload = false } = {}) {
 (async () => {
   setupResponsiveDisclosures();
   applyI18n();
-  /* Start the optional CDN dependency immediately, but never await it here:
-   * wasm32 startup and the ordinary XYZ workflow remain independent. */
+  /* Queue the optional CDN dependency behind its lightweight routing probe,
+   * but never await it here: wasm32 startup and XYZ remain independent. */
   startSmilesWorker();
   try {
     urlSmiles = readSmilesQuery(window.location.href);

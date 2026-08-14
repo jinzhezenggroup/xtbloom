@@ -633,7 +633,7 @@ License: `BSD-3-Clause` (`LICENSES/3Dmol.js-BSD-3-Clause.txt`; Copyright (c)
 2014, University of Pittsburgh and contributors; incorporates code from
 GLmol, Three.js, and jQuery per the upstream license text).
 
-Build-time npm dependency (not vendored):
+Build-time npm dependency and runtime-provided alternatives (not vendored):
 
 - `web/package.json` pins `3dmol@2.5.5` (published 2026-05-22); the exact
   resolution and integrity is recorded in `web/package-lock.json`.
@@ -642,6 +642,16 @@ Build-time npm dependency (not vendored):
   artifact by `web/CMakeLists.txt`. Its content hash is SHA-256
   `f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016`, with the
   upstream `/*! 3dmol v2.5.5 ... */` banner retained at the top of the file.
+- At runtime the browser requests the first 65536 bytes of that exact pinned
+  asset from the site-local `vendor/3Dmol-min.js`,
+  `https://cdn.jsdelivr.net/npm/3dmol@2.5.5/build/3Dmol-min.js`, and
+  `https://cdn.jsdmirror.com/npm/3dmol@2.5.5/build/3Dmol-min.js`, then cancels
+  reading after reaching that probe target. It downloads the fastest
+  measured complete candidate, verifies the size and SHA-256 above, and falls
+  through the remaining ranked candidates on failure. Close
+  probe results use JSDMirror first for recognized mainland-China time zones
+  and jsDelivr first elsewhere; the local copy remains the final regional
+  default and an independently verified availability fallback.
 
 The xTBloom WASM web demo (`web/`) uses it only for client-side molecular
 visualization of the user-supplied geometry. It is not part of the native
@@ -687,15 +697,27 @@ License: `BSD-3-Clause` (`LICENSES/openchemlib-BSD-3-Clause.txt`; Copyright
 (c) 2015-2017, cheminfo).
 
 The optional browser SMILES workflow fetches OpenChemLib 9.21.0 from exact
-jsDelivr URLs at runtime. The reviewed JavaScript release commit is
+JSDMirror or jsDelivr URLs at runtime. The two providers were verified to
+return the same pinned bytes. The reviewed JavaScript release commit is
 `36aec7791ac38e7fdc23a37ba07e19514eb1e5c9`; its OpenChemLib Java submodule is
-revision `27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf`. The browser imports
-`https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js` (SHA-256
+revision `27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf`. The browser imports one of
+
+- `https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js`; or
+- `https://cdn.jsdmirror.com/npm/openchemlib@9.21.0/dist/openchemlib.js`
+
+(1097449 bytes; SHA-256
 `5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3`) and
-registers
-`https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json` (SHA-256
+registers the matching provider's
+
+- `https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json`; or
+- `https://cdn.jsdmirror.com/npm/openchemlib@9.21.0/dist/resources.json`
+
+(1351963 bytes; SHA-256
 `d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14`).
-Floating `latest` and jsDelivr `+esm` transformations are not used.
+The two artifacts are downloaded, size- and SHA-256-verified, and accepted as
+one provider pair; a failed pair falls through to the other provider. The
+provider order reuses the measured JSDMirror/jsDelivr ranking from the 3Dmol
+probe. Floating `latest` and jsDelivr `+esm` transformations are not used.
 
 OpenChemLib parses SMILES, adds explicit hydrogens during seeded 3D conformer
 generation, and applies an MMFF94 pre-relaxation before the coordinates enter
@@ -706,11 +728,11 @@ registered as part of the upstream resource payload but is not called by
 xTBloom. Exact paths, sizes, digests, source revisions, license provenance, and
 the distribution boundary are recorded in `web/openchemlib_manifest.json`.
 
-The OpenChemLib module and resource bytes are supplied by jsDelivr directly to
-the user's browser; they are not vendored into the repository, linked into
-`xtbloom_web.wasm`, copied into the Pages artifact, installed with the native
-library, or bundled in Python wheels. The deployed site does retain the license
-text and provenance manifest next to its other legal material.
+The OpenChemLib module and resource bytes are supplied by the selected CDN
+directly to the user's browser; they are not vendored into the repository,
+linked into `xtbloom_web.wasm`, copied into the Pages artifact, installed with
+the native library, or bundled in Python wheels. The deployed site does retain
+the license text and provenance manifest next to its other legal material.
 
 ## Distribution policy
 

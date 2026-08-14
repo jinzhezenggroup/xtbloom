@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  OPEN_CHEMLIB_MODULE_URL,
-  OPEN_CHEMLIB_RESOURCES_URL,
+  CDN_REGION_GLOBAL,
+  CDN_REGION_MAINLAND_CHINA,
+  OPEN_CHEMLIB_CDN_URLS,
   OPEN_CHEMLIB_VERSION,
+  loadOpenChemLibRuntime,
+  normalizeCdnProviderOrder,
+  openChemLibUrlsForProviders,
   smilesToGeometry,
 } from "../smiles_helpers.js";
 
@@ -44,11 +48,68 @@ function fakeOcl(atoms, options = {}) {
   return { Molecule, ConformerGenerator, ForceFieldMMFF94 };
 }
 
-test("OpenChemLib runtime URLs pin the reviewed static jsDelivr release", () => {
+test("OpenChemLib runtime URLs pin byte-identical reviewed CDN releases", () => {
   assert.equal(OPEN_CHEMLIB_VERSION, "9.21.0");
-  assert.match(OPEN_CHEMLIB_MODULE_URL, /openchemlib@9\.21\.0\/dist\/openchemlib\.js$/);
-  assert.match(OPEN_CHEMLIB_RESOURCES_URL, /openchemlib@9\.21\.0\/dist\/resources\.json$/);
-  assert.doesNotMatch(OPEN_CHEMLIB_MODULE_URL, /latest|\+esm/);
+  for (const [provider, urls] of Object.entries(OPEN_CHEMLIB_CDN_URLS)) {
+    assert.match(urls.module, /openchemlib@9\.21\.0\/dist\/openchemlib\.js$/, provider);
+    assert.match(urls.resources, /openchemlib@9\.21\.0\/dist\/resources\.json$/, provider);
+    assert.doesNotMatch(urls.module, /latest|\+esm/, provider);
+  }
+  assert.equal(new URL(OPEN_CHEMLIB_CDN_URLS.jsdmirror.module).hostname, "cdn.jsdmirror.com");
+  assert.equal(new URL(OPEN_CHEMLIB_CDN_URLS.jsdelivr.module).hostname, "cdn.jsdelivr.net");
+});
+
+test("measured providers are normalized before regional fallback defaults", () => {
+  assert.deepEqual(normalizeCdnProviderOrder(
+    ["jsdelivr", "unknown", "jsdelivr"],
+    CDN_REGION_MAINLAND_CHINA,
+  ), ["jsdelivr", "jsdmirror"]);
+  assert.deepEqual(normalizeCdnProviderOrder([], CDN_REGION_MAINLAND_CHINA), [
+    "jsdmirror",
+    "jsdelivr",
+  ]);
+  assert.deepEqual(normalizeCdnProviderOrder([], CDN_REGION_GLOBAL), [
+    "jsdelivr",
+    "jsdmirror",
+  ]);
+  assert.deepEqual(
+    openChemLibUrlsForProviders(["jsdmirror"], CDN_REGION_GLOBAL).providers,
+    ["jsdmirror", "jsdelivr"],
+  );
+});
+
+test("OpenChemLib retries the complete pinned provider pair after one artifact fails", async () => {
+  const attempts = [];
+  const registrations = [];
+  const OCL = {
+    version: OPEN_CHEMLIB_VERSION,
+    Resources: { register: (resources) => registrations.push(resources) },
+  };
+  const resourcesBytes = new TextEncoder().encode(JSON.stringify({ "/resource": "value" }));
+  const runtime = await loadOpenChemLibRuntime(["jsdmirror", "jsdelivr"], {
+    attemptTimeoutMs: 1000,
+    fetchPinnedBytesImpl: async (url) => {
+      attempts.push(url);
+      if (url.includes("jsdmirror") && url.endsWith("resources.json")) {
+        throw new Error("mirror resource failed");
+      }
+      return url.endsWith("resources.json")
+        ? resourcesBytes.buffer
+        : new Uint8Array([1]).buffer;
+    },
+    importModule: async (url) => {
+      assert.equal(url, "blob:verified-openchemlib");
+      return OCL;
+    },
+    createModuleUrl: () => ({
+      url: "blob:verified-openchemlib",
+      revoke: () => {},
+    }),
+  });
+  assert.equal(runtime.provider, "jsdelivr");
+  assert.deepEqual(registrations, [{ "/resource": "value" }]);
+  assert.equal(attempts.some((url) => url.includes("cdn.jsdmirror.com")), true);
+  assert.equal(attempts.some((url) => url.includes("cdn.jsdelivr.net")), true);
 });
 
 test("SMILES conversion publishes explicit XYZ and total formal charge", () => {

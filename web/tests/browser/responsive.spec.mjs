@@ -148,6 +148,9 @@ test("mobile and desktop layouts survive both methods and completed states", asy
   await page.setViewportSize({ width: widths[0], height: VIEWPORT_HEIGHT });
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.locator("#engine-badge")).toHaveClass(/ok/, { timeout: 180_000 });
+  /* Every non-local request is blocked by beforeEach, so this explicitly
+   * proves that CDN probing falls through to the verified site-local bundle. */
+  await expect.poll(() => page.evaluate(() => Boolean(window.$3Dmol))).toBe(true);
   await expect(page.locator("#run")).toBeEnabled();
   await expect(page.locator("#method")).toHaveValue("2");
   await expect(page.locator("#method option")).toHaveCount(2);

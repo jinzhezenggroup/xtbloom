@@ -13,19 +13,23 @@ The deployment runs entirely in the browser:
 - the xTBloom CPU backend is compiled as a single-threaded wasm32 module;
 - `worker.js` owns the synchronous native calls so calculations do not block
   the UI thread;
-- `bootstrap.js` revalidates the manifest and verifies the versioned app/helper
-  module graph before importing application code, so a deployment cannot link
-  mismatched cached modules before recovery UI exists; the small inline loader
-  in `index.html` also retries a transient failure fetching `bootstrap.js`;
+- `bootstrap.js` probes a bounded prefix of the pinned 3Dmol.js asset from
+  JSDMirror, jsDelivr, and the site origin, then loads the fastest verified
+  source with ranked fallback. That optional routing runs in parallel with
+  manifest revalidation and verification of the versioned app/helper module
+  graph; the small inline loader in `index.html` also retries a transient
+  failure fetching `bootstrap.js`;
 - `app.js` downloads the five engine resources under one file/byte progress
   ledger, retries transient startup failures with generation-safe cleanup, and
   passes the wasm and Emscripten data bytes into the Worker;
 - `c60_case.js` supplies the visible C60 preset and the independent native-CPU
   GFN2 checkpoints used by the browser scientific regression;
-- `smiles_worker.js` independently loads the pinned OpenChemLib release,
-  generates explicit-hydrogen 3D conformers, and applies MMFF94
+- `smiles_worker.js` independently loads one complete size- and SHA-256-
+  verified OpenChemLib provider pair using the measured JSDMirror/jsDelivr
+  order, generates explicit-hydrogen 3D conformers, and applies MMFF94
   pre-relaxation;
-- `3dmol` renders the current geometry; and
+- `3dmol` renders the current geometry after the fastest of JSDMirror,
+  jsDelivr, or the retained site-local bundle passes byte verification; and
 - `app.js` provides a GFN1/GFN2 method selector, single-point calculation, and
   an adapter-local L-BFGS optimization loop. GFN2 is the UI default. It
   validates the coordinates box independently of the compute path: valid input
@@ -142,6 +146,7 @@ WebAssembly loading require an origin.
 python3 tools/eigen_dependency.py check
 npm ci --prefix web --ignore-scripts --no-audit --no-fund
 npm --prefix web test
+node web/tests/3dmol_smoke.mjs
 node web/tests/openchemlib_smoke.mjs
 node web/tests/wasm_smoke.mjs build/wasm32-web/web/site
 npm --prefix web run browser:install
@@ -150,9 +155,9 @@ XTBLOOM_WEB_SITE="$PWD/build/wasm32-web/web/site" \
 ```
 
 Set `XTBLOOM_WEB_PORT` when port 4173 is unavailable. The Playwright test serves
-the staged site itself, blocks every non-local request, and therefore proves
-that ordinary XYZ calculations do not depend on the optional OpenChemLib CDN
-path.
+the staged site itself and blocks every non-local request. It therefore proves
+both that ordinary XYZ calculations do not depend on the optional OpenChemLib
+CDN path and that 3Dmol falls through to the verified site-local bundle.
 
 The provider target independently checks LAPACKE workspace and failure
 behavior, Cholesky factorization and condition estimation, eigensolve, all
@@ -174,11 +179,16 @@ and layout diagnostics retained on failure.
 
 ## Dependencies and provenance
 
-`web/package.json` pins 3Dmol.js for the built site and Playwright 1.62.1 for
-developer/CI-only browser regression. Playwright's browser runtimes and its
-macOS-only optional `fsevents` dependency remain outside all distributed
-artifacts. The optional SMILES worker loads exact OpenChemLib 9.21.0 CDN URLs
-whose revisions, file sizes, and SHA-256 digests are recorded in
+`web/package.json` pins 3Dmol.js for the built site's local fallback and
+Playwright 1.62.1 for developer/CI-only browser regression. The browser probes
+the exact 3Dmol.js 2.5.5 asset from JSDMirror, jsDelivr, and that local copy,
+uses the fastest measured source, and verifies the complete bundle before
+execution. When probe results are close, recognized mainland-China time zones
+prefer JSDMirror and other environments prefer jsDelivr. Playwright's browser
+runtimes and its macOS-only optional `fsevents` dependency remain outside all
+distributed artifacts. The optional SMILES worker reuses the measured CDN
+order and loads an exact OpenChemLib 9.21.0 module/resource pair; provider URLs,
+revisions, file sizes, and SHA-256 digests are recorded in
 `web/openchemlib_manifest.json`. Eigen 5.0.1 is
 obtained from tag revision `bc3b39870ecb690a623a3f49149a358b95c5781d`;
 the official release archive has SHA-256
