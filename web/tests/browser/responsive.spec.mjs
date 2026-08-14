@@ -146,6 +146,15 @@ test.afterEach(async ({ page }, testInfo) => {
 test("SMILES Worker requires a hash version and ignores a stale helper", async ({ context, page }) => {
   const contentVersion = "d".repeat(64);
   const helperRequests = [];
+  /* Isolate the Worker contract from the application, which starts its own
+   * optional SMILES Worker asynchronously and would make request counts race. */
+  await context.route("**/smiles-worker-contract.html", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<!doctype html><title>SMILES Worker contract</title>",
+    });
+  });
   await context.route("**/smiles_helpers.js*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -185,7 +194,7 @@ test("SMILES Worker requires a hash version and ignores a stale helper", async (
     });
   });
 
-  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.goto("/smiles-worker-contract.html", { waitUntil: "domcontentloaded" });
   const staleVersion = await page.evaluate(async () => {
     const stale = await import(new URL("smiles_helpers.js", window.location.href).href);
     return stale.OPEN_CHEMLIB_VERSION;
@@ -256,6 +265,7 @@ test("SMILES Worker requires a hash version and ignores a stale helper", async (
   });
   expect(helperRequests.filter((request) => request.version === null)).toHaveLength(1);
 
+  const helperRequestsBeforeInvalidVersion = helperRequests.length;
   const invalidVersionResult = await page.evaluate(async () => {
     const workerUrl = new URL("smiles_worker.js", window.location.href);
     workerUrl.searchParams.set("xtbloom_version", "latest");
@@ -280,7 +290,7 @@ test("SMILES Worker requires a hash version and ignores a stale helper", async (
     type: "load-error",
     error: "SMILES Worker requires a 64-character SHA-256 content version",
   });
-  expect(helperRequests.filter((request) => request.version === "latest")).toHaveLength(0);
+  expect(helperRequests).toHaveLength(helperRequestsBeforeInvalidVersion);
 });
 
 test("mobile and desktop layouts survive both methods and completed states", async ({ page }, testInfo) => {
