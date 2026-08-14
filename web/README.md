@@ -13,12 +13,14 @@ The deployment runs entirely in the browser:
 - the xTBloom CPU backend is compiled as a single-threaded wasm32 module;
 - `worker.js` owns the synchronous native calls so calculations do not block
   the UI thread;
-- `bootstrap.js` probes a bounded prefix of the pinned 3Dmol.js asset from
-  JSDMirror, jsDelivr, and the site origin, then loads the fastest verified
-  source with ranked fallback. That optional routing runs in parallel with
+- `bootstrap.js` immediately downloads the region-preferred pinned 3Dmol.js
+  asset and verifies its complete size and SHA-256. Only after that preferred
+  source fails does it probe a bounded prefix of the remaining candidates for
+  at most 400 ms before continuing through ranked, region-ordered, and
+  site-local fallbacks. That optional loading runs in parallel with
   manifest revalidation and verification of the versioned app/helper module
-  graph. The manifest gives the lazily loaded SMILES Worker/helper graph the
-  same content version without making it gate the core app; the small inline
+  graph. The manifest gives the independently loaded SMILES Worker/helper graph
+  the same content version without making it gate the core app; the small inline
   loader in `index.html` also retries a transient failure fetching
   `bootstrap.js`;
 - `app.js` downloads the five engine resources under one file/byte progress
@@ -26,12 +28,13 @@ The deployment runs entirely in the browser:
   passes the wasm and Emscripten data bytes into the Worker;
 - `c60_case.js` supplies the visible C60 preset and the independent native-CPU
   GFN2 checkpoints used by the browser scientific regression;
-- `smiles_worker.js` independently loads one complete size- and SHA-256-
-  verified OpenChemLib provider pair using the measured JSDMirror/jsDelivr
-  order, generates explicit-hydrogen 3D conformers, and applies MMFF94
-  pre-relaxation;
-- `3dmol` renders the current geometry after the fastest of JSDMirror,
-  jsDelivr, or the retained site-local bundle passes byte verification; and
+- `smiles_worker.js` eagerly and independently loads one complete size- and
+  SHA-256-verified OpenChemLib provider pair using the stable regional
+  JSDMirror/jsDelivr order, generates explicit-hydrogen 3D conformers, and
+  applies MMFF94 pre-relaxation without gating engine or XYZ readiness;
+- `3dmol` renders the current geometry after the region-preferred provider or
+  a ranked verified fallback, including the retained site-local bundle,
+  passes byte verification; and
 - `app.js` provides a GFN1/GFN2 method selector, single-point calculation, and
   an adapter-local L-BFGS optimization loop. GFN2 is the UI default. It
   validates the coordinates box independently of the compute path: valid input
@@ -50,17 +53,19 @@ The build hashes the application module graph, optional SMILES Worker/helper
 graph, and five engine files into `engine-manifest.json`. The browser
 revalidates only that small manifest on refresh, verifies `app.js`,
 `app_helpers.js`, and `c60_case.js` before linking them, while leaving the
-optional SMILES pair lazy so it cannot delay the core app. Every manifest asset
-is addressed with the shared SHA-256-derived content version, and the SMILES
-Worker refuses to import a helper unless that 64-character hash is present.
+optional SMILES pair out of the core verification path. Once the app runs, it
+starts that pair eagerly in a background Worker after initiating the required
+engine fetch. Every manifest asset is addressed with the shared SHA-256-derived
+content version, and the SMILES Worker refuses to import a helper unless that
+64-character hash is present.
 It therefore imports the helper from the same cache generation instead of an
 older stable URL. An unchanged version stays cacheable; a transient failure
 reloads the complete resource set under that same content version, replacing
 rather than abandoning reusable cache entries. Digest verification prevents the UI,
 Worker glue, wasm, and preloaded data from being mixed across attempts; the
 digest-derived shared cache key provides the corresponding generation boundary
-for the lazy SMILES modules. Late messages from a failed Worker are ignored by
-a monotonically increasing loader generation.
+for the independently fetched SMILES modules. Late messages from a failed
+Worker are ignored by a monotonically increasing loader generation.
 
 The CPU eigensolver still discovers the same LP64 LAPACKE/CBLAS symbols from a
 preloaded side module named `libscipy_openblas.so`. For the Web build those
@@ -193,14 +198,16 @@ and layout diagnostics retained on failure.
 ## Dependencies and provenance
 
 `web/package.json` pins 3Dmol.js for the built site's local fallback and
-Playwright 1.62.1 for developer/CI-only browser regression. The browser probes
-the exact 3Dmol.js 2.5.5 asset from JSDMirror, jsDelivr, and that local copy,
-uses the fastest measured source, and verifies the complete bundle before
-execution. When probe results are close, recognized mainland-China time zones
-prefer JSDMirror and other environments prefer jsDelivr. Playwright's browser
+Playwright 1.62.1 for developer/CI-only browser regression. The browser starts
+the exact region-preferred 3Dmol.js 2.5.5 download without probe traffic and
+verifies the complete bundle before execution. If that source fails, a bounded
+probe ranks the remaining candidates; recognized mainland-China time zones
+prefer JSDMirror and other environments prefer jsDelivr when results are close
+or unavailable. Playwright's browser
 runtimes and its macOS-only optional `fsevents` dependency remain outside all
-distributed artifacts. The optional SMILES worker reuses the measured CDN
-order and loads an exact OpenChemLib 9.21.0 module/resource pair; provider URLs,
+distributed artifacts. The optional SMILES worker uses the synchronously
+published regional CDN order and loads an exact OpenChemLib 9.21.0
+module/resource pair; provider URLs,
 revisions, file sizes, and SHA-256 digests are recorded in
 `web/openchemlib_manifest.json`. Eigen 5.0.1 is
 obtained from tag revision `bc3b39870ecb690a623a3f49149a358b95c5781d`;

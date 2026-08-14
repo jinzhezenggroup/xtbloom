@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 const CHROMIUM_WIDTHS = [320, 360, 375, 390, 430, 768, 1024];
 const WEBKIT_WIDTHS = [320, 390];
@@ -141,6 +142,141 @@ test.afterEach(async ({ page }, testInfo) => {
     body: Buffer.from(JSON.stringify(await layoutDiagnostics(page).catch((error) => ({ error: String(error) })), null, 2)),
     contentType: "application/json",
   });
+});
+
+test("engine loading status is compact, accessible, and does not block editing", async ({ page }, testInfo) => {
+  let releaseManifest;
+  const manifestGate = new Promise((resolve) => { releaseManifest = resolve; });
+  await page.route("**/engine-manifest.json*", async (route) => {
+    await manifestGate;
+    await route.continue();
+  });
+
+  try {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    const overlay = page.locator("#overlay");
+    await expect(overlay).toBeVisible();
+    await expect(overlay).toHaveAttribute("role", "status");
+    await expect(overlay).toHaveAttribute("aria-live", "polite");
+
+    const loadingStyle = await overlay.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return {
+        backdropFilter: style.backdropFilter,
+        pointerEvents: style.pointerEvents,
+        width: rect.width,
+        height: rect.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        deferred: [".panel-output", ".roadmap", ".footer"].map((selector) => {
+          const deferredStyle = getComputedStyle(document.querySelector(selector));
+          return {
+            selector,
+            contentVisibility: deferredStyle.contentVisibility,
+            containIntrinsicSize: deferredStyle.containIntrinsicSize,
+          };
+        }),
+      };
+    });
+    expect(loadingStyle.backdropFilter).toBe("none");
+    expect(loadingStyle.pointerEvents).toBe("none");
+    expect(loadingStyle.width).toBeLessThan(loadingStyle.viewportWidth);
+    expect(loadingStyle.height).toBeLessThan(loadingStyle.viewportHeight);
+    if (testInfo.project.name === "chromium") {
+      for (const deferred of loadingStyle.deferred) {
+        expect(deferred.contentVisibility, deferred.selector).toBe("auto");
+        expect(deferred.containIntrinsicSize, deferred.selector).toMatch(/auto\s+\d+px/);
+      }
+    }
+
+    await page.locator("#xyz").fill("H 0 0 0");
+    await expect(page.locator("#xyz")).toHaveValue("H 0 0 0");
+  } finally {
+    releaseManifest();
+  }
+});
+
+test("verified regional 3Dmol starts directly without secondary probe traffic", async ({ context, page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "request-order evidence is owned by Chromium");
+  await page.addInitScript(() => {
+    const NativeDateTimeFormat = Intl.DateTimeFormat;
+    Intl.DateTimeFormat = function DateTimeFormat(...args) {
+      const formatter = NativeDateTimeFormat(...args);
+      const nativeResolvedOptions = formatter.resolvedOptions.bind(formatter);
+      formatter.resolvedOptions = () => ({ ...nativeResolvedOptions(), timeZone: "UTC" });
+      return formatter;
+    };
+    Intl.DateTimeFormat.prototype = NativeDateTimeFormat.prototype;
+  });
+  const pinnedThreeDmol = await readFile(new URL(
+    "../../node_modules/3dmol/build/3Dmol-min.js",
+    import.meta.url,
+  ));
+  const requests = [];
+  let releaseSecondary;
+  const secondaryGate = new Promise((resolve) => { releaseSecondary = resolve; });
+  context.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/3Dmol-min.js")) {
+      requests.push({
+        hostname: url.hostname,
+        pathname: url.pathname,
+        range: request.headers().range || "",
+      });
+    }
+  });
+  await context.route(
+    "https://cdn.jsdelivr.net/npm/3dmol@2.5.5/build/3Dmol-min.js",
+    async (route) => route.fulfill({
+      status: 200,
+      contentType: "text/javascript",
+      body: pinnedThreeDmol,
+    }),
+  );
+  await context.route(
+    "https://cdn.jsdmirror.com/npm/3dmol@2.5.5/build/3Dmol-min.js",
+    async (route) => {
+      await secondaryGate;
+      await route.abort("timedout");
+    },
+  );
+
+  try {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect.poll(() => page.evaluate(() => Boolean(window.$3Dmol))).toBe(true);
+    expect(requests).toEqual([{
+      hostname: "cdn.jsdelivr.net",
+      pathname: "/npm/3dmol@2.5.5/build/3Dmol-min.js",
+      range: "",
+    }]);
+  } finally {
+    releaseSecondary();
+  }
+});
+
+test("delayed OpenChemLib remains background-only for engine and XYZ readiness", async ({ context, page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "readiness ordering is owned by Chromium");
+  let releaseOpenChemLib;
+  const openChemLibGate = new Promise((resolve) => { releaseOpenChemLib = resolve; });
+  const openChemLibRequests = [];
+  await context.route("**/openchemlib@9.21.0/dist/*", async (route) => {
+    openChemLibRequests.push(route.request().url());
+    await openChemLibGate;
+    await route.abort("timedout");
+  });
+
+  try {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect.poll(() => openChemLibRequests.length).toBeGreaterThanOrEqual(2);
+    await expect(page.locator("#engine-badge")).toHaveClass(/ok/, { timeout: 180_000 });
+    await expect.poll(() => page.evaluate(() => Boolean(window.$3Dmol))).toBe(true);
+    await expect(page.locator("#run")).toBeEnabled();
+    await page.locator("#xyz").fill("H 0 0 0");
+    await expect(page.locator("#xyz")).toHaveValue("H 0 0 0");
+  } finally {
+    releaseOpenChemLib();
+  }
 });
 
 test("SMILES Worker requires a hash version and ignores a stale helper", async ({ context, page }) => {
@@ -295,13 +431,21 @@ test("SMILES Worker requires a hash version and ignores a stale helper", async (
 
 test("mobile and desktop layouts survive both methods and completed states", async ({ page }, testInfo) => {
   const widths = widthsFor(testInfo.project.name);
+  const siteOrigin = new URL(String(testInfo.project.use.baseURL)).origin;
   const enginePackageRequests = [];
   const sideModuleResponses = [];
+  const threeDmolRequests = [];
   /* Observe the real application fetches without intercepting or replacing
    * them. Register before navigation because the engine resources begin
    * downloading as soon as the module graph finishes bootstrap. */
   page.on("request", (request) => {
     const url = new URL(request.url());
+    if (url.pathname.endsWith("/3Dmol-min.js")) {
+      threeDmolRequests.push({
+        origin: url.origin,
+        range: request.headers().range || "",
+      });
+    }
     if (
       url.pathname.endsWith("/xtbloom_web.side.wasm") ||
       url.pathname.endsWith("/xtbloom_web.data")
@@ -336,9 +480,14 @@ test("mobile and desktop layouts survive both methods and completed states", asy
   expect(legacyDataRequests).toHaveLength(0);
   expect(sideModuleResponses[0]).toMatchObject({ ok: true });
   expect(sideModuleResponses[0].contentType).toMatch(/^application\/wasm(?:\s*;|$)/i);
-  /* Every non-local request is blocked by beforeEach, so this explicitly
-   * proves that CDN probing falls through to the verified site-local bundle. */
+  /* Every non-local request is blocked by beforeEach. The failed preferred
+   * full attempt unlocks one bounded local probe, followed by exactly one
+   * verified full local transfer. */
   await expect.poll(() => page.evaluate(() => Boolean(window.$3Dmol))).toBe(true);
+  expect(threeDmolRequests.filter(({ origin }) => origin === siteOrigin)).toEqual([
+    { origin: siteOrigin, range: "bytes=0-65535" },
+    { origin: siteOrigin, range: "" },
+  ]);
   await expect(page.locator("#run")).toBeEnabled();
   await expect(page.locator("#method")).toHaveValue("2");
   await expect(page.locator("#method option")).toHaveCount(2);

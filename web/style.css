@@ -290,7 +290,13 @@ td.num, th.num { text-align: right; }
   padding: 3px 10px;
   font: 12px var(--mono);
 }
-.panel-output { scroll-margin-top: 100px; }
+.panel-output {
+  scroll-margin-top: 100px;
+  /* Preserve scroll geometry while letting supporting browsers skip the
+     below-fold result subtree until it approaches the viewport. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 520px;
+}
 
 .err {
   margin-top: 14px;
@@ -307,6 +313,8 @@ td.num, th.num { text-align: right; }
 /* ---------- roadmap ---------- */
 .roadmap {
   margin: 0 clamp(16px, 4vw, 40px) 22px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 190px;
 }
 .roadmap-grid {
   display: grid;
@@ -346,6 +354,8 @@ td.num, th.num { text-align: right; }
   text-align: center;
   padding: 4px clamp(16px, 4vw, 40px) 40px;
   overflow-wrap: anywhere;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
 }
 .footer strong { color: var(--text); }
 .legal-links { line-height: 1.8; }
@@ -365,21 +375,32 @@ td.num, th.num { text-align: right; }
 /* ---------- overlay ---------- */
 .overlay {
   position: fixed;
-  inset: 0;
-  background: rgba(8, 11, 20, .78);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  width: min(420px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
   z-index: 50;
+  pointer-events: none;
 }
-.overlay-box { text-align: center; color: var(--text); }
-.overlay-box p { color: var(--muted); font-size: 13px; }
+.overlay-box {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 12px;
+  padding: 14px 16px;
+  color: var(--text);
+  background: rgba(17, 24, 39, .96);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+  overflow: auto;
+}
+.overlay-box p { margin: 0; color: var(--muted); font-size: 13px; }
 .spinner {
-  width: 46px;
-  height: 46px;
-  margin: 0 auto 16px;
-  border: 4px solid var(--bg3);
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  border: 3px solid var(--bg3);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
@@ -419,7 +440,7 @@ a.btn { text-decoration: none; max-width: 120px; }
 }
 .advanced-settings-body .sub-title { margin-top: 8px; }
 
-.loadbar { margin-top: 14px; width: min(360px, calc(100vw - 40px)); }
+.loadbar { grid-column: 1 / -1; margin-top: 2px; width: 100%; }
 .loadbar-track {
   height: 8px;
   border-radius: 999px;

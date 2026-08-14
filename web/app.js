@@ -421,7 +421,6 @@ let smilesBusy = false;
 let smilesStatusKey = "smiles_download_status";
 let smilesStatusVars = null;
 let smilesStatusTone = "";
-let smilesRoutingObserved = false;
 let urlSmiles = null;
 let urlSmilesStarted = false;
 const smilesWorkflow = createRevisionOwner();
@@ -518,27 +517,6 @@ function handleSmilesClientState(event) {
 }
 
 function startSmilesWorker() {
-  const routing = globalThis.__XTBLOOM_CDN_ROUTING;
-  if (
-    !Array.isArray(globalThis.__XTBLOOM_CDN_PROVIDERS) &&
-    routing &&
-    typeof routing.then === "function"
-  ) {
-    if (!smilesRoutingObserved) {
-      smilesRoutingObserved = true;
-      void routing.then(
-        () => {
-          smilesRoutingObserved = false;
-          startSmilesWorker();
-        },
-        () => {
-          smilesRoutingObserved = false;
-          startSmilesWorker();
-        },
-      );
-    }
-    return;
-  }
   if (!smilesClient) {
     smilesClient = createSmilesWorkerClient({
       createWorker: () => {
@@ -1751,8 +1729,12 @@ async function startEngineLoad({ forceReload = false } = {}) {
 (async () => {
   setupResponsiveDisclosures();
   applyI18n();
-  /* Queue the optional CDN dependency behind its lightweight routing probe,
-   * but never await it here: wasm32 startup and XYZ remain independent. */
+  /* Begin the required engine fetch first so the optional multi-megabyte
+   * OpenChemLib pair cannot take network priority ahead of core XYZ startup. */
+  const engineLoad = startEngineLoad();
+  /* OpenChemLib starts eagerly in its own Worker. Regional defaults are read
+   * synchronously, so neither 3Dmol fallback selection nor engine startup can
+   * hold this optional download on the main thread's critical path. */
   startSmilesWorker();
   try {
     urlSmiles = readSmilesQuery(window.location.href);
@@ -1766,5 +1748,5 @@ async function startEngineLoad({ forceReload = false } = {}) {
     setSmilesStatus("smiles_url_failed", { e: detail }, "err");
     setError(t("smiles_url_failed", { e: detail }));
   }
-  await startEngineLoad();
+  await engineLoad;
 })();

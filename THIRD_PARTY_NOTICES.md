@@ -642,13 +642,12 @@ Build-time npm dependency and runtime-provided alternatives (not vendored):
   artifact by `web/CMakeLists.txt`. Its content hash is SHA-256
   `f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016`, with the
   upstream `/*! 3dmol v2.5.5 ... */` banner retained at the top of the file.
-- At runtime the browser requests the first 65536 bytes of that exact pinned
-  asset from the site-local `vendor/3Dmol-min.js`,
-  `https://cdn.jsdelivr.net/npm/3dmol@2.5.5/build/3Dmol-min.js`, and
-  `https://cdn.jsdmirror.com/npm/3dmol@2.5.5/build/3Dmol-min.js`, then cancels
-  reading after reaching that probe target. It downloads the fastest
-  measured complete candidate, verifies the size and SHA-256 above, and falls
-  through the remaining ranked candidates on failure. Close
+- At runtime the browser immediately downloads the exact pinned asset from the
+  region-preferred CDN, verifies the size and SHA-256 above, and executes it on
+  success. Only after that complete preferred attempt fails does the browser
+  request the first 65536 bytes from each remaining CDN/site-local candidate;
+  it cancels those reads at the probe target or after the 400 ms total ranking
+  budget, then continues through verified ranked fallbacks. Close or unavailable
   probe results use JSDMirror first for recognized mainland-China time zones
   and jsDelivr first elsewhere; the local copy remains the final regional
   default and an independently verified availability fallback.
@@ -716,8 +715,9 @@ registers the matching provider's
 `d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14`).
 The two artifacts are downloaded, size- and SHA-256-verified, and accepted as
 one provider pair; a failed pair falls through to the other provider. The
-provider order reuses the measured JSDMirror/jsDelivr ranking from the 3Dmol
-probe. Floating `latest` and jsDelivr `+esm` transformations are not used.
+provider order is published synchronously from the visitor's region so this
+optional Worker never waits for 3Dmol loading or fallback ranking. Floating
+`latest` and jsDelivr `+esm` transformations are not used.
 
 OpenChemLib parses SMILES, adds explicit hydrogens during seeded 3D conformer
 generation, and applies an MMFF94 pre-relaxation before the coordinates enter

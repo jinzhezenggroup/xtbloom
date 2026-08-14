@@ -54,7 +54,8 @@ The engine loader reports completed files and received bytes across the full
 Worker, JavaScript, main WebAssembly module, and `.wasm`-named preload package.
 A dependency-free
 bootstrap first verifies the versioned app/helper module graph. The optional
-SMILES Worker/helper pair shares that graph's content version but remains lazy,
+SMILES Worker/helper pair shares that graph's content version, then starts
+eagerly in a separate background Worker after the core engine request begins,
 so a SMILES failure never blocks XYZ calculations. The page itself retries a
 transient failure loading that bootstrap. A small version manifest is
 revalidated on refresh; unchanged versioned resources stay in the browser
@@ -65,12 +66,13 @@ failures are retried automatically as one coherent resource generation; the
 manual retry keeps the current molecule and settings instead of reloading the
 page.
 
-The molecular viewer separately probes a small prefix of the pinned 3Dmol.js
-bundle from JSDMirror, jsDelivr, and the site origin, then downloads the fastest
-verified source with ranked fallback. The optional SMILES worker reuses the
-measured JSDMirror/jsDelivr order for its pinned OpenChemLib module and resource
-pair. Close probe results prefer JSDMirror for recognized mainland-China time
-zones and jsDelivr elsewhere. Provider failures do not prevent the core WASM
+The molecular viewer immediately downloads and verifies the region-preferred
+pinned 3Dmol.js bundle. Only if that source fails does a short, bounded probe
+rank the remaining JSDMirror, jsDelivr, and site-origin candidates before
+verified fallback. The optional SMILES worker starts independently with the
+stable regional JSDMirror/jsDelivr order for its pinned OpenChemLib module and
+resource pair. Recognized mainland-China time zones prefer JSDMirror and other
+environments prefer jsDelivr. Provider failures do not prevent the core WASM
 engine from loading; 3Dmol retains a site-local fallback, while ordinary XYZ
 calculations never require OpenChemLib.
 

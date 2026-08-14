@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   cdnRegionForTimeZone,
   initializeBrowserCdnRouting,
+  loadRegionPreferredThreeDmol,
   loadThreeDmol,
   prepareVersionedApplication,
   probeSourceSpeed,
@@ -277,6 +278,19 @@ test("CDN probes reject unavailable, failed, non-streaming, and empty responses"
     }),
     /empty probe response/,
   );
+
+  const controller = new AbortController();
+  const aborted = probeSourceSpeed(source, {
+    ...options,
+    signal: controller.signal,
+    fetchImpl: async (_url, request) => new Promise((resolve, reject) => {
+      request.signal.addEventListener("abort", () => reject(request.signal.reason), {
+        once: true,
+      });
+    }),
+  });
+  controller.abort();
+  await assert.rejects(aborted);
 });
 
 test("verified 3Dmol loading falls through ranked sources", async () => {
@@ -437,31 +451,7 @@ test("3Dmol loading preserves existing globals and reports script/global failure
   );
 });
 
-test("browser CDN routing shares measured provider order with optional workers", async () => {
-  const globalImpl = {};
-  const rankedSources = [
-    { source: { id: "local", url: "vendor/3Dmol-min.js" } },
-    { source: { id: "jsdmirror", url: "https://mirror.test/3dmol.js" } },
-    { source: { id: "jsdelivr", url: "https://jsdelivr.test/3dmol.js" } },
-  ];
-  const routing = await initializeBrowserCdnRouting({
-    intlImpl: {
-      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "Asia/Shanghai" }) }),
-    },
-    globalImpl,
-    rankImpl: async () => rankedSources,
-    loadThreeDmolImpl: async () => ({ source: "local" }),
-  });
-  assert.equal(routing.region, "mainland-china");
-  assert.deepEqual(routing.providers, ["jsdmirror", "jsdelivr"]);
-  assert.deepEqual(globalImpl.__XTBLOOM_CDN_PROVIDERS, ["jsdmirror", "jsdelivr"]);
-  assert.deepEqual(await globalImpl.__XTBLOOM_3DMOL_READY, {
-    ok: true,
-    source: "local",
-  });
-});
-
-test("browser CDN routing uses the regional order when ranking throws", async () => {
+test("browser CDN routing publishes stable regional provider order for optional workers", async () => {
   const globalImpl = {};
   let attemptedOrder = null;
   const routing = await initializeBrowserCdnRouting({
@@ -469,15 +459,171 @@ test("browser CDN routing uses the regional order when ranking throws", async ()
       DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "Asia/Shanghai" }) }),
     },
     globalImpl,
-    rankImpl: async () => { throw new Error("probe setup failed"); },
     loadThreeDmolImpl: async (rankedSources) => {
       attemptedOrder = rankedSources.map((entry) => entry.source.id);
-      return { source: "local" };
+      return { source: "jsdmirror" };
     },
   });
+  assert.equal(routing.region, "mainland-china");
   assert.deepEqual(routing.providers, ["jsdmirror", "jsdelivr"]);
-  assert.deepEqual(await routing.ready, { ok: true, source: "local" });
+  assert.deepEqual(globalImpl.__XTBLOOM_CDN_PROVIDERS, ["jsdmirror", "jsdelivr"]);
   assert.deepEqual(attemptedOrder, ["jsdmirror", "jsdelivr", "local"]);
+  assert.deepEqual(await globalImpl.__XTBLOOM_3DMOL_READY, {
+    ok: true,
+    source: "jsdmirror",
+  });
+});
+
+test("browser CDN routing starts the regional verified fetch without waiting for ranking", async () => {
+  const globalImpl = {};
+  let attemptedOrder = null;
+  let finishLoading;
+  const loading = new Promise((resolve) => { finishLoading = resolve; });
+  const routing = await Promise.race([
+    initializeBrowserCdnRouting({
+      intlImpl: {
+        DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "UTC" }) }),
+      },
+      globalImpl,
+      rankImpl: () => new Promise(() => {}),
+      loadThreeDmolImpl: (rankedSources) => {
+        attemptedOrder = rankedSources.map((entry) => entry.source.id);
+        return loading;
+      },
+    }),
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error("regional 3Dmol fetch waited for CDN ranking")),
+      100,
+    )),
+  ]);
+
+  assert.deepEqual(attemptedOrder, ["jsdelivr", "jsdmirror", "local"]);
+  assert.deepEqual(routing.providers, ["jsdelivr", "jsdmirror"]);
+  assert.equal(routing.ready, globalImpl.__XTBLOOM_3DMOL_READY);
+  finishLoading({ source: "jsdelivr" });
+  assert.deepEqual(await routing.ready, { ok: true, source: "jsdelivr" });
+});
+
+test("preferred 3Dmol success never waits for or starts fallback ranking", async () => {
+  const attempts = [];
+  let rankCalls = 0;
+  const result = await loadRegionPreferredThreeDmol(THREE_DMOL_SOURCES, {
+    region: "global",
+    globalImpl: {},
+    rankImpl: () => {
+      rankCalls += 1;
+      return new Promise(() => {});
+    },
+    attemptSourceImpl: async (source) => {
+      attempts.push(source.id);
+      return { source: source.id, url: source.url };
+    },
+  });
+  assert.equal(result.source, "jsdelivr");
+  assert.deepEqual(attempts, ["jsdelivr"]);
+  assert.equal(rankCalls, 0);
+});
+
+test("bounded fallback ranking cannot delay regional and local verified attempts", async () => {
+  const timers = createManualTimers();
+  const attempts = [];
+  let rankingSignal = null;
+  const resultPromise = loadRegionPreferredThreeDmol(THREE_DMOL_SOURCES, {
+    region: "global",
+    globalImpl: {},
+    fallbackRankingTimeoutMs: 400,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    rankImpl: (_sources, options) => {
+      rankingSignal = options.signal;
+      return new Promise(() => {});
+    },
+    attemptSourceImpl: async (source) => {
+      attempts.push(source.id);
+      if (source.id !== "local") throw new Error(`${source.id} unavailable`);
+      return { source: source.id, url: source.url };
+    },
+  });
+
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(attempts, ["jsdelivr"]);
+  assert.equal(timers.size, 1);
+  const [rankingTimer] = timers.ids();
+  assert.equal(timers.delayOf(rankingTimer), 400);
+  timers.run(rankingTimer);
+  const result = await resultPromise;
+  assert.equal(rankingSignal.aborted, true);
+  assert.deepEqual(attempts, ["jsdelivr", "jsdmirror", "local"]);
+  assert.equal(result.source, "local");
+});
+
+test("fallback ranking rejects replacements, removes duplicates, and retains every error", async () => {
+  const attempts = [];
+  await assert.rejects(
+    loadRegionPreferredThreeDmol(THREE_DMOL_SOURCES, {
+      region: "global",
+      globalImpl: {},
+      rankImpl: async () => [
+        { source: { id: "jsdelivr", url: THREE_DMOL_SOURCES[0].url } },
+        { source: { id: "jsdmirror", url: "https://attacker.test/replaced.js" } },
+        { source: THREE_DMOL_SOURCES[2] },
+        { source: THREE_DMOL_SOURCES[2] },
+      ],
+      attemptSourceImpl: async (source) => {
+        attempts.push(source.id);
+        throw new Error(`${source.id} unavailable`);
+      },
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.equal(error.errors.length, 3);
+      assert.deepEqual(error.errors.map((inner) => inner.message), [
+        "jsdelivr unavailable",
+        "local unavailable",
+        "jsdmirror unavailable",
+      ]);
+      return true;
+    },
+  );
+  assert.deepEqual(attempts, ["jsdelivr", "local", "jsdmirror"]);
+});
+
+test("a failed script's partial global is cleared or stops fallback publication", async () => {
+  const recoverableGlobal = {};
+  const attempts = [];
+  const recovered = await loadRegionPreferredThreeDmol(THREE_DMOL_SOURCES, {
+    region: "global",
+    globalImpl: recoverableGlobal,
+    rankImpl: async (sources) => sources.map((source) => ({ source })),
+    attemptSourceImpl: async (source) => {
+      attempts.push(source.id);
+      if (source.id === "jsdelivr") {
+        recoverableGlobal.$3Dmol = { partial: true };
+        throw new Error("preferred script failed after partial publication");
+      }
+      assert.equal(recoverableGlobal.$3Dmol, undefined);
+      return { source: source.id, url: source.url };
+    },
+  });
+  assert.equal(recovered.source, "jsdmirror");
+  assert.deepEqual(attempts, ["jsdelivr", "jsdmirror"]);
+
+  const unrecoverableGlobal = {};
+  await assert.rejects(
+    loadRegionPreferredThreeDmol(THREE_DMOL_SOURCES, {
+      region: "global",
+      globalImpl: unrecoverableGlobal,
+      attemptSourceImpl: async () => {
+        Object.defineProperty(unrecoverableGlobal, "$3Dmol", {
+          configurable: false,
+          value: { partial: true },
+        });
+        throw new Error("non-configurable partial global");
+      },
+    }),
+    /left an unusable global/,
+  );
 });
 
 test("browser CDN routing defaults globally when time-zone lookup or loading fails", async () => {
@@ -502,8 +648,15 @@ test("browser application starts while CDN routing remains in flight", async () 
   const globalImpl = {};
   const routing = startBrowserCdnAndApplication({
     globalImpl,
+    intlImpl: {
+      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "UTC" }) }),
+    },
     initializeRouting: () => new Promise((resolve) => { resolveRouting = resolve; }),
-    startApplication: () => { applicationStarts += 1; },
+    startApplication: () => {
+      applicationStarts += 1;
+      assert.equal(globalImpl.__XTBLOOM_CDN_REGION, "global");
+      assert.deepEqual(globalImpl.__XTBLOOM_CDN_PROVIDERS, ["jsdelivr", "jsdmirror"]);
+    },
   });
   assert.equal(applicationStarts, 1);
   assert.equal(globalImpl.__XTBLOOM_CDN_ROUTING, routing);
@@ -539,6 +692,9 @@ test("browser startup publishes global fallbacks after synchronous setup failure
   };
   const routing = startBrowserCdnAndApplication({
     globalImpl,
+    intlImpl: {
+      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "UTC" }) }),
+    },
     initializeRouting: () => { throw routingError; },
     startApplication: () => { throw applicationError; },
   });
@@ -1388,11 +1544,19 @@ test("deployed page describes the universal browser artifact as wasm32", async (
 });
 
 test("page bootstraps pinned SMILES loading and applies URL-optimized geometry", async () => {
-  const [appSource, indexSource] = await Promise.all([
+  const [appSource, indexSource, styleSource] = await Promise.all([
     readFile(new URL("../app.js", import.meta.url), "utf8"),
     readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../style.css", import.meta.url), "utf8"),
   ]);
   assert.match(appSource, /startSmilesWorker\(\);/);
+  const smilesStartup = appSource.slice(
+    appSource.indexOf("function startSmilesWorker()"),
+    appSource.indexOf("function requestSmilesGeometry"),
+  );
+  assert.doesNotMatch(smilesStartup, /__XTBLOOM_CDN_ROUTING/);
+  assert.ok(appSource.indexOf("const engineLoad = startEngineLoad();") <
+    appSource.lastIndexOf("startSmilesWorker();"));
   assert.match(appSource, /readSmilesQuery\(window\.location\.href\)/);
   assert.match(appSource, /applyFinalGeometry:\s*true/);
   assert.match(appSource, /setCoordinateInput\(d\.geometry, \{ preserveOptimization: true \}\)/);
@@ -1400,6 +1564,17 @@ test("page bootstraps pinned SMILES loading and applies URL-optimized geometry",
   assert.match(indexSource, /id="smiles"/);
   assert.match(indexSource, /id="smiles-generate"/);
   assert.doesNotMatch(indexSource, /id="smiles-alert"/);
+  assert.match(indexSource, /id="overlay"[^>]*role="status"/);
+  assert.match(indexSource, /class="spinner"[^>]*aria-hidden="true"/);
+  const overlayRule = styleSource.match(/\.overlay\s*\{([^}]*)\}/)?.[1] || "";
+  assert.doesNotMatch(overlayRule, /backdrop-filter/);
+  assert.match(overlayRule, /pointer-events:\s*none/);
+  for (const selector of [".panel-output", ".roadmap", ".footer"]) {
+    assert.match(
+      styleSource,
+      new RegExp(`${selector.replace(".", "\\.")}\\s*\\{[^}]*content-visibility:\\s*auto`, "s"),
+    );
+  }
 });
 
 test("engine bootstrap retries a coherent versioned generation without reloading the page", async () => {
