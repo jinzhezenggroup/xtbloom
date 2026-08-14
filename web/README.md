@@ -79,16 +79,18 @@ GitHub `cloudflare-pages` environment, restrict its deployment branches to
   project name.
 
 Set the Cloudflare project's production branch to `main` when creating it. The
-deployment action requires that the project and GitHub environment already
-exist; it does not create them. The built-in `GITHUB_TOKEN` needs no manual
-secret and receives only `contents: read` plus `deployments: write`, which the
-action uses to attach the Cloudflare URL to a GitHub Deployment. No pull-request
-permission is granted because Cloudflare deployment runs only on `main`.
+deployment job requires that the project and GitHub environment already exist;
+it does not create them. No pull-request permission is granted because
+Cloudflare deployment runs only on `main`.
 
-The requested Marketplace action is a maintained third-party project rather
-than an official Cloudflare action. The workflow pins its signed v3.5.0 commit
-and the exact Wrangler 4.86.0 default tested by that Action release. Re-audit
-both pins before upgrading them.
+Wrangler 4.123.0 and its complete transitive dependency graph are pinned by
+`tools/cloudflare-pages/package-lock.json`. The credential-free validation job
+runs `npm ci --omit=optional --ignore-scripts`, verifies the Wrangler version,
+and archives that minimal Linux installation. The production job restores the
+archive without checking out repository code or invoking npm; its
+credential-bearing step only invokes the locked Wrangler installation.
+Re-audit the lockfile and every explicit deployment package before upgrading
+them.
 
 Attaching a custom domain is a separate Cloudflare Pages configuration step.
 Add the hostname through the project's **Custom domains** screen before

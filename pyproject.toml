@@ -163,6 +163,7 @@ sdist.exclude = [
   "tests/**",
   "tools/conformance/**",
   "tools/check_benchmark_evidence_size.py",
+  "tools/cloudflare-pages/**",
   "tools/licensing/**",
   "tools/oracle/**",
   "tools/scc_reuse/**",
