@@ -151,13 +151,15 @@ class EvidenceSizePolicyUnitTests(unittest.TestCase):
                 completed = subprocess.CompletedProcess(
                     args=[], returncode=1, stdout=b"", stderr=stderr
                 )
-                with mock.patch.object(
-                    checker.subprocess, "run", return_value=completed
-                ) as run:
-                    with self.assertRaisesRegex(checker.EvidencePolicyError, expected):
-                        checker._run_git(
-                            Path("repository"), ["status"], input_bytes=b"input"
-                        )
+                with (
+                    mock.patch.object(
+                        checker.subprocess, "run", return_value=completed
+                    ) as run,
+                    self.assertRaisesRegex(checker.EvidencePolicyError, expected),
+                ):
+                    checker._run_git(
+                        Path("repository"), ["status"], input_bytes=b"input"
+                    )
                 self.assertEqual(run.call_args.args[0][:3], ["git", "-C", "repository"])
                 self.assertEqual(run.call_args.kwargs["input"], b"input")
                 self.assertEqual(
@@ -181,11 +183,13 @@ class EvidenceSizePolicyUnitTests(unittest.TestCase):
 
     def test_indexed_evidence_rejects_invalid_cat_file_records(self) -> None:
         """Only well-formed blob metadata can supply staged evidence sizes."""
-        index_output = (
-            b"100644 deadbeef 0\tbenchmarks/evidence/summary.json\0"
-        )
+        index_output = b"100644 deadbeef 0\tbenchmarks/evidence/summary.json\0"
         scenarios = [
-            (b"deadbeef blob\n", checker.EvidencePolicyError, "cannot parse git cat-file"),
+            (
+                b"deadbeef blob\n",
+                checker.EvidencePolicyError,
+                "cannot parse git cat-file",
+            ),
             (
                 b"deadbeef tree 9\n",
                 checker.EvidencePolicyError,
@@ -194,12 +198,14 @@ class EvidenceSizePolicyUnitTests(unittest.TestCase):
             (b"deadbeef blob invalid\n", ValueError, "invalid literal"),
         ]
         for cat_output, error_type, expected in scenarios:
-            with self.subTest(cat_output=cat_output):
-                with mock.patch.object(
+            with (
+                self.subTest(cat_output=cat_output),
+                mock.patch.object(
                     checker, "_run_git", side_effect=[index_output, cat_output]
-                ):
-                    with self.assertRaisesRegex(error_type, expected):
-                        checker.indexed_evidence(Path("repository"))
+                ),
+                self.assertRaisesRegex(error_type, expected),
+            ):
+                checker.indexed_evidence(Path("repository"))
 
     def test_indexed_evidence_deduplicates_blob_size_queries(self) -> None:
         """Several staged paths sharing one blob request its size only once."""
@@ -229,11 +235,13 @@ class EvidenceSizePolicyUnitTests(unittest.TestCase):
         """Command-line limit overrides must be strictly positive."""
         self.assertEqual(checker._positive_integer("7"), 7)
         for value in ("0", "-1"):
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(
                     argparse.ArgumentTypeError, "limit must be a positive integer"
-                ):
-                    checker._positive_integer(value)
+                ),
+            ):
+                checker._positive_integer(value)
 
     def test_main_reports_operational_errors_without_tracebacks(self) -> None:
         """Expected repository failures become one-line hook diagnostics."""
