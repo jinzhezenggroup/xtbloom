@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import tools.check_benchmark_evidence_size as checker
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CHECKER = REPOSITORY_ROOT / "tools" / "check_benchmark_evidence_size.py"
@@ -129,6 +135,116 @@ class EvidenceSizePolicyTests(unittest.TestCase):
         self._write(path, b"this worktree copy is deliberately oversized")
         result = self._check()
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class EvidenceSizePolicyUnitTests(unittest.TestCase):
+    """Cover malformed Git states and command-line helper boundaries."""
+
+    def test_run_git_reports_failures_and_disables_replace_refs(self) -> None:
+        """Git diagnostics stay concise and replacement objects stay disabled."""
+        scenarios = [
+            (b"fatal: not a repository\n", "fatal: not a repository"),
+            (b"", "git status failed"),
+        ]
+        for stderr, expected in scenarios:
+            with self.subTest(stderr=stderr):
+                completed = subprocess.CompletedProcess(
+                    args=[], returncode=1, stdout=b"", stderr=stderr
+                )
+                with mock.patch.object(
+                    checker.subprocess, "run", return_value=completed
+                ) as run:
+                    with self.assertRaisesRegex(checker.EvidencePolicyError, expected):
+                        checker._run_git(
+                            Path("repository"), ["status"], input_bytes=b"input"
+                        )
+                self.assertEqual(run.call_args.args[0][:3], ["git", "-C", "repository"])
+                self.assertEqual(run.call_args.kwargs["input"], b"input")
+                self.assertEqual(
+                    run.call_args.kwargs["env"]["GIT_NO_REPLACE_OBJECTS"], "1"
+                )
+
+    def test_indexed_evidence_rejects_malformed_or_unmerged_entries(self) -> None:
+        """Corrupt and conflicted index records fail before blob measurement."""
+        scenarios = [
+            (b"broken-record\0", "cannot parse git ls-files output"),
+            (
+                b"100644 deadbeef 2\tbenchmarks/evidence/conflict.json\0",
+                "unmerged index entry.*stage 2",
+            ),
+        ]
+        for index_output, expected in scenarios:
+            with self.subTest(index_output=index_output):
+                with mock.patch.object(checker, "_run_git", return_value=index_output):
+                    with self.assertRaisesRegex(checker.EvidencePolicyError, expected):
+                        checker.indexed_evidence(Path("repository"))
+
+    def test_indexed_evidence_rejects_invalid_cat_file_records(self) -> None:
+        """Only well-formed blob metadata can supply staged evidence sizes."""
+        index_output = (
+            b"100644 deadbeef 0\tbenchmarks/evidence/summary.json\0"
+        )
+        scenarios = [
+            (b"deadbeef blob\n", checker.EvidencePolicyError, "cannot parse git cat-file"),
+            (
+                b"deadbeef tree 9\n",
+                checker.EvidencePolicyError,
+                "deadbeef is tree, not a blob",
+            ),
+            (b"deadbeef blob invalid\n", ValueError, "invalid literal"),
+        ]
+        for cat_output, error_type, expected in scenarios:
+            with self.subTest(cat_output=cat_output):
+                with mock.patch.object(
+                    checker, "_run_git", side_effect=[index_output, cat_output]
+                ):
+                    with self.assertRaisesRegex(error_type, expected):
+                        checker.indexed_evidence(Path("repository"))
+
+    def test_indexed_evidence_deduplicates_blob_size_queries(self) -> None:
+        """Several staged paths sharing one blob request its size only once."""
+        index_output = (
+            b"100644 deadbeef 0\tbenchmarks/evidence/first.json\0"
+            b"100644 deadbeef 0\tbenchmarks/evidence/second.json\0"
+        )
+        with mock.patch.object(
+            checker,
+            "_run_git",
+            side_effect=[index_output, b"deadbeef blob 7\n"],
+        ) as run_git:
+            entries = checker.indexed_evidence(Path("repository"))
+        self.assertEqual([entry.size for entry in entries], [7, 7])
+        self.assertEqual(run_git.call_args_list[1].kwargs["input_bytes"], b"deadbeef\n")
+
+    def test_byte_formatting_covers_binary_units(self) -> None:
+        """Diagnostics retain exact byte counts across byte, KiB, and MiB ranges."""
+        self.assertEqual(checker._format_bytes(1023), "1023 bytes")
+        self.assertEqual(checker._format_bytes(1536), "1.50 KiB (1536 bytes)")
+        self.assertEqual(
+            checker._format_bytes(2 * 1024 * 1024),
+            "2.00 MiB (2097152 bytes)",
+        )
+
+    def test_positive_integer_parser_rejects_zero_and_negative_values(self) -> None:
+        """Command-line limit overrides must be strictly positive."""
+        self.assertEqual(checker._positive_integer("7"), 7)
+        for value in ("0", "-1"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    argparse.ArgumentTypeError, "limit must be a positive integer"
+                ):
+                    checker._positive_integer(value)
+
+    def test_main_reports_operational_errors_without_tracebacks(self) -> None:
+        """Expected repository failures become one-line hook diagnostics."""
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(checker, "check_repository", side_effect=OSError("disk")),
+            contextlib.redirect_stderr(stderr),
+        ):
+            status = checker.main(["--repository", "repository"])
+        self.assertEqual(status, 1)
+        self.assertEqual(stderr.getvalue(), "FAIL benchmark evidence size: disk\n")
 
 
 if __name__ == "__main__":
