@@ -87,7 +87,16 @@ def _structures_from_data(
     dpdata's Angstrom convention to bohr.
     """
     atom_names = list(data["atom_names"])
-    atom_types = np.asarray(data["atom_types"], dtype=np.int64)
+    raw_atom_types = np.asarray(data["atom_types"])
+    if raw_atom_types.ndim != 1 or raw_atom_types.size == 0:
+        raise XTBloomValueError(
+            "atom_types must be a nonempty one-dimensional array of integer indices"
+        )
+    if raw_atom_types.dtype.kind not in "iu":
+        raise XTBloomValueError("atom_types must contain exact integer indices")
+    if np.any(raw_atom_types < 0) or np.any(raw_atom_types >= len(atom_names)):
+        raise XTBloomValueError("atom_types contains an index outside atom_names")
+    atom_types = np.asarray(raw_atom_types, dtype=np.int64)
     coords = np.asarray(data["coords"], dtype=np.float64)
     if coords.ndim != 3 or coords.shape[1:] != (atom_types.size, 3):
         raise XTBloomValueError("coords must have shape (nframes, natoms, 3)")
