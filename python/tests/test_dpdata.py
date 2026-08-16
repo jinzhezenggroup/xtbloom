@@ -408,6 +408,23 @@ def test_minimizer_applies_bounded_first_trial(
     np.testing.assert_allclose(labeled["coords"][0] / _BOHR, calls[1][0])
 
 
+def test_minimizer_uses_per_atom_force_norm_for_fmax(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep a frame active when components pass fmax but the vector norm does not."""
+    from xtbloom.dpdata import XTBloomMinimizer
+
+    component = 0.004 / (_HARTREE_TO_EV / _BOHR)
+
+    def diagonal_force(call: int, _positions: np.ndarray) -> tuple[float, float]:
+        return (0.0, component) if call == 0 else (-1.0, 0.0)
+
+    calls = _patch_minimizer_calculator(monkeypatch, diagonal_force)
+    XTBloomMinimizer(fmax=0.005, max_steps=1).minimize(_case_data_dict("oh_radical"))
+
+    assert len(calls) == 2
+
+
 def test_minimizer_reports_accepted_state_at_step_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -467,7 +484,7 @@ def test_system_minimize_converges_and_lowers_energy() -> None:
     coords = np.asarray(labeled.data["coords"])
     assert labeled.get_nframes() == 1
     assert forces.shape == (1, 5, 3)
-    assert float(np.max(np.abs(forces))) <= 5e-3
+    assert float(np.max(np.linalg.norm(forces, axis=2))) <= 5e-3
     assert energies[0] <= initial.data["energies"][0]
     assert not np.allclose(coords[0], initial.data["coords"][0], atol=1e-3)
 
@@ -490,7 +507,7 @@ def test_minimize_relaxes_every_frame_in_one_batch() -> None:
     assert labeled.get_nframes() == 3
     assert forces.shape == (3, 5, 3)
     assert energies.shape == (3,)
-    assert float(np.max(np.abs(forces))) <= 5e-3
+    assert float(np.max(np.linalg.norm(forces, axis=2))) <= 5e-3
     # Each frame converged to a different (energy-lowered) geometry.
     assert len({float(e) for e in energies}) == 3
     assert not np.allclose(coords[0], coords[1])
