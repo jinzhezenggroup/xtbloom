@@ -289,10 +289,23 @@ def _get_charge(
 def _get_uhf(
     atoms: ase.Atoms, parameters: ase.calculators.calculator.Parameters
 ) -> int:
-    """Return unpaired electrons from the multiplicity or initial magmoms."""
-    if parameters.multiplicity is None:
-        return int(atoms.get_initial_magnetic_moments().sum().round())
-    return _resolve_uhf(None, parameters.multiplicity)
+    """Return the nonnegative unpaired-electron count from ASE spin metadata."""
+    if parameters.multiplicity is not None:
+        return _resolve_uhf(None, parameters.multiplicity)
+
+    total_moment = float(np.asarray(atoms.get_initial_magnetic_moments()).sum())
+    if not np.isfinite(total_moment):
+        raise ase.calculators.calculator.InputError(
+            "initial magnetic moments must sum to a finite integer number of "
+            "unpaired electrons; set multiplicity explicitly"
+        )
+    rounded_moment = round(total_moment)
+    if not np.isclose(total_moment, rounded_moment, rtol=0.0, atol=1.0e-8):
+        raise ase.calculators.calculator.InputError(
+            "initial magnetic moments must sum to an integer number of unpaired "
+            "electrons; set multiplicity explicitly for a nonintegral total"
+        )
+    return abs(int(rounded_moment))
 
 
 if "xtbloom" not in ase.calculators.calculator.external_calculators:
