@@ -379,7 +379,9 @@ class XTBloomMinimizer(Minimizer):
                         accepted_pos[frame] = evaluated_pos
                         accepted_energy[frame] = energy
                         accepted_force[frame] = force
-                        max_force = float(np.max(np.abs(force * _FORCE_TO_EV_ANG)))
+                        max_force = float(
+                            np.max(np.linalg.norm(force * _FORCE_TO_EV_ANG, axis=1))
+                        )
                         if max_force <= self._fmax:
                             done.add(frame)
                             continue
@@ -455,7 +457,9 @@ class XTBloomMinimizer(Minimizer):
 
                         # A rejected geometry cannot establish convergence; the
                         # force criterion is checked only after energy acceptance.
-                        max_force = float(np.max(np.abs(force * _FORCE_TO_EV_ANG)))
+                        max_force = float(
+                            np.max(np.linalg.norm(force * _FORCE_TO_EV_ANG, axis=1))
+                        )
                         if max_force <= self._fmax:
                             done.add(frame)
                             continue
