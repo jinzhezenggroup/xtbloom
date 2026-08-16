@@ -85,8 +85,7 @@ int check_status_and_initializer_rejections() {
 
   CHECK(xtbloom_context_options_init(nullptr, sizeof(xtbloom_context_options_t)) ==
         XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(xtbloom_batch_init(nullptr, sizeof(xtbloom_batch_t)) ==
-        XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(xtbloom_batch_init(nullptr, sizeof(xtbloom_batch_t)) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(xtbloom_compute_options_init(nullptr, sizeof(xtbloom_compute_options_t)) ==
         XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(xtbloom_batch_result_init(nullptr, sizeof(xtbloom_batch_result_t)) ==
@@ -141,8 +140,8 @@ bool owner_create_returns(const xtbloom_result_owner_options_t* options,
   return status == expected && owner == nullptr;
 }
 
-bool export_is_rejected(const xtbloom_result_owner_t* owner,
-                        const xtbloom_dlpack_view_t* view, int version = 0) {
+bool export_is_rejected(const xtbloom_result_owner_t* owner, const xtbloom_dlpack_view_t* view,
+                        int version = 0) {
   void* managed = reinterpret_cast<void*>(UINTPTR_MAX);
   const xtbloom_status_t status =
       xtbloom_result_owner_export_dltensor(owner, view, version, &managed);
@@ -445,8 +444,8 @@ int main() {
           XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(xtbloom_plan_compute_enqueue(raw_plan, nullptr, nullptr, nullptr, nullptr) ==
           XTBLOOM_STATUS_INVALID_ARGUMENT);
-    CHECK(xtbloom_plan_compute_enqueue(raw_plan, nullptr, nullptr, nullptr,
-                                       other_request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(xtbloom_plan_compute_enqueue(raw_plan, nullptr, nullptr, nullptr, other_request.get()) ==
+          XTBLOOM_STATUS_INVALID_ARGUMENT);
     CHECK(xtbloom_plan_compute_enqueue(raw_plan, nullptr, nullptr, nullptr, request.get()) ==
           XTBLOOM_STATUS_NOT_SUPPORTED);
     CHECK(xtbloom_plan_compute(raw_plan, &batch, &compute_options, &result) ==
