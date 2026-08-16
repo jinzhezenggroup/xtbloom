@@ -566,13 +566,17 @@ def _frame_value(
     """Return a fixed scalar, a per-frame value, or the default."""
     if fixed is not None:
         return fixed
-    if key in data:
-        value = np.asarray(data[key])
-        if value.ndim == 0:
-            return value.item()
-        if value.size == nframes:
-            return value[frame].item()
-    return default
+    if key not in data:
+        return default
+    value = np.asarray(data[key])
+    if value.ndim == 0:
+        return value.item()
+    if value.ndim != 1 or value.shape[0] != nframes:
+        raise XTBloomValueError(
+            f"{key} must be a scalar or a one-dimensional array with "
+            "one value per frame"
+        )
+    return value[frame].item()
 
 
 __all__ = ["XTBloomDriver", "XTBloomMinimizer"]
