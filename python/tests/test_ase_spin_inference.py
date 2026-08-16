@@ -21,7 +21,9 @@ def test_signed_initial_magnetic_moments_map_to_same_uhf(total_moment: float) ->
 
 
 @pytest.mark.parametrize("total_moment", [0.5, -0.5, float("nan")])
-def test_nonintegral_or_nonfinite_inferred_spin_is_rejected(total_moment: float) -> None:
+def test_nonintegral_or_nonfinite_inferred_spin_is_rejected(
+    total_moment: float,
+) -> None:
     """Do not silently round ambiguous ASE magnetic moments into a multiplicity."""
     atoms = Atoms("OH", positions=[[0.0, 0.0, 0.0], [0.0, 0.0, 0.97]])
     atoms.set_initial_magnetic_moments([total_moment, 0.0])
