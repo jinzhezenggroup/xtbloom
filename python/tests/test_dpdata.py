@@ -297,6 +297,30 @@ def test_driver_rejects_malformed_scalar_coordinates(coords: object) -> None:
         XTBloomDriver().label(data)
 
 
+@pytest.mark.parametrize(
+    ("atom_types", "message"),
+    [
+        (np.array([0.5, 1.0, 1.0, 0.0, 2.0]), "exact integer"),
+        (np.array([True, False, False, True, False]), "exact integer"),
+        (np.array([-1, 1, 1, 0, 2], dtype=np.int64), "outside atom_names"),
+        (np.array([3, 1, 1, 0, 2], dtype=np.int64), "outside atom_names"),
+        (np.array([[0], [1], [1], [0], [2]], dtype=np.int64), "one-dimensional"),
+        (np.array([], dtype=np.int64), "nonempty one-dimensional"),
+    ],
+)
+def test_driver_rejects_malformed_atom_types(
+    atom_types: np.ndarray, message: str
+) -> None:
+    """Reject atom type metadata before it can change species by coercion/indexing."""
+    from xtbloom.dpdata import XTBloomDriver
+    from xtbloom.exceptions import XTBloomValueError
+
+    data = _case_data_dict("ketene")
+    data["atom_types"] = atom_types
+    with pytest.raises(XTBloomValueError, match=message):
+        XTBloomDriver().label(data)
+
+
 def _ensure_minimizer_registered() -> type:
     """Load and return the registered xTBloom dpdata minimizer class."""
     import xtbloom.dpdata as _  # noqa: F401
