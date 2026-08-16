@@ -294,10 +294,13 @@ def _get_uhf(
         return _resolve_uhf(None, parameters.multiplicity)
 
     total_moment = float(np.asarray(atoms.get_initial_magnetic_moments()).sum())
+    if not np.isfinite(total_moment):
+        raise ase.calculators.calculator.InputError(
+            "initial magnetic moments must sum to a finite integer number of "
+            "unpaired electrons; set multiplicity explicitly"
+        )
     rounded_moment = round(total_moment)
-    if not np.isfinite(total_moment) or not np.isclose(
-        total_moment, rounded_moment, rtol=0.0, atol=1.0e-8
-    ):
+    if not np.isclose(total_moment, rounded_moment, rtol=0.0, atol=1.0e-8):
         raise ase.calculators.calculator.InputError(
             "initial magnetic moments must sum to an integer number of unpaired "
             "electrons; set multiplicity explicitly for a nonintegral total"
