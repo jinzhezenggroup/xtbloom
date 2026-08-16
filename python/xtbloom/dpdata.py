@@ -560,7 +560,8 @@ def _frame_value(
         return value.item()
     if value.ndim != 1 or value.shape[0] != nframes:
         raise XTBloomValueError(
-            f"{key} must be a scalar or a one-dimensional array with one value per frame"
+            f"{key} must be a scalar or a one-dimensional array with "
+            "one value per frame"
         )
     return value[frame].item()
 
