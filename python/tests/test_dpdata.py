@@ -261,6 +261,65 @@ def test_driver_reads_per_frame_multiplicity_without_forcing_uhf_zero() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("charge", np.array([0.0, 0.0])),
+        ("charge", np.zeros((3, 1))),
+        ("uhf", np.array([0, 0, 0, 0], dtype=np.int32)),
+        ("multiplicity", np.array([[1, 1, 1]], dtype=np.int32)),
+    ],
+)
+def test_driver_rejects_malformed_per_frame_metadata(
+    key: str, value: np.ndarray
+) -> None:
+    """Reject present charge/spin metadata whose shape does not match the frames."""
+    from xtbloom.dpdata import XTBloomDriver
+    from xtbloom.exceptions import XTBloomValueError
+
+    data = _case_data_dict("ketene", nframes=3)
+    data[key] = value
+    with pytest.raises(XTBloomValueError, match=key):
+        XTBloomDriver().label(data)
+
+
+def test_driver_fixed_metadata_overrides_malformed_per_frame_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep explicit constructor values authoritative over ignored data metadata."""
+    from xtbloom.dpdata import XTBloomDriver
+
+    captured: dict[str, object] = {}
+
+    class FakeBatchCalculator:
+        def __init__(
+            self, structures: list[Structure], _method: str, **_kwargs: object
+        ) -> None:
+            captured["structures"] = structures
+
+        def compute(self, *, raise_on_failure: bool) -> SimpleNamespace:
+            assert raise_on_failure
+            structures = captured["structures"]
+            assert isinstance(structures, list)
+            return SimpleNamespace(
+                energies=np.zeros(len(structures), dtype=np.float64),
+                forces=np.concatenate(
+                    [np.zeros_like(structure.positions) for structure in structures]
+                ),
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("xtbloom.dpdata.BatchCalculator", FakeBatchCalculator)
+    data = _case_data_dict("ketene", nframes=3)
+    data["charge"] = np.array([99.0, 99.0])
+    XTBloomDriver(charge=1.0).label(data)
+    structures = captured["structures"]
+    assert isinstance(structures, list)
+    assert [structure.charge for structure in structures] == [1.0, 1.0, 1.0]
+
+
 def test_driver_raises_instead_of_publishing_failed_frame_nans() -> None:
     """Raise instead of publishing NaNs for a failed dpdata frame."""
     _ensure_driver_registered()
