@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 
 pytest.importorskip("dpdata")
-from xtbloom.dpdata import _frame_value  # noqa: E402
-from xtbloom.exceptions import XTBloomValueError  # noqa: E402
+from xtbloom.dpdata import _frame_value
+from xtbloom.exceptions import XTBloomValueError
 
 
 def test_frame_value_accepts_scalar_and_per_frame_metadata() -> None:
