@@ -19,7 +19,9 @@ def test_accepted_geometry_uses_per_atom_force_norm(
     calls: list[np.ndarray] = []
 
     class FakeBatchCalculator:
-        def __init__(self, structures: list[object], _method: str, **_kwargs: object) -> None:
+        def __init__(
+            self, structures: list[object], _method: str, **_kwargs: object
+        ) -> None:
             self._structures = structures
 
         def compute(self) -> list[SimpleNamespace]:
