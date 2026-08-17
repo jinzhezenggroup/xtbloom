@@ -135,9 +135,7 @@ def singlepoint_auto_safe(
             "AUTO_SAFE SCC recovery requires at least one mixer policy"
         )
     if not all(isinstance(policy, SccMixerPolicy) for policy in ordered):
-        raise XTBloomValueError(
-            "AUTO_SAFE policies must be SccMixerPolicy instances"
-        )
+        raise XTBloomValueError("AUTO_SAFE policies must be SccMixerPolicy instances")
 
     original_history = int(calculator._settings.scc_mixer_history)
     original_damping = float(calculator._settings.scc_mixer_damping)
