@@ -5,6 +5,10 @@
 #include <string>
 #include <vector>
 
+#if defined(__linux__)
+#include <pthread.h>
+#endif
+
 #include "runtime/backend.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
 #include "xtbloom/xtbloom.h"
@@ -147,16 +151,41 @@ int run_context(std::int32_t cpu_threads, bool expect_background_worker) {
 }  // namespace
 
 int main() {
-  if (const int line = test_context_model_caches_are_lazy_and_independent(); line != 0) {
+#if defined(__linux__)
+  /* glibc bug nptl/24776: a second pthread implementation loaded with
+   * dlmopen can allocate the same key number as the host while both namespaces
+   * write the same THREAD_SELF specific-data slots. Reserve a host TSS key
+   * before MKL initialization and prove xTBloom never overwrites it. This is a
+   * native analogue of CPython's _Py_tss_tstate / gilstate keys from #381. */
+  pthread_key_t host_tss_key{};
+  int host_tss_sentinel = 0;
+  CHECK(pthread_key_create(&host_tss_key, nullptr) == 0);
+  CHECK(pthread_setspecific(host_tss_key, &host_tss_sentinel) == 0);
+#endif
+
+  /* Exercise the context-owner thread before creating any background worker.
+   * This is the path that can corrupt a CPython caller even when cpu_threads=1. */
+  if (const int line = run_context(1, false); line != 0) {
     return line;
   }
-  if (const int line = run_context(1, false); line != 0) {
+#if defined(__linux__)
+  CHECK(pthread_getspecific(host_tss_key) == &host_tss_sentinel);
+#endif
+
+  if (const int line = test_context_model_caches_are_lazy_and_independent(); line != 0) {
     return line;
   }
   for (int repetition = 0; repetition < 8; ++repetition) {
     if (const int line = run_context(2, true); line != 0) {
       return line;
     }
+#if defined(__linux__)
+    CHECK(pthread_getspecific(host_tss_key) == &host_tss_sentinel);
+#endif
   }
+
+#if defined(__linux__)
+  CHECK(pthread_key_delete(host_tss_key) == 0);
+#endif
   return 0;
 }
