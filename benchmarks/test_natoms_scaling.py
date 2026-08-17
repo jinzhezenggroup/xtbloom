@@ -620,7 +620,7 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(metadata["source"]["git"], clean)
 
     def test_run_identity_records_cpu_dispatch_override(self) -> None:
-        """Retain the experimental ISA override used by one timing process."""
+        """Retain both requested and context-resolved CPU ISA identity."""
         with tempfile.TemporaryDirectory() as directory:
             library = Path(directory) / "libxtbloom.so"
             library.write_bytes(b"xtbloom")
@@ -634,13 +634,94 @@ class NatomsScalingTest(unittest.TestCase):
                     "build_metadata",
                     return_value={"build_system": "test"},
                 ),
+                mock.patch.object(
+                    natoms_scaling,
+                    "_resolved_xtbloom_cpu_isa",
+                    return_value=("avx2", "requested_context_creation"),
+                ),
             ):
                 identity = natoms_scaling.collect_run_identity(
-                    "xtbloom", library, (), None
+                    "xtbloom", library, (), None, "cpu", 1, 0
                 )
         self.assertEqual(
             identity["cpu_dispatch_environment"], {"XTBLOOM_CPU_ISA": "avx2"}
         )
+        self.assertEqual(
+            identity["cpu_dispatch"],
+            {
+                "requested": "avx2",
+                "resolved": "avx2",
+                "resolution_method": "requested_context_creation",
+            },
+        )
+
+    def test_auto_cpu_isa_resolution_uses_context_creation_probe(self) -> None:
+        """Resolve auto from the exact library and restore the requested mode."""
+        library = SimpleNamespace(xtbloom_context_destroy=mock.Mock())
+        observed_modes: list[str | None] = []
+
+        def make_context(*_args: object) -> object:
+            observed_modes.append(os.environ.get("XTBLOOM_CPU_ISA"))
+            return object()
+
+        with (
+            mock.patch.dict(os.environ, {"XTBLOOM_CPU_ISA": "auto"}),
+            mock.patch.object(
+                natoms_scaling.public_api,
+                "_configure_library",
+                return_value=library,
+            ),
+            mock.patch.object(
+                natoms_scaling.public_api,
+                "_make_context",
+                side_effect=make_context,
+            ),
+        ):
+            resolved = natoms_scaling._resolved_xtbloom_cpu_isa(
+                Path("libxtbloom.so"), "cpu", 0, 0
+            )
+            self.assertEqual(os.environ["XTBLOOM_CPU_ISA"], "auto")
+        self.assertEqual(resolved, ("avx2", "forced_avx2_context_probe"))
+        self.assertEqual(observed_modes, ["avx2"])
+        library.xtbloom_context_destroy.assert_called_once()
+
+    def test_empty_cpu_isa_override_is_not_treated_as_auto(self) -> None:
+        """Match the public runtime's rejection of an explicitly empty mode."""
+        with (
+            mock.patch.dict(os.environ, {"XTBLOOM_CPU_ISA": ""}),
+            mock.patch.object(
+                natoms_scaling.public_api, "_configure_library"
+            ) as configure,
+            self.assertRaisesRegex(natoms_scaling.BenchmarkError, "exactly one of"),
+        ):
+            natoms_scaling._resolved_xtbloom_cpu_isa(Path("libxtbloom.so"), "cpu", 0, 0)
+        configure.assert_not_called()
+
+    def test_auto_cpu_isa_falls_back_and_restores_unset_environment(self) -> None:
+        """Record baseline when forced AVX2 is unavailable without leaking state."""
+        library = SimpleNamespace(xtbloom_context_destroy=mock.Mock())
+        with (
+            mock.patch.dict(os.environ),
+            mock.patch.object(
+                natoms_scaling.public_api,
+                "_configure_library",
+                return_value=library,
+            ),
+            mock.patch.object(
+                natoms_scaling.public_api,
+                "_make_context",
+                side_effect=natoms_scaling.public_api.BackendUnavailable(
+                    "synthetic unavailable AVX2"
+                ),
+            ),
+        ):
+            os.environ.pop("XTBLOOM_CPU_ISA", None)
+            resolved = natoms_scaling._resolved_xtbloom_cpu_isa(
+                Path("libxtbloom.so"), "cpu", 0, 0
+            )
+            self.assertNotIn("XTBLOOM_CPU_ISA", os.environ)
+        self.assertEqual(resolved, ("baseline", "forced_avx2_context_probe"))
+        library.xtbloom_context_destroy.assert_not_called()
 
     def test_meson_metadata_records_build_options_compilers_and_dependencies(
         self,
@@ -1043,6 +1124,23 @@ class NatomsScalingTest(unittest.TestCase):
             with self.assertRaisesRegex(
                 natoms_scaling.BenchmarkError, "identity|inconsistent"
             ):
+                natoms_scaling.load_reference_artifact(path)
+
+    def test_reference_artifact_accepts_automatic_cpu_threads_only(self) -> None:
+        """Accept zero as automatic threads while retaining negative rejection."""
+        document = make_reference_document()
+        options = document["rows"][0]["compute_options"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fresh.json"
+            options["cpu_threads"] = 0
+            path.write_text(json.dumps(document), encoding="utf-8")
+            artifact = natoms_scaling.load_reference_artifact(path)
+            row = next(iter(artifact.rows.values()))
+            self.assertEqual(row.compute_options["cpu_threads"], 0)
+
+            options["cpu_threads"] = -1
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaises(natoms_scaling.BenchmarkError):
                 natoms_scaling.load_reference_artifact(path)
 
     def test_reference_artifact_rejects_schema_identity_and_duplicate_rows(

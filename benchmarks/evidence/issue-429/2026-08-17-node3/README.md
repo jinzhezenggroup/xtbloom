@@ -32,9 +32,13 @@ process rounds, that file reports the median of the per-process medians; every
 process contained 30 measured calls. Single-process FRESH controls used 20
 measured calls, while the primary serial FRESH sweep used 30.
 `DISTRIBUTIONS.csv` retains every process/coordinate separately with its sample
-count, min, inclusive Q1, median, inclusive Q3, max, mean, p95, SCC-iteration
-median, and correctness status. It is generated only after verifying all 38
-omitted raw JSON files against `RAW_SHA256SUMS`:
+count, requested and resolved ISA, min, inclusive Q1, median, inclusive Q3,
+max, mean, p95, SCC-iteration median, and correctness status. New runner
+artifacts record the resolved ISA through public context creation. These raw
+artifacts predate that field, so the summarizer fails closed except for the
+exact candidate-library SHA above, whose forced AVX2 context creation proves
+that `auto` resolved to AVX2/FMA on node3. The CSV is generated only after
+verifying all 38 omitted raw JSON files against `RAW_SHA256SUMS`:
 
 ```bash
 python3 summarize_distributions.py /path/to/raw-json-directory \

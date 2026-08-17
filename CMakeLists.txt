@@ -911,15 +911,52 @@ if(XTBLOOM_SYSTEM_PROCESSOR_LOWER MATCHES "^(x86_64|amd64|x64)$" AND NOT EMSCRIP
 endif()
 if(XTBLOOM_ENABLE_AVX2_DISPATCH AND XTBLOOM_SINGLE_X86_64_TARGET)
   if(MSVC)
+    # MSVC x64 has no supported option that resets a global /arch setting back
+    # to the baseline ISA. Reject one before creating multiversioned objects so
+    # generic detection and baseline leaves cannot inherit /arch:AVX2.
+    get_cmake_property(XTBLOOM_CMAKE_VARIABLES VARIABLES)
+    foreach(XTBLOOM_CMAKE_VARIABLE IN LISTS XTBLOOM_CMAKE_VARIABLES)
+      if(XTBLOOM_CMAKE_VARIABLE MATCHES "^CMAKE_CXX_FLAGS($|_)")
+        string(TOLOWER "${${XTBLOOM_CMAKE_VARIABLE}}"
+          XTBLOOM_MSVC_GLOBAL_FLAGS_LOWER)
+        if(XTBLOOM_MSVC_GLOBAL_FLAGS_LOWER MATCHES "[-/]arch:")
+          message(FATAL_ERROR
+            "${XTBLOOM_CMAKE_VARIABLE} contains a global /arch option; "
+            "xTBloom CPU dispatch requires baseline-safe generic objects and "
+            "adds /arch:AVX2 only to the dedicated AVX2 target")
+        endif()
+      endif()
+    endforeach()
+    foreach(XTBLOOM_MSVC_ENVIRONMENT_NAME IN ITEMS CL _CL_)
+      if(XTBLOOM_MSVC_ENVIRONMENT_NAME STREQUAL "CL")
+        set(XTBLOOM_MSVC_ENVIRONMENT_VALUE "$ENV{CL}")
+      else()
+        set(XTBLOOM_MSVC_ENVIRONMENT_VALUE "$ENV{_CL_}")
+      endif()
+      string(TOLOWER "${XTBLOOM_MSVC_ENVIRONMENT_VALUE}"
+        XTBLOOM_MSVC_GLOBAL_FLAGS_LOWER)
+      if(XTBLOOM_MSVC_GLOBAL_FLAGS_LOWER MATCHES "[-/]arch:")
+        message(FATAL_ERROR
+          "the ${XTBLOOM_MSVC_ENVIRONMENT_NAME} environment variable contains "
+          "a global /arch option; xTBloom CPU dispatch requires baseline-safe "
+          "generic objects and adds /arch:AVX2 only to the dedicated AVX2 target")
+      endif()
+    endforeach()
+    unset(XTBLOOM_MSVC_ENVIRONMENT_NAME)
+    unset(XTBLOOM_MSVC_ENVIRONMENT_VALUE)
+    unset(XTBLOOM_MSVC_GLOBAL_FLAGS_LOWER)
+    unset(XTBLOOM_CMAKE_VARIABLE)
+    unset(XTBLOOM_CMAKE_VARIABLES)
     check_cxx_compiler_flag("/arch:AVX2" XTBLOOM_CXX_HAS_ARCH_AVX2)
     if(XTBLOOM_CXX_HAS_ARCH_AVX2)
       set(XTBLOOM_BUILD_AVX2_FMA_KERNELS ON)
       set(XTBLOOM_AVX2_FMA_COMPILE_OPTIONS "/arch:AVX2")
-      # These objects are dispatch boundaries. Prevent a surrounding /GL or
-      # broader /arch flag from merging ISA-specific code into generic code.
-      target_compile_options(xtbloom_cpu_dispatch_objects PRIVATE /arch:SSE2 /GL-)
+      # These objects are dispatch boundaries. /GL- prevents whole-program
+      # optimization from merging ISA-specific code into generic code. On x64,
+      # omitting /arch is MSVC's supported baseline; /arch:SSE2 is unsupported.
+      target_compile_options(xtbloom_cpu_dispatch_objects PRIVATE /GL-)
       target_compile_options(xtbloom_gfn2_mulliken_baseline_objects PRIVATE
-        /arch:SSE2 /GL-)
+        /GL-)
     endif()
   elseif(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
     check_cxx_compiler_flag("-mavx2" XTBLOOM_CXX_HAS_MAVX2)

@@ -14,6 +14,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+_LEGACY_AUTO_ISA_BY_LIBRARY_SHA256 = {
+    # The retained auto artifacts predate the resolved-ISA identity field. The
+    # exact same library SHA passed forced AVX2 context creation on node3, which
+    # is the same build/CPU/OS gate used by auto selection.
+    "b15e90b7a3d88cc14dcbd0e0baea59d0a82970386dd27e239829c0e80ec8ab73": "avx2",
+}
+
 
 def _percentile(samples: list[float], fraction: float) -> float:
     """Return a linearly interpolated inclusive percentile."""
@@ -69,6 +76,31 @@ def _process_round(filename: str) -> int:
     return int(match.group(1)) if match is not None else 1
 
 
+def _cpu_isa_identity(identity: dict[str, Any]) -> tuple[str, str]:
+    """Return requested and resolved CPU ISA, failing closed for legacy auto."""
+    environment = identity["cpu_dispatch_environment"]
+    recorded_request = environment.get("XTBLOOM_CPU_ISA")
+    requested = "auto" if recorded_request is None else recorded_request
+    if requested not in ("auto", "baseline", "avx2"):
+        raise ValueError(f"artifact has invalid requested CPU ISA {requested!r}")
+    dispatch = identity.get("cpu_dispatch")
+    if isinstance(dispatch, dict) and dispatch.get("resolved") in (
+        "baseline",
+        "avx2",
+    ):
+        return requested, dispatch["resolved"]
+    if requested in ("baseline", "avx2"):
+        return requested, requested
+    library_sha = identity["library"]["sha256"]
+    try:
+        return requested, _LEGACY_AUTO_ISA_BY_LIBRARY_SHA256[library_sha]
+    except KeyError as exc:
+        raise ValueError(
+            "auto artifact lacks a context-resolved ISA for library "
+            f"SHA-256 {library_sha}"
+        ) from exc
+
+
 def main() -> int:
     """Verify raw inputs and write one compact distribution row per benchmark cell."""
     parser = argparse.ArgumentParser()
@@ -82,6 +114,7 @@ def main() -> int:
         (
             "artifact",
             "generated_at_utc",
+            "requested_isa",
             "isa",
             "process_round",
             "start_mode",
@@ -103,7 +136,7 @@ def main() -> int:
     )
     for filename, document in documents:
         identity = document["run_identity"]
-        isa = identity["cpu_dispatch_environment"]["XTBLOOM_CPU_ISA"]
+        requested_isa, isa = _cpu_isa_identity(identity)
         affinity = ";".join(
             str(cpu) for cpu in identity["hardware"]["process_affinity"]
         )
@@ -113,6 +146,7 @@ def main() -> int:
                 (
                     filename,
                     identity["generated_at_utc"],
+                    requested_isa,
                     isa,
                     _process_round(filename),
                     row["start_mode"],

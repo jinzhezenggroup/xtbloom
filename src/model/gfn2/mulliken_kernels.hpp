@@ -11,9 +11,12 @@
 
 namespace xtbloom::detail::gfn2 {
 
-/* POD-like one-shot states passed to the selected leaf callbacks. The generic
- * Mulliken layer owns all validation, staging, publication, and diagnostics;
- * ISA-specific translation units receive only already-validated flat ranges. */
+/* Non-copyable one-shot states passed by pointer to the selected leaf
+ * callbacks. The generic Mulliken layer owns all validation, staging,
+ * publication, and diagnostics; ISA-specific translation units receive only
+ * already-validated flat ranges. orbital_to_atom is non-decreasing because it
+ * is derived from validated atom-owned shell ranges, and chunk_count is
+ * positive whenever a callback is entered. */
 struct MullikenPopulationTask {
   const std::int64_t* orbital_to_shell = nullptr;
   const std::int64_t* orbital_to_atom = nullptr;

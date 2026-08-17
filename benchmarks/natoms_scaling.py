@@ -588,14 +588,75 @@ def exact_argv(arguments: Sequence[str]) -> list[str]:
     return [sys.executable, str(Path(__file__).resolve()), *arguments]
 
 
+def _requested_xtbloom_cpu_isa() -> str:
+    """Return the exact override, defaulting only when it is truly unset."""
+    requested = os.environ.get("XTBLOOM_CPU_ISA")
+    return "auto" if requested is None else requested
+
+
+def _resolved_xtbloom_cpu_isa(
+    library_path: Path,
+    backend: str,
+    cpu_threads: int,
+    device_id: int,
+) -> tuple[str | None, str]:
+    """Resolve the CPU ISA through the same public context-creation path.
+
+    Forced modes are confirmed by creating a context with the requested value.
+    For ``auto``, a short-lived forced-AVX2 context probes the exact loaded
+    library, CPU, and OS-state gate: success means auto selects AVX2/FMA, while
+    ``BACKEND_UNAVAILABLE`` means auto selects the baseline implementation.
+    The process environment is restored before benchmark contexts are created.
+    """
+    if backend != "cpu":
+        return None, "cpu_only_not_applicable"
+    requested = _requested_xtbloom_cpu_isa()
+    if requested not in ("auto", "baseline", "avx2"):
+        raise BenchmarkError(
+            "XTBLOOM_CPU_ISA must be exactly one of auto, baseline, or avx2"
+        )
+    library = public_api._configure_library(library_path)
+
+    def create_and_destroy_context() -> None:
+        context = public_api._make_context(library, backend, device_id, cpu_threads)
+        library.xtbloom_context_destroy(context)
+
+    if requested != "auto":
+        create_and_destroy_context()
+        return requested, "requested_context_creation"
+
+    previous = os.environ.get("XTBLOOM_CPU_ISA")
+    os.environ["XTBLOOM_CPU_ISA"] = "avx2"
+    try:
+        try:
+            create_and_destroy_context()
+        except public_api.BackendUnavailable:
+            return "baseline", "forced_avx2_context_probe"
+    finally:
+        if previous is None:
+            os.environ.pop("XTBLOOM_CPU_ISA", None)
+        else:
+            os.environ["XTBLOOM_CPU_ISA"] = previous
+    return "avx2", "forced_avx2_context_probe"
+
+
 def collect_run_identity(
     engine: str,
     library: Path,
     arguments: Sequence[str],
     reference_artifact: ReferenceArtifact | None,
+    backend: str,
+    cpu_threads: int,
+    device_id: int,
 ) -> dict[str, Any]:
     """Collect the immutable evidence repeated at top-level and per row."""
     resolved_library = library.resolve()
+    requested_cpu_isa = _requested_xtbloom_cpu_isa()
+    resolved_cpu_isa, resolution_method = (
+        _resolved_xtbloom_cpu_isa(resolved_library, backend, cpu_threads, device_id)
+        if engine == "xtbloom"
+        else (None, "non_xtbloom_engine")
+    )
     return {
         "argv": exact_argv(arguments),
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -622,6 +683,11 @@ def collect_run_identity(
         },
         "cpu_dispatch_environment": {
             name: os.environ.get(name) for name in CPU_DISPATCH_ENVIRONMENT_NAMES
+        },
+        "cpu_dispatch": {
+            "requested": requested_cpu_isa,
+            "resolved": resolved_cpu_isa,
+            "resolution_method": resolution_method,
         },
         "fresh_reference_artifact": (
             {
@@ -2467,7 +2533,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None
         )
         identity = collect_run_identity(
-            args.engine, library, arguments, reference_artifact
+            args.engine,
+            library,
+            arguments,
+            reference_artifact,
+            args.backend,
+            args.cpu_threads,
+            args.device_id,
         )
         apply_current_evidence_policy(identity, args.allow_dirty_evidence)
         protocol = Protocol(
