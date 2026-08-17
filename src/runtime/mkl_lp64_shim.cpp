@@ -32,12 +32,13 @@
 #define _GNU_SOURCE 1
 #endif
 
-#include <atomic>
-#include <cerrno>
-#include <cstring>
 #include <dlfcn.h>
 #include <link.h>
 #include <pthread.h>
+
+#include <atomic>
+#include <cerrno>
+#include <cstring>
 
 namespace {
 
@@ -99,8 +100,8 @@ std::atomic<void*> g_pthread_setspecific{nullptr};
 
 }  // namespace
 
-extern "C" XTBLOOM_MKL_SHIM_EXPORT int pthread_key_create(
-    pthread_key_t* key, void (*destructor)(void*)) noexcept {
+extern "C" XTBLOOM_MKL_SHIM_EXPORT int pthread_key_create(pthread_key_t* key,
+                                                          void (*destructor)(void*)) noexcept {
   using Function = int (*)(pthread_key_t*, void (*)(void*));
   const Function function =
       cached_base_pthread_symbol<Function>(g_pthread_key_create, "pthread_key_create");
@@ -122,7 +123,7 @@ extern "C" XTBLOOM_MKL_SHIM_EXPORT void* pthread_getspecific(pthread_key_t key) 
 }
 
 extern "C" XTBLOOM_MKL_SHIM_EXPORT int pthread_setspecific(pthread_key_t key,
-                                                            const void* value) noexcept {
+                                                           const void* value) noexcept {
   using Function = int (*)(pthread_key_t, const void*);
   const Function function =
       cached_base_pthread_symbol<Function>(g_pthread_setspecific, "pthread_setspecific");
