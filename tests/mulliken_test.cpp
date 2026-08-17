@@ -688,6 +688,14 @@ int test_exact_plan_relationship_and_view_identity() {
   const MullikenPlan original_plan = hydrogen.plan;
   const auto* const original_identity = hydrogen.plan.identity();
 
+  MullikenKernelTable incomplete_kernels = xtbloom::detail::gfn2::mulliken_baseline_kernels();
+  incomplete_kernels.hamiltonian = nullptr;
+  CHECK(xtbloom::detail::gfn2::make_mulliken_plan(
+            hydrogen.basis, hydrogen.integral_plan, hydrogen.wavefunction, incomplete_kernels,
+            hydrogen.plan, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(error.find("kernel table is incomplete") != std::string::npos);
+  CHECK(hydrogen.plan.identity() == original_identity);
+
   WavefunctionLayout malformed_wavefunction = hydrogen.wavefunction;
   malformed_wavefunction.reference_shell_occupations[0] += 1.0;
   CHECK(xtbloom::detail::gfn2::make_mulliken_plan(hydrogen.basis, hydrogen.integral_plan,
@@ -1341,6 +1349,17 @@ int test_alias_atomicity_and_zero_allocation() {
 
   fixture.density[6] = 0.3;
   fixture.overlap[6] = 0.2;
+  fixture.quadrupole_integrals[0] = std::numeric_limits<double>::quiet_NaN();
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
+            fixture.plan, integral_view(fixture), density_view(fixture), population_view(fixture),
+            0, workspace_view(fixture), error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(error.find("quadrupole integral contains NaN or infinity") != std::string::npos);
+  CHECK(all_equal_to(fixture.qsh, 41.0));
+  CHECK(all_equal_to(fixture.qat, 42.0));
+  CHECK(all_equal_to(fixture.dipole, 43.0));
+  CHECK(all_equal_to(fixture.quadrupole, 44.0));
+  fixture.quadrupole_integrals[0] = -0.05;
+
   std::fill(fixture.hamiltonian.begin(), fixture.hamiltonian.end(), 17.0);
   MullikenIntegralView h_alias = integral_view(fixture);
   h_alias.overlap = fixture.hamiltonian.data();
@@ -1349,6 +1368,15 @@ int test_alias_atomicity_and_zero_allocation() {
             workspace_view(fixture), error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(std::all_of(fixture.hamiltonian.begin(), fixture.hamiltonian.end(),
                     [](double value) { return value == 17.0; }));
+
+  fixture.quadrupole_integrals[0] = std::numeric_limits<double>::quiet_NaN();
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+            fixture.plan, integral_view(fixture), potential_view(fixture),
+            hamiltonian_view(fixture), 0, workspace_view(fixture),
+            error) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(error.find("quadrupole integral input contains NaN or infinity") != std::string::npos);
+  CHECK(all_equal_to(fixture.hamiltonian, 17.0));
+  fixture.quadrupole_integrals[0] = -0.05;
 
   fixture.overlap[4] = 2.0;
   fixture.vat[2] = std::numeric_limits<double>::max();

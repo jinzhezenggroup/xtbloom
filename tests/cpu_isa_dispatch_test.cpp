@@ -16,6 +16,7 @@
 namespace {
 
 using xtbloom::detail::cpu_avx2_fma_kernels_built;
+using xtbloom::detail::cpu_isa_name;
 using xtbloom::detail::CpuFeatureSnapshot;
 using xtbloom::detail::CpuIsa;
 using xtbloom::detail::detect_cpu_features;
@@ -29,6 +30,8 @@ constexpr CpuFeatureSnapshot kCapable{true, true, true, true, true};
 int test_exact_override_parsing_and_selection() {
   CpuIsa selected = CpuIsa::kBaseline;
   std::string error;
+  CHECK(std::string(cpu_isa_name(CpuIsa::kBaseline)) == "baseline");
+  CHECK(std::string(cpu_isa_name(CpuIsa::kAvx2Fma)) == "avx2");
   CHECK(resolve_cpu_isa_request(nullptr, true, kCapable, selected, error) ==
         XTBLOOM_STATUS_SUCCESS);
   CHECK(selected == CpuIsa::kAvx2Fma);
