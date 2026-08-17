@@ -384,6 +384,7 @@ ABI-v3 callers may select the modified-Broyden history depth (`1..64`) and
 damping (`0 < damping <= 1`); history 8 and damping 0.4 preserve the earlier
 behavior. `XTBLOOM_DETERMINISM_REPRODUCIBLE` requests bitwise replay only when
 the complete execution environment and start-mode sequence are unchanged. It
-is not a CPU/CUDA or cross-provider/toolkit/architecture equivalence promise.
-All three mixer fields and the determinism tag are part of fixed-plan,
+includes the CPU ISA selected when the context was created and is not a
+CPU/CUDA, cross-ISA, or cross-provider/toolkit/architecture equivalence
+promise. All three mixer fields and the determinism tag are part of fixed-plan,
 cache/Graph, and strict-WARM identity.

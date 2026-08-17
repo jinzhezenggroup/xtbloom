@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 
+#include "cpu_dispatch/features.hpp"
 #include "xtbloom/xtbloom.h"
 
 namespace xtbloom::detail {
@@ -29,7 +30,7 @@ class Gfn2CpuExecutionCache {
    * execution path serial. The implementation owns persistent workers so a
    * steady-state compute call never creates or destroys threads.
    */
-  explicit Gfn2CpuExecutionCache(std::int32_t cpu_threads);
+  explicit Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa = CpuIsa::kBaseline);
   ~Gfn2CpuExecutionCache();
 
   Gfn2CpuExecutionCache(const Gfn2CpuExecutionCache&) = delete;

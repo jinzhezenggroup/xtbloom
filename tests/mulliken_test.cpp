@@ -66,6 +66,7 @@ using xtbloom::detail::gfn2::IntegralPlan;
 using xtbloom::detail::gfn2::MullikenDensityView;
 using xtbloom::detail::gfn2::MullikenHamiltonianView;
 using xtbloom::detail::gfn2::MullikenIntegralView;
+using xtbloom::detail::gfn2::MullikenKernelTable;
 using xtbloom::detail::gfn2::MullikenPlan;
 using xtbloom::detail::gfn2::MullikenPopulationView;
 using xtbloom::detail::gfn2::MullikenPotentialView;
@@ -123,7 +124,7 @@ bool make_fixture(const std::vector<std::int64_t>& atom_offsets,
                   const std::vector<std::int32_t>& atomic_numbers,
                   const std::vector<double>& charges, const std::vector<std::int32_t>& unpaired,
                   const std::vector<std::int32_t>& spin_channels, Fixture& fixture,
-                  std::string& error) {
+                  std::string& error, const MullikenKernelTable* kernels = nullptr) {
   const std::int64_t batch_size = static_cast<std::int64_t>(atom_offsets.size() - 1u);
   if (xtbloom::detail::gfn2::make_basis_plan(
           batch_size, static_cast<std::int64_t>(atomic_numbers.size()), atom_offsets.data(),
@@ -132,10 +133,17 @@ bool make_fixture(const std::vector<std::int64_t>& atom_offsets,
           XTBLOOM_STATUS_SUCCESS ||
       xtbloom::detail::gfn2::make_wavefunction_layout(
           fixture.basis, atomic_numbers.data(), charges.data(), unpaired.data(),
-          spin_channels.data(), fixture.wavefunction, error) != XTBLOOM_STATUS_SUCCESS ||
-      xtbloom::detail::gfn2::make_mulliken_plan(fixture.basis, fixture.integral_plan,
-                                                fixture.wavefunction, fixture.plan,
-                                                error) != XTBLOOM_STATUS_SUCCESS) {
+          spin_channels.data(), fixture.wavefunction, error) != XTBLOOM_STATUS_SUCCESS) {
+    return false;
+  }
+  const xtbloom_status_t mulliken_status =
+      kernels == nullptr
+          ? xtbloom::detail::gfn2::make_mulliken_plan(fixture.basis, fixture.integral_plan,
+                                                      fixture.wavefunction, fixture.plan, error)
+          : xtbloom::detail::gfn2::make_mulliken_plan(fixture.basis, fixture.integral_plan,
+                                                      fixture.wavefunction, *kernels, fixture.plan,
+                                                      error);
+  if (mulliken_status != XTBLOOM_STATUS_SUCCESS) {
     return false;
   }
 
@@ -1725,35 +1733,35 @@ SccParallelExecutor test_reverse_chunk_executor() {
   return {nullptr, 4u, &Dispatcher::run};
 }
 
-int test_parallel_path_is_bit_identical() {
-  const auto fill_fixture = [](Fixture& fixture) {
-    for (std::size_t index = 0; index < fixture.overlap.size(); ++index) {
-      fixture.overlap[index] = 0.41 - 0.0011 * static_cast<double>(index);
-    }
-    for (std::size_t index = 0; index < fixture.dipole_integrals.size(); ++index) {
-      fixture.dipole_integrals[index] = -0.23 + 0.0008 * static_cast<double>(index);
-    }
-    for (std::size_t index = 0; index < fixture.quadrupole_integrals.size(); ++index) {
-      fixture.quadrupole_integrals[index] = 0.13 - 0.00023 * static_cast<double>(index);
-    }
-    for (std::size_t index = 0; index < fixture.density.size(); ++index) {
-      fixture.density[index] = 0.16 + 0.0031 * static_cast<double>(index);
-    }
-    for (std::size_t index = 0; index < fixture.vat.size(); ++index) {
-      fixture.vat[index] = -0.19 + 0.043 * static_cast<double>(index);
-      fixture.vsh[index] = 0.12 - 0.027 * static_cast<double>(index);
-    }
-    for (std::size_t index = 0; index < fixture.dipole_potential.size(); ++index) {
-      fixture.dipole_potential[index] = -0.06 + 0.009 * static_cast<double>(index);
-    }
-    for (std::size_t index = 0; index < fixture.quadrupole_potential.size(); ++index) {
-      fixture.quadrupole_potential[index] = 0.04 - 0.0015 * static_cast<double>(index);
-    }
-    for (std::size_t index = 0; index < fixture.hamiltonian.size(); ++index) {
-      fixture.hamiltonian[index] = 0.07 + 0.0013 * static_cast<double>(index);
-    }
-  };
+void fill_parallel_fixture(Fixture& fixture) {
+  for (std::size_t index = 0; index < fixture.overlap.size(); ++index) {
+    fixture.overlap[index] = 0.41 - 0.0011 * static_cast<double>(index);
+  }
+  for (std::size_t index = 0; index < fixture.dipole_integrals.size(); ++index) {
+    fixture.dipole_integrals[index] = -0.23 + 0.0008 * static_cast<double>(index);
+  }
+  for (std::size_t index = 0; index < fixture.quadrupole_integrals.size(); ++index) {
+    fixture.quadrupole_integrals[index] = 0.13 - 0.00023 * static_cast<double>(index);
+  }
+  for (std::size_t index = 0; index < fixture.density.size(); ++index) {
+    fixture.density[index] = 0.16 + 0.0031 * static_cast<double>(index);
+  }
+  for (std::size_t index = 0; index < fixture.vat.size(); ++index) {
+    fixture.vat[index] = -0.19 + 0.043 * static_cast<double>(index);
+    fixture.vsh[index] = 0.12 - 0.027 * static_cast<double>(index);
+  }
+  for (std::size_t index = 0; index < fixture.dipole_potential.size(); ++index) {
+    fixture.dipole_potential[index] = -0.06 + 0.009 * static_cast<double>(index);
+  }
+  for (std::size_t index = 0; index < fixture.quadrupole_potential.size(); ++index) {
+    fixture.quadrupole_potential[index] = 0.04 - 0.0015 * static_cast<double>(index);
+  }
+  for (std::size_t index = 0; index < fixture.hamiltonian.size(); ++index) {
+    fixture.hamiltonian[index] = 0.07 + 0.0013 * static_cast<double>(index);
+  }
+}
 
+int test_parallel_path_is_bit_identical() {
   for (const std::int32_t spin_channels : {1, 2}) {
     Fixture serial_fixture;
     Fixture parallel_fixture;
@@ -1768,8 +1776,8 @@ int test_parallel_path_is_bit_identical() {
                        error));
     CHECK(make_fixture({0, 6}, atomic_numbers, {0.0}, {unpaired}, {spin_channels}, parallel_fixture,
                        error));
-    fill_fixture(serial_fixture);
-    fill_fixture(parallel_fixture);
+    fill_parallel_fixture(serial_fixture);
+    fill_parallel_fixture(parallel_fixture);
 
     /* Serial population reference. */
     CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
@@ -1814,7 +1822,7 @@ int test_parallel_path_is_bit_identical() {
   Fixture poisoned;
   std::string error;
   CHECK(make_fixture({0, 6}, {6, 6, 1, 1, 1, 1}, {0.0}, {0}, {1}, poisoned, error));
-  fill_fixture(poisoned);
+  fill_parallel_fixture(poisoned);
   poisoned.density[0] = std::numeric_limits<double>::quiet_NaN();
   SccParallelExecutor parallel = test_parallel_executor();
   std::fill(poisoned.qsh.begin(), poisoned.qsh.end(), 3.0);
@@ -1830,7 +1838,7 @@ int test_parallel_path_is_bit_identical() {
 
   Fixture poisoned_hamiltonian;
   CHECK(make_fixture({0, 6}, {6, 6, 1, 1, 1, 1}, {0.0}, {0}, {1}, poisoned_hamiltonian, error));
-  fill_fixture(poisoned_hamiltonian);
+  fill_parallel_fixture(poisoned_hamiltonian);
   poisoned_hamiltonian.overlap[0] = std::numeric_limits<double>::quiet_NaN();
   const std::vector<double> before_failure = poisoned_hamiltonian.hamiltonian;
   CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
@@ -1845,7 +1853,7 @@ int test_parallel_path_is_bit_identical() {
    * (element 0) must win even when a late dipole-integral NaN runs first. */
   Fixture multi_failure;
   CHECK(make_fixture({0, 6}, {6, 6, 1, 1, 1, 1}, {0.0}, {0}, {1}, multi_failure, error));
-  fill_fixture(multi_failure);
+  fill_parallel_fixture(multi_failure);
   multi_failure.density[0] = std::numeric_limits<double>::quiet_NaN();
   {
     const std::int64_t orbitals = multi_failure.plan.batch_orbital_offsets()[1] -
@@ -1878,7 +1886,105 @@ int test_parallel_path_is_bit_identical() {
   return 0;
 }
 
+int test_baseline_and_avx2_kernel_parity() {
+  if (!xtbloom::detail::cpu_avx2_fma_kernels_built() ||
+      !xtbloom::detail::detect_cpu_features().supports_avx2_fma()) {
+    return 0;
+  }
+  const MullikenKernelTable& baseline = xtbloom::detail::gfn2::mulliken_baseline_kernels();
+  const MullikenKernelTable& avx2 = xtbloom::detail::gfn2::mulliken_avx2_fma_kernels();
+  SccParallelExecutor parallel = test_parallel_executor();
+  const std::vector<std::int32_t> atomic_numbers{6, 6, 1, 1, 1, 1};
+
+  for (const std::int32_t spin_channels : {1, 2}) {
+    const std::int32_t unpaired = spin_channels == 1 ? 0 : 2;
+    Fixture baseline_serial;
+    Fixture avx2_serial;
+    Fixture avx2_parallel;
+    std::string error;
+    CHECK(make_fixture({0, 6}, atomic_numbers, {0.0}, {unpaired}, {spin_channels}, baseline_serial,
+                       error, &baseline));
+    CHECK(make_fixture({0, 6}, atomic_numbers, {0.0}, {unpaired}, {spin_channels}, avx2_serial,
+                       error, &avx2));
+    CHECK(make_fixture({0, 6}, atomic_numbers, {0.0}, {unpaired}, {spin_channels}, avx2_parallel,
+                       error, &avx2));
+    CHECK(baseline_serial.plan.cpu_isa() == xtbloom::detail::CpuIsa::kBaseline);
+    CHECK(avx2_serial.plan.cpu_isa() == xtbloom::detail::CpuIsa::kAvx2Fma);
+    fill_parallel_fixture(baseline_serial);
+    fill_parallel_fixture(avx2_serial);
+    fill_parallel_fixture(avx2_parallel);
+
+    CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
+              baseline_serial.plan, integral_view(baseline_serial), density_view(baseline_serial),
+              population_view(baseline_serial), 0, workspace_view(baseline_serial),
+              error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
+              avx2_serial.plan, integral_view(avx2_serial), density_view(avx2_serial),
+              population_view(avx2_serial), 0, workspace_view(avx2_serial),
+              error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
+              avx2_parallel.plan, integral_view(avx2_parallel), density_view(avx2_parallel),
+              population_view(avx2_parallel), 0, workspace_view(avx2_parallel), error,
+              &parallel) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(avx2_serial.qsh == baseline_serial.qsh);
+    CHECK(avx2_serial.qat == baseline_serial.qat);
+    CHECK(avx2_serial.dipole == baseline_serial.dipole);
+    CHECK(avx2_serial.quadrupole == baseline_serial.quadrupole);
+    CHECK(avx2_parallel.qsh == avx2_serial.qsh);
+    CHECK(avx2_parallel.qat == avx2_serial.qat);
+    CHECK(avx2_parallel.dipole == avx2_serial.dipole);
+    CHECK(avx2_parallel.quadrupole == avx2_serial.quadrupole);
+
+    CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+              baseline_serial.plan, integral_view(baseline_serial), potential_view(baseline_serial),
+              hamiltonian_view(baseline_serial), 0, workspace_view(baseline_serial),
+              error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+              avx2_serial.plan, integral_view(avx2_serial), potential_view(avx2_serial),
+              hamiltonian_view(avx2_serial), 0, workspace_view(avx2_serial),
+              error) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+              avx2_parallel.plan, integral_view(avx2_parallel), potential_view(avx2_parallel),
+              hamiltonian_view(avx2_parallel), 0, workspace_view(avx2_parallel), error,
+              &parallel) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(avx2_serial.hamiltonian == baseline_serial.hamiltonian);
+    CHECK(avx2_parallel.hamiltonian == avx2_serial.hamiltonian);
+  }
+
+  /* AVX2 callbacks preserve the serial-first diagnostic even when reverse
+   * scheduling executes a later poisoned chunk before the first element. */
+  Fixture poisoned;
+  std::string error;
+  CHECK(make_fixture({0, 6}, atomic_numbers, {0.0}, {0}, {1}, poisoned, error, &avx2));
+  fill_parallel_fixture(poisoned);
+  poisoned.density[0] = std::numeric_limits<double>::quiet_NaN();
+  const std::int64_t orbitals = poisoned.plan.batch_orbital_offsets()[1];
+  const std::int64_t late_element = (orbitals - 1) * orbitals + (orbitals - 1);
+  poisoned.dipole_integrals[static_cast<std::size_t>(late_element)] =
+      std::numeric_limits<double>::quiet_NaN();
+  SccParallelExecutor reverse = test_reverse_chunk_executor();
+  CHECK(xtbloom::detail::gfn2::evaluate_mulliken_population_system_cpu(
+            poisoned.plan, integral_view(poisoned), density_view(poisoned),
+            population_view(poisoned), 0, workspace_view(poisoned), error,
+            &reverse) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(error.find("Mulliken target density or overlap contains NaN or infinity") !=
+        std::string::npos);
+
+  poisoned.overlap[0] = std::numeric_limits<double>::quiet_NaN();
+  const std::vector<double> before = poisoned.hamiltonian;
+  CHECK(xtbloom::detail::gfn2::add_mulliken_hamiltonian_system_cpu(
+            poisoned.plan, integral_view(poisoned), potential_view(poisoned),
+            hamiltonian_view(poisoned), 0, workspace_view(poisoned), error,
+            &reverse) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(error.find("Mulliken target overlap input contains NaN or infinity") != std::string::npos);
+  CHECK(poisoned.hamiltonian == before);
+  return 0;
+}
+
 int main() {
+  if (const int line = test_baseline_and_avx2_kernel_parity(); line != 0) {
+    return line;
+  }
   if (const int line = test_parallel_path_is_bit_identical(); line != 0) {
     return line;
   }

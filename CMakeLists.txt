@@ -28,6 +28,7 @@ include_directories(BEFORE ${XTBLOOM_GENERATED_INCLUDE_DIR})
 
 include(CheckLanguage)
 include(CheckLibraryExists)
+include(CheckCXXCompilerFlag)
 include(CheckCXXSourceCompiles)
 include(CMakePushCheckState)
 include(GNUInstallDirs)
@@ -206,6 +207,8 @@ option(XTBLOOM_PYTHON_WHEEL
   "Install an unversioned single-copy shared library for a Python wheel" OFF)
 option(XTBLOOM_BUNDLE_WHEEL_OPENBLAS
   "Build the private OpenBLAS shim whose dependencies auditwheel vendors" OFF)
+option(XTBLOOM_ENABLE_AVX2_DISPATCH
+  "Include runtime-selected AVX2/FMA CPU kernels in supported x86-64 builds" ON)
 set(XTBLOOM_CPU_LINALG_LIBRARY "" CACHE FILEPATH
   "Optional monolithic shared LP64 LAPACKE+CBLAS runtime with local thread control for the CPU eigensolver (e.g. libscipy_openblas.so or libmkl_rt.so). When unset, compatible runtimes are auto-discovered with find_package(BLAS/LAPACK)."
 )
@@ -858,6 +861,123 @@ if(XTBLOOM_WHEEL_OPENBLAS_DESKTOP)
   endif()
 endif()
 
+add_library(xtbloom_cpu_dispatch_objects OBJECT
+  src/cpu_dispatch/features.cpp
+)
+target_compile_features(xtbloom_cpu_dispatch_objects PUBLIC cxx_std_17)
+target_include_directories(xtbloom_cpu_dispatch_objects PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(xtbloom_cpu_dispatch_objects PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  INTERPROCEDURAL_OPTIMIZATION OFF
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+
+add_library(xtbloom_gfn2_mulliken_baseline_objects OBJECT
+  src/model/gfn2/mulliken_kernels_baseline.cpp
+)
+target_compile_features(xtbloom_gfn2_mulliken_baseline_objects PUBLIC cxx_std_17)
+target_include_directories(xtbloom_gfn2_mulliken_baseline_objects PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(xtbloom_gfn2_mulliken_baseline_objects PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  INTERPROCEDURAL_OPTIMIZATION OFF
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+
+# A single shared library carries the baseline kernels on every architecture.
+# Add the AVX2/FMA object only for a single x86-64 target whose compiler accepts
+# both flags; universal Apple builds, ARM, and WebAssembly remain baseline-only.
+set(XTBLOOM_BUILD_AVX2_FMA_KERNELS OFF)
+set(XTBLOOM_AVX2_FMA_COMPILE_OPTIONS "")
+set(XTBLOOM_SINGLE_X86_64_TARGET OFF)
+if(XTBLOOM_SYSTEM_PROCESSOR_LOWER MATCHES "^(x86_64|amd64|x64)$" AND NOT EMSCRIPTEN)
+  set(XTBLOOM_SINGLE_X86_64_TARGET ON)
+  if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+    list(LENGTH CMAKE_OSX_ARCHITECTURES XTBLOOM_OSX_ARCH_COUNT)
+    list(GET CMAKE_OSX_ARCHITECTURES 0 XTBLOOM_OSX_FIRST_ARCH)
+    if(NOT XTBLOOM_OSX_ARCH_COUNT EQUAL 1 OR NOT XTBLOOM_OSX_FIRST_ARCH STREQUAL "x86_64")
+      set(XTBLOOM_SINGLE_X86_64_TARGET OFF)
+    endif()
+  endif()
+endif()
+if(XTBLOOM_ENABLE_AVX2_DISPATCH AND XTBLOOM_SINGLE_X86_64_TARGET)
+  if(MSVC)
+    check_cxx_compiler_flag("/arch:AVX2" XTBLOOM_CXX_HAS_ARCH_AVX2)
+    if(XTBLOOM_CXX_HAS_ARCH_AVX2)
+      set(XTBLOOM_BUILD_AVX2_FMA_KERNELS ON)
+      set(XTBLOOM_AVX2_FMA_COMPILE_OPTIONS "/arch:AVX2")
+      # These objects are dispatch boundaries. Prevent a surrounding /GL or
+      # broader /arch flag from merging ISA-specific code into generic code.
+      target_compile_options(xtbloom_cpu_dispatch_objects PRIVATE /arch:SSE2 /GL-)
+      target_compile_options(xtbloom_gfn2_mulliken_baseline_objects PRIVATE
+        /arch:SSE2 /GL-)
+    endif()
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
+    check_cxx_compiler_flag("-mavx2" XTBLOOM_CXX_HAS_MAVX2)
+    check_cxx_compiler_flag("-mfma" XTBLOOM_CXX_HAS_MFMA)
+    if(XTBLOOM_CXX_HAS_MAVX2 AND XTBLOOM_CXX_HAS_MFMA)
+      set(XTBLOOM_BUILD_AVX2_FMA_KERNELS ON)
+      set(XTBLOOM_AVX2_FMA_COMPILE_OPTIONS
+        "-march=x86-64;-mtune=generic;-mavx2;-mfma;-fno-lto")
+      # Ensure generic detection and baseline leaves stay load-safe even when a
+      # surrounding build environment supplies -march=native or LTO.
+      target_compile_options(xtbloom_cpu_dispatch_objects PRIVATE
+        -march=x86-64 -mtune=generic -mno-avx -mno-avx2 -mno-fma -fno-lto)
+      target_compile_options(xtbloom_gfn2_mulliken_baseline_objects PRIVATE
+        -march=x86-64 -mtune=generic -mno-avx -mno-avx2 -mno-fma -fno-lto)
+    endif()
+  endif()
+endif()
+
+set(XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS
+  xtbloom_cpu_dispatch_objects
+  xtbloom_gfn2_mulliken_baseline_objects
+)
+set(XTBLOOM_GFN2_DISPATCH_OBJECTS
+  $<TARGET_OBJECTS:xtbloom_cpu_dispatch_objects>
+  $<TARGET_OBJECTS:xtbloom_gfn2_mulliken_baseline_objects>
+)
+if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
+  add_library(xtbloom_gfn2_mulliken_avx2_objects OBJECT
+    src/model/gfn2/mulliken_kernels_avx2.cpp
+  )
+  target_compile_features(xtbloom_gfn2_mulliken_avx2_objects PUBLIC cxx_std_17)
+  target_include_directories(xtbloom_gfn2_mulliken_avx2_objects PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_options(xtbloom_gfn2_mulliken_avx2_objects PRIVATE
+    ${XTBLOOM_AVX2_FMA_COMPILE_OPTIONS})
+  if(MSVC)
+    target_compile_options(xtbloom_gfn2_mulliken_avx2_objects PRIVATE /GL-)
+  endif()
+  set_target_properties(xtbloom_gfn2_mulliken_avx2_objects PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    INTERPROCEDURAL_OPTIMIZATION OFF
+    POSITION_INDEPENDENT_CODE ON
+    VISIBILITY_INLINES_HIDDEN YES
+  )
+  target_compile_definitions(xtbloom_cpu_dispatch_objects PRIVATE
+    XTBLOOM_HAS_AVX2_FMA_KERNELS=1)
+  list(APPEND XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS
+    xtbloom_gfn2_mulliken_avx2_objects)
+  list(APPEND XTBLOOM_GFN2_DISPATCH_OBJECTS
+    $<TARGET_OBJECTS:xtbloom_gfn2_mulliken_avx2_objects>)
+  message(STATUS "xtbloom CPU ISA dispatch: baseline + AVX2/FMA Mulliken kernels")
+else()
+  message(STATUS "xtbloom CPU ISA dispatch: baseline Mulliken kernels only")
+endif()
+
 add_library(xtbloom_model_common_cpu_objects OBJECT
   src/model/common/sto.cpp
   src/model/common/integrals.cpp
@@ -941,6 +1061,7 @@ add_library(xtbloom_gfn2_cpu_objects OBJECT
   src/model/gfn2/h0.cpp
   src/model/gfn2/lattice.cpp
   src/model/gfn2/mulliken.cpp
+  src/model/gfn2/mulliken_kernels.cpp
   src/model/gfn2/repulsion.cpp
   src/model/gfn2/scc_driver.cpp
   src/model/gfn2/scc_mixer.cpp
@@ -959,6 +1080,10 @@ set_target_properties(xtbloom_gfn2_cpu_objects PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   VISIBILITY_INLINES_HIDDEN YES
 )
+if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
+  target_compile_definitions(xtbloom_gfn2_cpu_objects PRIVATE
+    XTBLOOM_HAS_AVX2_FMA_KERNELS=1)
+endif()
 # Keep the complete CPU GFN1 implementation in its own object target so the
 # public library can publish the already-reserved model tag without merging
 # the model-owned source graph into GFN2. Both models share only the reviewed
@@ -998,8 +1123,10 @@ set_target_properties(xtbloom_gfn1_cpu_objects PROPERTIES
 # receives only its own terms plus the small shared-model target.
 add_library(xtbloom_gfn2_cpu INTERFACE)
 target_link_libraries(xtbloom_gfn2_cpu INTERFACE
+  ${XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS}
   xtbloom_model_common_cpu_objects
   xtbloom_gfn2_cpu_objects
+  ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
   $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
 )
@@ -1022,6 +1149,7 @@ add_library(xtbloom
   src/runtime/request.cpp
   src/runtime/result_owner.cpp
   src/runtime/validation.cpp
+  ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
   $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
@@ -1681,6 +1809,11 @@ if(XTBLOOM_BUILD_TESTS)
     xtbloom_configure_linalg_runtime_test(xtbloom_runtime_test xtbloom.runtime)
   endif()
 
+  add_executable(xtbloom_cpu_isa_dispatch_test tests/cpu_isa_dispatch_test.cpp)
+  target_link_libraries(xtbloom_cpu_isa_dispatch_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_cpu_isa_dispatch_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.cpu.isa_dispatch COMMAND xtbloom_cpu_isa_dispatch_test)
+
   add_executable(xtbloom_model_registry_test
     tests/model_registry_test.cpp
     src/runtime/model_registry.cpp
@@ -1753,6 +1886,7 @@ if(XTBLOOM_BUILD_TESTS)
       src/runtime/request.cpp
       src/runtime/result_owner.cpp
       src/runtime/validation.cpp
+      ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
       $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
       $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
       $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>

@@ -197,8 +197,10 @@ modified-Broyden policy with a history depth from 1 through 64 and a finite
 damping factor in `(0, 1]`; the established defaults are history 8 and damping
 0.4. `XTBLOOM_DETERMINISM_REPRODUCIBLE` requests exact replay only within one
 fixed environment: the same xTBloom build, backend, CPU provider or CUDA
-toolkit, device architecture, descriptors and options, launch/bucket geometry,
-and `FRESH`/`WARM` sequence. It does not promise bitwise CPU-to-CUDA,
+toolkit, context-selected CPU ISA or device architecture, descriptors and
+options, launch/bucket geometry, and `FRESH`/`WARM` sequence. CPU contexts
+select their baseline or AVX2/FMA kernel table once at creation and never
+change it during the context lifetime. It does not promise bitwise CPU-to-CUDA,
 cross-provider, cross-toolkit, or cross-architecture identity. CPU reproducible
 mode disables the optional single-system inner chunk executor, and CUDA seals
 pedantic cuBLAS math into the setup/Graph owner. Changing any ABI-v3 policy is
