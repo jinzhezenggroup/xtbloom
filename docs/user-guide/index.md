@@ -105,6 +105,16 @@ Replace `89` with the compute capability required by the deployment. At run
 time, request `XTBLOOM_BACKEND_CUDA` or `backend="cuda"`; `AUTO` may select CPU
 when CUDA is unavailable.
 
+On supported x86-64 builds, one library contains both baseline and AVX2/FMA
+Mulliken kernels. A CPU context detects the host once and freezes the selected
+kernel table, so dispatch does not occur inside numerical loops. The
+experimental diagnostic override `XTBLOOM_CPU_ISA=auto|baseline|avx2` can force
+a path before creating a CPU context; an unavailable forced `avx2` request
+fails cleanly, and CUDA contexts ignore this CPU-only variable. Source builds
+can set `-DXTBLOOM_ENABLE_AVX2_DISPATCH=OFF` to produce a baseline-only library.
+Reproducible mode promises exact replay only while this context-selected ISA
+and the rest of the documented execution environment remain unchanged.
+
 CPU inference requires one dlopen-able monolithic LP64 LAPACKE+CBLAS runtime.
 If auto-discovery cannot find one, set
 `-DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/provider`. Installed CMake

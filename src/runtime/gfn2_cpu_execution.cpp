@@ -696,7 +696,8 @@ struct SystemOutput {
 };
 
 struct SystemExecution {
-  explicit SystemExecution(SystemKey value) : key(std::move(value)) {}
+  explicit SystemExecution(SystemKey value, const MullikenKernelTable& kernels)
+      : key(std::move(value)), mulliken_kernels(kernels) {}
 
   SystemKey key;
   std::vector<std::int64_t> atom_offsets{0, 0};
@@ -714,6 +715,7 @@ struct SystemExecution {
   ES2Plan es2;
   ES3Plan es3;
   AES2Plan aes2;
+  MullikenKernelTable mulliken_kernels;
   MullikenPlan mulliken;
   EigensolverPlan eigensolver;
   SccMixerPlan mixer;
@@ -903,7 +905,8 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_aes2_plan(basis, key.atomic_numbers.data(), aes2, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = make_mulliken_plan(basis, integrals, wavefunction_layout, mulliken, error);
+  status =
+      make_mulliken_plan(basis, integrals, wavefunction_layout, mulliken_kernels, mulliken, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_eigensolver_plan(wavefunction_layout, eigensolver, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -1585,8 +1588,10 @@ xtbloom_status_t SystemExecution::infer(
 struct Gfn2CpuExecutionCache::Impl {
   enum class TaskFailure : std::uint8_t { kNone, kAllocation, kException, kUnknown };
 
-  explicit Impl(std::int32_t requested_threads)
-      : cpu_threads(resolve_cpu_threads(requested_threads)), workers(cpu_threads) {}
+  explicit Impl(std::int32_t requested_threads, CpuIsa cpu_isa)
+      : mulliken_kernels(mulliken_kernels_for_cpu_isa(cpu_isa)),
+        cpu_threads(resolve_cpu_threads(requested_threads)),
+        workers(cpu_threads) {}
 
   ~Impl() {
     /* backend_self_test and serial/batch participation may initialize MKL
@@ -1624,6 +1629,7 @@ struct Gfn2CpuExecutionCache::Impl {
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> system_statuses;
 
+  const MullikenKernelTable mulliken_kernels;
   const std::size_t cpu_threads;
   CpuWorkerPool workers;
 
@@ -1693,7 +1699,7 @@ struct Gfn2CpuExecutionCache::Impl {
         requested.size() == 1u && workers.concurrency() > 1u &&
         requested.front().determinism != XTBLOOM_DETERMINISM_REPRODUCIBLE;
     for (const SystemKey& key : requested) {
-      auto system = std::make_unique<SystemExecution>(key);
+      auto system = std::make_unique<SystemExecution>(key, mulliken_kernels);
       if (intra_system_parallel) {
         system->parallel_executor.pool_context = &workers;
         system->parallel_executor.worker_count = workers.concurrency();
@@ -1825,8 +1831,8 @@ struct Gfn2CpuExecutionCache::Impl {
   }
 };
 
-Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads)
-    : impl_(std::make_unique<Impl>(cpu_threads)) {}
+Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa)
+    : impl_(std::make_unique<Impl>(cpu_threads, cpu_isa)) {}
 Gfn2CpuExecutionCache::~Gfn2CpuExecutionCache() = default;
 
 xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,

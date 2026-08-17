@@ -77,6 +77,14 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
+  CpuIsa resolved_cpu_isa = CpuIsa::kBaseline;
+  if (selected == XTBLOOM_BACKEND_CPU) {
+    const xtbloom_status_t isa_status = resolve_cpu_isa_from_environment(resolved_cpu_isa, error);
+    if (isa_status != XTBLOOM_STATUS_SUCCESS) {
+      return isa_status;
+    }
+  }
+
   Context* created = new (std::nothrow) Context{};
   if (created == nullptr) {
     error = "failed to allocate a xtbloom context";
@@ -86,6 +94,7 @@ xtbloom_status_t create_context(const xtbloom_context_options_t& options, Contex
   created->backend = selected;
   created->device_id = resolved_device;
   created->cpu_threads = options.cpu_threads;
+  created->cpu_isa = resolved_cpu_isa;
   created->stream = options.stream;
 #if defined(XTBLOOM_HAS_CUDA)
   if (selected == XTBLOOM_BACKEND_CUDA) {
@@ -132,7 +141,8 @@ xtbloom_status_t ensure_gfn2_cpu_execution_cache(Context& context, std::string& 
     /* Keep the established GFN2 pool context-owned, but construct it only when
      * GFN2 is selected so publishing GFN1 does not double every CPU context's
      * resident thread count. */
-    context.gfn2_cpu_execution_cache = std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads);
+    context.gfn2_cpu_execution_cache =
+        std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads, context.cpu_isa);
   } catch (const std::bad_alloc&) {
     error = "failed to allocate the CPU GFN2 execution cache";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;

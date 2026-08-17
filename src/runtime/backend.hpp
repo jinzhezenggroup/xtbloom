@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 
+#include "cpu_dispatch/features.hpp"
 #include "xtbloom/xtbloom.h"
 
 namespace xtbloom::detail {
@@ -21,6 +22,7 @@ struct Context {
   xtbloom_backend_t backend = XTBLOOM_BACKEND_CPU;
   std::int32_t device_id = -1;
   std::int32_t cpu_threads = 0;
+  CpuIsa cpu_isa = CpuIsa::kBaseline;
   void* stream = nullptr;
 
   /* One CPU context is one public transaction domain, independent of model.

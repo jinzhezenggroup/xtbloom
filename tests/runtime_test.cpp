@@ -1,8 +1,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <string>
 
 #include "xtbloom/xtbloom.h"
 
@@ -25,6 +27,31 @@ struct RequestDeleter {
 
 using ContextHandle = std::unique_ptr<xtbloom_context_t, ContextDeleter>;
 using RequestHandle = std::unique_ptr<xtbloom_request_t, RequestDeleter>;
+
+bool set_environment(const char* name, const char* value) {
+#if defined(_WIN32)
+  return _putenv_s(name, value == nullptr ? "" : value) == 0;
+#else
+  return value == nullptr ? unsetenv(name) == 0 : setenv(name, value, 1) == 0;
+#endif
+}
+
+class EnvironmentGuard {
+ public:
+  explicit EnvironmentGuard(const char* name) : name_(name) {
+    if (const char* value = std::getenv(name); value != nullptr) {
+      present_ = true;
+      value_ = value;
+    }
+  }
+
+  ~EnvironmentGuard() { (void)set_environment(name_, present_ ? value_.c_str() : nullptr); }
+
+ private:
+  const char* name_;
+  bool present_ = false;
+  std::string value_;
+};
 
 ContextHandle create_context(const xtbloom_context_options_t& options, xtbloom_status_t& status) {
   xtbloom_context_t* raw_context = nullptr;
@@ -130,6 +157,52 @@ int check_context_creation_rejections(const xtbloom_context_options_t& valid_opt
   CHECK(xtbloom_context_get_device_id(nullptr) == -1);
   CHECK(std::strstr(xtbloom_get_last_error(), "context is NULL") != nullptr);
   xtbloom_context_destroy(nullptr);
+  return 0;
+}
+
+int check_cpu_isa_context_policy() {
+  constexpr const char* kEnvironment = "XTBLOOM_CPU_ISA";
+  EnvironmentGuard guard(kEnvironment);
+  xtbloom_context_options_t options;
+  CHECK(xtbloom_context_options_init(&options, sizeof(options)) == XTBLOOM_STATUS_SUCCESS);
+  options.backend = XTBLOOM_BACKEND_CPU;
+
+  CHECK(set_environment(kEnvironment, "garbage"));
+  xtbloom_status_t status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = create_context(options, status);
+  CHECK(status == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(context == nullptr);
+  CHECK(std::strstr(xtbloom_get_last_error(), kEnvironment) != nullptr);
+
+  CHECK(set_environment(kEnvironment, "baseline"));
+  context = create_context(options, status);
+  CHECK(status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+  CHECK(xtbloom_context_get_backend(context.get()) == XTBLOOM_BACKEND_CPU);
+
+  /* Mutating the process environment cannot change or invalidate an already
+   * created context; only the next CPU context parses the override. */
+  CHECK(set_environment(kEnvironment, "garbage"));
+  CHECK(xtbloom_context_get_backend(context.get()) == XTBLOOM_BACKEND_CPU);
+  ContextHandle rejected = create_context(options, status);
+  CHECK(status == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(rejected == nullptr);
+  context.reset();
+
+  CHECK(set_environment(kEnvironment, "avx2"));
+  ContextHandle forced_avx2 = create_context(options, status);
+  CHECK(status == XTBLOOM_STATUS_SUCCESS || status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE);
+  CHECK((status == XTBLOOM_STATUS_SUCCESS) == (forced_avx2 != nullptr));
+
+#if defined(XTBLOOM_TEST_HAS_CUDA)
+  /* The override is CPU-only. CUDA availability may still fail for an absent
+   * device, but an invalid CPU override must never make CUDA invalid. */
+  CHECK(set_environment(kEnvironment, "garbage"));
+  options.backend = XTBLOOM_BACKEND_CUDA;
+  ContextHandle cuda_context = create_context(options, status);
+  CHECK(status != XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(status == XTBLOOM_STATUS_SUCCESS || status == XTBLOOM_STATUS_BACKEND_UNAVAILABLE);
+#endif
   return 0;
 }
 
@@ -261,6 +334,7 @@ int main() {
   CHECK(xtbloom_context_options_init(&options, sizeof(options)) == XTBLOOM_STATUS_SUCCESS);
   options.backend = XTBLOOM_BACKEND_CPU;
   CHECK(check_context_creation_rejections(options) == 0);
+  CHECK(check_cpu_isa_context_policy() == 0);
   CHECK(check_result_owner_rejections() == 0);
 
   xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
