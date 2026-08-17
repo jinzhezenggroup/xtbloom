@@ -60,6 +60,7 @@ THREAD_ENVIRONMENT_NAMES = (
     "MKL_INTERFACE_LAYER",
     "MKL_THREADING_LAYER",
 )
+CPU_DISPATCH_ENVIRONMENT_NAMES = ("XTBLOOM_CPU_ISA",)
 
 
 def _manifest_tolerance_defaults() -> tuple[float, float, float, float, dict[str, Any]]:
@@ -360,6 +361,7 @@ def _cmake_build_metadata(library: Path, cache: Path) -> dict[str, Any]:
     compiler_path = Path(compiler_text).resolve() if compiler_text else None
     provider_text = entries.get("XTBLOOM_CPU_LINALG_LIBRARY")
     provider_path = Path(provider_text).resolve() if provider_text else None
+    compile_commands = library.parent / "compile_commands.json"
     source_inputs = []
     for relative in ("CMakeLists.txt", "cmake/xtbloom.map"):
         candidate = source_path / relative
@@ -370,6 +372,7 @@ def _cmake_build_metadata(library: Path, cache: Path) -> dict[str, Any]:
         "build_directory": str(library.parent.resolve()),
         "cmake_version": run_text(("cmake", "--version")),
         "cache": _file_identity(cache),
+        "compile_commands": _file_identity(compile_commands),
         "cache_entries": selected,
         "source": {
             "path": str(source_path),
@@ -616,6 +619,9 @@ def collect_run_identity(
         },
         "thread_environment": {
             name: os.environ.get(name) for name in THREAD_ENVIRONMENT_NAMES
+        },
+        "cpu_dispatch_environment": {
+            name: os.environ.get(name) for name in CPU_DISPATCH_ENVIRONMENT_NAMES
         },
         "fresh_reference_artifact": (
             {
@@ -1594,7 +1600,7 @@ def _validated_reference_options(
         or options["flags"] != expected_flags
         or options["total_atoms"] != natoms * batch_size
         or type(options["cpu_threads"]) is not int
-        or options["cpu_threads"] <= 0
+        or options["cpu_threads"] < 0
         or type(options["device_id"]) is not int
         or options["device_id"] < 0
     ):
@@ -2393,8 +2399,11 @@ def validate_arguments(args: argparse.Namespace) -> None:
         raise BenchmarkError(
             "xtbloom WARM and reference-engine runs require --energy-reference-json"
         )
-    if args.cpu_threads <= 0:
-        raise BenchmarkError("--cpu-threads must be positive")
+    if args.cpu_threads < 0 or (args.engine != "xtbloom" and args.cpu_threads == 0):
+        raise BenchmarkError(
+            "--cpu-threads must be nonnegative for xtbloom and positive for "
+            "reference engines"
+        )
     if args.device_id < 0:
         raise BenchmarkError("--device-id must be nonnegative")
     if args.warmups < 0:

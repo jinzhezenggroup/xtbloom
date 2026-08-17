@@ -375,6 +375,24 @@ class NatomsScalingTest(unittest.TestCase):
 
             fresh = parser.parse_args(arguments("xtbloom", "fresh"))
             natoms_scaling.validate_arguments(fresh)
+            automatic = parser.parse_args(
+                [*arguments("xtbloom", "fresh"), "--cpu-threads", "0"]
+            )
+            natoms_scaling.validate_arguments(automatic)
+            with self.assertRaisesRegex(
+                natoms_scaling.BenchmarkError, "positive for reference engines"
+            ):
+                natoms_scaling.validate_arguments(
+                    parser.parse_args(
+                        [
+                            *arguments("tblite", None),
+                            "--cpu-threads",
+                            "0",
+                            "--energy-reference-json",
+                            str(reference),
+                        ]
+                    )
+                )
             for engine, mode in (
                 ("xtbloom", "warm"),
                 ("tblite", None),
@@ -577,6 +595,11 @@ class NatomsScalingTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            compile_commands = build / "compile_commands.json"
+            compile_commands_bytes = (
+                b'[{"file":"mulliken_kernels_avx2.cpp","command":"c++ -mavx2 -mfma"}]'
+            )
+            compile_commands.write_bytes(compile_commands_bytes)
             clean = {"path": str(source), "revision": "a" * 40, "dirty": False}
             with mock.patch.object(natoms_scaling, "git_state", return_value=clean):
                 metadata = natoms_scaling.build_metadata(library)
@@ -585,12 +608,39 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(
             metadata["cache_entries"]["CMAKE_CXX_FLAGS_RELEASE"], "-O3 -DNDEBUG"
         )
+        self.assertEqual(
+            metadata["compile_commands"]["sha256"],
+            hashlib.sha256(compile_commands_bytes).hexdigest(),
+        )
         self.assertTrue(metadata["compiler"]["is_file"])
         self.assertEqual(
             metadata["dependency_provider"]["sha256"],
             hashlib.sha256(b"blas").hexdigest(),
         )
         self.assertEqual(metadata["source"]["git"], clean)
+
+    def test_run_identity_records_cpu_dispatch_override(self) -> None:
+        """Retain the experimental ISA override used by one timing process."""
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / "libxtbloom.so"
+            library.write_bytes(b"xtbloom")
+            with (
+                mock.patch.dict(os.environ, {"XTBLOOM_CPU_ISA": "avx2"}),
+                mock.patch.object(
+                    natoms_scaling, "git_state", return_value={"dirty": False}
+                ),
+                mock.patch.object(
+                    natoms_scaling,
+                    "build_metadata",
+                    return_value={"build_system": "test"},
+                ),
+            ):
+                identity = natoms_scaling.collect_run_identity(
+                    "xtbloom", library, (), None
+                )
+        self.assertEqual(
+            identity["cpu_dispatch_environment"], {"XTBLOOM_CPU_ISA": "avx2"}
+        )
 
     def test_meson_metadata_records_build_options_compilers_and_dependencies(
         self,
