@@ -13,8 +13,7 @@ namespace {
 
 constexpr const char* kCpuIsaEnvironment = "XTBLOOM_CPU_ISA";
 
-#if (defined(__GNUC__) || defined(__clang__)) && \
-    (defined(__x86_64__) || defined(__i386__))
+#if (defined(__GNUC__) || defined(__clang__)) && (defined(__x86_64__) || defined(__i386__))
 #if defined(__has_builtin)
 #define XTBLOOM_HAS_CPU_BUILTINS \
   (__has_builtin(__builtin_cpu_init) && __has_builtin(__builtin_cpu_supports))
@@ -61,8 +60,7 @@ CpuFeatureSnapshot detect_cpu_features() noexcept {
   }
   if (maximum_leaf >= 7) {
     __cpuidex(registers, 7, 0);
-    features.avx2 =
-        (static_cast<unsigned int>(registers[1]) & (1u << 5u)) != 0u;
+    features.avx2 = (static_cast<unsigned int>(registers[1]) & (1u << 5u)) != 0u;
   }
   return features;
 #elif XTBLOOM_HAS_CPU_BUILTINS
@@ -92,14 +90,13 @@ xtbloom_status_t resolve_cpu_isa_request(const char* request, bool avx2_kernels_
     return XTBLOOM_STATUS_SUCCESS;
   }
   if (std::strcmp(mode, "auto") == 0) {
-    selected = avx2_kernels_built && features.supports_avx2_fma() ? CpuIsa::kAvx2Fma
-                                                                  : CpuIsa::kBaseline;
+    selected =
+        avx2_kernels_built && features.supports_avx2_fma() ? CpuIsa::kAvx2Fma : CpuIsa::kBaseline;
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
   }
   if (std::strcmp(mode, "avx2") != 0) {
-    error =
-        "XTBLOOM_CPU_ISA must be exactly one of auto, baseline, or avx2 when it is set";
+    error = "XTBLOOM_CPU_ISA must be exactly one of auto, baseline, or avx2 when it is set";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!avx2_kernels_built) {

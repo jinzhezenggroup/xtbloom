@@ -89,13 +89,11 @@ static void population_chunk(void* opaque, std::size_t chunk) noexcept {
           const double integral = task.dipole_integrals[static_cast<std::size_t>(
               component * task.matrix_elements + matrix_index)];
           if (!std::isfinite(integral)) {
-            population_fail(task, 2,
-                            element_position + 2u + static_cast<std::uint64_t>(component));
+            population_fail(task, 2, element_position + 2u + static_cast<std::uint64_t>(component));
             return;
           }
           if (!add_product(-density_value, integral, value)) {
-            population_fail(task, 5,
-                            element_position + 2u + static_cast<std::uint64_t>(component));
+            population_fail(task, 5, element_position + 2u + static_cast<std::uint64_t>(component));
             return;
           }
         }
@@ -105,13 +103,11 @@ static void population_chunk(void* opaque, std::size_t chunk) noexcept {
           const double integral = task.quadrupole_integrals[static_cast<std::size_t>(
               component * task.matrix_elements + matrix_index)];
           if (!std::isfinite(integral)) {
-            population_fail(task, 3,
-                            element_position + 5u + static_cast<std::uint64_t>(component));
+            population_fail(task, 3, element_position + 5u + static_cast<std::uint64_t>(component));
             return;
           }
           if (!add_product(-density_value, integral, value)) {
-            population_fail(task, 6,
-                            element_position + 5u + static_cast<std::uint64_t>(component));
+            population_fail(task, 6, element_position + 5u + static_cast<std::uint64_t>(component));
             return;
           }
         }
@@ -157,8 +153,7 @@ static void hamiltonian_chunk(void* opaque, std::size_t chunk) noexcept {
 
       for (std::int64_t local_column = local_row; local_column < task.orbitals; ++local_column) {
         const std::int64_t column = task.orbital_begin + local_column;
-        const std::int64_t column_shell =
-            task.orbital_to_shell[static_cast<std::size_t>(column)];
+        const std::int64_t column_shell = task.orbital_to_shell[static_cast<std::size_t>(column)];
         const std::int64_t column_atom = task.orbital_to_atom[static_cast<std::size_t>(column)];
         const std::int64_t local_column_shell = column_shell - task.shell_begin;
         const std::int64_t local_column_atom = column_atom - task.atom_begin;

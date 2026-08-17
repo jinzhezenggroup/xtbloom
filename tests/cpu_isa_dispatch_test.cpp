@@ -1,9 +1,9 @@
-#include "cpu_dispatch/features.hpp"
-#include "model/gfn2/mulliken_kernels.hpp"
-
 #include <array>
 #include <cstdio>
 #include <string>
+
+#include "cpu_dispatch/features.hpp"
+#include "model/gfn2/mulliken_kernels.hpp"
 
 #define CHECK(condition)                                                                   \
   do {                                                                                     \
@@ -15,9 +15,9 @@
 
 namespace {
 
+using xtbloom::detail::cpu_avx2_fma_kernels_built;
 using xtbloom::detail::CpuFeatureSnapshot;
 using xtbloom::detail::CpuIsa;
-using xtbloom::detail::cpu_avx2_fma_kernels_built;
 using xtbloom::detail::detect_cpu_features;
 using xtbloom::detail::resolve_cpu_isa_request;
 using xtbloom::detail::gfn2::mulliken_avx2_fma_kernels;
@@ -37,11 +37,9 @@ int test_exact_override_parsing_and_selection() {
   CHECK(resolve_cpu_isa_request("auto", false, kCapable, selected, error) ==
         XTBLOOM_STATUS_SUCCESS);
   CHECK(selected == CpuIsa::kBaseline);
-  CHECK(resolve_cpu_isa_request("baseline", true, {}, selected, error) ==
-        XTBLOOM_STATUS_SUCCESS);
+  CHECK(resolve_cpu_isa_request("baseline", true, {}, selected, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(selected == CpuIsa::kBaseline);
-  CHECK(resolve_cpu_isa_request("avx2", true, kCapable, selected, error) ==
-        XTBLOOM_STATUS_SUCCESS);
+  CHECK(resolve_cpu_isa_request("avx2", true, kCapable, selected, error) == XTBLOOM_STATUS_SUCCESS);
   CHECK(selected == CpuIsa::kAvx2Fma);
 
   for (const char* invalid :

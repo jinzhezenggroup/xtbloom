@@ -13,8 +13,7 @@
 
 namespace xtbloom::detail::gfn2 {
 
-XTBLOOM_NOINLINE void mulliken_population_chunk_baseline(void* opaque,
-                                                         std::size_t chunk) noexcept {
+XTBLOOM_NOINLINE void mulliken_population_chunk_baseline(void* opaque, std::size_t chunk) noexcept {
   kernel_implementation::population_chunk(opaque, chunk);
 }
 
@@ -24,9 +23,8 @@ XTBLOOM_NOINLINE void mulliken_hamiltonian_chunk_baseline(void* opaque,
 }
 
 const MullikenKernelTable& mulliken_baseline_kernels() noexcept {
-  static constexpr MullikenKernelTable kernels{&mulliken_population_chunk_baseline,
-                                                &mulliken_hamiltonian_chunk_baseline,
-                                                CpuIsa::kBaseline};
+  static constexpr MullikenKernelTable kernels{
+      &mulliken_population_chunk_baseline, &mulliken_hamiltonian_chunk_baseline, CpuIsa::kBaseline};
   return kernels;
 }
 
