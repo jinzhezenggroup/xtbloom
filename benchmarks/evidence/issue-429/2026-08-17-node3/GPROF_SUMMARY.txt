@@ -1,0 +1,87 @@
+Issue #429 diagnostic gprof attribution
+=======================================
+
+Purpose
+-------
+
+This is a coarse sampling diagnostic used only to confirm that the selected
+Mulliken leaf callbacks are reached by public CPU inference. It is not the
+retained latency claim; RESULTS.csv and DISTRIBUTIONS.csv contain the
+correctness-qualified Release timing evidence.
+
+Source and build identity
+-------------------------
+
+Source revision: dfde941819c404ea975f4af877cfb69fd000c5b3
+Changes after the measured dd8193d implementation were formatter-only
+normalization of native-library sources plus one test-only non-AVX2 host guard;
+the Release candidate library remained byte-identical. The evidence-bundle
+files being prepared were untracked and cannot affect the native binary.
+
+Configuration: static RelWithDebInfo, GCC 11.4.0, -pg,
+-fno-omit-frame-pointer, XTBLOOM_ENABLE_AVX2_DISPATCH=ON.
+
+xtbloom_cpu_public_inference_test SHA-256:
+3596167d21667def31ca175cd09c6549b8bb8225ff2e5b4b5b35c656b19fbce6
+CMakeCache.txt SHA-256:
+b2935c5e1b74af33e8efe6d7dd312c8847146bf7c4e81154970ea40bed02f2f9
+build.ninja SHA-256:
+478446c9ffd7d97a923a1f5d1e5ae87b1813d1c79e9e344986f2c09371829edf
+LP64 SciPy OpenBLAS provider SHA-256:
+b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98
+Profiler: GNU gprof (GNU Binutils for Ubuntu) 2.38.
+
+Commands
+--------
+
+cmake -S . -B build/issue429-gprof -G Ninja \
+  -DXTBLOOM_ENABLE_CUDA=OFF \
+  -DXTBLOOM_CPU_LINALG_LIBRARY="$XTBLOOM_LINALG_PROVIDER" \
+  -DXTBLOOM_ENABLE_AVX2_DISPATCH=ON \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_C_FLAGS="-pg -fno-omit-frame-pointer" \
+  -DCMAKE_CXX_FLAGS="-pg -fno-omit-frame-pointer" \
+  -DCMAKE_EXE_LINKER_FLAGS=-pg
+cmake --build build/issue429-gprof \
+  --target xtbloom_cpu_public_inference_test --parallel
+
+For each mode, the test ran in its own empty directory so the resulting
+gmon.out files could not overwrite one another:
+
+env XTBLOOM_CPU_ISA=<baseline|avx2> OMP_NUM_THREADS=1 \
+  OPENBLAS_NUM_THREADS=1 MKL_INTERFACE_LAYER=LP64 \
+  MKL_THREADING_LAYER=SEQUENTIAL \
+  LD_LIBRARY_PATH="$XTBLOOM_LINALG_PROVIDER_DIR" \
+  build/issue429-gprof/xtbloom_cpu_public_inference_test
+gprof -b build/issue429-gprof/xtbloom_cpu_public_inference_test gmon.out
+
+Selected flat-profile observations
+----------------------------------
+
+Each sampling tick represented 0.01 seconds. The complete public inference
+test accumulated 0.23 sampled seconds in forced-baseline mode and 0.14 sampled
+seconds in forced-AVX2 mode. The coarse baseline flat profile directly sampled
+both selected leaves:
+
+  self_s  calls  function
+     0.01   5315  mulliken_hamiltonian_chunk_baseline(void*, unsigned long)
+     0.01   3580  mulliken_population_chunk_baseline(void*, unsigned long)
+
+The forced-AVX2 call graph recorded the corresponding specialized leaves with
+5464 and 3662 calls. Neither accumulated a complete 0.01-second sampling tick:
+
+  self_s  calls  function
+     0.00   5464  mulliken_hamiltonian_chunk_avx2_fma(void*, unsigned long)
+     0.00   3662  mulliken_population_chunk_avx2_fma(void*, unsigned long)
+
+Interpretation and limitation
+-----------------------------
+
+The forced-mode call counts confirm that public inference reaches the exact
+leaf pair whose translation unit changes ISA. The lower complete-process
+sample total and absence of a full tick in either AVX2 leaf are directionally
+consistent with the Release timings, but gprof's 0.01-second granularity and
+worker-thread attribution make this diagnostic unsuitable for quantifying the
+speedup. Linux hardware-PMU profiling remained unavailable because
+perf_event_paranoid=4.

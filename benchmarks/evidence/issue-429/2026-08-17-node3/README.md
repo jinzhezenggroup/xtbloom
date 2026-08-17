@@ -7,8 +7,8 @@ same `libxtbloom.so` and changes only the context-time
 `XTBLOOM_CPU_ISA=baseline|avx2` selection. Positive speedup values mean AVX2 is
 faster. Every retained JSON row reported `availability=available`,
 `correctness.status=pass`, and eligible clean-source evidence.
-The subsequent formatter-only source normalization rebuilt to the identical
-candidate-library SHA-256 recorded below.
+Subsequent native-library source formatting and a test-only non-AVX2 host guard
+rebuilt to the identical candidate-library SHA-256 recorded below.
 
 ## Result
 
@@ -27,10 +27,19 @@ a sub-1% control regression, not described as a speedup. The 122-atom
 single-system control improved 0.5-1.1% with 16 workers and 0.6-2.5% with
 automatic workers. SCC iteration counts were unchanged in every coordinate.
 
-The compact values are in `RESULTS.csv`. For rows with multiple process
-rounds, that file reports the median of the per-process medians; every process
-contained 30 measured calls. Single-process FRESH controls used 20 measured
-calls, while the primary serial FRESH sweep used 30.
+The compact headline values are in `RESULTS.csv`. For rows with multiple
+process rounds, that file reports the median of the per-process medians; every
+process contained 30 measured calls. Single-process FRESH controls used 20
+measured calls, while the primary serial FRESH sweep used 30.
+`DISTRIBUTIONS.csv` retains every process/coordinate separately with its sample
+count, min, inclusive Q1, median, inclusive Q3, max, mean, p95, SCC-iteration
+median, and correctness status. It is generated only after verifying all 38
+omitted raw JSON files against `RAW_SHA256SUMS`:
+
+```bash
+python3 summarize_distributions.py /path/to/raw-json-directory \
+  > DISTRIBUTIONS.csv
+```
 
 ## Attribution to the retained leaf kernels
 
@@ -51,11 +60,12 @@ showed:
 The useful specialization is therefore hardware scalar FMA in the selected
 Mulliken contraction and Hamiltonian leaves, not broad whole-binary YMM
 vectorization. A diagnostic static `-pg` build of the public CPU inference test
-also sampled the baseline Hamiltonian and population callbacks directly in the
-flat profile (13.6% and 4.5% of process samples); the AVX2 run reduced the total
-sampled profile from 0.22 to 0.18 seconds. This gprof observation is only leaf
-attribution, not the retained latency claim. Linux hardware PMU profiling was
-unavailable because `perf_event_paranoid=4`.
+also sampled the baseline Hamiltonian and population callbacks directly and
+recorded the corresponding AVX2 leaf call counts. `GPROF_SUMMARY.txt` retains
+the exact commands, binary/build/provider hashes, selected flat-profile rows,
+and the 0.01-second sampling limitation. This gprof observation is only leaf
+attribution, not the retained latency claim. Linux hardware PMU profiling
+remained unavailable because `perf_event_paranoid=4`.
 
 ## Build and machine identity
 
