@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "model/gfn2/periodic_topology.hpp"
+
 #define CHECK(condition) \
   do {                   \
     if (!(condition)) {  \
@@ -30,6 +32,26 @@ bool near(double actual, double expected, double tolerance) {
 bool same_translation(const xtbloom::detail::gfn2::LatticeTranslation& first,
                       const xtbloom::detail::gfn2::LatticeTranslation& second) {
   return first.index == second.index && first.cartesian == second.cartesian;
+}
+
+std::size_t topology_multiplicity(
+    const std::vector<xtbloom::detail::gfn2::WignerSeitzImage>& topology, std::int64_t center_atom,
+    std::int64_t image_atom) {
+  return static_cast<std::size_t>(
+      std::count_if(topology.begin(), topology.end(), [&](const auto& image) {
+        return image.center_atom == center_atom && image.image_atom == image_atom;
+      }));
+}
+
+double topology_weight_sum(const std::vector<xtbloom::detail::gfn2::WignerSeitzImage>& topology,
+                           std::int64_t center_atom, std::int64_t image_atom) {
+  double result = 0.0;
+  for (const auto& image : topology) {
+    if (image.center_atom == center_atom && image.image_atom == image_atom) {
+      result += image.weight;
+    }
+  }
+  return result;
 }
 
 double direct_reciprocal_dot(const xtbloom::detail::gfn2::Lattice3D& lattice, std::size_t direct,
@@ -285,6 +307,145 @@ int test_rounding_boundary_image_completeness() {
   return 0;
 }
 
+int test_wigner_seitz_topology_reference_degeneracies() {
+  /* CaF2 Wigner--Seitz degeneracies from the pinned xTB test_wsc oracle. */
+  constexpr std::array<double, 9> direct{
+      5.9598811567890,
+      2.1071361905157,
+      3.6496669404404,
+      0.0,
+      6.3214085715472,
+      3.6496669404404,
+      0.0,
+      0.0,
+      7.2993338808807,
+  };
+  constexpr std::array<double, 9> fractional{
+      0.25, 0.25, 0.25, 0.75, 0.75, 0.75, 0.00, 0.00, 0.00,
+  };
+  xtbloom::detail::gfn2::Lattice3D lattice;
+  std::string error;
+  CHECK(xtbloom::detail::gfn2::make_lattice_3d(direct.data(), lattice, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  std::array<double, 9> positions{};
+  for (std::size_t atom = 0; atom < 3u; ++atom) {
+    CHECK(xtbloom::detail::gfn2::fractional_to_cartesian(lattice, fractional.data() + atom * 3u,
+                                                         positions.data() + atom * 3u,
+                                                         error) == XTBLOOM_STATUS_SUCCESS);
+  }
+
+  std::vector<xtbloom::detail::gfn2::WignerSeitzImage> topology;
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 3, positions.data(), 10.0, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
+            topology, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(topology.size() == 50u);
+  CHECK(topology_multiplicity(topology, 0, 0) == 12u);
+  CHECK(topology_multiplicity(topology, 1, 0) == 6u);
+  CHECK(topology_multiplicity(topology, 1, 1) == 12u);
+  CHECK(topology_multiplicity(topology, 2, 0) == 4u);
+  CHECK(topology_multiplicity(topology, 2, 1) == 4u);
+  CHECK(topology_multiplicity(topology, 2, 2) == 12u);
+  for (std::int64_t center = 0; center < 3; ++center) {
+    for (std::int64_t image = 0; image <= center; ++image) {
+      CHECK(near(topology_weight_sum(topology, center, image), 1.0, 2.0e-15));
+    }
+  }
+  CHECK(std::all_of(topology.begin(), topology.end(), [](const auto& image) {
+    return std::all_of(image.translation.begin(), image.translation.end(),
+                       [](std::int64_t value) { return std::abs(value) <= 1; });
+  }));
+  return 0;
+}
+
+int test_wigner_seitz_topology_canonicalization_and_validation() {
+  constexpr std::array<double, 9> direct{
+      2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0,
+  };
+  xtbloom::detail::gfn2::Lattice3D lattice;
+  std::string error;
+  CHECK(xtbloom::detail::gfn2::make_lattice_3d(direct.data(), lattice, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  constexpr std::array<double, 6> positions{0.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+  std::vector<xtbloom::detail::gfn2::WignerSeitzImage> topology;
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 2, positions.data(), 1.1, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
+            topology, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(topology.size() == 2u);
+  CHECK(topology[0].center_atom == 1 && topology[0].image_atom == 0);
+  CHECK((topology[0].translation == std::array<std::int64_t, 3>{0, 0, 0}));
+  CHECK((topology[1].translation == std::array<std::int64_t, 3>{1, 0, 0}));
+  CHECK(topology[0].distance_squared == 1.0 && topology[1].distance_squared == 1.0);
+  CHECK(topology[0].weight == 0.5 && topology[1].weight == 0.5);
+
+  std::array<double, 6> shifted = positions;
+  shifted[3] += direct[0];
+  std::vector<xtbloom::detail::gfn2::WignerSeitzImage> shifted_topology;
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 2, shifted.data(), 1.1, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
+            shifted_topology, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(shifted_topology.size() == topology.size());
+  for (std::size_t index = 0; index < topology.size(); ++index) {
+    CHECK(shifted_topology[index].center_atom == topology[index].center_atom);
+    CHECK(shifted_topology[index].image_atom == topology[index].image_atom);
+    CHECK(shifted_topology[index].translation == topology[index].translation);
+    CHECK(shifted_topology[index].displacement == topology[index].displacement);
+    CHECK(shifted_topology[index].distance_squared == topology[index].distance_squared);
+    CHECK(shifted_topology[index].weight == topology[index].weight);
+  }
+
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 2, positions.data(), 1.1,
+            xtbloom::detail::gfn2::WignerSeitzPairMode::kDirected, shifted_topology,
+            error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(shifted_topology.size() == 4u);
+  CHECK(topology_multiplicity(shifted_topology, 0, 1) == 2u);
+  CHECK(topology_multiplicity(shifted_topology, 1, 0) == 2u);
+  CHECK((shifted_topology[0].translation == std::array<std::int64_t, 3>{0, 0, 0}));
+  CHECK((shifted_topology[1].translation == std::array<std::int64_t, 3>{-1, 0, 0}));
+  CHECK((shifted_topology[2].translation == std::array<std::int64_t, 3>{0, 0, 0}));
+  CHECK((shifted_topology[3].translation == std::array<std::int64_t, 3>{1, 0, 0}));
+
+  constexpr std::array<double, 3> one_atom{0.25, 0.25, 0.25};
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 1, one_atom.data(), 2.01, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
+            shifted_topology, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(shifted_topology.size() == 6u);
+  constexpr std::array<std::array<std::int64_t, 3>, 6> self_images{{
+      {-1, 0, 0},
+      {0, -1, 0},
+      {0, 0, -1},
+      {0, 0, 1},
+      {0, 1, 0},
+      {1, 0, 0},
+  }};
+  for (std::size_t image = 0; image < self_images.size(); ++image) {
+    CHECK(shifted_topology[image].translation == self_images[image]);
+    CHECK(shifted_topology[image].distance_squared == 4.0);
+    CHECK(near(shifted_topology[image].weight, 1.0 / 6.0, 1.0e-16));
+  }
+
+  std::vector<xtbloom::detail::gfn2::WignerSeitzImage> sentinel(1u);
+  sentinel[0].center_atom = 17;
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 2, positions.data(), -1.0, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
+            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  auto nonfinite = positions;
+  nonfinite[4] = std::numeric_limits<double>::infinity();
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 2, nonfinite.data(), 1.1, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
+            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 2, positions.data(), 1.1,
+            static_cast<xtbloom::detail::gfn2::WignerSeitzPairMode>(42), sentinel,
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  return 0;
+}
+
 int test_integer_cartesian_translations_wrap_canonically() {
   constexpr std::array<double, 9> direct{
       0.79979393826591227, -0.27902125012705659, -1.9036126812397094,
@@ -514,6 +675,12 @@ int main() {
     return line;
   }
   if (const int line = test_rounding_boundary_image_completeness(); line != 0) {
+    return line;
+  }
+  if (const int line = test_wigner_seitz_topology_reference_degeneracies(); line != 0) {
+    return line;
+  }
+  if (const int line = test_wigner_seitz_topology_canonicalization_and_validation(); line != 0) {
     return line;
   }
   if (const int line = test_integer_cartesian_translations_wrap_canonically(); line != 0) {
