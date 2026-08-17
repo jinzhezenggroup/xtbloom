@@ -83,12 +83,16 @@ int test_every_capability_gate() {
 
 int test_kernel_identity_and_real_host_selection() {
   const auto& baseline = mulliken_baseline_kernels();
+  const CpuFeatureSnapshot actual = detect_cpu_features();
   CHECK(baseline.population != nullptr);
   CHECK(baseline.hamiltonian != nullptr);
   CHECK(baseline.isa == CpuIsa::kBaseline);
   CHECK(mulliken_kernels_for_cpu_isa(CpuIsa::kBaseline).population == baseline.population);
 
-  if (cpu_avx2_fma_kernels_built()) {
+  /* Never enter an AVX2-compiled translation unit on an incapable host merely
+   * to inspect its table. The resolver tests the unavailable path using
+   * synthetic feature snapshots without risking an illegal instruction. */
+  if (cpu_avx2_fma_kernels_built() && actual.supports_avx2_fma()) {
     const auto& avx2 = mulliken_avx2_fma_kernels();
     CHECK(avx2.population != nullptr);
     CHECK(avx2.hamiltonian != nullptr);
@@ -100,7 +104,6 @@ int test_kernel_identity_and_real_host_selection() {
 
   CpuIsa selected = CpuIsa::kBaseline;
   std::string error;
-  const CpuFeatureSnapshot actual = detect_cpu_features();
   CHECK(resolve_cpu_isa_request("auto", cpu_avx2_fma_kernels_built(), actual, selected, error) ==
         XTBLOOM_STATUS_SUCCESS);
   const CpuIsa expected = cpu_avx2_fma_kernels_built() && actual.supports_avx2_fma()
