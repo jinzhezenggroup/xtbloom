@@ -7,10 +7,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 from xtbloom.interface import Calculator
-from xtbloom.scc_recovery import AUTO_SAFE_POLICIES, SccMixerPolicy, singlepoint_auto_safe
+from xtbloom.scc_recovery import (
+    AUTO_SAFE_POLICIES,
+    SccMixerPolicy,
+    singlepoint_auto_safe,
+)
 
 
 @dataclass
@@ -50,6 +53,7 @@ def _scc_failure() -> XTBloomRuntimeError:
 
 
 def test_auto_safe_uses_reviewed_order_and_restores_settings() -> None:
+    """Retry the reviewed policies in order and restore caller settings."""
     calculator = _FakeCalculator([_scc_failure(), "recovered"])
 
     assert singlepoint_auto_safe(calculator) == "recovered"
@@ -59,6 +63,7 @@ def test_auto_safe_uses_reviewed_order_and_restores_settings() -> None:
 
 
 def test_auto_safe_stops_after_first_success() -> None:
+    """Stop the portfolio immediately when the default policy converges."""
     calculator = _FakeCalculator(["default-converged"])
 
     assert singlepoint_auto_safe(calculator) == "default-converged"
@@ -66,6 +71,7 @@ def test_auto_safe_stops_after_first_success() -> None:
 
 
 def test_auto_safe_exhaustion_reraises_final_scc_failure() -> None:
+    """Re-raise the final SCC failure after exhausting bounded policies."""
     failures = [_scc_failure(), _scc_failure(), _scc_failure()]
     calculator = _FakeCalculator(failures)
 
@@ -79,9 +85,10 @@ def test_auto_safe_exhaustion_reraises_final_scc_failure() -> None:
 
 
 def test_auto_safe_does_not_retry_eigensolver_failure() -> None:
+    """Do not hide eigensolver failures behind SCC policy retries."""
     error = XTBloomRuntimeError(
-        "xTBloom batch inference produced failed systems: system 0: eigensolver failed, "
-        "scc_converged=0, iterations=1"
+        "xTBloom batch inference produced failed systems: system 0: "
+        "eigensolver failed, scc_converged=0, iterations=1"
     )
     calculator = _FakeCalculator([error])
 
@@ -93,6 +100,7 @@ def test_auto_safe_does_not_retry_eigensolver_failure() -> None:
 
 
 def test_auto_safe_rejects_warm_start() -> None:
+    """Reject WARM semantics because every recovery attempt must be FRESH."""
     calculator = _FakeCalculator([], warm_start=True)
     with pytest.raises(XTBloomValueError, match="warm_start=False"):
         singlepoint_auto_safe(calculator)
@@ -100,6 +108,7 @@ def test_auto_safe_rejects_warm_start() -> None:
 
 
 def test_policy_bounds_and_empty_portfolio() -> None:
+    """Validate policy bounds and reject an empty recovery portfolio."""
     with pytest.raises(XTBloomValueError):
         SccMixerPolicy(history=0, damping=0.4)
     with pytest.raises(XTBloomValueError):
@@ -126,6 +135,7 @@ def _load_tmacl() -> tuple[list[str], np.ndarray]:
 
 
 def test_auto_safe_recovers_issue_217_tmacl_at_300k() -> None:
+    """Recover the reviewed localized 300 K state for issue #217 tmacl."""
     symbols, positions = _load_tmacl()
     calculator = Calculator(
         "GFN2-xTB",
@@ -151,8 +161,9 @@ def test_auto_safe_recovers_issue_217_tmacl_at_300k() -> None:
 
 
 def test_default_portfolio_is_stable_contract() -> None:
-    assert AUTO_SAFE_POLICIES == (
+    """Pin the reviewed default AUTO_SAFE policy ordering."""
+    assert (
         SccMixerPolicy(8, 0.4),
         SccMixerPolicy(2, 0.2),
         SccMixerPolicy(16, 0.4),
-    )
+    ) == AUTO_SAFE_POLICIES

@@ -23,7 +23,6 @@ from .exceptions import XTBloomNotSupportedError, XTBloomRuntimeError, XTBloomVa
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from .interface import Calculator, Result
 
 _ResultT = TypeVar("_ResultT")
 
@@ -36,6 +35,7 @@ class SccMixerPolicy:
     damping: float
 
     def __post_init__(self) -> None:
+        """Validate and normalize one recovery policy."""
         if isinstance(self.history, bool) or not isinstance(self.history, int):
             raise XTBloomValueError("SCC recovery history must be an integer")
         if self.history < 1 or self.history > 64:
@@ -79,7 +79,6 @@ def _is_retryable_scc_failure(error: XTBloomRuntimeError) -> bool:
     intentionally narrow: a mixed diagnostic containing an eigensolver failure
     is not safe to hide behind another mixer retry.
     """
-
     message = error.message.lower()
     return "scc not converged" in message and "eigensolver failed" not in message
 
@@ -87,7 +86,7 @@ def _is_retryable_scc_failure(error: XTBloomRuntimeError) -> bool:
 def singlepoint_auto_safe(
     calculator: _CalculatorLike[_ResultT],
     *,
-    policies: "Sequence[SccMixerPolicy]" = AUTO_SAFE_POLICIES,
+    policies: Sequence[SccMixerPolicy] = AUTO_SAFE_POLICIES,
 ) -> _ResultT:
     """Run a GFN2 single point through a bounded deterministic SCC portfolio.
 
@@ -121,7 +120,6 @@ def singlepoint_auto_safe(
     The calculator's original mixer history and damping are restored before
     this function returns or raises.  Other compute settings are never changed.
     """
-
     if calculator.method not in {"GFN2", "GFN2-xTB"}:
         raise XTBloomNotSupportedError(
             "AUTO_SAFE SCC recovery is currently validated only for GFN2-xTB"
@@ -133,9 +131,13 @@ def singlepoint_auto_safe(
 
     ordered = tuple(policies)
     if not ordered:
-        raise XTBloomValueError("AUTO_SAFE SCC recovery requires at least one mixer policy")
+        raise XTBloomValueError(
+            "AUTO_SAFE SCC recovery requires at least one mixer policy"
+        )
     if not all(isinstance(policy, SccMixerPolicy) for policy in ordered):
-        raise XTBloomValueError("AUTO_SAFE policies must be SccMixerPolicy instances")
+        raise XTBloomValueError(
+            "AUTO_SAFE policies must be SccMixerPolicy instances"
+        )
 
     original_history = int(calculator._settings.scc_mixer_history)
     original_damping = float(calculator._settings.scc_mixer_damping)
