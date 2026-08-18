@@ -1810,6 +1810,25 @@ int test_native_lattice_refusal_matrix(std::int32_t device) {
     CHECK(result.descriptor.flags == kResultFlagsCanary);
   }
 
+  /* The staged CUDA lattice gate is shared by both released models. Keep its
+   * public diagnostic model-neutral and preserve GFN1 output transactionality. */
+  g_scenario = "native-lattice-refusal/gfn1-host";
+  options.model = XTBLOOM_MODEL_GFN1_XTB;
+  batch.bind();
+  batch.descriptor.cell_matrices = host_input(cells);
+  batch.descriptor.periodic_axes = host_input(axes);
+  ResultOwner gfn1_result;
+  CUDA_CHECK(gfn1_result.bind(batch, ResultLayout::kHost, options.flags));
+  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &options, &gfn1_result.descriptor) ==
+        XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(std::strstr(xtbloom_get_last_error(), "native periodic execution is not implemented") !=
+        nullptr);
+  bool gfn1_unchanged = false;
+  CUDA_CHECK(gfn1_result.unchanged(gfn1_unchanged));
+  CHECK(gfn1_unchanged);
+  CHECK(gfn1_result.descriptor.flags == kResultFlagsCanary);
+  options.model = XTBLOOM_MODEL_GFN2_XTB;
+
   /* Cover the opposite mixed input placement independently: cell rows on the
    * host and periodic-axis masks on the device. */
   g_scenario = "native-lattice-refusal/mixed-reverse";

@@ -769,6 +769,15 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(
     copy_field(wavefunction.qat, projected.qat);
     copy_field(wavefunction.energy_weighted_density, projected.energy_weighted_density);
 
+    /* Projection precedes the common validator, so prove the two vectors read
+     * below before converting the signed batch count or indexing either one. */
+    if (wavefunction.batch_size <= 0 || wavefunction.batch_size > INT32_MAX ||
+        !valid_offsets(wavefunction.atom_offsets, wavefunction.batch_size,
+                       wavefunction.total_atoms) ||
+        !exact_extent(wavefunction.spin_channels, wavefunction.batch_size)) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kInvalidPlan,
+                     Gfn2SccSetupTopologyField::kWavefunction);
+    }
     const std::size_t systems = static_cast<std::size_t>(wavefunction.batch_size);
     projected.dipole.system_offsets.assign(systems + 1u, 0);
     projected.quadrupole.system_offsets.assign(systems + 1u, 0);

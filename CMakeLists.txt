@@ -4316,7 +4316,8 @@ if(XTBLOOM_BUILD_TESTS)
                   --manifest ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/gfn1/manifest.json
                   --library $<TARGET_FILE:xtbloom> --backend cuda
                   --memory-mode ${memory_mode}
-                  --actual-dir ${CMAKE_CURRENT_BINARY_DIR}/conformance/gfn1-public-api
+                  --actual-dir
+                  ${CMAKE_CURRENT_BINARY_DIR}/conformance/gfn1-public-api-cuda-${memory_mode}
                   --skip-backend-unavailable
         )
         set_tests_properties(xtbloom.conformance.gfn1_public_cuda${gfn1_cuda_suffix} PROPERTIES

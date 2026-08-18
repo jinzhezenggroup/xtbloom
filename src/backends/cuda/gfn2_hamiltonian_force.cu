@@ -488,6 +488,9 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
                                  std::uint32_t* system_errors,
                                  std::uint32_t* device_error) noexcept {
   const bool has_spin = input.spin_density != nullptr;
+  if (batch.batch_size > std::numeric_limits<int>::max()) {
+    return cudaErrorInvalidConfiguration;
+  }
   if (!valid_xtb_model_flavor(batch.model) || batch.total_atoms < 0 ||
       batch.total_matrix_elements < 0 ||
       batch.total_atoms > kMaximumInt64 / kGfn2HamiltonianQuadrupoleComponents ||
@@ -568,8 +571,7 @@ cudaError_t validate_descriptors(const Gfn2HamiltonianDeviceBatch& batch,
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
       !is_aligned(system_errors, alignof(std::uint32_t)) ||
       !is_aligned(device_error, alignof(std::uint32_t))) {
-    return batch.batch_size > std::numeric_limits<int>::max() ? cudaErrorInvalidConfiguration
-                                                              : cudaErrorInvalidValue;
+    return cudaErrorInvalidValue;
   }
 
   std::array<MemoryRange, 17> reads;

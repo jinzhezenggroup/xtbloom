@@ -76,6 +76,6 @@ The ABI-v4 native-cell descriptors validate molecular `NONE` and fully
 periodic `XYZ` inputs, but valid `XYZ` compute requests return
 `NOT_IMPLEMENTED` transactionally. GFN1 field/dipole properties, ROCm, native geometry
 optimization, molecular dynamics, solvation, native/analytic Hessians,
-vibrational analysis, and periodic GFN2 execution are not implemented. The
+vibrational analysis, and periodic GFN1/GFN2 execution are not implemented. The
 Python Hessian and the browser/dpdata optimizers are higher-level adapters
 built on repeated native calculations.

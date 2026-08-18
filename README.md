@@ -147,7 +147,7 @@ before reusing the numbers.
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
 | Array API/DLPack and PyTorch autograd | GFN2-only adapter surfaces |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN1/GFN2 CPU/WASM adapter; GFN2 is the default |
-| ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN2 execution | Not implemented |
+| ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN1/GFN2 execution | Not implemented |
 
 Reserved ABI values are not reported as supported features. At finite
 electronic temperature, the reported variational energy is the electronic

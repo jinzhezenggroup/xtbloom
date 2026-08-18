@@ -22,8 +22,8 @@ lattice vectors in bohr plus a fixed-width periodic-axis mask. V1/V2/V3 callers
 remain molecular, and a V4 image whose masks are all `NONE` is also molecular.
 `XYZ` cells are validated for finite, right-handed, nonsingular geometry, but
 then refused with `NOT_IMPLEMENTED` before execution because complete periodic
-GFN2 topology, electrostatics, multipoles, forces, and cell derivatives are not
-yet connected. This native-cell suffix is separate from the caller-owned
+GFN1/GFN2 topology, electrostatics, forces, and cell derivatives, plus GFN2
+multipoles, are not yet connected. This native-cell suffix is separate from the caller-owned
 `b + A*q` response operator described below.
 
 Point-charge embedding uses a caller-provided per-site screening gamma so the softened short-range

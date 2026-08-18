@@ -208,7 +208,7 @@ browser demo exposes both GFN1 and GFN2 and defaults to GFN2. ROCm remains
 reserved.
 
 xTBloom's ABI-v4 batch descriptor reserves validated native 3D cell and
-periodic-axis input, but native periodic GFN2 execution and the Python
+periodic-axis input, but native periodic GFN1/GFN2 execution and the Python
 periodic adapters are not implemented yet. Valid `XYZ` requests therefore
 return `NOT_IMPLEMENTED` before output publication. The separate periodic
 charge-response API consumes fields computed by another electrostatics

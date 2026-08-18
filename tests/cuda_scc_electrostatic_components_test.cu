@@ -612,6 +612,8 @@ int test_es3_batches_inactive_and_graph() {
                                  stream));
       CUDA_CHECK(cudaMemcpyAsync(d_offsets.get() + 4, &poisoned_offset, sizeof(poisoned_offset),
                                  cudaMemcpyHostToDevice, stream));
+      CUDA_CHECK(d_energy.upload(
+          std::vector<double>(static_cast<std::size_t>(batch_size), kSentinel), stream));
       CUDA_CHECK(reset_gfn2_es3_scc_errors_cuda(batch_size, d_errors.get(), d_plan.get(), stream));
       CUDA_CHECK(evaluate_gfn2_es3_scc_potential_cuda(batch, activity_view, d_mixed.get(),
                                                       d_potential.get(), d_errors.get(),
@@ -622,8 +624,7 @@ int test_es3_batches_inactive_and_graph() {
       CUDA_CHECK(d_energy.download(energy, stream));
       CUDA_CHECK(cudaStreamSynchronize(stream));
       CHECK(plan[0] == static_cast<std::uint32_t>(Gfn2ES3DeviceError::kInvalidOffsets));
-      CHECK(close(energy[0], gamma[0] * raw[0] * raw[0] * raw[0] / 3.0 +
-                                 gamma[1] * raw[1] * raw[1] * raw[1] / 3.0));
+      CHECK(energy[0] == kSentinel);
       CUDA_CHECK(cudaMemcpyAsync(d_offsets.get(), offsets.data(),
                                  offsets.size() * sizeof(std::int64_t), cudaMemcpyHostToDevice,
                                  stream));

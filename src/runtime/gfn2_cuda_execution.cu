@@ -354,7 +354,7 @@ xtbloom_status_t validate_host_native_lattice_request(const xtbloom_batch_t& bat
   }
   if (periodic) {
     error =
-        "native lattice/PBC descriptors are valid but periodic GFN2 execution is not "
+        "native lattice/PBC descriptors are valid but native periodic execution is not "
         "implemented yet";
     return XTBLOOM_STATUS_NOT_IMPLEMENTED;
   }

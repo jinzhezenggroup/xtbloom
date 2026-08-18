@@ -209,7 +209,7 @@ reserved but not supported.
 The two buffers must be supplied together. A `NONE` item uses an all-zero cell;
 an `XYZ` item requires a finite, right-handed, nonsingular cell. V1/V2/V3
 callers and V4 batches containing only `NONE` items keep molecular behavior.
-Native periodic GFN2 physics is not released yet: after complete host/CUDA
+Native periodic GFN1/GFN2 physics is not released yet: after complete host/CUDA
 descriptor, pointer, and cell validation, any `XYZ` item returns
 `XTBLOOM_STATUS_NOT_IMPLEMENTED` before output publication. This descriptor is
 not the caller-supplied periodic `b + A*q` embedding operator and does not make

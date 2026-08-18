@@ -615,6 +615,39 @@ int test_setup_rejects_noncanonical_gfn1_provenance() {
   return 0;
 }
 
+int test_setup_topology_rejects_hostile_gfn1_layout_extents() {
+  Gfn1SetupFixture fixture;
+  std::string error;
+  CHECK(fixture.initialize(error));
+
+  Gfn2SccSetupTopology baseline;
+  CHECK(Gfn2SccSetupTopology::create(fixture.basis, fixture.integrals, fixture.wavefunction,
+                                     kPlanToken, baseline)
+            .success());
+
+  const auto expect_rejected = [&](const gfn1::WavefunctionLayout& wavefunction) {
+    const auto diagnostic = Gfn2SccSetupTopology::create(fixture.basis, fixture.integrals,
+                                                         wavefunction, kPlanToken + 1u, baseline);
+    return !diagnostic.success() && diagnostic.status == XTBLOOM_STATUS_INVALID_ARGUMENT &&
+           diagnostic.error == Gfn2SccSetupTopologyError::kInvalidPlan &&
+           diagnostic.field == Gfn2SccSetupTopologyField::kWavefunction && baseline.valid() &&
+           baseline.host_topology().plan_token == kPlanToken;
+  };
+
+  auto hostile = fixture.wavefunction;
+  hostile.atom_offsets.clear();
+  CHECK(expect_rejected(hostile));
+
+  hostile = fixture.wavefunction;
+  hostile.spin_channels.clear();
+  CHECK(expect_rejected(hostile));
+
+  hostile = fixture.wavefunction;
+  hostile.batch_size = -1;
+  CHECK(expect_rejected(hostile));
+  return 0;
+}
+
 struct Gfn1Es3DeviceFixture {
   std::vector<std::int64_t> batch_shell_offsets{0, 4};
   /* Allocate one spare entry so intentional metadata aliasing remains in-bounds. */
@@ -779,6 +812,9 @@ int main() {
 
   if (const int status = test_scalar_arena_and_initializer_contract(); status != 0) return status;
   if (const int status = test_setup_rejects_noncanonical_gfn1_provenance(); status != 0) {
+    return status;
+  }
+  if (const int status = test_setup_topology_rejects_hostile_gfn1_layout_extents(); status != 0) {
     return status;
   }
   return test_gfn1_es3_hostile_topology_mapping_and_gamma3();

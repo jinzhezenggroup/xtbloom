@@ -87,16 +87,6 @@ struct Gfn2SccSetupPeriodicSource {
   Gfn2SccSetupHostArray<double> response_matrices{};
 };
 
-/*
- * Production host sources for the immutable restricted GFN2 SCC plan. Required
- * component plans are accepted by identity and cross-validated against the
- * already-bound common topology. Numerical views contain evaluated H0,
- * overlap/multipole operators, geometry, and cache seeds for one generation.
- *
- * D4, explicit point charges, periodic embedding, and warm-start generations
- * are enabled solely by a non-null optional plan/source. Disabled components
- * are emitted in canonical all-zero form and consume no device-arena bytes.
- */
 struct Gfn1SccSetupPointChargeSource {
   const gfn1::ExternalPointChargePlan* plan = nullptr;
   Gfn2SccSetupHostArray<double> positions{};
@@ -139,6 +129,16 @@ struct Gfn1SccSetupInputSources {
   Gfn2EigensolverOptions eigensolver_options{};
 };
 
+/*
+ * Production host sources for the immutable restricted GFN2 SCC plan. Required
+ * component plans are accepted by identity and cross-validated against the
+ * already-bound common topology. Numerical views contain evaluated H0,
+ * overlap/multipole operators, geometry, and cache seeds for one generation.
+ *
+ * D4, explicit point charges, periodic embedding, and warm-start generations
+ * are enabled solely by a non-null optional plan/source. Disabled components
+ * are emitted in canonical all-zero form and consume no device-arena bytes.
+ */
 struct Gfn2SccSetupInputSources {
   const gfn2::BasisPlan* basis = nullptr;
   const gfn2::IntegralPlan* integrals = nullptr;

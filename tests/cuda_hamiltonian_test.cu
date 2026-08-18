@@ -1077,6 +1077,13 @@ int test_sticky_alias_token_and_alignment() {
   CHECK(assemble_gfn2_hamiltonian_cuda(overflowing_shell_count, input, activity, output, workspace,
                                        device.system_errors.get(),
                                        device.device_error.get()) == cudaErrorInvalidValue);
+  auto oversized_overflowing_batch = batch;
+  oversized_overflowing_batch.batch_size =
+      static_cast<std::int64_t>(std::numeric_limits<int>::max()) + 1;
+  oversized_overflowing_batch.total_atoms = std::numeric_limits<std::int64_t>::max();
+  CHECK(assemble_gfn2_hamiltonian_cuda(oversized_overflowing_batch, input, activity, output,
+                                       workspace, device.system_errors.get(),
+                                       device.device_error.get()) == cudaErrorInvalidConfiguration);
   auto alias_output = output;
   alias_output.matrix = workspace.matrix_scratch;
   CHECK(assemble_gfn2_hamiltonian_cuda(batch, input, activity, alias_output, workspace,

@@ -1348,7 +1348,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn1SccSetupInputS
   } catch (const std::bad_alloc&) {
     return failure(XTBLOOM_STATUS_ALLOCATION_FAILED, Error::kAllocationFailed, Field::kArena);
   } catch (...) {
-    return failure(XTBLOOM_STATUS_INTERNAL_ERROR, Error::kInvalidSource, Field::kArena);
+    return failure(XTBLOOM_STATUS_INTERNAL_ERROR, Error::kInvalidSource, Field::kRequiredPlans);
   }
 }
 
