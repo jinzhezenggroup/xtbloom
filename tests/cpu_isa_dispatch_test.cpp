@@ -22,11 +22,11 @@ using xtbloom::detail::CpuFeatureSnapshot;
 using xtbloom::detail::CpuIsa;
 using xtbloom::detail::detect_cpu_features;
 using xtbloom::detail::resolve_cpu_isa_request;
-using xtbloom::detail::gfn2::MullikenKernelTable;
 using xtbloom::detail::gfn2::mulliken_avx2_fma_kernels;
 using xtbloom::detail::gfn2::mulliken_avx512_fma_kernels;
 using xtbloom::detail::gfn2::mulliken_baseline_kernels;
 using xtbloom::detail::gfn2::mulliken_kernels_for_cpu_isa;
+using xtbloom::detail::gfn2::MullikenKernelTable;
 
 constexpr CpuFeatureSnapshot kAvx2Capable{true, true, true, false, true, true, false};
 constexpr CpuFeatureSnapshot kAvx512Capable{true, true, true, true, true, true, true};
@@ -179,13 +179,12 @@ int test_kernel_identity_and_real_host_selection() {
   CpuIsa selected = CpuIsa::kBaseline;
   std::string error;
   CHECK(resolve_cpu_isa_request("auto", cpu_avx2_fma_kernels_built(),
-                                cpu_avx512_fma_kernels_built(), actual, selected, error) ==
-        XTBLOOM_STATUS_SUCCESS);
-  const CpuIsa expected = cpu_avx512_fma_kernels_built() && actual.supports_avx512_fma()
-                              ? CpuIsa::kAvx512Fma
-                          : cpu_avx2_fma_kernels_built() && actual.supports_avx2_fma()
-                              ? CpuIsa::kAvx2Fma
-                              : CpuIsa::kBaseline;
+                                cpu_avx512_fma_kernels_built(), actual, selected,
+                                error) == XTBLOOM_STATUS_SUCCESS);
+  const CpuIsa expected =
+      cpu_avx512_fma_kernels_built() && actual.supports_avx512_fma() ? CpuIsa::kAvx512Fma
+      : cpu_avx2_fma_kernels_built() && actual.supports_avx2_fma()   ? CpuIsa::kAvx2Fma
+                                                                     : CpuIsa::kBaseline;
   CHECK(selected == expected);
   CHECK(mulliken_kernels_for_cpu_isa(selected).isa == expected);
   return 0;

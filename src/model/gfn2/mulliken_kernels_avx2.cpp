@@ -49,13 +49,13 @@ XTBLOOM_NOINLINE void mulliken_hamiltonian_chunk_avx2_fma(void* opaque,
  * be cloned into the higher-target wrapper rather than leaving this as a thin
  * AVX2 call-through. Performance evidence must still inspect the emitted
  * object before treating this as a wider-vector optimization. */
-XTBLOOM_AVX512_TARGET XTBLOOM_FLATTEN XTBLOOM_NOINLINE void
-mulliken_population_chunk_avx512_fma(void* opaque, std::size_t chunk) noexcept {
+XTBLOOM_AVX512_TARGET XTBLOOM_FLATTEN XTBLOOM_NOINLINE void mulliken_population_chunk_avx512_fma(
+    void* opaque, std::size_t chunk) noexcept {
   kernel_implementation::population_chunk(opaque, chunk);
 }
 
-XTBLOOM_AVX512_TARGET XTBLOOM_FLATTEN XTBLOOM_NOINLINE void
-mulliken_hamiltonian_chunk_avx512_fma(void* opaque, std::size_t chunk) noexcept {
+XTBLOOM_AVX512_TARGET XTBLOOM_FLATTEN XTBLOOM_NOINLINE void mulliken_hamiltonian_chunk_avx512_fma(
+    void* opaque, std::size_t chunk) noexcept {
   kernel_implementation::hamiltonian_chunk(opaque, chunk);
 }
 
@@ -67,8 +67,8 @@ const MullikenKernelTable& mulliken_avx2_fma_kernels() noexcept {
 
 const MullikenKernelTable& mulliken_avx512_fma_kernels() noexcept {
   static constexpr MullikenKernelTable kernels{&mulliken_population_chunk_avx512_fma,
-                                                &mulliken_hamiltonian_chunk_avx512_fma,
-                                                CpuIsa::kAvx512Fma};
+                                               &mulliken_hamiltonian_chunk_avx512_fma,
+                                               CpuIsa::kAvx512Fma};
   return kernels;
 }
 

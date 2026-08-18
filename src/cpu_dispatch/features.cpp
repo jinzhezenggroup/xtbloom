@@ -151,8 +151,7 @@ xtbloom_status_t resolve_cpu_isa_request(const char* request, bool avx2_kernels_
     return XTBLOOM_STATUS_SUCCESS;
   }
   if (std::strcmp(mode, "avx2") != 0) {
-    error =
-        "XTBLOOM_CPU_ISA must be exactly one of auto, baseline, avx2, or avx512 when it is set";
+    error = "XTBLOOM_CPU_ISA must be exactly one of auto, baseline, avx2, or avx512 when it is set";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
   if (!avx2_kernels_built) {
