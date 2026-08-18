@@ -19,6 +19,35 @@ cross-engine figure and the FRESH/WARM study use different SCC settings,
 correctness gates, start policies, workloads, and sample counts. Never combine
 their numbers or thresholds.
 
+## Continuous regression signal
+
+`codspeed_inference.py` is a deliberately small `pytest-codspeed` suite for
+pull-request regression detection. It measures representative public Python/C
+ABI CPU paths (GFN1, GFN2 FRESH/WARM, and a small ragged batch) with one xTBloom
+CPU worker. The dedicated `.github/workflows/codspeed.yml` job additionally
+sets single-threaded BLAS and forces the portable baseline CPU ISA before
+running CodSpeed `simulation` mode.
+
+CodSpeed results are **regression signals, not publication-grade hardware
+timings**. They do not replace any protocol above, and they must not be quoted
+as absolute latency or throughput evidence. CUDA, cross-engine comparisons,
+large-system scaling, Hessian throughput, and hardware-specific ISA claims stay
+on their existing audit-ready protocols.
+
+The workflow installs exact `pytest-codspeed==5.0.3` (MIT; upstream tag
+`v5.0.3`) only after the locked project environment is created. The plugin and
+the pinned MIT-licensed CodSpeed GitHub Action are CI-only inputs: neither is
+added to project runtime metadata, `uv.lock`, sdists, native installs, or
+wheels. The retained generic MIT text is `LICENSES/MIT.txt`.
+
+To run the same benchmark module in an environment that already has the plugin
+installed:
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 XTBLOOM_CPU_ISA=baseline \
+  pytest benchmarks/codspeed_inference.py --codspeed
+```
+
 ## Evidence requirements
 
 A publishable result must retain:
