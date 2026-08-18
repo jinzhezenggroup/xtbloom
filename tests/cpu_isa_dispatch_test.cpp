@@ -22,6 +22,7 @@ using xtbloom::detail::CpuFeatureSnapshot;
 using xtbloom::detail::CpuIsa;
 using xtbloom::detail::detect_cpu_features;
 using xtbloom::detail::resolve_cpu_isa_request;
+using xtbloom::detail::gfn2::MullikenKernelTable;
 using xtbloom::detail::gfn2::mulliken_avx2_fma_kernels;
 using xtbloom::detail::gfn2::mulliken_avx512_fma_kernels;
 using xtbloom::detail::gfn2::mulliken_baseline_kernels;
