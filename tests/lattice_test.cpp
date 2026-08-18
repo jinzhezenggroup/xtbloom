@@ -358,6 +358,33 @@ int test_wigner_seitz_topology_reference_degeneracies() {
   return 0;
 }
 
+int test_wigner_seitz_topology_distance_tolerance() {
+  /*
+   * Pinned xTB generate_wsc.f90 compares Cartesian distances with a strict
+   * 0.01-bohr tolerance. These two images differ by 0.005 bohr, although
+   * their squared distances differ by about 0.05 bohr^2.
+   */
+  constexpr std::array<double, 9> direct{
+      10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0,
+  };
+  constexpr std::array<double, 6> positions{0.0, 0.0, 0.0, 4.9975, 0.0, 0.0};
+  xtbloom::detail::gfn2::Lattice3D lattice;
+  std::string error;
+  CHECK(xtbloom::detail::gfn2::make_lattice_3d(direct.data(), lattice, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  std::vector<xtbloom::detail::gfn2::WignerSeitzImage> topology;
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 2, positions.data(), 6.0, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
+            topology, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(topology.size() == 2u);
+  CHECK((topology[0].translation == std::array<std::int64_t, 3>{0, 0, 0}));
+  CHECK((topology[1].translation == std::array<std::int64_t, 3>{1, 0, 0}));
+  CHECK(topology[0].weight == 0.5);
+  CHECK(topology[1].weight == 0.5);
+  return 0;
+}
+
 int test_wigner_seitz_topology_skips_overflowed_far_images() {
   /*
    * The rectangular translation superset contains x/y corner images whose
@@ -720,6 +747,9 @@ int main() {
     return line;
   }
   if (const int line = test_wigner_seitz_topology_reference_degeneracies(); line != 0) {
+    return line;
+  }
+  if (const int line = test_wigner_seitz_topology_distance_tolerance(); line != 0) {
     return line;
   }
   if (const int line = test_wigner_seitz_topology_skips_overflowed_far_images(); line != 0) {

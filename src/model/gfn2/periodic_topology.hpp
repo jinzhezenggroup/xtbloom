@@ -21,11 +21,12 @@ namespace xtbloom::detail::gfn2 {
 /*
  * Wigner--Seitz topology keeps only the closest periodic image or equally
  * close images of an atom pair. Every retained image receives weight 1/n,
- * where n is the number of closest images within the xTB 0.01^2-bohr^2
- * squared-distance boundary tolerance. This is a topology/canonicalization
- * weight, not a generic real-space pair-energy factor.
+ * where n is the number of closest images whose Cartesian distances differ
+ * by strictly less than xTB's 0.01-bohr tolerance. This is a
+ * topology/canonicalization weight, not a generic real-space pair-energy
+ * factor.
  */
-constexpr double kWignerSeitzDistanceSquaredTolerance = 0.01 * 0.01;
+constexpr double kWignerSeitzDistanceTolerance = 0.01;
 constexpr double kPeriodicTopologyMinimumDistanceSquared = 1.0e-12;
 
 enum class WignerSeitzPairMode : std::int32_t {
@@ -104,6 +105,16 @@ inline ImageGeometryStatus image_geometry(const std::array<double, 3>& center,
   return ImageGeometryStatus::kInsideCutoff;
 }
 
+inline bool within_wigner_seitz_distance_tolerance(double distance_squared,
+                                                   double minimum_distance) noexcept {
+  using lattice_binary64_detail::absolute;
+  using lattice_binary64_detail::rounded_square_root;
+  using lattice_binary64_detail::rounded_subtract;
+
+  const double distance = rounded_square_root(distance_squared);
+  return absolute(rounded_subtract(distance, minimum_distance)) < kWignerSeitzDistanceTolerance;
+}
+
 }  // namespace periodic_topology_detail
 
 /*
@@ -127,8 +138,8 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
                                                    std::string& error) {
   using namespace periodic_topology_detail;
   using lattice_binary64_detail::finite;
-  using lattice_binary64_detail::rounded_add;
   using lattice_binary64_detail::rounded_multiply;
+  using lattice_binary64_detail::rounded_square_root;
 
   if (!representable_geometry_size(atom_count)) {
     error = "periodic topology atom count is outside the supported host range";
@@ -193,11 +204,7 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
           return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
 
-        const double boundary = rounded_add(minimum, kWignerSeitzDistanceSquaredTolerance);
-        if (!finite(boundary)) {
-          error = "periodic topology Wigner-Seitz boundary is outside the binary64 range";
-          return XTBLOOM_STATUS_INVALID_ARGUMENT;
-        }
+        const double minimum_distance = rounded_square_root(minimum);
         std::size_t multiplicity = 0u;
         for (const auto& translation : translations) {
           if (center == image && is_origin(translation)) continue;
@@ -206,7 +213,8 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
           const ImageGeometryStatus geometry =
               image_geometry(wrapped[center], wrapped[image], translation, cutoff, cutoff_squared,
                              displacement, distance_squared);
-          if (geometry == ImageGeometryStatus::kInsideCutoff && distance_squared <= boundary) {
+          if (geometry == ImageGeometryStatus::kInsideCutoff &&
+              within_wigner_seitz_distance_tolerance(distance_squared, minimum_distance)) {
             ++multiplicity;
           }
         }
@@ -226,7 +234,8 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
           const ImageGeometryStatus geometry =
               image_geometry(wrapped[center], wrapped[image], translation, cutoff, cutoff_squared,
                              displacement, distance_squared);
-          if (geometry == ImageGeometryStatus::kOutsideCutoff || distance_squared > boundary) {
+          if (geometry == ImageGeometryStatus::kOutsideCutoff ||
+              !within_wigner_seitz_distance_tolerance(distance_squared, minimum_distance)) {
             continue;
           }
           WignerSeitzImage entry;
