@@ -22,9 +22,14 @@ constexpr std::uint32_t component_bit(Gfn2SccPotentialComponent component) noexc
   return static_cast<std::uint32_t>(component);
 }
 
-constexpr std::uint32_t kMandatoryComponents = component_bit(Gfn2SccPotentialComponent::kES2) |
-                                               component_bit(Gfn2SccPotentialComponent::kES3) |
-                                               component_bit(Gfn2SccPotentialComponent::kAES2);
+constexpr std::uint32_t kCommonMandatoryComponents =
+    component_bit(Gfn2SccPotentialComponent::kES2) |
+    component_bit(Gfn2SccPotentialComponent::kES3);
+
+constexpr std::uint32_t mandatory_components(XtbModelFlavor model) noexcept {
+  return kCommonMandatoryComponents |
+         (model == XtbModelFlavor::kGfn2 ? component_bit(Gfn2SccPotentialComponent::kAES2) : 0u);
+}
 
 Diagnostic fail(Error error, Field field, std::int64_t index = -1, std::size_t required = 0u,
                 std::size_t provided = 0u, cudaError_t cuda_status = cudaSuccess) noexcept {
@@ -97,7 +102,9 @@ bool derive_shape(const Gfn2SccIterationDevicePlan& plan, Shape& shape) noexcept
       plan.wavefunction_layout.layout_fingerprint == 0u ||
       plan.wavefunction_layout.batch_size != plan.topology.batch_size ||
       plan.mixer_policy.history_size <= 0 ||
-      (plan.enabled_components & kMandatoryComponents) != kMandatoryComponents ||
+      (plan.mixer_policy.atomic_multipole_components != 0 &&
+       plan.mixer_policy.atomic_multipole_components != 9) ||
+      (plan.enabled_components & mandatory_components(plan.model)) != mandatory_components(plan.model) ||
       (plan.enabled_components & ~kGfn2SccPotentialAllComponents) != 0u) {
     return false;
   }
@@ -131,7 +138,9 @@ bool derive_shape(const Gfn2SccIterationDevicePlan& plan, Shape& shape) noexcept
          checked_multiply(shape.spin_atoms, 6, shape.spin_quadrupoles) &&
          checked_multiply(shape.batch, 2, shape.two_batch) &&
          checked_multiply(shape.physical_orbitals, 2, shape.two_orbitals) &&
-         checked_multiply(shape.spin_atoms, 9, shape.mixer_vector) &&
+         checked_multiply(shape.spin_atoms,
+                          static_cast<std::int64_t>(plan.mixer_policy.atomic_multipole_components),
+                          shape.mixer_vector) &&
          checked_add(shape.spin_shells, shape.mixer_vector, shape.mixer_vector) &&
          checked_multiply(shape.mixer_vector, shape.history, shape.history_elements) &&
          checked_multiply(shape.batch, shape.history, shape.omega_elements);

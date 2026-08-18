@@ -94,6 +94,29 @@ struct ShellRange {
   std::int64_t end;
 };
 
+__device__ bool gfn1_atom_shell_range(const Gfn2ES3DeviceBatch& batch, std::int64_t atom,
+                                      std::int64_t* begin, std::int64_t* end) {
+  if (atom < 0 || atom >= batch.total_atoms) return false;
+  *begin = batch.atom_shell_offsets[atom];
+  *end = batch.atom_shell_offsets[atom + 1];
+  return *begin >= 0 && *begin < *end && *end <= batch.total_shells;
+}
+
+__device__ bool gfn1_atom_charge(const Gfn2ES3DeviceBatch& batch, std::int64_t atom,
+                                 const double* shell_charges, double* charge) {
+  std::int64_t begin = 0;
+  std::int64_t end = 0;
+  if (!gfn1_atom_shell_range(batch, atom, &begin, &end)) return false;
+  double value = 0.0;
+  for (std::int64_t shell = begin; shell < end; ++shell) {
+    if (!isfinite(shell_charges[shell])) return false;
+    value += shell_charges[shell];
+    if (!isfinite(value)) return false;
+  }
+  *charge = value;
+  return true;
+}
+
 /* Validate the ragged partition before any pointer indexed by its values. */
 __device__ void load_and_validate_range(const Gfn2ES3DeviceBatch& batch, std::int64_t system,
                                         ShellRange* range, int* valid,
@@ -149,7 +172,16 @@ __global__ void es3_potential_kernel(Gfn2ES3DeviceBatch batch, const double* she
   /* Preflight all outputs before publishing any result for this system. */
   for (std::int64_t shell = range.begin + threadIdx.x; shell < range.end; shell += blockDim.x) {
     double potential = 0.0;
-    if (!shell_potential(batch.shell_gamma3[shell], shell_charges[shell], &potential)) {
+    double charge = shell_charges[shell];
+    if (batch.model == XtbModelFlavor::kGfn1) {
+      const std::int64_t atom = batch.shell_to_atom[shell];
+      if (!gfn1_atom_charge(batch, atom, shell_charges, &charge)) {
+        record_error(device_error, Gfn2ES3DeviceError::kInvalidOffsets);
+        atomicExch(&valid, 0);
+        continue;
+      }
+    }
+    if (!shell_potential(batch.shell_gamma3[shell], charge, &potential)) {
       record_error(device_error, Gfn2ES3DeviceError::kNonfinitePotentialArithmetic);
       atomicExch(&valid, 0);
     }
@@ -161,7 +193,11 @@ __global__ void es3_potential_kernel(Gfn2ES3DeviceBatch batch, const double* she
 
   for (std::int64_t shell = range.begin + threadIdx.x; shell < range.end; shell += blockDim.x) {
     double potential = 0.0;
-    (void)shell_potential(batch.shell_gamma3[shell], shell_charges[shell], &potential);
+    double charge = shell_charges[shell];
+    if (batch.model == XtbModelFlavor::kGfn1) {
+      (void)gfn1_atom_charge(batch, batch.shell_to_atom[shell], shell_charges, &charge);
+    }
+    (void)shell_potential(batch.shell_gamma3[shell], charge, &potential);
     shell_potentials[shell] = potential;
   }
 }
@@ -190,6 +226,38 @@ __global__ void es3_energy_kernel(Gfn2ES3DeviceBatch batch, const double* shell_
     double energy = energies[system];
     if (!isfinite(energy)) {
       record_error(device_error, Gfn2ES3DeviceError::kNonfiniteEnergySeed);
+      return;
+    }
+    if (batch.model == XtbModelFlavor::kGfn1) {
+      const std::int64_t atom_begin = batch.atom_offsets[system];
+      const std::int64_t atom_end = batch.atom_offsets[system + 1];
+      if (atom_begin < 0 || atom_begin > atom_end || atom_end > batch.total_atoms) {
+        record_error(device_error, Gfn2ES3DeviceError::kInvalidOffsets);
+        return;
+      }
+      for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+        std::int64_t shell_begin = 0;
+        std::int64_t shell_end = 0;
+        double charge = 0.0;
+        if (!gfn1_atom_shell_range(batch, atom, &shell_begin, &shell_end) ||
+            !gfn1_atom_charge(batch, atom, shell_charges, &charge)) {
+          record_error(device_error, Gfn2ES3DeviceError::kInvalidOffsets);
+          return;
+        }
+        double contribution = 0.0;
+        if (!isfinite(batch.shell_gamma3[shell_begin]) ||
+            !shell_energy(batch.shell_gamma3[shell_begin], charge, &contribution)) {
+          record_error(device_error, Gfn2ES3DeviceError::kNonfiniteEnergyArithmetic);
+          return;
+        }
+        const double updated = energy + contribution;
+        if (!isfinite(updated)) {
+          record_error(device_error, Gfn2ES3DeviceError::kNonfiniteEnergyArithmetic);
+          return;
+        }
+        energy = updated;
+      }
+      energies[system] = energy;
       return;
     }
     for (std::int64_t shell = range.begin; shell < range.end; ++shell) {
@@ -288,8 +356,14 @@ __global__ void es3_scc_potential_kernel(Gfn2ES3DeviceBatch batch,
   const std::int64_t end = batch.batch_shell_offsets[system + 1];
   for (std::int64_t shell = begin + threadIdx.x; shell < end; shell += blockDim.x) {
     const double gamma3 = batch.shell_gamma3[shell];
-    const double charge = shell_charges[shell];
+    double charge = shell_charges[shell];
     double value = 0.0;
+    if (batch.model == XtbModelFlavor::kGfn1 &&
+        !gfn1_atom_charge(batch, batch.shell_to_atom[shell], shell_charges, &charge)) {
+      record_es3_scc_system_error(system_errors, system, Gfn2ES3DeviceError::kInvalidOffsets);
+      atomicExch(&valid, 0);
+      continue;
+    }
     if (!isfinite(gamma3)) {
       record_es3_scc_system_error(system_errors, system, Gfn2ES3DeviceError::kNonfiniteGamma3);
       atomicExch(&valid, 0);
@@ -308,7 +382,11 @@ __global__ void es3_scc_potential_kernel(Gfn2ES3DeviceBatch batch,
   }
   for (std::int64_t shell = begin + threadIdx.x; shell < end; shell += blockDim.x) {
     double value = 0.0;
-    (void)shell_potential(batch.shell_gamma3[shell], shell_charges[shell], &value);
+    double charge = shell_charges[shell];
+    if (batch.model == XtbModelFlavor::kGfn1) {
+      (void)gfn1_atom_charge(batch, batch.shell_to_atom[shell], shell_charges, &charge);
+    }
+    (void)shell_potential(batch.shell_gamma3[shell], charge, &value);
     shell_potentials[shell] = value;
   }
 }
@@ -325,6 +403,40 @@ __global__ void es3_scc_energy_kernel(Gfn2ES3DeviceBatch batch,
   const std::int64_t begin = batch.batch_shell_offsets[system];
   const std::int64_t end = batch.batch_shell_offsets[system + 1];
   double energy = 0.0;
+  if (batch.model == XtbModelFlavor::kGfn1) {
+    const std::int64_t atom_begin = batch.atom_offsets[system];
+    const std::int64_t atom_end = batch.atom_offsets[system + 1];
+    if (atom_begin < 0 || atom_begin > atom_end || atom_end > batch.total_atoms) {
+      record_es3_scc_system_error(system_errors, system, Gfn2ES3DeviceError::kInvalidOffsets);
+      return;
+    }
+    for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
+      std::int64_t shell_begin = 0;
+      std::int64_t shell_end = 0;
+      double charge = 0.0;
+      if (!gfn1_atom_shell_range(batch, atom, &shell_begin, &shell_end) ||
+          !gfn1_atom_charge(batch, atom, shell_charges, &charge)) {
+        record_es3_scc_system_error(system_errors, system, Gfn2ES3DeviceError::kInvalidOffsets);
+        return;
+      }
+      double contribution = 0.0;
+      if (!isfinite(batch.shell_gamma3[shell_begin]) ||
+          !shell_energy(batch.shell_gamma3[shell_begin], charge, &contribution)) {
+        record_es3_scc_system_error(system_errors, system,
+                                    Gfn2ES3DeviceError::kNonfiniteEnergyArithmetic);
+        return;
+      }
+      const double updated = energy + contribution;
+      if (!isfinite(updated)) {
+        record_es3_scc_system_error(system_errors, system,
+                                    Gfn2ES3DeviceError::kNonfiniteEnergyArithmetic);
+        return;
+      }
+      energy = updated;
+    }
+    component_energies[system] = energy;
+    return;
+  }
   for (std::int64_t shell = begin; shell < end; ++shell) {
     const double gamma3 = batch.shell_gamma3[shell];
     const double charge = shell_charges[shell];
@@ -388,6 +500,7 @@ bool is_aligned(const void* pointer, std::size_t alignment) noexcept {
 cudaError_t validate_common_launcher_arguments(const Gfn2ES3DeviceBatch& batch,
                                                std::uint32_t* device_error) noexcept {
   if (batch.batch_size <= 0 || batch.total_shells <= 0 ||
+      !valid_xtb_model_flavor(batch.model) ||
       batch.batch_size == std::numeric_limits<std::int64_t>::max() ||
       batch.batch_shell_offset_count != batch.batch_size + 1 ||
       batch.shell_gamma3_count != batch.total_shells || batch.batch_shell_offsets == nullptr ||
@@ -395,6 +508,15 @@ cudaError_t validate_common_launcher_arguments(const Gfn2ES3DeviceBatch& batch,
       !is_aligned(batch.batch_shell_offsets, alignof(std::int64_t)) ||
       !is_aligned(batch.shell_gamma3, alignof(double)) ||
       !is_aligned(device_error, alignof(std::uint32_t))) {
+    return cudaErrorInvalidValue;
+  }
+  if (batch.model == XtbModelFlavor::kGfn1 &&
+      (batch.total_atoms <= 0 || batch.atom_offset_count != batch.batch_size + 1 ||
+       batch.atom_shell_offset_count != batch.total_atoms + 1 ||
+       batch.shell_to_atom_count != batch.total_shells ||
+       !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
+       !is_aligned(batch.atom_shell_offsets, alignof(std::int64_t)) ||
+       !is_aligned(batch.shell_to_atom, alignof(std::int64_t)))) {
     return cudaErrorInvalidValue;
   }
   if (static_cast<std::uint64_t>(batch.batch_size) >

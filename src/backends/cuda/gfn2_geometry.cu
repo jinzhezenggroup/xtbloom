@@ -18,6 +18,7 @@ constexpr double kMinimumDistanceSquared = 1.0e-12;
 constexpr double kFirstSteepness = 10.0;
 constexpr double kSecondSteepness = 20.0;
 constexpr double kSecondRadiusShiftBohr = 2.0;
+constexpr double kGfn1Steepness = 16.0;
 
 struct SystemRanges {
   std::int64_t atom_begin;
@@ -71,7 +72,8 @@ __device__ double logistic(double argument) {
   return exponential / (1.0 + exponential);
 }
 
-__device__ bool evaluate_pair(double dx, double dy, double dz, double radius, PairValues* values) {
+__device__ bool evaluate_pair(XtbModelFlavor model, double dx, double dy, double dz, double radius,
+                              PairValues* values) {
   const double distance_squared = dx * dx + dy * dy + dz * dz;
   if (!isfinite(distance_squared) || distance_squared < kMinimumDistanceSquared) {
     return false;
@@ -90,14 +92,23 @@ __device__ bool evaluate_pair(double dx, double dy, double dz, double radius, Pa
   }
 
   const double inverse_distance_squared = values->inverse_distance * values->inverse_distance;
-  const double shifted_radius = radius + kSecondRadiusShiftBohr;
-  const double first = logistic(kFirstSteepness * (radius * values->inverse_distance - 1.0));
-  const double second =
-      logistic(kSecondSteepness * (shifted_radius * values->inverse_distance - 1.0));
-  values->count = first * second;
-  const double derivative = -inverse_distance_squared *
-                            (kFirstSteepness * radius * first * (1.0 - first) * second +
-                             kSecondSteepness * shifted_radius * second * (1.0 - second) * first);
+  double derivative = 0.0;
+  if (model == XtbModelFlavor::kGfn1) {
+    const double count = logistic(kGfn1Steepness * (radius * values->inverse_distance - 1.0));
+    values->count = count;
+    derivative = -kGfn1Steepness * radius * inverse_distance_squared * count * (1.0 - count);
+  } else if (model == XtbModelFlavor::kGfn2) {
+    const double shifted_radius = radius + kSecondRadiusShiftBohr;
+    const double first = logistic(kFirstSteepness * (radius * values->inverse_distance - 1.0));
+    const double second =
+        logistic(kSecondSteepness * (shifted_radius * values->inverse_distance - 1.0));
+    values->count = first * second;
+    derivative = -inverse_distance_squared *
+                 (kFirstSteepness * radius * first * (1.0 - first) * second +
+                  kSecondSteepness * shifted_radius * second * (1.0 - second) * first);
+  } else {
+    return false;
+  }
   values->derivative_over_distance = derivative * values->inverse_distance;
   return values->count >= 0.0 && values->count <= 1.0 && isfinite(values->count) &&
          isfinite(values->derivative_over_distance);
@@ -214,7 +225,7 @@ __global__ void build_pair_cache_kernel(Gfn2GeometryDeviceBatch batch, const dou
       }
       const double radius = batch.covalent_radii[upper] + batch.covalent_radii[lower];
       PairValues values{};
-      if (!evaluate_pair(dx, dy, dz, radius, &values)) {
+      if (!evaluate_pair(batch.model, dx, dy, dz, radius, &values)) {
         const double distance_squared = dx * dx + dy * dy + dz * dz;
         const Gfn2GeometryDeviceError error =
             isfinite(distance_squared) && distance_squared < kMinimumDistanceSquared
@@ -359,7 +370,8 @@ __global__ void coordination_vjp_kernel(
       const double* const data = cache.pair_data + pair * kGfn2GeometryPairDataElements;
       const double radius = batch.covalent_radii[upper] + batch.covalent_radii[lower];
       PairValues expected{};
-      const bool expected_valid = evaluate_pair(data[0], data[1], data[2], radius, &expected);
+      const bool expected_valid =
+          evaluate_pair(batch.model, data[0], data[1], data[2], radius, &expected);
       if (!expected_valid || data[3] != expected.distance || data[4] != expected.inverse_distance ||
           data[5] != expected.count || data[6] != expected.derivative_over_distance) {
         record_system_error(system_errors, system, device_error,
@@ -503,6 +515,7 @@ cudaError_t validate_common(const Gfn2GeometryDeviceBatch& batch,
       batch.atom_offset_elements != batch.batch_size + 1 ||
       batch.pair_offset_elements != batch.batch_size + 1 ||
       batch.covalent_radius_elements < batch.total_atoms || batch.plan_token == 0u ||
+      !valid_xtb_model_flavor(batch.model) ||
       !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
       !is_aligned(batch.pair_offsets, alignof(std::int64_t)) ||
       !required_pointer(batch.covalent_radii, batch.total_atoms) ||

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/xtb_model.hpp"
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
 namespace xtbloom::detail::cuda {
@@ -42,6 +43,17 @@ struct Gfn2ES3DeviceBatch {
   const double* shell_gamma3 = nullptr;
   /* Optional setup identity used by SCC-specific consumers. */
   std::uint64_t plan_token = 0u;
+  /* GFN1 stores Gamma3 per atom. Setup broadcasts it into shell_gamma3 so the
+   * immutable scalar parameter image stays compact-compatible with GFN2, then
+   * these topology projections recover the atom charge used by the GFN1 term. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
+  std::int64_t total_atoms = 0;
+  std::int64_t atom_offset_count = 0;
+  std::int64_t atom_shell_offset_count = 0;
+  std::int64_t shell_to_atom_count = 0;
+  const std::int64_t* atom_offsets = nullptr;
+  const std::int64_t* atom_shell_offsets = nullptr;
+  const std::int64_t* shell_to_atom = nullptr;
 };
 
 static_assert(std::is_trivially_copyable_v<Gfn2ES3DeviceBatch>);

@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include "backends/common/gfn2_plan_schema.hpp"
+#include "backends/common/xtb_model.hpp"
 #include "backends/cuda/gfn2_aes2.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
 #include "backends/cuda/gfn2_density.cuh"
@@ -252,6 +253,7 @@ struct Gfn2SccIterationDeviceScalarBridge {
 struct Gfn2SccIterationDevicePlan {
   std::uint32_t abi_version = kGfn2SccIterationAbiVersion;
   std::uint32_t enabled_components = 0u;
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
   std::uint64_t plan_token = 0u;
   std::uint64_t geometry_generation = 0u;
 

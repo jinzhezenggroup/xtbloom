@@ -46,22 +46,26 @@ __device__ std::int64_t atom_begin(const Gfn2SccDeviceBatch& batch,
 
 __device__ std::int64_t system_vector_begin(const Gfn2SccDeviceBatch& batch,
                                             const Gfn2WavefunctionLayoutView& layout,
+                                            const Gfn2SccMixerDevicePolicy& policy,
                                             std::int64_t system) {
   return shell_begin(batch, layout, system) +
-         kMultipoleComponentsPerAtom * atom_begin(batch, layout, system);
+         static_cast<std::int64_t>(policy.atomic_multipole_components) *
+             atom_begin(batch, layout, system);
 }
 
 __device__ std::int64_t system_dimension(const Gfn2SccDeviceBatch& batch,
                                          const Gfn2WavefunctionLayoutView& layout,
+                                         const Gfn2SccMixerDevicePolicy& policy,
                                          std::int64_t system) {
   const std::int64_t shells =
       shell_begin(batch, layout, system + 1) - shell_begin(batch, layout, system);
-  return shells + kMultipoleComponentsPerAtom *
+  return shells + static_cast<std::int64_t>(policy.atomic_multipole_components) *
                       (atom_begin(batch, layout, system + 1) - atom_begin(batch, layout, system));
 }
 
 __device__ double load_component(const Gfn2SccDeviceBatch& batch,
                                  const Gfn2WavefunctionLayoutView& layout,
+                                 const Gfn2SccMixerDevicePolicy& policy,
                                  const Gfn2SccDeviceConstMultipoles& multipoles,
                                  std::int64_t system, std::int64_t component) {
   const std::int64_t shell_offset = shell_begin(batch, layout, system);
@@ -69,6 +73,7 @@ __device__ double load_component(const Gfn2SccDeviceBatch& batch,
   if (component < shell_count) {
     return multipoles.shell_charges[shell_offset + component];
   }
+  if (policy.atomic_multipole_components == 0) return 0.0;
   component -= shell_count;
   const std::int64_t atom_offset = atom_begin(batch, layout, system);
   const std::int64_t atom_count = atom_begin(batch, layout, system + 1) - atom_offset;
@@ -82,6 +87,7 @@ __device__ double load_component(const Gfn2SccDeviceBatch& batch,
 
 __device__ void store_component(const Gfn2SccDeviceBatch& batch,
                                 const Gfn2WavefunctionLayoutView& layout,
+                                const Gfn2SccMixerDevicePolicy& policy,
                                 const Gfn2SccDeviceMultipoles& multipoles, std::int64_t system,
                                 std::int64_t component, double value) {
   const std::int64_t shell_offset = shell_begin(batch, layout, system);
@@ -90,6 +96,7 @@ __device__ void store_component(const Gfn2SccDeviceBatch& batch,
     multipoles.shell_charges[shell_offset + component] = value;
     return;
   }
+  if (policy.atomic_multipole_components == 0) return;
   component -= shell_count;
   const std::int64_t atom_offset = atom_begin(batch, layout, system);
   const std::int64_t atom_count = atom_begin(batch, layout, system + 1) - atom_offset;
@@ -153,6 +160,7 @@ __global__ void topology_preflight_kernel(Gfn2SccDeviceBatch batch,
 
 __global__ void initial_values_preflight_kernel(Gfn2SccDeviceBatch batch,
                                                 Gfn2WavefunctionLayoutView layout,
+                                                Gfn2SccMixerDevicePolicy policy,
                                                 Gfn2SccDeviceConstMultipoles initial,
                                                 std::uint32_t* device_error) {
   if (atomicAdd(device_error, 0u) !=
@@ -160,9 +168,9 @@ __global__ void initial_values_preflight_kernel(Gfn2SccDeviceBatch batch,
     return;
   }
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
-  const std::int64_t dimension = system_dimension(batch, layout, system);
+  const std::int64_t dimension = system_dimension(batch, layout, policy, system);
   for (std::int64_t component = threadIdx.x; component < dimension; component += blockDim.x) {
-    if (!isfinite(load_component(batch, layout, initial, system, component))) {
+    if (!isfinite(load_component(batch, layout, policy, initial, system, component))) {
       record_error(device_error, Gfn2SccMixerDeviceError::kNonfiniteInitialMultipole);
     }
   }
@@ -322,13 +330,13 @@ __global__ void initialize_state_kernel(Gfn2SccDeviceBatch batch, Gfn2Wavefuncti
     return;
   }
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
-  const std::int64_t vector_begin = system_vector_begin(batch, layout, system);
-  const std::int64_t dimension = system_dimension(batch, layout, system);
+  const std::int64_t vector_begin = system_vector_begin(batch, layout, policy, system);
+  const std::int64_t dimension = system_dimension(batch, layout, policy, system);
   const std::int64_t history_begin = vector_begin * policy.history_size;
   const std::int64_t history_count = dimension * policy.history_size;
   for (std::int64_t component = threadIdx.x; component < dimension; component += blockDim.x) {
     state.current_inputs[vector_begin + component] =
-        load_component(batch, layout, initial, system, component);
+        load_component(batch, layout, policy, initial, system, component);
     state.previous_inputs[vector_begin + component] = 0.0;
     state.previous_residuals[vector_begin + component] = 0.0;
   }
@@ -372,9 +380,9 @@ __global__ void restart_system_kernel(Gfn2SccDeviceBatch batch, Gfn2Wavefunction
     return;
   }
 
-  const std::int64_t dimension = system_dimension(batch, layout, system);
+  const std::int64_t dimension = system_dimension(batch, layout, policy, system);
   for (std::int64_t component = threadIdx.x; component < dimension; component += blockDim.x) {
-    if (!isfinite(load_component(batch, layout, current_public, system, component))) {
+    if (!isfinite(load_component(batch, layout, policy, current_public, system, component))) {
       record_error(device_error, Gfn2SccMixerDeviceError::kNonfiniteRestartMultipole);
       atomicExch(&valid, 0);
     }
@@ -384,12 +392,12 @@ __global__ void restart_system_kernel(Gfn2SccDeviceBatch batch, Gfn2Wavefunction
     return;
   }
 
-  const std::int64_t vector_begin = system_vector_begin(batch, layout, system);
+  const std::int64_t vector_begin = system_vector_begin(batch, layout, policy, system);
   const std::int64_t history_begin = vector_begin * policy.history_size;
   const std::int64_t history_count = dimension * policy.history_size;
   for (std::int64_t component = threadIdx.x; component < dimension; component += blockDim.x) {
     state.current_inputs[vector_begin + component] =
-        load_component(batch, layout, current_public, system, component);
+        load_component(batch, layout, policy, current_public, system, component);
     state.previous_inputs[vector_begin + component] = 0.0;
     state.previous_residuals[vector_begin + component] = 0.0;
   }
@@ -513,14 +521,14 @@ __global__ void mix_broyden_kernel(
     return;
   }
 
-  const std::int64_t vector_begin = system_vector_begin(batch, layout, system);
-  const std::int64_t dimension = system_dimension(batch, layout, system);
+  const std::int64_t vector_begin = system_vector_begin(batch, layout, policy, system);
+  const std::int64_t dimension = system_dimension(batch, layout, policy, system);
   const std::int64_t history_begin = vector_begin * policy.history_size;
   const std::int64_t beta_begin = system * policy.history_size * policy.history_size;
   const std::int64_t coefficient_begin = system * policy.history_size;
 
   for (std::int64_t component = threadIdx.x; component < dimension; component += blockDim.x) {
-    const double raw_value = load_component(batch, layout, raw, system, component);
+    const double raw_value = load_component(batch, layout, policy, raw, system, component);
     const double current_value = state.current_inputs[vector_begin + component];
     const double residual = raw_value - current_value;
     workspace.residual[vector_begin + component] = residual;
@@ -822,7 +830,7 @@ __global__ void mix_broyden_kernel(
     state.previous_inputs[index] = state.current_inputs[index];
     state.previous_residuals[index] = workspace.residual[index];
     state.current_inputs[index] = mixed_value;
-    store_component(batch, layout, next_mixed, system, component, mixed_value);
+    store_component(batch, layout, policy, next_mixed, system, component, mixed_value);
   }
   __syncthreads();
   if (threadIdx.x == 0) {
@@ -956,6 +964,8 @@ bool validate_dimensions(const Gfn2SccDeviceBatch& batch, const Gfn2Wavefunction
          batch.shell_offset_count == batch.batch_size + 1 &&
          batch.atom_offset_count == batch.batch_size + 1 && batch.plan_token != 0u &&
          policy.plan_token == batch.plan_token && policy.history_size > 0 &&
+         (policy.atomic_multipole_components == 0 ||
+          policy.atomic_multipole_components == kMultipoleComponentsPerAtom) &&
          std::isfinite(policy.damping) && policy.damping > 0.0 && policy.damping <= 1.0 &&
          std::isfinite(policy.rms_tolerance) && policy.rms_tolerance > 0.0 &&
          std::isfinite(policy.maximum_tolerance) && policy.maximum_tolerance > 0.0 &&
@@ -964,7 +974,8 @@ bool validate_dimensions(const Gfn2SccDeviceBatch& batch, const Gfn2Wavefunction
                           &dimensions->dipole_elements) &&
          checked_multiply(dimensions->atom_elements, kQuadrupoleComponents,
                           &dimensions->quadrupole_elements) &&
-         checked_multiply(dimensions->atom_elements, kMultipoleComponentsPerAtom,
+         checked_multiply(dimensions->atom_elements,
+                          static_cast<std::int64_t>(policy.atomic_multipole_components),
                           &atomic_components) &&
          checked_add(dimensions->shell_elements, &atomic_components) &&
          (dimensions->vector_elements = atomic_components, true) &&
@@ -1227,7 +1238,7 @@ cudaError_t initialize_gfn2_scc_mixer_cuda(
     return status;
   }
   initial_values_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                    0, stream>>>(batch, layout, initial, device_error);
+                                    0, stream>>>(batch, layout, policy, initial, device_error);
   status = cudaPeekAtLastError();
   if (status != cudaSuccess) {
     return status;

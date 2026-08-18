@@ -264,6 +264,7 @@ struct Gfn2SccSetupInputs::Impl {
     std::size_t total_bytes = 0u;
   } layout;
 
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
   std::uint64_t plan_token = 0u;
   std::uint64_t geometry_generation = 0u;
   std::uint64_t warm_start_generation = 0u;
@@ -326,7 +327,8 @@ struct Gfn2SccSetupInputs::Impl {
     const std::int64_t matrix3 = total_matrix_elements * 3;
     const std::int64_t matrix6 = total_matrix_elements * 6;
     const std::int64_t provenance_count =
-        3 + (d4_enabled ? 1 : 0) + (point_enabled ? 1 : 0) + (periodic_enabled ? 1 : 0);
+        2 + (model == XtbModelFlavor::kGfn2 ? 1 : 0) + (d4_enabled ? 1 : 0) +
+        (point_enabled ? 1 : 0) + (periodic_enabled ? 1 : 0);
     return append_segment<std::int64_t>(batch_offsets, cursor, layout.pair_offsets) &&
            append_segment<double>(total_atoms, cursor, layout.covalent_radii) &&
            append_segment<double>(atom_coordinates, cursor, layout.positions) &&
@@ -343,10 +345,14 @@ struct Gfn2SccSetupInputs::Impl {
            append_segment<std::int64_t>(batch_offsets, cursor, layout.es2_matrix_offsets) &&
            append_segment<double>(total_shells, cursor, layout.es2_shell_hardness) &&
            append_segment<double>(total_shells, cursor, layout.es3_shell_gamma3) &&
-           append_segment<double>(total_atoms, cursor, layout.aes2_dipole_kernel) &&
-           append_segment<double>(total_atoms, cursor, layout.aes2_quadrupole_kernel) &&
-           append_segment<double>(total_atoms, cursor, layout.aes2_multipole_radius) &&
-           append_segment<double>(total_atoms, cursor, layout.aes2_multipole_valence_cn) &&
+           append_segment<double>(model == XtbModelFlavor::kGfn2 ? total_atoms : 0, cursor,
+                                  layout.aes2_dipole_kernel) &&
+           append_segment<double>(model == XtbModelFlavor::kGfn2 ? total_atoms : 0, cursor,
+                                  layout.aes2_quadrupole_kernel) &&
+           append_segment<double>(model == XtbModelFlavor::kGfn2 ? total_atoms : 0, cursor,
+                                  layout.aes2_multipole_radius) &&
+           append_segment<double>(model == XtbModelFlavor::kGfn2 ? total_atoms : 0, cursor,
+                                  layout.aes2_multipole_valence_cn) &&
            append_segment<double>(total_shells, cursor, layout.mulliken_reference_occupations) &&
            append_segment<double>(2 * batch_size, cursor, layout.electron_counts) &&
            append_segment<double>(batch_size, cursor, layout.temperatures) &&
@@ -354,7 +360,8 @@ struct Gfn2SccSetupInputs::Impl {
            append_segment<double>(total_atoms, cursor, layout.geometry_coordination) &&
            append_segment<std::uint64_t>(batch_size, cursor, layout.geometry_generations) &&
            append_segment<double>(es2_matrix_elements, cursor, layout.es2_coulomb_matrix) &&
-           append_segment<double>(aes2_pair_elements, cursor, layout.aes2_pair_data) &&
+           append_segment<double>(model == XtbModelFlavor::kGfn2 ? aes2_pair_elements : 0, cursor,
+                                  layout.aes2_pair_data) &&
            append_segment<Gfn2D4DeviceElementData>(d4_enabled ? layout.d4_elements.elements : 0,
                                                    cursor, layout.d4_elements) &&
            append_segment<Gfn2D4DeviceReferenceData>(d4_enabled ? layout.d4_references.elements : 0,
@@ -652,6 +659,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     if (candidate == nullptr) {
       return failure(XTBLOOM_STATUS_ALLOCATION_FAILED, Error::kAllocationFailed, Field::kArena);
     }
+    candidate->model = XtbModelFlavor::kGfn2;
     candidate->plan_token = plan_token;
     candidate->geometry_generation = sources.geometry_generation;
     candidate->warm_start_generation = sources.warm_start_generation;
@@ -874,6 +882,433 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
   }
 }
 
+
+Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(
+    const Gfn1SccSetupInputSources& sources, const Gfn2RaggedTopologyView& host_topology,
+    std::uint64_t plan_token, Gfn2SccSetupInputs& output) noexcept {
+  using Error = Gfn2SccSetupInputsError;
+  using Field = Gfn2SccSetupInputsField;
+  if (plan_token == 0u) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPlanToken);
+  }
+  if (host_topology.memory_space != Gfn2PlanMemorySpace::kHost ||
+      host_topology.plan_token != plan_token ||
+      validate_gfn2_topology_host(host_topology).error != Gfn2PlanSchemaError::kSuccess) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kTopology);
+  }
+  if (sources.basis == nullptr || sources.integrals == nullptr || sources.h0_plan == nullptr ||
+      sources.wavefunction == nullptr || sources.es2 == nullptr || sources.es3 == nullptr ||
+      sources.spin == nullptr || sources.mulliken == nullptr || sources.mixer == nullptr ||
+      sources.driver == nullptr) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
+  }
+
+  const auto& basis = *sources.basis;
+  const auto& integrals = *sources.integrals;
+  const auto& h0_plan = *sources.h0_plan;
+  const auto& wavefunction = *sources.wavefunction;
+  const auto& es2 = *sources.es2;
+  const auto& es3 = *sources.es3;
+  const auto& spin = *sources.spin;
+  const auto& mulliken = *sources.mulliken;
+  const auto& mixer = *sources.mixer;
+  const auto& driver = *sources.driver;
+  const std::int64_t batch = host_topology.batch_size;
+  const std::int64_t atoms = host_topology.total_atoms;
+  const std::int64_t shells = host_topology.total_shells;
+  const std::int64_t orbitals = host_topology.total_orbitals;
+  const std::int64_t matrices = host_topology.total_matrix_elements;
+
+  if (basis.batch_size != batch || basis.total_atoms != atoms || basis.total_shells != shells ||
+      basis.total_orbitals != orbitals || integrals.batch_size != batch ||
+      integrals.total_matrix_elements != matrices || h0_plan.batch_size != batch ||
+      h0_plan.total_atoms != atoms || h0_plan.total_shells != shells ||
+      h0_plan.total_orbitals != orbitals || h0_plan.total_matrix_elements != matrices ||
+      wavefunction.batch_size != batch || wavefunction.total_atoms != atoms ||
+      wavefunction.total_shells != shells || wavefunction.total_orbitals != orbitals ||
+      !es2.sealed() || es2.batch_size() != batch || es2.total_atoms() != atoms ||
+      es2.total_shells() != shells || es3.batch_size != batch || es3.total_atoms != atoms ||
+      es3.atom_gamma3.size() != static_cast<std::size_t>(atoms) ||
+      spin.batch_size != batch || spin.total_atoms != atoms || spin.total_shells != shells ||
+      spin.shell_population_elements != wavefunction.qsh.element_count ||
+      !mulliken.sealed() || mulliken.batch_size() != batch || mulliken.total_atoms() != atoms ||
+      mulliken.total_shells() != shells || mulliken.total_orbitals() != orbitals ||
+      mulliken.matrix_elements() != matrices || !mixer.sealed() ||
+      !mixer.matches_wavefunction_layout(wavefunction) || !driver.sealed() ||
+      driver.batch_size() != batch || driver.maximum_iterations() == 0u) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
+  }
+  if (!vector_matches(basis.atom_offsets, host_topology.atom_offsets, batch + 1) ||
+      !vector_matches(basis.batch_shell_offsets, host_topology.batch_shell_offsets, batch + 1) ||
+      !vector_matches(basis.batch_orbital_offsets, host_topology.batch_orbital_offsets,
+                      batch + 1) ||
+      !vector_matches(integrals.matrix_offsets, host_topology.matrix_offsets, batch + 1) ||
+      !vector_matches(basis.atom_shell_offsets, host_topology.atom_shell_offsets, atoms + 1) ||
+      !vector_matches(basis.shell_orbital_offsets, host_topology.shell_orbital_offsets,
+                      shells + 1) ||
+      !vector_matches(basis.shell_to_atom, host_topology.shell_to_atom, shells) ||
+      wavefunction.atom_offsets != basis.atom_offsets ||
+      wavefunction.batch_shell_offsets != basis.batch_shell_offsets ||
+      wavefunction.batch_orbital_offsets != basis.batch_orbital_offsets ||
+      es2.atom_offsets() != basis.atom_offsets ||
+      es2.batch_shell_offsets() != basis.batch_shell_offsets ||
+      es2.atom_shell_offsets() != basis.atom_shell_offsets ||
+      es2.shell_to_atom() != basis.shell_to_atom ||
+      spin.atom_offsets != basis.atom_offsets ||
+      spin.batch_shell_offsets != basis.batch_shell_offsets ||
+      spin.atom_shell_offsets != basis.atom_shell_offsets ||
+      spin.shell_population_offsets != wavefunction.qsh.system_offsets ||
+      spin.spin_channels != wavefunction.spin_channels ||
+      mulliken.atom_offsets() != basis.atom_offsets ||
+      mulliken.batch_shell_offsets() != basis.batch_shell_offsets ||
+      mulliken.batch_orbital_offsets() != basis.batch_orbital_offsets ||
+      mulliken.matrix_offsets() != integrals.matrix_offsets ||
+      mulliken.shell_orbital_offsets() != basis.shell_orbital_offsets ||
+      mulliken.shell_to_atom() != basis.shell_to_atom) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
+  }
+  if (!exact_vector(es2.matrix_offsets(), batch + 1) || es2.matrix_offsets().front() != 0 ||
+      es2.total_matrix_elements() <= 0 ||
+      es2.matrix_offsets().back() != es2.total_matrix_elements()) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kES2);
+  }
+
+  std::vector<std::int64_t> pair_offsets(static_cast<std::size_t>(batch) + 1u, 0);
+  std::int64_t total_pairs = 0;
+  for (std::int64_t system = 0; system < batch; ++system) {
+    const std::int64_t count = basis.atom_offsets[static_cast<std::size_t>(system + 1)] -
+                               basis.atom_offsets[static_cast<std::size_t>(system)];
+    if (count < 0 || count > 0x3fffffffLL) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kGeometry,
+                     system);
+    }
+    std::int64_t pairs = 0;
+    if (count > 1 && !checked_multiply(count, count - 1, pairs)) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kGeometry,
+                     system);
+    }
+    pairs /= 2;
+    if (total_pairs > std::numeric_limits<std::int64_t>::max() - pairs) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kGeometry,
+                     system);
+    }
+    total_pairs += pairs;
+    pair_offsets[static_cast<std::size_t>(system + 1)] = total_pairs;
+  }
+  std::int64_t atom_coordinates = 0;
+  std::int64_t geometry_pair_elements = 0;
+  if (!checked_multiply(atoms, 3, atom_coordinates) ||
+      !checked_multiply(total_pairs, kGfn2GeometryPairDataElements, geometry_pair_elements)) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kGeometry);
+  }
+  if (sources.geometry_generation == 0u || !exact_array(sources.atomic_numbers, atoms) ||
+      !exact_array(sources.positions, atom_coordinates) || !exact_array(sources.covalent_radii, atoms) ||
+      !exact_array(sources.geometry_cache.pair_data, geometry_pair_elements) ||
+      !exact_array(sources.geometry_cache.coordination_numbers, atoms) ||
+      !exact_array(sources.geometry_cache.system_generations, batch) ||
+      !std::all_of(sources.geometry_cache.system_generations.data,
+                   sources.geometry_cache.system_generations.data + batch,
+                   [&](std::uint64_t generation) { return generation == sources.geometry_generation; })) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
+  }
+  if (!exact_array(sources.h0, matrices) || !exact_array(sources.overlap, matrices) ||
+      sources.dipole_integrals.data != nullptr || sources.dipole_integrals.elements != 0 ||
+      sources.quadrupole_integrals.data != nullptr || sources.quadrupole_integrals.elements != 0) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kHamiltonian);
+  }
+  if (!exact_array(sources.es2_cache.coulomb_matrix, es2.total_matrix_elements())) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kES2);
+  }
+  const bool warm = sources.warm_start_generation != 0u;
+  if ((warm && !exact_array(sources.warm_start_generations, batch)) ||
+      (!warm && (sources.warm_start_generations.data != nullptr ||
+                 sources.warm_start_generations.elements != 0))) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
+  }
+  const bool valid_eigensolver_strategy =
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kAuto ||
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kBatchedDivideAndConquer ||
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kBatchedJacobi ||
+      sources.eigensolver_options.strategy == Gfn2EigensolverStrategy::kTridiagonalBisection;
+  if (!std::isfinite(sources.eigensolver_options.minimum_overlap_rcond) ||
+      !(sources.eigensolver_options.minimum_overlap_rcond > 0.0) ||
+      !std::isfinite(sources.eigensolver_options.symmetry_tolerance) ||
+      sources.eigensolver_options.symmetry_tolerance < 0.0 || !valid_eigensolver_strategy ||
+      sources.eigensolver_options.jacobi != nullptr) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kEigensolver);
+  }
+
+  const bool point_enabled = sources.point_charges.plan != nullptr;
+  const bool periodic_enabled = sources.periodic.plan != nullptr;
+  if (driver.periodic_embedding_enabled() != periodic_enabled) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
+  }
+  std::int64_t point_count = 0;
+  if (point_enabled) {
+    const auto& point = *sources.point_charges.plan;
+    point_count = point.total_point_charges;
+    std::int64_t point_coordinates = 0;
+    if (point.batch_size != batch || point.total_atoms != atoms || point.total_shells != shells ||
+        point.atom_offsets != basis.atom_offsets ||
+        point.batch_shell_offsets != basis.batch_shell_offsets ||
+        point.atom_shell_offsets != basis.atom_shell_offsets || point.shell_to_atom != basis.shell_to_atom ||
+        point.point_charge_offsets.size() != static_cast<std::size_t>(batch + 1) ||
+        point.point_charge_offsets.front() != 0 || point.point_charge_offsets.back() != point_count ||
+        point.shell_hardness.size() != static_cast<std::size_t>(shells) || point_count < 0 ||
+        !checked_multiply(point_count, 3, point_coordinates) ||
+        !exact_array(sources.point_charges.positions, point_coordinates) ||
+        !exact_array(sources.point_charges.charges, point_count) ||
+        !exact_array(sources.point_charges.hardnesses, point_count) ||
+        !exact_array(sources.point_charges.shell_potential_cache, shells)) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPointCharges);
+    }
+  } else if (sources.point_charges.positions.data != nullptr ||
+             sources.point_charges.positions.elements != 0 ||
+             sources.point_charges.charges.data != nullptr || sources.point_charges.charges.elements != 0 ||
+             sources.point_charges.hardnesses.data != nullptr ||
+             sources.point_charges.hardnesses.elements != 0 ||
+             sources.point_charges.shell_potential_cache.data != nullptr ||
+             sources.point_charges.shell_potential_cache.elements != 0) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPointCharges);
+  }
+
+  std::int64_t periodic_matrices = 0;
+  if (periodic_enabled) {
+    const auto& periodic = *sources.periodic.plan;
+    periodic_matrices = periodic.total_matrix_elements();
+    if (!periodic.sealed() || periodic.batch_size() != batch || periodic.total_atoms() != atoms ||
+        periodic.atom_offsets() != basis.atom_offsets || periodic_matrices < 0 ||
+        !exact_vector(periodic.matrix_offsets(), batch + 1) || periodic.matrix_offsets().front() != 0 ||
+        periodic.matrix_offsets().back() != periodic_matrices ||
+        !exact_array(sources.periodic.shifts, atoms) ||
+        !exact_array(sources.periodic.response_matrices, periodic_matrices)) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic);
+    }
+    for (std::int64_t system = 0; system < batch; ++system) {
+      const std::int64_t system_atoms = basis.atom_offsets[static_cast<std::size_t>(system + 1)] -
+                                        basis.atom_offsets[static_cast<std::size_t>(system)];
+      std::int64_t expected = 0;
+      if (!checked_multiply(system_atoms, system_atoms, expected) ||
+          periodic.matrix_offsets()[static_cast<std::size_t>(system + 1)] -
+                  periodic.matrix_offsets()[static_cast<std::size_t>(system)] != expected) {
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kPeriodic, system);
+      }
+    }
+  } else if (sources.periodic.shifts.data != nullptr || sources.periodic.shifts.elements != 0 ||
+             sources.periodic.response_matrices.data != nullptr ||
+             sources.periodic.response_matrices.elements != 0) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kPeriodic);
+  }
+
+  try {
+    std::unique_ptr<Impl> candidate(new (std::nothrow) Impl());
+    if (candidate == nullptr) {
+      return failure(XTBLOOM_STATUS_ALLOCATION_FAILED, Error::kAllocationFailed, Field::kArena);
+    }
+    candidate->model = XtbModelFlavor::kGfn1;
+    candidate->plan_token = plan_token;
+    candidate->geometry_generation = sources.geometry_generation;
+    candidate->warm_start_generation = sources.warm_start_generation;
+    candidate->batch_size = batch;
+    candidate->total_atoms = atoms;
+    candidate->total_shells = shells;
+    candidate->total_orbitals = orbitals;
+    candidate->total_matrix_elements = matrices;
+    candidate->es2_matrix_elements = es2.total_matrix_elements();
+    candidate->total_pairs = total_pairs;
+    candidate->minimum_atoms = minimum_partition(host_topology.atom_offsets, batch);
+    candidate->maximum_atoms = maximum_partition(host_topology.atom_offsets, batch);
+    candidate->maximum_shells = maximum_partition(host_topology.batch_shell_offsets, batch);
+    candidate->mixer_history = mixer.history_size();
+    candidate->maximum_iterations = driver.maximum_iterations();
+    candidate->mixer_damping = mixer.damping();
+    candidate->residual_tolerance = mixer.rms_tolerance();
+    candidate->mixer_maximum_tolerance = mixer.maximum_tolerance();
+    candidate->energy_tolerance = driver.energy_tolerance();
+    candidate->electronic_temperature = driver.electronic_temperature();
+    candidate->eigensolver_options = sources.eigensolver_options;
+    candidate->host_topology = host_topology;
+    candidate->host_wavefunction.memory_space = Gfn2PlanMemorySpace::kHost;
+    candidate->host_wavefunction.plan_token = plan_token;
+    candidate->host_wavefunction.batch_size = batch;
+    candidate->host_wavefunction.total_spin_channels = std::accumulate(
+        wavefunction.spin_channels.begin(), wavefunction.spin_channels.end(), std::int64_t{0});
+    candidate->host_wavefunction.total_spin_orbitals = wavefunction.eigenvalues.element_count;
+    candidate->host_wavefunction.total_spin_matrix_elements = wavefunction.density.element_count;
+    candidate->host_wavefunction.total_spin_shells = wavefunction.qsh.element_count;
+    candidate->host_wavefunction.total_spin_atoms = wavefunction.qat.element_count;
+    candidate->host_wavefunction.spin_channel_count = batch;
+    candidate->host_wavefunction.spin_channel_offset_count = batch + 1;
+    candidate->host_wavefunction.spin_orbital_offset_count = batch + 1;
+    candidate->host_wavefunction.spin_matrix_offset_count = batch + 1;
+    candidate->host_wavefunction.spin_shell_offset_count = batch + 1;
+    candidate->host_wavefunction.spin_atom_offset_count = batch + 1;
+    std::vector<std::int64_t> spin_channel_offsets(static_cast<std::size_t>(batch) + 1u, 0);
+    for (std::int64_t system = 0; system < batch; ++system) {
+      const std::int32_t channels = wavefunction.spin_channels[static_cast<std::size_t>(system)];
+      if ((channels != 1 && channels != 2) ||
+          spin_channel_offsets[static_cast<std::size_t>(system)] >
+              std::numeric_limits<std::int64_t>::max() - channels) {
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource,
+                       Field::kRequiredPlans, system);
+      }
+      spin_channel_offsets[static_cast<std::size_t>(system + 1)] =
+          spin_channel_offsets[static_cast<std::size_t>(system)] + channels;
+    }
+    Gfn2WavefunctionLayoutView fingerprint_view = candidate->host_wavefunction;
+    fingerprint_view.spin_channels = wavefunction.spin_channels.data();
+    fingerprint_view.spin_channel_offsets = spin_channel_offsets.data();
+    fingerprint_view.spin_orbital_offsets = wavefunction.eigenvalues.system_offsets.data();
+    fingerprint_view.spin_matrix_offsets = wavefunction.density.system_offsets.data();
+    fingerprint_view.spin_shell_offsets = wavefunction.qsh.system_offsets.data();
+    fingerprint_view.spin_atom_offsets = wavefunction.qat.system_offsets.data();
+    candidate->host_wavefunction.layout_fingerprint =
+        gfn2_wavefunction_layout_fingerprint_host(fingerprint_view);
+    if (candidate->host_wavefunction.layout_fingerprint == 0u) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
+    }
+    candidate->spin_coupling_matrix_count =
+        spin.coupling_offsets.empty() ? 0 : spin.coupling_offsets.back();
+    if (spin.coupling_offsets.size() != static_cast<std::size_t>(atoms + 1) ||
+        candidate->spin_coupling_matrix_count <= 0 ||
+        static_cast<std::size_t>(candidate->spin_coupling_matrix_count) !=
+            spin.coupling_matrices.size()) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
+    }
+    candidate->mixer_vector_elements = candidate->host_wavefunction.total_spin_shells;
+    candidate->d4_enabled = false;
+    candidate->point_enabled = point_enabled;
+    candidate->periodic_enabled = periodic_enabled;
+    candidate->point_count = point_count;
+    candidate->periodic_matrix_elements = periodic_matrices;
+    candidate->enabled_components =
+        static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
+        static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
+        (point_enabled ? static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kExplicitPointCharge)
+                       : 0u) |
+        (periodic_enabled
+             ? static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kPeriodicEmbedding)
+             : 0u);
+    if (!candidate->make_layout()) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kArena);
+    }
+
+    cudaError_t cuda_status = cudaMallocHost(&candidate->upload_image, candidate->layout.total_bytes);
+    if (cuda_status != cudaSuccess) {
+      Gfn2SccSetupInputsDiagnostic diagnostic = failure(
+          cuda_status == cudaErrorMemoryAllocation ? XTBLOOM_STATUS_ALLOCATION_FAILED
+                                                   : XTBLOOM_STATUS_INTERNAL_ERROR,
+          cuda_status == cudaErrorMemoryAllocation ? Error::kAllocationFailed : Error::kCudaError,
+          Field::kArena);
+      diagnostic.required_bytes = candidate->layout.total_bytes;
+      diagnostic.cuda_status = cuda_status;
+      return diagnostic;
+    }
+    auto* const image = static_cast<std::byte*>(candidate->upload_image);
+    std::memset(image, 0, candidate->layout.total_bytes);
+
+    Gfn2SccSetupHostArray<std::int64_t> pair_offset_view{pair_offsets.data(), batch + 1};
+    std::vector<std::int64_t> physical_dipole_offsets(static_cast<std::size_t>(batch) + 1u);
+    std::vector<std::int64_t> physical_quadrupole_offsets(static_cast<std::size_t>(batch) + 1u);
+    for (std::int64_t system = 0; system <= batch; ++system) {
+      if (!checked_multiply(basis.atom_offsets[static_cast<std::size_t>(system)], 3,
+                            physical_dipole_offsets[static_cast<std::size_t>(system)]) ||
+          !checked_multiply(basis.atom_offsets[static_cast<std::size_t>(system)], 6,
+                            physical_quadrupole_offsets[static_cast<std::size_t>(system)])) {
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kHamiltonian);
+      }
+    }
+    Gfn2SccSetupHostArray<std::int64_t> dipole_offsets{physical_dipole_offsets.data(), batch + 1};
+    Gfn2SccSetupHostArray<std::int64_t> quadrupole_offsets{physical_quadrupole_offsets.data(),
+                                                           batch + 1};
+    Gfn2SccSetupHostArray<double> es2_hardness{es2.shell_hardness().data(), shells};
+    Gfn2SccSetupHostArray<std::int64_t> es2_matrix_offsets{es2.matrix_offsets().data(), batch + 1};
+    std::vector<double> es3_shell_gamma(static_cast<std::size_t>(shells), 0.0);
+    for (std::int64_t shell = 0; shell < shells; ++shell) {
+      const std::int64_t atom = basis.shell_to_atom[static_cast<std::size_t>(shell)];
+      if (atom < 0 || atom >= atoms) {
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans,
+                       shell);
+      }
+      es3_shell_gamma[static_cast<std::size_t>(shell)] =
+          es3.atom_gamma3[static_cast<std::size_t>(atom)];
+    }
+    Gfn2SccSetupHostArray<double> es3_gamma{es3_shell_gamma.data(), shells};
+    Gfn2SccSetupHostArray<double> reference_occupations{
+        mulliken.reference_shell_occupations().data(), shells};
+    std::vector<double> electron_counts(static_cast<std::size_t>(2 * batch));
+    std::vector<double> temperatures(static_cast<std::size_t>(batch),
+                                     driver.electronic_temperature());
+    for (std::int64_t system = 0; system < batch; ++system) {
+      electron_counts[static_cast<std::size_t>(2 * system)] =
+          wavefunction.alpha_electron_counts[static_cast<std::size_t>(system)];
+      electron_counts[static_cast<std::size_t>(2 * system + 1)] =
+          wavefunction.beta_electron_counts[static_cast<std::size_t>(system)];
+    }
+
+    pack_array(image, candidate->layout.pair_offsets, pair_offset_view);
+    pack_array(image, candidate->layout.covalent_radii, sources.covalent_radii);
+    pack_array(image, candidate->layout.positions, sources.positions);
+    pack_array(image, candidate->layout.atomic_numbers, sources.atomic_numbers);
+    if (project_gfn2_element_identity_projection_host(sources.atomic_numbers.data,
+                                                      sources.atomic_numbers.elements, plan_token,
+                                                      candidate->host_element_identity)
+            .error != Gfn2PlanSchemaError::kSuccess) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kRequiredPlans);
+    }
+    pack_array(image, candidate->layout.h0, sources.h0);
+    pack_array(image, candidate->layout.overlap, sources.overlap);
+    /* dipole/quadrupole operator segments intentionally stay zero-filled. */
+    pack_vector(image, candidate->layout.spin_coupling_offsets, spin.coupling_offsets);
+    pack_vector(image, candidate->layout.spin_coupling_matrices, spin.coupling_matrices);
+    pack_array(image, candidate->layout.dipole_offsets, dipole_offsets);
+    pack_array(image, candidate->layout.quadrupole_offsets, quadrupole_offsets);
+    pack_array(image, candidate->layout.es2_matrix_offsets, es2_matrix_offsets);
+    pack_array(image, candidate->layout.es2_shell_hardness, es2_hardness);
+    pack_array(image, candidate->layout.es3_shell_gamma3, es3_gamma);
+    pack_array(image, candidate->layout.mulliken_reference_occupations, reference_occupations);
+    pack_vector(image, candidate->layout.electron_counts, electron_counts);
+    pack_vector(image, candidate->layout.temperatures, temperatures);
+    pack_array(image, candidate->layout.geometry_pair_data, sources.geometry_cache.pair_data);
+    pack_array(image, candidate->layout.geometry_coordination,
+               sources.geometry_cache.coordination_numbers);
+    pack_array(image, candidate->layout.geometry_generations,
+               sources.geometry_cache.system_generations);
+    pack_array(image, candidate->layout.es2_coulomb_matrix, sources.es2_cache.coulomb_matrix);
+    if (point_enabled) {
+      const auto& point = *sources.point_charges.plan;
+      Gfn2SccSetupHostArray<std::int64_t> offsets{point.point_charge_offsets.data(), batch + 1};
+      Gfn2SccSetupHostArray<double> hardness{point.shell_hardness.data(), shells};
+      pack_array(image, candidate->layout.point_charge_offsets, offsets);
+      pack_array(image, candidate->layout.point_shell_hardness, hardness);
+      pack_array(image, candidate->layout.point_positions, sources.point_charges.positions);
+      pack_array(image, candidate->layout.point_charges, sources.point_charges.charges);
+      pack_array(image, candidate->layout.point_hardnesses, sources.point_charges.hardnesses);
+      pack_array(image, candidate->layout.point_shell_cache,
+                 sources.point_charges.shell_potential_cache);
+    }
+    if (periodic_enabled) {
+      const auto& periodic = *sources.periodic.plan;
+      Gfn2SccSetupHostArray<std::int64_t> offsets{periodic.matrix_offsets().data(), batch + 1};
+      pack_array(image, candidate->layout.periodic_matrix_offsets, offsets);
+      pack_array(image, candidate->layout.periodic_shifts, sources.periodic.shifts);
+      pack_array(image, candidate->layout.periodic_response, sources.periodic.response_matrices);
+    }
+    if (warm) {
+      pack_array(image, candidate->layout.warm_start_generations, sources.warm_start_generations);
+    }
+
+    Gfn2SccSetupInputs replacement;
+    replacement.impl_ = std::move(candidate);
+    output = std::move(replacement);
+    return {};
+  } catch (const std::bad_alloc&) {
+    return failure(XTBLOOM_STATUS_ALLOCATION_FAILED, Error::kAllocationFailed, Field::kArena);
+  } catch (...) {
+    return failure(XTBLOOM_STATUS_INTERNAL_ERROR, Error::kInvalidSource, Field::kArena);
+  }
+}
+
 bool Gfn2SccSetupInputs::valid() const noexcept { return impl_ != nullptr; }
 
 std::size_t Gfn2SccSetupInputs::retained_host_bytes() const noexcept {
@@ -956,6 +1391,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
   Gfn2SccIterationDevicePlan candidate{};
   candidate.abi_version = kGfn2SccIterationAbiVersion;
   candidate.enabled_components = impl_->enabled_components;
+  candidate.model = impl_->model;
   candidate.plan_token = token;
   candidate.geometry_generation = impl_->geometry_generation;
   candidate.topology = device_topology;
@@ -1008,7 +1444,8 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
   candidate.state_policy = {impl_->maximum_iterations, impl_->residual_tolerance,
                             impl_->energy_tolerance, token};
   candidate.mixer_policy = {impl_->mixer_history, impl_->mixer_damping, impl_->residual_tolerance,
-                            impl_->mixer_maximum_tolerance, token};
+                            impl_->mixer_maximum_tolerance, token,
+                            impl_->model == XtbModelFlavor::kGfn1 ? 0 : 9};
 
   candidate.geometry_batch = {batch,
                               atoms,
@@ -1021,6 +1458,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
                               device_topology.atom_offsets,
                               cptr(impl_->layout.pair_offsets, static_cast<std::int64_t*>(nullptr)),
                               cptr(impl_->layout.covalent_radii, static_cast<double*>(nullptr))};
+  candidate.geometry_batch.model = impl_->model;
   candidate.geometry_cache = {
       mptr(impl_->layout.geometry_pair_data, static_cast<double*>(nullptr)),
       impl_->layout.geometry_pair_data.elements,
@@ -1103,6 +1541,16 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
                          device_topology.batch_shell_offsets,
                          cptr(impl_->layout.es3_shell_gamma3, static_cast<double*>(nullptr)),
                          token};
+  candidate.es3_batch.model = impl_->model;
+  if (impl_->model == XtbModelFlavor::kGfn1) {
+    candidate.es3_batch.total_atoms = atoms;
+    candidate.es3_batch.atom_offset_count = batch + 1;
+    candidate.es3_batch.atom_shell_offset_count = atoms + 1;
+    candidate.es3_batch.shell_to_atom_count = shells;
+    candidate.es3_batch.atom_offsets = device_topology.atom_offsets;
+    candidate.es3_batch.atom_shell_offsets = device_topology.atom_shell_offsets;
+    candidate.es3_batch.shell_to_atom = device_topology.shell_to_atom;
+  }
   candidate.aes2_batch = {
       batch,
       atoms,
@@ -1179,6 +1627,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
         cptr(impl_->layout.point_charges, static_cast<double*>(nullptr)),
         cptr(impl_->layout.point_hardnesses, static_cast<double*>(nullptr)),
         token};
+    candidate.explicit_point_charge_batch.model = impl_->model;
     candidate.explicit_point_charge_cache = {
         mptr(impl_->layout.point_shell_cache, static_cast<double*>(nullptr)), shells,
         impl_->geometry_generation, token};
@@ -1352,7 +1801,9 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
   geometry.owner_stage = Gfn2SccStageId::kGeometry;
   records[record_count++] = geometry;
   batch_provenance(Gfn2SccStageId::kES2Potential);
-  batch_provenance(Gfn2SccStageId::kAES2Potential);
+  if (impl_->model == XtbModelFlavor::kGfn2) {
+    batch_provenance(Gfn2SccStageId::kAES2Potential);
+  }
   if (impl_->d4_enabled) {
     batch_provenance(Gfn2SccStageId::kD4Potential);
   }

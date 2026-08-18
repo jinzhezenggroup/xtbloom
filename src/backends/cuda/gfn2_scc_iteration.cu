@@ -15,10 +15,16 @@ namespace {
 using BindingError = Gfn2SccIterationBindingError;
 using BindingField = Gfn2SccIterationBindingField;
 
-constexpr std::uint32_t kMandatoryPotentialComponents =
+constexpr std::uint32_t kCommonMandatoryPotentialComponents =
     static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
-    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
-    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
+    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3);
+
+constexpr std::uint32_t mandatory_potential_components(XtbModelFlavor model) noexcept {
+  return kCommonMandatoryPotentialComponents |
+         (model == XtbModelFlavor::kGfn2
+              ? static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2)
+              : 0u);
+}
 
 /* These exact aliases cross descriptor families, so they cannot use the
  * per-function monotonically assigned groups below. Keep their identities
@@ -443,8 +449,10 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   XTBLOOM_CHECK_TOKEN(plan.es2_batch.plan_token, BindingField::kES2);
   XTBLOOM_CHECK_TOKEN(plan.es2_cache.plan_token, BindingField::kES2);
   XTBLOOM_CHECK_TOKEN(plan.es3_batch.plan_token, BindingField::kES3);
-  XTBLOOM_CHECK_TOKEN(plan.aes2_batch.plan_token, BindingField::kAES2);
-  XTBLOOM_CHECK_TOKEN(plan.aes2_cache.plan_token, BindingField::kAES2);
+  if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) {
+    XTBLOOM_CHECK_TOKEN(plan.aes2_batch.plan_token, BindingField::kAES2);
+    XTBLOOM_CHECK_TOKEN(plan.aes2_cache.plan_token, BindingField::kAES2);
+  }
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
     XTBLOOM_CHECK_TOKEN(plan.d4_batch.plan_token, BindingField::kD4);
     XTBLOOM_CHECK_TOKEN(plan.d4_pairlist_cache.plan_token, BindingField::kD4);
@@ -582,8 +590,11 @@ bool validate_top_level_shape(const Gfn2SccIterationDevicePlan& plan, Validator&
   }
   const std::uint32_t invalid_components =
       plan.enabled_components & ~kGfn2SccPotentialAllComponents;
-  if (invalid_components != 0u ||
-      (plan.enabled_components & kMandatoryPotentialComponents) != kMandatoryPotentialComponents) {
+  const std::uint32_t mandatory = mandatory_potential_components(plan.model);
+  if (!valid_xtb_model_flavor(plan.model) || invalid_components != 0u ||
+      (plan.enabled_components & mandatory) != mandatory ||
+      (plan.model == XtbModelFlavor::kGfn1 &&
+       component_enabled(plan, Gfn2SccPotentialComponent::kAES2))) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kPlan);
   }
   if (plan.topology.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
@@ -609,7 +620,12 @@ bool validate_top_level_shape(const Gfn2SccIterationDevicePlan& plan, Validator&
     return validator.fail(BindingError::kInvalidCount, BindingField::kTopology);
   }
   std::int64_t atom_multipoles = 0;
-  if (!checked_multiply(plan.wavefunction_layout.total_spin_atoms, 9, atom_multipoles) ||
+  if ((plan.mixer_policy.atomic_multipole_components != 0 &&
+       plan.mixer_policy.atomic_multipole_components != 9) ||
+      !checked_multiply(
+          plan.wavefunction_layout.total_spin_atoms,
+          static_cast<std::int64_t>(plan.mixer_policy.atomic_multipole_components),
+          atom_multipoles) ||
       !checked_add(plan.wavefunction_layout.total_spin_shells, atom_multipoles, mixer_vector)) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kMixer);
   }
@@ -804,8 +820,9 @@ bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& val
       !exact(plan.es2_batch.total_shells, shells, BindingField::kES2) ||
       !exact(plan.es3_batch.batch_size, batch, BindingField::kES3) ||
       !exact(plan.es3_batch.total_shells, shells, BindingField::kES3) ||
-      !exact(plan.aes2_batch.batch_size, batch, BindingField::kAES2) ||
-      !exact(plan.aes2_batch.total_atoms, atoms, BindingField::kAES2)) {
+      (component_enabled(plan, Gfn2SccPotentialComponent::kAES2) &&
+       (!exact(plan.aes2_batch.batch_size, batch, BindingField::kAES2) ||
+        !exact(plan.aes2_batch.total_atoms, atoms, BindingField::kAES2)))) {
     return false;
   }
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody) &&
@@ -991,26 +1008,28 @@ bool validate_plan_pointer_shapes(const Gfn2SccIterationDevicePlan& plan,
     return false;
   }
 
-  const auto& aes2 = plan.aes2_batch;
-  if (!exact(aes2.atom_offset_count, batch + 1, BindingField::kAES2) ||
-      !exact(aes2.pair_offset_count, batch + 1, BindingField::kAES2) ||
-      !exact(aes2.dipole_kernel_count, atoms, BindingField::kAES2) ||
-      !exact(aes2.quadrupole_kernel_count, atoms, BindingField::kAES2) ||
-      !exact(aes2.multipole_radius_count, atoms, BindingField::kAES2) ||
-      !exact(aes2.multipole_valence_cn_count, atoms, BindingField::kAES2) ||
-      !aligned(aes2.atom_offsets, batch + 1, sizeof(std::int64_t), alignof(std::int64_t),
-               BindingField::kAES2, 0) ||
-      !aligned(aes2.pair_offsets, batch + 1, sizeof(std::int64_t), alignof(std::int64_t),
-               BindingField::kAES2, 1) ||
-      !aligned(aes2.dipole_kernel, atoms, sizeof(double), alignof(double), BindingField::kAES2,
-               2) ||
-      !aligned(aes2.quadrupole_kernel, atoms, sizeof(double), alignof(double), BindingField::kAES2,
-               3) ||
-      !aligned(aes2.multipole_radius, atoms, sizeof(double), alignof(double), BindingField::kAES2,
-               4) ||
-      !aligned(aes2.multipole_valence_cn, atoms, sizeof(double), alignof(double),
-               BindingField::kAES2, 5)) {
-    return false;
+  if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) {
+    const auto& aes2 = plan.aes2_batch;
+    if (!exact(aes2.atom_offset_count, batch + 1, BindingField::kAES2) ||
+        !exact(aes2.pair_offset_count, batch + 1, BindingField::kAES2) ||
+        !exact(aes2.dipole_kernel_count, atoms, BindingField::kAES2) ||
+        !exact(aes2.quadrupole_kernel_count, atoms, BindingField::kAES2) ||
+        !exact(aes2.multipole_radius_count, atoms, BindingField::kAES2) ||
+        !exact(aes2.multipole_valence_cn_count, atoms, BindingField::kAES2) ||
+        !aligned(aes2.atom_offsets, batch + 1, sizeof(std::int64_t), alignof(std::int64_t),
+                 BindingField::kAES2, 0) ||
+        !aligned(aes2.pair_offsets, batch + 1, sizeof(std::int64_t), alignof(std::int64_t),
+                 BindingField::kAES2, 1) ||
+        !aligned(aes2.dipole_kernel, atoms, sizeof(double), alignof(double), BindingField::kAES2,
+                 2) ||
+        !aligned(aes2.quadrupole_kernel, atoms, sizeof(double), alignof(double),
+                 BindingField::kAES2, 3) ||
+        !aligned(aes2.multipole_radius, atoms, sizeof(double), alignof(double), BindingField::kAES2,
+                 4) ||
+        !aligned(aes2.multipole_valence_cn, atoms, sizeof(double), alignof(double),
+                 BindingField::kAES2, 5)) {
+      return false;
+    }
   }
 
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
@@ -1174,7 +1193,8 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
     return false;
   }
   if (!same(plan.geometry_batch.atom_offsets, atom.atom_offsets, BindingField::kGeometry) ||
-      !same(plan.aes2_batch.atom_offsets, atom.atom_offsets, BindingField::kAES2)) {
+      (component_enabled(plan, Gfn2SccPotentialComponent::kAES2) &&
+       !same(plan.aes2_batch.atom_offsets, atom.atom_offsets, BindingField::kAES2))) {
     return false;
   }
 
@@ -1315,10 +1335,12 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
    * keep their setup-owned distinct pair offsets). */
   if (plan.topology.pair_map_kind == Gfn2PairMapKind::kPackedLowerTriangle) {
     if (!same(plan.geometry_batch.pair_offsets, pairs.pair_offsets, BindingField::kGeometry) ||
-        !same(plan.aes2_batch.pair_offsets, pairs.pair_offsets, BindingField::kAES2)) {
+        (component_enabled(plan, Gfn2SccPotentialComponent::kAES2) &&
+         !same(plan.aes2_batch.pair_offsets, pairs.pair_offsets, BindingField::kAES2))) {
       return false;
     }
-  } else if (!same(plan.aes2_batch.pair_offsets, plan.geometry_batch.pair_offsets,
+  } else if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2) &&
+             !same(plan.aes2_batch.pair_offsets, plan.geometry_batch.pair_offsets,
                    BindingField::kAES2)) {
     /* Production plans currently use kNone and a setup-owned dense pair
      * partition.  Geometry is the authority for that non-topology domain. */
@@ -2688,32 +2710,35 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
     return false;
   }
 
-  std::int64_t aes2_pair_elements = 0;
-  std::int64_t aes2_potential_elements = 0;
-  if (!checked_multiply(plan.aes2_batch.total_pairs, kGfn2AES2PairDataElements,
-                        aes2_pair_elements) ||
-      !checked_multiply(atoms, kGfn2AES2PotentialElementsPerAtom, aes2_potential_elements) ||
-      !exact(plan.aes2_cache.pair_data_elements, aes2_pair_elements, BindingField::kAES2) ||
-      !read(plan.aes2_cache.pair_data, aes2_pair_elements, sizeof(double), alignof(double),
-            BindingField::kAES2, 0) ||
-      !scratch(workspace.aes2_workspace.pair_scratch, workspace.aes2_workspace.pair_elements,
-               aes2_pair_elements, sizeof(double), alignof(double), BindingField::kAES2, 1) ||
-      !scratch(workspace.aes2_workspace.potential_scratch,
-               workspace.aes2_workspace.potential_elements, aes2_potential_elements, sizeof(double),
-               alignof(double), BindingField::kAES2, 2) ||
-      !scratch(workspace.aes2_workspace.batch_scratch, workspace.aes2_workspace.batch_elements,
-               batch, sizeof(double), alignof(double), BindingField::kAES2, 3) ||
-      !scratch(workspace.aes2_workspace.gradient_scratch,
-               workspace.aes2_workspace.gradient_elements, dipoles, sizeof(double), alignof(double),
-               BindingField::kAES2, 4) ||
-      !scratch(workspace.aes2_workspace.coordination_scratch,
-               workspace.aes2_workspace.coordination_elements, atoms, sizeof(double),
-               alignof(double), BindingField::kAES2, 5) ||
-      !scratch(workspace.aes2_workspace.scc_peer_error_scratch,
-               workspace.aes2_workspace.scc_peer_error_elements, 1, sizeof(std::uint32_t),
-               alignof(std::uint32_t), BindingField::kAES2, 6)) {
-    return false;
+  if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) {
+    std::int64_t aes2_pair_elements = 0;
+    std::int64_t aes2_potential_elements = 0;
+    if (!checked_multiply(plan.aes2_batch.total_pairs, kGfn2AES2PairDataElements,
+                          aes2_pair_elements) ||
+        !checked_multiply(atoms, kGfn2AES2PotentialElementsPerAtom, aes2_potential_elements) ||
+        !exact(plan.aes2_cache.pair_data_elements, aes2_pair_elements, BindingField::kAES2) ||
+        !read(plan.aes2_cache.pair_data, aes2_pair_elements, sizeof(double), alignof(double),
+              BindingField::kAES2, 0) ||
+        !scratch(workspace.aes2_workspace.pair_scratch, workspace.aes2_workspace.pair_elements,
+                 aes2_pair_elements, sizeof(double), alignof(double), BindingField::kAES2, 1) ||
+        !scratch(workspace.aes2_workspace.potential_scratch,
+                 workspace.aes2_workspace.potential_elements, aes2_potential_elements, sizeof(double),
+                 alignof(double), BindingField::kAES2, 2) ||
+        !scratch(workspace.aes2_workspace.batch_scratch, workspace.aes2_workspace.batch_elements,
+                 batch, sizeof(double), alignof(double), BindingField::kAES2, 3) ||
+        !scratch(workspace.aes2_workspace.gradient_scratch,
+                 workspace.aes2_workspace.gradient_elements, dipoles, sizeof(double), alignof(double),
+                 BindingField::kAES2, 4) ||
+        !scratch(workspace.aes2_workspace.coordination_scratch,
+                 workspace.aes2_workspace.coordination_elements, atoms, sizeof(double),
+                 alignof(double), BindingField::kAES2, 5) ||
+        !scratch(workspace.aes2_workspace.scc_peer_error_scratch,
+                 workspace.aes2_workspace.scc_peer_error_elements, 1, sizeof(std::uint32_t),
+                 alignof(std::uint32_t), BindingField::kAES2, 6)) {
+      return false;
+    }
   }
+
 
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
     std::int64_t weights = 0;
@@ -3419,25 +3444,27 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
       return failure;
     }
 
-    stage_report = report(Gfn2SccStageId::kAES2Potential);
-    if (!begin_stage(stage_report) ||
-        !check_cuda(stage_report->stage,
-                    reset_gfn2_aes2_device_errors_cuda(
-                        plan.topology.batch_size, mutable_system_codes(*stage_report),
-                        mutable_device_error(*stage_report), stream)) ||
-        !check_cuda(stage_report->stage,
-                    evaluate_gfn2_aes2_scc_potential_cuda(
-                        plan.aes2_batch, plan.aes2_cache, plan.geometry_generation,
-                        workspace.activity, workspace.physical_topology.atomic_charges,
-                        workspace.physical_topology.atomic_dipoles,
-                        workspace.physical_topology.atomic_quadrupoles,
-                        workspace.components.aes2_atomic_potential,
-                        workspace.components.aes2_dipole_potential,
-                        workspace.components.aes2_quadrupole_potential, workspace.aes2_workspace,
-                        mutable_system_codes(*stage_report), mutable_device_error(*stage_report),
-                        stream)) ||
-        !finish_stage(*stage_report)) {
-      return failure;
+    if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) {
+      stage_report = report(Gfn2SccStageId::kAES2Potential);
+      if (!begin_stage(stage_report) ||
+          !check_cuda(stage_report->stage,
+                      reset_gfn2_aes2_device_errors_cuda(
+                          plan.topology.batch_size, mutable_system_codes(*stage_report),
+                          mutable_device_error(*stage_report), stream)) ||
+          !check_cuda(stage_report->stage,
+                      evaluate_gfn2_aes2_scc_potential_cuda(
+                          plan.aes2_batch, plan.aes2_cache, plan.geometry_generation,
+                          workspace.activity, workspace.physical_topology.atomic_charges,
+                          workspace.physical_topology.atomic_dipoles,
+                          workspace.physical_topology.atomic_quadrupoles,
+                          workspace.components.aes2_atomic_potential,
+                          workspace.components.aes2_dipole_potential,
+                          workspace.components.aes2_quadrupole_potential, workspace.aes2_workspace,
+                          mutable_system_codes(*stage_report), mutable_device_error(*stage_report),
+                          stream)) ||
+          !finish_stage(*stage_report)) {
+        return failure;
+      }
     }
 
     if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
@@ -3736,24 +3763,27 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
     return failure;
   }
 
-  stage_report = report(Gfn2SccStageId::kAES2RawEnergy);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_aes2_device_errors_cuda(
-                      plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(
-          stage_report->stage,
-          evaluate_gfn2_aes2_scc_energy_cuda(
-              plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, workspace.activity,
-              workspace.physical_topology.atomic_charges,
-              workspace.physical_topology.atomic_dipoles,
-              workspace.physical_topology.atomic_quadrupoles, workspace.components.aes2_energy,
-              workspace.aes2_workspace, mutable_system_codes(*stage_report),
-              mutable_device_error(*stage_report), stream)) ||
-      !finish_stage(*stage_report)) {
-    return failure;
+  if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) {
+    stage_report = report(Gfn2SccStageId::kAES2RawEnergy);
+    if (!begin_stage(stage_report) ||
+        !check_cuda(stage_report->stage,
+                    reset_gfn2_aes2_device_errors_cuda(
+                        plan.topology.batch_size, mutable_system_codes(*stage_report),
+                        mutable_device_error(*stage_report), stream)) ||
+        !check_cuda(
+            stage_report->stage,
+            evaluate_gfn2_aes2_scc_energy_cuda(
+                plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, workspace.activity,
+                workspace.physical_topology.atomic_charges,
+                workspace.physical_topology.atomic_dipoles,
+                workspace.physical_topology.atomic_quadrupoles, workspace.components.aes2_energy,
+                workspace.aes2_workspace, mutable_system_codes(*stage_report),
+                mutable_device_error(*stage_report), stream)) ||
+        !finish_stage(*stage_report)) {
+      return failure;
+    }
   }
+
 
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
     stage_report = report(Gfn2SccStageId::kD4RawEnergy);

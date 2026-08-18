@@ -727,6 +727,89 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(const BasisPlan& bas
   }
 }
 
+Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(
+    const gfn1::BasisPlan& basis, const gfn1::IntegralPlan& integrals,
+    const gfn1::WavefunctionLayout& wavefunction, std::uint64_t plan_token,
+    Gfn2SccSetupTopology& output) noexcept {
+  /* The common topology validator consumes only field partitions and electronic
+   * counts. Build an ephemeral GFN2-shaped descriptor from GFN1's authoritative
+   * scalar layout. The synthetic dipole/quadrupole partitions are topology-only
+   * scratch domains and never become GFN1 SCC variables. */
+  try {
+    gfn2::WavefunctionLayout projected;
+    projected.batch_size = wavefunction.batch_size;
+    projected.total_atoms = wavefunction.total_atoms;
+    projected.total_shells = wavefunction.total_shells;
+    projected.total_orbitals = wavefunction.total_orbitals;
+    projected.atom_offsets = wavefunction.atom_offsets;
+    projected.batch_shell_offsets = wavefunction.batch_shell_offsets;
+    projected.batch_orbital_offsets = wavefunction.batch_orbital_offsets;
+    projected.atomic_numbers = wavefunction.atomic_numbers;
+    projected.molecular_charges = wavefunction.molecular_charges;
+    projected.unpaired_electrons = wavefunction.unpaired_electrons;
+    projected.spin_channels = wavefunction.spin_channels;
+    projected.reference_atom_occupations = wavefunction.reference_atom_occupations;
+    projected.reference_shell_occupations = wavefunction.reference_shell_occupations;
+    projected.electron_counts = wavefunction.electron_counts;
+    projected.alpha_electron_counts = wavefunction.alpha_electron_counts;
+    projected.beta_electron_counts = wavefunction.beta_electron_counts;
+
+    const auto copy_field = [](const gfn1::WavefunctionFieldLayout& source,
+                               gfn2::WavefunctionFieldLayout& destination) {
+      destination.offset_bytes = source.offset_bytes;
+      destination.size_bytes = source.size_bytes;
+      destination.element_count = source.element_count;
+      destination.system_offsets = source.system_offsets;
+    };
+    copy_field(wavefunction.coefficients, projected.coefficients);
+    copy_field(wavefunction.eigenvalues, projected.eigenvalues);
+    copy_field(wavefunction.occupations, projected.occupations);
+    copy_field(wavefunction.density, projected.density);
+    copy_field(wavefunction.qsh, projected.qsh);
+    copy_field(wavefunction.qat, projected.qat);
+    copy_field(wavefunction.energy_weighted_density, projected.energy_weighted_density);
+
+    const std::size_t systems = static_cast<std::size_t>(wavefunction.batch_size);
+    projected.dipole.system_offsets.assign(systems + 1u, 0);
+    projected.quadrupole.system_offsets.assign(systems + 1u, 0);
+    for (std::size_t system = 0; system < systems; ++system) {
+      const std::int64_t atoms = wavefunction.atom_offsets[system + 1u] -
+                                 wavefunction.atom_offsets[system];
+      const std::int64_t channels = wavefunction.spin_channels[system];
+      std::int64_t spin_atoms = 0;
+      std::int64_t dipoles = 0;
+      std::int64_t quadrupoles = 0;
+      if (!checked_multiply(atoms, channels, spin_atoms) ||
+          !checked_multiply(spin_atoms, 3, dipoles) ||
+          !checked_multiply(spin_atoms, gfn2::kWavefunctionQuadrupoleComponents, quadrupoles) ||
+          projected.dipole.system_offsets[system] >
+              std::numeric_limits<std::int64_t>::max() - dipoles ||
+          projected.quadrupole.system_offsets[system] >
+              std::numeric_limits<std::int64_t>::max() - quadrupoles) {
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT,
+                       Gfn2SccSetupTopologyError::kCountOverflow,
+                       Gfn2SccSetupTopologyField::kWavefunction,
+                       static_cast<std::int64_t>(system));
+      }
+      projected.dipole.system_offsets[system + 1u] =
+          projected.dipole.system_offsets[system] + dipoles;
+      projected.quadrupole.system_offsets[system + 1u] =
+          projected.quadrupole.system_offsets[system] + quadrupoles;
+    }
+    projected.dipole.element_count = projected.dipole.system_offsets.back();
+    projected.quadrupole.element_count = projected.quadrupole.system_offsets.back();
+    return create(static_cast<const gfn2::BasisPlan&>(basis),
+                  static_cast<const gfn2::IntegralPlan&>(integrals), projected, plan_token, output);
+  } catch (const std::bad_alloc&) {
+    return failure(XTBLOOM_STATUS_ALLOCATION_FAILED,
+                   Gfn2SccSetupTopologyError::kAllocationFailed,
+                   Gfn2SccSetupTopologyField::kWavefunction);
+  } catch (...) {
+    return failure(XTBLOOM_STATUS_INTERNAL_ERROR, Gfn2SccSetupTopologyError::kInvalidPlan,
+                   Gfn2SccSetupTopologyField::kWavefunction);
+  }
+}
+
 bool Gfn2SccSetupTopology::valid() const noexcept { return impl_ != nullptr; }
 
 const Gfn2RaggedTopologyView& Gfn2SccSetupTopology::host_topology() const noexcept {

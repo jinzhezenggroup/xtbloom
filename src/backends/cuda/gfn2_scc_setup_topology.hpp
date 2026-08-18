@@ -14,6 +14,7 @@
 #include "backends/cuda/gfn2_eigensolver.cuh"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/integrals.hpp"
+#include "model/gfn1/wavefunction.hpp"
 #include "model/gfn2/wavefunction.hpp"
 #include "xtbloom/xtbloom.h"
 
@@ -96,6 +97,15 @@ class Gfn2SccSetupTopology {
   [[nodiscard]] static Gfn2SccSetupTopologyDiagnostic create(
       const gfn2::BasisPlan& basis, const gfn2::IntegralPlan& integrals,
       const gfn2::WavefunctionLayout& wavefunction, std::uint64_t plan_token,
+      Gfn2SccSetupTopology& output) noexcept;
+
+  /* GFN1 owns a scalar SCC wavefunction. This overload projects its physical
+   * charge/magnetization packing into the common CUDA topology schema while
+   * synthesizing only the unused multipole field extents required by that
+   * schema; no GFN2 numerical parameters are introduced. */
+  [[nodiscard]] static Gfn2SccSetupTopologyDiagnostic create(
+      const gfn1::BasisPlan& basis, const gfn1::IntegralPlan& integrals,
+      const gfn1::WavefunctionLayout& wavefunction, std::uint64_t plan_token,
       Gfn2SccSetupTopology& output) noexcept;
 
   [[nodiscard]] bool valid() const noexcept;

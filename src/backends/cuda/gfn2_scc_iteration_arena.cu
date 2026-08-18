@@ -10,10 +10,16 @@ namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr std::size_t kSliceAlignment = 64u;
-constexpr std::uint32_t kMandatoryComponents =
+constexpr std::uint32_t kCommonMandatoryComponents =
     static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
-    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
-    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
+    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3);
+
+constexpr std::uint32_t mandatory_components(XtbModelFlavor model) noexcept {
+  return kCommonMandatoryComponents |
+         (model == XtbModelFlavor::kGfn2
+              ? static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2)
+              : 0u);
+}
 
 struct ArenaShape {
   std::int64_t batch = 0;
@@ -102,7 +108,9 @@ struct ArenaShape {
       topology.bucket_count <= 0 || topology.total_atoms <= 0 || topology.total_shells <= 0 ||
       topology.total_orbitals <= 0 || topology.total_matrix_elements <= 0 ||
       plan.mixer_policy.history_size <= 0 ||
-      (plan.enabled_components & kMandatoryComponents) != kMandatoryComponents ||
+      (plan.mixer_policy.atomic_multipole_components != 0 &&
+       plan.mixer_policy.atomic_multipole_components != 9) ||
+      (plan.enabled_components & mandatory_components(plan.model)) != mandatory_components(plan.model) ||
       (plan.enabled_components & ~kGfn2SccPotentialAllComponents) != 0u ||
       plan.geometry_batch.total_pairs < 0 || plan.es2_batch.total_matrix_elements < 0 ||
       plan.aes2_batch.total_pairs < 0 || plan.d4_batch.total_pairs < 0) {
@@ -177,7 +185,9 @@ struct ArenaShape {
       !checked_multiply(shape.spin_atoms, 6, shape.spin_quadrupoles) ||
       !checked_multiply(shape.batch, 2, shape.two_batch) ||
       !checked_multiply(shape.orbitals, 2, shape.two_orbitals) ||
-      !checked_multiply(shape.spin_atoms, 9, shape.mixer_vector) ||
+      !checked_multiply(shape.spin_atoms,
+                        static_cast<std::int64_t>(plan.mixer_policy.atomic_multipole_components),
+                        shape.mixer_vector) ||
       !checked_add(shape.spin_shells, shape.mixer_vector, shape.mixer_vector) ||
       !checked_multiply(shape.mixer_vector, shape.mixer_history, shape.mixer_history_elements) ||
       !checked_multiply(shape.batch, shape.mixer_history, shape.mixer_omega_elements) ||
