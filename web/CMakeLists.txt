@@ -23,6 +23,20 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     "(emcmake cmake ...).")
 endif()
 
+option(XTBLOOM_WEB_ENABLE_SIMD
+  "Enable WebAssembly SIMD128 for the browser-only engine and provider" ON)
+set(_xtbloom_web_simd_flag "")
+if(XTBLOOM_WEB_ENABLE_SIMD)
+  # The core static library is created before this Web-only subdirectory. Apply
+  # the target feature here so the GFN-xTB physics, not only the adapter and
+  # Eigen compatibility module, can be auto-vectorized to f64x2 SIMD lanes.
+  target_compile_options(xtbloom PRIVATE -msimd128)
+  set(_xtbloom_web_simd_flag "-msimd128")
+  message(STATUS "xTBloom WebAssembly SIMD128: enabled")
+else()
+  message(STATUS "xTBloom WebAssembly SIMD128: disabled")
+endif()
+
 set(_xtbloom_web_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_xtbloom_web_site "${CMAKE_CURRENT_BINARY_DIR}/site")
 set(_xtbloom_web_obj "${CMAKE_CURRENT_BINARY_DIR}/xtbloom_web.o")
@@ -125,6 +139,7 @@ add_custom_command(
           -fno-exceptions -fno-rtti
           "-I${_xtbloom_web_eigen_root}"
           -sSIDE_MODULE=2 "${_xtbloom_web_arch_flag}" -O2
+          ${_xtbloom_web_simd_flag}
           "-sEXPORTED_FUNCTIONS=[\"_openblas_get_config\",\"_openblas_set_num_threads_local\",\"_LAPACKE_dpotrf_work\",\"_LAPACKE_dpocon_work\",\"_LAPACKE_dsyevd_work\",\"_cblas_dgemm\",\"_cblas_dtrsm\"]"
   DEPENDS
     "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
@@ -153,6 +168,7 @@ add_custom_command(
           -std=c++17
           "-I${_xtbloom_web_eigen_root}"
           "${_xtbloom_web_arch_flag}" -O2
+          ${_xtbloom_web_simd_flag}
   DEPENDS
     "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
     "${_xtbloom_web_src}/tests/linalg_eigen_test.cpp"
@@ -176,6 +192,7 @@ add_custom_command(
   OUTPUT "${_xtbloom_web_obj}"
   COMMAND ${CMAKE_C_COMPILER}
           "${_xtbloom_web_arch_flag}" -fPIC -O2
+          ${_xtbloom_web_simd_flag}
           "${_xtbloom_web_generated_include}"
           "${_xtbloom_web_source_include}"
           -c "${_xtbloom_web_src}/xtbloom_web.c"
@@ -205,6 +222,7 @@ add_custom_command(
           "${_xtbloom_web_source_include}"
           -o "${_xtbloom_web_engine_js}"
           "${_xtbloom_web_arch_flag}" -O2 -sMAIN_MODULE=2
+          ${_xtbloom_web_simd_flag}
           -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createXTBloomModule
           -sSTACK_SIZE=8MB -sALLOW_MEMORY_GROWTH
           -sFORCE_FILESYSTEM
