@@ -62,9 +62,19 @@ inline bool is_origin(const LatticeTranslation& translation) noexcept {
   return translation.index[0] == 0 && translation.index[1] == 0 && translation.index[2] == 0;
 }
 
-inline bool image_geometry(const std::array<double, 3>& center, const std::array<double, 3>& image,
-                           const LatticeTranslation& translation,
-                           std::array<double, 3>& displacement, double& distance_squared) noexcept {
+enum class ImageGeometryStatus {
+  kInsideCutoff,
+  kOutsideCutoff,
+  kInvalid,
+};
+
+inline ImageGeometryStatus image_geometry(const std::array<double, 3>& center,
+                                          const std::array<double, 3>& image,
+                                          const LatticeTranslation& translation, double cutoff,
+                                          double cutoff_squared,
+                                          std::array<double, 3>& displacement,
+                                          double& distance_squared) noexcept {
+  using lattice_binary64_detail::absolute;
   using lattice_binary64_detail::finite;
   using lattice_binary64_detail::rounded_add;
   using lattice_binary64_detail::rounded_multiply;
@@ -73,12 +83,26 @@ inline bool image_geometry(const std::array<double, 3>& center, const std::array
   for (std::size_t component = 0; component < 3u; ++component) {
     const double translated = rounded_add(image[component], translation.cartesian[component]);
     displacement[component] = rounded_subtract(translated, center[component]);
-    if (!finite(displacement[component])) return false;
+    /*
+     * The lattice generator deliberately returns a rectangular superset. A
+     * far image can therefore overflow while squaring even though another
+     * image of the same pair is safely inside the cutoff. An infinite
+     * displacement produced from finite inputs is also provably outside every
+     * accepted finite cutoff; NaN remains an invalid geometry state.
+     */
+    if (absolute(displacement[component]) > cutoff) {
+      return ImageGeometryStatus::kOutsideCutoff;
+    }
+    if (!finite(displacement[component])) return ImageGeometryStatus::kInvalid;
   }
   distance_squared = rounded_add(rounded_add(rounded_multiply(displacement[0], displacement[0]),
                                              rounded_multiply(displacement[1], displacement[1])),
                                  rounded_multiply(displacement[2], displacement[2]));
-  return finite(distance_squared) && distance_squared >= 0.0;
+  if (distance_squared > cutoff_squared) return ImageGeometryStatus::kOutsideCutoff;
+  if (!finite(distance_squared) || distance_squared < 0.0) {
+    return ImageGeometryStatus::kInvalid;
+  }
+  return ImageGeometryStatus::kInsideCutoff;
 }
 
 }  // namespace periodic_topology_detail
@@ -157,12 +181,14 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
           if (center == image && is_origin(translation)) continue;
           std::array<double, 3> displacement{};
           double distance_squared = 0.0;
-          if (!image_geometry(wrapped[center], wrapped[image], translation, displacement,
-                              distance_squared)) {
+          const ImageGeometryStatus geometry =
+              image_geometry(wrapped[center], wrapped[image], translation, cutoff, cutoff_squared,
+                             displacement, distance_squared);
+          if (geometry == ImageGeometryStatus::kInvalid) {
             error = "periodic topology image distance is outside the binary64 range";
             return XTBLOOM_STATUS_INVALID_ARGUMENT;
           }
-          if (distance_squared <= cutoff_squared && distance_squared < minimum) {
+          if (geometry == ImageGeometryStatus::kInsideCutoff && distance_squared < minimum) {
             minimum = distance_squared;
           }
         }
@@ -182,12 +208,14 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
           if (center == image && is_origin(translation)) continue;
           std::array<double, 3> displacement{};
           double distance_squared = 0.0;
-          if (!image_geometry(wrapped[center], wrapped[image], translation, displacement,
-                              distance_squared)) {
+          const ImageGeometryStatus geometry =
+              image_geometry(wrapped[center], wrapped[image], translation, cutoff, cutoff_squared,
+                             displacement, distance_squared);
+          if (geometry == ImageGeometryStatus::kInvalid) {
             error = "periodic topology image distance is outside the binary64 range";
             return XTBLOOM_STATUS_INVALID_ARGUMENT;
           }
-          if (distance_squared <= cutoff_squared && distance_squared <= boundary) {
+          if (geometry == ImageGeometryStatus::kInsideCutoff && distance_squared <= boundary) {
             ++multiplicity;
           }
         }
@@ -204,12 +232,16 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
           if (center == image && is_origin(translation)) continue;
           std::array<double, 3> displacement{};
           double distance_squared = 0.0;
-          if (!image_geometry(wrapped[center], wrapped[image], translation, displacement,
-                              distance_squared)) {
+          const ImageGeometryStatus geometry =
+              image_geometry(wrapped[center], wrapped[image], translation, cutoff, cutoff_squared,
+                             displacement, distance_squared);
+          if (geometry == ImageGeometryStatus::kInvalid) {
             error = "periodic topology image distance is outside the binary64 range";
             return XTBLOOM_STATUS_INVALID_ARGUMENT;
           }
-          if (distance_squared > cutoff_squared || distance_squared > boundary) continue;
+          if (geometry == ImageGeometryStatus::kOutsideCutoff || distance_squared > boundary) {
+            continue;
+          }
           WignerSeitzImage entry;
           entry.center_atom = static_cast<std::int64_t>(center);
           entry.image_atom = static_cast<std::int64_t>(image);

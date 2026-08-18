@@ -233,12 +233,19 @@ behavior in these immutable LGPL-3.0-or-later sources:
   and `src/type/latticepoint.f90` (Git blob
   `1406ed707b9bec5cce7f771a3bbf51b836778450`, SHA-256
   `d50db182bd78b686c96dc1d0c1420dcef9f012031404f731917eda2d400e2e4e`).
+  The repository-only CaF2 Wigner--Seitz test fixture is retained from
+  `test/unit/test_wsc.f90` at the same revision (Git blob
+  `9b562d9691936dfe98a4b078b8334e65aa82af1a`, SHA-256
+  `459c8370dc7957d76d8a338912a4f36306139b5c3d385fb400bf2a7e2c5d6273`).
 
 Only mathematical formulas and externally observable behavior were used as
-clean-room references. No upstream source, generated data, numerical table,
-binary, or other external byte was copied into xTBloom, no dependency was
-added, and the distributed payload is unchanged apart from xTBloom's original
-implementation and tests. The applicable LGPL text is retained in
+clean-room references for the implementation. The CaF2 lattice, fractional
+coordinates, and 12/6/4 image-degeneracy oracle in `tests/lattice_test.cpp`
+are copied as a small test-only numerical fixture under xTB's
+`LGPL-3.0-or-later` terms. No upstream implementation source or binary and no
+new dependency is retained. The fixture remains in tracked repository tests;
+installation-focused PyPI source distributions, native CMake installs, and
+wheels exclude it. The applicable LGPL text is retained in
 `LICENSES/LGPL-3.0-or-later.txt`.
 
 ## xTB issue #678 difficult-SCC input

@@ -358,6 +358,35 @@ int test_wigner_seitz_topology_reference_degeneracies() {
   return 0;
 }
 
+int test_wigner_seitz_topology_skips_overflowed_far_images() {
+  /*
+   * The rectangular translation superset contains x/y corner images whose
+   * squared norm overflows. They are nevertheless irrelevant because either
+   * large component alone proves that the image lies beyond the cutoff.
+   */
+  constexpr std::array<double, 9> direct{
+      1.0e154, 0.0, 0.0, 0.0, 1.0e154, 0.0, 0.0, 0.0, 1.0,
+  };
+  constexpr std::array<double, 3> position{0.0, 0.0, 0.0};
+  xtbloom::detail::gfn2::Lattice3D lattice;
+  std::string error;
+  CHECK(xtbloom::detail::gfn2::make_lattice_3d(direct.data(), lattice, error) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  std::vector<xtbloom::detail::gfn2::WignerSeitzImage> topology;
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 1, position.data(), 1.1, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
+            topology, error) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(topology.size() == 2u);
+  CHECK((topology[0].translation == std::array<std::int64_t, 3>{0, 0, -1}));
+  CHECK((topology[1].translation == std::array<std::int64_t, 3>{0, 0, 1}));
+  for (const auto& image : topology) {
+    CHECK(image.distance_squared == 1.0);
+    CHECK(image.weight == 0.5);
+  }
+  return 0;
+}
+
 int test_wigner_seitz_topology_canonicalization_and_validation() {
   constexpr std::array<double, 9> direct{
       2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0,
@@ -678,6 +707,9 @@ int main() {
     return line;
   }
   if (const int line = test_wigner_seitz_topology_reference_degeneracies(); line != 0) {
+    return line;
+  }
+  if (const int line = test_wigner_seitz_topology_skips_overflowed_far_images(); line != 0) {
     return line;
   }
   if (const int line = test_wigner_seitz_topology_canonicalization_and_validation(); line != 0) {
