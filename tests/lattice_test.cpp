@@ -54,6 +54,13 @@ double topology_weight_sum(const std::vector<xtbloom::detail::gfn2::WignerSeitzI
   return result;
 }
 
+bool same_topology_image(const xtbloom::detail::gfn2::WignerSeitzImage& first,
+                         const xtbloom::detail::gfn2::WignerSeitzImage& second) {
+  return first.center_atom == second.center_atom && first.image_atom == second.image_atom &&
+         first.translation == second.translation && first.displacement == second.displacement &&
+         first.distance_squared == second.distance_squared && first.weight == second.weight;
+}
+
 double direct_reciprocal_dot(const xtbloom::detail::gfn2::Lattice3D& lattice, std::size_t direct,
                              std::size_t reciprocal) {
   double result = 0.0;
@@ -482,36 +489,44 @@ int test_wigner_seitz_topology_canonicalization_and_validation() {
     CHECK(near(shifted_topology[image].weight, 1.0 / 6.0, 1.0e-16));
   }
 
-  std::vector<xtbloom::detail::gfn2::WignerSeitzImage> sentinel(1u);
-  sentinel[0].center_atom = 17;
+  xtbloom::detail::gfn2::WignerSeitzImage expected_sentinel;
+  expected_sentinel.center_atom = 17;
+  expected_sentinel.image_atom = 23;
+  expected_sentinel.translation = {-2, 3, 5};
+  expected_sentinel.displacement = {7.0, 11.0, 13.0};
+  expected_sentinel.distance_squared = 19.0;
+  expected_sentinel.weight = 0.25;
+  std::vector<xtbloom::detail::gfn2::WignerSeitzImage> sentinel{expected_sentinel};
   CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
             lattice, -1, positions.data(), 1.1, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
             sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  CHECK(sentinel.size() == 1u && same_topology_image(sentinel[0], expected_sentinel));
   CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
             lattice, 1, nullptr, 1.1, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique, sentinel,
             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  CHECK(sentinel.size() == 1u && same_topology_image(sentinel[0], expected_sentinel));
   CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
             lattice, 2, positions.data(), -1.0, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
             sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  CHECK(sentinel.size() == 1u && same_topology_image(sentinel[0], expected_sentinel));
   CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
             lattice, 0, nullptr, std::numeric_limits<double>::max(),
             xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique, sentinel,
             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  CHECK(sentinel.size() == 1u && same_topology_image(sentinel[0], expected_sentinel));
   auto nonfinite = positions;
   nonfinite[4] = std::numeric_limits<double>::infinity();
   CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
-            lattice, 2, nonfinite.data(), 1.1, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
-            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+            lattice, 2, nonfinite.data(), 1.0e150,
+            xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique, sentinel,
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(error == "Cartesian coordinate input contains NaN or infinity");
+  CHECK(sentinel.size() == 1u && same_topology_image(sentinel[0], expected_sentinel));
   CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
             lattice, 2, positions.data(), 1.1,
             static_cast<xtbloom::detail::gfn2::WignerSeitzPairMode>(42), sentinel,
             error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  CHECK(sentinel.size() == 1u && same_topology_image(sentinel[0], expected_sentinel));
   return 0;
 }
 

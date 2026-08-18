@@ -164,11 +164,6 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
   }
 
   try {
-    std::vector<LatticeTranslation> translations;
-    xtbloom_status_t status = make_lattice_translations(
-        lattice, cutoff, LatticeOriginPolicy::kInclude, translations, error);
-    if (status != XTBLOOM_STATUS_SUCCESS) return status;
-
     const auto count = static_cast<std::size_t>(atom_count);
     std::vector<std::array<double, 3>> wrapped;
     if (count > wrapped.max_size()) {
@@ -176,9 +171,27 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     wrapped.resize(count);
+    std::string local_error;
     for (std::size_t atom = 0; atom < count; ++atom) {
-      status = wrap_cartesian(lattice, positions + atom * 3u, wrapped[atom].data(), error);
-      if (status != XTBLOOM_STATUS_SUCCESS) return status;
+      const xtbloom_status_t status =
+          wrap_cartesian(lattice, positions + atom * 3u, wrapped[atom].data(), local_error);
+      if (status != XTBLOOM_STATUS_SUCCESS) {
+        error = std::move(local_error);
+        return status;
+      }
+    }
+
+    /*
+     * Validate and canonicalize every coordinate before enumerating the
+     * cutoff-dependent translation superset. Malformed geometry must not
+     * trigger potentially large allocation or enumeration work.
+     */
+    std::vector<LatticeTranslation> translations;
+    const xtbloom_status_t translation_status = make_lattice_translations(
+        lattice, cutoff, LatticeOriginPolicy::kInclude, translations, local_error);
+    if (translation_status != XTBLOOM_STATUS_SUCCESS) {
+      error = std::move(local_error);
+      return translation_status;
     }
 
     std::vector<WignerSeitzImage> created;
