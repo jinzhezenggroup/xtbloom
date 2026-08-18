@@ -12,6 +12,8 @@
 
 #include "backends/common/gfn2_plan_schema.hpp"
 #include "backends/cuda/gfn2_eigensolver.cuh"
+#include "model/gfn1/basis.hpp"
+#include "model/gfn1/integrals.hpp"
 #include "model/gfn1/wavefunction.hpp"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/integrals.hpp"

@@ -62,21 +62,41 @@ __device__ void record_system_error(std::uint32_t* system_errors, std::int64_t s
   }
 }
 
-/* Stable logistic form of 1/(1+exp(-argument)), matching the CPU reference. */
-__device__ double logistic(double argument) {
+struct LogisticValue {
+  double value;
+  double derivative;
+};
+
+/* Stable logistic value and derivative. Computing both from the same
+ * nonpositive exponential preserves the tiny GFN1 derivative after the value
+ * itself has rounded to one, matching the CPU reference. */
+__device__ LogisticValue logistic_with_derivative(double argument) {
   if (argument >= 0.0) {
     const double exponential = exp(-argument);
-    return 1.0 / (1.0 + exponential);
+    const double denominator = 1.0 + exponential;
+    return {1.0 / denominator, exponential / (denominator * denominator)};
   }
   const double exponential = exp(argument);
-  return exponential / (1.0 + exponential);
+  const double denominator = 1.0 + exponential;
+  return {exponential / denominator, exponential / (denominator * denominator)};
 }
+
+__device__ double logistic(double argument) { return logistic_with_derivative(argument).value; }
 
 __device__ bool evaluate_pair(XtbModelFlavor model, double dx, double dy, double dz, double radius,
                               PairValues* values) {
   const double distance_squared = dx * dx + dy * dy + dz * dz;
-  if (!isfinite(distance_squared) || distance_squared < kMinimumDistanceSquared) {
+  if (!isfinite(distance_squared)) {
     return false;
+  }
+
+  if (distance_squared < kMinimumDistanceSquared) {
+    if (model != XtbModelFlavor::kGfn1) return false;
+    /* GFN1 skips sub-threshold coincident pairs. Publish a canonical zero
+     * cache entry so later CN/VJP consumers never observe stale arena data.
+     * Equality remains active, matching the CPU contract. */
+    *values = {};
+    return true;
   }
 
   values->distance = sqrt(distance_squared);
@@ -94,9 +114,10 @@ __device__ bool evaluate_pair(XtbModelFlavor model, double dx, double dy, double
   const double inverse_distance_squared = values->inverse_distance * values->inverse_distance;
   double derivative = 0.0;
   if (model == XtbModelFlavor::kGfn1) {
-    const double count = logistic(kGfn1Steepness * (radius * values->inverse_distance - 1.0));
-    values->count = count;
-    derivative = -kGfn1Steepness * radius * inverse_distance_squared * count * (1.0 - count);
+    const LogisticValue count =
+        logistic_with_derivative(kGfn1Steepness * (radius * values->inverse_distance - 1.0));
+    values->count = count.value;
+    derivative = -kGfn1Steepness * radius * inverse_distance_squared * count.derivative;
   } else if (model == XtbModelFlavor::kGfn2) {
     const double shifted_radius = radius + kSecondRadiusShiftBohr;
     const double first = logistic(kFirstSteepness * (radius * values->inverse_distance - 1.0));

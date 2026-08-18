@@ -34,13 +34,12 @@ Use it as a context manager so native resources are released deterministically.
 Updating only positions reuses the context and immutable topology setup.
 
 `Calculator` and `BatchCalculator` accept `"GFN1-xTB"`/`"GFN1"` and
-`"GFN2-xTB"`/`"GFN2"`. GFN2 runs on CPU or CUDA. GFN1 is published on CPU;
-its high-level `backend="auto"` selects CPU even on a CUDA machine, while an
-explicit `backend="cuda"` request never falls back to GFN2. A CUDA-capable
-native build returns `NOT_SUPPORTED` for GFN1; a build without CUDA may reject
-the context first with `BACKEND_UNAVAILABLE`. Because GFN1 AUTO is CPU-only,
-pairing it with a nonnegative
-`device_id` is an input error rather than silently ignoring the GPU selection.
+`"GFN2-xTB"`/`"GFN2"`. Both models run on CPU or CUDA through the same native
+backend policy. `backend="auto"` prefers CUDA when available and otherwise
+falls back to CPU; `backend="cuda"` never substitutes one model for the other.
+A build without CUDA rejects an explicit CUDA context with
+`BACKEND_UNAVAILABLE`. A nonnegative `device_id` can be used with AUTO or an
+explicit CUDA request.
 
 ```python
 import numpy as np
@@ -388,8 +387,8 @@ radical = Structure(
 ```
 
 Set `spin_channels=1` only when the restricted open-shell formulation is
-intended. Both restricted and unrestricted GFN2-xTB are implemented on CPU and
-CUDA; both GFN1 forms are implemented on CPU.
+intended. Both restricted and unrestricted GFN1-xTB and GFN2-xTB are
+implemented on CPU and CUDA.
 
 ## Point charges and periodic response
 
@@ -444,9 +443,9 @@ automatically seeds each step's SCC from the previous converged state and
 falls back to a fresh solve whenever the request's identity changes; pass
 `warm_start=False` for bit-reproducible independent steps.
 
-ASE and dpdata accept both model names. GFN1 follows the same CPU-only AUTO
-policy as the high-level calculators; its electric-field/dipole path is
-rejected rather than evaluated as GFN2.
+ASE and dpdata accept both model names and use the same CPU/CUDA AUTO policy as
+the high-level calculators. GFN1 electric-field/dipole requests are rejected
+rather than evaluated as GFN2.
 
 For geometry relaxation, `xtbloom` also registers a batch minimizer under the
 `"xtbloom"` key. It moves every frame of a dpdata system in lockstep and

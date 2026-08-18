@@ -201,10 +201,9 @@ exception-oriented control flow.
 
 ## Scope and limitations
 
-GFN2-xTB is implemented on CPU and CUDA. GFN1-xTB is implemented on CPU only;
-CUDA requests return `NOT_SUPPORTED` without output publication. The high-level
-Python calculators, ASE, and dpdata expose GFN1 CPU, while Array API/DLPack,
-and PyTorch autograd remain GFN2-only. The single-threaded CPU/WebAssembly
+GFN1-xTB and GFN2-xTB are implemented on CPU and CUDA. The high-level Python
+calculators, ASE, and dpdata expose both models, while Array API/DLPack and
+PyTorch autograd remain GFN2-only. The single-threaded CPU/WebAssembly
 browser demo exposes both GFN1 and GFN2 and defaults to GFN2. ROCm remains
 reserved.
 

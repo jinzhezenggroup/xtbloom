@@ -501,6 +501,52 @@ int test_electric_field_component_order_and_nonfinite_peer() {
   return 0;
 }
 
+int test_output_only_electric_field_requires_full_scratch() {
+  HostCase host = make_case(1u);
+  DeviceCase device(host);
+  DeviceBuffer<double> field_output(1u);
+
+  /* A requested diagnostic is independent of field attachment. With no field
+   * input, the complete energy transaction publishes an exact zero in the
+   * appended diagnostic slot and otherwise preserves the field-free result. */
+  CHECK(device.input.electric_field == nullptr && device.input.electric_field_elements == 0);
+  device.diagnostics.electric_field = field_output.get();
+  device.diagnostics.electric_field_elements = 1;
+  device.workspace.diagnostic_elements = kGfn2SccFreeEnergyStorageComponents;
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(field_output.upload({kSentinel}) == cudaSuccess);
+  CHECK(launch(device) == 0);
+
+  std::array<std::vector<double>, kGfn2SccFreeEnergyDiagnosticComponents> output;
+  std::vector<double> field_diagnostic;
+  CHECK(download_outputs(device, output) == 0);
+  CHECK(field_output.download(field_diagnostic) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  for (std::size_t component = 0; component < output.size(); ++component) {
+    CHECK(output[component] == host.expected[component]);
+  }
+  CHECK(field_diagnostic == std::vector<double>{0.0});
+
+  /* The appended field slot makes twelve component-major scratch slices
+   * mandatory even when the input field is absent. Reject a one-slice-short
+   * binding synchronously before any caller-visible output can change. */
+  CHECK(device.fill_outputs(kSentinel) == cudaSuccess);
+  CHECK(field_output.upload({kSentinel}) == cudaSuccess);
+  device.workspace.diagnostic_elements = kGfn2SccFreeEnergyStorageComponents - 1;
+  CHECK(compose_gfn2_scc_free_energy_cuda(
+            device.batch, device.input, device.activity, device.diagnostics, device.workspace,
+            device.system_errors.get(), device.device_error.get()) == cudaErrorInvalidValue);
+  CHECK(download_outputs(device, output) == 0);
+  CHECK(field_output.download(field_diagnostic) == cudaSuccess);
+  CHECK(cudaDeviceSynchronize() == cudaSuccess);
+  for (const auto& component : output) {
+    CHECK(std::all_of(component.begin(), component.end(),
+                      [](double value) { return value == kSentinel; }));
+  }
+  CHECK(field_diagnostic == std::vector<double>{kSentinel});
+  return 0;
+}
+
 int test_existing_cuda_stage_output_binding() {
   constexpr std::size_t batch_size = 8u;
   HostCase host = make_case(batch_size);
@@ -973,11 +1019,12 @@ int test_cuda_graph_replay() {
 }  // namespace
 
 int main() {
-  const std::array<int (*)(), 10> tests{
+  const std::array<int (*)(), 11> tests{
       {test_batch_parity_custom_stream_and_disabled_terms,
        test_exact_cpu_association_and_subtotal_counterexamples,
        test_final_fma_rounding_counterexample,
        test_electric_field_component_order_and_nonfinite_peer,
+       test_output_only_electric_field_requires_full_scratch,
        test_existing_cuda_stage_output_binding,
        test_nonfinite_peer_isolation_inactive_and_upstream_system_error,
        test_intermediate_and_final_fma_overflow_and_sticky_plan_error,

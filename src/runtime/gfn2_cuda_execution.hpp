@@ -181,6 +181,16 @@ struct Gfn2CudaExecutionIdentity {
   /* Heap bodies for the prepared cache and its retained topology candidate. */
   std::size_t runtime_owner_host_bytes = 0u;
   std::size_t host_plans_bytes = 0u;
+  /* Test-visible decomposition of host_plans_bytes. These fields are internal
+   * runtime diagnostics, not part of the stable public C ABI. */
+  std::size_t host_common_plan_vector_bytes = 0u;
+  std::size_t host_gfn1_plan_vector_bytes = 0u;
+  std::size_t host_common_model_plan_bytes = 0u;
+  std::size_t host_gfn1_model_plan_bytes = 0u;
+  std::size_t host_numerical_vector_bytes = 0u;
+  std::size_t host_gfn1_expanded_parameter_bytes = 0u;
+  std::size_t host_gfn2_wavefunction_arena_bytes = 0u;
+  std::size_t host_gfn1_wavefunction_arena_bytes = 0u;
   std::size_t topology_setup_host_bytes = 0u;
   std::size_t inputs_setup_host_bytes = 0u;
   std::size_t eigensolver_setup_host_bytes = 0u;

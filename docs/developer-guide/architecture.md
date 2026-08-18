@@ -1,10 +1,10 @@
 # Architecture
 
 xTBloom is organized around one stable C ABI and replaceable compute backends.
-The implemented physics includes restricted and unrestricted GFN2-xTB on CPU
-and CUDA and GFN1-xTB on CPU, with analytic energy/forces/charges, external
-point charges, and caller-supplied periodic response inside SCC. GFN1 CUDA and
-ROCm remain unavailable. The internal model registry records model identity
+The implemented physics includes restricted and unrestricted GFN1-xTB and
+GFN2-xTB on CPU and CUDA, with analytic energy/forces/charges, external point
+charges, and caller-supplied periodic response inside SCC. ROCm remains
+unavailable. The internal model registry records model identity
 together with concrete per-backend executor routes; public compute and plan
 boundaries switch on the route before touching a model cache, so an unavailable
 backend can never substitute GFN2 or publish partial output. The

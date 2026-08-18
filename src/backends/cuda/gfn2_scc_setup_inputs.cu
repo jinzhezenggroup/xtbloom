@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "backends/cuda/gfn2_scc_setup_inputs.cuh"
+#include "model/gfn1/coordination.hpp"
 
 namespace xtbloom::detail::cuda {
 namespace {
@@ -324,8 +325,8 @@ struct Gfn2SccSetupInputs::Impl {
       return false;
     }
     const std::int64_t batch_offsets = batch_size + 1;
-    const std::int64_t matrix3 = total_matrix_elements * 3;
-    const std::int64_t matrix6 = total_matrix_elements * 6;
+    const std::int64_t matrix3 = model == XtbModelFlavor::kGfn2 ? total_matrix_elements * 3 : 0;
+    const std::int64_t matrix6 = model == XtbModelFlavor::kGfn2 ? total_matrix_elements * 6 : 0;
     const std::int64_t provenance_count = 2 + (model == XtbModelFlavor::kGfn2 ? 1 : 0) +
                                           (d4_enabled ? 1 : 0) + (point_enabled ? 1 : 0) +
                                           (periodic_enabled ? 1 : 0);
@@ -450,12 +451,13 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
       wavefunction.batch_size != batch || wavefunction.total_atoms != atoms ||
       wavefunction.total_shells != shells || wavefunction.total_orbitals != orbitals ||
       !es2.sealed() || es2.batch_size() != batch || es2.total_atoms() != atoms ||
-      es2.total_shells() != shells || es3.batch_size != batch || es3.total_shells != shells ||
-      !aes2.sealed() || aes2.batch_size() != batch || aes2.total_atoms() != atoms ||
-      !mulliken.sealed() || mulliken.batch_size() != batch || mulliken.total_atoms() != atoms ||
-      mulliken.total_shells() != shells || mulliken.total_orbitals() != orbitals ||
-      mulliken.matrix_elements() != matrices || !mixer.sealed() ||
-      !mixer.matches_wavefunction_layout(wavefunction) || !driver.sealed() ||
+      es2.total_shells() != shells ||
+      es2.hardness_average() != gfn2::ES2HardnessAverage::kArithmetic || es3.batch_size != batch ||
+      es3.total_shells != shells || !aes2.sealed() || aes2.batch_size() != batch ||
+      aes2.total_atoms() != atoms || !mulliken.sealed() || mulliken.batch_size() != batch ||
+      mulliken.total_atoms() != atoms || mulliken.total_shells() != shells ||
+      mulliken.total_orbitals() != orbitals || mulliken.matrix_elements() != matrices ||
+      !mixer.sealed() || !mixer.matches_wavefunction_layout(wavefunction) || !driver.sealed() ||
       driver.batch_size() != batch || driver.maximum_iterations() == 0u) {
     return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
   }
@@ -927,9 +929,10 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn1SccSetupInputS
       wavefunction.batch_size != batch || wavefunction.total_atoms != atoms ||
       wavefunction.total_shells != shells || wavefunction.total_orbitals != orbitals ||
       !es2.sealed() || es2.batch_size() != batch || es2.total_atoms() != atoms ||
-      es2.total_shells() != shells || es3.batch_size != batch || es3.total_atoms != atoms ||
-      es3.atom_gamma3.size() != static_cast<std::size_t>(atoms) || spin.batch_size != batch ||
-      spin.total_atoms != atoms || spin.total_shells != shells ||
+      es2.total_shells() != shells ||
+      es2.hardness_average() != gfn2::ES2HardnessAverage::kHarmonic || es3.batch_size != batch ||
+      es3.total_atoms != atoms || es3.atom_gamma3.size() != static_cast<std::size_t>(atoms) ||
+      spin.batch_size != batch || spin.total_atoms != atoms || spin.total_shells != shells ||
       spin.shell_population_elements != wavefunction.qsh.element_count || !mulliken.sealed() ||
       mulliken.batch_size() != batch || mulliken.total_atoms() != atoms ||
       mulliken.total_shells() != shells || mulliken.total_orbitals() != orbitals ||
@@ -1011,6 +1014,43 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn1SccSetupInputS
           sources.geometry_cache.system_generations.data + batch,
           [&](std::uint64_t generation) { return generation == sources.geometry_generation; })) {
     return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kInvalidSource, Field::kGeometry);
+  }
+  /* GFN1 setup accepts owning CPU plans, so pointer identity alone cannot
+   * establish that their element-dependent tables came from this topology.
+   * Reconstruct the canonical plans from Z and require exact values before
+   * copying any of them into the long-lived CUDA setup image. */
+  std::string provenance_error;
+  gfn1::ES3Plan canonical_es3;
+  if (gfn1::make_es3_plan(basis, sources.atomic_numbers.data, canonical_es3, provenance_error) !=
+          XTBLOOM_STATUS_SUCCESS ||
+      es3.atom_offsets != canonical_es3.atom_offsets ||
+      es3.atom_gamma3 != canonical_es3.atom_gamma3) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
+  }
+  gfn1::SpinPopulationLayout canonical_spin_layout;
+  gfn1::SpinPolarizationPlan canonical_spin;
+  if (gfn1::make_spin_population_layout(basis, wavefunction.spin_channels.data(),
+                                        canonical_spin_layout,
+                                        provenance_error) != XTBLOOM_STATUS_SUCCESS ||
+      gfn1::make_spin_polarization_plan(basis, sources.atomic_numbers.data, canonical_spin_layout,
+                                        canonical_spin,
+                                        provenance_error) != XTBLOOM_STATUS_SUCCESS ||
+      spin.atom_offsets != canonical_spin.atom_offsets ||
+      spin.batch_shell_offsets != canonical_spin.batch_shell_offsets ||
+      spin.atom_shell_offsets != canonical_spin.atom_shell_offsets ||
+      spin.shell_population_offsets != canonical_spin.shell_population_offsets ||
+      spin.spin_channels != canonical_spin.spin_channels ||
+      spin.coupling_offsets != canonical_spin.coupling_offsets ||
+      spin.coupling_matrices != canonical_spin.coupling_matrices) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
+  }
+  gfn1::CoordinationPlan canonical_coordination;
+  if (gfn1::make_coordination_plan(batch, atoms, basis.atom_offsets.data(),
+                                   sources.atomic_numbers.data, canonical_coordination,
+                                   provenance_error) != XTBLOOM_STATUS_SUCCESS ||
+      !std::equal(canonical_coordination.covalent_radius.begin(),
+                  canonical_coordination.covalent_radius.end(), sources.covalent_radii.data)) {
+    return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kGeometry);
   }
   if (!exact_array(sources.h0, matrices) || !exact_array(sources.overlap, matrices) ||
       sources.dipole_integrals.data != nullptr || sources.dipole_integrals.elements != 0 ||
@@ -1216,16 +1256,11 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn1SccSetupInputS
     std::memset(image, 0, candidate->layout.total_bytes);
 
     Gfn2SccSetupHostArray<std::int64_t> pair_offset_view{pair_offsets.data(), batch + 1};
-    std::vector<std::int64_t> physical_dipole_offsets(static_cast<std::size_t>(batch) + 1u);
-    std::vector<std::int64_t> physical_quadrupole_offsets(static_cast<std::size_t>(batch) + 1u);
-    for (std::int64_t system = 0; system <= batch; ++system) {
-      if (!checked_multiply(basis.atom_offsets[static_cast<std::size_t>(system)], 3,
-                            physical_dipole_offsets[static_cast<std::size_t>(system)]) ||
-          !checked_multiply(basis.atom_offsets[static_cast<std::size_t>(system)], 6,
-                            physical_quadrupole_offsets[static_cast<std::size_t>(system)])) {
-        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, Field::kHamiltonian);
-      }
-    }
+    /* GFN1 carries only scalar shell/atom populations. Keep the shared
+     * topology descriptor structurally complete while making both absent
+     * multipole partitions canonical all-zero ragged offsets. */
+    std::vector<std::int64_t> physical_dipole_offsets(static_cast<std::size_t>(batch) + 1u, 0);
+    std::vector<std::int64_t> physical_quadrupole_offsets(static_cast<std::size_t>(batch) + 1u, 0);
     Gfn2SccSetupHostArray<std::int64_t> dipole_offsets{physical_dipole_offsets.data(), batch + 1};
     Gfn2SccSetupHostArray<std::int64_t> quadrupole_offsets{physical_quadrupole_offsets.data(),
                                                            batch + 1};
@@ -1525,6 +1560,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
       cptr(impl_->layout.dipole_offsets, static_cast<std::int64_t*>(nullptr)),
       cptr(impl_->layout.quadrupole_offsets, static_cast<std::int64_t*>(nullptr)),
       device_topology.shell_to_atom};
+  candidate.potential_batch.model = impl_->model;
   candidate.es2_batch = {
       batch,
       atoms,
@@ -1543,6 +1579,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
       cptr(impl_->layout.es2_matrix_offsets, static_cast<std::int64_t*>(nullptr)),
       device_topology.shell_to_atom,
       cptr(impl_->layout.es2_shell_hardness, static_cast<double*>(nullptr))};
+  candidate.es2_batch.model = impl_->model;
   candidate.es2_cache = {mptr(impl_->layout.es2_coulomb_matrix, static_cast<double*>(nullptr)),
                          impl_->es2_matrix_elements, impl_->geometry_generation, token};
   candidate.es3_batch = {batch,
@@ -1562,25 +1599,28 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
     candidate.es3_batch.atom_shell_offsets = device_topology.atom_shell_offsets;
     candidate.es3_batch.shell_to_atom = device_topology.shell_to_atom;
   }
-  candidate.aes2_batch = {
-      batch,
-      atoms,
-      impl_->total_pairs,
-      token,
-      batch + 1,
-      batch + 1,
-      atoms,
-      atoms,
-      atoms,
-      atoms,
-      device_topology.atom_offsets,
-      cptr(impl_->layout.pair_offsets, static_cast<std::int64_t*>(nullptr)),
-      cptr(impl_->layout.aes2_dipole_kernel, static_cast<double*>(nullptr)),
-      cptr(impl_->layout.aes2_quadrupole_kernel, static_cast<double*>(nullptr)),
-      cptr(impl_->layout.aes2_multipole_radius, static_cast<double*>(nullptr)),
-      cptr(impl_->layout.aes2_multipole_valence_cn, static_cast<double*>(nullptr))};
-  candidate.aes2_cache = {mptr(impl_->layout.aes2_pair_data, static_cast<double*>(nullptr)),
-                          impl_->layout.aes2_pair_data.elements, impl_->geometry_generation, token};
+  if (impl_->model == XtbModelFlavor::kGfn2) {
+    candidate.aes2_batch = {
+        batch,
+        atoms,
+        impl_->total_pairs,
+        token,
+        batch + 1,
+        batch + 1,
+        atoms,
+        atoms,
+        atoms,
+        atoms,
+        device_topology.atom_offsets,
+        cptr(impl_->layout.pair_offsets, static_cast<std::int64_t*>(nullptr)),
+        cptr(impl_->layout.aes2_dipole_kernel, static_cast<double*>(nullptr)),
+        cptr(impl_->layout.aes2_quadrupole_kernel, static_cast<double*>(nullptr)),
+        cptr(impl_->layout.aes2_multipole_radius, static_cast<double*>(nullptr)),
+        cptr(impl_->layout.aes2_multipole_valence_cn, static_cast<double*>(nullptr))};
+    candidate.aes2_cache = {mptr(impl_->layout.aes2_pair_data, static_cast<double*>(nullptr)),
+                            impl_->layout.aes2_pair_data.elements, impl_->geometry_generation,
+                            token};
+  }
 
   if (impl_->d4_enabled) {
     candidate.d4_batch = {
@@ -1687,6 +1727,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
                                  device_topology.shell_to_atom,
                                  device_topology.orbital_to_shell,
                                  device_topology.orbital_to_atom};
+  candidate.hamiltonian_batch.model = impl_->model;
   candidate.eigensolver_batch = {batch,
                                  orbitals,
                                  matrices,
@@ -1744,11 +1785,14 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
       device_topology.shell_orbital_offsets,
       device_topology.shell_to_atom,
       cptr(impl_->layout.mulliken_reference_occupations, static_cast<double*>(nullptr))};
+  candidate.mulliken_batch.model = impl_->model;
   candidate.electronic_energy_batch = {batch, matrices, batch + 1, token,
                                        device_topology.matrix_offsets};
   candidate.classical_energy_batch = {batch, impl_->enabled_components, token};
+  candidate.classical_energy_batch.model = impl_->model;
   candidate.free_energy_batch = {batch, impl_->enabled_components, impl_->electronic_temperature,
                                  token};
+  candidate.free_energy_batch.model = impl_->model;
   candidate.publication_plan = {batch,
                                 atoms,
                                 shells,
@@ -1771,6 +1815,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
                                 impl_->residual_tolerance,
                                 impl_->energy_tolerance,
                                 token};
+  candidate.publication_plan.model = impl_->model;
 
   auto* const provenance =
       mptr(impl_->layout.provenance_bindings, static_cast<Gfn2SccCacheProvenanceBinding*>(nullptr));

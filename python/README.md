@@ -6,7 +6,7 @@ xTBloom provides batched GFN1/GFN2-xTB energies, analytic forces, and charges
 through a NumPy-friendly interface backed by the same stable C ABI used by
 native C and C++ applications.
 
-GFN2-xTB supports CPU and CUDA. GFN1-xTB supports CPU through `Calculator`,
+GFN1-xTB and GFN2-xTB support CPU and CUDA through `Calculator`,
 `BatchCalculator`, ASE, and dpdata. Both models support native ragged batches,
 explicit point charges with force output, and caller-supplied periodic charge
 response. Array API/DLPack, PyTorch autograd, and the browser demo remain
@@ -138,12 +138,9 @@ does not change the narrower PyTorch autograd contract described below.
 Set `backend="cpu"` or `backend="cuda"` to require one backend. The CUDA
 quickstart above deliberately uses `"cuda"` so an unavailable GPU fails clearly
 instead of running on CPU. `"auto"` prefers CUDA but falls back to CPU.
-For GFN1-xTB, high-level `"auto"` selects CPU because CUDA support is not
-published; an explicit `backend="cuda"` request is not redirected. A
-CUDA-capable native build returns `NOT_SUPPORTED`, while a build without CUDA
-may return `BACKEND_UNAVAILABLE` when creating the context.
-Passing a nonnegative `device_id` with GFN1 `backend="auto"` is rejected instead
-of silently ignoring the requested GPU.
+The same AUTO policy applies to GFN1-xTB and GFN2-xTB. A build without CUDA may
+return `BACKEND_UNAVAILABLE` when creating an explicitly requested CUDA
+context; a nonnegative `device_id` can be used with AUTO or CUDA.
 Compatible calls can opt into electronic warm starts; the default is an
 independent fresh SCC solve.
 
@@ -257,8 +254,8 @@ geometry optimization in the C ABI.
 
 ## Scope
 
-GFN1-xTB CUDA execution, GFN1 electric fields/dipoles, ROCm, lattice/PBC inputs,
-solvation, native geometry optimization, molecular dynamics, native/analytic
+GFN1 electric fields/dipoles, ROCm, lattice/PBC inputs, solvation, native
+geometry optimization, molecular dynamics, native/analytic
 Hessians, vibrational analysis, and
 higher-order autograd are not implemented. A numerical QM Cartesian Hessian is
 available through Python `Calculator.hessian()` and `BatchCalculator.hessian()`.

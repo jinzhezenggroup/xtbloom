@@ -62,8 +62,8 @@ Repository contributors and coding agents must also follow
 
 ## Capability boundary
 
-xTBloom implements restricted and unrestricted GFN2-xTB on CPU and CUDA and
-GFN1-xTB on CPU. Both models publish native ragged batches, analytic forces,
+xTBloom implements restricted and unrestricted GFN1-xTB and GFN2-xTB on CPU
+and CUDA. Both models publish native ragged batches, analytic forces,
 charges, explicit point charges, caller-supplied periodic charge response, the
 high-level Python calculators, ASE, and dpdata. Uniform electric fields and
 molecular dipoles, Array API/DLPack, and PyTorch autograd are GFN2-only. The
@@ -74,8 +74,7 @@ payload buffers.
 
 The ABI-v4 native-cell descriptors validate molecular `NONE` and fully
 periodic `XYZ` inputs, but valid `XYZ` compute requests return
-`NOT_IMPLEMENTED` transactionally. GFN1 CUDA execution and field/dipole
-properties, ROCm, native geometry
+`NOT_IMPLEMENTED` transactionally. GFN1 field/dipole properties, ROCm, native geometry
 optimization, molecular dynamics, solvation, native/analytic Hessians,
 vibrational analysis, and periodic GFN2 execution are not implemented. The
 Python Hessian and the browser/dpdata optimizers are higher-level adapters

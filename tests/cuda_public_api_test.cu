@@ -2199,11 +2199,12 @@ int test_host_device_mixed_and_streams(std::int32_t device, PublicBatch& batch,
 int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cpu_context,
                                       const xtbloom_compute_options_t& options) {
   xtbloom_compute_options_t failure_options = options;
+  const bool molecular_dipoles = options.model == XTBLOOM_MODEL_GFN2_XTB;
   failure_options.max_scc_iterations = 3;
   failure_options.charge_tolerance = 2.0e-5;
   failure_options.energy_tolerance = 1.0e-6;
   failure_options.electronic_temperature = XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
-  failure_options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+  if (molecular_dipoles) failure_options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
 
   PublicBatch healthy;
   healthy.atom_offsets = {0, 3};
@@ -2222,11 +2223,14 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
   healthy.molecular_charges = {1.0};
   healthy.unpaired_electrons = {0};
   healthy.spin_channels = {1};
-  healthy.set_electric_fields({{{0.0, 0.0, 0.0}}});
+  if (molecular_dipoles) healthy.set_electric_fields({{{0.0, 0.0, 0.0}}});
   MaterializedResult healthy_reference;
   g_scenario = "peer-failure/CPU-reference";
   CHECK(run_cpu_reference(cpu_context, healthy, failure_options, healthy_reference) == 0);
-  CHECK(healthy_reference.iterations[0] == failure_options.max_scc_iterations);
+  CHECK(healthy_reference.statuses[0] == XTBLOOM_STATUS_SUCCESS);
+  CHECK(healthy_reference.converged[0] == 1u);
+  CHECK(healthy_reference.iterations[0] > 0);
+  CHECK(healthy_reference.iterations[0] <= failure_options.max_scc_iterations);
 
   PublicBatch batch;
   batch.atom_offsets = {0, 3, 5};
@@ -2251,7 +2255,9 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
   batch.molecular_charges = {1.0, 0.0};
   batch.unpaired_electrons = {0, 1};
   batch.spin_channels = {1, 2};
-  batch.set_electric_fields({{{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}});
+  if (molecular_dipoles) {
+    batch.set_electric_fields({{{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}});
+  }
 
   MaterializedResult failure_reference;
   {
@@ -2284,10 +2290,17 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
   CHECK(failure_reference.converged[1] == 0u);
   CHECK(failure_reference.iterations[1] == failure_options.max_scc_iterations);
   CHECK(is_quiet_nan(failure_reference.energies[1]));
-  CHECK(failure_reference.dipole_moments.size() == 6u);
-  CHECK(is_quiet_nan(failure_reference.dipole_moments[3]));
-  CHECK(is_quiet_nan(failure_reference.dipole_moments[4]));
-  CHECK(is_quiet_nan(failure_reference.dipole_moments[5]));
+  if (molecular_dipoles) {
+    CHECK(failure_reference.dipole_moments.size() == 6u);
+    CHECK(is_quiet_nan(failure_reference.dipole_moments[3]));
+    CHECK(is_quiet_nan(failure_reference.dipole_moments[4]));
+    CHECK(is_quiet_nan(failure_reference.dipole_moments[5]));
+  } else {
+    CHECK(failure_reference.dipole_moments.size() == 6u);
+    CHECK(std::all_of(failure_reference.dipole_moments.begin(),
+                      failure_reference.dipole_moments.end(),
+                      [](double value) { return value == FieldCanaries<double>::kPayload; }));
+  }
   for (std::size_t atom = 3u; atom < 5u; ++atom) {
     CHECK(is_quiet_nan(failure_reference.atomic_charges[atom]));
     for (std::size_t axis = 0u; axis < 3u; ++axis) {
@@ -2347,9 +2360,13 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
     }
 
     CHECK(is_quiet_nan(actual.energies[1]));
-    CHECK(is_quiet_nan(actual.dipole_moments[3]));
-    CHECK(is_quiet_nan(actual.dipole_moments[4]));
-    CHECK(is_quiet_nan(actual.dipole_moments[5]));
+    if (molecular_dipoles) {
+      CHECK(is_quiet_nan(actual.dipole_moments[3]));
+      CHECK(is_quiet_nan(actual.dipole_moments[4]));
+      CHECK(is_quiet_nan(actual.dipole_moments[5]));
+    } else {
+      CHECK(actual.dipole_moments == failure_reference.dipole_moments);
+    }
     for (std::size_t atom = 3u; atom < 5u; ++atom) {
       CHECK(is_quiet_nan(actual.atomic_charges[atom]));
       for (std::size_t axis = 0u; axis < 3u; ++axis) {
@@ -2383,9 +2400,13 @@ int test_public_peer_failure_isolated(std::int32_t device, xtbloom_context_t* cp
   CHECK(near(async_actual.energies[0], failure_reference.energies[0], kEnergyAbsoluteTolerance,
              kEnergyRelativeTolerance));
   CHECK(is_quiet_nan(async_actual.energies[1]));
-  CHECK(is_quiet_nan(async_actual.dipole_moments[3]));
-  CHECK(is_quiet_nan(async_actual.dipole_moments[4]));
-  CHECK(is_quiet_nan(async_actual.dipole_moments[5]));
+  if (molecular_dipoles) {
+    CHECK(is_quiet_nan(async_actual.dipole_moments[3]));
+    CHECK(is_quiet_nan(async_actual.dipole_moments[4]));
+    CHECK(is_quiet_nan(async_actual.dipole_moments[5]));
+  } else {
+    CHECK(async_actual.dipole_moments == failure_reference.dipole_moments);
+  }
   for (std::size_t atom = 3u; atom < 5u; ++atom) {
     CHECK(is_quiet_nan(async_actual.atomic_charges[atom]));
     for (std::size_t axis = 0u; axis < 3u; ++axis) {
@@ -4493,9 +4514,31 @@ int test_stream_capture_transactionality(std::int32_t device, PublicBatch& batch
   return 0;
 }
 
-int test_gfn1_rejected_transactionally(std::int32_t device, PublicBatch& batch,
-                                       const xtbloom_compute_options_t& options) {
-  g_scenario = "GFN1-rejection-transactionality";
+/* Keep the GFN1 profiler range limited to reusable public work: a fixed plan,
+ * one stable mixed-input descriptor, one device-output descriptor, and a
+ * reusable request. CPU qualification, FRESH cache seeding, the first strict
+ * WARM call, and result downloads all remain outside the measured range. */
+int test_gfn1_profile(std::int32_t device, xtbloom_context_t* cpu_context) {
+  g_scenario = "GFN1/profile-reference";
+  PublicBatch batch;
+  CHECK(make_fixture_batch(4u, false, batch) == 0);
+  /* One H2/He/LiH/CH2 cycle is physically ragged; the CH2 triplet keeps the
+   * unrestricted scalar-SCC route active alongside restricted peers. */
+  batch.spin_channels.back() = 2;
+  batch.unpaired_electrons.back() = 2;
+  batch.bind();
+
+  xtbloom_compute_options_t options = make_compute_options();
+  options.model = XTBLOOM_MODEL_GFN1_XTB;
+  options.max_scc_iterations = 128;
+  MaterializedResult reference;
+  CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
+
+  DeviceBatchInputs inputs;
+  CUDA_CHECK(inputs.upload_all(batch));
+  const auto input_identity = inputs.identity();
+  bind_inputs(batch, &inputs, InputLayout::kMixed);
+
   StreamOwner stream;
   CUDA_CHECK(stream.create());
   xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
@@ -4503,217 +4546,250 @@ int test_gfn1_rejected_transactionally(std::int32_t device, PublicBatch& batch,
   CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
   CHECK(context != nullptr);
 
+  xtbloom_plan_t* raw_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(raw_plan != nullptr);
+  PlanHandle plan(raw_plan);
+  ResultOwner result;
+  CUDA_CHECK(result.bind(batch, ResultLayout::kDevice, options.flags));
   xtbloom_request_t* raw_request = nullptr;
   CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
   RequestHandle request(raw_request);
   xtbloom_request_info_t info{};
   CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
 
-  xtbloom_compute_options_t gfn1_options = options;
-  gfn1_options.model = XTBLOOM_MODEL_GFN1_XTB;
-  DeviceBatchInputs device_inputs;
-  CUDA_CHECK(device_inputs.upload_all(batch));
-  for (const InputLayout input_layout :
-       {InputLayout::kHost, InputLayout::kDevice, InputLayout::kMixed}) {
-    bind_inputs(batch, &device_inputs, input_layout);
-    for (const ResultLayout result_layout :
-         {ResultLayout::kHost, ResultLayout::kDevice, ResultLayout::kMixed}) {
-      ResultOwner result;
-      CUDA_CHECK(result.bind(batch, result_layout, gfn1_options.flags));
-      CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn1_options, &result.descriptor) ==
-            XTBLOOM_STATUS_NOT_SUPPORTED);
-      CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
-      bool unchanged = false;
-      CUDA_CHECK(result.unchanged(unchanged));
-      CHECK(unchanged);
-      bool guards = false;
-      CUDA_CHECK(result.guards_intact(guards));
-      CHECK(guards);
-
-      CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn1_options,
-                                    &result.descriptor,
-                                    request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
-      CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
-      CUDA_CHECK(result.unchanged(unchanged));
-      CHECK(unchanged);
-      CUDA_CHECK(result.guards_intact(guards));
-      CHECK(guards);
-      CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
-      CHECK(info.state == XTBLOOM_REQUEST_IDLE);
-      CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
-      CHECK(info.result_flags == 0u);
-      CHECK(std::strcmp(xtbloom_request_get_error(request.get()), "") == 0);
-    }
-
-    xtbloom_plan_t* raw_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
-    CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn1_options, &raw_plan) ==
-          XTBLOOM_STATUS_NOT_SUPPORTED);
-    CHECK(raw_plan == nullptr);
-    CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
-  }
-
-  /* CUDA dipole publication is released for GFN2. Once descriptor shape is
-   * valid, unavailable GFN1 model dispatch must still take precedence and
-   * remain transactional for both synchronous and asynchronous public calls. */
-  bind_inputs(batch, nullptr, InputLayout::kHost);
-  xtbloom_compute_options_t dipole_options = gfn1_options;
-  dipole_options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
-  ResultOwner dipole_result;
-  CUDA_CHECK(dipole_result.bind(batch, ResultLayout::kMixed, dipole_options.flags));
-  GuardedOutput<double> dipoles;
-  CUDA_CHECK(dipoles.initialize(3u * static_cast<std::size_t>(batch.descriptor.batch_size),
-                                Placement::kDevice));
-  dipole_result.descriptor.dipole_moments = dipoles.descriptor();
-  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &dipole_options,
-                        &dipole_result.descriptor) == XTBLOOM_STATUS_NOT_SUPPORTED);
-  CHECK(std::strstr(xtbloom_get_last_error(), "GFN1-xTB") != nullptr);
-  bool unchanged = false;
-  CUDA_CHECK(dipole_result.unchanged(unchanged));
-  CHECK(unchanged);
-  CUDA_CHECK(dipoles.unchanged(unchanged));
-  CHECK(unchanged);
-  bool guards = false;
-  CUDA_CHECK(dipoles.guards_intact(guards));
-  CHECK(guards);
-  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &dipole_options,
-                                &dipole_result.descriptor,
-                                request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
-  CUDA_CHECK(dipole_result.unchanged(unchanged));
-  CHECK(unchanged);
-  CUDA_CHECK(dipoles.unchanged(unchanged));
-  CHECK(unchanged);
-  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
-  xtbloom_plan_t* raw_dipole_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
-  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &dipole_options, &raw_dipole_plan) ==
-        XTBLOOM_STATUS_NOT_SUPPORTED);
-  CHECK(raw_dipole_plan == nullptr);
-
-  dipole_options.model = XTBLOOM_MODEL_GFN2_XTB;
-  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &dipole_options,
-                        &dipole_result.descriptor) == XTBLOOM_STATUS_SUCCESS);
-  MaterializedResult dipole_actual;
-  CUDA_CHECK(dipole_result.materialize(dipole_actual));
-  CHECK((dipole_actual.flags & XTBLOOM_RESULT_DIPOLE_MOMENTS) != 0u);
-  std::vector<double> published_dipoles;
-  CUDA_CHECK(dipoles.read_payload(published_dipoles));
-  CHECK(published_dipoles.size() == 3u * static_cast<std::size_t>(batch.descriptor.batch_size));
-  CHECK(std::all_of(published_dipoles.begin(), published_dipoles.end(),
-                    [](double value) { return std::isfinite(value); }));
-  CUDA_CHECK(dipoles.guards_intact(guards));
-  CHECK(guards);
-  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &dipole_options,
-                                &dipole_result.descriptor,
-                                request.get()) == XTBLOOM_STATUS_SUCCESS);
+  g_scenario = "GFN1/profile-fresh-seed";
+  CHECK(xtbloom_plan_compute_enqueue(plan.get(), &batch.descriptor, &options, &result.descriptor,
+                                     request.get()) == XTBLOOM_STATUS_SUCCESS);
   CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
   CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
   CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
-  CHECK((info.result_flags & XTBLOOM_RESULT_DIPOLE_MOMENTS) != 0u);
-  CHECK(xtbloom_request_query(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
-  raw_dipole_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
-  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &dipole_options, &raw_dipole_plan) ==
-        XTBLOOM_STATUS_SUCCESS);
-  CHECK(raw_dipole_plan != nullptr);
-  PlanHandle dipole_plan(raw_dipole_plan);
+  CHECK(info.result_flags == reference.flags);
+  CHECK(result.descriptor.flags == kResultFlagsCanary);
+  MaterializedResult seed_actual;
+  CUDA_CHECK(result.materialize(seed_actual));
+  seed_actual.flags = info.result_flags;
+  CHECK(compare_result(result, seed_actual, reference, options) == 0);
 
-  /* A valid reserved interaction has the same precedence. A structurally
-   * malformed attachment (missing payload) remains INVALID_ARGUMENT before
-   * model dispatch for sync, enqueue, and plan creation. Use a fresh request
-   * so the rejection proves that pre-submission validation leaves an IDLE
-   * request untouched rather than retaining the preceding GFN2 completion. */
-  xtbloom_request_t* raw_interaction_request = nullptr;
-  CHECK(xtbloom_request_create(context.get(), &raw_interaction_request) == XTBLOOM_STATUS_SUCCESS);
-  RequestHandle interaction_request(raw_interaction_request);
-  xtbloom_interaction_t interaction{};
-  interaction.type = XTBLOOM_INTERACTION_ALPB_SOLVATION;
-  interaction.system_index = 0;
-  interaction.payload_size = 32u;
-  std::vector<xtbloom_interaction_t> interactions{interaction};
-  std::vector<std::uint8_t> interaction_payload(32u, 0u);
-  std::int32_t block_version = 1;
-  std::memcpy(interaction_payload.data(), &block_version, sizeof(block_version));
-  bind_inputs(batch, nullptr, InputLayout::kHost);
-  batch.descriptor.total_interactions = 1;
-  batch.descriptor.interaction_descriptors = host_input(interactions);
-  batch.descriptor.interaction_payload = host_input(interaction_payload);
-  ResultOwner interaction_result;
-  CUDA_CHECK(interaction_result.bind(batch, ResultLayout::kMixed, gfn1_options.flags));
-  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn1_options,
-                        &interaction_result.descriptor) == XTBLOOM_STATUS_NOT_SUPPORTED);
-  CUDA_CHECK(interaction_result.unchanged(unchanged));
-  CHECK(unchanged);
-  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn1_options,
-                                &interaction_result.descriptor,
-                                interaction_request.get()) == XTBLOOM_STATUS_NOT_SUPPORTED);
-  CUDA_CHECK(interaction_result.unchanged(unchanged));
-  CHECK(unchanged);
-  CHECK(xtbloom_request_query(interaction_request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
-  xtbloom_plan_t* raw_interaction_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
-  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn1_options,
-                            &raw_interaction_plan) == XTBLOOM_STATUS_NOT_SUPPORTED);
-  CHECK(raw_interaction_plan == nullptr);
-
-  xtbloom_compute_options_t gfn2_interaction_options = gfn1_options;
-  gfn2_interaction_options.model = XTBLOOM_MODEL_GFN2_XTB;
-  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn2_interaction_options,
-                        &interaction_result.descriptor) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
-  /* CUDA interaction content is admitted on the owner stream, so enqueue
-   * accepts the transaction and reports a valid reserved tag at completion. */
-  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn2_interaction_options,
-                                &interaction_result.descriptor,
-                                interaction_request.get()) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(xtbloom_request_wait(interaction_request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  xtbloom_compute_options_t warm_options = options;
+  warm_options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  g_scenario = "GFN1/profile-warmup";
+  CHECK(xtbloom_plan_compute_enqueue(plan.get(), &batch.descriptor, &warm_options,
+                                     &result.descriptor, request.get()) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
   CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
-  CHECK(info.completion_status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
-  CHECK(info.result_flags == 0u);
-  CUDA_CHECK(interaction_result.unchanged(unchanged));
-  CHECK(unchanged);
-  /* CUDA plan creation binds topology and capacity, not one numerical
-   * attachment image. The reserved interaction is therefore rejected by
-   * each plan execution through the same stream-ordered admission gate. */
-  raw_interaction_plan = nullptr;
-  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn2_interaction_options,
-                            &raw_interaction_plan) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(raw_interaction_plan != nullptr);
-  PlanHandle interaction_plan(raw_interaction_plan);
-  CHECK(xtbloom_plan_compute(interaction_plan.get(), &batch.descriptor, &gfn2_interaction_options,
-                             &interaction_result.descriptor) == XTBLOOM_STATUS_NOT_IMPLEMENTED);
-  CUDA_CHECK(interaction_result.unchanged(unchanged));
-  CHECK(unchanged);
-  xtbloom_request_t* raw_plan_interaction_request = nullptr;
-  CHECK(xtbloom_request_create(context.get(), &raw_plan_interaction_request) ==
-        XTBLOOM_STATUS_SUCCESS);
-  RequestHandle plan_interaction_request(raw_plan_interaction_request);
-  CHECK(xtbloom_plan_compute_enqueue(interaction_plan.get(), &batch.descriptor,
-                                     &gfn2_interaction_options, &interaction_result.descriptor,
-                                     plan_interaction_request.get()) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(xtbloom_request_wait(plan_interaction_request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
-  CHECK(info.completion_status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
-  CHECK(info.result_flags == 0u);
-  CUDA_CHECK(interaction_result.unchanged(unchanged));
-  CHECK(unchanged);
+  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.result_flags == reference.flags);
+  CHECK(result.descriptor.flags == kResultFlagsCanary);
+  MaterializedResult warmup_actual;
+  CUDA_CHECK(result.materialize(warmup_actual));
+  warmup_actual.flags = info.result_flags;
+  CHECK(compare_result(result, warmup_actual, reference, warm_options) == 0);
 
-  xtbloom_request_t* raw_malformed_request = nullptr;
-  CHECK(xtbloom_request_create(context.get(), &raw_malformed_request) == XTBLOOM_STATUS_SUCCESS);
-  RequestHandle malformed_request(raw_malformed_request);
-  batch.descriptor.interaction_payload = {};
-  CHECK(xtbloom_compute(context.get(), &batch.descriptor, &gfn1_options,
-                        &interaction_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CUDA_CHECK(interaction_result.unchanged(unchanged));
-  CHECK(unchanged);
-  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &gfn1_options,
-                                &interaction_result.descriptor,
-                                malformed_request.get()) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(xtbloom_request_query(malformed_request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
-  CHECK(info.state == XTBLOOM_REQUEST_IDLE);
-  raw_interaction_plan = reinterpret_cast<xtbloom_plan_t*>(std::uintptr_t{1});
-  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &gfn1_options,
-                            &raw_interaction_plan) == XTBLOOM_STATUS_INVALID_ARGUMENT);
-  CHECK(raw_interaction_plan == nullptr);
+  /* Each successful strict-WARM completion publishes the one-shot checkpoint
+   * consumed by the next iteration. The range therefore measures exactly ten
+   * complete public transactions with no setup or correctness copies. */
+  constexpr int kProfileIterations = 10;
+  g_scenario = "GFN1/profile-steady-state";
+  CUDA_CHECK(cudaProfilerStart());
+  for (int iteration = 0; iteration < kProfileIterations; ++iteration) {
+    CHECK(xtbloom_plan_compute_enqueue(plan.get(), &batch.descriptor, &warm_options,
+                                       &result.descriptor,
+                                       request.get()) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+    CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+    CHECK(info.result_flags == reference.flags);
+    CHECK(result.descriptor.flags == kResultFlagsCanary);
+  }
+  CUDA_CHECK(cudaProfilerStop());
+
+  CHECK(inputs.identity() == input_identity);
+  MaterializedResult actual;
+  CUDA_CHECK(result.materialize(actual));
+  actual.flags = info.result_flags;
+  CHECK(compare_result(result, actual, reference, warm_options) == 0);
+  CHECK(result.descriptor.flags == kResultFlagsCanary);
+  std::printf("gfn1_profile_iterations=%d\n", kProfileIterations);
+  return 0;
+}
+
+/* GFN1 uses the same public transaction surface as GFN2, but its SCC state is
+ * scalar and its terminal model is D3/halogen rather than D4/AES2. Exercise
+ * the complete route through CPU-qualified ragged references instead of
+ * relying on backend-internal buffers that could accidentally retain GFN2
+ * defaults. */
+int test_gfn1_public_execution(std::int32_t device, xtbloom_context_t* cpu_context,
+                               bool sanitizer_mode = false) {
+  g_scenario = "GFN1/restricted-LiH-reference";
+  HostSccCaseOptions lih_options{};
+  lih_options.systems = {SmallSystemKind::kLiH};
+  lih_options.maximum_iterations = 128u;
+  lih_options.residual_tolerance = 1.0e-8;
+  lih_options.energy_tolerance = 1.0e-8;
+  HostSccCase lih_fixture;
+  std::string lih_error;
+  CHECK(HostSccCase::create(lih_options, lih_fixture, lih_error) == XTBLOOM_STATUS_SUCCESS);
+  PublicBatch restricted_lih = PublicBatch::from_fixture(lih_fixture);
+  restricted_lih.bind();
+
+  xtbloom_compute_options_t options = make_compute_options();
+  options.model = XTBLOOM_MODEL_GFN1_XTB;
+  options.max_scc_iterations = 128;
+  MaterializedResult lih_reference;
+  CHECK(run_cpu_reference(cpu_context, restricted_lih, options, lih_reference) == 0);
+
+  StreamOwner stream;
+  CUDA_CHECK(stream.create());
+  xtbloom_status_t context_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle context = make_context(XTBLOOM_BACKEND_CUDA, device, stream.get(), context_status);
+  CHECK(context_status == XTBLOOM_STATUS_SUCCESS);
+  CHECK(context != nullptr);
+  g_scenario = "GFN1/restricted-LiH-CUDA";
+  CHECK(execute_cuda_and_compare(context.get(), restricted_lih, options, ResultLayout::kHost,
+                                 lih_reference) == 0);
+
+  g_scenario = "GFN1/public-ragged-reference";
+  PublicBatch batch;
+  CHECK(make_fixture_batch(4u, false, batch) == 0);
+  /* Keep an explicit unrestricted peer in the same physical ragged batch. */
+  batch.spin_channels.back() = 2;
+  batch.unpaired_electrons.back() = 2;
   batch.bind();
+
+  MaterializedResult reference;
+  CHECK(run_cpu_reference(cpu_context, batch, options, reference) == 0);
+
+  DeviceBatchInputs device_inputs;
+  CUDA_CHECK(device_inputs.upload_all(batch));
+  const std::array<std::pair<InputLayout, ResultLayout>, 3> layouts{{
+      {InputLayout::kHost, ResultLayout::kHost},
+      {InputLayout::kDevice, ResultLayout::kDevice},
+      {InputLayout::kMixed, ResultLayout::kMixed},
+  }};
+  for (const auto& [input_layout, result_layout] : layouts) {
+    g_scenario =
+        input_layout == InputLayout::kHost
+            ? "GFN1/direct-host"
+            : (input_layout == InputLayout::kDevice ? "GFN1/direct-device" : "GFN1/direct-mixed");
+    bind_inputs(batch, input_layout == InputLayout::kHost ? nullptr : &device_inputs, input_layout);
+    CHECK(execute_cuda_and_compare(context.get(), batch, options, result_layout, reference) == 0);
+  }
+
+  /* Compute Sanitizer instruments the same production Graph once for a
+   * restricted system and once for a heterogeneous ragged batch. The default
+   * and --gfn1-only entries retain the broader repeated-call transaction
+   * matrix without multiplying instruction-level sanitizer cost. */
+  if (sanitizer_mode) {
+    return 0;
+  }
+
+  g_scenario = "GFN1/direct-default-stream";
+  xtbloom_status_t default_status = XTBLOOM_STATUS_INTERNAL_ERROR;
+  ContextHandle default_context =
+      make_context(XTBLOOM_BACKEND_CUDA, device, nullptr, default_status);
+  CHECK(default_status == XTBLOOM_STATUS_SUCCESS);
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  CHECK(execute_cuda_and_compare(default_context.get(), batch, options, ResultLayout::kHost,
+                                 reference) == 0);
+
+  g_scenario = "GFN1/context-enqueue";
+  bind_inputs(batch, &device_inputs, InputLayout::kMixed);
+  ResultOwner async_result;
+  CUDA_CHECK(async_result.bind(batch, ResultLayout::kMixed, options.flags));
+  xtbloom_request_t* raw_request = nullptr;
+  CHECK(xtbloom_request_create(context.get(), &raw_request) == XTBLOOM_STATUS_SUCCESS);
+  RequestHandle request(raw_request);
+  CHECK(xtbloom_compute_enqueue(context.get(), &batch.descriptor, &options,
+                                &async_result.descriptor, request.get()) == XTBLOOM_STATUS_SUCCESS);
+  xtbloom_request_info_t info{};
+  CHECK(xtbloom_request_info_init(&info, sizeof(info)) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.state == XTBLOOM_REQUEST_COMPLETE);
+  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult async_actual;
+  CUDA_CHECK(async_result.materialize(async_actual));
+  async_actual.flags = info.result_flags;
+  CHECK(compare_result(async_result, async_actual, reference, options) == 0);
+
+  g_scenario = "GFN1/plan-first-warm-rejection";
+  xtbloom_plan_t* raw_plan = nullptr;
+  CHECK(xtbloom_plan_create(context.get(), &batch.descriptor, &options, &raw_plan) ==
+        XTBLOOM_STATUS_SUCCESS);
+  CHECK(raw_plan != nullptr);
+  PlanHandle plan(raw_plan);
+  xtbloom_compute_options_t warm_options = options;
+  warm_options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  ResultOwner first_warm_result;
+  CUDA_CHECK(first_warm_result.bind(batch, ResultLayout::kDevice, warm_options.flags));
+  CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &warm_options,
+                             &first_warm_result.descriptor) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  bool unchanged = false;
+  CUDA_CHECK(first_warm_result.unchanged(unchanged));
+  CHECK(unchanged);
+
+  g_scenario = "GFN1/plan-fresh";
+  ResultOwner plan_result;
+  CUDA_CHECK(plan_result.bind(batch, ResultLayout::kHost, options.flags));
+  CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options, &plan_result.descriptor) ==
+        XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult plan_actual;
+  CUDA_CHECK(plan_result.materialize(plan_actual));
+  CHECK(compare_result(plan_result, plan_actual, reference, options) == 0);
+
+  g_scenario = "GFN1/plan-warm-enqueue";
+  ResultOwner warm_result;
+  CUDA_CHECK(warm_result.bind(batch, ResultLayout::kDevice, warm_options.flags));
+  CHECK(xtbloom_plan_compute_enqueue(plan.get(), &batch.descriptor, &warm_options,
+                                     &warm_result.descriptor,
+                                     request.get()) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(xtbloom_request_wait(request.get(), &info) == XTBLOOM_STATUS_SUCCESS);
+  CHECK(info.completion_status == XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult warm_actual;
+  CUDA_CHECK(warm_result.materialize(warm_actual));
+  warm_actual.flags = info.result_flags;
+  CHECK(compare_result(warm_result, warm_actual, reference, warm_options) == 0);
+
+  g_scenario = "GFN1/plan-changed-geometry";
+  batch.perturb(0.006);
+  CUDA_CHECK(device_inputs.upload_numerical(batch));
+  bind_inputs(batch, &device_inputs, InputLayout::kDevice);
+  MaterializedResult changed_reference;
+  CHECK(run_cpu_reference(cpu_context, batch, options, changed_reference) == 0);
+  bind_inputs(batch, &device_inputs, InputLayout::kDevice);
+  ResultOwner changed_result;
+  CUDA_CHECK(changed_result.bind(batch, ResultLayout::kMixed, options.flags));
+  CHECK(xtbloom_plan_compute(plan.get(), &batch.descriptor, &options, &changed_result.descriptor) ==
+        XTBLOOM_STATUS_SUCCESS);
+  MaterializedResult changed_actual;
+  CUDA_CHECK(changed_result.materialize(changed_actual));
+  CHECK(compare_result(changed_result, changed_actual, changed_reference, options) == 0);
+
+  /* The embedded coordinate covers GFN1 point-charge screening, point-force
+   * publication, and caller-owned periodic b/A operators in one true ragged
+   * public request. */
+  g_scenario = "GFN1/point-charge-periodic-mixed";
+  PublicBatch embedded;
+  CHECK(make_fixture_batch(4u, true, embedded) == 0);
+  embedded.spin_channels.back() = 2;
+  embedded.unpaired_electrons.back() = 2;
+  embedded.bind();
+  xtbloom_compute_options_t embedded_options = options;
+  embedded_options.flags |= XTBLOOM_COMPUTE_POINT_CHARGE_FORCES;
+  MaterializedResult embedded_reference;
+  CHECK(run_cpu_reference(cpu_context, embedded, embedded_options, embedded_reference) == 0);
+  DeviceBatchInputs embedded_inputs;
+  CUDA_CHECK(embedded_inputs.upload_all(embedded));
+  bind_inputs(embedded, &embedded_inputs, InputLayout::kMixed);
+  CHECK(execute_cuda_and_compare(context.get(), embedded, embedded_options, ResultLayout::kMixed,
+                                 embedded_reference) == 0);
+
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  CHECK(test_public_peer_failure_isolated(device, cpu_context, options) == 0);
+
+  bind_inputs(batch, nullptr, InputLayout::kHost);
+  CHECK(test_stream_capture_transactionality(device, batch, options) == 0);
   return 0;
 }
 
@@ -4851,14 +4927,18 @@ int main(int argc, char** argv) {
   const bool lattice_only = argc == 2 && std::strcmp(argv[1], "--lattice-only") == 0;
   const bool lattice_sanitizer = argc == 2 && std::strcmp(argv[1], "--lattice-sanitizer") == 0;
   const bool electric_field_only = argc == 2 && std::strcmp(argv[1], "--electric-field-only") == 0;
+  const bool gfn1_only = argc == 2 && std::strcmp(argv[1], "--gfn1-only") == 0;
+  const bool gfn1_sanitizer = argc == 2 && std::strcmp(argv[1], "--gfn1-sanitizer") == 0;
+  const bool gfn1_profile = argc == 2 && std::strcmp(argv[1], "--gfn1-profile") == 0;
   if (argc != 1 && !request_only && !request_sanitizer && !request_profile &&
       !context_request_sanitizer && !context_request_profile && !mixer_sanitizer && !lattice_only &&
-      !lattice_sanitizer && !electric_field_only) {
+      !lattice_sanitizer && !electric_field_only && !gfn1_only && !gfn1_sanitizer &&
+      !gfn1_profile) {
     std::fprintf(stderr,
                  "usage: %s [--request-only|--request-sanitizer|--request-profile|"
                  "--context-request-sanitizer|--context-request-profile|"
                  "--mixer-sanitizer|--lattice-only|--lattice-sanitizer|"
-                 "--electric-field-only]\n",
+                 "--electric-field-only|--gfn1-only|--gfn1-sanitizer|--gfn1-profile]\n",
                  argv[0]);
     return 2;
   }
@@ -4896,6 +4976,9 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "failed to create CPU reference context: %s\n", xtbloom_get_last_error());
     return 1;
   }
+  if (gfn1_only) return test_gfn1_public_execution(device, cpu_context.get());
+  if (gfn1_sanitizer) return test_gfn1_public_execution(device, cpu_context.get(), true);
+  if (gfn1_profile) return test_gfn1_profile(device, cpu_context.get());
   MaterializedResult reference;
   g_scenario = "CPU-reference";
   if (const int line = run_cpu_reference(cpu_context.get(), batch, options, reference); line != 0) {
@@ -4984,7 +5067,7 @@ int main(int argc, char** argv) {
       line != 0) {
     return line;
   }
-  if (const int line = test_gfn1_rejected_transactionally(device, batch, options); line != 0) {
+  if (const int line = test_gfn1_public_execution(device, cpu_context.get()); line != 0) {
     return line;
   }
   if (const int line = test_stream_capture_transactionality(device, batch, options); line != 0) {

@@ -866,6 +866,11 @@ bool is_aligned(const void* pointer, std::size_t alignment) noexcept {
   return pointer != nullptr && reinterpret_cast<std::uintptr_t>(pointer) % alignment == 0u;
 }
 
+bool is_empty_or_aligned(const void* pointer, std::int64_t elements,
+                         std::size_t alignment) noexcept {
+  return elements == 0 ? pointer == nullptr : is_aligned(pointer, alignment);
+}
+
 struct AddressRange {
   std::uintptr_t begin = 0u;
   std::uintptr_t end = 0u;
@@ -888,6 +893,15 @@ bool make_address_range(const void* pointer, std::int64_t elements, std::size_t 
   }
   *range = {begin, begin + bytes};
   return true;
+}
+
+bool make_optional_address_range(const void* pointer, std::int64_t elements,
+                                 std::size_t element_size, AddressRange* range) noexcept {
+  if (elements == 0) {
+    *range = {};
+    return pointer == nullptr;
+  }
+  return make_address_range(pointer, elements, element_size, range);
 }
 
 bool ranges_overlap(const AddressRange& first, const AddressRange& second) noexcept {
@@ -970,10 +984,10 @@ bool validate_dimensions(const Gfn2SccDeviceBatch& batch, const Gfn2Wavefunction
          std::isfinite(policy.rms_tolerance) && policy.rms_tolerance > 0.0 &&
          std::isfinite(policy.maximum_tolerance) && policy.maximum_tolerance > 0.0 &&
          valid_layout_binding(batch, layout) &&
-         checked_multiply(dimensions->atom_elements, kDipoleComponents,
-                          &dimensions->dipole_elements) &&
-         checked_multiply(dimensions->atom_elements, kQuadrupoleComponents,
-                          &dimensions->quadrupole_elements) &&
+         checked_multiply(policy.atomic_multipole_components == 0 ? 0 : dimensions->atom_elements,
+                          kDipoleComponents, &dimensions->dipole_elements) &&
+         checked_multiply(policy.atomic_multipole_components == 0 ? 0 : dimensions->atom_elements,
+                          kQuadrupoleComponents, &dimensions->quadrupole_elements) &&
          checked_multiply(dimensions->atom_elements,
                           static_cast<std::int64_t>(policy.atomic_multipole_components),
                           &atomic_components) &&
@@ -994,8 +1008,9 @@ bool valid_const_multipoles(const Gfn2SccDeviceConstMultipoles& view,
          view.dipole_elements == dimensions.dipole_elements &&
          view.quadrupole_elements == dimensions.quadrupole_elements &&
          is_aligned(view.shell_charges, alignof(double)) &&
-         is_aligned(view.atomic_dipoles, alignof(double)) &&
-         is_aligned(view.atomic_quadrupoles, alignof(double));
+         is_empty_or_aligned(view.atomic_dipoles, dimensions.dipole_elements, alignof(double)) &&
+         is_empty_or_aligned(view.atomic_quadrupoles, dimensions.quadrupole_elements,
+                             alignof(double));
 }
 
 bool valid_multipoles(const Gfn2SccDeviceMultipoles& view, const Gfn2SccDeviceBatch& batch,
@@ -1004,8 +1019,9 @@ bool valid_multipoles(const Gfn2SccDeviceMultipoles& view, const Gfn2SccDeviceBa
          view.dipole_elements == dimensions.dipole_elements &&
          view.quadrupole_elements == dimensions.quadrupole_elements &&
          is_aligned(view.shell_charges, alignof(double)) &&
-         is_aligned(view.atomic_dipoles, alignof(double)) &&
-         is_aligned(view.atomic_quadrupoles, alignof(double));
+         is_empty_or_aligned(view.atomic_dipoles, dimensions.dipole_elements, alignof(double)) &&
+         is_empty_or_aligned(view.atomic_quadrupoles, dimensions.quadrupole_elements,
+                             alignof(double));
 }
 
 bool valid_state(const Gfn2SccMixerDeviceState& state, const Gfn2SccDeviceBatch& batch,
@@ -1068,10 +1084,10 @@ bool validate_ranges(const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayo
                           &reads[1]) ||
       !make_address_range(input.shell_charges, dimensions.shell_elements, sizeof(double),
                           &reads[8]) ||
-      !make_address_range(input.atomic_dipoles, dimensions.dipole_elements, sizeof(double),
-                          &reads[9]) ||
-      !make_address_range(input.atomic_quadrupoles, dimensions.quadrupole_elements, sizeof(double),
-                          &reads[10]) ||
+      !make_optional_address_range(input.atomic_dipoles, dimensions.dipole_elements, sizeof(double),
+                                   &reads[9]) ||
+      !make_optional_address_range(input.atomic_quadrupoles, dimensions.quadrupole_elements,
+                                   sizeof(double), &reads[10]) ||
       !make_address_range(state.current_inputs, dimensions.vector_elements, sizeof(double),
                           &writes[0]) ||
       !make_address_range(state.previous_inputs, dimensions.vector_elements, sizeof(double),
@@ -1135,10 +1151,10 @@ bool validate_ranges(const Gfn2SccDeviceBatch& batch, const Gfn2WavefunctionLayo
   if (output != nullptr) {
     if (!make_address_range(output->shell_charges, dimensions.shell_elements, sizeof(double),
                             &writes[20]) ||
-        !make_address_range(output->atomic_dipoles, dimensions.dipole_elements, sizeof(double),
-                            &writes[21]) ||
-        !make_address_range(output->atomic_quadrupoles, dimensions.quadrupole_elements,
-                            sizeof(double), &writes[22])) {
+        !make_optional_address_range(output->atomic_dipoles, dimensions.dipole_elements,
+                                     sizeof(double), &writes[21]) ||
+        !make_optional_address_range(output->atomic_quadrupoles, dimensions.quadrupole_elements,
+                                     sizeof(double), &writes[22])) {
       return false;
     }
   } else {

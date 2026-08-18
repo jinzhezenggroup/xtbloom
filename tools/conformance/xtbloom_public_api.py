@@ -582,9 +582,7 @@ def supported_cases(
     cases = conformance.selected_cases(manifest, names)
     if backend is None:
         return cases
-    default_backends = (
-        ["cpu"] if model_tag(manifest) == XTBLOOM_MODEL_GFN1_XTB else ["cpu", "cuda"]
-    )
+    default_backends = ["cpu", "cuda"]
     return [
         case
         for case in cases

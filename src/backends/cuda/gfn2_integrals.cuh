@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/xtb_model.hpp"
+
 namespace xtbloom::detail::cuda {
 
 inline constexpr std::int64_t kGfn2IntegralDipoleComponents = 3;
@@ -79,6 +81,11 @@ struct Gfn2IntegralDeviceBatch {
   const std::uint8_t* angular_momenta = nullptr;
   const double* primitive_exponents = nullptr;
   const double* primitive_coefficients = nullptr;
+
+  /* The overlap primitive is shared by GFN1 and GFN2. Only GFN2 constructs
+   * dipole/quadrupole Hamiltonian operators, so the selected model controls
+   * whether those component planes are required, evaluated, and published. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 /* Device-resident immutable arrays uploaded from H0Plan accessors. */

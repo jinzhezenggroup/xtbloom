@@ -1582,6 +1582,7 @@ if(XTBLOOM_HAS_CUDA)
     src/runtime/gfn2_cuda_topology_staging.cu
     src/runtime/gfn2_cuda_execution.cu
     src/runtime/result_owner_cuda.cu
+    src/backends/cuda/gfn1_classical_corrections.cu
     src/backends/cuda/gfn2_aes2.cu
     src/backends/cuda/gfn2_classical_force.cu
     src/backends/cuda/gfn2_d4.cu
@@ -1643,7 +1644,14 @@ if(XTBLOOM_HAS_CUDA)
   # The startup bootstrap uses pthread_once and a diagnostic mutex. Preserve
   # that dependency for every executable that consumes the backend objects,
   # not just for the final xtbloom library target.
-  target_link_libraries(xtbloom_cuda_backend PUBLIC Threads::Threads)
+  target_link_libraries(xtbloom_cuda_backend PUBLIC
+    Threads::Threads
+    # CUDA host planning reuses the canonical CPU GFN1 plan builders. Expose
+    # their object closure to white-box CUDA executables, which link the
+    # backend objects directly rather than resolving hidden symbols through
+    # libxtbloom.
+    xtbloom_gfn1_cpu
+  )
   # The CUDA runtime/math/driver shared libraries are deliberately NOT linked.
   # The priority-101 bootstrap pre-resolves the complete shim cohort before
   # ordinary NVCC registration constructors run.
@@ -2672,6 +2680,9 @@ if(XTBLOOM_BUILD_TESTS)
     add_test(NAME xtbloom.cuda.gfn2_runtime_owner_refresh_chain
       COMMAND xtbloom_cuda_gfn2_runtime_owner_test --refresh-chain
     )
+    add_test(NAME xtbloom.cuda.gfn1_host_plan_accounting
+      COMMAND xtbloom_cuda_gfn2_runtime_owner_test --gfn1-host-plan-accounting
+    )
 
     add_executable(xtbloom_cuda_gfn2_runtime_parity_test
       tests/cuda_gfn2_runtime_parity_test.cu
@@ -3131,6 +3142,54 @@ if(XTBLOOM_BUILD_TESTS)
     )
     add_test(NAME xtbloom.cuda.scc_iteration_arena
       COMMAND xtbloom_cuda_scc_iteration_arena_test
+    )
+
+    add_executable(xtbloom_cuda_gfn1_scalar_contract_test
+      tests/cuda_gfn1_scalar_contract_test.cu
+    )
+    target_link_libraries(xtbloom_cuda_gfn1_scalar_contract_test PRIVATE
+      xtbloom_cuda_backend
+      xtbloom_gfn1_cpu
+      xtbloom_gfn2_cpu
+    )
+    target_include_directories(xtbloom_cuda_gfn1_scalar_contract_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_gfn1_scalar_contract_test
+      PRIVATE XTBLOOM_HAS_CUDA=1
+    )
+    set_target_properties(xtbloom_cuda_gfn1_scalar_contract_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.gfn1_scalar_contract
+      COMMAND xtbloom_cuda_gfn1_scalar_contract_test
+    )
+
+    add_executable(xtbloom_cuda_gfn1_classical_corrections_test
+      tests/cuda_gfn1_classical_corrections_test.cu
+    )
+    target_link_libraries(xtbloom_cuda_gfn1_classical_corrections_test PRIVATE
+      xtbloom_cuda_backend
+      xtbloom_gfn1_cpu
+      xtbloom_gfn2_cpu
+    )
+    target_include_directories(xtbloom_cuda_gfn1_classical_corrections_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_gfn1_classical_corrections_test
+      PRIVATE XTBLOOM_HAS_CUDA=1
+    )
+    set_target_properties(xtbloom_cuda_gfn1_classical_corrections_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.gfn1_classical_corrections
+      COMMAND xtbloom_cuda_gfn1_classical_corrections_test
     )
 
     add_executable(xtbloom_cuda_scc_iteration_initialize_test
@@ -4245,6 +4304,62 @@ if(XTBLOOM_BUILD_TESTS)
       LABELS "conformance;public-api;gfn1"
     )
     if(XTBLOOM_HAS_CUDA)
+      foreach(memory_mode IN ITEMS host device mixed)
+        if(memory_mode STREQUAL "host")
+          set(gfn1_cuda_suffix "")
+        else()
+          set(gfn1_cuda_suffix "_${memory_mode}")
+        endif()
+        add_test(
+          NAME xtbloom.conformance.gfn1_public_cuda${gfn1_cuda_suffix}
+          COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_public_api.py
+                  --manifest ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/gfn1/manifest.json
+                  --library $<TARGET_FILE:xtbloom> --backend cuda
+                  --memory-mode ${memory_mode}
+                  --actual-dir ${CMAKE_CURRENT_BINARY_DIR}/conformance/gfn1-public-api
+                  --skip-backend-unavailable
+        )
+        set_tests_properties(xtbloom.conformance.gfn1_public_cuda${gfn1_cuda_suffix} PROPERTIES
+          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+          ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+          ENVIRONMENT_MODIFICATION
+            "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+          LABELS "conformance;public-api;gfn1;cuda"
+          SKIP_RETURN_CODE 77
+        )
+        add_test(
+          NAME xtbloom.conformance.gfn1_invariants_cuda${gfn1_cuda_suffix}
+          COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_invariants.py
+                  --manifest ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/gfn1/manifest.json
+                  --library $<TARGET_FILE:xtbloom> --backend cuda
+                  --memory-mode ${memory_mode}
+                  --skip-backend-unavailable
+        )
+        set_tests_properties(xtbloom.conformance.gfn1_invariants_cuda${gfn1_cuda_suffix} PROPERTIES
+          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+          ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+          ENVIRONMENT_MODIFICATION
+            "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+          LABELS "conformance;public-api;gfn1;cuda"
+          SKIP_RETURN_CODE 77
+        )
+        add_test(
+          NAME xtbloom.conformance.gfn1_spin2_public_cuda${gfn1_cuda_suffix}
+          COMMAND ${Python3_EXECUTABLE} tools/conformance/gfn1_public_spin2.py
+                  --library $<TARGET_FILE:xtbloom> --backend cuda
+                  --memory-mode ${memory_mode}
+                  --skip-backend-unavailable
+        )
+        set_tests_properties(xtbloom.conformance.gfn1_spin2_public_cuda${gfn1_cuda_suffix} PROPERTIES
+          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+          ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+          ENVIRONMENT_MODIFICATION
+            "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+          LABELS "conformance;public-api;gfn1;cuda"
+          SKIP_RETURN_CODE 77
+        )
+      endforeach()
+      unset(gfn1_cuda_suffix)
       add_test(
         NAME xtbloom.conformance.public_cuda
         COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_public_api.py

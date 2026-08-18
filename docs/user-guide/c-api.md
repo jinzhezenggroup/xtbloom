@@ -43,9 +43,8 @@ line to `XTBLOOM_BACKEND_CUDA` to verify the CUDA build explicitly.
 
 `xtbloom_compute_options_init` defaults `compute_options.model` to
 `XTBLOOM_MODEL_GFN2_XTB`. Set it explicitly to `XTBLOOM_MODEL_GFN1_XTB` for
-GFN1 CPU execution. A GFN1 request on a CUDA context returns
-`XTBLOOM_STATUS_NOT_SUPPORTED` transactionally; the library never substitutes
-GFN2. GFN1 publishes energy, forces, charges, and point-charge forces, and
+GFN1 execution on CPU or CUDA; the library never substitutes GFN2. GFN1
+publishes energy, forces, charges, and point-charge forces, and
 accepts caller-supplied `b` and `A` fields for the `b + A*q` response. It does
 not support electric-field attachments or the molecular-dipole outlet.
 

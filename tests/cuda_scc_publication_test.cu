@@ -16,6 +16,7 @@
 namespace {
 
 using namespace xtbloom::detail::cuda;
+using xtbloom::detail::XtbModelFlavor;
 
 #define CHECK(condition)                                                                   \
   do {                                                                                     \
@@ -190,8 +191,11 @@ bool staged_matches_public(const Arena<T>& staged_arena, const T* staged_pointer
 
 struct Fixture {
   explicit Fixture(std::int64_t requested_batch, bool complex_case = false,
-                   bool mixed_spin_case = false)
-      : batch(requested_batch), complex(complex_case), mixed_spin(mixed_spin_case) {
+                   bool mixed_spin_case = false, bool gfn1_case = false)
+      : batch(requested_batch),
+        complex(complex_case),
+        mixed_spin(mixed_spin_case),
+        gfn1(gfn1_case) {
     build_topology();
     allocate_storage();
     bind_descriptors();
@@ -201,6 +205,7 @@ struct Fixture {
   std::int64_t batch = 0;
   bool complex = false;
   bool mixed_spin = false;
+  bool gfn1 = false;
   std::int64_t atoms = 0;
   std::int64_t shells = 0;
   std::int64_t orbitals = 0;
@@ -331,7 +336,9 @@ struct Fixture {
     spin_shells = spin_shell_offsets_host.back();
     spin_orbitals = spin_orbital_offsets_host.back();
     spin_matrices = spin_matrix_offsets_host.back();
-    vector_elements = spin_shells + 9 * spin_atoms;
+    /* GFN1 mixes scalar shell populations only. GFN2 appends the three dipole
+     * and six quadrupole components for every spin-expanded atom. */
+    vector_elements = spin_shells + (gfn1 ? 0 : 9 * spin_atoms);
     history_elements = vector_elements * history_size;
     omega_elements = batch * history_size;
 
@@ -430,10 +437,10 @@ struct Fixture {
                         spin_shells,
                         arena.take(static_cast<std::size_t>(spin_atoms)),
                         spin_atoms,
-                        arena.take(static_cast<std::size_t>(3 * spin_atoms)),
-                        3 * spin_atoms,
-                        arena.take(static_cast<std::size_t>(6 * spin_atoms)),
-                        6 * spin_atoms,
+                        gfn1 ? nullptr : arena.take(static_cast<std::size_t>(3 * spin_atoms)),
+                        gfn1 ? 0 : 3 * spin_atoms,
+                        gfn1 ? nullptr : arena.take(static_cast<std::size_t>(6 * spin_atoms)),
+                        gfn1 ? 0 : 6 * spin_atoms,
                         kPlanToken};
     value.plan_token = kPlanToken;
   }
@@ -447,14 +454,16 @@ struct Fixture {
     free.es2_elements = batch;
     free.es3 = arena.take(static_cast<std::size_t>(batch));
     free.es3_elements = batch;
-    free.aes2 = arena.take(static_cast<std::size_t>(batch));
-    free.aes2_elements = batch;
+    free.aes2 = gfn1 ? nullptr : arena.take(static_cast<std::size_t>(batch));
+    free.aes2_elements = gfn1 ? 0 : batch;
     free.spin = arena.take(static_cast<std::size_t>(batch));
     free.spin_elements = batch;
     free.d4_two_body = arena.take(static_cast<std::size_t>(batch));
     free.d4_two_body_elements = batch;
     free.explicit_point_charge = arena.take(static_cast<std::size_t>(batch));
     free.explicit_point_charge_elements = batch;
+    free.electric_field = arena.take(static_cast<std::size_t>(batch));
+    free.electric_field_elements = batch;
     free.periodic_embedding = arena.take(static_cast<std::size_t>(batch));
     free.periodic_embedding_elements = batch;
     free.entropy =
@@ -472,7 +481,7 @@ struct Fixture {
                        free.es3,
                        batch,
                        free.aes2,
-                       batch,
+                       free.aes2_elements,
                        free.d4_two_body,
                        batch,
                        free.explicit_point_charge,
@@ -482,6 +491,8 @@ struct Fixture {
                        arena.take(static_cast<std::size_t>(batch)),
                        batch,
                        kPlanToken};
+    value.classical.electric_field = free.electric_field;
+    value.classical.electric_field_elements = batch;
     value.plan_token = kPlanToken;
   }
 
@@ -511,10 +522,10 @@ struct Fixture {
   Gfn2SccDeviceMultipoles bind_multipoles(Arena<double>& arena) {
     return {arena.take(static_cast<std::size_t>(spin_shells)),
             spin_shells,
-            arena.take(static_cast<std::size_t>(3 * spin_atoms)),
-            3 * spin_atoms,
-            arena.take(static_cast<std::size_t>(6 * spin_atoms)),
-            6 * spin_atoms,
+            gfn1 ? nullptr : arena.take(static_cast<std::size_t>(3 * spin_atoms)),
+            gfn1 ? 0 : 3 * spin_atoms,
+            gfn1 ? nullptr : arena.take(static_cast<std::size_t>(6 * spin_atoms)),
+            gfn1 ? 0 : 6 * spin_atoms,
             kPlanToken};
   }
 
@@ -561,6 +572,7 @@ struct Fixture {
     plan.residual_rms_tolerance = 0.1;
     plan.energy_tolerance = 0.1;
     plan.plan_token = kPlanToken;
+    plan.model = gfn1 ? XtbModelFlavor::kGfn1 : XtbModelFlavor::kGfn2;
 
     ledger = {active_mask.get(),
               pending_statuses.get(),
@@ -591,9 +603,9 @@ struct Fixture {
     public_state.published = {public_state.wavefunction.population.qsh,
                               spin_shells,
                               public_state.wavefunction.population.dipole,
-                              3 * spin_atoms,
+                              public_state.wavefunction.population.dipole_elements,
                               public_state.wavefunction.population.quadrupole,
-                              6 * spin_atoms,
+                              public_state.wavefunction.population.quadrupole_elements,
                               kPlanToken};
     public_state.scc.current_inputs = bind_multipoles(public_d);
     public_state.scc.free_energies = public_d.take(static_cast<std::size_t>(batch));
@@ -658,17 +670,19 @@ struct Fixture {
       staged_d.at(staged.wavefunction.population.qat, static_cast<std::size_t>(atom)) =
           -0.03 * static_cast<double>(atom + 1);
     }
-    for (std::int64_t element = 0; element < 3 * spin_atoms; ++element) {
-      staged_d.at(staged.wavefunction.population.dipole, static_cast<std::size_t>(element)) =
-          0.04 * static_cast<double>(element + 1);
-      staged_d.at(staged.next_mixed.atomic_dipoles, static_cast<std::size_t>(element)) =
-          0.05 * static_cast<double>(element + 1);
-    }
-    for (std::int64_t element = 0; element < 6 * spin_atoms; ++element) {
-      staged_d.at(staged.wavefunction.population.quadrupole, static_cast<std::size_t>(element)) =
-          0.006 * static_cast<double>(element + 1);
-      staged_d.at(staged.next_mixed.atomic_quadrupoles, static_cast<std::size_t>(element)) =
-          0.007 * static_cast<double>(element + 1);
+    if (!gfn1) {
+      for (std::int64_t element = 0; element < 3 * spin_atoms; ++element) {
+        staged_d.at(staged.wavefunction.population.dipole, static_cast<std::size_t>(element)) =
+            0.04 * static_cast<double>(element + 1);
+        staged_d.at(staged.next_mixed.atomic_dipoles, static_cast<std::size_t>(element)) =
+            0.05 * static_cast<double>(element + 1);
+      }
+      for (std::int64_t element = 0; element < 6 * spin_atoms; ++element) {
+        staged_d.at(staged.wavefunction.population.quadrupole, static_cast<std::size_t>(element)) =
+            0.006 * static_cast<double>(element + 1);
+        staged_d.at(staged.next_mixed.atomic_quadrupoles, static_cast<std::size_t>(element)) =
+            0.007 * static_cast<double>(element + 1);
+      }
     }
 
     active_host.assign(static_cast<std::size_t>(batch), 1u);
@@ -984,6 +998,7 @@ int test_ragged_transaction_and_peer_failure() {
       fixture.public_state.energy.spin_energies,
       fixture.public_state.energy.free_energy.d4_two_body,
       fixture.public_state.energy.free_energy.explicit_point_charge,
+      fixture.public_state.energy.free_energy.electric_field,
       fixture.public_state.energy.free_energy.periodic_embedding,
       fixture.public_state.energy.free_energy.entropy,
       fixture.public_state.energy.free_energy.internal_energy,
@@ -1245,6 +1260,189 @@ int test_mixed_spin_transaction() {
   return 0;
 }
 
+int test_gfn1_scalar_transaction_and_peer_failure() {
+  Fixture fixture(3, false, true, true);
+  CHECK(fixture.plan.model == XtbModelFlavor::kGfn1);
+  CHECK(fixture.vector_elements == fixture.spin_shells);
+  CHECK(fixture.history_elements == fixture.spin_shells * Fixture::history_size);
+
+  const auto check_scalar_bindings = [](const Gfn2SccPublicationDeviceStagedState& staged,
+                                        const Gfn2SccPublicationDevicePublicState& published) {
+    return staged.wavefunction.population.dipole == nullptr &&
+           staged.wavefunction.population.dipole_elements == 0 &&
+           staged.wavefunction.population.quadrupole == nullptr &&
+           staged.wavefunction.population.quadrupole_elements == 0 &&
+           staged.next_mixed.atomic_dipoles == nullptr && staged.next_mixed.dipole_elements == 0 &&
+           staged.next_mixed.atomic_quadrupoles == nullptr &&
+           staged.next_mixed.quadrupole_elements == 0 &&
+           staged.energy.free_energy.aes2 == nullptr &&
+           staged.energy.free_energy.aes2_elements == 0 &&
+           staged.energy.classical.aes2 == nullptr && staged.energy.classical.aes2_elements == 0 &&
+           published.wavefunction.population.dipole == nullptr &&
+           published.wavefunction.population.dipole_elements == 0 &&
+           published.wavefunction.population.quadrupole == nullptr &&
+           published.wavefunction.population.quadrupole_elements == 0 &&
+           published.published.atomic_dipoles == nullptr &&
+           published.published.dipole_elements == 0 &&
+           published.published.atomic_quadrupoles == nullptr &&
+           published.published.quadrupole_elements == 0 &&
+           published.scc.current_inputs.atomic_dipoles == nullptr &&
+           published.scc.current_inputs.dipole_elements == 0 &&
+           published.scc.current_inputs.atomic_quadrupoles == nullptr &&
+           published.scc.current_inputs.quadrupole_elements == 0 &&
+           published.energy.free_energy.aes2 == nullptr &&
+           published.energy.free_energy.aes2_elements == 0 &&
+           published.energy.classical.aes2 == nullptr &&
+           published.energy.classical.aes2_elements == 0;
+  };
+  CHECK(check_scalar_bindings(fixture.staged, fixture.public_state));
+
+  constexpr std::int64_t failed_system = 1;
+  const std::int64_t failed_shell_begin = fixture.spin_shell_offsets_host[failed_system];
+  const std::int64_t failed_shell_end = fixture.spin_shell_offsets_host[failed_system + 1];
+  fixture.staged_d.at(fixture.staged.next_mixed.shell_charges,
+                      static_cast<std::size_t>(failed_shell_begin)) =
+      std::numeric_limits<double>::quiet_NaN();
+
+  CUDA_CHECK(fixture.upload());
+  PublicSnapshot before;
+  CUDA_CHECK(fixture.snapshot(before));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CUDA_CHECK(fixture.enqueue());
+
+  PublicSnapshot after;
+  std::vector<std::uint32_t> errors;
+  std::vector<std::uint8_t> active;
+  std::vector<std::uint64_t> failures;
+  CUDA_CHECK(fixture.snapshot(after));
+  CUDA_CHECK(fixture.system_errors.download(errors));
+  CUDA_CHECK(fixture.active_mask.download(active));
+  CUDA_CHECK(fixture.failure_records.download(failures));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(errors[failed_system] ==
+        static_cast<std::uint32_t>(Gfn2SccPublicationDeviceError::kNonfiniteNextMixedMultipole));
+  CHECK(active[failed_system] == 0u);
+  CHECK(gfn2_scc_failure_stage(failures[failed_system]) == Gfn2SccStageId::kStatePublication);
+
+  /* Successful GFN1 peers commit only their spin-expanded qsh mixer slices;
+   * no hidden d/Q tail may shift the history ranges. */
+  for (const std::int64_t system : {0, 2}) {
+    const std::int64_t shell_begin = fixture.spin_shell_offsets_host[system];
+    const std::int64_t shell_end = fixture.spin_shell_offsets_host[system + 1];
+    const std::int64_t history_begin = shell_begin * Fixture::history_size;
+    const std::int64_t history_end = shell_end * Fixture::history_size;
+    CHECK(staged_matches_public(fixture.staged_d, fixture.staged.next_mixed.shell_charges,
+                                fixture.public_d, fixture.public_state.published.shell_charges,
+                                after.doubles, shell_begin, shell_end));
+    CHECK(staged_matches_public(fixture.staged_d, fixture.staged.next_mixed.shell_charges,
+                                fixture.public_d,
+                                fixture.public_state.scc.current_inputs.shell_charges,
+                                after.doubles, shell_begin, shell_end));
+    CHECK(staged_matches_public(fixture.staged_d, fixture.staged.mixer.df_history, fixture.public_d,
+                                fixture.public_state.mixer.df_history, after.doubles, history_begin,
+                                history_end));
+    CHECK(staged_matches_public(fixture.staged_d, fixture.staged.mixer.u_history, fixture.public_d,
+                                fixture.public_state.mixer.u_history, after.doubles, history_begin,
+                                history_end));
+    const std::size_t field_index =
+        fixture.public_d.offset(fixture.public_state.energy.free_energy.electric_field) +
+        static_cast<std::size_t>(system);
+    CHECK(byte_equal(fixture.staged_d.at(fixture.staged.energy.free_energy.electric_field,
+                                         static_cast<std::size_t>(system)),
+                     after.doubles[field_index]));
+  }
+
+  CHECK(public_range_unchanged(fixture.public_d, before.doubles, after.doubles,
+                               fixture.public_state.published.shell_charges, failed_shell_begin,
+                               failed_shell_end));
+  CHECK(public_range_unchanged(fixture.public_d, before.doubles, after.doubles,
+                               fixture.public_state.mixer.current_inputs, failed_shell_begin,
+                               failed_shell_end));
+  CHECK(public_range_unchanged(fixture.public_d, before.doubles, after.doubles,
+                               fixture.public_state.wavefunction.eigenpairs.eigenvalues,
+                               fixture.spin_orbital_offsets_host[failed_system],
+                               fixture.spin_orbital_offsets_host[failed_system + 1]));
+
+  const std::vector<double*> nan_fields{
+      fixture.public_state.energy.free_energy.core,
+      fixture.public_state.energy.free_energy.es2,
+      fixture.public_state.energy.free_energy.es3,
+      fixture.public_state.energy.spin_energies,
+      fixture.public_state.energy.free_energy.d4_two_body,
+      fixture.public_state.energy.free_energy.explicit_point_charge,
+      fixture.public_state.energy.free_energy.electric_field,
+      fixture.public_state.energy.free_energy.periodic_embedding,
+      fixture.public_state.energy.free_energy.entropy,
+      fixture.public_state.energy.free_energy.internal_energy,
+      fixture.public_state.energy.free_energy.free_energy,
+      fixture.public_state.energy.classical.classical_total,
+      fixture.public_state.wavefunction.density.band_energies,
+      fixture.public_state.scc.previous_free_energies,
+      fixture.public_state.scc.free_energies,
+      fixture.public_state.scc.free_energy_changes,
+      fixture.public_state.scc.residual_rms};
+  for (const double* field : nan_fields) {
+    CHECK(std::isnan(after.doubles[fixture.public_d.offset(field) + failed_system]));
+  }
+  CHECK(after.statuses[fixture.public_status.offset(fixture.public_state.scc.system_statuses) +
+                       failed_system] == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(after.uint64s[fixture.public_u64.offset(fixture.public_state.scc.iterations) +
+                      failed_system] == 1u);
+  return 0;
+}
+
+int test_gfn1_rejects_nonnull_zero_extent_descriptors() {
+  for (int mode = 0; mode < 10; ++mode) {
+    Fixture fixture(1, false, false, true);
+    double* hostile = fixture.staged_d.device.get();
+    switch (mode) {
+      case 0:
+        fixture.staged.wavefunction.population.dipole = hostile;
+        break;
+      case 1:
+        fixture.staged.wavefunction.population.quadrupole = hostile;
+        break;
+      case 2:
+        fixture.staged.next_mixed.atomic_dipoles = hostile;
+        break;
+      case 3:
+        fixture.staged.next_mixed.atomic_quadrupoles = hostile;
+        break;
+      case 4:
+        fixture.public_state.wavefunction.population.dipole = hostile;
+        break;
+      case 5:
+        fixture.public_state.published.atomic_quadrupoles = hostile;
+        break;
+      case 6:
+        fixture.public_state.scc.current_inputs.atomic_dipoles = hostile;
+        break;
+      case 7:
+        fixture.staged.energy.free_energy.aes2 = hostile;
+        break;
+      case 8:
+        fixture.staged.energy.classical.aes2 = hostile;
+        break;
+      default:
+        fixture.public_state.energy.free_energy.aes2 = hostile;
+        break;
+    }
+
+    CUDA_CHECK(fixture.upload());
+    PublicSnapshot before;
+    CUDA_CHECK(fixture.snapshot(before));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(preflight_gfn2_scc_publication_cuda(fixture.plan, fixture.activity, fixture.ledger,
+                                              fixture.staged, fixture.public_state,
+                                              fixture.workspace) == cudaErrorInvalidValue);
+    PublicSnapshot after;
+    CUDA_CHECK(fixture.snapshot(after));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CHECK(snapshot_equal(before, after));
+  }
+  return 0;
+}
+
 int test_batch_sizes() {
   for (const bool mixed_spin : {false, true}) {
     for (const std::int64_t batch : {1, 8, 32, 128}) {
@@ -1337,6 +1535,10 @@ int main() {
   status = test_strict_convergence_and_iteration_zero_seed();
   if (status != 0) return status;
   status = test_mixed_spin_transaction();
+  if (status != 0) return status;
+  status = test_gfn1_scalar_transaction_and_peer_failure();
+  if (status != 0) return status;
+  status = test_gfn1_rejects_nonnull_zero_extent_descriptors();
   if (status != 0) return status;
   status = test_batch_sizes();
   if (status != 0) return status;
