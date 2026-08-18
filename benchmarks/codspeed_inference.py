@@ -1,15 +1,20 @@
 """Small CPU regression benchmarks for CodSpeed simulation.
 
 These cases are deliberately much smaller than the publication-grade benchmark
-protocols in this directory.  They exercise the public Python layer and native
+protocols in this directory. They exercise the public Python layer and native
 C ABI end to end so pull requests get a stable regression signal without
 turning CodSpeed numbers into hardware performance claims.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Protocol, TypeVar
+
 import numpy as np
 from xtbloom import BatchCalculator, BatchResult, Calculator, Result, Structure
+
+_T = TypeVar("_T")
 
 _WATER_NUMBERS = np.array([8, 1, 1], dtype=np.int32)
 _WATER_POSITIONS = np.array(
@@ -25,6 +30,14 @@ _H2_POSITIONS = np.array(
     [[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]],
     dtype=np.float64,
 )
+
+
+class _BenchmarkFixture(Protocol):
+    """Minimal callable surface used from pytest-codspeed."""
+
+    def __call__(self, target: Callable[[], _T]) -> _T:
+        """Measure one target callable and return its final result."""
+        ...
 
 
 def _assert_single_result(result: Result) -> None:
@@ -45,7 +58,7 @@ def _assert_batch_result(result: BatchResult) -> None:
     assert np.isfinite(result.charges).all()
 
 
-def test_gfn2_water_fresh(benchmark) -> None:
+def test_gfn2_water_fresh(benchmark: _BenchmarkFixture) -> None:
     """Measure repeated fresh-SCC GFN2 water inference on one CPU worker."""
     with Calculator(
         "GFN2-xTB",
@@ -59,7 +72,7 @@ def test_gfn2_water_fresh(benchmark) -> None:
     _assert_single_result(result)
 
 
-def test_gfn2_water_warm(benchmark) -> None:
+def test_gfn2_water_warm(benchmark: _BenchmarkFixture) -> None:
     """Measure strict warm-SCC GFN2 reuse after an untimed fresh seed."""
     with Calculator(
         "GFN2-xTB",
@@ -75,7 +88,7 @@ def test_gfn2_water_warm(benchmark) -> None:
     _assert_single_result(result)
 
 
-def test_gfn1_water_fresh(benchmark) -> None:
+def test_gfn1_water_fresh(benchmark: _BenchmarkFixture) -> None:
     """Measure repeated fresh-SCC GFN1 water inference on one CPU worker."""
     with Calculator(
         "GFN1-xTB",
@@ -89,7 +102,7 @@ def test_gfn1_water_fresh(benchmark) -> None:
     _assert_single_result(result)
 
 
-def test_gfn2_ragged_batch_fresh(benchmark) -> None:
+def test_gfn2_ragged_batch_fresh(benchmark: _BenchmarkFixture) -> None:
     """Measure one small ragged GFN2 batch through the public Python API."""
     structures = [
         Structure(_H2_NUMBERS, _H2_POSITIONS),
@@ -103,8 +116,9 @@ def test_gfn2_ragged_batch_fresh(benchmark) -> None:
         warm_start=False,
     ) as calculator:
         result = benchmark(
-            calculator.compute,
-            raise_on_failure=True,
-            auto_batch_size=False,
+            lambda: calculator.compute(
+                raise_on_failure=True,
+                auto_batch_size=False,
+            )
         )
     _assert_batch_result(result)
