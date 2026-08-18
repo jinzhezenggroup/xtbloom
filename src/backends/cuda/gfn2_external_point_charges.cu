@@ -173,8 +173,8 @@ __global__ void external_point_charge_potential_kernel(Gfn2ExternalPointChargeDe
         finite_result = false;
         break;
       }
-      const double inverse_average_hardness = inverse_screening_hardness(
-          batch.model, shell_hardness, batch.point_hardnesses[point]);
+      const double inverse_average_hardness =
+          inverse_screening_hardness(batch.model, shell_hardness, batch.point_hardnesses[point]);
       /* Match the nested-hypot CPU reference, including extreme hardnesses. */
       const double softened_distance = hypot(hypot(dx, dy), hypot(dz, inverse_average_hardness));
       const double contribution = batch.point_charges[point] / softened_distance;
@@ -413,8 +413,8 @@ __global__ void pc_scc_potential_cache_kernel(Gfn2ExternalPointChargeDeviceBatch
       const double dx = atom_x - batch.point_positions[point_coordinate];
       const double dy = atom_y - batch.point_positions[point_coordinate + 1];
       const double dz = atom_z - batch.point_positions[point_coordinate + 2];
-      const double inverse_average_hardness = inverse_screening_hardness(
-          batch.model, shell_hardness, batch.point_hardnesses[point]);
+      const double inverse_average_hardness =
+          inverse_screening_hardness(batch.model, shell_hardness, batch.point_hardnesses[point]);
       const double distance = hypot(hypot(dx, dy), hypot(dz, inverse_average_hardness));
       const double contribution = batch.point_charges[point] / distance;
       const double updated = potential + contribution;
@@ -483,8 +483,7 @@ __device__ bool evaluate_point_charge_pair_force(double atom_x, double atom_y, d
                                                  double point_x, double point_y, double point_z,
                                                  XtbModelFlavor model, double shell_hardness,
                                                  double point_hardness, double shell_charge,
-                                                 double point_charge,
-                                                 PointChargePairForce* force) {
+                                                 double point_charge, PointChargePairForce* force) {
   const double dx = atom_x - point_x;
   const double dy = atom_y - point_y;
   const double dz = atom_z - point_z;

@@ -773,8 +773,8 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(
     projected.dipole.system_offsets.assign(systems + 1u, 0);
     projected.quadrupole.system_offsets.assign(systems + 1u, 0);
     for (std::size_t system = 0; system < systems; ++system) {
-      const std::int64_t atoms = wavefunction.atom_offsets[system + 1u] -
-                                 wavefunction.atom_offsets[system];
+      const std::int64_t atoms =
+          wavefunction.atom_offsets[system + 1u] - wavefunction.atom_offsets[system];
       const std::int64_t channels = wavefunction.spin_channels[system];
       std::int64_t spin_atoms = 0;
       std::int64_t dipoles = 0;
@@ -786,10 +786,8 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(
               std::numeric_limits<std::int64_t>::max() - dipoles ||
           projected.quadrupole.system_offsets[system] >
               std::numeric_limits<std::int64_t>::max() - quadrupoles) {
-        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT,
-                       Gfn2SccSetupTopologyError::kCountOverflow,
-                       Gfn2SccSetupTopologyField::kWavefunction,
-                       static_cast<std::int64_t>(system));
+        return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Gfn2SccSetupTopologyError::kCountOverflow,
+                       Gfn2SccSetupTopologyField::kWavefunction, static_cast<std::int64_t>(system));
       }
       projected.dipole.system_offsets[system + 1u] =
           projected.dipole.system_offsets[system] + dipoles;
@@ -801,8 +799,7 @@ Gfn2SccSetupTopologyDiagnostic Gfn2SccSetupTopology::create(
     return create(static_cast<const gfn2::BasisPlan&>(basis),
                   static_cast<const gfn2::IntegralPlan&>(integrals), projected, plan_token, output);
   } catch (const std::bad_alloc&) {
-    return failure(XTBLOOM_STATUS_ALLOCATION_FAILED,
-                   Gfn2SccSetupTopologyError::kAllocationFailed,
+    return failure(XTBLOOM_STATUS_ALLOCATION_FAILED, Gfn2SccSetupTopologyError::kAllocationFailed,
                    Gfn2SccSetupTopologyField::kWavefunction);
   } catch (...) {
     return failure(XTBLOOM_STATUS_INTERNAL_ERROR, Gfn2SccSetupTopologyError::kInvalidPlan,

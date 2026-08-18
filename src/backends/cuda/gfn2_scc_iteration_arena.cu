@@ -110,7 +110,8 @@ struct ArenaShape {
       plan.mixer_policy.history_size <= 0 ||
       (plan.mixer_policy.atomic_multipole_components != 0 &&
        plan.mixer_policy.atomic_multipole_components != 9) ||
-      (plan.enabled_components & mandatory_components(plan.model)) != mandatory_components(plan.model) ||
+      (plan.enabled_components & mandatory_components(plan.model)) !=
+          mandatory_components(plan.model) ||
       (plan.enabled_components & ~kGfn2SccPotentialAllComponents) != 0u ||
       plan.geometry_batch.total_pairs < 0 || plan.es2_batch.total_matrix_elements < 0 ||
       plan.aes2_batch.total_pairs < 0 || plan.d4_batch.total_pairs < 0) {

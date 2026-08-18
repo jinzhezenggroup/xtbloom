@@ -23,8 +23,7 @@ constexpr std::uint32_t component_bit(Gfn2SccPotentialComponent component) noexc
 }
 
 constexpr std::uint32_t kCommonMandatoryComponents =
-    component_bit(Gfn2SccPotentialComponent::kES2) |
-    component_bit(Gfn2SccPotentialComponent::kES3);
+    component_bit(Gfn2SccPotentialComponent::kES2) | component_bit(Gfn2SccPotentialComponent::kES3);
 
 constexpr std::uint32_t mandatory_components(XtbModelFlavor model) noexcept {
   return kCommonMandatoryComponents |
@@ -104,7 +103,8 @@ bool derive_shape(const Gfn2SccIterationDevicePlan& plan, Shape& shape) noexcept
       plan.mixer_policy.history_size <= 0 ||
       (plan.mixer_policy.atomic_multipole_components != 0 &&
        plan.mixer_policy.atomic_multipole_components != 9) ||
-      (plan.enabled_components & mandatory_components(plan.model)) != mandatory_components(plan.model) ||
+      (plan.enabled_components & mandatory_components(plan.model)) !=
+          mandatory_components(plan.model) ||
       (plan.enabled_components & ~kGfn2SccPotentialAllComponents) != 0u) {
     return false;
   }

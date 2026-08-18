@@ -622,10 +622,9 @@ bool validate_top_level_shape(const Gfn2SccIterationDevicePlan& plan, Validator&
   std::int64_t atom_multipoles = 0;
   if ((plan.mixer_policy.atomic_multipole_components != 0 &&
        plan.mixer_policy.atomic_multipole_components != 9) ||
-      !checked_multiply(
-          plan.wavefunction_layout.total_spin_atoms,
-          static_cast<std::int64_t>(plan.mixer_policy.atomic_multipole_components),
-          atom_multipoles) ||
+      !checked_multiply(plan.wavefunction_layout.total_spin_atoms,
+                        static_cast<std::int64_t>(plan.mixer_policy.atomic_multipole_components),
+                        atom_multipoles) ||
       !checked_add(plan.wavefunction_layout.total_spin_shells, atom_multipoles, mixer_vector)) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kMixer);
   }
@@ -2722,13 +2721,13 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
         !scratch(workspace.aes2_workspace.pair_scratch, workspace.aes2_workspace.pair_elements,
                  aes2_pair_elements, sizeof(double), alignof(double), BindingField::kAES2, 1) ||
         !scratch(workspace.aes2_workspace.potential_scratch,
-                 workspace.aes2_workspace.potential_elements, aes2_potential_elements, sizeof(double),
-                 alignof(double), BindingField::kAES2, 2) ||
+                 workspace.aes2_workspace.potential_elements, aes2_potential_elements,
+                 sizeof(double), alignof(double), BindingField::kAES2, 2) ||
         !scratch(workspace.aes2_workspace.batch_scratch, workspace.aes2_workspace.batch_elements,
                  batch, sizeof(double), alignof(double), BindingField::kAES2, 3) ||
         !scratch(workspace.aes2_workspace.gradient_scratch,
-                 workspace.aes2_workspace.gradient_elements, dipoles, sizeof(double), alignof(double),
-                 BindingField::kAES2, 4) ||
+                 workspace.aes2_workspace.gradient_elements, dipoles, sizeof(double),
+                 alignof(double), BindingField::kAES2, 4) ||
         !scratch(workspace.aes2_workspace.coordination_scratch,
                  workspace.aes2_workspace.coordination_elements, atoms, sizeof(double),
                  alignof(double), BindingField::kAES2, 5) ||
@@ -2738,7 +2737,6 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
       return false;
     }
   }
-
 
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
     std::int64_t weights = 0;
@@ -3783,7 +3781,6 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
       return failure;
     }
   }
-
 
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
     stage_report = report(Gfn2SccStageId::kD4RawEnergy);

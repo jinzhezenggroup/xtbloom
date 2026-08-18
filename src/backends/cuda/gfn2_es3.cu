@@ -499,8 +499,7 @@ bool is_aligned(const void* pointer, std::size_t alignment) noexcept {
 
 cudaError_t validate_common_launcher_arguments(const Gfn2ES3DeviceBatch& batch,
                                                std::uint32_t* device_error) noexcept {
-  if (batch.batch_size <= 0 || batch.total_shells <= 0 ||
-      !valid_xtb_model_flavor(batch.model) ||
+  if (batch.batch_size <= 0 || batch.total_shells <= 0 || !valid_xtb_model_flavor(batch.model) ||
       batch.batch_size == std::numeric_limits<std::int64_t>::max() ||
       batch.batch_shell_offset_count != batch.batch_size + 1 ||
       batch.shell_gamma3_count != batch.total_shells || batch.batch_shell_offsets == nullptr ||
