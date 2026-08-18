@@ -27,10 +27,24 @@ option(XTBLOOM_WEB_ENABLE_SIMD
   "Enable WebAssembly SIMD128 for the browser-only engine and provider" ON)
 set(_xtbloom_web_simd_flag "")
 if(XTBLOOM_WEB_ENABLE_SIMD)
-  # The core static library is created before this Web-only subdirectory. Apply
-  # the target feature here so the GFN-xTB physics, not only the adapter and
-  # Eigen compatibility module, can be auto-vectorized to f64x2 SIMD lanes.
-  target_compile_options(xtbloom PRIVATE -msimd128)
+  # The public library is assembled from several parent-scope OBJECT targets.
+  # Apply the target feature to every CPU object producer as well as the final
+  # runtime target so the physics kernels, not only the adapter, can be
+  # auto-vectorized to f64x2 SIMD lanes.
+  set(_xtbloom_web_simd_targets
+    xtbloom
+    xtbloom_cpu_dispatch_objects
+    xtbloom_gfn2_mulliken_baseline_objects
+    xtbloom_model_common_cpu_objects
+    xtbloom_gfn1_cpu_objects
+    xtbloom_gfn2_cpu_objects)
+  foreach(_xtbloom_web_simd_target IN LISTS _xtbloom_web_simd_targets)
+    if(NOT TARGET ${_xtbloom_web_simd_target})
+      message(FATAL_ERROR
+        "missing Web SIMD compile target: ${_xtbloom_web_simd_target}")
+    endif()
+    target_compile_options(${_xtbloom_web_simd_target} PRIVATE -msimd128)
+  endforeach()
   set(_xtbloom_web_simd_flag "-msimd128")
   message(STATUS "xTBloom WebAssembly SIMD128: enabled")
 else()
