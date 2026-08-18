@@ -121,6 +121,7 @@ bool writes_are_disjoint(const RangeList<ReadCapacity>& reads,
 
 bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
   const std::uint64_t token = binding.plan_token;
+  const bool aes2_enabled = binding.plan.geometry.model == XtbModelFlavor::kGfn2;
   const bool epoch_token_matches =
       (binding.geometry_epoch.value == nullptr && binding.geometry_epoch.value_elements == 0 &&
        binding.geometry_epoch.plan_token == 0u) ||
@@ -195,17 +196,18 @@ bool all_tokens_match(const Gfn2PreprocessingDeviceBinding& binding) noexcept {
   return token != 0u && binding.plan.plan_token == token &&
          binding.plan.geometry.plan_token == token && binding.plan.integrals.plan_token == token &&
          binding.plan.h0.plan_token == token && binding.plan.es2.plan_token == token &&
-         binding.plan.aes2.plan_token == token && binding.input.plan_token == token &&
-         binding.activity.plan_token == token && binding.output.plan_token == token &&
-         binding.output.geometry.plan_token == token && binding.output.es2.plan_token == token &&
-         binding.output.aes2.plan_token == token && binding.diagnostics.plan_token == token &&
-         binding.workspace.plan_token == token &&
+         (!aes2_enabled || binding.plan.aes2.plan_token == token) &&
+         binding.input.plan_token == token && binding.activity.plan_token == token &&
+         binding.output.plan_token == token && binding.output.geometry.plan_token == token &&
+         binding.output.es2.plan_token == token &&
+         (!aes2_enabled || binding.output.aes2.plan_token == token) &&
+         binding.diagnostics.plan_token == token && binding.workspace.plan_token == token &&
          binding.workspace.geometry_candidate.plan_token == token &&
          binding.workspace.geometry.plan_token == token &&
          binding.workspace.integrals.plan_token == token &&
          binding.workspace.es2_candidate.plan_token == token &&
-         binding.workspace.aes2_candidate.plan_token == token && pairlist_matches &&
-         epoch_token_matches;
+         (!aes2_enabled || binding.workspace.aes2_candidate.plan_token == token) &&
+         pairlist_matches && epoch_token_matches;
 }
 
 /* Hash the byte-stable POD projection. Dynamic requested-generation metadata
@@ -218,6 +220,30 @@ std::uint64_t binding_seal(const Gfn2PreprocessingDeviceBinding& binding) noexce
   normalized.output.aes2.geometry_generation = 0u;
   normalized.workspace.es2_candidate.geometry_generation = 0u;
   normalized.workspace.aes2_candidate.geometry_generation = 0u;
+  if (normalized.plan.geometry.model == XtbModelFlavor::kGfn1) {
+    /* GFN1 owns only scalar overlap/H0/ES2 preprocessing. Make every
+     * multipole-only leaf irrelevant to the binding identity so a disabled
+     * AES2 or S/D/Q pointer cannot become an accidental cache dependency. */
+    normalized.plan.aes2 = {};
+    normalized.output.dipole_integrals = nullptr;
+    normalized.output.dipole_elements = 0;
+    normalized.output.quadrupole_integrals = nullptr;
+    normalized.output.quadrupole_elements = 0;
+    normalized.output.aes2 = {};
+    normalized.workspace.dipole_candidate = nullptr;
+    normalized.workspace.dipole_elements = 0;
+    normalized.workspace.quadrupole_candidate = nullptr;
+    normalized.workspace.quadrupole_elements = 0;
+    normalized.workspace.integrals.dipole_scratch = nullptr;
+    normalized.workspace.integrals.dipole_elements = 0;
+    normalized.workspace.integrals.quadrupole_scratch = nullptr;
+    normalized.workspace.integrals.quadrupole_elements = 0;
+    normalized.workspace.aes2_candidate = {};
+    normalized.workspace.aes2 = {};
+    normalized.diagnostics.aes2_system_errors = nullptr;
+    normalized.diagnostics.aes2_system_elements = 0;
+    normalized.diagnostics.aes2_device_error = nullptr;
+  }
 
   constexpr std::uint64_t kOffsetBasis = 1469598103934665603ULL;
   constexpr std::uint64_t kPrime = 1099511628211ULL;
@@ -273,6 +299,8 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   const Gfn2H0DevicePlan& h0 = binding.plan.h0;
   const Gfn2ES2DeviceBatch& es2 = binding.plan.es2;
   const Gfn2AES2DeviceBatch& aes2 = binding.plan.aes2;
+  const bool multipoles_enabled = geometry.model == XtbModelFlavor::kGfn2;
+  const bool aes2_enabled = multipoles_enabled;
   const std::int64_t batch = geometry.batch_size;
   const std::int64_t atoms = geometry.total_atoms;
   const std::int64_t pairs = geometry.total_pairs;
@@ -300,9 +328,13 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       shell_grid_blocks > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
       !checked_multiply(atoms, 3, coordinates) ||
       !checked_multiply(pairs, kGfn2GeometryPairDataElements, geometry_pair_elements) ||
-      !checked_multiply(matrices, kGfn2IntegralDipoleComponents, dipole_elements) ||
-      !checked_multiply(matrices, kGfn2IntegralQuadrupoleComponents, quadrupole_elements) ||
-      !checked_multiply(pairs, kGfn2AES2PairDataElements, aes2_pair_elements)) {
+      !valid_xtb_model_flavor(geometry.model) || integrals.model != geometry.model ||
+      es2.model != geometry.model ||
+      (multipoles_enabled &&
+       !checked_multiply(matrices, kGfn2IntegralDipoleComponents, dipole_elements)) ||
+      (multipoles_enabled &&
+       !checked_multiply(matrices, kGfn2IntegralQuadrupoleComponents, quadrupole_elements)) ||
+      (aes2_enabled && !checked_multiply(pairs, kGfn2AES2PairDataElements, aes2_pair_elements))) {
     return binding_failure(BindingError::kInvalidExtent, BindingField::kPlan);
   }
 
@@ -327,18 +359,19 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       es2.atom_offset_count == batch + 1 && es2.batch_shell_offset_count == batch + 1 &&
       es2.atom_shell_offset_count == atoms + 1 && es2.matrix_offset_count == batch + 1 &&
       es2.shell_to_atom_count == shells && es2.shell_hardness_count == shells &&
-      aes2.batch_size == batch && aes2.total_atoms == atoms && aes2.total_pairs == pairs &&
-      aes2.atom_offset_count == batch + 1 && aes2.pair_offset_count == batch + 1 &&
-      aes2.dipole_kernel_count == atoms && aes2.quadrupole_kernel_count == atoms &&
-      aes2.multipole_radius_count == atoms && aes2.multipole_valence_cn_count == atoms;
+      (!aes2_enabled ||
+       (aes2.batch_size == batch && aes2.total_atoms == atoms && aes2.total_pairs == pairs &&
+        aes2.atom_offset_count == batch + 1 && aes2.pair_offset_count == batch + 1 &&
+        aes2.dipole_kernel_count == atoms && aes2.quadrupole_kernel_count == atoms &&
+        aes2.multipole_radius_count == atoms && aes2.multipole_valence_cn_count == atoms));
   if (!compatible_extents) {
     return binding_failure(BindingError::kInvalidExtent, BindingField::kPlan);
   }
 
   const bool canonical_topology = geometry.atom_offsets == integrals.atom_offsets &&
                                   geometry.atom_offsets == es2.atom_offsets &&
-                                  geometry.atom_offsets == aes2.atom_offsets &&
-                                  geometry.pair_offsets == aes2.pair_offsets &&
+                                  (!aes2_enabled || geometry.atom_offsets == aes2.atom_offsets) &&
+                                  (!aes2_enabled || geometry.pair_offsets == aes2.pair_offsets) &&
                                   integrals.batch_shell_offsets == es2.batch_shell_offsets &&
                                   integrals.atom_shell_offsets == es2.atom_shell_offsets &&
                                   integrals.shell_to_atom == es2.shell_to_atom;
@@ -367,10 +400,10 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       canonical_pointer(h0.shell_pair_scale, integrals.total_shell_pair_elements) &&
       canonical_pointer(es2.matrix_offsets, batch + 1) &&
       canonical_pointer(es2.shell_hardness, shells) &&
-      canonical_pointer(aes2.dipole_kernel, atoms) &&
-      canonical_pointer(aes2.quadrupole_kernel, atoms) &&
-      canonical_pointer(aes2.multipole_radius, atoms) &&
-      canonical_pointer(aes2.multipole_valence_cn, atoms);
+      (!aes2_enabled || (canonical_pointer(aes2.dipole_kernel, atoms) &&
+                         canonical_pointer(aes2.quadrupole_kernel, atoms) &&
+                         canonical_pointer(aes2.multipole_radius, atoms) &&
+                         canonical_pointer(aes2.multipole_valence_cn, atoms)));
   if (!plan_pointers) {
     return binding_failure(BindingError::kInvalidPointer, BindingField::kPlan);
   }
@@ -410,19 +443,20 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   }
 
   const Gfn2PreprocessingDeviceDiagnostics& diagnostics = binding.diagnostics;
-  const bool diagnostics_valid = diagnostics.geometry_system_elements == batch &&
-                                 canonical_pointer(diagnostics.geometry_system_errors, batch) &&
-                                 canonical_pointer(diagnostics.geometry_device_error, 1) &&
-                                 diagnostics.integral_system_elements == batch &&
-                                 canonical_pointer(diagnostics.integral_system_errors, batch) &&
-                                 canonical_pointer(diagnostics.integral_device_error, 1) &&
-                                 canonical_pointer(diagnostics.es2_device_error, 1) &&
-                                 diagnostics.aes2_system_elements == batch &&
-                                 canonical_pointer(diagnostics.aes2_system_errors, batch) &&
-                                 canonical_pointer(diagnostics.aes2_device_error, 1) &&
-                                 diagnostics.system_stage_elements == batch &&
-                                 canonical_pointer(diagnostics.system_stages, batch) &&
-                                 canonical_pointer(diagnostics.plan_error, 1);
+  const bool diagnostics_valid =
+      diagnostics.geometry_system_elements == batch &&
+      canonical_pointer(diagnostics.geometry_system_errors, batch) &&
+      canonical_pointer(diagnostics.geometry_device_error, 1) &&
+      diagnostics.integral_system_elements == batch &&
+      canonical_pointer(diagnostics.integral_system_errors, batch) &&
+      canonical_pointer(diagnostics.integral_device_error, 1) &&
+      canonical_pointer(diagnostics.es2_device_error, 1) &&
+      (!aes2_enabled || (diagnostics.aes2_system_elements == batch &&
+                         canonical_pointer(diagnostics.aes2_system_errors, batch) &&
+                         canonical_pointer(diagnostics.aes2_device_error, 1))) &&
+      diagnostics.system_stage_elements == batch &&
+      canonical_pointer(diagnostics.system_stages, batch) &&
+      canonical_pointer(diagnostics.plan_error, 1);
   if (!diagnostics_valid) {
     return binding_failure(BindingError::kInvalidDiagnostics, BindingField::kDiagnostics);
   }
@@ -624,8 +658,9 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       reads.add(h0.shell_coordination_scale, shells) && reads.add(h0.shell_polynomial, shells) &&
       reads.add(h0.shell_pair_scale, integrals.total_shell_pair_elements) &&
       reads.add(es2.matrix_offsets, batch + 1) && reads.add(es2.shell_hardness, shells) &&
-      reads.add(aes2.dipole_kernel, atoms) && reads.add(aes2.quadrupole_kernel, atoms) &&
-      reads.add(aes2.multipole_radius, atoms) && reads.add(aes2.multipole_valence_cn, atoms) &&
+      (!aes2_enabled ||
+       (reads.add(aes2.dipole_kernel, atoms) && reads.add(aes2.quadrupole_kernel, atoms) &&
+        reads.add(aes2.multipole_radius, atoms) && reads.add(aes2.multipole_valence_cn, atoms))) &&
       reads.add(binding.input.positions, coordinates) &&
       reads.add(binding.admission.error, binding.admission.error_elements) &&
       reads.add(binding.activity.requested_mask, batch) &&
@@ -666,8 +701,8 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       writes.add(diagnostics.integral_system_errors, batch) &&
       writes.add(diagnostics.integral_device_error, 1) &&
       writes.add(diagnostics.es2_device_error, 1) &&
-      writes.add(diagnostics.aes2_system_errors, batch) &&
-      writes.add(diagnostics.aes2_device_error, 1) &&
+      (!aes2_enabled || (writes.add(diagnostics.aes2_system_errors, batch) &&
+                         writes.add(diagnostics.aes2_device_error, 1))) &&
       writes.add(diagnostics.system_stages, batch) && writes.add(diagnostics.plan_error, 1);
   const bool sparse_ranges_valid =
       !pairlist_enabled ||
@@ -802,7 +837,7 @@ __global__ void gate_composer_plan_kernel(
     std::int64_t batch_size, const std::uint32_t* plan_error, std::uint32_t* geometry_system_errors,
     std::uint32_t* geometry_device_error, std::uint32_t* integral_system_errors,
     std::uint32_t* integral_device_error, std::uint32_t* es2_device_error,
-    std::uint32_t* aes2_system_errors, std::uint32_t* aes2_device_error) {
+    std::uint32_t* aes2_system_errors, std::uint32_t* aes2_device_error, bool aes2_enabled) {
   if (read_u32(plan_error) == 0u) {
     return;
   }
@@ -812,13 +847,17 @@ __global__ void gate_composer_plan_kernel(
         static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kInvalidOffsets);
     integral_system_errors[system] =
         static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kInvalidOffsets);
-    aes2_system_errors[system] = static_cast<std::uint32_t>(Gfn2AES2DeviceError::kInvalidOffsets);
+    if (aes2_enabled) {
+      aes2_system_errors[system] = static_cast<std::uint32_t>(Gfn2AES2DeviceError::kInvalidOffsets);
+    }
   }
   if (system == 0) {
     *geometry_device_error = static_cast<std::uint32_t>(Gfn2GeometryDeviceError::kInvalidOffsets);
     *integral_device_error = static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kInvalidOffsets);
     *es2_device_error = static_cast<std::uint32_t>(Gfn2ES2DeviceError::kInvalidOffsets);
-    *aes2_device_error = static_cast<std::uint32_t>(Gfn2AES2DeviceError::kInvalidOffsets);
+    if (aes2_enabled) {
+      *aes2_device_error = static_cast<std::uint32_t>(Gfn2AES2DeviceError::kInvalidOffsets);
+    }
   }
 }
 
@@ -847,7 +886,8 @@ __global__ void prepare_late_stages_kernel(Gfn2GeometryDeviceBatch batch,
                                            const std::uint8_t* requested,
                                            const std::uint32_t* geometry_errors,
                                            const std::uint32_t* integral_errors, double* positions,
-                                           std::uint32_t* aes2_errors, std::uint32_t* plan_error) {
+                                           std::uint32_t* aes2_errors, std::uint32_t* plan_error,
+                                           bool aes2_enabled) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   const std::int64_t begin = batch.atom_offsets[system];
   const std::int64_t end = batch.atom_offsets[system + 1];
@@ -859,7 +899,7 @@ __global__ void prepare_late_stages_kernel(Gfn2GeometryDeviceBatch batch,
   }
   const bool failed =
       requested[system] != 1u || geometry_errors[system] != 0u || integral_errors[system] != 0u;
-  if (threadIdx.x == 0 && requested[system] == 1u && failed) {
+  if (aes2_enabled && threadIdx.x == 0 && requested[system] == 1u && failed) {
     atomicCAS(aes2_errors + system, 0u,
               static_cast<std::uint32_t>(Gfn2AES2DeviceError::kInvalidCoordination));
   }
@@ -1099,7 +1139,8 @@ __global__ void classify_plan_kernel(
     std::int64_t batch_size, const std::uint32_t* geometry_sequence,
     const std::uint32_t* sparse_sequence, const std::uint32_t* integral_sequence,
     const std::uint32_t* geometry_errors, const std::uint32_t* integral_errors,
-    const std::uint32_t* es2_error, const std::uint32_t* aes2_errors, std::uint32_t* plan_error) {
+    const std::uint32_t* es2_error, const std::uint32_t* aes2_errors, std::uint32_t* plan_error,
+    bool aes2_enabled) {
   if (threadIdx.x != 0 || blockIdx.x != 0 || read_u32(plan_error) != 0u) {
     return;
   }
@@ -1131,7 +1172,7 @@ __global__ void classify_plan_kernel(
       record_plan_error(plan_error, Gfn2PreprocessingDeviceError::kIntegralPlanFailure);
       return;
     }
-    if (aes2_plan_code(aes2_errors[system])) {
+    if (aes2_enabled && aes2_plan_code(aes2_errors[system])) {
       record_plan_error(plan_error, Gfn2PreprocessingDeviceError::kAes2PlanFailure);
       return;
     }
@@ -1150,7 +1191,9 @@ __global__ void publish_preprocessing_kernel(Gfn2PreprocessingDevicePlan plan,
   const bool requested = activity.requested_mask[system] == 1u;
   const std::uint32_t geometry_error = diagnostics.geometry_system_errors[system];
   const std::uint32_t integral_error = diagnostics.integral_system_errors[system];
-  const std::uint32_t aes2_error = diagnostics.aes2_system_errors[system];
+  const bool multipoles_enabled = plan.geometry.model == XtbModelFlavor::kGfn2;
+  const bool aes2_enabled = multipoles_enabled;
+  const std::uint32_t aes2_error = aes2_enabled ? diagnostics.aes2_system_errors[system] : 0u;
   std::uint32_t stage = static_cast<std::uint32_t>(Gfn2PreprocessingSystemStage::kSuccess);
   if (requested) {
     if (geometry_error != 0u) {
@@ -1201,23 +1244,27 @@ __global__ void publish_preprocessing_kernel(Gfn2PreprocessingDevicePlan plan,
       output.geometry.pair_data[pair * kGfn2GeometryPairDataElements + component] =
           workspace.geometry_candidate.pair_data[pair * kGfn2GeometryPairDataElements + component];
     }
-    for (std::int64_t component = 0; component < kGfn2AES2PairDataElements; ++component) {
-      output.aes2.pair_data[pair * kGfn2AES2PairDataElements + component] =
-          workspace.aes2_candidate.pair_data[pair * kGfn2AES2PairDataElements + component];
+    if (aes2_enabled) {
+      for (std::int64_t component = 0; component < kGfn2AES2PairDataElements; ++component) {
+        output.aes2.pair_data[pair * kGfn2AES2PairDataElements + component] =
+            workspace.aes2_candidate.pair_data[pair * kGfn2AES2PairDataElements + component];
+      }
     }
   }
   for (std::int64_t element = matrix_begin + threadIdx.x; element < matrix_end;
        element += blockDim.x) {
     output.overlap[element] = workspace.overlap_candidate[element];
     output.h0[element] = workspace.h0_candidate[element];
-    for (std::int64_t component = 0; component < kGfn2IntegralDipoleComponents; ++component) {
-      output.dipole_integrals[component * plan.integrals.total_matrix_elements + element] =
-          workspace.dipole_candidate[component * plan.integrals.total_matrix_elements + element];
-    }
-    for (std::int64_t component = 0; component < kGfn2IntegralQuadrupoleComponents; ++component) {
-      output.quadrupole_integrals[component * plan.integrals.total_matrix_elements + element] =
-          workspace
-              .quadrupole_candidate[component * plan.integrals.total_matrix_elements + element];
+    if (multipoles_enabled) {
+      for (std::int64_t component = 0; component < kGfn2IntegralDipoleComponents; ++component) {
+        output.dipole_integrals[component * plan.integrals.total_matrix_elements + element] =
+            workspace.dipole_candidate[component * plan.integrals.total_matrix_elements + element];
+      }
+      for (std::int64_t component = 0; component < kGfn2IntegralQuadrupoleComponents; ++component) {
+        output.quadrupole_integrals[component * plan.integrals.total_matrix_elements + element] =
+            workspace
+                .quadrupole_candidate[component * plan.integrals.total_matrix_elements + element];
+      }
     }
   }
   for (std::int64_t element = es2_begin + threadIdx.x; element < es2_end; element += blockDim.x) {
@@ -1285,6 +1332,8 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
       advance_epoch ? kUnpublishedPrimitiveGeneration : generation_source.scalar;
 
   const std::int64_t batch = binding.plan.geometry.batch_size;
+  const bool multipoles_enabled = binding.plan.geometry.model == XtbModelFlavor::kGfn2;
+  const bool aes2_enabled = multipoles_enabled;
   cudaError_t status =
       reset_gfn2_geometry_device_errors_cuda(batch, binding.diagnostics.geometry_system_errors,
                                              binding.diagnostics.geometry_device_error, stream);
@@ -1295,9 +1344,11 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
   if (status != cudaSuccess) return launch_failure({}, status);
   status = reset_gfn2_es2_device_error_cuda(binding.diagnostics.es2_device_error, stream);
   if (status != cudaSuccess) return launch_failure({}, status);
-  status = reset_gfn2_aes2_device_errors_cuda(batch, binding.diagnostics.aes2_system_errors,
-                                              binding.diagnostics.aes2_device_error, stream);
-  if (status != cudaSuccess) return launch_failure({}, status);
+  if (aes2_enabled) {
+    status = reset_gfn2_aes2_device_errors_cuda(batch, binding.diagnostics.aes2_system_errors,
+                                                binding.diagnostics.aes2_device_error, stream);
+    if (status != cudaSuccess) return launch_failure({}, status);
+  }
   status = cudaMemsetAsync(binding.diagnostics.system_stages, 0,
                            static_cast<std::size_t>(batch) * sizeof(std::uint32_t), stream);
   if (status != cudaSuccess) return launch_failure({}, status);
@@ -1321,7 +1372,7 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
       batch, binding.diagnostics.plan_error, binding.diagnostics.geometry_system_errors,
       binding.diagnostics.geometry_device_error, binding.diagnostics.integral_system_errors,
       binding.diagnostics.integral_device_error, binding.diagnostics.es2_device_error,
-      binding.diagnostics.aes2_system_errors, binding.diagnostics.aes2_device_error);
+      binding.diagnostics.aes2_system_errors, binding.diagnostics.aes2_device_error, aes2_enabled);
   status = check_launch();
   if (status != cudaSuccess) return launch_failure({}, status);
 
@@ -1402,7 +1453,7 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
       binding.plan.geometry, binding.activity.requested_mask,
       binding.diagnostics.geometry_system_errors, binding.diagnostics.integral_system_errors,
       binding.workspace.positions_scratch, binding.diagnostics.aes2_system_errors,
-      binding.diagnostics.plan_error);
+      binding.diagnostics.plan_error, aes2_enabled);
   status = check_launch();
   if (status != cudaSuccess) return launch_failure({}, status);
 
@@ -1413,21 +1464,23 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
       binding.diagnostics.es2_device_error, stream);
   if (status != cudaSuccess) return launch_failure({}, status);
 
-  Gfn2AES2DeviceCache aes2_candidate = binding.workspace.aes2_candidate;
-  aes2_candidate.geometry_generation = primitive_generation;
-  status = update_gfn2_aes2_geometry_cache_cuda(
-      binding.plan.aes2, binding.workspace.positions_scratch,
-      binding.workspace.geometry_candidate.coordination_numbers, aes2_candidate,
-      binding.workspace.aes2, binding.diagnostics.aes2_system_errors,
-      binding.diagnostics.aes2_device_error, stream);
-  if (status != cudaSuccess) return launch_failure({}, status);
+  if (aes2_enabled) {
+    Gfn2AES2DeviceCache aes2_candidate = binding.workspace.aes2_candidate;
+    aes2_candidate.geometry_generation = primitive_generation;
+    status = update_gfn2_aes2_geometry_cache_cuda(
+        binding.plan.aes2, binding.workspace.positions_scratch,
+        binding.workspace.geometry_candidate.coordination_numbers, aes2_candidate,
+        binding.workspace.aes2, binding.diagnostics.aes2_system_errors,
+        binding.diagnostics.aes2_device_error, stream);
+    if (status != cudaSuccess) return launch_failure({}, status);
+  }
 
   classify_plan_kernel<<<1, 1, 0, stream>>>(
       batch, binding.workspace.geometry.sequence_active,
       binding.plan.pairlist.batch_size > 0 ? binding.workspace.pairlist.sequence_active : nullptr,
       binding.workspace.integrals.sequence_active, binding.diagnostics.geometry_system_errors,
       binding.diagnostics.integral_system_errors, binding.diagnostics.es2_device_error,
-      binding.diagnostics.aes2_system_errors, binding.diagnostics.plan_error);
+      binding.diagnostics.aes2_system_errors, binding.diagnostics.plan_error, aes2_enabled);
   status = check_launch();
   if (status != cudaSuccess) return launch_failure({}, status);
   publish_preprocessing_kernel<<<static_cast<unsigned int>(batch), kThreadsPerBlock, 0, stream>>>(
@@ -1460,9 +1513,11 @@ Gfn2PreprocessingLaunchDiagnostic compose_preprocessing_impl(
    * authoritative record that a peer's complete public cache was committed. */
   if (!advance_epoch) {
     binding.output.es2.geometry_generation = generation_source.scalar;
-    binding.output.aes2.geometry_generation = generation_source.scalar;
     binding.workspace.es2_candidate.geometry_generation = generation_source.scalar;
-    binding.workspace.aes2_candidate.geometry_generation = generation_source.scalar;
+    if (aes2_enabled) {
+      binding.output.aes2.geometry_generation = generation_source.scalar;
+      binding.workspace.aes2_candidate.geometry_generation = generation_source.scalar;
+    }
   }
   return {};
 }

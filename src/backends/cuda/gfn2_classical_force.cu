@@ -183,7 +183,8 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
       plan.batch_size > 0 && plan.total_atoms > 0 && plan.total_shells > 0 &&
       plan.batch_size <= static_cast<std::int64_t>(std::numeric_limits<unsigned int>::max()) &&
       plan.total_atoms <= kInt64Maximum / 6 && plan.total_atoms <= kInt64Maximum / 3;
-  if (!extent_representable || plan.plan_token == 0u || plan.geometry_generation == 0u ||
+  if (!extent_representable || !valid_xtb_model_flavor(plan.model) || plan.plan_token == 0u ||
+      plan.geometry_generation == 0u ||
       (plan.enabled_components & ~kGfn2ClassicalForceAllComponents) != 0u ||
       !aligned_pointer(plan.atom_offsets) || !aligned_pointer(plan.atomic_numbers) ||
       activity.requested_mask == nullptr || activity.system_statuses == nullptr ||
@@ -212,6 +213,35 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
        !aligned_pointer(geometry_epoch->value))) {
     return false;
   }
+  if (plan.model == XtbModelFlavor::kGfn1) {
+    const auto& correction = plan.gfn1_correction;
+    const std::uint32_t forbidden =
+        static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kAES2) |
+        static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4TwoBody) |
+        static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4ATM);
+    if ((plan.enabled_components & forbidden) != 0u ||
+        plan.repulsion_sqrt_alpha_elements != plan.total_atoms ||
+        plan.repulsion_effective_charge_elements != plan.total_atoms ||
+        !aligned_pointer(plan.repulsion_sqrt_alpha) ||
+        !aligned_pointer(plan.repulsion_effective_charge) ||
+        plan.geometry_batch.model != plan.model ||
+        plan.geometry_batch.batch_size != plan.batch_size ||
+        plan.geometry_batch.total_atoms != plan.total_atoms ||
+        plan.geometry_batch.plan_token != plan.plan_token ||
+        plan.geometry_batch.atom_offsets != plan.atom_offsets || correction.model != plan.model ||
+        correction.batch_size != plan.batch_size || correction.total_atoms != plan.total_atoms ||
+        correction.total_pairs != plan.geometry_batch.total_pairs ||
+        correction.plan_token != plan.plan_token || correction.atom_offsets != plan.atom_offsets ||
+        correction.pair_offsets != plan.geometry_batch.pair_offsets ||
+        correction.covalent_radii != plan.geometry_batch.covalent_radii) {
+      return false;
+    }
+  } else if (plan.repulsion_sqrt_alpha != nullptr || plan.repulsion_effective_charge != nullptr ||
+             plan.repulsion_sqrt_alpha_elements != 0 ||
+             plan.repulsion_effective_charge_elements != 0 ||
+             plan.gfn1_correction.plan_token != 0u || workspace.gfn1_correction.plan_token != 0u) {
+    return false;
+  }
 
   const bool needs_es2 =
       component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kES2);
@@ -220,12 +250,24 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
   const bool needs_d4 =
       component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4TwoBody) ||
       component_enabled(plan.enabled_components, Gfn2ClassicalForceComponent::kD4ATM);
+  const bool needs_gfn1_correction = plan.model == XtbModelFlavor::kGfn1;
+
+  if (needs_gfn1_correction &&
+      (input.coordination_elements != plan.total_atoms ||
+       input.coordination_numbers != plan.geometry_cache.coordination_numbers ||
+       !aligned_pointer(input.coordination_numbers) ||
+       !validate_gfn1_classical_correction_binding(
+           plan.gfn1_correction, input.positions, input.coordination_numbers, nullptr, nullptr,
+           workspace.gradient_scratch, workspace.gfn1_correction, workspace.primitive_system_errors,
+           workspace.primitive_device_error))) {
+    return false;
+  }
 
   if (needs_es2 &&
       (input.shell_elements != plan.total_shells || !aligned_pointer(input.shell_charges) ||
        plan.es2_batch.batch_size != plan.batch_size ||
        plan.es2_batch.total_atoms != plan.total_atoms ||
-       plan.es2_batch.total_shells != plan.total_shells ||
+       plan.es2_batch.total_shells != plan.total_shells || plan.es2_batch.model != plan.model ||
        plan.es2_batch.plan_token != plan.plan_token ||
        plan.es2_batch.atom_offsets != plan.atom_offsets ||
        plan.es2_cache.plan_token != plan.plan_token ||
@@ -292,7 +334,7 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
    * d4_workspace.system_errors is the documented exact projection of
    * primitive_system_errors, so that range is represented only once.
    */
-  std::array<AddressRange, 32> writes{};
+  std::array<AddressRange, 40> writes{};
   std::size_t write_count = 0u;
   if (!append_range(writes, &write_count, output.forces, plan.total_atoms * 3) ||
       !append_range(writes, &write_count, workspace.gradient_scratch, plan.total_atoms * 3) ||
@@ -342,14 +384,32 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
                      plan.total_atoms * 3))) {
     return false;
   }
+  if (needs_gfn1_correction &&
+      (!append_range(writes, &write_count, workspace.gfn1_correction.weights,
+                     workspace.gfn1_correction.weight_elements) ||
+       !append_range(writes, &write_count, workspace.gfn1_correction.weight_cn_derivatives,
+                     workspace.gfn1_correction.weight_cn_derivative_elements) ||
+       !append_range(writes, &write_count, workspace.gfn1_correction.coordination_adjoints,
+                     workspace.gfn1_correction.coordination_adjoint_elements) ||
+       !append_range(writes, &write_count, workspace.gfn1_correction.axis_neighbors,
+                     workspace.gfn1_correction.axis_neighbor_elements) ||
+       !append_range(writes, &write_count, workspace.gfn1_correction.batch_scratch,
+                     workspace.gfn1_correction.batch_scratch_elements) ||
+       !append_range(writes, &write_count, workspace.gfn1_correction.gradient_scratch,
+                     workspace.gfn1_correction.gradient_scratch_elements))) {
+    return false;
+  }
   if (!ranges_are_disjoint(writes, write_count)) {
     return false;
   }
 
-  std::array<AddressRange, 64> reads{};
+  std::array<AddressRange, 80> reads{};
   std::size_t read_count = 0u;
   if (!append_range(reads, &read_count, plan.atom_offsets, plan.batch_size + 1) ||
       !append_range(reads, &read_count, plan.atomic_numbers, plan.total_atoms) ||
+      (plan.model == XtbModelFlavor::kGfn1 &&
+       (!append_range(reads, &read_count, plan.repulsion_sqrt_alpha, plan.total_atoms) ||
+        !append_range(reads, &read_count, plan.repulsion_effective_charge, plan.total_atoms))) ||
       !append_range(reads, &read_count, activity.requested_mask, plan.batch_size) ||
       !append_range(reads, &read_count, activity.system_statuses, plan.batch_size) ||
       !append_range(reads, &read_count, input.positions, plan.total_atoms * 3)) {
@@ -385,6 +445,33 @@ bool validate_common_descriptors(const Gfn2ClassicalForceDevicePlan& plan,
        !append_range(reads, &read_count, plan.geometry_cache.geometry_generations,
                      plan.batch_size))) {
     return false;
+  }
+  if (needs_gfn1_correction) {
+    const auto& correction = plan.gfn1_correction;
+    if (!append_range(reads, &read_count, input.coordination_numbers, plan.total_atoms) ||
+        !append_range(reads, &read_count, correction.pair_offsets,
+                      correction.pair_offset_elements) ||
+        !append_range(reads, &read_count, correction.covalent_radii,
+                      correction.covalent_radius_elements) ||
+        !append_range(reads, &read_count, correction.reference_counts,
+                      correction.reference_count_elements) ||
+        !append_range(reads, &read_count, correction.reference_cn,
+                      correction.reference_cn_elements) ||
+        !append_range(reads, &read_count, correction.reference_c6,
+                      correction.reference_c6_elements) ||
+        !append_range(reads, &read_count, correction.pair_rrij, correction.pair_rrij_elements) ||
+        !append_range(reads, &read_count, correction.pair_damping_radii,
+                      correction.pair_damping_radius_elements) ||
+        !append_range(reads, &read_count, correction.halogen_scaled_radii,
+                      correction.halogen_scaled_radius_elements) ||
+        !append_range(reads, &read_count, correction.halogen_bond_strength,
+                      correction.halogen_bond_strength_elements) ||
+        !append_range(reads, &read_count, correction.halogen_donor,
+                      correction.halogen_donor_elements) ||
+        !append_range(reads, &read_count, correction.halogen_acceptor,
+                      correction.halogen_acceptor_elements)) {
+      return false;
+    }
   }
   if (needs_d4) {
     const auto& cache = plan.d4_pairlist_cache;
@@ -566,10 +653,18 @@ __global__ void repulsion_gradient_kernel(Gfn2ClassicalForceDevicePlan plan,
   for (std::int64_t atom = begin + threadIdx.x; atom < end; atom += blockDim.x) {
     const std::int32_t atomic_number = plan.atomic_numbers[atom];
     const std::int64_t coordinate = atom * 3;
-    if (atomic_number < 1 ||
-        atomic_number > static_cast<std::int32_t>(parameters::gfn2::kElementCount) ||
-        !isfinite(positions[coordinate]) || !isfinite(positions[coordinate + 1]) ||
-        !isfinite(positions[coordinate + 2])) {
+    if (atomic_number < 1 || !isfinite(positions[coordinate]) ||
+        !isfinite(positions[coordinate + 1]) || !isfinite(positions[coordinate + 2])) {
+      atomicExch(&valid, 0);
+    } else if (plan.model == XtbModelFlavor::kGfn1) {
+      if (plan.repulsion_sqrt_alpha == nullptr || plan.repulsion_effective_charge == nullptr ||
+          !(plan.repulsion_sqrt_alpha[atom] > 0.0) ||
+          !(plan.repulsion_effective_charge[atom] > 0.0) ||
+          !isfinite(plan.repulsion_sqrt_alpha[atom]) ||
+          !isfinite(plan.repulsion_effective_charge[atom])) {
+        atomicExch(&valid, 0);
+      }
+    } else if (atomic_number > static_cast<std::int32_t>(parameters::gfn2::kElementCount)) {
       atomicExch(&valid, 0);
     } else {
       const parameters::gfn2::ElementParameters element = g_gfn2_elements[atomic_number - 1];
@@ -590,8 +685,12 @@ __global__ void repulsion_gradient_kernel(Gfn2ClassicalForceDevicePlan plan,
 
   for (std::int64_t upper = begin + 1 + threadIdx.x; upper < end; upper += blockDim.x) {
     const std::int32_t upper_number = plan.atomic_numbers[upper];
-    const parameters::gfn2::ElementParameters upper_element = g_gfn2_elements[upper_number - 1];
-    const double upper_sqrt_alpha = sqrt(upper_element.arep);
+    const parameters::gfn2::ElementParameters upper_element =
+        plan.model == XtbModelFlavor::kGfn2 ? g_gfn2_elements[upper_number - 1]
+                                            : parameters::gfn2::ElementParameters{};
+    const double upper_sqrt_alpha = plan.model == XtbModelFlavor::kGfn1
+                                        ? plan.repulsion_sqrt_alpha[upper]
+                                        : sqrt(upper_element.arep);
     const std::int64_t upper_coordinate = upper * 3;
     for (std::int64_t lower = begin; lower < upper; ++lower) {
       const std::int64_t lower_coordinate = lower * 3;
@@ -599,7 +698,13 @@ __global__ void repulsion_gradient_kernel(Gfn2ClassicalForceDevicePlan plan,
       const double dy = positions[upper_coordinate + 1] - positions[lower_coordinate + 1];
       const double dz = positions[upper_coordinate + 2] - positions[lower_coordinate + 2];
       const double distance_squared = dx * dx + dy * dy + dz * dz;
-      if (!(distance_squared > kMinimumDistanceSquared) || !isfinite(distance_squared)) {
+      if (!isfinite(distance_squared)) {
+        atomicExch(&valid, 0);
+        continue;
+      }
+      if (plan.model == XtbModelFlavor::kGfn1) {
+        if (distance_squared < 1.0e-12) continue;
+      } else if (!(distance_squared > kMinimumDistanceSquared)) {
         atomicExch(&valid, 0);
         continue;
       }
@@ -607,15 +712,27 @@ __global__ void repulsion_gradient_kernel(Gfn2ClassicalForceDevicePlan plan,
         continue;
       }
       const std::int32_t lower_number = plan.atomic_numbers[lower];
-      const parameters::gfn2::ElementParameters lower_element = g_gfn2_elements[lower_number - 1];
+      const parameters::gfn2::ElementParameters lower_element =
+          plan.model == XtbModelFlavor::kGfn2 ? g_gfn2_elements[lower_number - 1]
+                                              : parameters::gfn2::ElementParameters{};
       const double distance = sqrt(distance_squared);
-      const bool light_pair = upper_number <= 2 && lower_number <= 2;
+      const bool light_pair =
+          plan.model == XtbModelFlavor::kGfn2 && upper_number <= 2 && lower_number <= 2;
       const double exponent =
-          light_pair ? g_gfn2_global.repulsion_klight : g_gfn2_global.repulsion_kexp;
-      const double distance_power = light_pair ? distance : distance * sqrt(distance);
-      const double pair_alpha = upper_sqrt_alpha * sqrt(lower_element.arep);
-      const double pair_energy =
-          upper_element.zeff * lower_element.zeff * exp(-pair_alpha * distance_power) / distance;
+          plan.model == XtbModelFlavor::kGfn1
+              ? 1.5
+              : (light_pair ? g_gfn2_global.repulsion_klight : g_gfn2_global.repulsion_kexp);
+      const double distance_power =
+          plan.model == XtbModelFlavor::kGfn1 || !light_pair ? distance * sqrt(distance) : distance;
+      const double lower_sqrt_alpha = plan.model == XtbModelFlavor::kGfn1
+                                          ? plan.repulsion_sqrt_alpha[lower]
+                                          : sqrt(lower_element.arep);
+      const double pair_alpha = upper_sqrt_alpha * lower_sqrt_alpha;
+      const double pair_charge =
+          plan.model == XtbModelFlavor::kGfn1
+              ? plan.repulsion_effective_charge[upper] * plan.repulsion_effective_charge[lower]
+              : upper_element.zeff * lower_element.zeff;
+      const double pair_energy = pair_charge * exp(-pair_alpha * distance_power) / distance;
       const double force_scale =
           (pair_alpha * exponent * distance_power + 1.0) * pair_energy / distance_squared;
       const double force[3] = {force_scale * dx, force_scale * dy, force_scale * dz};
@@ -1097,6 +1214,26 @@ static cudaError_t add_classical_forces_impl(
     }
     status = merge_primitive_stage(plan, workspace, Gfn2ClassicalForceDeviceError::kD4ATMFailure,
                                    true, system_errors, device_error, stream);
+    if (status != cudaSuccess) {
+      return status;
+    }
+  }
+
+  if (plan.model == XtbModelFlavor::kGfn1) {
+    status = prepare_primitive_stage(plan, workspace, system_errors, stream);
+    if (status != cudaSuccess) {
+      return status;
+    }
+    status = add_gfn1_classical_corrections_cuda(
+        plan.gfn1_correction, input.positions, input.coordination_numbers, nullptr, nullptr,
+        workspace.gradient_scratch, workspace.gfn1_correction, workspace.primitive_system_errors,
+        workspace.primitive_device_error, stream);
+    if (status != cudaSuccess) {
+      return status;
+    }
+    status = merge_primitive_stage(plan, workspace,
+                                   Gfn2ClassicalForceDeviceError::kGfn1CorrectionFailure, false,
+                                   system_errors, device_error, stream);
     if (status != cudaSuccess) {
       return status;
     }

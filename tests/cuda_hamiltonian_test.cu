@@ -29,6 +29,7 @@ namespace {
 
 using xtbloom::detail::Gfn2PlanMemorySpace;
 using xtbloom::detail::Gfn2WavefunctionLayoutView;
+using xtbloom::detail::XtbModelFlavor;
 using xtbloom::detail::cuda::assemble_gfn2_hamiltonian_cuda;
 using xtbloom::detail::cuda::assemble_gfn2_spin_hamiltonian_cuda;
 using xtbloom::detail::cuda::Gfn2HamiltonianDeviceActivity;
@@ -213,7 +214,8 @@ HostCase make_case(std::size_t batch_size) {
   return data;
 }
 
-std::vector<double> evaluate_cpu(const HostCase& data, double sentinel = kSentinel) {
+std::vector<double> evaluate_cpu(const HostCase& data, double sentinel = kSentinel,
+                                 XtbModelFlavor model = XtbModelFlavor::kGfn2) {
   std::vector<double> result(static_cast<std::size_t>(data.matrix_offsets.back()), sentinel);
   const std::int64_t matrices = data.matrix_offsets.back();
   for (std::int64_t system = 0; system < data.batch_size; ++system) {
@@ -240,7 +242,7 @@ std::vector<double> evaluate_cpu(const HostCase& data, double sentinel = kSentin
             std::fma(half_overlap, data.shell_scalar[static_cast<std::size_t>(row_shell)], shift);
         shift = std::fma(half_overlap, data.shell_scalar[static_cast<std::size_t>(column_shell)],
                          shift);
-        for (int component = 0; component < 3; ++component) {
+        for (int component = 0; model == XtbModelFlavor::kGfn2 && component < 3; ++component) {
           shift = std::fma(
               -0.5 *
                   data.dipole_integrals[static_cast<std::size_t>(component * matrices + forward)],
@@ -250,7 +252,7 @@ std::vector<double> evaluate_cpu(const HostCase& data, double sentinel = kSentin
                   data.dipole_integrals[static_cast<std::size_t>(component * matrices + reverse)],
               data.dipole_potential[static_cast<std::size_t>(row_atom * 3 + component)], shift);
         }
-        for (int component = 0; component < 6; ++component) {
+        for (int component = 0; model == XtbModelFlavor::kGfn2 && component < 6; ++component) {
           shift = std::fma(
               -0.5 * data.quadrupole_integrals[static_cast<std::size_t>(component * matrices +
                                                                         forward)],
@@ -271,7 +273,8 @@ std::vector<double> evaluate_cpu(const HostCase& data, double sentinel = kSentin
   return result;
 }
 
-std::vector<double> evaluate_spin_cpu(const HostCase& host, const HostSpinHamiltonianCase& spin) {
+std::vector<double> evaluate_spin_cpu(const HostCase& host, const HostSpinHamiltonianCase& spin,
+                                      XtbModelFlavor model = XtbModelFlavor::kGfn2) {
   HostCase alpha = host;
   HostCase beta = host;
   for (std::size_t system = 0; system < static_cast<std::size_t>(host.batch_size); ++system) {
@@ -332,8 +335,8 @@ std::vector<double> evaluate_spin_cpu(const HostCase& host, const HostSpinHamilt
     }
   }
 
-  const std::vector<double> alpha_tmp = evaluate_cpu(alpha);
-  const std::vector<double> beta_tmp = evaluate_cpu(beta);
+  const std::vector<double> alpha_tmp = evaluate_cpu(alpha, kSentinel, model);
+  const std::vector<double> beta_tmp = evaluate_cpu(beta, kSentinel, model);
   std::vector<double> result(static_cast<std::size_t>(spin.matrix_offsets.back()), kSentinel);
   for (std::size_t system = 0; system < static_cast<std::size_t>(host.batch_size); ++system) {
     if (host.active[system] == 0u) {
@@ -424,48 +427,53 @@ struct DeviceFixture {
     return status == cudaSuccess ? output.fill(kSentinel, matrices, stream) : status;
   }
 
-  Gfn2HamiltonianDeviceBatch batch(const HostCase& host) const {
-    return {host.batch_size,
-            host.atom_offsets.back(),
-            static_cast<std::int64_t>(host.shell_to_atom.size()),
-            static_cast<std::int64_t>(host.orbital_to_shell.size()),
-            static_cast<std::int64_t>(host.h0.size()),
-            kPlanToken,
-            static_cast<std::int64_t>(host.atom_offsets.size()),
-            static_cast<std::int64_t>(host.batch_shell_offsets.size()),
-            static_cast<std::int64_t>(host.batch_orbital_offsets.size()),
-            static_cast<std::int64_t>(host.matrix_offsets.size()),
-            static_cast<std::int64_t>(host.atom_shell_offsets.size()),
-            static_cast<std::int64_t>(host.shell_orbital_offsets.size()),
-            static_cast<std::int64_t>(host.shell_to_atom.size()),
-            static_cast<std::int64_t>(host.orbital_to_shell.size()),
-            static_cast<std::int64_t>(host.orbital_to_atom.size()),
-            atom_offsets.get(),
-            batch_shell_offsets.get(),
-            batch_orbital_offsets.get(),
-            matrix_offsets.get(),
-            atom_shell_offsets.get(),
-            shell_orbital_offsets.get(),
-            shell_to_atom.get(),
-            orbital_to_shell.get(),
-            orbital_to_atom.get()};
+  Gfn2HamiltonianDeviceBatch batch(const HostCase& host,
+                                   XtbModelFlavor model = XtbModelFlavor::kGfn2) const {
+    Gfn2HamiltonianDeviceBatch result{host.batch_size,
+                                      host.atom_offsets.back(),
+                                      static_cast<std::int64_t>(host.shell_to_atom.size()),
+                                      static_cast<std::int64_t>(host.orbital_to_shell.size()),
+                                      static_cast<std::int64_t>(host.h0.size()),
+                                      kPlanToken,
+                                      static_cast<std::int64_t>(host.atom_offsets.size()),
+                                      static_cast<std::int64_t>(host.batch_shell_offsets.size()),
+                                      static_cast<std::int64_t>(host.batch_orbital_offsets.size()),
+                                      static_cast<std::int64_t>(host.matrix_offsets.size()),
+                                      static_cast<std::int64_t>(host.atom_shell_offsets.size()),
+                                      static_cast<std::int64_t>(host.shell_orbital_offsets.size()),
+                                      static_cast<std::int64_t>(host.shell_to_atom.size()),
+                                      static_cast<std::int64_t>(host.orbital_to_shell.size()),
+                                      static_cast<std::int64_t>(host.orbital_to_atom.size()),
+                                      atom_offsets.get(),
+                                      batch_shell_offsets.get(),
+                                      batch_orbital_offsets.get(),
+                                      matrix_offsets.get(),
+                                      atom_shell_offsets.get(),
+                                      shell_orbital_offsets.get(),
+                                      shell_to_atom.get(),
+                                      orbital_to_shell.get(),
+                                      orbital_to_atom.get()};
+    result.model = model;
+    return result;
   }
 
-  Gfn2HamiltonianDeviceInput input(const HostCase& host) const {
+  Gfn2HamiltonianDeviceInput input(const HostCase& host,
+                                   XtbModelFlavor model = XtbModelFlavor::kGfn2) const {
+    const bool multipoles_enabled = model == XtbModelFlavor::kGfn2;
     return {h0.get(),
             static_cast<std::int64_t>(host.h0.size()),
             overlap.get(),
             static_cast<std::int64_t>(host.overlap.size()),
-            dipole_integrals.get(),
-            static_cast<std::int64_t>(host.dipole_integrals.size()),
-            quadrupole_integrals.get(),
-            static_cast<std::int64_t>(host.quadrupole_integrals.size()),
+            multipoles_enabled ? dipole_integrals.get() : nullptr,
+            multipoles_enabled ? static_cast<std::int64_t>(host.dipole_integrals.size()) : 0,
+            multipoles_enabled ? quadrupole_integrals.get() : nullptr,
+            multipoles_enabled ? static_cast<std::int64_t>(host.quadrupole_integrals.size()) : 0,
             shell_scalar.get(),
             static_cast<std::int64_t>(host.shell_scalar.size()),
-            dipole_potential.get(),
-            static_cast<std::int64_t>(host.dipole_potential.size()),
-            quadrupole_potential.get(),
-            static_cast<std::int64_t>(host.quadrupole_potential.size()),
+            multipoles_enabled ? dipole_potential.get() : nullptr,
+            multipoles_enabled ? static_cast<std::int64_t>(host.dipole_potential.size()) : 0,
+            multipoles_enabled ? quadrupole_potential.get() : nullptr,
+            multipoles_enabled ? static_cast<std::int64_t>(host.quadrupole_potential.size()) : 0,
             kPlanToken};
   }
 
@@ -618,22 +626,26 @@ struct SpinHamiltonianFixture {
   }
 
   Gfn2HamiltonianDeviceInput input(const DeviceFixture& physical, const HostCase& physical_host,
-                                   const HostSpinHamiltonianCase& host) const {
-    return {physical.h0.get(),
-            static_cast<std::int64_t>(physical_host.h0.size()),
-            physical.overlap.get(),
-            static_cast<std::int64_t>(physical_host.overlap.size()),
-            physical.dipole_integrals.get(),
-            static_cast<std::int64_t>(physical_host.dipole_integrals.size()),
-            physical.quadrupole_integrals.get(),
-            static_cast<std::int64_t>(physical_host.quadrupole_integrals.size()),
-            shell_scalar.get(),
-            static_cast<std::int64_t>(host.shell_scalar.size()),
-            dipole_potential.get(),
-            static_cast<std::int64_t>(host.dipole_potential.size()),
-            quadrupole_potential.get(),
-            static_cast<std::int64_t>(host.quadrupole_potential.size()),
-            kPlanToken};
+                                   const HostSpinHamiltonianCase& host,
+                                   XtbModelFlavor model = XtbModelFlavor::kGfn2) const {
+    const bool multipoles_enabled = model == XtbModelFlavor::kGfn2;
+    return {
+        physical.h0.get(),
+        static_cast<std::int64_t>(physical_host.h0.size()),
+        physical.overlap.get(),
+        static_cast<std::int64_t>(physical_host.overlap.size()),
+        multipoles_enabled ? physical.dipole_integrals.get() : nullptr,
+        multipoles_enabled ? static_cast<std::int64_t>(physical_host.dipole_integrals.size()) : 0,
+        multipoles_enabled ? physical.quadrupole_integrals.get() : nullptr,
+        multipoles_enabled ? static_cast<std::int64_t>(physical_host.quadrupole_integrals.size())
+                           : 0,
+        shell_scalar.get(),
+        static_cast<std::int64_t>(host.shell_scalar.size()),
+        multipoles_enabled ? dipole_potential.get() : nullptr,
+        multipoles_enabled ? static_cast<std::int64_t>(host.dipole_potential.size()) : 0,
+        multipoles_enabled ? quadrupole_potential.get() : nullptr,
+        multipoles_enabled ? static_cast<std::int64_t>(host.quadrupole_potential.size()) : 0,
+        kPlanToken};
   }
 
   Gfn2HamiltonianDeviceOutput result(const HostSpinHamiltonianCase& host) {
@@ -647,22 +659,24 @@ struct SpinHamiltonianFixture {
 
 cudaError_t launch_spin_hamiltonian(DeviceFixture& physical, SpinHamiltonianFixture& spin_device,
                                     const HostCase& host, const HostSpinHamiltonianCase& spin_host,
-                                    cudaStream_t stream = nullptr) {
+                                    cudaStream_t stream = nullptr,
+                                    XtbModelFlavor model = XtbModelFlavor::kGfn2) {
   cudaError_t status = reset_gfn2_hamiltonian_device_errors_cuda(
       host.batch_size, physical.system_errors.get(), physical.device_error.get(), stream);
   if (status == cudaSuccess) {
     status = assemble_gfn2_spin_hamiltonian_cuda(
-        physical.batch(host), spin_device.layout(host, spin_host),
-        spin_device.input(physical, host, spin_host), physical.activity(host),
+        physical.batch(host, model), spin_device.layout(host, spin_host),
+        spin_device.input(physical, host, spin_host, model), physical.activity(host),
         spin_device.result(spin_host), spin_device.workspace(spin_host),
         physical.system_errors.get(), physical.device_error.get(), stream);
   }
   return status;
 }
 
-cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t stream = nullptr) {
-  const auto batch = device.batch(host);
-  const auto input = device.input(host);
+cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t stream = nullptr,
+                   XtbModelFlavor model = XtbModelFlavor::kGfn2) {
+  const auto batch = device.batch(host, model);
+  const auto input = device.input(host, model);
   const auto activity = device.activity(host);
   const auto output = device.result(host);
   const auto workspace = device.workspace(host);
@@ -1063,6 +1077,13 @@ int test_sticky_alias_token_and_alignment() {
   CHECK(assemble_gfn2_hamiltonian_cuda(overflowing_shell_count, input, activity, output, workspace,
                                        device.system_errors.get(),
                                        device.device_error.get()) == cudaErrorInvalidValue);
+  auto oversized_overflowing_batch = batch;
+  oversized_overflowing_batch.batch_size =
+      static_cast<std::int64_t>(std::numeric_limits<int>::max()) + 1;
+  oversized_overflowing_batch.total_atoms = std::numeric_limits<std::int64_t>::max();
+  CHECK(assemble_gfn2_hamiltonian_cuda(oversized_overflowing_batch, input, activity, output,
+                                       workspace, device.system_errors.get(),
+                                       device.device_error.get()) == cudaErrorInvalidConfiguration);
   auto alias_output = output;
   alias_output.matrix = workspace.matrix_scratch;
   CHECK(assemble_gfn2_hamiltonian_cuda(batch, input, activity, alias_output, workspace,
@@ -1277,6 +1298,89 @@ int test_spin_hamiltonian_failure_and_alias_contracts() {
   return 0;
 }
 
+int test_gfn1_scalar_hamiltonian_contracts() {
+  constexpr std::uint32_t kControlSentinel = 0x5ac31de7u;
+  HostCase host = make_case(4u);
+  const std::vector<double> expected = evaluate_cpu(host, kSentinel, XtbModelFlavor::kGfn1);
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host));
+  CUDA_CHECK(launch(device, host, nullptr, XtbModelFlavor::kGfn1));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  std::vector<double> actual(expected.size());
+  CUDA_CHECK(device.output.copy_to(actual.data(), actual.size()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    CHECK(near(actual[index], expected[index]));
+  }
+
+  /* Scalar GFN1 descriptors canonically omit every multipole plane. Reject a
+   * coherent-looking GFN2 plane before any output or diagnostic is touched. */
+  CUDA_CHECK(device.output.fill(kSentinel, actual.size()));
+  CUDA_CHECK(
+      device.system_errors.fill(kControlSentinel, static_cast<std::size_t>(host.batch_size)));
+  CUDA_CHECK(device.device_error.fill(kControlSentinel, 1u));
+  const auto batch = device.batch(host, XtbModelFlavor::kGfn1);
+  auto hostile = device.input(host, XtbModelFlavor::kGfn1);
+  hostile.dipole_integrals = device.dipole_integrals.get();
+  hostile.dipole_integral_elements = static_cast<std::int64_t>(host.dipole_integrals.size());
+  CHECK(assemble_gfn2_hamiltonian_cuda(batch, hostile, device.activity(host), device.result(host),
+                                       device.workspace(host), device.system_errors.get(),
+                                       device.device_error.get()) == cudaErrorInvalidValue);
+  std::vector<std::uint32_t> system_controls(static_cast<std::size_t>(host.batch_size));
+  std::uint32_t device_control = 0u;
+  CUDA_CHECK(device.output.copy_to(actual.data(), actual.size()));
+  CUDA_CHECK(device.system_errors.copy_to(system_controls.data(), system_controls.size()));
+  CUDA_CHECK(device.device_error.copy_to(&device_control, 1u));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(std::all_of(actual.begin(), actual.end(), [](double value) { return value == kSentinel; }));
+  CHECK(std::all_of(system_controls.begin(), system_controls.end(),
+                    [](std::uint32_t value) { return value == kControlSentinel; }));
+  CHECK(device_control == kControlSentinel);
+
+  HostSpinHamiltonianCase spin_host = make_spin_hamiltonian_case(host);
+  const std::vector<double> spin_expected =
+      evaluate_spin_cpu(host, spin_host, XtbModelFlavor::kGfn1);
+  DeviceFixture spin_physical;
+  SpinHamiltonianFixture spin_device;
+  CUDA_CHECK(spin_physical.initialize(host));
+  CUDA_CHECK(spin_device.initialize(spin_host));
+  CUDA_CHECK(launch_spin_hamiltonian(spin_physical, spin_device, host, spin_host, nullptr,
+                                     XtbModelFlavor::kGfn1));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  std::vector<double> spin_actual(spin_expected.size());
+  CUDA_CHECK(spin_device.output.copy_to(spin_actual.data(), spin_actual.size()));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  for (std::size_t index = 0; index < spin_actual.size(); ++index) {
+    CHECK(near(spin_actual[index], spin_expected[index]));
+  }
+
+  CUDA_CHECK(spin_device.output.fill(kSentinel, spin_actual.size()));
+  CUDA_CHECK(spin_physical.system_errors.fill(kControlSentinel,
+                                              static_cast<std::size_t>(host.batch_size)));
+  CUDA_CHECK(spin_physical.device_error.fill(kControlSentinel, 1u));
+  const auto spin_batch = spin_physical.batch(host, XtbModelFlavor::kGfn1);
+  const auto layout = spin_device.layout(host, spin_host);
+  auto hostile_spin = spin_device.input(spin_physical, host, spin_host, XtbModelFlavor::kGfn1);
+  hostile_spin.atomic_quadrupole_potentials = spin_device.quadrupole_potential.get();
+  hostile_spin.atomic_quadrupole_elements =
+      static_cast<std::int64_t>(spin_host.quadrupole_potential.size());
+  CHECK(assemble_gfn2_spin_hamiltonian_cuda(
+            spin_batch, layout, hostile_spin, spin_physical.activity(host),
+            spin_device.result(spin_host), spin_device.workspace(spin_host),
+            spin_physical.system_errors.get(),
+            spin_physical.device_error.get()) == cudaErrorInvalidValue);
+  CUDA_CHECK(spin_device.output.copy_to(spin_actual.data(), spin_actual.size()));
+  CUDA_CHECK(spin_physical.system_errors.copy_to(system_controls.data(), system_controls.size()));
+  CUDA_CHECK(spin_physical.device_error.copy_to(&device_control, 1u));
+  CUDA_CHECK(cudaDeviceSynchronize());
+  CHECK(std::all_of(spin_actual.begin(), spin_actual.end(),
+                    [](double value) { return value == kSentinel; }));
+  CHECK(std::all_of(system_controls.begin(), system_controls.end(),
+                    [](std::uint32_t value) { return value == kControlSentinel; }));
+  CHECK(device_control == kControlSentinel);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -1306,10 +1410,11 @@ int main() {
     std::fprintf(stderr, "CUDA spin Hamiltonian Graph test failed at line %d\n", status);
     return status;
   }
-  const std::array<int (*)(), 7> tests{
+  const std::array<int (*)(), 8> tests{
       {test_inactive_skip_and_peer_isolation, test_all_inactive_hostile_topology,
        test_hostile_offsets, test_arithmetic_overflow_is_transactional, test_invalid_active_mask,
-       test_sticky_alias_token_and_alignment, test_spin_hamiltonian_failure_and_alias_contracts}};
+       test_sticky_alias_token_and_alignment, test_spin_hamiltonian_failure_and_alias_contracts,
+       test_gfn1_scalar_hamiltonian_contracts}};
   for (const auto test : tests) {
     const int status = test();
     if (status != 0) {

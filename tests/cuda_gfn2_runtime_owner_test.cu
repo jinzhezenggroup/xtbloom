@@ -14,6 +14,21 @@
 
 #include "backends/cuda/gfn2_inference_publication.cuh"
 #include "backends/cuda/gfn2_scc_potential.cuh"
+#include "model/gfn1/basis.hpp"
+#include "model/gfn1/d3.hpp"
+#include "model/gfn1/es2.hpp"
+#include "model/gfn1/es3.hpp"
+#include "model/gfn1/external_point_charges.hpp"
+#include "model/gfn1/h0.hpp"
+#include "model/gfn1/halogen.hpp"
+#include "model/gfn1/integrals.hpp"
+#include "model/gfn1/mulliken.hpp"
+#include "model/gfn1/repulsion.hpp"
+#include "model/gfn1/scc_driver.hpp"
+#include "model/gfn1/scc_mixer.hpp"
+#include "model/gfn1/spin.hpp"
+#include "model/gfn1/wavefunction.hpp"
+#include "model/gfn2/eigensolver.hpp"
 #include "runtime/backend.hpp"
 #include "runtime/gfn2_cuda_execution.hpp"
 #include "tests/support/gfn2_scc_test_case.hpp"
@@ -72,6 +87,9 @@ using xtbloom::detail::cuda::Gfn2SccPotentialComponent;
 using xtbloom::test::gfn2::HostSccCase;
 using xtbloom::test::gfn2::HostSccCaseOptions;
 using xtbloom::test::gfn2::SmallSystemKind;
+
+namespace gfn1 = xtbloom::detail::gfn1;
+namespace gfn2 = xtbloom::detail::gfn2;
 
 template <typename T>
 xtbloom_const_buffer_t host_buffer(const std::vector<T>& values) noexcept {
@@ -485,6 +503,168 @@ xtbloom_compute_options_t compute_options(bool force_mode = true) noexcept {
   return options;
 }
 
+template <typename T>
+std::size_t vector_storage_bytes(const std::vector<T>& values) noexcept {
+  return values.capacity() * sizeof(T);
+}
+
+struct ExpectedGfn1HostPlanBytes {
+  std::size_t plan_vectors = 0u;
+  std::size_t model_plans = 0u;
+  std::size_t expanded_parameters = 0u;
+  std::size_t wavefunction_arena = 0u;
+};
+
+/* Rebuild only the canonical CPU GFN1 owners used by HostPlans. Keeping this
+ * enumeration independent from retained_host_byte_breakdown() makes the
+ * regression fail when one direct vector, opaque plan, expanded parameter
+ * array, or pinned wavefunction allocation is omitted from CUDA accounting. */
+xtbloom_status_t expected_gfn1_host_plan_bytes(const PublicHostBatch& batch,
+                                               const xtbloom_compute_options_t& options,
+                                               ExpectedGfn1HostPlanBytes& output,
+                                               std::string& error) {
+  const std::int64_t batch_size = batch.descriptor.batch_size;
+  const std::int64_t total_atoms = batch.descriptor.total_atoms;
+
+  gfn1::BasisPlan basis;
+  gfn1::IntegralPlan integrals;
+  gfn1::H0Plan h0;
+  gfn1::WavefunctionLayout wavefunction;
+  gfn1::ES2Plan es2;
+  gfn1::ES3Plan es3;
+  gfn1::SpinPopulationLayout spin_layout;
+  gfn1::SpinPolarizationPlan spin;
+  gfn1::MullikenPlan mulliken;
+  gfn2::EigensolverPlan eigensolver;
+  gfn1::SccMixerPlan mixer;
+  gfn1::ExternalPointChargePlan external;
+  gfn1::SccDriverPlan driver;
+  gfn1::RepulsionPlan repulsion;
+  gfn1::D3Plan d3;
+  gfn1::HalogenPlan halogen;
+
+  xtbloom_status_t status =
+      gfn1::make_basis_plan(batch_size, total_atoms, batch.atom_offsets.data(),
+                            batch.atomic_numbers.data(), basis, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_integral_plan(basis, integrals, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_h0_plan(basis, integrals, batch.atomic_numbers.data(), h0, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_wavefunction_layout(
+      basis, batch.atomic_numbers.data(), batch.molecular_charges.data(),
+      batch.unpaired_electrons.data(), batch.spin_channels.data(), wavefunction, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_es2_plan(basis, batch.atomic_numbers.data(), es2, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_es3_plan(basis, batch.atomic_numbers.data(), es3, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_spin_population_layout(basis, batch.spin_channels.data(), spin_layout, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_spin_polarization_plan(basis, batch.atomic_numbers.data(), spin_layout, spin,
+                                             error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_mulliken_plan(basis, integrals, wavefunction, mulliken, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn2::make_eigensolver_plan(gfn1::make_eigensolver_wavefunction_layout(wavefunction),
+                                       eigensolver, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_scc_mixer_plan(wavefunction, 8, 0.4, options.charge_tolerance,
+                                     options.charge_tolerance, mixer, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_external_point_charge_plan(basis, es2, 0, nullptr, external, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_scc_driver_plan(
+      wavefunction, mulliken, es2, es3, spin, eigensolver, mixer, nullptr,
+      static_cast<std::uint64_t>(options.max_scc_iterations), options.electronic_temperature,
+      options.energy_tolerance, driver, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_repulsion_plan(batch_size, total_atoms, batch.atom_offsets.data(),
+                                     batch.atomic_numbers.data(), repulsion, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_d3_plan(batch_size, total_atoms, batch.atom_offsets.data(),
+                              batch.atomic_numbers.data(), d3, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_halogen_plan(batch_size, total_atoms, batch.atom_offsets.data(),
+                                   batch.atomic_numbers.data(), halogen, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+  const std::size_t plan_vectors =
+      vector_storage_bytes(h0.atom_offsets) + vector_storage_bytes(h0.batch_shell_offsets) +
+      vector_storage_bytes(h0.batch_orbital_offsets) + vector_storage_bytes(h0.matrix_offsets) +
+      vector_storage_bytes(h0.shell_pair_offsets) + vector_storage_bytes(h0.atomic_radii) +
+      vector_storage_bytes(h0.shell_levels) + vector_storage_bytes(h0.shell_coordination_scale) +
+      vector_storage_bytes(h0.shell_polynomial) + vector_storage_bytes(h0.shell_pair_scale) +
+      vector_storage_bytes(wavefunction.atom_offsets) +
+      vector_storage_bytes(wavefunction.batch_shell_offsets) +
+      vector_storage_bytes(wavefunction.batch_orbital_offsets) +
+      vector_storage_bytes(wavefunction.atomic_numbers) +
+      vector_storage_bytes(wavefunction.molecular_charges) +
+      vector_storage_bytes(wavefunction.unpaired_electrons) +
+      vector_storage_bytes(wavefunction.spin_channels) +
+      vector_storage_bytes(wavefunction.reference_atom_occupations) +
+      vector_storage_bytes(wavefunction.reference_shell_occupations) +
+      vector_storage_bytes(wavefunction.electron_counts) +
+      vector_storage_bytes(wavefunction.alpha_electron_counts) +
+      vector_storage_bytes(wavefunction.beta_electron_counts) +
+      vector_storage_bytes(wavefunction.coefficients.system_offsets) +
+      vector_storage_bytes(wavefunction.eigenvalues.system_offsets) +
+      vector_storage_bytes(wavefunction.occupations.system_offsets) +
+      vector_storage_bytes(wavefunction.density.system_offsets) +
+      vector_storage_bytes(wavefunction.qsh.system_offsets) +
+      vector_storage_bytes(wavefunction.qat.system_offsets) +
+      vector_storage_bytes(wavefunction.energy_weighted_density.system_offsets) +
+      vector_storage_bytes(es3.atom_offsets) + vector_storage_bytes(es3.atom_gamma3) +
+      vector_storage_bytes(spin_layout.system_offsets) +
+      vector_storage_bytes(spin_layout.spin_channels) + vector_storage_bytes(spin.atom_offsets) +
+      vector_storage_bytes(spin.batch_shell_offsets) +
+      vector_storage_bytes(spin.atom_shell_offsets) +
+      vector_storage_bytes(spin.shell_population_offsets) +
+      vector_storage_bytes(spin.spin_channels) + vector_storage_bytes(spin.coupling_offsets) +
+      vector_storage_bytes(spin.coupling_matrices) + vector_storage_bytes(external.atom_offsets) +
+      vector_storage_bytes(external.batch_shell_offsets) +
+      vector_storage_bytes(external.atom_shell_offsets) +
+      vector_storage_bytes(external.point_charge_offsets) +
+      vector_storage_bytes(external.atom_to_batch) + vector_storage_bytes(external.point_to_batch) +
+      vector_storage_bytes(external.shell_to_atom) + vector_storage_bytes(external.shell_hardness) +
+      vector_storage_bytes(repulsion.atom_offsets) + vector_storage_bytes(repulsion.sqrt_alpha) +
+      vector_storage_bytes(repulsion.effective_charge);
+
+  std::vector<std::uint8_t> d3_reference_counts;
+  std::vector<double> d3_reference_cn;
+  std::vector<double> d3_reference_c6;
+  std::vector<double> d3_pair_rrij;
+  std::vector<double> d3_pair_damping_radii;
+  std::vector<double> halogen_scaled_radii;
+  std::vector<double> halogen_bond_strength;
+  std::vector<std::uint8_t> halogen_donor;
+  std::vector<std::uint8_t> halogen_acceptor;
+  const std::size_t atoms = static_cast<std::size_t>(total_atoms);
+  const std::size_t pairs = static_cast<std::size_t>(d3.total_pairs());
+  d3_reference_counts.assign(atoms, 0u);
+  d3_reference_cn.assign(atoms * gfn1::kD3MaximumReferences, 0.0);
+  d3_reference_c6.assign(pairs * gfn1::kD3MaximumReferences * gfn1::kD3MaximumReferences, 0.0);
+  d3_pair_rrij.assign(pairs, 0.0);
+  d3_pair_damping_radii.assign(pairs, 0.0);
+  halogen_scaled_radii.resize(atoms);
+  halogen_bond_strength.resize(atoms);
+  halogen_donor.resize(atoms);
+  halogen_acceptor.resize(atoms);
+
+  output = {
+      plan_vectors,
+      mulliken.resident_bytes() + mixer.resident_bytes() + driver.resident_bytes() +
+          d3.resident_bytes() + halogen.resident_bytes(),
+      vector_storage_bytes(d3_reference_counts) + vector_storage_bytes(d3_reference_cn) +
+          vector_storage_bytes(d3_reference_c6) + vector_storage_bytes(d3_pair_rrij) +
+          vector_storage_bytes(d3_pair_damping_radii) + vector_storage_bytes(halogen_scaled_radii) +
+          vector_storage_bytes(halogen_bond_strength) + vector_storage_bytes(halogen_donor) +
+          vector_storage_bytes(halogen_acceptor),
+      wavefunction.workspace_size_bytes,
+  };
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
 bool same_identity(const Gfn2CudaExecutionIdentity& first,
                    const Gfn2CudaExecutionIdentity& second) noexcept {
   return first.topology_fingerprint == second.topology_fingerprint &&
@@ -568,6 +748,14 @@ bool same_identity(const Gfn2CudaExecutionIdentity& first,
          first.topology_staging_device_bytes == second.topology_staging_device_bytes &&
          first.runtime_owner_host_bytes == second.runtime_owner_host_bytes &&
          first.host_plans_bytes == second.host_plans_bytes &&
+         first.host_common_plan_vector_bytes == second.host_common_plan_vector_bytes &&
+         first.host_gfn1_plan_vector_bytes == second.host_gfn1_plan_vector_bytes &&
+         first.host_common_model_plan_bytes == second.host_common_model_plan_bytes &&
+         first.host_gfn1_model_plan_bytes == second.host_gfn1_model_plan_bytes &&
+         first.host_numerical_vector_bytes == second.host_numerical_vector_bytes &&
+         first.host_gfn1_expanded_parameter_bytes == second.host_gfn1_expanded_parameter_bytes &&
+         first.host_gfn2_wavefunction_arena_bytes == second.host_gfn2_wavefunction_arena_bytes &&
+         first.host_gfn1_wavefunction_arena_bytes == second.host_gfn1_wavefunction_arena_bytes &&
          first.topology_setup_host_bytes == second.topology_setup_host_bytes &&
          first.inputs_setup_host_bytes == second.inputs_setup_host_bytes &&
          first.eigensolver_setup_host_bytes == second.eigensolver_setup_host_bytes &&
@@ -635,6 +823,12 @@ int validate_identity(const Gfn2CudaExecutionIdentity& identity, std::int64_t ba
   CHECK(identity.topology_staging_device_bytes > 0u);
   CHECK(identity.runtime_owner_host_bytes > 0u);
   CHECK(identity.host_plans_bytes > 0u);
+  CHECK(identity.host_plans_bytes ==
+        identity.host_common_plan_vector_bytes + identity.host_gfn1_plan_vector_bytes +
+            identity.host_common_model_plan_bytes + identity.host_gfn1_model_plan_bytes +
+            identity.host_numerical_vector_bytes + identity.host_gfn1_expanded_parameter_bytes +
+            identity.host_gfn2_wavefunction_arena_bytes +
+            identity.host_gfn1_wavefunction_arena_bytes);
   CHECK(identity.topology_setup_host_bytes > 0u);
   CHECK(identity.inputs_setup_host_bytes > 0u);
   CHECK(identity.eigensolver_setup_host_bytes > 0u);
@@ -887,6 +1081,49 @@ int test_topology_only_seed_factor_is_unpublished(cudaStream_t stream, std::int3
 
   CUDA_CHECK(cudaGraphExecDestroy(executable));
   CUDA_CHECK(cudaGraphDestroy(graph));
+  return 0;
+}
+
+int test_gfn1_host_plan_accounting(cudaStream_t stream, std::int32_t device_id) {
+  Gfn2CudaExecutionCache cache(device_id, reinterpret_cast<void*>(stream));
+  HostSccCase host;
+  std::string error;
+  CHECK(HostSccCase::create(homogeneous_case_options(1, SmallSystemKind::kH2, false, false, false),
+                            host, error) == XTBLOOM_STATUS_SUCCESS);
+  PublicHostBatch batch = PublicHostBatch::from_host(host, false);
+  xtbloom_compute_options_t options = compute_options(false);
+  options.model = XTBLOOM_MODEL_GFN1_XTB;
+
+  CHECK(cache.prepare_topology_only(batch.descriptor, options, error) == XTBLOOM_STATUS_SUCCESS);
+  const Gfn2CudaExecutionIdentity identity = cache.identity();
+  ExpectedGfn1HostPlanBytes expected;
+  CHECK_STATUS(expected_gfn1_host_plan_bytes(batch, options, expected, error),
+               XTBLOOM_STATUS_SUCCESS, error);
+  CHECK(identity.host_common_plan_vector_bytes > 0u);
+  CHECK(identity.host_gfn1_plan_vector_bytes == expected.plan_vectors);
+  CHECK(identity.host_common_model_plan_bytes > 0u);
+  CHECK(identity.host_gfn1_model_plan_bytes == expected.model_plans);
+  CHECK(identity.host_numerical_vector_bytes > 0u);
+  CHECK(identity.host_gfn1_expanded_parameter_bytes == expected.expanded_parameters);
+  CHECK(identity.host_gfn2_wavefunction_arena_bytes == 0u);
+  CHECK(identity.host_gfn1_wavefunction_arena_bytes == expected.wavefunction_arena);
+  CHECK(expected.plan_vectors > 0u);
+  CHECK(expected.model_plans > 0u);
+  CHECK(expected.expanded_parameters > 0u);
+  CHECK(expected.wavefunction_arena > 0u);
+  CHECK(identity.host_plans_bytes ==
+        identity.host_common_plan_vector_bytes + identity.host_gfn1_plan_vector_bytes +
+            identity.host_common_model_plan_bytes + identity.host_gfn1_model_plan_bytes +
+            identity.host_numerical_vector_bytes + identity.host_gfn1_expanded_parameter_bytes +
+            identity.host_gfn2_wavefunction_arena_bytes +
+            identity.host_gfn1_wavefunction_arena_bytes);
+  CHECK(identity.retained_host_workspace_bytes ==
+        identity.provider_host_workspace_bytes + identity.numerical_host_staging_arena_bytes +
+            identity.public_result_host_arena_bytes + identity.candidate_validation_arena_bytes +
+            identity.native_lattice_host_staging_bytes + identity.topology_staging_host_bytes +
+            identity.runtime_owner_host_bytes + identity.host_plans_bytes +
+            identity.topology_setup_host_bytes + identity.inputs_setup_host_bytes +
+            identity.eigensolver_setup_host_bytes + identity.initializer_host_bytes);
   return 0;
 }
 
@@ -1861,8 +2098,13 @@ int test_context_owned_runtime(cudaStream_t stream, std::int32_t device_id) {
   PublicHostBatch batch = PublicHostBatch::from_host(host, false);
   xtbloom_compute_options_t options = compute_options();
   bool reused = true;
-  CHECK(context->gfn2_cuda_execution_cache->prepare_host(batch.descriptor, options, reused,
-                                                         error) == XTBLOOM_STATUS_SUCCESS);
+  const xtbloom_status_t status =
+      context->gfn2_cuda_execution_cache->prepare_host(batch.descriptor, options, reused, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    std::fprintf(stderr, "context-owned runtime setup failed: status=%d error=%s\n", status,
+                 error.c_str());
+  }
+  CHECK(status == XTBLOOM_STATUS_SUCCESS);
   CHECK(!reused);
   CHECK(context->gfn2_cuda_execution_cache->valid());
   CHECK(validate_identity(context->gfn2_cuda_execution_cache->identity(), 1, false, false, false) ==
@@ -2915,11 +3157,14 @@ int main(int argc, char** argv) {
   const bool refresh_chain_only = argc == 2 && std::strcmp(argv[1], "--refresh-chain") == 0;
   const bool request_state_only = argc == 2 && std::strcmp(argv[1], "--request-state") == 0;
   const bool bounded_fallback_only = argc == 2 && std::strcmp(argv[1], "--bounded-fallback") == 0;
+  const bool gfn1_host_plan_accounting_only =
+      argc == 2 && std::strcmp(argv[1], "--gfn1-host-plan-accounting") == 0;
   if (argc != 1 && !electric_field_only && !native_lattice_lifecycle_only && !refresh_chain_only &&
-      !request_state_only && !bounded_fallback_only) {
+      !request_state_only && !bounded_fallback_only && !gfn1_host_plan_accounting_only) {
     std::fprintf(stderr,
                  "usage: %s [--electric-field-only|--native-lattice-lifecycle|"
-                 "--refresh-chain|--request-state|--bounded-fallback]\n",
+                 "--refresh-chain|--request-state|--bounded-fallback|"
+                 "--gfn1-host-plan-accounting]\n",
                  argv[0]);
     return 2;
   }
@@ -2969,6 +3214,13 @@ int main(int argc, char** argv) {
     return status;
   }
 
+  if (gfn1_host_plan_accounting_only) {
+    const int status = test_gfn1_host_plan_accounting(stream, device_id);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CUDA_CHECK(cudaStreamDestroy(stream));
+    return status;
+  }
+
   int status = test_context_owned_runtime(stream, device_id);
   if (status == 0) status = test_base_configuration(stream, device_id);
   if (status == 0) {
@@ -2990,6 +3242,7 @@ int main(int argc, char** argv) {
   }
   if (status == 0) status = test_ragged_runtime_shapes(stream, device_id);
   if (status == 0) status = test_topology_only_seed_factor_is_unpublished(stream, device_id);
+  if (status == 0) status = test_gfn1_host_plan_accounting(stream, device_id);
   if (status == 0) status = test_fresh_warm_inference_and_post_scc_refresh(stream, device_id);
   if (status == 0) status = test_electric_field_refresh_and_warm_identity(stream, device_id);
   if (status == 0) status = test_failed_refresh_revokes_warm_checkpoint(stream, device_id);

@@ -421,7 +421,8 @@ xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context, const xtblo
     if (model_status != XTBLOOM_STATUS_SUCCESS) {
       return fail(model_status, std::move(error));
     }
-    if (model_route != xtbloom::detail::ModelBackendRoute::kGfn2) {
+    if (model_route != xtbloom::detail::ModelBackendRoute::kGfn1 &&
+        model_route != xtbloom::detail::ModelBackendRoute::kGfn2) {
       return fail(XTBLOOM_STATUS_INTERNAL_ERROR,
                   "the registered model route has no asynchronous CUDA executor");
     }

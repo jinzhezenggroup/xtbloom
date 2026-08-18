@@ -74,7 +74,8 @@ __device__ bool checked_square(std::int64_t value, std::int64_t* square) {
   return true;
 }
 
-__device__ bool checked_product(std::int64_t first, std::int64_t second, std::int64_t* product) {
+__host__ __device__ bool checked_product(std::int64_t first, std::int64_t second,
+                                         std::int64_t* product) {
   if (first < 0 || second < 0 || (first != 0 && second > kMaximumInt64 / first)) {
     return false;
   }
@@ -596,13 +597,17 @@ __global__ void publish_population_kernel(Gfn2MullikenDeviceBatch batch,
   }
   for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
     population.qat[atom] = workspace.qat_scratch[atom];
-    for (int component = 0; component < kGfn2MullikenDipoleComponents; ++component) {
-      const std::int64_t index = atom * kGfn2MullikenDipoleComponents + component;
-      population.dipole[index] = workspace.dipole_scratch[index];
+    if (population.dipole_elements != 0) {
+      for (int component = 0; component < kGfn2MullikenDipoleComponents; ++component) {
+        const std::int64_t index = atom * kGfn2MullikenDipoleComponents + component;
+        population.dipole[index] = workspace.dipole_scratch[index];
+      }
     }
-    for (int component = 0; component < kGfn2MullikenQuadrupoleComponents; ++component) {
-      const std::int64_t index = atom * kGfn2MullikenQuadrupoleComponents + component;
-      population.quadrupole[index] = workspace.quadrupole_scratch[index];
+    if (population.quadrupole_elements != 0) {
+      for (int component = 0; component < kGfn2MullikenQuadrupoleComponents; ++component) {
+        const std::int64_t index = atom * kGfn2MullikenQuadrupoleComponents + component;
+        population.quadrupole[index] = workspace.quadrupole_scratch[index];
+      }
     }
   }
 }
@@ -836,7 +841,7 @@ __global__ void spin_conversion_kernel(Gfn2MullikenDeviceBatch batch,
     }
   }
 
-  if (nspin == 2) {
+  if (nspin == 2 && batch.model == XtbModelFlavor::kGfn2) {
     for (std::int64_t local_atom = threadIdx.x; local_atom < atoms; local_atom += blockDim.x) {
       for (int component = 0; component < kGfn2MullikenDipoleComponents; ++component) {
         const std::int64_t alpha_index =
@@ -939,13 +944,17 @@ __global__ void publish_spin_population_kernel(Gfn2MullikenDeviceBatch batch,
   }
   for (std::int64_t index = qat_begin + threadIdx.x; index < qat_end; index += blockDim.x) {
     population.qat[index] = workspace.qat_scratch[index];
-    for (int component = 0; component < kGfn2MullikenDipoleComponents; ++component) {
-      const std::int64_t component_index = index * kGfn2MullikenDipoleComponents + component;
-      population.dipole[component_index] = workspace.dipole_scratch[component_index];
+    if (population.dipole_elements != 0) {
+      for (int component = 0; component < kGfn2MullikenDipoleComponents; ++component) {
+        const std::int64_t component_index = index * kGfn2MullikenDipoleComponents + component;
+        population.dipole[component_index] = workspace.dipole_scratch[component_index];
+      }
     }
-    for (int component = 0; component < kGfn2MullikenQuadrupoleComponents; ++component) {
-      const std::int64_t component_index = index * kGfn2MullikenQuadrupoleComponents + component;
-      population.quadrupole[component_index] = workspace.quadrupole_scratch[component_index];
+    if (population.quadrupole_elements != 0) {
+      for (int component = 0; component < kGfn2MullikenQuadrupoleComponents; ++component) {
+        const std::int64_t component_index = index * kGfn2MullikenQuadrupoleComponents + component;
+        population.quadrupole[component_index] = workspace.quadrupole_scratch[component_index];
+      }
     }
   }
 }
@@ -1030,6 +1039,22 @@ cudaError_t evaluate_gfn2_mulliken_population_cuda(
     const Gfn2MullikenDeviceActivity& activity, const Gfn2MullikenDevicePopulation& population,
     const Gfn2MullikenDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
+  std::int64_t dipole_integral_elements = 0;
+  std::int64_t quadrupole_integral_elements = 0;
+  std::int64_t dipole_population_elements = 0;
+  std::int64_t quadrupole_population_elements = 0;
+  if (!valid_xtb_model_flavor(batch.model) ||
+      !checked_product(multipoles_enabled ? batch.total_matrix_elements : 0,
+                       kGfn2MullikenDipoleComponents, &dipole_integral_elements) ||
+      !checked_product(multipoles_enabled ? batch.total_matrix_elements : 0,
+                       kGfn2MullikenQuadrupoleComponents, &quadrupole_integral_elements) ||
+      !checked_product(multipoles_enabled ? batch.total_atoms : 0, kGfn2MullikenDipoleComponents,
+                       &dipole_population_elements) ||
+      !checked_product(multipoles_enabled ? batch.total_atoms : 0,
+                       kGfn2MullikenQuadrupoleComponents, &quadrupole_population_elements)) {
+    return cudaErrorInvalidValue;
+  }
   if (batch.batch_size <= 0 || batch.total_atoms <= 0 || batch.total_shells <= 0 ||
       batch.total_orbitals <= 0 || batch.total_matrix_elements <= 0 ||
       batch.maximum_system_atoms <= 0 || batch.maximum_system_shells <= 0 ||
@@ -1048,17 +1073,22 @@ cudaError_t evaluate_gfn2_mulliken_population_cuda(
       batch.reference_occupation_count != batch.total_shells ||
       input.density_elements != batch.total_matrix_elements ||
       input.overlap_elements != batch.total_matrix_elements ||
-      input.dipole_integral_elements !=
-          batch.total_matrix_elements * kGfn2MullikenDipoleComponents ||
-      input.quadrupole_integral_elements !=
-          batch.total_matrix_elements * kGfn2MullikenQuadrupoleComponents ||
+      input.dipole_integral_elements != dipole_integral_elements ||
+      input.quadrupole_integral_elements != quadrupole_integral_elements ||
+      (!multipoles_enabled &&
+       (input.dipole_integrals != nullptr || input.quadrupole_integrals != nullptr)) ||
       activity.elements != batch.batch_size || population.qsh_elements != batch.total_shells ||
       population.qat_elements != batch.total_atoms ||
-      population.dipole_elements != batch.total_atoms * kGfn2MullikenDipoleComponents ||
-      population.quadrupole_elements != batch.total_atoms * kGfn2MullikenQuadrupoleComponents ||
+      population.dipole_elements != dipole_population_elements ||
+      population.quadrupole_elements != quadrupole_population_elements ||
+      (!multipoles_enabled && (population.dipole != nullptr || population.quadrupole != nullptr)) ||
       workspace.qsh_elements < batch.total_shells || workspace.qat_elements < batch.total_atoms ||
-      workspace.dipole_elements < batch.total_atoms * kGfn2MullikenDipoleComponents ||
-      workspace.quadrupole_elements < batch.total_atoms * kGfn2MullikenQuadrupoleComponents ||
+      (multipoles_enabled ? workspace.dipole_elements < dipole_population_elements
+                          : workspace.dipole_elements != 0) ||
+      (multipoles_enabled ? workspace.quadrupole_elements < quadrupole_population_elements
+                          : workspace.quadrupole_elements != 0) ||
+      (!multipoles_enabled &&
+       (workspace.dipole_scratch != nullptr || workspace.quadrupole_scratch != nullptr)) ||
       workspace.sequence_elements < 1 || !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
       !is_aligned(batch.batch_shell_offsets, alignof(std::int64_t)) ||
       !is_aligned(batch.batch_orbital_offsets, alignof(std::int64_t)) ||
@@ -1068,17 +1098,20 @@ cudaError_t evaluate_gfn2_mulliken_population_cuda(
       !is_aligned(batch.shell_to_atom, alignof(std::int64_t)) ||
       !is_aligned(batch.reference_shell_occupations, alignof(double)) ||
       !is_aligned(input.density, alignof(double)) || !is_aligned(input.overlap, alignof(double)) ||
-      !is_aligned(input.dipole_integrals, alignof(double)) ||
-      !is_aligned(input.quadrupole_integrals, alignof(double)) ||
+      (dipole_integral_elements != 0 && !is_aligned(input.dipole_integrals, alignof(double))) ||
+      (quadrupole_integral_elements != 0 &&
+       !is_aligned(input.quadrupole_integrals, alignof(double))) ||
       !is_aligned(activity.active_mask, alignof(std::uint8_t)) ||
       !is_aligned(population.qsh, alignof(double)) ||
       !is_aligned(population.qat, alignof(double)) ||
-      !is_aligned(population.dipole, alignof(double)) ||
-      !is_aligned(population.quadrupole, alignof(double)) ||
+      (dipole_population_elements != 0 && !is_aligned(population.dipole, alignof(double))) ||
+      (quadrupole_population_elements != 0 &&
+       !is_aligned(population.quadrupole, alignof(double))) ||
       !is_aligned(workspace.qsh_scratch, alignof(double)) ||
       !is_aligned(workspace.qat_scratch, alignof(double)) ||
-      !is_aligned(workspace.dipole_scratch, alignof(double)) ||
-      !is_aligned(workspace.quadrupole_scratch, alignof(double)) ||
+      (workspace.dipole_elements != 0 && !is_aligned(workspace.dipole_scratch, alignof(double))) ||
+      (workspace.quadrupole_elements != 0 &&
+       !is_aligned(workspace.quadrupole_scratch, alignof(double))) ||
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
       !is_aligned(system_errors, alignof(std::uint32_t)) ||
       !is_aligned(device_error, alignof(std::uint32_t))) {
@@ -1168,12 +1201,14 @@ cudaError_t evaluate_gfn2_mulliken_population_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  multipole_population_kernel<<<static_cast<unsigned int>(atom_blocks), kThreadsPerBlock, 0,
-                                stream>>>(batch, input, activity, workspace, system_errors,
-                                          device_error);
-  status = check_launch();
-  if (status != cudaSuccess) {
-    return status;
+  if (multipoles_enabled) {
+    multipole_population_kernel<<<static_cast<unsigned int>(atom_blocks), kThreadsPerBlock, 0,
+                                  stream>>>(batch, input, activity, workspace, system_errors,
+                                            device_error);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
   }
   atom_population_kernel<<<static_cast<unsigned int>(atom_blocks), kThreadsPerBlock, 0, stream>>>(
       batch, activity, workspace, system_errors, device_error);
@@ -1191,6 +1226,22 @@ cudaError_t evaluate_gfn2_mulliken_population_spin_cuda(
     const Gfn2MullikenDeviceInput& input, const Gfn2MullikenDeviceActivity& activity,
     const Gfn2MullikenDevicePopulation& population, const Gfn2MullikenDeviceWorkspace& workspace,
     std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
+  std::int64_t dipole_integral_elements = 0;
+  std::int64_t quadrupole_integral_elements = 0;
+  std::int64_t dipole_population_elements = 0;
+  std::int64_t quadrupole_population_elements = 0;
+  if (!valid_xtb_model_flavor(batch.model) ||
+      !checked_product(multipoles_enabled ? batch.total_matrix_elements : 0,
+                       kGfn2MullikenDipoleComponents, &dipole_integral_elements) ||
+      !checked_product(multipoles_enabled ? batch.total_matrix_elements : 0,
+                       kGfn2MullikenQuadrupoleComponents, &quadrupole_integral_elements) ||
+      !checked_product(multipoles_enabled ? layout.total_spin_atoms : 0,
+                       kGfn2MullikenDipoleComponents, &dipole_population_elements) ||
+      !checked_product(multipoles_enabled ? layout.total_spin_atoms : 0,
+                       kGfn2MullikenQuadrupoleComponents, &quadrupole_population_elements)) {
+    return cudaErrorInvalidValue;
+  }
   if (batch.batch_size <= 0 || batch.total_atoms <= 0 || batch.total_shells <= 0 ||
       batch.total_orbitals <= 0 || batch.total_matrix_elements <= 0 ||
       layout.batch_size != batch.batch_size || layout.total_spin_channels <= 0 ||
@@ -1222,20 +1273,24 @@ cudaError_t evaluate_gfn2_mulliken_population_spin_cuda(
       layout.total_spin_channels > 2 * batch.batch_size ||
       input.density_elements != layout.total_spin_matrix_elements ||
       input.overlap_elements != batch.total_matrix_elements ||
-      input.dipole_integral_elements !=
-          batch.total_matrix_elements * kGfn2MullikenDipoleComponents ||
-      input.quadrupole_integral_elements !=
-          batch.total_matrix_elements * kGfn2MullikenQuadrupoleComponents ||
+      input.dipole_integral_elements != dipole_integral_elements ||
+      input.quadrupole_integral_elements != quadrupole_integral_elements ||
+      (!multipoles_enabled &&
+       (input.dipole_integrals != nullptr || input.quadrupole_integrals != nullptr)) ||
       activity.elements != batch.batch_size ||
       population.qsh_elements != layout.total_spin_shells ||
       population.qat_elements != layout.total_spin_atoms ||
-      population.dipole_elements != layout.total_spin_atoms * kGfn2MullikenDipoleComponents ||
-      population.quadrupole_elements !=
-          layout.total_spin_atoms * kGfn2MullikenQuadrupoleComponents ||
+      population.dipole_elements != dipole_population_elements ||
+      population.quadrupole_elements != quadrupole_population_elements ||
+      (!multipoles_enabled && (population.dipole != nullptr || population.quadrupole != nullptr)) ||
       workspace.qsh_elements < layout.total_spin_shells ||
       workspace.qat_elements < layout.total_spin_atoms ||
-      workspace.dipole_elements < layout.total_spin_atoms * kGfn2MullikenDipoleComponents ||
-      workspace.quadrupole_elements < layout.total_spin_atoms * kGfn2MullikenQuadrupoleComponents ||
+      (multipoles_enabled ? workspace.dipole_elements < dipole_population_elements
+                          : workspace.dipole_elements != 0) ||
+      (multipoles_enabled ? workspace.quadrupole_elements < quadrupole_population_elements
+                          : workspace.quadrupole_elements != 0) ||
+      (!multipoles_enabled &&
+       (workspace.dipole_scratch != nullptr || workspace.quadrupole_scratch != nullptr)) ||
       workspace.sequence_elements < 1 || !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
       !is_aligned(batch.batch_shell_offsets, alignof(std::int64_t)) ||
       !is_aligned(batch.batch_orbital_offsets, alignof(std::int64_t)) ||
@@ -1250,17 +1305,20 @@ cudaError_t evaluate_gfn2_mulliken_population_spin_cuda(
       !is_aligned(layout.spin_atom_offsets, alignof(std::int64_t)) ||
       !is_aligned(layout.spin_channels, alignof(std::int32_t)) ||
       !is_aligned(input.density, alignof(double)) || !is_aligned(input.overlap, alignof(double)) ||
-      !is_aligned(input.dipole_integrals, alignof(double)) ||
-      !is_aligned(input.quadrupole_integrals, alignof(double)) ||
+      (dipole_integral_elements != 0 && !is_aligned(input.dipole_integrals, alignof(double))) ||
+      (quadrupole_integral_elements != 0 &&
+       !is_aligned(input.quadrupole_integrals, alignof(double))) ||
       !is_aligned(activity.active_mask, alignof(std::uint8_t)) ||
       !is_aligned(population.qsh, alignof(double)) ||
       !is_aligned(population.qat, alignof(double)) ||
-      !is_aligned(population.dipole, alignof(double)) ||
-      !is_aligned(population.quadrupole, alignof(double)) ||
+      (dipole_population_elements != 0 && !is_aligned(population.dipole, alignof(double))) ||
+      (quadrupole_population_elements != 0 &&
+       !is_aligned(population.quadrupole, alignof(double))) ||
       !is_aligned(workspace.qsh_scratch, alignof(double)) ||
       !is_aligned(workspace.qat_scratch, alignof(double)) ||
-      !is_aligned(workspace.dipole_scratch, alignof(double)) ||
-      !is_aligned(workspace.quadrupole_scratch, alignof(double)) ||
+      (workspace.dipole_elements != 0 && !is_aligned(workspace.dipole_scratch, alignof(double))) ||
+      (workspace.quadrupole_elements != 0 &&
+       !is_aligned(workspace.quadrupole_scratch, alignof(double))) ||
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
       !is_aligned(system_errors, alignof(std::uint32_t)) ||
       !is_aligned(device_error, alignof(std::uint32_t))) {
@@ -1368,12 +1426,14 @@ cudaError_t evaluate_gfn2_mulliken_population_spin_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  spin_multipole_population_kernel<<<static_cast<unsigned int>(atom_blocks), kThreadsPerBlock, 0,
-                                     stream>>>(batch, layout, input, activity, workspace,
-                                               system_errors, device_error);
-  status = check_launch();
-  if (status != cudaSuccess) {
-    return status;
+  if (multipoles_enabled) {
+    spin_multipole_population_kernel<<<static_cast<unsigned int>(atom_blocks), kThreadsPerBlock, 0,
+                                       stream>>>(batch, layout, input, activity, workspace,
+                                                 system_errors, device_error);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
   }
   spin_conversion_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
                            stream>>>(batch, layout, activity, workspace, system_errors,

@@ -294,11 +294,6 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
     error = "a fixed-topology plan requires a registered model executor route";
     return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
-  if (model_route == ModelBackendRoute::kGfn1 && context.backend != XTBLOOM_BACKEND_CPU) {
-    error = "GFN1-xTB fixed-topology plans are currently supported only on CPU";
-    return XTBLOOM_STATUS_NOT_SUPPORTED;
-  }
-
   impl_->backend = context.backend;
   impl_->route = model_route;
   impl_->context = &context;

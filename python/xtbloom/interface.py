@@ -1765,25 +1765,14 @@ def _resolve_method(method: str) -> int:
 def _backend_for_model(
     model: int, backend: str | int, device_id: int | None
 ) -> str | int:
-    """Resolve high-level AUTO safely for a model with CPU-only publication.
+    """Preserve the requested backend for either published xTB model.
 
-    The native AUTO policy prefers CUDA when a device is available. GFN1-xTB
-    is intentionally published on CPU only, so its high-level default must
-    select CPU explicitly. An explicit CUDA request is preserved: a
-    CUDA-capable build returns ``NOT_SUPPORTED`` from the model registry,
-    while a build without CUDA may reject context creation first.
+    Native AUTO applies the same CPU/CUDA availability policy to GFN1 and
+    GFN2. Keeping this helper centralizes model-specific routing if a future
+    model has a narrower backend surface without silently substituting one
+    model for another.
     """
-    if model == library.MODEL_GFN1_XTB and backend in (
-        "auto",
-        library.BACKEND_AUTO,
-    ):
-        if device_id is not None and int(device_id) >= 0:
-            raise XTBloomValueError(
-                "GFN1-xTB backend='auto' selects CPU and cannot use a CUDA "
-                "device_id; omit device_id or request backend='cuda' to receive "
-                "the native CUDA capability result"
-            )
-        return "cpu"
+    del model, device_id
     return backend
 
 

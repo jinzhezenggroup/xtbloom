@@ -146,8 +146,8 @@ class XTBloomDriver(Driver):
     Parameters
     ----------
     method : str, default "GFN2-xTB"
-        Underlying tight-binding method. GFN1-xTB is CPU-only; its high-level
-        ``backend="auto"`` policy selects CPU, while explicit CUDA is refused.
+        Underlying tight-binding method. Both GFN1-xTB and GFN2-xTB use the
+        shared CPU/CUDA backend policy.
     charge : float, optional
         Fixed total charge applied to every frame. When ``None`` the per-frame
         ``data["charge"]`` key (or 0) is used.
@@ -158,7 +158,7 @@ class XTBloomDriver(Driver):
         Alternative to ``uhf`` (``uhf = multiplicity - 1``).
     spin_channels : int, optional
         Orbital channels (1 restricted / 2 unrestricted). Defaults to
-        unrestricted for open-shell frames on the CPU backend.
+        unrestricted for open-shell frames.
     **kwargs
         Forwarded to :class:`xtbloom.interface.BatchCalculator`: ``backend``,
         ``device_id``, ``cpu_threads``, ``max_scc_iterations``,

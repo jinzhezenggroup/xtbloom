@@ -13,6 +13,14 @@ namespace {
 
 constexpr int kThreadsPerBlock = 256;
 
+__device__ double inverse_screening_hardness(XtbModelFlavor model, double shell_hardness,
+                                             double point_hardness) {
+  if (model == XtbModelFlavor::kGfn1) {
+    return 0.5 / shell_hardness + 0.5 / point_hardness;
+  }
+  return 2.0 / (shell_hardness + point_hardness);
+}
+
 __device__ void record_error(std::uint32_t* device_error,
                              Gfn2ExternalPointChargeDeviceError error) {
   atomicCAS(device_error, static_cast<std::uint32_t>(Gfn2ExternalPointChargeDeviceError::kSuccess),
@@ -166,7 +174,7 @@ __global__ void external_point_charge_potential_kernel(Gfn2ExternalPointChargeDe
         break;
       }
       const double inverse_average_hardness =
-          2.0 / (shell_hardness + batch.point_hardnesses[point]);
+          inverse_screening_hardness(batch.model, shell_hardness, batch.point_hardnesses[point]);
       /* Match the nested-hypot CPU reference, including extreme hardnesses. */
       const double softened_distance = hypot(hypot(dx, dy), hypot(dz, inverse_average_hardness));
       const double contribution = batch.point_charges[point] / softened_distance;
@@ -406,7 +414,7 @@ __global__ void pc_scc_potential_cache_kernel(Gfn2ExternalPointChargeDeviceBatch
       const double dy = atom_y - batch.point_positions[point_coordinate + 1];
       const double dz = atom_z - batch.point_positions[point_coordinate + 2];
       const double inverse_average_hardness =
-          2.0 / (shell_hardness + batch.point_hardnesses[point]);
+          inverse_screening_hardness(batch.model, shell_hardness, batch.point_hardnesses[point]);
       const double distance = hypot(hypot(dx, dy), hypot(dz, inverse_average_hardness));
       const double contribution = batch.point_charges[point] / distance;
       const double updated = potential + contribution;
@@ -473,9 +481,9 @@ struct PointChargePairForce {
  */
 __device__ bool evaluate_point_charge_pair_force(double atom_x, double atom_y, double atom_z,
                                                  double point_x, double point_y, double point_z,
-                                                 double shell_hardness, double point_hardness,
-                                                 double shell_charge, double point_charge,
-                                                 PointChargePairForce* force) {
+                                                 XtbModelFlavor model, double shell_hardness,
+                                                 double point_hardness, double shell_charge,
+                                                 double point_charge, PointChargePairForce* force) {
   const double dx = atom_x - point_x;
   const double dy = atom_y - point_y;
   const double dz = atom_z - point_z;
@@ -486,7 +494,8 @@ __device__ bool evaluate_point_charge_pair_force(double atom_x, double atom_y, d
     *force = {0.0, 0.0, 0.0};
     return true;
   }
-  const double inverse_average_hardness = 2.0 / (shell_hardness + point_hardness);
+  const double inverse_average_hardness =
+      inverse_screening_hardness(model, shell_hardness, point_hardness);
   const double softened_distance = hypot(hypot(dx, dy), hypot(dz, inverse_average_hardness));
   const double inverse_distance = 1.0 / softened_distance;
   const double force_scale =
@@ -546,7 +555,7 @@ __global__ void external_point_charge_force_kernel(Gfn2ExternalPointChargeDevice
       if (!evaluate_point_charge_pair_force(
               atom_x, atom_y, atom_z, batch.point_positions[point_coordinate],
               batch.point_positions[point_coordinate + 1],
-              batch.point_positions[point_coordinate + 2], shell_hardness,
+              batch.point_positions[point_coordinate + 2], batch.model, shell_hardness,
               batch.point_hardnesses[point], shell_charge, batch.point_charges[point], &force)) {
         finite_result = false;
         break;
@@ -740,7 +749,7 @@ __global__ void pc_gated_force_kernel(Gfn2ExternalPointChargeDeviceBatch batch,
       if (!evaluate_point_charge_pair_force(
               atom_x, atom_y, atom_z, batch.point_positions[point_coordinate],
               batch.point_positions[point_coordinate + 1],
-              batch.point_positions[point_coordinate + 2], shell_hardness,
+              batch.point_positions[point_coordinate + 2], batch.model, shell_hardness,
               batch.point_hardnesses[point], shell_charge, batch.point_charges[point], &force)) {
         finite_result = false;
         break;
@@ -822,7 +831,7 @@ cudaError_t validate_common_launcher_arguments(const Gfn2ExternalPointChargeDevi
       batch.total_point_charges < 0 || batch.atom_offsets == nullptr ||
       batch.batch_shell_offsets == nullptr || batch.point_charge_offsets == nullptr ||
       batch.shell_to_atom == nullptr || batch.shell_hardness == nullptr ||
-      device_error == nullptr) {
+      !valid_xtb_model_flavor(batch.model) || device_error == nullptr) {
     return cudaErrorInvalidValue;
   }
   if (static_cast<std::uint64_t>(batch.batch_size) >

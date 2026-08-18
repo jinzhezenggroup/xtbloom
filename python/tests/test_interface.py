@@ -118,8 +118,8 @@ def test_gfn1_two_channel_open_shell_public_smoke() -> None:
     assert np.isfinite(result.charges).all()
 
 
-def test_gfn1_auto_is_cpu_and_explicit_cuda_is_unsupported() -> None:
-    """Make the high-level default usable without weakening CUDA refusal."""
+def test_gfn1_auto_and_explicit_cuda_policy() -> None:
+    """Use shared AUTO routing and qualify explicit CUDA when available."""
     case = _cases.gfn1_case_by_id("gfn1_ketene")
     numbers, positions, charge, uhf, spin = _cases.gfn1_structure_inputs(case)
     calculator = Calculator(
@@ -130,8 +130,19 @@ def test_gfn1_auto_is_cpu_and_explicit_cuda_is_unsupported() -> None:
         uhf=uhf,
         spin_channels=spin,
     )
-    assert calculator.backend == _library.BACKEND_CPU
-    assert calculator.singlepoint().scc_converged
+    auto_result = calculator.singlepoint()
+    assert calculator.backend in (_library.BACKEND_CPU, _library.BACKEND_CUDA)
+    assert auto_result.scc_converged
+
+    cpu_result = Calculator(
+        "GFN1-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        spin_channels=spin,
+        backend="cpu",
+    ).singlepoint()
 
     explicit_cuda = Calculator(
         "GFN1-xTB",
@@ -142,14 +153,15 @@ def test_gfn1_auto_is_cpu_and_explicit_cuda_is_unsupported() -> None:
         spin_channels=spin,
         backend="cuda",
     )
-    with pytest.raises(XTBloomRuntimeError) as caught:
-        explicit_cuda.singlepoint()
-    assert caught.value.status in (
-        _library.STATUS_NOT_SUPPORTED,
-        _library.STATUS_BACKEND_UNAVAILABLE,
-    )
-    if caught.value.status == _library.STATUS_NOT_SUPPORTED:
-        assert "GFN1-xTB" in str(caught.value)
+    try:
+        cuda_result = explicit_cuda.singlepoint()
+    except XTBloomRuntimeError as caught:
+        assert caught.status == _library.STATUS_BACKEND_UNAVAILABLE
+    else:
+        assert cuda_result.scc_converged
+        assert cuda_result.energy == pytest.approx(cpu_result.energy, abs=3.0e-8)
+        assert cuda_result.forces == pytest.approx(cpu_result.forces, abs=3.0e-7)
+        assert cuda_result.charges == pytest.approx(cpu_result.charges, abs=1.0e-7)
 
 
 def test_gfn1_point_charges_match_independent_golden() -> None:

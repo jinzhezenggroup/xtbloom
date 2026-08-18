@@ -49,7 +49,7 @@ class XTBloom(ase.calculators.calculator.Calculator):
      scc_mixer_history        8                 Broyden history vectors (1..64)
      scc_mixer_damping        0.4               Broyden damping in (0, 1]
      determinism             "default"          default/reproducible execution policy
-     backend                  "auto"            Execution backend; GFN1 auto uses CPU
+     backend                  "auto"            Execution backend for either model
      device_id                None              CUDA device id
      cpu_threads              1                 CPU batch-parallelism ceiling
      cache_api                True              Reuse the underlying API calculator

@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "backends/common/gfn2_plan_schema.hpp"
+#include "backends/common/xtb_model.hpp"
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
 namespace xtbloom::detail::cuda {
@@ -82,6 +83,10 @@ struct Gfn2SccPotentialDeviceBatch {
   const std::int64_t* dipole_offsets = nullptr;
   const std::int64_t* quadrupole_offsets = nullptr;
   const std::int64_t* shell_to_atom = nullptr;
+
+  /* The model selects whether dipole/quadrupole offsets and buffers carry the
+   * GFN2 3/6-component layout or the canonical scalar-only GFN1 layout. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 struct Gfn2SccPotentialDeviceActivity {

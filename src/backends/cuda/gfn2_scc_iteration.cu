@@ -15,10 +15,16 @@ namespace {
 using BindingError = Gfn2SccIterationBindingError;
 using BindingField = Gfn2SccIterationBindingField;
 
-constexpr std::uint32_t kMandatoryPotentialComponents =
+constexpr std::uint32_t kCommonMandatoryPotentialComponents =
     static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
-    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
-    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
+    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3);
+
+constexpr std::uint32_t mandatory_potential_components(XtbModelFlavor model) noexcept {
+  return kCommonMandatoryPotentialComponents |
+         (model == XtbModelFlavor::kGfn2
+              ? static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2)
+              : 0u);
+}
 
 /* These exact aliases cross descriptor families, so they cannot use the
  * per-function monotonically assigned groups below. Keep their identities
@@ -443,8 +449,10 @@ bool validate_plan_tokens(const Gfn2SccIterationDevicePlan& plan,
   XTBLOOM_CHECK_TOKEN(plan.es2_batch.plan_token, BindingField::kES2);
   XTBLOOM_CHECK_TOKEN(plan.es2_cache.plan_token, BindingField::kES2);
   XTBLOOM_CHECK_TOKEN(plan.es3_batch.plan_token, BindingField::kES3);
-  XTBLOOM_CHECK_TOKEN(plan.aes2_batch.plan_token, BindingField::kAES2);
-  XTBLOOM_CHECK_TOKEN(plan.aes2_cache.plan_token, BindingField::kAES2);
+  if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) {
+    XTBLOOM_CHECK_TOKEN(plan.aes2_batch.plan_token, BindingField::kAES2);
+    XTBLOOM_CHECK_TOKEN(plan.aes2_cache.plan_token, BindingField::kAES2);
+  }
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
     XTBLOOM_CHECK_TOKEN(plan.d4_batch.plan_token, BindingField::kD4);
     XTBLOOM_CHECK_TOKEN(plan.d4_pairlist_cache.plan_token, BindingField::kD4);
@@ -582,8 +590,20 @@ bool validate_top_level_shape(const Gfn2SccIterationDevicePlan& plan, Validator&
   }
   const std::uint32_t invalid_components =
       plan.enabled_components & ~kGfn2SccPotentialAllComponents;
-  if (invalid_components != 0u ||
-      (plan.enabled_components & kMandatoryPotentialComponents) != kMandatoryPotentialComponents) {
+  const std::uint32_t mandatory = mandatory_potential_components(plan.model);
+  const std::uint32_t expected_multipole_components = plan.model == XtbModelFlavor::kGfn1 ? 0u : 9u;
+  if (!valid_xtb_model_flavor(plan.model) || invalid_components != 0u ||
+      (plan.enabled_components & mandatory) != mandatory ||
+      (plan.model == XtbModelFlavor::kGfn1 &&
+       (component_enabled(plan, Gfn2SccPotentialComponent::kAES2) ||
+        component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody))) ||
+      plan.mixer_policy.atomic_multipole_components != expected_multipole_components ||
+      plan.geometry_batch.model != plan.model || plan.potential_batch.model != plan.model ||
+      plan.es2_batch.model != plan.model || plan.es3_batch.model != plan.model ||
+      plan.mulliken_batch.model != plan.model || plan.classical_energy_batch.model != plan.model ||
+      plan.publication_plan.model != plan.model ||
+      (component_enabled(plan, Gfn2SccPotentialComponent::kExplicitPointCharge) &&
+       plan.explicit_point_charge_batch.model != plan.model)) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kPlan);
   }
   if (plan.topology.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
@@ -609,7 +629,9 @@ bool validate_top_level_shape(const Gfn2SccIterationDevicePlan& plan, Validator&
     return validator.fail(BindingError::kInvalidCount, BindingField::kTopology);
   }
   std::int64_t atom_multipoles = 0;
-  if (!checked_multiply(plan.wavefunction_layout.total_spin_atoms, 9, atom_multipoles) ||
+  if (!checked_multiply(plan.wavefunction_layout.total_spin_atoms,
+                        static_cast<std::int64_t>(plan.mixer_policy.atomic_multipole_components),
+                        atom_multipoles) ||
       !checked_add(plan.wavefunction_layout.total_spin_shells, atom_multipoles, mixer_vector)) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kMixer);
   }
@@ -774,7 +796,9 @@ bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& val
              BindingField::kStatePublication)) {
     return false;
   }
-  if (plan.classical_energy_batch.enabled_components != plan.enabled_components ||
+  if (plan.classical_energy_batch.model != plan.model ||
+      plan.free_energy_batch.model != plan.model ||
+      plan.classical_energy_batch.enabled_components != plan.enabled_components ||
       plan.free_energy_batch.enabled_components != plan.enabled_components ||
       !std::isfinite(plan.free_energy_batch.electronic_temperature) ||
       plan.free_energy_batch.electronic_temperature < 0.0) {
@@ -804,8 +828,9 @@ bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& val
       !exact(plan.es2_batch.total_shells, shells, BindingField::kES2) ||
       !exact(plan.es3_batch.batch_size, batch, BindingField::kES3) ||
       !exact(plan.es3_batch.total_shells, shells, BindingField::kES3) ||
-      !exact(plan.aes2_batch.batch_size, batch, BindingField::kAES2) ||
-      !exact(plan.aes2_batch.total_atoms, atoms, BindingField::kAES2)) {
+      (component_enabled(plan, Gfn2SccPotentialComponent::kAES2) &&
+       (!exact(plan.aes2_batch.batch_size, batch, BindingField::kAES2) ||
+        !exact(plan.aes2_batch.total_atoms, atoms, BindingField::kAES2)))) {
     return false;
   }
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody) &&
@@ -991,26 +1016,28 @@ bool validate_plan_pointer_shapes(const Gfn2SccIterationDevicePlan& plan,
     return false;
   }
 
-  const auto& aes2 = plan.aes2_batch;
-  if (!exact(aes2.atom_offset_count, batch + 1, BindingField::kAES2) ||
-      !exact(aes2.pair_offset_count, batch + 1, BindingField::kAES2) ||
-      !exact(aes2.dipole_kernel_count, atoms, BindingField::kAES2) ||
-      !exact(aes2.quadrupole_kernel_count, atoms, BindingField::kAES2) ||
-      !exact(aes2.multipole_radius_count, atoms, BindingField::kAES2) ||
-      !exact(aes2.multipole_valence_cn_count, atoms, BindingField::kAES2) ||
-      !aligned(aes2.atom_offsets, batch + 1, sizeof(std::int64_t), alignof(std::int64_t),
-               BindingField::kAES2, 0) ||
-      !aligned(aes2.pair_offsets, batch + 1, sizeof(std::int64_t), alignof(std::int64_t),
-               BindingField::kAES2, 1) ||
-      !aligned(aes2.dipole_kernel, atoms, sizeof(double), alignof(double), BindingField::kAES2,
-               2) ||
-      !aligned(aes2.quadrupole_kernel, atoms, sizeof(double), alignof(double), BindingField::kAES2,
-               3) ||
-      !aligned(aes2.multipole_radius, atoms, sizeof(double), alignof(double), BindingField::kAES2,
-               4) ||
-      !aligned(aes2.multipole_valence_cn, atoms, sizeof(double), alignof(double),
-               BindingField::kAES2, 5)) {
-    return false;
+  if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) {
+    const auto& aes2 = plan.aes2_batch;
+    if (!exact(aes2.atom_offset_count, batch + 1, BindingField::kAES2) ||
+        !exact(aes2.pair_offset_count, batch + 1, BindingField::kAES2) ||
+        !exact(aes2.dipole_kernel_count, atoms, BindingField::kAES2) ||
+        !exact(aes2.quadrupole_kernel_count, atoms, BindingField::kAES2) ||
+        !exact(aes2.multipole_radius_count, atoms, BindingField::kAES2) ||
+        !exact(aes2.multipole_valence_cn_count, atoms, BindingField::kAES2) ||
+        !aligned(aes2.atom_offsets, batch + 1, sizeof(std::int64_t), alignof(std::int64_t),
+                 BindingField::kAES2, 0) ||
+        !aligned(aes2.pair_offsets, batch + 1, sizeof(std::int64_t), alignof(std::int64_t),
+                 BindingField::kAES2, 1) ||
+        !aligned(aes2.dipole_kernel, atoms, sizeof(double), alignof(double), BindingField::kAES2,
+                 2) ||
+        !aligned(aes2.quadrupole_kernel, atoms, sizeof(double), alignof(double),
+                 BindingField::kAES2, 3) ||
+        !aligned(aes2.multipole_radius, atoms, sizeof(double), alignof(double), BindingField::kAES2,
+                 4) ||
+        !aligned(aes2.multipole_valence_cn, atoms, sizeof(double), alignof(double),
+                 BindingField::kAES2, 5)) {
+      return false;
+    }
   }
 
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
@@ -1174,7 +1201,8 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
     return false;
   }
   if (!same(plan.geometry_batch.atom_offsets, atom.atom_offsets, BindingField::kGeometry) ||
-      !same(plan.aes2_batch.atom_offsets, atom.atom_offsets, BindingField::kAES2)) {
+      (component_enabled(plan, Gfn2SccPotentialComponent::kAES2) &&
+       !same(plan.aes2_batch.atom_offsets, atom.atom_offsets, BindingField::kAES2))) {
     return false;
   }
 
@@ -1315,10 +1343,12 @@ bool validate_leaf_projection_identity(const Gfn2SccIterationDevicePlan& plan,
    * keep their setup-owned distinct pair offsets). */
   if (plan.topology.pair_map_kind == Gfn2PairMapKind::kPackedLowerTriangle) {
     if (!same(plan.geometry_batch.pair_offsets, pairs.pair_offsets, BindingField::kGeometry) ||
-        !same(plan.aes2_batch.pair_offsets, pairs.pair_offsets, BindingField::kAES2)) {
+        (component_enabled(plan, Gfn2SccPotentialComponent::kAES2) &&
+         !same(plan.aes2_batch.pair_offsets, pairs.pair_offsets, BindingField::kAES2))) {
       return false;
     }
-  } else if (!same(plan.aes2_batch.pair_offsets, plan.geometry_batch.pair_offsets,
+  } else if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2) &&
+             !same(plan.aes2_batch.pair_offsets, plan.geometry_batch.pair_offsets,
                    BindingField::kAES2)) {
     /* Production plans currently use kNone and a setup-owned dense pair
      * partition.  Geometry is the authority for that non-topology domain. */
@@ -1516,6 +1546,7 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
         spec.mask = 0x1cu;
         return true;
       case Gfn2SccStageId::kAES2Potential:
+        if (!component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) return false;
         spec.role = Gfn2SccStageDeviceCodeRole::kPlanOnly;
         spec.mask = 0x706u;
         return true;
@@ -1580,6 +1611,7 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
         spec.mask = 0x4cu;
         return true;
       case Gfn2SccStageId::kAES2RawEnergy:
+        if (!component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) return false;
         spec.role = Gfn2SccStageDeviceCodeRole::kPlanOnly;
         spec.mask = 0x1b06u;
         return true;
@@ -1604,6 +1636,7 @@ bool validate_stage_reports(const Gfn2SccIterationDevicePlan& plan,
   };
 
   std::int64_t expected_count = kGfn2SccIterationBaseStageReportCount;
+  if (!component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) expected_count -= 2;
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) expected_count += 2;
   if (component_enabled(plan, Gfn2SccPotentialComponent::kExplicitPointCharge)) expected_count += 1;
   if (component_enabled(plan, Gfn2SccPotentialComponent::kPeriodicEmbedding)) expected_count += 2;
@@ -1981,14 +2014,24 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
   const std::int64_t spin_orbitals = plan.wavefunction_layout.total_spin_orbitals;
   const std::int64_t spin_matrices = plan.wavefunction_layout.total_spin_matrix_elements;
   const bool mixed_spin = plan.wavefunction_layout.total_spin_channels != plan.topology.batch_size;
+  const bool multipoles_enabled = plan.model == XtbModelFlavor::kGfn2;
+  const std::int64_t field_dipoles = multipoles_enabled ? dipoles : 0;
   std::int64_t spin_dipoles = 0;
   std::int64_t spin_quadrupoles = 0;
+  std::int64_t dipole_matrices = 0;
+  std::int64_t quadrupole_matrices = 0;
   std::int64_t field_vectors = 0;
-  if (!checked_multiply(spin_atoms, 3, spin_dipoles) ||
-      !checked_multiply(spin_atoms, 6, spin_quadrupoles) ||
+  if (!checked_multiply(multipoles_enabled ? spin_atoms : 0, 3, spin_dipoles) ||
+      !checked_multiply(multipoles_enabled ? spin_atoms : 0, 6, spin_quadrupoles) ||
+      !checked_multiply(multipoles_enabled ? matrices : 0, 3, dipole_matrices) ||
+      !checked_multiply(multipoles_enabled ? matrices : 0, 6, quadrupole_matrices) ||
       !checked_multiply(batch, 3, field_vectors)) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kSpin);
   }
+  const std::int64_t hamiltonian_dipoles =
+      multipoles_enabled ? (mixed_spin ? spin_dipoles : dipoles) : 0;
+  const std::int64_t hamiltonian_quadrupoles =
+      multipoles_enabled ? (mixed_spin ? spin_quadrupoles : quadrupoles) : 0;
   std::uint32_t group = 1u;
   const auto exact = [&](std::int64_t actual, std::int64_t expected, BindingField field,
                          std::int64_t index = -1) {
@@ -2025,15 +2068,15 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
       !exact(input.electric_field.position_elements, dipoles, BindingField::kElectricField, 1) ||
       !exact(input.electric_field_potentials.atom_elements, atoms, BindingField::kElectricField,
              2) ||
-      !exact(input.electric_field_potentials.dipole_elements, dipoles, BindingField::kElectricField,
-             3) ||
+      !exact(input.electric_field_potentials.dipole_elements, field_dipoles,
+             BindingField::kElectricField, 3) ||
       !read(input.electric_field.vectors, field_vectors, sizeof(double), alignof(double),
             BindingField::kElectricField, 0) ||
       !read(input.electric_field.positions, dipoles, sizeof(double), alignof(double),
             BindingField::kElectricField, 1) ||
       !read(input.electric_field_potentials.atomic, atoms, sizeof(double), alignof(double),
             BindingField::kElectricField, 2) ||
-      !read(input.electric_field_potentials.dipole, dipoles, sizeof(double), alignof(double),
+      !read(input.electric_field_potentials.dipole, field_dipoles, sizeof(double), alignof(double),
             BindingField::kElectricField, 3)) {
     return false;
   }
@@ -2057,16 +2100,16 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
       !exact(input.raw_spin.shell_population_elements, spin_shells, BindingField::kSpin) ||
       !exact(input.hamiltonian.h0_elements, matrices, BindingField::kHamiltonian) ||
       !exact(input.hamiltonian.overlap_elements, matrices, BindingField::kHamiltonian) ||
-      !exact(input.hamiltonian.dipole_integral_elements, 3 * matrices,
+      !exact(input.hamiltonian.dipole_integral_elements, dipole_matrices,
              BindingField::kHamiltonian) ||
-      !exact(input.hamiltonian.quadrupole_integral_elements, 6 * matrices,
+      !exact(input.hamiltonian.quadrupole_integral_elements, quadrupole_matrices,
              BindingField::kHamiltonian) ||
       !exact(input.hamiltonian.shell_scalar_elements, mixed_spin ? spin_shells : shells,
              BindingField::kHamiltonian) ||
-      !exact(input.hamiltonian.atomic_dipole_elements, mixed_spin ? spin_dipoles : dipoles,
+      !exact(input.hamiltonian.atomic_dipole_elements, hamiltonian_dipoles,
              BindingField::kHamiltonian) ||
-      !exact(input.hamiltonian.atomic_quadrupole_elements,
-             mixed_spin ? spin_quadrupoles : quadrupoles, BindingField::kHamiltonian) ||
+      !exact(input.hamiltonian.atomic_quadrupole_elements, hamiltonian_quadrupoles,
+             BindingField::kHamiltonian) ||
       !exact(input.eigensolver_hamiltonian_elements, spin_matrices, BindingField::kEigensolver) ||
       !exact(input.occupation_eigenvalue_elements, spin_orbitals, BindingField::kOccupations) ||
       !exact(input.density.coefficient_elements, spin_matrices, BindingField::kDensity) ||
@@ -2075,8 +2118,9 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
       !exact(input.density.active_elements, batch, BindingField::kDensity) ||
       !exact(input.mulliken.density_elements, spin_matrices, BindingField::kMulliken) ||
       !exact(input.mulliken.overlap_elements, matrices, BindingField::kMulliken) ||
-      !exact(input.mulliken.dipole_integral_elements, 3 * matrices, BindingField::kMulliken) ||
-      !exact(input.mulliken.quadrupole_integral_elements, 6 * matrices, BindingField::kMulliken) ||
+      !exact(input.mulliken.dipole_integral_elements, dipole_matrices, BindingField::kMulliken) ||
+      !exact(input.mulliken.quadrupole_integral_elements, quadrupole_matrices,
+             BindingField::kMulliken) ||
       !exact(input.electronic_energy.density_elements, spin_matrices,
              BindingField::kElectronicEnergy) ||
       !exact(input.electronic_energy.h0_elements, matrices, BindingField::kElectronicEnergy) ||
@@ -2095,10 +2139,10 @@ bool validate_core_buffers(const Gfn2SccIterationDevicePlan& plan,
             BindingField::kHamiltonian, 0) ||
       !read(input.hamiltonian.overlap, matrices, sizeof(double), alignof(double),
             BindingField::kHamiltonian, 1) ||
-      !read(input.hamiltonian.dipole_integrals, 3 * matrices, sizeof(double), alignof(double),
+      !read(input.hamiltonian.dipole_integrals, dipole_matrices, sizeof(double), alignof(double),
             BindingField::kHamiltonian, 2) ||
-      !read(input.hamiltonian.quadrupole_integrals, 6 * matrices, sizeof(double), alignof(double),
-            BindingField::kHamiltonian, 3) ||
+      !read(input.hamiltonian.quadrupole_integrals, quadrupole_matrices, sizeof(double),
+            alignof(double), BindingField::kHamiltonian, 3) ||
       !read(plan.occupations_batch.electron_counts, two_batch, sizeof(double), alignof(double),
             BindingField::kOccupations, 0) ||
       !read(plan.occupations_batch.temperatures, batch, sizeof(double), alignof(double),
@@ -2283,10 +2327,14 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
   const std::int64_t spin_shells = plan.wavefunction_layout.total_spin_shells;
   const std::int64_t spin_atoms = plan.wavefunction_layout.total_spin_atoms;
   const std::int64_t spin_matrices = plan.wavefunction_layout.total_spin_matrix_elements;
+  const bool multipoles_enabled = plan.model == XtbModelFlavor::kGfn2;
+  const std::int64_t physical_dipoles = multipoles_enabled ? dipoles : 0;
+  const std::int64_t physical_quadrupoles = multipoles_enabled ? quadrupoles : 0;
+  const std::int64_t field_dipoles = physical_dipoles;
   std::int64_t spin_dipoles = 0;
   std::int64_t spin_quadrupoles = 0;
-  if (!checked_multiply(spin_atoms, 3, spin_dipoles) ||
-      !checked_multiply(spin_atoms, 6, spin_quadrupoles)) {
+  if (!checked_multiply(multipoles_enabled ? spin_atoms : 0, 3, spin_dipoles) ||
+      !checked_multiply(multipoles_enabled ? spin_atoms : 0, 6, spin_quadrupoles)) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kPotential);
   }
   std::uint32_t group = 1000u;
@@ -2389,8 +2437,10 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
                                      BindingField::kPeriodicEmbedding, 4) ||
       !exact(projection.electric_field_atomic_elements, atoms, BindingField::kElectricField, 4) ||
       projection.electric_field_atomic == nullptr ||
-      !exact(projection.electric_field_dipole_elements, dipoles, BindingField::kElectricField, 5) ||
-      projection.electric_field_dipole == nullptr) {
+      !exact(projection.electric_field_dipole_elements, field_dipoles, BindingField::kElectricField,
+             5) ||
+      (field_dipoles == 0 ? projection.electric_field_dipole != nullptr
+                          : projection.electric_field_dipole == nullptr)) {
     return false;
   }
 
@@ -2403,16 +2453,17 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
              BindingField::kPotential, 10) ||
       !exact(workspace.physical_topology.shell_elements, shells, BindingField::kPotential) ||
       !exact(workspace.physical_topology.atom_elements, atoms, BindingField::kPotential) ||
-      !exact(workspace.physical_topology.dipole_elements, dipoles, BindingField::kPotential) ||
-      !exact(workspace.physical_topology.quadrupole_elements, quadrupoles,
+      !exact(workspace.physical_topology.dipole_elements, physical_dipoles,
+             BindingField::kPotential) ||
+      !exact(workspace.physical_topology.quadrupole_elements, physical_quadrupoles,
              BindingField::kPotential) ||
       !write(workspace.physical_topology.shell_charges, shells, sizeof(double), alignof(double),
              BindingField::kPotential, 15) ||
       !write(workspace.physical_topology.atomic_charges, atoms, sizeof(double), alignof(double),
              BindingField::kPotential, 16, kFieldAtomicChargeAliasGroup) ||
-      !write(workspace.physical_topology.atomic_dipoles, dipoles, sizeof(double), alignof(double),
-             BindingField::kPotential, 17, kFieldAtomicDipoleAliasGroup) ||
-      !write(workspace.physical_topology.atomic_quadrupoles, quadrupoles, sizeof(double),
+      !write(workspace.physical_topology.atomic_dipoles, physical_dipoles, sizeof(double),
+             alignof(double), BindingField::kPotential, 17, kFieldAtomicDipoleAliasGroup) ||
+      !write(workspace.physical_topology.atomic_quadrupoles, physical_quadrupoles, sizeof(double),
              alignof(double), BindingField::kPotential, 18) ||
       !exact(workspace.complete_potentials.shell_elements, spin_shells, BindingField::kPotential) ||
       !exact(workspace.complete_potentials.atom_elements, spin_atoms, BindingField::kPotential) ||
@@ -2462,16 +2513,17 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
                  BindingField::kElectricField, 6) &&
            read(values.electric_field_multipoles.atomic_charges, atoms, sizeof(double),
                 alignof(double), BindingField::kElectricField, 6, kFieldAtomicChargeAliasGroup) &&
-           exact(values.electric_field_multipoles.dipole_elements, dipoles,
+           exact(values.electric_field_multipoles.dipole_elements, physical_dipoles,
                  BindingField::kElectricField, 7) &&
-           read(values.electric_field_multipoles.atomic_dipoles, dipoles, sizeof(double),
+           read(values.electric_field_multipoles.atomic_dipoles, physical_dipoles, sizeof(double),
                 alignof(double), BindingField::kElectricField, 7, kFieldAtomicDipoleAliasGroup) &&
            exact(values.electric_field_potentials.atom_elements, atoms,
                  BindingField::kElectricField, 8) &&
            values.electric_field_potentials.atomic != nullptr &&
-           exact(values.electric_field_potentials.dipole_elements, dipoles,
+           exact(values.electric_field_potentials.dipole_elements, physical_dipoles,
                  BindingField::kElectricField, 9) &&
-           values.electric_field_potentials.dipole != nullptr;
+           (physical_dipoles == 0 ? values.electric_field_potentials.dipole == nullptr
+                                  : values.electric_field_potentials.dipole != nullptr);
   };
   if (!validate_classical_input(input.classical_energy)) {
     return false;
@@ -2519,9 +2571,11 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
         {d.electric_field, d.electric_field_elements},
     }};
     for (std::size_t index = 0; index < fields.size(); ++index) {
-      const std::int64_t expected = batch;
+      const bool disabled_aes2 =
+          index == 2u && !component_enabled(plan, Gfn2SccPotentialComponent::kAES2);
+      const std::int64_t expected = disabled_aes2 ? 0 : batch;
       if (!exact(fields[index].second, expected, field, static_cast<std::int64_t>(index)) ||
-          fields[index].first == nullptr) {
+          (expected == 0 ? fields[index].first != nullptr : fields[index].first == nullptr)) {
         return false;
       }
       /* Shared component arrays are registered through free diagnostics. */
@@ -2550,11 +2604,14 @@ bool validate_component_and_energy_buffers(const Gfn2SccIterationDevicePlan& pla
         {d.electric_field, d.electric_field_elements},
     }};
     for (std::size_t index = 0; index < fields.size(); ++index) {
-      const std::int64_t expected = batch;
+      const bool disabled_aes2 =
+          index == 3u && !component_enabled(plan, Gfn2SccPotentialComponent::kAES2);
+      const std::int64_t expected = disabled_aes2 ? 0 : batch;
       if (!exact(fields[index].second, expected, field, static_cast<std::int64_t>(index)) ||
-          fields[index].first == nullptr) {
+          (expected == 0 ? fields[index].first != nullptr : fields[index].first == nullptr)) {
         return false;
       }
+      if (expected == 0) continue;
       /* #99 deliberately reuses the staged occupation entropy as the
        * complete free-energy entropy diagnostic. The free-energy primitive
        * reads it into scratch before publishing the identical value. */
@@ -2598,10 +2655,11 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
   const std::int64_t spin_atoms = plan.wavefunction_layout.total_spin_atoms;
   const std::int64_t spin_orbitals = plan.wavefunction_layout.total_spin_orbitals;
   const std::int64_t spin_matrices = plan.wavefunction_layout.total_spin_matrix_elements;
+  const bool multipoles_enabled = plan.model == XtbModelFlavor::kGfn2;
   std::int64_t spin_dipoles = 0;
   std::int64_t spin_quadrupoles = 0;
-  if (!checked_multiply(spin_atoms, 3, spin_dipoles) ||
-      !checked_multiply(spin_atoms, 6, spin_quadrupoles)) {
+  if (!checked_multiply(multipoles_enabled ? spin_atoms : 0, 3, spin_dipoles) ||
+      !checked_multiply(multipoles_enabled ? spin_atoms : 0, 6, spin_quadrupoles)) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kSpin);
   }
   std::uint32_t group = 2000u;
@@ -2688,31 +2746,33 @@ bool validate_workspace_buffers(const Gfn2SccIterationDevicePlan& plan,
     return false;
   }
 
-  std::int64_t aes2_pair_elements = 0;
-  std::int64_t aes2_potential_elements = 0;
-  if (!checked_multiply(plan.aes2_batch.total_pairs, kGfn2AES2PairDataElements,
-                        aes2_pair_elements) ||
-      !checked_multiply(atoms, kGfn2AES2PotentialElementsPerAtom, aes2_potential_elements) ||
-      !exact(plan.aes2_cache.pair_data_elements, aes2_pair_elements, BindingField::kAES2) ||
-      !read(plan.aes2_cache.pair_data, aes2_pair_elements, sizeof(double), alignof(double),
-            BindingField::kAES2, 0) ||
-      !scratch(workspace.aes2_workspace.pair_scratch, workspace.aes2_workspace.pair_elements,
-               aes2_pair_elements, sizeof(double), alignof(double), BindingField::kAES2, 1) ||
-      !scratch(workspace.aes2_workspace.potential_scratch,
-               workspace.aes2_workspace.potential_elements, aes2_potential_elements, sizeof(double),
-               alignof(double), BindingField::kAES2, 2) ||
-      !scratch(workspace.aes2_workspace.batch_scratch, workspace.aes2_workspace.batch_elements,
-               batch, sizeof(double), alignof(double), BindingField::kAES2, 3) ||
-      !scratch(workspace.aes2_workspace.gradient_scratch,
-               workspace.aes2_workspace.gradient_elements, dipoles, sizeof(double), alignof(double),
-               BindingField::kAES2, 4) ||
-      !scratch(workspace.aes2_workspace.coordination_scratch,
-               workspace.aes2_workspace.coordination_elements, atoms, sizeof(double),
-               alignof(double), BindingField::kAES2, 5) ||
-      !scratch(workspace.aes2_workspace.scc_peer_error_scratch,
-               workspace.aes2_workspace.scc_peer_error_elements, 1, sizeof(std::uint32_t),
-               alignof(std::uint32_t), BindingField::kAES2, 6)) {
-    return false;
+  if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) {
+    std::int64_t aes2_pair_elements = 0;
+    std::int64_t aes2_potential_elements = 0;
+    if (!checked_multiply(plan.aes2_batch.total_pairs, kGfn2AES2PairDataElements,
+                          aes2_pair_elements) ||
+        !checked_multiply(atoms, kGfn2AES2PotentialElementsPerAtom, aes2_potential_elements) ||
+        !exact(plan.aes2_cache.pair_data_elements, aes2_pair_elements, BindingField::kAES2) ||
+        !read(plan.aes2_cache.pair_data, aes2_pair_elements, sizeof(double), alignof(double),
+              BindingField::kAES2, 0) ||
+        !scratch(workspace.aes2_workspace.pair_scratch, workspace.aes2_workspace.pair_elements,
+                 aes2_pair_elements, sizeof(double), alignof(double), BindingField::kAES2, 1) ||
+        !scratch(workspace.aes2_workspace.potential_scratch,
+                 workspace.aes2_workspace.potential_elements, aes2_potential_elements,
+                 sizeof(double), alignof(double), BindingField::kAES2, 2) ||
+        !scratch(workspace.aes2_workspace.batch_scratch, workspace.aes2_workspace.batch_elements,
+                 batch, sizeof(double), alignof(double), BindingField::kAES2, 3) ||
+        !scratch(workspace.aes2_workspace.gradient_scratch,
+                 workspace.aes2_workspace.gradient_elements, dipoles, sizeof(double),
+                 alignof(double), BindingField::kAES2, 4) ||
+        !scratch(workspace.aes2_workspace.coordination_scratch,
+                 workspace.aes2_workspace.coordination_elements, atoms, sizeof(double),
+                 alignof(double), BindingField::kAES2, 5) ||
+        !scratch(workspace.aes2_workspace.scc_peer_error_scratch,
+                 workspace.aes2_workspace.scc_peer_error_elements, 1, sizeof(std::uint32_t),
+                 alignof(std::uint32_t), BindingField::kAES2, 6)) {
+      return false;
+    }
   }
 
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
@@ -3109,6 +3169,7 @@ __device__ void copy_device_range(const T* source, T* destination, std::int64_t 
  */
 __global__ void stage_active_mixer_kernel(Gfn2WavefunctionLayoutView wavefunction_layout,
                                           std::int64_t history_size,
+                                          std::int64_t atomic_multipole_components,
                                           Gfn2SccIterationDeviceActivity activity,
                                           Gfn2SccMixerDeviceState source,
                                           Gfn2SccMixerDeviceState destination) {
@@ -3116,15 +3177,15 @@ __global__ void stage_active_mixer_kernel(Gfn2WavefunctionLayoutView wavefunctio
   if (*activity.sequence_active != 1u || activity.active_mask[system] != 1u) {
     return;
   }
-  /* Mixer vectors contain every charge/magnetization qsh, dipole, and
-   * quadrupole channel. Physical topology offsets are therefore insufficient
-   * for a mixed-spin batch: use the canonical nspin-expanded partitions.
-   * Restricted layouts carry identical physical and spin-aware offsets, so
-   * this preserves the historical byte ranges exactly. */
-  const std::int64_t vector_begin = wavefunction_layout.spin_shell_offsets[system] +
-                                    9 * wavefunction_layout.spin_atom_offsets[system];
-  const std::int64_t vector_end = wavefunction_layout.spin_shell_offsets[system + 1] +
-                                  9 * wavefunction_layout.spin_atom_offsets[system + 1];
+  /* Mixer vectors contain every charge/magnetization qsh followed by the
+   * model's atomic multipole channels. GFN1 has no such channels, whereas
+   * GFN2 carries 3 dipole plus 6 quadrupole values per spin-expanded atom. */
+  const std::int64_t vector_begin =
+      wavefunction_layout.spin_shell_offsets[system] +
+      atomic_multipole_components * wavefunction_layout.spin_atom_offsets[system];
+  const std::int64_t vector_end =
+      wavefunction_layout.spin_shell_offsets[system + 1] +
+      atomic_multipole_components * wavefunction_layout.spin_atom_offsets[system + 1];
   const std::int64_t history_begin = vector_begin * history_size;
   const std::int64_t history_end = vector_end * history_size;
   const std::int64_t omega_begin = system * history_size;
@@ -3154,7 +3215,8 @@ cudaError_t stage_active_mixer(const Gfn2SccIterationBinding& binding,
   stage_active_mixer_kernel<<<static_cast<unsigned int>(binding.plan.topology.batch_size), 256, 0,
                               stream>>>(
       binding.plan.wavefunction_layout, binding.plan.mixer_policy.history_size,
-      binding.workspace.activity, binding.state.mixer, binding.workspace.staged_mixer);
+      binding.plan.mixer_policy.atomic_multipole_components, binding.workspace.activity,
+      binding.state.mixer, binding.workspace.staged_mixer);
   return cudaPeekAtLastError();
 }
 
@@ -3419,25 +3481,27 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
       return failure;
     }
 
-    stage_report = report(Gfn2SccStageId::kAES2Potential);
-    if (!begin_stage(stage_report) ||
-        !check_cuda(stage_report->stage,
-                    reset_gfn2_aes2_device_errors_cuda(
-                        plan.topology.batch_size, mutable_system_codes(*stage_report),
-                        mutable_device_error(*stage_report), stream)) ||
-        !check_cuda(stage_report->stage,
-                    evaluate_gfn2_aes2_scc_potential_cuda(
-                        plan.aes2_batch, plan.aes2_cache, plan.geometry_generation,
-                        workspace.activity, workspace.physical_topology.atomic_charges,
-                        workspace.physical_topology.atomic_dipoles,
-                        workspace.physical_topology.atomic_quadrupoles,
-                        workspace.components.aes2_atomic_potential,
-                        workspace.components.aes2_dipole_potential,
-                        workspace.components.aes2_quadrupole_potential, workspace.aes2_workspace,
-                        mutable_system_codes(*stage_report), mutable_device_error(*stage_report),
-                        stream)) ||
-        !finish_stage(*stage_report)) {
-      return failure;
+    if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) {
+      stage_report = report(Gfn2SccStageId::kAES2Potential);
+      if (!begin_stage(stage_report) ||
+          !check_cuda(stage_report->stage,
+                      reset_gfn2_aes2_device_errors_cuda(
+                          plan.topology.batch_size, mutable_system_codes(*stage_report),
+                          mutable_device_error(*stage_report), stream)) ||
+          !check_cuda(stage_report->stage,
+                      evaluate_gfn2_aes2_scc_potential_cuda(
+                          plan.aes2_batch, plan.aes2_cache, plan.geometry_generation,
+                          workspace.activity, workspace.physical_topology.atomic_charges,
+                          workspace.physical_topology.atomic_dipoles,
+                          workspace.physical_topology.atomic_quadrupoles,
+                          workspace.components.aes2_atomic_potential,
+                          workspace.components.aes2_dipole_potential,
+                          workspace.components.aes2_quadrupole_potential, workspace.aes2_workspace,
+                          mutable_system_codes(*stage_report), mutable_device_error(*stage_report),
+                          stream)) ||
+          !finish_stage(*stage_report)) {
+        return failure;
+      }
     }
 
     if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {
@@ -3736,23 +3800,25 @@ static Gfn2SccIterationLaunchResult launch_scc_iteration_impl(
     return failure;
   }
 
-  stage_report = report(Gfn2SccStageId::kAES2RawEnergy);
-  if (!begin_stage(stage_report) ||
-      !check_cuda(stage_report->stage,
-                  reset_gfn2_aes2_device_errors_cuda(
-                      plan.topology.batch_size, mutable_system_codes(*stage_report),
-                      mutable_device_error(*stage_report), stream)) ||
-      !check_cuda(
-          stage_report->stage,
-          evaluate_gfn2_aes2_scc_energy_cuda(
-              plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, workspace.activity,
-              workspace.physical_topology.atomic_charges,
-              workspace.physical_topology.atomic_dipoles,
-              workspace.physical_topology.atomic_quadrupoles, workspace.components.aes2_energy,
-              workspace.aes2_workspace, mutable_system_codes(*stage_report),
-              mutable_device_error(*stage_report), stream)) ||
-      !finish_stage(*stage_report)) {
-    return failure;
+  if (component_enabled(plan, Gfn2SccPotentialComponent::kAES2)) {
+    stage_report = report(Gfn2SccStageId::kAES2RawEnergy);
+    if (!begin_stage(stage_report) ||
+        !check_cuda(stage_report->stage,
+                    reset_gfn2_aes2_device_errors_cuda(
+                        plan.topology.batch_size, mutable_system_codes(*stage_report),
+                        mutable_device_error(*stage_report), stream)) ||
+        !check_cuda(
+            stage_report->stage,
+            evaluate_gfn2_aes2_scc_energy_cuda(
+                plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, workspace.activity,
+                workspace.physical_topology.atomic_charges,
+                workspace.physical_topology.atomic_dipoles,
+                workspace.physical_topology.atomic_quadrupoles, workspace.components.aes2_energy,
+                workspace.aes2_workspace, mutable_system_codes(*stage_report),
+                mutable_device_error(*stage_report), stream)) ||
+        !finish_stage(*stage_report)) {
+      return failure;
+    }
   }
 
   if (component_enabled(plan, Gfn2SccPotentialComponent::kD4TwoBody)) {

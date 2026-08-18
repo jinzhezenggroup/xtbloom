@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/xtb_model.hpp"
 #include "backends/cuda/gfn2_scc_iteration_control.cuh"
 
 namespace xtbloom::detail::cuda {
@@ -59,6 +60,10 @@ struct Gfn2ES2DeviceBatch {
   const std::int64_t* matrix_offsets = nullptr;
   const std::int64_t* shell_to_atom = nullptr;
   const double* shell_hardness = nullptr;
+
+  /* GFN2 averages shell hardnesses arithmetically; GFN1 uses the harmonic
+   * average required by its published parameterization. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 /*
@@ -96,10 +101,9 @@ static_assert(std::is_standard_layout_v<Gfn2ES2DeviceWorkspace>);
 
 /*
  * Preflight and overwrite Gamma in cache.coulomb_matrix. For different atoms,
- * Gamma_st = [R_AB^2 + gamma_st^-2]^-1/2 with arithmetic gamma averaging;
- * same-atom entries equal the arithmetic average. No public matrix element is
- * written unless every system passes topology, finite-input, and arithmetic
- * preflight.
+ * Gamma_st = [R_AB^2 + gamma_st^-2]^-1/2 with the model-selected gamma
+ * average; same-atom entries equal that same average. No public matrix element
+ * is written unless every system passes topology and finite-input preflight.
  */
 cudaError_t update_gfn2_es2_geometry_cache_cuda(const Gfn2ES2DeviceBatch& batch,
                                                 const double* positions,

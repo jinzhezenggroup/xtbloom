@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include "backends/cuda/gfn1_classical_corrections.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
 #include "backends/cuda/gfn2_electric_field.cuh"
 #include "backends/cuda/gfn2_energy_force_execution.cuh"
@@ -35,6 +36,23 @@
 #include "backends/cuda/gfn2_scc_setup_topology.hpp"
 #include "backends/cuda/gfn2_terminal_classical_energy.cuh"
 #include "data/parameters/d4.hpp"
+#include "data/parameters/gfn1.hpp"
+#include "data/parameters/gfn1_d3.hpp"
+#include "model/gfn1/basis.hpp"
+#include "model/gfn1/coordination.hpp"
+#include "model/gfn1/d3.hpp"
+#include "model/gfn1/es2.hpp"
+#include "model/gfn1/es3.hpp"
+#include "model/gfn1/external_point_charges.hpp"
+#include "model/gfn1/h0.hpp"
+#include "model/gfn1/halogen.hpp"
+#include "model/gfn1/integrals.hpp"
+#include "model/gfn1/mulliken.hpp"
+#include "model/gfn1/repulsion.hpp"
+#include "model/gfn1/scc_driver.hpp"
+#include "model/gfn1/scc_mixer.hpp"
+#include "model/gfn1/spin.hpp"
+#include "model/gfn1/wavefunction.hpp"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/coordination.hpp"
@@ -336,7 +354,7 @@ xtbloom_status_t validate_host_native_lattice_request(const xtbloom_batch_t& bat
   }
   if (periodic) {
     error =
-        "native lattice/PBC descriptors are valid but periodic GFN2 execution is not "
+        "native lattice/PBC descriptors are valid but native periodic execution is not "
         "implemented yet";
     return XTBLOOM_STATUS_NOT_IMPLEMENTED;
   }
@@ -742,6 +760,8 @@ struct NumericalRefreshDeviceBinding {
   std::int64_t geometry_pair_elements = 0;
   std::int64_t es2_elements = 0;
   std::int64_t aes2_elements = 0;
+  std::uint8_t multipoles_enabled = 1u;
+  std::uint8_t aes2_enabled = 1u;
   std::uint8_t d4_enabled = 0u;
   std::uint8_t point_enabled = 0u;
   std::uint8_t periodic_enabled = 0u;
@@ -1204,15 +1224,17 @@ __global__ void commit_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBindi
    * matrix interval in every component plane; treating 3*M or 6*M as one
    * contiguous per-peer interval would publish bytes belonging to adjacent
    * peers and violate transactional rollback. */
-  for (std::int64_t matrix = matrix_begin + threadIdx.x; matrix < matrix_end;
-       matrix += blockDim.x) {
-    for (std::int64_t component = 0; component < 3; ++component) {
-      const std::int64_t index = component * binding.total_matrices + matrix;
-      binding.public_dipole[index] = binding.candidate_dipole[index];
-    }
-    for (std::int64_t component = 0; component < 6; ++component) {
-      const std::int64_t index = component * binding.total_matrices + matrix;
-      binding.public_quadrupole[index] = binding.candidate_quadrupole[index];
+  if (binding.multipoles_enabled != 0u) {
+    for (std::int64_t matrix = matrix_begin + threadIdx.x; matrix < matrix_end;
+         matrix += blockDim.x) {
+      for (std::int64_t component = 0; component < 3; ++component) {
+        const std::int64_t index = component * binding.total_matrices + matrix;
+        binding.public_dipole[index] = binding.candidate_dipole[index];
+      }
+      for (std::int64_t component = 0; component < 6; ++component) {
+        const std::int64_t index = component * binding.total_matrices + matrix;
+        binding.public_quadrupole[index] = binding.candidate_quadrupole[index];
+      }
     }
   }
 
@@ -1222,9 +1244,11 @@ __global__ void commit_gfn2_numerical_refresh_kernel(NumericalRefreshDeviceBindi
        index < pair_end * kGfn2GeometryPairDataElements; index += blockDim.x) {
     binding.public_geometry_pairs[index] = binding.candidate_geometry_pairs[index];
   }
-  for (std::int64_t index = pair_begin * kGfn2AES2PairDataElements + threadIdx.x;
-       index < pair_end * kGfn2AES2PairDataElements; index += blockDim.x) {
-    binding.public_aes2[index] = binding.candidate_aes2[index];
+  if (binding.aes2_enabled != 0u) {
+    for (std::int64_t index = pair_begin * kGfn2AES2PairDataElements + threadIdx.x;
+         index < pair_end * kGfn2AES2PairDataElements; index += blockDim.x) {
+      binding.public_aes2[index] = binding.candidate_aes2[index];
+    }
   }
   const std::int64_t es2_begin = binding.es2_offsets[system];
   const std::int64_t es2_end = binding.es2_offsets[system + 1];
@@ -1405,6 +1429,7 @@ __global__ void initialize_gfn2_warm_checkpoint_batch_if_admitted_kernel(
  */
 struct StationaryForceProjectionDeviceBinding {
   std::uint8_t enabled = 0u;
+  std::uint8_t multipoles_enabled = 1u;
   const std::uint32_t* request_error = nullptr;
   std::int64_t batch_size = 0;
   std::int64_t total_atoms = 0;
@@ -1491,13 +1516,15 @@ __global__ void project_gfn2_stationary_force_state_kernel(
     const std::int64_t local_atom = atom - atom_begin;
     const std::int64_t spin_atom = spin_atom_begin + local_atom;
     binding.atomic_charges[atom] = binding.packed_atomic_charges[spin_atom];
-    for (std::int64_t component = 0; component < 3; ++component) {
-      binding.atomic_dipoles[atom * 3 + component] =
-          binding.packed_atomic_dipoles[spin_atom * 3 + component];
-    }
-    for (std::int64_t component = 0; component < 6; ++component) {
-      binding.atomic_quadrupoles[atom * 6 + component] =
-          binding.packed_atomic_quadrupoles[spin_atom * 6 + component];
+    if (binding.multipoles_enabled != 0u) {
+      for (std::int64_t component = 0; component < 3; ++component) {
+        binding.atomic_dipoles[atom * 3 + component] =
+            binding.packed_atomic_dipoles[spin_atom * 3 + component];
+      }
+      for (std::int64_t component = 0; component < 6; ++component) {
+        binding.atomic_quadrupoles[atom * 6 + component] =
+            binding.packed_atomic_quadrupoles[spin_atom * 6 + component];
+      }
     }
   }
 
@@ -1529,8 +1556,8 @@ __global__ void project_gfn2_stationary_force_state_kernel(
 cudaError_t project_gfn2_stationary_force_state_cuda(
     const StationaryForceProjectionDeviceBinding& binding, cudaStream_t stream) noexcept {
   if (binding.enabled == 0u) return cudaSuccess;
-  if (binding.enabled != 1u || binding.batch_size <= 0 || binding.total_atoms <= 0 ||
-      binding.total_shells <= 0 || binding.total_matrix_elements <= 0 ||
+  if (binding.enabled != 1u || binding.multipoles_enabled > 1u || binding.batch_size <= 0 ||
+      binding.total_atoms <= 0 || binding.total_shells <= 0 || binding.total_matrix_elements <= 0 ||
       binding.total_spin_atoms < binding.total_atoms ||
       binding.total_spin_shells < binding.total_shells ||
       binding.total_spin_matrix_elements < binding.total_matrix_elements ||
@@ -1541,11 +1568,12 @@ cudaError_t project_gfn2_stationary_force_state_cuda(
       binding.spin_coupling_offsets == nullptr || binding.spin_coupling_matrices == nullptr ||
       binding.packed_density == nullptr || binding.packed_energy_weighted_density == nullptr ||
       binding.packed_shell_charges == nullptr || binding.packed_atomic_charges == nullptr ||
-      binding.packed_atomic_dipoles == nullptr || binding.packed_atomic_quadrupoles == nullptr ||
       binding.total_density == nullptr || binding.total_energy_weighted_density == nullptr ||
       binding.spin_density == nullptr || binding.shell_charges == nullptr ||
-      binding.atomic_charges == nullptr || binding.atomic_dipoles == nullptr ||
-      binding.atomic_quadrupoles == nullptr || binding.spin_shell_potentials == nullptr ||
+      binding.atomic_charges == nullptr || binding.spin_shell_potentials == nullptr ||
+      (binding.multipoles_enabled != 0u &&
+       (binding.packed_atomic_dipoles == nullptr || binding.packed_atomic_quadrupoles == nullptr ||
+        binding.atomic_dipoles == nullptr || binding.atomic_quadrupoles == nullptr)) ||
       binding.batch_size > static_cast<std::int64_t>(std::numeric_limits<unsigned int>::max())) {
     return cudaErrorInvalidValue;
   }
@@ -1555,6 +1583,7 @@ cudaError_t project_gfn2_stationary_force_state_cuda(
 }
 
 struct TopologyKey {
+  xtbloom_model_t model = XTBLOOM_MODEL_GFN2_XTB;
   std::vector<std::int64_t> atom_offsets;
   std::vector<std::int32_t> atomic_numbers;
   std::vector<double> molecular_charges;
@@ -1575,6 +1604,7 @@ struct TopologyKey {
 
   std::uint64_t fingerprint() const noexcept {
     std::uint64_t hash = 0x4750555854424b59ULL;
+    hash_append(hash, static_cast<std::uint32_t>(model));
     hash_append_vector(hash, atom_offsets);
     hash_append_vector(hash, atomic_numbers);
     hash_append_vector(hash, molecular_charges);
@@ -1846,7 +1876,7 @@ TopologyMatch match_existing_topology(const xtbloom_batch_t& batch,
   const bool periodic_enabled =
       batch.atomic_potential_shifts.data != nullptr || batch.total_charge_response_elements != 0 ||
       batch.charge_response_offsets.data != nullptr || batch.charge_response_matrix.data != nullptr;
-  if (options.model != XTBLOOM_MODEL_GFN2_XTB || options.flags != key.flags ||
+  if (options.model != key.model || options.flags != key.flags ||
       options.max_scc_iterations != key.maximum_iterations ||
       options.charge_tolerance != key.charge_tolerance ||
       options.energy_tolerance != key.energy_tolerance ||
@@ -1969,7 +1999,7 @@ bool context_enqueue_shape_policy_matches(const xtbloom_batch_t& batch,
   return batch.batch_size == expected_batch && batch.total_atoms == expected_atoms &&
          batch.total_point_charges == expected_points &&
          (!response_active || batch.total_charge_response_elements == expected_response) &&
-         options.model == XTBLOOM_MODEL_GFN2_XTB && options.flags == key.flags &&
+         options.model == key.model && options.flags == key.flags &&
          options.max_scc_iterations == key.maximum_iterations &&
          options.charge_tolerance == key.charge_tolerance &&
          options.energy_tolerance == key.energy_tolerance &&
@@ -2008,17 +2038,19 @@ xtbloom_status_t make_topology_key(const xtbloom_batch_t& batch,
                                    std::vector<double>& periodic_shifts,
                                    std::vector<double>& periodic_response, std::string& error) {
   if (batch.batch_size <= 0 || batch.total_atoms <= 0 || batch.total_point_charges < 0 ||
-      batch.total_charge_response_elements < 0 || options.model != XTBLOOM_MODEL_GFN2_XTB ||
+      batch.total_charge_response_elements < 0 ||
+      (options.model != XTBLOOM_MODEL_GFN1_XTB && options.model != XTBLOOM_MODEL_GFN2_XTB) ||
       options.max_scc_iterations <= 0 || !std::isfinite(options.charge_tolerance) ||
       options.charge_tolerance <= 0.0 || !std::isfinite(options.energy_tolerance) ||
       options.energy_tolerance <= 0.0 || !std::isfinite(options.electronic_temperature) ||
       options.electronic_temperature < 0.0) {
-    error = "invalid GFN2 CUDA setup dimensions or compute policy";
+    error = "invalid CUDA xTB setup dimensions or compute policy";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
 
   xtbloom_status_t status = validate_public_execution_policy(options, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  key.model = options.model;
   status = copy_host_buffer("atom_offsets", batch.atom_offsets, batch.batch_size + 1,
                             key.atom_offsets, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
@@ -2205,6 +2237,11 @@ xtbloom_status_t make_topology_only_seed(
   xtbloom_status_t status = validate_public_execution_policy(options, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
+  /* Device/mixed descriptors arrive through topology staging instead of
+   * make_topology_key(). Preserve the selected model here as part of the
+   * immutable cache identity so a GFN1 request can never reuse or construct
+   * a GFN2 plan by default. */
+  key.model = options.model;
   key.atom_offsets = snapshot.atom_offsets;
   key.atomic_numbers = snapshot.atomic_numbers;
   key.molecular_charges = snapshot.molecular_charges;
@@ -2257,7 +2294,7 @@ xtbloom_status_t make_topology_only_seed(
 bool topology_snapshot_matches(const Gfn2CudaTopologyHostSnapshot& snapshot,
                                const xtbloom_compute_options_t& options,
                                const TopologyKey& key) noexcept {
-  return snapshot.atom_offsets == key.atom_offsets &&
+  return options.model == key.model && snapshot.atom_offsets == key.atom_offsets &&
          snapshot.atomic_numbers == key.atomic_numbers &&
          snapshot.molecular_charges == key.molecular_charges &&
          snapshot.unpaired_electrons == key.unpaired_electrons &&
@@ -2274,6 +2311,23 @@ bool topology_snapshot_matches(const Gfn2CudaTopologyHostSnapshot& snapshot,
          public_scc_mixer_damping(options) == key.scc_mixer_damping &&
          public_determinism(options) == key.determinism;
 }
+
+struct HostPlanByteBreakdown {
+  std::size_t common_plan_vectors = 0u;
+  std::size_t gfn1_plan_vectors = 0u;
+  std::size_t common_model_plans = 0u;
+  std::size_t gfn1_model_plans = 0u;
+  std::size_t numerical_vectors = 0u;
+  std::size_t gfn1_expanded_parameters = 0u;
+  std::size_t gfn2_wavefunction_arena = 0u;
+  std::size_t gfn1_wavefunction_arena = 0u;
+
+  [[nodiscard]] std::size_t total() const noexcept {
+    return common_plan_vectors + gfn1_plan_vectors + common_model_plans + gfn1_model_plans +
+           numerical_vectors + gfn1_expanded_parameters + gfn2_wavefunction_arena +
+           gfn1_wavefunction_arena;
+  }
+};
 
 struct HostPlans {
   TopologyKey key;
@@ -2297,8 +2351,37 @@ struct HostPlans {
   ExternalPointChargePlan external;
   PeriodicEmbeddingPlan periodic;
   SccDriverPlan driver;
+
+  /* GFN1 owns scalar SCC plans that cannot be represented by the GFN2
+   * multipole types. Common CUDA topology/linear-algebra descriptors are
+   * still reused, while these plans remain the scientific source of truth. */
+  gfn1::H0Plan gfn1_h0;
+  gfn1::WavefunctionLayout gfn1_wavefunction_layout;
+  gfn1::ES3Plan gfn1_es3;
+  gfn1::SpinPopulationLayout gfn1_spin_layout;
+  gfn1::SpinPolarizationPlan gfn1_spin;
+  gfn1::MullikenPlan gfn1_mulliken;
+  gfn1::SccMixerPlan gfn1_mixer;
+  gfn1::ExternalPointChargePlan gfn1_external;
+  gfn1::SccDriverPlan gfn1_driver;
+  gfn1::RepulsionPlan gfn1_repulsion;
+  gfn1::D3Plan gfn1_d3;
+  gfn1::HalogenPlan gfn1_halogen;
+  std::vector<std::uint8_t> gfn1_d3_reference_counts;
+  std::vector<double> gfn1_d3_reference_cn;
+  std::vector<double> gfn1_d3_reference_c6;
+  std::vector<double> gfn1_d3_pair_rrij;
+  std::vector<double> gfn1_d3_pair_damping_radii;
+  std::vector<double> gfn1_halogen_scaled_radii;
+  std::vector<double> gfn1_halogen_bond_strength;
+  std::vector<std::uint8_t> gfn1_halogen_donor;
+  std::vector<std::uint8_t> gfn1_halogen_acceptor;
+  PinnedArena gfn1_wavefunction_storage;
+  gfn1::WavefunctionView gfn1_wavefunction{};
+
   bool d4_enabled = false;
   bool periodic_enabled = false;
+  bool gfn1_enabled = false;
 
   std::vector<double> positions;
   std::vector<double> point_positions;
@@ -2342,8 +2425,8 @@ struct HostPlans {
   PinnedArena wavefunction_storage;
   WavefunctionView wavefunction{};
 
-  [[nodiscard]] std::size_t retained_host_bytes() const noexcept {
-    const std::size_t direct_plan_vectors =
+  [[nodiscard]] HostPlanByteBreakdown retained_host_byte_breakdown() const noexcept {
+    const std::size_t common_plan_vectors =
         vector_bytes(key.atom_offsets) + vector_bytes(key.atomic_numbers) +
         vector_bytes(key.molecular_charges) + vector_bytes(key.unpaired_electrons) +
         vector_bytes(key.spin_channels) + vector_bytes(key.point_offsets) +
@@ -2381,10 +2464,53 @@ struct HostPlans {
         vector_bytes(wavefunction_layout.dipole.system_offsets) +
         vector_bytes(wavefunction_layout.quadrupole.system_offsets) +
         vector_bytes(wavefunction_layout.energy_weighted_density.system_offsets);
-    const std::size_t model_plan_storage =
+    const std::size_t gfn1_plan_vectors =
+        vector_bytes(gfn1_h0.atom_offsets) + vector_bytes(gfn1_h0.batch_shell_offsets) +
+        vector_bytes(gfn1_h0.batch_orbital_offsets) + vector_bytes(gfn1_h0.matrix_offsets) +
+        vector_bytes(gfn1_h0.shell_pair_offsets) + vector_bytes(gfn1_h0.atomic_radii) +
+        vector_bytes(gfn1_h0.shell_levels) + vector_bytes(gfn1_h0.shell_coordination_scale) +
+        vector_bytes(gfn1_h0.shell_polynomial) + vector_bytes(gfn1_h0.shell_pair_scale) +
+        vector_bytes(gfn1_wavefunction_layout.atom_offsets) +
+        vector_bytes(gfn1_wavefunction_layout.batch_shell_offsets) +
+        vector_bytes(gfn1_wavefunction_layout.batch_orbital_offsets) +
+        vector_bytes(gfn1_wavefunction_layout.atomic_numbers) +
+        vector_bytes(gfn1_wavefunction_layout.molecular_charges) +
+        vector_bytes(gfn1_wavefunction_layout.unpaired_electrons) +
+        vector_bytes(gfn1_wavefunction_layout.spin_channels) +
+        vector_bytes(gfn1_wavefunction_layout.reference_atom_occupations) +
+        vector_bytes(gfn1_wavefunction_layout.reference_shell_occupations) +
+        vector_bytes(gfn1_wavefunction_layout.electron_counts) +
+        vector_bytes(gfn1_wavefunction_layout.alpha_electron_counts) +
+        vector_bytes(gfn1_wavefunction_layout.beta_electron_counts) +
+        vector_bytes(gfn1_wavefunction_layout.coefficients.system_offsets) +
+        vector_bytes(gfn1_wavefunction_layout.eigenvalues.system_offsets) +
+        vector_bytes(gfn1_wavefunction_layout.occupations.system_offsets) +
+        vector_bytes(gfn1_wavefunction_layout.density.system_offsets) +
+        vector_bytes(gfn1_wavefunction_layout.qsh.system_offsets) +
+        vector_bytes(gfn1_wavefunction_layout.qat.system_offsets) +
+        vector_bytes(gfn1_wavefunction_layout.energy_weighted_density.system_offsets) +
+        vector_bytes(gfn1_es3.atom_offsets) + vector_bytes(gfn1_es3.atom_gamma3) +
+        vector_bytes(gfn1_spin_layout.system_offsets) +
+        vector_bytes(gfn1_spin_layout.spin_channels) + vector_bytes(gfn1_spin.atom_offsets) +
+        vector_bytes(gfn1_spin.batch_shell_offsets) + vector_bytes(gfn1_spin.atom_shell_offsets) +
+        vector_bytes(gfn1_spin.shell_population_offsets) + vector_bytes(gfn1_spin.spin_channels) +
+        vector_bytes(gfn1_spin.coupling_offsets) + vector_bytes(gfn1_spin.coupling_matrices) +
+        vector_bytes(gfn1_external.atom_offsets) + vector_bytes(gfn1_external.batch_shell_offsets) +
+        vector_bytes(gfn1_external.atom_shell_offsets) +
+        vector_bytes(gfn1_external.point_charge_offsets) +
+        vector_bytes(gfn1_external.atom_to_batch) + vector_bytes(gfn1_external.point_to_batch) +
+        vector_bytes(gfn1_external.shell_to_atom) + vector_bytes(gfn1_external.shell_hardness) +
+        vector_bytes(gfn1_repulsion.atom_offsets) + vector_bytes(gfn1_repulsion.sqrt_alpha) +
+        vector_bytes(gfn1_repulsion.effective_charge);
+    const std::size_t common_model_plan_storage =
         es2.resident_bytes() + aes2.resident_bytes() + mulliken.resident_bytes() +
         eigensolver.resident_bytes() + mixer.resident_bytes() + d4.resident_bytes() +
         periodic.resident_bytes() + driver.resident_bytes();
+    /* The GFN1 driver counts its copied scalar layouts but deliberately
+     * excludes shared opaque subplans, so each owner below is counted once. */
+    const std::size_t gfn1_model_plan_storage =
+        gfn1_mulliken.resident_bytes() + gfn1_mixer.resident_bytes() +
+        gfn1_driver.resident_bytes() + gfn1_d3.resident_bytes() + gfn1_halogen.resident_bytes();
     const std::size_t numerical_vectors =
         vector_bytes(positions) + vector_bytes(point_positions) + vector_bytes(point_values) +
         vector_bytes(point_gammas) + vector_bytes(periodic_shifts) +
@@ -2400,8 +2526,24 @@ struct HostPlans {
         vector_bytes(aes2_gradient_scratch) + vector_bytes(aes2_coordination_scratch) +
         vector_bytes(d4_elements) + vector_bytes(d4_references) + vector_bytes(d4_coordination) +
         vector_bytes(explicit_point_shell_potential);
-    return direct_plan_vectors + model_plan_storage + numerical_vectors +
-           wavefunction_storage.bytes();
+    const std::size_t gfn1_expanded_parameter_vectors =
+        vector_bytes(gfn1_d3_reference_counts) + vector_bytes(gfn1_d3_reference_cn) +
+        vector_bytes(gfn1_d3_reference_c6) + vector_bytes(gfn1_d3_pair_rrij) +
+        vector_bytes(gfn1_d3_pair_damping_radii) + vector_bytes(gfn1_halogen_scaled_radii) +
+        vector_bytes(gfn1_halogen_bond_strength) + vector_bytes(gfn1_halogen_donor) +
+        vector_bytes(gfn1_halogen_acceptor);
+    return {common_plan_vectors,
+            gfn1_plan_vectors,
+            common_model_plan_storage,
+            gfn1_model_plan_storage,
+            numerical_vectors,
+            gfn1_expanded_parameter_vectors,
+            wavefunction_storage.bytes(),
+            gfn1_wavefunction_storage.bytes()};
+  }
+
+  [[nodiscard]] std::size_t retained_host_bytes() const noexcept {
+    return retained_host_byte_breakdown().total();
   }
 
   xtbloom_status_t build(TopologyKey&& new_key, std::vector<double>&& new_positions,
@@ -2411,6 +2553,33 @@ struct HostPlans {
                          std::vector<double>&& new_periodic_shifts,
                          std::vector<double>&& new_periodic_response, std::uint64_t token,
                          std::string& error) {
+    if (new_key.model == XTBLOOM_MODEL_GFN1_XTB) {
+      return build_gfn1(std::move(new_key), std::move(new_positions),
+                        std::move(new_point_positions), std::move(new_point_values),
+                        std::move(new_point_gammas), std::move(new_periodic_shifts),
+                        std::move(new_periodic_response), token, error);
+    }
+    return build_gfn2(std::move(new_key), std::move(new_positions), std::move(new_point_positions),
+                      std::move(new_point_values), std::move(new_point_gammas),
+                      std::move(new_periodic_shifts), std::move(new_periodic_response), token,
+                      error);
+  }
+
+  xtbloom_status_t build_gfn1(TopologyKey&& new_key, std::vector<double>&& new_positions,
+                              std::vector<double>&& new_point_positions,
+                              std::vector<double>&& new_point_values,
+                              std::vector<double>&& new_point_gammas,
+                              std::vector<double>&& new_periodic_shifts,
+                              std::vector<double>&& new_periodic_response, std::uint64_t token,
+                              std::string& error);
+
+  xtbloom_status_t build_gfn2(TopologyKey&& new_key, std::vector<double>&& new_positions,
+                              std::vector<double>&& new_point_positions,
+                              std::vector<double>&& new_point_values,
+                              std::vector<double>&& new_point_gammas,
+                              std::vector<double>&& new_periodic_shifts,
+                              std::vector<double>&& new_periodic_response, std::uint64_t token,
+                              std::string& error) {
     key = std::move(new_key);
     positions = std::move(new_positions);
     point_positions = std::move(new_point_positions);
@@ -2420,6 +2589,7 @@ struct HostPlans {
     periodic_response = std::move(new_periodic_response);
     fingerprint = key.fingerprint();
     plan_token = token;
+    gfn1_enabled = false;
 
     const std::int64_t batch = static_cast<std::int64_t>(key.molecular_charges.size());
     const std::int64_t atoms = static_cast<std::int64_t>(key.atomic_numbers.size());
@@ -2633,11 +2803,67 @@ struct HostPlans {
     return sources;
   }
 
+  Gfn1SccSetupInputSources gfn1_input_sources() const noexcept {
+    Gfn1SccSetupInputSources sources{};
+    sources.basis = &basis;
+    sources.integrals = &integrals;
+    sources.h0_plan = &gfn1_h0;
+    sources.wavefunction = &gfn1_wavefunction_layout;
+    sources.es2 = &es2;
+    sources.es3 = &gfn1_es3;
+    sources.spin = &gfn1_spin;
+    sources.mulliken = &gfn1_mulliken;
+    sources.mixer = &gfn1_mixer;
+    sources.driver = &gfn1_driver;
+    sources.eigensolver_options.deterministic_debug =
+        key.determinism == XTBLOOM_DETERMINISM_REPRODUCIBLE;
+    sources.geometry_generation = geometry_generation;
+    sources.atomic_numbers = setup_array(key.atomic_numbers);
+    sources.positions = setup_array(positions);
+    sources.covalent_radii = setup_array(coordination.covalent_radius);
+    sources.h0 = setup_array(core_hamiltonian);
+    sources.overlap = setup_array(overlap);
+    sources.geometry_cache.pair_data = setup_array(geometry_pair_data);
+    sources.geometry_cache.coordination_numbers = setup_array(coordination_numbers);
+    sources.geometry_cache.system_generations = setup_array(geometry_generations);
+    sources.es2_cache.coulomb_matrix = setup_array(es2_matrix);
+    if (!point_values.empty()) {
+      sources.point_charges.plan = &gfn1_external;
+      sources.point_charges.positions = setup_array(point_positions);
+      sources.point_charges.charges = setup_array(point_values);
+      sources.point_charges.hardnesses = setup_array(point_gammas);
+      sources.point_charges.shell_potential_cache = setup_array(explicit_point_shell_potential);
+    }
+    if (periodic_enabled) {
+      sources.periodic.plan = &periodic;
+      sources.periodic.shifts = setup_array(periodic_shifts);
+      sources.periodic.response_matrices = setup_array(periodic_response);
+    }
+    return sources;
+  }
+
   Gfn2SccIterationHostInitialization initialization() const noexcept {
     Gfn2SccIterationHostInitialization host{};
     host.mode = Gfn2SccIterationInitializationMode::kFresh;
     host.plan_token = plan_token;
     host.initialization_generation = kInitialStateGeneration;
+    if (gfn1_enabled) {
+      host.topology = {
+          initialization_array(key.atom_offsets.data(),
+                               static_cast<std::int64_t>(key.atom_offsets.size())),
+          initialization_array(
+              gfn1_wavefunction_layout.batch_shell_offsets.data(),
+              static_cast<std::int64_t>(gfn1_wavefunction_layout.batch_shell_offsets.size())),
+          plan_token};
+      host.wavefunction.plan_token = plan_token;
+      host.wavefunction.population = {
+          initialization_array(gfn1_wavefunction.qsh, gfn1_wavefunction_layout.qsh.element_count),
+          initialization_array(gfn1_wavefunction.qat, gfn1_wavefunction_layout.qat.element_count),
+          {},
+          {},
+          plan_token};
+      return host;
+    }
     host.topology = {initialization_array(key.atom_offsets.data(),
                                           static_cast<std::int64_t>(key.atom_offsets.size())),
                      initialization_array(
@@ -2654,6 +2880,284 @@ struct HostPlans {
     return host;
   }
 };
+
+xtbloom_status_t HostPlans::build_gfn1(TopologyKey&& new_key, std::vector<double>&& new_positions,
+                                       std::vector<double>&& new_point_positions,
+                                       std::vector<double>&& new_point_values,
+                                       std::vector<double>&& new_point_gammas,
+                                       std::vector<double>&& new_periodic_shifts,
+                                       std::vector<double>&& new_periodic_response,
+                                       std::uint64_t token, std::string& error) {
+  key = std::move(new_key);
+  positions = std::move(new_positions);
+  point_positions = std::move(new_point_positions);
+  point_values = std::move(new_point_values);
+  point_gammas = std::move(new_point_gammas);
+  periodic_shifts = std::move(new_periodic_shifts);
+  periodic_response = std::move(new_periodic_response);
+  fingerprint = key.fingerprint();
+  plan_token = token;
+  gfn1_enabled = true;
+  d4_enabled = false;
+
+  const std::int64_t batch = static_cast<std::int64_t>(key.molecular_charges.size());
+  const std::int64_t atoms = static_cast<std::int64_t>(key.atomic_numbers.size());
+  const std::int64_t points = static_cast<std::int64_t>(point_values.size());
+
+  xtbloom_status_t status = gfn1::make_basis_plan(batch, atoms, key.atom_offsets.data(),
+                                                  key.atomic_numbers.data(), basis, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_integral_plan(basis, integrals, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+  gfn1::CoordinationPlan gfn1_coordination;
+  status = gfn1::make_coordination_plan(batch, atoms, key.atom_offsets.data(),
+                                        key.atomic_numbers.data(), gfn1_coordination, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  coordination.batch_size = gfn1_coordination.batch_size;
+  coordination.total_atoms = gfn1_coordination.total_atoms;
+  coordination.atom_offsets = gfn1_coordination.atom_offsets;
+  coordination.covalent_radius = gfn1_coordination.covalent_radius;
+
+  status = gfn1::make_repulsion_plan(batch, atoms, key.atom_offsets.data(),
+                                     key.atomic_numbers.data(), gfn1_repulsion, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  repulsion = {};
+  repulsion.batch_size = gfn1_repulsion.batch_size;
+  repulsion.total_atoms = gfn1_repulsion.total_atoms;
+  repulsion.atom_offsets = gfn1_repulsion.atom_offsets;
+  repulsion.sqrt_alpha = gfn1_repulsion.sqrt_alpha;
+  repulsion.effective_charge = gfn1_repulsion.effective_charge;
+  repulsion.light_element.assign(static_cast<std::size_t>(atoms), 0u);
+
+  status = gfn1::make_h0_plan(basis, integrals, key.atomic_numbers.data(), gfn1_h0, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  h0 = {};
+  h0.batch_size = gfn1_h0.batch_size;
+  h0.total_atoms = gfn1_h0.total_atoms;
+  h0.total_shells = gfn1_h0.total_shells;
+  h0.total_orbitals = gfn1_h0.total_orbitals;
+  h0.total_matrix_elements = gfn1_h0.total_matrix_elements;
+  h0.atom_offsets = gfn1_h0.atom_offsets;
+  h0.batch_shell_offsets = gfn1_h0.batch_shell_offsets;
+  h0.batch_orbital_offsets = gfn1_h0.batch_orbital_offsets;
+  h0.matrix_offsets = gfn1_h0.matrix_offsets;
+  h0.shell_pair_offsets = gfn1_h0.shell_pair_offsets;
+  h0.atomic_radii = gfn1_h0.atomic_radii;
+  h0.shell_levels = gfn1_h0.shell_levels;
+  h0.shell_coordination_scale = gfn1_h0.shell_coordination_scale;
+  h0.shell_polynomial = gfn1_h0.shell_polynomial;
+  h0.shell_pair_scale = gfn1_h0.shell_pair_scale;
+
+  status = gfn1::make_wavefunction_layout(
+      basis, key.atomic_numbers.data(), key.molecular_charges.data(), key.unpaired_electrons.data(),
+      key.spin_channels.data(), gfn1_wavefunction_layout, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_es2_plan(basis, key.atomic_numbers.data(), es2, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_es3_plan(basis, key.atomic_numbers.data(), gfn1_es3, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  es3 = {};
+  es3.batch_size = batch;
+  es3.total_shells = basis.total_shells;
+  es3.batch_shell_offsets = basis.batch_shell_offsets;
+  es3.shell_gamma3.resize(static_cast<std::size_t>(basis.total_shells));
+  for (std::int64_t shell = 0; shell < basis.total_shells; ++shell) {
+    const std::int64_t atom = basis.shell_to_atom[static_cast<std::size_t>(shell)];
+    es3.shell_gamma3[static_cast<std::size_t>(shell)] =
+        gfn1_es3.atom_gamma3[static_cast<std::size_t>(atom)];
+  }
+  aes2 = {};
+
+  status =
+      gfn1::make_spin_population_layout(basis, key.spin_channels.data(), gfn1_spin_layout, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_spin_polarization_plan(basis, key.atomic_numbers.data(), gfn1_spin_layout,
+                                             gfn1_spin, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status =
+      gfn1::make_mulliken_plan(basis, integrals, gfn1_wavefunction_layout, gfn1_mulliken, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn2::make_eigensolver_plan(
+      gfn1::make_eigensolver_wavefunction_layout(gfn1_wavefunction_layout), eigensolver, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_scc_mixer_plan(gfn1_wavefunction_layout, key.scc_mixer_history,
+                                     key.scc_mixer_damping, key.charge_tolerance,
+                                     key.charge_tolerance, gfn1_mixer, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_d3_plan(batch, atoms, key.atom_offsets.data(), key.atomic_numbers.data(),
+                              gfn1_d3, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::make_halogen_plan(batch, atoms, key.atom_offsets.data(), key.atomic_numbers.data(),
+                                   gfn1_halogen, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+  const std::int64_t d3_pairs = gfn1_d3.total_pairs();
+  gfn1_d3_reference_counts.assign(static_cast<std::size_t>(atoms), 0u);
+  gfn1_d3_reference_cn.assign(static_cast<std::size_t>(atoms) * kGfn1D3MaximumReferences, 0.0);
+  gfn1_d3_reference_c6.assign(static_cast<std::size_t>(d3_pairs) * kGfn1D3ReferencePairStride, 0.0);
+  gfn1_d3_pair_rrij.assign(static_cast<std::size_t>(d3_pairs), 0.0);
+  gfn1_d3_pair_damping_radii.assign(static_cast<std::size_t>(d3_pairs), 0.0);
+  gfn1_halogen_scaled_radii.resize(static_cast<std::size_t>(atoms));
+  gfn1_halogen_bond_strength.resize(static_cast<std::size_t>(atoms));
+  gfn1_halogen_donor.resize(static_cast<std::size_t>(atoms));
+  gfn1_halogen_acceptor.resize(static_cast<std::size_t>(atoms));
+  for (std::int64_t atom = 0; atom < atoms; ++atom) {
+    const std::uint32_t z =
+        static_cast<std::uint32_t>(key.atomic_numbers[static_cast<std::size_t>(atom)]);
+    const auto& d3_element = parameters::gfn1_d3::kElements[z - 1u];
+    gfn1_d3_reference_counts[static_cast<std::size_t>(atom)] = d3_element.reference_count;
+    const std::size_t ref_offset = static_cast<std::size_t>(atom) * kGfn1D3MaximumReferences;
+    for (std::uint32_t ref = 0; ref < d3_element.reference_count; ++ref) {
+      gfn1_d3_reference_cn[ref_offset + ref] = parameters::gfn1_d3::reference_cn(z, ref);
+    }
+    const auto* element = parameters::gfn1::find_element(z);
+    if (element == nullptr) {
+      error = "GFN1 CUDA correction setup found an unsupported atomic number";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    gfn1_halogen_scaled_radii[static_cast<std::size_t>(atom)] =
+        parameters::gfn1::kGlobal.halogen_radius_scale * element->atomic_radius_bohr;
+    gfn1_halogen_bond_strength[static_cast<std::size_t>(atom)] = element->xbond;
+    gfn1_halogen_donor[static_cast<std::size_t>(atom)] =
+        static_cast<std::uint8_t>(z == 17u || z == 35u || z == 53u || z == 85u);
+    gfn1_halogen_acceptor[static_cast<std::size_t>(atom)] =
+        static_cast<std::uint8_t>(z == 7u || z == 8u || z == 15u || z == 16u);
+  }
+  for (std::int64_t system = 0; system < batch; ++system) {
+    const std::int64_t begin = key.atom_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t end = key.atom_offsets[static_cast<std::size_t>(system + 1)];
+    for (std::int64_t second = begin + 1; second < end; ++second) {
+      const std::int64_t local_second = second - begin;
+      for (std::int64_t first = begin; first < second; ++first) {
+        const std::int64_t local_first = first - begin;
+        const std::int64_t pair = gfn1_d3.pair_offsets()[static_cast<std::size_t>(system)] +
+                                  local_second * (local_second - 1) / 2 + local_first;
+        const std::uint32_t z1 =
+            static_cast<std::uint32_t>(key.atomic_numbers[static_cast<std::size_t>(first)]);
+        const std::uint32_t z2 =
+            static_cast<std::uint32_t>(key.atomic_numbers[static_cast<std::size_t>(second)]);
+        const double rrij =
+            3.0 * parameters::gfn1_d3::kR4R2[z1 - 1u] * parameters::gfn1_d3::kR4R2[z2 - 1u];
+        gfn1_d3_pair_rrij[static_cast<std::size_t>(pair)] = rrij;
+        gfn1_d3_pair_damping_radii[static_cast<std::size_t>(pair)] =
+            parameters::gfn1::kGlobal.dispersion_a1 * std::sqrt(rrij) +
+            parameters::gfn1::kGlobal.dispersion_a2;
+        const std::size_t c6_offset = static_cast<std::size_t>(pair) * kGfn1D3ReferencePairStride;
+        const std::uint32_t n1 = gfn1_d3_reference_counts[static_cast<std::size_t>(first)];
+        const std::uint32_t n2 = gfn1_d3_reference_counts[static_cast<std::size_t>(second)];
+        for (std::uint32_t i = 0; i < n1; ++i) {
+          for (std::uint32_t j = 0; j < n2; ++j) {
+            gfn1_d3_reference_c6[c6_offset + i * kGfn1D3MaximumReferences + j] =
+                parameters::gfn1_d3::reference_c6(z1, i, z2, j);
+          }
+        }
+      }
+    }
+  }
+
+  status = gfn1::make_external_point_charge_plan(
+      basis, es2, points, points == 0 ? nullptr : key.point_offsets.data(), gfn1_external, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  external = {};
+  external.batch_size = gfn1_external.batch_size;
+  external.total_atoms = gfn1_external.total_atoms;
+  external.total_shells = gfn1_external.total_shells;
+  external.total_point_charges = gfn1_external.total_point_charges;
+  external.atom_offsets = gfn1_external.atom_offsets;
+  external.batch_shell_offsets = gfn1_external.batch_shell_offsets;
+  external.point_charge_offsets = gfn1_external.point_charge_offsets;
+  external.shell_to_atom = gfn1_external.shell_to_atom;
+  external.shell_hardness = gfn1_external.shell_hardness;
+
+  periodic_enabled = key.periodic_enabled;
+  if (periodic_enabled) {
+    status =
+        gfn2::make_periodic_embedding_plan(batch, atoms, key.atom_offsets.data(), periodic, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  } else {
+    periodic = {};
+  }
+  status = gfn1::make_scc_driver_plan(
+      gfn1_wavefunction_layout, gfn1_mulliken, es2, gfn1_es3, gfn1_spin, eigensolver, gfn1_mixer,
+      periodic_enabled ? &periodic : nullptr, static_cast<std::uint64_t>(key.maximum_iterations),
+      key.electronic_temperature, key.energy_tolerance, gfn1_driver, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+  const std::size_t atom_count = static_cast<std::size_t>(atoms);
+  const std::size_t shell_count = static_cast<std::size_t>(basis.total_shells);
+  const std::size_t matrix_count = static_cast<std::size_t>(integrals.total_matrix_elements);
+  const std::size_t integral_doubles =
+      (integrals.workspace_size_bytes + sizeof(double) - 1u) / sizeof(double);
+  coordination_numbers.resize(atom_count);
+  overlap.resize(matrix_count);
+  dipole_integrals.clear();
+  quadrupole_integrals.clear();
+  core_hamiltonian.resize(matrix_count);
+  integral_workspace.resize(std::max<std::size_t>(integral_doubles, 1u));
+
+  status = gfn1::evaluate_coordination_cpu(gfn1_coordination, positions.data(),
+                                           coordination_numbers.data(), error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::evaluate_overlap_cpu(basis, integrals, positions.data(), overlap.data(),
+                                      integral_workspace.data(),
+                                      integral_workspace.size() * sizeof(double), error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::evaluate_h0_cpu(basis, integrals, gfn1_h0, positions.data(),
+                                 coordination_numbers.data(), overlap.data(),
+                                 core_hamiltonian.data(), error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+  geometry_pair_data.assign(static_cast<std::size_t>(gfn1_d3.total_pairs()) *
+                                static_cast<std::size_t>(kGfn2GeometryPairDataElements),
+                            0.0);
+  geometry_generations.assign(static_cast<std::size_t>(batch), geometry_generation);
+
+  es2_matrix.resize(static_cast<std::size_t>(es2.total_matrix_elements()));
+  es2_matrix_scratch.resize(es2_matrix.size());
+  es2_shell_scratch.resize(shell_count);
+  es2_batch_scratch.resize(static_cast<std::size_t>(batch));
+  es2_gradient_scratch.resize(3u * atom_count);
+  es2_workspace = {es2_matrix_scratch.data(),   es2.total_matrix_elements(),
+                   es2_shell_scratch.data(),    es2.total_shells(),
+                   es2_batch_scratch.data(),    batch,
+                   es2_gradient_scratch.data(), atoms * 3};
+  status = gfn1::update_es2_geometry_cache_cpu(es2, positions.data(), geometry_generation,
+                                               es2_matrix.data(), es2_matrix.size(), es2_workspace,
+                                               es2_cache, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+  aes2_pairs.clear();
+  aes2_pair_scratch.clear();
+  aes2_potential_scratch.clear();
+  aes2_batch_scratch.clear();
+  aes2_gradient_scratch.clear();
+  aes2_coordination_scratch.clear();
+  d4_elements.clear();
+  d4_references.clear();
+  d4_coordination.clear();
+
+  explicit_point_shell_potential.resize(shell_count);
+  status = gfn1::evaluate_external_point_charge_potential_cpu(
+      gfn1_external, positions.data(), point_positions.empty() ? nullptr : point_positions.data(),
+      point_values.empty() ? nullptr : point_values.data(),
+      point_gammas.empty() ? nullptr : point_gammas.data(), explicit_point_shell_potential.data(),
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+  if (gfn1_wavefunction_storage.allocate(gfn1_wavefunction_layout.workspace_size_bytes) !=
+      cudaSuccess) {
+    error = "failed to allocate pinned host GFN1 wavefunction initialization storage";
+    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  }
+  status =
+      gfn1::bind_wavefunction_view(gfn1_wavefunction_layout, gfn1_wavefunction_storage.get(),
+                                   gfn1_wavefunction_storage.bytes(), gfn1_wavefunction, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = gfn1::initialize_sad_multipole_state(gfn1_wavefunction_layout, gfn1_wavefunction, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  return XTBLOOM_STATUS_SUCCESS;
+}
 
 std::string cuda_error_message(const char* operation, cudaError_t status) {
   std::ostringstream message;
@@ -2770,6 +3274,12 @@ struct InferenceState {
   Gfn2TerminalClassicalEnergyDeviceResults terminal_results{};
   Gfn2TerminalClassicalEnergyDeviceWorkspace terminal_workspace{};
   Gfn2TerminalClassicalEnergyDeviceDiagnostics terminal_diagnostics{};
+  /* GFN1 D3(BJ) and halogen energy are accumulated into the terminal
+   * classical-energy slot after the transactional repulsion publication. The
+   * final inference gate consumes the same terminal diagnostics, so a failed
+   * correction peer can never publish a partial total energy. */
+  Gfn1ClassicalCorrectionDevicePlan gfn1_correction_plan{};
+  Gfn1ClassicalCorrectionDeviceWorkspace gfn1_correction_workspace{};
 
   Gfn2InferencePublicationDevicePlan publication_plan{};
   Gfn2InferencePublicationDeviceInput publication_input{};
@@ -3036,6 +3546,9 @@ struct Gfn2CudaExecutionCache::Impl {
      * only the small FRESH/WARM reset preludes are distinct. */
     RequestExecutionGraphOwner request_execution_graph;
     const std::int32_t* atomic_numbers = nullptr;
+    const double* gfn1_repulsion_sqrt_alpha = nullptr;
+    const double* gfn1_repulsion_effective_charge = nullptr;
+    Gfn1ClassicalCorrectionDevicePlan gfn1_correction_plan{};
     EnergyForceBindings energy_force{};
     NumericalRefreshState numerical{};
     InferenceState inference{};
@@ -3114,8 +3627,9 @@ struct Gfn2CudaExecutionCache::Impl {
     if (!checked_elements(atoms, 3, atom_coordinates) ||
         !checked_elements(numerical.total_point_charges, 3, point_coordinates) ||
         !checked_elements(batch, 3, field_coordinates) ||
-        !checked_elements(matrices, 3, dipole_integrals) ||
-        !checked_elements(matrices, 6, quadrupole_integrals)) {
+        (numerical.multipoles_enabled != 0u && !checked_elements(matrices, 3, dipole_integrals)) ||
+        (numerical.multipoles_enabled != 0u &&
+         !checked_elements(matrices, 6, quadrupole_integrals))) {
       error = "CUDA runtime admission audit extent overflows int64_t";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
@@ -3567,7 +4081,9 @@ struct Gfn2CudaExecutionCache::Impl {
         static_cast<std::int64_t>(candidate.host.periodic_response.size());
     const std::int64_t geometry_pairs = candidate.plan_seed.geometry_batch.total_pairs;
     const std::int64_t es2_elements = candidate.plan_seed.es2_batch.total_matrix_elements;
-    const std::int64_t aes2_pairs = candidate.plan_seed.aes2_batch.total_pairs;
+    const bool multipoles_enabled = !candidate.host.gfn1_enabled;
+    const bool aes2_enabled = !candidate.host.gfn1_enabled;
+    const std::int64_t aes2_pairs = aes2_enabled ? candidate.plan_seed.aes2_batch.total_pairs : 0;
     const std::uint64_t token = candidate.host.plan_token;
     std::int64_t coordinates = 0;
     std::int64_t point_coordinates = 0;
@@ -3632,8 +4148,8 @@ struct Gfn2CudaExecutionCache::Impl {
         !checked_elements(points, 3, point_coordinates) ||
         !checked_elements(geometry_pairs, kGfn2GeometryPairDataElements, geometry_pair_elements) ||
         !checked_elements(aes2_pairs, kGfn2AES2PairDataElements, aes2_elements) ||
-        !checked_elements(matrices, 3, dipole_elements) ||
-        !checked_elements(matrices, 6, quadrupole_elements)) {
+        (multipoles_enabled && !checked_elements(matrices, 3, dipole_elements)) ||
+        (multipoles_enabled && !checked_elements(matrices, 6, quadrupole_elements))) {
       error = "numerical refresh element count overflows int64_t";
       return XTBLOOM_STATUS_ALLOCATION_FAILED;
     }
@@ -4141,6 +4657,8 @@ struct Gfn2CudaExecutionCache::Impl {
         arena_pointer<std::uint8_t>(arena, offset.angular_momenta),
         arena_pointer<double>(arena, offset.primitive_exponents),
         arena_pointer<double>(arena, offset.primitive_coefficients)};
+    binding.plan.integrals.model =
+        candidate.host.gfn1_enabled ? XtbModelFlavor::kGfn1 : XtbModelFlavor::kGfn2;
     binding.plan.h0 = {atoms,
                        shells,
                        shells,
@@ -4153,7 +4671,7 @@ struct Gfn2CudaExecutionCache::Impl {
                        arena_pointer<double>(arena, offset.h0_polynomial),
                        arena_pointer<double>(arena, offset.h0_pair_scale)};
     binding.plan.es2 = candidate.plan_seed.es2_batch;
-    binding.plan.aes2 = candidate.plan_seed.aes2_batch;
+    binding.plan.aes2 = aes2_enabled ? candidate.plan_seed.aes2_batch : Gfn2AES2DeviceBatch{};
     binding.input = {arena_pointer<double>(arena, offset.candidate_positions), coordinates, token};
     binding.activity = {arena_pointer<std::uint8_t>(arena, offset.requested), batch,
                         arena_pointer<std::uint8_t>(arena, offset.output_published), batch, token};
@@ -4167,22 +4685,28 @@ struct Gfn2CudaExecutionCache::Impl {
         token};
     binding.output.overlap = arena_pointer<double>(arena, offset.output_overlap);
     binding.output.overlap_elements = matrices;
-    binding.output.dipole_integrals = arena_pointer<double>(arena, offset.output_dipole);
+    binding.output.dipole_integrals =
+        arena_pointer_if<double>(arena, offset.output_dipole, dipole_elements);
     binding.output.dipole_elements = dipole_elements;
-    binding.output.quadrupole_integrals = arena_pointer<double>(arena, offset.output_quadrupole);
+    binding.output.quadrupole_integrals =
+        arena_pointer_if<double>(arena, offset.output_quadrupole, quadrupole_elements);
     binding.output.quadrupole_elements = quadrupole_elements;
     binding.output.h0 = arena_pointer<double>(arena, offset.output_h0);
     binding.output.h0_elements = matrices;
     binding.output.es2 = {arena_pointer<double>(arena, offset.output_es2), es2_elements, 0u, token};
-    binding.output.aes2 = {arena_pointer_if<double>(arena, offset.output_aes2, aes2_elements),
-                           aes2_elements, 0u, token};
+    binding.output.aes2 = aes2_enabled
+                              ? Gfn2AES2DeviceCache{arena_pointer_if<double>(
+                                                        arena, offset.output_aes2, aes2_elements),
+                                                    aes2_elements, 0u, token}
+                              : Gfn2AES2DeviceCache{};
     binding.output.operator_generations =
         arena_pointer<std::uint64_t>(arena, offset.output_operator_generations);
     binding.output.generation_elements = batch;
     binding.output.plan_token = token;
     const bool pairlist_enabled =
-        candidate.host.d4_enabled ||
-        xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(maximum_system_atoms);
+        !candidate.host.gfn1_enabled &&
+        (candidate.host.d4_enabled ||
+         xtbloom::detail::cuda::gfn2_pairlist_use_sparse_for(maximum_system_atoms));
     const double pairlist_builder_cutoff = candidate.host.d4_enabled
                                                ? kD4PairlistBuilderCutoffBohr
                                                : xtbloom::detail::cuda::kDefaultPairlistCutoffBohr;
@@ -4215,9 +4739,9 @@ struct Gfn2CudaExecutionCache::Impl {
         batch,
         arena_pointer<std::uint32_t>(arena, offset.integral_device_error),
         arena_pointer<std::uint32_t>(arena, offset.es2_device_error),
-        arena_pointer<std::uint32_t>(arena, offset.aes2_system_errors),
-        batch,
-        arena_pointer<std::uint32_t>(arena, offset.aes2_device_error),
+        aes2_enabled ? arena_pointer<std::uint32_t>(arena, offset.aes2_system_errors) : nullptr,
+        aes2_enabled ? batch : 0,
+        aes2_enabled ? arena_pointer<std::uint32_t>(arena, offset.aes2_device_error) : nullptr,
         arena_pointer<std::uint32_t>(arena, offset.preprocessing_stages),
         batch,
         arena_pointer<std::uint32_t>(arena, offset.preprocessing_plan_error),
@@ -4349,24 +4873,26 @@ struct Gfn2CudaExecutionCache::Impl {
             : xtbloom::detail::Gfn2PairListConsumerView{};
     binding.workspace.overlap_candidate = arena_pointer<double>(arena, offset.overlap_candidate);
     binding.workspace.overlap_elements = matrices;
-    binding.workspace.dipole_candidate = arena_pointer<double>(arena, offset.dipole_candidate);
+    binding.workspace.dipole_candidate =
+        arena_pointer_if<double>(arena, offset.dipole_candidate, dipole_elements);
     binding.workspace.dipole_elements = dipole_elements;
     binding.workspace.quadrupole_candidate =
-        arena_pointer<double>(arena, offset.quadrupole_candidate);
+        arena_pointer_if<double>(arena, offset.quadrupole_candidate, quadrupole_elements);
     binding.workspace.quadrupole_elements = quadrupole_elements;
     binding.workspace.h0_candidate = arena_pointer<double>(arena, offset.h0_candidate);
     binding.workspace.h0_elements = matrices;
-    binding.workspace.integrals = {arena_pointer<double>(arena, offset.overlap_scratch),
-                                   matrices,
-                                   arena_pointer<double>(arena, offset.dipole_scratch),
-                                   dipole_elements,
-                                   arena_pointer<double>(arena, offset.quadrupole_scratch),
-                                   quadrupole_elements,
-                                   arena_pointer<double>(arena, offset.h0_scratch),
-                                   matrices,
-                                   arena_pointer<std::uint32_t>(arena, offset.integral_sequence),
-                                   1,
-                                   token};
+    binding.workspace.integrals = {
+        arena_pointer<double>(arena, offset.overlap_scratch),
+        matrices,
+        arena_pointer_if<double>(arena, offset.dipole_scratch, dipole_elements),
+        dipole_elements,
+        arena_pointer_if<double>(arena, offset.quadrupole_scratch, quadrupole_elements),
+        quadrupole_elements,
+        arena_pointer<double>(arena, offset.h0_scratch),
+        matrices,
+        arena_pointer<std::uint32_t>(arena, offset.integral_sequence),
+        1,
+        token};
     binding.workspace.es2_candidate = {arena_pointer<double>(arena, offset.es2_candidate),
                                        es2_elements, 0u, token};
     binding.workspace.es2 = {arena_pointer<double>(arena, offset.es2_scratch),
@@ -4377,28 +4903,36 @@ struct Gfn2CudaExecutionCache::Impl {
                              0,
                              nullptr,
                              0};
-    binding.workspace.aes2_candidate = {
-        arena_pointer_if<double>(arena, offset.aes2_candidate, aes2_elements), aes2_elements, 0u,
-        token};
-    binding.workspace.aes2 = {arena_pointer_if<double>(arena, offset.aes2_scratch, aes2_elements),
-                              aes2_elements,
-                              nullptr,
-                              0,
-                              nullptr,
-                              0,
-                              nullptr,
-                              0,
-                              nullptr,
-                              0,
-                              nullptr,
-                              0};
+    binding.workspace.aes2_candidate =
+        aes2_enabled ? Gfn2AES2DeviceCache{arena_pointer_if<double>(arena, offset.aes2_candidate,
+                                                                    aes2_elements),
+                                           aes2_elements, 0u, token}
+                     : Gfn2AES2DeviceCache{};
+    binding.workspace.aes2 =
+        aes2_enabled ? Gfn2AES2DeviceWorkspace{arena_pointer_if<double>(arena, offset.aes2_scratch,
+                                                                        aes2_elements),
+                                               aes2_elements,
+                                               nullptr,
+                                               0,
+                                               nullptr,
+                                               0,
+                                               nullptr,
+                                               0,
+                                               nullptr,
+                                               0,
+                                               nullptr,
+                                               0}
+                     : Gfn2AES2DeviceWorkspace{};
     binding.workspace.plan_token = token;
     binding.geometry_epoch = {arena_pointer<std::uint64_t>(arena, offset.geometry_epoch), 1, token};
     binding.plan_token = token;
 
     const auto seal = seal_gfn2_preprocessing_binding_cuda(binding);
     if (!seal.success()) {
-      error = "CUDA runtime preprocessing binding rejected its fixed arena projection";
+      error = "CUDA runtime preprocessing binding rejected its fixed arena projection (error=" +
+              std::to_string(static_cast<std::uint32_t>(seal.error)) +
+              ", field=" + std::to_string(static_cast<std::uint32_t>(seal.field)) +
+              ", index=" + std::to_string(seal.index) + ")";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
@@ -4413,6 +4947,8 @@ struct Gfn2CudaExecutionCache::Impl {
     device.geometry_pair_elements = geometry_pair_elements;
     device.es2_elements = es2_elements;
     device.aes2_elements = aes2_elements;
+    device.multipoles_enabled = multipoles_enabled ? 1u : 0u;
+    device.aes2_enabled = aes2_enabled ? 1u : 0u;
     device.d4_enabled = candidate.host.d4_enabled ? 1u : 0u;
     device.point_enabled = points != 0 ? 1u : 0u;
     device.periodic_enabled = candidate.host.periodic_enabled ? 1u : 0u;
@@ -4485,12 +5021,16 @@ struct Gfn2CudaExecutionCache::Impl {
     device.public_coordination =
         const_cast<double*>(candidate.plan_seed.geometry_cache.coordination_numbers);
     device.public_overlap = const_cast<double*>(candidate.input_seed.hamiltonian.overlap);
-    device.public_dipole = const_cast<double*>(candidate.input_seed.hamiltonian.dipole_integrals);
+    device.public_dipole =
+        multipoles_enabled ? const_cast<double*>(candidate.input_seed.hamiltonian.dipole_integrals)
+                           : nullptr;
     device.public_quadrupole =
-        const_cast<double*>(candidate.input_seed.hamiltonian.quadrupole_integrals);
+        multipoles_enabled
+            ? const_cast<double*>(candidate.input_seed.hamiltonian.quadrupole_integrals)
+            : nullptr;
     device.public_h0 = const_cast<double*>(candidate.input_seed.hamiltonian.h0);
     device.public_es2 = candidate.plan_seed.es2_cache.coulomb_matrix;
-    device.public_aes2 = candidate.plan_seed.aes2_cache.pair_data;
+    device.public_aes2 = aes2_enabled ? candidate.plan_seed.aes2_cache.pair_data : nullptr;
     device.preprocessing_plan_error = binding.diagnostics.plan_error;
     device.geometry_epoch = binding.geometry_epoch.value;
 
@@ -4624,7 +5164,7 @@ struct Gfn2CudaExecutionCache::Impl {
     };
     append_provenance(Gfn2SccStageId::kGeometry);
     append_provenance(Gfn2SccStageId::kES2Potential);
-    append_provenance(Gfn2SccStageId::kAES2Potential);
+    if (aes2_enabled) append_provenance(Gfn2SccStageId::kAES2Potential);
     if (candidate.host.d4_enabled) append_provenance(Gfn2SccStageId::kD4Potential);
     if (points != 0) append_provenance(Gfn2SccStageId::kExplicitPointChargePotential);
     if (candidate.host.periodic_enabled) append_provenance(Gfn2SccStageId::kPeriodicPotential);
@@ -4659,12 +5199,14 @@ struct Gfn2CudaExecutionCache::Impl {
     std::int64_t quadrupole_matrix_elements = 0;
     std::int64_t quadrupole_elements = 0;
     std::int64_t d4_weight_elements = 0;
+    std::int64_t gfn1_weight_elements = 0;
     if (!checked_elements(atoms, 3, coordinates) ||
         !checked_elements(points, 3, point_coordinates) ||
         !checked_elements(matrices, 3, dipole_matrix_elements) ||
         !checked_elements(matrices, 6, quadrupole_matrix_elements) ||
         !checked_elements(atoms, 6, quadrupole_elements) ||
-        !checked_elements(atoms, kGfn2D4MaximumReferences, d4_weight_elements)) {
+        !checked_elements(atoms, kGfn2D4MaximumReferences, d4_weight_elements) ||
+        !checked_elements(atoms, kGfn1D3MaximumReferences, gfn1_weight_elements)) {
       error = "force descriptor element count overflows int64_t";
       return XTBLOOM_STATUS_ALLOCATION_FAILED;
     }
@@ -4674,7 +5216,13 @@ struct Gfn2CudaExecutionCache::Impl {
                               static_cast<std::uint32_t>(XTBLOOM_COMPUTE_DIPOLE_MOMENTS))) != 0u;
     const bool explicit_points = points != 0;
     const bool d4_enabled = candidate.host.d4_enabled;
+    const bool gfn1_enabled = candidate.host.gfn1_enabled;
     const bool periodic_enabled = candidate.host.periodic_enabled;
+    const std::int64_t atomic_dipole_elements = gfn1_enabled ? 0 : coordinates;
+    const std::int64_t atomic_quadrupole_elements = gfn1_enabled ? 0 : quadrupole_elements;
+    const std::int64_t force_dipole_matrix_elements = gfn1_enabled ? 0 : dipole_matrix_elements;
+    const std::int64_t force_quadrupole_matrix_elements =
+        gfn1_enabled ? 0 : quadrupole_matrix_elements;
     const std::uint64_t token = candidate.host.plan_token;
 
     struct ImmutableOffsets {
@@ -4691,6 +5239,17 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t h0_coordination_scale = 0u;
       std::size_t h0_polynomial = 0u;
       std::size_t h0_pair_scale = 0u;
+      std::size_t gfn1_repulsion_sqrt_alpha = 0u;
+      std::size_t gfn1_repulsion_effective_charge = 0u;
+      std::size_t gfn1_reference_counts = 0u;
+      std::size_t gfn1_reference_cn = 0u;
+      std::size_t gfn1_reference_c6 = 0u;
+      std::size_t gfn1_pair_rrij = 0u;
+      std::size_t gfn1_pair_damping_radii = 0u;
+      std::size_t gfn1_halogen_scaled_radii = 0u;
+      std::size_t gfn1_halogen_bond_strength = 0u;
+      std::size_t gfn1_halogen_donor = 0u;
+      std::size_t gfn1_halogen_acceptor = 0u;
     } immutable;
 
     ArenaLayout immutable_layout;
@@ -4715,6 +5274,22 @@ struct Gfn2CudaExecutionCache::Impl {
       immutable.h0_polynomial = immutable_layout.append<double>(shells);
       immutable.h0_pair_scale =
           immutable_layout.append<double>(candidate.host.h0.shell_pair_offsets.back());
+    }
+    if (gfn1_enabled) {
+      immutable.gfn1_repulsion_sqrt_alpha = immutable_layout.append<double>(atoms);
+      immutable.gfn1_repulsion_effective_charge = immutable_layout.append<double>(atoms);
+      immutable.gfn1_reference_counts = immutable_layout.append<std::uint8_t>(atoms);
+      immutable.gfn1_reference_cn = immutable_layout.append<double>(gfn1_weight_elements);
+      immutable.gfn1_reference_c6 = immutable_layout.append<double>(
+          static_cast<std::int64_t>(candidate.host.gfn1_d3_reference_c6.size()));
+      immutable.gfn1_pair_rrij =
+          immutable_layout.append<double>(candidate.host.gfn1_d3.total_pairs());
+      immutable.gfn1_pair_damping_radii =
+          immutable_layout.append<double>(candidate.host.gfn1_d3.total_pairs());
+      immutable.gfn1_halogen_scaled_radii = immutable_layout.append<double>(atoms);
+      immutable.gfn1_halogen_bond_strength = immutable_layout.append<double>(atoms);
+      immutable.gfn1_halogen_donor = immutable_layout.append<std::uint8_t>(atoms);
+      immutable.gfn1_halogen_acceptor = immutable_layout.append<std::uint8_t>(atoms);
     }
     if (!immutable_layout.valid()) {
       error = "force immutable arena layout overflows size_t";
@@ -4753,6 +5328,28 @@ struct Gfn2CudaExecutionCache::Impl {
       upload_immutable(immutable.h0_coordination_scale, candidate.host.h0.shell_coordination_scale);
       upload_immutable(immutable.h0_polynomial, candidate.host.h0.shell_polynomial);
       upload_immutable(immutable.h0_pair_scale, candidate.host.h0.shell_pair_scale);
+    }
+    if (gfn1_enabled) {
+      const auto upload_immutable = [&](std::size_t offset, const auto& source) {
+        if (cuda_status != cudaSuccess) return;
+        cuda_status = upload(offset, source.data(), source.size() * sizeof(source[0]));
+      };
+      upload_immutable(immutable.gfn1_repulsion_sqrt_alpha,
+                       candidate.host.gfn1_repulsion.sqrt_alpha);
+      upload_immutable(immutable.gfn1_repulsion_effective_charge,
+                       candidate.host.gfn1_repulsion.effective_charge);
+      upload_immutable(immutable.gfn1_reference_counts, candidate.host.gfn1_d3_reference_counts);
+      upload_immutable(immutable.gfn1_reference_cn, candidate.host.gfn1_d3_reference_cn);
+      upload_immutable(immutable.gfn1_reference_c6, candidate.host.gfn1_d3_reference_c6);
+      upload_immutable(immutable.gfn1_pair_rrij, candidate.host.gfn1_d3_pair_rrij);
+      upload_immutable(immutable.gfn1_pair_damping_radii,
+                       candidate.host.gfn1_d3_pair_damping_radii);
+      upload_immutable(immutable.gfn1_halogen_scaled_radii,
+                       candidate.host.gfn1_halogen_scaled_radii);
+      upload_immutable(immutable.gfn1_halogen_bond_strength,
+                       candidate.host.gfn1_halogen_bond_strength);
+      upload_immutable(immutable.gfn1_halogen_donor, candidate.host.gfn1_halogen_donor);
+      upload_immutable(immutable.gfn1_halogen_acceptor, candidate.host.gfn1_halogen_acceptor);
     }
     if (cuda_status != cudaSuccess) {
       error = cuda_error_message("force immutable upload", cuda_status);
@@ -4910,6 +5507,12 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t classical_d4_batch = 0u;
       std::size_t classical_d4_gradient = 0u;
       std::size_t classical_geometry_gradient = 0u;
+      std::size_t gfn1_weights = 0u;
+      std::size_t gfn1_weight_cn_derivatives = 0u;
+      std::size_t gfn1_coordination_adjoints = 0u;
+      std::size_t gfn1_axis_neighbors = 0u;
+      std::size_t gfn1_batch_scratch = 0u;
+      std::size_t gfn1_gradient_scratch = 0u;
       std::size_t external_qm_scratch = 0u;
       std::size_t external_point_scratch = 0u;
       std::size_t composition_qm_scratch = 0u;
@@ -4939,31 +5542,34 @@ struct Gfn2CudaExecutionCache::Impl {
       execution.stationary_spin_density = execution_layout.append<double>(matrices);
       execution.stationary_shell_charges = execution_layout.append<double>(shells);
       execution.stationary_atomic_charges = execution_layout.append<double>(atoms);
-      execution.stationary_atomic_dipoles = execution_layout.append<double>(coordinates);
+      execution.stationary_atomic_dipoles = execution_layout.append<double>(atomic_dipole_elements);
       execution.stationary_atomic_quadrupoles =
-          execution_layout.append<double>(quadrupole_elements);
+          execution_layout.append<double>(atomic_quadrupole_elements);
       execution.stationary_spin_shell_potential = execution_layout.append<double>(shells);
       execution.post_complete_shell = execution_layout.append<double>(shells);
       execution.post_complete_atom = execution_layout.append<double>(atoms);
-      execution.post_complete_dipole = execution_layout.append<double>(coordinates);
-      execution.post_complete_quadrupole = execution_layout.append<double>(quadrupole_elements);
+      execution.post_complete_dipole = execution_layout.append<double>(atomic_dipole_elements);
+      execution.post_complete_quadrupole =
+          execution_layout.append<double>(atomic_quadrupole_elements);
       execution.post_shell_scalar = execution_layout.append<double>(shells);
       execution.post_es2_shell = execution_layout.append<double>(shells);
       execution.post_es3_shell = execution_layout.append<double>(shells);
-      execution.post_aes2_atom = execution_layout.append<double>(atoms);
-      execution.post_aes2_dipole = execution_layout.append<double>(coordinates);
-      execution.post_aes2_quadrupole = execution_layout.append<double>(quadrupole_elements);
+      execution.post_aes2_atom = execution_layout.append<double>(gfn1_enabled ? 0 : atoms);
+      execution.post_aes2_dipole = execution_layout.append<double>(atomic_dipole_elements);
+      execution.post_aes2_quadrupole = execution_layout.append<double>(atomic_quadrupole_elements);
       execution.post_d4_atom = execution_layout.append<double>(d4_enabled ? atoms : 0);
       execution.post_periodic_atom = execution_layout.append<double>(periodic_enabled ? atoms : 0);
       execution.post_staged_shell = execution_layout.append<double>(shells);
       execution.post_staged_atom = execution_layout.append<double>(atoms);
-      execution.post_staged_dipole = execution_layout.append<double>(coordinates);
-      execution.post_staged_quadrupole = execution_layout.append<double>(quadrupole_elements);
+      execution.post_staged_dipole = execution_layout.append<double>(atomic_dipole_elements);
+      execution.post_staged_quadrupole =
+          execution_layout.append<double>(atomic_quadrupole_elements);
       execution.post_staged_shell_scalar = execution_layout.append<double>(shells);
       execution.overlap_adjoint = execution_layout.append<double>(matrices);
       execution.coordination_adjoint = execution_layout.append<double>(atoms);
-      execution.dipole_adjoint = execution_layout.append<double>(dipole_matrix_elements);
-      execution.quadrupole_adjoint = execution_layout.append<double>(quadrupole_matrix_elements);
+      execution.dipole_adjoint = execution_layout.append<double>(force_dipole_matrix_elements);
+      execution.quadrupole_adjoint =
+          execution_layout.append<double>(force_quadrupole_matrix_elements);
       execution.electronic_gradient = execution_layout.append<double>(coordinates);
       execution.classical_force = execution_layout.append<double>(coordinates);
       execution.explicit_qm_force =
@@ -4972,8 +5578,8 @@ struct Gfn2CudaExecutionCache::Impl {
           execution_layout.append<double>(explicit_points ? point_coordinates : 0);
 
       execution.post_es2_shell_scratch = execution_layout.append<double>(shells);
-      execution.post_aes2_potential_scratch =
-          execution_layout.append<double>(candidate.host.aes2.potential_scratch_elements());
+      execution.post_aes2_potential_scratch = execution_layout.append<double>(
+          gfn1_enabled ? 0 : candidate.host.aes2.potential_scratch_elements());
       execution.post_d4_weights =
           execution_layout.append<double>(d4_enabled ? d4_weight_elements : 0);
       execution.post_d4_weight_cn =
@@ -4990,17 +5596,18 @@ struct Gfn2CudaExecutionCache::Impl {
           execution_layout.append<double>(periodic_enabled ? atoms : 0);
       execution.post_composition_shell = execution_layout.append<double>(shells);
       execution.post_composition_atom = execution_layout.append<double>(atoms);
-      execution.post_composition_dipole = execution_layout.append<double>(coordinates);
-      execution.post_composition_quadrupole = execution_layout.append<double>(quadrupole_elements);
+      execution.post_composition_dipole = execution_layout.append<double>(atomic_dipole_elements);
+      execution.post_composition_quadrupole =
+          execution_layout.append<double>(atomic_quadrupole_elements);
       execution.post_bridge_shell = execution_layout.append<double>(shells);
       execution.h0_overlap_scratch = execution_layout.append<double>(matrices);
       execution.h0_coordination_scratch = execution_layout.append<double>(atoms);
       execution.h0_gradient_scratch = execution_layout.append<double>(coordinates);
       execution.hamiltonian_overlap_scratch = execution_layout.append<double>(matrices);
       execution.hamiltonian_dipole_scratch =
-          execution_layout.append<double>(dipole_matrix_elements);
+          execution_layout.append<double>(force_dipole_matrix_elements);
       execution.hamiltonian_quadrupole_scratch =
-          execution_layout.append<double>(quadrupole_matrix_elements);
+          execution_layout.append<double>(force_quadrupole_matrix_elements);
       execution.integral_gradient_scratch = execution_layout.append<double>(coordinates);
       execution.coordination_gradient_scratch = execution_layout.append<double>(coordinates);
       execution.classical_gradient_scratch = execution_layout.append<double>(coordinates);
@@ -5008,8 +5615,10 @@ struct Gfn2CudaExecutionCache::Impl {
       execution.sparse_gradient_scratch = execution_layout.append<double>(coordinates);
       execution.sparse_sequence = execution_layout.append<std::uint32_t>(1);
       execution.classical_coordination_adjoint = execution_layout.append<double>(atoms);
-      execution.classical_aes2_gradient = execution_layout.append<double>(coordinates);
-      execution.classical_aes2_coordination = execution_layout.append<double>(atoms);
+      execution.classical_aes2_gradient =
+          execution_layout.append<double>(gfn1_enabled ? 0 : coordinates);
+      execution.classical_aes2_coordination =
+          execution_layout.append<double>(gfn1_enabled ? 0 : atoms);
       execution.classical_d4_weights =
           execution_layout.append<double>(d4_enabled ? d4_weight_elements : 0);
       execution.classical_d4_weight_cn =
@@ -5022,6 +5631,17 @@ struct Gfn2CudaExecutionCache::Impl {
       execution.classical_d4_gradient =
           execution_layout.append<double>(d4_enabled ? coordinates : 0);
       execution.classical_geometry_gradient = execution_layout.append<double>(coordinates);
+      execution.gfn1_weights =
+          execution_layout.append<double>(gfn1_enabled ? gfn1_weight_elements : 0);
+      execution.gfn1_weight_cn_derivatives =
+          execution_layout.append<double>(gfn1_enabled ? gfn1_weight_elements : 0);
+      execution.gfn1_coordination_adjoints =
+          execution_layout.append<double>(gfn1_enabled ? atoms : 0);
+      execution.gfn1_axis_neighbors =
+          execution_layout.append<std::int64_t>(gfn1_enabled ? atoms : 0);
+      execution.gfn1_batch_scratch = execution_layout.append<double>(gfn1_enabled ? batch : 0);
+      execution.gfn1_gradient_scratch =
+          execution_layout.append<double>(gfn1_enabled ? coordinates : 0);
       execution.external_qm_scratch =
           execution_layout.append<double>(explicit_points ? coordinates : 0);
       execution.external_point_scratch =
@@ -5050,6 +5670,45 @@ struct Gfn2CudaExecutionCache::Impl {
     candidate.atomic_numbers =
         force_mode ? arena_pointer<std::int32_t>(immutable_arena, immutable.atomic_numbers)
                    : nullptr;
+    if (gfn1_enabled) {
+      candidate.gfn1_repulsion_sqrt_alpha =
+          arena_pointer<double>(immutable_arena, immutable.gfn1_repulsion_sqrt_alpha);
+      candidate.gfn1_repulsion_effective_charge =
+          arena_pointer<double>(immutable_arena, immutable.gfn1_repulsion_effective_charge);
+      const std::int64_t gfn1_pairs = candidate.host.gfn1_d3.total_pairs();
+      candidate.gfn1_correction_plan = {
+          batch,
+          atoms,
+          gfn1_pairs,
+          token,
+          candidate.device_topology.atom_offsets,
+          candidate.plan_seed.geometry_batch.pair_offsets,
+          candidate.plan_seed.geometry_batch.covalent_radii,
+          arena_pointer<std::uint8_t>(immutable_arena, immutable.gfn1_reference_counts),
+          arena_pointer<double>(immutable_arena, immutable.gfn1_reference_cn),
+          arena_pointer_if<double>(immutable_arena, immutable.gfn1_reference_c6,
+                                   gfn1_pairs * kGfn1D3ReferencePairStride),
+          arena_pointer_if<double>(immutable_arena, immutable.gfn1_pair_rrij, gfn1_pairs),
+          arena_pointer_if<double>(immutable_arena, immutable.gfn1_pair_damping_radii, gfn1_pairs),
+          arena_pointer<double>(immutable_arena, immutable.gfn1_halogen_scaled_radii),
+          arena_pointer<double>(immutable_arena, immutable.gfn1_halogen_bond_strength),
+          arena_pointer<std::uint8_t>(immutable_arena, immutable.gfn1_halogen_donor),
+          arena_pointer<std::uint8_t>(immutable_arena, immutable.gfn1_halogen_acceptor),
+          XtbModelFlavor::kGfn1,
+          batch + 1,
+          batch + 1,
+          atoms,
+          atoms,
+          gfn1_weight_elements,
+          gfn1_pairs * kGfn1D3ReferencePairStride,
+          gfn1_pairs,
+          gfn1_pairs,
+          atoms,
+          atoms,
+          atoms,
+          atoms,
+      };
+    }
     auto* const repulsion = arena_pointer<double>(execution_arena, execution.repulsion);
     auto* const d4_atm =
         arena_pointer_if<double>(execution_arena, execution.d4_atm, d4_enabled ? batch : 0);
@@ -5165,6 +5824,8 @@ struct Gfn2CudaExecutionCache::Impl {
           arena_pointer<std::uint8_t>(immutable_arena, immutable.angular_momenta),
           arena_pointer<double>(immutable_arena, immutable.primitive_exponents),
           arena_pointer<double>(immutable_arena, immutable.primitive_coefficients)};
+      binding.plan.integral_batch.model =
+          gfn1_enabled ? XtbModelFlavor::kGfn1 : XtbModelFlavor::kGfn2;
       binding.plan.h0_plan = {
           atoms,
           shells,
@@ -5226,8 +5887,10 @@ struct Gfn2CudaExecutionCache::Impl {
 
       std::uint32_t classical_components =
           static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kRepulsion) |
-          static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kES2) |
-          static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kAES2);
+          static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kES2);
+      if (!gfn1_enabled) {
+        classical_components |= static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kAES2);
+      }
       if (d4_enabled) {
         classical_components |=
             static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4TwoBody) |
@@ -5258,6 +5921,14 @@ struct Gfn2CudaExecutionCache::Impl {
                                      classical_d4_batch,
                                      candidate.plan_seed.d4_parameters,
                                      candidate.numerical.d4_cache};
+      binding.plan.classical_plan.model =
+          gfn1_enabled ? XtbModelFlavor::kGfn1 : XtbModelFlavor::kGfn2;
+      binding.plan.classical_plan.repulsion_sqrt_alpha = candidate.gfn1_repulsion_sqrt_alpha;
+      binding.plan.classical_plan.repulsion_effective_charge =
+          candidate.gfn1_repulsion_effective_charge;
+      binding.plan.classical_plan.gfn1_correction = candidate.gfn1_correction_plan;
+      binding.plan.classical_plan.repulsion_sqrt_alpha_elements = gfn1_enabled ? atoms : 0;
+      binding.plan.classical_plan.repulsion_effective_charge_elements = gfn1_enabled ? atoms : 0;
       std::uint32_t composition_components =
           static_cast<std::uint32_t>(Gfn2ForceCompositionComponent::kElectronicGradient) |
           static_cast<std::uint32_t>(Gfn2ForceCompositionComponent::kClassicalForce);
@@ -5297,10 +5968,10 @@ struct Gfn2CudaExecutionCache::Impl {
           arena_pointer<double>(execution_arena, execution.stationary_shell_charges);
       auto* const stationary_atomic_charges =
           arena_pointer<double>(execution_arena, execution.stationary_atomic_charges);
-      auto* const stationary_atomic_dipoles =
-          arena_pointer<double>(execution_arena, execution.stationary_atomic_dipoles);
-      auto* const stationary_atomic_quadrupoles =
-          arena_pointer<double>(execution_arena, execution.stationary_atomic_quadrupoles);
+      auto* const stationary_atomic_dipoles = arena_pointer_if<double>(
+          execution_arena, execution.stationary_atomic_dipoles, atomic_dipole_elements);
+      auto* const stationary_atomic_quadrupoles = arena_pointer_if<double>(
+          execution_arena, execution.stationary_atomic_quadrupoles, atomic_quadrupole_elements);
       auto* const stationary_spin_shell_potential =
           arena_pointer<double>(execution_arena, execution.stationary_spin_shell_potential);
       const Gfn2SccPotentialDeviceTopologyMultipoles physical{stationary_shell_charges,
@@ -5308,14 +5979,15 @@ struct Gfn2CudaExecutionCache::Impl {
                                                               stationary_atomic_charges,
                                                               atoms,
                                                               stationary_atomic_dipoles,
-                                                              coordinates,
+                                                              atomic_dipole_elements,
                                                               stationary_atomic_quadrupoles,
-                                                              quadrupole_elements,
+                                                              atomic_quadrupole_elements,
                                                               token};
 
       auto& projection = binding.stationary_projection;
       projection = {};
       projection.enabled = 1u;
+      projection.multipoles_enabled = gfn1_enabled ? 0u : 1u;
       projection.batch_size = batch;
       projection.total_atoms = atoms;
       projection.total_shells = shells;
@@ -5365,6 +6037,10 @@ struct Gfn2CudaExecutionCache::Impl {
           token};
       binding.input.post_scc_potential.electric_field_potentials =
           candidate.numerical.field_potential_view;
+      if (gfn1_enabled) {
+        binding.input.post_scc_potential.electric_field_potentials.dipole = nullptr;
+        binding.input.post_scc_potential.electric_field_potentials.dipole_elements = 0;
+      }
       binding.input.h0 = {positions,
                           coordinates,
                           candidate.plan_seed.geometry_cache.coordination_numbers,
@@ -5381,10 +6057,10 @@ struct Gfn2CudaExecutionCache::Impl {
           arena_pointer<double>(execution_arena, execution.post_complete_shell);
       auto* const post_complete_atom =
           arena_pointer<double>(execution_arena, execution.post_complete_atom);
-      auto* const post_complete_dipole =
-          arena_pointer<double>(execution_arena, execution.post_complete_dipole);
-      auto* const post_complete_quadrupole =
-          arena_pointer<double>(execution_arena, execution.post_complete_quadrupole);
+      auto* const post_complete_dipole = arena_pointer_if<double>(
+          execution_arena, execution.post_complete_dipole, atomic_dipole_elements);
+      auto* const post_complete_quadrupole = arena_pointer_if<double>(
+          execution_arena, execution.post_complete_quadrupole, atomic_quadrupole_elements);
       auto* const post_shell_scalar =
           arena_pointer<double>(execution_arena, execution.post_shell_scalar);
       binding.input.hamiltonian = {stationary_density,
@@ -5392,9 +6068,9 @@ struct Gfn2CudaExecutionCache::Impl {
                                    post_shell_scalar,
                                    shells,
                                    post_complete_dipole,
-                                   coordinates,
+                                   atomic_dipole_elements,
                                    post_complete_quadrupole,
-                                   quadrupole_elements,
+                                   atomic_quadrupole_elements,
                                    token};
       binding.input.hamiltonian.spin_density = stationary_spin_density;
       binding.input.hamiltonian.spin_density_elements = matrices;
@@ -5438,7 +6114,7 @@ struct Gfn2CudaExecutionCache::Impl {
 
       binding.intermediates.post_scc_potential = {
           {post_complete_shell, shells, post_complete_atom, atoms, post_complete_dipole,
-           coordinates, post_complete_quadrupole, quadrupole_elements, token},
+           atomic_dipole_elements, post_complete_quadrupole, atomic_quadrupole_elements, token},
           post_shell_scalar,
           shells,
           token};
@@ -5449,15 +6125,15 @@ struct Gfn2CudaExecutionCache::Impl {
       post_intermediates.es3_shell =
           arena_pointer<double>(execution_arena, execution.post_es3_shell);
       post_intermediates.es3_shell_elements = shells;
-      post_intermediates.aes2_atomic =
-          arena_pointer<double>(execution_arena, execution.post_aes2_atom);
-      post_intermediates.aes2_atomic_elements = atoms;
-      post_intermediates.aes2_dipole =
-          arena_pointer<double>(execution_arena, execution.post_aes2_dipole);
-      post_intermediates.aes2_dipole_elements = coordinates;
-      post_intermediates.aes2_quadrupole =
-          arena_pointer<double>(execution_arena, execution.post_aes2_quadrupole);
-      post_intermediates.aes2_quadrupole_elements = quadrupole_elements;
+      post_intermediates.aes2_atomic = arena_pointer_if<double>(
+          execution_arena, execution.post_aes2_atom, gfn1_enabled ? 0 : atoms);
+      post_intermediates.aes2_atomic_elements = gfn1_enabled ? 0 : atoms;
+      post_intermediates.aes2_dipole = arena_pointer_if<double>(
+          execution_arena, execution.post_aes2_dipole, atomic_dipole_elements);
+      post_intermediates.aes2_dipole_elements = atomic_dipole_elements;
+      post_intermediates.aes2_quadrupole = arena_pointer_if<double>(
+          execution_arena, execution.post_aes2_quadrupole, atomic_quadrupole_elements);
+      post_intermediates.aes2_quadrupole_elements = atomic_quadrupole_elements;
       post_intermediates.d4_atomic =
           arena_pointer_if<double>(execution_arena, execution.post_d4_atom, d4_enabled ? atoms : 0);
       post_intermediates.d4_atomic_elements = d4_enabled ? atoms : 0;
@@ -5469,10 +6145,12 @@ struct Gfn2CudaExecutionCache::Impl {
           shells,
           arena_pointer<double>(execution_arena, execution.post_staged_atom),
           atoms,
-          arena_pointer<double>(execution_arena, execution.post_staged_dipole),
-          coordinates,
-          arena_pointer<double>(execution_arena, execution.post_staged_quadrupole),
-          quadrupole_elements,
+          arena_pointer_if<double>(execution_arena, execution.post_staged_dipole,
+                                   atomic_dipole_elements),
+          atomic_dipole_elements,
+          arena_pointer_if<double>(execution_arena, execution.post_staged_quadrupole,
+                                   atomic_quadrupole_elements),
+          atomic_quadrupole_elements,
           token};
       post_intermediates.shell_scalar =
           arena_pointer<double>(execution_arena, execution.post_staged_shell_scalar);
@@ -5494,10 +6172,12 @@ struct Gfn2CudaExecutionCache::Impl {
       binding.intermediates.hamiltonian = {
           overlap_adjoint,
           matrices,
-          arena_pointer<double>(execution_arena, execution.dipole_adjoint),
-          dipole_matrix_elements,
-          arena_pointer<double>(execution_arena, execution.quadrupole_adjoint),
-          quadrupole_matrix_elements,
+          arena_pointer_if<double>(execution_arena, execution.dipole_adjoint,
+                                   force_dipole_matrix_elements),
+          force_dipole_matrix_elements,
+          arena_pointer_if<double>(execution_arena, execution.quadrupole_adjoint,
+                                   force_quadrupole_matrix_elements),
+          force_quadrupole_matrix_elements,
           token};
       binding.intermediates.classical = {
           arena_pointer<double>(execution_arena, execution.classical_force), coordinates, token};
@@ -5514,11 +6194,13 @@ struct Gfn2CudaExecutionCache::Impl {
       post_workspace.es2.shell_scratch =
           arena_pointer<double>(execution_arena, execution.post_es2_shell_scratch);
       post_workspace.es2.shell_elements = shells;
-      post_workspace.aes2.potential_scratch =
-          arena_pointer<double>(execution_arena, execution.post_aes2_potential_scratch);
-      post_workspace.aes2.potential_elements = candidate.host.aes2.potential_scratch_elements();
-      post_workspace.aes2.scc_peer_error_scratch = device_error(kPostAes2PeerError);
-      post_workspace.aes2.scc_peer_error_elements = 1;
+      if (!gfn1_enabled) {
+        post_workspace.aes2.potential_scratch =
+            arena_pointer<double>(execution_arena, execution.post_aes2_potential_scratch);
+        post_workspace.aes2.potential_elements = candidate.host.aes2.potential_scratch_elements();
+        post_workspace.aes2.scc_peer_error_scratch = device_error(kPostAes2PeerError);
+        post_workspace.aes2.scc_peer_error_elements = 1;
+      }
       if (d4_enabled) {
         post_workspace.d4 = {
             arena_pointer<double>(execution_arena, execution.post_d4_weights),
@@ -5549,10 +6231,12 @@ struct Gfn2CudaExecutionCache::Impl {
           shells,
           arena_pointer<double>(execution_arena, execution.post_composition_atom),
           atoms,
-          arena_pointer<double>(execution_arena, execution.post_composition_dipole),
-          coordinates,
-          arena_pointer<double>(execution_arena, execution.post_composition_quadrupole),
-          quadrupole_elements,
+          arena_pointer_if<double>(execution_arena, execution.post_composition_dipole,
+                                   atomic_dipole_elements),
+          atomic_dipole_elements,
+          arena_pointer_if<double>(execution_arena, execution.post_composition_quadrupole,
+                                   atomic_quadrupole_elements),
+          atomic_quadrupole_elements,
           sequence_pool + kPostCompositionSequence,
           1,
           token};
@@ -5582,10 +6266,12 @@ struct Gfn2CudaExecutionCache::Impl {
       binding.workspace.hamiltonian = {
           arena_pointer<double>(execution_arena, execution.hamiltonian_overlap_scratch),
           matrices,
-          arena_pointer<double>(execution_arena, execution.hamiltonian_dipole_scratch),
-          dipole_matrix_elements,
-          arena_pointer<double>(execution_arena, execution.hamiltonian_quadrupole_scratch),
-          quadrupole_matrix_elements,
+          arena_pointer_if<double>(execution_arena, execution.hamiltonian_dipole_scratch,
+                                   force_dipole_matrix_elements),
+          force_dipole_matrix_elements,
+          arena_pointer_if<double>(execution_arena, execution.hamiltonian_quadrupole_scratch,
+                                   force_quadrupole_matrix_elements),
+          force_quadrupole_matrix_elements,
           sequence_pool + kHamiltonianSequence,
           1,
           token};
@@ -5608,12 +6294,14 @@ struct Gfn2CudaExecutionCache::Impl {
       Gfn2AES2DeviceWorkspace classical_aes2{};
       /* Only the AES2 reverse pass is used here. Assign by name because the
        * update/potential scratch fields precede the gradient fields. */
-      classical_aes2.gradient_scratch =
-          arena_pointer<double>(execution_arena, execution.classical_aes2_gradient);
-      classical_aes2.gradient_elements = coordinates;
-      classical_aes2.coordination_scratch =
-          arena_pointer<double>(execution_arena, execution.classical_aes2_coordination);
-      classical_aes2.coordination_elements = atoms;
+      if (!gfn1_enabled) {
+        classical_aes2.gradient_scratch =
+            arena_pointer<double>(execution_arena, execution.classical_aes2_gradient);
+        classical_aes2.gradient_elements = coordinates;
+        classical_aes2.coordination_scratch =
+            arena_pointer<double>(execution_arena, execution.classical_aes2_coordination);
+        classical_aes2.coordination_elements = atoms;
+      }
       Gfn2D4DeviceWorkspace classical_d4{};
       if (d4_enabled) {
         classical_d4 = {
@@ -5659,7 +6347,25 @@ struct Gfn2CudaExecutionCache::Impl {
           classical_aes2,
           classical_d4,
           classical_geometry,
-          token};
+          token,
+          {}};
+      if (gfn1_enabled) {
+        binding.workspace.classical.gfn1_correction = {
+            arena_pointer<double>(execution_arena, execution.gfn1_weights),
+            arena_pointer<double>(execution_arena, execution.gfn1_weight_cn_derivatives),
+            arena_pointer<double>(execution_arena, execution.gfn1_coordination_adjoints),
+            arena_pointer<std::int64_t>(execution_arena, execution.gfn1_axis_neighbors),
+            arena_pointer<double>(execution_arena, execution.gfn1_batch_scratch),
+            arena_pointer<double>(execution_arena, execution.gfn1_gradient_scratch),
+            token,
+            gfn1_weight_elements,
+            gfn1_weight_elements,
+            atoms,
+            atoms,
+            batch,
+            coordinates,
+        };
+      }
       binding.workspace.external_point_charge = {
           arena_pointer_if<double>(execution_arena, execution.external_qm_scratch,
                                    explicit_points ? coordinates : 0),
@@ -5734,21 +6440,23 @@ struct Gfn2CudaExecutionCache::Impl {
         error = cuda_error_message("CUDA initial geometry-cache construction", cuda_status);
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
-      cuda_status =
-          reset_gfn2_aes2_device_errors_cuda(batch, binding.diagnostics.coordination_system_errors,
-                                             binding.diagnostics.coordination_device_error, stream);
-      if (cuda_status != cudaSuccess) {
-        error = cuda_error_message("CUDA initial AES2 diagnostic reset", cuda_status);
-        return XTBLOOM_STATUS_INVALID_ARGUMENT;
-      }
-      cuda_status = update_gfn2_aes2_geometry_cache_cuda(
-          candidate.plan_seed.aes2_batch, positions,
-          binding.plan.coordination_cache.coordination_numbers, candidate.plan_seed.aes2_cache,
-          candidate.workspace_seed.aes2_workspace, binding.diagnostics.coordination_system_errors,
-          binding.diagnostics.coordination_device_error, stream);
-      if (cuda_status != cudaSuccess) {
-        error = cuda_error_message("CUDA initial AES2-cache construction", cuda_status);
-        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      if (!gfn1_enabled) {
+        cuda_status = reset_gfn2_aes2_device_errors_cuda(
+            batch, binding.diagnostics.coordination_system_errors,
+            binding.diagnostics.coordination_device_error, stream);
+        if (cuda_status != cudaSuccess) {
+          error = cuda_error_message("CUDA initial AES2 diagnostic reset", cuda_status);
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
+        cuda_status = update_gfn2_aes2_geometry_cache_cuda(
+            candidate.plan_seed.aes2_batch, positions,
+            binding.plan.coordination_cache.coordination_numbers, candidate.plan_seed.aes2_cache,
+            candidate.workspace_seed.aes2_workspace, binding.diagnostics.coordination_system_errors,
+            binding.diagnostics.coordination_device_error, stream);
+        if (cuda_status != cudaSuccess) {
+          error = cuda_error_message("CUDA initial AES2-cache construction", cuda_status);
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
       }
     }
 
@@ -5835,7 +6543,6 @@ struct Gfn2CudaExecutionCache::Impl {
       error = cuda_error_message("CUDA energy/force composed smoke", cuda_status);
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
-
     /* The smoke borrows the initialized SCC storage only long enough to drive
      * the terminal chain. Restore the immutable device checkpoint so the
      * published runtime still starts at iteration zero. */
@@ -5860,6 +6567,7 @@ struct Gfn2CudaExecutionCache::Impl {
     const std::uint64_t token = candidate.host.plan_token;
     const std::uint32_t requested = candidate.host.key.flags;
     const bool d4_enabled = candidate.host.d4_enabled;
+    const bool gfn1_enabled = candidate.host.gfn1_enabled;
     const bool energy_requested =
         (requested & static_cast<std::uint32_t>(XTBLOOM_COMPUTE_ENERGY)) != 0u;
     const bool force_requested =
@@ -5873,9 +6581,11 @@ struct Gfn2CudaExecutionCache::Impl {
     std::int64_t coordinates = 0;
     std::int64_t point_coordinates = 0;
     std::int64_t d4_weight_elements = 0;
+    std::int64_t gfn1_weight_elements = 0;
     if (requested == 0u || !checked_elements(atoms, 3, coordinates) ||
         !checked_elements(points, 3, point_coordinates) ||
-        !checked_elements(atoms, kGfn2D4MaximumReferences, d4_weight_elements)) {
+        !checked_elements(atoms, kGfn2D4MaximumReferences, d4_weight_elements) ||
+        !checked_elements(atoms, kGfn1D3MaximumReferences, gfn1_weight_elements)) {
       error = "inference result extent or requested-property mask is invalid";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
@@ -5897,6 +6607,12 @@ struct Gfn2CudaExecutionCache::Impl {
       std::size_t terminal_d4_device_error = 0u;
       std::size_t terminal_system_errors = 0u;
       std::size_t terminal_plan_error = 0u;
+      std::size_t gfn1_weights = 0u;
+      std::size_t gfn1_weight_cn_derivatives = 0u;
+      std::size_t gfn1_coordination_adjoints = 0u;
+      std::size_t gfn1_axis_neighbors = 0u;
+      std::size_t gfn1_batch_scratch = 0u;
+      std::size_t gfn1_gradient_scratch = 0u;
 
       std::size_t result_energies = 0u;
       std::size_t result_qm_forces = 0u;
@@ -5935,6 +6651,13 @@ struct Gfn2CudaExecutionCache::Impl {
     offset.terminal_d4_device_error = layout.append<std::uint32_t>(d4_enabled ? 1 : 0);
     offset.terminal_system_errors = layout.append<std::uint32_t>(batch);
     offset.terminal_plan_error = layout.append<std::uint32_t>(1);
+    offset.gfn1_weights = layout.append<double>(gfn1_enabled ? gfn1_weight_elements : 0);
+    offset.gfn1_weight_cn_derivatives =
+        layout.append<double>(gfn1_enabled ? gfn1_weight_elements : 0);
+    offset.gfn1_coordination_adjoints = layout.append<double>(gfn1_enabled ? atoms : 0);
+    offset.gfn1_axis_neighbors = layout.append<std::int64_t>(gfn1_enabled ? atoms : 0);
+    offset.gfn1_batch_scratch = layout.append<double>(gfn1_enabled ? batch : 0);
+    offset.gfn1_gradient_scratch = layout.append<double>(gfn1_enabled ? coordinates : 0);
 
     offset.result_energies = layout.append<double>(energy_requested ? batch : 0);
     offset.result_qm_forces = layout.append<double>(force_requested ? coordinates : 0);
@@ -5995,13 +6718,20 @@ struct Gfn2CudaExecutionCache::Impl {
         token,
     };
 
-    const Gfn2RepulsionDeviceBatch repulsion{
+    Gfn2RepulsionDeviceBatch repulsion{
         batch,
         atoms,
         candidate.device_topology.atom_offsets,
         terminal_atomic_numbers,
         candidate.numerical.device.committed_positions,
     };
+    if (gfn1_enabled) {
+      repulsion.model = XtbModelFlavor::kGfn1;
+      repulsion.sqrt_alpha = candidate.gfn1_repulsion_sqrt_alpha;
+      repulsion.effective_charge = candidate.gfn1_repulsion_effective_charge;
+      repulsion.sqrt_alpha_elements = atoms;
+      repulsion.effective_charge_elements = atoms;
+    }
     Gfn2D4DeviceBatch terminal_d4 = candidate.plan_seed.d4_batch;
     if (d4_enabled) terminal_d4.atomic_numbers = repulsion.atomic_numbers;
     inference.terminal_plan = {
@@ -6065,6 +6795,24 @@ struct Gfn2CudaExecutionCache::Impl {
         1,
         token,
     };
+    if (gfn1_enabled) {
+      inference.gfn1_correction_plan = candidate.gfn1_correction_plan;
+      inference.gfn1_correction_workspace = {
+          arena_pointer<double>(arena, offset.gfn1_weights),
+          arena_pointer<double>(arena, offset.gfn1_weight_cn_derivatives),
+          arena_pointer<double>(arena, offset.gfn1_coordination_adjoints),
+          arena_pointer<std::int64_t>(arena, offset.gfn1_axis_neighbors),
+          arena_pointer<double>(arena, offset.gfn1_batch_scratch),
+          arena_pointer<double>(arena, offset.gfn1_gradient_scratch),
+          token,
+          gfn1_weight_elements,
+          gfn1_weight_elements,
+          atoms,
+          atoms,
+          batch,
+          coordinates,
+      };
+    }
 
     const auto input_if_requested = [](const double* pointer, bool enabled) {
       return enabled ? pointer : nullptr;
@@ -6544,9 +7292,14 @@ struct Gfn2CudaExecutionCache::Impl {
         error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
-    auto topology_diagnostic = Gfn2SccSetupTopology::create(
-        candidate->host.basis, candidate->host.integrals, candidate->host.wavefunction_layout,
-        token, candidate->topology_owner);
+    auto topology_diagnostic =
+        candidate->host.gfn1_enabled
+            ? Gfn2SccSetupTopology::create(candidate->host.basis, candidate->host.integrals,
+                                           candidate->host.gfn1_wavefunction_layout, token,
+                                           candidate->topology_owner)
+            : Gfn2SccSetupTopology::create(candidate->host.basis, candidate->host.integrals,
+                                           candidate->host.wavefunction_layout, token,
+                                           candidate->topology_owner);
     if (!topology_diagnostic.success()) {
       error = setup_error_message("CUDA topology owner construction", topology_diagnostic.status,
                                   static_cast<std::uint32_t>(topology_diagnostic.error),
@@ -6572,9 +7325,14 @@ struct Gfn2CudaExecutionCache::Impl {
     }
     candidate->submitted = true;
 
-    auto input_diagnostic = Gfn2SccSetupInputs::create(candidate->host.input_sources(),
-                                                       candidate->topology_owner.host_topology(),
-                                                       token, candidate->inputs_owner);
+    auto input_diagnostic =
+        candidate->host.gfn1_enabled
+            ? Gfn2SccSetupInputs::create(candidate->host.gfn1_input_sources(),
+                                         candidate->topology_owner.host_topology(), token,
+                                         candidate->inputs_owner)
+            : Gfn2SccSetupInputs::create(candidate->host.input_sources(),
+                                         candidate->topology_owner.host_topology(), token,
+                                         candidate->inputs_owner);
     if (!input_diagnostic.success()) {
       error = setup_error_message("CUDA input owner construction", input_diagnostic.status,
                                   static_cast<std::uint32_t>(input_diagnostic.error),
@@ -6662,7 +7420,12 @@ struct Gfn2CudaExecutionCache::Impl {
         3 * candidate->host.basis.total_atoms,
         token,
     };
-    candidate->input_seed.electric_field_potentials = candidate->numerical.field_potential_view;
+    auto scc_field_potential_view = candidate->numerical.field_potential_view;
+    if (candidate->host.gfn1_enabled) {
+      scc_field_potential_view.dipole = nullptr;
+      scc_field_potential_view.dipole_elements = 0;
+    }
+    candidate->input_seed.electric_field_potentials = scc_field_potential_view;
     candidate->plan_seed.classical_energy_batch.electric_field =
         candidate->plan_seed.electric_field_batch;
     /* Report projection rebuilds the composed input descriptors from the
@@ -6676,8 +7439,7 @@ struct Gfn2CudaExecutionCache::Impl {
         candidate->workspace_seed.physical_topology.dipole_elements,
         token,
     };
-    candidate->input_seed.classical_energy.electric_field_potentials =
-        candidate->numerical.field_potential_view;
+    candidate->input_seed.classical_energy.electric_field_potentials = scc_field_potential_view;
     candidate->input_seed.free_energy.electric_field =
         candidate->workspace_seed.staged_classical_energy.electric_field;
     candidate->input_seed.free_energy.electric_field_elements =
@@ -6743,7 +7505,10 @@ struct Gfn2CudaExecutionCache::Impl {
         candidate->report_storage, candidate->plan_seed, candidate->input_seed,
         candidate->state_seed, candidate->workspace_seed, candidate->scc_binding);
     if (report_diagnostic.error != Gfn2SccIterationBindingError::kSuccess) {
-      error = "CUDA SCC report factory rejected the composed runtime binding";
+      error = setup_error_message("CUDA SCC report factory", XTBLOOM_STATUS_INVALID_ARGUMENT,
+                                  static_cast<std::uint32_t>(report_diagnostic.error),
+                                  static_cast<std::uint32_t>(report_diagnostic.field),
+                                  report_diagnostic.index);
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
 
@@ -7198,7 +7963,7 @@ struct Gfn2CudaExecutionCache::Impl {
                                   batch.charge_response_matrix.data != nullptr ||
                                   batch.charge_response_matrix.size_bytes != 0u;
     if (batch.batch_size != expected_batch || batch.total_atoms != expected_atoms ||
-        batch.total_point_charges != expected_points || options.model != XTBLOOM_MODEL_GFN2_XTB ||
+        batch.total_point_charges != expected_points || options.model != key.model ||
         options.flags != key.flags || options.max_scc_iterations != key.maximum_iterations ||
         options.charge_tolerance != key.charge_tolerance ||
         options.energy_tolerance != key.energy_tolerance ||
@@ -8194,6 +8959,23 @@ struct Gfn2CudaExecutionCache::Impl {
       error = cuda_error_message("CUDA terminal classical energy", cuda_status);
       return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
                                                   : XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    if (current.host.gfn1_enabled) {
+      /* The terminal composer has already published the model-aware nuclear
+       * repulsion candidate into private runtime storage. Add GFN1's remaining
+       * charge-independent terms there; any peer error is recorded in the
+       * terminal diagnostic array consumed by final public publication. */
+      cuda_status = add_gfn1_classical_corrections_cuda(
+          inference.gfn1_correction_plan, current.numerical.device.committed_positions,
+          current.plan_seed.geometry_cache.coordination_numbers,
+          inference.terminal_activity.requested_mask, inference.terminal_results.repulsion, nullptr,
+          inference.gfn1_correction_workspace, inference.terminal_diagnostics.system_errors,
+          inference.terminal_diagnostics.plan_error, execution_stream);
+      if (cuda_status != cudaSuccess) {
+        error = cuda_error_message("CUDA GFN1 terminal classical corrections", cuda_status);
+        return cuda_status == cudaErrorInvalidValue ? XTBLOOM_STATUS_INVALID_ARGUMENT
+                                                    : XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
     }
 
     if (current.energy_force.stationary_projection.enabled == 1u) {
@@ -9345,7 +10127,16 @@ struct Gfn2CudaExecutionCache::Impl {
     /* Cache/prepared records contain the inline host plans, arena owners, and
      * descriptor metadata. Their nested heap payloads are counted below. */
     identity.runtime_owner_host_bytes = sizeof(Impl) + sizeof(current);
+    const HostPlanByteBreakdown host_plan_bytes = current.host.retained_host_byte_breakdown();
     identity.host_plans_bytes = current.host.retained_host_bytes();
+    identity.host_common_plan_vector_bytes = host_plan_bytes.common_plan_vectors;
+    identity.host_gfn1_plan_vector_bytes = host_plan_bytes.gfn1_plan_vectors;
+    identity.host_common_model_plan_bytes = host_plan_bytes.common_model_plans;
+    identity.host_gfn1_model_plan_bytes = host_plan_bytes.gfn1_model_plans;
+    identity.host_numerical_vector_bytes = host_plan_bytes.numerical_vectors;
+    identity.host_gfn1_expanded_parameter_bytes = host_plan_bytes.gfn1_expanded_parameters;
+    identity.host_gfn2_wavefunction_arena_bytes = host_plan_bytes.gfn2_wavefunction_arena;
+    identity.host_gfn1_wavefunction_arena_bytes = host_plan_bytes.gfn1_wavefunction_arena;
     identity.topology_setup_host_bytes = current.topology_owner.retained_host_bytes();
     identity.inputs_setup_host_bytes = current.inputs_owner.retained_host_bytes();
     identity.eigensolver_setup_host_bytes = current.eigensolver_owner.retained_host_bytes();

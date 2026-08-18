@@ -119,7 +119,7 @@ struct DescriptorValidationResult {
 /*
  * Return SUCCESS for an absent suffix or an explicitly molecular V4 image
  * (all masks NONE with zero cells).  Any released XYZ item is currently
- * refused atomically because native periodic GFN2 execution is not connected.
+ * refused atomically because native periodic execution is not connected.
  * Call only after validate_host_lattice_semantics() has succeeded.
  */
 [[nodiscard]] DescriptorValidationResult validate_host_lattice_execution_availability(

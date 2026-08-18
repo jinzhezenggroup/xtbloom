@@ -12,10 +12,9 @@ namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 128;
-constexpr std::uint32_t kMandatoryComponents =
+constexpr std::uint32_t kScalarMandatoryComponents =
     static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
-    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
-    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
+    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3);
 constexpr std::uint32_t kInvalidRequestedMask = 1u;
 constexpr std::uint32_t kIneligibleGeometry = 2u;
 constexpr std::uint32_t kStaleGeometry = 3u;
@@ -26,6 +25,35 @@ constexpr std::uint32_t kClosedStageWithoutCode = 0x00fffffeu;
 template <typename T>
 bool aligned_pointer(const T* pointer) noexcept {
   return pointer != nullptr && reinterpret_cast<std::uintptr_t>(pointer) % alignof(T) == 0u;
+}
+
+template <typename T>
+bool valid_buffer(const T* pointer, std::int64_t elements, std::int64_t expected) noexcept {
+  return elements == expected && (expected == 0 ? pointer == nullptr : aligned_pointer(pointer));
+}
+
+bool canonical_empty(const Gfn2AES2DeviceBatch& batch) noexcept {
+  return batch.batch_size == 0 && batch.total_atoms == 0 && batch.total_pairs == 0 &&
+         batch.plan_token == 0u && batch.atom_offset_count == 0 && batch.pair_offset_count == 0 &&
+         batch.dipole_kernel_count == 0 && batch.quadrupole_kernel_count == 0 &&
+         batch.multipole_radius_count == 0 && batch.multipole_valence_cn_count == 0 &&
+         batch.atom_offsets == nullptr && batch.pair_offsets == nullptr &&
+         batch.dipole_kernel == nullptr && batch.quadrupole_kernel == nullptr &&
+         batch.multipole_radius == nullptr && batch.multipole_valence_cn == nullptr;
+}
+
+bool canonical_empty(const Gfn2AES2DeviceCache& cache) noexcept {
+  return cache.pair_data == nullptr && cache.pair_data_elements == 0 &&
+         cache.geometry_generation == 0u && cache.plan_token == 0u;
+}
+
+bool canonical_empty(const Gfn2AES2DeviceWorkspace& workspace) noexcept {
+  return workspace.pair_scratch == nullptr && workspace.pair_elements == 0 &&
+         workspace.potential_scratch == nullptr && workspace.potential_elements == 0 &&
+         workspace.batch_scratch == nullptr && workspace.batch_elements == 0 &&
+         workspace.gradient_scratch == nullptr && workspace.gradient_elements == 0 &&
+         workspace.coordination_scratch == nullptr && workspace.coordination_elements == 0 &&
+         workspace.scc_peer_error_scratch == nullptr && workspace.scc_peer_error_elements == 0;
 }
 
 bool component_enabled(std::uint32_t mask, Gfn2SccPotentialComponent component) noexcept {
@@ -236,21 +264,24 @@ bool public_results_are_disjoint(const Gfn2PostSccPotentialDevicePlan& plan,
       !no_public_overlap(plan.es3_batch.batch_shell_offsets,
                          plan.es3_batch.batch_shell_offset_count, sizeof(std::int64_t)) ||
       !no_public_overlap(plan.es3_batch.shell_gamma3, plan.es3_batch.shell_gamma3_count,
-                         sizeof(double)) ||
-      !no_public_overlap(plan.aes2_batch.atom_offsets, plan.aes2_batch.atom_offset_count,
-                         sizeof(std::int64_t)) ||
-      !no_public_overlap(plan.aes2_batch.pair_offsets, plan.aes2_batch.pair_offset_count,
-                         sizeof(std::int64_t)) ||
-      !no_public_overlap(plan.aes2_batch.dipole_kernel, plan.aes2_batch.dipole_kernel_count,
-                         sizeof(double)) ||
-      !no_public_overlap(plan.aes2_batch.quadrupole_kernel, plan.aes2_batch.quadrupole_kernel_count,
-                         sizeof(double)) ||
-      !no_public_overlap(plan.aes2_batch.multipole_radius, plan.aes2_batch.multipole_radius_count,
-                         sizeof(double)) ||
-      !no_public_overlap(plan.aes2_batch.multipole_valence_cn,
-                         plan.aes2_batch.multipole_valence_cn_count, sizeof(double)) ||
-      !no_public_overlap(plan.aes2_cache.pair_data, plan.aes2_cache.pair_data_elements,
                          sizeof(double))) {
+    return false;
+  }
+  if (component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kAES2) &&
+      (!no_public_overlap(plan.aes2_batch.atom_offsets, plan.aes2_batch.atom_offset_count,
+                          sizeof(std::int64_t)) ||
+       !no_public_overlap(plan.aes2_batch.pair_offsets, plan.aes2_batch.pair_offset_count,
+                          sizeof(std::int64_t)) ||
+       !no_public_overlap(plan.aes2_batch.dipole_kernel, plan.aes2_batch.dipole_kernel_count,
+                          sizeof(double)) ||
+       !no_public_overlap(plan.aes2_batch.quadrupole_kernel,
+                          plan.aes2_batch.quadrupole_kernel_count, sizeof(double)) ||
+       !no_public_overlap(plan.aes2_batch.multipole_radius, plan.aes2_batch.multipole_radius_count,
+                          sizeof(double)) ||
+       !no_public_overlap(plan.aes2_batch.multipole_valence_cn,
+                          plan.aes2_batch.multipole_valence_cn_count, sizeof(double)) ||
+       !no_public_overlap(plan.aes2_cache.pair_data, plan.aes2_cache.pair_data_elements,
+                          sizeof(double)))) {
     return false;
   }
   if (component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kD4TwoBody) &&
@@ -306,12 +337,30 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
                      const Gfn2PostSccPotentialDeviceDiagnostics& diagnostics,
                      const Gfn2GeometryEpochConsumerDevice* geometry) noexcept {
   const auto& batch = plan.potential_batch;
+  const XtbModelFlavor model = plan.es3_batch.model;
+  const bool gfn2 = model == XtbModelFlavor::kGfn2;
+  const bool aes2_enabled =
+      component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kAES2);
+  const std::uint32_t mandatory_components =
+      kScalarMandatoryComponents |
+      (gfn2 ? static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2) : 0u);
+  if (!valid_xtb_model_flavor(model) || batch.model != model || batch.total_atoms <= 0 ||
+      batch.total_atoms >
+          std::numeric_limits<std::int64_t>::max() / kGfn2SccPotentialQuadrupoleComponents) {
+    return false;
+  }
+  const std::int64_t dipole_elements =
+      gfn2 ? batch.total_atoms * kGfn2SccPotentialDipoleComponents : 0;
+  const std::int64_t quadrupole_elements =
+      gfn2 ? batch.total_atoms * kGfn2SccPotentialQuadrupoleComponents : 0;
   if (plan.plan_token == 0u || plan.geometry_generation == 0u ||
       batch.plan_token != plan.plan_token || batch.batch_size <= 0 || batch.total_atoms <= 0 ||
       batch.total_shells <= 0 ||
       batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<unsigned int>::max()) ||
       (plan.enabled_components & ~kGfn2SccPotentialAllComponents) != 0u ||
-      (plan.enabled_components & kMandatoryComponents) != kMandatoryComponents ||
+      (plan.enabled_components & mandatory_components) != mandatory_components ||
+      (!gfn2 && (aes2_enabled || component_enabled(plan.enabled_components,
+                                                   Gfn2SccPotentialComponent::kD4TwoBody))) ||
       input.plan_token != plan.plan_token || input.activity.plan_token != plan.plan_token ||
       results.plan_token != plan.plan_token || results.complete.plan_token != plan.plan_token ||
       intermediates.plan_token != plan.plan_token ||
@@ -325,9 +374,8 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
       workspace.active_elements != batch.batch_size || workspace.sequence_elements != 1 ||
       workspace.stage_system_error_elements != batch.batch_size ||
       workspace.stage_device_error_elements != 1 || input.shell_elements != batch.total_shells ||
-      input.atom_elements != batch.total_atoms ||
-      input.dipole_elements != batch.total_atoms * kGfn2SccPotentialDipoleComponents ||
-      input.quadrupole_elements != batch.total_atoms * kGfn2SccPotentialQuadrupoleComponents ||
+      input.atom_elements != batch.total_atoms || input.dipole_elements != dipole_elements ||
+      input.quadrupole_elements != quadrupole_elements ||
       results.complete.shell_elements != batch.total_shells ||
       results.complete.atom_elements != batch.total_atoms ||
       results.complete.dipole_elements != input.dipole_elements ||
@@ -340,23 +388,32 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
       intermediates.shell_scalar_elements != batch.total_shells ||
       intermediates.es2_shell_elements != batch.total_shells ||
       intermediates.es3_shell_elements != batch.total_shells ||
-      intermediates.aes2_atomic_elements != batch.total_atoms ||
-      intermediates.aes2_dipole_elements != input.dipole_elements ||
-      intermediates.aes2_quadrupole_elements != input.quadrupole_elements ||
+      intermediates.aes2_atomic_elements != (aes2_enabled ? batch.total_atoms : 0) ||
+      intermediates.aes2_dipole_elements != (aes2_enabled ? dipole_elements : 0) ||
+      intermediates.aes2_quadrupole_elements != (aes2_enabled ? quadrupole_elements : 0) ||
       !aligned_pointer(input.activity.requested_mask) ||
       !aligned_pointer(input.activity.system_statuses) ||
       !aligned_pointer(input.raw_shell_charges) || !aligned_pointer(input.raw_atomic_charges) ||
-      !aligned_pointer(input.raw_atomic_dipoles) ||
-      !aligned_pointer(input.raw_atomic_quadrupoles) || !aligned_pointer(results.complete.shell) ||
-      !aligned_pointer(results.complete.atomic) || !aligned_pointer(results.complete.dipole) ||
-      !aligned_pointer(results.complete.quadrupole) || !aligned_pointer(results.shell_scalar) ||
-      !aligned_pointer(intermediates.es2_shell) || !aligned_pointer(intermediates.es3_shell) ||
-      !aligned_pointer(intermediates.aes2_atomic) || !aligned_pointer(intermediates.aes2_dipole) ||
-      !aligned_pointer(intermediates.aes2_quadrupole) ||
+      !valid_buffer(input.raw_atomic_dipoles, input.dipole_elements, dipole_elements) ||
+      !valid_buffer(input.raw_atomic_quadrupoles, input.quadrupole_elements, quadrupole_elements) ||
+      !aligned_pointer(results.complete.shell) || !aligned_pointer(results.complete.atomic) ||
+      !aligned_pointer(results.shell_scalar) || !aligned_pointer(intermediates.es2_shell) ||
+      !aligned_pointer(intermediates.es3_shell) ||
+      !valid_buffer(intermediates.aes2_atomic, intermediates.aes2_atomic_elements,
+                    aes2_enabled ? batch.total_atoms : 0) ||
+      !valid_buffer(intermediates.aes2_dipole, intermediates.aes2_dipole_elements,
+                    aes2_enabled ? dipole_elements : 0) ||
+      !valid_buffer(intermediates.aes2_quadrupole, intermediates.aes2_quadrupole_elements,
+                    aes2_enabled ? quadrupole_elements : 0) ||
       !aligned_pointer(intermediates.complete.shell) ||
       !aligned_pointer(intermediates.complete.atomic) ||
-      !aligned_pointer(intermediates.complete.dipole) ||
-      !aligned_pointer(intermediates.complete.quadrupole) ||
+      !valid_buffer(results.complete.dipole, results.complete.dipole_elements, dipole_elements) ||
+      !valid_buffer(results.complete.quadrupole, results.complete.quadrupole_elements,
+                    quadrupole_elements) ||
+      !valid_buffer(intermediates.complete.dipole, intermediates.complete.dipole_elements,
+                    dipole_elements) ||
+      !valid_buffer(intermediates.complete.quadrupole, intermediates.complete.quadrupole_elements,
+                    quadrupole_elements) ||
       !aligned_pointer(intermediates.shell_scalar) || !aligned_pointer(workspace.active_mask) ||
       !aligned_pointer(workspace.sequence_active) ||
       !aligned_pointer(workspace.stage_system_errors) ||
@@ -413,17 +470,24 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
   if (plan.es2_batch.plan_token != plan.plan_token ||
       plan.es2_batch.batch_size != batch.batch_size ||
       plan.es2_batch.total_atoms != batch.total_atoms ||
-      plan.es2_batch.total_shells != batch.total_shells ||
+      plan.es2_batch.total_shells != batch.total_shells || plan.es2_batch.model != batch.model ||
       plan.es2_cache.plan_token != plan.plan_token ||
       plan.es2_cache.geometry_generation != plan.geometry_generation ||
       plan.es3_batch.plan_token != plan.plan_token ||
       plan.es3_batch.batch_size != batch.batch_size ||
-      plan.es3_batch.total_shells != batch.total_shells ||
-      plan.aes2_batch.plan_token != plan.plan_token ||
-      plan.aes2_batch.batch_size != batch.batch_size ||
-      plan.aes2_batch.total_atoms != batch.total_atoms ||
-      plan.aes2_cache.plan_token != plan.plan_token ||
-      plan.aes2_cache.geometry_generation != plan.geometry_generation) {
+      plan.es3_batch.total_shells != batch.total_shells) {
+    return false;
+  }
+  if (aes2_enabled) {
+    if (plan.aes2_batch.plan_token != plan.plan_token ||
+        plan.aes2_batch.batch_size != batch.batch_size ||
+        plan.aes2_batch.total_atoms != batch.total_atoms ||
+        plan.aes2_cache.plan_token != plan.plan_token ||
+        plan.aes2_cache.geometry_generation != plan.geometry_generation) {
+      return false;
+    }
+  } else if (!canonical_empty(plan.aes2_batch) || !canonical_empty(plan.aes2_cache) ||
+             !canonical_empty(workspace.aes2)) {
     return false;
   }
 
@@ -463,7 +527,8 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
   }
 
   if (component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kExplicitPointCharge)) {
-    if (plan.external_point_charge_batch.plan_token != plan.plan_token ||
+    if (plan.external_point_charge_batch.model != model ||
+        plan.external_point_charge_batch.plan_token != plan.plan_token ||
         plan.external_point_charge_batch.batch_size != batch.batch_size ||
         plan.external_point_charge_batch.total_atoms != batch.total_atoms ||
         plan.external_point_charge_batch.total_shells != batch.total_shells ||
@@ -489,8 +554,8 @@ bool validate_common(const Gfn2PostSccPotentialDevicePlan& plan,
   const auto& field = input.electric_field_potentials;
   if (field.plan_token != 0u &&
       (field.plan_token != plan.plan_token || field.atom_elements != batch.total_atoms ||
-       field.dipole_elements != batch.total_atoms * 3 || !aligned_pointer(field.atomic) ||
-       !aligned_pointer(field.dipole))) {
+       field.dipole_elements != dipole_elements || !aligned_pointer(field.atomic) ||
+       !valid_buffer(field.dipole, field.dipole_elements, dipole_elements))) {
     return false;
   }
 
@@ -708,20 +773,22 @@ static cudaError_t refresh_post_scc_potentials_impl(
     return status;
   }
 
-  status = reset_gfn2_aes2_device_errors_cuda(batch_size, workspace.stage_system_errors,
-                                              workspace.stage_device_error, stream);
-  if (status == cudaSuccess) {
-    status = evaluate_gfn2_aes2_scc_potential_cuda(
-        plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, activity,
-        input.raw_atomic_charges, input.raw_atomic_dipoles, input.raw_atomic_quadrupoles,
-        intermediates.aes2_atomic, intermediates.aes2_dipole, intermediates.aes2_quadrupole,
-        workspace.aes2, workspace.stage_system_errors, workspace.stage_device_error, stream);
-  }
-  if (status == cudaSuccess) {
-    status = merge_stage(Gfn2PostSccPotentialStage::kAES2, true, nullptr);
-  }
-  if (status != cudaSuccess) {
-    return status;
+  if (component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kAES2)) {
+    status = reset_gfn2_aes2_device_errors_cuda(batch_size, workspace.stage_system_errors,
+                                                workspace.stage_device_error, stream);
+    if (status == cudaSuccess) {
+      status = evaluate_gfn2_aes2_scc_potential_cuda(
+          plan.aes2_batch, plan.aes2_cache, plan.geometry_generation, activity,
+          input.raw_atomic_charges, input.raw_atomic_dipoles, input.raw_atomic_quadrupoles,
+          intermediates.aes2_atomic, intermediates.aes2_dipole, intermediates.aes2_quadrupole,
+          workspace.aes2, workspace.stage_system_errors, workspace.stage_device_error, stream);
+    }
+    if (status == cudaSuccess) {
+      status = merge_stage(Gfn2PostSccPotentialStage::kAES2, true, nullptr);
+    }
+    if (status != cudaSuccess) {
+      return status;
+    }
   }
 
   if (component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kD4TwoBody)) {
@@ -774,12 +841,14 @@ static cudaError_t refresh_post_scc_potentials_impl(
     components.explicit_point_charge_shell_elements =
         plan.external_point_charge_cache.shell_elements;
   }
-  components.aes2_atomic = intermediates.aes2_atomic;
-  components.aes2_atomic_elements = intermediates.aes2_atomic_elements;
-  components.aes2_dipole = intermediates.aes2_dipole;
-  components.aes2_dipole_elements = intermediates.aes2_dipole_elements;
-  components.aes2_quadrupole = intermediates.aes2_quadrupole;
-  components.aes2_quadrupole_elements = intermediates.aes2_quadrupole_elements;
+  if (component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kAES2)) {
+    components.aes2_atomic = intermediates.aes2_atomic;
+    components.aes2_atomic_elements = intermediates.aes2_atomic_elements;
+    components.aes2_dipole = intermediates.aes2_dipole;
+    components.aes2_dipole_elements = intermediates.aes2_dipole_elements;
+    components.aes2_quadrupole = intermediates.aes2_quadrupole;
+    components.aes2_quadrupole_elements = intermediates.aes2_quadrupole_elements;
+  }
   if (component_enabled(plan.enabled_components, Gfn2SccPotentialComponent::kD4TwoBody)) {
     components.d4_atomic = intermediates.d4_atomic;
     components.d4_atomic_elements = intermediates.d4_atomic_elements;
