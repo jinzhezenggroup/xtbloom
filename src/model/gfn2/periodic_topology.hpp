@@ -65,7 +65,6 @@ inline bool is_origin(const LatticeTranslation& translation) noexcept {
 enum class ImageGeometryStatus {
   kInsideCutoff,
   kOutsideCutoff,
-  kInvalid,
 };
 
 inline ImageGeometryStatus image_geometry(const std::array<double, 3>& center,
@@ -88,19 +87,19 @@ inline ImageGeometryStatus image_geometry(const std::array<double, 3>& center,
      * far image can therefore overflow while squaring even though another
      * image of the same pair is safely inside the cutoff. An infinite
      * displacement produced from finite inputs is also provably outside every
-     * accepted finite cutoff; NaN remains an invalid geometry state.
+     * accepted finite cutoff. All inputs have already been validated as
+     * finite, so these operations can produce infinity through overflow but
+     * cannot produce NaN.
      */
-    if (absolute(displacement[component]) > cutoff) {
+    if (!finite(displacement[component]) || absolute(displacement[component]) > cutoff) {
       return ImageGeometryStatus::kOutsideCutoff;
     }
-    if (!finite(displacement[component])) return ImageGeometryStatus::kInvalid;
   }
   distance_squared = rounded_add(rounded_add(rounded_multiply(displacement[0], displacement[0]),
                                              rounded_multiply(displacement[1], displacement[1])),
                                  rounded_multiply(displacement[2], displacement[2]));
-  if (distance_squared > cutoff_squared) return ImageGeometryStatus::kOutsideCutoff;
-  if (!finite(distance_squared) || distance_squared < 0.0) {
-    return ImageGeometryStatus::kInvalid;
+  if (!finite(distance_squared) || distance_squared > cutoff_squared) {
+    return ImageGeometryStatus::kOutsideCutoff;
   }
   return ImageGeometryStatus::kInsideCutoff;
 }
@@ -184,10 +183,6 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
           const ImageGeometryStatus geometry =
               image_geometry(wrapped[center], wrapped[image], translation, cutoff, cutoff_squared,
                              displacement, distance_squared);
-          if (geometry == ImageGeometryStatus::kInvalid) {
-            error = "periodic topology image distance is outside the binary64 range";
-            return XTBLOOM_STATUS_INVALID_ARGUMENT;
-          }
           if (geometry == ImageGeometryStatus::kInsideCutoff && distance_squared < minimum) {
             minimum = distance_squared;
           }
@@ -211,10 +206,6 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
           const ImageGeometryStatus geometry =
               image_geometry(wrapped[center], wrapped[image], translation, cutoff, cutoff_squared,
                              displacement, distance_squared);
-          if (geometry == ImageGeometryStatus::kInvalid) {
-            error = "periodic topology image distance is outside the binary64 range";
-            return XTBLOOM_STATUS_INVALID_ARGUMENT;
-          }
           if (geometry == ImageGeometryStatus::kInsideCutoff && distance_squared <= boundary) {
             ++multiplicity;
           }
@@ -235,10 +226,6 @@ inline xtbloom_status_t make_wigner_seitz_topology(const Lattice3D& lattice,
           const ImageGeometryStatus geometry =
               image_geometry(wrapped[center], wrapped[image], translation, cutoff, cutoff_squared,
                              displacement, distance_squared);
-          if (geometry == ImageGeometryStatus::kInvalid) {
-            error = "periodic topology image distance is outside the binary64 range";
-            return XTBLOOM_STATUS_INVALID_ARGUMENT;
-          }
           if (geometry == ImageGeometryStatus::kOutsideCutoff || distance_squared > boundary) {
             continue;
           }

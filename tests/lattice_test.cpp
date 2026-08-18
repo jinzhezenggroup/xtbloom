@@ -458,8 +458,21 @@ int test_wigner_seitz_topology_canonicalization_and_validation() {
   std::vector<xtbloom::detail::gfn2::WignerSeitzImage> sentinel(1u);
   sentinel[0].center_atom = 17;
   CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, -1, positions.data(), 1.1, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
+            sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 1, nullptr, 1.1, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique, sentinel,
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
             lattice, 2, positions.data(), -1.0, xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique,
             sentinel, error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
+  CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
+  CHECK(xtbloom::detail::gfn2::make_wigner_seitz_topology(
+            lattice, 0, nullptr, std::numeric_limits<double>::max(),
+            xtbloom::detail::gfn2::WignerSeitzPairMode::kUnique, sentinel,
+            error) == XTBLOOM_STATUS_INVALID_ARGUMENT);
   CHECK(sentinel.size() == 1u && sentinel[0].center_atom == 17);
   auto nonfinite = positions;
   nonfinite[4] = std::numeric_limits<double>::infinity();
