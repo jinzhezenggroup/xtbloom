@@ -13,7 +13,6 @@ Atomic units everywhere: bohr, Hartree, Hartree/bohr, elementary charge.
 from importlib.metadata import version as _distribution_version
 
 from ._dlpack import DLPackResultBuffer
-from .array import ArrayBatch, compute_arrays
 from .exceptions import (
     XTBloomError,
     XTBloomNotSupportedError,
@@ -21,6 +20,7 @@ from .exceptions import (
     XTBloomValueError,
 )
 from .interface import (
+    ArrayBatch,
     ArrayBatchResult,
     BatchCalculator,
     BatchResult,
@@ -30,6 +30,7 @@ from .interface import (
     PointCharge,
     Result,
     Structure,
+    compute_arrays,
     numbers_to_symbols,
     symbols_to_numbers,
 )

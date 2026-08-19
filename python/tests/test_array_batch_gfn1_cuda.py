@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from xtbloom import ArrayBatch, Calculator
+from xtbloom import ArrayBatch, Calculator, Context
+from xtbloom.exceptions import XTBloomRuntimeError
 
 
 @pytest.mark.cuda
 def test_array_batch_gfn1_cuda_host_descriptors_match_cpu() -> None:
     """Match GFN1 CUDA host-descriptor outputs to the CPU reference."""
+    try:
+        with Context("cuda"):
+            pass
+    except XTBloomRuntimeError:
+        pytest.skip("CUDA backend is not available on this host")
+
     arrays = {
         "atom_offsets": np.array([0, 2], dtype=np.int64),
         "atomic_numbers": np.array([1, 1], dtype=np.int32),

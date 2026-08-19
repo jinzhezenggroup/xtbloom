@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from xtbloom import ArrayBatch, Calculator, compute_arrays
 from xtbloom.exceptions import XTBloomValueError
+from xtbloom.interface import ArrayBatch as InterfaceArrayBatch
 
 
 def _h2_arrays() -> dict[str, np.ndarray]:
@@ -24,6 +25,11 @@ def test_array_batch_rejects_unknown_method_before_native_execution() -> None:
     arrays = _h2_arrays()
     with pytest.raises(XTBloomValueError):
         ArrayBatch(**arrays, method="GFN0-xTB", backend="cpu")
+
+
+def test_top_level_array_batch_is_the_established_interface_class() -> None:
+    """Extend the existing public class instead of replacing it with a wrapper."""
+    assert ArrayBatch is InterfaceArrayBatch
 
 
 @pytest.mark.parametrize("method", ["GFN1-xTB", "GFN1"])
@@ -75,3 +81,14 @@ def test_array_batch_default_remains_gfn2() -> None:
     np.testing.assert_allclose(
         default.energies, [reference.energy], rtol=0.0, atol=1e-12
     )
+
+
+def test_array_batch_accepts_gfn2_alias() -> None:
+    """Resolve the short GFN2 spelling through the packed interface."""
+    arrays = _h2_arrays()
+    with ArrayBatch(**arrays, method="GFN2", backend="cpu") as batch:
+        assert batch.method == "GFN2"
+        aliased = batch.compute()
+    with ArrayBatch(**arrays, method="GFN2-xTB", backend="cpu") as batch:
+        canonical = batch.compute()
+    np.testing.assert_allclose(aliased.energies, canonical.energies, rtol=0.0, atol=0.0)
