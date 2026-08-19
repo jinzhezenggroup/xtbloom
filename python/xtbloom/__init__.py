@@ -35,6 +35,7 @@ from .interface import (
     symbols_to_numbers,
 )
 from .torch import xtbloom_torch
+from .vibrations import VibrationalResult, analyze_vibrations, vibrations
 
 # The build backend records exact release tags or revision-aware development
 # versions in the installed distribution metadata. Reading it here avoids a
@@ -55,13 +56,16 @@ __all__ = [
     "PointCharge",
     "Result",
     "Structure",
+    "VibrationalResult",
     "XTBloomError",
     "XTBloomNotSupportedError",
     "XTBloomRuntimeError",
     "XTBloomValueError",
     "__version__",
+    "analyze_vibrations",
     "compute_arrays",
     "numbers_to_symbols",
     "symbols_to_numbers",
+    "vibrations",
     "xtbloom_torch",
 ]
