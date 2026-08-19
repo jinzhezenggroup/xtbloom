@@ -195,6 +195,7 @@ exception-oriented control flow.
 - [Browser demo](browser-demo.md)
 - [Skills for AI agents](agent-skills.md)
 - [Python API](python.md)
+- [ASE molecular dynamics](ase-md.md)
 - [C and C++ API](c-api.md)
 - [QM/MM usage](qmmm.md)
 - [Performance evidence](performance.md)
@@ -213,9 +214,9 @@ periodic adapters are not implemented yet. Valid `XYZ` requests therefore
 return `NOT_IMPLEMENTED` before output publication. The separate periodic
 charge-response API consumes fields computed by another electrostatics
 program; it does not make the QM calculation periodic by itself. Native
-geometry optimization, molecular dynamics, solvation, vibrational analysis,
-and native/analytic Hessians are not implemented. Python `Calculator.hessian()` and `BatchCalculator.hessian()`
-provide dense numerical QM-coordinate Hessians from batched analytic-force
-differences. The Hessian and
-the browser/dpdata optimizers are higher-level adapters built on repeated
-xTBloom calculations.
+drivers for geometry optimization and molecular dynamics, solvation,
+vibrational analysis, and native/analytic Hessians are not implemented. Python
+`Calculator.hessian()` and `BatchCalculator.hessian()` provide dense numerical
+QM-coordinate Hessians from batched analytic-force differences. ASE-driven
+molecular dynamics, the Hessian, and the browser/dpdata optimizers are
+higher-level adapters built on repeated xTBloom calculations.

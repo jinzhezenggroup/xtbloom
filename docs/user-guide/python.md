@@ -441,7 +441,9 @@ and native periodic GFN1/GFN2 execution is not implemented. The ASE calculator
 enables warm start by default (`warm_start=True`), so an ASE dynamics run
 automatically seeds each step's SCC from the previous converged state and
 falls back to a fresh solve whenever the request's identity changes; pass
-`warm_start=False` for bit-reproducible independent steps.
+`warm_start=False` for bit-reproducible independent steps. See the
+[ASE molecular-dynamics guide](ase-md.md) for a runnable velocity-Verlet
+trajectory and the scope boundaries for native drivers and periodic systems.
 
 ASE and dpdata accept both model names and use the same CPU/CUDA AUTO policy as
 the high-level calculators. GFN1 electric-field/dipole requests are rejected
