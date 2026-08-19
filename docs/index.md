@@ -65,8 +65,8 @@ Repository contributors and coding agents must also follow
 xTBloom implements restricted and unrestricted GFN1-xTB and GFN2-xTB on CPU
 and CUDA. Both models publish native ragged batches, analytic forces,
 charges, explicit point charges, caller-supplied periodic charge response, the
-high-level Python calculators, ASE, and dpdata. Uniform electric fields and
-molecular dipoles, Array API/DLPack, and PyTorch autograd are GFN2-only. The
+high-level Python calculators, Array API/DLPack, ASE, and dpdata. Uniform
+electric fields, molecular dipoles, and PyTorch autograd are GFN2-only. The
 single-threaded CPU/WebAssembly browser demo exposes both GFN1 and GFN2, with
 GFN2 selected by default. The low-level CUDA ABI accepts host, device, and
 mixed descriptors, including independently placed interaction descriptor and
