@@ -123,6 +123,8 @@ Batch size does not alter the calculator's `cpu_threads` budget. The default
 step is `0.005` bohr. The default `symmetrize=False` preserves the raw
 antisymmetric residual as a finite-difference/SCC convergence diagnostic;
 `symmetrize=True` applies `0.5 * (H + H.T)` independently to every matrix.
+The [vibrational analysis guide](vibrations.md) describes mass weighting,
+rigid-mode projection, frequencies, and normal modes built from these matrices.
 
 One dense Hessian requires `6 * natoms` independent force calculations. For a
 batch, displacement tasks from different Hessians are interleaved in the same
@@ -145,10 +147,11 @@ atom, axis, sign, status, and iteration count. A temporary fresh-SCC context
 leaves every calculator geometry and any original warm checkpoint unchanged.
 
 These are explicit numerical Python methods, not analytic coupled-response
-Hessians or native C ABI outputs. xTBloom does not yet perform mass weighting,
-translation/rotation projection, normal-mode analysis, or thermochemistry.
-They do not change the compiled autograd operator, so PyTorch higher-order
-autograd remains unsupported.
+Hessians or native C ABI outputs. The Python API supports mass weighting,
+translation/rotation projection, frequencies, and normal-mode analysis through
+`analyze_vibrations()` and `vibrations()`; thermochemistry remains unsupported.
+The numerical methods do not change the compiled autograd operator, so PyTorch
+higher-order autograd remains unsupported.
 
 ## Ragged batches
 
