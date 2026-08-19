@@ -441,7 +441,9 @@ and native periodic GFN1/GFN2 execution is not implemented. The ASE calculator
 enables warm start by default (`warm_start=True`), so an ASE dynamics run
 automatically seeds each step's SCC from the previous converged state and
 falls back to a fresh solve whenever the request's identity changes; pass
-`warm_start=False` for bit-reproducible independent steps. See the
+`warm_start=False` for independent fresh-SCC steps. Bitwise replay additionally
+requires `determinism="reproducible"` and an unchanged build, backend, provider,
+device, options, geometry, and SCC sequence. See the
 [ASE molecular-dynamics guide](ase-md.md) for a runnable velocity-Verlet
 trajectory and the scope boundaries for native drivers and periodic systems.
 

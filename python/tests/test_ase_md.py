@@ -36,6 +36,7 @@ def test_velocity_verlet_drives_repeated_xtbloom_force_calls(
         pbc=False,
     )
     atoms.set_velocities(np.zeros((3, 3)))
+    initial_positions = atoms.positions.copy()
     calculator = XTBloom(method="GFN2-xTB", backend="cpu", warm_start=True)
     atoms.calc = calculator
     try:
@@ -51,4 +52,5 @@ def test_velocity_verlet_drives_repeated_xtbloom_force_calls(
     assert all(mode == _library.SCC_START_WARM for mode in calls[1:])
     assert np.isfinite(energy)
     assert np.isfinite(forces).all()
+    assert np.linalg.norm(atoms.positions - initial_positions) > 0.0
     assert np.isfinite(atoms.positions).all()
