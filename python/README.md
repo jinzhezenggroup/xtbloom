@@ -9,8 +9,8 @@ native C and C++ applications.
 GFN1-xTB and GFN2-xTB support CPU and CUDA through `Calculator`,
 `BatchCalculator`, ASE, and dpdata. Both models support native ragged batches,
 explicit point charges with force output, and caller-supplied periodic charge
-response. Array API/DLPack, PyTorch autograd, and the browser demo remain
-explicitly GFN2-only surfaces.
+response. The packed Array API/DLPack surface also supports both models;
+PyTorch autograd remains explicitly GFN2-only.
 
 ## Installation
 
@@ -181,10 +181,12 @@ conservative CUDA chunks while preserving input order.
 
 ## Advanced array and CUDA paths
 
-`ArrayBatch` is currently GFN2-xTB-only. It accepts packed ragged descriptors from eager NumPy, CuPy, JAX, or
-PyTorch arrays through `__dlpack__` and `__dlpack_device__`. Host arrays map
-to host descriptors; CUDA arrays can remain device-resident. By default,
-results return as host NumPy arrays.
+`ArrayBatch` accepts `method="GFN1-xTB"`/`"GFN1"` and
+`method="GFN2-xTB"`/`"GFN2"`, with GFN2-xTB retained as the default. It accepts
+packed ragged descriptors from eager NumPy, CuPy, JAX, or PyTorch arrays through
+`__dlpack__` and `__dlpack_device__`. Host arrays map to host descriptors; CUDA
+arrays can remain device-resident. By default, results return as host NumPy
+arrays.
 
 Use an `out=` mapping for caller-owned NumPy, CuPy, or PyTorch output buffers,
 or `result_memory="cuda"` for one xTBloom-owned packed device arena exported as
@@ -260,8 +262,8 @@ Hessians, vibrational analysis, and
 higher-order autograd are not implemented. A numerical QM Cartesian Hessian is
 available through Python `Calculator.hessian()` and `BatchCalculator.hessian()`.
 The high-level `Calculator` and `BatchCalculator` APIs use host NumPy arrays;
-direct device and mixed descriptors are exposed through the GFN2-only
-`ArrayBatch` surface and the low-level C ABI.
+direct device and mixed descriptors are exposed through the model-aware
+`ArrayBatch` surface and the low-level C ABI. PyTorch autograd remains GFN2-only.
 
 ## More documentation
 
