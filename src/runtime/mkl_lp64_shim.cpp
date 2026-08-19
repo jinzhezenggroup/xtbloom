@@ -14,9 +14,16 @@
 // interpose. The host's interface/threading state is therefore unchanged, and
 // LP64 xtbloom calls remain correct even when the host uses ILP64.
 //
-// The shim intentionally exports nothing; the eigensolver factory only dlopens it
-// and resolves the LAPACKE/CBLAS/thread-control symbols through its dependency
-// scope.
+// glibc link-map namespaces do not isolate pthread thread-specific-data slots.
+// The adjacent dependency-free mkl_pthread_tss_bridge is initialized with the
+// base pthread entry points before this shim or any provider dependency enters
+// the namespace, then appears first in this shim's DT_NEEDED scope. Public and
+// internal pthread TSS calls therefore share the host key registry without
+// weakening MKL/LAPACK symbol isolation (glibc bug nptl/24776).
+//
+// The shim otherwise intentionally exports no provider symbols; the eigensolver
+// factory only dlopens it and resolves LAPACKE/CBLAS/thread-control symbols
+// through its dependency scope.
 
 namespace xtbloom {
 namespace detail {

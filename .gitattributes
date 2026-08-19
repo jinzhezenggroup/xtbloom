@@ -9,6 +9,9 @@ LICENSES/scipy-openblas32-0.3.34.0.0-macos.txt -text
 LICENSES/scipy-openblas32-0.3.34.0.0-windows-amd64.txt -text whitespace=cr-at-eol
 LICENSES/scipy-openblas32-0.3.34.0.0-windows-arm64.txt -text whitespace=cr-at-eol
 LICENSES/scipy-openblas32-tools-LICENSE_win32.txt -text
+# This exact upstream CodSpeed notice is SHA-256 checked at every package
+# boundary, so Windows checkouts must retain its canonical LF bytes.
+LICENSES/codspeed-MIT.txt -text
 
 # GFN1 and GFN1-D3 provenance bind the upstream mctc-lib Apache and tblite /
 # simple-dftd3 LGPL licenses by exact byte length and SHA-256. Preserve their

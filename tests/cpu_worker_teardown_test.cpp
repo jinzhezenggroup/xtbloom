@@ -1,9 +1,22 @@
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
+
+#if defined(__linux__)
+#include <pthread.h>
+#endif
+
+#if defined(__SANITIZE_ADDRESS__)
+#define XTBLOOM_TEST_ADDRESS_SANITIZED 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define XTBLOOM_TEST_ADDRESS_SANITIZED 1
+#endif
+#endif
 
 #include "runtime/backend.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
@@ -19,6 +32,37 @@
   } while (false)
 
 namespace {
+
+#if defined(__linux__)
+pthread_key_t g_host_tss_key{};
+int g_host_tss_sentinel = 0;
+std::atomic<std::size_t> g_worker_tss_pre_checks{0u};
+std::atomic<std::size_t> g_worker_tss_post_checks{0u};
+std::atomic<std::size_t> g_worker_tss_failures{0u};
+
+void check_worker_host_tss(bool after_scc_iteration) noexcept {
+  if (!after_scc_iteration) {
+    g_worker_tss_pre_checks.fetch_add(1u, std::memory_order_relaxed);
+    /* Install once per worker so later pre-checks cannot hide corruption left
+     * by an earlier eigensolver call on the same persistent thread. */
+    static thread_local bool sentinel_installed = false;
+    bool failed = false;
+    if (!sentinel_installed) {
+      failed = pthread_setspecific(g_host_tss_key, &g_host_tss_sentinel) != 0;
+      sentinel_installed = !failed;
+    }
+    if (failed || pthread_getspecific(g_host_tss_key) != &g_host_tss_sentinel) {
+      g_worker_tss_failures.fetch_add(1u, std::memory_order_relaxed);
+    }
+    return;
+  }
+
+  g_worker_tss_post_checks.fetch_add(1u, std::memory_order_relaxed);
+  if (pthread_getspecific(g_host_tss_key) != &g_host_tss_sentinel) {
+    g_worker_tss_failures.fetch_add(1u, std::memory_order_relaxed);
+  }
+}
+#endif
 
 template <typename T>
 xtbloom_const_buffer_t input_buffer(const std::vector<T>& values) {
@@ -117,6 +161,11 @@ struct TwoSystemBatch {
 
 int run_context(std::int32_t cpu_threads, bool expect_background_worker) {
   xtbloom::detail::reset_gfn2_cpu_worker_teardown_test_counters();
+#if defined(__linux__)
+  g_worker_tss_pre_checks.store(0u, std::memory_order_relaxed);
+  g_worker_tss_post_checks.store(0u, std::memory_order_relaxed);
+  g_worker_tss_failures.store(0u, std::memory_order_relaxed);
+#endif
   TwoSystemBatch request;
   ContextHandle context = make_cpu_context(cpu_threads);
   CHECK(context != nullptr);
@@ -134,8 +183,19 @@ int run_context(std::int32_t cpu_threads, bool expect_background_worker) {
      * the caller may drain work, so this is a deterministic production-path
      * assertion rather than a scheduler-dependent observation. */
     CHECK(background_runs >= 1u);
+#if defined(__linux__)
+    const std::size_t worker_tss_pre_checks =
+        g_worker_tss_pre_checks.load(std::memory_order_relaxed);
+    CHECK(worker_tss_pre_checks >= background_runs);
+    CHECK(g_worker_tss_post_checks.load(std::memory_order_relaxed) == worker_tss_pre_checks);
+    CHECK(g_worker_tss_failures.load(std::memory_order_relaxed) == 0u);
+#endif
   } else {
     CHECK(background_runs == 0u);
+#if defined(__linux__)
+    CHECK(g_worker_tss_pre_checks.load(std::memory_order_relaxed) == 0u);
+    CHECK(g_worker_tss_post_checks.load(std::memory_order_relaxed) == 0u);
+#endif
   }
 
   context.reset();
@@ -147,16 +207,49 @@ int run_context(std::int32_t cpu_threads, bool expect_background_worker) {
 }  // namespace
 
 int main() {
-  if (const int line = test_context_model_caches_are_lazy_and_independent(); line != 0) {
-    return line;
-  }
+#if defined(__linux__)
+  /* glibc bug nptl/24776: a second pthread implementation loaded with
+   * dlmopen can allocate the same key number as the host while both namespaces
+   * write the same THREAD_SELF specific-data slots. Reserve a host TSS key
+   * before MKL initialization and prove xTBloom never overwrites it. This is a
+   * native analogue of CPython's _Py_tss_tstate / gilstate keys from #381. */
+  CHECK(pthread_key_create(&g_host_tss_key, nullptr) == 0);
+#if !defined(XTBLOOM_TEST_ADDRESS_SANITIZED)
+  CHECK(g_host_tss_key == pthread_key_t{0});
+#endif
+  CHECK(pthread_setspecific(g_host_tss_key, &g_host_tss_sentinel) == 0);
+#endif
+
+  /* Exercise the context-owner thread before creating any background worker.
+   * This is the path that can corrupt a CPython caller even when cpu_threads=1. */
   if (const int line = run_context(1, false); line != 0) {
     return line;
   }
+#if defined(__linux__)
+  CHECK(pthread_getspecific(g_host_tss_key) == &g_host_tss_sentinel);
+#endif
+
+  if (const int line = test_context_model_caches_are_lazy_and_independent(); line != 0) {
+    return line;
+  }
+#if defined(__linux__)
+  /* Bound each production SCC iteration containing the eigensolver on
+   * persistent workers so the test observes their slots, not only the
+   * context-owner thread's slot. */
+  xtbloom::detail::set_gfn2_cpu_worker_tss_hook(&check_worker_host_tss);
+#endif
   for (int repetition = 0; repetition < 8; ++repetition) {
     if (const int line = run_context(2, true); line != 0) {
       return line;
     }
+#if defined(__linux__)
+    CHECK(pthread_getspecific(g_host_tss_key) == &g_host_tss_sentinel);
+#endif
   }
+
+#if defined(__linux__)
+  xtbloom::detail::set_gfn2_cpu_worker_tss_hook(nullptr);
+  CHECK(pthread_key_delete(g_host_tss_key) == 0);
+#endif
   return 0;
 }

@@ -53,6 +53,7 @@ namespace {
 
 #if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
 thread_local bool g_test_background_worker = false;
+std::atomic<Gfn2CpuWorkerTssHook> g_test_background_tss_hook{nullptr};
 std::atomic<std::size_t> g_test_background_eigensolver_runs{0u};
 std::atomic<std::size_t> g_test_background_thread_cleanups{0u};
 std::atomic<bool> g_test_provider_requires_thread_cleanup{false};
@@ -1325,12 +1326,28 @@ xtbloom_status_t SystemExecution::restore_warm_checkpoint(std::string& error) {
 
 xtbloom_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend,
                                           std::string& error) {
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+  Gfn2CpuWorkerTssHook test_tss_hook = nullptr;
+  if (g_test_background_worker && backend.production()) {
+    test_tss_hook = g_test_background_tss_hook.load(std::memory_order_acquire);
+  }
+#endif
   while (driver_state.converged[0] == 0u &&
          driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS) {
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+    if (test_tss_hook != nullptr) {
+      test_tss_hook(false);
+    }
+#endif
     const xtbloom_status_t status = iterate_scc_driver_batch_cpu(
         driver, geometry, backend, overlap_cache, wavefunction, mixer_state, driver_state,
         driver_workspace, error,
         scc_parallel_enabled(parallel_executor) ? &parallel_executor : nullptr);
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+    if (test_tss_hook != nullptr) {
+      test_tss_hook(true);
+    }
+#endif
     if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
@@ -2076,6 +2093,10 @@ std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache
 }
 
 #if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+void set_gfn2_cpu_worker_tss_hook(Gfn2CpuWorkerTssHook hook) noexcept {
+  g_test_background_tss_hook.store(hook, std::memory_order_release);
+}
+
 void reset_gfn2_cpu_worker_teardown_test_counters() noexcept {
   g_test_background_eigensolver_runs.store(0u, std::memory_order_relaxed);
   g_test_background_thread_cleanups.store(0u, std::memory_order_relaxed);
