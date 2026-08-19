@@ -896,6 +896,20 @@ class InstallPayloadTests(unittest.TestCase):
                 ):
                     CHECKER.check_install(root)
 
+    def test_install_rejects_changed_codspeed_license(self) -> None:
+        """Require the exact reviewed CodSpeed notice in native installs."""
+        with tempfile.TemporaryDirectory(
+            prefix="xtbloom-install-license-test-"
+        ) as directory:
+            root = Path(directory)
+            self._write_required_install_files(root)
+            license_path = root / "share/licenses/xtbloom/third-party/codspeed-MIT.txt"
+            license_path.write_bytes(b"changed\n")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "CodSpeed MIT license differs"
+            ):
+                CHECKER.check_install(root)
+
     def test_install_rejects_corrupt_gfn1_d3_provenance(self) -> None:
         """Validate the installed D3 provenance manifest contents."""
         with tempfile.TemporaryDirectory(
