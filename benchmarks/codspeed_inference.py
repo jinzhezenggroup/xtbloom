@@ -8,11 +8,13 @@ turning CodSpeed numbers into hardware performance claims.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Protocol, TypeVar
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 import numpy as np
 from xtbloom import BatchCalculator, BatchResult, Calculator, Result, Structure
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _T = TypeVar("_T")
 
