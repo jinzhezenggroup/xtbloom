@@ -139,10 +139,11 @@ jobs:
             --test-reporter-destination=coverage-web.lcov \
             web/tests/*.test.mjs
 
-          # The helper tests intentionally cover the extracted testable
-          # modules, not browser-only workers or generated Emscripten glue.
+          # The helper and benchmark tests intentionally cover the extracted
+          # testable modules plus the shared C60 case, not browser-only workers
+          # or generated Emscripten glue.
           coverage_sources="$(sed -n 's/^SF://p' coverage-web.lcov | sort -u)"
-          expected_sources=$'web/app_helpers.js\nweb/bootstrap.js\nweb/smiles_helpers.js'
+          expected_sources=$'web/app_helpers.js\nweb/bootstrap.js\nweb/c60_case.js\nweb/smiles_helpers.js'
           test "${coverage_sources}" = "${expected_sources}"
 
       - name: Preserve web coverage for the upload-only job
