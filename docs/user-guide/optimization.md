@@ -44,7 +44,12 @@ native resources are acquired because each slot has an independent
 accepted-state ledger:
 
 ```python
+import numpy as np
 from xtbloom import Structure, optimize_batch
+
+water_positions = np.array(
+    [[0.0, 0.0, -0.45], [0.0, 1.40, 0.55], [0.0, -1.40, 0.55]]
+)
 
 systems = [
     Structure([1, 1], np.array([[-0.8, 0.0, 0.0], [0.8, 0.0, 0.0]])),

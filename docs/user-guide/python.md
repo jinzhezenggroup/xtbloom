@@ -104,7 +104,12 @@ reusable `BatchCalculator`. Both use analytic forces and report accepted states
 in the native Hartree/bohr unit convention:
 
 ```python
-from xtbloom import optimize, optimize_batch
+import numpy as np
+from xtbloom import Calculator, Structure, optimize, optimize_batch
+
+numbers = np.array([1, 1])
+positions = np.array([[-0.8, 0.0, 0.0], [0.8, 0.0, 0.0]])
+systems = [Structure(numbers, positions)]
 
 with Calculator(
     "GFN2-xTB", numbers, positions, backend="cpu", warm_start=True
