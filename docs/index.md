@@ -29,7 +29,11 @@ single-point calculations, not native C-ABI optimization drivers.
   [Python installation guide](user-guide/python.md#installation), then continue
   there for single systems, native ragged batches, spin, point charges, Array
   API/DLPack, ASE, and dpdata. For molecular relaxation, see the
-  [direct geometry-optimization guide](user-guide/optimization.md).
+  [direct geometry-optimization guide](user-guide/optimization.md), and for
+  trajectories see the [ASE molecular-dynamics guide](user-guide/ase-md.md).
+- **Analyzing vibrations:** use the Python
+  [vibrational analysis guide](user-guide/vibrations.md) for numerical
+  Hessians, rigid-mode projection, frequencies, and normal modes.
 - **Using C or C++:** [C ABI guide](user-guide/c-api.md) for installation, a
   complete example, descriptor ownership, CUDA memory, and error handling.
 - **Embedding QM/MM:** [QM/MM guide](user-guide/qmmm.md) for explicit point
@@ -78,8 +82,10 @@ payload buffers.
 The ABI-v4 native-cell descriptors validate molecular `NONE` and fully
 periodic `XYZ` inputs, but valid `XYZ` compute requests return
 `NOT_IMPLEMENTED` transactionally. GFN1 field/dipole properties, ROCm, native
-C-ABI geometry-optimization drivers, molecular dynamics, solvation,
-native/analytic Hessians, vibrational analysis, and periodic GFN1/GFN2
-execution are not implemented. The Python Hessian and the direct Python,
-browser, and dpdata optimizers are higher-level adapters built on repeated
-native calculations.
+drivers for geometry optimization and molecular dynamics, solvation,
+native/analytic Hessians, and periodic GFN1/GFN2 execution are not implemented.
+C-ABI geometry-optimization and molecular-dynamics drivers, solvation,
+native/analytic Hessians, and periodic GFN1/GFN2 execution are not implemented.
+The direct Python optimizer, ASE-driven molecular dynamics, Python numerical
+Hessian/vibrational analysis, and browser/dpdata optimizers are higher-level
+adapters built on repeated native calculations.
