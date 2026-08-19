@@ -22,7 +22,6 @@ SIMD128 build. It is not a native CPU/CUDA or browser-wide claim.
   6.8.0-110-generic, AMD EPYC 7K62 48-Core Processor.
 - Each measurement process was pinned to CPU 0 with `taskset -c 0`.
   `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, and `MKL_NUM_THREADS` were 1.
-  The ending load average was 1.51, 1.45, 1.32.
 
 `build-metadata.txt` records CMake-cache, JavaScript glue, static-library, and
 Wasm artifact identities. The JSON reports retain every raw timing sample,
