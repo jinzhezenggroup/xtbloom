@@ -449,13 +449,14 @@ def test_minimizer_applies_bounded_first_trial(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Evaluate the bounded initial move instead of repeating the input geometry."""
+    import xtbloom._optimizer as optimizer_module
     import xtbloom.dpdata as dpdata_module
 
     calls = _patch_minimizer_calculator(
         monkeypatch, lambda call, _positions: (1.0 - 0.5 * call, 1.0)
     )
-    direction = Mock(wraps=dpdata_module.lbfgs_direction)
-    monkeypatch.setattr(dpdata_module, "lbfgs_direction", direction)
+    direction = Mock(wraps=optimizer_module.lbfgs_direction)
+    monkeypatch.setattr(optimizer_module, "lbfgs_direction", direction)
     labeled = dpdata_module.XTBloomMinimizer(max_steps=1).minimize(
         _case_data_dict("oh_radical")
     )

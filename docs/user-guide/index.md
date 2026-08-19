@@ -195,6 +195,7 @@ exception-oriented control flow.
 - [Browser demo](browser-demo.md)
 - [Skills for AI agents](agent-skills.md)
 - [Python API](python.md)
+- [Direct Python geometry optimization](optimization.md)
 - [Vibrational analysis](vibrations.md)
 - [ASE molecular dynamics](ase-md.md)
 - [C and C++ API](c-api.md)
@@ -221,4 +222,6 @@ and native/analytic Hessians are not implemented. Python
 QM-coordinate Hessians from batched analytic-force differences. ASE-driven
 molecular dynamics, the Hessian and Python [vibrational
 analysis](vibrations.md), and the browser/dpdata optimizers are higher-level
+adapters built on repeated xTBloom calculations.
+The direct Python `optimize()`/`optimize_batch()` helpers are also higher-level
 adapters built on repeated xTBloom calculations.

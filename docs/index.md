@@ -6,6 +6,7 @@ charges through one stable C ABI and Python interfaces built on that ABI.
 [Try the browser demo](https://xtbloom.jinzhezeng.group) ·
 [Install xTBloom](user-guide/index.md#installation) ·
 [Python API](user-guide/python.md) ·
+[Geometry optimization](user-guide/optimization.md) ·
 [C/C++ API](user-guide/c-api.md)
 
 ## See it run
@@ -14,9 +15,10 @@ charges through one stable C ABI and Python interfaces built on that ABI.
 
 The browser demo runs entirely on the client: enter SMILES or XYZ coordinates,
 inspect the 3D structure, and calculate GFN1-xTB or GFN2-xTB results without
-uploading the molecule. GFN2-xTB remains the default. Its SMILES-to-3D and
-geometry-optimization workflow belongs to the demo adapter, not the native
-single-point API.
+uploading the molecule. GFN2-xTB remains the default. Its SMILES-to-3D workflow
+belongs to the demo adapter. The Python package also provides a direct
+geometry optimizer; both are higher-level adapters over repeated native
+single-point calculations, not native C-ABI optimization drivers.
 
 [Open the demo](https://xtbloom.jinzhezeng.group) ·
 [Browser usage and limitations](user-guide/browser-demo.md)
@@ -26,8 +28,9 @@ single-point API.
 - **Using Python:** start with the
   [Python installation guide](user-guide/python.md#installation), then continue
   there for single systems, native ragged batches, spin, point charges, Array
-  API/DLPack, ASE, dpdata, and
-  [ASE molecular dynamics](user-guide/ase-md.md).
+  API/DLPack, ASE, and dpdata. For molecular relaxation, see the
+  [direct geometry-optimization guide](user-guide/optimization.md), and for
+  trajectories see the [ASE molecular-dynamics guide](user-guide/ase-md.md).
 - **Analyzing vibrations:** use the Python
   [vibrational analysis guide](user-guide/vibrations.md) for numerical
   Hessians, rigid-mode projection, frequencies, and normal modes.
@@ -81,6 +84,8 @@ periodic `XYZ` inputs, but valid `XYZ` compute requests return
 `NOT_IMPLEMENTED` transactionally. GFN1 field/dipole properties, ROCm, native
 drivers for geometry optimization and molecular dynamics, solvation,
 native/analytic Hessians, and periodic GFN1/GFN2 execution are not implemented.
-ASE-driven molecular dynamics, the Python numerical Hessian and vibrational
-analysis, and the browser/dpdata optimizers are higher-level adapters built on
-repeated native calculations.
+C-ABI geometry-optimization and molecular-dynamics drivers, solvation,
+native/analytic Hessians, and periodic GFN1/GFN2 execution are not implemented.
+The direct Python optimizer, ASE-driven molecular dynamics, Python numerical
+Hessian/vibrational analysis, and browser/dpdata optimizers are higher-level
+adapters built on repeated native calculations.

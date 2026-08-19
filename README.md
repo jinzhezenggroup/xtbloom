@@ -103,7 +103,9 @@ print(result["charges"])
 ```
 
 See the [Python guide](docs/user-guide/python.md) for ragged batches, direct
-device arrays, point charges, ASE, dpdata, and PyTorch integration.
+device arrays, point charges, ASE, dpdata, and PyTorch integration. Molecular
+relaxation is available through the
+[direct Python geometry optimizer](docs/user-guide/optimization.md).
 
 Native consumers can install the CMake package and link
 `xtbloom::xtbloom`. The [C/C++ guide](docs/user-guide/c-api.md) contains a
@@ -144,6 +146,7 @@ before reusing the numbers.
 | Native-cell descriptors | ABI-v4 validates `NONE`/`XYZ`; periodic execution returns `NOT_IMPLEMENTED` |
 | Uniform electric field and molecular dipoles | GFN2 CPU and CUDA; not published for GFN1 |
 | ASE and dpdata integrations | GFN1 and GFN2 |
+| Direct Python and dpdata geometry optimization | Higher-level GFN1 CPU and GFN2 CPU/CUDA adapters |
 | ASE-driven molecular dynamics | Supported for molecular systems through ASE integrators; no native xTBloom MD driver |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
 | Vibrational analysis | Python mass weighting, rigid-mode projection, frequencies, and normal modes from numerical Hessians; [guide](docs/user-guide/vibrations.md) |
@@ -171,6 +174,7 @@ and response properties are central.
 - [User guide](docs/user-guide/index.md)
 - [Browser demo](docs/user-guide/browser-demo.md)
 - [Python API](docs/user-guide/python.md)
+- [Direct Python geometry optimization](docs/user-guide/optimization.md)
 - [Vibrational analysis](docs/user-guide/vibrations.md)
 - [ASE molecular dynamics](docs/user-guide/ase-md.md)
 - [C and C++ API](docs/user-guide/c-api.md)
