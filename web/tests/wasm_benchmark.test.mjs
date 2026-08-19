@@ -24,7 +24,7 @@ test("benchmark sample counts require at least three complete samples", () => {
   }
 });
 
-test("water validation rejects a converged result with incorrect energy", () => {
+test("water validation rejects converged reference mismatches", () => {
   const waterResult = {
     ok: 1,
     model: 2,
@@ -38,5 +38,9 @@ test("water validation rejects a converged result with incorrect energy", () => 
   assert.throws(
     () => validateResult("water", { ...waterResult, energy_Eh: -4.0 }),
     /water energy differs from the reference/,
+  );
+  assert.throws(
+    () => validateResult("water", { ...waterResult, scc_iterations: 8 }),
+    /water SCC iteration count differs from the reference/,
   );
 });
