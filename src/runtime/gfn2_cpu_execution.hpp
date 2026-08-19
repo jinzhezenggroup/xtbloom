@@ -91,6 +91,10 @@ std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache
 #if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
 /* Test-only observability for the standalone public-runtime teardown binary.
  * These functions are not compiled into the production shared library. */
+using Gfn2CpuWorkerTssHook = void (*)(bool after_scc_iteration) noexcept;
+/* Invoke hook on a persistent background worker immediately before and after
+ * each production SCC iteration containing the generalized eigensolver. */
+void set_gfn2_cpu_worker_tss_hook(Gfn2CpuWorkerTssHook hook) noexcept;
 void reset_gfn2_cpu_worker_teardown_test_counters() noexcept;
 std::size_t gfn2_cpu_test_background_eigensolver_runs() noexcept;
 std::size_t gfn2_cpu_test_background_thread_cleanups() noexcept;

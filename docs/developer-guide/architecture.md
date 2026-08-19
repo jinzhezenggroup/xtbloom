@@ -321,20 +321,27 @@ OpenBLAS/GCC dependency closure. The factory loads the adjacent shim by absolute
 `RTLD_LOCAL` in a new glibc link-map namespace. A missing or corrupt wheel provider fails without
 falling back to host OpenBLAS, and `libxtbloom` never acquires an OpenBLAS `DT_NEEDED` edge.
 
-The native MKL path is also host-isolated: CMake builds a private
-`libxtbloom_mkl_lp64_shim` with fixed `DT_NEEDED` dependencies on `libmkl_intel_lp64`,
-`libmkl_sequential`, and `libmkl_core`. The factory loads the adjacent shim with `RTLD_LOCAL`
-in a new glibc link-map namespace; `RTLD_LOCAL` in the base namespace would still allow a
-globally loaded host runtime to interpose on the component dependencies. The shim deliberately
-uses `DT_RPATH` rather than `DT_RUNPATH`, so `LD_LIBRARY_PATH` cannot substitute same-SONAME
-components from a different MKL installation for the configure-time cohort.
+The native MKL path is also host-isolated. CMake builds a dependency-free
+`libxtbloom_mkl_pthread_tss_bridge` plus a private `libxtbloom_mkl_lp64_shim` whose first
+`DT_NEEDED` entry is that bridge, followed by fixed dependencies on `libmkl_intel_lp64`,
+`libmkl_sequential`, and `libmkl_core`. Before creating the provider cohort, the factory resolves
+the base-namespace pthread TSS entry points, loads only the zero-dependency bridge into a new glibc
+link-map namespace, and initializes its forwarding table. It then loads the adjacent provider shim
+into that same namespace with `RTLD_LOCAL`. This ordering bridges both public pthread TSS symbols
+and the internal aliases used by glibc 2.33 and older before private libc/libdl relocations or
+constructors can allocate a colliding key. `RTLD_LOCAL` in the base namespace would still allow a
+globally loaded host runtime to interpose on the component dependencies. The provider shim
+deliberately uses `DT_RPATH` rather than `DT_RUNPATH`, so `LD_LIBRARY_PATH` cannot substitute
+same-SONAME components from a different MKL installation for the configure-time cohort.
 xTBloom never loads `libmkl_rt`, never calls `MKL_Set_Interface_Layer`, and never reads
 `MKL_INTERFACE_LAYER`, so an embedding process's MKL interface/threading state is untouched and
-LP64 xTBloom calls stay correct even when the host uses ILP64. A shared `libxtbloom` locates the shim
-in its own directory. Because a static archive has no runtime module directory, a static MKL
-consumer must stage the installed shim beside its final executable; a missing sibling produces a
-deterministic backend-unavailable error rather than a base-namespace or `libmkl_rt` fallback. On
-Linux the CUDA build generates
+LP64 xTBloom calls stay correct even when the host uses ILP64. Once provider constructors can create
+base-registry TSS keys, the bridge, provider, and base pthread handles remain loaded for process
+life so their registered destructors stay callable through worker and interpreter teardown. A
+shared `libxtbloom` locates both private DSOs in its own directory. Because a static archive has no
+runtime module directory, a static MKL consumer must stage the installed bridge and provider shim
+beside its final executable; a missing sibling produces a deterministic backend-unavailable error
+rather than a base-namespace or `libmkl_rt` fallback. On Linux the CUDA build generates
 one ELF trampoline shim per wrapped host library
 (cudart, cuBLAS, cuSOLVER, and libcuda) and compiles those shims into libxtbloom itself
 (`src/runtime/cuda_dlopen.c`). When the build environment ships the provider
