@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import ctypes
-from typing import TYPE_CHECKING
+import typing
 
 import numpy as np
 
 from . import _dlpack, library
 from . import interface as _interface
 
-if TYPE_CHECKING:
+if typing.TYPE_CHECKING:
     from types import TracebackType
 
 
@@ -114,7 +114,7 @@ class ArrayBatch(_interface.ArrayBatch):
             result_memory=result_memory,
         )
 
-    def __enter__(self) -> ArrayBatch:
+    def __enter__(self) -> typing.Self:
         """Return this batch for use in a context manager."""
         return self
 
