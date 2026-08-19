@@ -2,8 +2,8 @@
 
 This bundle supports the narrow claim that the browser-only, single-threaded
 wasm32 public Web adapter reduces correctness-qualified GFN2-xTB C60 compute
-latency under Node/V8 when the previous `-O2` scalar build is replaced by the
-`-O3` SIMD128 build. It is not a native CPU/CUDA or browser-wide claim.
+latency under Node/V8 when the previous scalar build is replaced by the final
+SIMD128 build. It is not a native CPU/CUDA or browser-wide claim.
 
 ## Revisions and environment
 
@@ -32,17 +32,19 @@ artifact size/hash, runtime identity, source revision, and scientific result.
 
 The variants were built and measured separately:
 
-- `baseline`: previous `-O2` scalar Web build;
+- `baseline`: previous scalar Web build, with `-O2` on the custom provider,
+  adapter, and final link stages (the core Release objects already used `-O3`);
 - `scalar`: final `-O3` build with `XTBLOOM_WEB_ENABLE_SIMD=OFF`;
 - `simd`: final `-O3` build with `XTBLOOM_WEB_ENABLE_SIMD=ON`.
 
-The synchronous public `xtbloom_web_compute` adapter requested GFN2-xTB
-energy, charges, and analytic forces with charge 0, no unpaired electrons,
-energy tolerance `1e-8 Eh`, charge tolerance `1e-5 e`, and at most 250 SCC
-iterations. The timed boundary includes the Emscripten `ccall` and JSON parse.
-Each workload had one untimed correctness/warmup call. Two processes retained
-10 samples each per variant, in order `baseline-a`, `scalar-a`, `simd-a`,
-`simd-b`, `scalar-b`, `baseline-b`, for 20 samples per result row.
+The synchronous public `xtbloom_web_compute` adapter requested a batch of one
+GFN2-xTB system with energy, charges, and analytic forces, charge 0, no
+unpaired electrons, energy tolerance `1e-8 Eh`, charge tolerance `1e-5 e`, at
+most 250 SCC iterations, and a strict FRESH SCC start. The timed boundary
+includes the Emscripten `ccall` and JSON parse. Each workload had one untimed
+correctness/warmup call. Two processes retained 10 samples each per variant,
+in order `baseline-a`, `scalar-a`, `simd-a`, `simd-b`, `scalar-b`,
+`baseline-b`, for 20 samples per result row.
 
 Both water and C60 converged in every warmup and retained call. All variants
 reported water energy `-5.06262145 Eh` in 9 SCC iterations and C60 energy
@@ -56,21 +58,22 @@ Eigen LAPACKE/CBLAS test.
 
 | Variant | Water median (range), ms | C60 median (range), ms | C60 vs baseline |
 | --- | ---: | ---: | ---: |
-| O2 scalar baseline | 4.184 (0.960-13.064) | 1046.477 (1039.804-1187.077) | 1.000x |
+| Previous scalar (O2 Web stages) | 4.184 (0.960-13.064) | 1046.477 (1039.804-1187.077) | 1.000x |
 | O3 scalar | 2.450 (0.968-16.132) | 1030.319 (1021.062-1048.568) | 1.016x |
 | O3 SIMD128 | 2.546 (0.986-16.140) | 897.615 (875.961-919.302) | 1.166x |
 
-The combined O3+SIMD build reduced C60 median latency by 14.23%. Within the
-final revision, SIMD reduced the O3 scalar median by 12.88% (1.148x); O3 alone
-reduced the previous-build median by 1.54%. The C60 SIMD range is disjoint from
-both scalar ranges. Water is visibly bimodal and its ranges overlap, so no
-small-molecule speed claim is made.
+The final SIMD build reduced C60 median latency by 14.23% relative to the
+previous scalar build. Within the final revision, SIMD reduced the O3 scalar
+median by 12.88% (1.148x); the final scalar median was 1.54% lower than the
+previous-build median. The C60 SIMD range is disjoint from both scalar ranges.
+Water is visibly bimodal and its ranges overlap, so no small-molecule speed
+claim is made.
 
 Complete staged engine payload (`xtbloom_web.js`, main Wasm, and side Wasm):
 
 | Variant | Bytes | Change from baseline |
 | --- | ---: | ---: |
-| O2 scalar baseline | 1,860,352 | - |
+| Previous scalar (O2 Web stages) | 1,860,352 | - |
 | O3 scalar | 1,883,196 | +22,844 (+1.23%) |
 | O3 SIMD128 | 1,899,118 | +38,766 (+2.08%) |
 
