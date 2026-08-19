@@ -25,6 +25,42 @@ distributions retain their own license metadata; the corresponding Apache and
 MIT texts are also available as `LICENSES/Apache-2.0.txt` and
 `LICENSES/MIT.txt`.
 
+## CodSpeed continuous-integration tooling
+
+The dedicated informational CPU-regression workflow uses the following
+disposable CI inputs. None is linked into `libxtbloom`, declared in xTBloom
+runtime or build metadata, or redistributed in a source archive, native
+install, or wheel. Distribution legal payloads retain
+`LICENSES/codspeed-MIT.txt` for the shared plugin/Action notice only.
+
+- `pytest-codspeed` 5.0.3
+  (<https://github.com/CodSpeedHQ/pytest-codspeed>, tag commit
+  `b2d12d8e96704c82b449d8668818a754ede45c66`, `MIT`) is resolved with all
+  transitive dependencies and hashes in
+  `benchmarks/codspeed-requirements.txt`. Its CPython 3.12 Linux x86_64 wheel
+  has SHA-256
+  `a2e0ab65df73e837666d12357280ca50ff6d6ac03ea5266703be518b68170edf`.
+- CodSpeed Action 5.0.1 (<https://github.com/CodSpeedHQ/action>, `MIT`) is
+  pinned to immutable commit
+  `88472375d0a4572cf70a9f1fe3a4e0ab8da1b924`. The plugin and Action share the
+  retained `Copyright (c) 2022 CodSpeed and contributors` MIT notice.
+- CodSpeed runner 5.0.1 (<https://github.com/CodSpeedHQ/codspeed>, tag commit
+  `8b253c6a2d3a435bc404f8a74f86d3c4ed2a2402`, `MIT OR Apache-2.0`) is acquired
+  by the pinned Action. Its installer SHA-256 is
+  `5d8abb100020c7968220ab856c776670abfdc77bb0fac532c56f695af4f4a098`;
+  the x86_64 Linux archive SHA-256 is
+  `dda8318ddceecb99203ff64cf5697553040fe1eb4b617a6a585674f829c63e33`.
+  Upstream's MIT choice carries `Copyright (c) 2023 CodSpeed Technology SAS`.
+- The simulation runner installs `valgrind-codspeed` 3.26.0-0codspeed6
+  (<https://github.com/CodSpeedHQ/valgrind-codspeed>, `GPL-3.0`). The Ubuntu
+  24.04 amd64 package used by the workflow has SHA-256
+  `454becce1a232bba1c408ed8aad4a20afa78acfbaba072cef2bf1c0a636ebd71`.
+
+The retained CodSpeed MIT text is byte-identical to the license at the
+reviewed plugin and Action revisions. The runner's MIT/Apache-2.0 and modified
+Valgrind GPL-3.0 terms remain in their downloaded CI artifacts and upstream
+sources; xTBloom does not redistribute those executables.
+
 ## array-api-compat
 
 Repository: <https://github.com/data-apis/array-api-compat>

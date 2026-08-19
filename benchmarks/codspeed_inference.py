@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Protocol, TypeVar
 import numpy as np
 from xtbloom import BatchCalculator, BatchResult, Calculator, Result, Structure
 
+from benchmarks.natoms_scaling import make_alkane
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -27,11 +29,13 @@ _WATER_POSITIONS = np.array(
     ],
     dtype=np.float64,
 )
-_H2_NUMBERS = np.array([1, 1], dtype=np.int32)
-_H2_POSITIONS = np.array(
-    [[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]],
-    dtype=np.float64,
-)
+# Reuse the deterministic 32-atom C10H22 fixture from the audit-ready scaling
+# protocol. Water-only timings are dominated by fixed Python/C-ABI and tiny-
+# matrix costs; this size exposes model and eigensolver regressions while still
+# keeping instruction-simulation CI bounded.
+_ALKANE = make_alkane(32)
+_ALKANE_NUMBERS = np.asarray(_ALKANE.atomic_numbers, dtype=np.int32)
+_ALKANE_POSITIONS = np.asarray(_ALKANE.positions_bohr, dtype=np.float64).reshape(-1, 3)
 
 
 class _BenchmarkFixture(Protocol):
@@ -60,12 +64,12 @@ def _assert_batch_result(result: BatchResult) -> None:
     assert np.isfinite(result.charges).all()
 
 
-def test_gfn2_water_fresh(benchmark: _BenchmarkFixture) -> None:
-    """Measure repeated fresh-SCC GFN2 water inference on one CPU worker."""
+def test_gfn2_c10h22_fresh(benchmark: _BenchmarkFixture) -> None:
+    """Measure repeated fresh-SCC GFN2 32-atom inference on one CPU worker."""
     with Calculator(
         "GFN2-xTB",
-        _WATER_NUMBERS,
-        _WATER_POSITIONS,
+        _ALKANE_NUMBERS,
+        _ALKANE_POSITIONS,
         backend="cpu",
         cpu_threads=1,
         warm_start=False,
@@ -74,12 +78,12 @@ def test_gfn2_water_fresh(benchmark: _BenchmarkFixture) -> None:
     _assert_single_result(result)
 
 
-def test_gfn2_water_warm(benchmark: _BenchmarkFixture) -> None:
-    """Measure strict warm-SCC GFN2 reuse after an untimed fresh seed."""
+def test_gfn2_c10h22_warm(benchmark: _BenchmarkFixture) -> None:
+    """Measure strict warm-SCC 32-atom GFN2 reuse after an untimed fresh seed."""
     with Calculator(
         "GFN2-xTB",
-        _WATER_NUMBERS,
-        _WATER_POSITIONS,
+        _ALKANE_NUMBERS,
+        _ALKANE_POSITIONS,
         backend="cpu",
         cpu_threads=1,
         warm_start=True,
@@ -90,12 +94,12 @@ def test_gfn2_water_warm(benchmark: _BenchmarkFixture) -> None:
     _assert_single_result(result)
 
 
-def test_gfn1_water_fresh(benchmark: _BenchmarkFixture) -> None:
-    """Measure repeated fresh-SCC GFN1 water inference on one CPU worker."""
+def test_gfn1_c10h22_fresh(benchmark: _BenchmarkFixture) -> None:
+    """Measure repeated fresh-SCC GFN1 32-atom inference on one CPU worker."""
     with Calculator(
         "GFN1-xTB",
-        _WATER_NUMBERS,
-        _WATER_POSITIONS,
+        _ALKANE_NUMBERS,
+        _ALKANE_POSITIONS,
         backend="cpu",
         cpu_threads=1,
         warm_start=False,
@@ -105,10 +109,10 @@ def test_gfn1_water_fresh(benchmark: _BenchmarkFixture) -> None:
 
 
 def test_gfn2_ragged_batch_fresh(benchmark: _BenchmarkFixture) -> None:
-    """Measure one small ragged GFN2 batch through the public Python API."""
+    """Measure a mixed-size ragged GFN2 batch through the public Python API."""
     structures = [
-        Structure(_H2_NUMBERS, _H2_POSITIONS),
         Structure(_WATER_NUMBERS, _WATER_POSITIONS),
+        Structure(_ALKANE_NUMBERS, _ALKANE_POSITIONS),
     ]
     with BatchCalculator(
         structures,

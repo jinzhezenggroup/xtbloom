@@ -18,7 +18,11 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       OMP_NUM_THREADS: "1"
+      # The reviewed provider is DYNAMIC_ARCH. Fix its kernel so simulation
+      # counts do not change with the hosted runner's physical CPU model.
+      OPENBLAS_CORETYPE: Nehalem
       OPENBLAS_NUM_THREADS: "1"
+      UV_DEFAULT_INDEX: https://pypi.org/simple
       XTBLOOM_CPU_ISA: baseline
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,13 +50,26 @@ jobs:
                 'import json, sys; print(json.load(sys.stdin)["provider_path"])'
           )"
           test -f "${openblas}"
+          OPENBLAS_PROVIDER="${openblas}" uv run --no-sync python - <<'PY'
+          import ctypes
+          import os
+
+          provider = ctypes.CDLL(os.environ["OPENBLAS_PROVIDER"])
+          provider.scipy_openblas_get_corename.restype = ctypes.c_char_p
+          core = provider.scipy_openblas_get_corename().decode("ascii")
+          if core != "Nehalem":
+              raise SystemExit(f"expected OpenBLAS core Nehalem, got {core}")
+          print(f"verified OpenBLAS core: {core}")
+          PY
           CMAKE_ARGS="-DXTBLOOM_CPU_LINALG_LIBRARY=${openblas}" \
             uv sync --locked --no-editable --extra test --group wheel-build \
               --reinstall-package xtbloom
-          # pytest-codspeed is a CI-only MIT-licensed benchmark plugin. Keep it
-          # outside project metadata/uv.lock so it cannot enter package extras,
-          # sdists, or wheels; pin the exact reviewed release used here.
-          uv pip install "pytest-codspeed==5.0.3"
+          # This hash-complete lock is CI-only and deliberately separate from
+          # project metadata and uv.lock. The benchmark toolchain therefore
+          # cannot enter package requirements, sdists, or wheels.
+          uv pip install --require-hashes \
+            --requirement benchmarks/codspeed-requirements.txt
+          uv pip check
       - name: Validate benchmark collection
         run: uv run --no-sync pytest benchmarks/codspeed_inference.py --collect-only -q
       - name: Run CodSpeed CPU simulation
