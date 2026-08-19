@@ -258,12 +258,16 @@ function(xtbloom_add_mkl_pthread_tss_bridge target output_name)
   target_compile_options(${target} PRIVATE
     -fno-stack-protector
     -fno-sanitize=all
+    -fno-profile-arcs
+    -fno-test-coverage
   )
   target_link_options(${target} PRIVATE
     -nostdlib
     -nodefaultlibs
     -nostartfiles
     -fno-sanitize=all
+    -fno-profile-arcs
+    -fno-test-coverage
     "LINKER:-z,defs"
   )
   set_target_properties(${target} PROPERTIES

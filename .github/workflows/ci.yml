@@ -59,16 +59,19 @@ jobs:
           CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
           # Tests execute concurrently, so atomic profile updates prevent
           # corrupt negative gcov counters in shared library objects.
-          COVERAGE_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage -fprofile-update=atomic' || '' }}
+          # Spell out the compile switches so dependency-free targets can
+          # cancel instrumentation without inheriting libgcov at link time.
+          COVERAGE_COMPILE_FLAGS: ${{ matrix.compiler == 'gcc' && '-fprofile-arcs -ftest-coverage -fprofile-update=atomic' || '' }}
+          COVERAGE_LINK_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage' || '' }}
         run: |
           cmake -S . -B build -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_C_FLAGS="${COVERAGE_FLAGS}" \
-            -DCMAKE_CXX_FLAGS="${COVERAGE_FLAGS}" \
-            -DCMAKE_EXE_LINKER_FLAGS="${COVERAGE_FLAGS}"
+            -DCMAKE_C_FLAGS="${COVERAGE_COMPILE_FLAGS}" \
+            -DCMAKE_CXX_FLAGS="${COVERAGE_COMPILE_FLAGS}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${COVERAGE_LINK_FLAGS}"
       - name: Build
         run: cmake --build build --parallel
       - name: Show ccache statistics
@@ -388,8 +391,8 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_C_FLAGS="--coverage -fprofile-update=atomic" \
-            -DCMAKE_CXX_FLAGS="--coverage -fprofile-update=atomic" \
+            -DCMAKE_C_FLAGS="-fprofile-arcs -ftest-coverage -fprofile-update=atomic" \
+            -DCMAKE_CXX_FLAGS="-fprofile-arcs -ftest-coverage -fprofile-update=atomic" \
             -DCMAKE_EXE_LINKER_FLAGS=--coverage \
             -DCMAKE_BUILD_TYPE=Release
       - name: Build
