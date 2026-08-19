@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { initializeDownloadedEngineModule } from "../app_helpers.js";
 import { C60_REFERENCE, C60_XYZ } from "../c60_case.js";
@@ -15,7 +15,8 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function summarize(samples) {
+export function summarize(samples) {
+  assert.ok(samples.length > 0, "at least one timing sample is required");
   const sorted = [...samples].sort((left, right) => left - right);
   const middle = Math.floor(sorted.length / 2);
   const median = sorted.length % 2 === 0
@@ -26,6 +27,15 @@ function summarize(samples) {
     range_ms: [sorted[0], sorted.at(-1)],
     samples_ms: samples,
   };
+}
+
+export function parseRetainedSamples(value = "5") {
+  const retainedSamples = Number(value);
+  assert.ok(
+    Number.isInteger(retainedSamples) && retainedSamples >= 3,
+    "retained sample count must be an integer of at least 3",
+  );
+  return retainedSamples;
 }
 
 async function loadEngine(sitePath) {
@@ -73,12 +83,13 @@ function validateResult(name, result) {
   assert.ok(Number.isFinite(result.energy_Eh));
   assert.ok(Number.isInteger(result.scc_iterations));
   assert.ok(result.scc_iterations > 0);
+  assert.equal(result.scc_converged, 1);
+  const expectedAtoms = name === "c60" ? 60 : 3;
+  assert.equal(result.charges.length, expectedAtoms);
+  assert.equal(result.forces.length, expectedAtoms);
   if (name === "c60") {
-    assert.equal(result.scc_converged, 1);
     assert.equal(result.scc_iterations, C60_REFERENCE.sccIterations);
     assert.ok(Math.abs(result.energy_Eh - C60_REFERENCE.energyEh) < 1e-6);
-    assert.equal(result.charges.length, 60);
-    assert.equal(result.forces.length, 60);
   }
 }
 
@@ -103,38 +114,53 @@ function benchmark(name, xyz, compute, retainedSamples) {
   };
 }
 
-const sitePath = process.argv[2] || "build/wasm32-web/web/site";
-const label = process.argv[3] || "web-build";
-const retainedSamples = Number.parseInt(process.argv[4] || "5", 10);
-assert.ok(Number.isInteger(retainedSamples) && retainedSamples >= 3);
-
-const { Module, wasmBinary, dataBinary } = await loadEngine(sitePath);
-const compute = makeCompute(Module);
-
-const report = {
+export async function runBenchmark({
+  sitePath,
   label,
-  site: path.resolve(sitePath),
-  runtime: {
-    node: process.version,
-    platform: process.platform,
-    arch: process.arch,
-    cpu: os.cpus()[0]?.model || "unknown",
-  },
-  retained_samples: retainedSamples,
-  artifacts: {
-    main_wasm: {
-      bytes: wasmBinary.byteLength,
-      sha256: sha256(wasmBinary),
+  retainedSamples,
+  sourceRevision = "unknown",
+}) {
+  const { Module, wasmBinary, dataBinary } = await loadEngine(sitePath);
+  const compute = makeCompute(Module);
+  return {
+    label,
+    source_revision: sourceRevision,
+    site: path.resolve(sitePath),
+    runtime: {
+      node: process.version,
+      v8: process.versions.v8,
+      platform: process.platform,
+      os_release: os.release(),
+      arch: process.arch,
+      cpu: os.cpus()[0]?.model || "unknown",
+      logical_cpus: os.cpus().length,
     },
-    side_wasm: {
-      bytes: dataBinary.byteLength,
-      sha256: sha256(dataBinary),
+    warmup_samples: 1,
+    retained_samples: retainedSamples,
+    timed_scope: "synchronous xtbloom_web_compute ccall plus JSON parsing",
+    artifacts: {
+      main_wasm: {
+        bytes: wasmBinary.byteLength,
+        sha256: sha256(wasmBinary),
+      },
+      side_wasm: {
+        bytes: dataBinary.byteLength,
+        sha256: sha256(dataBinary),
+      },
     },
-  },
-  workloads: {
-    water: benchmark("water", WATER_XYZ, compute, retainedSamples),
-    c60: benchmark("c60", C60_XYZ, compute, retainedSamples),
-  },
-};
+    workloads: {
+      water: benchmark("water", WATER_XYZ, compute, retainedSamples),
+      c60: benchmark("c60", C60_XYZ, compute, retainedSamples),
+    },
+  };
+}
 
-console.log(JSON.stringify(report, null, 2));
+if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  const report = await runBenchmark({
+    sitePath: process.argv[2] || "build/wasm32-web/web/site",
+    label: process.argv[3] || "web-build",
+    retainedSamples: parseRetainedSamples(process.argv[4]),
+    sourceRevision: process.argv[5] || "unknown",
+  });
+  console.log(JSON.stringify(report, null, 2));
+}

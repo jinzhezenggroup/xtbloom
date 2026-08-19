@@ -98,6 +98,9 @@ xTBloom's published native benchmark evidence.
 ## Scope
 
 - The deployed engine is the single-threaded CPU backend compiled to wasm32.
+- The deployed artifact requires WebAssembly SIMD128. Maintainers can build a
+  scalar fallback with `XTBLOOM_WEB_ENABLE_SIMD=OFF`; this does not change the
+  public C ABI or native CPU/CUDA artifacts.
 - The method selector exposes GFN1-xTB and GFN2-xTB; GFN2-xTB is the default.
   The browser remains CPU-only even though native builds support both models
   on CUDA.

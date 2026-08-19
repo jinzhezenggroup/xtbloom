@@ -25,6 +25,7 @@ endif()
 
 option(XTBLOOM_WEB_ENABLE_SIMD
   "Enable WebAssembly SIMD128 for the browser-only engine and provider" ON)
+set(_xtbloom_web_optimization_flag "-O3")
 set(_xtbloom_web_simd_flag "")
 if(XTBLOOM_WEB_ENABLE_SIMD)
   # The public library is assembled from several parent-scope OBJECT targets.
@@ -152,7 +153,8 @@ add_custom_command(
           -fvisibility=hidden -fvisibility-inlines-hidden
           -fno-exceptions -fno-rtti
           "-I${_xtbloom_web_eigen_root}"
-          -sSIDE_MODULE=2 "${_xtbloom_web_arch_flag}" -O2
+          -sSIDE_MODULE=2 "${_xtbloom_web_arch_flag}"
+          "${_xtbloom_web_optimization_flag}"
           ${_xtbloom_web_simd_flag}
           "-sEXPORTED_FUNCTIONS=[\"_openblas_get_config\",\"_openblas_set_num_threads_local\",\"_LAPACKE_dpotrf_work\",\"_LAPACKE_dpocon_work\",\"_LAPACKE_dsyevd_work\",\"_cblas_dgemm\",\"_cblas_dtrsm\"]"
   DEPENDS
@@ -205,7 +207,8 @@ add_custom_target(
 add_custom_command(
   OUTPUT "${_xtbloom_web_obj}"
   COMMAND ${CMAKE_C_COMPILER}
-          "${_xtbloom_web_arch_flag}" -fPIC -O2
+          "${_xtbloom_web_arch_flag}" -fPIC
+          "${_xtbloom_web_optimization_flag}"
           ${_xtbloom_web_simd_flag}
           "${_xtbloom_web_generated_include}"
           "${_xtbloom_web_source_include}"
@@ -235,7 +238,8 @@ add_custom_command(
           "${_xtbloom_web_generated_include}"
           "${_xtbloom_web_source_include}"
           -o "${_xtbloom_web_engine_js}"
-          "${_xtbloom_web_arch_flag}" -O2 -sMAIN_MODULE=2
+          "${_xtbloom_web_arch_flag}" "${_xtbloom_web_optimization_flag}"
+          -sMAIN_MODULE=2
           ${_xtbloom_web_simd_flag}
           -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createXTBloomModule
           -sSTACK_SIZE=8MB -sALLOW_MEMORY_GROWTH
