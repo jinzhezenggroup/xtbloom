@@ -10,6 +10,10 @@ import { C60_REFERENCE, C60_XYZ } from "../c60_case.js";
 
 const MODEL_GFN2_XTB = 2;
 const WATER_XYZ = "O 0 0 0\nH 0 0 0.9572\nH 0 0.75718 -0.58552";
+const WATER_REFERENCE = {
+  energyEh: -5.06262145,
+  sccIterations: 9,
+};
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -77,7 +81,7 @@ function makeCompute(Module) {
   };
 }
 
-function validateResult(name, result) {
+export function validateResult(name, result) {
   assert.equal(result.ok, 1, `${name} calculation failed`);
   assert.equal(result.model, MODEL_GFN2_XTB);
   assert.ok(Number.isFinite(result.energy_Eh));
@@ -87,10 +91,16 @@ function validateResult(name, result) {
   const expectedAtoms = name === "c60" ? 60 : 3;
   assert.equal(result.charges.length, expectedAtoms);
   assert.equal(result.forces.length, expectedAtoms);
-  if (name === "c60") {
-    assert.equal(result.scc_iterations, C60_REFERENCE.sccIterations);
-    assert.ok(Math.abs(result.energy_Eh - C60_REFERENCE.energyEh) < 1e-6);
-  }
+  const reference = name === "c60" ? C60_REFERENCE : WATER_REFERENCE;
+  assert.equal(
+    result.scc_iterations,
+    reference.sccIterations,
+    `${name} SCC iteration count differs from the reference`,
+  );
+  assert.ok(
+    Math.abs(result.energy_Eh - reference.energyEh) < 1e-6,
+    `${name} energy differs from the reference`,
+  );
 }
 
 function benchmark(name, xyz, compute, retainedSamples) {

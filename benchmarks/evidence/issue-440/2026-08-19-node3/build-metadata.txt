@@ -11,6 +11,7 @@ Width flags: -m32 -fPIC
 Threads: OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
 baseline source: 3c21f50195389b093941eb5ed6f1143b8802f96e (clean)
+baseline Web configuration: scalar; -msimd128 absent; custom Web stages -O2
 baseline CMakeCache.txt: a780033ae92650b9f5edea92f434174a8f46ff71c9ff5ef6691a4c9cef48ab20
 baseline libxtbloom.a: a243318671acd5352dab079e30ad0001c5fe393c5355819b9a6d3de69bbbe535
 baseline xtbloom_web.js: ff6a38b66b4f4483427a34008d770506b643a7e8125a66949d5455fbbaec37b0
@@ -18,12 +19,14 @@ baseline xtbloom_web.wasm: 83eecd2001f16832e7daf5179ae48c8fcf3b66e7566dc4a783c82
 baseline xtbloom_web.side.wasm: db1d49cb4755ed96ae1fbce907b13882e1cc62657bd56418a21c902b10dfdc34
 
 final source: 3b9fac09ecb0b2da1596022ddda786fa9acfb885 (clean)
+scalar Web configuration: XTBLOOM_WEB_ENABLE_SIMD=OFF; -msimd128 absent; custom Web stages -O3
 scalar CMakeCache.txt: ab0e9f1f3f91345f80c56e9e3356cae2e88271222647df36e331eaa9e7b59632
 scalar libxtbloom.a: 8b5e1ed0956a58cdaf91d3cd3f3892207f34764577a1f5f73bb2c871863097f3
 scalar xtbloom_web.js: bd8b29aef05df841cd6bb5519c11b9567c1ab627d3f85248d149558f2943da33
 scalar xtbloom_web.wasm: 86f0c7c7d46c95bf10713281ae1ee8543a8656e7fdf8f41785d245baba7a462d
 scalar xtbloom_web.side.wasm: 89732c8351bd226011351c3327b475222d6ce10de0ab28f8a32ce9323dffb0a8
 
+SIMD Web configuration: XTBLOOM_WEB_ENABLE_SIMD=ON; -msimd128 enabled; custom Web stages -O3
 SIMD CMakeCache.txt: 42e3b19d9daedca3c9951963e37adb13b521bee62e5be167368a9d2030b4071e
 SIMD libxtbloom.a: bb86cc614f5d234d2eb7862274bdf7835b15ac0492274b537bce59bf9016c132
 SIMD xtbloom_web.js: 8dad44cc79faf4f3c00a5097681f404875cbea2b10801910a24a4aee241cdf95

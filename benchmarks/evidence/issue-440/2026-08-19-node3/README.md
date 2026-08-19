@@ -48,11 +48,11 @@ in order `baseline-a`, `scalar-a`, `simd-a`, `simd-b`, `scalar-b`,
 
 Both water and C60 converged in every warmup and retained call. All variants
 reported water energy `-5.06262145 Eh` in 9 SCC iterations and C60 energy
-`-128.249019 Eh` in 13 SCC iterations. The harness also required successful
-SCC convergence and complete charge/force arrays; C60 additionally had to
-match the independent energy and iteration checkpoint. Before timing, all
-three sites passed `wasm_smoke.mjs`; both final sites passed the standalone
-Eigen LAPACKE/CBLAS test.
+`-128.249019 Eh` in 13 SCC iterations. The harness required successful SCC
+convergence and complete charge/force arrays, and the retained results were
+checked against both independent energy and iteration checkpoints. Before
+timing, all three sites passed `wasm_smoke.mjs`; both final sites passed the
+standalone Eigen LAPACKE/CBLAS test.
 
 ## Results
 
