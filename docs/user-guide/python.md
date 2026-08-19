@@ -334,13 +334,13 @@ API semantics do not depend on one device's measured timing.
 
 ## PyTorch autograd op (positions gradient only)
 
-`xtbloom.xtbloom_torch` is a GFN2-xTB-only adapter with no model selector. It
-runs packed xtbloom inference on PyTorch tensors (host CPU
-or CUDA device) and returns `(energies, forces)` as float64 tensors, with
-zero-copy tensor data plane. It is the only autograd entry point in the Python
-API, and its gradient contract is deliberately narrow: it supports exactly
-`dE/dR = -F` with respect to `positions`, which the native library evaluates
-analytically.
+`xtbloom.xtbloom_torch` accepts `method="GFN1-xTB"`/`"GFN1"` and
+`method="GFN2-xTB"`/`"GFN2"`, with GFN2-xTB retained as the default. It runs
+packed xTBloom inference on PyTorch tensors (host CPU or CUDA device) and
+returns `(energies, forces)` as float64 tensors, with a zero-copy tensor data
+plane. It is the only autograd entry point in the Python API, and its gradient
+contract is deliberately narrow: it supports exactly `dE/dR = -F` with respect
+to `positions`, which the selected native GFN model evaluates analytically.
 
 ```python
 import torch
@@ -353,12 +353,15 @@ energies, forces = xtbloom_torch(
     atom_offsets,     # (nsystems + 1,) int64
     molecular_charges,  # (nsystems,) float64
     unpaired_electrons, # (nsystems,) int32
+    method="GFN1-xTB",
     backend="cuda",
 )
 loss = energies.sum()
 loss.backward()      # positions.grad == -forces
 ```
 
+- `method` is a calculation-wide selector; GFN1 and GFN2 use separate native
+  compute plans even when the packed topology is otherwise identical.
 - Backpropagation through `forces` (the force Hessian `dF/dR`) raises
   `XTBloomNotSupportedError`.
 - Higher-order differentiation requests such as `create_graph=True` or
@@ -376,15 +379,17 @@ loss.backward()      # positions.grad == -forces
 
   ```python
   with torch.cuda.stream(stream):
-      energies, forces = xtbloom_torch(...)
+      energies, forces = xtbloom_torch(..., method="GFN1-xTB")
   ```
 
 The op itself is a compiled extension, `libxtbloom_torch_ext`, written against
 the LibTorch Stable ABI (torch >= 2.10). It binds tensor data pointers directly
-to the public xtbloom C ABI. CPU calls complete synchronously; CUDA calls return
-ordinary `(energies, forces)` tensors ordered on `torch.cuda.current_stream()`,
-just like other CUDA-enabled PyTorch operations. Stream management and native
-execution lifetime are implementation details rather than Python API choices.
+to the public xTBloom C ABI and passes the selected public GFN model tag through
+the private Torch dispatcher. CPU calls complete synchronously; CUDA calls
+return ordinary `(energies, forces)` tensors ordered on
+`torch.cuda.current_stream()`, just like other CUDA-enabled PyTorch operations.
+Stream management and native execution lifetime are implementation details
+rather than Python API choices.
 
 Because only ABI-stable symbols are used, a single binary works across torch
 releases without per-version rebuilds. The extension is optional: when the
@@ -396,15 +401,15 @@ The shipped plugin retains only the official runtime edge
 (`DT_NEEDED libtorch_cpu.so` on Linux, `@rpath/libtorch_cpu.dylib` on macOS, or
 `torch_cpu.dll` on Windows) and binds to the torch the end user already
 imported. Torch is still required at *runtime* to call `xtbloom_torch`; the rest
-of xtbloom builds and runs without torch. See
+of xTBloom builds and runs without torch. See
 `cmake/3rdparty/torch-stable/README.md` for provenance, supported wheel cohorts,
 and regeneration.
 
 `xtbloom_torch` is eager-only: it drives the native library through a custom op,
-which `torch.compile` cannot trace.  The op is therefore marked opaque to the
+which `torch.compile` cannot trace. The op is therefore marked opaque to the
 compiler, so wrapping it in `torch.compile` inserts a clean graph
 break and runs it eagerly: correct results and no trace-time error, but no
-compilation speedup for the xtbloom call itself (the surrounding graph is still
+compilation speedup for the xTBloom call itself (the surrounding graph is still
 compiled).
 
 ## Open-shell calculations

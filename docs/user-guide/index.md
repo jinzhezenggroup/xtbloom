@@ -206,10 +206,9 @@ exception-oriented control flow.
 ## Scope and limitations
 
 GFN1-xTB and GFN2-xTB are implemented on CPU and CUDA. The high-level Python
-calculators, Array API/DLPack, ASE, and dpdata expose both models, while
-PyTorch autograd remains GFN2-only. The single-threaded CPU/WebAssembly
-browser demo exposes both GFN1 and GFN2 and defaults to GFN2. ROCm remains
-reserved.
+calculators, Array API/DLPack, PyTorch positions-only autograd, ASE, and dpdata
+expose both models. The single-threaded CPU/WebAssembly browser demo exposes
+both GFN1 and GFN2 and defaults to GFN2. ROCm remains reserved.
 
 xTBloom's ABI-v4 batch descriptor reserves validated native 3D cell and
 periodic-axis input, but native periodic GFN1/GFN2 execution and the Python

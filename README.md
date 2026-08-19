@@ -150,7 +150,7 @@ before reusing the numbers.
 | ASE-driven molecular dynamics | Supported for molecular systems through ASE integrators; no native xTBloom MD driver |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
 | Array API/DLPack | GFN1 and GFN2 |
-| PyTorch autograd | GFN2-only adapter surface |
+| PyTorch autograd | GFN1 and GFN2; positions gradient `dE/dR = -F` only |
 | Vibrational analysis | Python mass weighting, rigid-mode projection, frequencies, and normal modes from numerical Hessians; [guide](docs/user-guide/vibrations.md) |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN1/GFN2 CPU/WASM adapter; GFN2 is the default |
 | ROCm, solvation, native optimization/MD drivers, analytic/C-ABI Hessians, periodic GFN1/GFN2 execution | Not implemented |

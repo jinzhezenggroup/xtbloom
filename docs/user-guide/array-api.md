@@ -32,7 +32,8 @@ All existing packed-array semantics are unchanged: exact dtype/shape checks,
 DLPack stream negotiation, host/device/mixed descriptors, point charges,
 caller-supplied charge response, and peer-local numerical failures.
 
-This change is intentionally scoped to the packed Array API/DLPack inference
-surface. `xtbloom_torch` remains a separately implemented GFN2-only autograd
-operator because its compiled extension has its own model and derivative
-contract.
+`xtbloom_torch` is a separately implemented compiled autograd operator, but it
+accepts the same GFN1/GFN2 `method` spellings and keeps GFN2-xTB as the default.
+Its derivative contract is intentionally narrower than `ArrayBatch`: only the
+positions gradient `dE/dR = -F` is supported, while force gradients and
+higher-order differentiation remain unsupported.

@@ -507,6 +507,7 @@ StreamKey stream_key_of(const ContextKey& key) noexcept { return {key.device, ke
 struct PlanKey {
   int64_t nsystems = 0;
   int64_t natoms = 0;
+  int64_t model = XTBLOOM_MODEL_GFN2_XTB;
   std::array<BufferIdentity, 5> topology{};
   int64_t max_scc_iterations = 0;
   std::uint64_t charge_tolerance = 0;
@@ -518,8 +519,8 @@ struct PlanKey {
   int64_t determinism = XTBLOOM_DETERMINISM_DEFAULT;
 
   bool operator==(const PlanKey& other) const noexcept {
-    return nsystems == other.nsystems && natoms == other.natoms && topology == other.topology &&
-           max_scc_iterations == other.max_scc_iterations &&
+    return nsystems == other.nsystems && natoms == other.natoms && model == other.model &&
+           topology == other.topology && max_scc_iterations == other.max_scc_iterations &&
            charge_tolerance == other.charge_tolerance &&
            energy_tolerance == other.energy_tolerance &&
            electronic_temperature == other.electronic_temperature && scc_mixer == other.scc_mixer &&
@@ -1511,10 +1512,11 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
     Tensor atom_offsets_owner, Tensor molecular_charges_owner, Tensor unpaired_electrons_owner,
     Tensor spin_channels_owner, int64_t atomic_numbers_version, int64_t atom_offsets_version,
     int64_t molecular_charges_version, int64_t unpaired_electrons_version,
-    int64_t spin_channels_version, Tensor out_energies, Tensor out_forces, int64_t backend,
-    int64_t device_id, int64_t cpu_threads, int64_t stream, int64_t max_scc_iterations,
-    double charge_tolerance, double energy_tolerance, double electronic_temperature,
-    int64_t scc_mixer, int64_t scc_mixer_history, double scc_mixer_damping, int64_t determinism) {
+    int64_t spin_channels_version, Tensor out_energies, Tensor out_forces, int64_t model,
+    int64_t backend, int64_t device_id, int64_t cpu_threads, int64_t stream,
+    int64_t max_scc_iterations, double charge_tolerance, double energy_tolerance,
+    double electronic_temperature, int64_t scc_mixer, int64_t scc_mixer_history,
+    double scc_mixer_damping, int64_t determinism) {
   const XTBloomApi& api = xtbloom_api();
   // Fail fast when the torch extension was built against an incompatible
   // ABI level, before any tensor contract is assumed.
@@ -1523,6 +1525,8 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
   // The dispatcher exposes int64 scalars. Validate before narrowing them into
   // the fixed-width public ABI so direct private-op callers cannot wrap a
   // hostile value into an otherwise valid tag or history length.
+  STD_TORCH_CHECK(model == XTBLOOM_MODEL_GFN1_XTB || model == XTBLOOM_MODEL_GFN2_XTB,
+                  "xtbloom_torch: model has an unknown value");
   STD_TORCH_CHECK(scc_mixer == XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN,
                   "xtbloom_torch: scc_mixer must select modified Broyden");
   STD_TORCH_CHECK(scc_mixer_history >= 1 && scc_mixer_history <= 64,
@@ -1610,7 +1614,7 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
   // --- compute options ---------------------------------------------------------
   xtbloom_compute_options_t options;
   check_status(api.compute_options_init(&options, sizeof(options)), "xtbloom_compute_options_init");
-  options.model = XTBLOOM_MODEL_GFN2_XTB;
+  options.model = static_cast<xtbloom_model_t>(model);
   options.flags = static_cast<uint32_t>(XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES |
                                         XTBLOOM_COMPUTE_ATOMIC_CHARGES);
   options.max_scc_iterations = static_cast<int32_t>(max_scc_iterations);
@@ -1637,6 +1641,7 @@ std::tuple<Tensor, Tensor, std::int64_t> xtbloom_torch_forward(
     const PlanKey plan_key{
         nsystems,
         natoms,
+        model,
         {topology_identity(atom_offsets, atom_offsets_version),
          topology_identity(atomic_numbers, atomic_numbers_version),
          topology_identity(molecular_charges, molecular_charges_version),
@@ -1763,7 +1768,7 @@ STABLE_TORCH_LIBRARY(xtbloom, m) {
       "Tensor unpaired_electrons_owner, Tensor spin_channels_owner, "
       "int atomic_numbers_version, int atom_offsets_version, int molecular_charges_version, "
       "int unpaired_electrons_version, int spin_channels_version, "
-      "Tensor(a!) out_energies, Tensor(b!) out_forces, int backend, int device_id, "
+      "Tensor(a!) out_energies, Tensor(b!) out_forces, int model, int backend, int device_id, "
       "int cpu_threads, "
       "int stream, int max_scc_iterations, float charge_tolerance, float energy_tolerance, "
       "float electronic_temperature, int scc_mixer, int scc_mixer_history, "
