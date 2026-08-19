@@ -255,10 +255,11 @@ geometry optimization in the C ABI.
 ## Scope
 
 GFN1 electric fields/dipoles, ROCm, lattice/PBC inputs, solvation, native
-geometry optimization, molecular dynamics, native/analytic
-Hessians, vibrational analysis, and
-higher-order autograd are not implemented. A numerical QM Cartesian Hessian is
-available through Python `Calculator.hessian()` and `BatchCalculator.hessian()`.
+geometry-optimization and molecular-dynamics drivers, native/analytic Hessians,
+and higher-order autograd are not implemented. Python provides numerical QM
+Cartesian Hessians and [vibrational analysis](../docs/user-guide/vibrations.md),
+while standard ASE integrators provide [molecular dynamics](../docs/user-guide/ase-md.md)
+over repeated xTBloom calculations.
 The high-level `Calculator` and `BatchCalculator` APIs use host NumPy arrays;
 direct device and mixed descriptors are exposed through the GFN2-only
 `ArrayBatch` surface and the low-level C ABI.

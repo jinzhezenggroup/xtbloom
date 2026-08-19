@@ -144,11 +144,12 @@ before reusing the numbers.
 | Native-cell descriptors | ABI-v4 validates `NONE`/`XYZ`; periodic execution returns `NOT_IMPLEMENTED` |
 | Uniform electric field and molecular dipoles | GFN2 CPU and CUDA; not published for GFN1 |
 | ASE and dpdata integrations | GFN1 and GFN2 |
+| ASE-driven molecular dynamics | Supported for molecular systems through ASE integrators; no native xTBloom MD driver |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
 | Vibrational analysis | Python mass weighting, rigid-mode projection, frequencies, and normal modes from numerical Hessians; [guide](docs/user-guide/vibrations.md) |
 | Array API/DLPack and PyTorch autograd | GFN2-only adapter surfaces |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN1/GFN2 CPU/WASM adapter; GFN2 is the default |
-| ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN1/GFN2 execution | Not implemented |
+| ROCm, solvation, native optimization/MD drivers, analytic/C-ABI Hessians, periodic GFN1/GFN2 execution | Not implemented |
 
 Reserved ABI values are not reported as supported features. At finite
 electronic temperature, the reported variational energy is the electronic
@@ -171,6 +172,7 @@ and response properties are central.
 - [Browser demo](docs/user-guide/browser-demo.md)
 - [Python API](docs/user-guide/python.md)
 - [Vibrational analysis](docs/user-guide/vibrations.md)
+- [ASE molecular dynamics](docs/user-guide/ase-md.md)
 - [C and C++ API](docs/user-guide/c-api.md)
 - [QM/MM usage](docs/user-guide/qmmm.md)
 - [Skills for AI agents](docs/user-guide/agent-skills.md)
