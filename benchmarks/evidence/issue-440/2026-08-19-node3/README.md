@@ -10,7 +10,7 @@ SIMD128 build. It is not a native CPU/CUDA or browser-wide claim.
 - Previous scalar baseline: clean detached revision
   `3c21f50195389b093941eb5ed6f1143b8802f96e`.
 - Final scalar and SIMD variants: clean revision
-  `42f033ba48a156e3d0f1db8d71c8df0272aefe7d`.
+  `3b9fac09ecb0b2da1596022ddda786fa9acfb885`.
 - Emscripten: 6.0.6, revision
   `ce75e06884093bcefb86a6b8fd56a5d62a4cc245`.
 - Compiler bundle SHA-256:
@@ -58,13 +58,13 @@ Eigen LAPACKE/CBLAS test.
 
 | Variant | Water median (range), ms | C60 median (range), ms | C60 vs baseline |
 | --- | ---: | ---: | ---: |
-| Previous scalar (O2 Web stages) | 4.184 (0.960-13.064) | 1046.477 (1039.804-1187.077) | 1.000x |
-| O3 scalar | 2.450 (0.968-16.132) | 1030.319 (1021.062-1048.568) | 1.016x |
-| O3 SIMD128 | 2.546 (0.986-16.140) | 897.615 (875.961-919.302) | 1.166x |
+| Previous scalar (O2 Web stages) | 4.393 (0.995-14.344) | 1040.820 (1036.830-1059.835) | 1.000x |
+| O3 scalar | 2.877 (0.995-16.097) | 1027.548 (1020.341-1044.837) | 1.013x |
+| O3 SIMD128 | 3.938 (0.976-20.992) | 874.412 (869.024-893.495) | 1.190x |
 
-The final SIMD build reduced C60 median latency by 14.23% relative to the
+The final SIMD build reduced C60 median latency by 15.99% relative to the
 previous scalar build. Within the final revision, SIMD reduced the O3 scalar
-median by 12.88% (1.148x); the final scalar median was 1.54% lower than the
+median by 14.90% (1.175x); the final scalar median was 1.28% lower than the
 previous-build median. The C60 SIMD range is disjoint from both scalar ranges.
 Water is visibly bimodal and its ranges overlap, so no small-molecule speed
 claim is made.
@@ -74,8 +74,8 @@ Complete staged engine payload (`xtbloom_web.js`, main Wasm, and side Wasm):
 | Variant | Bytes | Change from baseline |
 | --- | ---: | ---: |
 | Previous scalar (O2 Web stages) | 1,860,352 | - |
-| O3 scalar | 1,883,196 | +22,844 (+1.23%) |
-| O3 SIMD128 | 1,899,118 | +38,766 (+2.08%) |
+| O3 scalar | 1,883,205 | +22,853 (+1.23%) |
+| O3 SIMD128 | 1,899,135 | +38,783 (+2.09%) |
 
 ## Commands
 
@@ -105,7 +105,7 @@ for the run label and the matching source revision recorded in the last field:
 taskset -c 0 /tmp/emsdk-6.0.6/node/24.19.0_64bit/bin/node \
   web/tests/wasm_benchmark.mjs \
   /tmp/xtbloom-441-build/simd/web/site simd-a 10 \
-  42f033ba48a156e3d0f1db8d71c8df0272aefe7d > simd-a.json
+  3b9fac09ecb0b2da1596022ddda786fa9acfb885 > simd-a.json
 ```
 
 ## Limitations
@@ -113,8 +113,8 @@ taskset -c 0 /tmp/emsdk-6.0.6/node/24.19.0_64bit/bin/node \
 - Node/V8 was measured, not Chromium/WebKit Worker scheduling, network
   download, cache fill, startup, rendering, or user-interface latency.
 - One x86_64 machine and one wasm32 configuration were measured.
-- The baseline and final revisions differ by the PR plus one merged main
-  commit whose implementation scope is native CUDA GFN1; the same-revision
+- The baseline and final revisions differ by the PR plus intervening main
+  commits (CodSpeed CI and native MKL isolation); the same-revision
   scalar/SIMD pair isolates SIMD at the final source.
 - Water is below a stable timing granularity for this protocol; its raw data is
   retained only to satisfy the small-molecule coverage criterion.
