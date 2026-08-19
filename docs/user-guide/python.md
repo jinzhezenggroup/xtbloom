@@ -123,6 +123,8 @@ Batch size does not alter the calculator's `cpu_threads` budget. The default
 step is `0.005` bohr. The default `symmetrize=False` preserves the raw
 antisymmetric residual as a finite-difference/SCC convergence diagnostic;
 `symmetrize=True` applies `0.5 * (H + H.T)` independently to every matrix.
+The [vibrational analysis guide](vibrations.md) describes mass weighting,
+rigid-mode projection, frequencies, and normal modes built from these matrices.
 
 One dense Hessian requires `6 * natoms` independent force calculations. For a
 batch, displacement tasks from different Hessians are interleaved in the same
@@ -145,10 +147,11 @@ atom, axis, sign, status, and iteration count. A temporary fresh-SCC context
 leaves every calculator geometry and any original warm checkpoint unchanged.
 
 These are explicit numerical Python methods, not analytic coupled-response
-Hessians or native C ABI outputs. xTBloom does not yet perform mass weighting,
-translation/rotation projection, normal-mode analysis, or thermochemistry.
-They do not change the compiled autograd operator, so PyTorch higher-order
-autograd remains unsupported.
+Hessians or native C ABI outputs. The Python API supports mass weighting,
+translation/rotation projection, frequencies, and normal-mode analysis through
+`analyze_vibrations()` and `vibrations()`; thermochemistry remains unsupported.
+The numerical methods do not change the compiled autograd operator, so PyTorch
+higher-order autograd remains unsupported.
 
 ## Ragged batches
 
@@ -443,7 +446,11 @@ and native periodic GFN1/GFN2 execution is not implemented. The ASE calculator
 enables warm start by default (`warm_start=True`), so an ASE dynamics run
 automatically seeds each step's SCC from the previous converged state and
 falls back to a fresh solve whenever the request's identity changes; pass
-`warm_start=False` for bit-reproducible independent steps.
+`warm_start=False` for independent fresh-SCC steps. Bitwise replay additionally
+requires `determinism="reproducible"` and an unchanged build, backend, provider,
+device, options, geometry, and SCC sequence. See the
+[ASE molecular-dynamics guide](ase-md.md) for a runnable velocity-Verlet
+trajectory and the scope boundaries for native drivers and periodic systems.
 
 ASE and dpdata accept both model names and use the same CPU/CUDA AUTO policy as
 the high-level calculators. GFN1 electric-field/dipole requests are rejected
