@@ -9,6 +9,7 @@ from xtbloom.exceptions import XTBloomValueError
 
 
 def _h2_arrays() -> dict[str, np.ndarray]:
+    """Return exact-dtype packed descriptors for one H2 system."""
     return {
         "atom_offsets": np.array([0, 2], dtype=np.int64),
         "atomic_numbers": np.array([1, 1], dtype=np.int32),
@@ -19,6 +20,7 @@ def _h2_arrays() -> dict[str, np.ndarray]:
 
 
 def test_array_batch_rejects_unknown_method_before_native_execution() -> None:
+    """Reject an unknown packed-array model before native execution."""
     arrays = _h2_arrays()
     with pytest.raises(XTBloomValueError):
         ArrayBatch(**arrays, method="GFN0-xTB", backend="cpu")
@@ -26,6 +28,7 @@ def test_array_batch_rejects_unknown_method_before_native_execution() -> None:
 
 @pytest.mark.parametrize("method", ["GFN1-xTB", "GFN1"])
 def test_array_batch_gfn1_cpu_matches_calculator(method: str) -> None:
+    """Match packed GFN1 CPU results to the high-level calculator."""
     arrays = _h2_arrays()
     with ArrayBatch(**arrays, method=method, backend="cpu") as batch:
         packed = batch.compute()
@@ -45,6 +48,7 @@ def test_array_batch_gfn1_cpu_matches_calculator(method: str) -> None:
 
 
 def test_compute_arrays_forwards_gfn1_method() -> None:
+    """Forward the GFN1 selector through one-shot packed inference."""
     arrays = _h2_arrays()
     direct = compute_arrays(**arrays, method="GFN1-xTB", backend="cpu")
     with ArrayBatch(**arrays, method="GFN1-xTB", backend="cpu") as batch:
@@ -56,6 +60,7 @@ def test_compute_arrays_forwards_gfn1_method() -> None:
 
 
 def test_array_batch_default_remains_gfn2() -> None:
+    """Keep GFN2 as the backward-compatible packed-array default."""
     arrays = _h2_arrays()
     with ArrayBatch(**arrays, backend="cpu") as batch:
         assert batch.method == "GFN2-xTB"
