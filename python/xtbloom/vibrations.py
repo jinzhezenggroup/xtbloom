@@ -39,19 +39,13 @@ def _validated_inputs(
     r = np.asarray(positions, dtype=np.float64)
     m = np.asarray(masses, dtype=np.float64)
     if r.ndim != 2 or r.shape[1] != 3 or r.shape[0] == 0:
-        raise XTBloomValueError(
-            "positions must have shape (natoms, 3) with natoms > 0"
-        )
+        raise XTBloomValueError("positions must have shape (natoms, 3) with natoms > 0")
     natoms = r.shape[0]
     if h.shape != (3 * natoms, 3 * natoms):
-        raise XTBloomValueError(
-            f"hessian must have shape ({3 * natoms}, {3 * natoms})"
-        )
+        raise XTBloomValueError(f"hessian must have shape ({3 * natoms}, {3 * natoms})")
     if m.shape != (natoms,):
         raise XTBloomValueError(f"masses must have shape ({natoms},)")
-    if not (
-        np.isfinite(h).all() and np.isfinite(r).all() and np.isfinite(m).all()
-    ):
+    if not (np.isfinite(h).all() and np.isfinite(r).all() and np.isfinite(m).all()):
         raise XTBloomValueError("hessian, positions, and masses must be finite")
     if np.any(m <= 0.0):
         raise XTBloomValueError(
@@ -120,9 +114,7 @@ def analyze_vibrations(
         ``(nmodes, N, 3)``; ``mass_weighted_modes`` contains the corresponding
         orthonormal mass-weighted eigenvectors.
     """
-    h, positions_array, masses_array = _validated_inputs(
-        hessian, positions, masses
-    )
+    h, positions_array, masses_array = _validated_inputs(hessian, positions, masses)
     if symmetrize:
         h = 0.5 * (h + h.T)
     inv_sqrt_mass = np.repeat(1.0 / np.sqrt(masses_array), 3)

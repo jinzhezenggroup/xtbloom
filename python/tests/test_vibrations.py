@@ -29,21 +29,15 @@ def test_nonlinear_projection_recovers_signed_spectrum() -> None:
     )
     masses = np.array([15.999, 1.008, 1.008])
     eigenvalues = np.array([-1.0e-4, 2.0e-4, 3.0e-4])
-    hessian = _hessian_with_vibrational_eigenvalues(
-        positions, masses, eigenvalues
-    )
+    hessian = _hessian_with_vibrational_eigenvalues(positions, masses, eigenvalues)
 
     result = analyze_vibrations(hessian, positions, masses)
 
     assert result.rigid_rank == 6
-    np.testing.assert_allclose(
-        result.eigenvalues, eigenvalues, atol=2.0e-18, rtol=0.0
-    )
+    np.testing.assert_allclose(result.eigenvalues, eigenvalues, atol=2.0e-18, rtol=0.0)
     expected = np.sign(eigenvalues) * np.sqrt(np.abs(eigenvalues))
     expected *= _HESSIAN_AMU_TO_WAVENUMBER
-    np.testing.assert_allclose(
-        result.frequencies_cm1, expected, atol=2.0e-11, rtol=0.0
-    )
+    np.testing.assert_allclose(result.frequencies_cm1, expected, atol=2.0e-11, rtol=0.0)
     np.testing.assert_array_equal(result.imaginary, [True, False, False])
     assert result.modes.shape == (3, 3, 3)
     assert result.mass_weighted_modes.shape == (3, 3, 3)
@@ -62,9 +56,7 @@ def test_linear_and_single_atom_rigid_rank() -> None:
     assert h2.rigid_rank == 5
     assert h2.frequencies_cm1.shape == (1,)
 
-    atom = analyze_vibrations(
-        np.zeros((3, 3)), np.zeros((1, 3)), np.array([4.002602])
-    )
+    atom = analyze_vibrations(np.zeros((3, 3)), np.zeros((1, 3)), np.array([4.002602]))
     assert atom.rigid_rank == 3
     assert atom.frequencies_cm1.size == 0
     assert atom.modes.shape == (0, 1, 3)
