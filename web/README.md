@@ -84,6 +84,11 @@ The deployed build is wasm32 so it works without browser Memory64 support. CI
 also builds wasm64 and compares its public results with wasm32 as a
 pointer-width and numerical parity gate; wasm64 is not deployed.
 
+Release Web builds use `-O3` and require WebAssembly SIMD128 by default. Modern
+Chromium, Firefox, and WebKit releases provide SIMD128. A scalar artifact for
+older runtimes or reproducible A/B measurement can be configured with
+`-DXTBLOOM_WEB_ENABLE_SIMD=OFF`; this switch affects only Web builds.
+
 ## Production deployments
 
 The `wasm-web-pages` workflow deploys the same validated wasm32 artifact to
@@ -136,6 +141,22 @@ emcmake cmake -S . -B build/wasm32-web -G Ninja \
 cmake --build build/wasm32-web --parallel
 cmake --build build/wasm32-web --target xtbloom_web_linalg_test --parallel
 ```
+
+For a same-revision scalar comparison, configure a separate build directory
+with the same command plus `-DXTBLOOM_WEB_ENABLE_SIMD=OFF`. After both sites
+pass the scientific smoke test, record repeated water and C60 samples with:
+
+```bash
+taskset -c 0 node web/tests/wasm_benchmark.mjs \
+  build/wasm32-web-scalar/web/site scalar 20 "$(git rev-parse HEAD)"
+taskset -c 0 node web/tests/wasm_benchmark.mjs \
+  build/wasm32-web/web/site simd128 20 "$(git rev-parse HEAD)"
+```
+
+The JSON output includes artifact hashes, runtime identity, raw samples,
+medians, ranges, and correctness-qualified scientific results. Archive a final
+comparison under `benchmarks/evidence/issue-<N>/`; do not infer a browser-wide
+speedup from the Node/V8 result alone.
 
 CMake downloads the official Eigen 5.0.1 archive only for this Web-enabled
 configuration and verifies its fixed SHA-256. For an offline build, download

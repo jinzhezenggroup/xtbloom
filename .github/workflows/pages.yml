@@ -111,6 +111,7 @@ jobs:
             -DXTBLOOM_ENABLE_CUDA=OFF \
             -DXTBLOOM_BUILD_TESTS=OFF \
             -DXTBLOOM_BUILD_WEB_DEMO=ON \
+            -DXTBLOOM_WEB_ENABLE_SIMD=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="${ARCH_FLAG} -fPIC" \
@@ -139,10 +140,11 @@ jobs:
             --test-reporter-destination=coverage-web.lcov \
             web/tests/*.test.mjs
 
-          # The helper tests intentionally cover the extracted testable
-          # modules, not browser-only workers or generated Emscripten glue.
+          # The helper and benchmark tests intentionally cover the extracted
+          # testable modules plus the shared C60 case, not browser-only workers
+          # or generated Emscripten glue.
           coverage_sources="$(sed -n 's/^SF://p' coverage-web.lcov | sort -u)"
-          expected_sources=$'web/app_helpers.js\nweb/bootstrap.js\nweb/smiles_helpers.js'
+          expected_sources=$'web/app_helpers.js\nweb/bootstrap.js\nweb/c60_case.js\nweb/smiles_helpers.js'
           test "${coverage_sources}" = "${expected_sources}"
 
       - name: Preserve web coverage for the upload-only job
@@ -183,6 +185,27 @@ jobs:
         # memory64 first shipped in V8 13.3 (Chrome 133); Node 24 is the first
         # Node release line that enables it by default.
         run: node web/tests/wasm_smoke.mjs "${BUILD_DIR}/web/site"
+
+      - name: Configure wasm32 scalar fallback
+        if: matrix.architecture == 'wasm32'
+        run: |
+          emcmake cmake -S . -B build/wasm32-web-scalar -G Ninja \
+            -DXTBLOOM_ENABLE_CUDA=OFF \
+            -DXTBLOOM_BUILD_TESTS=OFF \
+            -DXTBLOOM_BUILD_WEB_DEMO=ON \
+            -DXTBLOOM_WEB_ENABLE_SIMD=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-m32 -fPIC" \
+            -DCMAKE_CXX_FLAGS="-m32 -fPIC"
+
+      - name: Build and test wasm32 scalar fallback
+        if: matrix.architecture == 'wasm32'
+        run: |
+          cmake --build build/wasm32-web-scalar --parallel 2
+          cmake --build build/wasm32-web-scalar \
+            --target xtbloom_web_linalg_test --parallel 2
+          node web/tests/wasm_smoke.mjs build/wasm32-web-scalar/web/site
 
       - name: Preserve ${{ matrix.architecture }} site for parity
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

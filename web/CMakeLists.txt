@@ -23,6 +23,35 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     "(emcmake cmake ...).")
 endif()
 
+option(XTBLOOM_WEB_ENABLE_SIMD
+  "Enable WebAssembly SIMD128 for the browser-only engine and provider" ON)
+set(_xtbloom_web_optimization_flag "-O3")
+set(_xtbloom_web_simd_flag "")
+if(XTBLOOM_WEB_ENABLE_SIMD)
+  # The public library is assembled from several parent-scope OBJECT targets.
+  # Apply the target feature to every CPU object producer as well as the final
+  # runtime target so the physics kernels, not only the adapter, can be
+  # auto-vectorized to f64x2 SIMD lanes.
+  set(_xtbloom_web_simd_targets
+    xtbloom
+    xtbloom_cpu_dispatch_objects
+    xtbloom_gfn2_mulliken_baseline_objects
+    xtbloom_model_common_cpu_objects
+    xtbloom_gfn1_cpu_objects
+    xtbloom_gfn2_cpu_objects)
+  foreach(_xtbloom_web_simd_target IN LISTS _xtbloom_web_simd_targets)
+    if(NOT TARGET ${_xtbloom_web_simd_target})
+      message(FATAL_ERROR
+        "missing Web SIMD compile target: ${_xtbloom_web_simd_target}")
+    endif()
+    target_compile_options(${_xtbloom_web_simd_target} PRIVATE -msimd128)
+  endforeach()
+  set(_xtbloom_web_simd_flag "-msimd128")
+  message(STATUS "xTBloom WebAssembly SIMD128: enabled")
+else()
+  message(STATUS "xTBloom WebAssembly SIMD128: disabled")
+endif()
+
 set(_xtbloom_web_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_xtbloom_web_site "${CMAKE_CURRENT_BINARY_DIR}/site")
 set(_xtbloom_web_obj "${CMAKE_CURRENT_BINARY_DIR}/xtbloom_web.o")
@@ -124,7 +153,9 @@ add_custom_command(
           -fvisibility=hidden -fvisibility-inlines-hidden
           -fno-exceptions -fno-rtti
           "-I${_xtbloom_web_eigen_root}"
-          -sSIDE_MODULE=2 "${_xtbloom_web_arch_flag}" -O2
+          -sSIDE_MODULE=2 "${_xtbloom_web_arch_flag}"
+          "${_xtbloom_web_optimization_flag}"
+          ${_xtbloom_web_simd_flag}
           "-sEXPORTED_FUNCTIONS=[\"_openblas_get_config\",\"_openblas_set_num_threads_local\",\"_LAPACKE_dpotrf_work\",\"_LAPACKE_dpocon_work\",\"_LAPACKE_dsyevd_work\",\"_cblas_dgemm\",\"_cblas_dtrsm\"]"
   DEPENDS
     "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
@@ -153,6 +184,7 @@ add_custom_command(
           -std=c++17
           "-I${_xtbloom_web_eigen_root}"
           "${_xtbloom_web_arch_flag}" -O2
+          ${_xtbloom_web_simd_flag}
   DEPENDS
     "${_xtbloom_web_src}/wasm/linalg_eigen.cpp"
     "${_xtbloom_web_src}/tests/linalg_eigen_test.cpp"
@@ -175,7 +207,9 @@ add_custom_target(
 add_custom_command(
   OUTPUT "${_xtbloom_web_obj}"
   COMMAND ${CMAKE_C_COMPILER}
-          "${_xtbloom_web_arch_flag}" -fPIC -O2
+          "${_xtbloom_web_arch_flag}" -fPIC
+          "${_xtbloom_web_optimization_flag}"
+          ${_xtbloom_web_simd_flag}
           "${_xtbloom_web_generated_include}"
           "${_xtbloom_web_source_include}"
           -c "${_xtbloom_web_src}/xtbloom_web.c"
@@ -204,7 +238,14 @@ add_custom_command(
           "${_xtbloom_web_generated_include}"
           "${_xtbloom_web_source_include}"
           -o "${_xtbloom_web_engine_js}"
-          "${_xtbloom_web_arch_flag}" -O2 -sMAIN_MODULE=2
+          "${_xtbloom_web_arch_flag}" "${_xtbloom_web_optimization_flag}"
+          -sMAIN_MODULE=2
+          # Emscripten 6.0.6 at -O3 otherwise strips the __stack_pointer
+          # export required by dlopen side modules. EXPORT_ALL retains the
+          # dynamic-link exports without the dead-code retention of
+          # MAIN_MODULE=1.
+          -sEXPORT_ALL=1
+          ${_xtbloom_web_simd_flag}
           -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createXTBloomModule
           -sSTACK_SIZE=8MB -sALLOW_MEMORY_GROWTH
           -sFORCE_FILESYSTEM
