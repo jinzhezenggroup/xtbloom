@@ -1,0 +1,31 @@
+Host: node3
+Kernel: Linux 6.8.0-110-generic x86_64
+CPU: AMD EPYC 7K62 48-Core Processor, 48 online CPUs, CPU 0 affinity
+Node: 24.19.0
+V8: 13.6.233.17-node.51
+Emscripten: 6.0.6 (ce75e06884093bcefb86a6b8fd56a5d62a4cc245)
+CMake: 4.2.1
+Ninja: 1.13.0
+Build type: Release
+Width flags: -m32 -fPIC
+Threads: OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+
+baseline source: 3c21f50195389b093941eb5ed6f1143b8802f96e (clean)
+baseline CMakeCache.txt: a780033ae92650b9f5edea92f434174a8f46ff71c9ff5ef6691a4c9cef48ab20
+baseline libxtbloom.a: a243318671acd5352dab079e30ad0001c5fe393c5355819b9a6d3de69bbbe535
+baseline xtbloom_web.js: ff6a38b66b4f4483427a34008d770506b643a7e8125a66949d5455fbbaec37b0
+baseline xtbloom_web.wasm: 83eecd2001f16832e7daf5179ae48c8fcf3b66e7566dc4a783c82bbf15c094f1
+baseline xtbloom_web.side.wasm: db1d49cb4755ed96ae1fbce907b13882e1cc62657bd56418a21c902b10dfdc34
+
+final source: 42f033ba48a156e3d0f1db8d71c8df0272aefe7d (clean)
+scalar CMakeCache.txt: ab0e9f1f3f91345f80c56e9e3356cae2e88271222647df36e331eaa9e7b59632
+scalar libxtbloom.a: d7538302f7b617711c1d7265a7e5f424f390f9859566bda196b0a8ba2ff9797c
+scalar xtbloom_web.js: bd8b29aef05df841cd6bb5519c11b9567c1ab627d3f85248d149558f2943da33
+scalar xtbloom_web.wasm: b6bccbf90843ab2a9cc5278a8c1e31f25c3dfd31ed30735da7238b7b617de00d
+scalar xtbloom_web.side.wasm: 89732c8351bd226011351c3327b475222d6ce10de0ab28f8a32ce9323dffb0a8
+
+SIMD CMakeCache.txt: 42e3b19d9daedca3c9951963e37adb13b521bee62e5be167368a9d2030b4071e
+SIMD libxtbloom.a: cf712d3943edba3fb56bfb64fc3b4773c1bc879d54249972b2ee0193f8bbe8f6
+SIMD xtbloom_web.js: 8dad44cc79faf4f3c00a5097681f404875cbea2b10801910a24a4aee241cdf95
+SIMD xtbloom_web.wasm: f2b9c357c6e67ceba68d6a2ea130f311b7fc731a83a9f4b0bca65ebfe887c4f4
+SIMD xtbloom_web.side.wasm: c04bb6ead1f057fc6ae3288d34da9374760c6357e12eee4d9f3f7488a27dc3f9

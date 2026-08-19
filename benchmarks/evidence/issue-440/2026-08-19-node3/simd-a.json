@@ -1,0 +1,77 @@
+{
+  "label": "simd-a",
+  "source_revision": "42f033ba48a156e3d0f1db8d71c8df0272aefe7d",
+  "site": "/tmp/xtbloom-441-build/simd/web/site",
+  "runtime": {
+    "node": "v24.19.0",
+    "v8": "13.6.233.17-node.51",
+    "platform": "linux",
+    "os_release": "6.8.0-110-generic",
+    "arch": "x64",
+    "cpu": "AMD EPYC 7K62 48-Core Processor",
+    "logical_cpus": 48
+  },
+  "warmup_samples": 1,
+  "retained_samples": 10,
+  "timed_scope": "synchronous xtbloom_web_compute ccall plus JSON parsing",
+  "artifacts": {
+    "main_wasm": {
+      "bytes": 1636580,
+      "sha256": "f2b9c357c6e67ceba68d6a2ea130f311b7fc731a83a9f4b0bca65ebfe887c4f4"
+    },
+    "side_wasm": {
+      "bytes": 163231,
+      "sha256": "c04bb6ead1f057fc6ae3288d34da9374760c6357e12eee4d9f3f7488a27dc3f9"
+    }
+  },
+  "workloads": {
+    "water": {
+      "median_ms": 1.2050235,
+      "range_ms": [
+        1.031026,
+        16.139576
+      ],
+      "samples_ms": [
+        5.122716,
+        1.221981,
+        1.188066,
+        7.139631,
+        1.105598,
+        1.051294,
+        15.390391,
+        1.032338,
+        1.031026,
+        16.139576
+      ],
+      "result": {
+        "energy_Eh": -5.06262145,
+        "scc_iterations": 9,
+        "scc_converged": 1
+      }
+    },
+    "c60": {
+      "median_ms": 880.4810669999999,
+      "range_ms": [
+        875.960671,
+        896.659201
+      ],
+      "samples_ms": [
+        896.323723,
+        888.004739,
+        883.118283,
+        880.460557,
+        875.960671,
+        879.496352,
+        876.474268,
+        896.659201,
+        880.501577,
+        877.940416
+      ],
+      "result": {
+        "energy_Eh": -128.249019,
+        "scc_iterations": 13,
+        "scc_converged": 1
+      }
+    }
+  }
+}
