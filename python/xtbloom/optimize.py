@@ -275,10 +275,18 @@ def optimize_batch(
     determinism: str | int = "default",
     warm_start: bool = True,
 ) -> OptimizationResult:
-    """Optimize a ragged sequence through one reusable :class:`BatchCalculator`."""
+    """Optimize distinct mutable structures through one reusable batch context.
+
+    Repeating the same :class:`Structure` object is rejected because each batch
+    member owns an independent accepted-state ledger while updates occur in place.
+    """
     structures = list(structures)
     if not structures:
         raise XTBloomValueError("cannot optimize an empty structure sequence")
+    if len({id(structure) for structure in structures}) != len(structures):
+        raise XTBloomValueError(
+            "optimize_batch structures must be distinct mutable objects"
+        )
     # Validate optimizer-only arguments before acquiring native resources.
     fmax, max_steps, memory = _validated_controls(fmax, max_steps, memory)
     calculator = BatchCalculator(

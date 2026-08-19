@@ -354,6 +354,24 @@ def test_optimize_batch_validates_controls_before_calculator_creation(
         )
 
 
+def test_optimize_batch_rejects_aliased_structures_before_calculator_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject one mutable structure occupying multiple controller slots."""
+
+    def unexpected_calculator(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("aliased structures reached BatchCalculator")
+
+    monkeypatch.setattr(_optimize_module, "BatchCalculator", unexpected_calculator)
+    structure = FakeStructure([[1.0, 0.0, 0.0]])
+    original = structure.positions.copy()
+
+    with pytest.raises(XTBloomValueError, match="distinct mutable objects"):
+        optimize_batch([structure, structure])  # type: ignore[list-item]
+
+    np.testing.assert_array_equal(structure.positions, original)
+
+
 def test_optimize_executes_native_cpu_and_restores_returned_state() -> None:
     """Exercise the direct optimizer through real CPU SCC and force calls."""
     positions = np.array([[-0.80, 0.0, 0.0], [0.80, 0.0, 0.0]])

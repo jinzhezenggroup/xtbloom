@@ -38,7 +38,10 @@ occurs before an evaluator or line-search exception escapes.
 
 For a ragged molecular batch, `optimize_batch()` creates one reusable
 `BatchCalculator` and keeps every system in one stable ragged topology while
-systems converge independently:
+systems converge independently. Every entry must be a distinct mutable
+`Structure`; reusing one object in multiple batch slots is rejected before
+native resources are acquired because each slot has an independent
+accepted-state ledger:
 
 ```python
 from xtbloom import Structure, optimize_batch
