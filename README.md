@@ -89,7 +89,7 @@ positions = np.array(
     [
         [0.0000000000, 0.0000000000, -0.7357858611],
         [1.4418315287, 0.0000000000, 0.3678929305],
-        [-1.4418315287, 0.0000000000, 0.3678929305],
+        [-1.4418315287, 0.000000000, 0.3678929305],
     ]
 )
 
@@ -145,7 +145,8 @@ before reusing the numbers.
 | Uniform electric field and molecular dipoles | GFN2 CPU and CUDA; not published for GFN1 |
 | ASE and dpdata integrations | GFN1 and GFN2 |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
-| Array API/DLPack and PyTorch autograd | GFN2-only adapter surfaces |
+| Array API/DLPack | GFN1 and GFN2 |
+| PyTorch autograd | GFN2-only adapter surface |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN1/GFN2 CPU/WASM adapter; GFN2 is the default |
 | ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN1/GFN2 execution | Not implemented |
 
