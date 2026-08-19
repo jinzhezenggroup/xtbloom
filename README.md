@@ -169,6 +169,7 @@ and response properties are central.
 - [User guide](docs/user-guide/index.md)
 - [Browser demo](docs/user-guide/browser-demo.md)
 - [Python API](docs/user-guide/python.md)
+- [Vibrational analysis](docs/user-guide/vibrations.md)
 - [C and C++ API](docs/user-guide/c-api.md)
 - [QM/MM usage](docs/user-guide/qmmm.md)
 - [Skills for AI agents](docs/user-guide/agent-skills.md)

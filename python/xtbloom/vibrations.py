@@ -12,13 +12,31 @@ from .exceptions import XTBloomValueError
 if TYPE_CHECKING:
     from .interface import Calculator
 
-# sqrt(Eh / (bohr^2 * unified-atomic-mass-unit)) / (2*pi*c), in cm^-1.
+# CODATA 2018: sqrt(Eh / (bohr^2 * unified-atomic-mass-unit)) / (2*pi*c),
+# in cm^-1. Keeping the evaluated binary64 value makes results independent of
+# an optional physical-constants package at runtime.
 _HESSIAN_AMU_TO_WAVENUMBER = 5140.487143715828
 
 
 @dataclass(frozen=True)
 class VibrationalResult:
-    """Normal modes derived from a Cartesian energy Hessian."""
+    """Normal modes derived from a Cartesian energy Hessian.
+
+    Attributes
+    ----------
+    frequencies_cm1
+        Signed frequencies in cm^-1; negative values denote imaginary modes.
+    eigenvalues
+        Eigenvalues of the analyzed mass-weighted Hessian in
+        Hartree/(bohr^2 u).
+    modes
+        Unit-norm Cartesian displacement vectors with shape ``(nmodes, N, 3)``.
+    mass_weighted_modes
+        Orthonormal mass-weighted eigenvectors with shape ``(nmodes, N, 3)``.
+    rigid_rank
+        Number of rigid directions removed. This is zero when rigid projection
+        is disabled.
+    """
 
     frequencies_cm1: np.ndarray
     eigenvalues: np.ndarray
@@ -84,14 +102,15 @@ def analyze_vibrations(
     masses: object,
     *,
     project_rigid: bool = True,
-    symmetrize: bool = True,
 ) -> VibrationalResult:
     """Diagonalize a Cartesian Hessian into molecular vibrational modes.
 
     Parameters
     ----------
     hessian
-        Cartesian energy Hessian in Hartree/bohr^2, shape ``(3N, 3N)``.
+        Cartesian energy Hessian in Hartree/bohr^2, shape ``(3N, 3N)``. The
+        analysis always diagonalizes ``0.5 * (H + H.T)``; callers retain their
+        input matrix for antisymmetry diagnostics.
     positions
         Cartesian coordinates in bohr, shape ``(N, 3)``.
     masses
@@ -101,10 +120,6 @@ def analyze_vibrations(
         subspace before diagonalization. Rank detection naturally gives three
         rigid directions for one atom, five for a linear molecule, and six for
         a non-linear molecule.
-    symmetrize
-        Diagonalize ``0.5 * (H + H.T)``. This is recommended for xTBloom's
-        finite-difference Hessian while the raw Hessian remains available to
-        the caller for antisymmetry diagnostics.
 
     Returns
     -------
@@ -115,8 +130,7 @@ def analyze_vibrations(
         orthonormal mass-weighted eigenvectors.
     """
     h, positions_array, masses_array = _validated_inputs(hessian, positions, masses)
-    if symmetrize:
-        h = 0.5 * (h + h.T)
+    h = 0.5 * (h + h.T)
     inv_sqrt_mass = np.repeat(1.0 / np.sqrt(masses_array), 3)
     mass_weighted = h * inv_sqrt_mass[:, None] * inv_sqrt_mass[None, :]
 
@@ -144,6 +158,8 @@ def analyze_vibrations(
         )
 
     reduced = vibrational_basis.T @ mass_weighted @ vibrational_basis
+    # Remove roundoff from the basis transformations before the Hermitian
+    # eigensolve; the input operator was symmetrized above.
     reduced = 0.5 * (reduced + reduced.T)
     eigenvalues, reduced_modes = np.linalg.eigh(reduced)
     mass_weighted_columns = vibrational_basis @ reduced_modes
@@ -188,7 +204,6 @@ def vibrations(
         calculator.positions,
         masses,
         project_rigid=project_rigid,
-        symmetrize=True,
     )
 
 

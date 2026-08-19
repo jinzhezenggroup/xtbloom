@@ -31,7 +31,7 @@ print(vib.modes.shape)
 imaginary mode. `modes` contains unit-norm Cartesian displacement vectors, and
 `mass_weighted_modes` contains the corresponding orthonormal mass-weighted
 eigenvectors. The eigenvalues of the projected mass-weighted Hessian are also
-available as `eigenvalues`.
+available as `eigenvalues` in Hartree/(bohr^2 u).
 
 By default, `analyze_vibrations()` projects the numerically detected rigid-body
 subspace before diagonalization. The rank is three for a single atom, five for
@@ -42,9 +42,24 @@ mass-weighted Cartesian eigenproblem is useful for diagnostics.
 The helper accepts atomic masses explicitly rather than choosing isotopes or
 maintaining a second periodic-table mass database. The Hessian is expected in
 Hartree/bohr^2, positions in bohr, and masses in unified atomic mass units.
-`analyze_vibrations()` symmetrizes the Hessian by default because
+`analyze_vibrations()` always diagonalizes `0.5 * (H + H.T)` because
 `Calculator.hessian()` is a finite difference of analytic forces and keeps its
-raw antisymmetric residual as a convergence diagnostic.
+raw antisymmetric residual as a convergence diagnostic. Passing a Hessian to
+the analysis does not modify it, so callers can inspect that raw matrix before
+or after analysis.
+
+Frequencies have their usual physical interpretation only at a stationary
+geometry. At a non-stationary point, rotations need not be Hessian zero modes,
+and projecting them changes the local curvature problem. Converge the geometry
+first and check the frequencies against multiple finite-difference steps and
+tighter SCC tolerances. A small imaginary frequency can be numerical residue;
+a stable imaginary frequency can identify a saddle direction.
+
+Rigid projection also assumes that the energy is invariant under translating
+and rotating the complete analyzed system. Disable it with
+`project_rigid=False` for a molecule in a fixed external environment, such as
+stationary point charges or a laboratory-frame field, unless that environment
+is transformed with the molecule.
 
 This API performs normal-mode analysis only. It does not provide thermochemical
 partition functions, standard-state corrections, rotational symmetry numbers,

@@ -2,49 +2,131 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
-from xtbloom import analyze_vibrations, vibrations
+from xtbloom import Calculator, analyze_vibrations, vibrations
 from xtbloom.exceptions import XTBloomValueError
-from xtbloom.vibrations import _HESSIAN_AMU_TO_WAVENUMBER, _rigid_basis
+
+
+def _codata_2018_hessian_factor() -> float:
+    """Independently derive the Eh/(bohr^2 u) to cm^-1 conversion."""
+    hartree_joule = 4.3597447222071e-18
+    bohr_metre = 5.29177210903e-11
+    unified_atomic_mass_kg = 1.66053906660e-27
+    speed_of_light_metre_per_second = 299792458.0
+    angular_frequency = math.sqrt(
+        hartree_joule / (bohr_metre**2 * unified_atomic_mass_kg)
+    )
+    return angular_frequency / (2.0 * math.pi * speed_of_light_metre_per_second * 100.0)
+
+
+def _independent_nonlinear_bases() -> tuple[np.ndarray, np.ndarray]:
+    """Return hand-derived rigid and internal bases for a right-triangle molecule."""
+    # Coordinates are flattened as (x1, y1, z1, ...). The first six columns
+    # are three translations and rotations about the center of mass; the three
+    # internal columns independently solve zero translation and rotation.
+    rigid_candidates = np.column_stack(
+        [
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 2.0],
+            [0.0, 0.0, 1.0, 0.0, 0.0, -2.0, 0.0, 0.0, 1.0],
+            [1.0, -1.0, 0.0, 1.0, 2.0, 0.0, -2.0, -1.0, 0.0],
+        ]
+    )
+    internal_candidates = np.column_stack(
+        [
+            [1.0, 0.0, 0.0, 0.0, -1.0, 0.0, -1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0, -1.0, 0.0, -1.0, 1.0, 0.0],
+        ]
+    )
+    rigid, _ = np.linalg.qr(rigid_candidates)
+    vibrational, _ = np.linalg.qr(internal_candidates)
+    return rigid, vibrational
 
 
 def _hessian_with_vibrational_eigenvalues(
-    positions: np.ndarray, masses: np.ndarray, eigenvalues: np.ndarray
+    vibrational: np.ndarray, eigenvalues: np.ndarray
 ) -> np.ndarray:
-    """Construct a Cartesian Hessian with a prescribed rigid-free spectrum."""
-    rigid, rank = _rigid_basis(positions, masses)
-    complete, _, _ = np.linalg.svd(rigid, full_matrices=True)
-    vibrational = complete[:, rank:]
-    assert vibrational.shape[1] == len(eigenvalues)
+    """Construct a Cartesian Hessian from an independent internal basis."""
     mass_weighted = vibrational @ np.diag(eigenvalues) @ vibrational.T
-    sqrt_mass = np.repeat(np.sqrt(masses), 3)
-    return mass_weighted * sqrt_mass[:, None] * sqrt_mass[None, :]
+    return np.ascontiguousarray(mass_weighted)
 
 
 def test_nonlinear_projection_recovers_signed_spectrum() -> None:
-    """Recover real and imaginary modes after nonlinear rigid projection."""
+    """Recover an independently constructed nonlinear signed spectrum."""
     positions = np.array(
-        [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-0.4, 1.3, 0.0]],
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
         dtype=np.float64,
     )
-    masses = np.array([15.999, 1.008, 1.008])
+    masses = np.ones(3)
     eigenvalues = np.array([-1.0e-4, 2.0e-4, 3.0e-4])
-    hessian = _hessian_with_vibrational_eigenvalues(positions, masses, eigenvalues)
+    rigid, vibrational = _independent_nonlinear_bases()
+    hessian = _hessian_with_vibrational_eigenvalues(vibrational, eigenvalues)
 
     result = analyze_vibrations(hessian, positions, masses)
 
     assert result.rigid_rank == 6
     np.testing.assert_allclose(result.eigenvalues, eigenvalues, atol=2.0e-18, rtol=0.0)
     expected = np.sign(eigenvalues) * np.sqrt(np.abs(eigenvalues))
-    expected *= _HESSIAN_AMU_TO_WAVENUMBER
-    np.testing.assert_allclose(result.frequencies_cm1, expected, atol=2.0e-11, rtol=0.0)
+    expected *= _codata_2018_hessian_factor()
+    np.testing.assert_allclose(result.frequencies_cm1, expected, atol=3.0e-11, rtol=0.0)
     np.testing.assert_array_equal(result.imaginary, [True, False, False])
     assert result.modes.shape == (3, 3, 3)
     assert result.mass_weighted_modes.shape == (3, 3, 3)
+    mass_weighted_modes = result.mass_weighted_modes.reshape(3, -1)
     np.testing.assert_allclose(
         np.linalg.norm(result.modes.reshape(3, -1), axis=1),
         1.0,
+        atol=2.0e-15,
+        rtol=0.0,
+    )
+    np.testing.assert_allclose(hessian @ rigid, 0.0, atol=2.0e-19, rtol=0.0)
+    np.testing.assert_allclose(mass_weighted_modes @ rigid, 0.0, atol=2.0e-15, rtol=0.0)
+    np.testing.assert_allclose(
+        np.abs(mass_weighted_modes @ vibrational),
+        np.eye(3),
+        atol=2.0e-15,
+        rtol=0.0,
+    )
+
+
+def test_mass_weighting_and_frequency_conversion_match_codata_2018() -> None:
+    """Check mass division and wavenumbers against independent SI constants."""
+    result = analyze_vibrations(
+        np.diag([4.0, 9.0, 16.0]),
+        np.zeros((1, 3)),
+        np.array([4.0]),
+        project_rigid=False,
+    )
+    np.testing.assert_array_equal(result.eigenvalues, [1.0, 2.25, 4.0])
+    factor = _codata_2018_hessian_factor()
+    np.testing.assert_allclose(
+        result.frequencies_cm1,
+        [factor, 1.5 * factor, 2.0 * factor],
+        atol=3.0e-10,
+        rtol=0.0,
+    )
+
+
+def test_analysis_always_symmetrizes_an_asymmetric_input() -> None:
+    """Diagonalize the symmetric part while leaving the caller input unchanged."""
+    hessian = np.array([[4.0, 2.0, 0.0], [0.0, 9.0, 3.0], [0.0, 1.0, 16.0]])
+    original = hessian.copy()
+    result = analyze_vibrations(
+        hessian,
+        np.zeros((1, 3)),
+        np.ones(1),
+        project_rigid=False,
+    )
+    np.testing.assert_array_equal(hessian, original)
+    np.testing.assert_allclose(
+        result.eigenvalues,
+        np.linalg.eigvalsh(0.5 * (original + original.T)),
         atol=2.0e-15,
         rtol=0.0,
     )
@@ -123,3 +205,22 @@ def test_vibrations_wrapper_preserves_raw_hessian_diagnostic_path() -> None:
     ]
     assert result.rigid_rank == 5
     assert result.frequencies_cm1.shape == (1,)
+
+
+def test_vibrations_runs_real_cpu_calculator_hessian() -> None:
+    """Exercise the complete public wrapper through native CPU forces."""
+    positions = np.array([[-0.71, 0.0, 0.0], [0.71, 0.0, 0.0]])
+    with Calculator("GFN2-xTB", [1, 1], positions, backend="cpu") as calculator:
+        result = vibrations(
+            calculator,
+            [1.00784, 1.00784],
+            step=0.005,
+            auto_batch_size=2,
+        )
+
+    assert result.rigid_rank == 5
+    assert result.frequencies_cm1.shape == (1,)
+    assert result.modes.shape == (1, 2, 3)
+    assert result.mass_weighted_modes.shape == (1, 2, 3)
+    assert np.isfinite(result.frequencies_cm1).all()
+    assert result.frequencies_cm1[0] > 0.0

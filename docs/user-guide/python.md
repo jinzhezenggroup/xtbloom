@@ -123,6 +123,8 @@ Batch size does not alter the calculator's `cpu_threads` budget. The default
 step is `0.005` bohr. The default `symmetrize=False` preserves the raw
 antisymmetric residual as a finite-difference/SCC convergence diagnostic;
 `symmetrize=True` applies `0.5 * (H + H.T)` independently to every matrix.
+The [vibrational analysis guide](vibrations.md) describes mass weighting,
+rigid-mode projection, frequencies, and normal modes built from these matrices.
 
 One dense Hessian requires `6 * natoms` independent force calculations. For a
 batch, displacement tasks from different Hessians are interleaved in the same
