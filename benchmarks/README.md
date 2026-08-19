@@ -19,6 +19,54 @@ cross-engine figure and the FRESH/WARM study use different SCC settings,
 correctness gates, start policies, workloads, and sample counts. Never combine
 their numbers or thresholds.
 
+## Continuous regression signal
+
+`codspeed_inference.py` is a deliberately small `pytest-codspeed` suite for
+pull-request regression detection. It measures representative public Python/C
+ABI CPU paths (GFN1, GFN2 FRESH/WARM, and a mixed-size ragged batch) with one
+xTBloom CPU worker. The primary cases use the deterministic 32-atom alkane from
+the scaling protocol, rather than letting a water-only workload reduce the
+signal to fixed API and tiny-matrix overhead. The dedicated
+`.github/workflows/codspeed.yml` job additionally sets single-threaded BLAS,
+forces xTBloom's portable baseline CPU ISA, and pins the reviewed
+dynamic-architecture OpenBLAS provider to its `Nehalem` kernel before running
+CodSpeed `simulation` mode. The workflow verifies the selected OpenBLAS core at
+runtime; `XTBLOOM_CPU_ISA` alone does not control BLAS dispatch.
+
+CodSpeed results are **regression signals, not publication-grade hardware
+timings**. They do not replace any protocol above, and they must not be quoted
+as absolute latency or throughput evidence. CUDA, cross-engine comparisons,
+large-system scaling, Hessian throughput, and hardware-specific ISA claims stay
+on their existing audit-ready protocols.
+
+The workflow creates the project environment from `uv.lock`, then installs the
+CI-only CodSpeed toolchain from `codspeed-requirements.txt` with hashes required
+for every artifact. `codspeed-requirements.in` is the human-maintained input;
+regenerate the lock with the pinned workflow version of uv and the command in
+its generated header. Both files stay outside project metadata and the PyPI
+sdist. The plugin, Action, runner, and modified Valgrind executable do not enter
+xTBloom runtime metadata, native installs, sdists, or wheels; distribution
+archives retain only the applicable legal notice. Exact provenance and hashes
+are recorded in `THIRD_PARTY_NOTICES.md`.
+
+CodSpeed is an informational regression signal. PR results use CodSpeed's
+default comparison against the latest successful `main` baseline, but a
+reported performance delta does not automatically block a merge. Investigate a
+material signal with the applicable reproducible benchmark protocol before
+making a performance claim. The first successful `main` run after this workflow
+lands establishes the initial baseline, so the introducing PR has no prior
+baseline. A reviewed runner, Action, compiler, Python, OpenBLAS, or lock update
+starts a new baseline; do not compare values across those environment changes.
+
+To run the same benchmark module in an environment that already has the plugin
+installed:
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_CORETYPE=Nehalem OPENBLAS_NUM_THREADS=1 \
+  XTBLOOM_CPU_ISA=baseline \
+  pytest benchmarks/codspeed_inference.py --codspeed
+```
+
 ## Evidence requirements
 
 A publishable result must retain:

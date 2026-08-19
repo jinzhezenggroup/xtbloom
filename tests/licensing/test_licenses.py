@@ -359,6 +359,8 @@ class LicenseArchiveTests(unittest.TestCase):
                     payload = (
                         REPOSITORY / "LICENSES/LGPL-3.0-or-later.txt"
                     ).read_bytes()
+                elif name.endswith("/codspeed-MIT.txt"):
+                    payload = (REPOSITORY / CHECKER.CODSPEED_LICENSE).read_bytes()
                 else:
                     payload = b"test\n"
                 archive.writestr(name, payload)
@@ -528,6 +530,18 @@ class LicenseArchiveTests(unittest.TestCase):
             self._write_wheel(wheel, names)
             with self.assertRaisesRegex(
                 CHECKER.LicenseCheckError, "array-api-compat-MIT"
+            ):
+                CHECKER.check_archive(wheel)
+
+    def test_wheel_rejects_changed_codspeed_license(self) -> None:
+        """Require the exact reviewed plugin/Action notice in both wheel copies."""
+        names = self._valid_wheel_names()
+        member = f"{WHEEL_DIST_INFO}/licenses/{CHECKER.CODSPEED_LICENSE}"
+        with tempfile.TemporaryDirectory(prefix="xtbloom-license-test-") as directory:
+            wheel = Path(directory) / "xtbloom-test-manylinux_2_28_x86_64.whl"
+            self._write_wheel(wheel, names, {member: b"changed\n"})
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "CodSpeed MIT license differs"
             ):
                 CHECKER.check_archive(wheel)
 
@@ -810,6 +824,10 @@ class InstallPayloadTests(unittest.TestCase):
                 destination.write_bytes(
                     (REPOSITORY / "LICENSES/LGPL-3.0-or-later.txt").read_bytes()
                 )
+            elif relative.endswith("third-party/codspeed-MIT.txt"):
+                destination.write_bytes(
+                    (REPOSITORY / CHECKER.CODSPEED_LICENSE).read_bytes()
+                )
             else:
                 destination.write_bytes(b"test\n")
 
@@ -878,6 +896,20 @@ class InstallPayloadTests(unittest.TestCase):
                 ):
                     CHECKER.check_install(root)
 
+    def test_install_rejects_changed_codspeed_license(self) -> None:
+        """Require the exact reviewed CodSpeed notice in native installs."""
+        with tempfile.TemporaryDirectory(
+            prefix="xtbloom-install-license-test-"
+        ) as directory:
+            root = Path(directory)
+            self._write_required_install_files(root)
+            license_path = root / "share/licenses/xtbloom/third-party/codspeed-MIT.txt"
+            license_path.write_bytes(b"changed\n")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "CodSpeed MIT license differs"
+            ):
+                CHECKER.check_install(root)
+
     def test_install_rejects_corrupt_gfn1_d3_provenance(self) -> None:
         """Validate the installed D3 provenance manifest contents."""
         with tempfile.TemporaryDirectory(
@@ -924,6 +956,37 @@ class InstallPayloadTests(unittest.TestCase):
                 CHECKER.LicenseCheckError, "LGPL license differs"
             ):
                 CHECKER.check_install(root)
+
+
+class CodSpeedDependencySourceTests(unittest.TestCase):
+    """Keep CI-only CodSpeed inputs and their retained notice fully pinned."""
+
+    def test_codspeed_notice_record_is_complete(self) -> None:
+        """Accept all reviewed revisions and downloaded artifact hashes."""
+        notice = (REPOSITORY / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        CHECKER._require_notice_tokens(notice, CHECKER.CODSPEED_NOTICE_TOKENS)
+
+    def test_codspeed_notice_rejects_every_omitted_record(self) -> None:
+        """Reject removal of a plugin, Action, runner, or Valgrind locator."""
+        notice = (REPOSITORY / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        for token in CHECKER.CODSPEED_NOTICE_TOKENS:
+            with self.subTest(token=token):
+                changed = notice.replace(token, "", 1)
+                with self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError, "THIRD_PARTY_NOTICES.md omits"
+                ):
+                    CHECKER._require_notice_tokens(
+                        changed, CHECKER.CODSPEED_NOTICE_TOKENS
+                    )
+
+    def test_codspeed_license_is_exact(self) -> None:
+        """Accept only the byte-exact shared MIT notice from upstream."""
+        payload = (REPOSITORY / CHECKER.CODSPEED_LICENSE).read_bytes()
+        CHECKER._require_codspeed_license_bytes(payload, "source tree")
+        with self.assertRaisesRegex(
+            CHECKER.LicenseCheckError, "CodSpeed MIT license differs"
+        ):
+            CHECKER._require_codspeed_license_bytes(payload + b"changed\n", "test")
 
 
 class WebDependencySourceTests(unittest.TestCase):

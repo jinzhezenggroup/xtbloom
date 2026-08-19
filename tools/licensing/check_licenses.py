@@ -135,6 +135,10 @@ EIGEN_RETAINED_FILES = tuple(
     record[1] for record in (*EIGEN_LICENSE_RECORDS, *EIGEN_EMBEDDED_NOTICE_RECORDS)
 )
 ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
+CODSPEED_LICENSE = "LICENSES/codspeed-MIT.txt"
+CODSPEED_LICENSE_SHA256 = (
+    "8bdf389981158ed3e82ec001461023c14a91b802e964caaba3e1f5e82f3097fc"
+)
 OPENBLAS_LICENSE = "LICENSES/scipy-openblas32-0.3.34.0.0.txt"
 OPENBLAS_WINDOWS_LICENSE = "LICENSES/scipy-openblas32-tools-LICENSE_win32.txt"
 OPENBLAS_EXACT_PACKAGED_LICENSES = (
@@ -202,6 +206,7 @@ SOURCE_FILES = (
     "LICENSES/MIT.txt",
     "LICENSES/BSD-3-Clause.txt",
     ARRAY_API_COMPAT_LICENSE,
+    CODSPEED_LICENSE,
     OPENBLAS_LICENSE,
     OPENBLAS_WINDOWS_LICENSE,
     *OPENBLAS_EXACT_PACKAGED_LICENSES,
@@ -240,6 +245,7 @@ COMMON_ARCHIVE_SUFFIXES = (
     "LICENSES/MIT.txt",
     "LICENSES/BSD-3-Clause.txt",
     ARRAY_API_COMPAT_LICENSE,
+    CODSPEED_LICENSE,
     OPENBLAS_LICENSE,
     OPENBLAS_WINDOWS_LICENSE,
     *OPENBLAS_EXACT_PACKAGED_LICENSES,
@@ -287,6 +293,7 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/third-party/MIT.txt",
     "share/licenses/xtbloom/third-party/BSD-3-Clause.txt",
     "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
+    "share/licenses/xtbloom/third-party/codspeed-MIT.txt",
     "share/licenses/xtbloom/third-party/scipy-openblas32-0.3.34.0.0.txt",
     "share/licenses/xtbloom/third-party/scipy-openblas32-tools-LICENSE_win32.txt",
     *(
@@ -342,6 +349,7 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/third-party/MIT.txt",
     "share/licenses/xtbloom/third-party/BSD-3-Clause.txt",
     "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
+    "share/licenses/xtbloom/third-party/codspeed-MIT.txt",
     "share/licenses/xtbloom/third-party/scipy-openblas32-0.3.34.0.0.txt",
     "share/licenses/xtbloom/third-party/scipy-openblas32-tools-LICENSE_win32.txt",
     *(
@@ -391,6 +399,15 @@ PLAYWRIGHT_NOTICE_TOKENS = (
     "WebKit 26.5 revision 2336",
     "FFmpeg revision 1011",
 )
+CODSPEED_NOTICE_TOKENS = (
+    "b2d12d8e96704c82b449d8668818a754ede45c66",
+    "a2e0ab65df73e837666d12357280ca50ff6d6ac03ea5266703be518b68170edf",
+    "88472375d0a4572cf70a9f1fe3a4e0ab8da1b924",
+    "8b253c6a2d3a435bc404f8a74f86d3c4ed2a2402",
+    "5d8abb100020c7968220ab856c776670abfdc77bb0fac532c56f695af4f4a098",
+    "dda8318ddceecb99203ff64cf5697553040fe1eb4b617a6a585674f829c63e33",
+    "454becce1a232bba1c408ed8aad4a20afa78acfbaba072cef2bf1c0a636ebd71",
+)
 NOTICE_TOKENS = (
     "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
     "6f0b06fbfa8653a23ca55c453772ce3af4420706",
@@ -423,6 +440,7 @@ NOTICE_TOKENS = (
     "pako 2.2.0 and pako 1.0.11",
     "2d35a2618bb734b61c442fb775c0a7a669f800be63f6ac0d029b656598581de6",
     *PLAYWRIGHT_NOTICE_TOKENS,
+    *CODSPEED_NOTICE_TOKENS,
     "26a9e470a7b3c7822084b09fb7f13902c5f37b51",
     "fsevents` 2.3.2",
     "a7f5d00939b74e141a73131468c4ce48ee0f2197",
@@ -2225,6 +2243,12 @@ def _require_notice_tokens(notice: str, tokens: tuple[str, ...]) -> None:
             raise LicenseCheckError(f"THIRD_PARTY_NOTICES.md omits {token}")
 
 
+def _require_codspeed_license_bytes(payload: bytes, context: str) -> None:
+    """Require the exact shared MIT notice from the reviewed plugin and Action."""
+    if hashlib.sha256(payload).hexdigest() != CODSPEED_LICENSE_SHA256:
+        raise LicenseCheckError(f"{context} CodSpeed MIT license differs")
+
+
 def _require_gfn1_web_source_map() -> None:
     """Keep every shipped GFN1 parameter provenance file byte-mapped to source."""
     for site_relative, source_relative in REQUIRED_GFN1_WEB_SOURCE_MAP.items():
@@ -2238,6 +2262,9 @@ def _require_gfn1_web_source_map() -> None:
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
     _require_files(root, SOURCE_FILES, "source tree")
+    _require_codspeed_license_bytes(
+        (root / CODSPEED_LICENSE).read_bytes(), "source tree"
+    )
     license_text = (root / "LICENSE").read_text(encoding="utf-8")
     if (
         "GNU GENERAL PUBLIC LICENSE" not in license_text
@@ -2691,6 +2718,10 @@ def _file_starts_with(path: Path, prefix: bytes) -> bool:
 def check_install(prefix: Path) -> None:
     """Validate the legal payload installed by CMake."""
     _require_files(prefix, INSTALL_FILES, "install tree")
+    _require_codspeed_license_bytes(
+        (prefix / "share/licenses/xtbloom/third-party/codspeed-MIT.txt").read_bytes(),
+        "install tree",
+    )
     try:
         installed_gfn1_d3 = json.loads(
             (
@@ -2954,6 +2985,17 @@ def _find_archive_name(names: set[str], suffix: str) -> str:
             f"archive must contain exactly one {suffix}; found {len(matches)}"
         )
     return matches[0]
+
+
+def _check_archived_codspeed_license(path: Path, names: set[str], wheel: bool) -> None:
+    """Validate every retained CodSpeed MIT notice at distribution boundaries."""
+    suffixes = [CODSPEED_LICENSE]
+    if wheel:
+        suffixes.append("share/licenses/xtbloom/third-party/codspeed-MIT.txt")
+    for suffix in suffixes:
+        member = _find_archive_name(names, suffix)
+        payload = _read_archive_members(path, {member})[member]
+        _require_codspeed_license_bytes(payload, "archived")
 
 
 def _check_archived_gfn1_d3(path: Path, names: set[str], wheel: bool) -> None:
@@ -3598,6 +3640,7 @@ def check_archive(path: Path, source_root: Path | None = None) -> None:
         raise LicenseCheckError(
             f"{path} is missing archived legal files: {', '.join(missing)}"
         )
+    _check_archived_codspeed_license(path, names, wheel=path.suffix == ".whl")
     bundled = _find_bundled_vendor_libraries(names)
     if bundled:
         raise LicenseCheckError(
