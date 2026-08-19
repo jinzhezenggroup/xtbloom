@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 from dpdata.driver import Driver, Minimizer
 
-from ._optimizer import curvature, initial_step_size, lbfgs_direction
+from ._optimizer import _LBFGSState, _validated_controls
 from .exceptions import XTBloomNotSupportedError, XTBloomRuntimeError, XTBloomValueError
 from .interface import BatchCalculator, Structure, symbols_to_numbers
 
@@ -42,15 +42,6 @@ if TYPE_CHECKING:
 HARTREE_TO_EV = 27.211386245988
 BOHR_TO_ANGSTROM = 0.529177210903
 _FORCE_TO_EV_ANG = HARTREE_TO_EV / BOHR_TO_ANGSTROM
-
-#: Fraction of the current energy accepted as numerical noise when deciding
-#: whether a trial geometry improves the previous one.
-_ACCEPT_TOLERANCE = 1.0e-8
-#: Per-frame step length evolution.  After the first accepted step the L-BFGS
-#: direction already carries the inverse-Hessian scale, so the natural step is
-#: ``alpha = 1``; a rejected trial halves alpha and the next accept restores it.
-_ALPHA_DECAY = 0.5
-_ALPHA_MIN = 1.0e-4
 
 
 class _SymbolMap:
@@ -281,16 +272,11 @@ class XTBloomMinimizer(Minimizer):
         max_steps: int | None = None,
         memory: int = 5,
     ) -> None:
-        if not np.isfinite(fmax) or fmax <= 0.0:
-            raise XTBloomValueError("fmax must be finite and positive")
-        if max_steps is not None and int(max_steps) < 1:
-            raise XTBloomValueError("max_steps must be a positive integer or None")
-        if int(memory) < 1:
-            raise XTBloomValueError("memory must be a positive integer")
+        fmax, max_steps, memory = _validated_controls(fmax, max_steps, memory)
         self._driver = driver if driver is not None else XTBloomDriver()
-        self._fmax = float(fmax)
-        self._max_steps = None if max_steps is None else int(max_steps)
-        self._memory = int(memory)
+        self._fmax = fmax
+        self._max_steps = max_steps
+        self._memory = memory
 
     def minimize(self, data: dict) -> dict:
         """Minimize the system and label it with the relaxed geometries.
@@ -329,20 +315,9 @@ class XTBloomMinimizer(Minimizer):
         if nframes == 0:
             raise XTBloomValueError("cannot minimize a system without frames")
 
-        # Per-frame optimizer ledger, keyed by original frame index.  Only an
-        # energy-accepted evaluation enters ``accepted_*``; this keeps a rejected
-        # final trial from becoming the published result when max_steps expires.
-        accepted_pos: dict[int, np.ndarray] = {}
-        accepted_energy: dict[int, float] = {}
-        accepted_force: dict[int, np.ndarray] = {}
-        prev_pos: dict[int, np.ndarray] = {}
-        prev_energy: dict[int, float] = {}
-        prev_gradient: dict[int, np.ndarray] = {}
-        alpha: dict[int, float] = {}
-        s_history: dict[int, list[np.ndarray]] = {}
-        y_history: dict[int, list[np.ndarray]] = {}
-        rho_history: dict[int, list[float]] = {}
-        initialized: set[int] = set()
+        # The shared state object guarantees that rejected trials never replace
+        # a frame's published position, energy, force, or L-BFGS history.
+        states: dict[int, _LBFGSState] = {}
         done: set[int] = set()
         failed: set[int] = set()
         line_search_failed: set[int] = set()
@@ -379,15 +354,16 @@ class XTBloomMinimizer(Minimizer):
                         # its last successfully evaluated geometry.
                         failed.add(frame)
                         done.add(frame)
-                        if frame in initialized:
-                            structures[frame].update(positions=prev_pos[frame])
+                        if frame in states:
+                            structures[frame].update(positions=states[frame].position)
                         continue
 
-                    if frame not in initialized:
+                    if frame not in states:
                         # The input geometry is the first accepted baseline.
-                        accepted_pos[frame] = evaluated_pos
-                        accepted_energy[frame] = energy
-                        accepted_force[frame] = force
+                        state = _LBFGSState.from_evaluation(
+                            evaluated_pos, energy, force, self._memory
+                        )
+                        states[frame] = state
                         max_force = float(
                             np.max(np.linalg.norm(force * _FORCE_TO_EV_ANG, axis=1))
                         )
@@ -397,72 +373,27 @@ class XTBloomMinimizer(Minimizer):
                         if not can_move:
                             continue
 
-                        # ``force`` is -dE/dR (library convention); the
-                        # optimizer works with the energy gradient +dE/dR.
-                        gradient = -force
-                        alpha[frame] = initial_step_size(gradient)
-                        prev_pos[frame] = evaluated_pos
-                        prev_energy[frame] = energy
-                        prev_gradient[frame] = gradient
-                        s_history[frame] = []
-                        y_history[frame] = []
-                        rho_history[frame] = []
-                        initialized.add(frame)
-                        direction = lbfgs_direction(gradient, [], [], [])
-                        trial = prev_pos[frame] + alpha[frame] * direction
-                        structures[frame].update(positions=trial)
+                        structures[frame].update(positions=state.initial_trial())
                     else:
-                        baseline_pos = prev_pos[frame]
-                        acceptance_limit = prev_energy[frame] + _ACCEPT_TOLERANCE * max(
-                            1.0, abs(prev_energy[frame])
-                        )
-                        if energy > acceptance_limit:
+                        state = states[frame]
+                        if not state.accepts(energy):
                             # Trial did not improve: retry from the accepted
                             # baseline with a shorter step, reusing the same
                             # history. Once the minimum step has itself been
                             # rejected, stop this frame instead of retrying the
                             # identical geometry forever.
-                            if alpha[frame] <= _ALPHA_MIN:
+                            trial = state.backoff_trial()
+                            if trial is None:
                                 line_search_failed.add(frame)
                                 done.add(frame)
-                                structures[frame].update(positions=baseline_pos)
+                                structures[frame].update(positions=state.position)
                                 continue
                             if not can_move:
                                 continue
-                            alpha[frame] = max(alpha[frame] * _ALPHA_DECAY, _ALPHA_MIN)
-                            direction = lbfgs_direction(
-                                prev_gradient[frame],
-                                s_history[frame],
-                                y_history[frame],
-                                rho_history[frame],
-                            )
-                            trial = prev_pos[frame] + alpha[frame] * direction
                             structures[frame].update(positions=trial)
                             continue
 
-                        gradient = -force
-                        s_step = evaluated_pos - baseline_pos
-                        y_step = gradient - prev_gradient[frame]
-                        rho = curvature(s_step, y_step)
-                        if rho > 0.0:
-                            # Positive curvature: keep the pair.  A
-                            # non-positive pair means the Hessian along the
-                            # step is not positive definite, so the history
-                            # is left untouched for robustness.
-                            s_history[frame].append(s_step)
-                            y_history[frame].append(y_step)
-                            rho_history[frame].append(1.0 / rho)
-                            if len(s_history[frame]) > self._memory:
-                                s_history[frame].pop(0)
-                                y_history[frame].pop(0)
-                                rho_history[frame].pop(0)
-
-                        accepted_pos[frame] = evaluated_pos
-                        accepted_energy[frame] = energy
-                        accepted_force[frame] = force
-                        prev_pos[frame] = evaluated_pos
-                        prev_energy[frame] = energy
-                        prev_gradient[frame] = gradient
+                        state.accept_trial(evaluated_pos, energy, force)
 
                         # A rejected geometry cannot establish convergence; the
                         # force criterion is checked only after energy acceptance.
@@ -475,18 +406,7 @@ class XTBloomMinimizer(Minimizer):
                         if not can_move:
                             continue
 
-                        # L-BFGS directions carry the inverse-Hessian scale, so
-                        # the natural accepted step is alpha = 1 (restored here
-                        # after any rejection halving).
-                        alpha[frame] = 1.0
-                        direction = lbfgs_direction(
-                            gradient,
-                            s_history[frame],
-                            y_history[frame],
-                            rho_history[frame],
-                        )
-                        trial = prev_pos[frame] + alpha[frame] * direction
-                        structures[frame].update(positions=trial)
+                        structures[frame].update(positions=state.next_trial())
 
                 evaluations += 1
                 if done:
@@ -499,6 +419,8 @@ class XTBloomMinimizer(Minimizer):
                     else:
                         active = []
         finally:
+            for frame, state in states.items():
+                structures[frame].update(positions=state.position)
             calculator.close()
 
         if failed:
@@ -524,17 +446,17 @@ class XTBloomMinimizer(Minimizer):
         # Frames not finished (max_steps reached) are reported at their last
         # energy-accepted geometry, never at an unevaluated or rejected trial.
         final_pos = (
-            np.stack([accepted_pos[frame] for frame in range(nframes)])
+            np.stack([states[frame].position for frame in range(nframes)])
             * BOHR_TO_ANGSTROM
         )
         final_energies = (
             np.asarray(
-                [accepted_energy[frame] for frame in range(nframes)], dtype=np.float64
+                [states[frame].energy for frame in range(nframes)], dtype=np.float64
             )
             * HARTREE_TO_EV
         )
         final_forces = (
-            np.stack([accepted_force[frame] for frame in range(nframes)])
+            np.stack([states[frame].force for frame in range(nframes)])
             * _FORCE_TO_EV_ANG
         )
 

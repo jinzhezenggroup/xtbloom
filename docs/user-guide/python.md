@@ -96,6 +96,38 @@ Single-system `Calculator.singlepoint()` raises when its one system does not
 converge or its eigensolver fails. A batch preserves successful peers by
 default.
 
+## Direct geometry optimization
+
+`optimize()` relaxes one existing `Calculator` in place, and
+`optimize_batch()` relaxes a ragged sequence of `Structure` objects through one
+reusable `BatchCalculator`. Both use analytic forces and report accepted states
+in the native Hartree/bohr unit convention:
+
+```python
+from xtbloom import optimize, optimize_batch
+
+with Calculator(
+    "GFN2-xTB", numbers, positions, backend="cpu", warm_start=True
+) as calc:
+    single = optimize(calc, fmax=5e-4, max_steps=200)
+
+batch = optimize_batch(systems, backend="cuda", warm_start=True)
+print(batch.converged)
+print(batch.failed_indices)
+batch.raise_for_status()
+```
+
+The single-system function raises on numerical failure. The batch function
+keeps SCC/eigensolver and line-search failures local: `failed` and
+`failure_messages` identify stopped systems while successful peers continue,
+and `raise_for_status()` provides optional strict handling afterward. On every
+normal or exceptional exit, input coordinates are restored to the last
+energy-accepted geometry; a system without any valid baseline stays at its
+original geometry. Reaching `max_steps` returns an unfinished system with
+`converged=False`, not `failed=True`. See the
+[geometry-optimization guide](optimization.md) for result semantics,
+line-search behavior, and limitations.
+
 ## Numerical Cartesian Hessians
 
 `Calculator.hessian()` returns one dense QM-coordinate energy Hessian, while

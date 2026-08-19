@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ._optimizer import curvature, initial_step_size, lbfgs_direction
+from . import library
+from ._optimizer import _LBFGSState, _validated_controls
 from .exceptions import XTBloomRuntimeError, XTBloomValueError
 from .interface import BatchCalculator
 
@@ -15,10 +16,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from .interface import Calculator, Structure
-
-_ACCEPT_TOLERANCE = 1.0e-8
-_ALPHA_DECAY = 0.5
-_ALPHA_MIN = 1.0e-4
 
 
 @dataclass(frozen=True)
@@ -29,6 +26,8 @@ class OptimizationResult:
     energies: np.ndarray
     forces: tuple[np.ndarray, ...]
     converged: np.ndarray
+    failed: np.ndarray
+    failure_messages: tuple[str | None, ...]
     steps: np.ndarray
     evaluations: int
 
@@ -37,34 +36,30 @@ class OptimizationResult:
         """Return whether every system met the requested force threshold."""
         return bool(np.all(self.converged))
 
+    @property
+    def failed_indices(self) -> np.ndarray:
+        """Return indices stopped by peer-local numerical failures."""
+        return np.flatnonzero(self.failed)
 
-def _validated_controls(
-    fmax: float, max_steps: int | None, memory: int
-) -> tuple[float, int | None, int]:
-    threshold = float(fmax)
-    if not np.isfinite(threshold) or threshold <= 0.0:
-        raise XTBloomValueError("fmax must be finite and positive")
-    if isinstance(max_steps, bool):
-        raise XTBloomValueError("max_steps must be a positive integer or None")
-    if max_steps is not None:
-        try:
-            steps = int(max_steps)
-        except (TypeError, ValueError, OverflowError):
-            raise XTBloomValueError(
-                "max_steps must be a positive integer or None"
-            ) from None
-        if steps != max_steps or steps < 1:
-            raise XTBloomValueError("max_steps must be a positive integer or None")
-        max_steps = steps
-    if isinstance(memory, bool):
-        raise XTBloomValueError("memory must be a positive integer")
-    try:
-        memory_value = int(memory)
-    except (TypeError, ValueError, OverflowError):
-        raise XTBloomValueError("memory must be a positive integer") from None
-    if memory_value != memory or memory_value < 1:
-        raise XTBloomValueError("memory must be a positive integer")
-    return threshold, max_steps, memory_value
+    def raise_for_status(self) -> None:
+        """Raise a combined exception while retaining successful peer results."""
+        messages = [
+            f"system {int(index)}: {self.failure_messages[int(index)]}"
+            for index in self.failed_indices
+        ]
+        if messages:
+            raise XTBloomRuntimeError(
+                "xTBloom optimization produced failed systems: " + "; ".join(messages)
+            )
+
+
+@dataclass(frozen=True)
+class _Evaluation:
+    """One evaluator output plus an optional peer-local failure diagnostic."""
+
+    energy: float
+    force: np.ndarray
+    error: str | None = None
 
 
 def _max_force(force: np.ndarray) -> float:
@@ -74,151 +69,163 @@ def _max_force(force: np.ndarray) -> float:
 
 def _optimize_structures(
     structures: Sequence[Structure],
-    evaluate: Callable[[], Sequence[tuple[float, np.ndarray]]],
+    evaluate: Callable[[], Sequence[_Evaluation]],
     *,
     fmax: float,
     max_steps: int | None,
     memory: int,
+    peer_local_failures: bool,
 ) -> OptimizationResult:
-    """Run the shared energy-accepted L-BFGS controller."""
+    """Run the shared controller and restore accepted positions on every exit."""
     fmax, max_steps, memory = _validated_controls(fmax, max_steps, memory)
     if not structures:
         raise XTBloomValueError("cannot optimize an empty structure sequence")
     nsystems = len(structures)
-    accepted_pos: list[np.ndarray | None] = [None] * nsystems
-    accepted_energy = np.full(nsystems, np.nan, dtype=np.float64)
-    accepted_force: list[np.ndarray | None] = [None] * nsystems
-    previous_gradient: list[np.ndarray | None] = [None] * nsystems
-    alpha = np.zeros(nsystems, dtype=np.float64)
-    s_history: list[list[np.ndarray]] = [[] for _ in range(nsystems)]
-    y_history: list[list[np.ndarray]] = [[] for _ in range(nsystems)]
-    rho_history: list[list[float]] = [[] for _ in range(nsystems)]
+    original_positions = [structure.positions.copy() for structure in structures]
+    states: list[_LBFGSState | None] = [None] * nsystems
     converged = np.zeros(nsystems, dtype=bool)
-    accepted_steps = np.zeros(nsystems, dtype=np.int64)
+    failed = np.zeros(nsystems, dtype=bool)
+    failure_messages: list[str | None] = [None] * nsystems
 
     def restore_accepted() -> None:
-        for index, position in enumerate(accepted_pos):
-            if position is not None:
-                structures[index].update(positions=position)
+        """Leave every structure at its last valid accepted geometry."""
+        for index, state in enumerate(states):
+            position = original_positions[index] if state is None else state.position
+            structures[index].update(positions=position)
 
-    def checked_evaluate() -> list[tuple[float, np.ndarray]]:
+    def checked_evaluate() -> list[_Evaluation]:
+        """Normalize evaluator data and reject call-level contract violations."""
         values = list(evaluate())
         if len(values) != nsystems:
             raise XTBloomRuntimeError(
                 "optimizer evaluator returned a different system count"
             )
-        failed: list[int] = []
-        normalized: list[tuple[float, np.ndarray]] = []
-        for index, (energy, force) in enumerate(values):
-            force_array = np.asarray(force, dtype=np.float64)
-            if force_array.shape != structures[index].positions.shape:
+        normalized: list[_Evaluation] = []
+        for index, value in enumerate(values):
+            if not isinstance(value, _Evaluation):
+                raise XTBloomRuntimeError(
+                    f"optimizer evaluator returned an invalid entry for system {index}"
+                )
+            try:
+                energy = float(value.energy)
+                force_array = np.asarray(value.force, dtype=np.float64)
+            except (TypeError, ValueError, OverflowError):
+                raise XTBloomRuntimeError(
+                    f"optimizer evaluator returned non-numeric data for system {index}"
+                ) from None
+            if force_array.shape != original_positions[index].shape:
                 raise XTBloomRuntimeError(
                     "optimizer evaluator returned an invalid force shape "
                     f"for system {index}"
                 )
-            if not np.isfinite(energy) or not np.isfinite(force_array).all():
-                failed.append(index)
-            normalized.append((float(energy), force_array.copy()))
-        if failed:
-            restore_accepted()
-            indices = ", ".join(str(index) for index in failed)
-            raise XTBloomRuntimeError(
-                f"xTBloom optimization produced failed systems: {indices}"
+            error = value.error
+            if error is None and (
+                not np.isfinite(energy) or not np.isfinite(force_array).all()
+            ):
+                error = "evaluator returned non-finite energy or forces"
+            normalized.append(
+                _Evaluation(energy=energy, force=force_array.copy(), error=error)
             )
         return normalized
 
-    initial = checked_evaluate()
-    evaluations = 1
-    for index, (energy, force) in enumerate(initial):
-        position = structures[index].positions.copy()
-        accepted_pos[index] = position
-        accepted_energy[index] = energy
-        accepted_force[index] = force
-        converged[index] = _max_force(force) <= fmax
-        if converged[index]:
-            continue
-        gradient = -force
-        previous_gradient[index] = gradient
-        alpha[index] = initial_step_size(gradient)
-        direction = lbfgs_direction(gradient, [], [], [])
-        structures[index].update(positions=position + alpha[index] * direction)
-
-    moves = 0
-    while not bool(np.all(converged)) and (max_steps is None or moves < max_steps):
-        values = checked_evaluate()
-        evaluations += 1
-        moves += 1
-        for index, (energy, force) in enumerate(values):
-            if converged[index]:
-                # Converged peers stay fixed but remain in the ragged batch so
-                # the caller-owned BatchCalculator can reuse one stable topology.
-                continue
-            baseline_pos = cast("np.ndarray", accepted_pos[index])
-            baseline_gradient = cast("np.ndarray", previous_gradient[index])
-            acceptance_limit = accepted_energy[index] + _ACCEPT_TOLERANCE * max(
-                1.0, abs(accepted_energy[index])
+    def stop_failed(index: int, message: str) -> None:
+        """Stop one peer at its accepted state or raise for strict callers."""
+        if not peer_local_failures:
+            raise XTBloomRuntimeError(
+                f"xTBloom optimization failed for system {index}: {message}"
             )
-            if energy > acceptance_limit:
-                structures[index].update(positions=baseline_pos)
-                if alpha[index] <= _ALPHA_MIN:
-                    restore_accepted()
-                    raise XTBloomRuntimeError(
-                        "xTBloom optimization line search stalled at the minimum "
-                        f"step size for system {index}"
-                    )
-                alpha[index] = max(alpha[index] * _ALPHA_DECAY, _ALPHA_MIN)
-                direction = lbfgs_direction(
-                    baseline_gradient,
-                    s_history[index],
-                    y_history[index],
-                    rho_history[index],
-                )
-                structures[index].update(
-                    positions=baseline_pos + alpha[index] * direction
-                )
+        failed[index] = True
+        converged[index] = False
+        failure_messages[index] = message
+        state = states[index]
+        position = original_positions[index] if state is None else state.position
+        structures[index].update(positions=position)
+
+    try:
+        initial = checked_evaluate()
+        evaluations = 1
+        for index, value in enumerate(initial):
+            if value.error is not None:
+                stop_failed(index, value.error)
                 continue
-
-            evaluated_pos = structures[index].positions.copy()
-            gradient = -force
-            s_step = evaluated_pos - baseline_pos
-            y_step = gradient - baseline_gradient
-            pair_curvature = curvature(s_step, y_step)
-            if pair_curvature > 0.0:
-                s_history[index].append(s_step)
-                y_history[index].append(y_step)
-                rho_history[index].append(1.0 / pair_curvature)
-                if len(s_history[index]) > memory:
-                    s_history[index].pop(0)
-                    y_history[index].pop(0)
-                    rho_history[index].pop(0)
-
-            accepted_pos[index] = evaluated_pos
-            accepted_energy[index] = energy
-            accepted_force[index] = force
-            previous_gradient[index] = gradient
-            accepted_steps[index] += 1
+            energy = float(value.energy)
+            force = np.asarray(value.force, dtype=np.float64)
+            state = _LBFGSState.from_evaluation(
+                structures[index].positions, energy, force, memory
+            )
+            states[index] = state
             converged[index] = _max_force(force) <= fmax
-            if converged[index]:
-                continue
+            if not converged[index]:
+                structures[index].update(positions=state.initial_trial())
 
-            alpha[index] = 1.0
-            direction = lbfgs_direction(
-                gradient,
-                s_history[index],
-                y_history[index],
-                rho_history[index],
+        moves = 0
+        while not bool(np.all(converged | failed)) and (
+            max_steps is None or moves < max_steps
+        ):
+            values = checked_evaluate()
+            evaluations += 1
+            moves += 1
+            for index, value in enumerate(values):
+                if converged[index] or failed[index]:
+                    # Finished peers stay fixed but remain in a stable ragged
+                    # batch so the native context and warm state can be reused.
+                    continue
+                if value.error is not None:
+                    stop_failed(index, value.error)
+                    continue
+
+                energy = float(value.energy)
+                force = np.asarray(value.force, dtype=np.float64)
+                state = states[index]
+                assert state is not None
+                if not state.accepts(energy):
+                    trial = state.backoff_trial()
+                    if trial is None:
+                        stop_failed(
+                            index,
+                            "line search stalled at the minimum step size",
+                        )
+                    else:
+                        structures[index].update(positions=trial)
+                    continue
+
+                state.accept_trial(structures[index].positions, energy, force)
+                converged[index] = _max_force(force) <= fmax
+                if not converged[index]:
+                    structures[index].update(positions=state.next_trial())
+
+        positions = tuple(
+            (original_positions[index] if state is None else state.position).copy()
+            for index, state in enumerate(states)
+        )
+        energies = np.asarray(
+            [np.nan if state is None else state.energy for state in states],
+            dtype=np.float64,
+        )
+        forces = tuple(
+            (
+                np.full_like(original_positions[index], np.nan)
+                if state is None
+                else state.force.copy()
             )
-            structures[index].update(positions=evaluated_pos + direction)
-
-    restore_accepted()
-    return OptimizationResult(
-        positions=tuple(cast("np.ndarray", value).copy() for value in accepted_pos),
-        energies=accepted_energy.copy(),
-        forces=tuple(cast("np.ndarray", value).copy() for value in accepted_force),
-        converged=converged.copy(),
-        steps=accepted_steps.copy(),
-        evaluations=evaluations,
-    )
+            for index, state in enumerate(states)
+        )
+        steps = np.asarray(
+            [0 if state is None else state.steps for state in states],
+            dtype=np.int64,
+        )
+        return OptimizationResult(
+            positions=positions,
+            energies=energies,
+            forces=forces,
+            converged=converged.copy(),
+            failed=failed.copy(),
+            failure_messages=tuple(failure_messages),
+            steps=steps,
+            evaluations=evaluations,
+        )
+    finally:
+        restore_accepted()
 
 
 def optimize(
@@ -234,12 +241,17 @@ def optimize(
     keeps its configured backend, SCC policy, and warm-start behavior.
     """
 
-    def evaluate() -> list[tuple[float, np.ndarray]]:
+    def evaluate() -> list[_Evaluation]:
         result = calculator.singlepoint()
-        return [(result.energy, result.forces)]
+        return [_Evaluation(result.energy, result.forces)]
 
     return _optimize_structures(
-        [calculator], evaluate, fmax=fmax, max_steps=max_steps, memory=memory
+        [calculator],
+        evaluate,
+        fmax=fmax,
+        max_steps=max_steps,
+        memory=memory,
+        peer_local_failures=False,
     )
 
 
@@ -267,6 +279,8 @@ def optimize_batch(
     structures = list(structures)
     if not structures:
         raise XTBloomValueError("cannot optimize an empty structure sequence")
+    # Validate optimizer-only arguments before acquiring native resources.
+    fmax, max_steps, memory = _validated_controls(fmax, max_steps, memory)
     calculator = BatchCalculator(
         structures,
         method,
@@ -284,12 +298,19 @@ def optimize_batch(
         warm_start=warm_start,
     )
 
-    def evaluate() -> list[tuple[float, np.ndarray]]:
+    def evaluate() -> list[_Evaluation]:
         result = calculator.compute()
-        values: list[tuple[float, np.ndarray]] = []
+        values: list[_Evaluation] = []
         for index in range(len(structures)):
             single = result[index]
-            values.append((single.energy, single.forces))
+            error = None
+            if single.scc_status != library.STATUS_SUCCESS or not single.scc_converged:
+                error = (
+                    f"{library.status_string(single.scc_status)}, "
+                    f"scc_converged={int(single.scc_converged)}, "
+                    f"iterations={single.scc_iterations}"
+                )
+            values.append(_Evaluation(single.energy, single.forces, error))
         return values
 
     try:
@@ -299,6 +320,7 @@ def optimize_batch(
             fmax=fmax,
             max_steps=max_steps,
             memory=memory,
+            peer_local_failures=True,
         )
     finally:
         calculator.close()

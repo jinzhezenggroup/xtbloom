@@ -103,7 +103,9 @@ print(result["charges"])
 ```
 
 See the [Python guide](docs/user-guide/python.md) for ragged batches, direct
-device arrays, point charges, ASE, dpdata, and PyTorch integration.
+device arrays, point charges, ASE, dpdata, and PyTorch integration. Molecular
+relaxation is available through the
+[direct Python geometry optimizer](docs/user-guide/optimization.md).
 
 Native consumers can install the CMake package and link
 `xtbloom::xtbloom`. The [C/C++ guide](docs/user-guide/c-api.md) contains a
@@ -144,10 +146,11 @@ before reusing the numbers.
 | Native-cell descriptors | ABI-v4 validates `NONE`/`XYZ`; periodic execution returns `NOT_IMPLEMENTED` |
 | Uniform electric field and molecular dipoles | GFN2 CPU and CUDA; not published for GFN1 |
 | ASE and dpdata integrations | GFN1 and GFN2 |
+| Direct Python and dpdata geometry optimization | Higher-level GFN1 CPU and GFN2 CPU/CUDA adapters |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
 | Array API/DLPack and PyTorch autograd | GFN2-only adapter surfaces |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN1/GFN2 CPU/WASM adapter; GFN2 is the default |
-| ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN1/GFN2 execution | Not implemented |
+| ROCm, solvation, native C-ABI optimization drivers, MD, analytic/C-ABI Hessians, periodic GFN1/GFN2 execution | Not implemented |
 
 Reserved ABI values are not reported as supported features. At finite
 electronic temperature, the reported variational energy is the electronic
@@ -169,6 +172,7 @@ and response properties are central.
 - [User guide](docs/user-guide/index.md)
 - [Browser demo](docs/user-guide/browser-demo.md)
 - [Python API](docs/user-guide/python.md)
+- [Direct Python geometry optimization](docs/user-guide/optimization.md)
 - [C and C++ API](docs/user-guide/c-api.md)
 - [QM/MM usage](docs/user-guide/qmmm.md)
 - [Skills for AI agents](docs/user-guide/agent-skills.md)
