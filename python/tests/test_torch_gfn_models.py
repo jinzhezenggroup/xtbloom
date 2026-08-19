@@ -24,10 +24,12 @@ WATER_POSITIONS = np.array(
 
 
 def _skip_reason() -> str | None:
+    """Return a skip reason when the optional Torch runtime is unavailable."""
     return None if _TORCH is not None else "torch is not installed"
 
 
 def _library_has_cuda() -> bool:
+    """Return whether the installed xTBloom core can create a CUDA context."""
     from xtbloom.interface import Context
 
     try:
@@ -39,6 +41,7 @@ def _library_has_cuda() -> bool:
 
 
 def _packed(torch: object, *, device: str = "cpu") -> dict[str, object]:
+    """Build one packed water batch on the requested Torch device."""
     return {
         "positions": torch.tensor(WATER_POSITIONS, dtype=torch.float64, device=device),
         "atomic_numbers": torch.tensor(WATER_NUMBERS, dtype=torch.int32, device=device),
@@ -49,7 +52,8 @@ def _packed(torch: object, *, device: str = "cpu") -> dict[str, object]:
     }
 
 
-def _run(torch: object, arrays: dict[str, object], *, method: str, backend: str):
+def _run(arrays: dict[str, object], *, method: str, backend: str):
+    """Run the public Torch adapter on one prepared packed batch."""
     return xtbloom_torch(
         arrays["positions"],
         arrays["atomic_numbers"],
@@ -63,6 +67,7 @@ def _run(torch: object, arrays: dict[str, object], *, method: str, backend: str)
 
 
 def test_torch_method_resolver_matches_public_model_tags() -> None:
+    """Map every documented Torch method spelling to the stable ABI model tag."""
     import xtbloom.library as library
 
     assert _resolve_method("GFN1-xTB") == library.MODEL_GFN1_XTB
@@ -75,13 +80,14 @@ def test_torch_method_resolver_matches_public_model_tags() -> None:
 
 @pytest.mark.parametrize("method", ["GFN1-xTB", "GFN1"])
 def test_torch_gfn1_cpu_matches_calculator(method: str) -> None:
+    """Match GFN1 Torch CPU energies and forces to the high-level calculator."""
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
     import torch
 
     arrays = _packed(torch)
-    energies, forces = _run(torch, arrays, method=method, backend="cpu")
+    energies, forces = _run(arrays, method=method, backend="cpu")
     reference = Calculator(
         "GFN1-xTB", WATER_NUMBERS, WATER_POSITIONS, backend="cpu"
     ).singlepoint()
@@ -100,6 +106,7 @@ def test_torch_gfn1_cpu_matches_calculator(method: str) -> None:
 
 
 def test_torch_gfn1_autograd_is_negative_force() -> None:
+    """Preserve the exact first-order relation dE/dR = -F for GFN1."""
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
@@ -107,13 +114,14 @@ def test_torch_gfn1_autograd_is_negative_force() -> None:
 
     arrays = _packed(torch)
     positions = arrays["positions"].requires_grad_(True)
-    energies, forces = _run(torch, arrays, method="GFN1-xTB", backend="cpu")
+    energies, forces = _run(arrays, method="GFN1-xTB", backend="cpu")
     energies.sum().backward()
     assert positions.grad is not None
     assert torch.allclose(positions.grad, -forces, atol=0.0, rtol=0.0)
 
 
 def test_private_torch_op_rejects_unknown_model() -> None:
+    """Reject unknown private dispatcher model tags before native narrowing."""
     reason = _skip_reason()
     if reason:
         pytest.skip(reason)
@@ -159,6 +167,7 @@ def test_private_torch_op_rejects_unknown_model() -> None:
 
 @pytest.mark.cuda
 def test_torch_cuda_cache_separates_gfn1_and_gfn2() -> None:
+    """Keep persistent CUDA plan-cache entries distinct across GFN models."""
     reason = _skip_reason() if _library_has_cuda() else "CUDA backend unavailable"
     if reason:
         pytest.skip(reason)
@@ -177,7 +186,7 @@ def test_torch_cuda_cache_separates_gfn1_and_gfn2() -> None:
     for method in ("GFN1-xTB", "GFN2-xTB", "GFN1-xTB"):
         positions = arrays["positions"].detach().clone().requires_grad_(True)
         call_arrays = {**arrays, "positions": positions}
-        energies, forces = _run(torch, call_arrays, method=method, backend="cuda")
+        energies, forces = _run(call_arrays, method=method, backend="cuda")
         energies.sum().backward()
         reference = references[method]
         assert positions.grad is not None
