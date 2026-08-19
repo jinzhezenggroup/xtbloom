@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "backends/common/gfn2_plan_schema.hpp"
+#include "backends/common/xtb_model.hpp"
 
 namespace xtbloom::detail::cuda {
 
@@ -62,6 +63,10 @@ struct Gfn2HamiltonianDeviceBatch {
   const std::int64_t* shell_to_atom = nullptr;
   const std::int64_t* orbital_to_shell = nullptr;
   const std::int64_t* orbital_to_atom = nullptr;
+
+  /* GFN1 uses the scalar overlap operator only; GFN2 additionally binds the
+   * directed dipole and quadrupole operator planes. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 /*

@@ -97,8 +97,8 @@ def test_ase_forces_and_charges(ketene_atoms: Atoms) -> None:
         )
 
 
-def test_ase_gfn1_cpu_matches_independent_golden(gfn1_ketene_atoms: Atoms) -> None:
-    """Expose GFN1 CPU energy and forces through the ordinary ASE adapter."""
+def test_ase_gfn1_auto_matches_independent_golden(gfn1_ketene_atoms: Atoms) -> None:
+    """Expose GFN1 energy and forces through the ASE AUTO backend policy."""
     case = _cases.gfn1_case_by_id("gfn1_ketene")
     golden = _cases.gfn1_golden(case)
     tolerance = _cases.gfn1_tolerances()
@@ -115,7 +115,7 @@ def test_ase_gfn1_cpu_matches_independent_golden(gfn1_ketene_atoms: Atoms) -> No
         abs=tolerance["forces"]["atol"] * _HARTREE_TO_EV / _BOHR,
     )
     assert atoms.calc._xtb is not None
-    assert atoms.calc._xtb.backend == _library.BACKEND_CPU
+    assert atoms.calc._xtb.backend in (_library.BACKEND_CPU, _library.BACKEND_CUDA)
 
 
 def test_ase_charge_from_atoms(ketene_atoms: Atoms) -> None:

@@ -609,8 +609,9 @@ int main(int argc, char** argv) {
   if (mode != CONSUMER_MODE_SMOKE) {
     inference_status = run_installed_inference(
         context, mode == CONSUMER_MODE_CUDA ? "CUDA GFN2" : "CPU GFN2", XTBLOOM_MODEL_GFN2_XTB);
-    if (inference_status == 0 && mode == CONSUMER_MODE_CPU) {
-      inference_status = run_installed_inference(context, "CPU GFN1", XTBLOOM_MODEL_GFN1_XTB);
+    if (inference_status == 0) {
+      inference_status = run_installed_inference(
+          context, mode == CONSUMER_MODE_CUDA ? "CUDA GFN1" : "CPU GFN1", XTBLOOM_MODEL_GFN1_XTB);
     }
   }
   xtbloom_context_destroy(context);

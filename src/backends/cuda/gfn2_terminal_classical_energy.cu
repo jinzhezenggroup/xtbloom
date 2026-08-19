@@ -86,8 +86,9 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
       (plan.enabled_components & ~kGfn2TerminalClassicalEnergyAllComponents) != 0u || batch <= 0 ||
       batch > std::numeric_limits<int>::max() || plan.repulsion.total_atoms <= 0 ||
       plan.repulsion.total_atoms > std::numeric_limits<std::int64_t>::max() / 3 ||
-      plan.repulsion.atom_offsets == nullptr || plan.repulsion.atomic_numbers == nullptr ||
-      plan.repulsion.positions == nullptr || plan.geometry_epoch.value_elements != 1 ||
+      !valid_xtb_model_flavor(plan.repulsion.model) || plan.repulsion.atom_offsets == nullptr ||
+      plan.repulsion.atomic_numbers == nullptr || plan.repulsion.positions == nullptr ||
+      plan.geometry_epoch.value_elements != 1 ||
       plan.geometry_epoch.plan_token != plan.plan_token ||
       !aligned(plan.geometry_epoch.value, alignof(std::uint64_t)) ||
       plan.generation_elements != batch ||
@@ -110,6 +111,20 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
       diagnostics.plan_error_elements != 1 ||
       !aligned(diagnostics.plan_error, alignof(std::uint32_t)) ||
       !aligned(diagnostics.repulsion_device_error, alignof(std::uint32_t))) {
+    return false;
+  }
+  if (plan.repulsion.model == XtbModelFlavor::kGfn1) {
+    if (d4 || plan.repulsion.sqrt_alpha_elements != plan.repulsion.total_atoms ||
+        plan.repulsion.effective_charge_elements != plan.repulsion.total_atoms ||
+        !canonical_pointer(plan.repulsion.sqrt_alpha, plan.repulsion.sqrt_alpha_elements) ||
+        !canonical_pointer(plan.repulsion.effective_charge,
+                           plan.repulsion.effective_charge_elements)) {
+      return false;
+    }
+  } else if (!canonical_pointer(plan.repulsion.sqrt_alpha, 0) ||
+             !canonical_pointer(plan.repulsion.effective_charge, 0) ||
+             plan.repulsion.sqrt_alpha_elements != 0 ||
+             plan.repulsion.effective_charge_elements != 0) {
     return false;
   }
   if (d4) {
@@ -138,7 +153,7 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
     return false;
   }
 
-  std::array<AddressRange, 7> reads{};
+  std::array<AddressRange, 9> reads{};
   std::array<AddressRange, 9> writes{};
   if (!make_range(plan.repulsion.atom_offsets, batch + 1, reads[0]) ||
       !make_range(plan.repulsion.atomic_numbers, plan.repulsion.total_atoms, reads[1]) ||
@@ -147,6 +162,9 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
       !make_range(plan.committed_generations, batch, reads[4]) ||
       !make_range(activity.requested_mask, batch, reads[5]) ||
       !make_range(activity.admission.error, activity.admission.error_elements, reads[6]) ||
+      !make_range(plan.repulsion.sqrt_alpha, plan.repulsion.sqrt_alpha_elements, reads[7]) ||
+      !make_range(plan.repulsion.effective_charge, plan.repulsion.effective_charge_elements,
+                  reads[8]) ||
       !make_range(results.repulsion, batch, writes[0]) ||
       !make_range(results.d4_atm, d4 ? batch : 0, writes[1]) ||
       !make_range(workspace.repulsion_candidate, batch, writes[2]) ||

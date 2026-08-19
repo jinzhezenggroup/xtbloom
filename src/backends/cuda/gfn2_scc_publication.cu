@@ -147,12 +147,14 @@ bool valid_plan(const Gfn2SccPublicationDevicePlan& plan, std::int64_t* dipoles,
                 std::int64_t* history_elements, std::int64_t* omega_elements) noexcept {
   std::int64_t atom_components = 0;
   std::int64_t expected_vector = 0;
-  return plan.batch_size > 0 && plan.batch_size <= std::numeric_limits<unsigned int>::max() &&
-         plan.total_atoms > 0 && plan.total_shells > 0 && plan.total_orbitals > 0 &&
-         plan.total_matrix_elements > 0 && plan.history_size > 0 && plan.maximum_iterations > 0u &&
-         plan.plan_token != 0u && std::isfinite(plan.residual_rms_tolerance) &&
-         plan.residual_rms_tolerance > 0.0 && std::isfinite(plan.energy_tolerance) &&
-         plan.energy_tolerance > 0.0 && plan.atom_offset_count == plan.batch_size + 1 &&
+  const bool multipoles_enabled = plan.model == XtbModelFlavor::kGfn2;
+  return valid_xtb_model_flavor(plan.model) && plan.batch_size > 0 &&
+         plan.batch_size <= std::numeric_limits<unsigned int>::max() && plan.total_atoms > 0 &&
+         plan.total_shells > 0 && plan.total_orbitals > 0 && plan.total_matrix_elements > 0 &&
+         plan.history_size > 0 && plan.maximum_iterations > 0u && plan.plan_token != 0u &&
+         std::isfinite(plan.residual_rms_tolerance) && plan.residual_rms_tolerance > 0.0 &&
+         std::isfinite(plan.energy_tolerance) && plan.energy_tolerance > 0.0 &&
+         plan.atom_offset_count == plan.batch_size + 1 &&
          plan.shell_offset_count == plan.batch_size + 1 &&
          plan.orbital_offset_count == plan.batch_size + 1 &&
          plan.matrix_offset_count == plan.batch_size + 1 &&
@@ -162,11 +164,12 @@ bool valid_plan(const Gfn2SccPublicationDevicePlan& plan, std::int64_t* dipoles,
          is_aligned(plan.orbital_offsets, alignof(std::int64_t)) &&
          is_aligned(plan.matrix_offsets, alignof(std::int64_t)) &&
          is_aligned(plan.shell_to_atom, alignof(std::int64_t)) &&
-         checked_multiply(plan.wavefunction_layout.total_spin_atoms, kDipoleComponents, dipoles) &&
-         checked_multiply(plan.wavefunction_layout.total_spin_atoms, kQuadrupoleComponents,
-                          quadrupoles) &&
-         checked_multiply(plan.wavefunction_layout.total_spin_atoms, kMultipoleAtomComponents,
-                          &atom_components) &&
+         checked_multiply(multipoles_enabled ? plan.wavefunction_layout.total_spin_atoms : 0,
+                          kDipoleComponents, dipoles) &&
+         checked_multiply(multipoles_enabled ? plan.wavefunction_layout.total_spin_atoms : 0,
+                          kQuadrupoleComponents, quadrupoles) &&
+         checked_multiply(multipoles_enabled ? plan.wavefunction_layout.total_spin_atoms : 0,
+                          kMultipoleAtomComponents, &atom_components) &&
          checked_add(plan.wavefunction_layout.total_spin_shells, atom_components,
                      &expected_vector) &&
          expected_vector == plan.total_mixer_vector_elements &&
@@ -231,8 +234,9 @@ bool valid_population(const Gfn2MullikenDevicePopulation& values,
          values.qat_elements == plan.wavefunction_layout.total_spin_atoms &&
          values.dipole_elements == dipoles && values.quadrupole_elements == quadrupoles &&
          is_aligned(values.qsh, alignof(double)) && is_aligned(values.qat, alignof(double)) &&
-         is_aligned(values.dipole, alignof(double)) &&
-         is_aligned(values.quadrupole, alignof(double));
+         (dipoles == 0 ? values.dipole == nullptr : is_aligned(values.dipole, alignof(double))) &&
+         (quadrupoles == 0 ? values.quadrupole == nullptr
+                           : is_aligned(values.quadrupole, alignof(double)));
 }
 
 bool valid_wavefunction(const Gfn2SccPublicationDeviceWavefunction& values,
@@ -250,13 +254,16 @@ bool valid_classical(const Gfn2SccClassicalEnergyDeviceDiagnostics& values,
   const std::array<std::pair<double*, std::int64_t>, 7> fields{{
       {values.es2, values.es2_elements},
       {values.es3, values.es3_elements},
-      {values.aes2, values.aes2_elements},
       {values.d4_two_body, values.d4_two_body_elements},
       {values.explicit_point_charge, values.explicit_point_charge_elements},
+      {values.electric_field, values.electric_field_elements},
       {values.periodic_embedding, values.periodic_embedding_elements},
       {values.classical_total, values.classical_total_elements},
   }};
-  if (values.plan_token != plan.plan_token) {
+  if (values.plan_token != plan.plan_token ||
+      (plan.model == XtbModelFlavor::kGfn1 ? values.aes2 != nullptr || values.aes2_elements != 0
+                                           : values.aes2_elements != plan.batch_size ||
+                                                 !is_aligned(values.aes2, alignof(double)))) {
     return false;
   }
   for (const auto& field : fields) {
@@ -273,16 +280,19 @@ bool valid_free_energy(const Gfn2SccFreeEnergyDeviceDiagnostics& values,
       {values.core, values.core_elements},
       {values.es2, values.es2_elements},
       {values.es3, values.es3_elements},
-      {values.aes2, values.aes2_elements},
       {values.spin, values.spin_elements},
       {values.d4_two_body, values.d4_two_body_elements},
       {values.explicit_point_charge, values.explicit_point_charge_elements},
+      {values.electric_field, values.electric_field_elements},
       {values.periodic_embedding, values.periodic_embedding_elements},
       {values.entropy, values.entropy_elements},
       {values.internal_energy, values.internal_energy_elements},
       {values.free_energy, values.free_energy_elements},
   }};
-  if (values.plan_token != plan.plan_token) {
+  if (values.plan_token != plan.plan_token ||
+      (plan.model == XtbModelFlavor::kGfn1 ? values.aes2 != nullptr || values.aes2_elements != 0
+                                           : values.aes2_elements != plan.batch_size ||
+                                                 !is_aligned(values.aes2, alignof(double)))) {
     return false;
   }
   for (const auto& field : fields) {
@@ -306,6 +316,7 @@ bool valid_energy(const Gfn2SccPublicationDeviceEnergyTrace& values,
          same_pointer(values.classical.d4_two_body, values.free_energy.d4_two_body) &&
          same_pointer(values.classical.explicit_point_charge,
                       values.free_energy.explicit_point_charge) &&
+         same_pointer(values.classical.electric_field, values.free_energy.electric_field) &&
          same_pointer(values.classical.periodic_embedding, values.free_energy.periodic_embedding);
 }
 
@@ -337,8 +348,10 @@ bool valid_const_multipoles(const Gfn2SccDeviceConstMultipoles& values,
          values.shell_elements == plan.wavefunction_layout.total_spin_shells &&
          values.dipole_elements == dipoles && values.quadrupole_elements == quadrupoles &&
          is_aligned(values.shell_charges, alignof(double)) &&
-         is_aligned(values.atomic_dipoles, alignof(double)) &&
-         is_aligned(values.atomic_quadrupoles, alignof(double));
+         (dipoles == 0 ? values.atomic_dipoles == nullptr
+                       : is_aligned(values.atomic_dipoles, alignof(double))) &&
+         (quadrupoles == 0 ? values.atomic_quadrupoles == nullptr
+                           : is_aligned(values.atomic_quadrupoles, alignof(double)));
 }
 
 bool valid_multipoles(const Gfn2SccDeviceMultipoles& values,
@@ -348,8 +361,10 @@ bool valid_multipoles(const Gfn2SccDeviceMultipoles& values,
          values.shell_elements == plan.wavefunction_layout.total_spin_shells &&
          values.dipole_elements == dipoles && values.quadrupole_elements == quadrupoles &&
          is_aligned(values.shell_charges, alignof(double)) &&
-         is_aligned(values.atomic_dipoles, alignof(double)) &&
-         is_aligned(values.atomic_quadrupoles, alignof(double));
+         (dipoles == 0 ? values.atomic_dipoles == nullptr
+                       : is_aligned(values.atomic_dipoles, alignof(double))) &&
+         (quadrupoles == 0 ? values.atomic_quadrupoles == nullptr
+                           : is_aligned(values.atomic_quadrupoles, alignof(double)));
 }
 
 bool valid_scc_state(const Gfn2SccDeviceState& values, const Gfn2SccPublicationDevicePlan& plan,
@@ -483,10 +498,12 @@ bool append_energy_ranges(RangeSet<Capacity>* set,
   return append_range(set, free.core, plan.batch_size, sizeof(double)) &&
          append_range(set, free.es2, plan.batch_size, sizeof(double)) &&
          append_range(set, free.es3, plan.batch_size, sizeof(double)) &&
-         append_range(set, free.aes2, plan.batch_size, sizeof(double)) &&
+         append_range(set, free.aes2, plan.model == XtbModelFlavor::kGfn2 ? plan.batch_size : 0,
+                      sizeof(double)) &&
          append_range(set, values.spin_energies, plan.batch_size, sizeof(double)) &&
          append_range(set, free.d4_two_body, plan.batch_size, sizeof(double)) &&
          append_range(set, free.explicit_point_charge, plan.batch_size, sizeof(double)) &&
+         append_range(set, free.electric_field, plan.batch_size, sizeof(double)) &&
          append_range(set, free.periodic_embedding, plan.batch_size, sizeof(double)) &&
          (entropy_already_registered ||
           append_range(set, free.entropy, plan.batch_size, sizeof(double))) &&
@@ -854,10 +871,13 @@ __global__ void publication_numerical_preflight_kernel(
   const std::int64_t spin_shell_end = plan.wavefunction_layout.spin_shell_offsets[system + 1];
   const std::int64_t spin_atom_begin = plan.wavefunction_layout.spin_atom_offsets[system];
   const std::int64_t spin_atom_end = plan.wavefunction_layout.spin_atom_offsets[system + 1];
-  const std::int64_t dipole_begin = spin_atom_begin * kDipoleComponents;
-  const std::int64_t dipole_end = spin_atom_end * kDipoleComponents;
-  const std::int64_t quadrupole_begin = spin_atom_begin * kQuadrupoleComponents;
-  const std::int64_t quadrupole_end = spin_atom_end * kQuadrupoleComponents;
+  const bool multipoles_enabled = plan.model == XtbModelFlavor::kGfn2;
+  const std::int64_t dipole_begin = multipoles_enabled ? spin_atom_begin * kDipoleComponents : 0;
+  const std::int64_t dipole_end = multipoles_enabled ? spin_atom_end * kDipoleComponents : 0;
+  const std::int64_t quadrupole_begin =
+      multipoles_enabled ? spin_atom_begin * kQuadrupoleComponents : 0;
+  const std::int64_t quadrupole_end =
+      multipoles_enabled ? spin_atom_end * kQuadrupoleComponents : 0;
 
   for (std::int64_t atom = spin_atom_begin + threadIdx.x; atom < spin_atom_end;
        atom += blockDim.x) {
@@ -1006,17 +1026,21 @@ __device__ bool peer_failure_counts_attempt(std::uint64_t failure_record) {
   }
 }
 
-__device__ void publish_peer_failure_trace(std::int64_t system, std::uint64_t failure_record,
+__device__ void publish_peer_failure_trace(Gfn2SccPublicationDevicePlan plan, std::int64_t system,
+                                           std::uint64_t failure_record,
                                            Gfn2SccIterationDeviceLedger ledger,
                                            Gfn2SccPublicationDevicePublicState public_state) {
   const double nan = __longlong_as_double(0x7ff8000000000000ULL);
   public_state.energy.free_energy.core[system] = nan;
   public_state.energy.free_energy.es2[system] = nan;
   public_state.energy.free_energy.es3[system] = nan;
-  public_state.energy.free_energy.aes2[system] = nan;
+  if (plan.model == XtbModelFlavor::kGfn2) {
+    public_state.energy.free_energy.aes2[system] = nan;
+  }
   public_state.energy.spin_energies[system] = nan;
   public_state.energy.free_energy.d4_two_body[system] = nan;
   public_state.energy.free_energy.explicit_point_charge[system] = nan;
+  public_state.energy.free_energy.electric_field[system] = nan;
   public_state.energy.free_energy.periodic_embedding[system] = nan;
   public_state.energy.free_energy.entropy[system] = nan;
   public_state.energy.free_energy.internal_energy[system] = nan;
@@ -1058,7 +1082,7 @@ __global__ void publication_commit_kernel(Gfn2SccPublicationDevicePlan plan,
   const std::uint64_t failure_record = ledger.system_failure_records[system];
   if (failure_record != 0u) {
     if (threadIdx.x == 0) {
-      publish_peer_failure_trace(system, failure_record, ledger, public_state);
+      publish_peer_failure_trace(plan, system, failure_record, ledger, public_state);
     }
     return;
   }
@@ -1078,14 +1102,19 @@ __global__ void publication_commit_kernel(Gfn2SccPublicationDevicePlan plan,
   const std::int64_t shell_end = plan.wavefunction_layout.spin_shell_offsets[system + 1];
   const std::int64_t spin_atom_begin = plan.wavefunction_layout.spin_atom_offsets[system];
   const std::int64_t spin_atom_end = plan.wavefunction_layout.spin_atom_offsets[system + 1];
-  const std::int64_t dipole_begin = spin_atom_begin * kDipoleComponents;
-  const std::int64_t dipole_end = spin_atom_end * kDipoleComponents;
-  const std::int64_t quadrupole_begin = spin_atom_begin * kQuadrupoleComponents;
-  const std::int64_t quadrupole_end = spin_atom_end * kQuadrupoleComponents;
+  const bool multipoles_enabled = plan.model == XtbModelFlavor::kGfn2;
+  const std::int64_t dipole_begin = multipoles_enabled ? spin_atom_begin * kDipoleComponents : 0;
+  const std::int64_t dipole_end = multipoles_enabled ? spin_atom_end * kDipoleComponents : 0;
+  const std::int64_t quadrupole_begin =
+      multipoles_enabled ? spin_atom_begin * kQuadrupoleComponents : 0;
+  const std::int64_t quadrupole_end =
+      multipoles_enabled ? spin_atom_end * kQuadrupoleComponents : 0;
   const std::int64_t occupation_begin = 2 * physical_orbital_begin;
   const std::int64_t occupation_end = 2 * physical_orbital_end;
-  const std::int64_t vector_begin = shell_begin + kMultipoleAtomComponents * spin_atom_begin;
-  const std::int64_t vector_end = shell_end + kMultipoleAtomComponents * spin_atom_end;
+  const std::int64_t vector_begin =
+      multipoles_enabled ? shell_begin + kMultipoleAtomComponents * spin_atom_begin : shell_begin;
+  const std::int64_t vector_end =
+      multipoles_enabled ? shell_end + kMultipoleAtomComponents * spin_atom_end : shell_end;
   const std::int64_t history_begin = vector_begin * plan.history_size;
   const std::int64_t history_end = vector_end * plan.history_size;
   const std::int64_t omega_begin = system * plan.history_size;
@@ -1179,12 +1208,16 @@ __global__ void publication_commit_kernel(Gfn2SccPublicationDevicePlan plan,
     public_state.energy.free_energy.core[system] = staged.energy.free_energy.core[system];
     public_state.energy.free_energy.es2[system] = staged.energy.free_energy.es2[system];
     public_state.energy.free_energy.es3[system] = staged.energy.free_energy.es3[system];
-    public_state.energy.free_energy.aes2[system] = staged.energy.free_energy.aes2[system];
+    if (multipoles_enabled) {
+      public_state.energy.free_energy.aes2[system] = staged.energy.free_energy.aes2[system];
+    }
     public_state.energy.spin_energies[system] = staged.energy.spin_energies[system];
     public_state.energy.free_energy.d4_two_body[system] =
         staged.energy.free_energy.d4_two_body[system];
     public_state.energy.free_energy.explicit_point_charge[system] =
         staged.energy.free_energy.explicit_point_charge[system];
+    public_state.energy.free_energy.electric_field[system] =
+        staged.energy.free_energy.electric_field[system];
     public_state.energy.free_energy.periodic_embedding[system] =
         staged.energy.free_energy.periodic_embedding[system];
     public_state.energy.free_energy.entropy[system] = staged.energy.free_energy.entropy[system];

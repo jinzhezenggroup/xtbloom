@@ -135,10 +135,21 @@ __device__ bool arithmetic_hardness(double first, double second, double* average
   return *average > 0.0 && isfinite(*average) && isfinite(inverse);
 }
 
-__device__ bool softened_kernel(double dx, double dy, double dz, double first_hardness,
-                                double second_hardness, double* kernel) {
+__device__ bool average_hardness(XtbModelFlavor model, double first, double second,
+                                 double* average) {
+  if (model == XtbModelFlavor::kGfn1) {
+    /* Match tblite and the CPU GFN1 kernel's operation order exactly. */
+    *average = 2.0 / (1.0 / first + 1.0 / second);
+    const double inverse = 1.0 / *average;
+    return *average > 0.0 && isfinite(*average) && isfinite(inverse);
+  }
+  return arithmetic_hardness(first, second, average);
+}
+
+__device__ bool softened_kernel(XtbModelFlavor model, double dx, double dy, double dz,
+                                double first_hardness, double second_hardness, double* kernel) {
   double average = 0.0;
-  if (!arithmetic_hardness(first_hardness, second_hardness, &average)) {
+  if (!average_hardness(model, first_hardness, second_hardness, &average)) {
     return false;
   }
   const double inverse_average = 1.0 / average;
@@ -175,7 +186,7 @@ __global__ void geometry_preflight_kernel(Gfn2ES2DeviceBatch batch, const double
     double kernel = 0.0;
     bool finite_result = true;
     if (row_atom == column_atom) {
-      finite_result = arithmetic_hardness(row_hardness, column_hardness, &kernel);
+      finite_result = average_hardness(batch.model, row_hardness, column_hardness, &kernel);
       if (!finite_result) {
         record_error(device_error, Gfn2ES2DeviceError::kNonfiniteHardnessArithmetic);
       }
@@ -188,7 +199,8 @@ __global__ void geometry_preflight_kernel(Gfn2ES2DeviceBatch batch, const double
       if (!isfinite(dx) || !isfinite(dy) || !isfinite(dz)) {
         record_error(device_error, Gfn2ES2DeviceError::kCoordinateDifferenceOverflow);
         finite_result = false;
-      } else if (!softened_kernel(dx, dy, dz, row_hardness, column_hardness, &kernel)) {
+      } else if (!softened_kernel(batch.model, dx, dy, dz, row_hardness, column_hardness,
+                                  &kernel)) {
         record_error(device_error, Gfn2ES2DeviceError::kNonfiniteKernelArithmetic);
         finite_result = false;
       }
@@ -805,6 +817,7 @@ cudaError_t validate_common(const Gfn2ES2DeviceBatch& batch, std::uint32_t* devi
                             CommonBytes* bytes) noexcept {
   if (batch.batch_size <= 0 || batch.total_atoms <= 0 || batch.total_shells <= 0 ||
       batch.total_matrix_elements <= 0 || batch.plan_token == 0 ||
+      !valid_xtb_model_flavor(batch.model) ||
       batch.batch_size == std::numeric_limits<std::int64_t>::max() ||
       batch.total_atoms == std::numeric_limits<std::int64_t>::max() ||
       batch.atom_offset_count != batch.batch_size + 1 ||

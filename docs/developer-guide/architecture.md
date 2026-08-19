@@ -1,10 +1,10 @@
 # Architecture
 
 xTBloom is organized around one stable C ABI and replaceable compute backends.
-The implemented physics includes restricted and unrestricted GFN2-xTB on CPU
-and CUDA and GFN1-xTB on CPU, with analytic energy/forces/charges, external
-point charges, and caller-supplied periodic response inside SCC. GFN1 CUDA and
-ROCm remain unavailable. The internal model registry records model identity
+The implemented physics includes restricted and unrestricted GFN1-xTB and
+GFN2-xTB on CPU and CUDA, with analytic energy/forces/charges, external point
+charges, and caller-supplied periodic response inside SCC. ROCm remains
+unavailable. The internal model registry records model identity
 together with concrete per-backend executor routes; public compute and plan
 boundaries switch on the route before touching a model cache, so an unavailable
 backend can never substitute GFN2 or publish partial output. The
@@ -22,8 +22,8 @@ lattice vectors in bohr plus a fixed-width periodic-axis mask. V1/V2/V3 callers
 remain molecular, and a V4 image whose masks are all `NONE` is also molecular.
 `XYZ` cells are validated for finite, right-handed, nonsingular geometry, but
 then refused with `NOT_IMPLEMENTED` before execution because complete periodic
-GFN2 topology, electrostatics, multipoles, forces, and cell derivatives are not
-yet connected. This native-cell suffix is separate from the caller-owned
+GFN1/GFN2 topology, electrostatics, forces, and cell derivatives, plus GFN2
+multipoles, are not yet connected. This native-cell suffix is separate from the caller-owned
 `b + A*q` response operator described below.
 
 Point-charge embedding uses a caller-provided per-site screening gamma so the softened short-range

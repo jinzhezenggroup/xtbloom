@@ -189,8 +189,8 @@ def test_label_energies_match_golden() -> None:
     )
 
 
-def test_label_gfn1_cpu_matches_independent_golden() -> None:
-    """Label dpdata frames with GFN1 without substituting the default GFN2 model."""
+def test_label_gfn1_auto_matches_independent_golden() -> None:
+    """Label dpdata frames with GFN1 through the shared AUTO backend policy."""
     _ensure_driver_registered()
     case = _cases.gfn1_case_by_id("gfn1_ketene")
     system = dpdata.System(data=_gfn1_case_data_dict("gfn1_ketene"))

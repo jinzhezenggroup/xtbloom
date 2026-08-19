@@ -43,9 +43,8 @@ line to `XTBLOOM_BACKEND_CUDA` to verify the CUDA build explicitly.
 
 `xtbloom_compute_options_init` defaults `compute_options.model` to
 `XTBLOOM_MODEL_GFN2_XTB`. Set it explicitly to `XTBLOOM_MODEL_GFN1_XTB` for
-GFN1 CPU execution. A GFN1 request on a CUDA context returns
-`XTBLOOM_STATUS_NOT_SUPPORTED` transactionally; the library never substitutes
-GFN2. GFN1 publishes energy, forces, charges, and point-charge forces, and
+GFN1 execution on CPU or CUDA; the library never substitutes GFN2. GFN1
+publishes energy, forces, charges, and point-charge forces, and
 accepts caller-supplied `b` and `A` fields for the `b + A*q` response. It does
 not support electric-field attachments or the molecular-dipole outlet.
 
@@ -210,7 +209,7 @@ reserved but not supported.
 The two buffers must be supplied together. A `NONE` item uses an all-zero cell;
 an `XYZ` item requires a finite, right-handed, nonsingular cell. V1/V2/V3
 callers and V4 batches containing only `NONE` items keep molecular behavior.
-Native periodic GFN2 physics is not released yet: after complete host/CUDA
+Native periodic GFN1/GFN2 physics is not released yet: after complete host/CUDA
 descriptor, pointer, and cell validation, any `XYZ` item returns
 `XTBLOOM_STATUS_NOT_IMPLEMENTED` before output publication. This descriptor is
 not the caller-supplied periodic `b + A*q` embedding operator and does not make

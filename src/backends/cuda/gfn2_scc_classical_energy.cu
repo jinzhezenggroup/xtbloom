@@ -82,11 +82,13 @@ __device__ double evaluate_field_energy(const Gfn2SccClassicalEnergyDeviceBatch&
   for (std::int64_t atom = begin; atom < end; ++atom) {
     double contribution = input.electric_field_potentials.atomic[atom] *
                           input.electric_field_multipoles.atomic_charges[atom];
+    if (batch.model == XtbModelFlavor::kGfn2) {
 #pragma unroll
-    for (int component = 0; component < 3; ++component) {
-      const std::int64_t index = atom * 3 + component;
-      contribution = fma(input.electric_field_potentials.dipole[index],
-                         input.electric_field_multipoles.atomic_dipoles[index], contribution);
+      for (int component = 0; component < 3; ++component) {
+        const std::int64_t index = atom * 3 + component;
+        contribution = fma(input.electric_field_potentials.dipole[index],
+                           input.electric_field_multipoles.atomic_dipoles[index], contribution);
+      }
     }
     energy += contribution;
     if (!isfinite(contribution) || !isfinite(energy)) {
@@ -202,7 +204,9 @@ __global__ void publish_classical_energy_kernel(Gfn2SccClassicalEnergyDeviceBatc
 
   diagnostics.es2[system] = workspace.component_scratch[system];
   diagnostics.es3[system] = workspace.component_scratch[batch.batch_size + system];
-  diagnostics.aes2[system] = workspace.component_scratch[2 * batch.batch_size + system];
+  if (diagnostics.aes2 != nullptr) {
+    diagnostics.aes2[system] = workspace.component_scratch[2 * batch.batch_size + system];
+  }
   diagnostics.d4_two_body[system] = workspace.component_scratch[3 * batch.batch_size + system];
   diagnostics.explicit_point_charge[system] =
       workspace.component_scratch[4 * batch.batch_size + system];
@@ -289,6 +293,7 @@ bool valid_field_binding(const Gfn2SccClassicalEnergyDeviceBatch& batch,
            potentials.atom_elements == 0 && potentials.dipole == nullptr &&
            potentials.dipole_elements == 0;
   }
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
   return field.plan_token == batch.plan_token && field.batch_size == batch.batch_size &&
          field.total_atoms > 0 &&
          field.total_atoms <= std::numeric_limits<std::int64_t>::max() / 3 &&
@@ -296,14 +301,16 @@ bool valid_field_binding(const Gfn2SccClassicalEnergyDeviceBatch& batch,
          is_aligned(field.atom_offsets, alignof(std::int64_t)) &&
          multipoles.plan_token == batch.plan_token &&
          multipoles.atom_elements == field.total_atoms &&
-         multipoles.dipole_elements == field.total_atoms * 3 &&
+         multipoles.dipole_elements == (multipoles_enabled ? field.total_atoms * 3 : 0) &&
          is_aligned(multipoles.atomic_charges, alignof(double)) &&
-         is_aligned(multipoles.atomic_dipoles, alignof(double)) &&
+         (!multipoles_enabled || is_aligned(multipoles.atomic_dipoles, alignof(double))) &&
+         (multipoles_enabled || multipoles.atomic_dipoles == nullptr) &&
          potentials.plan_token == batch.plan_token &&
          potentials.atom_elements == field.total_atoms &&
-         potentials.dipole_elements == field.total_atoms * 3 &&
+         potentials.dipole_elements == (multipoles_enabled ? field.total_atoms * 3 : 0) &&
          is_aligned(potentials.atomic, alignof(double)) &&
-         is_aligned(potentials.dipole, alignof(double));
+         (!multipoles_enabled || is_aligned(potentials.dipole, alignof(double))) &&
+         (multipoles_enabled || potentials.dipole == nullptr);
 }
 
 bool validate_launch(const Gfn2SccClassicalEnergyDeviceBatch& batch,
@@ -312,9 +319,14 @@ bool validate_launch(const Gfn2SccClassicalEnergyDeviceBatch& batch,
                      const Gfn2SccClassicalEnergyDeviceDiagnostics& diagnostics,
                      const Gfn2SccClassicalEnergyDeviceWorkspace& workspace,
                      std::uint32_t* system_errors, std::uint32_t* device_error) noexcept {
-  if (batch.batch_size <= 0 ||
+  const bool aes2_enabled =
+      component_enabled(batch.enabled_components, Gfn2SccClassicalEnergyComponent::kAES2);
+  const bool d4_enabled =
+      component_enabled(batch.enabled_components, Gfn2SccClassicalEnergyComponent::kD4TwoBody);
+  if (batch.batch_size <= 0 || !valid_xtb_model_flavor(batch.model) ||
       batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
       (batch.enabled_components & ~kGfn2SccClassicalAllComponents) != 0u ||
+      (batch.model == XtbModelFlavor::kGfn1 && (aes2_enabled || d4_enabled)) ||
       batch.plan_token == 0u || input.plan_token != batch.plan_token ||
       activity.plan_token != batch.plan_token || diagnostics.plan_token != batch.plan_token ||
       workspace.plan_token != batch.plan_token ||
@@ -344,7 +356,9 @@ bool validate_launch(const Gfn2SccClassicalEnergyDeviceBatch& batch,
          is_aligned(activity.active_mask, alignof(std::uint8_t)))) ||
       !valid_output(diagnostics.es2, diagnostics.es2_elements, batch.batch_size) ||
       !valid_output(diagnostics.es3, diagnostics.es3_elements, batch.batch_size) ||
-      !valid_output(diagnostics.aes2, diagnostics.aes2_elements, batch.batch_size) ||
+      !(batch.model == XtbModelFlavor::kGfn1
+            ? diagnostics.aes2 == nullptr && diagnostics.aes2_elements == 0
+            : valid_output(diagnostics.aes2, diagnostics.aes2_elements, batch.batch_size)) ||
       !valid_output(diagnostics.d4_two_body, diagnostics.d4_two_body_elements, batch.batch_size) ||
       !valid_output(diagnostics.explicit_point_charge, diagnostics.explicit_point_charge_elements,
                     batch.batch_size) ||

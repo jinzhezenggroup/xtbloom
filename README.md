@@ -44,15 +44,15 @@ for usage and scope.
 
 - **Native ragged batches.** Differently sized molecules share one call without
   padding every system to the largest atom or orbital count.
-- **One model-aware API.** Restricted and unrestricted GFN2-xTB run on CPU and
-  CUDA; GFN1-xTB runs on CPU through the same stable public model selector.
+- **One model-aware API.** Restricted and unrestricted GFN1-xTB and GFN2-xTB
+  run on CPU and CUDA through the same stable public model selector.
   The low-level CUDA path accepts caller-owned host, device, or mixed buffers.
 - **Failure isolation.** SCC or eigensolver failure is local to one batch
   member; successful peers remain valid and failed slices receive NaNs plus
   per-system diagnostics.
-- **Analytic derivatives and embedding.** Both models return CPU energies, QM
-  forces, charges, optional point-charge forces, and caller-supplied charge
-  response. GFN2 additionally publishes CUDA, uniform-field, and dipole paths.
+- **Analytic derivatives and embedding.** Both models return CPU/CUDA energies,
+  QM forces, charges, optional point-charge forces, and caller-supplied charge
+  response. GFN2 additionally publishes uniform-field and dipole paths.
 - **Reusable execution state.** Contexts retain CPU workers, CUDA workspaces,
   fixed-topology plans, and compatible electronic warm starts.
 - **One deployment boundary.** C, C++, Python, ASE, and dpdata all call the same
@@ -135,7 +135,7 @@ before reusing the numbers.
 | Capability | Status |
 | --- | --- |
 | Restricted and unrestricted GFN2-xTB energy, forces, and charges | CPU and CUDA |
-| Restricted and unrestricted GFN1-xTB energy, forces, and charges | CPU only; a CUDA-capable build returns `NOT_SUPPORTED` |
+| Restricted and unrestricted GFN1-xTB energy, forces, and charges | CPU and CUDA |
 | Ragged batches and peer-local numerical failures | Supported |
 | Host input/output descriptors | CPU and CUDA |
 | CUDA-device and mixed descriptors | Low-level C ABI |
@@ -143,11 +143,11 @@ before reusing the numbers.
 | Caller-supplied periodic charge response | GFN1 and GFN2; separate from the native-cell ABI |
 | Native-cell descriptors | ABI-v4 validates `NONE`/`XYZ`; periodic execution returns `NOT_IMPLEMENTED` |
 | Uniform electric field and molecular dipoles | GFN2 CPU and CUDA; not published for GFN1 |
-| ASE and dpdata integrations | GFN1 CPU and GFN2 |
+| ASE and dpdata integrations | GFN1 and GFN2 |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
 | Array API/DLPack and PyTorch autograd | GFN2-only adapter surfaces |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN1/GFN2 CPU/WASM adapter; GFN2 is the default |
-| ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN2 execution | Not implemented |
+| ROCm, solvation, optimization, MD, analytic/C-ABI Hessians, periodic GFN1/GFN2 execution | Not implemented |
 
 Reserved ABI values are not reported as supported features. At finite
 electronic temperature, the reported variational energy is the electronic

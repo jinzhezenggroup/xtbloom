@@ -219,10 +219,12 @@ __global__ void zero_force_intermediates_kernel(
   for (std::int64_t matrix = matrix_begin + threadIdx.x; matrix < matrix_end;
        matrix += blockDim.x) {
     intermediates.h0.overlap_adjoint[matrix] = 0.0;
-    for (int component = 0; component < 3; ++component) {
+    for (int component = 0; integral_batch.model == XtbModelFlavor::kGfn2 && component < 3;
+         ++component) {
       intermediates.hamiltonian.dipole_adjoint[component * matrix_elements + matrix] = 0.0;
     }
-    for (int component = 0; component < 6; ++component) {
+    for (int component = 0; integral_batch.model == XtbModelFlavor::kGfn2 && component < 6;
+         ++component) {
       intermediates.hamiltonian.quadrupole_adjoint[component * matrix_elements + matrix] = 0.0;
     }
   }
@@ -529,24 +531,37 @@ bool total_energy_component_enabled(const Gfn2TotalEnergyDeviceBatch& batch,
 }
 
 bool validate_restricted_physics_masks(const Gfn2EnergyForceExecutionDevicePlan& plan) noexcept {
-  constexpr std::uint32_t kRequiredSccComponents =
+  constexpr std::uint32_t kScalarSccComponents =
       static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
-      static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
-      static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
-  constexpr std::uint32_t kRequiredClassicalComponents =
+      static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3);
+  constexpr std::uint32_t kGfn2RequiredSccComponents =
+      kScalarSccComponents | static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
+  constexpr std::uint32_t kGfn1ForbiddenSccComponents =
+      static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2) |
+      static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kD4TwoBody);
+  constexpr std::uint32_t kScalarClassicalComponents =
       static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kRepulsion) |
-      static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kES2) |
-      static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kAES2);
+      static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kES2);
+  constexpr std::uint32_t kGfn2RequiredClassicalComponents =
+      kScalarClassicalComponents | static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kAES2);
   constexpr std::uint32_t kRequiredCompositionComponents =
       static_cast<std::uint32_t>(Gfn2ForceCompositionComponent::kElectronicGradient) |
       static_cast<std::uint32_t>(Gfn2ForceCompositionComponent::kClassicalForce);
+
+  const XtbModelFlavor model = plan.integral_batch.model;
+  if (!valid_xtb_model_flavor(model) || plan.classical_plan.model != model ||
+      plan.hamiltonian_batch.model != model || plan.coordination_batch.model != model ||
+      plan.classical_plan.geometry_batch.model != model ||
+      plan.post_scc_potential_plan.es3_batch.model != model ||
+      (model == XtbModelFlavor::kGfn1 && plan.classical_plan.gfn1_correction.model != model)) {
+    return false;
+  }
 
   const std::uint32_t potential_mask = plan.scc_potential_components;
   const std::uint32_t energy_mask = plan.scc_energy_components;
   if ((potential_mask & ~kGfn2SccPotentialAllComponents) != 0u ||
       (energy_mask & ~kGfn2SccClassicalAllComponents) != 0u || potential_mask != energy_mask ||
-      plan.post_scc_potential_plan.enabled_components != potential_mask ||
-      (potential_mask & kRequiredSccComponents) != kRequiredSccComponents) {
+      plan.post_scc_potential_plan.enabled_components != potential_mask) {
     return false;
   }
 
@@ -557,13 +572,29 @@ bool validate_restricted_physics_masks(const Gfn2EnergyForceExecutionDevicePlan&
   const bool explicit_points = plan.external_point_charge_batch.total_point_charges > 0;
   const bool scc_explicit_points =
       mask_component_enabled(potential_mask, Gfn2SccPotentialComponent::kExplicitPointCharge);
-
-  std::uint32_t required_classical = kRequiredClassicalComponents;
-  if (d4_two_body) {
-    required_classical |= static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4TwoBody);
+  if (explicit_points &&
+      (plan.external_point_charge_batch.model != model ||
+       plan.post_scc_potential_plan.external_point_charge_batch.model != model)) {
+    return false;
   }
-  if (d4_atm) {
-    required_classical |= static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4ATM);
+
+  std::uint32_t required_classical = kScalarClassicalComponents;
+  if (model == XtbModelFlavor::kGfn1) {
+    if ((potential_mask & kScalarSccComponents) != kScalarSccComponents ||
+        (potential_mask & kGfn1ForbiddenSccComponents) != 0u || d4_atm) {
+      return false;
+    }
+  } else {
+    if ((potential_mask & kGfn2RequiredSccComponents) != kGfn2RequiredSccComponents) {
+      return false;
+    }
+    required_classical = kGfn2RequiredClassicalComponents;
+    if (d4_two_body) {
+      required_classical |= static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4TwoBody);
+    }
+    if (d4_atm) {
+      required_classical |= static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4ATM);
+    }
   }
 
   std::uint32_t required_composition = kRequiredCompositionComponents;
@@ -605,9 +636,10 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
   const bool explicit_pc = force_component_enabled(
       plan.force_composition_batch, Gfn2ForceCompositionComponent::kExplicitPointChargeForce);
   const bool point_output = results.forces.point_forces != nullptr;
-  if (!validate_restricted_physics_masks(plan) || input.plan_token != token ||
-      results.plan_token != token || intermediates.plan_token != token ||
-      workspace.plan_token != token || diagnostics.plan_token != token ||
+  const bool physics_masks_valid = validate_restricted_physics_masks(plan);
+  if (!physics_masks_valid || input.plan_token != token || results.plan_token != token ||
+      intermediates.plan_token != token || workspace.plan_token != token ||
+      diagnostics.plan_token != token ||
       (input.admission.error == nullptr
            ? input.admission.error_elements != 0 || input.admission.plan_token != 0u
            : input.admission.error_elements != 1 || input.admission.plan_token != token ||
@@ -848,6 +880,7 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
     const bool classical_d4_two_body =
         (classical_components &
          static_cast<std::uint32_t>(Gfn2ClassicalForceComponent::kD4TwoBody)) != 0u;
+    const bool gfn1 = plan.integral_batch.model == XtbModelFlavor::kGfn1;
     std::int64_t coordination_pair_elements = 0;
     std::int64_t classical_geometry_pair_elements = 0;
     std::int64_t classical_aes2_pair_elements = 0;
@@ -867,7 +900,7 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
                             sizeof(std::uint32_t), &admission_range)) {
       return cudaErrorInvalidValue;
     }
-    AddressRangeList<177> live_ranges;
+    AddressRangeList<200> live_ranges;
     const bool live_ranges_valid =
         live_ranges.add(results.energy.total_energy, results.energy.elements) &&
         live_ranges.add(results.forces.qm_forces, results.forces.qm_force_elements) &&
@@ -888,7 +921,7 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
         live_ranges.add(input.scc_state.system_statuses, batch_size) &&
         live_ranges.add(input.classical.positions, input.classical.position_elements) &&
         live_ranges.add(input.classical.coordination_numbers,
-                        classical_aes2 ? input.classical.coordination_elements : 0) &&
+                        classical_aes2 || gfn1 ? input.classical.coordination_elements : 0) &&
         live_ranges.add(input.classical.shell_charges,
                         classical_es2 ? input.classical.shell_elements : 0) &&
         live_ranges.add(input.classical.atomic_charges, classical_aes2 || classical_d4_two_body
@@ -912,6 +945,35 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
                         intermediates.h0.coordination_adjoint_elements) &&
         live_ranges.add(plan.classical_plan.atom_offsets, batch_size + 1) &&
         live_ranges.add(plan.classical_plan.atomic_numbers, plan.integral_batch.total_atoms) &&
+        live_ranges.add(plan.classical_plan.repulsion_sqrt_alpha,
+                        gfn1 ? plan.classical_plan.repulsion_sqrt_alpha_elements : 0) &&
+        live_ranges.add(plan.classical_plan.repulsion_effective_charge,
+                        gfn1 ? plan.classical_plan.repulsion_effective_charge_elements : 0) &&
+        live_ranges.add(plan.classical_plan.gfn1_correction.pair_offsets,
+                        gfn1 ? plan.classical_plan.gfn1_correction.pair_offset_elements : 0) &&
+        live_ranges.add(plan.classical_plan.gfn1_correction.covalent_radii,
+                        gfn1 ? plan.classical_plan.gfn1_correction.covalent_radius_elements : 0) &&
+        live_ranges.add(plan.classical_plan.gfn1_correction.reference_counts,
+                        gfn1 ? plan.classical_plan.gfn1_correction.reference_count_elements : 0) &&
+        live_ranges.add(plan.classical_plan.gfn1_correction.reference_cn,
+                        gfn1 ? plan.classical_plan.gfn1_correction.reference_cn_elements : 0) &&
+        live_ranges.add(plan.classical_plan.gfn1_correction.reference_c6,
+                        gfn1 ? plan.classical_plan.gfn1_correction.reference_c6_elements : 0) &&
+        live_ranges.add(plan.classical_plan.gfn1_correction.pair_rrij,
+                        gfn1 ? plan.classical_plan.gfn1_correction.pair_rrij_elements : 0) &&
+        live_ranges.add(
+            plan.classical_plan.gfn1_correction.pair_damping_radii,
+            gfn1 ? plan.classical_plan.gfn1_correction.pair_damping_radius_elements : 0) &&
+        live_ranges.add(
+            plan.classical_plan.gfn1_correction.halogen_scaled_radii,
+            gfn1 ? plan.classical_plan.gfn1_correction.halogen_scaled_radius_elements : 0) &&
+        live_ranges.add(
+            plan.classical_plan.gfn1_correction.halogen_bond_strength,
+            gfn1 ? plan.classical_plan.gfn1_correction.halogen_bond_strength_elements : 0) &&
+        live_ranges.add(plan.classical_plan.gfn1_correction.halogen_donor,
+                        gfn1 ? plan.classical_plan.gfn1_correction.halogen_donor_elements : 0) &&
+        live_ranges.add(plan.classical_plan.gfn1_correction.halogen_acceptor,
+                        gfn1 ? plan.classical_plan.gfn1_correction.halogen_acceptor_elements : 0) &&
         live_ranges.add(plan.classical_plan.es2_batch.batch_shell_offsets,
                         classical_es2 ? batch_size + 1 : 0) &&
         live_ranges.add(plan.classical_plan.es2_batch.atom_shell_offsets,
@@ -1002,6 +1064,20 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
                         workspace.classical.primitive_device_error_elements) &&
         live_ranges.add(workspace.classical.sequence_active,
                         workspace.classical.sequence_elements) &&
+        live_ranges.add(workspace.classical.gfn1_correction.weights,
+                        gfn1 ? workspace.classical.gfn1_correction.weight_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.gfn1_correction.weight_cn_derivatives,
+            gfn1 ? workspace.classical.gfn1_correction.weight_cn_derivative_elements : 0) &&
+        live_ranges.add(
+            workspace.classical.gfn1_correction.coordination_adjoints,
+            gfn1 ? workspace.classical.gfn1_correction.coordination_adjoint_elements : 0) &&
+        live_ranges.add(workspace.classical.gfn1_correction.axis_neighbors,
+                        gfn1 ? workspace.classical.gfn1_correction.axis_neighbor_elements : 0) &&
+        live_ranges.add(workspace.classical.gfn1_correction.batch_scratch,
+                        gfn1 ? workspace.classical.gfn1_correction.batch_scratch_elements : 0) &&
+        live_ranges.add(workspace.classical.gfn1_correction.gradient_scratch,
+                        gfn1 ? workspace.classical.gfn1_correction.gradient_scratch_elements : 0) &&
         live_ranges.add(workspace.classical.aes2_workspace.pair_scratch,
                         classical_aes2 ? workspace.classical.aes2_workspace.pair_elements : 0) &&
         live_ranges.add(
@@ -1174,20 +1250,34 @@ static cudaError_t execute_energy_force_impl(
   AddressRange energy_system_range{};
   AddressRange energy_device_range{};
   if (!make_address_range(input.admission.error, input.admission.error_elements,
-                          sizeof(std::uint32_t), &admission_range) ||
-      !make_address_range(workspace.plan_failure, workspace.plan_failure_elements,
-                          sizeof(std::uint32_t), &plan_failure_range) ||
-      !make_address_range(results.energy.total_energy, results.energy.elements, sizeof(double),
-                          &energy_result_range) ||
-      !make_address_range(intermediates.energy.total_energy, intermediates.energy.elements,
-                          sizeof(double), &staged_energy_range) ||
-      !make_address_range(diagnostics.execution_system_errors, diagnostics.batch_elements,
-                          sizeof(std::uint32_t), &execution_system_range) ||
-      !make_address_range(diagnostics.execution_device_error, 1, sizeof(std::uint32_t),
-                          &execution_device_range) ||
-      !make_address_range(diagnostics.total_energy_system_errors, diagnostics.batch_elements,
-                          sizeof(std::uint32_t), &energy_system_range) ||
-      !make_address_range(diagnostics.total_energy_device_error, 1, sizeof(std::uint32_t),
+                          sizeof(std::uint32_t), &admission_range)) {
+    return cudaErrorInvalidValue;
+  }
+  if (!make_address_range(workspace.plan_failure, workspace.plan_failure_elements,
+                          sizeof(std::uint32_t), &plan_failure_range)) {
+    return cudaErrorInvalidValue;
+  }
+  if (!make_address_range(results.energy.total_energy, results.energy.elements, sizeof(double),
+                          &energy_result_range)) {
+    return cudaErrorInvalidValue;
+  }
+  if (!make_address_range(intermediates.energy.total_energy, intermediates.energy.elements,
+                          sizeof(double), &staged_energy_range)) {
+    return cudaErrorInvalidValue;
+  }
+  if (!make_address_range(diagnostics.execution_system_errors, diagnostics.batch_elements,
+                          sizeof(std::uint32_t), &execution_system_range)) {
+    return cudaErrorInvalidValue;
+  }
+  if (!make_address_range(diagnostics.execution_device_error, 1, sizeof(std::uint32_t),
+                          &execution_device_range)) {
+    return cudaErrorInvalidValue;
+  }
+  if (!make_address_range(diagnostics.total_energy_system_errors, diagnostics.batch_elements,
+                          sizeof(std::uint32_t), &energy_system_range)) {
+    return cudaErrorInvalidValue;
+  }
+  if (!make_address_range(diagnostics.total_energy_device_error, 1, sizeof(std::uint32_t),
                           &energy_device_range)) {
     return cudaErrorInvalidValue;
   }
@@ -1214,7 +1304,6 @@ static cudaError_t execute_energy_force_impl(
       return binding_status;
     }
   }
-
   cudaError_t status = reset_execution_errors(batch_size, diagnostics, stream);
   if (status == cudaSuccess) {
     status = cudaMemsetAsync(workspace.plan_failure, 0, sizeof(*workspace.plan_failure), stream);

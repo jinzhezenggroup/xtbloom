@@ -836,7 +836,7 @@ def xtbloom_torch(
 
     This compiled autograd surface currently executes GFN2-xTB only and does
     not expose a model selector. Use :class:`xtbloom.Calculator` or
-    :class:`xtbloom.BatchCalculator` for CPU GFN1-xTB inference.
+    :class:`xtbloom.BatchCalculator` for CPU or CUDA GFN1-xTB inference.
 
     The inputs mirror the packed ragged-batch descriptors of
     :class:`xtbloom.ArrayBatch`; ``positions`` is the only differentiable

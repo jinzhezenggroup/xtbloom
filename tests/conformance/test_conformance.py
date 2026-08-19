@@ -202,14 +202,14 @@ class ConformanceToolTest(unittest.TestCase):
         self.assertIn("shared library is missing", completed.stderr)
         self.assertNotIn("SKIP oh_radical", completed.stdout)
 
-    def test_public_runner_selects_gfn1_cpu_without_cuda_publication(self) -> None:
-        """GFN1 corpus defaults to CPU and preserves restricted open-shell input."""
+    def test_public_runner_selects_gfn1_cpu_and_cuda(self) -> None:
+        """GFN1 corpus publishes both backends and preserves open-shell input."""
         manifest = json.loads(GFN1_MANIFEST.read_text(encoding="utf-8"))
         self.assertEqual(
             PUBLIC_API.model_tag(manifest), PUBLIC_API.XTBLOOM_MODEL_GFN1_XTB
         )
         self.assertEqual(len(PUBLIC_API.supported_cases(manifest, None, "cpu")), 8)
-        self.assertEqual(PUBLIC_API.supported_cases(manifest, None, "cuda"), [])
+        self.assertEqual(len(PUBLIC_API.supported_cases(manifest, None, "cuda")), 8)
         cases = PUBLIC_API.supported_cases(manifest, ["gfn1_oh_radical"])
         storage = PUBLIC_API.assemble_batch(GFN1_MANIFEST, manifest, cases)
         self.assertEqual(storage.unpaired_electrons, [1])

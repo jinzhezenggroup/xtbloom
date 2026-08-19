@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -13,11 +14,12 @@
 #include "backends/cuda/gfn2_es3.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
 
-#define CHECK(condition) \
-  do {                   \
-    if (!(condition)) {  \
-      return __LINE__;   \
-    }                    \
+#define CHECK(condition)                                                                   \
+  do {                                                                                     \
+    if (!(condition)) {                                                                    \
+      std::fprintf(stderr, "CHECK failed at %s:%d: %s\n", __FILE__, __LINE__, #condition); \
+      return __LINE__;                                                                     \
+    }                                                                                      \
   } while (false)
 
 #define CUDA_CHECK(expression) CHECK((expression) == cudaSuccess)
@@ -599,7 +601,9 @@ int test_es3_batches_inactive_and_graph() {
       CHECK(errors[static_cast<std::size_t>(system)] == 0u);
     }
     if (batch_size == 8) {
-      /* Keep system zero live while poisoning an offset owned only by inactive peers. */
+      /* Immutable topology is plan-wide even when only one peer is active.
+       * Poisoning an inactive peer must fail the complete ES3 transaction
+       * before the healthy peer can republish. */
       active.assign(8u, 0u);
       active[0] = 1u;
       const std::int64_t poisoned_offset = -1;
@@ -608,6 +612,8 @@ int test_es3_batches_inactive_and_graph() {
                                  stream));
       CUDA_CHECK(cudaMemcpyAsync(d_offsets.get() + 4, &poisoned_offset, sizeof(poisoned_offset),
                                  cudaMemcpyHostToDevice, stream));
+      CUDA_CHECK(d_energy.upload(
+          std::vector<double>(static_cast<std::size_t>(batch_size), kSentinel), stream));
       CUDA_CHECK(reset_gfn2_es3_scc_errors_cuda(batch_size, d_errors.get(), d_plan.get(), stream));
       CUDA_CHECK(evaluate_gfn2_es3_scc_potential_cuda(batch, activity_view, d_mixed.get(),
                                                       d_potential.get(), d_errors.get(),
@@ -617,9 +623,8 @@ int test_es3_batches_inactive_and_graph() {
       CUDA_CHECK(d_plan.download(plan, stream));
       CUDA_CHECK(d_energy.download(energy, stream));
       CUDA_CHECK(cudaStreamSynchronize(stream));
-      CHECK(plan[0] == 0u);
-      CHECK(close(energy[0], gamma[0] * raw[0] * raw[0] * raw[0] / 3.0 +
-                                 gamma[1] * raw[1] * raw[1] * raw[1] / 3.0));
+      CHECK(plan[0] == static_cast<std::uint32_t>(Gfn2ES3DeviceError::kInvalidOffsets));
+      CHECK(energy[0] == kSentinel);
       CUDA_CHECK(cudaMemcpyAsync(d_offsets.get(), offsets.data(),
                                  offsets.size() * sizeof(std::int64_t), cudaMemcpyHostToDevice,
                                  stream));

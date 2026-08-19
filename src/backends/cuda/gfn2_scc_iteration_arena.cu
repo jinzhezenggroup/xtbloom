@@ -10,12 +10,19 @@ namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr std::size_t kSliceAlignment = 64u;
-constexpr std::uint32_t kMandatoryComponents =
+constexpr std::uint32_t kCommonMandatoryComponents =
     static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES2) |
-    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3) |
-    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2);
+    static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kES3);
+
+constexpr std::uint32_t mandatory_components(XtbModelFlavor model) noexcept {
+  return kCommonMandatoryComponents |
+         (model == XtbModelFlavor::kGfn2
+              ? static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2)
+              : 0u);
+}
 
 struct ArenaShape {
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
   std::int64_t batch = 0;
   std::int64_t buckets = 0;
   std::int64_t atoms = 0;
@@ -27,6 +34,7 @@ struct ArenaShape {
   std::int64_t spin_matrices = 0;
   std::int64_t spin_shells = 0;
   std::int64_t spin_atoms = 0;
+  std::int64_t coordinates = 0;
   std::int64_t dipoles = 0;
   std::int64_t quadrupoles = 0;
   std::int64_t spin_dipoles = 0;
@@ -101,8 +109,15 @@ struct ArenaShape {
       topology.plan_token != plan.plan_token || topology.batch_size <= 0 ||
       topology.bucket_count <= 0 || topology.total_atoms <= 0 || topology.total_shells <= 0 ||
       topology.total_orbitals <= 0 || topology.total_matrix_elements <= 0 ||
-      plan.mixer_policy.history_size <= 0 ||
-      (plan.enabled_components & kMandatoryComponents) != kMandatoryComponents ||
+      plan.mixer_policy.history_size <= 0 || !valid_xtb_model_flavor(plan.model) ||
+      plan.mixer_policy.atomic_multipole_components !=
+          (plan.model == XtbModelFlavor::kGfn1 ? 0u : 9u) ||
+      (plan.enabled_components & mandatory_components(plan.model)) !=
+          mandatory_components(plan.model) ||
+      (plan.model == XtbModelFlavor::kGfn1 &&
+       (plan.enabled_components &
+        (static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kAES2) |
+         static_cast<std::uint32_t>(Gfn2SccPotentialComponent::kD4TwoBody))) != 0u) ||
       (plan.enabled_components & ~kGfn2SccPotentialAllComponents) != 0u ||
       plan.geometry_batch.total_pairs < 0 || plan.es2_batch.total_matrix_elements < 0 ||
       plan.aes2_batch.total_pairs < 0 || plan.d4_batch.total_pairs < 0) {
@@ -146,6 +161,7 @@ struct ArenaShape {
     return false;
   }
 
+  shape.model = plan.model;
   shape.batch = topology.batch_size;
   shape.buckets = topology.bucket_count;
   shape.atoms = topology.total_atoms;
@@ -171,13 +187,19 @@ struct ArenaShape {
   shape.provider_host_bytes = provider_requirements.solver_host_workspace_bytes;
 
   std::int64_t history_square = 0;
-  if (!checked_multiply(shape.atoms, 3, shape.dipoles) ||
-      !checked_multiply(shape.atoms, 6, shape.quadrupoles) ||
-      !checked_multiply(shape.spin_atoms, 3, shape.spin_dipoles) ||
-      !checked_multiply(shape.spin_atoms, 6, shape.spin_quadrupoles) ||
+  if (!checked_multiply(shape.atoms, 3, shape.coordinates) ||
+      !checked_multiply(shape.model == XtbModelFlavor::kGfn2 ? shape.atoms : 0, 3, shape.dipoles) ||
+      !checked_multiply(shape.model == XtbModelFlavor::kGfn2 ? shape.atoms : 0, 6,
+                        shape.quadrupoles) ||
+      !checked_multiply(shape.model == XtbModelFlavor::kGfn2 ? shape.spin_atoms : 0, 3,
+                        shape.spin_dipoles) ||
+      !checked_multiply(shape.model == XtbModelFlavor::kGfn2 ? shape.spin_atoms : 0, 6,
+                        shape.spin_quadrupoles) ||
       !checked_multiply(shape.batch, 2, shape.two_batch) ||
       !checked_multiply(shape.orbitals, 2, shape.two_orbitals) ||
-      !checked_multiply(shape.spin_atoms, 9, shape.mixer_vector) ||
+      !checked_multiply(shape.spin_atoms,
+                        static_cast<std::int64_t>(plan.mixer_policy.atomic_multipole_components),
+                        shape.mixer_vector) ||
       !checked_add(shape.spin_shells, shape.mixer_vector, shape.mixer_vector) ||
       !checked_multiply(shape.mixer_vector, shape.mixer_history, shape.mixer_history_elements) ||
       !checked_multiply(shape.batch, shape.mixer_history, shape.mixer_omega_elements) ||
@@ -186,10 +208,13 @@ struct ArenaShape {
       !checked_multiply(shape.batch, shape.mixer_history, shape.mixer_coefficient_elements) ||
       !checked_multiply(plan.geometry_batch.total_pairs, kGfn2GeometryPairDataElements,
                         shape.geometry_pair_elements) ||
-      !checked_multiply(plan.aes2_batch.total_pairs, kGfn2AES2PairDataElements,
-                        shape.aes2_pair_elements) ||
-      !checked_multiply(shape.atoms, kGfn2AES2PotentialElementsPerAtom,
-                        shape.aes2_potential_elements) ||
+      !checked_multiply(component_enabled(shape, Gfn2SccPotentialComponent::kAES2)
+                            ? plan.aes2_batch.total_pairs
+                            : 0,
+                        kGfn2AES2PairDataElements, shape.aes2_pair_elements) ||
+      !checked_multiply(
+          component_enabled(shape, Gfn2SccPotentialComponent::kAES2) ? shape.atoms : 0,
+          kGfn2AES2PotentialElementsPerAtom, shape.aes2_potential_elements) ||
       !checked_multiply(shape.atoms, kGfn2D4MaximumReferences, shape.d4_weight_elements) ||
       !checked_multiply(shape.batch, kGfn2SccClassicalStorageComponents,
                         shape.classical_scratch_elements) ||
@@ -294,6 +319,7 @@ void hash_append(std::uint64_t value, std::uint64_t& hash) noexcept {
 [[nodiscard]] std::uint64_t shape_fingerprint(const ArenaShape& shape) noexcept {
   std::uint64_t hash = 0x101c0de89abcdef0ULL;
   hash_append(kGfn2SccIterationArenaAbiVersion, hash);
+  hash_append(static_cast<std::uint64_t>(shape.model), hash);
   hash_append(static_cast<std::uint64_t>(shape.batch), hash);
   hash_append(static_cast<std::uint64_t>(shape.buckets), hash);
   hash_append(static_cast<std::uint64_t>(shape.atoms), hash);
@@ -382,12 +408,14 @@ void take_component_storage(ArenaCursor& cursor, const ArenaShape& shape,
   storage.es2_shell_elements = shape.shells;
   storage.es3_shell_potential = cursor.take<double>(shape.shells);
   storage.es3_shell_elements = shape.shells;
-  storage.aes2_atomic_potential = cursor.take<double>(shape.atoms);
-  storage.aes2_atomic_elements = shape.atoms;
-  storage.aes2_dipole_potential = cursor.take<double>(shape.dipoles);
-  storage.aes2_dipole_elements = shape.dipoles;
-  storage.aes2_quadrupole_potential = cursor.take<double>(shape.quadrupoles);
-  storage.aes2_quadrupole_elements = shape.quadrupoles;
+  if (component_enabled(shape, Gfn2SccPotentialComponent::kAES2)) {
+    storage.aes2_atomic_potential = cursor.take<double>(shape.atoms);
+    storage.aes2_atomic_elements = shape.atoms;
+    storage.aes2_dipole_potential = cursor.take<double>(shape.dipoles);
+    storage.aes2_dipole_elements = shape.dipoles;
+    storage.aes2_quadrupole_potential = cursor.take<double>(shape.quadrupoles);
+    storage.aes2_quadrupole_elements = shape.quadrupoles;
+  }
   if (component_enabled(shape, Gfn2SccPotentialComponent::kD4TwoBody)) {
     storage.d4_atomic_potential = cursor.take<double>(shape.atoms);
     storage.d4_atomic_elements = shape.atoms;
@@ -401,8 +429,10 @@ void take_component_storage(ArenaCursor& cursor, const ArenaShape& shape,
   storage.es2_energy_elements = shape.batch;
   storage.es3_energy = cursor.take<double>(shape.batch);
   storage.es3_energy_elements = shape.batch;
-  storage.aes2_energy = cursor.take<double>(shape.batch);
-  storage.aes2_energy_elements = shape.batch;
+  if (component_enabled(shape, Gfn2SccPotentialComponent::kAES2)) {
+    storage.aes2_energy = cursor.take<double>(shape.batch);
+    storage.aes2_energy_elements = shape.batch;
+  }
   if (component_enabled(shape, Gfn2SccPotentialComponent::kD4TwoBody)) {
     storage.d4_two_body_energy = cursor.take<double>(shape.batch);
     storage.d4_two_body_energy_elements = shape.batch;
@@ -720,8 +750,10 @@ void take_energy_trace(ArenaCursor& cursor, const ArenaShape& shape, double* ent
   free.es2_elements = shape.batch;
   free.es3 = cursor.take<double>(shape.batch);
   free.es3_elements = shape.batch;
-  free.aes2 = cursor.take<double>(shape.batch);
-  free.aes2_elements = shape.batch;
+  if (component_enabled(shape, Gfn2SccPotentialComponent::kAES2)) {
+    free.aes2 = cursor.take<double>(shape.batch);
+    free.aes2_elements = shape.batch;
+  }
   free.d4_two_body = cursor.take<double>(shape.batch);
   free.d4_two_body_elements = shape.batch;
   free.explicit_point_charge = cursor.take<double>(shape.batch);
@@ -749,7 +781,7 @@ void take_energy_trace(ArenaCursor& cursor, const ArenaShape& shape, double* ent
   classical.es3 = free.es3;
   classical.es3_elements = shape.batch;
   classical.aes2 = free.aes2;
-  classical.aes2_elements = shape.batch;
+  classical.aes2_elements = free.aes2_elements;
   classical.d4_two_body = free.d4_two_body;
   classical.d4_two_body_elements = shape.batch;
   classical.explicit_point_charge = free.explicit_point_charge;
@@ -812,8 +844,8 @@ void project_primitive_workspace_front(ArenaCursor& cursor, const ArenaShape& sh
                                   shape.geometry_pair_elements,
                                   cursor.take<double>(shape.atoms),
                                   shape.atoms,
-                                  cursor.take<double>(shape.dipoles),
-                                  shape.dipoles,
+                                  cursor.take<double>(shape.coordinates),
+                                  shape.coordinates,
                                   cursor.take<std::uint32_t>(1),
                                   1,
                                   shape.plan_token};
@@ -824,21 +856,23 @@ void project_primitive_workspace_front(ArenaCursor& cursor, const ArenaShape& sh
                              shape.shells,
                              cursor.take<double>(shape.batch),
                              shape.batch,
-                             cursor.take<double>(shape.dipoles),
-                             shape.dipoles};
+                             cursor.take<double>(shape.coordinates),
+                             shape.coordinates};
 
-  workspace.aes2_workspace = {cursor.take<double>(shape.aes2_pair_elements),
-                              shape.aes2_pair_elements,
-                              cursor.take<double>(shape.aes2_potential_elements),
-                              shape.aes2_potential_elements,
-                              cursor.take<double>(shape.batch),
-                              shape.batch,
-                              cursor.take<double>(shape.dipoles),
-                              shape.dipoles,
-                              cursor.take<double>(shape.atoms),
-                              shape.atoms,
-                              cursor.take<std::uint32_t>(1),
-                              1};
+  if (component_enabled(shape, Gfn2SccPotentialComponent::kAES2)) {
+    workspace.aes2_workspace = {cursor.take<double>(shape.aes2_pair_elements),
+                                shape.aes2_pair_elements,
+                                cursor.take<double>(shape.aes2_potential_elements),
+                                shape.aes2_potential_elements,
+                                cursor.take<double>(shape.batch),
+                                shape.batch,
+                                cursor.take<double>(shape.coordinates),
+                                shape.coordinates,
+                                cursor.take<double>(shape.atoms),
+                                shape.atoms,
+                                cursor.take<std::uint32_t>(1),
+                                1};
+  }
 
   if (component_enabled(shape, Gfn2SccPotentialComponent::kD4TwoBody)) {
     auto& d4 = workspace.d4_workspace;

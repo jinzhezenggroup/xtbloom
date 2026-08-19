@@ -476,11 +476,11 @@ typedef struct xtbloom_batch {
    * nine cell entries to be exactly zero; XYZ requires a finite, right-handed,
    * nonsingular cell. Partial-axis masks are reserved but not implemented.
    *
-   * Native PBC changes the complete GFN2 topology and is distinct from the
+   * Native PBC changes each model's complete topology and is distinct from the
    * caller-supplied b + A*q charge-response operator above. A V4 batch whose
    * masks are all NONE remains a molecular request. If any item uses XYZ,
    * this ABI release validates the complete descriptor set but returns
-   * NOT_IMPLEMENTED before execution until every periodic GFN2 energy and
+   * NOT_IMPLEMENTED before execution until every periodic GFN1/GFN2 energy and
    * derivative term is connected. */
   xtbloom_const_buffer_t cell_matrices;
   xtbloom_const_buffer_t periodic_axes;

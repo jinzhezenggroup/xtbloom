@@ -3,9 +3,8 @@
 ## Independent GFN1 foundation corpus
 
 The separate corpus under `data/conformance/gfn1/` records independent
-reference-engine results for the public CPU GFN1 implementation. The shared
-public C API and invariant runners accept this manifest explicitly; GFN1 CUDA
-remains unpublished and is never selected by default.
+reference-engine results for the public GFN1 implementation. The shared public
+C API and invariant runners accept this manifest explicitly on CPU and CUDA.
 
 Four closed-shell cases use the pinned tblite 0.7.0 GFN1 implementation.
 The canonical GFN1 parameter export is independently pinned to the tblite
@@ -62,8 +61,8 @@ python3 tools/conformance/gfn1_conformance.py finalize-manifest \
 ```
 
 The primary thresholds remain property-specific absolute tolerances. They are
-public CPU GFN1 acceptance gates; the committed goldens remain independent of
-xTBloom and are never regenerated from the implementation under test.
+public CPU/CUDA GFN1 acceptance gates; the committed goldens remain independent
+of xTBloom and are never regenerated from the implementation under test.
 
 ## GFN2 production conformance corpus
 
@@ -243,9 +242,10 @@ point-charge forces. The GFN2 `oh_radical` case uses standard shared-orbital
 charges on CPU and CUDA. GFN2 spin-polarized (`spin_channels=2`) inference and
 analytic forces are exercised on CPU and CUDA separately until an independent
 spin-polarized golden is committed. The GFN1 corpus also retains shared-orbital
-OH; `xtbloom.conformance.gfn1_spin2_public_cpu` reuses the independent,
-hash-bound P10 fixture from `tests/gfn1_cpu_conformance.py` to gate singleton
-and heterogeneous-ragged public CPU two-channel energy and forces. Molecular dipoles are
+OH. The `xtbloom.conformance.gfn1_spin2_public_{cpu,cuda*}` tests reuse the
+independent, hash-bound P10 fixture from `tests/gfn1_cpu_conformance.py` to gate
+singleton and heterogeneous-ragged public two-channel energy and forces on CPU
+and all three CUDA memory modes. Molecular dipoles are
 requested and recorded as `molecular_dipole_e_bohr` on both GFN2 backends, but
 are not yet part of the golden comparison because the committed corpus has no
 independent molecular-dipole oracle. Atomic dipoles and quadrupoles likewise
