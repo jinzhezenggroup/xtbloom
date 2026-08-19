@@ -240,6 +240,11 @@ add_custom_command(
           -o "${_xtbloom_web_engine_js}"
           "${_xtbloom_web_arch_flag}" "${_xtbloom_web_optimization_flag}"
           -sMAIN_MODULE=2
+          # Emscripten 6.0.6 at -O3 otherwise strips the __stack_pointer
+          # export required by dlopen side modules. EXPORT_ALL retains the
+          # dynamic-link exports without the dead-code retention of
+          # MAIN_MODULE=1.
+          -sEXPORT_ALL=1
           ${_xtbloom_web_simd_flag}
           -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createXTBloomModule
           -sSTACK_SIZE=8MB -sALLOW_MEMORY_GROWTH
