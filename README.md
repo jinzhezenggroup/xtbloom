@@ -177,7 +177,7 @@ and response properties are central.
 - [Python API](docs/user-guide/python.md)
 - [Direct Python geometry optimization](docs/user-guide/optimization.md)
 - [Vibrational analysis](docs/user-guide/vibrations.md)
-- [ASE molecular dynamics](docs/user-guide/ase-md)
+- [ASE molecular dynamics](docs/user-guide/ase-md.md)
 - [C and C++ API](docs/user-guide/c-api.md)
 - [QM/MM usage](docs/user-guide/qmmm.md)
 - [Skills for AI agents](docs/user-guide/agent-skills.md)
