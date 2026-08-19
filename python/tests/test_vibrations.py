@@ -23,6 +23,7 @@ def _hessian_with_vibrational_eigenvalues(
 
 
 def test_nonlinear_projection_recovers_signed_spectrum() -> None:
+    """Recover real and imaginary modes after nonlinear rigid projection."""
     positions = np.array(
         [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [-0.4, 1.3, 0.0]],
         dtype=np.float64,
@@ -50,6 +51,7 @@ def test_nonlinear_projection_recovers_signed_spectrum() -> None:
 
 
 def test_linear_and_single_atom_rigid_rank() -> None:
+    """Detect five rigid modes for linear H2 and three for one atom."""
     h2_positions = np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]])
     h2_masses = np.array([1.008, 1.008])
     h2 = analyze_vibrations(np.zeros((6, 6)), h2_positions, h2_masses)
@@ -63,6 +65,7 @@ def test_linear_and_single_atom_rigid_rank() -> None:
 
 
 def test_projection_can_be_disabled() -> None:
+    """Retain every Cartesian mode when rigid projection is disabled."""
     result = analyze_vibrations(
         np.eye(6),
         np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]]),
@@ -86,18 +89,25 @@ def test_projection_can_be_disabled() -> None:
 def test_invalid_inputs_are_rejected(
     hessian: np.ndarray, positions: np.ndarray, masses: np.ndarray
 ) -> None:
+    """Reject malformed, nonfinite, and nonpositive vibrational inputs."""
     with pytest.raises(XTBloomValueError):
         analyze_vibrations(hessian, positions, masses)
 
 
 def test_vibrations_wrapper_preserves_raw_hessian_diagnostic_path() -> None:
+    """Request the raw numerical Hessian before vibrational post-processing."""
+
     class FakeCalculator:
+        """Minimal calculator stand-in that records Hessian options."""
+
         positions = np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]])
 
         def __init__(self) -> None:
+            """Initialize the Hessian-call ledger."""
             self.calls: list[dict[str, object]] = []
 
         def hessian(self, **kwargs: object) -> np.ndarray:
+            """Record Hessian options and return a zero Cartesian matrix."""
             self.calls.append(kwargs)
             return np.zeros((6, 6))
 
