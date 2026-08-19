@@ -12,9 +12,7 @@ def _h2_arrays() -> dict[str, np.ndarray]:
     return {
         "atom_offsets": np.array([0, 2], dtype=np.int64),
         "atomic_numbers": np.array([1, 1], dtype=np.int32),
-        "positions": np.array(
-            [[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]], dtype=np.float64
-        ),
+        "positions": np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]], dtype=np.float64),
         "molecular_charges": np.array([0.0], dtype=np.float64),
         "unpaired_electrons": np.array([0], dtype=np.int32),
     }
@@ -42,12 +40,8 @@ def test_array_batch_gfn1_cpu_matches_calculator(method: str) -> None:
     np.testing.assert_allclose(
         packed.energies, [reference.energy], rtol=0.0, atol=1e-12
     )
-    np.testing.assert_allclose(
-        packed.forces, reference.forces, rtol=0.0, atol=1e-12
-    )
-    np.testing.assert_allclose(
-        packed.charges, reference.charges, rtol=0.0, atol=1e-12
-    )
+    np.testing.assert_allclose(packed.forces, reference.forces, rtol=0.0, atol=1e-12)
+    np.testing.assert_allclose(packed.charges, reference.charges, rtol=0.0, atol=1e-12)
 
 
 def test_compute_arrays_forwards_gfn1_method() -> None:
@@ -56,13 +50,9 @@ def test_compute_arrays_forwards_gfn1_method() -> None:
     with ArrayBatch(**arrays, method="GFN1-xTB", backend="cpu") as batch:
         explicit = batch.compute()
 
-    np.testing.assert_allclose(
-        direct.energies, explicit.energies, rtol=0.0, atol=0.0
-    )
+    np.testing.assert_allclose(direct.energies, explicit.energies, rtol=0.0, atol=0.0)
     np.testing.assert_allclose(direct.forces, explicit.forces, rtol=0.0, atol=0.0)
-    np.testing.assert_allclose(
-        direct.charges, explicit.charges, rtol=0.0, atol=0.0
-    )
+    np.testing.assert_allclose(direct.charges, explicit.charges, rtol=0.0, atol=0.0)
 
 
 def test_array_batch_default_remains_gfn2() -> None:

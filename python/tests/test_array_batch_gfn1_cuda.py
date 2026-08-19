@@ -12,9 +12,7 @@ def test_array_batch_gfn1_cuda_host_descriptors_match_cpu() -> None:
     arrays = {
         "atom_offsets": np.array([0, 2], dtype=np.int64),
         "atomic_numbers": np.array([1, 1], dtype=np.int32),
-        "positions": np.array(
-            [[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]], dtype=np.float64
-        ),
+        "positions": np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]], dtype=np.float64),
         "molecular_charges": np.array([0.0], dtype=np.float64),
         "unpaired_electrons": np.array([0], dtype=np.int32),
     }

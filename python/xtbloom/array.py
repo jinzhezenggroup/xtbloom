@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from . import _dlpack, interface as _interface, library
+from . import _dlpack, library
+from . import interface as _interface
 
 if TYPE_CHECKING:
     from types import TracebackType
