@@ -2292,12 +2292,12 @@ _CHARGE_RESPONSE_FIELDS = (
 
 
 class ArrayBatch:
-    """Packed ragged-batch inference over Array API/DLPack arrays.
+    """Packed GFN1/GFN2 ragged-batch inference over Array API/DLPack arrays.
 
-    This lower-level packed-array surface currently executes GFN2-xTB only;
-    unlike :class:`Calculator` and :class:`BatchCalculator`, it does not yet
-    expose a model selector. It never substitutes GFN2 for a requested GFN1
-    calculation because no method argument is accepted.
+    ``method`` accepts the same model names and aliases as :class:`Calculator`
+    and :class:`BatchCalculator`. GFN2-xTB remains the default for backward
+    compatibility, and the selected public model tag is passed unchanged to
+    the native compute request.
 
     This is the zero-copy entry point of the Python interface: every
     positional descriptor takes a dense, single-device array implementing the
@@ -2347,6 +2347,9 @@ class ArrayBatch:
         Periodic charge-response ``b + A q`` group; must be supplied together.
         Shifts are ``(natoms,)`` float64, offsets ``(nsystems + 1,)`` int64,
         and the matrix packs all per-system ``A`` blocks row-major.
+    method : str
+        GFN model name: ``"GFN1-xTB"``/``"GFN1"`` or
+        ``"GFN2-xTB"``/``"GFN2"``. Defaults to ``"GFN2-xTB"``.
     copy : bool
         Allow a producer-side copy to pack a non-contiguous input. Dtypes must
         still match the C ABI exactly.
@@ -2374,6 +2377,7 @@ class ArrayBatch:
         charge_response_offsets: object | None = None,
         charge_response_matrix: object | None = None,
         *,
+        method: str = "GFN2-xTB",
         copy: bool = False,
         backend: str | int = "auto",
         device_id: int | None = None,
@@ -2398,6 +2402,8 @@ class ArrayBatch:
             )
         _require_all_or_none("point charge", _POINT_CHARGE_FIELDS, locals())
         _require_all_or_none("charge response", _CHARGE_RESPONSE_FIELDS, locals())
+        self._model = _resolve_method(method)
+        self._method = method
         self._arrays: dict[str, object | None] = {
             "atom_offsets": atom_offsets,
             "atomic_numbers": atomic_numbers,
@@ -2414,7 +2420,12 @@ class ArrayBatch:
             "charge_response_matrix": charge_response_matrix,
         }
         self._copy = bool(copy)
-        self._context = Context(backend, device_id, cpu_threads, stream)
+        self._context = Context(
+            _backend_for_model(self._model, backend, device_id),
+            device_id,
+            cpu_threads,
+            stream,
+        )
 
     @property
     def backend(self) -> int:
@@ -2425,6 +2436,11 @@ class ArrayBatch:
     def context(self) -> Context:
         """The native context this batch computes with."""
         return self._context
+
+    @property
+    def method(self) -> str:
+        """Return the configured GFN method name."""
+        return self._method
 
     def compute(
         self,
@@ -2677,6 +2693,7 @@ def _compute_array_batch(
         options = _build_compute_options(
             nsystems,
             npoints,
+            model=batch._model,
             max_scc_iterations=max_scc_iterations,
             charge_tolerance=charge_tolerance,
             energy_tolerance=energy_tolerance,
@@ -2837,6 +2854,7 @@ def _build_compute_options(
     nsystems: int,
     npoints: int,
     *,
+    model: int,
     max_scc_iterations: int,
     charge_tolerance: float,
     energy_tolerance: float,
@@ -2859,7 +2877,7 @@ def _build_compute_options(
         ),
     )
     options.scc_start_mode = library.SCC_START_FRESH
-    options.model = library.MODEL_GFN2_XTB
+    options.model = model
     flags = 0
     if compute_energy:
         flags |= library.COMPUTE_ENERGY
@@ -3331,6 +3349,7 @@ def compute_arrays(
     charge_response_offsets: object | None = None,
     charge_response_matrix: object | None = None,
     *,
+    method: str = "GFN2-xTB",
     copy: bool = False,
     backend: str | int = "auto",
     device_id: int | None = None,
@@ -3352,8 +3371,7 @@ def compute_arrays(
     Builds a temporary :class:`ArrayBatch` from the flat descriptor arrays,
     computes with the given options, and returns an :class:`ArrayBatchResult`.
     ``out=`` and ``result_memory`` follow :meth:`ArrayBatch.compute`.
-    This packed-array convenience surface is currently GFN2-xTB-only and has
-    no method selector.
+    ``method`` follows :class:`ArrayBatch` and defaults to GFN2-xTB.
     """
     batch = ArrayBatch(
         atom_offsets,
@@ -3369,6 +3387,7 @@ def compute_arrays(
         atomic_potential_shifts=atomic_potential_shifts,
         charge_response_offsets=charge_response_offsets,
         charge_response_matrix=charge_response_matrix,
+        method=method,
         copy=copy,
         backend=backend,
         device_id=device_id,

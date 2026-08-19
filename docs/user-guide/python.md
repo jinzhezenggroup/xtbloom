@@ -239,8 +239,9 @@ CuPy, JAX eager arrays, PyTorch tensors); xTBloom imports none of those
 libraries, consumed buffers are caller-owned, and interface devices are
 accepted without a host round trip on the CUDA backend.
 
-`ArrayBatch` and `compute_arrays` currently have no model selector and execute
-GFN2-xTB only. Use the host-NumPy `Calculator`/`BatchCalculator` APIs for GFN1.
+`ArrayBatch` and `compute_arrays` accept `"GFN1-xTB"`/`"GFN1"` and
+`"GFN2-xTB"`/`"GFN2"` through `method=`, with GFN2-xTB retained as the default.
+Both models use the same CPU/CUDA backend policy and packed descriptor contract.
 
 ```python
 from xtbloom import ArrayBatch
@@ -251,6 +252,7 @@ batch = ArrayBatch(
     positions=positions_np,          # (natoms, 3) float64
     molecular_charges=np.array([0.0, 0.0]),
     unpaired_electrons=np.array([0, 0], dtype=np.int32),
+    method="GFN1-xTB",
     backend="cuda",
 )
 result = batch.compute()

@@ -4,6 +4,12 @@
 
 `xtbloom.ArrayBatch` is the reusable packed-array interface. `xtbloom.compute_arrays` is its one-shot convenience form. Both consume eager Array API/DLPack producers without importing their framework.
 
+`ArrayBatch` and `compute_arrays` accept `method="GFN1-xTB"`/`"GFN1"` and
+`method="GFN2-xTB"`/`"GFN2"`; GFN2-xTB is the backward-compatible default.
+Both models follow the same CPU/CUDA packed-buffer contract. The separate
+`xtbloom_torch` autograd operation remains GFN2-xTB-only and has no model
+selector.
+
 The Python array interfaces use:
 
 - positions in bohr;

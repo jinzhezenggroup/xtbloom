@@ -195,6 +195,7 @@ exception-oriented control flow.
 - [Browser demo](browser-demo.md)
 - [Skills for AI agents](agent-skills.md)
 - [Python API](python.md)
+- [Array API and DLPack](array-api.md)
 - [Direct Python geometry optimization](optimization.md)
 - [Vibrational analysis](vibrations.md)
 - [ASE molecular dynamics](ase-md.md)
@@ -205,8 +206,8 @@ exception-oriented control flow.
 ## Scope and limitations
 
 GFN1-xTB and GFN2-xTB are implemented on CPU and CUDA. The high-level Python
-calculators, ASE, and dpdata expose both models, while Array API/DLPack and
-PyTorch autograd remain GFN2-only. The single-threaded CPU/WebAssembly
+calculators, Array API/DLPack, ASE, and dpdata expose both models, while
+PyTorch autograd remains GFN2-only. The single-threaded CPU/WebAssembly
 browser demo exposes both GFN1 and GFN2 and defaults to GFN2. ROCm remains
 reserved.
 

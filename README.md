@@ -149,8 +149,9 @@ before reusing the numbers.
 | Direct Python and dpdata geometry optimization | Higher-level GFN1 CPU and GFN2 CPU/CUDA adapters |
 | ASE-driven molecular dynamics | Supported for molecular systems through ASE integrators; no native xTBloom MD driver |
 | Numerical QM Cartesian Hessian | Python `Calculator` and `BatchCalculator`; [batched analytic-force differences](docs/user-guide/python.md#numerical-cartesian-hessians) |
+| Array API/DLPack | GFN1 and GFN2 |
+| PyTorch autograd | GFN2-only adapter surface |
 | Vibrational analysis | Python mass weighting, rigid-mode projection, frequencies, and normal modes from numerical Hessians; [guide](docs/user-guide/vibrations.md) |
-| Array API/DLPack and PyTorch autograd | GFN2-only adapter surfaces |
 | Browser single points, SMILES-to-3D, and demo optimization | Experimental client-side GFN1/GFN2 CPU/WASM adapter; GFN2 is the default |
 | ROCm, solvation, native optimization/MD drivers, analytic/C-ABI Hessians, periodic GFN1/GFN2 execution | Not implemented |
 
