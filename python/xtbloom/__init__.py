@@ -34,6 +34,7 @@ from .interface import (
     numbers_to_symbols,
     symbols_to_numbers,
 )
+from .optimize import OptimizationResult, optimize, optimize_batch
 from .torch import xtbloom_torch
 from .vibrations import VibrationalResult, analyze_vibrations, vibrations
 
@@ -53,6 +54,7 @@ __all__ = [
     "ChargeResponse",
     "Context",
     "DLPackResultBuffer",
+    "OptimizationResult",
     "PointCharge",
     "Result",
     "Structure",
@@ -65,6 +67,8 @@ __all__ = [
     "analyze_vibrations",
     "compute_arrays",
     "numbers_to_symbols",
+    "optimize",
+    "optimize_batch",
     "symbols_to_numbers",
     "vibrations",
     "xtbloom_torch",

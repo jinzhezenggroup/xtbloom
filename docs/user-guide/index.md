@@ -196,6 +196,7 @@ exception-oriented control flow.
 - [Skills for AI agents](agent-skills.md)
 - [Python API](python.md)
 - [Array API and DLPack](array-api.md)
+- [Direct Python geometry optimization](optimization.md)
 - [Vibrational analysis](vibrations.md)
 - [ASE molecular dynamics](ase-md.md)
 - [C and C++ API](c-api.md)
@@ -206,8 +207,9 @@ exception-oriented control flow.
 
 GFN1-xTB and GFN2-xTB are implemented on CPU and CUDA. The high-level Python
 calculators, Array API/DLPack, ASE, and dpdata expose both models, while
-PyTorch autograd remains GFN2-only. The single-threaded CPU/WebAssembly browser
-demo exposes both GFN1 and GFN2 and defaults to GFN2. ROCm remains reserved.
+PyTorch autograd remains GFN2-only. The single-threaded CPU/WebAssembly
+browser demo exposes both GFN1 and GFN2 and defaults to GFN2. ROCm remains
+reserved.
 
 xTBloom's ABI-v4 batch descriptor reserves validated native 3D cell and
 periodic-axis input, but native periodic GFN1/GFN2 execution and the Python
@@ -221,4 +223,6 @@ and native/analytic Hessians are not implemented. Python
 QM-coordinate Hessians from batched analytic-force differences. ASE-driven
 molecular dynamics, the Hessian and Python [vibrational
 analysis](vibrations.md), and the browser/dpdata optimizers are higher-level
+adapters built on repeated xTBloom calculations.
+The direct Python `optimize()`/`optimize_batch()` helpers are also higher-level
 adapters built on repeated xTBloom calculations.
