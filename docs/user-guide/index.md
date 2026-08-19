@@ -195,6 +195,7 @@ exception-oriented control flow.
 - [Browser demo](browser-demo.md)
 - [Skills for AI agents](agent-skills.md)
 - [Python API](python.md)
+- [Array API and DLPack](array-api.md)
 - [Vibrational analysis](vibrations.md)
 - [ASE molecular dynamics](ase-md.md)
 - [C and C++ API](c-api.md)
