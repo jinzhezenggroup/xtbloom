@@ -213,6 +213,66 @@ set(XTBLOOM_CPU_LINALG_LIBRARY "" CACHE FILEPATH
   "Optional monolithic shared LP64 LAPACKE+CBLAS runtime with local thread control for the CPU eigensolver (e.g. libscipy_openblas.so or libmkl_rt.so). When unset, compatible runtimes are auto-discovered with find_package(BLAS/LAPACK)."
 )
 
+# Linux provider isolation and its focused tests share one compile-time proof of
+# the complete GNU namespace API. musl and other Linux libcs that do not expose
+# dlmopen/dlinfo must not accidentally accept an MKL or wheel-isolation build.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  cmake_push_check_state(RESET)
+  set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
+  check_cxx_source_compiles([=[
+    #ifndef _GNU_SOURCE
+    #define _GNU_SOURCE 1
+    #endif
+    #include <dlfcn.h>
+    #include <link.h>
+    int main() {
+      void* handle = dlmopen(LM_ID_NEWLM, nullptr, RTLD_NOW | RTLD_LOCAL);
+      Lmid_t namespace_id = LM_ID_BASE;
+      return handle == nullptr ? 0 : dlinfo(handle, RTLD_DI_LMID, &namespace_id);
+    }
+  ]=] XTBLOOM_HAS_DLMOPEN_NAMESPACE)
+  cmake_pop_check_state()
+else()
+  set(XTBLOOM_HAS_DLMOPEN_NAMESPACE OFF)
+endif()
+
+set(XTBLOOM_MKL_TSS_BRIDGE_COMPILER_SUPPORTED OFF)
+if(CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang)$")
+  set(XTBLOOM_MKL_TSS_BRIDGE_COMPILER_SUPPORTED ON)
+endif()
+
+function(xtbloom_add_mkl_pthread_tss_bridge target output_name)
+  # This bridge must enter a new namespace before libc/libdl. Keep it free of
+  # startup objects, compiler runtimes, sanitizers, and every DT_NEEDED edge.
+  # The exact no-runtime link contract is currently proven only for these ELF
+  # compiler drivers; rejecting other compilers is safer than silently adding
+  # a libc/compiler-runtime dependency before private TSS is bridged.
+  if(NOT XTBLOOM_MKL_TSS_BRIDGE_COMPILER_SUPPORTED)
+    message(FATAL_ERROR
+      "The MKL pthread TSS bridge requires a GNU- or Clang-compatible C compiler"
+    )
+  endif()
+  add_library(${target} SHARED src/runtime/mkl_pthread_tss_bridge.c)
+  target_compile_features(${target} PRIVATE c_std_11)
+  target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_compile_options(${target} PRIVATE
+    -fno-stack-protector
+    -fno-sanitize=all
+  )
+  target_link_options(${target} PRIVATE
+    -nostdlib
+    -nodefaultlibs
+    -nostartfiles
+    -fno-sanitize=all
+    "LINKER:-z,defs"
+  )
+  set_target_properties(${target} PROPERTIES
+    OUTPUT_NAME ${output_name}
+    C_VISIBILITY_PRESET hidden
+    POSITION_INDEPENDENT_CODE YES
+  )
+endfunction()
+
 string(TOUPPER "${XTBLOOM_ENABLE_CUDA}" XTBLOOM_ENABLE_CUDA_NORMALIZED)
 if(NOT XTBLOOM_ENABLE_CUDA_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
   message(FATAL_ERROR "XTBLOOM_ENABLE_CUDA must be AUTO, ON, or OFF")
@@ -416,21 +476,6 @@ if(XTBLOOM_BUNDLE_WHEEL_OPENBLAS)
     # dlmopen is part of the Linux wheel's host-isolation contract, not an
     # optional optimization. Prove namespace creation and inspection before
     # accepting the build input.
-    cmake_push_check_state(RESET)
-    set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
-    check_cxx_source_compiles([=[
-      #ifndef _GNU_SOURCE
-      #define _GNU_SOURCE 1
-      #endif
-      #include <dlfcn.h>
-      #include <link.h>
-      int main() {
-        void* handle = dlmopen(LM_ID_NEWLM, nullptr, RTLD_NOW | RTLD_LOCAL);
-        Lmid_t namespace_id = LM_ID_BASE;
-        return handle == nullptr ? 0 : dlinfo(handle, RTLD_DI_LMID, &namespace_id);
-      }
-    ]=] XTBLOOM_HAS_DLMOPEN_NAMESPACE)
-    cmake_pop_check_state()
     if(NOT XTBLOOM_HAS_DLMOPEN_NAMESPACE)
       message(FATAL_ERROR
         "XTBLOOM_PYTHON_WHEEL requires glibc dlmopen/dlinfo namespace isolation")
@@ -592,25 +637,6 @@ if(XTBLOOM_CPU_LINALG_RUNTIME)
   if(xtbloom_linalg_runtime_name MATCHES "mkl_rt")
     set(XTBLOOM_CPU_LINALG_RUNTIME_IS_MKL ON)
 
-    # Namespace isolation depends on GNU-compatible dlmopen/dlinfo support,
-    # not merely on the Linux platform name. Prove the complete compile/link
-    # interface before accepting an MKL provider.
-    cmake_push_check_state(RESET)
-    set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
-    check_cxx_source_compiles([=[
-      #ifndef _GNU_SOURCE
-      #define _GNU_SOURCE 1
-      #endif
-      #include <dlfcn.h>
-      #include <link.h>
-      int main() {
-        void* handle = dlmopen(LM_ID_NEWLM, nullptr, RTLD_NOW | RTLD_LOCAL);
-        Lmid_t namespace_id = LM_ID_BASE;
-        return handle == nullptr ? 0 : dlinfo(handle, RTLD_DI_LMID, &namespace_id);
-      }
-    ]=] XTBLOOM_HAS_DLMOPEN_NAMESPACE)
-    cmake_pop_check_state()
-
     get_filename_component(xtbloom_linalg_runtime_realpath
       "${XTBLOOM_CPU_LINALG_RUNTIME}" REALPATH
     )
@@ -639,10 +665,19 @@ if(XTBLOOM_CPU_LINALG_RUNTIME)
     endforeach()
 
     if(XTBLOOM_HAS_MKL_COMPONENTS AND XTBLOOM_HAS_DLMOPEN_NAMESPACE)
+      xtbloom_add_mkl_pthread_tss_bridge(
+        xtbloom_mkl_pthread_tss_bridge xtbloom_mkl_pthread_tss_bridge
+      )
+      set_target_properties(xtbloom_mkl_pthread_tss_bridge PROPERTIES
+        EXPORT_NAME mkl_pthread_tss_bridge
+      )
       add_library(xtbloom_mkl_lp64_shim SHARED
         src/runtime/mkl_lp64_shim.cpp
       )
       target_compile_features(xtbloom_mkl_lp64_shim PRIVATE cxx_std_17)
+      # Sanitizer runtimes commonly claim pthread key 0 and can be injected as
+      # the first DT_NEEDED entry. The bridge must remain first in every build.
+      target_compile_options(xtbloom_mkl_lp64_shim PRIVATE -fno-sanitize=all)
       set_target_properties(xtbloom_mkl_lp64_shim PROPERTIES
         EXPORT_NAME mkl_lp64_shim
         OUTPUT_NAME xtbloom_mkl_lp64_shim
@@ -653,6 +688,10 @@ if(XTBLOOM_CPU_LINALG_RUNTIME)
         "${XTBLOOM_MKL_intel_lp64_LIB}" DIRECTORY
       )
       target_link_libraries(xtbloom_mkl_lp64_shim PRIVATE
+        # The initialized bridge must precede every provider/runtime DSO in
+        # DT_NEEDED order so public and weak internal pthread TSS references
+        # bind to it before private libc/libdl constructors can execute.
+        xtbloom_mkl_pthread_tss_bridge
         "${XTBLOOM_MKL_intel_lp64_LIB}"
         "${XTBLOOM_MKL_sequential_LIB}"
         "${XTBLOOM_MKL_core_LIB}"
@@ -664,17 +703,21 @@ if(XTBLOOM_CPU_LINALG_RUNTIME)
       # and would allow a same-SONAME component from another MKL installation to
       # replace one member of the configure-time cohort.
       target_link_options(xtbloom_mkl_lp64_shim PRIVATE
+        -fno-sanitize=all
         "LINKER:--no-as-needed"
         "LINKER:--disable-new-dtags"
       )
       set_target_properties(xtbloom_mkl_lp64_shim PROPERTIES
-        BUILD_RPATH "${xtbloom_mkl_component_dir}"
-        INSTALL_RPATH "${xtbloom_mkl_component_dir}"
+        BUILD_RPATH "$ORIGIN;${xtbloom_mkl_component_dir}"
+        INSTALL_RPATH "$ORIGIN;${xtbloom_mkl_component_dir}"
         # The runtime resolves only a sibling shim. Keep build-tree tests and
         # installed shared libraries on the same relocation-safe contract.
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
       )
-      install(TARGETS xtbloom_mkl_lp64_shim EXPORT xtbloomTargets
+      install(TARGETS
+        xtbloom_mkl_pthread_tss_bridge
+        xtbloom_mkl_lp64_shim
+        EXPORT xtbloomTargets
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
       )
       set(XTBLOOM_CPU_LINALG_SHIM ON)
@@ -1710,6 +1753,88 @@ if(XTBLOOM_BUILD_TESTS)
   enable_testing()
   find_package(Threads REQUIRED)
   find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+     XTBLOOM_HAS_DLMOPEN_NAMESPACE AND
+     XTBLOOM_MKL_TSS_BRIDGE_COMPILER_SUPPORTED)
+    # This provider-independent fixture preserves the glibc <=2.33 bootstrap
+    # shape even when CI selects OpenBLAS instead of MKL: bridge first, then
+    # private libdl/libpthread, followed by a private dlsym call.
+    if(TARGET xtbloom_mkl_pthread_tss_bridge)
+      set(xtbloom_mkl_tss_test_bridge xtbloom_mkl_pthread_tss_bridge)
+    else()
+      set(xtbloom_mkl_tss_test_bridge xtbloom_mkl_pthread_tss_bridge_test)
+      xtbloom_add_mkl_pthread_tss_bridge(
+        ${xtbloom_mkl_tss_test_bridge} xtbloom_mkl_pthread_tss_bridge_test
+      )
+    endif()
+
+    add_library(xtbloom_mkl_tss_bootstrap_fixture SHARED
+      tests/mkl_tss_bootstrap_fixture.c
+    )
+    target_compile_features(xtbloom_mkl_tss_bootstrap_fixture PRIVATE c_std_11)
+    target_compile_options(xtbloom_mkl_tss_bootstrap_fixture PRIVATE -fno-sanitize=all)
+    target_link_options(xtbloom_mkl_tss_bootstrap_fixture PRIVATE
+      -fno-sanitize=all
+      "LINKER:--no-as-needed"
+      "LINKER:--disable-new-dtags"
+      "LINKER:-z,defs"
+    )
+    target_link_libraries(xtbloom_mkl_tss_bootstrap_fixture PRIVATE
+      ${xtbloom_mkl_tss_test_bridge}
+      "-l:libdl.so.2"
+      "-l:libpthread.so.0"
+    )
+    set_target_properties(xtbloom_mkl_tss_bootstrap_fixture PROPERTIES
+      OUTPUT_NAME xtbloom_mkl_tss_bootstrap_fixture
+      C_VISIBILITY_PRESET hidden
+      BUILD_RPATH "$ORIGIN"
+      BUILD_RPATH_USE_ORIGIN TRUE
+    )
+
+    add_executable(xtbloom_mkl_tss_bootstrap_test
+      tests/mkl_tss_bootstrap_test.c
+    )
+    target_compile_features(xtbloom_mkl_tss_bootstrap_test PRIVATE c_std_11)
+    # ASan and similar runtimes allocate TSS before main. Keep the launcher
+    # uninstrumented so its hostile sentinel deterministically owns key 0.
+    target_compile_options(xtbloom_mkl_tss_bootstrap_test PRIVATE -fno-sanitize=all)
+    target_link_options(xtbloom_mkl_tss_bootstrap_test PRIVATE -fno-sanitize=all)
+    target_include_directories(xtbloom_mkl_tss_bootstrap_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(xtbloom_mkl_tss_bootstrap_test PRIVATE
+      Threads::Threads
+      ${CMAKE_DL_LIBS}
+    )
+    add_test(
+      NAME xtbloom.cpu.mkl_tss_bootstrap
+      COMMAND xtbloom_mkl_tss_bootstrap_test
+        $<TARGET_FILE:${xtbloom_mkl_tss_test_bridge}>
+        $<TARGET_FILE:xtbloom_mkl_tss_bootstrap_fixture>
+    )
+    find_program(XTBLOOM_MKL_TSS_READELF NAMES readelf llvm-readelf REQUIRED)
+    add_test(
+      NAME xtbloom.cpu.mkl_tss_bridge_elf
+      COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/check_mkl_tss_bridge.py
+        --readelf ${XTBLOOM_MKL_TSS_READELF}
+        --nm ${CMAKE_NM}
+        --bridge $<TARGET_FILE:${xtbloom_mkl_tss_test_bridge}>
+        --fixture $<TARGET_FILE:xtbloom_mkl_tss_bootstrap_fixture>
+    )
+    if(TARGET xtbloom_mkl_pthread_tss_bridge)
+      add_test(
+        NAME xtbloom.cpu.mkl_tss_provider_elf
+        COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/check_mkl_tss_bridge.py
+          --readelf ${XTBLOOM_MKL_TSS_READELF}
+          --nm ${CMAKE_NM}
+          --bridge $<TARGET_FILE:xtbloom_mkl_pthread_tss_bridge>
+          --provider $<TARGET_FILE:xtbloom_mkl_lp64_shim>
+      )
+    endif()
+  endif()
 
   add_test(
     NAME xtbloom.benchmarks.self_test
@@ -3818,6 +3943,73 @@ if(XTBLOOM_BUILD_TESTS)
       set_tests_properties(xtbloom.cpu.linalg_isolation_search_path PROPERTIES
         ENVIRONMENT
           "MKL_THREADING_LAYER=SEQUENTIAL;LD_LIBRARY_PATH=${CMAKE_CURRENT_BINARY_DIR}/mkl-decoy:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+      )
+
+      # A provider can register a base-registry pthread key in its constructor
+      # before symbol verification fails. Its key destructor remains private
+      # code, so the failure path must retain the entire namespace until process
+      # exit rather than dlclosing it before the calling worker terminates.
+      set(xtbloom_mkl_tss_failure_dir
+        "${CMAKE_CURRENT_BINARY_DIR}/mkl-tss-failure"
+      )
+      add_library(xtbloom_mkl_tss_failure_provider SHARED
+        tests/mkl_tss_failure_provider.c
+      )
+      target_compile_features(xtbloom_mkl_tss_failure_provider PRIVATE c_std_11)
+      target_compile_options(xtbloom_mkl_tss_failure_provider PRIVATE -fno-sanitize=all)
+      target_link_options(xtbloom_mkl_tss_failure_provider PRIVATE
+        -fno-sanitize=all
+        "LINKER:--no-as-needed"
+        "LINKER:--disable-new-dtags"
+        "LINKER:-z,defs"
+      )
+      target_link_libraries(xtbloom_mkl_tss_failure_provider PRIVATE
+        xtbloom_mkl_pthread_tss_bridge
+      )
+      set_target_properties(xtbloom_mkl_tss_failure_provider PROPERTIES
+        OUTPUT_NAME xtbloom_mkl_lp64_shim
+        C_VISIBILITY_PRESET hidden
+        BUILD_RPATH "$ORIGIN"
+        LIBRARY_OUTPUT_DIRECTORY "${xtbloom_mkl_tss_failure_dir}"
+      )
+
+      add_executable(xtbloom_mkl_tss_failure_retention_test
+        tests/mkl_tss_failure_retention_test.cpp
+      )
+      target_link_libraries(xtbloom_mkl_tss_failure_retention_test PRIVATE
+        xtbloom_gfn2_cpu
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+      )
+      target_compile_features(
+        xtbloom_mkl_tss_failure_retention_test PRIVATE cxx_std_17
+      )
+      set_target_properties(xtbloom_mkl_tss_failure_retention_test PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${xtbloom_mkl_tss_failure_dir}"
+      )
+      add_dependencies(
+        xtbloom_mkl_tss_failure_retention_test
+        xtbloom_mkl_tss_failure_provider
+        xtbloom_mkl_pthread_tss_bridge
+      )
+      add_custom_command(TARGET xtbloom_mkl_tss_failure_retention_test POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "$<TARGET_FILE:xtbloom_mkl_pthread_tss_bridge>"
+          "${xtbloom_mkl_tss_failure_dir}"
+        COMMENT "Staging the MKL pthread bridge beside the failure-path fixture"
+      )
+      add_test(
+        NAME xtbloom.cpu.mkl_tss_failure_retention
+        COMMAND xtbloom_mkl_tss_failure_retention_test
+      )
+      add_test(
+        NAME xtbloom.cpu.mkl_tss_failure_provider_elf
+        COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/check_mkl_tss_bridge.py
+          --readelf ${XTBLOOM_MKL_TSS_READELF}
+          --nm ${CMAKE_NM}
+          --bridge $<TARGET_FILE:xtbloom_mkl_pthread_tss_bridge>
+          --provider $<TARGET_FILE:xtbloom_mkl_tss_failure_provider>
       )
     endif()
   elseif(NOT XTBLOOM_WHEEL_OPENBLAS)
