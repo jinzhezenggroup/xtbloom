@@ -147,10 +147,11 @@ atom, axis, sign, status, and iteration count. A temporary fresh-SCC context
 leaves every calculator geometry and any original warm checkpoint unchanged.
 
 These are explicit numerical Python methods, not analytic coupled-response
-Hessians or native C ABI outputs. xTBloom does not yet perform mass weighting,
-translation/rotation projection, normal-mode analysis, or thermochemistry.
-They do not change the compiled autograd operator, so PyTorch higher-order
-autograd remains unsupported.
+Hessians or native C ABI outputs. The Python API supports mass weighting,
+translation/rotation projection, frequencies, and normal-mode analysis through
+`analyze_vibrations()` and `vibrations()`; thermochemistry remains unsupported.
+The numerical methods do not change the compiled autograd operator, so PyTorch
+higher-order autograd remains unsupported.
 
 ## Ragged batches
 

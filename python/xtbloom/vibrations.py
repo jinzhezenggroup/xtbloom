@@ -53,9 +53,14 @@ class VibrationalResult:
 def _validated_inputs(
     hessian: object, positions: object, masses: object
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    h = np.asarray(hessian, dtype=np.float64)
-    r = np.asarray(positions, dtype=np.float64)
-    m = np.asarray(masses, dtype=np.float64)
+    try:
+        h = np.asarray(hessian, dtype=np.float64)
+        r = np.asarray(positions, dtype=np.float64)
+        m = np.asarray(masses, dtype=np.float64)
+    except (TypeError, ValueError) as error:
+        raise XTBloomValueError(
+            "hessian, positions, and masses must be numeric rectangular arrays"
+        ) from error
     if r.ndim != 2 or r.shape[1] != 3 or r.shape[0] == 0:
         raise XTBloomValueError("positions must have shape (natoms, 3) with natoms > 0")
     natoms = r.shape[0]

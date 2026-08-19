@@ -166,12 +166,14 @@ def test_projection_can_be_disabled() -> None:
         (np.eye(3), np.zeros((1, 3)), np.ones(2)),
         (np.eye(3), np.zeros((1, 3)), np.array([0.0])),
         (np.eye(3), np.zeros((1, 3)), np.array([np.nan])),
+        (np.eye(3), [[0.0, 0.0], [0.0]], np.ones(1)),
+        (np.eye(3), np.zeros((1, 3)), ["hydrogen"]),
     ],
 )
 def test_invalid_inputs_are_rejected(
-    hessian: np.ndarray, positions: np.ndarray, masses: np.ndarray
+    hessian: object, positions: object, masses: object
 ) -> None:
-    """Reject malformed, nonfinite, and nonpositive vibrational inputs."""
+    """Normalize malformed, nonnumeric, nonfinite, and nonpositive failures."""
     with pytest.raises(XTBloomValueError):
         analyze_vibrations(hessian, positions, masses)
 
