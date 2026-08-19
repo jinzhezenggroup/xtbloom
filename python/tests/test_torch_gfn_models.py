@@ -82,7 +82,9 @@ def test_torch_gfn1_cpu_matches_calculator(method: str) -> None:
 
     arrays = _packed(torch)
     energies, forces = _run(torch, arrays, method=method, backend="cpu")
-    reference = Calculator("GFN1-xTB", WATER_NUMBERS, WATER_POSITIONS).singlepoint()
+    reference = Calculator(
+        "GFN1-xTB", WATER_NUMBERS, WATER_POSITIONS, backend="cpu"
+    ).singlepoint()
     assert torch.allclose(
         energies,
         torch.tensor([reference.energy], dtype=torch.float64),
@@ -166,7 +168,9 @@ def test_torch_cuda_cache_separates_gfn1_and_gfn2() -> None:
         pytest.skip("torch has no usable CUDA device")
 
     references = {
-        method: Calculator(method, WATER_NUMBERS, WATER_POSITIONS).singlepoint()
+        method: Calculator(
+            method, WATER_NUMBERS, WATER_POSITIONS, backend="cpu"
+        ).singlepoint()
         for method in ("GFN1-xTB", "GFN2-xTB")
     }
     arrays = _packed(torch, device="cuda")
