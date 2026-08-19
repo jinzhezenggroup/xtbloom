@@ -270,8 +270,8 @@ def optimize_batch(
     energy_tolerance: float = 1.0e-8,
     electronic_temperature: float = 300.0,
     scc_mixer: str | int = "modified_broyden",
-    scc_mixer_history: int = 8,
-    scc_mixer_damping: float = 0.4,
+    scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+    scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
     determinism: str | int = "default",
     warm_start: bool = True,
 ) -> OptimizationResult:
