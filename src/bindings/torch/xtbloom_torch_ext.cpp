@@ -150,8 +150,8 @@ std::wstring utf8_to_wide(const std::string& value) {
                                   static_cast<int>(value.size()), nullptr, 0);
   if (units <= 0) return {};
   std::wstring result(static_cast<size_t>(units), L'\0');
-  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), units, result.data(),
-                          units) != units) {
+  if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+                          static_cast<int>(value.size()), result.data(), units) != units) {
     return {};
   }
   return result;
