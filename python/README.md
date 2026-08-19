@@ -9,8 +9,8 @@ native C and C++ applications.
 GFN1-xTB and GFN2-xTB support CPU and CUDA through `Calculator`,
 `BatchCalculator`, ASE, and dpdata. Both models support native ragged batches,
 explicit point charges with force output, and caller-supplied periodic charge
-response. The packed Array API/DLPack surface also supports both models;
-PyTorch autograd remains explicitly GFN2-only.
+response. The packed Array API/DLPack surface and PyTorch positions-only
+autograd also support both models.
 
 ## Installation
 
@@ -194,22 +194,35 @@ DLPack producers. Exact dtype, shape, layout, lifetime, stream, and ownership
 rules are documented in the
 [Python API guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/python.md#array-api-and-dlpack-input-arrays).
 
-`xtbloom_torch` is currently GFN2-xTB-only. `xtbloom_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
-unpaired_electrons, ...)` runs xTBloom inference on PyTorch tensors (host or
-CUDA) and is the only autograd entry point in the Python API. It supports
-exactly the positions gradient `dE/dR = -F`; autograd on any other input, or a
-gradient flowing through the `forces` output (the Hessian), raises
-`XTBloomNotSupportedError`. Higher-order differentiation is likewise rejected
-explicitly rather than returning a partial or zero Hessian. The native data
-plane is a compiled extension written against the LibTorch Stable ABI
-(torch >= 2.10), so a single binary works across torch releases; its stable
-headers are vendored in `cmake/3rdparty/torch-stable` and it links a
-build-time-only stub, so building xTBloom never downloads or requires torch
-(torch is still required at runtime to call `xtbloom_torch`). PyTorch is
-imported only when the op is called. CPU execution is synchronous; CUDA follows
-`torch.cuda.current_stream()` and returns the ordinary `(energies, forces)`
-pair. See
-`docs/user-guide/python.md` for the full contract.
+`xtbloom_torch` accepts `method="GFN1-xTB"`/`"GFN1"` and
+`method="GFN2-xTB"`/`"GFN2"`, with GFN2-xTB retained as the default. For example:
+
+```python
+energies, forces = xtbloom_torch(
+    positions,
+    atomic_numbers,
+    atom_offsets,
+    molecular_charges,
+    unpaired_electrons,
+    method="GFN1-xTB",
+    backend="cuda",
+)
+```
+
+It runs xTBloom inference on PyTorch tensors (host or CUDA) and is the only
+autograd entry point in the Python API. It supports exactly the positions
+gradient `dE/dR = -F`; autograd on any other input, or a gradient flowing
+through the `forces` output (the Hessian), raises `XTBloomNotSupportedError`.
+Higher-order differentiation is likewise rejected explicitly rather than
+returning a partial or zero Hessian. The native data plane is a compiled
+extension written against the LibTorch Stable ABI (torch >= 2.10), so a single
+binary works across torch releases; its stable headers are vendored in
+`cmake/3rdparty/torch-stable` and it links a build-time-only stub, so building
+xTBloom never downloads or requires torch (torch is still required at runtime
+to call `xtbloom_torch`). PyTorch is imported only when the op is called. CPU
+execution is synchronous; CUDA follows `torch.cuda.current_stream()` and
+returns the ordinary `(energies, forces)` pair. See `docs/user-guide/python.md`
+for the full contract.
 
 ## Charge, spin, and embedding
 
@@ -264,7 +277,8 @@ while standard ASE integrators provide [molecular dynamics](../docs/user-guide/a
 over repeated xTBloom calculations.
 The high-level `Calculator` and `BatchCalculator` APIs use host NumPy arrays;
 direct device and mixed descriptors are exposed through the model-aware
-`ArrayBatch` surface and the low-level C ABI. PyTorch autograd remains GFN2-only.
+`ArrayBatch` surface and the low-level C ABI. PyTorch autograd supports GFN1 and
+GFN2 with the positions-only `dE/dR = -F` contract.
 
 ## More documentation
 
