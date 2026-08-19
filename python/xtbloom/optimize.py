@@ -14,7 +14,7 @@ from .interface import BatchCalculator
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from .interface import Calculator, Result, Structure
+    from .interface import Calculator, Structure
 
 _ACCEPT_TOLERANCE = 1.0e-8
 _ALPHA_DECAY = 0.5
