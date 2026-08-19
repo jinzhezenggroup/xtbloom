@@ -52,7 +52,9 @@ def _packed(torch: object, *, device: str = "cpu") -> dict[str, object]:
     }
 
 
-def _run(arrays: dict[str, object], *, method: str, backend: str):
+def _run(
+    arrays: dict[str, object], *, method: str, backend: str
+) -> tuple[object, object]:
     """Run the public Torch adapter on one prepared packed batch."""
     return xtbloom_torch(
         arrays["positions"],
