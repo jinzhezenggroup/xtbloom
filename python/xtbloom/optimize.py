@@ -113,7 +113,8 @@ def _optimize_structures(
             force_array = np.asarray(force, dtype=np.float64)
             if force_array.shape != structures[index].positions.shape:
                 raise XTBloomRuntimeError(
-                    f"optimizer evaluator returned an invalid force shape for system {index}"
+                    "optimizer evaluator returned an invalid force shape "
+                    f"for system {index}"
                 )
             if not np.isfinite(energy) or not np.isfinite(force_array).all():
                 failed.append(index)
