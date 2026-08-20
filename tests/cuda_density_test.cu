@@ -1728,6 +1728,11 @@ int test_contraction_tile_selector_boundaries_and_budget() {
   CHECK(!select_gfn2_density_contraction_tiles(overflow.data(), overflow.size(), restricted.data(),
                                                restricted.size(), 1, tiles));
   CHECK(tiles == 77);
+  const std::int64_t oversized_batch =
+      static_cast<std::int64_t>(std::numeric_limits<int>::max()) + 1;
+  CHECK(!select_gfn2_density_contraction_tiles(ao23.data(), ao23.size(), restricted.data(),
+                                               restricted.size(), oversized_batch, tiles));
+  CHECK(tiles == 77);
   CHECK(!select_gfn2_density_contraction_tiles(ao23.data(), ao23.size(), restricted.data(), 0, 1,
                                                tiles));
   CHECK(tiles == 77);

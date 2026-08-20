@@ -233,9 +233,8 @@ bool select_gfn2_density_contraction_tiles(const std::int64_t* orbital_offsets,
                                            std::int64_t spin_channel_count, std::int64_t batch_size,
                                            std::int64_t& tiles) noexcept {
   if (orbital_offsets == nullptr || spin_channels == nullptr || batch_size <= 0 ||
-      batch_size == std::numeric_limits<std::int64_t>::max() ||
-      orbital_offset_count != batch_size + 1 || spin_channel_count != batch_size ||
-      orbital_offsets[0] != 0) {
+      batch_size > std::numeric_limits<int>::max() || orbital_offset_count != batch_size + 1 ||
+      spin_channel_count != batch_size || orbital_offsets[0] != 0) {
     return false;
   }
   std::int64_t useful_tiles = 0;

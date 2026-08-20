@@ -1206,6 +1206,13 @@ int test_valid_binding_and_fail_closed_copy() {
   }
   CHECK(valid.error == Gfn2SccIterationBindingError::kSuccess);
 
+  fixture.plan.abi_version = kGfn2SccIterationAbiVersion - 1u;
+  const auto stale_abi = validate_gfn2_scc_iteration_binding_cuda(fixture.plan, fixture.input,
+                                                                  fixture.state, fixture.workspace);
+  CHECK(stale_abi.error == Gfn2SccIterationBindingError::kInvalidAbiVersion);
+  CHECK(stale_abi.field == Gfn2SccIterationBindingField::kPlan);
+  fixture.plan.abi_version = kGfn2SccIterationAbiVersion;
+
   Gfn2SccIterationBinding binding{};
   auto diagnostic = bind_gfn2_scc_iteration_cuda(fixture.plan, fixture.input, fixture.state,
                                                  fixture.workspace, binding);
