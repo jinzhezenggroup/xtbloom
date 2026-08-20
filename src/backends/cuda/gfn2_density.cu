@@ -214,28 +214,6 @@ __global__ void preflight_kernel(Gfn2DensityDeviceBatch batch, Gfn2DensityDevice
   }
 }
 
-__host__ __device__ std::int64_t triangle_inclusive(std::int64_t value) {
-  return (value & 1LL) == 0LL ? (value / 2LL) * (value + 1LL) : value * ((value + 1LL) / 2LL);
-}
-
-struct MatrixPair {
-  std::int64_t row;
-  std::int64_t column;
-};
-
-__device__ MatrixPair matrix_pair(std::int64_t packed) {
-  std::int64_t row =
-      static_cast<std::int64_t>(0.5 * (sqrt(1.0 + 8.0 * static_cast<double>(packed)) - 1.0));
-  while (row > 0 && triangle_inclusive(row) > packed) {
-    --row;
-  }
-  while (triangle_inclusive(row + 1) <= packed) {
-    ++row;
-  }
-  const std::int64_t previous = triangle_inclusive(row);
-  return {row, packed - previous};
-}
-
 __global__ void contract_kernel(Gfn2DensityDeviceBatch batch, Gfn2DensityDeviceInput input,
                                 Gfn2DensityDeviceWorkspace workspace, std::uint32_t* system_errors,
                                 std::uint32_t* device_error, std::int64_t tiles_per_system) {
@@ -249,13 +227,13 @@ __global__ void contract_kernel(Gfn2DensityDeviceBatch batch, Gfn2DensityDeviceI
   const std::int64_t orbital_end = batch.orbital_offsets[system + 1];
   const std::int64_t matrix_begin = batch.matrix_offsets[system];
   const std::int64_t count = orbital_end - orbital_begin;
-  const std::int64_t pair_count = triangle_inclusive(count);
+  const std::int64_t pair_count = gfn2_triangle_inclusive(count);
   const std::int64_t pair_stride = tiles_per_system * blockDim.x;
   /* Scheduling changes only pair ownership; one thread still executes the
    * complete ordered FP64 orbital loop for each matrix element. */
   for (std::int64_t pair = tile * blockDim.x + threadIdx.x; pair < pair_count;
        pair += pair_stride) {
-    const MatrixPair indices = matrix_pair(pair);
+    const Gfn2PackedMatrixPair indices = gfn2_packed_matrix_pair(pair);
     double density = 0.0;
     double weighted_density = 0.0;
     bool finite = true;
@@ -571,12 +549,12 @@ __global__ void spin_contract_kernel(Gfn2DensityDeviceBatch batch,
   const std::int64_t matrix_count = count * count;
   const std::int64_t matrix_begin = layout.spin_matrix_offsets[system] + channel * matrix_count;
   const std::int64_t orbital_begin = layout.spin_orbital_offsets[system] + channel * count;
-  const std::int64_t pair_count = triangle_inclusive(count);
+  const std::int64_t pair_count = gfn2_triangle_inclusive(count);
   const std::int64_t pair_stride = tiles_per_channel * blockDim.x;
   /* Match the restricted path's one-thread-per-pair arithmetic contract. */
   for (std::int64_t pair = tile * blockDim.x + threadIdx.x; pair < pair_count;
        pair += pair_stride) {
-    const MatrixPair indices = matrix_pair(pair);
+    const Gfn2PackedMatrixPair indices = gfn2_packed_matrix_pair(pair);
     double density = 0.0;
     double weighted_density = 0.0;
     bool finite = true;

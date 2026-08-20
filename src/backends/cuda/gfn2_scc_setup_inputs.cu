@@ -1806,6 +1806,9 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
                                  device_topology.orbital_to_shell,
                                  device_topology.orbital_to_atom};
   candidate.hamiltonian_batch.model = impl_->model;
+  /* Reuse the setup-selected pair schedule so both independent AO-pair stages
+   * have bounded, topology-fixed direct and Graph launch shapes. */
+  candidate.hamiltonian_batch.assembly_tiles_per_channel = impl_->density_contraction_tiles;
   candidate.eigensolver_batch = {batch,
                                  orbitals,
                                  matrices,

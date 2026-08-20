@@ -808,6 +808,10 @@ bool validate_plan_shapes(const Gfn2SccIterationDevicePlan& plan, Validator& val
       plan.density_batch.contraction_tiles_per_channel > kGfn2DensityContractBlockBudget) {
     return validator.fail(BindingError::kInvalidCount, BindingField::kDensity);
   }
+  if (plan.hamiltonian_batch.assembly_tiles_per_channel <= 0 ||
+      plan.hamiltonian_batch.assembly_tiles_per_channel > kGfn2DensityContractBlockBudget) {
+    return validator.fail(BindingError::kInvalidCount, BindingField::kHamiltonian);
+  }
   if (plan.publication_plan.total_mixer_vector_elements != mixer_vector ||
       plan.publication_plan.history_size != plan.mixer_policy.history_size ||
       plan.publication_plan.maximum_iterations != plan.activity_policy.maximum_iterations ||

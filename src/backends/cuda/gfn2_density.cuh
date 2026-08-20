@@ -5,6 +5,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cmath>
 #include <cstdint>
 #include <type_traits>
 
@@ -16,6 +17,33 @@ namespace xtbloom::detail::cuda {
 inline constexpr std::int64_t kGfn2DensityContractBlockBudget = 512;
 /* Shared by density launches and the setup-time pair-tile selector. */
 inline constexpr int kGfn2DensityThreadsPerBlock = 256;
+
+/*
+ * Packed lower-triangle indexing shared by independent AO-pair kernels. The
+ * inverse uses a floating estimate followed by exact integer correction so
+ * every valid packed index maps to one deterministic matrix pair.
+ */
+struct Gfn2PackedMatrixPair {
+  std::int64_t row;
+  std::int64_t column;
+};
+
+__host__ __device__ inline std::int64_t gfn2_triangle_inclusive(std::int64_t value) {
+  return (value & 1LL) == 0LL ? (value / 2LL) * (value + 1LL) : value * ((value + 1LL) / 2LL);
+}
+
+__device__ inline Gfn2PackedMatrixPair gfn2_packed_matrix_pair(std::int64_t packed) {
+  std::int64_t row =
+      static_cast<std::int64_t>(0.5 * (::sqrt(1.0 + 8.0 * static_cast<double>(packed)) - 1.0));
+  while (row > 0 && gfn2_triangle_inclusive(row) > packed) {
+    --row;
+  }
+  while (gfn2_triangle_inclusive(row + 1) <= packed) {
+    ++row;
+  }
+  const std::int64_t previous = gfn2_triangle_inclusive(row);
+  return {row, packed - previous};
+}
 
 /*
  * Host-visible contract for the kernel node captured into the SCC Graph.

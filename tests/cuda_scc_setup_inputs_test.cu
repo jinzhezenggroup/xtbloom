@@ -282,6 +282,7 @@ int test_all_optional_four_system_upload() {
         fixture.device_wavefunction.spin_channels);
   CHECK(plan.publication_plan.wavefunction_layout.spin_shell_offsets ==
         fixture.device_wavefunction.spin_shell_offsets);
+  CHECK(plan.hamiltonian_batch.assembly_tiles_per_channel == 1);
   CHECK(plan.density_batch.contraction_tiles_per_channel == 1);
   CHECK(plan.spin_batch.spin_channels == fixture.device_wavefunction.spin_channels);
   CHECK(plan.spin_batch.shell_population_offsets == fixture.device_wavefunction.spin_shell_offsets);
