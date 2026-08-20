@@ -1,0 +1,49 @@
+Issue #457 Compute Sanitizer summary
+====================================
+
+Environment
+-----------
+GPU: NVIDIA GeForce RTX 5090 (sm_120)
+Driver: 580.95.05
+CUDA compiler/toolkit: 12.9.86
+Compute Sanitizer: 2025.2.1.0 build 35969825
+Candidate revision: e948d63b3e4523a8e9be8e879f20f1638ff57fdc
+
+Density direct plus host-captured Graph control
+-----------------------------------------------
+Binary: build/cuda-issue457-final-e948d63/xtbloom_cuda_density_test
+
+memcheck: exit 0; ERROR SUMMARY: 0 errors
+racecheck: exit 0; RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)
+initcheck: exit 0; ERROR SUMMARY: 0 errors
+synccheck: exit 0; ERROR SUMMARY: 0 errors
+
+Production 542-AO device-tail Graph
+-----------------------------------
+Binary: build/cuda-issue457-final-e948d63/xtbloom_cuda_scc_iteration_production_test --large-singleton-sanitizer
+
+Uninstrumented: exit 0.
+memcheck: exit 0; ERROR SUMMARY: 0 errors
+racecheck: exit 0; RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)
+initcheck: exit 0; ERROR SUMMARY: 0 errors
+synccheck: exit 99; ERROR SUMMARY: 256 errors. The default print limit emitted
+100 reports. Every printed report is exactly:
+
+  Barrier error detected. Divergent thread(s) in warp.
+  reduce_spin_atomic_charges_kernel+0x2b0
+
+Classification: PASS (OWNER-DISPOSITIONED UPSTREAM TOOL DEFECT), under issue
+#279 and the repository CUDA-validation policy. The literal tool result remains
+exit 99 and is not represented as a clean synccheck pass. The GPU, driver,
+toolkit, sanitizer build, device-launched Graph path, kernel, PC, report class,
+clean direct/host-Graph control, clean uninstrumented run, and clean remaining
+sanitizers all match the approved disposition.
+
+Command template
+----------------
+
+  compute-sanitizer --tool <memcheck|racecheck|initcheck|synccheck> \
+    --error-exitcode=99 <binary> [arguments]
+
+All commands ran through one-GPU exclusive scheduler allocations with
+LD_LIBRARY_PATH selecting CUDA 12.9.1 and the reviewed LP64 MKL runtime.
