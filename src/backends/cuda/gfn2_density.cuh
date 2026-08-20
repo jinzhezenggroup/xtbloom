@@ -14,6 +14,8 @@ namespace xtbloom::detail::cuda {
 
 /* Topology-fixed upper bound for pair tiles assigned to one system/channel. */
 inline constexpr std::int64_t kGfn2DensityContractBlockBudget = 512;
+/* Shared by density launches and the setup-time pair-tile selector. */
+inline constexpr int kGfn2DensityThreadsPerBlock = 256;
 
 /*
  * Host-visible contract for the kernel node captured into the SCC Graph.

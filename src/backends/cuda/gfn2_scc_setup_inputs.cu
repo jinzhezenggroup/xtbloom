@@ -20,7 +20,6 @@ namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr std::size_t kDeviceAlignment = 256u;
-constexpr std::int64_t kDensityThreadsPerBlock = 256;
 constexpr std::int64_t kDensityTargetContractBlocks = kGfn2DensityContractBlockBudget;
 
 struct Segment {
@@ -258,7 +257,8 @@ bool select_gfn2_density_contraction_tiles(const std::int64_t* orbital_offsets,
       return false;
     }
     const std::int64_t pairs = twice_pairs / 2;
-    system_tiles = pairs / kDensityThreadsPerBlock + (pairs % kDensityThreadsPerBlock != 0 ? 1 : 0);
+    system_tiles =
+        pairs / kGfn2DensityThreadsPerBlock + (pairs % kGfn2DensityThreadsPerBlock != 0 ? 1 : 0);
     if (!checked_multiply(system_tiles, channels, channel_tiles) ||
         !checked_add(useful_tiles, channel_tiles, useful_tiles) ||
         !checked_add(channel_capacity, channels, channel_capacity)) {

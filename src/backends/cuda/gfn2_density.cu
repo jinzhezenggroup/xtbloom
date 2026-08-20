@@ -11,7 +11,7 @@
 namespace xtbloom::detail::cuda {
 namespace {
 
-constexpr int kThreadsPerBlock = 256;
+constexpr int kThreadsPerBlock = kGfn2DensityThreadsPerBlock;
 constexpr std::int64_t kMaximumInt64 = 9223372036854775807LL;
 
 static_assert((kThreadsPerBlock & (kThreadsPerBlock - 1)) == 0,
