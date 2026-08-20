@@ -107,6 +107,7 @@ def artifact_metadata(
             "cross_engine_force_atol_hartree_per_bohr": 2.0e-3,
             "repeatability_energy_atol_hartree": 1.0e-10,
             "repeatability_force_atol_hartree_per_bohr": 1.0e-8,
+            "perturb_sigma_bohr": nce.PERTURB_SIGMA_BOHR,
             "scc_max_iterations": 500,
             "scc_charge_tolerance": 1.0e-4,
             "scc_energy_tolerance": 1.0e-6,
@@ -771,6 +772,74 @@ class NatomsCrossEngineTest(unittest.TestCase):
             )
             artifact = nce.load_reference_artifact(path)
         self.assertEqual(artifact.engine, "tblite")
+
+    def test_historical_reference_requires_explicit_opt_in(self) -> None:
+        """Revision mismatch remains rejected unless the caller opts in."""
+        reference = nce.ReferenceArtifact(
+            path=Path("reference.json"),
+            sha256="a" * 64,
+            engine="tblite",
+            metadata={"commit": {"head": "old"}},
+            rows={},
+        )
+        with self.assertRaisesRegex(nce.BenchmarkError, "same clean HEAD"):
+            nce.validate_reference_revision_policy(reference, "new", False)
+
+    def test_matching_historical_reference_contract_is_accepted(self) -> None:
+        """Explicit reuse accepts a complete deterministic workload identity."""
+        metadata = artifact_metadata("cold")
+        metadata["commit"] = {"head": "old", "dirty": False}
+        reference = nce.ReferenceArtifact(
+            path=Path("reference.json"),
+            sha256="a" * 64,
+            engine="tblite",
+            metadata=metadata,
+            rows={
+                (14, 1): {
+                    "natoms": 14,
+                    "batch_size": 1,
+                    "total_atoms_in_batch": 14,
+                    "requested_properties": ["energy", "forces"],
+                    "workload_seed": 14001,
+                }
+            },
+        )
+        nce.validate_reference_revision_policy(reference, "new", True)
+
+    def test_historical_reference_rejects_workload_mismatch(self) -> None:
+        """The opt-in does not permit a different workload contract."""
+        metadata = artifact_metadata("cold")
+        metadata["commit"] = {"head": "old", "dirty": False}
+        valid_row = {
+            "natoms": 14,
+            "batch_size": 1,
+            "total_atoms_in_batch": 14,
+            "requested_properties": ["energy", "forces"],
+            "workload_seed": 14001,
+        }
+        cases = (
+            ("perturb_sigma_bohr", "perturbation"),
+            ("workload_seed", "workload seed"),
+            ("requested_properties", "requested properties"),
+            ("total_atoms_in_batch", "batch extent"),
+        )
+        for field, message in cases:
+            with self.subTest(field=field):
+                case_metadata = json.loads(json.dumps(metadata))
+                row = dict(valid_row)
+                if field == "perturb_sigma_bohr":
+                    case_metadata["protocol"][field] = 0.03
+                else:
+                    row[field] = None
+                reference = nce.ReferenceArtifact(
+                    path=Path("reference.json"),
+                    sha256="a" * 64,
+                    engine="tblite",
+                    metadata=case_metadata,
+                    rows={(14, 1): row},
+                )
+                with self.assertRaisesRegex(nce.BenchmarkError, message):
+                    nce.validate_reference_revision_policy(reference, "new", True)
 
     def test_cross_engine_gate_checks_energy_and_force_vectors(self) -> None:
         """Either observable exceeding its gate makes a timing row ineligible."""

@@ -44,6 +44,12 @@ This owner-authorized output-compatibility gate determines benchmark
 eligibility. It is not a tblite convergence default and does not replace
 xTBloom's primary scientific conformance thresholds.
 
+By default, the runner and reference must use the same clean revision. A
+CUDA-only refresh may explicitly pass `--allow-historical-reference` to reuse
+an older clean reference; the runner still requires identical workload seeds,
+properties, batch extents, perturbation, timing controls, SCC contract,
+correctness thresholds, and thread budget.
+
 ## Timing interpretation
 
 xTBloom submits a complete ragged batch through one public call. The xTB and
