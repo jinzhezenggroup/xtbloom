@@ -1,0 +1,5 @@
+Time (%),Total Time (ns),Count,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Operation
+93.3,6439218,56,114986.0,384.0,256,3366058,565315.1,[CUDA memcpy Host-to-Device]
+3.8,262784,257,1022.5,288.0,256,79776,5954.7,[CUDA memset]
+2.6,182720,3,60906.7,84128.0,960,97632,52352.6,[CUDA memcpy Device-to-Device]
+0.2,15648,26,601.8,432.0,352,2144,484.8,[CUDA memcpy Device-to-Host]
