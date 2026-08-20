@@ -104,5 +104,7 @@ evidence budget:
 | `xtbloom-cuda-b512.json` | 4,171,465 | `572fbed7da26c6fd4facb3bb50b6375d1e7c2c68ec158fa53f66765574538a9d` |
 
 The CSV files retain every requested coordinate, distribution summary,
-throughput, availability, and correctness result. `SHA256SUMS` covers every
+throughput, availability, and correctness result. The compact
+`publication-metadata.json` binds those CSVs to the clean source/runtime,
+hardware, protocol, panel, and reference identities. `SHA256SUMS` covers every
 tracked artifact in this bundle.

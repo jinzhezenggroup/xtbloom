@@ -36,6 +36,7 @@
       "cross_engine_force_atol_hartree_per_bohr": 0.002,
       "repeatability_energy_atol_hartree": 1e-10,
       "repeatability_force_atol_hartree_per_bohr": 1e-08,
+      "perturb_sigma_bohr": 0.02,
       "scc_max_iterations": 500,
       "scc_charge_tolerance": 0.0001,
       "scc_energy_tolerance": 1e-06,
@@ -66,6 +67,7 @@
       "source_revision": "c9c0a432947f122d25cb91d0a4624af0a3e761ad",
       "runtime_identity": "libxtbloom.so.0.1.0 sha256=eba5b40dd5cd9c156a3d4eb9a1fdb0da96e0d5beaa668bdeb51694ce67364ad2",
       "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "metadata": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/publication-metadata.json",
       "artifacts": [
         {
           "panel": "cold",
@@ -90,6 +92,7 @@
       "source_revision": "af65028c5dddc1a3aad3ffc554f0b7dba121a2fe",
       "runtime_identity": "libxtbloom.so.0.2.0 sha256=6a0c81f844bda7814e450cbc716e5cc9f773377b6e79b4d3efd8c37ef1511b95; CUDA 12.9.86 sm_120",
       "evidence_bundle": "benchmarks/evidence/issue-459/2026-08-20-node3/README.md",
+      "metadata": "benchmarks/evidence/issue-459/2026-08-20-node3/publication-metadata.json",
       "artifacts": [
         {
           "panel": "cold",
@@ -114,6 +117,7 @@
       "source_revision": "b31754bf3c7cccf8c242c469b03ae675e04bd608",
       "runtime_identity": "xTB 6.7.1 libxtb.so sha256=959ed711f85f3c84e5e9dffd15e1b49dfae1bd46783f544ce8756b5e148094dd",
       "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "metadata": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/publication-metadata.json",
       "artifacts": [
         {
           "panel": "cold",
@@ -138,6 +142,7 @@
       "source_revision": "133f91efb94b47f05848e1f86832f40a1accc385",
       "runtime_identity": "tblite 0.7.0 libtblite.so sha256=1c2fb4308b398851580af11ccad5eec22314ff45a34a553380277e776a44c3b5",
       "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "metadata": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/publication-metadata.json",
       "artifacts": [
         {
           "panel": "cold",
@@ -159,6 +164,7 @@
       "source_revision": "b529b5ddb75c0554274955082a189f9f88437cb2",
       "runtime_identity": "dxtb 0.4.0; PyTorch 2.13.0; tad-libcint 0.3.0",
       "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "metadata": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/publication-metadata.json",
       "artifacts": [
         {
           "panel": "cold",
@@ -183,6 +189,7 @@
       "source_revision": "b529b5ddb75c0554274955082a189f9f88437cb2",
       "runtime_identity": "dxtb 0.4.0; PyTorch 2.13.0+cu130; tad-libcint 0.3.0",
       "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "metadata": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/publication-metadata.json",
       "artifacts": [
         {
           "panel": "cold",

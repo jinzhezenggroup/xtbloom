@@ -1314,8 +1314,11 @@ class NatomsCrossEngineTest(unittest.TestCase):
             evidence.mkdir(parents=True)
             (evidence / "README.md").write_text("evidence\n", encoding="utf-8")
             sources: list[dict[str, object]] = []
+            metadata_sources: list[dict[str, object]] = []
+            metadata_path = evidence / "publication-metadata.json"
             for engine_index, engine in enumerate(publication.SUPPORTED_ENGINES):
                 artifacts: list[dict[str, str]] = []
+                metadata_artifacts: list[dict[str, object]] = []
                 for panel, batch_size, _start_policy in panels:
                     csv_path = evidence / f"{engine}-{panel}.csv"
                     with csv_path.open("w", encoding="utf-8", newline="") as handle:
@@ -1375,6 +1378,17 @@ class NatomsCrossEngineTest(unittest.TestCase):
                     if engine != "tblite":
                         artifact["reference_artifact_sha256"] = "a" * 64
                     artifacts.append(artifact)
+                    metadata_artifacts.append(
+                        {
+                            "panel": panel,
+                            "csv": csv_path.name,
+                            "batch_size": batch_size,
+                            "start_policy": _start_policy,
+                            "reference_artifact_sha256": (
+                                None if engine == "tblite" else "a" * 64
+                            ),
+                        }
+                    )
                 revision = ("1" if engine == "xtbloom-cuda" else "0") * 40
                 sources.append(
                     {
@@ -1385,12 +1399,50 @@ class NatomsCrossEngineTest(unittest.TestCase):
                         "evidence_bundle": str(
                             (evidence / "README.md").relative_to(root)
                         ),
+                        "metadata": str(metadata_path.relative_to(root)),
                         "artifacts": artifacts,
                     }
                 )
+                metadata_sources.append(
+                    {
+                        "engine": engine,
+                        "measured_date": "2026-08-20",
+                        "source_revision": revision,
+                        "runtime_identity": f"{engine}-runtime",
+                        "runner_revision": revision,
+                        "runner_dirty": False,
+                        "source_dirty": False,
+                        "evidence_eligibility": "eligible_clean_head",
+                        "artifacts": metadata_artifacts,
+                    }
+                )
+            publication_hardware = {
+                "hostname": "node3",
+                "cpu_model": "AMD EPYC 7K62",
+                "cpu_threads": 16,
+                "cuda_device": {
+                    "name": "NVIDIA GeForce RTX 5090",
+                    "uuid": "test-uuid",
+                    "driver": "580.95.05",
+                },
+            }
+            publication_protocol = artifact_metadata()["protocol"]
+            metadata_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "protocol_id": "test-protocol",
+                        "hardware": publication_hardware,
+                        "protocol": publication_protocol,
+                        "sources": metadata_sources,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            checksum_paths = [*evidence.glob("*.csv"), metadata_path]
             checksum_lines = [
                 f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}"
-                for path in sorted(evidence.glob("*.csv"))
+                for path in sorted(checksum_paths)
             ]
             (evidence / "SHA256SUMS").write_text(
                 "\n".join(checksum_lines) + "\n", encoding="utf-8"
@@ -1399,16 +1451,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 "schema_version": 1,
                 "publication": {
                     "protocol_id": "test-protocol",
-                    "hardware": {
-                        "hostname": "node3",
-                        "cpu_model": "AMD EPYC 7K62",
-                        "cpu_threads": 16,
-                        "cuda_device": {
-                            "name": "NVIDIA GeForce RTX 5090",
-                            "uuid": "test-uuid",
-                            "driver": "580.95.05",
-                        },
-                    },
+                    "hardware": publication_hardware,
                     "panels": [
                         {
                             "id": panel,
@@ -1417,7 +1460,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
                         }
                         for panel, batch_size, start_policy in panels
                     ],
-                    "protocol": artifact_metadata()["protocol"],
+                    "protocol": publication_protocol,
                 },
                 "sources": sources,
             }
@@ -1436,6 +1479,50 @@ class NatomsCrossEngineTest(unittest.TestCase):
             rendered = publication.render_table(metadata)
             self.assertIn("NVIDIA GeForce RTX 5090", rendered)
             self.assertIn("xtbloom-cuda", rendered)
+
+            original_metadata = metadata_path.read_text(encoding="utf-8")
+            tampered_metadata = json.loads(original_metadata)
+            tampered_metadata["hardware"]["cuda_device"]["name"] = "other"
+            metadata_path.write_text(json.dumps(tampered_metadata), encoding="utf-8")
+            with (
+                mock.patch.object(publication, "REPOSITORY_ROOT", root),
+                self.assertRaisesRegex(
+                    publication.PublicationError, "metadata does not match SHA256SUMS"
+                ),
+            ):
+                publication.load_publication(manifest_path)
+            metadata_path.write_text(original_metadata, encoding="utf-8")
+
+            tampered = json.loads(json.dumps(manifest))
+            tampered["publication"]["hardware"]["cuda_device"]["name"] = "other"
+            manifest_path.write_text(json.dumps(tampered), encoding="utf-8")
+            with (
+                mock.patch.object(publication, "REPOSITORY_ROOT", root),
+                self.assertRaisesRegex(
+                    publication.PublicationError, "publication metadata"
+                ),
+            ):
+                publication.load_publication(manifest_path)
+
+            tampered = json.loads(json.dumps(manifest))
+            tampered["sources"][0]["source_revision"] = "f" * 40
+            manifest_path.write_text(json.dumps(tampered), encoding="utf-8")
+            with (
+                mock.patch.object(publication, "REPOSITORY_ROOT", root),
+                self.assertRaisesRegex(publication.PublicationError, "source_revision"),
+            ):
+                publication.load_publication(manifest_path)
+
+            tampered = json.loads(json.dumps(manifest))
+            tampered["sources"][0]["artifacts"][0]["reference_artifact_sha256"] = (
+                "b" * 64
+            )
+            manifest_path.write_text(json.dumps(tampered), encoding="utf-8")
+            with (
+                mock.patch.object(publication, "REPOSITORY_ROOT", root),
+                self.assertRaisesRegex(publication.PublicationError, "reference"),
+            ):
+                publication.load_publication(manifest_path)
 
 
 if __name__ == "__main__":

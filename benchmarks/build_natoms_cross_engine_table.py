@@ -126,6 +126,41 @@ def _load_checksums(evidence_readme: Path) -> dict[str, str]:
     return checksums
 
 
+def _load_source_metadata(
+    source: dict[str, Any],
+    engine: str,
+    evidence_readme: Path,
+    checksums: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load one checksummed evidence record instead of trusting the manifest."""
+    metadata_path, _metadata_relative = _repository_path(
+        source.get("metadata"), f"{engine}.metadata"
+    )
+    if metadata_path.parent != evidence_readme.parent:
+        raise PublicationError(f"{engine} metadata is outside its evidence bundle")
+    if checksums.get(metadata_path.name) != _sha256(metadata_path):
+        raise PublicationError(f"{engine} metadata does not match SHA256SUMS")
+    try:
+        document = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PublicationError(f"cannot read {metadata_path}: {exc}") from exc
+    if document.get("schema_version") != 1:
+        raise PublicationError("publication metadata must use schema_version 1")
+    raw_sources = document.get("sources")
+    if not isinstance(raw_sources, list):
+        raise PublicationError("publication metadata sources must be a list")
+    matches = [
+        item
+        for item in raw_sources
+        if isinstance(item, dict) and item.get("engine") == engine
+    ]
+    if len(matches) != 1:
+        raise PublicationError(
+            f"publication metadata must contain exactly one {engine} source"
+        )
+    return document, matches[0]
+
+
 def _required_string(mapping: dict[str, Any], field: str) -> str:
     value = mapping.get(field)
     if not isinstance(value, str) or not value:
@@ -184,6 +219,7 @@ def _validate_protocol(publication: dict[str, Any]) -> dict[str, Any]:
         "cross_engine_force_atol_hartree_per_bohr",
         "repeatability_energy_atol_hartree",
         "repeatability_force_atol_hartree_per_bohr",
+        "perturb_sigma_bohr",
         "scc_charge_tolerance",
         "scc_energy_tolerance",
     ):
@@ -214,6 +250,16 @@ def load_publication(
     cuda_name = _required_string(cuda_device, "name")
     cuda_uuid = _required_string(cuda_device, "uuid")
     cuda_driver = _required_string(cuda_device, "driver")
+    expected_hardware = {
+        "hostname": hostname,
+        "cpu_model": cpu_model,
+        "cpu_threads": cpu_threads,
+        "cuda_device": {
+            "name": cuda_name,
+            "uuid": cuda_uuid,
+            "driver": cuda_driver,
+        },
+    }
 
     raw_panels = publication.get("panels")
     if not isinstance(raw_panels, list) or not raw_panels:
@@ -260,6 +306,46 @@ def load_publication(
         if evidence_path.name != "README.md":
             raise PublicationError(f"{engine} evidence bundle must name README.md")
         checksums = _load_checksums(evidence_path)
+        metadata_document, source_metadata = _load_source_metadata(
+            source, engine, evidence_path, checksums
+        )
+        if (
+            metadata_document.get("protocol_id") != protocol_id
+            or metadata_document.get("hardware") != expected_hardware
+            or metadata_document.get("protocol") != protocol
+        ):
+            raise PublicationError(
+                f"{engine} manifest does not match evidence publication metadata"
+            )
+        for field, expected in (
+            ("measured_date", measured_date),
+            ("source_revision", source_revision),
+            ("runtime_identity", runtime_identity),
+        ):
+            if source_metadata.get(field) != expected:
+                raise PublicationError(
+                    f"{engine} manifest {field} does not match evidence metadata"
+                )
+        if (
+            source_metadata.get("evidence_eligibility") != "eligible_clean_head"
+            or source_metadata.get("source_dirty") is not False
+            or source_metadata.get("runner_dirty") is not False
+            or HEX_40.fullmatch(str(source_metadata.get("runner_revision", ""))) is None
+        ):
+            raise PublicationError(f"{engine} evidence metadata is not clean-eligible")
+        raw_metadata_artifacts = source_metadata.get("artifacts")
+        if not isinstance(raw_metadata_artifacts, list):
+            raise PublicationError(f"{engine} evidence artifacts must be a list")
+        metadata_artifacts: dict[str, dict[str, Any]] = {}
+        for item in raw_metadata_artifacts:
+            if not isinstance(item, dict):
+                raise PublicationError(f"{engine} evidence artifact is not an object")
+            item_panel = item.get("panel")
+            if not isinstance(item_panel, str) or item_panel in metadata_artifacts:
+                raise PublicationError(
+                    f"{engine} evidence metadata has invalid panel records"
+                )
+            metadata_artifacts[item_panel] = item
         raw_artifacts = source.get("artifacts")
         if not isinstance(raw_artifacts, list) or not raw_artifacts:
             raise PublicationError(f"{engine} artifacts must be a nonempty list")
@@ -275,6 +361,11 @@ def load_publication(
                 raise PublicationError(f"{engine} duplicates panel {panel_id}")
             seen_panels.add(panel_id)
             batch_size, start_policy = panels[panel_id]
+            metadata_artifact = metadata_artifacts.get(panel_id)
+            if metadata_artifact is None:
+                raise PublicationError(
+                    f"{engine} evidence metadata omits panel {panel_id}"
+                )
             csv_path, csv_relative = _repository_path(
                 artifact.get("csv"), f"{engine}.{panel_id}.csv"
             )
@@ -282,12 +373,29 @@ def load_publication(
                 raise PublicationError(
                     f"{engine}.{panel_id} CSV is outside its evidence bundle"
                 )
+            if (
+                metadata_artifact.get("csv") != csv_path.name
+                or metadata_artifact.get("batch_size") != batch_size
+                or metadata_artifact.get("start_policy") != start_policy
+            ):
+                raise PublicationError(
+                    f"{engine}.{panel_id} does not match evidence metadata"
+                )
             artifact_sha256 = _sha256(csv_path)
             if checksums.get(csv_path.name) != artifact_sha256:
                 raise PublicationError(
                     f"{engine}.{panel_id} CSV does not match SHA256SUMS"
                 )
             reference_sha256 = artifact.get("reference_artifact_sha256", "")
+            metadata_reference_sha256 = metadata_artifact.get(
+                "reference_artifact_sha256", ""
+            )
+            if metadata_reference_sha256 is None:
+                metadata_reference_sha256 = ""
+            if reference_sha256 != metadata_reference_sha256:
+                raise PublicationError(
+                    f"{engine}.{panel_id} reference does not match evidence metadata"
+                )
             if engine == "tblite":
                 if reference_sha256:
                     raise PublicationError(
@@ -433,6 +541,12 @@ def load_publication(
         if missing_panels:
             raise PublicationError(
                 f"{engine} omits publication panels: {sorted(missing_panels)}"
+            )
+        extra_metadata_panels = set(metadata_artifacts) - seen_panels
+        if extra_metadata_panels:
+            raise PublicationError(
+                f"{engine} evidence metadata has extra panels: "
+                f"{sorted(extra_metadata_panels)}"
             )
     missing_engines = set(SUPPORTED_ENGINES) - source_engines
     if missing_engines:

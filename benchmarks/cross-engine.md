@@ -74,6 +74,9 @@ newer clean revision while retaining unchanged sources, but all selected rows
 must keep the same hardware, workload, start policies, convergence contract,
 correctness gates, and CPU budget. Each source CSV must match the
 `SHA256SUMS` ledger in its issue evidence bundle.
+The same ledger covers `publication-metadata.json`, which binds the selected
+CSV names to their clean revisions, runtime identities, hardware, protocol,
+panel policy, and reference hashes before table or figure generation.
 
 Generate and verify the reviewable current-results table with:
 
