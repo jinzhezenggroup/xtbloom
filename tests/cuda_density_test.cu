@@ -433,6 +433,31 @@ bool exact_results_equal(const Results& first, const Results& second) {
          first.system_errors == second.system_errors && first.device_error == second.device_error;
 }
 
+int count_kernel_grid(cudaGraph_t graph, dim3 expected_grid, dim3 expected_block,
+                      std::size_t& matches) {
+  std::size_t node_count = 0u;
+  CUDA_CHECK(cudaGraphGetNodes(graph, nullptr, &node_count));
+  std::vector<cudaGraphNode_t> nodes(node_count);
+  CUDA_CHECK(cudaGraphGetNodes(graph, nodes.data(), &node_count));
+  matches = 0u;
+  for (const cudaGraphNode_t node : nodes) {
+    cudaGraphNodeType type{};
+    CUDA_CHECK(cudaGraphNodeGetType(node, &type));
+    if (type != cudaGraphNodeTypeKernel) {
+      continue;
+    }
+    cudaKernelNodeParams parameters{};
+    CUDA_CHECK(cudaGraphKernelNodeGetParams(node, &parameters));
+    const dim3 grid = parameters.gridDim;
+    const dim3 block = parameters.blockDim;
+    if (grid.x == expected_grid.x && grid.y == expected_grid.y && grid.z == expected_grid.z &&
+        block.x == expected_block.x && block.y == expected_block.y && block.z == expected_block.z) {
+      ++matches;
+    }
+  }
+  return 0;
+}
+
 int compare_success(const HostCase& host, const Results& actual) {
   CHECK(actual.device_error == 0u);
   CHECK(std::all_of(actual.system_errors.begin(), actual.system_errors.end(),
@@ -1754,6 +1779,10 @@ int test_large_singleton_pair_tiles_preserve_direct_and_graph_results() {
   CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
   CHECK(run(restricted_device, restricted, stream) == 0);
   CUDA_CHECK(cudaStreamEndCapture(stream, &restricted_graph));
+  std::size_t restricted_contract_nodes = 0u;
+  CHECK(count_kernel_grid(restricted_graph, dim3(1u, 9u, 1u), dim3(256u, 1u, 1u),
+                          restricted_contract_nodes) == 0);
+  CHECK(restricted_contract_nodes == 1u);
   CUDA_CHECK(cudaGraphInstantiate(&restricted_executable, restricted_graph, nullptr, nullptr, 0));
 
   restricted.occupations[0] *= 0.375;
@@ -1799,6 +1828,10 @@ int test_large_singleton_pair_tiles_preserve_direct_and_graph_results() {
     CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
     CHECK(run_spin(spin_device, spin, stream) == 0);
     CUDA_CHECK(cudaStreamEndCapture(stream, &spin_graph));
+    std::size_t spin_contract_nodes = 0u;
+    CHECK(count_kernel_grid(spin_graph, dim3(1u, static_cast<unsigned int>(channels), 9u),
+                            dim3(256u, 1u, 1u), spin_contract_nodes) == 0);
+    CHECK(spin_contract_nodes == 1u);
     CUDA_CHECK(cudaGraphInstantiate(&spin_executable, spin_graph, nullptr, nullptr, 0));
 
     const std::size_t changed_occupation = channels == 1 ? 0u : 65u;
