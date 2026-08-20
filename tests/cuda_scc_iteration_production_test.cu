@@ -2160,6 +2160,8 @@ int test_large_singleton_tridiagonal_graph() {
   CHECK(fixture.binding.plan.eigensolver_provider.buckets[0].system_count == 1);
   CHECK(fixture.binding.plan.eigensolver_provider.buckets[0].orbital_count == 542);
   CHECK(fixture.binding.plan.density_batch.contraction_tiles_per_channel > 1);
+  CHECK(fixture.binding.plan.hamiltonian_batch.assembly_tiles_per_channel ==
+        fixture.binding.plan.density_batch.contraction_tiles_per_channel);
   Gfn2DensityContractLaunchShape restricted_density_shape{};
   CHECK(make_gfn2_density_contract_launch_shape(
       fixture.binding.plan.topology.batch_size,
@@ -2259,6 +2261,8 @@ int test_large_singleton_tridiagonal_graph() {
   CHECK(unrestricted.binding.plan.eigensolver_provider.buckets[0].system_count == 1);
   CHECK(unrestricted.binding.plan.eigensolver_provider.buckets[0].solve_count == 2);
   CHECK(unrestricted.binding.plan.density_batch.contraction_tiles_per_channel > 1);
+  CHECK(unrestricted.binding.plan.hamiltonian_batch.assembly_tiles_per_channel ==
+        unrestricted.binding.plan.density_batch.contraction_tiles_per_channel);
   Gfn2DensityContractLaunchShape unrestricted_density_shape{};
   CHECK(make_gfn2_density_contract_launch_shape(
       unrestricted.binding.plan.topology.batch_size,

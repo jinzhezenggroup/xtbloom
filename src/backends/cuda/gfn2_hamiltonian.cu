@@ -11,7 +11,7 @@
 namespace xtbloom::detail::cuda {
 namespace {
 
-constexpr int kThreadsPerBlock = 256;
+constexpr int kThreadsPerBlock = kGfn2DensityThreadsPerBlock;
 constexpr std::int64_t kMaximumInt64 = 9223372036854775807LL;
 
 struct SystemRanges {
@@ -278,13 +278,12 @@ __device__ bool convert_spin_potential(double charge, double magnetization, int 
   return isfinite(*converted);
 }
 
-__global__ void assemble_hamiltonian_kernel(Gfn2HamiltonianDeviceBatch batch,
-                                            Gfn2HamiltonianDeviceInput input,
-                                            Gfn2HamiltonianDeviceActivity activity,
-                                            Gfn2HamiltonianDeviceWorkspace workspace,
-                                            std::uint32_t* system_errors,
-                                            std::uint32_t* device_error) {
+__global__ void assemble_hamiltonian_kernel(
+    Gfn2HamiltonianDeviceBatch batch, Gfn2HamiltonianDeviceInput input,
+    Gfn2HamiltonianDeviceActivity activity, Gfn2HamiltonianDeviceWorkspace workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error, std::int64_t tiles_per_system) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.y);
   if (!sequence_is_active(workspace) || !system_is_active(activity, system) ||
       !system_is_valid(system_errors, system)) {
     return;
@@ -292,14 +291,17 @@ __global__ void assemble_hamiltonian_kernel(Gfn2HamiltonianDeviceBatch batch,
   const std::int64_t orbital_begin = batch.batch_orbital_offsets[system];
   const std::int64_t orbitals = batch.batch_orbital_offsets[system + 1] - orbital_begin;
   const std::int64_t matrix_begin = batch.matrix_offsets[system];
-  const std::int64_t matrix_elements = orbitals * orbitals;
+  const std::int64_t pair_count = gfn2_triangle_inclusive(orbitals);
+  const std::int64_t pair_stride = tiles_per_system * blockDim.x;
 
-  for (std::int64_t local = threadIdx.x; local < matrix_elements; local += blockDim.x) {
-    const std::int64_t local_row = local / orbitals;
-    const std::int64_t local_column = local - local_row * orbitals;
-    if (local_column < local_row) {
-      continue;
-    }
+  /* Scheduling changes only pair ownership. Swapping the packed lower pair
+   * yields the original upper-triangle row/column orientation, after which one
+   * thread executes the unchanged ordered FP64 expression for both directions. */
+  for (std::int64_t pair = tile * blockDim.x + threadIdx.x; pair < pair_count;
+       pair += pair_stride) {
+    const Gfn2PackedMatrixPair indices = gfn2_packed_matrix_pair(pair);
+    const std::int64_t local_row = indices.column;
+    const std::int64_t local_column = indices.row;
     const std::int64_t row = orbital_begin + local_row;
     const std::int64_t column = orbital_begin + local_column;
     const std::int64_t row_shell = batch.orbital_to_shell[row];
@@ -408,14 +410,14 @@ __global__ void assemble_hamiltonian_kernel(Gfn2HamiltonianDeviceBatch batch,
   }
 }
 
-__global__ void assemble_spin_hamiltonian_kernel(Gfn2HamiltonianDeviceBatch batch,
-                                                 Gfn2WavefunctionLayoutView layout,
-                                                 Gfn2HamiltonianDeviceInput input,
-                                                 Gfn2HamiltonianDeviceActivity activity,
-                                                 Gfn2HamiltonianDeviceWorkspace workspace,
-                                                 std::uint32_t* system_errors,
-                                                 std::uint32_t* device_error) {
+__global__ void assemble_spin_hamiltonian_kernel(
+    Gfn2HamiltonianDeviceBatch batch, Gfn2WavefunctionLayoutView layout,
+    Gfn2HamiltonianDeviceInput input, Gfn2HamiltonianDeviceActivity activity,
+    Gfn2HamiltonianDeviceWorkspace workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error, std::int64_t tiles_per_channel) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const int channel = static_cast<int>(blockIdx.y);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.z);
   if (!sequence_is_active(workspace) || !system_is_active(activity, system) ||
       !system_is_valid(system_errors, system)) {
     return;
@@ -432,13 +434,17 @@ __global__ void assemble_spin_hamiltonian_kernel(Gfn2HamiltonianDeviceBatch batc
   const std::int64_t spin_shell_begin = layout.spin_shell_offsets[system];
   const std::int64_t spin_atom_begin = layout.spin_atom_offsets[system];
   const int channels = layout.spin_channels[system];
+  if (channel >= channels) {
+    return;
+  }
 
-  for (std::int64_t local = threadIdx.x; local < matrix_elements; local += blockDim.x) {
-    const std::int64_t local_row = local / orbitals;
-    const std::int64_t local_column = local - local_row * orbitals;
-    if (local_column < local_row) {
-      continue;
-    }
+  const std::int64_t pair_count = gfn2_triangle_inclusive(orbitals);
+  const std::int64_t pair_stride = tiles_per_channel * blockDim.x;
+  for (std::int64_t pair = tile * blockDim.x + threadIdx.x; pair < pair_count;
+       pair += pair_stride) {
+    const Gfn2PackedMatrixPair indices = gfn2_packed_matrix_pair(pair);
+    const std::int64_t local_row = indices.column;
+    const std::int64_t local_column = indices.row;
     const std::int64_t row = orbital_begin + local_row;
     const std::int64_t column = orbital_begin + local_column;
     const std::int64_t row_shell = batch.orbital_to_shell[row];
@@ -467,7 +473,9 @@ __global__ void assemble_spin_hamiltonian_kernel(Gfn2HamiltonianDeviceBatch batc
       continue;
     }
 
-    for (int spin = 0; spin < channels; ++spin) {
+    /* gridDim.y is one for all-restricted batches and two when any member is
+     * unrestricted, so each useful system/channel pair has one owning CTA. */
+    for (int spin = channel; spin < channels; spin += static_cast<int>(gridDim.y)) {
       double row_scalar = 0.0;
       double column_scalar = 0.0;
       if (channels == 1) {
@@ -754,6 +762,8 @@ bool validate_spin_hamiltonian_launch(
       !valid_xtb_model_flavor(batch.model) || batch.batch_size <= 0 || batch.total_atoms <= 0 ||
       batch.total_shells <= 0 || batch.total_orbitals <= 0 || batch.total_matrix_elements <= 0 ||
       batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      batch.assembly_tiles_per_channel <= 0 ||
+      batch.assembly_tiles_per_channel > kGfn2DensityContractBlockBudget ||
       (multipoles_enabled &&
        batch.total_atoms > kMaximumInt64 / kGfn2HamiltonianQuadrupoleComponents) ||
       batch.total_shells == kMaximumInt64 ||
@@ -911,6 +921,7 @@ cudaError_t assemble_gfn2_hamiltonian_cuda(
     const Gfn2HamiltonianDeviceActivity& activity, const Gfn2HamiltonianDeviceOutput& output,
     const Gfn2HamiltonianDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  const std::int64_t tiles_per_system = batch.assembly_tiles_per_channel;
   const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
   std::int64_t dipole_integrals = 0;
   std::int64_t quadrupole_integrals = 0;
@@ -927,6 +938,8 @@ cudaError_t assemble_gfn2_hamiltonian_cuda(
       !valid_xtb_model_flavor(batch.model) || batch.batch_size <= 0 || batch.total_atoms <= 0 ||
       batch.total_shells <= 0 || batch.total_orbitals <= 0 || batch.total_matrix_elements <= 0 ||
       batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      batch.assembly_tiles_per_channel <= 0 ||
+      batch.assembly_tiles_per_channel > kGfn2DensityContractBlockBudget ||
       (multipoles_enabled &&
        batch.total_atoms > kMaximumInt64 / kGfn2HamiltonianQuadrupoleComponents) ||
       batch.total_shells == kMaximumInt64 ||
@@ -1022,6 +1035,11 @@ cudaError_t assemble_gfn2_hamiltonian_cuda(
   if (!pairwise_disjoint(ranges)) {
     return cudaErrorInvalidValue;
   }
+  Gfn2DensityContractLaunchShape launch_shape{};
+  if (!make_gfn2_density_contract_launch_shape(batch.batch_size, batch.batch_size, tiles_per_system,
+                                               launch_shape)) {
+    return cudaErrorInvalidValue;
+  }
 
   capture_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace);
   cudaError_t status = check_launch();
@@ -1034,9 +1052,9 @@ cudaError_t assemble_gfn2_hamiltonian_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  assemble_hamiltonian_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
-                                stream>>>(batch, input, activity, workspace, system_errors,
-                                          device_error);
+  const dim3 assembly_grid(launch_shape.systems, launch_shape.tiles, 1u);
+  assemble_hamiltonian_kernel<<<assembly_grid, kThreadsPerBlock, 0, stream>>>(
+      batch, input, activity, workspace, system_errors, device_error, tiles_per_system);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
@@ -1051,11 +1069,17 @@ cudaError_t assemble_gfn2_spin_hamiltonian_cuda(
     const Gfn2HamiltonianDeviceInput& input, const Gfn2HamiltonianDeviceActivity& activity,
     const Gfn2HamiltonianDeviceOutput& output, const Gfn2HamiltonianDeviceWorkspace& workspace,
     std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  const std::int64_t tiles_per_channel = batch.assembly_tiles_per_channel;
   if (!validate_spin_hamiltonian_launch(batch, layout, input, activity, output, workspace,
                                         system_errors, device_error)) {
     return batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max())
                ? cudaErrorInvalidConfiguration
                : cudaErrorInvalidValue;
+  }
+  Gfn2DensityContractLaunchShape launch_shape{};
+  if (!make_gfn2_density_contract_launch_shape(batch.batch_size, layout.total_spin_channels,
+                                               tiles_per_channel, launch_shape)) {
+    return cudaErrorInvalidValue;
   }
 
   capture_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace);
@@ -1076,9 +1100,9 @@ cudaError_t assemble_gfn2_spin_hamiltonian_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  assemble_spin_hamiltonian_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                     0, stream>>>(batch, layout, input, activity, workspace,
-                                                  system_errors, device_error);
+  const dim3 assembly_grid(launch_shape.systems, launch_shape.channels, launch_shape.tiles);
+  assemble_spin_hamiltonian_kernel<<<assembly_grid, kThreadsPerBlock, 0, stream>>>(
+      batch, layout, input, activity, workspace, system_errors, device_error, tiles_per_channel);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;

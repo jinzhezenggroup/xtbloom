@@ -507,6 +507,7 @@ struct Fixture {
     h.shell_to_atom = plan.topology.shell_to_atom;
     h.orbital_to_shell = plan.topology.orbital_to_shell;
     h.orbital_to_atom = plan.topology.orbital_to_atom;
+    h.assembly_tiles_per_channel = 1;
 
     plan.eigensolver_batch = {kBatch,
                               kOrbitals,
@@ -1343,6 +1344,18 @@ int test_optional_canonical_null_and_report_extension_capacity() {
   CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidCount);
   CHECK(diagnostic.field == Gfn2SccIterationBindingField::kDensity);
   fixture.plan.density_batch.contraction_tiles_per_channel = 1;
+
+  fixture.plan.hamiltonian_batch.assembly_tiles_per_channel = 0;
+  diagnostic = validate_gfn2_scc_iteration_binding_cuda(fixture.plan, fixture.input, fixture.state,
+                                                        fixture.workspace);
+  CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidCount);
+  CHECK(diagnostic.field == Gfn2SccIterationBindingField::kHamiltonian);
+  fixture.plan.hamiltonian_batch.assembly_tiles_per_channel = kGfn2DensityContractBlockBudget + 1;
+  diagnostic = validate_gfn2_scc_iteration_binding_cuda(fixture.plan, fixture.input, fixture.state,
+                                                        fixture.workspace);
+  CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidCount);
+  CHECK(diagnostic.field == Gfn2SccIterationBindingField::kHamiltonian);
+  fixture.plan.hamiltonian_batch.assembly_tiles_per_channel = 1;
 
   for (std::int64_t index = 0; index < fixture.plan.report_count; ++index) {
     if (fixture.plan.reports[index].stage == Gfn2SccStageId::kES2Potential) {

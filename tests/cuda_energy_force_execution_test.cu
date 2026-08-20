@@ -1176,7 +1176,9 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
       d.shell_orbital_offsets.get(),
       d.shell_to_atom.get(),
       d.orbital_to_shell.get(),
-      d.orbital_to_atom.get()};
+      d.orbital_to_atom.get(),
+      xtbloom::detail::XtbModelFlavor::kGfn2,
+      1};
 
   const Gfn2GeometryDeviceBatch geometry_batch{static_cast<std::int64_t>(batch),
                                                static_cast<std::int64_t>(atoms),

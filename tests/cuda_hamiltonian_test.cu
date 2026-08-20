@@ -38,7 +38,10 @@ using xtbloom::detail::cuda::Gfn2HamiltonianDeviceError;
 using xtbloom::detail::cuda::Gfn2HamiltonianDeviceInput;
 using xtbloom::detail::cuda::Gfn2HamiltonianDeviceOutput;
 using xtbloom::detail::cuda::Gfn2HamiltonianDeviceWorkspace;
+using xtbloom::detail::cuda::kGfn2DensityContractBlockBudget;
+using xtbloom::detail::cuda::kGfn2DensityThreadsPerBlock;
 using xtbloom::detail::cuda::reset_gfn2_hamiltonian_device_errors_cuda;
+using xtbloom::detail::cuda::select_gfn2_density_contraction_tiles;
 using xtbloom::detail::gfn2::BasisPlan;
 using xtbloom::detail::gfn2::IntegralPlan;
 using xtbloom::detail::gfn2::MullikenHamiltonianView;
@@ -108,6 +111,31 @@ cudaError_t upload(DeviceBuffer<T>& target, const std::vector<T>& source,
 bool near(double actual, double expected, double absolute = 3.0e-13, double relative = 3.0e-13) {
   return std::abs(actual - expected) <=
          absolute + relative * std::max(std::abs(actual), std::abs(expected));
+}
+
+int count_kernel_grid(cudaGraph_t graph, dim3 expected_grid, dim3 expected_block,
+                      std::size_t& matches) {
+  std::size_t node_count = 0u;
+  CUDA_CHECK(cudaGraphGetNodes(graph, nullptr, &node_count));
+  std::vector<cudaGraphNode_t> nodes(node_count);
+  CUDA_CHECK(cudaGraphGetNodes(graph, nodes.data(), &node_count));
+  matches = 0u;
+  for (const cudaGraphNode_t node : nodes) {
+    cudaGraphNodeType type{};
+    CUDA_CHECK(cudaGraphNodeGetType(node, &type));
+    if (type != cudaGraphNodeTypeKernel) {
+      continue;
+    }
+    cudaKernelNodeParams parameters{};
+    CUDA_CHECK(cudaGraphKernelNodeGetParams(node, &parameters));
+    const dim3 grid = parameters.gridDim;
+    const dim3 block = parameters.blockDim;
+    if (grid.x == expected_grid.x && grid.y == expected_grid.y && grid.z == expected_grid.z &&
+        block.x == expected_block.x && block.y == expected_block.y && block.z == expected_block.z) {
+      ++matches;
+    }
+  }
+  return 0;
 }
 
 struct HostCase {
@@ -208,6 +236,67 @@ HostCase make_case(std::size_t batch_size) {
     }
     for (int component = 0; component < 6; ++component) {
       data.quadrupole_integrals[static_cast<std::size_t>(component * matrices_total + matrix)] =
+          0.003 * static_cast<double>(1 + (matrix * (component + 5) + component * 31) % 47) - 0.07;
+    }
+  }
+  return data;
+}
+
+/* One atom and one shell per system make the AO count independently
+ * controllable, which lets focused scheduling tests place work in late tiles
+ * without depending on a production basis table. */
+HostCase make_orbital_count_case(const std::vector<std::int64_t>& orbital_counts) {
+  HostCase data;
+  data.batch_size = static_cast<std::int64_t>(orbital_counts.size());
+  std::int64_t total_orbitals = 0;
+  std::int64_t total_matrices = 0;
+  for (std::size_t system = 0; system < orbital_counts.size(); ++system) {
+    const std::int64_t orbitals = orbital_counts[system];
+    const std::int64_t atom = static_cast<std::int64_t>(system);
+    const std::int64_t shell = static_cast<std::int64_t>(system);
+    data.shell_to_atom.push_back(atom);
+    data.shell_scalar.push_back(0.08 * static_cast<double>(1 + (shell * 7) % 13) - 0.31);
+    for (std::int64_t orbital = 0; orbital < orbitals; ++orbital) {
+      data.orbital_to_shell.push_back(shell);
+      data.orbital_to_atom.push_back(atom);
+    }
+    total_orbitals += orbitals;
+    total_matrices += orbitals * orbitals;
+    data.atom_offsets.push_back(atom + 1);
+    data.batch_shell_offsets.push_back(shell + 1);
+    data.batch_orbital_offsets.push_back(total_orbitals);
+    data.matrix_offsets.push_back(total_matrices);
+    data.atom_shell_offsets.push_back(shell + 1);
+    data.shell_orbital_offsets.push_back(total_orbitals);
+  }
+  data.active.assign(orbital_counts.size(), 1u);
+  data.dipole_potential.resize(3u * orbital_counts.size());
+  data.quadrupole_potential.resize(6u * orbital_counts.size());
+  for (std::int64_t atom = 0; atom < data.batch_size; ++atom) {
+    for (int component = 0; component < 3; ++component) {
+      data.dipole_potential[static_cast<std::size_t>(atom * 3 + component)] =
+          0.035 * static_cast<double>(1 + (atom * 11 + component * 5) % 17) - 0.16;
+    }
+    for (int component = 0; component < 6; ++component) {
+      data.quadrupole_potential[static_cast<std::size_t>(atom * 6 + component)] =
+          0.019 * static_cast<double>(1 + (atom * 13 + component * 7) % 23) - 0.21;
+    }
+  }
+  data.h0.resize(static_cast<std::size_t>(total_matrices));
+  data.overlap.resize(static_cast<std::size_t>(total_matrices));
+  data.dipole_integrals.resize(static_cast<std::size_t>(3 * total_matrices));
+  data.quadrupole_integrals.resize(static_cast<std::size_t>(6 * total_matrices));
+  for (std::int64_t matrix = 0; matrix < total_matrices; ++matrix) {
+    data.h0[static_cast<std::size_t>(matrix)] =
+        0.013 * static_cast<double>(1 + (matrix * 17) % 37) - 0.26;
+    data.overlap[static_cast<std::size_t>(matrix)] =
+        0.009 * static_cast<double>(1 + (matrix * 19) % 41) - 0.14;
+    for (int component = 0; component < 3; ++component) {
+      data.dipole_integrals[static_cast<std::size_t>(component * total_matrices + matrix)] =
+          0.006 * static_cast<double>(1 + (matrix * (component + 3) + component * 29) % 43) - 0.12;
+    }
+    for (int component = 0; component < 6; ++component) {
+      data.quadrupole_integrals[static_cast<std::size_t>(component * total_matrices + matrix)] =
           0.003 * static_cast<double>(1 + (matrix * (component + 5) + component * 31) % 47) - 0.07;
     }
   }
@@ -428,7 +517,8 @@ struct DeviceFixture {
   }
 
   Gfn2HamiltonianDeviceBatch batch(const HostCase& host,
-                                   XtbModelFlavor model = XtbModelFlavor::kGfn2) const {
+                                   XtbModelFlavor model = XtbModelFlavor::kGfn2,
+                                   std::int64_t assembly_tiles_per_channel = 1) const {
     Gfn2HamiltonianDeviceBatch result{host.batch_size,
                                       host.atom_offsets.back(),
                                       static_cast<std::int64_t>(host.shell_to_atom.size()),
@@ -454,6 +544,7 @@ struct DeviceFixture {
                                       orbital_to_shell.get(),
                                       orbital_to_atom.get()};
     result.model = model;
+    result.assembly_tiles_per_channel = assembly_tiles_per_channel;
     return result;
   }
 
@@ -491,10 +582,12 @@ struct DeviceFixture {
   }
 };
 
-HostSpinHamiltonianCase make_spin_hamiltonian_case(const HostCase& host) {
+HostSpinHamiltonianCase make_spin_hamiltonian_case(const HostCase& host,
+                                                   std::int32_t forced_channels = 0) {
   HostSpinHamiltonianCase spin;
   for (std::size_t system = 0; system < static_cast<std::size_t>(host.batch_size); ++system) {
-    const std::int32_t channels = system % 2u == 0u ? 1 : 2;
+    const std::int32_t channels =
+        forced_channels != 0 ? forced_channels : (system % 2u == 0u ? 1 : 2);
     const std::int64_t orbitals =
         host.batch_orbital_offsets[system + 1u] - host.batch_orbital_offsets[system];
     const std::int64_t matrices = orbitals * orbitals;
@@ -660,22 +753,24 @@ struct SpinHamiltonianFixture {
 cudaError_t launch_spin_hamiltonian(DeviceFixture& physical, SpinHamiltonianFixture& spin_device,
                                     const HostCase& host, const HostSpinHamiltonianCase& spin_host,
                                     cudaStream_t stream = nullptr,
-                                    XtbModelFlavor model = XtbModelFlavor::kGfn2) {
+                                    XtbModelFlavor model = XtbModelFlavor::kGfn2,
+                                    std::int64_t assembly_tiles_per_channel = 1) {
   cudaError_t status = reset_gfn2_hamiltonian_device_errors_cuda(
       host.batch_size, physical.system_errors.get(), physical.device_error.get(), stream);
   if (status == cudaSuccess) {
     status = assemble_gfn2_spin_hamiltonian_cuda(
-        physical.batch(host, model), spin_device.layout(host, spin_host),
-        spin_device.input(physical, host, spin_host, model), physical.activity(host),
-        spin_device.result(spin_host), spin_device.workspace(spin_host),
+        physical.batch(host, model, assembly_tiles_per_channel),
+        spin_device.layout(host, spin_host), spin_device.input(physical, host, spin_host, model),
+        physical.activity(host), spin_device.result(spin_host), spin_device.workspace(spin_host),
         physical.system_errors.get(), physical.device_error.get(), stream);
   }
   return status;
 }
 
 cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t stream = nullptr,
-                   XtbModelFlavor model = XtbModelFlavor::kGfn2) {
-  const auto batch = device.batch(host, model);
+                   XtbModelFlavor model = XtbModelFlavor::kGfn2,
+                   std::int64_t assembly_tiles_per_channel = 1) {
+  const auto batch = device.batch(host, model, assembly_tiles_per_channel);
   const auto input = device.input(host, model);
   const auto activity = device.activity(host);
   const auto output = device.result(host);
@@ -1072,6 +1167,16 @@ int test_sticky_alias_token_and_alignment() {
   CHECK(assemble_gfn2_hamiltonian_cuda(wrong_batch, input, activity, output, workspace,
                                        device.system_errors.get(),
                                        device.device_error.get()) == cudaErrorInvalidValue);
+  auto zero_tiles = batch;
+  zero_tiles.assembly_tiles_per_channel = 0;
+  CHECK(assemble_gfn2_hamiltonian_cuda(zero_tiles, input, activity, output, workspace,
+                                       device.system_errors.get(),
+                                       device.device_error.get()) == cudaErrorInvalidValue);
+  auto excessive_tiles = batch;
+  excessive_tiles.assembly_tiles_per_channel = kGfn2DensityContractBlockBudget + 1;
+  CHECK(assemble_gfn2_hamiltonian_cuda(excessive_tiles, input, activity, output, workspace,
+                                       device.system_errors.get(),
+                                       device.device_error.get()) == cudaErrorInvalidValue);
   auto overflowing_shell_count = batch;
   overflowing_shell_count.total_shells = std::numeric_limits<std::int64_t>::max();
   CHECK(assemble_gfn2_hamiltonian_cuda(overflowing_shell_count, input, activity, output, workspace,
@@ -1251,6 +1356,11 @@ int test_spin_hamiltonian_failure_and_alias_contracts() {
   auto output = spin_device.result(spin_host);
   auto workspace = spin_device.workspace(spin_host);
   const auto batch = physical.batch(host);
+  auto zero_tile_batch = batch;
+  zero_tile_batch.assembly_tiles_per_channel = 0;
+  CHECK(assemble_gfn2_spin_hamiltonian_cuda(zero_tile_batch, layout, input, activity, output,
+                                            workspace, physical.system_errors.get(),
+                                            physical.device_error.get()) == cudaErrorInvalidValue);
   auto wrong_layout = layout;
   wrong_layout.memory_space = Gfn2PlanMemorySpace::kHost;
   CHECK(assemble_gfn2_spin_hamiltonian_cuda(batch, wrong_layout, input, activity, output, workspace,
@@ -1295,6 +1405,167 @@ int test_spin_hamiltonian_failure_and_alias_contracts() {
   CHECK(inactive_error == 0u);
   CHECK(std::all_of(inactive_output.begin(), inactive_output.end(),
                     [](double value) { return value == kSentinel; }));
+  return 0;
+}
+
+int test_large_singleton_pair_tiles_preserve_direct_graph_and_failure_results() {
+  constexpr std::int64_t kLargeOrbitals = 65;
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+
+  HostCase restricted = make_orbital_count_case({kLargeOrbitals});
+  const std::array<std::int32_t, 1> restricted_channels{1};
+  std::int64_t restricted_tiles = 0;
+  CHECK(select_gfn2_density_contraction_tiles(
+      restricted.batch_orbital_offsets.data(), restricted.batch_orbital_offsets.size(),
+      restricted_channels.data(), restricted_channels.size(), restricted.batch_size,
+      restricted_tiles));
+  CHECK(restricted_tiles == 9);
+
+  for (const XtbModelFlavor model : {XtbModelFlavor::kGfn1, XtbModelFlavor::kGfn2}) {
+    DeviceFixture device;
+    CUDA_CHECK(device.initialize(restricted, stream));
+    CUDA_CHECK(launch(device, restricted, stream, model, 1));
+    std::vector<double> single_tile(restricted.h0.size());
+    CUDA_CHECK(device.output.copy_to(single_tile.data(), single_tile.size(), stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    CUDA_CHECK(device.output.fill(kSentinel, restricted.h0.size(), stream));
+    CUDA_CHECK(launch(device, restricted, stream, model, restricted_tiles));
+    std::vector<double> tiled(restricted.h0.size());
+    CUDA_CHECK(device.output.copy_to(tiled.data(), tiled.size(), stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(tiled == single_tile);
+  }
+
+  DeviceFixture restricted_graph_device;
+  CUDA_CHECK(restricted_graph_device.initialize(restricted, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  cudaGraph_t restricted_graph = nullptr;
+  cudaGraphExec_t restricted_executable = nullptr;
+  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+  CUDA_CHECK(
+      launch(restricted_graph_device, restricted, stream, XtbModelFlavor::kGfn2, restricted_tiles));
+  CUDA_CHECK(cudaStreamEndCapture(stream, &restricted_graph));
+  std::size_t restricted_assembly_nodes = 0u;
+  CHECK(
+      count_kernel_grid(restricted_graph, dim3(1u, static_cast<unsigned int>(restricted_tiles), 1u),
+                        dim3(kGfn2DensityThreadsPerBlock, 1u, 1u), restricted_assembly_nodes) == 0);
+  CHECK(restricted_assembly_nodes == 1u);
+  CUDA_CHECK(cudaGraphInstantiate(&restricted_executable, restricted_graph, nullptr, nullptr, 0));
+  CUDA_CHECK(cudaGraphLaunch(restricted_executable, stream));
+  std::vector<double> restricted_graph_result(restricted.h0.size());
+  CUDA_CHECK(restricted_graph_device.output.copy_to(restricted_graph_result.data(),
+                                                    restricted_graph_result.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  const std::vector<double> restricted_expected = evaluate_cpu(restricted);
+  for (std::size_t index = 0; index < restricted_graph_result.size(); ++index) {
+    CHECK(near(restricted_graph_result[index], restricted_expected[index]));
+  }
+  CUDA_CHECK(cudaGraphExecDestroy(restricted_executable));
+  CUDA_CHECK(cudaGraphDestroy(restricted_graph));
+
+  for (const std::int32_t channels : {1, 2}) {
+    HostSpinHamiltonianCase spin = make_spin_hamiltonian_case(restricted, channels);
+    const std::array<std::int32_t, 1> spin_channels{channels};
+    std::int64_t spin_tiles = 0;
+    CHECK(select_gfn2_density_contraction_tiles(
+        restricted.batch_orbital_offsets.data(), restricted.batch_orbital_offsets.size(),
+        spin_channels.data(), spin_channels.size(), restricted.batch_size, spin_tiles));
+    CHECK(spin_tiles == 9);
+
+    for (const XtbModelFlavor model : {XtbModelFlavor::kGfn1, XtbModelFlavor::kGfn2}) {
+      DeviceFixture physical;
+      SpinHamiltonianFixture spin_device;
+      CUDA_CHECK(physical.initialize(restricted, stream));
+      CUDA_CHECK(spin_device.initialize(spin, stream));
+      CUDA_CHECK(
+          launch_spin_hamiltonian(physical, spin_device, restricted, spin, stream, model, 1));
+      std::vector<double> single_tile(static_cast<std::size_t>(spin.matrix_offsets.back()));
+      CUDA_CHECK(spin_device.output.copy_to(single_tile.data(), single_tile.size(), stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+
+      CUDA_CHECK(spin_device.output.fill(kSentinel, single_tile.size(), stream));
+      CUDA_CHECK(launch_spin_hamiltonian(physical, spin_device, restricted, spin, stream, model,
+                                         spin_tiles));
+      std::vector<double> tiled(single_tile.size());
+      CUDA_CHECK(spin_device.output.copy_to(tiled.data(), tiled.size(), stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+      CHECK(tiled == single_tile);
+    }
+
+    DeviceFixture graph_physical;
+    SpinHamiltonianFixture graph_spin_device;
+    CUDA_CHECK(graph_physical.initialize(restricted, stream));
+    CUDA_CHECK(graph_spin_device.initialize(spin, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    cudaGraph_t spin_graph = nullptr;
+    cudaGraphExec_t spin_executable = nullptr;
+    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+    CUDA_CHECK(launch_spin_hamiltonian(graph_physical, graph_spin_device, restricted, spin, stream,
+                                       XtbModelFlavor::kGfn2, spin_tiles));
+    CUDA_CHECK(cudaStreamEndCapture(stream, &spin_graph));
+    std::size_t spin_assembly_nodes = 0u;
+    CHECK(count_kernel_grid(
+              spin_graph,
+              dim3(1u, static_cast<unsigned int>(channels), static_cast<unsigned int>(spin_tiles)),
+              dim3(kGfn2DensityThreadsPerBlock, 1u, 1u), spin_assembly_nodes) == 0);
+    CHECK(spin_assembly_nodes == 1u);
+    CUDA_CHECK(cudaGraphInstantiate(&spin_executable, spin_graph, nullptr, nullptr, 0));
+    CUDA_CHECK(cudaGraphLaunch(spin_executable, stream));
+    std::vector<double> spin_graph_result(static_cast<std::size_t>(spin.matrix_offsets.back()));
+    CUDA_CHECK(graph_spin_device.output.copy_to(spin_graph_result.data(), spin_graph_result.size(),
+                                                stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    const std::vector<double> spin_expected = evaluate_spin_cpu(restricted, spin);
+    for (std::size_t index = 0; index < spin_graph_result.size(); ++index) {
+      CHECK(near(spin_graph_result[index], spin_expected[index]));
+    }
+    CUDA_CHECK(cudaGraphExecDestroy(spin_executable));
+    CUDA_CHECK(cudaGraphDestroy(spin_graph));
+  }
+
+  /* The final diagonal pair belongs to tile eight. Its nonfinite H0 must
+   * suppress the complete failing system while an earlier healthy peer still
+   * publishes successfully. */
+  HostCase late_failure = make_orbital_count_case({7, kLargeOrbitals});
+  late_failure.h0[static_cast<std::size_t>(late_failure.matrix_offsets.back() - 1)] =
+      std::numeric_limits<double>::quiet_NaN();
+  DeviceFixture late_device;
+  CUDA_CHECK(late_device.initialize(late_failure, stream));
+  CUDA_CHECK(launch(late_device, late_failure, stream, XtbModelFlavor::kGfn2, restricted_tiles));
+  std::vector<double> late_output(late_failure.h0.size());
+  std::vector<std::uint32_t> late_errors(2u);
+  CUDA_CHECK(late_device.output.copy_to(late_output.data(), late_output.size(), stream));
+  CUDA_CHECK(late_device.system_errors.copy_to(late_errors.data(), late_errors.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(!system_is_sentinel(late_failure, late_output, 0u));
+  CHECK(system_is_sentinel(late_failure, late_output, 1u));
+  CHECK(late_errors[0] == 0u);
+  CHECK(late_errors[1] == static_cast<std::uint32_t>(Gfn2HamiltonianDeviceError::kNonfiniteH0));
+
+  HostSpinHamiltonianCase late_spin = make_spin_hamiltonian_case(late_failure, 2);
+  DeviceFixture late_spin_physical;
+  SpinHamiltonianFixture late_spin_device;
+  CUDA_CHECK(late_spin_physical.initialize(late_failure, stream));
+  CUDA_CHECK(late_spin_device.initialize(late_spin, stream));
+  CUDA_CHECK(launch_spin_hamiltonian(late_spin_physical, late_spin_device, late_failure, late_spin,
+                                     stream, XtbModelFlavor::kGfn2, restricted_tiles));
+  std::vector<double> late_spin_output(static_cast<std::size_t>(late_spin.matrix_offsets.back()));
+  CUDA_CHECK(
+      late_spin_device.output.copy_to(late_spin_output.data(), late_spin_output.size(), stream));
+  CUDA_CHECK(
+      late_spin_physical.system_errors.copy_to(late_errors.data(), late_errors.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(std::any_of(late_spin_output.begin(),
+                    late_spin_output.begin() + late_spin.matrix_offsets[1],
+                    [](double value) { return value != kSentinel; }));
+  CHECK(std::all_of(late_spin_output.begin() + late_spin.matrix_offsets[1], late_spin_output.end(),
+                    [](double value) { return value == kSentinel; }));
+  CHECK(late_errors[0] == 0u);
+  CHECK(late_errors[1] == static_cast<std::uint32_t>(Gfn2HamiltonianDeviceError::kNonfiniteH0));
+
+  CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }
 
@@ -1410,10 +1681,11 @@ int main() {
     std::fprintf(stderr, "CUDA spin Hamiltonian Graph test failed at line %d\n", status);
     return status;
   }
-  const std::array<int (*)(), 8> tests{
+  const std::array<int (*)(), 9> tests{
       {test_inactive_skip_and_peer_isolation, test_all_inactive_hostile_topology,
        test_hostile_offsets, test_arithmetic_overflow_is_transactional, test_invalid_active_mask,
        test_sticky_alias_token_and_alignment, test_spin_hamiltonian_failure_and_alias_contracts,
+       test_large_singleton_pair_tiles_preserve_direct_graph_and_failure_results,
        test_gfn1_scalar_hamiltonian_contracts}};
   for (const auto test : tests) {
     const int status = test();

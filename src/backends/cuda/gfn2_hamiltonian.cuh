@@ -10,6 +10,7 @@
 
 #include "backends/common/gfn2_plan_schema.hpp"
 #include "backends/common/xtb_model.hpp"
+#include "backends/cuda/gfn2_density.cuh"
 
 namespace xtbloom::detail::cuda {
 
@@ -67,6 +68,13 @@ struct Gfn2HamiltonianDeviceBatch {
   /* GFN1 uses the scalar overlap operator only; GFN2 additionally binds the
    * directed dipole and quadrupole operator planes. */
   XtbModelFlavor model = XtbModelFlavor::kGfn2;
+
+  /*
+   * Topology-fixed upper-triangle tiles assigned to each system/channel.
+   * Setup reuses the density selector so Hamiltonian direct and Graph launch
+   * shapes remain independent of the per-iteration active mask.
+   */
+  std::int64_t assembly_tiles_per_channel = 0;
 };
 
 /*
