@@ -76,7 +76,9 @@ correctness gates, and CPU budget. Each source CSV must match the
 `SHA256SUMS` ledger in its issue evidence bundle.
 The same ledger covers `publication-metadata.json`, which binds the selected
 CSV names to their clean revisions, runtime identities, hardware, protocol,
-panel policy, and reference hashes before table or figure generation.
+panel policy, declared coordinates, and reference hashes before table or figure
+generation. Reference hashes must resolve to retained checksummed evidence or
+the repository's explicit oversized-artifact ledger.
 
 Generate and verify the reviewable current-results table with:
 

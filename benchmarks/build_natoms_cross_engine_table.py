@@ -87,6 +87,14 @@ def _sha256(path: Path) -> str:
 
 def _repository_path(value: object, field: str) -> tuple[Path, str]:
     """Resolve one required repository-relative path without allowing escape."""
+    resolved, relative = _repository_candidate_path(value, field)
+    if not resolved.is_file():
+        raise PublicationError(f"{field} does not exist: {value}")
+    return resolved, relative
+
+
+def _repository_candidate_path(value: object, field: str) -> tuple[Path, str]:
+    """Resolve a safe repository path that may name an intentionally omitted file."""
     if not isinstance(value, str) or not value or Path(value).is_absolute():
         raise PublicationError(f"{field} must be a repository-relative path")
     relative = Path(value)
@@ -95,8 +103,6 @@ def _repository_path(value: object, field: str) -> tuple[Path, str]:
         resolved.relative_to(REPOSITORY_ROOT)
     except ValueError as exc:
         raise PublicationError(f"{field} escapes the repository") from exc
-    if not resolved.is_file():
-        raise PublicationError(f"{field} does not exist: {value}")
     return resolved, relative.as_posix()
 
 
@@ -161,6 +167,104 @@ def _load_source_metadata(
     return document, matches[0]
 
 
+def _validate_checksummed_artifact(
+    path: Path, expected_sha256: str | None = None
+) -> None:
+    """Require a retained evidence artifact to match its bundle checksum ledger."""
+    checksums = _load_checksums(path.with_name("README.md"))
+    actual_sha256 = _sha256(path)
+    if checksums.get(path.name) != actual_sha256 or (
+        expected_sha256 is not None and actual_sha256 != expected_sha256
+    ):
+        raise PublicationError(f"reference artifact is not checksum-qualified: {path}")
+
+
+def _legacy_large_artifacts() -> dict[str, str]:
+    """Load exact hashes for reproducible raw evidence omitted by the size policy."""
+    ledger = REPOSITORY_ROOT / "benchmarks/evidence/legacy-large-artifacts.tsv"
+    try:
+        with ledger.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+    except OSError as exc:
+        raise PublicationError(f"cannot read {ledger}: {exc}") from exc
+    bindings: dict[str, str] = {}
+    for row in rows:
+        path = row.get("path", "")
+        digest = row.get("sha256", "")
+        if not path or HEX_64.fullmatch(digest) is None or path in bindings:
+            raise PublicationError(f"invalid record in {ledger}")
+        bindings[path] = digest
+    return bindings
+
+
+def _validate_reference_binding(
+    metadata_document: dict[str, Any],
+    reference_sha256: str,
+    engine: str,
+    panel_id: str,
+) -> None:
+    """Bind a declared reference hash to retained or size-ledgered evidence."""
+    bindings = _required_mapping(
+        metadata_document.get("reference_bindings"), "reference_bindings"
+    )
+    binding = _required_mapping(
+        bindings.get(reference_sha256), f"{engine}.{panel_id}.reference_binding"
+    )
+    kind = _required_string(binding, "kind")
+    path, relative = _repository_candidate_path(
+        binding.get("path"), f"{engine}.{panel_id}.reference_binding.path"
+    )
+    if kind == "retained-artifact":
+        if path.is_file():
+            _validate_checksummed_artifact(path, reference_sha256)
+        elif _legacy_large_artifacts().get(relative) != reference_sha256:
+            raise PublicationError(
+                f"{engine}.{panel_id} reference is neither retained nor size-ledgered"
+            )
+        return
+    if kind == "consumer-record":
+        if not path.is_file():
+            raise PublicationError(f"{engine}.{panel_id} consumer record is missing")
+        _validate_checksummed_artifact(path)
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PublicationError(
+                f"cannot read reference consumer record: {exc}"
+            ) from exc
+        recorded_sha256 = ((record.get("metadata") or {}).get("runner") or {}).get(
+            "reference_json_sha256"
+        )
+        if recorded_sha256 != reference_sha256:
+            raise PublicationError(
+                f"{engine}.{panel_id} consumer record has a different reference"
+            )
+        return
+    raise PublicationError(f"unsupported reference binding kind: {kind}")
+
+
+def _panel_coordinates(
+    metadata_document: dict[str, Any], panels: dict[str, tuple[int, str]]
+) -> dict[str, set[int]]:
+    """Load the complete coordinate set required from every selected artifact."""
+    raw_coordinates = _required_mapping(
+        metadata_document.get("panel_coordinates"), "panel_coordinates"
+    )
+    if set(raw_coordinates) != set(panels):
+        raise PublicationError("publication metadata panel coordinates are incomplete")
+    coordinates: dict[str, set[int]] = {}
+    for panel_id, values in raw_coordinates.items():
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(type(value) is not int or value <= 0 for value in values)
+            or len(values) != len(set(values))
+        ):
+            raise PublicationError(f"invalid coordinates for panel {panel_id}")
+        coordinates[panel_id] = set(values)
+    return coordinates
+
+
 def _required_string(mapping: dict[str, Any], field: str) -> str:
     value = mapping.get(field)
     if not isinstance(value, str) or not value:
@@ -223,7 +327,11 @@ def _validate_protocol(publication: dict[str, Any]) -> dict[str, Any]:
         "scc_charge_tolerance",
         "scc_energy_tolerance",
     ):
-        if _finite_number(protocol, field) < 0.0:
+        value = _finite_number(protocol, field)
+        if field == "perturb_sigma_bohr":
+            if value <= 0.0:
+                raise PublicationError("protocol.perturb_sigma_bohr must be positive")
+        elif value < 0.0:
             raise PublicationError(f"protocol.{field} must be nonnegative")
     _required_mapping(protocol.get("convergence_contract"), "convergence_contract")
     return protocol
@@ -317,6 +425,7 @@ def load_publication(
             raise PublicationError(
                 f"{engine} manifest does not match evidence publication metadata"
             )
+        panel_coordinates = _panel_coordinates(metadata_document, panels)
         for field, expected in (
             ("measured_date", measured_date),
             ("source_revision", source_revision),
@@ -408,6 +517,11 @@ def load_publication(
                 raise PublicationError(
                     f"{engine}.{panel_id} requires a reference artifact SHA-256"
                 )
+            else:
+                _validate_reference_binding(
+                    metadata_document, reference_sha256, engine, panel_id
+                )
+            artifact_natoms: set[int] = set()
             with csv_path.open(encoding="utf-8", newline="") as handle:
                 reader = csv.DictReader(handle)
                 for csv_row in reader:
@@ -428,6 +542,7 @@ def load_publication(
                         )
                     if row_threads != cpu_threads:
                         raise PublicationError(f"{csv_relative} changes the CPU budget")
+                    artifact_natoms.add(natoms)
                     availability = csv_row.get("availability", "")
                     if availability not in {"available", "error", "unavailable"}:
                         raise PublicationError(
@@ -463,6 +578,16 @@ def load_publication(
                     )
                     cross_status = csv_row.get("cross_engine_status", "")
                     correctness_status = csv_row.get("correctness_status", "")
+                    expected_cross_status = (
+                        "reference" if engine == "tblite" else "pass"
+                    )
+                    if availability == "available" and (
+                        correctness_status != "pass"
+                        or cross_status != expected_cross_status
+                    ):
+                        raise PublicationError(
+                            f"{csv_relative} contains unqualified available results"
+                        )
                     internal_row = {
                         "engine": engine,
                         "natoms": natoms,
@@ -537,6 +662,10 @@ def load_publication(
                             "protocol_id": protocol_id,
                         }
                     )
+            if artifact_natoms != panel_coordinates[panel_id]:
+                raise PublicationError(
+                    f"{csv_relative} does not contain the declared coordinates"
+                )
         missing_panels = set(panels) - seen_panels
         if missing_panels:
             raise PublicationError(

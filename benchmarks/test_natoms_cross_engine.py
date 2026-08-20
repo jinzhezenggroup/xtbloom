@@ -1312,10 +1312,16 @@ class NatomsCrossEngineTest(unittest.TestCase):
             root = Path(directory)
             evidence = root / "benchmarks" / "evidence" / "issue-1" / "run"
             evidence.mkdir(parents=True)
+            (
+                root / "benchmarks" / "evidence" / "legacy-large-artifacts.tsv"
+            ).write_text("sha256\tbytes\tsource_commit\tpath\n", encoding="utf-8")
             (evidence / "README.md").write_text("evidence\n", encoding="utf-8")
             sources: list[dict[str, object]] = []
             metadata_sources: list[dict[str, object]] = []
             metadata_path = evidence / "publication-metadata.json"
+            reference_path = evidence / "reference.json"
+            reference_path.write_text("reference\n", encoding="utf-8")
+            reference_digest = hashlib.sha256(reference_path.read_bytes()).hexdigest()
             for engine_index, engine in enumerate(publication.SUPPORTED_ENGINES):
                 artifacts: list[dict[str, str]] = []
                 metadata_artifacts: list[dict[str, object]] = []
@@ -1376,7 +1382,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
                         "csv": str(csv_path.relative_to(root)),
                     }
                     if engine != "tblite":
-                        artifact["reference_artifact_sha256"] = "a" * 64
+                        artifact["reference_artifact_sha256"] = reference_digest
                     artifacts.append(artifact)
                     metadata_artifacts.append(
                         {
@@ -1385,7 +1391,7 @@ class NatomsCrossEngineTest(unittest.TestCase):
                             "batch_size": batch_size,
                             "start_policy": _start_policy,
                             "reference_artifact_sha256": (
-                                None if engine == "tblite" else "a" * 64
+                                None if engine == "tblite" else reference_digest
                             ),
                         }
                     )
@@ -1434,19 +1440,32 @@ class NatomsCrossEngineTest(unittest.TestCase):
                         "protocol_id": "test-protocol",
                         "hardware": publication_hardware,
                         "protocol": publication_protocol,
+                        "panel_coordinates": {
+                            panel: [14] for panel, _batch, _start in panels
+                        },
+                        "reference_bindings": {
+                            reference_digest: {
+                                "kind": "retained-artifact",
+                                "path": str(reference_path.relative_to(root)),
+                            }
+                        },
                         "sources": metadata_sources,
                     }
                 ),
                 encoding="utf-8",
             )
-            checksum_paths = [*evidence.glob("*.csv"), metadata_path]
-            checksum_lines = [
-                f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}"
-                for path in sorted(checksum_paths)
-            ]
-            (evidence / "SHA256SUMS").write_text(
-                "\n".join(checksum_lines) + "\n", encoding="utf-8"
-            )
+            checksum_paths = [*evidence.glob("*.csv"), metadata_path, reference_path]
+
+            def write_checksums() -> None:
+                checksum_lines = [
+                    f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}"
+                    for path in sorted(checksum_paths)
+                ]
+                (evidence / "SHA256SUMS").write_text(
+                    "\n".join(checksum_lines) + "\n", encoding="utf-8"
+                )
+
+            write_checksums()
             manifest = {
                 "schema_version": 1,
                 "publication": {
@@ -1523,6 +1542,53 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 self.assertRaisesRegex(publication.PublicationError, "reference"),
             ):
                 publication.load_publication(manifest_path)
+
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            unbound_metadata = json.loads(original_metadata)
+            unbound_metadata["reference_bindings"][reference_digest]["path"] = (
+                "benchmarks/evidence/issue-1/run/missing-reference.json"
+            )
+            metadata_path.write_text(json.dumps(unbound_metadata), encoding="utf-8")
+            write_checksums()
+            with (
+                mock.patch.object(publication, "REPOSITORY_ROOT", root),
+                self.assertRaisesRegex(
+                    publication.PublicationError, "neither retained"
+                ),
+            ):
+                publication.load_publication(manifest_path)
+            metadata_path.write_text(original_metadata, encoding="utf-8")
+            write_checksums()
+
+            selected_csv = evidence / "xtbloom-cpu-cold.csv"
+            original_csv = selected_csv.read_text(encoding="utf-8")
+            selected_csv.write_text(
+                original_csv.splitlines()[0] + "\n", encoding="utf-8"
+            )
+            write_checksums()
+            with (
+                mock.patch.object(publication, "REPOSITORY_ROOT", root),
+                self.assertRaisesRegex(publication.PublicationError, "coordinates"),
+            ):
+                publication.load_publication(manifest_path)
+
+            selected_csv.write_text(
+                original_csv.replace(",pass,pass,", ",fail,pass,", 1),
+                encoding="utf-8",
+            )
+            write_checksums()
+            with (
+                mock.patch.object(publication, "REPOSITORY_ROOT", root),
+                self.assertRaisesRegex(publication.PublicationError, "unqualified"),
+            ):
+                publication.load_publication(manifest_path)
+
+    def test_publication_protocol_requires_positive_perturbation(self) -> None:
+        """A zero geometry perturbation is a different scaling workload."""
+        protocol = json.loads(json.dumps(artifact_metadata()["protocol"]))
+        protocol["perturb_sigma_bohr"] = 0.0
+        with self.assertRaisesRegex(publication.PublicationError, "must be positive"):
+            publication._validate_protocol({"protocol": protocol})
 
 
 if __name__ == "__main__":

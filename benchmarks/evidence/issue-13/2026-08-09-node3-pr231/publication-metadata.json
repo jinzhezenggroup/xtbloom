@@ -41,6 +41,25 @@
       }
     }
   },
+  "panel_coordinates": {
+    "cold": [14, 32, 62, 122, 242, 362],
+    "b128": [14, 32, 62, 122],
+    "b512": [14, 32, 62, 122]
+  },
+  "reference_bindings": {
+    "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e": {
+      "kind": "consumer-record",
+      "path": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtb-cold.json"
+    },
+    "e7a3d61ff6151bfa5f14d89a0c048f199035ee844a658bfe87fc9d39e35a8532": {
+      "kind": "consumer-record",
+      "path": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtb-b128.json"
+    },
+    "33a344f3995660fb53f5025c7c217ac6e1e7dc4a53109759ddebda7d8dfee7e7": {
+      "kind": "consumer-record",
+      "path": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/dxtb-cuda-b512.json"
+    }
+  },
   "sources": [
     {
       "engine": "xtbloom-cpu",
