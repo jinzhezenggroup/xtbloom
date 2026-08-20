@@ -169,15 +169,18 @@ bool update_reference(HostCase& data, std::string& error) {
 }
 
 bool make_case(std::size_t batch_size, HostCase& data, std::string& error,
-               std::size_t large_singleton_atoms = 0u) {
+               std::size_t large_system_atoms = 0u) {
   std::vector<std::int64_t> atom_offsets(batch_size + 1u, 0);
   std::vector<std::int32_t> atomic_numbers;
   for (std::size_t system = 0; system < batch_size; ++system) {
     atom_offsets[system] = static_cast<std::int64_t>(atomic_numbers.size());
-    if (batch_size == 1u && large_singleton_atoms != 0u) {
-      for (std::size_t atom = 0; atom < large_singleton_atoms; ++atom) {
+    if (large_system_atoms != 0u) {
+      for (std::size_t atom = 0; atom < large_system_atoms; ++atom) {
         atomic_numbers.push_back(1);
-        data.positions.push_back(2.25 * static_cast<double>(atom));
+        /* Keep large ragged peers spatially separated while ensuring every
+         * system has enough matrix work to exercise more than one tile. */
+        data.positions.push_back(200.0 * static_cast<double>(system) +
+                                 2.25 * static_cast<double>(atom));
         data.positions.push_back(0.17 * static_cast<double>(atom % 3u));
         data.positions.push_back(-0.11 * static_cast<double>(atom % 5u));
       }
@@ -731,6 +734,11 @@ int test_multitile_hostile_primitive_offset_is_peer_isolated() {
   std::string error;
   CHECK(make_case(2u, host, error, 65u));
   constexpr std::int64_t kTiles = 2;
+  constexpr std::int64_t kThreadsPerLinearTile = 64;
+  for (std::size_t system = 0; system < 2u; ++system) {
+    CHECK(host.integrals.matrix_offsets[system + 1u] - host.integrals.matrix_offsets[system] >
+          kThreadsPerLinearTile);
+  }
 
   cudaStream_t stream = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
@@ -767,8 +775,12 @@ int test_multitile_hostile_primitive_offset_is_peer_isolated() {
   const std::size_t failed_end = static_cast<std::size_t>(host.basis.atom_offsets[1] * 3);
   CHECK(std::equal(actual.begin(), actual.begin() + static_cast<std::ptrdiff_t>(failed_end),
                    host.seed.begin()));
-  CHECK(std::equal(actual.begin() + static_cast<std::ptrdiff_t>(failed_end), actual.end(),
-                   clean.begin() + static_cast<std::ptrdiff_t>(failed_end)));
+  /* The healthy large peer still runs concurrent atomic force reductions.
+   * Reject cross-system contamination while allowing repeat-order roundoff. */
+  CHECK(std::equal(
+      actual.begin() + static_cast<std::ptrdiff_t>(failed_end), actual.end(),
+      clean.begin() + static_cast<std::ptrdiff_t>(failed_end),
+      [](double actual_value, double clean_value) { return near(actual_value, clean_value); }));
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }

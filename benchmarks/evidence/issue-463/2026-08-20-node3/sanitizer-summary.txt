@@ -48,13 +48,31 @@ direct/host-Graph controls, clean uninstrumented run, and clean remaining
 sanitizers match the approved disposition. No changed integral/H0 kernel
 signature and no additional signature appeared.
 
-Command template
-----------------
+Exact commands
+--------------
+
+  export LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64
+  export CUDA_VISIBLE_DEVICES=0
+  for test_binary in \
+    xtbloom_cuda_integrals_test \
+    xtbloom_cuda_integral_force_test \
+    xtbloom_cuda_h0_force_test \
+    xtbloom_cuda_gfn2_preprocessing_test \
+    xtbloom_cuda_electronic_gradient_test \
+    xtbloom_cuda_energy_force_execution_test; do
+    for sanitizer_tool in memcheck racecheck initcheck synccheck; do
+      /group/software/cuda-12.9.1/bin/compute-sanitizer \
+        --tool "$sanitizer_tool" --error-exitcode=99 \
+        "./build/cuda-issue463-dev/$test_binary"
+    done
+  done
+
+  for sanitizer_tool in memcheck racecheck initcheck; do
+    /group/software/cuda-12.9.1/bin/compute-sanitizer \
+      --tool "$sanitizer_tool" --error-exitcode=99 \
+      ./build/cuda-issue463-dev/xtbloom_cuda_gfn2_runtime_graph_test
+  done
 
   /group/software/cuda-12.9.1/bin/compute-sanitizer \
-    --tool <memcheck|racecheck|initcheck|synccheck> \
-    --error-exitcode=99 <binary>
-
-Commands ran with one exclusively selected GPU and:
-  LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64:/home/jzzeng/miniconda3/lib
-  CUDA_VISIBLE_DEVICES=0
+    --tool synccheck --error-exitcode=99 \
+    ./build/cuda-issue463-dev/xtbloom_cuda_gfn2_runtime_graph_test
