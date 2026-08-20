@@ -62,16 +62,39 @@ JSON retains every raw sample, final force vectors, convergence and correctness
 state, source/build/runtime identities, and binary hashes. CSV is the compact
 tabular view.
 
-`plot_natoms_cross_engine.py` rejects dirty or protocol-incompatible inputs and
-preserves failed or unavailable coordinates. It declares Matplotlib through
-PEP 723 metadata and has an adjacent locked resolution:
+The maintained public selection lives in
+`natoms_cross_engine_publication.json`. It may advance one engine/backend to a
+newer clean revision while retaining unchanged sources, but all selected rows
+must keep the same hardware, workload, start policies, convergence contract,
+correctness gates, and CPU budget. Each source CSV must match the
+`SHA256SUMS` ledger in its issue evidence bundle.
+
+Generate and verify the reviewable current-results table with:
+
+```bash
+python3 benchmarks/build_natoms_cross_engine_table.py \
+  --manifest benchmarks/natoms_cross_engine_publication.json \
+  --output benchmarks/natoms_cross_engine_latest.csv
+
+python3 benchmarks/build_natoms_cross_engine_table.py \
+  --manifest benchmarks/natoms_cross_engine_publication.json \
+  --output benchmarks/natoms_cross_engine_latest.csv --check
+```
+
+`plot_natoms_cross_engine.py` reads the same manifest, preserves failed or
+unavailable coordinates, and writes the selected RTX 5090 identity inside the
+figure. It declares Matplotlib through PEP 723 metadata and has an adjacent
+locked resolution:
 
 ```bash
 uv run --script benchmarks/plot_natoms_cross_engine.py \
-  --artifact /path/to/result-1.json \
-  --artifact /path/to/result-2.json \
+  --publication-manifest benchmarks/natoms_cross_engine_publication.json \
   --output /path/to/natoms_cross_engine.svg
 ```
+
+Repeated direct `--artifact` inputs remain supported for issue-local figures
+whose JSON artifacts share one clean run identity. They are not the source of
+the maintained mixed-revision public figure.
 
 The publication bundle, exact commands, raw numbers, hashes, unavailable rows,
 and limitations are archived in

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
@@ -12,6 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from benchmarks import build_natoms_cross_engine_table as publication
 from benchmarks import natoms_cross_engine as nce
 from benchmarks import plot_natoms_cross_engine as plotters
 
@@ -35,7 +37,13 @@ def artifact_metadata(
                 "CUDA_VISIBLE_DEVICES": "0",
                 "runtime_uuid": "test-uuid",
                 "resolved_visibility_token": "0",
-                "device": {"physical_index": "0", "uuid": "test-uuid"},
+                "device": {
+                    "physical_index": "0",
+                    "uuid": "test-uuid",
+                    "name": "NVIDIA GeForce RTX 5090",
+                    "driver": "580.95.05",
+                    "memory_mib": "32607",
+                },
             },
         },
         "threads": {
@@ -164,6 +172,13 @@ class NatomsCrossEngineTest(unittest.TestCase):
                     all(math.isfinite(value) for value in positions[slot]),
                     msg=f"slot {slot} finite",
                 )
+
+    def test_timing_summary_retains_observed_maximum(self) -> None:
+        """Compact publication rows must not infer the upper whisker."""
+        summary = nce.timing_summary((3.0, 1.0, 2.0), batch_size=4)
+        self.assertEqual(summary["min_ms"], 1.0)
+        self.assertEqual(summary["max_ms"], 3.0)
+        self.assertEqual(summary["p95_ms"], 3.0)
 
     def test_direct_url_identity_binds_local_source_without_leaking_url(self) -> None:
         """Publication metadata retains a local binding but no URL secrets."""
@@ -1216,6 +1231,142 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 )
             with self.assertRaisesRegex(plotters.PlotError, "incompatible run"):
                 plotters.load_rows(paths)
+
+    def test_publication_manifest_tracks_independent_engine_revisions(self) -> None:
+        """A CUDA refresh can replace its rows without relabelling CPU data."""
+        panels = (
+            ("cold", 1, "cold"),
+            ("b128", 128, "auto-warm"),
+            ("b512", 512, "cold"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "benchmarks" / "evidence" / "issue-1" / "run"
+            evidence.mkdir(parents=True)
+            (evidence / "README.md").write_text("evidence\n", encoding="utf-8")
+            sources: list[dict[str, object]] = []
+            for engine_index, engine in enumerate(publication.SUPPORTED_ENGINES):
+                artifacts: list[dict[str, str]] = []
+                for panel, batch_size, _start_policy in panels:
+                    csv_path = evidence / f"{engine}-{panel}.csv"
+                    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+                        writer = csv.DictWriter(
+                            handle,
+                            fieldnames=(
+                                "engine",
+                                "natoms",
+                                "batch_size",
+                                "total_atoms_in_batch",
+                                "cpu_threads",
+                                "device_id",
+                                "job",
+                                "availability",
+                                "median_ms",
+                                "mean_ms",
+                                "p95_ms",
+                                "min_ms",
+                                "max_ms",
+                                "systems_per_second_at_median",
+                                "correctness_status",
+                                "cross_engine_status",
+                                "max_abs_energy_delta_hartree",
+                                "max_abs_force_delta_hartree_per_bohr",
+                            ),
+                            lineterminator="\n",
+                        )
+                        writer.writeheader()
+                        writer.writerow(
+                            {
+                                "engine": engine,
+                                "natoms": 14,
+                                "batch_size": batch_size,
+                                "total_atoms_in_batch": 14 * batch_size,
+                                "cpu_threads": 16,
+                                "device_id": 0,
+                                "job": "",
+                                "availability": "available",
+                                "median_ms": 10.0 + engine_index,
+                                "mean_ms": 10.0 + engine_index,
+                                "p95_ms": 11.0 + engine_index,
+                                "min_ms": 9.0 + engine_index,
+                                "max_ms": 11.0 + engine_index,
+                                "systems_per_second_at_median": 1.0,
+                                "correctness_status": "pass",
+                                "cross_engine_status": (
+                                    "reference" if engine == "tblite" else "pass"
+                                ),
+                                "max_abs_energy_delta_hartree": "",
+                                "max_abs_force_delta_hartree_per_bohr": "",
+                            }
+                        )
+                    artifact: dict[str, str] = {
+                        "panel": panel,
+                        "csv": str(csv_path.relative_to(root)),
+                    }
+                    if engine != "tblite":
+                        artifact["reference_artifact_sha256"] = "a" * 64
+                    artifacts.append(artifact)
+                revision = ("1" if engine == "xtbloom-cuda" else "0") * 40
+                sources.append(
+                    {
+                        "engine": engine,
+                        "measured_date": "2026-08-20",
+                        "source_revision": revision,
+                        "runtime_identity": f"{engine}-runtime",
+                        "evidence_bundle": str(
+                            (evidence / "README.md").relative_to(root)
+                        ),
+                        "artifacts": artifacts,
+                    }
+                )
+            checksum_lines = [
+                f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}"
+                for path in sorted(evidence.glob("*.csv"))
+            ]
+            (evidence / "SHA256SUMS").write_text(
+                "\n".join(checksum_lines) + "\n", encoding="utf-8"
+            )
+            manifest = {
+                "schema_version": 1,
+                "publication": {
+                    "protocol_id": "test-protocol",
+                    "hardware": {
+                        "hostname": "node3",
+                        "cpu_model": "AMD EPYC 7K62",
+                        "cpu_threads": 16,
+                        "cuda_device": {
+                            "name": "NVIDIA GeForce RTX 5090",
+                            "uuid": "test-uuid",
+                            "driver": "580.95.05",
+                        },
+                    },
+                    "panels": [
+                        {
+                            "id": panel,
+                            "batch_size": batch_size,
+                            "start_policy": start_policy,
+                        }
+                        for panel, batch_size, start_policy in panels
+                    ],
+                    "protocol": artifact_metadata()["protocol"],
+                },
+                "sources": sources,
+            }
+            manifest_path = root / "publication.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with mock.patch.object(publication, "REPOSITORY_ROOT", root):
+                rows, metadata = publication.load_publication(manifest_path)
+            self.assertEqual(len(rows), 18)
+            revisions = {row["engine"]: row["_source_revision"] for row in rows}
+            self.assertEqual(revisions["xtbloom-cpu"], "0" * 40)
+            self.assertEqual(revisions["xtbloom-cuda"], "1" * 40)
+            self.assertEqual(
+                metadata["hardware"]["selected_cuda_device"]["device"]["name"],
+                "NVIDIA GeForce RTX 5090",
+            )
+            rendered = publication.render_table(metadata)
+            self.assertIn("NVIDIA GeForce RTX 5090", rendered)
+            self.assertIn("xtbloom-cuda", rendered)
 
 
 if __name__ == "__main__":

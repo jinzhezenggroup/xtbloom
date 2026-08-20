@@ -766,6 +766,7 @@ def timing_summary(samples_ms: Sequence[float], batch_size: int) -> dict[str, An
         "samples_ms": list(samples_ms),
         "count": len(samples_ms),
         "min_ms": min(samples_ms),
+        "max_ms": max(samples_ms),
         "median_ms": statistics.median(samples_ms),
         "mean_ms": statistics.fmean(samples_ms),
         "p95_ms": percentile(samples_ms, 0.95),
@@ -2236,6 +2237,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         "mean_ms",
         "p95_ms",
         "min_ms",
+        "max_ms",
         "systems_per_second_at_median",
         "correctness_status",
         "cross_engine_status",
@@ -2257,6 +2259,7 @@ def write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
             flat["mean_ms"] = timing.get("mean_ms")
             flat["p95_ms"] = timing.get("p95_ms")
             flat["min_ms"] = timing.get("min_ms")
+            flat["max_ms"] = timing.get("max_ms")
             flat["systems_per_second_at_median"] = timing.get(
                 "systems_per_second_at_median"
             )
