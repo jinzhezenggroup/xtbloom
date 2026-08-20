@@ -148,6 +148,7 @@ __global__ void preflight_and_seed_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0D
                                           std::uint32_t* system_errors,
                                           std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.y);
   __shared__ SystemRanges ranges;
   __shared__ int selected;
   __shared__ int valid;
@@ -167,8 +168,9 @@ __global__ void preflight_and_seed_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0D
     return;
   }
 
-  for (std::int64_t atom = ranges.atom_begin + threadIdx.x; atom < ranges.atom_end;
-       atom += blockDim.x) {
+  const std::int64_t stride = batch.linear_tiles_per_system * blockDim.x;
+  for (std::int64_t atom = ranges.atom_begin + tile * blockDim.x + threadIdx.x;
+       atom < ranges.atom_end; atom += stride) {
     const std::int64_t shell_begin = batch.atom_shell_offsets[atom];
     const std::int64_t shell_end = batch.atom_shell_offsets[atom + 1];
     if (!valid_range(shell_begin, shell_end, batch.total_shells) ||
@@ -216,8 +218,8 @@ __global__ void preflight_and_seed_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0D
     }
   }
 
-  for (std::int64_t shell = ranges.shell_begin + threadIdx.x; shell < ranges.shell_end;
-       shell += blockDim.x) {
+  for (std::int64_t shell = ranges.shell_begin + tile * blockDim.x + threadIdx.x;
+       shell < ranges.shell_end; shell += stride) {
     const std::int64_t atom = batch.shell_to_atom[shell];
     const std::int64_t orbital_begin = batch.shell_orbital_offsets[shell];
     const std::int64_t orbital_end = batch.shell_orbital_offsets[shell + 1];
@@ -238,8 +240,8 @@ __global__ void preflight_and_seed_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0D
     }
   }
 
-  for (std::int64_t pair = ranges.shell_pair_begin + threadIdx.x; pair < ranges.shell_pair_end;
-       pair += blockDim.x) {
+  for (std::int64_t pair = ranges.shell_pair_begin + tile * blockDim.x + threadIdx.x;
+       pair < ranges.shell_pair_end; pair += stride) {
     const double scale = h0_plan.shell_pair_scale[pair];
     if (!(scale > 0.0) || !isfinite(scale)) {
       record_system_error(system_errors, system, device_error,
@@ -248,8 +250,8 @@ __global__ void preflight_and_seed_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0D
     }
   }
 
-  for (std::int64_t matrix = ranges.matrix_begin + threadIdx.x; matrix < ranges.matrix_end;
-       matrix += blockDim.x) {
+  for (std::int64_t matrix = ranges.matrix_begin + tile * blockDim.x + threadIdx.x;
+       matrix < ranges.matrix_end; matrix += stride) {
     const double overlap = input.overlap[matrix];
     const double density = input.density[matrix];
     const double weighted = input.energy_weighted_density[matrix];
@@ -432,6 +434,7 @@ __global__ void publish_kernel(Gfn2IntegralDeviceBatch batch, Gfn2ForceDeviceAct
                                Gfn2H0ForceDeviceOutput output, Gfn2H0ForceDeviceWorkspace workspace,
                                const std::uint32_t* system_errors) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.y);
   if (!sequence_is_active(workspace) || activity.requested_mask[system] != 1u ||
       activity.system_statuses[system] != XTBLOOM_STATUS_SUCCESS ||
       !system_is_valid(system_errors, system)) {
@@ -441,11 +444,13 @@ __global__ void publish_kernel(Gfn2IntegralDeviceBatch batch, Gfn2ForceDeviceAct
   const std::int64_t atom_end = batch.atom_offsets[system + 1];
   const std::int64_t matrix_begin = batch.matrix_offsets[system];
   const std::int64_t matrix_end = batch.matrix_offsets[system + 1];
-  for (std::int64_t matrix = matrix_begin + threadIdx.x; matrix < matrix_end;
-       matrix += blockDim.x) {
+  const std::int64_t stride = batch.linear_tiles_per_system * blockDim.x;
+  for (std::int64_t matrix = matrix_begin + tile * blockDim.x + threadIdx.x; matrix < matrix_end;
+       matrix += stride) {
     output.overlap_adjoint[matrix] = workspace.overlap_adjoint_scratch[matrix];
   }
-  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+  for (std::int64_t atom = atom_begin + tile * blockDim.x + threadIdx.x; atom < atom_end;
+       atom += stride) {
     output.coordination_adjoint[atom] = workspace.coordination_adjoint_scratch[atom];
     const std::int64_t coordinate = atom * 3;
     output.gradients[coordinate] = workspace.gradient_scratch[coordinate];
@@ -521,7 +526,8 @@ cudaError_t validate_descriptors(
   if (batch.batch_size <= 0 || batch.batch_size > std::numeric_limits<int>::max() ||
       batch.total_atoms < 0 || batch.total_shells < 0 || batch.total_orbitals < 0 ||
       batch.total_matrix_elements < 0 || batch.total_shell_pair_elements < 0 ||
-      batch.total_atoms > kMaximumInt64 / 3 || batch.plan_token == 0u ||
+      batch.total_atoms > kMaximumInt64 / 3 || batch.linear_tiles_per_system <= 0 ||
+      batch.linear_tiles_per_system > kGfn2IntegralLinearBlockBudget || batch.plan_token == 0u ||
       batch.atom_offset_count != batch.batch_size + 1 ||
       batch.batch_shell_offset_count != batch.batch_size + 1 ||
       batch.batch_orbital_offset_count != batch.batch_size + 1 ||
@@ -685,7 +691,13 @@ cudaError_t add_gfn2_h0_pulay_gradient_cuda(
     return status;
   }
   const unsigned int blocks = static_cast<unsigned int>(batch.batch_size);
-  preflight_and_seed_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+  Gfn2IntegralLinearLaunchShape linear_shape{};
+  if (!make_gfn2_integral_linear_launch_shape(batch.batch_size, batch.linear_tiles_per_system,
+                                              linear_shape)) {
+    return cudaErrorInvalidValue;
+  }
+  const dim3 linear_grid(linear_shape.systems, linear_shape.tiles, 1u);
+  preflight_and_seed_kernel<<<linear_grid, kThreadsPerBlock, 0, stream>>>(
       batch, h0_plan, activity, input, output, workspace, system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
@@ -697,8 +709,8 @@ cudaError_t add_gfn2_h0_pulay_gradient_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  publish_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(batch, activity, output, workspace,
-                                                          system_errors);
+  publish_kernel<<<linear_grid, kThreadsPerBlock, 0, stream>>>(batch, activity, output, workspace,
+                                                               system_errors);
   return check_launch();
 }
 

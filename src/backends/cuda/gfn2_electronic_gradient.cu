@@ -44,6 +44,8 @@ cudaError_t validate_active_composition(
       integral_batch.total_shells != hamiltonian_batch.total_shells ||
       integral_batch.total_orbitals != hamiltonian_batch.total_orbitals ||
       integral_batch.total_matrix_elements != hamiltonian_batch.total_matrix_elements ||
+      integral_batch.linear_tiles_per_system <= 0 ||
+      integral_batch.linear_tiles_per_system > kGfn2IntegralLinearBlockBudget ||
       activity.batch_elements != integral_batch.batch_size ||
       workspace.batch_elements < integral_batch.batch_size ||
       diagnostics.batch_elements < integral_batch.batch_size ||

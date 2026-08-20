@@ -659,6 +659,8 @@ cudaError_t validate_force_binding(const Gfn2EnergyForceExecutionDevicePlan& pla
       batch_size == std::numeric_limits<std::int64_t>::max() ||
       plan.integral_batch.total_atoms < 0 ||
       plan.integral_batch.total_atoms > std::numeric_limits<std::int64_t>::max() / 3 ||
+      plan.integral_batch.linear_tiles_per_system <= 0 ||
+      plan.integral_batch.linear_tiles_per_system > kGfn2IntegralLinearBlockBudget ||
       plan.external_point_charge_batch.total_shells < 0 ||
       plan.external_point_charge_batch.total_point_charges < 0 ||
       plan.external_point_charge_batch.total_point_charges >

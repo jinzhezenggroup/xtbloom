@@ -432,6 +432,7 @@ struct DeviceFixture {
                               matrices,
                               host.shell_pair_offsets.back(),
                               host.maximum_system_shells,
+                              1,
                               host.integrals.integral_cutoff,
                               kPlanToken,
                               batch + 1,
@@ -1108,6 +1109,16 @@ int test_plan_failure_and_seal_fail_closed() {
   shell_overflow.plan.integrals.total_shells = std::numeric_limits<std::int64_t>::max();
   CHECK(seal_gfn2_preprocessing_binding_cuda(shell_overflow).error ==
         Gfn2PreprocessingBindingError::kInvalidExtent);
+  for (const std::int64_t invalid_tiles :
+       std::array<std::int64_t, 2>{0, kGfn2IntegralLinearBlockBudget + 1}) {
+    Gfn2PreprocessingDeviceBinding invalid_linear_grid = device.binding;
+    invalid_linear_grid.binding_seal = 0u;
+    invalid_linear_grid.plan.integrals.linear_tiles_per_system = invalid_tiles;
+    const Gfn2PreprocessingBindingDiagnostic diagnostic =
+        seal_gfn2_preprocessing_binding_cuda(invalid_linear_grid);
+    CHECK(diagnostic.error == Gfn2PreprocessingBindingError::kInvalidExtent);
+    CHECK(diagnostic.field == Gfn2PreprocessingBindingField::kPlan);
+  }
 
   CHECK(compose_gfn2_preprocessing_cuda(device.binding, 31u, stream).success());
   CUDA_CHECK(cudaStreamSynchronize(stream));

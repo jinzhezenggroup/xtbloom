@@ -566,12 +566,15 @@ __global__ void publish_integrals_kernel(Gfn2IntegralDeviceBatch batch, const do
                                          Gfn2IntegralDeviceWorkspace workspace,
                                          const std::uint32_t* system_errors) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.y);
   if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
     return;
   }
   const std::int64_t begin = batch.matrix_offsets[system];
   const std::int64_t end = batch.matrix_offsets[system + 1];
-  for (std::int64_t element = begin + threadIdx.x; element < end; element += blockDim.x) {
+  const std::int64_t stride = batch.linear_tiles_per_system * blockDim.x;
+  for (std::int64_t element = begin + tile * blockDim.x + threadIdx.x; element < end;
+       element += stride) {
     overlap[element] = overlap_in[element];
     if (batch.model != XtbModelFlavor::kGfn2) continue;
     for (int component = 0; component < 3; ++component) {
@@ -590,6 +593,7 @@ __global__ void h0_preflight_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0DeviceP
                                     Gfn2IntegralDeviceWorkspace workspace,
                                     std::uint32_t* system_errors, std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.y);
   if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
     return;
   }
@@ -606,7 +610,9 @@ __global__ void h0_preflight_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0DeviceP
   const std::int64_t pair_end = batch.shell_pair_offsets[system + 1];
   const std::int64_t matrix_begin = batch.matrix_offsets[system];
   const std::int64_t matrix_end = batch.matrix_offsets[system + 1];
-  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+  const std::int64_t stride = batch.linear_tiles_per_system * blockDim.x;
+  for (std::int64_t atom = atom_begin + tile * blockDim.x + threadIdx.x; atom < atom_end;
+       atom += stride) {
     if (!(plan.atomic_radii[atom] > 0.0) || !isfinite(plan.atomic_radii[atom]) ||
         !isfinite(coordination_numbers[atom])) {
       record_system_error(system_errors, system, device_error,
@@ -616,7 +622,8 @@ __global__ void h0_preflight_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0DeviceP
       atomicExch(&valid, 0);
     }
   }
-  for (std::int64_t shell = shell_begin + threadIdx.x; shell < shell_end; shell += blockDim.x) {
+  for (std::int64_t shell = shell_begin + tile * blockDim.x + threadIdx.x; shell < shell_end;
+       shell += stride) {
     if (!isfinite(plan.shell_levels[shell]) || !isfinite(plan.shell_coordination_scale[shell]) ||
         !isfinite(plan.shell_polynomial[shell])) {
       record_system_error(system_errors, system, device_error,
@@ -624,15 +631,16 @@ __global__ void h0_preflight_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0DeviceP
       atomicExch(&valid, 0);
     }
   }
-  for (std::int64_t pair = pair_begin + threadIdx.x; pair < pair_end; pair += blockDim.x) {
+  for (std::int64_t pair = pair_begin + tile * blockDim.x + threadIdx.x; pair < pair_end;
+       pair += stride) {
     if (!(plan.shell_pair_scale[pair] > 0.0) || !isfinite(plan.shell_pair_scale[pair])) {
       record_system_error(system_errors, system, device_error,
                           Gfn2IntegralDeviceError::kInvalidH0Parameter);
       atomicExch(&valid, 0);
     }
   }
-  for (std::int64_t element = matrix_begin + threadIdx.x; element < matrix_end;
-       element += blockDim.x) {
+  for (std::int64_t element = matrix_begin + tile * blockDim.x + threadIdx.x; element < matrix_end;
+       element += stride) {
     if (!isfinite(overlap[element])) {
       record_system_error(system_errors, system, device_error,
                           Gfn2IntegralDeviceError::kNonfiniteOverlap);
@@ -717,12 +725,15 @@ __global__ void publish_h0_kernel(Gfn2IntegralDeviceBatch batch,
                                   Gfn2IntegralDeviceWorkspace workspace, double* hamiltonian,
                                   const std::uint32_t* system_errors) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.y);
   if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
     return;
   }
   const std::int64_t begin = batch.matrix_offsets[system];
   const std::int64_t end = batch.matrix_offsets[system + 1];
-  for (std::int64_t element = begin + threadIdx.x; element < end; element += blockDim.x) {
+  const std::int64_t stride = batch.linear_tiles_per_system * blockDim.x;
+  for (std::int64_t element = begin + tile * blockDim.x + threadIdx.x; element < end;
+       element += stride) {
     hamiltonian[element] = workspace.h0_scratch[element];
   }
 }
@@ -793,9 +804,10 @@ cudaError_t validate_common(const Gfn2IntegralDeviceBatch& batch,
   if (batch.batch_size <= 0 || batch.total_atoms <= 0 || batch.total_shells <= 0 ||
       batch.total_orbitals <= 0 || batch.total_primitives <= 0 ||
       batch.total_matrix_elements <= 0 || batch.total_shell_pair_elements <= 0 ||
-      batch.maximum_system_shells <= 0 || !(batch.integral_cutoff > 0.0) ||
-      !std::isfinite(batch.integral_cutoff) || batch.plan_token == 0u ||
-      workspace.plan_token != batch.plan_token ||
+      batch.maximum_system_shells <= 0 || batch.linear_tiles_per_system <= 0 ||
+      batch.linear_tiles_per_system > kGfn2IntegralLinearBlockBudget ||
+      !(batch.integral_cutoff > 0.0) || !std::isfinite(batch.integral_cutoff) ||
+      batch.plan_token == 0u || workspace.plan_token != batch.plan_token ||
       batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
       batch.total_atoms == kMaximumInt64 || batch.total_shells == kMaximumInt64 ||
       batch.total_atoms > kMaximumInt64 / 3 || !valid_xtb_model_flavor(batch.model) ||
@@ -850,6 +862,16 @@ cudaError_t validate_common(const Gfn2IntegralDeviceBatch& batch,
 cudaError_t check_launch() noexcept { return cudaPeekAtLastError(); }
 
 }  // namespace
+
+bool make_gfn2_integral_linear_launch_shape(std::int64_t batch_size, std::int64_t tiles_per_system,
+                                            Gfn2IntegralLinearLaunchShape& shape) noexcept {
+  if (batch_size <= 0 || batch_size > std::numeric_limits<int>::max() || tiles_per_system <= 0 ||
+      tiles_per_system > kGfn2IntegralLinearBlockBudget) {
+    return false;
+  }
+  shape = {static_cast<std::uint32_t>(batch_size), static_cast<std::uint32_t>(tiles_per_system)};
+  return true;
+}
 
 cudaError_t reset_gfn2_integral_device_errors_cuda(std::int64_t batch_size,
                                                    std::uint32_t* system_errors,
@@ -967,10 +989,15 @@ cudaError_t evaluate_gfn2_integrals_cuda(const Gfn2IntegralDeviceBatch& batch,
   if (status != cudaSuccess) {
     return status;
   }
-  publish_integrals_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
-                             stream>>>(batch, workspace.overlap_scratch, workspace.dipole_scratch,
-                                       workspace.quadrupole_scratch, overlap, dipole, quadrupole,
-                                       workspace, system_errors);
+  Gfn2IntegralLinearLaunchShape linear_shape{};
+  if (!make_gfn2_integral_linear_launch_shape(batch.batch_size, batch.linear_tiles_per_system,
+                                              linear_shape)) {
+    return cudaErrorInvalidValue;
+  }
+  const dim3 linear_grid(linear_shape.systems, linear_shape.tiles, 1u);
+  publish_integrals_kernel<<<linear_grid, kThreadsPerBlock, 0, stream>>>(
+      batch, workspace.overlap_scratch, workspace.dipole_scratch, workspace.quadrupole_scratch,
+      overlap, dipole, quadrupole, workspace, system_errors);
   return check_launch();
 }
 
@@ -1064,7 +1091,13 @@ cudaError_t evaluate_gfn2_h0_cuda(const Gfn2IntegralDeviceBatch& batch,
   if (status != cudaSuccess) {
     return status;
   }
-  h0_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
+  Gfn2IntegralLinearLaunchShape linear_shape{};
+  if (!make_gfn2_integral_linear_launch_shape(batch.batch_size, batch.linear_tiles_per_system,
+                                              linear_shape)) {
+    return cudaErrorInvalidValue;
+  }
+  const dim3 linear_grid(linear_shape.systems, linear_shape.tiles, 1u);
+  h0_preflight_kernel<<<linear_grid, kThreadsPerBlock, 0, stream>>>(
       batch, plan, coordination_numbers, overlap, workspace, system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
@@ -1077,8 +1110,8 @@ cudaError_t evaluate_gfn2_h0_cuda(const Gfn2IntegralDeviceBatch& batch,
   if (status != cudaSuccess) {
     return status;
   }
-  publish_h0_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
-      batch, workspace, hamiltonian, system_errors);
+  publish_h0_kernel<<<linear_grid, kThreadsPerBlock, 0, stream>>>(batch, workspace, hamiltonian,
+                                                                  system_errors);
   return check_launch();
 }
 
@@ -1121,13 +1154,17 @@ __global__ void capture_force_sequence_kernel(const std::uint32_t* device_error,
   }
 }
 
-__global__ void integral_force_preflight_kernel(Gfn2IntegralDeviceBatch batch,
-                                                Gfn2ForceDeviceActivity activity,
-                                                Gfn2IntegralForceDeviceInput input,
-                                                Gfn2IntegralForceDeviceOutput output,
-                                                Gfn2IntegralForceDeviceWorkspace workspace,
-                                                std::uint32_t* system_errors,
-                                                std::uint32_t* device_error) {
+/*
+ * Validate every indexing relationship with one CTA per system before any
+ * tiled force preflight reads system-wide primitive bounds. A kernel boundary
+ * is the inter-CTA synchronization point: keeping this phase single-CTA means
+ * malformed shell metadata cannot race a peer tile into an out-of-range read.
+ */
+__global__ void integral_force_topology_preflight_kernel(Gfn2IntegralDeviceBatch batch,
+                                                         Gfn2ForceDeviceActivity activity,
+                                                         Gfn2IntegralForceDeviceWorkspace workspace,
+                                                         std::uint32_t* system_errors,
+                                                         std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (!force_sequence_is_active(workspace) ||
       !force_member_is_active(activity, system, system_errors, device_error)) {
@@ -1161,7 +1198,7 @@ __global__ void integral_force_preflight_kernel(Gfn2IntegralDeviceBatch batch,
       const std::int64_t orbitals = ranges.orbital_end - ranges.orbital_begin;
       std::int64_t expected_pairs = 0;
       std::int64_t expected_matrix = 0;
-      valid = checked_square(shells, &expected_pairs) &&
+      valid = shells <= batch.maximum_system_shells && checked_square(shells, &expected_pairs) &&
               checked_square(orbitals, &expected_matrix) &&
               ranges.shell_pair_end - ranges.shell_pair_begin == expected_pairs &&
               ranges.matrix_end - ranges.matrix_begin == expected_matrix &&
@@ -1201,22 +1238,6 @@ __global__ void integral_force_preflight_kernel(Gfn2IntegralDeviceBatch batch,
                           Gfn2IntegralDeviceError::kInvalidOffsets);
       atomicExch(&valid, 0);
     }
-    const std::int64_t coordinate = atom * 3;
-    for (int axis = 0; axis < 3; ++axis) {
-      if (!isfinite(input.positions[coordinate + axis])) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2IntegralDeviceError::kNonfinitePosition);
-        atomicExch(&valid, 0);
-      }
-      const double seed = output.gradients[coordinate + axis];
-      if (!isfinite(seed)) {
-        record_system_error(system_errors, system, device_error,
-                            Gfn2IntegralDeviceError::kNonfiniteGradientSeed);
-        atomicExch(&valid, 0);
-      } else {
-        workspace.gradient_scratch[coordinate + axis] = seed;
-      }
-    }
   }
   for (std::int64_t shell = ranges.shell_begin + threadIdx.x; shell < ranges.shell_end;
        shell += blockDim.x) {
@@ -1244,29 +1265,68 @@ __global__ void integral_force_preflight_kernel(Gfn2IntegralDeviceBatch batch,
       atomicExch(&valid, 0);
     }
   }
-  __syncthreads();
-  if (valid == 0) {
+}
+
+/*
+ * After topology validation has completed for the whole grid, numerical
+ * inputs and disjoint output seeds can be scanned by bounded topology-fixed
+ * tiles. Every write has unique element ownership; a peer tile's error only
+ * suppresses the later publication kernel.
+ */
+__global__ void integral_force_numerical_preflight_kernel(
+    Gfn2IntegralDeviceBatch batch, Gfn2ForceDeviceActivity activity,
+    Gfn2IntegralForceDeviceInput input, Gfn2IntegralForceDeviceOutput output,
+    Gfn2IntegralForceDeviceWorkspace workspace, std::uint32_t* system_errors,
+    std::uint32_t* device_error) {
+  const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.y);
+  if (!force_sequence_is_active(workspace) ||
+      !force_member_is_active(activity, system, system_errors, device_error)) {
     return;
   }
-  const std::int64_t primitive_begin = batch.shell_primitive_offsets[ranges.shell_begin];
-  const std::int64_t primitive_end = batch.shell_primitive_offsets[ranges.shell_end];
-  for (std::int64_t primitive = primitive_begin + threadIdx.x; primitive < primitive_end;
-       primitive += blockDim.x) {
+
+  const std::int64_t atom_begin = batch.atom_offsets[system];
+  const std::int64_t atom_end = batch.atom_offsets[system + 1];
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t matrix_begin = batch.matrix_offsets[system];
+  const std::int64_t matrix_end = batch.matrix_offsets[system + 1];
+  const std::int64_t primitive_begin = batch.shell_primitive_offsets[shell_begin];
+  const std::int64_t primitive_end = batch.shell_primitive_offsets[shell_end];
+  const std::int64_t stride = batch.linear_tiles_per_system * blockDim.x;
+
+  for (std::int64_t atom = atom_begin + tile * blockDim.x + threadIdx.x; atom < atom_end;
+       atom += stride) {
+    const std::int64_t coordinate = atom * 3;
+    for (int axis = 0; axis < 3; ++axis) {
+      if (!isfinite(input.positions[coordinate + axis])) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2IntegralDeviceError::kNonfinitePosition);
+      }
+      const double seed = output.gradients[coordinate + axis];
+      if (!isfinite(seed)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2IntegralDeviceError::kNonfiniteGradientSeed);
+      } else {
+        workspace.gradient_scratch[coordinate + axis] = seed;
+      }
+    }
+  }
+  for (std::int64_t primitive = primitive_begin + tile * blockDim.x + threadIdx.x;
+       primitive < primitive_end; primitive += stride) {
     if (!(batch.primitive_exponents[primitive] > 0.0) ||
         !isfinite(batch.primitive_exponents[primitive]) ||
         !isfinite(batch.primitive_coefficients[primitive])) {
       record_system_error(system_errors, system, device_error,
                           Gfn2IntegralDeviceError::kInvalidPrimitiveData);
-      atomicExch(&valid, 0);
     }
   }
   const std::int64_t matrix_elements = batch.total_matrix_elements;
-  for (std::int64_t matrix = ranges.matrix_begin + threadIdx.x; matrix < ranges.matrix_end;
-       matrix += blockDim.x) {
+  for (std::int64_t matrix = matrix_begin + tile * blockDim.x + threadIdx.x; matrix < matrix_end;
+       matrix += stride) {
     if (!isfinite(input.overlap_adjoint[matrix])) {
       record_system_error(system_errors, system, device_error,
                           Gfn2IntegralDeviceError::kNonfiniteAdjoint);
-      atomicExch(&valid, 0);
     }
     for (int component = 0;
          batch.model == XtbModelFlavor::kGfn2 && component < kGfn2IntegralDipoleComponents;
@@ -1274,7 +1334,6 @@ __global__ void integral_force_preflight_kernel(Gfn2IntegralDeviceBatch batch,
       if (!isfinite(input.dipole_adjoint[component * matrix_elements + matrix])) {
         record_system_error(system_errors, system, device_error,
                             Gfn2IntegralDeviceError::kNonfiniteAdjoint);
-        atomicExch(&valid, 0);
       }
     }
     for (int component = 0;
@@ -1283,7 +1342,6 @@ __global__ void integral_force_preflight_kernel(Gfn2IntegralDeviceBatch batch,
       if (!isfinite(input.quadrupole_adjoint[component * matrix_elements + matrix])) {
         record_system_error(system_errors, system, device_error,
                             Gfn2IntegralDeviceError::kNonfiniteAdjoint);
-        atomicExch(&valid, 0);
       }
     }
   }
@@ -1641,6 +1699,7 @@ __global__ void publish_integral_force_kernel(Gfn2IntegralDeviceBatch batch,
                                               Gfn2IntegralForceDeviceWorkspace workspace,
                                               const std::uint32_t* system_errors) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.y);
   if (!force_sequence_is_active(workspace) || activity.requested_mask[system] != 1u ||
       activity.system_statuses[system] != XTBLOOM_STATUS_SUCCESS ||
       !system_is_valid(system_errors, system)) {
@@ -1648,7 +1707,9 @@ __global__ void publish_integral_force_kernel(Gfn2IntegralDeviceBatch batch,
   }
   const std::int64_t atom_begin = batch.atom_offsets[system];
   const std::int64_t atom_end = batch.atom_offsets[system + 1];
-  for (std::int64_t atom = atom_begin + threadIdx.x; atom < atom_end; atom += blockDim.x) {
+  const std::int64_t stride = batch.linear_tiles_per_system * blockDim.x;
+  for (std::int64_t atom = atom_begin + tile * blockDim.x + threadIdx.x; atom < atom_end;
+       atom += stride) {
     for (int coordinate = 0; coordinate < 3; ++coordinate) {
       output.gradients[atom * 3 + coordinate] = workspace.gradient_scratch[atom * 3 + coordinate];
     }
@@ -1768,9 +1829,21 @@ cudaError_t add_gfn2_integral_gradient_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  integral_force_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock,
-                                    0, stream>>>(batch, activity, input, output, workspace,
-                                                 system_errors, device_error);
+  Gfn2IntegralLinearLaunchShape linear_shape{};
+  if (!make_gfn2_integral_linear_launch_shape(batch.batch_size, batch.linear_tiles_per_system,
+                                              linear_shape)) {
+    return cudaErrorInvalidValue;
+  }
+  const dim3 linear_grid(linear_shape.systems, linear_shape.tiles, 1u);
+  integral_force_topology_preflight_kernel<<<static_cast<unsigned int>(batch.batch_size),
+                                             kThreadsPerBlock, 0, stream>>>(
+      batch, activity, workspace, system_errors, device_error);
+  status = check_launch();
+  if (status != cudaSuccess) {
+    return status;
+  }
+  integral_force_numerical_preflight_kernel<<<linear_grid, kThreadsPerBlock, 0, stream>>>(
+      batch, activity, input, output, workspace, system_errors, device_error);
   status = check_launch();
   if (status != cudaSuccess) {
     return status;
@@ -1781,8 +1854,8 @@ cudaError_t add_gfn2_integral_gradient_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  publish_integral_force_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0,
-                                  stream>>>(batch, activity, output, workspace, system_errors);
+  publish_integral_force_kernel<<<linear_grid, kThreadsPerBlock, 0, stream>>>(
+      batch, activity, output, workspace, system_errors);
   return check_launch();
 }
 

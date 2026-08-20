@@ -1,6 +1,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -459,6 +460,7 @@ struct DeviceFixture {
             h.integrals.total_matrix_elements,
             h.h0.shell_pair_offsets.back(),
             h.maximum_system_shells,
+            1,
             h.integrals.integral_cutoff,
             kPlanToken,
             static_cast<std::int64_t>(h.basis.atom_offsets.size()),
@@ -625,14 +627,20 @@ struct DeviceFixture {
   }
 };
 
-cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t stream) {
+cudaError_t launch_with_integral_batch(DeviceFixture& device, const HostCase& host,
+                                       const Gfn2IntegralDeviceBatch& integral_batch,
+                                       cudaStream_t stream) {
   return xtbloom::detail::cuda::compose_gfn2_electronic_gradient_cuda(
-      Gfn2ElectronicGradientRequest{1u, kPlanToken}, device.integral_batch(host),
-      device.h0_plan(host), device.hamiltonian_batch(host), device.activity(host),
-      device.h0_input(host), device.h0_output(host), device.h0_workspace(host),
-      device.hamiltonian_input(host), device.hamiltonian_output(host),
-      device.hamiltonian_workspace(host), device.integral_workspace(host),
-      device.composer_workspace(host), device.diagnostics(host), stream);
+      Gfn2ElectronicGradientRequest{1u, kPlanToken}, integral_batch, device.h0_plan(host),
+      device.hamiltonian_batch(host), device.activity(host), device.h0_input(host),
+      device.h0_output(host), device.h0_workspace(host), device.hamiltonian_input(host),
+      device.hamiltonian_output(host), device.hamiltonian_workspace(host),
+      device.integral_workspace(host), device.composer_workspace(host), device.diagnostics(host),
+      stream);
+}
+
+cudaError_t launch(DeviceFixture& device, const HostCase& host, cudaStream_t stream) {
+  return launch_with_integral_batch(device, host, device.integral_batch(host), stream);
 }
 
 int compare(DeviceFixture& device, const HostCase& host, cudaStream_t stream) {
@@ -836,6 +844,40 @@ int test_energy_only_requires_no_force_binding_or_launch() {
   return 0;
 }
 
+int test_invalid_linear_tiles_reject_before_error_reset() {
+  HostCase host;
+  std::string error;
+  CHECK(make_case(host, error));
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, stream));
+
+  constexpr std::uint32_t kSentinel = 0x6a17d4f2u;
+  const std::vector<std::uint32_t> system_sentinel(static_cast<std::size_t>(host.basis.batch_size),
+                                                   kSentinel);
+  for (const std::int64_t invalid_tiles :
+       std::array<std::int64_t, 2>{0, xtbloom::detail::cuda::kGfn2IntegralLinearBlockBudget + 1}) {
+    CUDA_CHECK(
+        device.h0_system_errors.copy_from(system_sentinel.data(), system_sentinel.size(), stream));
+    CUDA_CHECK(device.h0_device_error.copy_from(&kSentinel, 1u, stream));
+    Gfn2IntegralDeviceBatch invalid_batch = device.integral_batch(host);
+    invalid_batch.linear_tiles_per_system = invalid_tiles;
+    CHECK(launch_with_integral_batch(device, host, invalid_batch, stream) == cudaErrorInvalidValue);
+
+    std::vector<std::uint32_t> actual_system_errors(system_sentinel.size());
+    std::uint32_t actual_device_error = 0u;
+    CUDA_CHECK(device.h0_system_errors.copy_to(actual_system_errors.data(),
+                                               actual_system_errors.size(), stream));
+    CUDA_CHECK(device.h0_device_error.copy_to(&actual_device_error, 1u, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(actual_system_errors == system_sentinel);
+    CHECK(actual_device_error == kSentinel);
+  }
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -845,5 +887,8 @@ int main() {
   if (const int status = test_stage_failure_propagates_without_peer_contamination(); status != 0) {
     return status;
   }
-  return test_energy_only_requires_no_force_binding_or_launch();
+  if (const int status = test_energy_only_requires_no_force_binding_or_launch(); status != 0) {
+    return status;
+  }
+  return test_invalid_linear_tiles_reject_before_error_reset();
 }
