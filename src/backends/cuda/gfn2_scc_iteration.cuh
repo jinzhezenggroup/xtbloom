@@ -45,8 +45,10 @@ namespace xtbloom::detail::cuda {
  * AO/matrix, packed all-pair, AO bucket, element identity) as the single
  * borrowing authority for every plan leaf; leaf identity is proven against
  * these projections in one place instead of re-deriving the master topology.
- * ABI v4 replaces the dense D4 pair cache with Gfn2D4PairListDeviceCache. */
-inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 5u;
+ * ABI v4 replaces the dense D4 pair cache with Gfn2D4PairListDeviceCache. ABI
+ * v5 adds uniform electric-field execution. ABI v6 adds the topology-fixed
+ * density contraction tile count used by direct and Graph launches. */
+inline constexpr std::uint32_t kGfn2SccIterationAbiVersion = 6u;
 
 /*
  * Which numerical-body stages one launch runs. The production device-tail loop

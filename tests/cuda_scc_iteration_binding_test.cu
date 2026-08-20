@@ -566,6 +566,7 @@ struct Fixture {
     plan.density_batch = {kBatch,
                           kOrbitals,
                           kMatrices,
+                          kOrbitals,
                           2,
                           2,
                           kToken,
@@ -1324,14 +1325,26 @@ int test_optional_canonical_null_and_report_extension_capacity() {
                                                  fixture.workspace)
             .error == Gfn2SccIterationBindingError::kSuccess);
 
+  fixture.plan.density_batch.contraction_tiles_per_channel = 0;
+  auto diagnostic = validate_gfn2_scc_iteration_binding_cuda(fixture.plan, fixture.input,
+                                                             fixture.state, fixture.workspace);
+  CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidCount);
+  CHECK(diagnostic.field == Gfn2SccIterationBindingField::kDensity);
+  fixture.plan.density_batch.contraction_tiles_per_channel = kGfn2DensityContractBlockBudget + 1;
+  diagnostic = validate_gfn2_scc_iteration_binding_cuda(fixture.plan, fixture.input, fixture.state,
+                                                        fixture.workspace);
+  CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidCount);
+  CHECK(diagnostic.field == Gfn2SccIterationBindingField::kDensity);
+  fixture.plan.density_batch.contraction_tiles_per_channel = 1;
+
   for (std::int64_t index = 0; index < fixture.plan.report_count; ++index) {
     if (fixture.plan.reports[index].stage == Gfn2SccStageId::kES2Potential) {
       fixture.plan.reports[index].device_code_role = Gfn2SccStageDeviceCodeRole::kMixedFirstError;
       break;
     }
   }
-  auto diagnostic = validate_gfn2_scc_iteration_binding_cuda(fixture.plan, fixture.input,
-                                                             fixture.state, fixture.workspace);
+  diagnostic = validate_gfn2_scc_iteration_binding_cuda(fixture.plan, fixture.input, fixture.state,
+                                                        fixture.workspace);
   CHECK(diagnostic.error == Gfn2SccIterationBindingError::kInvalidStageReport);
 
   fixture.make_reports();

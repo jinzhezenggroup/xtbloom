@@ -2159,6 +2159,15 @@ int test_large_singleton_tridiagonal_graph() {
   CHECK(fixture.binding.plan.eigensolver_provider.bucket_count == 1);
   CHECK(fixture.binding.plan.eigensolver_provider.buckets[0].system_count == 1);
   CHECK(fixture.binding.plan.eigensolver_provider.buckets[0].orbital_count == 542);
+  CHECK(fixture.binding.plan.density_batch.contraction_tiles_per_channel > 1);
+  Gfn2DensityContractLaunchShape restricted_density_shape{};
+  CHECK(make_gfn2_density_contract_launch_shape(
+      fixture.binding.plan.topology.batch_size,
+      fixture.binding.plan.wavefunction_layout.total_spin_channels,
+      fixture.binding.plan.density_batch.contraction_tiles_per_channel, restricted_density_shape));
+  CHECK(restricted_density_shape.channels == 1u);
+  CHECK(restricted_density_shape.tiles ==
+        fixture.binding.plan.density_batch.contraction_tiles_per_channel);
   CHECK(gfn2_eigensolver_uses_tridiagonal(fixture.binding.plan.eigensolver_options,
                                           fixture.binding.plan.eigensolver_provider.buckets[0]));
   CUDA_CHECK(cudaStreamSynchronize(fixture.handles.stream()));
@@ -2249,6 +2258,16 @@ int test_large_singleton_tridiagonal_graph() {
   CHECK(unrestricted.binding.plan.eigensolver_provider.buckets[0].orbital_count == 542);
   CHECK(unrestricted.binding.plan.eigensolver_provider.buckets[0].system_count == 1);
   CHECK(unrestricted.binding.plan.eigensolver_provider.buckets[0].solve_count == 2);
+  CHECK(unrestricted.binding.plan.density_batch.contraction_tiles_per_channel > 1);
+  Gfn2DensityContractLaunchShape unrestricted_density_shape{};
+  CHECK(make_gfn2_density_contract_launch_shape(
+      unrestricted.binding.plan.topology.batch_size,
+      unrestricted.binding.plan.wavefunction_layout.total_spin_channels,
+      unrestricted.binding.plan.density_batch.contraction_tiles_per_channel,
+      unrestricted_density_shape));
+  CHECK(unrestricted_density_shape.channels == 2u);
+  CHECK(unrestricted_density_shape.tiles ==
+        unrestricted.binding.plan.density_batch.contraction_tiles_per_channel);
   CUDA_CHECK(cudaStreamSynchronize(unrestricted.handles.stream()));
   Gfn2SccLoopCudaGraphOwner unrestricted_owner;
   CHECK(unrestricted_owner.build(unrestricted.binding).device_tail_graph_ready());

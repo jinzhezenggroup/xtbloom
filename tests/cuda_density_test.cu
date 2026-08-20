@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -126,6 +127,16 @@ struct HostCase {
   std::size_t batch_size() const { return active.size(); }
   std::size_t total_orbitals() const { return eigenvalues.size(); }
   std::size_t total_matrix_elements() const { return coefficients.size(); }
+  std::int64_t contraction_tiles() const {
+    const std::vector<std::int32_t> channels(batch_size(), 1);
+    std::int64_t tiles = 0;
+    return xtbloom::detail::cuda::select_gfn2_density_contraction_tiles(
+               orbital_offsets.data(), static_cast<std::int64_t>(orbital_offsets.size()),
+               channels.data(), static_cast<std::int64_t>(channels.size()),
+               static_cast<std::int64_t>(batch_size()), tiles)
+               ? tiles
+               : 0;
+  }
 };
 
 void build_reference(HostCase& host) {
@@ -186,7 +197,8 @@ void build_reference(HostCase& host) {
   }
 }
 
-HostCase make_case(std::size_t batch_size) {
+HostCase make_case(std::size_t batch_size, std::int64_t singleton_orbitals = 7,
+                   std::int64_t multi_system_orbitals = 0) {
   HostCase host;
   host.orbital_offsets.assign(batch_size + 1u, 0);
   host.matrix_offsets.assign(batch_size + 1u, 0);
@@ -195,7 +207,10 @@ HostCase make_case(std::size_t batch_size) {
   for (std::size_t system = 0u; system < batch_size; ++system) {
     host.orbital_offsets[system] = orbitals;
     host.matrix_offsets[system] = matrices;
-    const std::int64_t count = batch_size == 1u ? 7 : 1 + static_cast<std::int64_t>(system % 9u);
+    const std::int64_t count =
+        batch_size == 1u ? singleton_orbitals
+                         : (multi_system_orbitals > 0 ? multi_system_orbitals
+                                                      : 1 + static_cast<std::int64_t>(system % 9u));
     orbitals += count;
     matrices += count * count;
   }
@@ -314,6 +329,7 @@ struct DeviceFixture {
     return {static_cast<std::int64_t>(host.batch_size()),
             static_cast<std::int64_t>(host.total_orbitals()),
             static_cast<std::int64_t>(host.total_matrix_elements()),
+            host.contraction_tiles(),
             static_cast<std::int64_t>(host.orbital_offsets.size()),
             static_cast<std::int64_t>(host.matrix_offsets.size()),
             kPlanToken,
@@ -409,6 +425,14 @@ cudaError_t copy_results(const HostCase& host, const DeviceFixture& device, Resu
   return status;
 }
 
+bool exact_results_equal(const Results& first, const Results& second) {
+  return first.density == second.density && first.weighted_density == second.weighted_density &&
+         first.band == second.band && first.occupation_sum == second.occupation_sum &&
+         first.density_trace == second.density_trace &&
+         first.weighted_trace == second.weighted_trace &&
+         first.system_errors == second.system_errors && first.device_error == second.device_error;
+}
+
 int compare_success(const HostCase& host, const Results& actual) {
   CHECK(actual.device_error == 0u);
   CHECK(std::all_of(actual.system_errors.begin(), actual.system_errors.end(),
@@ -437,6 +461,25 @@ int compare_success(const HostCase& host, const Results& actual) {
     CHECK(near(actual.density_trace[system], host.expected_density_trace[system], 8.0e-13));
     CHECK(near(actual.weighted_trace[system], host.expected_weighted_trace[system], 8.0e-13));
   }
+  return 0;
+}
+
+int compare_restricted_system_success(const HostCase& host, const Results& actual,
+                                      std::size_t system) {
+  CHECK(system < host.batch_size());
+  CHECK(actual.system_errors[system] == 0u);
+  const std::int64_t begin = host.matrix_offsets[system];
+  const std::int64_t end = host.matrix_offsets[system + 1u];
+  for (std::int64_t index = begin; index < end; ++index) {
+    CHECK(near(actual.density[static_cast<std::size_t>(index)],
+               host.expected_density[static_cast<std::size_t>(index)], 8.0e-13));
+    CHECK(near(actual.weighted_density[static_cast<std::size_t>(index)],
+               host.expected_weighted_density[static_cast<std::size_t>(index)], 8.0e-13));
+  }
+  CHECK(near(actual.band[system], host.expected_band[system], 8.0e-13));
+  CHECK(near(actual.occupation_sum[system], host.expected_occupation_sum[system], 8.0e-13));
+  CHECK(near(actual.density_trace[system], host.expected_density_trace[system], 8.0e-13));
+  CHECK(near(actual.weighted_trace[system], host.expected_weighted_trace[system], 8.0e-13));
   return 0;
 }
 
@@ -801,6 +844,15 @@ struct SpinHostCase {
   std::size_t total_spin_channels() const {
     return static_cast<std::size_t>(spin_channel_offsets.back());
   }
+  std::int64_t contraction_tiles() const {
+    std::int64_t tiles = 0;
+    return xtbloom::detail::cuda::select_gfn2_density_contraction_tiles(
+               orbital_offsets.data(), static_cast<std::int64_t>(orbital_offsets.size()),
+               spin_channels.data(), static_cast<std::int64_t>(spin_channels.size()),
+               static_cast<std::int64_t>(batch_size()), tiles)
+               ? tiles
+               : 0;
+  }
 };
 
 void build_spin_reference(SpinHostCase& host) {
@@ -893,7 +945,10 @@ void build_spin_reference(SpinHostCase& host) {
   }
 }
 
-SpinHostCase make_spin_case(std::size_t batch_size) {
+SpinHostCase make_spin_case(std::size_t batch_size, std::int64_t singleton_orbitals = 6,
+                            std::int32_t singleton_spin_channels = 2,
+                            std::int64_t multi_system_orbitals = 0,
+                            std::int32_t multi_system_spin_channels = 0) {
   SpinHostCase host;
   host.orbital_offsets.assign(batch_size + 1u, 0);
   host.matrix_offsets.assign(batch_size + 1u, 0);
@@ -908,8 +963,14 @@ SpinHostCase make_spin_case(std::size_t batch_size) {
   std::int64_t spin_matrices = 0;
   std::int64_t spin_channels = 0;
   for (std::size_t system = 0u; system < batch_size; ++system) {
-    const std::int64_t count = batch_size == 1u ? 6 : 1 + static_cast<std::int64_t>(system % 7u);
-    const std::int32_t channels = batch_size == 1u || system % 2u == 1u ? 2 : 1;
+    const std::int64_t count =
+        batch_size == 1u ? singleton_orbitals
+                         : (multi_system_orbitals > 0 ? multi_system_orbitals
+                                                      : 1 + static_cast<std::int64_t>(system % 7u));
+    const std::int32_t channels =
+        batch_size == 1u ? singleton_spin_channels
+                         : (multi_system_spin_channels != 0 ? multi_system_spin_channels
+                                                            : (system % 2u == 1u ? 2 : 1));
     host.orbital_offsets[system] = orbitals;
     host.matrix_offsets[system] = matrices;
     host.spin_orbital_offsets[system] = spin_orbitals;
@@ -1082,6 +1143,7 @@ struct SpinDeviceFixture {
     value.batch_size = static_cast<std::int64_t>(host.batch_size());
     value.total_orbitals = static_cast<std::int64_t>(host.total_orbitals());
     value.total_matrix_elements = static_cast<std::int64_t>(host.total_matrix_elements());
+    value.contraction_tiles_per_channel = host.contraction_tiles();
     value.orbital_offset_count = static_cast<std::int64_t>(host.orbital_offsets.size());
     value.matrix_offset_count = static_cast<std::int64_t>(host.matrix_offsets.size());
     value.plan_token = kPlanToken;
@@ -1246,6 +1308,18 @@ cudaError_t copy_spin_results(const SpinHostCase& host, const SpinDeviceFixture&
   return status;
 }
 
+bool exact_spin_results_equal(const SpinResults& first, const SpinResults& second) {
+  return first.density == second.density && first.weighted_density == second.weighted_density &&
+         first.band == second.band && first.occupation_sum == second.occupation_sum &&
+         first.density_trace == second.density_trace &&
+         first.weighted_trace == second.weighted_trace &&
+         first.channel_band == second.channel_band &&
+         first.channel_occupation_sum == second.channel_occupation_sum &&
+         first.channel_density_trace == second.channel_density_trace &&
+         first.channel_weighted_trace == second.channel_weighted_trace &&
+         first.system_errors == second.system_errors && first.device_error == second.device_error;
+}
+
 int run_spin(SpinDeviceFixture& device, const SpinHostCase& host, cudaStream_t stream) {
   CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_density_device_errors_cuda(
       static_cast<std::int64_t>(host.batch_size()), device.system_errors.get(),
@@ -1302,6 +1376,37 @@ int compare_spin_success(const SpinHostCase& host, const SpinResults& actual) {
     CHECK(near(actual.density_trace[system], host.expected_density_trace[system], 8.0e-13));
     CHECK(near(actual.weighted_trace[system], host.expected_weighted_trace[system], 8.0e-13));
   }
+  return 0;
+}
+
+int compare_spin_system_success(const SpinHostCase& host, const SpinResults& actual,
+                                std::size_t system) {
+  CHECK(system < host.batch_size());
+  CHECK(actual.system_errors[system] == 0u);
+  const std::int64_t matrix_begin = host.spin_matrix_offsets[system];
+  const std::int64_t matrix_end = host.spin_matrix_offsets[system + 1u];
+  for (std::int64_t index = matrix_begin; index < matrix_end; ++index) {
+    CHECK(near(actual.density[static_cast<std::size_t>(index)],
+               host.expected_density[static_cast<std::size_t>(index)], 8.0e-13));
+    CHECK(near(actual.weighted_density[static_cast<std::size_t>(index)],
+               host.expected_weighted_density[static_cast<std::size_t>(index)], 8.0e-13));
+  }
+  const std::int64_t channel_begin = host.spin_channel_offsets[system];
+  const std::int64_t channel_end = host.spin_channel_offsets[system + 1u];
+  for (std::int64_t channel = channel_begin; channel < channel_end; ++channel) {
+    const std::size_t index = static_cast<std::size_t>(channel);
+    CHECK(near(actual.channel_band[index], host.expected_channel_band[index], 8.0e-13));
+    CHECK(near(actual.channel_occupation_sum[index], host.expected_channel_occupation_sum[index],
+               8.0e-13));
+    CHECK(near(actual.channel_density_trace[index], host.expected_channel_density_trace[index],
+               8.0e-13));
+    CHECK(near(actual.channel_weighted_trace[index], host.expected_channel_weighted_trace[index],
+               8.0e-13));
+  }
+  CHECK(near(actual.band[system], host.expected_band[system], 8.0e-13));
+  CHECK(near(actual.occupation_sum[system], host.expected_occupation_sum[system], 8.0e-13));
+  CHECK(near(actual.density_trace[system], host.expected_density_trace[system], 8.0e-13));
+  CHECK(near(actual.weighted_trace[system], host.expected_weighted_trace[system], 8.0e-13));
   return 0;
 }
 
@@ -1529,6 +1634,290 @@ int test_spin_entry_requires_explicit_metadata() {
   return 0;
 }
 
+int test_contraction_tile_selector_boundaries_and_budget() {
+  using xtbloom::detail::cuda::Gfn2DensityContractLaunchShape;
+  using xtbloom::detail::cuda::make_gfn2_density_contract_launch_shape;
+  using xtbloom::detail::cuda::select_gfn2_density_contraction_tiles;
+
+  std::int64_t tiles = 77;
+  const std::array<std::int64_t, 2> ao22{0, 22};
+  const std::array<std::int32_t, 1> restricted{1};
+  CHECK(select_gfn2_density_contraction_tiles(ao22.data(), ao22.size(), restricted.data(),
+                                              restricted.size(), 1, tiles));
+  CHECK(tiles == 1);
+
+  const std::array<std::int64_t, 2> ao23{0, 23};
+  CHECK(select_gfn2_density_contraction_tiles(ao23.data(), ao23.size(), restricted.data(),
+                                              restricted.size(), 1, tiles));
+  CHECK(tiles == 2);
+
+  const std::array<std::int64_t, 5> heterogeneous{0, 22, 45, 110, 111};
+  const std::array<std::int32_t, 4> heterogeneous_spin{1, 2, 1, 1};
+  CHECK(select_gfn2_density_contraction_tiles(heterogeneous.data(), heterogeneous.size(),
+                                              heterogeneous_spin.data(), heterogeneous_spin.size(),
+                                              4, tiles));
+  /* Useful channel tiles are 1 + 2*2 + 9 + 1 = 15 across five channels. */
+  CHECK(tiles == 3);
+
+  std::array<std::int64_t, 9> homogeneous{};
+  std::array<std::int32_t, 8> homogeneous_spin{};
+  homogeneous_spin.fill(1);
+  for (std::size_t index = 0; index < homogeneous_spin.size(); ++index) {
+    homogeneous[index + 1u] = homogeneous[index] + 65;
+  }
+  CHECK(select_gfn2_density_contraction_tiles(homogeneous.data(), homogeneous.size(),
+                                              homogeneous_spin.data(), homogeneous_spin.size(), 8,
+                                              tiles));
+  CHECK(tiles == 9);
+
+  std::array<std::int64_t, 9> budgeted{};
+  std::array<std::int32_t, 8> unrestricted{};
+  unrestricted.fill(2);
+  for (std::size_t index = 0; index < unrestricted.size(); ++index) {
+    budgeted[index + 1u] = budgeted[index] + 722;
+  }
+  CHECK(select_gfn2_density_contraction_tiles(budgeted.data(), budgeted.size(), unrestricted.data(),
+                                              unrestricted.size(), 8, tiles));
+  CHECK(tiles == 32);
+
+  std::array<std::int32_t, 8> mixed_channels{1, 2, 1, 2, 1, 2, 1, 2};
+  CHECK(select_gfn2_density_contraction_tiles(
+      budgeted.data(), budgeted.size(), mixed_channels.data(), mixed_channels.size(), 8, tiles));
+  /* The production grid has two channel slots for every system once any
+   * unrestricted member is present, so 8*2*32 exactly meets the CTA budget. */
+  CHECK(tiles == 32);
+
+  Gfn2DensityContractLaunchShape shape{77u, 77u, 77u};
+  CHECK(make_gfn2_density_contract_launch_shape(1, 1, 9, shape));
+  CHECK(shape.systems == 1u && shape.channels == 1u && shape.tiles == 9u);
+  CHECK(make_gfn2_density_contract_launch_shape(1, 2, 9, shape));
+  CHECK(shape.systems == 1u && shape.channels == 2u && shape.tiles == 9u);
+  CHECK(make_gfn2_density_contract_launch_shape(4, 5, 3, shape));
+  CHECK(shape.systems == 4u && shape.channels == 2u && shape.tiles == 3u);
+  shape = {77u, 77u, 77u};
+  CHECK(!make_gfn2_density_contract_launch_shape(4, 3, 3, shape));
+  CHECK(shape.systems == 77u && shape.channels == 77u && shape.tiles == 77u);
+
+  const std::array<std::int64_t, 2> overflow{0, std::numeric_limits<std::int64_t>::max()};
+  tiles = 77;
+  CHECK(!select_gfn2_density_contraction_tiles(overflow.data(), overflow.size(), restricted.data(),
+                                               restricted.size(), 1, tiles));
+  CHECK(tiles == 77);
+  CHECK(!select_gfn2_density_contraction_tiles(ao23.data(), ao23.size(), restricted.data(), 0, 1,
+                                               tiles));
+  CHECK(tiles == 77);
+  const std::array<std::int32_t, 1> invalid_spin{3};
+  CHECK(!select_gfn2_density_contraction_tiles(ao23.data(), ao23.size(), invalid_spin.data(),
+                                               invalid_spin.size(), 1, tiles));
+  CHECK(tiles == 77);
+  const std::array<std::int64_t, 3> decreasing{0, 23, 22};
+  const std::array<std::int32_t, 2> two_restricted{1, 1};
+  CHECK(!select_gfn2_density_contraction_tiles(decreasing.data(), decreasing.size(),
+                                               two_restricted.data(), two_restricted.size(), 2,
+                                               tiles));
+  CHECK(tiles == 77);
+  return 0;
+}
+
+int test_large_singleton_pair_tiles_preserve_direct_and_graph_results() {
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+
+  HostCase restricted = make_case(1u, 65);
+  DeviceFixture restricted_device;
+  CUDA_CHECK(restricted_device.initialize(restricted, stream));
+  Gfn2DensityDeviceBatch restricted_batch = restricted_device.batch(restricted);
+  CHECK(restricted_batch.contraction_tiles_per_channel == 9);
+  CHECK(run(restricted_device, restricted, stream) == 0);
+  Results restricted_tiled;
+  CUDA_CHECK(copy_results(restricted, restricted_device, restricted_tiled, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(compare_success(restricted, restricted_tiled) == 0);
+
+  CUDA_CHECK(restricted_device.reset_outputs(restricted, stream));
+  restricted_batch.contraction_tiles_per_channel = 1;
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_density_device_errors_cuda(
+      1, restricted_device.system_errors.get(), restricted_device.device_error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+      restricted_batch, restricted_device.input(), restricted_device.results(),
+      restricted_device.workspace(), restricted_device.system_errors.get(),
+      restricted_device.device_error.get(), stream));
+  Results restricted_single_tile;
+  CUDA_CHECK(copy_results(restricted, restricted_device, restricted_single_tile, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(exact_results_equal(restricted_tiled, restricted_single_tile));
+
+  CUDA_CHECK(restricted_device.reset_outputs(restricted, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  cudaGraph_t restricted_graph = nullptr;
+  cudaGraphExec_t restricted_executable = nullptr;
+  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+  CHECK(run(restricted_device, restricted, stream) == 0);
+  CUDA_CHECK(cudaStreamEndCapture(stream, &restricted_graph));
+  CUDA_CHECK(cudaGraphInstantiate(&restricted_executable, restricted_graph, nullptr, nullptr, 0));
+
+  restricted.occupations[0] *= 0.375;
+  build_reference(restricted);
+  CUDA_CHECK(restricted_device.occupations.copy_from(restricted.occupations.data(),
+                                                     restricted.occupations.size(), stream));
+  CUDA_CHECK(restricted_device.reset_outputs(restricted, stream));
+  CUDA_CHECK(cudaGraphLaunch(restricted_executable, stream));
+  Results restricted_replay;
+  CUDA_CHECK(copy_results(restricted, restricted_device, restricted_replay, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(compare_success(restricted, restricted_replay) == 0);
+
+  for (const std::int32_t channels : {1, 2}) {
+    SpinHostCase spin = make_spin_case(1u, 65, channels);
+    SpinDeviceFixture spin_device;
+    CUDA_CHECK(spin_device.initialize(spin, stream));
+    Gfn2DensityDeviceBatch spin_batch = spin_device.batch(spin);
+    CHECK(spin_batch.contraction_tiles_per_channel == 9);
+    CHECK(run_spin(spin_device, spin, stream) == 0);
+    SpinResults spin_tiled;
+    CUDA_CHECK(copy_spin_results(spin, spin_device, spin_tiled, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(compare_spin_success(spin, spin_tiled) == 0);
+
+    CUDA_CHECK(spin_device.reset_outputs(spin, stream));
+    spin_batch.contraction_tiles_per_channel = 1;
+    CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_density_device_errors_cuda(
+        1, spin_device.system_errors.get(), spin_device.device_error.get(), stream));
+    CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_spin_density_cuda(
+        spin_batch, spin_device.layout(spin), spin_device.input(), spin_device.results(),
+        spin_device.workspace(), spin_device.system_errors.get(), spin_device.device_error.get(),
+        stream));
+    SpinResults spin_single_tile;
+    CUDA_CHECK(copy_spin_results(spin, spin_device, spin_single_tile, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(exact_spin_results_equal(spin_tiled, spin_single_tile));
+
+    CUDA_CHECK(spin_device.reset_outputs(spin, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    cudaGraph_t spin_graph = nullptr;
+    cudaGraphExec_t spin_executable = nullptr;
+    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+    CHECK(run_spin(spin_device, spin, stream) == 0);
+    CUDA_CHECK(cudaStreamEndCapture(stream, &spin_graph));
+    CUDA_CHECK(cudaGraphInstantiate(&spin_executable, spin_graph, nullptr, nullptr, 0));
+
+    const std::size_t changed_occupation = channels == 1 ? 0u : 65u;
+    spin.occupations[changed_occupation] *= 0.25;
+    build_spin_reference(spin);
+    CUDA_CHECK(spin_device.occupations.copy_from(spin.occupations.data(), spin.occupations.size(),
+                                                 stream));
+    CUDA_CHECK(spin_device.reset_outputs(spin, stream));
+    CUDA_CHECK(cudaGraphLaunch(spin_executable, stream));
+    SpinResults spin_replay;
+    CUDA_CHECK(copy_spin_results(spin, spin_device, spin_replay, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(compare_spin_success(spin, spin_replay) == 0);
+
+    CUDA_CHECK(cudaGraphExecDestroy(spin_executable));
+    CUDA_CHECK(cudaGraphDestroy(spin_graph));
+  }
+
+  const double overflow_coefficient = 2.0 * std::sqrt(std::numeric_limits<double>::max());
+  HostCase late_restricted = make_case(2u, 7, 65);
+  constexpr std::size_t kFailingSystem = 1u;
+  const std::int64_t restricted_orbital_begin = late_restricted.orbital_offsets[kFailingSystem];
+  const std::int64_t restricted_orbital_end = late_restricted.orbital_offsets[kFailingSystem + 1u];
+  const std::int64_t restricted_count = restricted_orbital_end - restricted_orbital_begin;
+  const std::int64_t restricted_matrix_begin = late_restricted.matrix_offsets[kFailingSystem];
+  const std::int64_t restricted_matrix_end = late_restricted.matrix_offsets[kFailingSystem + 1u];
+  std::fill(late_restricted.coefficients.begin() + restricted_matrix_begin,
+            late_restricted.coefficients.begin() + restricted_matrix_end, 0.0);
+  std::fill(late_restricted.eigenvalues.begin() + restricted_orbital_begin,
+            late_restricted.eigenvalues.begin() + restricted_orbital_end, 0.0);
+  std::fill(late_restricted.occupations.begin() + 2 * restricted_orbital_begin,
+            late_restricted.occupations.begin() + 2 * restricted_orbital_end, 0.0);
+  late_restricted
+      .coefficients[static_cast<std::size_t>(restricted_matrix_begin + 22 * restricted_count)] =
+      overflow_coefficient;
+  late_restricted.occupations[static_cast<std::size_t>(2 * restricted_orbital_begin)] = 1.0;
+  DeviceFixture late_restricted_device;
+  CUDA_CHECK(late_restricted_device.initialize(late_restricted, stream));
+  CHECK(run(late_restricted_device, late_restricted, stream) == 0);
+  Results late_restricted_results;
+  CUDA_CHECK(
+      copy_results(late_restricted, late_restricted_device, late_restricted_results, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(late_restricted_results.device_error ==
+        static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteDensityArithmetic));
+  CHECK(late_restricted_results.system_errors[kFailingSystem] ==
+        static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteDensityArithmetic));
+  CHECK(compare_restricted_system_success(late_restricted, late_restricted_results, 0u) == 0);
+  CHECK(std::all_of(late_restricted_results.density.begin() + restricted_matrix_begin,
+                    late_restricted_results.density.begin() + restricted_matrix_end,
+                    [](double value) { return value == kSentinel; }));
+  CHECK(std::all_of(late_restricted_results.weighted_density.begin() + restricted_matrix_begin,
+                    late_restricted_results.weighted_density.begin() + restricted_matrix_end,
+                    [](double value) { return value == kSentinel; }));
+  CHECK(late_restricted_results.band[kFailingSystem] == kSentinel);
+  CHECK(late_restricted_results.occupation_sum[kFailingSystem] == kSentinel);
+  CHECK(late_restricted_results.density_trace[kFailingSystem] == kSentinel);
+  CHECK(late_restricted_results.weighted_trace[kFailingSystem] == kSentinel);
+
+  SpinHostCase late_spin = make_spin_case(2u, 6, 2, 65, 2);
+  const std::int64_t spin_orbital_begin = late_spin.orbital_offsets[kFailingSystem];
+  const std::int64_t spin_orbital_end = late_spin.orbital_offsets[kFailingSystem + 1u];
+  const std::int64_t spin_count = spin_orbital_end - spin_orbital_begin;
+  const std::int64_t spin_eigenvalue_begin = late_spin.spin_orbital_offsets[kFailingSystem];
+  const std::int64_t spin_eigenvalue_end = late_spin.spin_orbital_offsets[kFailingSystem + 1u];
+  const std::int64_t spin_matrix_begin = late_spin.spin_matrix_offsets[kFailingSystem];
+  const std::int64_t spin_matrix_end = late_spin.spin_matrix_offsets[kFailingSystem + 1u];
+  const std::int64_t beta_matrix_begin = spin_matrix_begin + spin_count * spin_count;
+  std::fill(late_spin.coefficients.begin() + spin_matrix_begin,
+            late_spin.coefficients.begin() + spin_matrix_end, 0.0);
+  std::fill(late_spin.eigenvalues.begin() + spin_eigenvalue_begin,
+            late_spin.eigenvalues.begin() + spin_eigenvalue_end, 0.0);
+  std::fill(late_spin.occupations.begin() + 2 * spin_orbital_begin,
+            late_spin.occupations.begin() + 2 * spin_orbital_end, 0.0);
+  late_spin.coefficients[static_cast<std::size_t>(beta_matrix_begin + 22 * spin_count)] =
+      overflow_coefficient;
+  late_spin.occupations[static_cast<std::size_t>(2 * spin_orbital_begin + spin_count)] = 1.0;
+  SpinDeviceFixture late_spin_device;
+  CUDA_CHECK(late_spin_device.initialize(late_spin, stream));
+  CHECK(run_spin(late_spin_device, late_spin, stream) == 0);
+  SpinResults late_spin_results;
+  CUDA_CHECK(copy_spin_results(late_spin, late_spin_device, late_spin_results, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(late_spin_results.device_error ==
+        static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteDensityArithmetic));
+  CHECK(late_spin_results.system_errors[kFailingSystem] ==
+        static_cast<std::uint32_t>(Gfn2DensityDeviceError::kNonfiniteDensityArithmetic));
+  CHECK(compare_spin_system_success(late_spin, late_spin_results, 0u) == 0);
+  CHECK(std::all_of(late_spin_results.density.begin() + spin_matrix_begin,
+                    late_spin_results.density.begin() + spin_matrix_end,
+                    [](double value) { return value == kSentinel; }));
+  CHECK(std::all_of(late_spin_results.weighted_density.begin() + spin_matrix_begin,
+                    late_spin_results.weighted_density.begin() + spin_matrix_end,
+                    [](double value) { return value == kSentinel; }));
+  const std::int64_t failing_channel_begin = late_spin.spin_channel_offsets[kFailingSystem];
+  const std::int64_t failing_channel_end = late_spin.spin_channel_offsets[kFailingSystem + 1u];
+  CHECK(std::all_of(late_spin_results.channel_band.begin() + failing_channel_begin,
+                    late_spin_results.channel_band.begin() + failing_channel_end,
+                    [](double value) { return value == kSentinel; }));
+  CHECK(std::all_of(late_spin_results.channel_occupation_sum.begin() + failing_channel_begin,
+                    late_spin_results.channel_occupation_sum.begin() + failing_channel_end,
+                    [](double value) { return value == kSentinel; }));
+  CHECK(std::all_of(late_spin_results.channel_density_trace.begin() + failing_channel_begin,
+                    late_spin_results.channel_density_trace.begin() + failing_channel_end,
+                    [](double value) { return value == kSentinel; }));
+  CHECK(std::all_of(late_spin_results.channel_weighted_trace.begin() + failing_channel_begin,
+                    late_spin_results.channel_weighted_trace.begin() + failing_channel_end,
+                    [](double value) { return value == kSentinel; }));
+  CHECK(late_spin_results.band[kFailingSystem] == kSentinel);
+  CHECK(late_spin_results.occupation_sum[kFailingSystem] == kSentinel);
+  CHECK(late_spin_results.density_trace[kFailingSystem] == kSentinel);
+  CHECK(late_spin_results.weighted_trace[kFailingSystem] == kSentinel);
+
+  CUDA_CHECK(cudaGraphExecDestroy(restricted_executable));
+  CUDA_CHECK(cudaGraphDestroy(restricted_graph));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 int test_host_argument_alias_token_and_alignment_validation() {
   HostCase host = make_case(8u);
   DeviceFixture device;
@@ -1585,6 +1974,16 @@ int test_host_argument_alias_token_and_alignment_validation() {
             batch, input, results, workspace, device.system_errors.get(),
             device.device_error.get()) == cudaErrorInvalidValue);
   workspace = device.workspace();
+  batch.contraction_tiles_per_channel = 0;
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+            batch, input, results, workspace, device.system_errors.get(),
+            device.device_error.get()) == cudaErrorInvalidValue);
+  batch = device.batch(host);
+  batch.contraction_tiles_per_channel = xtbloom::detail::cuda::kGfn2DensityContractBlockBudget + 1;
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
+            batch, input, results, workspace, device.system_errors.get(),
+            device.device_error.get()) == cudaErrorInvalidValue);
+  batch = device.batch(host);
   results.band_energies = reinterpret_cast<double*>(device.device_error.get());
   CHECK(xtbloom::detail::cuda::evaluate_gfn2_restricted_density_cuda(
             batch, input, results, workspace, device.system_errors.get(),
@@ -1615,6 +2014,11 @@ int main() {
     return line;
   if (const int line = test_spin_graph_replay_changed_beta_input(); line != 0) return line;
   if (const int line = test_spin_entry_requires_explicit_metadata(); line != 0) return line;
+  if (const int line = test_contraction_tile_selector_boundaries_and_budget(); line != 0)
+    return line;
+  if (const int line = test_large_singleton_pair_tiles_preserve_direct_and_graph_results();
+      line != 0)
+    return line;
   if (const int line = test_host_argument_alias_token_and_alignment_validation(); line != 0)
     return line;
   return 0;
