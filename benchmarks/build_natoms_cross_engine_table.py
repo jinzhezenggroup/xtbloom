@@ -21,7 +21,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SUPPORTED_ENGINES = (
     "xtbloom-cpu",
@@ -291,10 +290,13 @@ def load_publication(
             reference_sha256 = artifact.get("reference_artifact_sha256", "")
             if engine == "tblite":
                 if reference_sha256:
-                    raise PublicationError("tblite reference rows cannot name a reference")
-            elif not isinstance(reference_sha256, str) or HEX_64.fullmatch(
-                reference_sha256
-            ) is None:
+                    raise PublicationError(
+                        "tblite reference rows cannot name a reference"
+                    )
+            elif (
+                not isinstance(reference_sha256, str)
+                or HEX_64.fullmatch(reference_sha256) is None
+            ):
                 raise PublicationError(
                     f"{engine}.{panel_id} requires a reference artifact SHA-256"
                 )
@@ -306,12 +308,16 @@ def load_publication(
                             f"{csv_relative} contains engine {csv_row.get('engine')}"
                         )
                     if csv_row.get("job", ""):
-                        raise PublicationError(f"{csv_relative} contains non-panel jobs")
+                        raise PublicationError(
+                            f"{csv_relative} contains non-panel jobs"
+                        )
                     row_batch = _optional_int(csv_row, "batch_size")
                     natoms = _optional_int(csv_row, "natoms")
                     row_threads = _optional_int(csv_row, "cpu_threads")
                     if row_batch != batch_size or natoms is None or natoms <= 0:
-                        raise PublicationError(f"{csv_relative} has an invalid coordinate")
+                        raise PublicationError(
+                            f"{csv_relative} has an invalid coordinate"
+                        )
                     if row_threads != cpu_threads:
                         raise PublicationError(f"{csv_relative} changes the CPU budget")
                     availability = csv_row.get("availability", "")
@@ -326,7 +332,9 @@ def load_publication(
                     p95_ms = _optional_float(csv_row, "p95_ms")
                     if availability == "available":
                         timing_values = (median_ms, mean_ms, min_ms, p95_ms)
-                        if any(value is None or value <= 0.0 for value in timing_values):
+                        if any(
+                            value is None or value <= 0.0 for value in timing_values
+                        ):
                             raise PublicationError(
                                 f"{csv_relative} omits available timing statistics"
                             )
@@ -481,6 +489,7 @@ def render_table(metadata: dict[str, Any]) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the current-results table command-line interface."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -493,6 +502,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Validate the publication manifest and write or check its table."""
     args = build_parser().parse_args(argv)
     try:
         _rows, metadata = load_publication(args.manifest)

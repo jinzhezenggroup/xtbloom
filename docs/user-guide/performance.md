@@ -12,6 +12,10 @@ correctness gates, and explicit limitations.
 The public figure measures GFN2-xTB energy plus analytic-force latency for
 distinct conformers of one alkane family.
 
+CUDA curves use an NVIDIA GeForce RTX 5090 (driver 580.95.05). The xTBloom
+CUDA rows were refreshed on 2026-08-20; CPU and third-party rows retain their
+unchanged 2026-08-09 measurements.
+
 On an AMD EPYC 7K62 with the same 16-thread CPU budget:
 
 | Workload | xTBloom CPU | xTB | tblite | Measured xTBloom speedup |
@@ -34,7 +38,9 @@ is limited to the recorded alkane corpus, energy plus forces, three measured
 samples per coordinate, and the stated hardware.
 
 - [Methodology](../../benchmarks/cross-engine.md)
-- [Raw evidence, commands, hashes, and limitations](../../benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
+- [Latest machine-readable table](../../benchmarks/natoms_cross_engine_latest.csv)
+- [RTX 5090 xTBloom CUDA evidence](../../benchmarks/evidence/issue-459/2026-08-20-node3/README.md)
+- [Historical CPU and third-party evidence](../../benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
 
 ## Warm-state CPU evidence
 

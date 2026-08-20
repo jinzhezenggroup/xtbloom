@@ -86,25 +86,25 @@
     },
     {
       "engine": "xtbloom-cuda",
-      "measured_date": "2026-08-09",
-      "source_revision": "c9c0a432947f122d25cb91d0a4624af0a3e761ad",
-      "runtime_identity": "libxtbloom.so.0.1.0 sha256=d995eca4a864db2d7f5fd284e9288f6f5cdd6a1436537fb1bd4fe600dfc0c524",
-      "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "measured_date": "2026-08-20",
+      "source_revision": "af65028c5dddc1a3aad3ffc554f0b7dba121a2fe",
+      "runtime_identity": "libxtbloom.so.0.2.0 sha256=6a0c81f844bda7814e450cbc716e5cc9f773377b6e79b4d3efd8c37ef1511b95; CUDA 12.9.86 sm_120",
+      "evidence_bundle": "benchmarks/evidence/issue-459/2026-08-20-node3/README.md",
       "artifacts": [
         {
           "panel": "cold",
-          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtbloom-cuda-cold.csv",
-          "reference_artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e"
+          "csv": "benchmarks/evidence/issue-459/2026-08-20-node3/xtbloom-cuda-cold.csv",
+          "reference_artifact_sha256": "9b9626f0481b8b72c12c5f5bfc95ed3a3d49e6d31301d403edb0dd1256e852f5"
         },
         {
           "panel": "b128",
-          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtbloom-cuda-b128.csv",
-          "reference_artifact_sha256": "e7a3d61ff6151bfa5f14d89a0c048f199035ee844a658bfe87fc9d39e35a8532"
+          "csv": "benchmarks/evidence/issue-459/2026-08-20-node3/xtbloom-cuda-b128.csv",
+          "reference_artifact_sha256": "b6997834c64a6d184c73a5b581894f2ed4f3a48e32ae736e09f274476f5dde4f"
         },
         {
           "panel": "b512",
-          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtbloom-cuda-b512.csv",
-          "reference_artifact_sha256": "33a344f3995660fb53f5025c7c217ac6e1e7dc4a53109759ddebda7d8dfee7e7"
+          "csv": "benchmarks/evidence/issue-459/2026-08-20-node3/xtbloom-cuda-b512.csv",
+          "reference_artifact_sha256": "1201442fa630ce40bcd93f3d788c1348bce61f4b140215a6aa6001e3efd17af4"
         }
       ]
     },

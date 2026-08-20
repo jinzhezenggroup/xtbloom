@@ -102,8 +102,9 @@ Repeated direct `--artifact` inputs remain supported for issue-local figures
 whose JSON artifacts share one clean run identity. They are not the source of
 the maintained mixed-revision public figure.
 
-The publication bundle, exact commands, raw numbers, hashes, unavailable rows,
-and limitations are archived in
+The current xTBloom CUDA bundle is archived in
+[issue #459 evidence](evidence/issue-459/2026-08-20-node3/README.md). Unchanged
+CPU and third-party rows remain in the
 [issue #13 evidence](evidence/issue-13/2026-08-09-node3-pr231/README.md).
 
 ## Validation
