@@ -1301,6 +1301,45 @@ class NatomsCrossEngineTest(unittest.TestCase):
             with self.assertRaisesRegex(plotters.PlotError, "incompatible run"):
                 plotters.load_rows(paths)
 
+    def test_checked_in_manifest_selects_only_issue_467_cuda(self) -> None:
+        """The public manifest advances CUDA without changing other sources."""
+        manifest_path = Path(__file__).with_name("natoms_cross_engine_publication.json")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        sources = {source["engine"]: source for source in manifest["sources"]}
+
+        cuda = sources["xtbloom-cuda"]
+        evidence_root = "benchmarks/evidence/issue-467/2026-08-20-node3"
+        self.assertEqual(cuda["measured_date"], "2026-08-20")
+        self.assertEqual(
+            cuda["source_revision"],
+            "e0a3b0d60a75fbc3efe2fc243a75cafee10f3b68",
+        )
+        self.assertEqual(cuda["evidence_bundle"], f"{evidence_root}/README.md")
+        self.assertEqual(cuda["metadata"], f"{evidence_root}/publication-metadata.json")
+        self.assertEqual(
+            {artifact["panel"]: artifact["csv"] for artifact in cuda["artifacts"]},
+            {
+                "cold": f"{evidence_root}/xtbloom-cuda-cold.csv",
+                "b128": f"{evidence_root}/xtbloom-cuda-b128.csv",
+                "b512": f"{evidence_root}/xtbloom-cuda-b512.csv",
+            },
+        )
+
+        # This snapshot intentionally binds every non-CUDA source field. A future
+        # CPU or third-party refresh must update it in the same reviewed change.
+        non_cuda_sources = [
+            source
+            for source in manifest["sources"]
+            if source["engine"] != "xtbloom-cuda"
+        ]
+        canonical_sources = json.dumps(
+            non_cuda_sources, sort_keys=True, separators=(",", ":")
+        ).encode()
+        self.assertEqual(
+            hashlib.sha256(canonical_sources).hexdigest(),
+            "9fb7afc9b0443ab0d361173d502ffd44f8e56a986c676b89c0651eb3d7b3cd5a",
+        )
+
     def test_publication_manifest_tracks_independent_engine_revisions(self) -> None:
         """A CUDA refresh can replace its rows without relabelling CPU data."""
         panels = (

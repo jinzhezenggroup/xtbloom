@@ -63,7 +63,7 @@
   "sources": [
     {
       "engine": "xtbloom-cuda",
-      "measured_date": "2026-08-21",
+      "measured_date": "2026-08-20",
       "source_revision": "e0a3b0d60a75fbc3efe2fc243a75cafee10f3b68",
       "runtime_identity": "libxtbloom.so.0.2.0 sha256=406102812d5ef0207b4a69f3869b977d5bc89234b65dbd46b2bb836140831b5f; CUDA 12.9.86 sm_120",
       "runner_revision": "e0a3b0d60a75fbc3efe2fc243a75cafee10f3b68",
