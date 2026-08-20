@@ -88,25 +88,25 @@
     },
     {
       "engine": "xtbloom-cuda",
-      "measured_date": "2026-08-20",
-      "source_revision": "af65028c5dddc1a3aad3ffc554f0b7dba121a2fe",
-      "runtime_identity": "libxtbloom.so.0.2.0 sha256=6a0c81f844bda7814e450cbc716e5cc9f773377b6e79b4d3efd8c37ef1511b95; CUDA 12.9.86 sm_120",
-      "evidence_bundle": "benchmarks/evidence/issue-459/2026-08-20-node3/README.md",
-      "metadata": "benchmarks/evidence/issue-459/2026-08-20-node3/publication-metadata.json",
+      "measured_date": "2026-08-21",
+      "source_revision": "e0a3b0d60a75fbc3efe2fc243a75cafee10f3b68",
+      "runtime_identity": "libxtbloom.so.0.2.0 sha256=406102812d5ef0207b4a69f3869b977d5bc89234b65dbd46b2bb836140831b5f; CUDA 12.9.86 sm_120",
+      "evidence_bundle": "benchmarks/evidence/issue-467/2026-08-21-node3/README.md",
+      "metadata": "benchmarks/evidence/issue-467/2026-08-21-node3/publication-metadata.json",
       "artifacts": [
         {
           "panel": "cold",
-          "csv": "benchmarks/evidence/issue-459/2026-08-20-node3/xtbloom-cuda-cold.csv",
+          "csv": "benchmarks/evidence/issue-467/2026-08-21-node3/xtbloom-cuda-cold.csv",
           "reference_artifact_sha256": "9b9626f0481b8b72c12c5f5bfc95ed3a3d49e6d31301d403edb0dd1256e852f5"
         },
         {
           "panel": "b128",
-          "csv": "benchmarks/evidence/issue-459/2026-08-20-node3/xtbloom-cuda-b128.csv",
+          "csv": "benchmarks/evidence/issue-467/2026-08-21-node3/xtbloom-cuda-b128.csv",
           "reference_artifact_sha256": "b6997834c64a6d184c73a5b581894f2ed4f3a48e32ae736e09f274476f5dde4f"
         },
         {
           "panel": "b512",
-          "csv": "benchmarks/evidence/issue-459/2026-08-20-node3/xtbloom-cuda-b512.csv",
+          "csv": "benchmarks/evidence/issue-467/2026-08-21-node3/xtbloom-cuda-b512.csv",
           "reference_artifact_sha256": "1201442fa630ce40bcd93f3d788c1348bce61f4b140215a6aa6001e3efd17af4"
         }
       ]

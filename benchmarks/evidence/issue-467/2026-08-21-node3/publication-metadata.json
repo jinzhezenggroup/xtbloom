@@ -63,10 +63,10 @@
   "sources": [
     {
       "engine": "xtbloom-cuda",
-      "measured_date": "2026-08-20",
-      "source_revision": "af65028c5dddc1a3aad3ffc554f0b7dba121a2fe",
-      "runtime_identity": "libxtbloom.so.0.2.0 sha256=6a0c81f844bda7814e450cbc716e5cc9f773377b6e79b4d3efd8c37ef1511b95; CUDA 12.9.86 sm_120",
-      "runner_revision": "af65028c5dddc1a3aad3ffc554f0b7dba121a2fe",
+      "measured_date": "2026-08-21",
+      "source_revision": "e0a3b0d60a75fbc3efe2fc243a75cafee10f3b68",
+      "runtime_identity": "libxtbloom.so.0.2.0 sha256=406102812d5ef0207b4a69f3869b977d5bc89234b65dbd46b2bb836140831b5f; CUDA 12.9.86 sm_120",
+      "runner_revision": "e0a3b0d60a75fbc3efe2fc243a75cafee10f3b68",
       "runner_dirty": false,
       "source_dirty": false,
       "evidence_eligibility": "eligible_clean_head",

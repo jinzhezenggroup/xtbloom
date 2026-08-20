@@ -1,9 +1,7 @@
-# Issue #459: RTX 5090 xTBloom CUDA refresh
+# Issue #467: post-#466 RTX 5090 xTBloom CUDA refresh
 
-This bundle refreshes only the xTBloom CUDA series in the public cross-engine
-figure. CPU, xTB, tblite, and dxtb rows remain pinned to the 2026-08-09
-evidence because neither those implementations nor their measurement contract
-changed.
+This bundle refreshes only xTBloom CUDA. CPU, xTB, tblite, and dxtb remain
+pinned to 2026-08-09. It supersedes #459; prior bytes remain in Git history.
 
 ## Result
 
@@ -12,20 +10,20 @@ samples per coordinate:
 
 | Panel | Atoms | Median (ms) |
 | --- | ---: | ---: |
-| Batch 1, cold | 14 | 13.826 |
-| Batch 1, cold | 32 | 32.922 |
-| Batch 1, cold | 62 | 56.907 |
-| Batch 1, cold | 122 | 109.729 |
-| Batch 1, cold | 242 | 252.979 |
-| Batch 1, cold | 362 | 620.349 |
-| Batch 128, auto-warm | 14 | 31.125 |
-| Batch 128, auto-warm | 32 | 61.433 |
-| Batch 128, auto-warm | 62 | 181.182 |
-| Batch 128, auto-warm | 122 | 628.971 |
-| Batch 512, cold | 14 | 272.537 |
-| Batch 512, cold | 32 | 413.656 |
-| Batch 512, cold | 62 | 1158.800 |
-| Batch 512, cold | 122 | 4071.670 |
+| Batch 1, cold | 14 | 14.034 |
+| Batch 1, cold | 32 | 32.468 |
+| Batch 1, cold | 62 | 55.299 |
+| Batch 1, cold | 122 | 103.080 |
+| Batch 1, cold | 242 | 227.732 |
+| Batch 1, cold | 362 | 557.470 |
+| Batch 128, auto-warm | 14 | 31.232 |
+| Batch 128, auto-warm | 32 | 61.549 |
+| Batch 128, auto-warm | 62 | 180.613 |
+| Batch 128, auto-warm | 122 | 624.969 |
+| Batch 512, cold | 14 | 273.371 |
+| Batch 512, cold | 32 | 414.806 |
+| Batch 512, cold | 62 | 1158.460 |
+| Batch 512, cold | 122 | 4064.811 |
 
 All 14 requested coordinates ran on CUDA and passed the panel-matched energy
 and force gate. The largest observed differences from tblite were
@@ -35,9 +33,9 @@ within the unchanged `2e-3` limits.
 ## Identities and protocol
 
 - Clean xTBloom/runner revision:
-  `af65028c5dddc1a3aad3ffc554f0b7dba121a2fe`.
+  `e0a3b0d60a75fbc3efe2fc243a75cafee10f3b68`.
 - Library: `libxtbloom.so.0.2.0`, SHA-256
-  `6a0c81f844bda7814e450cbc716e5cc9f773377b6e79b4d3efd8c37ef1511b95`.
+  `406102812d5ef0207b4a69f3869b977d5bc89234b65dbd46b2bb836140831b5f`.
 - Build: Release, CUDA 12.9.86, `sm_120`, GCC C++17.
 - Host: `node3`, AMD EPYC 7K62, affinity CPUs 0-15.
 - GPU: NVIDIA GeForce RTX 5090, 32607 MiB, UUID
@@ -67,7 +65,7 @@ srun --exclusive -N1 -n1 -c16 --mem=0 --gres=gpu:1 -w node3 \
   taskset -c 0-15 bash -lc '<three runner commands below>'
 
 python3 benchmarks/natoms_cross_engine.py \
-  --library build/cuda-issue459-9299c9b/libxtbloom.so.0.2.0 \
+  --library build/cuda-issue467/libxtbloom.so.0.2.0 \
   --engines xtbloom-cuda --warmups 1 --repetitions 3 --cpu-threads 16 \
   --energy-atol 2e-3 --force-atol 2e-3 \
   --repeatability-energy-atol 1e-10 --repeatability-force-atol 1e-8 \
@@ -99,9 +97,9 @@ evidence budget:
 
 | Raw artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `xtbloom-cuda-cold.json` | 64,424 | `cd916d51f6365c0fe6dd1b452ff0d2285e9d8075aa640f98d858d49235dc070d` |
-| `xtbloom-cuda-b128.json` | 1,067,796 | `b247e749a00f04a372ea88df620d47103e5701f11f891e26dfd05cc215e97cb2` |
-| `xtbloom-cuda-b512.json` | 4,171,465 | `572fbed7da26c6fd4facb3bb50b6375d1e7c2c68ec158fa53f66765574538a9d` |
+| `xtbloom-cuda-cold.json` | 63,849 | `ee0b37d179342d6d92e381e8bb6f7b7097a7a27f48a5c715887293a8b0de220b` |
+| `xtbloom-cuda-b128.json` | 1,067,433 | `8ff55006a50d1fb7b5ddcadbddfac406de74d6a47f95b2536a86787e1917ea48` |
+| `xtbloom-cuda-b512.json` | 4,171,128 | `ff17d4ca3f3f1c5f42c0634bdd0b0a30894111800b2ee0039942a51b38d8902f` |
 
 The CSV files retain every requested coordinate, distribution summary,
 throughput, availability, and correctness result. The compact
