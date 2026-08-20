@@ -152,13 +152,15 @@ srun --exclusive -N1 -n1 -c48 --mem=0 --gres=gpu:1 \
   OMP_DYNAMIC=FALSE MKL_DYNAMIC=FALSE bash -c '<commands below>'
 ```
 
-Inside that single exclusive allocation, the exact roots were:
+Inside that single exclusive allocation, the local worktree parent contained
+the retired project name forbidden by repository policy, so its absolute path
+is omitted. With `<worktree-parent>` standing for that parent, the roots were:
 
 ```bash
-python_bin=/home/jzzeng/codes/gpuxtb3-worktrees/issue-457-density/.venv/bin/python
-baseline_root=/home/jzzeng/codes/gpuxtb3-worktrees/issue-457-baseline-clean
-candidate_root=/home/jzzeng/codes/gpuxtb3-worktrees/issue-457-density
-output_root=/home/jzzeng/codes/gpuxtb3-worktrees/issue-457-density/build/issue457-final-performance
+python_bin=<worktree-parent>/issue-457-density/.venv/bin/python
+baseline_root=<worktree-parent>/issue-457-baseline-clean
+candidate_root=<worktree-parent>/issue-457-density
+output_root=<worktree-parent>/issue-457-density/build/issue457-final-performance
 baseline_library="$baseline_root/build/cuda-issue457-baseline-clean/libxtbloom.so.0.2.0"
 candidate_library="$candidate_root/build/cuda-issue457-final-e948d63/libxtbloom.so.0.2.0"
 ```
