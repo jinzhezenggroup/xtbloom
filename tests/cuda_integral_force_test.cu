@@ -645,11 +645,6 @@ int test_large_singleton_tiling_graph_and_late_failure() {
   std::string error;
   CHECK(make_case(1u, host, error, 65u));
   CHECK(host.basis.total_atoms == 65);
-  /* Keep the unchanged atomic shell-pair contraction neutral so this test can
-   * compare only the tiled preflight/publication scheduling bitwise. */
-  std::fill(host.overlap_adjoint.begin(), host.overlap_adjoint.end(), 0.0);
-  std::fill(host.dipole_adjoint.begin(), host.dipole_adjoint.end(), 0.0);
-  std::fill(host.quadrupole_adjoint.begin(), host.quadrupole_adjoint.end(), 0.0);
   const std::array<std::int32_t, 1> spin_channels{1};
   std::int64_t tiles = 0;
   CHECK(select_gfn2_density_contraction_tiles(
@@ -668,13 +663,16 @@ int test_large_singleton_tiling_graph_and_late_failure() {
   std::vector<double> single(host.seed.size());
   CUDA_CHECK(device.gradients.copy_to(single.data(), single.size(), stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(std::equal(single.begin(), single.end(), host.reference.begin(),
+                   [](double actual, double expected) { return near(actual, expected); }));
 
   CUDA_CHECK(device.upload_dynamic(host, stream));
   CHECK(run_force(device, host, stream, tiles) == 0);
   std::vector<double> tiled(host.seed.size());
   CUDA_CHECK(device.gradients.copy_to(tiled.data(), tiled.size(), stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  CHECK(tiled == single);
+  CHECK(std::equal(tiled.begin(), tiled.end(), single.begin(),
+                   [](double actual, double expected) { return near(actual, expected); }));
 
   CUDA_CHECK(device.upload_dynamic(host, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -697,7 +695,8 @@ int test_large_singleton_tiling_graph_and_late_failure() {
   CUDA_CHECK(cudaGraphLaunch(executable, stream));
   CUDA_CHECK(device.gradients.copy_to(tiled.data(), tiled.size(), stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  CHECK(tiled == single);
+  CHECK(std::equal(tiled.begin(), tiled.end(), single.begin(),
+                   [](double actual, double expected) { return near(actual, expected); }));
   CUDA_CHECK(cudaGraphExecDestroy(executable));
   CUDA_CHECK(cudaGraphDestroy(graph));
 
