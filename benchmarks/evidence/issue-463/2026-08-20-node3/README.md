@@ -191,147 +191,57 @@ for every timed call. WARM performs an untimed FRESH seed and strict WARM calls;
 each WARM artifact references the FRESH JSON produced by the same clean library
 revision. Energy and force gates are 1e-8 Hartree and 5e-7 Hartree/bohr.
 
-The exact common environment and path boundary was:
+The exact environment, concrete paths, reusable command, and invocations were:
 
 ~~~bash
 export LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64:/home/jzzeng/miniconda3/lib
 export CUDA_VISIBLE_DEVICES=0
-export OMP_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export MKL_NUM_THREADS=1
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 export OMP_DYNAMIC=FALSE
 export MKL_DYNAMIC=FALSE
 candidate_root="$(git rev-parse --show-toplevel)"
 baseline_root="$(git -C ../issue-463-baseline-clean rev-parse --show-toplevel)"
 benchmark_python=/home/jzzeng/miniconda3/bin/python3
-~~~
+baseline_library="$baseline_root/build/cuda-issue463-baseline/libxtbloom.so"
+candidate_library="$candidate_root/build/cuda-issue463-dev/libxtbloom.so"
 
-The 122-AO controls were recorded with these exact commands and output paths:
+run_scaling() {
+  local root=$1 library=$2 stem=$3 natoms=$4 batches=$5 repetitions=$6 mode=$7
+  local reference=${8:-}
+  local reference_args=()
+  if [[ -n "$reference" ]]; then
+    reference_args=(--energy-reference-json "$reference")
+  fi
+  "$benchmark_python" "$root/benchmarks/natoms_scaling.py" \
+    --engine xtbloom --library "$library" --backend cuda --device-id 0 \
+    --cpu-threads 1 --property force --natoms "$natoms" --batch-sizes "$batches" \
+    --warmups 10 --repetitions "$repetitions" --start-mode "$mode" \
+    "${reference_args[@]}" \
+    --output-json "$root/build/benchmarks/issue-463-final/$stem.json" \
+    --output-csv "$root/build/benchmarks/issue-463-final/$stem.csv"
+}
 
-~~~bash
-"$benchmark_python" "$baseline_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$baseline_root/build/cuda-issue463-baseline/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 62 --batch-sizes 8,32,128 \
-  --warmups 10 --repetitions 30 --start-mode fresh \
-  --output-json "$baseline_root/build/benchmarks/issue-463-final/baseline-controls-fresh.json" \
-  --output-csv "$baseline_root/build/benchmarks/issue-463-final/baseline-controls-fresh.csv"
+run_scaling "$baseline_root" "$baseline_library" baseline-controls-fresh 62 8,32,128 30 fresh
+run_scaling "$candidate_root" "$candidate_library" candidate-controls-fresh 62 8,32,128 30 fresh
+run_scaling "$baseline_root" "$baseline_library" baseline-controls-warm 62 8,32,128 30 warm \
+  "$baseline_root/build/benchmarks/issue-463-final/baseline-controls-fresh.json"
+run_scaling "$candidate_root" "$candidate_library" candidate-controls-warm 62 8,32,128 30 warm \
+  "$candidate_root/build/benchmarks/issue-463-final/candidate-controls-fresh.json"
 
-"$benchmark_python" "$candidate_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$candidate_root/build/cuda-issue463-dev/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 62 --batch-sizes 8,32,128 \
-  --warmups 10 --repetitions 30 --start-mode fresh \
-  --output-json "$candidate_root/build/benchmarks/issue-463-final/candidate-controls-fresh.json" \
-  --output-csv "$candidate_root/build/benchmarks/issue-463-final/candidate-controls-fresh.csv"
-
-"$benchmark_python" "$baseline_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$baseline_root/build/cuda-issue463-baseline/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 62 --batch-sizes 8,32,128 \
-  --warmups 10 --repetitions 30 --start-mode warm \
-  --energy-reference-json "$baseline_root/build/benchmarks/issue-463-final/baseline-controls-fresh.json" \
-  --output-json "$baseline_root/build/benchmarks/issue-463-final/baseline-controls-warm.json" \
-  --output-csv "$baseline_root/build/benchmarks/issue-463-final/baseline-controls-warm.csv"
-
-"$benchmark_python" "$candidate_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$candidate_root/build/cuda-issue463-dev/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 62 --batch-sizes 8,32,128 \
-  --warmups 10 --repetitions 30 --start-mode warm \
-  --energy-reference-json "$candidate_root/build/benchmarks/issue-463-final/candidate-controls-fresh.json" \
-  --output-json "$candidate_root/build/benchmarks/issue-463-final/candidate-controls-warm.json" \
-  --output-csv "$candidate_root/build/benchmarks/issue-463-final/candidate-controls-warm.csv"
-~~~
-
-The large coordinate used four 15-sample blocks in ABBA order:
-baseline-a, candidate-a, candidate-b, baseline-b. The exact FRESH sequence was:
-
-~~~bash
-"$benchmark_python" "$baseline_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$baseline_root/build/cuda-issue463-baseline/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
-  --warmups 10 --repetitions 15 --start-mode fresh \
-  --output-json "$baseline_root/build/benchmarks/issue-463-final/baseline-a-large-fresh.json" \
-  --output-csv "$baseline_root/build/benchmarks/issue-463-final/baseline-a-large-fresh.csv"
-
-"$benchmark_python" "$candidate_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$candidate_root/build/cuda-issue463-dev/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
-  --warmups 10 --repetitions 15 --start-mode fresh \
-  --output-json "$candidate_root/build/benchmarks/issue-463-final/candidate-a-large-fresh.json" \
-  --output-csv "$candidate_root/build/benchmarks/issue-463-final/candidate-a-large-fresh.csv"
-
-"$benchmark_python" "$candidate_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$candidate_root/build/cuda-issue463-dev/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
-  --warmups 10 --repetitions 15 --start-mode fresh \
-  --output-json "$candidate_root/build/benchmarks/issue-463-final/candidate-b-large-fresh.json" \
-  --output-csv "$candidate_root/build/benchmarks/issue-463-final/candidate-b-large-fresh.csv"
-
-"$benchmark_python" "$baseline_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$baseline_root/build/cuda-issue463-baseline/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
-  --warmups 10 --repetitions 15 --start-mode fresh \
-  --output-json "$baseline_root/build/benchmarks/issue-463-final/baseline-b-large-fresh.json" \
-  --output-csv "$baseline_root/build/benchmarks/issue-463-final/baseline-b-large-fresh.csv"
-~~~
-
-The WARM sequence used the matching A-block FRESH artifact for each clean
-library revision:
-
-~~~bash
-"$benchmark_python" "$baseline_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$baseline_root/build/cuda-issue463-baseline/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
-  --warmups 10 --repetitions 15 --start-mode warm \
-  --energy-reference-json "$baseline_root/build/benchmarks/issue-463-final/baseline-a-large-fresh.json" \
-  --output-json "$baseline_root/build/benchmarks/issue-463-final/baseline-a-large-warm.json" \
-  --output-csv "$baseline_root/build/benchmarks/issue-463-final/baseline-a-large-warm.csv"
-
-"$benchmark_python" "$candidate_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$candidate_root/build/cuda-issue463-dev/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
-  --warmups 10 --repetitions 15 --start-mode warm \
-  --energy-reference-json "$candidate_root/build/benchmarks/issue-463-final/candidate-a-large-fresh.json" \
-  --output-json "$candidate_root/build/benchmarks/issue-463-final/candidate-a-large-warm.json" \
-  --output-csv "$candidate_root/build/benchmarks/issue-463-final/candidate-a-large-warm.csv"
-
-"$benchmark_python" "$candidate_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$candidate_root/build/cuda-issue463-dev/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
-  --warmups 10 --repetitions 15 --start-mode warm \
-  --energy-reference-json "$candidate_root/build/benchmarks/issue-463-final/candidate-a-large-fresh.json" \
-  --output-json "$candidate_root/build/benchmarks/issue-463-final/candidate-b-large-warm.json" \
-  --output-csv "$candidate_root/build/benchmarks/issue-463-final/candidate-b-large-warm.csv"
-
-"$benchmark_python" "$baseline_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$baseline_root/build/cuda-issue463-baseline/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
-  --warmups 10 --repetitions 15 --start-mode warm \
-  --energy-reference-json "$baseline_root/build/benchmarks/issue-463-final/baseline-a-large-fresh.json" \
-  --output-json "$baseline_root/build/benchmarks/issue-463-final/baseline-b-large-warm.json" \
-  --output-csv "$baseline_root/build/benchmarks/issue-463-final/baseline-b-large-warm.csv"
+# Large FRESH/WARM blocks retain ABBA order: baseline-a, candidate-a,
+# candidate-b, baseline-b. Both B blocks use their revision's A FRESH result.
+run_scaling "$baseline_root" "$baseline_library" baseline-a-large-fresh 362 1 15 fresh
+run_scaling "$candidate_root" "$candidate_library" candidate-a-large-fresh 362 1 15 fresh
+run_scaling "$candidate_root" "$candidate_library" candidate-b-large-fresh 362 1 15 fresh
+run_scaling "$baseline_root" "$baseline_library" baseline-b-large-fresh 362 1 15 fresh
+run_scaling "$baseline_root" "$baseline_library" baseline-a-large-warm 362 1 15 warm \
+  "$baseline_root/build/benchmarks/issue-463-final/baseline-a-large-fresh.json"
+run_scaling "$candidate_root" "$candidate_library" candidate-a-large-warm 362 1 15 warm \
+  "$candidate_root/build/benchmarks/issue-463-final/candidate-a-large-fresh.json"
+run_scaling "$candidate_root" "$candidate_library" candidate-b-large-warm 362 1 15 warm \
+  "$candidate_root/build/benchmarks/issue-463-final/candidate-a-large-fresh.json"
+run_scaling "$baseline_root" "$baseline_library" baseline-b-large-warm 362 1 15 warm \
+  "$baseline_root/build/benchmarks/issue-463-final/baseline-a-large-fresh.json"
 ~~~
 
 The reported large medians pool both baseline blocks and both candidate blocks
@@ -363,41 +273,24 @@ nsys=/group/software/cuda-12.9.1/bin/nsys
 baseline_dir="$baseline_root/build/benchmarks/issue-463-final"
 candidate_dir="$candidate_root/build/benchmarks/issue-463-final"
 
-"$nsys" profile \
-  --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
-  --force-overwrite=true --output="$baseline_dir/nsys-baseline" \
-  "$benchmark_python" "$baseline_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$baseline_root/build/cuda-issue463-baseline/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
-  --warmups 1 --repetitions 1 --start-mode fresh \
-  --output-json "$baseline_dir/nsys-baseline.json" \
-  --output-csv "$baseline_dir/nsys-baseline.csv"
+profile_one() {
+  local root=$1 library=$2 label=$3 output_dir=$4
+  "$nsys" profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
+    --force-overwrite=true --output="$output_dir/nsys-$label" \
+    "$benchmark_python" "$root/benchmarks/natoms_scaling.py" \
+    --engine xtbloom --library "$library" --backend cuda --device-id 0 \
+    --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
+    --warmups 1 --repetitions 1 --start-mode fresh \
+    --output-json "$output_dir/nsys-$label.json" \
+    --output-csv "$output_dir/nsys-$label.csv"
+  "$nsys" stats \
+    --report cuda_api_sum,cuda_gpu_kern_sum,cuda_gpu_mem_size_sum,cuda_gpu_mem_time_sum \
+    --format csv --force-overwrite=true --output "$output_dir/nsys-$label-stats" \
+    "$output_dir/nsys-$label.nsys-rep"
+}
 
-"$nsys" profile \
-  --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
-  --force-overwrite=true --output="$candidate_dir/nsys-candidate" \
-  "$benchmark_python" "$candidate_root/benchmarks/natoms_scaling.py" \
-  --engine xtbloom \
-  --library "$candidate_root/build/cuda-issue463-dev/libxtbloom.so" \
-  --backend cuda --device-id 0 \
-  --cpu-threads 1 --property force --natoms 362 --batch-sizes 1 \
-  --warmups 1 --repetitions 1 --start-mode fresh \
-  --output-json "$candidate_dir/nsys-candidate.json" \
-  --output-csv "$candidate_dir/nsys-candidate.csv"
-
-"$nsys" stats \
-  --report cuda_api_sum,cuda_gpu_kern_sum,cuda_gpu_mem_size_sum,cuda_gpu_mem_time_sum \
-  --format csv --force-overwrite=true \
-  --output "$baseline_dir/nsys-baseline-stats" \
-  "$baseline_dir/nsys-baseline.nsys-rep"
-
-"$nsys" stats \
-  --report cuda_api_sum,cuda_gpu_kern_sum,cuda_gpu_mem_size_sum,cuda_gpu_mem_time_sum \
-  --format csv --force-overwrite=true \
-  --output "$candidate_dir/nsys-candidate-stats" \
-  "$candidate_dir/nsys-candidate.nsys-rep"
+profile_one "$baseline_root" "$baseline_library" baseline "$baseline_dir"
+profile_one "$candidate_root" "$candidate_library" candidate "$candidate_dir"
 
 rg 'integral_force|publish_integrals_kernel|Gfn2H0Force' \
   "$baseline_dir/nsys-baseline-stats_cuda_gpu_kern_sum.csv" \

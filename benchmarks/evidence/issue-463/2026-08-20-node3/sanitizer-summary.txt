@@ -51,7 +51,7 @@ signature and no additional signature appeared.
 Exact commands
 --------------
 
-  export LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64
+  export LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64:/home/jzzeng/miniconda3/lib
   export CUDA_VISIBLE_DEVICES=0
   for test_binary in \
     xtbloom_cuda_integrals_test \
