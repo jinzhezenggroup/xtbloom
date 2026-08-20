@@ -39,7 +39,7 @@ samples per coordinate, and the stated hardware.
 
 - [Methodology](../../benchmarks/cross-engine.md)
 - [Latest machine-readable table](../../benchmarks/natoms_cross_engine_latest.csv)
-- [RTX 5090 xTBloom CUDA evidence](../../benchmarks/evidence/issue-459/2026-08-20-node3/README.md)
+- [RTX 5090 xTBloom CUDA evidence](../../benchmarks/evidence/issue-467/2026-08-20-node3/README.md)
 - [Historical CPU and third-party evidence](../../benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
 
 ## Warm-state CPU evidence

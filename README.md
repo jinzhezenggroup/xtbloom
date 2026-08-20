@@ -134,7 +134,7 @@ the panels use the start policies stated in the evidence. Read the
 [user-facing performance summary](docs/user-guide/performance.md), the
 [benchmark methodology](benchmarks/cross-engine.md), and the
 [latest machine-readable table](benchmarks/natoms_cross_engine_latest.csv).
-The [RTX 5090 CUDA refresh](benchmarks/evidence/issue-459/2026-08-20-node3/README.md)
+The [RTX 5090 CUDA refresh](benchmarks/evidence/issue-467/2026-08-20-node3/README.md)
 and [historical CPU/third-party evidence](benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
 retain the commands, identities, hashes, and limitations needed before reusing
 the numbers.
