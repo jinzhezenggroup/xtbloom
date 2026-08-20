@@ -1,6 +1,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "backends/cuda/gfn2_density.cuh"
 #include "backends/cuda/gfn2_integral_force.cuh"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/integrals.hpp"
@@ -29,6 +31,8 @@ using xtbloom::detail::cuda::Gfn2IntegralDeviceError;
 using xtbloom::detail::cuda::Gfn2IntegralForceDeviceInput;
 using xtbloom::detail::cuda::Gfn2IntegralForceDeviceOutput;
 using xtbloom::detail::cuda::Gfn2IntegralForceDeviceWorkspace;
+using xtbloom::detail::cuda::kGfn2IntegralLinearBlockBudget;
+using xtbloom::detail::cuda::select_gfn2_density_contraction_tiles;
 using xtbloom::detail::gfn2::BasisPlan;
 using xtbloom::detail::gfn2::IntegralPlan;
 
@@ -83,6 +87,28 @@ cudaError_t upload(DeviceBuffer<T>& target, const std::vector<T>& source, cudaSt
 bool near(double actual, double expected, double absolute = 2.0e-10, double relative = 2.0e-10) {
   return std::abs(actual - expected) <=
          absolute + relative * std::max(std::abs(actual), std::abs(expected));
+}
+
+int count_kernel_grid(cudaGraph_t graph, dim3 expected_grid, std::size_t& matches) {
+  std::size_t node_count = 0u;
+  CUDA_CHECK(cudaGraphGetNodes(graph, nullptr, &node_count));
+  std::vector<cudaGraphNode_t> nodes(node_count);
+  CUDA_CHECK(cudaGraphGetNodes(graph, nodes.data(), &node_count));
+  matches = 0u;
+  for (const cudaGraphNode_t node : nodes) {
+    cudaGraphNodeType type{};
+    CUDA_CHECK(cudaGraphNodeGetType(node, &type));
+    if (type != cudaGraphNodeTypeKernel) {
+      continue;
+    }
+    cudaKernelNodeParams parameters{};
+    CUDA_CHECK(cudaGraphKernelNodeGetParams(node, &parameters));
+    const dim3 grid = parameters.gridDim;
+    if (grid.x == expected_grid.x && grid.y == expected_grid.y && grid.z == expected_grid.z) {
+      ++matches;
+    }
+  }
+  return 0;
 }
 
 struct HostCase {
@@ -142,12 +168,25 @@ bool update_reference(HostCase& data, std::string& error) {
              workspace.size() * sizeof(double), error) == XTBLOOM_STATUS_SUCCESS;
 }
 
-bool make_case(std::size_t batch_size, HostCase& data, std::string& error) {
+bool make_case(std::size_t batch_size, HostCase& data, std::string& error,
+               std::size_t large_system_atoms = 0u) {
   std::vector<std::int64_t> atom_offsets(batch_size + 1u, 0);
   std::vector<std::int32_t> atomic_numbers;
   for (std::size_t system = 0; system < batch_size; ++system) {
     atom_offsets[system] = static_cast<std::int64_t>(atomic_numbers.size());
-    append_system(system, atomic_numbers, data.positions);
+    if (large_system_atoms != 0u) {
+      for (std::size_t atom = 0; atom < large_system_atoms; ++atom) {
+        atomic_numbers.push_back(1);
+        /* Keep large ragged peers spatially separated while ensuring every
+         * system has enough matrix work to exercise more than one tile. */
+        data.positions.push_back(200.0 * static_cast<double>(system) +
+                                 2.25 * static_cast<double>(atom));
+        data.positions.push_back(0.17 * static_cast<double>(atom % 3u));
+        data.positions.push_back(-0.11 * static_cast<double>(atom % 5u));
+      }
+    } else {
+      append_system(system, atomic_numbers, data.positions);
+    }
   }
   atom_offsets[batch_size] = static_cast<std::int64_t>(atomic_numbers.size());
   if (xtbloom::detail::gfn2::make_basis_plan(static_cast<std::int64_t>(batch_size),
@@ -309,6 +348,7 @@ struct DeviceFixture {
         host.integrals.total_matrix_elements,
         host.shell_pair_offsets.back(),
         host.maximum_system_shells,
+        1,
         host.integrals.integral_cutoff,
         kPlanToken,
         static_cast<std::int64_t>(host.basis.atom_offsets.size()),
@@ -366,8 +406,10 @@ struct DeviceFixture {
   }
 };
 
-int run_force(DeviceFixture& device, const HostCase& host, cudaStream_t stream) {
-  const Gfn2IntegralDeviceBatch batch = device.batch(host);
+int run_force(DeviceFixture& device, const HostCase& host, cudaStream_t stream,
+              std::int64_t linear_tiles_per_system = 1) {
+  Gfn2IntegralDeviceBatch batch = device.batch(host);
+  batch.linear_tiles_per_system = linear_tiles_per_system;
   CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_force_device_errors_cuda(
       batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
   CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_integral_gradient_cuda(
@@ -598,6 +640,178 @@ int test_changed_input_graph_replay() {
   return 0;
 }
 
+int test_large_singleton_tiling_graph_and_late_failure() {
+  HostCase host;
+  std::string error;
+  CHECK(make_case(1u, host, error, 65u));
+  CHECK(host.basis.total_atoms == 65);
+  const std::array<std::int32_t, 1> spin_channels{1};
+  std::int64_t tiles = 0;
+  CHECK(select_gfn2_density_contraction_tiles(
+      host.basis.batch_orbital_offsets.data(), host.basis.batch_orbital_offsets.size(),
+      spin_channels.data(), spin_channels.size(), host.basis.batch_size, tiles));
+  CHECK(tiles > 1 && tiles <= kGfn2IntegralLinearBlockBudget);
+  CHECK(host.integrals.total_matrix_elements > (tiles - 1) * 64);
+
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, stream));
+
+  CUDA_CHECK(device.upload_dynamic(host, stream));
+  CHECK(run_force(device, host, stream, 1) == 0);
+  std::vector<double> single(host.seed.size());
+  CUDA_CHECK(device.gradients.copy_to(single.data(), single.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(std::equal(single.begin(), single.end(), host.reference.begin(),
+                   [](double actual, double expected) { return near(actual, expected); }));
+
+  CUDA_CHECK(device.upload_dynamic(host, stream));
+  CHECK(run_force(device, host, stream, tiles) == 0);
+  std::vector<double> tiled(host.seed.size());
+  CUDA_CHECK(device.gradients.copy_to(tiled.data(), tiled.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(std::equal(tiled.begin(), tiled.end(), single.begin(),
+                   [](double actual, double expected) { return near(actual, expected); }));
+
+  CUDA_CHECK(device.upload_dynamic(host, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  Gfn2IntegralDeviceBatch tiled_batch = device.batch(host);
+  tiled_batch.linear_tiles_per_system = tiles;
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t executable = nullptr;
+  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_force_device_errors_cuda(
+      tiled_batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::add_gfn2_integral_gradient_cuda(
+      tiled_batch, device.activity(host), device.input(host), device.output(host),
+      device.workspace(host), device.system_errors.get(), device.device_error.get(), stream));
+  CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
+  std::size_t tiled_nodes = 0u;
+  CHECK(count_kernel_grid(graph, dim3(1u, static_cast<unsigned int>(tiles), 1u), tiled_nodes) == 0);
+  /* Preflight and final gradient publication share the topology-fixed grid. */
+  CHECK(tiled_nodes == 2u);
+  CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0));
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  CUDA_CHECK(device.gradients.copy_to(tiled.data(), tiled.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(std::equal(tiled.begin(), tiled.end(), single.begin(),
+                   [](double actual, double expected) { return near(actual, expected); }));
+  CUDA_CHECK(cudaGraphExecDestroy(executable));
+  CUDA_CHECK(cudaGraphDestroy(graph));
+
+  Gfn2IntegralDeviceBatch invalid_batch = device.batch(host);
+  const std::vector<double> invalid_gradients(host.seed.size(), -91.25);
+  const std::vector<std::uint32_t> invalid_system_errors(1u, 0xa5a5a5a5u);
+  constexpr std::uint32_t kInvalidDeviceErrorSentinel = 0x5a5a5a5au;
+  auto check_invalid_tiles_transactional = [&](std::int64_t invalid_tiles) -> int {
+    /* Admission failures happen before any launch, so all caller-visible
+     * buffers must retain their deliberately non-default sentinels. */
+    CUDA_CHECK(
+        device.gradients.copy_from(invalid_gradients.data(), invalid_gradients.size(), stream));
+    CUDA_CHECK(device.system_errors.copy_from(invalid_system_errors.data(),
+                                              invalid_system_errors.size(), stream));
+    CUDA_CHECK(device.device_error.copy_from(&kInvalidDeviceErrorSentinel, 1u, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    invalid_batch.linear_tiles_per_system = invalid_tiles;
+    CHECK(xtbloom::detail::cuda::add_gfn2_integral_gradient_cuda(
+              invalid_batch, device.activity(host), device.input(host), device.output(host),
+              device.workspace(host), device.system_errors.get(), device.device_error.get(),
+              stream) == cudaErrorInvalidValue);
+
+    std::vector<double> actual_gradients(invalid_gradients.size());
+    std::vector<std::uint32_t> actual_system_errors(invalid_system_errors.size());
+    std::uint32_t actual_device_error = 0u;
+    CUDA_CHECK(device.gradients.copy_to(actual_gradients.data(), actual_gradients.size(), stream));
+    CUDA_CHECK(device.system_errors.copy_to(actual_system_errors.data(),
+                                            actual_system_errors.size(), stream));
+    CUDA_CHECK(device.device_error.copy_to(&actual_device_error, 1u, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(actual_gradients == invalid_gradients);
+    CHECK(actual_system_errors == invalid_system_errors);
+    CHECK(actual_device_error == kInvalidDeviceErrorSentinel);
+    return 0;
+  };
+  CHECK(check_invalid_tiles_transactional(-1) == 0);
+  CHECK(check_invalid_tiles_transactional(0) == 0);
+  CHECK(check_invalid_tiles_transactional(kGfn2IntegralLinearBlockBudget + 1) == 0);
+
+  CUDA_CHECK(device.upload_dynamic(host, stream));
+  const std::int64_t late_element = (tiles - 1) * 64;
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  CUDA_CHECK(cudaMemcpyAsync(device.overlap_adjoint.get() + late_element, &nan, sizeof(nan),
+                             cudaMemcpyHostToDevice, stream));
+  CHECK(run_force(device, host, stream, tiles) == 0);
+  std::uint32_t system_error = 0u;
+  std::uint32_t device_error = 0u;
+  CUDA_CHECK(device.gradients.copy_to(tiled.data(), tiled.size(), stream));
+  CUDA_CHECK(device.system_errors.copy_to(&system_error, 1u, stream));
+  CUDA_CHECK(device.device_error.copy_to(&device_error, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(system_error == static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kNonfiniteAdjoint));
+  CHECK(device_error == static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kNonfiniteAdjoint));
+  CHECK(tiled == host.seed);
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+int test_multitile_hostile_primitive_offset_is_peer_isolated() {
+  HostCase host;
+  std::string error;
+  CHECK(make_case(2u, host, error, 65u));
+  constexpr std::int64_t kTiles = 2;
+  constexpr std::int64_t kThreadsPerLinearTile = 64;
+  for (std::size_t system = 0; system < 2u; ++system) {
+    CHECK(host.integrals.matrix_offsets[system + 1u] - host.integrals.matrix_offsets[system] >
+          kThreadsPerLinearTile);
+  }
+
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, stream));
+
+  CUDA_CHECK(device.upload_dynamic(host, stream));
+  CHECK(run_force(device, host, stream, kTiles) == 0);
+  std::vector<double> clean(host.seed.size());
+  CUDA_CHECK(device.gradients.copy_to(clean.data(), clean.size(), stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  /* Corrupt the large member's first primitive boundary. Before the topology
+   * and numerical phases were separated, the CTA that owned shell zero could
+   * reject while another tile consumed this negative system-wide bound. */
+  CUDA_CHECK(device.upload_dynamic(host, stream));
+  const std::int64_t hostile_primitive_begin = -1024;
+  CUDA_CHECK(cudaMemcpyAsync(device.shell_primitive_offsets.get(), &hostile_primitive_begin,
+                             sizeof(hostile_primitive_begin), cudaMemcpyHostToDevice, stream));
+  CHECK(run_force(device, host, stream, kTiles) == 0);
+
+  std::vector<double> actual(host.seed.size());
+  std::vector<std::uint32_t> system_errors(2u);
+  std::uint32_t device_error = 0u;
+  CUDA_CHECK(device.gradients.copy_to(actual.data(), actual.size(), stream));
+  CUDA_CHECK(device.system_errors.copy_to(system_errors.data(), system_errors.size(), stream));
+  CUDA_CHECK(device.device_error.copy_to(&device_error, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(system_errors[0] ==
+        static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kInvalidShellMetadata));
+  CHECK(system_errors[1] == static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kSuccess));
+  CHECK(device_error == static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kInvalidShellMetadata));
+
+  const std::size_t failed_end = static_cast<std::size_t>(host.basis.atom_offsets[1] * 3);
+  CHECK(std::equal(actual.begin(), actual.begin() + static_cast<std::ptrdiff_t>(failed_end),
+                   host.seed.begin()));
+  /* The healthy large peer still runs concurrent atomic force reductions.
+   * Reject cross-system contamination while allowing repeat-order roundoff. */
+  CHECK(std::equal(
+      actual.begin() + static_cast<std::ptrdiff_t>(failed_end), actual.end(),
+      clean.begin() + static_cast<std::ptrdiff_t>(failed_end),
+      [](double actual_value, double clean_value) { return near(actual_value, clean_value); }));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -610,5 +824,11 @@ int main() {
   if (const int status = test_requested_and_failed_poison_peers(); status != 0) {
     return status;
   }
-  return test_changed_input_graph_replay();
+  if (const int status = test_changed_input_graph_replay(); status != 0) {
+    return status;
+  }
+  if (const int status = test_large_singleton_tiling_graph_and_late_failure(); status != 0) {
+    return status;
+  }
+  return test_multitile_hostile_primitive_offset_is_peer_isolated();
 }

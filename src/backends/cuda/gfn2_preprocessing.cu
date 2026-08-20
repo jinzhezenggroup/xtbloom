@@ -317,6 +317,8 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   if (batch <= 0 || atoms <= 0 || pairs < 0 || shells <= 0 || matrices <= 0 ||
       shell_matrices <= 0 || integrals.total_orbitals <= 0 || integrals.total_primitives <= 0 ||
       integrals.total_shell_pair_elements <= 0 || integrals.maximum_system_shells <= 0 ||
+      integrals.linear_tiles_per_system <= 0 ||
+      integrals.linear_tiles_per_system > kGfn2IntegralLinearBlockBudget ||
       !(integrals.integral_cutoff > 0.0) || !std::isfinite(integrals.integral_cutoff) ||
       atoms == std::numeric_limits<std::int64_t>::max() ||
       shells == std::numeric_limits<std::int64_t>::max() ||

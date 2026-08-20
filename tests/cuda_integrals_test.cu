@@ -1,6 +1,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -28,6 +29,9 @@ using xtbloom::detail::cuda::Gfn2H0DevicePlan;
 using xtbloom::detail::cuda::Gfn2IntegralDeviceBatch;
 using xtbloom::detail::cuda::Gfn2IntegralDeviceError;
 using xtbloom::detail::cuda::Gfn2IntegralDeviceWorkspace;
+using xtbloom::detail::cuda::Gfn2IntegralLinearLaunchShape;
+using xtbloom::detail::cuda::kGfn2IntegralLinearBlockBudget;
+using xtbloom::detail::cuda::make_gfn2_integral_linear_launch_shape;
 using xtbloom::detail::gfn2::BasisPlan;
 using xtbloom::detail::gfn2::H0Plan;
 using xtbloom::detail::gfn2::IntegralPlan;
@@ -93,6 +97,28 @@ cudaError_t upload(DeviceBuffer<T>& target, const std::vector<T>& source, cudaSt
 bool near(double actual, double expected, double absolute = 2.0e-13, double relative = 2.0e-13) {
   return std::abs(actual - expected) <=
          absolute + relative * std::max(std::abs(actual), std::abs(expected));
+}
+
+int count_kernel_grid(cudaGraph_t graph, dim3 expected_grid, std::size_t& matches) {
+  std::size_t node_count = 0u;
+  CUDA_CHECK(cudaGraphGetNodes(graph, nullptr, &node_count));
+  std::vector<cudaGraphNode_t> nodes(node_count);
+  CUDA_CHECK(cudaGraphGetNodes(graph, nodes.data(), &node_count));
+  matches = 0u;
+  for (const cudaGraphNode_t node : nodes) {
+    cudaGraphNodeType type{};
+    CUDA_CHECK(cudaGraphNodeGetType(node, &type));
+    if (type != cudaGraphNodeTypeKernel) {
+      continue;
+    }
+    cudaKernelNodeParams parameters{};
+    CUDA_CHECK(cudaGraphKernelNodeGetParams(node, &parameters));
+    const dim3 grid = parameters.gridDim;
+    if (grid.x == expected_grid.x && grid.y == expected_grid.y && grid.z == expected_grid.z) {
+      ++matches;
+    }
+  }
+  return 0;
 }
 
 struct HostCase {
@@ -303,6 +329,7 @@ struct DeviceFixture {
         host.integrals.total_matrix_elements,
         host.shell_pair_offsets.back(),
         host.maximum_system_shells,
+        1,
         host.integrals.integral_cutoff,
         kPlanToken,
         static_cast<std::int64_t>(host.basis.atom_offsets.size()),
@@ -373,8 +400,10 @@ struct DeviceFixture {
   }
 };
 
-int run_forward(DeviceFixture& device, const HostCase& host, cudaStream_t stream) {
-  const Gfn2IntegralDeviceBatch batch = device.batch(host);
+int run_forward(DeviceFixture& device, const HostCase& host, cudaStream_t stream,
+                std::int64_t linear_tiles_per_system = 1) {
+  Gfn2IntegralDeviceBatch batch = device.batch(host);
+  batch.linear_tiles_per_system = linear_tiles_per_system;
   const Gfn2IntegralDeviceWorkspace workspace = device.workspace(host);
   CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
       batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
@@ -748,6 +777,136 @@ int test_h0_failure_atomicity() {
   return 0;
 }
 
+int test_linear_launch_shape_tiling_and_late_failure() {
+  Gfn2IntegralLinearLaunchShape shape{17u, 19u};
+  CHECK(make_gfn2_integral_linear_launch_shape(3, 2, shape));
+  CHECK(shape.systems == 3u && shape.tiles == 2u);
+  for (const std::array<std::int64_t, 2> invalid :
+       {std::array<std::int64_t, 2>{0, 1}, std::array<std::int64_t, 2>{1, 0},
+        std::array<std::int64_t, 2>{1, kGfn2IntegralLinearBlockBudget + 1}}) {
+    shape = {17u, 19u};
+    CHECK(!make_gfn2_integral_linear_launch_shape(invalid[0], invalid[1], shape));
+    CHECK(shape.systems == 17u && shape.tiles == 19u);
+  }
+
+  HostCase host;
+  std::string error;
+  CHECK(make_case(1u, host, error));
+  CHECK(host.integrals.total_matrix_elements > 64);
+  constexpr std::int64_t kTiles = 2;
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, stream));
+
+  auto download_outputs = [&](std::vector<double>& overlap, std::vector<double>& dipole,
+                              std::vector<double>& quadrupole,
+                              std::vector<double>& hamiltonian) -> int {
+    overlap.resize(host.overlap.size());
+    dipole.resize(host.dipole.size());
+    quadrupole.resize(host.quadrupole.size());
+    hamiltonian.resize(host.hamiltonian.size());
+    CUDA_CHECK(device.overlap.copy_to(overlap.data(), overlap.size(), stream));
+    CUDA_CHECK(device.dipole.copy_to(dipole.data(), dipole.size(), stream));
+    CUDA_CHECK(device.quadrupole.copy_to(quadrupole.data(), quadrupole.size(), stream));
+    CUDA_CHECK(device.hamiltonian.copy_to(hamiltonian.data(), hamiltonian.size(), stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    return 0;
+  };
+
+  CUDA_CHECK(device.seed_outputs(host, stream));
+  CHECK(run_forward(device, host, stream, 1) == 0);
+  std::vector<double> single_overlap;
+  std::vector<double> single_dipole;
+  std::vector<double> single_quadrupole;
+  std::vector<double> single_hamiltonian;
+  CHECK(download_outputs(single_overlap, single_dipole, single_quadrupole, single_hamiltonian) ==
+        0);
+
+  CUDA_CHECK(device.seed_outputs(host, stream));
+  CHECK(run_forward(device, host, stream, kTiles) == 0);
+  std::vector<double> tiled_overlap;
+  std::vector<double> tiled_dipole;
+  std::vector<double> tiled_quadrupole;
+  std::vector<double> tiled_hamiltonian;
+  CHECK(download_outputs(tiled_overlap, tiled_dipole, tiled_quadrupole, tiled_hamiltonian) == 0);
+  CHECK(tiled_overlap == single_overlap);
+  CHECK(tiled_dipole == single_dipole);
+  CHECK(tiled_quadrupole == single_quadrupole);
+  CHECK(tiled_hamiltonian == single_hamiltonian);
+
+  CUDA_CHECK(device.seed_outputs(host, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  Gfn2IntegralDeviceBatch tiled_batch = device.batch(host);
+  tiled_batch.linear_tiles_per_system = kTiles;
+  const Gfn2IntegralDeviceWorkspace workspace = device.workspace(host);
+  cudaGraph_t graph = nullptr;
+  cudaGraphExec_t executable = nullptr;
+  CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+      tiled_batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_integrals_cuda(
+      tiled_batch, device.positions.get(), device.overlap.get(), device.dipole.get(),
+      device.quadrupole.get(), workspace, device.system_errors.get(), device.device_error.get(),
+      stream));
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+      tiled_batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_h0_cuda(
+      tiled_batch, device.h0_plan(host), device.positions.get(), device.coordination.get(),
+      device.overlap.get(), device.hamiltonian.get(), workspace, device.system_errors.get(),
+      device.device_error.get(), stream));
+  CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
+  std::size_t tiled_nodes = 0u;
+  CHECK(count_kernel_grid(graph, dim3(1u, static_cast<unsigned int>(kTiles), 1u), tiled_nodes) ==
+        0);
+  /* Integral publication plus H0 preflight and H0 publication use this fixed grid. */
+  CHECK(tiled_nodes == 3u);
+  CUDA_CHECK(cudaGraphInstantiate(&executable, graph, nullptr, nullptr, 0));
+  CUDA_CHECK(cudaGraphLaunch(executable, stream));
+  CHECK(download_outputs(tiled_overlap, tiled_dipole, tiled_quadrupole, tiled_hamiltonian) == 0);
+  CHECK(tiled_overlap == single_overlap);
+  CHECK(tiled_dipole == single_dipole);
+  CHECK(tiled_quadrupole == single_quadrupole);
+  CHECK(tiled_hamiltonian == single_hamiltonian);
+  CUDA_CHECK(cudaGraphExecDestroy(executable));
+  CUDA_CHECK(cudaGraphDestroy(graph));
+
+  Gfn2IntegralDeviceBatch invalid_batch = device.batch(host);
+  invalid_batch.linear_tiles_per_system = 0;
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_integrals_cuda(
+            invalid_batch, device.positions.get(), device.overlap.get(), device.dipole.get(),
+            device.quadrupole.get(), workspace, device.system_errors.get(),
+            device.device_error.get(), stream) == cudaErrorInvalidValue);
+  invalid_batch.linear_tiles_per_system = kGfn2IntegralLinearBlockBudget + 1;
+  CHECK(xtbloom::detail::cuda::evaluate_gfn2_integrals_cuda(
+            invalid_batch, device.positions.get(), device.overlap.get(), device.dipole.get(),
+            device.quadrupole.get(), workspace, device.system_errors.get(),
+            device.device_error.get(), stream) == cudaErrorInvalidValue);
+
+  /* Element 64 is owned by the second tile. Its nonfinite value must suppress
+   * the complete H0 publication rather than leak an earlier tile's scratch. */
+  CUDA_CHECK(device.overlap.copy_from(host.overlap.data(), host.overlap.size(), stream));
+  CUDA_CHECK(device.hamiltonian.fill(kSentinel, host.hamiltonian.size(), stream));
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  CUDA_CHECK(cudaMemcpyAsync(device.overlap.get() + 64, &nan, sizeof(nan), cudaMemcpyHostToDevice,
+                             stream));
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_integral_device_errors_cuda(
+      tiled_batch.batch_size, device.system_errors.get(), device.device_error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::evaluate_gfn2_h0_cuda(
+      tiled_batch, device.h0_plan(host), device.positions.get(), device.coordination.get(),
+      device.overlap.get(), device.hamiltonian.get(), workspace, device.system_errors.get(),
+      device.device_error.get(), stream));
+  std::vector<double> failed_h0(host.hamiltonian.size());
+  std::uint32_t system_error = 0u;
+  CUDA_CHECK(device.hamiltonian.copy_to(failed_h0.data(), failed_h0.size(), stream));
+  CUDA_CHECK(device.system_errors.copy_to(&system_error, 1u, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(system_error == static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kNonfiniteOverlap));
+  CHECK(slice_is(failed_h0, 0u, failed_h0.size(), kSentinel));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -766,5 +925,8 @@ int main() {
   if (const int status = test_aliases_are_rejected_synchronously(); status != 0) {
     return status;
   }
-  return test_h0_failure_atomicity();
+  if (const int status = test_h0_failure_atomicity(); status != 0) {
+    return status;
+  }
+  return test_linear_launch_shape_tiling_and_late_failure();
 }
