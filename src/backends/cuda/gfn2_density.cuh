@@ -12,6 +12,40 @@
 
 namespace xtbloom::detail::cuda {
 
+/* Topology-fixed upper bound for pair tiles assigned to one system/channel. */
+inline constexpr std::int64_t kGfn2DensityContractBlockBudget = 512;
+/* Shared by density launches and the setup-time pair-tile selector. */
+inline constexpr int kGfn2DensityThreadsPerBlock = 256;
+
+/*
+ * Host-visible contract for the kernel node captured into the SCC Graph.
+ * total_spin_channels distinguishes an all-restricted batch (one launched
+ * channel) from a batch containing any unrestricted system (two launched
+ * channels) without reading device metadata or the iteration active mask.
+ */
+struct Gfn2DensityContractLaunchShape {
+  std::uint32_t systems = 0u;
+  std::uint32_t channels = 0u;
+  std::uint32_t tiles = 0u;
+};
+
+[[nodiscard]] bool make_gfn2_density_contract_launch_shape(
+    std::int64_t batch_size, std::int64_t total_spin_channels, std::int64_t tiles_per_channel,
+    Gfn2DensityContractLaunchShape& shape) noexcept;
+
+/*
+ * Select the Graph-stable pair-tile count from host topology. The selector
+ * targets at most kGfn2DensityContractBlockBudget launched contraction CTAs
+ * when capacity permits, while a grid-stride loop covers work beyond that target.
+ * The output is changed only on success.
+ */
+[[nodiscard]] bool select_gfn2_density_contraction_tiles(const std::int64_t* orbital_offsets,
+                                                         std::int64_t orbital_offset_count,
+                                                         const std::int32_t* spin_channels,
+                                                         std::int64_t spin_channel_count,
+                                                         std::int64_t batch_size,
+                                                         std::int64_t& tiles) noexcept;
+
 /* Per-system failure code; the batch diagnostic is canonicalized by system index. */
 enum class Gfn2DensityDeviceError : std::uint32_t {
   kSuccess = 0u,
@@ -38,6 +72,12 @@ struct Gfn2DensityDeviceBatch {
   std::int64_t batch_size = 0;
   std::int64_t total_orbitals = 0;
   std::int64_t total_matrix_elements = 0;
+  /*
+   * Topology-fixed pair tiles assigned to each system/channel. Setup balances
+   * useful ragged work against a bounded total CTA target so Graph replay does
+   * not depend on the per-iteration active mask.
+   */
+  std::int64_t contraction_tiles_per_channel = 0;
   std::int64_t orbital_offset_count = 0;
   std::int64_t matrix_offset_count = 0;
   std::uint64_t plan_token = 0u;

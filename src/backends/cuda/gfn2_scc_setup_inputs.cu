@@ -20,6 +20,7 @@ namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr std::size_t kDeviceAlignment = 256u;
+constexpr std::int64_t kDensityTargetContractBlocks = kGfn2DensityContractBlockBudget;
 
 struct Segment {
   std::size_t offset = 0u;
@@ -71,6 +72,14 @@ bool checked_multiply(std::int64_t first, std::int64_t second, std::int64_t& res
     return false;
   }
   result = first * second;
+  return true;
+}
+
+bool checked_add(std::int64_t first, std::int64_t second, std::int64_t& result) noexcept {
+  if (first < 0 || second < 0 || first > std::numeric_limits<std::int64_t>::max() - second) {
+    return false;
+  }
+  result = first + second;
   return true;
 }
 
@@ -218,6 +227,60 @@ std::int64_t minimum_partition(const std::int64_t* offsets, std::int64_t partiti
 
 }  // namespace
 
+bool select_gfn2_density_contraction_tiles(const std::int64_t* orbital_offsets,
+                                           std::int64_t orbital_offset_count,
+                                           const std::int32_t* spin_channels,
+                                           std::int64_t spin_channel_count, std::int64_t batch_size,
+                                           std::int64_t& tiles) noexcept {
+  if (orbital_offsets == nullptr || spin_channels == nullptr || batch_size <= 0 ||
+      batch_size > std::numeric_limits<int>::max() || orbital_offset_count != batch_size + 1 ||
+      spin_channel_count != batch_size || orbital_offsets[0] != 0) {
+    return false;
+  }
+  std::int64_t useful_tiles = 0;
+  std::int64_t channel_capacity = 0;
+  std::int64_t maximum_channels = 0;
+  for (std::int64_t system = 0; system < batch_size; ++system) {
+    const std::int64_t orbital_begin = orbital_offsets[system];
+    const std::int64_t orbital_end = orbital_offsets[system + 1];
+    const std::int64_t channels = spin_channels[system];
+    std::int64_t twice_pairs = 0;
+    std::int64_t system_tiles = 0;
+    std::int64_t channel_tiles = 0;
+    if (orbital_begin < 0 || orbital_end <= orbital_begin || (channels != 1 && channels != 2)) {
+      return false;
+    }
+    const std::int64_t count = orbital_end - orbital_begin;
+    if (count == std::numeric_limits<std::int64_t>::max() ||
+        !checked_multiply(count, count + 1, twice_pairs)) {
+      return false;
+    }
+    const std::int64_t pairs = twice_pairs / 2;
+    system_tiles =
+        pairs / kGfn2DensityThreadsPerBlock + (pairs % kGfn2DensityThreadsPerBlock != 0 ? 1 : 0);
+    if (!checked_multiply(system_tiles, channels, channel_tiles) ||
+        !checked_add(useful_tiles, channel_tiles, useful_tiles) ||
+        !checked_add(channel_capacity, channels, channel_capacity)) {
+      return false;
+    }
+    maximum_channels = std::max(maximum_channels, channels);
+  }
+  std::int64_t launch_channel_capacity = 0;
+  if (!checked_multiply(batch_size, maximum_channels, launch_channel_capacity)) {
+    return false;
+  }
+  const std::int64_t average_tiles =
+      useful_tiles / channel_capacity + (useful_tiles % channel_capacity != 0 ? 1 : 0);
+  const std::int64_t target_tiles =
+      std::max<std::int64_t>(1, kDensityTargetContractBlocks / launch_channel_capacity);
+  const std::int64_t selected = std::min(average_tiles, target_tiles);
+  if (selected <= 0 || selected > kGfn2DensityContractBlockBudget) {
+    return false;
+  }
+  tiles = selected;
+  return true;
+}
+
 struct Gfn2SccSetupInputs::Impl {
   struct Layout {
     Segment pair_offsets;
@@ -279,6 +342,7 @@ struct Gfn2SccSetupInputs::Impl {
   std::int64_t minimum_atoms = 0;
   std::int64_t maximum_atoms = 0;
   std::int64_t maximum_shells = 0;
+  std::int64_t density_contraction_tiles = 0;
   std::int64_t mixer_history = 0;
   std::uint64_t maximum_iterations = 0u;
   double mixer_damping = 0.0;
@@ -675,6 +739,13 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn2SccSetupInputS
     candidate->minimum_atoms = minimum_partition(host_topology.atom_offsets, batch);
     candidate->maximum_atoms = maximum_partition(host_topology.atom_offsets, batch);
     candidate->maximum_shells = maximum_partition(host_topology.batch_shell_offsets, batch);
+    if (!select_gfn2_density_contraction_tiles(
+            host_topology.batch_orbital_offsets, host_topology.batch_orbital_offset_count,
+            wavefunction.spin_channels.data(),
+            static_cast<std::int64_t>(wavefunction.spin_channels.size()), batch,
+            candidate->density_contraction_tiles)) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
+    }
     candidate->mixer_history = mixer.history_size();
     candidate->maximum_iterations = driver.maximum_iterations();
     candidate->mixer_damping = mixer.damping();
@@ -1166,6 +1237,13 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::create(const Gfn1SccSetupInputS
     candidate->minimum_atoms = minimum_partition(host_topology.atom_offsets, batch);
     candidate->maximum_atoms = maximum_partition(host_topology.atom_offsets, batch);
     candidate->maximum_shells = maximum_partition(host_topology.batch_shell_offsets, batch);
+    if (!select_gfn2_density_contraction_tiles(
+            host_topology.batch_orbital_offsets, host_topology.batch_orbital_offset_count,
+            wavefunction.spin_channels.data(),
+            static_cast<std::int64_t>(wavefunction.spin_channels.size()), batch,
+            candidate->density_contraction_tiles)) {
+      return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCrossPlan, Field::kRequiredPlans);
+    }
     candidate->mixer_history = mixer.history_size();
     candidate->maximum_iterations = driver.maximum_iterations();
     candidate->mixer_damping = mixer.damping();
@@ -1755,6 +1833,7 @@ Gfn2SccSetupInputsDiagnostic Gfn2SccSetupInputs::bind_device_arena_and_upload_as
   candidate.density_batch = {batch,
                              orbitals,
                              matrices,
+                             impl_->density_contraction_tiles,
                              batch + 1,
                              batch + 1,
                              token,

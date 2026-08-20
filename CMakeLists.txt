@@ -1348,6 +1348,7 @@ if(XTBLOOM_HAS_CUDA)
     cudaGraphExecDestroy
     cudaGraphGetNodes
     cudaGraphInstantiate
+    cudaGraphKernelNodeGetParams
     cudaGraphLaunch
     cudaGraphMemcpyNodeGetParams
     cudaGraphNodeGetType

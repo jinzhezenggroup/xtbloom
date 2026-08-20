@@ -1,0 +1,17 @@
+group,natoms,ao_count,batch_size,start_mode,baseline_median_ms,candidate_median_ms,speedup_x,improvement_percent,baseline_samples,candidate_samples,baseline_iteration_median,candidate_iteration_median,baseline_correctness,candidate_correctness,baseline_fresh_reference,candidate_fresh_reference
+controls,62,122,1,fresh,152.937254,126.736224,1.206737,17.131882,20,20,18.0,18.0,pass,pass,not_requested,not_requested
+controls,62,122,8,fresh,166.520396,142.701994,1.166910,14.303594,20,20,18.0,18.0,pass,pass,not_requested,not_requested
+controls,62,122,32,fresh,214.941836,195.522707,1.099319,9.034597,20,20,18.0,18.0,pass,pass,not_requested,not_requested
+controls,62,122,128,fresh,445.414290,440.442723,1.011288,1.116167,20,20,18.0,18.0,pass,pass,not_requested,not_requested
+controls,62,122,1,warm,29.949039,26.286659,1.139325,12.228709,20,20,2.0,2.0,pass,pass,pass,pass
+controls,62,122,8,warm,38.627249,33.144327,1.165426,14.194442,20,20,2.0,2.0,pass,pass,pass,pass
+controls,62,122,32,warm,62.588684,60.338724,1.037289,3.594837,20,20,2.0,2.0,pass,pass,pass,pass
+controls,62,122,128,warm,180.438860,179.709123,1.004061,0.404423,20,20,2.0,2.0,pass,pass,pass,pass
+large_ao,122,242,1,fresh,442.268383,235.744162,1.876052,46.696583,10,10,18.0,18.0,pass,pass,not_requested,not_requested
+large_ao,242,482,1,fresh,2069.654312,510.229005,4.056324,75.347139,10,10,17.0,17.0,pass,pass,not_requested,not_requested
+large_ao,272,542,1,fresh,3055.370933,855.215677,3.572632,72.009432,10,10,17.0,17.0,pass,pass,not_requested,not_requested
+large_ao,362,722,1,fresh,6521.070475,1293.447079,5.041621,80.165111,10,10,17.0,17.0,pass,pass,not_requested,not_requested
+large_ao,122,242,1,warm,77.798186,54.817164,1.419230,29.539277,10,10,2.0,2.0,pass,pass,pass,pass
+large_ao,242,482,1,warm,313.835454,130.229442,2.409866,58.503910,10,10,2.0,2.0,pass,pass,pass,pass
+large_ao,272,542,1,warm,449.449261,188.951726,2.378646,57.959275,10,10,2.0,2.0,pass,pass,pass,pass
+large_ao,362,722,1,warm,929.938504,316.381521,2.939295,65.978232,10,10,2.0,2.0,pass,pass,pass,pass
