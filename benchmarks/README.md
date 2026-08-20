@@ -19,6 +19,16 @@ cross-engine figure and the FRESH/WARM study use different SCC settings,
 correctness gates, start policies, workloads, and sample counts. Never combine
 their numbers or thresholds.
 
+The public cross-engine selection is maintained in
+`natoms_cross_engine_publication.json`. Each engine/backend points to its own
+clean evidence series, so a CUDA-only optimization refreshes only xTBloom CUDA
+without relabelling unchanged CPU or third-party timings. The generated
+`natoms_cross_engine_latest.csv` is the reviewable current data table and
+includes per-row revisions, artifact hashes, evidence paths, protocol identity,
+and the recorded RTX 5090 identity for CUDA rows. Manifest declarations are
+checked against each evidence bundle's SHA-covered `publication-metadata.json`
+rather than trusted as free-form labels.
+
 ## Continuous regression signal
 
 `codspeed_inference.py` is a deliberately small `pytest-codspeed` suite for

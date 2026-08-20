@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "publication": {
+    "protocol_id": "cross-engine-gfn2-force-v1",
+    "hardware": {
+      "hostname": "node3",
+      "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+      "cpu_threads": 16,
+      "cuda_device": {
+        "name": "NVIDIA GeForce RTX 5090",
+        "uuid": "GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8",
+        "driver": "580.95.05"
+      }
+    },
+    "panels": [
+      {
+        "id": "cold",
+        "batch_size": 1,
+        "start_policy": "cold"
+      },
+      {
+        "id": "b128",
+        "batch_size": 128,
+        "start_policy": "auto-warm"
+      },
+      {
+        "id": "b512",
+        "batch_size": 512,
+        "start_policy": "cold"
+      }
+    ],
+    "protocol": {
+      "warmups": 1,
+      "repetitions": 3,
+      "cross_engine_energy_atol_hartree": 0.002,
+      "cross_engine_force_atol_hartree_per_bohr": 0.002,
+      "repeatability_energy_atol_hartree": 1e-10,
+      "repeatability_force_atol_hartree_per_bohr": 1e-08,
+      "perturb_sigma_bohr": 0.02,
+      "scc_max_iterations": 500,
+      "scc_charge_tolerance": 0.0001,
+      "scc_energy_tolerance": 1e-06,
+      "convergence_contract": {
+        "xtbloom": {
+          "charge_tolerance": 0.0001,
+          "energy_tolerance": 1e-06
+        },
+        "xtb": {
+          "public_accuracy_factor": 1.0
+        },
+        "tblite": {
+          "public_accuracy_factor": 1.0
+        },
+        "dxtb": {
+          "x_atol": 0.0001,
+          "x_atol_max": 1e-05,
+          "f_atol": 0.0001,
+          "force_convergence": true
+        }
+      }
+    }
+  },
+  "sources": [
+    {
+      "engine": "xtbloom-cpu",
+      "measured_date": "2026-08-09",
+      "source_revision": "c9c0a432947f122d25cb91d0a4624af0a3e761ad",
+      "runtime_identity": "libxtbloom.so.0.1.0 sha256=eba5b40dd5cd9c156a3d4eb9a1fdb0da96e0d5beaa668bdeb51694ce67364ad2",
+      "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "metadata": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/publication-metadata.json",
+      "artifacts": [
+        {
+          "panel": "cold",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtbloom-cpu-cold.csv",
+          "reference_artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e"
+        },
+        {
+          "panel": "b128",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtbloom-cpu-b128.csv",
+          "reference_artifact_sha256": "e7a3d61ff6151bfa5f14d89a0c048f199035ee844a658bfe87fc9d39e35a8532"
+        },
+        {
+          "panel": "b512",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtbloom-cpu-b512.csv",
+          "reference_artifact_sha256": "33a344f3995660fb53f5025c7c217ac6e1e7dc4a53109759ddebda7d8dfee7e7"
+        }
+      ]
+    },
+    {
+      "engine": "xtbloom-cuda",
+      "measured_date": "2026-08-20",
+      "source_revision": "af65028c5dddc1a3aad3ffc554f0b7dba121a2fe",
+      "runtime_identity": "libxtbloom.so.0.2.0 sha256=6a0c81f844bda7814e450cbc716e5cc9f773377b6e79b4d3efd8c37ef1511b95; CUDA 12.9.86 sm_120",
+      "evidence_bundle": "benchmarks/evidence/issue-459/2026-08-20-node3/README.md",
+      "metadata": "benchmarks/evidence/issue-459/2026-08-20-node3/publication-metadata.json",
+      "artifacts": [
+        {
+          "panel": "cold",
+          "csv": "benchmarks/evidence/issue-459/2026-08-20-node3/xtbloom-cuda-cold.csv",
+          "reference_artifact_sha256": "9b9626f0481b8b72c12c5f5bfc95ed3a3d49e6d31301d403edb0dd1256e852f5"
+        },
+        {
+          "panel": "b128",
+          "csv": "benchmarks/evidence/issue-459/2026-08-20-node3/xtbloom-cuda-b128.csv",
+          "reference_artifact_sha256": "b6997834c64a6d184c73a5b581894f2ed4f3a48e32ae736e09f274476f5dde4f"
+        },
+        {
+          "panel": "b512",
+          "csv": "benchmarks/evidence/issue-459/2026-08-20-node3/xtbloom-cuda-b512.csv",
+          "reference_artifact_sha256": "1201442fa630ce40bcd93f3d788c1348bce61f4b140215a6aa6001e3efd17af4"
+        }
+      ]
+    },
+    {
+      "engine": "xtb",
+      "measured_date": "2026-08-09",
+      "source_revision": "b31754bf3c7cccf8c242c469b03ae675e04bd608",
+      "runtime_identity": "xTB 6.7.1 libxtb.so sha256=959ed711f85f3c84e5e9dffd15e1b49dfae1bd46783f544ce8756b5e148094dd",
+      "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "metadata": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/publication-metadata.json",
+      "artifacts": [
+        {
+          "panel": "cold",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtb-cold.csv",
+          "reference_artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e"
+        },
+        {
+          "panel": "b128",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtb-b128.csv",
+          "reference_artifact_sha256": "e7a3d61ff6151bfa5f14d89a0c048f199035ee844a658bfe87fc9d39e35a8532"
+        },
+        {
+          "panel": "b512",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/xtb-b512.csv",
+          "reference_artifact_sha256": "33a344f3995660fb53f5025c7c217ac6e1e7dc4a53109759ddebda7d8dfee7e7"
+        }
+      ]
+    },
+    {
+      "engine": "tblite",
+      "measured_date": "2026-08-09",
+      "source_revision": "133f91efb94b47f05848e1f86832f40a1accc385",
+      "runtime_identity": "tblite 0.7.0 libtblite.so sha256=1c2fb4308b398851580af11ccad5eec22314ff45a34a553380277e776a44c3b5",
+      "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "metadata": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/publication-metadata.json",
+      "artifacts": [
+        {
+          "panel": "cold",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/ref-tblite-cold.csv"
+        },
+        {
+          "panel": "b128",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/ref-tblite-b128.csv"
+        },
+        {
+          "panel": "b512",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/ref-tblite-b512.csv"
+        }
+      ]
+    },
+    {
+      "engine": "dxtb-cpu",
+      "measured_date": "2026-08-09",
+      "source_revision": "b529b5ddb75c0554274955082a189f9f88437cb2",
+      "runtime_identity": "dxtb 0.4.0; PyTorch 2.13.0; tad-libcint 0.3.0",
+      "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "metadata": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/publication-metadata.json",
+      "artifacts": [
+        {
+          "panel": "cold",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/dxtb-cpu-cold.csv",
+          "reference_artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e"
+        },
+        {
+          "panel": "b128",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/dxtb-cpu-b128.csv",
+          "reference_artifact_sha256": "e7a3d61ff6151bfa5f14d89a0c048f199035ee844a658bfe87fc9d39e35a8532"
+        },
+        {
+          "panel": "b512",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/dxtb-cpu-b512.csv",
+          "reference_artifact_sha256": "33a344f3995660fb53f5025c7c217ac6e1e7dc4a53109759ddebda7d8dfee7e7"
+        }
+      ]
+    },
+    {
+      "engine": "dxtb-cuda",
+      "measured_date": "2026-08-09",
+      "source_revision": "b529b5ddb75c0554274955082a189f9f88437cb2",
+      "runtime_identity": "dxtb 0.4.0; PyTorch 2.13.0+cu130; tad-libcint 0.3.0",
+      "evidence_bundle": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md",
+      "metadata": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/publication-metadata.json",
+      "artifacts": [
+        {
+          "panel": "cold",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/dxtb-cuda-cold.csv",
+          "reference_artifact_sha256": "401125f8e1ca89aceca982a427581fb7b90d5ff9f50596a64592fd581d18c25e"
+        },
+        {
+          "panel": "b128",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/dxtb-cuda-b128.csv",
+          "reference_artifact_sha256": "e7a3d61ff6151bfa5f14d89a0c048f199035ee844a658bfe87fc9d39e35a8532"
+        },
+        {
+          "panel": "b512",
+          "csv": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/dxtb-cuda-b512.csv",
+          "reference_artifact_sha256": "33a344f3995660fb53f5025c7c217ac6e1e7dc4a53109759ddebda7d8dfee7e7"
+        }
+      ]
+    }
+  ]
+}

@@ -115,6 +115,10 @@ complete runnable example and the descriptor ownership rules.
 
 ![Cross-engine GFN2-xTB scaling benchmark](docs/assets/natoms_cross_engine.svg)
 
+CUDA curves were measured on an NVIDIA GeForce RTX 5090 (driver 580.95.05).
+The xTBloom CUDA series was refreshed on 2026-08-20; CPU and third-party
+series remain pinned to their unchanged 2026-08-09 evidence.
+
 On the recorded AMD EPYC 7K62 system with the same 16-thread CPU budget:
 
 - for a warm-state batch of 128 distinct 62-atom alkane conformers, xTBloom CPU
@@ -129,8 +133,11 @@ xTB implementations. Batch 1 is retained in the figure as latency context, and
 the panels use the start policies stated in the evidence. Read the
 [user-facing performance summary](docs/user-guide/performance.md), the
 [benchmark methodology](benchmarks/cross-engine.md), and the
-[raw evidence bundle](benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
-before reusing the numbers.
+[latest machine-readable table](benchmarks/natoms_cross_engine_latest.csv).
+The [RTX 5090 CUDA refresh](benchmarks/evidence/issue-459/2026-08-20-node3/README.md)
+and [historical CPU/third-party evidence](benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
+retain the commands, identities, hashes, and limitations needed before reusing
+the numbers.
 
 ## Supported scope
 
