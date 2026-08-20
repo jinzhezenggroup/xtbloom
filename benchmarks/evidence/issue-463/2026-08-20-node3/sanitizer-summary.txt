@@ -53,6 +53,15 @@ Exact commands
 
   export LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64:/home/jzzeng/miniconda3/lib
   export CUDA_VISIBLE_DEVICES=0
+  xtbloom_sanitizer_failed=0
+  run_clean() {
+    "$@" || {
+      status=$?
+      printf 'unexpected sanitizer exit %d: %s\n' "$status" "$*" >&2
+      xtbloom_sanitizer_failed=1
+    }
+  }
+
   for test_binary in \
     xtbloom_cuda_integrals_test \
     xtbloom_cuda_integral_force_test \
@@ -61,18 +70,28 @@ Exact commands
     xtbloom_cuda_electronic_gradient_test \
     xtbloom_cuda_energy_force_execution_test; do
     for sanitizer_tool in memcheck racecheck initcheck synccheck; do
-      /group/software/cuda-12.9.1/bin/compute-sanitizer \
+      run_clean /group/software/cuda-12.9.1/bin/compute-sanitizer \
         --tool "$sanitizer_tool" --error-exitcode=99 \
         "./build/cuda-issue463-dev/$test_binary"
     done
   done
 
   for sanitizer_tool in memcheck racecheck initcheck; do
-    /group/software/cuda-12.9.1/bin/compute-sanitizer \
+    run_clean /group/software/cuda-12.9.1/bin/compute-sanitizer \
       --tool "$sanitizer_tool" --error-exitcode=99 \
       ./build/cuda-issue463-dev/xtbloom_cuda_gfn2_runtime_graph_test
   done
 
-  /group/software/cuda-12.9.1/bin/compute-sanitizer \
-    --tool synccheck --error-exitcode=99 \
-    ./build/cuda-issue463-dev/xtbloom_cuda_gfn2_runtime_graph_test
+  if /group/software/cuda-12.9.1/bin/compute-sanitizer \
+      --tool synccheck --error-exitcode=99 \
+      ./build/cuda-issue463-dev/xtbloom_cuda_gfn2_runtime_graph_test; then
+    status=0
+  else
+    status=$?
+  fi
+  if [ "$status" -ne 99 ]; then
+    printf 'unexpected production synccheck exit %d (expected 99)\n' \
+      "$status" >&2
+    xtbloom_sanitizer_failed=1
+  fi
+  exit "$xtbloom_sanitizer_failed"

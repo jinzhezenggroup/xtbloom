@@ -702,16 +702,41 @@ int test_large_singleton_tiling_graph_and_late_failure() {
   CUDA_CHECK(cudaGraphDestroy(graph));
 
   Gfn2IntegralDeviceBatch invalid_batch = device.batch(host);
-  invalid_batch.linear_tiles_per_system = 0;
-  CHECK(xtbloom::detail::cuda::add_gfn2_integral_gradient_cuda(
-            invalid_batch, device.activity(host), device.input(host), device.output(host),
-            device.workspace(host), device.system_errors.get(), device.device_error.get(),
-            stream) == cudaErrorInvalidValue);
-  invalid_batch.linear_tiles_per_system = kGfn2IntegralLinearBlockBudget + 1;
-  CHECK(xtbloom::detail::cuda::add_gfn2_integral_gradient_cuda(
-            invalid_batch, device.activity(host), device.input(host), device.output(host),
-            device.workspace(host), device.system_errors.get(), device.device_error.get(),
-            stream) == cudaErrorInvalidValue);
+  const std::vector<double> invalid_gradients(host.seed.size(), -91.25);
+  const std::vector<std::uint32_t> invalid_system_errors(1u, 0xa5a5a5a5u);
+  constexpr std::uint32_t kInvalidDeviceErrorSentinel = 0x5a5a5a5au;
+  auto check_invalid_tiles_transactional = [&](std::int64_t invalid_tiles) -> int {
+    /* Admission failures happen before any launch, so all caller-visible
+     * buffers must retain their deliberately non-default sentinels. */
+    CUDA_CHECK(
+        device.gradients.copy_from(invalid_gradients.data(), invalid_gradients.size(), stream));
+    CUDA_CHECK(device.system_errors.copy_from(invalid_system_errors.data(),
+                                              invalid_system_errors.size(), stream));
+    CUDA_CHECK(device.device_error.copy_from(&kInvalidDeviceErrorSentinel, 1u, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    invalid_batch.linear_tiles_per_system = invalid_tiles;
+    CHECK(xtbloom::detail::cuda::add_gfn2_integral_gradient_cuda(
+              invalid_batch, device.activity(host), device.input(host), device.output(host),
+              device.workspace(host), device.system_errors.get(), device.device_error.get(),
+              stream) == cudaErrorInvalidValue);
+
+    std::vector<double> actual_gradients(invalid_gradients.size());
+    std::vector<std::uint32_t> actual_system_errors(invalid_system_errors.size());
+    std::uint32_t actual_device_error = 0u;
+    CUDA_CHECK(device.gradients.copy_to(actual_gradients.data(), actual_gradients.size(), stream));
+    CUDA_CHECK(device.system_errors.copy_to(actual_system_errors.data(),
+                                            actual_system_errors.size(), stream));
+    CUDA_CHECK(device.device_error.copy_to(&actual_device_error, 1u, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(actual_gradients == invalid_gradients);
+    CHECK(actual_system_errors == invalid_system_errors);
+    CHECK(actual_device_error == kInvalidDeviceErrorSentinel);
+    return 0;
+  };
+  CHECK(check_invalid_tiles_transactional(-1) == 0);
+  CHECK(check_invalid_tiles_transactional(0) == 0);
+  CHECK(check_invalid_tiles_transactional(kGfn2IntegralLinearBlockBudget + 1) == 0);
 
   CUDA_CHECK(device.upload_dynamic(host, stream));
   const std::int64_t late_element = (tiles - 1) * 64;
@@ -720,10 +745,13 @@ int test_large_singleton_tiling_graph_and_late_failure() {
                              cudaMemcpyHostToDevice, stream));
   CHECK(run_force(device, host, stream, tiles) == 0);
   std::uint32_t system_error = 0u;
+  std::uint32_t device_error = 0u;
   CUDA_CHECK(device.gradients.copy_to(tiled.data(), tiled.size(), stream));
   CUDA_CHECK(device.system_errors.copy_to(&system_error, 1u, stream));
+  CUDA_CHECK(device.device_error.copy_to(&device_error, 1u, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   CHECK(system_error == static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kNonfiniteAdjoint));
+  CHECK(device_error == static_cast<std::uint32_t>(Gfn2IntegralDeviceError::kNonfiniteAdjoint));
   CHECK(tiled == host.seed);
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;

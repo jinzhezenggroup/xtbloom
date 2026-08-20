@@ -297,8 +297,11 @@ rg 'integral_force|publish_integrals_kernel|Gfn2H0Force' \
   "$candidate_dir/nsys-candidate-stats_cuda_gpu_kern_sum.csv"
 ~~~
 
-The instrumented samples were 1195.114 ms baseline and 1163.346 ms candidate,
-a 2.658% reduction, with 17 SCC iterations and passing correctness in both.
+The single instrumented profile samples were 1195.114 ms baseline and
+1163.346 ms candidate, so the candidate observation was 2.658% lower. This
+one profile pair is a launch/transfer audit, not a repeated timing estimate;
+the 30-sample medians above remain the performance evidence. Both profile
+runs used 17 SCC iterations and passed correctness.
 
 Across each complete setup/warmup/measured process, allocation and lifetime
 counts are identical: 32 cudaMalloc, 38 cudaFree, 11 cudaMallocHost, and
