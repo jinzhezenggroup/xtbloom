@@ -316,8 +316,10 @@ CUDA memory-operation counts and bytes are identical: memset 282.530 MB/257,
 device-to-device 155.230 MB/3, host-to-device 141.344 MB/56, and
 device-to-host 0.028 MB/26. cudaLaunchKernel increases from 1557 to 1560, the
 expected three launches for the separated per-system topology validation and
-tiled numerical preflight boundary. This adds no allocation, transfer, Graph
-resource, polling, event/stream/device synchronization, or host work.
+tiled numerical preflight boundary. Those extra host launch submissions occur
+during setup/capture; replay remains two Graph launches in both traces. The
+measured change adds no allocation, transfer, Graph resource, polling, or
+event/stream/device synchronization.
 
 The capture includes setup and is not represented as a zero-allocation
 steady-state-only trace. API and memory summaries are retained in full.
