@@ -203,7 +203,15 @@ class PaperSuiteTest(unittest.TestCase):
         )
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        # The portability scan below intentionally treats every deployable suite
+        # file as UTF-8. Keep this test import from leaving a transient bytecode
+        # file inside that source tree when the suite runs without ``python -B``.
+        previous_dont_write_bytecode = sys.dont_write_bytecode
+        try:
+            sys.dont_write_bytecode = True
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = previous_dont_write_bytecode
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             explicit = root / "site" / "libcudart.so"
