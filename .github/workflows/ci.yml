@@ -167,7 +167,8 @@ jobs:
             uv run --no-sync pytest python/tests -q --cov \
               --cov-report=xml:coverage-python.xml
           uv run --no-sync python -m unittest -v \
-            benchmarks.test_run benchmarks.test_natoms_scaling \
+            benchmarks.test_run benchmarks.test_dataset_runner \
+            benchmarks.test_paper_suite benchmarks.test_natoms_scaling \
             benchmarks.test_natoms_cross_engine benchmarks.test_dxtb_adapter \
             benchmarks.test_evidence_size
       - name: Validate repository-relative Python coverage paths

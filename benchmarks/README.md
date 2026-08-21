@@ -9,6 +9,7 @@ the scripts and method pages here define how evidence is produced and audited.
 | Question | Runner | Method | Hardware-free test |
 | --- | --- | --- | --- |
 | End-to-end gas/QM-MM matrix across xTBloom, xTB, tblite, and dxtb | `run.py` | [Public matrix](matrix.md) | `benchmarks.test_run`, `benchmarks.test_dxtb_adapter` |
+| Paper-wide frozen-manifest correctness and performance matrix | `dataset_runner.py`, `paper/bin/submit.sh` | [Paper experiment suite](paper/README.md) | `benchmarks.test_dataset_runner`, `benchmarks.test_paper_suite` |
 | Cross-engine molecule-size scaling and the public README figure | `natoms_cross_engine.py` | [Cross-engine scaling](cross-engine.md) | `benchmarks.test_natoms_cross_engine` |
 | CPU FRESH/WARM scaling against explicit references | `natoms_scaling.py` | [FRESH/WARM scaling](fresh-warm.md) | `benchmarks.test_natoms_scaling` |
 | Cost of xTBloom-owned CUDA DLPack result arenas | `dlpack_result_memory.py` | [DLPack result memory](dlpack-result-memory.md) | `benchmarks.test_dlpack_result_memory` |
@@ -109,6 +110,8 @@ set before changing benchmark documentation or publication logic:
 
 ```bash
 python3 -m unittest -v benchmarks.test_run
+python3 -m unittest -v benchmarks.test_dataset_runner
+python3 -m unittest -v benchmarks.test_paper_suite
 python3 -m unittest -v benchmarks.test_dxtb_adapter
 python3 -m unittest -v benchmarks.test_natoms_cross_engine
 python3 -m unittest -v benchmarks.test_natoms_scaling
