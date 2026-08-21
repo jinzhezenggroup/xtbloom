@@ -354,6 +354,21 @@ banned-module-level-imports = ["torch"]
 # benchmarks/run.py appends a tools path to sys.path before importing
 # xtbloom_conformance/xtbloom_public_api; those imports cannot move to the top.
 "benchmarks/run.py" = ["E402"]
+# Paper orchestration is a collection of executable CLIs, not a public Python
+# API. Their schema-shaped values are intentionally dynamic, user-facing
+# diagnostics may exceed the formatter width, and stdout is their shell ABI.
+"benchmarks/paper/python/*.py" = [
+  "ANN",
+  "D",
+  "E501",
+  "E731",
+  "PERF401",
+  "SIM105",
+  "T201",
+  "TC003",
+]
+# Test method names state the portability contract directly.
+"benchmarks/test_paper_suite.py" = ["D102"]
 # Test method names already state their focused contract; class/module
 # docstrings provide the surrounding scientific intent.
 "tests/parameters/test_gfn1*.py" = ["D102"]
