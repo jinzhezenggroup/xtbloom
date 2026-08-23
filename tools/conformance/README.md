@@ -64,6 +64,47 @@ The primary thresholds remain property-specific absolute tolerances. They are
 public CPU/CUDA GFN1 acceptance gates; the committed goldens remain independent
 of xTBloom and are never regenerated from the implementation under test.
 
+## Native three-dimensional periodic GFN2 corpus
+
+The separate corpus under `data/conformance/periodic/` freezes the native-PBC
+contract before execution is released. Four xTBloom-authored neutral cells
+cover orthogonal, skew, one-atom, and unrestricted full-model calculations.
+Their energy, Cartesian gradient, and strain derivative come from tblite 0.7.0
+at revision `133f91efb94b47f05848e1f86832f40a1accc385`. Two cells additionally
+retain three-step central differences for all six upper-triangular affine
+strain modes. The runner converts tblite's Fortran-column-major virial output
+to the public row-major order explicitly.
+
+The charged Li+ tblite result is retained only as a diagnostic boundary. The
+reviewed tblite monopole matrix omits the uniform-background constant, so it is
+not a charged-cell acceptance oracle. Two independent analytic cases instead
+reconstruct the required background energy, potential, and isotropic strain.
+This distinction is enforced by the offline checker.
+
+Verify committed inputs, goldens, source/runtime hashes, finite differences,
+and background formulas without an oracle installation:
+
+```sh
+python3 tools/conformance/periodic_gfn2.py check
+```
+
+Regenerate only into a separate build directory with the exact pinned tblite
+executable and a loader path that resolves its reviewed runtime:
+
+```sh
+LD_LIBRARY_PATH=/path/to/oracle/lib \
+python3 tools/conformance/periodic_gfn2.py generate \
+  --executable /path/to/tblite \
+  --output-dir build/conformance/periodic-tblite
+
+python3 tools/conformance/periodic_gfn2.py compare \
+  --actual-dir build/conformance/periodic-tblite
+```
+
+The affine convention, Ewald/background equations, cutoffs, signs, and
+unsupported combinations are defined in
+[`docs/theory/periodic-gfn2.md`](../../docs/theory/periodic-gfn2.md).
+
 ## GFN2 production conformance corpus
 
 The corpus is deliberately independent of the xTBloom implementation. Eight

@@ -417,6 +417,10 @@ NOTICE_TOKENS = (
     "b529b5ddb75c0554274955082a189f9f88437cb2",
     "663245d739be0123da61c917e55116b0c3db4c74",
     "133f91efb94b47f05848e1f86832f40a1accc385",
+    "data/conformance/periodic/manifest.json",
+    "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725",
+    "charged tblite result is explicitly diagnostic",
     "edcfbbe39d411edc225e27315fbda3a204ddb023",
     "9ab8ca565e0f71d967587e0bca2015f7d689f19f",
     "6f4fc02ae058ef11848046af01a1a756f3229c29",
@@ -2243,6 +2247,66 @@ def _require_notice_tokens(notice: str, tokens: tuple[str, ...]) -> None:
             raise LicenseCheckError(f"THIRD_PARTY_NOTICES.md omits {token}")
 
 
+def _check_periodic_oracle_provenance(root: Path) -> None:
+    """Audit the source/data boundary of the repository-only periodic corpus."""
+    manifest_path = root / "data/conformance/periodic/manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError("periodic GFN2 manifest is malformed") from exc
+    reference = manifest.get("reference_engine")
+    legal = manifest.get("legal")
+    if (
+        manifest.get("schema") != "xtbloom-periodic-gfn2-conformance-v1"
+        or not isinstance(reference, dict)
+        or reference.get("repository") != "https://github.com/tblite/tblite"
+        or reference.get("revision") != "133f91efb94b47f05848e1f86832f40a1accc385"
+        or reference.get("license") != "LGPL-3.0-or-later"
+        or reference.get("executable_sha256")
+        != "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3"
+        or reference.get("runtime_artifacts", {}).get("libtblite_sha256")
+        != "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725"
+    ):
+        raise LicenseCheckError("periodic GFN2 oracle provenance is unreviewed")
+    if (
+        not isinstance(legal, dict)
+        or "authored for xTBloom" not in str(legal.get("inputs", ""))
+        or "no tblite source or binary is redistributed"
+        not in str(legal.get("goldens", "")).lower()
+        or "LICENSES/LGPL-3.0-or-later.txt" not in str(legal.get("license", ""))
+    ):
+        raise LicenseCheckError("periodic GFN2 legal boundary is incomplete")
+
+    cases = manifest.get("cases")
+    if not isinstance(cases, list) or len(cases) != 5:
+        raise LicenseCheckError("periodic GFN2 corpus has an unreviewed case set")
+    roles = [case.get("oracle_role") for case in cases if isinstance(case, dict)]
+    if (
+        roles.count("primary-neutral-full-model") != 4
+        or roles.count("diagnostic-unbackgrounded-charged") != 1
+    ):
+        raise LicenseCheckError("periodic GFN2 corpus roles are incomplete")
+    for case in cases:
+        if not isinstance(case, dict):
+            raise LicenseCheckError("periodic GFN2 corpus case is malformed")
+        input_name = case.get("input")
+        golden_name = case.get("golden")
+        if (
+            not isinstance(input_name, str)
+            or not input_name.startswith("data/conformance/periodic/inputs/")
+            or not isinstance(golden_name, str)
+            or not golden_name.startswith("data/conformance/periodic/golden/")
+        ):
+            raise LicenseCheckError(
+                "periodic GFN2 corpus path escapes its reviewed boundary"
+            )
+        golden = (root / golden_name).read_text(encoding="utf-8")
+        if '"path":' in golden or "/home/" in golden:
+            raise LicenseCheckError("periodic GFN2 golden retains a machine-local path")
+    if not (root / "LICENSES/LGPL-3.0-or-later.txt").is_file():
+        raise LicenseCheckError("periodic GFN2 oracle license text is missing")
+
+
 def _require_codspeed_license_bytes(payload: bytes, context: str) -> None:
     """Require the exact shared MIT notice from the reviewed plugin and Action."""
     if hashlib.sha256(payload).hexdigest() != CODSPEED_LICENSE_SHA256:
@@ -2297,6 +2361,7 @@ def check_source(root: Path) -> None:
 
     notice = (root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     _require_notice_tokens(notice, NOTICE_TOKENS)
+    _check_periodic_oracle_provenance(root)
     _require_gfn1_web_source_map()
 
     web_lock = json.loads((root / "web/package-lock.json").read_text(encoding="utf-8"))

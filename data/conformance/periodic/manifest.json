@@ -1,0 +1,293 @@
+{
+  "analytic_background_cases": [
+    {
+      "alpha_bohr_inverse": 0.25,
+      "charge_e": 1.0,
+      "description": "Unit charged cubic cell isolates the uniform-background scalar and isotropic strain sign.",
+      "energy_hartree": -0.01454441043328608,
+      "id": "background_cubic_q1",
+      "potential_hartree_per_e": -0.02908882086657216,
+      "strain_derivatives_hartree": [
+        0.01454441043328608,
+        0.0,
+        0.0,
+        0.0,
+        0.01454441043328608,
+        0.0,
+        0.0,
+        0.0,
+        0.01454441043328608
+      ],
+      "volume_bohr3": 1728.0
+    },
+    {
+      "alpha_bohr_inverse": 0.31,
+      "charge_e": -2.0,
+      "description": "A non-unit negative charge and non-round volume independently cover Q and Q-squared scaling.",
+      "energy_hartree": -0.02667825807185991,
+      "id": "background_skew_qm2",
+      "potential_hartree_per_e": 0.02667825807185991,
+      "strain_derivatives_hartree": [
+        0.02667825807185991,
+        0.0,
+        0.0,
+        0.0,
+        0.02667825807185991,
+        0.0,
+        0.0,
+        0.0,
+        0.02667825807185991
+      ],
+      "volume_bohr3": 2450.75
+    }
+  ],
+  "cases": [
+    {
+      "atom_count": 3,
+      "cell_matrix_row_major_bohr": [
+        11.7,
+        0.0,
+        0.0,
+        0.0,
+        12.9,
+        0.0,
+        0.0,
+        0.0,
+        14.3
+      ],
+      "description": "xTBloom-authored neutral water in an anisotropic orthogonal cell.",
+      "golden": "data/conformance/periodic/golden/periodic_water_orthogonal.json",
+      "golden_sha256": "a5967f2f5235be2df0cd2afac91be26c29efc9e5d9f5e3513ece1eec71156d46",
+      "id": "periodic_water_orthogonal",
+      "input": "data/conformance/periodic/inputs/periodic_water_orthogonal.tmol",
+      "input_sha256": "bf551b2f10cd3742e881163351360607607091a498894c8086ed3f3e878f3481",
+      "molecular_charge": 0,
+      "oracle_role": "primary-neutral-full-model",
+      "periodic_axes": 7,
+      "spin_channels": 1,
+      "strain_finite_difference": true,
+      "tolerances": {
+        "energy_hartree": 5e-10,
+        "forces_hartree_per_bohr": 5e-8,
+        "strain_derivatives_hartree": 2e-5
+      },
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 4,
+      "cell_matrix_row_major_bohr": [
+        12.4,
+        0.0,
+        0.0,
+        1.7,
+        13.1,
+        0.0,
+        -0.9,
+        1.3,
+        14.2
+      ],
+      "description": "xTBloom-authored neutral ammonia in a right-handed skew cell.",
+      "golden": "data/conformance/periodic/golden/periodic_ammonia_skew.json",
+      "golden_sha256": "b528c2352b68f8e365449596b790fa2a708f81301bc220614cbe5b9998f18df2",
+      "id": "periodic_ammonia_skew",
+      "input": "data/conformance/periodic/inputs/periodic_ammonia_skew.tmol",
+      "input_sha256": "460d291faf92209fc7a423a3df3f3d4cb0a0a87492f3017150b0255fbe7c4037",
+      "molecular_charge": 0,
+      "oracle_role": "primary-neutral-full-model",
+      "periodic_axes": 7,
+      "spin_channels": 1,
+      "strain_finite_difference": true,
+      "tolerances": {
+        "energy_hartree": 5e-10,
+        "forces_hartree_per_bohr": 5e-8,
+        "strain_derivatives_hartree": 2e-5
+      },
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 1,
+      "cell_matrix_row_major_bohr": [
+        10.7,
+        0.0,
+        0.0,
+        0.6,
+        11.3,
+        0.0,
+        -0.4,
+        0.8,
+        12.1
+      ],
+      "description": "xTBloom-authored neutral neon cell isolates periodic self images and the one-atom force invariant.",
+      "golden": "data/conformance/periodic/golden/periodic_neon_one_atom.json",
+      "golden_sha256": "b0b00c1859a48ca4921876134a218bf221364ea3f640b2ba7fef5780c2a9e1dc",
+      "id": "periodic_neon_one_atom",
+      "input": "data/conformance/periodic/inputs/periodic_neon_one_atom.tmol",
+      "input_sha256": "02ba264c9b78afa932610c0f19bc1bf6504aa2c8f103514310c41669c5c97fd3",
+      "molecular_charge": 0,
+      "oracle_role": "primary-neutral-full-model",
+      "periodic_axes": 7,
+      "spin_channels": 1,
+      "strain_finite_difference": false,
+      "tolerances": {
+        "energy_hartree": 5e-10,
+        "forces_hartree_per_bohr": 5e-8,
+        "strain_derivatives_hartree": 2e-5
+      },
+      "unpaired_electrons": 0
+    },
+    {
+      "atom_count": 2,
+      "cell_matrix_row_major_bohr": [
+        13.5,
+        0.0,
+        0.0,
+        0.9,
+        14.1,
+        0.0,
+        -0.7,
+        1.1,
+        15.2
+      ],
+      "description": "xTBloom-authored OH radical covers unrestricted two-channel periodic SCC.",
+      "golden": "data/conformance/periodic/golden/periodic_oh_unrestricted.json",
+      "golden_sha256": "eeeba4a7c07c211c23b24173c7fd61628f7ce10d25205622f8012139fb1ee5ba",
+      "id": "periodic_oh_unrestricted",
+      "input": "data/conformance/periodic/inputs/periodic_oh_unrestricted.tmol",
+      "input_sha256": "e1ce9fcf89d91bca44d1cbc28553dbdfd4f31671a33cf7d3e466ebdc55190c82",
+      "molecular_charge": 0,
+      "oracle_role": "primary-neutral-full-model",
+      "periodic_axes": 7,
+      "spin_channels": 2,
+      "strain_finite_difference": false,
+      "tolerances": {
+        "energy_hartree": 5e-10,
+        "forces_hartree_per_bohr": 5e-8,
+        "strain_derivatives_hartree": 2e-5
+      },
+      "unpaired_electrons": 1
+    },
+    {
+      "atom_count": 1,
+      "cell_matrix_row_major_bohr": [
+        11.0,
+        0.0,
+        0.0,
+        0.5,
+        11.8,
+        0.0,
+        -0.3,
+        0.7,
+        12.6
+      ],
+      "description": "Charged tblite diagnostic retained only to demonstrate the upstream no-background boundary; it is not an xTBloom acceptance oracle.",
+      "golden": "data/conformance/periodic/golden/periodic_lithium_cation_diagnostic.json",
+      "golden_sha256": "c690d4cef3e15baa7bd8bc2ef09a13da56004bac0175fdc62e7b011103e93bf6",
+      "id": "periodic_lithium_cation_diagnostic",
+      "input": "data/conformance/periodic/inputs/periodic_lithium_cation_diagnostic.tmol",
+      "input_sha256": "fb80c7e7b7f6638e01f0dbafda5e7b59ccc6edd3c1dd2017d9aabea96cb6fbf6",
+      "molecular_charge": 1,
+      "oracle_role": "diagnostic-unbackgrounded-charged",
+      "periodic_axes": 7,
+      "spin_channels": 1,
+      "strain_finite_difference": false,
+      "tolerances": {
+        "energy_hartree": 5e-10,
+        "forces_hartree_per_bohr": 5e-8,
+        "strain_derivatives_hartree": 2e-5
+      },
+      "unpaired_electrons": 0
+    }
+  ],
+  "legal": {
+    "goldens": "Normalized numerical outputs generated by the pinned tblite executable; no tblite source or binary is redistributed.",
+    "inputs": "All periodic input coordinates and cells in this corpus were authored for xTBloom and are released under the repository license.",
+    "license": "LGPL-3.0-or-later applies to the reviewed tblite implementation; the retained license text is LICENSES/LGPL-3.0-or-later.txt."
+  },
+  "reference_engine": {
+    "accuracy": 0.0001,
+    "cli_command_template": [
+      "{executable}",
+      "run",
+      "--method",
+      "gfn2",
+      "--acc",
+      "0.0001",
+      "--no-restart",
+      "--grad",
+      "{gradient}",
+      "--json",
+      "{json}",
+      "[--charge {charge}]",
+      "[--spin {unpaired_electrons}]",
+      "{input}"
+    ],
+    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "license": "LGPL-3.0-or-later",
+    "repository": "https://github.com/tblite/tblite",
+    "revision": "133f91efb94b47f05848e1f86832f40a1accc385",
+    "runtime_artifacts": {
+      "libtblite_sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725"
+    },
+    "source_modules": {
+      "src/tblite/coulomb/charge/effective.f90": {
+        "git_blob": "67b91d63e13803e5bc297597e7312404bb1e576c",
+        "role": "periodic shell-charge Ewald kernel and derivatives",
+        "sha256": "1d66415c1046e3b83bde1434f6e1ea5697a95362332c70a8db08b2668a07214a"
+      },
+      "src/tblite/coulomb/ewald.f90": {
+        "git_blob": "363a3b824d57185d19df79a2d7ce09e382f54a65",
+        "role": "Ewald alpha and cutoff selection",
+        "sha256": "561e46c89f7dd2551936faf13d1749de1712aa186ef4ca1e83a05f5168236b44"
+      },
+      "src/tblite/coulomb/multipole.f90": {
+        "git_blob": "9c4f86dc242f7b161c8d9cddeff0df6c2bb72f75",
+        "role": "periodic charge-dipole, dipole-dipole, and charge-quadrupole Ewald terms",
+        "sha256": "16f464f878876e9948c16042af7665518dc2c86d98332b51f661f22dffe2a8b6"
+      },
+      "src/tblite/cutoff.f90": {
+        "git_blob": "0c456606b64818e6962ad95b988ecc4f1f4a90f1",
+        "role": "lattice vectors, wrapping, and cutoff images",
+        "sha256": "a8d039243e9c8a9e938085bc561b2ae3d767c034e8cacef0f905cb56319facf9"
+      },
+      "src/tblite/disp/d4.f90": {
+        "git_blob": "55b110037de26e260b3c761c352248268081b90f",
+        "role": "periodic D4 two-body, ATM, and derivatives",
+        "sha256": "3eb1577c7504da68da0bb7f8345ea9945996f45939dcb26744c9d4d034ede0d8"
+      },
+      "src/tblite/integral/native/integrals.f90": {
+        "git_blob": "37a0c95d13c39aaf42c28c75bd264ae5efbaf7a3",
+        "role": "overlap and multipole integral definitions",
+        "sha256": "39a44a9a03e5a5c8e0a70d5217e36ca50544e7e652e5dbeedb8fe95544341798"
+      },
+      "src/tblite/repulsion/effective.f90": {
+        "git_blob": "236d646e365f229e9ab36976d00523290091e47a",
+        "role": "periodic screened nuclear repulsion",
+        "sha256": "41f3ff370a59daba5687d00c47b804c14c8af0837da4c51d3a83d594fe079ed5"
+      },
+      "src/tblite/wignerseitz.f90": {
+        "git_blob": "7fa48356974ccfa7507625340ae75d53dd87ff86",
+        "role": "tblite smooth competing-image oracle boundary",
+        "sha256": "1ea8adf0496582ffc685ce451050ae2583680ae5f0e03a894684db8ea0473233"
+      },
+      "src/tblite/xtb/h0.f90": {
+        "git_blob": "14edb1d731f7ba716a83db3bb7583bc245075e0b",
+        "role": "periodic zeroth-order Hamiltonian and strain response",
+        "sha256": "40935bb3a80286fac01670e2b7945770fc4f2d1ed922e22e8b859ce4b283608a"
+      },
+      "src/tblite/xtb/singlepoint.f90": {
+        "git_blob": "ff47c5385aeb76cd8c47e29c709249cf5a5bf181",
+        "role": "full-model energy, gradient, and virial composition",
+        "sha256": "061dc06b5d117cf79a78b4488defc108ef244d53cf699e07e04125d0b499d4c7"
+      }
+    },
+    "version": "0.7.0"
+  },
+  "schema": "xtbloom-periodic-gfn2-conformance-v1",
+  "units": {
+    "cell": "bohr",
+    "energy": "hartree",
+    "forces": "hartree_per_bohr",
+    "positions": "bohr",
+    "strain_derivative": "hartree"
+  }
+}

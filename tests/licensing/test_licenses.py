@@ -38,6 +38,34 @@ VERSION_INSPECTOR = importlib.util.module_from_spec(VERSION_SPEC)
 VERSION_SPEC.loader.exec_module(VERSION_INSPECTOR)
 
 
+class PeriodicOracleProvenanceTests(unittest.TestCase):
+    """Keep generated periodic evidence separate from copied upstream bytes."""
+
+    def test_reviewed_periodic_corpus_passes(self) -> None:
+        """Accept the pinned tblite identity and authored input boundary."""
+        CHECKER._check_periodic_oracle_provenance(REPOSITORY)
+
+    def test_machine_local_runtime_path_is_rejected(self) -> None:
+        """Keep generated evidence portable across oracle installations."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = REPOSITORY / "data/conformance/periodic"
+            shutil.copytree(source, root / "data/conformance/periodic")
+            (root / "LICENSES").mkdir()
+            shutil.copy2(
+                REPOSITORY / "LICENSES/LGPL-3.0-or-later.txt",
+                root / "LICENSES/LGPL-3.0-or-later.txt",
+            )
+            golden = next((root / "data/conformance/periodic/golden").glob("*.json"))
+            document = json.loads(golden.read_text(encoding="utf-8"))
+            document["provenance"]["runtime"]["libtblite"]["path"] = (
+                "/home/user/libtblite.so"
+            )
+            golden.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "machine-local"):
+                CHECKER._check_periodic_oracle_provenance(root)
+
+
 class SourceDistributionBoundaryTests(unittest.TestCase):
     """Keep PyPI sdists limited to wheel-build and provenance inputs."""
 

@@ -1,0 +1,168 @@
+{
+  "case_id": "periodic_water_orthogonal",
+  "oracle_role": "primary-neutral-full-model",
+  "properties": {
+    "energy_hartree": -5.070982531261947,
+    "forces_hartree_per_bohr": [
+      -2.528901567322439e-16,
+      -3.6808372999410926e-18,
+      0.003848225694908955,
+      0.0032485699768860744,
+      6.821451971020342e-18,
+      -0.0019241128474545468,
+      -0.0032485699768858246,
+      -3.140862078983629e-18,
+      -0.0019241128474544848
+    ],
+    "gradient_hartree_per_bohr": [
+      2.528901567322439e-16,
+      3.6808372999410926e-18,
+      -0.003848225694908955,
+      -0.0032485699768860744,
+      -6.821451971020342e-18,
+      0.0019241128474545468,
+      0.0032485699768858246,
+      3.140862078983629e-18,
+      0.0019241128474544848
+    ],
+    "strain_derivatives_hartree": [
+      -0.01003657236876454,
+      -7.124157782931927e-18,
+      -1.0191500421363742e-16,
+      -7.117863258438298e-18,
+      -0.0004710389519486109,
+      -2.1008301389883198e-18,
+      -8.977193988179977e-17,
+      -2.0969082436719502e-18,
+      0.006931625771202382
+    ]
+  },
+  "provenance": {
+    "accuracy": 0.0001,
+    "command_template": [
+      "{executable}",
+      "run",
+      "--method",
+      "gfn2",
+      "--acc",
+      "0.0001",
+      "--no-restart",
+      "--grad",
+      "{gradient}",
+      "--json",
+      "{json}",
+      "[--charge {charge}]",
+      "[--spin {unpaired_electrons}]",
+      "{input}"
+    ],
+    "engine": "tblite",
+    "environment": {
+      "inherited_environment_boundary": "All non-XTB variables except the recorded thread controls are inherited; runtime identity is pinned independently.",
+      "removed_variables": [],
+      "set": {
+        "MKL_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1"
+      }
+    },
+    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "executable_version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled",
+    "generation_mode": "live-cli",
+    "input": "data/conformance/periodic/inputs/periodic_water_orthogonal.tmol",
+    "input_sha256": "bf551b2f10cd3742e881163351360607607091a498894c8086ed3f3e878f3481",
+    "raw_output_sha256": "02944369a5a66356824a7d6410efab40c37f9e711468a9160c8b7349a6d251cb",
+    "runtime": {
+      "libtblite": {
+        "discovery": "ldd",
+        "filename": "libtblite.so.0.7.0",
+        "sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725",
+        "status": "resolved"
+      }
+    },
+    "source_revision": "133f91efb94b47f05848e1f86832f40a1accc385"
+  },
+  "schema": "xtbloom-periodic-gfn2-golden-v1",
+  "source_output_sha256": "63ecbdf6ef7447e6eb81d80c36cd69a0b43219309243a30b0bc33eb600d0438b",
+  "strain_finite_difference": {
+    "affine_convention": "r'=(I+epsilon)r; H'=H(I+epsilon)^T",
+    "modes": {
+      "xx": {
+        "central_differences_hartree": [
+          -0.010036592050788329,
+          -0.01003658170350974,
+          -0.010036574789040742
+        ],
+        "component": [
+          0,
+          0
+        ],
+        "richardson_hartree": -0.010036572484217743
+      },
+      "xy": {
+        "central_differences_hartree": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "component": [
+          0,
+          1
+        ],
+        "richardson_hartree": 0.0
+      },
+      "xz": {
+        "central_differences_hartree": [
+          -1.1102230246251565e-11,
+          -4.440892098500626e-12,
+          0.0
+        ],
+        "component": [
+          0,
+          2
+        ],
+        "richardson_hartree": 1.4802973661668755e-12
+      },
+      "yy": {
+        "central_differences_hartree": [
+          -0.0004710390544282461,
+          -0.0004710389633899581,
+          -0.0004710389678308502
+        ],
+        "component": [
+          1,
+          1
+        ],
+        "richardson_hartree": -0.0004710389693111476
+      },
+      "yz": {
+        "central_differences_hartree": [
+          6.661338147750939e-12,
+          0.0,
+          0.0
+        ],
+        "component": [
+          1,
+          2
+        ],
+        "richardson_hartree": 0.0
+      },
+      "zz": {
+        "central_differences_hartree": [
+          0.006931622003047977,
+          0.006931624865202934,
+          0.006931625557982102
+        ],
+        "component": [
+          2,
+          2
+        ],
+        "richardson_hartree": 0.006931625788908491
+      }
+    },
+    "steps": [
+      0.0002,
+      0.0001,
+      5e-05
+    ]
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "case_id": "periodic_neon_one_atom",
+  "oracle_role": "primary-neutral-full-model",
+  "properties": {
+    "energy_hartree": -5.93223035268068,
+    "forces_hartree_per_bohr": [
+      1.1612032524853294e-25,
+      4.66298836519761e-25,
+      1.308625578453032e-25
+    ],
+    "gradient_hartree_per_bohr": [
+      -1.1612032524853294e-25,
+      -4.66298836519761e-25,
+      -1.308625578453032e-25
+    ],
+    "strain_derivatives_hartree": [
+      4.054620314246691e-05,
+      8.888646613046748e-07,
+      -4.140329876271893e-09,
+      8.888646613046746e-07,
+      3.1886684315085195e-05,
+      1.5035902239934345e-07,
+      -4.140329876271916e-09,
+      1.503590223993434e-07,
+      2.3584366582169398e-05
+    ]
+  },
+  "provenance": {
+    "accuracy": 0.0001,
+    "command_template": [
+      "{executable}",
+      "run",
+      "--method",
+      "gfn2",
+      "--acc",
+      "0.0001",
+      "--no-restart",
+      "--grad",
+      "{gradient}",
+      "--json",
+      "{json}",
+      "[--charge {charge}]",
+      "[--spin {unpaired_electrons}]",
+      "{input}"
+    ],
+    "engine": "tblite",
+    "environment": {
+      "inherited_environment_boundary": "All non-XTB variables except the recorded thread controls are inherited; runtime identity is pinned independently.",
+      "removed_variables": [],
+      "set": {
+        "MKL_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1"
+      }
+    },
+    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "executable_version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled",
+    "generation_mode": "live-cli",
+    "input": "data/conformance/periodic/inputs/periodic_neon_one_atom.tmol",
+    "input_sha256": "02ba264c9b78afa932610c0f19bc1bf6504aa2c8f103514310c41669c5c97fd3",
+    "raw_output_sha256": "e931eac09832f0d044343871c235b7ccdc685290477737e9d48da12f423d9017",
+    "runtime": {
+      "libtblite": {
+        "discovery": "ldd",
+        "filename": "libtblite.so.0.7.0",
+        "sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725",
+        "status": "resolved"
+      }
+    },
+    "source_revision": "133f91efb94b47f05848e1f86832f40a1accc385"
+  },
+  "schema": "xtbloom-periodic-gfn2-golden-v1",
+  "source_output_sha256": "0aee887b3f4e095c237713c0ccd25022604fe0f2778a543adc7d57e479905b77"
+}

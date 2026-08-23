@@ -6,6 +6,7 @@ upstream conventions and pinned independent xTB/tblite evidence; xTBloom does
 not define a new parameterization or a new tight-binding method.
 
 - [GFN2-xTB, SCC, occupations, and forces](gfn2.md)
+- [Native three-dimensional periodic GFN2-xTB](periodic-gfn2.md)
 - [GFN1-xTB model and publication contract](gfn1.md)
 - [Explicit point charges and periodic response](qmmm.md)
 
