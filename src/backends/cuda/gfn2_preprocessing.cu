@@ -1074,8 +1074,11 @@ __global__ void initialize_committed_pairlist_metadata_kernel(Gfn2PairListDevice
   }
 }
 
+/* Kernel descriptors must be copied into CUDA argument storage.  A reference
+ * parameter instead exposes the launcher's host address to device code, which
+ * is invalid on GPUs that cannot directly access host stack memory. */
 __global__ void commit_pairlist_kernel(Gfn2PairListDeviceBatch pairlist,
-                                       const Gfn2PairListDeviceCache& candidate,
+                                       Gfn2PairListDeviceCache candidate,
                                        Gfn2PairListConsumerView committed,
                                        GeometryGenerationSource generation_source,
                                        Gfn2PreprocessingDeviceActivity activity,

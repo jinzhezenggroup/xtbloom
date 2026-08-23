@@ -1865,6 +1865,14 @@ if(XTBLOOM_BUILD_TESTS)
     COMMAND ${CMAKE_COMMAND} -P
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/version_resolution_test.cmake
   )
+  if(XTBLOOM_HAS_CUDA)
+    add_test(
+      NAME xtbloom.cuda.kernel_signature_audit
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/abi/check_cuda_kernel_signatures.py
+              --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+  endif()
 
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # The production adapter is platform-neutral C. A tiny fake provider gives
