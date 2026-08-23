@@ -574,6 +574,34 @@
       "value": "d4_cn"
     },
     {
+      "analytic": -0.04810157505442222,
+      "indices_zero_based": [
+        0
+      ],
+      "kind": "d4_cn_affine_strain",
+      "samples": [
+        {
+          "absolute_error": 1.4286121209627911e-08,
+          "estimate": -0.04810158934054343,
+          "minus": 1.6158423086797935,
+          "minus_raw_sha256": "1bdaae838ba7d77a1406769b2a129afb392f08353c5b68b95d097c786eb1dd70",
+          "plus": 1.6158326883619254,
+          "plus_raw_sha256": "6a1a7a1e2c9f65693c9b68f389d5726e448cb8bd21cf97e29faf89ca159e8f0c",
+          "step": 0.0001
+        },
+        {
+          "absolute_error": 3.5702485759459e-09,
+          "estimate": -0.04810157862467079,
+          "minus": 1.6158399061393296,
+          "minus_raw_sha256": "fcfc87e76b34903ef1be56574abf068b96c527de427d3ef04fb676501367de82",
+          "plus": 1.6158350959814671,
+          "plus_raw_sha256": "369d4765d3ed3b35d2888f0013e25afde292a4da56b4f20a2a506d3462b8e58e",
+          "step": 5e-05
+        }
+      ],
+      "value": "d4_cn"
+    },
+    {
       "analytic": 0.0003550677349712526,
       "indices_zero_based": [],
       "kind": "atomic_charge_potential",

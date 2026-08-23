@@ -36,7 +36,7 @@
     },
     {
       "golden": "data/conformance/periodic/terms/golden/d4.json",
-      "golden_sha256": "fdbd79cbfb6c6ed599560795b3dc4929a800c807e8a1fd137f06589c9c02dab7",
+      "golden_sha256": "55d4b914979a5c0ca7652eba9cfbeb69039e3f85661195fa838276d509d3daef",
       "mode": "d4",
       "raw": "data/conformance/periodic/terms/raw/d4.txt",
       "raw_sha256": "17f67d6703a5995b729a19c1588b3013852384306c9c71eb60d4c18f6b9e56d5"
@@ -65,7 +65,7 @@
   ],
   "generator": {
     "path": "tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py",
-    "sha256": "fee9d9d41c8458734758caa4b3949b02c43f76f4e5c9e75db09b3c15119aad90"
+    "sha256": "0f8dcfbf5f362c1f3955681465d4a89056c9425107fd06c68e41c7fedc3a4c28"
   },
   "input": {
     "id": "water_skew",
@@ -231,6 +231,7 @@
           "sha256": "5c7c9170328386c2799036a0ee047525a2911367aba818ba161fb17b720338b3"
         }
       },
+      "license": "LGPL-3.0-or-later",
       "repository": "https://github.com/dftd4/dftd4",
       "revision": "6e1f59c3f39d919a2dbef0601d2576727c8b30e8"
     },
@@ -245,10 +246,12 @@
           "sha256": "3bc326ecfbd5a8b43cac9f021a1472df335f7ef041e2f33916906fa71c60a3ab"
         }
       },
+      "license": "Apache-2.0",
       "repository": "https://github.com/grimme-lab/mctc-lib",
       "revision": "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d"
     },
     "multicharge": {
+      "license": "LGPL-3.0-or-later",
       "repository": "https://github.com/grimme-lab/multicharge",
       "revision": "6a5d63f9e9e29dcf13cc47cc27f33bf9015681bf",
       "scientific_role": "linked runtime provenance only; GFN2 qmod does not invoke EEQ"
@@ -288,6 +291,7 @@
           "sha256": "40935bb3a80286fac01670e2b7945770fc4f2d1ed922e22e8b859ce4b283608a"
         }
       },
+      "license": "LGPL-3.0-or-later",
       "repository": "https://github.com/tblite/tblite",
       "revision": "133f91efb94b47f05848e1f86832f40a1accc385"
     }

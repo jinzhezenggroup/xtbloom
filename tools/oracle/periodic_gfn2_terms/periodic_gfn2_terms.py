@@ -40,6 +40,7 @@ Variant = Callable[[InputDocument, float], InputDocument]
 
 SOURCE_RECORDS = {
     "tblite": {
+        "license": "LGPL-3.0-or-later",
         "revision": "133f91efb94b47f05848e1f86832f40a1accc385",
         "repository": "https://github.com/tblite/tblite",
         "files": {
@@ -94,6 +95,7 @@ SOURCE_RECORDS = {
         },
     },
     "mctc-lib": {
+        "license": "Apache-2.0",
         "revision": "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
         "repository": "https://github.com/grimme-lab/mctc-lib",
         "files": {
@@ -112,6 +114,7 @@ SOURCE_RECORDS = {
         },
     },
     "dftd4": {
+        "license": "LGPL-3.0-or-later",
         "revision": "6e1f59c3f39d919a2dbef0601d2576727c8b30e8",
         "repository": "https://github.com/dftd4/dftd4",
         "files": {
@@ -154,6 +157,7 @@ SOURCE_RECORDS = {
         },
     },
     "multicharge": {
+        "license": "LGPL-3.0-or-later",
         "revision": "6a5d63f9e9e29dcf13cc47cc27f33bf9015681bf",
         "repository": "https://github.com/grimme-lab/multicharge",
         "scientific_role": (
@@ -603,6 +607,22 @@ def build_fd_evidence(
             )
         )
         evidence[-1]["kind"] = "d4_cn_cartesian"
+        evidence.append(
+            finite_difference(
+                probe,
+                mode,
+                input_data,
+                "d4_cn",
+                (0,),
+                strain_variant,
+                element(
+                    primary,
+                    "d4_dcndL",
+                    (STRAIN_ROW, STRAIN_COLUMN, 0),
+                ),
+            )
+        )
+        evidence[-1]["kind"] = "d4_cn_affine_strain"
         evidence.append(
             finite_difference(
                 probe,

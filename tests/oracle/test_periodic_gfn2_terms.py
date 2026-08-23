@@ -87,6 +87,18 @@ class PeriodicGfn2TermFixtureTests(unittest.TestCase):
         with self.assertRaisesRegex(terms.FixtureError, "stored finite difference"):
             terms.check_finite_differences(changed, self.manifest["tolerances"])
 
+    def test_d4_coordination_covers_cartesian_and_affine_derivatives(self) -> None:
+        """Require independent D4-CN Cartesian and affine-strain evidence."""
+        d4_cn_kinds = {
+            evidence["kind"]
+            for evidence in self.documents["d4"]["finite_difference"]
+            if evidence["kind"].startswith("d4_cn_")
+        }
+        self.assertEqual(
+            d4_cn_kinds,
+            {"d4_cn_cartesian", "d4_cn_affine_strain"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
