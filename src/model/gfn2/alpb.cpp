@@ -176,9 +176,12 @@ xtbloom_status_t validate_geometry_inputs(std::int64_t atom_count, const double*
       const double dx = positions[first * 3u] - positions[second * 3u];
       const double dy = positions[first * 3u + 1u] - positions[second * 3u + 1u];
       const double dz = positions[first * 3u + 2u] - positions[second * 3u + 2u];
-      const double distance = std::hypot(dx, dy, dz);
+      const double distance_measure = settings.kernel == AlpbBornKernel::kP16
+                                          ? std::hypot(dx, dy, dz)
+                                          : dx * dx + dy * dy + dz * dz;
       const double radius_product = born_radii[first] * born_radii[second];
-      if (!std::isfinite(distance) || !(radius_product > 0.0) || !std::isfinite(radius_product)) {
+      if (!std::isfinite(distance_measure) || !(radius_product > 0.0) ||
+          !std::isfinite(radius_product)) {
         error = "ALPB polar pair inputs exceed the stable binary64 range";
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
@@ -240,35 +243,44 @@ xtbloom_status_t build_alpb_polar_matrix_cpu(std::int64_t atom_count, const doub
       settings.model == AlpbPolarModel::kAlpb ? dielectric_scale * alpha_beta / shape.value : 0.0;
 
   const auto count = static_cast<std::size_t>(atom_count);
-  try {
-    std::vector<double> candidate(count * count);
-    for (std::size_t first = 0; first < count; ++first) {
-      candidate[first * count + first] = dielectric_scale / born_radii[first] + size_correction;
-      for (std::size_t second = 0; second < first; ++second) {
-        const double dx = positions[first * 3u] - positions[second * 3u];
-        const double dy = positions[first * 3u + 1u] - positions[second * 3u + 1u];
-        const double dz = positions[first * 3u + 2u] - positions[second * 3u + 2u];
-        const double distance = std::hypot(dx, dy, dz);
-        const double inverse_distance =
-            settings.kernel == AlpbBornKernel::kP16
-                ? p16_inverse_distance(distance, born_radii[first], born_radii[second])
-                : still_inverse_distance(distance * distance, born_radii[first],
-                                         born_radii[second]);
-        const double element = dielectric_scale * inverse_distance + size_correction;
-        candidate[first * count + second] = element;
-        candidate[second * count + first] = element;
-      }
+  const auto matrix_element = [&](std::size_t first, std::size_t second) {
+    if (first == second) {
+      return dielectric_scale / born_radii[first] + size_correction;
     }
-    for (const double element : candidate) {
-      if (!std::isfinite(element)) {
+    const double dx = positions[first * 3u] - positions[second * 3u];
+    const double dy = positions[first * 3u + 1u] - positions[second * 3u + 1u];
+    const double dz = positions[first * 3u + 2u] - positions[second * 3u + 2u];
+    const double inverse_distance =
+        settings.kernel == AlpbBornKernel::kP16
+            ? p16_inverse_distance(std::hypot(dx, dy, dz), born_radii[first], born_radii[second])
+            : still_inverse_distance(dx * dx + dy * dy + dz * dz, born_radii[first],
+                                     born_radii[second]);
+    return dielectric_scale * inverse_distance + size_correction;
+  };
+
+  // Validate a complete candidate matrix before touching caller storage. The
+  // second pass deliberately recomputes the symmetric elements, trading extra
+  // arithmetic for O(1) transactional workspace on the O(N^2) SCC hot path.
+  for (std::size_t first = 0; first < count; ++first) {
+    if (!std::isfinite(matrix_element(first, first))) {
+      error = "ALPB polar matrix arithmetic exceeded the stable binary64 range";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    for (std::size_t second = 0; second < first; ++second) {
+      if (!std::isfinite(matrix_element(first, second))) {
         error = "ALPB polar matrix arithmetic exceeded the stable binary64 range";
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
     }
-    std::copy(candidate.begin(), candidate.end(), matrix);
-  } catch (const std::bad_alloc&) {
-    error = "failed to allocate transactional ALPB polar matrix storage";
-    return XTBLOOM_STATUS_ALLOCATION_FAILED;
+  }
+
+  for (std::size_t first = 0; first < count; ++first) {
+    matrix[first * count + first] = matrix_element(first, first);
+    for (std::size_t second = 0; second < first; ++second) {
+      const double element = matrix_element(first, second);
+      matrix[first * count + second] = element;
+      matrix[second * count + first] = element;
+    }
   }
 
   error.clear();
@@ -395,11 +407,11 @@ xtbloom_status_t add_alpb_polar_gradient_cpu(std::int64_t atom_count, const doub
         const double dx = positions[first * 3u] - positions[second * 3u];
         const double dy = positions[first * 3u + 1u] - positions[second * 3u + 1u];
         const double dz = positions[first * 3u + 2u] - positions[second * 3u + 2u];
-        const double distance = std::hypot(dx, dy, dz);
-        const double distance_squared = distance * distance;
         const double charge_product = atomic_charges[first] * atomic_charges[second];
         double radial_scale = 0.0;
+        double direction_scale = 1.0;
         if (settings.kernel == AlpbBornKernel::kP16) {
+          const double distance = std::hypot(dx, dy, dz);
           const double geometric_radius = std::sqrt(born_radii[first] * born_radii[second]);
           const double argument = geometric_radius / (geometric_radius + kP16ZetaOver16 * distance);
           const double argument2 = argument * argument;
@@ -410,7 +422,9 @@ xtbloom_status_t add_alpb_polar_gradient_cpu(std::int64_t atom_count, const doub
           radial_scale = dielectric_scale * charge_product *
                          (1.0 - kP16Zeta * argument * argument16) /
                          (screened_distance * screened_distance);
+          direction_scale = 1.0 / distance;
         } else {
+          const double distance_squared = dx * dx + dy * dy + dz * dz;
           const double radius_product = born_radii[first] * born_radii[second];
           const double exponential = std::exp(-0.25 * distance_squared / radius_product);
           const double screened_squared = distance_squared + radius_product * exponential;
@@ -418,8 +432,6 @@ xtbloom_status_t add_alpb_polar_gradient_cpu(std::int64_t atom_count, const doub
                          (screened_squared * std::sqrt(screened_squared));
         }
 
-        const double direction_scale =
-            settings.kernel == AlpbBornKernel::kP16 ? 1.0 / distance : 1.0;
         const double gx = radial_scale * dx * direction_scale;
         const double gy = radial_scale * dy * direction_scale;
         const double gz = radial_scale * dz * direction_scale;

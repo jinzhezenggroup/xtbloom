@@ -64,7 +64,9 @@ xtbloom_status_t evaluate_alpb_polar_cpu(std::int64_t atom_count, const double* 
  * Accumulate dE/dR in Hartree/bohr for fixed atomic charges, Born radii, and
  * cavity radii. Derivatives of a future geometry-dependent Born-radius model
  * must be composed separately through its radius Jacobian. A zero-atom input
- * is an empty no-op and permits null array pointers.
+ * is an empty no-op and permits null array pointers. The P16 coordinate
+ * derivative is undefined at exact atom coincidence, so this call rejects
+ * that geometry even though the corresponding matrix elements remain finite.
  */
 xtbloom_status_t add_alpb_polar_gradient_cpu(std::int64_t atom_count, const double* positions,
                                              const double* born_radii, const double* cavity_radii,
