@@ -22,13 +22,16 @@ class PeriodicGfn2OracleTests(unittest.TestCase):
     """Exercise canonical validation without needing a tblite executable."""
 
     def setUp(self) -> None:
+        """Load the committed manifest used by every test."""
         self.manifest_path = periodic.DEFAULT_MANIFEST
         self.manifest = periodic.load_json(self.manifest_path)
 
     def test_committed_corpus_passes(self) -> None:
+        """Accept the complete committed periodic corpus."""
         periodic.check(self.manifest_path)
 
     def test_affine_deformation_matches_public_row_major_convention(self) -> None:
+        """Apply strain using the public row-major affine convention."""
         structure = {
             "positions_bohr": [2.0, 3.0, 5.0],
             "symbols": ["He"],
@@ -53,6 +56,7 @@ class PeriodicGfn2OracleTests(unittest.TestCase):
         )
 
     def test_tblite_column_major_virial_is_normalized_to_row_major(self) -> None:
+        """Transpose tblite's Fortran virial into the public matrix order."""
         raw = {
             "energy": -1.0,
             "gradient": [1.0, 2.0, 3.0],
@@ -66,12 +70,14 @@ class PeriodicGfn2OracleTests(unittest.TestCase):
         self.assertEqual(normalized["forces_hartree_per_bohr"], [-1.0, -2.0, -3.0])
 
     def test_background_reconstruction_rejects_energy_drift(self) -> None:
+        """Reject a charged-background energy that no longer matches its equation."""
         manifest = copy.deepcopy(self.manifest)
         manifest["analytic_background_cases"][0]["energy_hartree"] += 1.0e-12
         with self.assertRaisesRegex(periodic.PeriodicOracleError, "energy drifted"):
             periodic.check_analytic_background(manifest)
 
     def test_background_derivative_matches_volume_finite_difference(self) -> None:
+        """Match the analytic background strain term to a volume derivative."""
         case = self.manifest["analytic_background_cases"][0]
         charge = case["charge_e"]
         alpha = case["alpha_bohr_inverse"]
@@ -88,6 +94,7 @@ class PeriodicGfn2OracleTests(unittest.TestCase):
         )
 
     def test_manifest_input_hash_is_enforced(self) -> None:
+        """Reject corpus paths that escape the repository provenance boundary."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manifest = copy.deepcopy(self.manifest)
@@ -105,6 +112,7 @@ class PeriodicGfn2OracleTests(unittest.TestCase):
                 periodic.check(manifest_path)
 
     def test_strain_richardson_value_is_recomputed(self) -> None:
+        """Reject stored Richardson values that are inconsistent with raw steps."""
         case = next(
             item for item in self.manifest["cases"] if item["strain_finite_difference"]
         )

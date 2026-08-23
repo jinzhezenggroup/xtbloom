@@ -75,7 +75,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def sha256_json(value: Any) -> str:
+def sha256_json(value: object) -> str:
     """Hash one value using the corpus canonical JSON serialization."""
     encoded = json.dumps(
         value, allow_nan=False, separators=(",", ":"), sort_keys=True
@@ -383,7 +383,8 @@ def run_tblite(
     )
     if completed.returncode != 0:
         raise PeriodicOracleError(
-            f"tblite failed for {case['id']} ({completed.returncode}):\n{completed.stdout}"
+            f"tblite failed for {case['id']} ({completed.returncode}):\n"
+            f"{completed.stdout}"
         )
     raw = load_json(output_path)
     return normalize_tblite(raw, int(case["atom_count"])), sha256_file(output_path)
@@ -720,10 +721,10 @@ def check(manifest_path: Path) -> None:
     if primary_count < 4 or diagnostic_count < 1:
         raise PeriodicOracleError("periodic corpus lacks the reviewed case roles")
     check_analytic_background(manifest)
-    print(
+    sys.stdout.write(
         f"periodic GFN2 corpus check passed: {primary_count} primary, "
         f"{diagnostic_count} diagnostic, "
-        f"{len(manifest['analytic_background_cases'])} analytic background"
+        f"{len(manifest['analytic_background_cases'])} analytic background\n"
     )
 
 
@@ -769,10 +770,11 @@ def compare(manifest_path: Path, actual_dir: Path, names: list[str] | None) -> N
             )
             if maximum > tolerance:
                 raise PeriodicOracleError(
-                    f"{case['id']} {property_name} maximum error {maximum} > {tolerance}"
+                    f"{case['id']} {property_name} maximum error "
+                    f"{maximum} > {tolerance}"
                 )
         compared += 1
-    print(f"periodic GFN2 comparison passed: {compared} cases")  # noqa: T201
+    sys.stdout.write(f"periodic GFN2 comparison passed: {compared} cases\n")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -813,7 +815,7 @@ def main() -> int:
         else:  # pragma: no cover - argparse enforces the command set.
             raise PeriodicOracleError(f"unknown command: {arguments.command}")
     except PeriodicOracleError as exc:
-        print(f"periodic GFN2 oracle error: {exc}", file=sys.stderr)
+        sys.stderr.write(f"periodic GFN2 oracle error: {exc}\n")
         return 1
     return 0
 
