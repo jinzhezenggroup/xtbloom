@@ -178,4 +178,3 @@ potential, and strain are therefore checked by an independent analytic
 reconstruction. xTB is used only for focused topology and short-range
 diagnostics because its periodic GFN2 multipole and public virial paths are
 not a complete full-model reference.
-

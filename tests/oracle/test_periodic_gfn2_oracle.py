@@ -80,9 +80,7 @@ class PeriodicGfn2OracleTests(unittest.TestCase):
 
         def energy(strain: float) -> float:
             strained_volume = volume * (1.0 + strain)
-            return -math.pi * charge * charge / (
-                2.0 * alpha * alpha * strained_volume
-            )
+            return -math.pi * charge * charge / (2.0 * alpha * alpha * strained_volume)
 
         numerical = (energy(step) - energy(-step)) / (2.0 * step)
         self.assertAlmostEqual(
@@ -101,7 +99,9 @@ class PeriodicGfn2OracleTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             # Absolute paths outside the repository are rejected before a
             # misleading digest can assert corpus identity.
-            with self.assertRaisesRegex(periodic.PeriodicOracleError, "escapes repository"):
+            with self.assertRaisesRegex(
+                periodic.PeriodicOracleError, "escapes repository"
+            ):
                 periodic.check(manifest_path)
 
     def test_strain_richardson_value_is_recomputed(self) -> None:
@@ -111,9 +111,9 @@ class PeriodicGfn2OracleTests(unittest.TestCase):
         golden = periodic.load_json(periodic.repository_path(case["golden"]))
         strain = golden["properties"]["strain_derivatives_hartree"]
         changed = copy.deepcopy(golden)
-        changed["strain_finite_difference"]["modes"]["xx"][
-            "richardson_hartree"
-        ] += 1.0e-10
+        changed["strain_finite_difference"]["modes"]["xx"]["richardson_hartree"] += (
+            1.0e-10
+        )
         with self.assertRaisesRegex(periodic.PeriodicOracleError, "Richardson drifted"):
             periodic.check_strain_evidence(changed, strain)
 

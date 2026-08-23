@@ -89,7 +89,9 @@ def repository_path(relative: str) -> Path:
     try:
         candidate.relative_to(REPOSITORY_ROOT.resolve())
     except ValueError as exc:
-        raise PeriodicOracleError(f"manifest path escapes repository: {relative}") from exc
+        raise PeriodicOracleError(
+            f"manifest path escapes repository: {relative}"
+        ) from exc
     return candidate
 
 
@@ -118,7 +120,9 @@ def finite_vector(value: object, count: int, label: str) -> list[float]:
     """Validate a fixed-length numeric vector."""
     if not isinstance(value, list) or len(value) != count:
         raise PeriodicOracleError(f"{label} must contain {count} values")
-    return [finite_number(item, f"{label}[{index}]") for index, item in enumerate(value)]
+    return [
+        finite_number(item, f"{label}[{index}]") for index, item in enumerate(value)
+    ]
 
 
 def determinant(cell: list[float]) -> float:
@@ -184,9 +188,7 @@ def format_turbomole(
     lines = ["$coord"]
     for atom, symbol in enumerate(structure["symbols"]):
         xyz = positions[3 * atom : 3 * atom + 3]
-        lines.append(
-            f"  {xyz[0]:.17g}  {xyz[1]:.17g}  {xyz[2]:.17g}  {symbol}"
-        )
+        lines.append(f"  {xyz[0]:.17g}  {xyz[1]:.17g}  {xyz[2]:.17g}  {symbol}")
     lines.extend(["$periodic 3", "$lattice"])
     for row in range(3):
         values = cell[3 * row : 3 * row + 3]
@@ -208,7 +210,10 @@ def affine_deformation(
     for atom in range(len(positions) // 3):
         vector = positions[3 * atom : 3 * atom + 3]
         deformed_positions.extend(
-            sum(deformation[3 * component + source] * vector[source] for source in range(3))
+            sum(
+                deformation[3 * component + source] * vector[source]
+                for source in range(3)
+            )
             for component in range(3)
         )
 
@@ -348,9 +353,7 @@ def normalize_tblite(raw: dict[str, Any], atom_count: int) -> dict[str, Any]:
     # tblite reshapes its Fortran [3,3] array in column-major order.
     virial_column_major = finite_vector(raw.get("virial"), 9, "tblite virial")
     strain_row_major = [
-        virial_column_major[3 * column + row]
-        for row in range(3)
-        for column in range(3)
+        virial_column_major[3 * column + row] for row in range(3) for column in range(3)
     ]
     return {
         "energy_hartree": energy,
@@ -427,7 +430,9 @@ def strain_finite_differences(
     return evidence
 
 
-def selected_cases(manifest: dict[str, Any], names: list[str] | None) -> list[dict[str, Any]]:
+def selected_cases(
+    manifest: dict[str, Any], names: list[str] | None
+) -> list[dict[str, Any]]:
     """Select unique case IDs and reject command-line typos."""
     cases = manifest.get("cases")
     if not isinstance(cases, list):
@@ -578,14 +583,22 @@ def check_analytic_background(manifest: dict[str, Any]) -> None:
         expected_strain = [0.0] * 9
         for diagonal in (0, 4, 8):
             expected_strain[diagonal] = -expected_energy
-        if finite_number(case.get("energy_hartree"), "background energy") != expected_energy:
+        if (
+            finite_number(case.get("energy_hartree"), "background energy")
+            != expected_energy
+        ):
             raise PeriodicOracleError(f"{case.get('id')} background energy drifted")
         if (
             finite_number(case.get("potential_hartree_per_e"), "background potential")
             != expected_potential
         ):
             raise PeriodicOracleError(f"{case.get('id')} background potential drifted")
-        if finite_vector(case.get("strain_derivatives_hartree"), 9, "background strain") != expected_strain:
+        if (
+            finite_vector(
+                case.get("strain_derivatives_hartree"), 9, "background strain"
+            )
+            != expected_strain
+        ):
             raise PeriodicOracleError(f"{case.get('id')} background strain drifted")
 
 
@@ -615,9 +628,11 @@ def check(manifest_path: Path) -> None:
         if re.fullmatch(r"[0-9a-f]{64}", str(reference.get(name, ""))) is None:
             raise PeriodicOracleError(f"reference {name} is invalid")
     runtime = reference.get("runtime_artifacts")
-    if not isinstance(runtime, dict) or re.fullmatch(
-        r"[0-9a-f]{64}", str(runtime.get("libtblite_sha256", ""))
-    ) is None:
+    if (
+        not isinstance(runtime, dict)
+        or re.fullmatch(r"[0-9a-f]{64}", str(runtime.get("libtblite_sha256", "")))
+        is None
+    ):
         raise PeriodicOracleError("reference libtblite hash is invalid")
     check_source_modules(reference)
 
@@ -640,11 +655,15 @@ def check(manifest_path: Path) -> None:
         if role == "primary-neutral-full-model":
             primary_count += 1
             if int(case["molecular_charge"]) != 0:
-                raise PeriodicOracleError(f"{case['id']} primary tblite cell must be neutral")
+                raise PeriodicOracleError(
+                    f"{case['id']} primary tblite cell must be neutral"
+                )
         elif role == "diagnostic-unbackgrounded-charged":
             diagnostic_count += 1
             if int(case["molecular_charge"]) == 0:
-                raise PeriodicOracleError(f"{case['id']} charged diagnostic must be charged")
+                raise PeriodicOracleError(
+                    f"{case['id']} charged diagnostic must be charged"
+                )
         else:
             raise PeriodicOracleError(f"{case['id']} has unknown oracle role")
 
@@ -705,12 +724,10 @@ def check(manifest_path: Path) -> None:
         f"periodic GFN2 corpus check passed: {primary_count} primary, "
         f"{diagnostic_count} diagnostic, "
         f"{len(manifest['analytic_background_cases'])} analytic background"
-    )  # noqa: T201 - CLI result
+    )
 
 
-def compare(
-    manifest_path: Path, actual_dir: Path, names: list[str] | None
-) -> None:
+def compare(manifest_path: Path, actual_dir: Path, names: list[str] | None) -> None:
     """Compare independently generated normalized results with committed goldens."""
     manifest = load_json(manifest_path)
     compared = 0
@@ -730,13 +747,24 @@ def compare(
         ):
             expected_value = expected["properties"][property_name]
             actual_value = actual["properties"][property_name]
-            expected_values = expected_value if isinstance(expected_value, list) else [expected_value]
-            actual_values = actual_value if isinstance(actual_value, list) else [actual_value]
+            expected_values = (
+                expected_value if isinstance(expected_value, list) else [expected_value]
+            )
+            actual_values = (
+                actual_value if isinstance(actual_value, list) else [actual_value]
+            )
             if len(expected_values) != len(actual_values):
-                raise PeriodicOracleError(f"{case['id']} {property_name} extent mismatch")
-            tolerance = finite_number(tolerances[property_name], f"{case['id']} tolerance")
+                raise PeriodicOracleError(
+                    f"{case['id']} {property_name} extent mismatch"
+                )
+            tolerance = finite_number(
+                tolerances[property_name], f"{case['id']} tolerance"
+            )
             maximum = max(
-                abs(finite_number(lhs, property_name) - finite_number(rhs, property_name))
+                abs(
+                    finite_number(lhs, property_name)
+                    - finite_number(rhs, property_name)
+                )
                 for lhs, rhs in zip(expected_values, actual_values, strict=True)
             )
             if maximum > tolerance:
@@ -781,9 +809,7 @@ def main() -> int:
                 arguments.cases,
             )
         elif arguments.command == "compare":
-            compare(
-                arguments.manifest, arguments.actual_dir, arguments.cases
-            )
+            compare(arguments.manifest, arguments.actual_dir, arguments.cases)
         else:  # pragma: no cover - argparse enforces the command set.
             raise PeriodicOracleError(f"unknown command: {arguments.command}")
     except PeriodicOracleError as exc:
