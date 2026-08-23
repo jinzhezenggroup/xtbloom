@@ -578,6 +578,41 @@ int test_cpu_parity_and_pair_sets() {
   return 0;
 }
 
+/* Launch with a cache descriptor whose object lifetime ends before the stream
+ * is synchronized.  CUDA launch arguments must contain the descriptor value,
+ * not a device-visible reference to this helper's host stack. */
+cudaError_t launch_coordination_with_stack_local_cache(const HostCase& host, DeviceFixture& device,
+                                                       cudaStream_t stream) {
+  const Gfn2PairListDeviceCache cache = device.cache();
+  return xtbloom::detail::cuda::evaluate_gfn2_pairlist_coordination_cuda(
+      device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), device.radii.get(),
+      kGeneration, cache, device.coordination.get(), device.workspace(), device.system_errors.get(),
+      device.device_error.get(), stream);
+}
+
+int test_stack_local_cache_descriptor() {
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  HostCase host;
+  std::string error;
+  CHECK(make_case(1u, true, host, error));
+  DeviceFixture device;
+  CUDA_CHECK(device.initialize(host, Gfn2PairListMode::kSparse, stream));
+  CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
+      1, device.system_errors.get(), device.device_error.get(), stream));
+  CUDA_CHECK(xtbloom::detail::cuda::update_gfn2_pairlist_cache_cuda(
+      device.batch(host, Gfn2PairListMode::kSparse), device.positions.get(), kGeneration,
+      device.cache(), device.workspace(), device.system_errors.get(), device.device_error.get(),
+      stream));
+  CUDA_CHECK(launch_coordination_with_stack_local_cache(host, device, stream));
+  Results results;
+  CUDA_CHECK(copy_results(host, device, results, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  CHECK(compare_sparse_success(host, results, 25.0) == 0);
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
 int test_dense_fallback_matches_full_triangle() {
   cudaStream_t stream = nullptr;
   CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
@@ -800,7 +835,7 @@ int test_stale_generation_rejected() {
   /* Ask coordination with a stale generation for system 4. */
   const std::uint64_t stale = kGeneration - 1u;
   CUDA_CHECK(cudaMemcpyAsync(device.pair_generations.get() + 4, &stale, sizeof(stale),
-                             cudaMemcpyDeviceToDevice, stream));
+                             cudaMemcpyHostToDevice, stream));
   const std::vector<double> sentinel(host.total_atoms(), kPairSentinel);
   CUDA_CHECK(device.coordination.copy_from(sentinel.data(), sentinel.size(), stream));
   CUDA_CHECK(xtbloom::detail::cuda::reset_gfn2_pairlist_device_errors_cuda(
@@ -2944,6 +2979,10 @@ int main() {
   }
   if (const int line = test_cpu_parity_and_pair_sets(); line != 0) {
     fprintf(stderr, "FAIL test_cpu_parity_and_pair_sets line %d\n", line);
+    return line;
+  }
+  if (const int line = test_stack_local_cache_descriptor(); line != 0) {
+    fprintf(stderr, "FAIL test_stack_local_cache_descriptor line %d\n", line);
     return line;
   }
   if (const int line = test_dense_fallback_matches_full_triangle(); line != 0) {
