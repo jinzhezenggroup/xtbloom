@@ -11,7 +11,7 @@ import _cases
 import numpy as np
 import pytest
 import xtbloom.library as _library
-from xtbloom import Calculator, PointCharge, Result, Structure
+from xtbloom import BatchCalculator, Calculator, PointCharge, Result, Structure
 from xtbloom.exceptions import XTBloomRuntimeError, XTBloomValueError
 
 # Cases whose goldens are pure molecular (no external point charges).
@@ -84,6 +84,138 @@ def test_h2o_singlepoint_smoke() -> None:
     assert result["gradient"] == pytest.approx(-result.forces, abs=0.0)
 
 
+@pytest.mark.parametrize("case_id", ["gfn1_ketene", "gfn1_oh_radical"])
+def test_gfn1_singlepoint_matches_independent_golden(case_id: str) -> None:
+    """Match closed-shell and shared-orbital open-shell GFN1 to oracles."""
+    case = _cases.gfn1_case_by_id(case_id)
+    numbers, positions, charge, uhf, spin = _cases.gfn1_structure_inputs(case)
+    result = Calculator(
+        "GFN1-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        spin_channels=spin,
+        backend="cpu",
+    ).singlepoint()
+    assert result.scc_converged
+    _assert_matches_golden(result, _cases.gfn1_golden(case), _cases.gfn1_tolerances())
+
+
+def test_gfn1_two_channel_open_shell_public_smoke() -> None:
+    """Exercise public two-channel GFN1 without claiming a new golden."""
+    result = Calculator(
+        "GFN1-xTB",
+        np.array([8, 1]),
+        np.array([[0.0, 0.0, 0.0], [1.8, 0.0, 0.0]]),
+        uhf=1,
+        spin_channels=2,
+        backend="cpu",
+    ).singlepoint()
+    assert result.scc_converged
+    assert np.isfinite(result.energy)
+    assert np.isfinite(result.forces).all()
+    assert np.isfinite(result.charges).all()
+
+
+def test_gfn1_auto_and_explicit_cuda_policy() -> None:
+    """Use shared AUTO routing and qualify explicit CUDA when available."""
+    case = _cases.gfn1_case_by_id("gfn1_ketene")
+    numbers, positions, charge, uhf, spin = _cases.gfn1_structure_inputs(case)
+    calculator = Calculator(
+        "GFN1",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        spin_channels=spin,
+    )
+    auto_result = calculator.singlepoint()
+    assert calculator.backend in (_library.BACKEND_CPU, _library.BACKEND_CUDA)
+    assert auto_result.scc_converged
+
+    cpu_result = Calculator(
+        "GFN1-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        spin_channels=spin,
+        backend="cpu",
+    ).singlepoint()
+
+    explicit_cuda = Calculator(
+        "GFN1-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        spin_channels=spin,
+        backend="cuda",
+    )
+    try:
+        cuda_result = explicit_cuda.singlepoint()
+    except XTBloomRuntimeError as caught:
+        assert caught.status == _library.STATUS_BACKEND_UNAVAILABLE
+    else:
+        assert cuda_result.scc_converged
+        assert cuda_result.energy == pytest.approx(cpu_result.energy, abs=3.0e-8)
+        assert cuda_result.forces == pytest.approx(cpu_result.forces, abs=3.0e-7)
+        assert cuda_result.charges == pytest.approx(cpu_result.charges, abs=1.0e-7)
+
+
+def test_gfn1_point_charges_match_independent_golden() -> None:
+    """Exercise the GFN1-specific harmonic-hardness point-charge path."""
+    case = _cases.gfn1_case_by_id("gfn1_water_dimer_6pc_hardness")
+    numbers, positions, charge, uhf, spin = _cases.gfn1_structure_inputs(case)
+    point_data = _cases.gfn1_qmmm_points(case)
+    assert point_data is not None
+    result = Calculator(
+        "GFN1-xTB",
+        numbers,
+        positions,
+        charge=charge,
+        uhf=uhf,
+        spin_channels=spin,
+        point_charges=PointCharge(*point_data),
+        backend="cpu",
+    ).singlepoint()
+    golden = _cases.gfn1_golden(case)
+    tolerances = _cases.gfn1_tolerances()
+    _assert_matches_golden(result, golden, tolerances)
+    assert result.point_charge_forces == pytest.approx(
+        np.asarray(golden["point_charge_forces_hartree_per_bohr"]).reshape(-1, 3),
+        abs=tolerances["point_charge_forces"]["atol"],
+    )
+
+
+def test_gfn1_ragged_batch_matches_independent_goldens() -> None:
+    """Keep GFN1 model identity across differently sized batched systems."""
+    case_ids = ["gfn1_oh_radical", "gfn1_ketene"]
+    structures = []
+    for case_id in case_ids:
+        case = _cases.gfn1_case_by_id(case_id)
+        numbers, positions, charge, uhf, spin = _cases.gfn1_structure_inputs(case)
+        structures.append(
+            Structure(
+                numbers,
+                positions,
+                charge=charge,
+                uhf=uhf,
+                spin_channels=spin,
+            )
+        )
+    result = BatchCalculator(structures, method="GFN1", backend="cpu").compute(
+        raise_on_failure=True
+    )
+    for index, case_id in enumerate(case_ids):
+        _assert_matches_golden(
+            result[index],
+            _cases.gfn1_golden(_cases.gfn1_case_by_id(case_id)),
+            _cases.gfn1_tolerances(),
+        )
+
+
 def test_update_positions_reuses_calculator() -> None:
     """Reuse a calculator after replacing its positions."""
     case = _cases.case_by_id("ketene")
@@ -127,6 +259,14 @@ def test_structure_update_is_transactional() -> None:
         ("charge_tolerance", float("nan")),
         ("energy_tolerance", -1.0),
         ("electronic_temperature", float("inf")),
+        ("scc_mixer", "linear"),
+        ("scc_mixer", 2),
+        ("scc_mixer_history", 0),
+        ("scc_mixer_history", 65),
+        ("scc_mixer_damping", 0.0),
+        ("scc_mixer_damping", float("nan")),
+        ("determinism", "portable"),
+        ("determinism", 2),
     ],
 )
 def test_invalid_compute_settings_are_rejected(setting: str, value: object) -> None:
@@ -134,6 +274,40 @@ def test_invalid_compute_settings_are_rejected(setting: str, value: object) -> N
     calc = Calculator("GFN2-xTB", np.array([1, 1]), np.zeros((2, 3)))
     with pytest.raises(XTBloomValueError):
         calc.set(setting, value)
+
+
+def test_compute_policy_aliases_and_tags_are_normalized() -> None:
+    """Accept frozen names or int32 tags and retain their exact ABI values."""
+    calc = Calculator(
+        "GFN2-xTB",
+        np.array([1, 1]),
+        np.zeros((2, 3)),
+        scc_mixer="modified_broyden",
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    )
+    assert calc._settings.scc_mixer == _library.SCC_MIXER_MODIFIED_BROYDEN
+    assert calc._settings.scc_mixer_history == 16
+    assert calc._settings.scc_mixer_damping == 0.25
+    assert calc._settings.determinism == _library.DETERMINISM_REPRODUCIBLE
+
+    calc.set("scc_mixer", _library.SCC_MIXER_MODIFIED_BROYDEN)
+    calc.set("determinism", _library.DETERMINISM_DEFAULT)
+    assert calc._settings.determinism == _library.DETERMINISM_DEFAULT
+
+
+def test_high_level_policy_updates_fail_closed_on_legacy_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calculator and BatchCalculator reject policies an old core would ignore."""
+    monkeypatch.setattr(
+        _library, "compute_options_v3_available", lambda _lib=None: False
+    )
+    calc = Calculator("GFN2-xTB", np.array([1, 1]), np.zeros((2, 3)))
+    calc.set("scc_mixer_history", 8)
+    with pytest.raises(XTBloomRuntimeError, match=r"does not support.*ABI v3"):
+        calc.set("scc_mixer_history", 16)
 
 
 def test_open_shell_spin_polarized_differs_from_restricted() -> None:

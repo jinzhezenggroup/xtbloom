@@ -309,6 +309,19 @@ def test_out_alias_atomic_charges() -> None:
     assert out_charges.size == 3
 
 
+def test_out_none_is_treated_as_omitted() -> None:
+    """A ``None`` entry follows the ordinary result-allocation policy."""
+    packed = _pack_single([_water()])
+    result = ArrayBatch(**packed, backend="cpu").compute(
+        compute_forces=False,
+        compute_charges=False,
+        out={"energies": None},
+    )
+
+    assert isinstance(result.energies, np.ndarray)
+    assert result.energies.shape == (1,)
+
+
 def test_out_readonly_rejected() -> None:
     """Read-only buffers must never be used as mutable outputs."""
     water = _water()
@@ -354,6 +367,16 @@ def test_out_for_unrequested_property_is_rejected() -> None:
         ArrayBatch(**packed, backend="cpu").compute(
             compute_energy=False,
             out={"energies": np.empty(1)},
+        )
+
+
+def test_nonproducer_out_for_unrequested_property_fails_preflight() -> None:
+    """Explicit buffers remain part of full-request DLPack preflight."""
+    packed = _pack_single([_water()])
+    with pytest.raises(XTBloomValueError, match="__dlpack_device__"):
+        ArrayBatch(**packed, backend="cpu").compute(
+            compute_energy=False,
+            out={"energies": object()},
         )
 
 

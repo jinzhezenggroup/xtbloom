@@ -1,0 +1,12 @@
+revision,kernel,time_percent,total_time_ns,instances,avg_ns,median_ns,min_ns,max_ns,stddev_ns
+baseline,integral_force_preflight_kernel,7.8,34800554,3,11600184.7,11600046.0,11599342,11601166,919.9
+baseline,publish_integrals_kernel,5.7,25349408,2,12674704.0,12674704.0,12642576,12706832,45435.9
+baseline,h0_force_preflight_and_seed_kernel,2.0,8777451,3,2925817.0,2926212.0,2921476,2929763,4157.6
+baseline,h0_force_publish_kernel,0.4,1704546,3,568182.0,568160.0,567937,568449,256.7
+baseline,publish_integral_force_kernel,0.0,8000,3,2666.7,2656.0,2656,2688,18.5
+candidate,h0_force_preflight_and_seed_kernel,0.1,193600,3,64533.3,64384.0,64224,64992,405.2
+candidate,h0_force_publish_kernel,0.0,174048,3,58016.0,58080.0,57824,58144,169.3
+candidate,integral_force_numerical_preflight_kernel,0.0,159392,3,53130.7,53088.0,52992,53312,164.2
+candidate,publish_integrals_kernel,0.0,117248,2,58624.0,58624.0,57728,59520,1267.1
+candidate,publish_integral_force_kernel,0.0,84256,3,28085.3,28064.0,28064,28128,37.0
+candidate,integral_force_topology_preflight_kernel,0.0,27456,3,9152.0,9120.0,8832,9504,337.1

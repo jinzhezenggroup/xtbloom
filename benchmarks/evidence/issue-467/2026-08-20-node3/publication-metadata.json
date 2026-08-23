@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "protocol_id": "cross-engine-gfn2-force-v1",
+  "hardware": {
+    "hostname": "node3",
+    "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+    "cpu_threads": 16,
+    "cuda_device": {
+      "name": "NVIDIA GeForce RTX 5090",
+      "uuid": "GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8",
+      "driver": "580.95.05"
+    }
+  },
+  "protocol": {
+    "warmups": 1,
+    "repetitions": 3,
+    "cross_engine_energy_atol_hartree": 0.002,
+    "cross_engine_force_atol_hartree_per_bohr": 0.002,
+    "repeatability_energy_atol_hartree": 1e-10,
+    "repeatability_force_atol_hartree_per_bohr": 1e-08,
+    "perturb_sigma_bohr": 0.02,
+    "scc_max_iterations": 500,
+    "scc_charge_tolerance": 0.0001,
+    "scc_energy_tolerance": 1e-06,
+    "convergence_contract": {
+      "xtbloom": {
+        "charge_tolerance": 0.0001,
+        "energy_tolerance": 1e-06
+      },
+      "xtb": {
+        "public_accuracy_factor": 1.0
+      },
+      "tblite": {
+        "public_accuracy_factor": 1.0
+      },
+      "dxtb": {
+        "x_atol": 0.0001,
+        "x_atol_max": 1e-05,
+        "f_atol": 0.0001,
+        "force_convergence": true
+      }
+    }
+  },
+  "panel_coordinates": {
+    "cold": [14, 32, 62, 122, 242, 362],
+    "b128": [14, 32, 62, 122],
+    "b512": [14, 32, 62, 122]
+  },
+  "reference_bindings": {
+    "9b9626f0481b8b72c12c5f5bfc95ed3a3d49e6d31301d403edb0dd1256e852f5": {
+      "kind": "retained-artifact",
+      "path": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/ref-tblite-cold.json"
+    },
+    "b6997834c64a6d184c73a5b581894f2ed4f3a48e32ae736e09f274476f5dde4f": {
+      "kind": "retained-artifact",
+      "path": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/ref-tblite-b128.json"
+    },
+    "1201442fa630ce40bcd93f3d788c1348bce61f4b140215a6aa6001e3efd17af4": {
+      "kind": "retained-artifact",
+      "path": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/ref-tblite-b512.json"
+    }
+  },
+  "sources": [
+    {
+      "engine": "xtbloom-cuda",
+      "measured_date": "2026-08-20",
+      "source_revision": "e0a3b0d60a75fbc3efe2fc243a75cafee10f3b68",
+      "runtime_identity": "libxtbloom.so.0.2.0 sha256=406102812d5ef0207b4a69f3869b977d5bc89234b65dbd46b2bb836140831b5f; CUDA 12.9.86 sm_120",
+      "runner_revision": "e0a3b0d60a75fbc3efe2fc243a75cafee10f3b68",
+      "runner_dirty": false,
+      "source_dirty": false,
+      "evidence_eligibility": "eligible_clean_head",
+      "artifacts": [
+        {
+          "panel": "cold",
+          "csv": "xtbloom-cuda-cold.csv",
+          "batch_size": 1,
+          "start_policy": "cold",
+          "reference_artifact_sha256": "9b9626f0481b8b72c12c5f5bfc95ed3a3d49e6d31301d403edb0dd1256e852f5"
+        },
+        {
+          "panel": "b128",
+          "csv": "xtbloom-cuda-b128.csv",
+          "batch_size": 128,
+          "start_policy": "auto-warm",
+          "reference_artifact_sha256": "b6997834c64a6d184c73a5b581894f2ed4f3a48e32ae736e09f274476f5dde4f"
+        },
+        {
+          "panel": "b512",
+          "csv": "xtbloom-cuda-b512.csv",
+          "batch_size": 512,
+          "start_policy": "cold",
+          "reference_artifact_sha256": "1201442fa630ce40bcd93f3d788c1348bce61f4b140215a6aa6001e3efd17af4"
+        }
+      ]
+    }
+  ]
+}

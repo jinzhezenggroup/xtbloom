@@ -35,7 +35,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.10.7"
           enable-cache: true
@@ -57,18 +57,21 @@ jobs:
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
           CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
-          # Instrument the gcc build with gcov coverage flags so the same
-          # build+ctest run that validates correctness also produces coverage.
-          COVERAGE_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage' || '' }}
+          # Tests execute concurrently, so atomic profile updates prevent
+          # corrupt negative gcov counters in shared library objects.
+          # Spell out the compile switches so dependency-free targets can
+          # cancel instrumentation without inheriting libgcov at link time.
+          COVERAGE_COMPILE_FLAGS: ${{ matrix.compiler == 'gcc' && '-fprofile-arcs -ftest-coverage -fprofile-update=atomic' || '' }}
+          COVERAGE_LINK_FLAGS: ${{ matrix.compiler == 'gcc' && '--coverage' || '' }}
         run: |
           cmake -S . -B build -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_C_FLAGS="${COVERAGE_FLAGS}" \
-            -DCMAKE_CXX_FLAGS="${COVERAGE_FLAGS}" \
-            -DCMAKE_EXE_LINKER_FLAGS="${COVERAGE_FLAGS}"
+            -DCMAKE_C_FLAGS="${COVERAGE_COMPILE_FLAGS}" \
+            -DCMAKE_CXX_FLAGS="${COVERAGE_COMPILE_FLAGS}" \
+            -DCMAKE_EXE_LINKER_FLAGS="${COVERAGE_LINK_FLAGS}"
       - name: Build
         run: cmake --build build --parallel
       - name: Show ccache statistics
@@ -108,7 +111,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           # Generate against uv.lock with the matching uv version, then bump
           # `version` and regenerate the lock together.
@@ -197,8 +200,8 @@ jobs:
           retention-days: 1
 
   upload-coverage:
-    needs: [cpu, python]
-    if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' }}
+    needs: [cpu, python, public-cpu-release]
+    if: ${{ !cancelled() && needs.cpu.result == 'success' && needs.python.result == 'success' && needs['public-cpu-release'].result == 'success' }}
     # Coverage reporting is observability rather than a correctness gate. A
     # Codecov or artifact-service outage must not fail the workflow.
     continue-on-error: true
@@ -206,12 +209,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - artifact: coverage-report-cpp
-            file: coverage-cpp.xml
+          - artifact: coverage-report-cpp*
+            files: coverage/coverage-cpp.xml,coverage/coverage-cpp-public.xml
             flag: cpp
             name: code-coverage/cpp
           - artifact: coverage-report-python
-            file: coverage-python.xml
+            files: coverage/coverage-python.xml
             flag: python
             name: code-coverage/python
     runs-on: ubuntu-24.04
@@ -228,14 +231,16 @@ jobs:
       - name: Download coverage report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ${{ matrix.artifact }}
+          pattern: ${{ matrix.artifact }}
+          path: coverage
+          merge-multiple: true
       - name: Upload coverage to Codecov
         # fail_ci_if_error covers CLI upload errors; continue-on-error also
         # covers action setup, integrity-check, and OIDC failures.
         continue-on-error: true
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
-          files: ${{ matrix.file }}
+          files: ${{ matrix.files }}
           flags: ${{ matrix.flag }}
           name: ${{ matrix.name }}
           disable_search: true
@@ -251,7 +256,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -294,6 +299,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install uv and Python 3.11
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.10.7"
+          python-version: "3.11"
+          enable-cache: true
       - name: Install ccache
         run: sudo apt-get update && sudo apt-get install --yes ccache
       - name: Restore ccache
@@ -305,8 +316,17 @@ jobs:
             ccache-static-
       - name: Configure static package
         run: |
+          uv sync --locked --no-install-project --no-default-groups --group wheel-build
+          openblas="$(
+            uv run --no-sync python python/ci/resolve-openblas-wheel.py \
+              --manifest cmake/3rdparty/scipy_openblas32_manifest.json | \
+              uv run --no-sync python -c \
+                'import json, sys; print(json.load(sys.stdin)["provider_path"])'
+          )"
+          test -f "${openblas}"
           cmake -S . -B build-static -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
+            -DXTBLOOM_CPU_LINALG_LIBRARY="${openblas}" \
             -DXTBLOOM_BUILD_TESTS=OFF \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
@@ -325,7 +345,7 @@ jobs:
           cmake -S tests/install_consumer -B build-static-consumer -G Ninja \
             -DCMAKE_PREFIX_PATH="${RUNNER_TEMP}/xtbloom-static-install"
           cmake --build build-static-consumer --parallel
-          "${PWD}/build-static-consumer/xtbloom_install_consumer" smoke
+          "${PWD}/build-static-consumer/xtbloom_install_consumer" cpu
 
   public-cpu-release:
     runs-on: ubuntu-24.04
@@ -337,7 +357,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install uv and Python 3.11
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.10.7"
           python-version: "3.11"
@@ -356,7 +376,7 @@ jobs:
         # may change optional local-thread-control symbols independently of
         # xtbloom, which would turn this gate into an unreviewed moving target.
         run: |
-          uv sync --locked --no-install-project --only-group wheel-build
+          uv sync --locked --no-install-project --no-default-groups --group wheel-build
           openblas="$(
             uv run --no-sync python python/ci/resolve-openblas-wheel.py \
               --manifest cmake/3rdparty/scipy_openblas32_manifest.json | \
@@ -367,9 +387,13 @@ jobs:
           cmake -S . -B build-public -G Ninja \
             -DXTBLOOM_ENABLE_CUDA=OFF \
             -DXTBLOOM_CPU_LINALG_LIBRARY="${openblas}" \
+            -DPython3_EXECUTABLE="${PWD}/.venv/bin/python" \
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_FLAGS="-fprofile-arcs -ftest-coverage -fprofile-update=atomic" \
+            -DCMAKE_CXX_FLAGS="-fprofile-arcs -ftest-coverage -fprofile-update=atomic" \
+            -DCMAKE_EXE_LINKER_FLAGS=--coverage \
             -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build-public --parallel
@@ -377,6 +401,24 @@ jobs:
         run: ccache -s
       - name: Test public inference and conformance
         run: ctest --test-dir build-public --output-on-failure
+      - name: Collect public C++ coverage
+        env:
+          COVERAGE_XML: coverage-cpp-public.xml
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes lcov
+          lcov --capture --directory build-public --output-file coverage-public.info \
+            --exclude '/usr/*' --exclude '*/tests/*' \
+            --ignore-errors mismatch,unused
+          uvx --from 'lcov_cobertura==2.1.1' lcov_cobertura coverage-public.info \
+            --output "${COVERAGE_XML}"
+      - name: Preserve public C++ coverage for the upload-only job
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: coverage-report-cpp-public
+          path: coverage-cpp-public.xml
+          retention-days: 1
       - name: Install and consume exported CMake package
         run: |
           cmake --install build-public --prefix "${RUNNER_TEMP}/xtbloom-install"

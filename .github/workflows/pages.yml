@@ -1,6 +1,7 @@
-# Builds the xtbloom WASM web demo and publishes it to GitHub Pages.
+# Builds the xtbloom WASM web demo and publishes it to GitHub Pages and
+# Cloudflare Pages.
 #
-# The artifact is a fully client-side GFN2-xTB single-point + geometry
+# The artifact is a fully client-side GFN1-xTB/GFN2-xTB single-point + geometry
 # optimization page: a single-threaded wasm32 module (so no COOP/COEP headers
 # are needed, which GitHub Pages cannot configure anyway) that dlopens a
 # preloaded Eigen LAPACKE/CBLAS side module. A separate wasm64 build is retained
@@ -99,7 +100,7 @@ jobs:
         run: ccache --zero-stats
 
       - name: Install web build dependencies
-        run: npm ci --prefix web --ignore-scripts --no-audit --no-fund
+        run: npm ci --prefix web --omit=dev --ignore-scripts --no-audit --no-fund
 
       - name: Check pinned Eigen dependency metadata
         run: python3 tools/eigen_dependency.py check
@@ -110,6 +111,7 @@ jobs:
             -DXTBLOOM_ENABLE_CUDA=OFF \
             -DXTBLOOM_BUILD_TESTS=OFF \
             -DXTBLOOM_BUILD_WEB_DEMO=ON \
+            -DXTBLOOM_WEB_ENABLE_SIMD=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_FLAGS="${ARCH_FLAG} -fPIC" \
@@ -138,10 +140,11 @@ jobs:
             --test-reporter-destination=coverage-web.lcov \
             web/tests/*.test.mjs
 
-          # The helper tests intentionally cover the extracted testable
-          # modules, not browser-only workers or generated Emscripten glue.
+          # The helper and benchmark tests intentionally cover the extracted
+          # testable modules plus the shared C60 case, not browser-only workers
+          # or generated Emscripten glue.
           coverage_sources="$(sed -n 's/^SF://p' coverage-web.lcov | sort -u)"
-          expected_sources=$'web/app_helpers.js\nweb/bootstrap.js\nweb/smiles_helpers.js'
+          expected_sources=$'web/app_helpers.js\nweb/bootstrap.js\nweb/c60_case.js\nweb/smiles_helpers.js'
           test "${coverage_sources}" = "${expected_sources}"
 
       - name: Preserve web coverage for the upload-only job
@@ -154,9 +157,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Verify pinned OpenChemLib CDN integration
+      - name: Verify pinned browser CDN integration
         if: matrix.architecture == 'wasm32'
-        run: node web/tests/openchemlib_smoke.mjs
+        run: |
+          node web/tests/3dmol_smoke.mjs
+          node web/tests/openchemlib_smoke.mjs
 
       - name: Run public C ABI layout and short-initializer checks
         run: |
@@ -180,6 +185,27 @@ jobs:
         # memory64 first shipped in V8 13.3 (Chrome 133); Node 24 is the first
         # Node release line that enables it by default.
         run: node web/tests/wasm_smoke.mjs "${BUILD_DIR}/web/site"
+
+      - name: Configure wasm32 scalar fallback
+        if: matrix.architecture == 'wasm32'
+        run: |
+          emcmake cmake -S . -B build/wasm32-web-scalar -G Ninja \
+            -DXTBLOOM_ENABLE_CUDA=OFF \
+            -DXTBLOOM_BUILD_TESTS=OFF \
+            -DXTBLOOM_BUILD_WEB_DEMO=ON \
+            -DXTBLOOM_WEB_ENABLE_SIMD=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-m32 -fPIC" \
+            -DCMAKE_CXX_FLAGS="-m32 -fPIC"
+
+      - name: Build and test wasm32 scalar fallback
+        if: matrix.architecture == 'wasm32'
+        run: |
+          cmake --build build/wasm32-web-scalar --parallel 2
+          cmake --build build/wasm32-web-scalar \
+            --target xtbloom_web_linalg_test --parallel 2
+          node web/tests/wasm_smoke.mjs build/wasm32-web-scalar/web/site
 
       - name: Preserve ${{ matrix.architecture }} site for parity
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -226,18 +252,24 @@ jobs:
 
   validate:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Node for dual-width parity
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
+
+      - name: Install pinned browser regression dependencies
+        run: npm ci --prefix web --ignore-scripts --no-audit --no-fund
+
+      - name: Install pinned Chromium and WebKit runtimes
+        run: npm --prefix web run browser:install
 
       - name: Restore wasm32 site
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -255,6 +287,51 @@ jobs:
         run: >-
           node web/tests/wasm_parity.mjs
           build/wasm32-web/web/site build/wasm64-web/web/site
+
+      - name: Test responsive layout in Chromium and WebKit
+        env:
+          XTBLOOM_WEB_SITE: ${{ github.workspace }}/build/wasm32-web/web/site
+        run: npm --prefix web run test:browser
+
+      - name: Preserve browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: web-responsive-failure-${{ github.run_attempt }}
+          path: |
+            web/test-results/browser
+            web/playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # Install and verify the exact Linux deployment graph before any
+      # deployment secret is available. Optional packages and lifecycle
+      # scripts are unnecessary for a static Pages upload; the explicit
+      # workerd/esbuild packages keep Wrangler executable without them.
+      - name: Install locked Cloudflare Pages deployer
+        run: >-
+          npm ci --prefix tools/cloudflare-pages
+          --omit=optional --ignore-scripts --no-audit --no-fund
+
+      - name: Verify locked Wrangler version
+        run: >-
+          test "$(node
+          tools/cloudflare-pages/node_modules/wrangler/bin/wrangler.js
+          --version)" = "4.123.0"
+
+      - name: Archive locked Cloudflare Pages deployer
+        run: >-
+          tar -czf build/cloudflare-pages-deployer.tar.gz
+          -C tools/cloudflare-pages
+          node_modules package.json package-lock.json
+
+      - name: Preserve locked Cloudflare Pages deployer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: xtbloom-cloudflare-pages-deployer
+          path: build/cloudflare-pages-deployer.tar.gz
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Upload trusted main site artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -282,3 +359,60 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+
+  deploy-cloudflare:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      deployments: write
+    environment:
+      name: cloudflare-pages
+      url: https://${{ vars.CLOUDFLARE_PROJECT_NAME }}.pages.dev
+    steps:
+      # Keep repository code and package installation outside the
+      # credential-bearing job. These immutable artifacts contain the wasm32
+      # site that passed parity and the exact lockfile-installed deployer.
+      - name: Restore validated wasm32 site
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: xtbloom-web-wasm32
+          path: build/wasm32-web/web/site
+
+      - name: Set up Node for locked Wrangler
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Restore locked Cloudflare Pages deployer
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: xtbloom-cloudflare-pages-deployer
+          path: build/cloudflare-pages-deployer-archive
+
+      - name: Extract locked Cloudflare Pages deployer
+        run: |
+          mkdir -p build/cloudflare-pages-deployer
+          tar -xzf \
+            build/cloudflare-pages-deployer-archive/cloudflare-pages-deployer.tar.gz \
+            -C build/cloudflare-pages-deployer
+
+      - name: Deploy to Cloudflare Pages
+        # This credential-bearing step invokes only the already-installed
+        # locked Wrangler graph. It performs no npm resolution or lifecycle
+        # scripts while the Cloudflare token is available.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PROJECT_NAME: ${{ vars.CLOUDFLARE_PROJECT_NAME }}
+          WRANGLER_SEND_METRICS: 'false'
+        run: >-
+          node
+          build/cloudflare-pages-deployer/node_modules/wrangler/bin/wrangler.js
+          pages deploy build/wasm32-web/web/site
+          --project-name "${CLOUDFLARE_PROJECT_NAME}"
+          --branch main
+          --commit-dirty=true
+          --commit-hash "${GITHUB_SHA}"

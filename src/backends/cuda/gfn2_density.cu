@@ -11,7 +11,7 @@
 namespace xtbloom::detail::cuda {
 namespace {
 
-constexpr int kThreadsPerBlock = 256;
+constexpr int kThreadsPerBlock = kGfn2DensityThreadsPerBlock;
 constexpr std::int64_t kMaximumInt64 = 9223372036854775807LL;
 
 static_assert((kThreadsPerBlock & (kThreadsPerBlock - 1)) == 0,
@@ -214,32 +214,11 @@ __global__ void preflight_kernel(Gfn2DensityDeviceBatch batch, Gfn2DensityDevice
   }
 }
 
-__host__ __device__ std::int64_t triangle_inclusive(std::int64_t value) {
-  return (value & 1LL) == 0LL ? (value / 2LL) * (value + 1LL) : value * ((value + 1LL) / 2LL);
-}
-
-struct MatrixPair {
-  std::int64_t row;
-  std::int64_t column;
-};
-
-__device__ MatrixPair matrix_pair(std::int64_t packed) {
-  std::int64_t row =
-      static_cast<std::int64_t>(0.5 * (sqrt(1.0 + 8.0 * static_cast<double>(packed)) - 1.0));
-  while (row > 0 && triangle_inclusive(row) > packed) {
-    --row;
-  }
-  while (triangle_inclusive(row + 1) <= packed) {
-    ++row;
-  }
-  const std::int64_t previous = triangle_inclusive(row);
-  return {row, packed - previous};
-}
-
 __global__ void contract_kernel(Gfn2DensityDeviceBatch batch, Gfn2DensityDeviceInput input,
                                 Gfn2DensityDeviceWorkspace workspace, std::uint32_t* system_errors,
-                                std::uint32_t* device_error) {
+                                std::uint32_t* device_error, std::int64_t tiles_per_system) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.y);
   if (atomicAdd(workspace.sequence_active, 0u) == 0u || input.active[system] != 1u ||
       !system_is_valid(system_errors, system)) {
     return;
@@ -248,9 +227,13 @@ __global__ void contract_kernel(Gfn2DensityDeviceBatch batch, Gfn2DensityDeviceI
   const std::int64_t orbital_end = batch.orbital_offsets[system + 1];
   const std::int64_t matrix_begin = batch.matrix_offsets[system];
   const std::int64_t count = orbital_end - orbital_begin;
-  const std::int64_t pair_count = triangle_inclusive(count);
-  for (std::int64_t pair = threadIdx.x; pair < pair_count; pair += blockDim.x) {
-    const MatrixPair indices = matrix_pair(pair);
+  const std::int64_t pair_count = gfn2_triangle_inclusive(count);
+  const std::int64_t pair_stride = tiles_per_system * blockDim.x;
+  /* Scheduling changes only pair ownership; one thread still executes the
+   * complete ordered FP64 orbital loop for each matrix element. */
+  for (std::int64_t pair = tile * blockDim.x + threadIdx.x; pair < pair_count;
+       pair += pair_stride) {
+    const Gfn2PackedMatrixPair indices = gfn2_packed_matrix_pair(pair);
     double density = 0.0;
     double weighted_density = 0.0;
     bool finite = true;
@@ -553,9 +536,11 @@ __global__ void spin_contract_kernel(Gfn2DensityDeviceBatch batch,
                                      Gfn2WavefunctionLayoutView layout,
                                      Gfn2DensityDeviceInput input,
                                      Gfn2DensityDeviceWorkspace workspace,
-                                     std::uint32_t* system_errors, std::uint32_t* device_error) {
+                                     std::uint32_t* system_errors, std::uint32_t* device_error,
+                                     std::int64_t tiles_per_channel) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   const std::int32_t channel = static_cast<std::int32_t>(blockIdx.y);
+  const std::int64_t tile = static_cast<std::int64_t>(blockIdx.z);
   if (atomicAdd(workspace.sequence_active, 0u) == 0u || input.active[system] != 1u ||
       !system_is_valid(system_errors, system) || channel >= layout.spin_channels[system]) {
     return;
@@ -564,9 +549,12 @@ __global__ void spin_contract_kernel(Gfn2DensityDeviceBatch batch,
   const std::int64_t matrix_count = count * count;
   const std::int64_t matrix_begin = layout.spin_matrix_offsets[system] + channel * matrix_count;
   const std::int64_t orbital_begin = layout.spin_orbital_offsets[system] + channel * count;
-  const std::int64_t pair_count = triangle_inclusive(count);
-  for (std::int64_t pair = threadIdx.x; pair < pair_count; pair += blockDim.x) {
-    const MatrixPair indices = matrix_pair(pair);
+  const std::int64_t pair_count = gfn2_triangle_inclusive(count);
+  const std::int64_t pair_stride = tiles_per_channel * blockDim.x;
+  /* Match the restricted path's one-thread-per-pair arithmetic contract. */
+  for (std::int64_t pair = tile * blockDim.x + threadIdx.x; pair < pair_count;
+       pair += pair_stride) {
+    const Gfn2PackedMatrixPair indices = gfn2_packed_matrix_pair(pair);
     double density = 0.0;
     double weighted_density = 0.0;
     bool finite = true;
@@ -868,6 +856,8 @@ bool validate_restricted_launch(const Gfn2DensityDeviceBatch& batch,
   std::int64_t two_orbitals = 0;
   if (batch.batch_size <= 0 || batch.batch_size > std::numeric_limits<int>::max() ||
       batch.total_orbitals <= 0 || batch.total_matrix_elements <= 0 || batch.plan_token == 0u ||
+      batch.contraction_tiles_per_channel <= 0 ||
+      batch.contraction_tiles_per_channel > kGfn2DensityContractBlockBudget ||
       !checked_multiply(batch.total_orbitals, 2, &two_orbitals) ||
       batch.orbital_offset_count != batch.batch_size + 1 ||
       batch.matrix_offset_count != batch.batch_size + 1 || input.plan_token != batch.plan_token ||
@@ -983,6 +973,8 @@ bool validate_spin_launch(const Gfn2DensityDeviceBatch& batch,
   std::int64_t two_orbitals = 0;
   if (batch.batch_size <= 0 || batch.batch_size > std::numeric_limits<int>::max() ||
       batch.total_orbitals <= 0 || batch.total_matrix_elements <= 0 ||
+      batch.contraction_tiles_per_channel <= 0 ||
+      batch.contraction_tiles_per_channel > kGfn2DensityContractBlockBudget ||
       layout.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
       layout.plan_token != batch.plan_token || layout.batch_size != batch.batch_size ||
       layout.total_spin_orbitals <= 0 || layout.total_spin_matrix_elements <= 0 ||
@@ -1145,6 +1137,23 @@ bool validate_spin_launch(const Gfn2DensityDeviceBatch& batch,
 
 }  // namespace
 
+bool make_gfn2_density_contract_launch_shape(std::int64_t batch_size,
+                                             std::int64_t total_spin_channels,
+                                             std::int64_t tiles_per_channel,
+                                             Gfn2DensityContractLaunchShape& shape) noexcept {
+  if (batch_size <= 0 || batch_size > std::numeric_limits<int>::max() ||
+      total_spin_channels < batch_size || total_spin_channels > 2 * batch_size ||
+      tiles_per_channel <= 0 || tiles_per_channel > kGfn2DensityContractBlockBudget) {
+    return false;
+  }
+  Gfn2DensityContractLaunchShape candidate{};
+  candidate.systems = static_cast<std::uint32_t>(batch_size);
+  candidate.channels = total_spin_channels == batch_size ? 1u : 2u;
+  candidate.tiles = static_cast<std::uint32_t>(tiles_per_channel);
+  shape = candidate;
+  return true;
+}
+
 cudaError_t reset_gfn2_density_device_errors_cuda(std::int64_t batch_size,
                                                   std::uint32_t* system_errors,
                                                   std::uint32_t* device_error,
@@ -1170,7 +1179,13 @@ cudaError_t evaluate_gfn2_restricted_density_cuda(
     const Gfn2DensityDeviceBatch& batch, const Gfn2DensityDeviceInput& input,
     const Gfn2DensityDeviceResults& results, const Gfn2DensityDeviceWorkspace& workspace,
     std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  const std::int64_t tiles_per_system = batch.contraction_tiles_per_channel;
   if (!validate_restricted_launch(batch, input, results, workspace, system_errors, device_error)) {
+    return cudaErrorInvalidValue;
+  }
+  Gfn2DensityContractLaunchShape launch_shape{};
+  if (!make_gfn2_density_contract_launch_shape(batch.batch_size, batch.batch_size, tiles_per_system,
+                                               launch_shape)) {
     return cudaErrorInvalidValue;
   }
   capture_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace.sequence_active);
@@ -1184,8 +1199,9 @@ cudaError_t evaluate_gfn2_restricted_density_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  contract_kernel<<<static_cast<unsigned int>(batch.batch_size), kThreadsPerBlock, 0, stream>>>(
-      batch, input, workspace, system_errors, device_error);
+  const dim3 contract_grid(launch_shape.systems, launch_shape.tiles, 1u);
+  contract_kernel<<<contract_grid, kThreadsPerBlock, 0, stream>>>(
+      batch, input, workspace, system_errors, device_error, tiles_per_system);
   status = cudaGetLastError();
   if (status != cudaSuccess) {
     return status;
@@ -1212,8 +1228,14 @@ cudaError_t evaluate_gfn2_spin_density_cuda(
     const Gfn2DensityDeviceInput& input, const Gfn2DensityDeviceResults& results,
     const Gfn2DensityDeviceWorkspace& workspace, std::uint32_t* system_errors,
     std::uint32_t* device_error, cudaStream_t stream) noexcept {
+  const std::int64_t tiles_per_channel = batch.contraction_tiles_per_channel;
   if (!validate_spin_launch(batch, layout, input, results, workspace, system_errors,
                             device_error)) {
+    return cudaErrorInvalidValue;
+  }
+  Gfn2DensityContractLaunchShape launch_shape{};
+  if (!make_gfn2_density_contract_launch_shape(batch.batch_size, layout.total_spin_channels,
+                                               tiles_per_channel, launch_shape)) {
     return cudaErrorInvalidValue;
   }
   capture_sequence_kernel<<<1, 1, 0, stream>>>(device_error, workspace.sequence_active);
@@ -1227,13 +1249,14 @@ cudaError_t evaluate_gfn2_spin_density_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  const dim3 channel_grid(static_cast<unsigned int>(batch.batch_size), 2u, 1u);
-  spin_contract_kernel<<<channel_grid, kThreadsPerBlock, 0, stream>>>(
-      batch, layout, input, workspace, system_errors, device_error);
+  const dim3 contract_grid(launch_shape.systems, launch_shape.channels, launch_shape.tiles);
+  spin_contract_kernel<<<contract_grid, kThreadsPerBlock, 0, stream>>>(
+      batch, layout, input, workspace, system_errors, device_error, tiles_per_channel);
   status = cudaGetLastError();
   if (status != cudaSuccess) {
     return status;
   }
+  const dim3 channel_grid(launch_shape.systems, launch_shape.channels, 1u);
   spin_trace_kernel<<<channel_grid, kThreadsPerBlock, 0, stream>>>(batch, layout, input, workspace,
                                                                    system_errors, device_error);
   status = cudaGetLastError();

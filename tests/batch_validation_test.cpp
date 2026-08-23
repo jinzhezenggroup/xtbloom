@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "model/gfn2/lattice.hpp"
 #include "runtime/validation.hpp"
 #include "xtbloom/xtbloom.h"
 
@@ -21,15 +22,19 @@ namespace {
 using xtbloom::detail::DescriptorValidationResult;
 using xtbloom::detail::kAtomicNumbersNeedStaging;
 using xtbloom::detail::kAtomOffsetsNeedStaging;
+using xtbloom::detail::kCellMatricesNeedStaging;
 using xtbloom::detail::kChargeResponseOffsetsNeedStaging;
 using xtbloom::detail::kChargeResponseShapeNeedsStaging;
 using xtbloom::detail::kMolecularChargesNeedStaging;
+using xtbloom::detail::kPeriodicAxesNeedStaging;
 using xtbloom::detail::kPointChargeOffsetsNeedStaging;
 using xtbloom::detail::kSpinChannelsNeedStaging;
 using xtbloom::detail::kTopologyMetadataStagingMask;
 using xtbloom::detail::kUnpairedElectronsNeedStaging;
 using xtbloom::detail::validate_compute_descriptor_structure;
 using xtbloom::detail::validate_compute_descriptors;
+using xtbloom::detail::validate_host_lattice_execution_availability;
+using xtbloom::detail::validate_host_lattice_semantics;
 using xtbloom::detail::validate_host_topology_semantics;
 
 #define CHECK(condition)                                                                 \
@@ -69,6 +74,9 @@ struct Fixture {
   std::vector<double> response_matrix;
   std::vector<xtbloom_interaction_t> interactions;
   std::vector<std::uint8_t> interaction_payload;
+  std::vector<double> cell_matrices;
+  std::vector<std::int32_t> periodic_axes;
+  alignas(double) std::array<std::uint8_t, 36> misaligned_interaction_payload{};
 
   std::vector<double> energies{0.0, 0.0};
   std::vector<double> forces = std::vector<double>(9);
@@ -102,6 +110,10 @@ struct Fixture {
     options.energy_tolerance = 1.0e-8;
     options.electronic_temperature = XTBLOOM_DEFAULT_ELECTRONIC_TEMPERATURE;
     options.scc_start_mode = XTBLOOM_SCC_START_FRESH;
+    options.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+    options.scc_mixer_history = 8;
+    options.scc_mixer_damping = 0.4;
+    options.determinism = XTBLOOM_DETERMINISM_DEFAULT;
 
     result.struct_size = sizeof(result);
     result.api_version = XTBLOOM_API_VERSION;
@@ -150,6 +162,19 @@ struct Fixture {
     batch.total_interactions = 1;
     batch.interaction_descriptors = input_buffer(interactions);
     batch.interaction_payload = input_buffer(interaction_payload);
+  }
+
+  void enable_lattice(std::vector<std::int32_t> masks = {XTBLOOM_PERIODIC_AXES_NONE,
+                                                         XTBLOOM_PERIODIC_AXES_XYZ}) {
+    cell_matrices.assign(18, 0.0);
+    if (masks.size() > 1u && masks[1] == XTBLOOM_PERIODIC_AXES_XYZ) {
+      const double cell[9] = {4.0, 0.0, 0.0, 0.2, 5.0, 0.0, -0.1, 0.3, 6.0};
+      std::copy(std::begin(cell), std::end(cell), cell_matrices.begin() + 9);
+    }
+    periodic_axes = std::move(masks);
+    batch.struct_size = sizeof(batch);
+    batch.cell_matrices = input_buffer(cell_matrices);
+    batch.periodic_axes = input_buffer(periodic_axes);
   }
 };
 
@@ -439,6 +464,29 @@ bool test_compute_options() {
        [](Fixture& f) { f.options.scc_start_mode = std::numeric_limits<std::int32_t>::max(); },
        "scc_start_mode"},
       {"options ABI-v2 reserved", [](Fixture& f) { f.options.reserved_v2 = 1; }, "reserved_v2"},
+      {"zero SCC mixer", [](Fixture& f) { f.options.scc_mixer = 0; }, "scc_mixer"},
+      {"unknown SCC mixer", [](Fixture& f) { f.options.scc_mixer = 2; }, "scc_mixer"},
+      {"zero SCC mixer history", [](Fixture& f) { f.options.scc_mixer_history = 0; },
+       "scc_mixer_history"},
+      {"negative SCC mixer history", [](Fixture& f) { f.options.scc_mixer_history = -1; },
+       "scc_mixer_history"},
+      {"oversized SCC mixer history", [](Fixture& f) { f.options.scc_mixer_history = 65; },
+       "scc_mixer_history"},
+      {"zero SCC mixer damping", [](Fixture& f) { f.options.scc_mixer_damping = 0.0; },
+       "scc_mixer_damping"},
+      {"negative SCC mixer damping", [](Fixture& f) { f.options.scc_mixer_damping = -0.1; },
+       "scc_mixer_damping"},
+      {"oversized SCC mixer damping", [](Fixture& f) { f.options.scc_mixer_damping = 1.01; },
+       "scc_mixer_damping"},
+      {"infinite SCC mixer damping",
+       [](Fixture& f) { f.options.scc_mixer_damping = std::numeric_limits<double>::infinity(); },
+       "scc_mixer_damping"},
+      {"NaN SCC mixer damping",
+       [](Fixture& f) { f.options.scc_mixer_damping = std::numeric_limits<double>::quiet_NaN(); },
+       "scc_mixer_damping"},
+      {"negative determinism", [](Fixture& f) { f.options.determinism = -1; }, "determinism"},
+      {"unknown determinism", [](Fixture& f) { f.options.determinism = 2; }, "determinism"},
+      {"options ABI-v3 reserved", [](Fixture& f) { f.options.reserved_v3 = 1; }, "reserved_v3"},
       {"result reserved", [](Fixture& f) { f.result.reserved = 1; }, "reserved"},
   };
   for (const InvalidCase& test : cases) {
@@ -454,6 +502,9 @@ bool test_compute_options() {
 
   fixture.options.model = XTBLOOM_MODEL_GFN2_XTB;
   fixture.options.scc_start_mode = XTBLOOM_SCC_START_WARM;
+  fixture.options.scc_mixer_history = 64;
+  fixture.options.scc_mixer_damping = 1.0;
+  fixture.options.determinism = XTBLOOM_DETERMINISM_REPRODUCIBLE;
   CHECK(validate_compute_descriptors(XTBLOOM_BACKEND_CUDA, &fixture.batch, &fixture.options,
                                      &fixture.result)
             .ok());
@@ -468,12 +519,22 @@ bool test_compute_options_short_prefixes() {
   constexpr std::size_t kCanaryBytes = 16;
   for (const std::size_t caller_size :
        {static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE),
-        static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE - 1)}) {
+        static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE - 1),
+        static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE),
+        static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE + 1), std::size_t{63},
+        std::size_t{64}, std::size_t{71}, std::size_t{72},
+        static_cast<std::size_t>(XTBLOOM_COMPUTE_OPTIONS_V3_SIZE - 1)}) {
     std::unique_ptr<unsigned char, decltype(&std::free)> storage(
         static_cast<unsigned char*>(std::malloc(caller_size + kCanaryBytes)), &std::free);
     CHECK(storage != nullptr);
     std::memset(storage.get(), 0xa5, caller_size + kCanaryBytes);
     std::memcpy(storage.get(), &fixture.options, caller_size);
+    /* Make every byte in an incomplete suffix hostile. Validation must gate
+     * the suffix by its complete size rather than by individual field offsets. */
+    const std::size_t complete_prefix = caller_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE
+                                            ? XTBLOOM_COMPUTE_OPTIONS_V2_SIZE
+                                            : XTBLOOM_COMPUTE_OPTIONS_V1_SIZE;
+    std::memset(storage.get() + complete_prefix, 0xa5, caller_size - complete_prefix);
     const std::uint32_t encoded_size = static_cast<std::uint32_t>(caller_size);
     std::memcpy(storage.get(), &encoded_size, sizeof(encoded_size));
 
@@ -849,8 +910,8 @@ bool test_interaction_abi_v3() {
   interaction.payload_offset = 0;
   interaction.payload_size = 32;
 
-  /* A well-formed electric-field attachment passes CPU structural validation
-   * (P2 of #237 implements the electric field on the CPU backend). */
+  /* A well-formed electric-field attachment passes CPU structural validation;
+   * both released backends execute the field after their pointer gates. */
   {
     Fixture field;
     field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
@@ -860,14 +921,14 @@ bool test_interaction_abi_v3() {
     CHECK(!checked.requires_backend_staging_validation());
   }
 
-  /* The CUDA structure-only entry point still refuses field execution because
-   * the CUDA backend has not released interactions yet (#237 P3). */
+  /* The CUDA structure-only entry point accepts a host-readable released field;
+   * the runtime performs pointer provenance and executes the term. */
   {
     Fixture field;
     field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
     checked = validate_compute_descriptor_structure(XTBLOOM_BACKEND_CUDA, &field.batch,
                                                     &field.options, &field.result);
-    CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+    CHECK(checked.ok());
   }
 
   const InvalidCase invalid_interactions[] = {
@@ -942,6 +1003,24 @@ bool test_interaction_abi_v3() {
          f.enable_interaction(entry, efield_block(0.0, 0.0, 0.0));
        },
        "extends past interaction_payload"},
+      {"payload block address overflow",
+       [](Fixture& f) {
+         xtbloom_interaction_t entry{};
+         entry.type = XTBLOOM_INTERACTION_ALPB_SOLVATION;
+         entry.system_index = 0;
+         entry.payload_offset = 16;
+         entry.payload_size = sizeof(std::int32_t);
+         f.interactions = {entry};
+         f.batch.struct_size = sizeof(f.batch);
+         f.batch.total_interactions = 1;
+         f.batch.interaction_descriptors = input_buffer(f.interactions);
+         /* The semantic pass must reject this address before forming or
+          * dereferencing the wrapped block pointer. */
+         f.batch.interaction_payload = {
+             reinterpret_cast<const void*>(std::numeric_limits<std::uintptr_t>::max() - 15u), 20u,
+             XTBLOOM_MEMORY_HOST, 0u};
+       },
+       "address overflows uintptr_t"},
       {"electric-field payload undersized",
        [](Fixture& f) {
          xtbloom_interaction_t entry{};
@@ -968,6 +1047,22 @@ bool test_interaction_abi_v3() {
          entry.payload_offset = 1;
          entry.payload_size = 32;
          f.enable_interaction(entry, std::vector<std::uint8_t>(64, 0));
+       },
+       "undersized or misaligned"},
+      {"electric-field payload view base misaligned",
+       [](Fixture& f) {
+         xtbloom_interaction_t entry{};
+         entry.type = XTBLOOM_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 0;
+         entry.payload_size = 32;
+         const std::vector<std::uint8_t> payload = efield_block(0.0, 0.0, 0.0);
+         std::memcpy(f.misaligned_interaction_payload.data() + 4u, payload.data(), payload.size());
+         f.interactions = {entry};
+         f.batch.struct_size = sizeof(f.batch);
+         f.batch.total_interactions = 1;
+         f.batch.interaction_descriptors = input_buffer(f.interactions);
+         f.batch.interaction_payload = {f.misaligned_interaction_payload.data() + 4u, 32u,
+                                        XTBLOOM_MEMORY_HOST, 0u};
        },
        "undersized or misaligned"},
       {"electric-field payload version unsupported",
@@ -1062,9 +1157,8 @@ bool test_interaction_abi_v3() {
     CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
   }
 
-  /* The reserved dipole-moment output is released on the CPU backend (P2 of
-   * #237); requesting it with a correctly sized outlet is accepted. The CUDA
-   * backend still refuses execution until its publication lands (#237 P3). */
+  /* Dipole-moment publication is released on both GFN2 backends; requesting
+   * it with a correctly sized outlet is accepted structurally. */
   {
     Fixture dipole;
     dipole.options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
@@ -1082,11 +1176,10 @@ bool test_interaction_abi_v3() {
     cuda_dipole.result.dipole_moments = output_buffer(cuda_output);
     checked = validate_compute_descriptor_structure(XTBLOOM_BACKEND_CUDA, &cuda_dipole.batch,
                                                     &cuda_dipole.options, &cuda_dipole.result);
-    CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+    CHECK(checked.ok());
   }
 
-  /* Validate the released outlet shape before reporting that publication is
-   * not implemented. This keeps malformed requests distinguishable. */
+  /* Validate the released outlet shape before backend execution. */
   {
     Fixture missing_dipole;
     missing_dipole.options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
@@ -1130,16 +1223,219 @@ bool test_interaction_abi_v3() {
     CHECK(checked.error.find("reserved batch-result outlet") != std::string::npos);
   }
 
-  /* Device-resident descriptors defer content checks through the staging
-   * mask and are then refused by the availability gate. */
+  /* Device-resident descriptors defer content and reserved-tag checks through
+   * the CUDA runtime's stream-ordered interaction gate. */
   {
     Fixture device_field;
     device_field.enable_interaction(interaction, efield_block(0.0, 0.0, 0.1));
     device_field.batch.interaction_descriptors.memory_space = XTBLOOM_MEMORY_CUDA_DEVICE;
     checked = validate_compute_descriptors(XTBLOOM_BACKEND_CUDA, &device_field.batch,
                                            &device_field.options, &device_field.result);
-    CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+    CHECK(checked.ok());
+    CHECK((checked.pending_offset_checks & xtbloom::detail::kInteractionDescriptorsNeedStaging) !=
+          0u);
   }
+  return true;
+}
+
+bool test_lattice_abi_v4() {
+  /* V1/V2/V3 callers own no lattice bytes and remain molecular requests. */
+  for (const std::uint32_t size : {static_cast<std::uint32_t>(XTBLOOM_BATCH_V1_SIZE),
+                                   static_cast<std::uint32_t>(XTBLOOM_BATCH_V2_SIZE),
+                                   static_cast<std::uint32_t>(XTBLOOM_BATCH_V3_SIZE),
+                                   static_cast<std::uint32_t>(XTBLOOM_BATCH_V4_SIZE - 1u)}) {
+    Fixture legacy;
+    legacy.batch.struct_size = size;
+    if (size == XTBLOOM_BATCH_V4_SIZE - 1u) {
+      /* A partial suffix owns neither V4 field. Hostile bytes in the backing
+       * object must therefore remain semantically invisible to validation. */
+      legacy.batch.cell_matrices = {reinterpret_cast<const void*>(std::uintptr_t{1u}),
+                                    std::numeric_limits<std::size_t>::max(),
+                                    static_cast<xtbloom_memory_space_t>(INT32_C(0x7fffffff)), 1u};
+      legacy.batch.periodic_axes = {reinterpret_cast<const void*>(std::uintptr_t{2u}),
+                                    std::numeric_limits<std::size_t>::max(),
+                                    static_cast<xtbloom_memory_space_t>(INT32_C(0x7fffffff)), 1u};
+    }
+    CHECK(validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &legacy.batch, &legacy.options,
+                                       &legacy.result)
+              .ok());
+  }
+  Fixture future;
+  future.batch.struct_size = sizeof(future.batch) + 64u;
+  CHECK(validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &future.batch, &future.options,
+                                     &future.result)
+            .ok());
+
+  /* An absent optional suffix must not add a new batch_size*9 overflow gate
+   * to legacy molecular descriptors. Existing required extents still decide
+   * the diagnostic, as they did before ABI-v4 existed. */
+  for (const std::uint32_t size : {static_cast<std::uint32_t>(XTBLOOM_BATCH_V1_SIZE),
+                                   static_cast<std::uint32_t>(XTBLOOM_BATCH_V3_SIZE),
+                                   static_cast<std::uint32_t>(XTBLOOM_BATCH_V4_SIZE - 1u)}) {
+    Fixture legacy;
+    legacy.batch.struct_size = size;
+    legacy.batch.batch_size = std::numeric_limits<std::int64_t>::max() / 9 + 1;
+    const DescriptorValidationResult overflow = validate_compute_descriptor_structure(
+        XTBLOOM_BACKEND_CUDA, &legacy.batch, &legacy.options, &legacy.result);
+    CHECK(overflow.status == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(overflow.error.find("native-cell") == std::string::npos);
+  }
+
+  /* A complete V4 image with only NONE masks is explicitly molecular. */
+  Fixture molecular;
+  molecular.enable_lattice({XTBLOOM_PERIODIC_AXES_NONE, XTBLOOM_PERIODIC_AXES_NONE});
+  DescriptorValidationResult checked = validate_compute_descriptors(
+      XTBLOOM_BACKEND_CPU, &molecular.batch, &molecular.options, &molecular.result);
+  CHECK(checked.ok());
+  CHECK(xtbloom::detail::validate_plan_descriptor_structure(XTBLOOM_BACKEND_CPU, &molecular.batch,
+                                                            &molecular.options)
+            .ok());
+
+  /* A valid released 3D request is fully validated, then refused atomically. */
+  Fixture periodic;
+  periodic.enable_lattice();
+  const std::vector<double> energies_before = periodic.energies;
+  const std::vector<double> forces_before = periodic.forces;
+  const std::vector<std::int32_t> iterations_before = periodic.scc_iterations;
+  const std::vector<std::uint8_t> converged_before = periodic.scc_converged;
+  const std::vector<std::int32_t> statuses_before = periodic.per_system_status;
+  checked = validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &periodic.batch, &periodic.options,
+                                         &periodic.result);
+  CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  checked = xtbloom::detail::validate_plan_descriptor_structure(XTBLOOM_BACKEND_CPU,
+                                                                &periodic.batch, &periodic.options);
+  CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(checked.error.find("periodic GFN2 execution is not implemented") != std::string::npos);
+  CHECK(checked.error.find("periodic GFN2 execution") != std::string::npos);
+  CHECK(periodic.result.flags == 0u);
+  CHECK(periodic.energies == energies_before);
+  CHECK(periodic.forces == forces_before);
+  CHECK(periodic.scc_iterations == iterations_before);
+  CHECK(periodic.scc_converged == converged_before);
+  CHECK(periodic.per_system_status == statuses_before);
+
+  /* Device content remains opaque through common validation and exposes both
+   * staging requirements. A CUDA bridge must stage before availability. */
+  Fixture device;
+  device.enable_lattice();
+  device.batch.cell_matrices = {reinterpret_cast<const void*>(std::uintptr_t{0x70000u}),
+                                device.cell_matrices.size() * sizeof(double),
+                                XTBLOOM_MEMORY_CUDA_DEVICE, 0};
+  device.batch.periodic_axes = {reinterpret_cast<const void*>(std::uintptr_t{0x80000u}),
+                                device.periodic_axes.size() * sizeof(std::int32_t),
+                                XTBLOOM_MEMORY_CUDA_DEVICE, 0};
+  checked = validate_compute_descriptors(XTBLOOM_BACKEND_CUDA, &device.batch, &device.options,
+                                         &device.result);
+  CHECK(checked.ok());
+  CHECK((checked.pending_offset_checks & kCellMatricesNeedStaging) != 0u);
+  CHECK((checked.pending_offset_checks & kPeriodicAxesNeedStaging) != 0u);
+
+  const std::vector<InvalidCase> invalid = {
+      {"cell without axes",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.batch.periodic_axes = {};
+       },
+       "supplied together"},
+      {"axes without cell",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.batch.cell_matrices = {};
+       },
+       "supplied together"},
+      {"cell undersized",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.batch.cell_matrices.size_bytes -= sizeof(double);
+       },
+       "cell_matrices is smaller"},
+      {"axes undersized",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.batch.periodic_axes.size_bytes -= sizeof(std::int32_t);
+       },
+       "periodic_axes is smaller"},
+      {"unknown mask", [](Fixture& f) { f.enable_lattice({XTBLOOM_PERIODIC_AXES_NONE, 8}); },
+       "unknown mask bits"},
+      {"partial mask",
+       [](Fixture& f) { f.enable_lattice({XTBLOOM_PERIODIC_AXES_NONE, XTBLOOM_PERIODIC_AXIS_X}); },
+       "one- and two-dimensional", XTBLOOM_STATUS_NOT_SUPPORTED},
+      {"nonzero molecular cell",
+       [](Fixture& f) {
+         f.enable_lattice({XTBLOOM_PERIODIC_AXES_NONE, XTBLOOM_PERIODIC_AXES_NONE});
+         f.cell_matrices[0] = 1.0;
+       },
+       "all-zero cell"},
+      {"nonfinite periodic cell",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.cell_matrices[9] = std::numeric_limits<double>::infinity();
+       },
+       "NaN or infinity"},
+      {"singular periodic cell",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.cell_matrices[9] = 1.0;
+         f.cell_matrices[10] = 0.0;
+         f.cell_matrices[11] = 0.0;
+         f.cell_matrices[12] = 2.0;
+         f.cell_matrices[13] = 0.0;
+         f.cell_matrices[14] = 0.0;
+       },
+       "right-handed"},
+      {"left-handed periodic cell",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.cell_matrices[17] = -6.0;
+       },
+       "right-handed"},
+      {"cell aliases output",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.result.forces.data = f.cell_matrices.data();
+         f.result.forces.size_bytes = f.cell_matrices.size() * sizeof(double);
+       },
+       "aliases"},
+  };
+  for (const InvalidCase& test : invalid) {
+    CHECK(expect_invalid(test));
+  }
+
+  /* The staged-host helpers are independently callable by the CUDA bridge. */
+  CHECK(validate_host_lattice_semantics(periodic.batch).ok());
+  CHECK(
+      validate_host_lattice_execution_availability(periodic.batch, XTBLOOM_MODEL_GFN2_XTB).status ==
+      XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(validate_host_lattice_semantics(molecular.batch).ok());
+  CHECK(validate_host_lattice_execution_availability(molecular.batch, XTBLOOM_MODEL_GFN2_XTB).ok());
+
+  /* Public validation and the reusable lattice builder share one scale-aware
+   * predicate even for strongly anisotropic but linearly independent cells. */
+  Fixture anisotropic;
+  anisotropic.enable_lattice();
+  const std::array<double, 9> cell{1.0e5, 0.0, 0.0, 0.0, 1.0e-5, 0.0, 0.0, 0.0, 1.0};
+  std::copy(cell.begin(), cell.end(), anisotropic.cell_matrices.begin() + 9);
+  CHECK(validate_host_lattice_semantics(anisotropic.batch).ok());
+  xtbloom::detail::gfn2::Lattice3D constructed;
+  std::string lattice_error;
+  CHECK(xtbloom::detail::gfn2::make_lattice_3d(cell.data(), constructed, lattice_error) ==
+        XTBLOOM_STATUS_SUCCESS);
+
+  /* Independent vector scaling avoids intermediate norm overflow even when
+   * several components are at DBL_MAX. This is a valid right-handed cell for
+   * semantic validation even though derived volume cannot fit in binary64. */
+  Fixture maximum_components;
+  maximum_components.enable_lattice();
+  const double maximum = std::numeric_limits<double>::max();
+  const std::array<double, 9> huge_cell{
+      maximum, maximum, 0.0, -maximum, maximum, 0.0, 0.0, 0.0, maximum,
+  };
+  std::copy(huge_cell.begin(), huge_cell.end(), maximum_components.cell_matrices.begin() + 9);
+  CHECK(validate_host_lattice_semantics(maximum_components.batch).ok());
+
+  maximum_components.cell_matrices[17] = -maximum;
+  checked = validate_host_lattice_semantics(maximum_components.batch);
+  CHECK(checked.status == XTBLOOM_STATUS_INVALID_ARGUMENT);
   return true;
 }
 
@@ -1165,6 +1461,7 @@ int main() {
       {"host offsets and response packing", test_host_offsets_and_response_packing},
       {"aliasing and address ranges", test_aliasing_and_address_ranges},
       {"ABI-v3 interactions", test_interaction_abi_v3},
+      {"ABI-v4 native lattice", test_lattice_abi_v4},
   };
   for (const Test& test : tests) {
     if (!test.run()) {

@@ -34,6 +34,7 @@ enum class Gfn2ForceCompositionDeviceError : std::uint32_t {
   kNonfiniteExplicitQmForce = 5u,
   kNonfiniteExplicitPointForce = 6u,
   kNonfiniteForceArithmetic = 7u,
+  kNonfiniteElectricFieldForce = 8u,
 };
 
 /* Immutable ragged output topology and component contract. */
@@ -64,6 +65,12 @@ struct Gfn2ForceCompositionDeviceInput {
   const double* explicit_point_forces = nullptr;
   std::int64_t explicit_point_force_elements = 0;
   std::uint64_t plan_token = 0u;
+  /* Normalized E[batch][3] and stationary raw q[atoms]. Both are absent for
+   * legacy field-free bindings or present together for fixed runtime plans. */
+  const double* electric_field_vectors = nullptr;
+  std::int64_t electric_field_vector_elements = 0;
+  const double* atomic_charges = nullptr;
+  std::int64_t atomic_charge_elements = 0;
 };
 
 /* Either output may be omitted; point output is empty when the batch has no points. */
@@ -104,7 +111,7 @@ cudaError_t reset_gfn2_force_composition_device_errors_cuda(std::int64_t batch_s
 /*
  * Publish final forces for requested terminal-success members:
  *
- *   F_QM = -g_electronic + F_classical + F_explicit-PC-on-QM,
+ *   F_QM = -g_electronic + F_classical + F_explicit-PC-on-QM + q_i E,
  *   F_PC = F_explicit-PC-on-points.
  *
  * An unrequested or failed member is rejected before any component value is

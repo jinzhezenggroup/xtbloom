@@ -44,9 +44,11 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import math
+import operator
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, SupportsIndex, cast
 
 import numpy as np
 
@@ -248,11 +250,26 @@ def _xtbloom_torch_op() -> Callable[..., tuple[object, object, int]]:
     )
 
 
+_METHOD_ALIASES = {
+    "GFN1-xTB": library.MODEL_GFN1_XTB,
+    "GFN1": library.MODEL_GFN1_XTB,
+    "GFN2-xTB": library.MODEL_GFN2_XTB,
+    "GFN2": library.MODEL_GFN2_XTB,
+}
+
 _BACKEND_ALIASES = {
     "auto": library.BACKEND_AUTO,
     "cpu": library.BACKEND_CPU,
     "cuda": library.BACKEND_CUDA,
 }
+
+
+def _resolve_method(method: str) -> int:
+    """Validate the GFN method selector and return its public C-ABI model tag."""
+    try:
+        return _METHOD_ALIASES[method]
+    except KeyError:
+        raise XTBloomValueError(f"unknown method {method!r}") from None
 
 
 def _resolve_backend(backend: str | int) -> int:
@@ -282,6 +299,73 @@ def _resolve_context_scalars(
     if resolved_threads < 0:
         raise XTBloomValueError("cpu_threads must be nonnegative")
     return resolved_device, resolved_threads
+
+
+def _resolve_scc_policy(
+    scc_mixer: str | int,
+    scc_mixer_history: int,
+    scc_mixer_damping: float,
+    determinism: str | int,
+) -> tuple[int, int, float, int]:
+    """Validate the ABI-v3 SCC policy without importing the high-level interface."""
+    mixer_aliases = {"modified_broyden": library.SCC_MIXER_MODIFIED_BROYDEN}
+    determinism_aliases = {
+        "default": library.DETERMINISM_DEFAULT,
+        "reproducible": library.DETERMINISM_REPRODUCIBLE,
+    }
+
+    def exact_integer(name: str, value: object) -> int:
+        if isinstance(value, bool | np.bool_):
+            raise XTBloomValueError(f"{name} must be an integer")
+        try:
+            return int(operator.index(cast("SupportsIndex", value)))
+        except TypeError:
+            raise XTBloomValueError(f"{name} must be an integer") from None
+
+    if isinstance(scc_mixer, str):
+        try:
+            mixer = mixer_aliases[scc_mixer]
+        except KeyError:
+            raise XTBloomValueError(
+                "scc_mixer must be 'modified_broyden' or SCC_MIXER_MODIFIED_BROYDEN"
+            ) from None
+    else:
+        mixer = exact_integer("scc_mixer", scc_mixer)
+    if mixer != library.SCC_MIXER_MODIFIED_BROYDEN:
+        raise XTBloomValueError(
+            "scc_mixer must be 'modified_broyden' or SCC_MIXER_MODIFIED_BROYDEN"
+        )
+
+    history = exact_integer("scc_mixer_history", scc_mixer_history)
+    if not 1 <= history <= library.MAX_SCC_MIXER_HISTORY:
+        raise XTBloomValueError(
+            f"scc_mixer_history must lie between 1 and {library.MAX_SCC_MIXER_HISTORY}"
+        )
+
+    damping = float(scc_mixer_damping)
+    if not math.isfinite(damping) or not 0.0 < damping <= 1.0:
+        raise XTBloomValueError("scc_mixer_damping must be finite and lie in (0, 1]")
+
+    if isinstance(determinism, str):
+        try:
+            deterministic = determinism_aliases[determinism]
+        except KeyError:
+            raise XTBloomValueError(
+                "determinism must be 'default', 'reproducible', "
+                "DETERMINISM_DEFAULT, or DETERMINISM_REPRODUCIBLE"
+            ) from None
+    else:
+        deterministic = exact_integer("determinism", determinism)
+    if deterministic not in (
+        library.DETERMINISM_DEFAULT,
+        library.DETERMINISM_REPRODUCIBLE,
+    ):
+        raise XTBloomValueError(
+            "determinism must be 'default', 'reproducible', DETERMINISM_DEFAULT, "
+            "or DETERMINISM_REPRODUCIBLE"
+        )
+    library.require_compute_options_v3(mixer, history, damping, deterministic)
+    return mixer, history, damping, deterministic
 
 
 def _check_cuda_process() -> None:
@@ -353,6 +437,7 @@ def _native_forward(
     spin_channels_version: int,
     out_energies: object,
     out_forces: object,
+    model: int,
     backend: int,
     device_id: int,
     cpu_threads: int,
@@ -361,6 +446,10 @@ def _native_forward(
     charge_tolerance: float,
     energy_tolerance: float,
     electronic_temperature: float,
+    scc_mixer: int,
+    scc_mixer_history: int,
+    scc_mixer_damping: float,
+    determinism: int,
 ) -> tuple[object, object, int]:
     """Run the compiled stable-ABI op on Torch's selected execution stream.
 
@@ -387,6 +476,7 @@ def _native_forward(
         spin_channels_version,
         out_energies,
         out_forces,
+        int(model),
         backend,
         device_id,
         cpu_threads,
@@ -395,6 +485,10 @@ def _native_forward(
         float(charge_tolerance),
         float(energy_tolerance),
         float(electronic_temperature),
+        int(scc_mixer),
+        int(scc_mixer_history),
+        float(scc_mixer_damping),
+        int(determinism),
     )
 
 
@@ -472,6 +566,7 @@ def _function() -> _AutogradFunction:
             molecular_charges: object,
             unpaired_electrons: object,
             spin_channels: object,
+            model: int,
             backend: str | int,
             device_id: int | None,
             cpu_threads: int,
@@ -479,6 +574,10 @@ def _function() -> _AutogradFunction:
             charge_tolerance: float,
             energy_tolerance: float,
             electronic_temperature: float,
+            scc_mixer: str | int,
+            scc_mixer_history: int,
+            scc_mixer_damping: float,
+            determinism: str | int,
         ) -> tuple[_Tensor, _Tensor]:
             # The C ABI and the DLPack bridge are deliberately strict about
             # dtype/layout, so validate the couple of autograd-relevant facts
@@ -527,6 +626,9 @@ def _function() -> _AutogradFunction:
             resolved_device, resolved_threads = _resolve_context_scalars(
                 device_id, cpu_threads
             )
+            mixer, history, damping, deterministic = _resolve_scc_policy(
+                scc_mixer, scc_mixer_history, scc_mixer_damping, determinism
+            )
             out_energies, out_forces = _allocate_outputs(
                 torch,
                 positions.device,
@@ -567,6 +669,7 @@ def _function() -> _AutogradFunction:
                 spin_channels_version=int(normalized_spin_channels._version),
                 out_energies=out_energies,
                 out_forces=out_forces,
+                model=model,
                 backend=resolved_backend,
                 device_id=resolved_device,
                 cpu_threads=resolved_threads,
@@ -575,6 +678,10 @@ def _function() -> _AutogradFunction:
                 charge_tolerance=charge_tolerance,
                 energy_tolerance=energy_tolerance,
                 electronic_temperature=electronic_temperature,
+                scc_mixer=mixer,
+                scc_mixer_history=history,
+                scc_mixer_damping=damping,
+                determinism=deterministic,
             )
             energies, forces, submission_id = cast(
                 "tuple[_Tensor, _Tensor, int]", _native_result
@@ -615,7 +722,7 @@ def _function() -> _AutogradFunction:
                     "energy gradient dE/dR = -F is available"
                 )
             if grad_energies is None:
-                return (None,) * 13
+                return (None,) * 18
             _native_wait(ctx._xtbloom_submission_id)
             saved_forces, saved_atom_offsets = ctx.saved_tensors
             # dE/dR = -F, block-diagonal over the ragged batch: atom a of
@@ -647,6 +754,11 @@ def _function() -> _AutogradFunction:
                 None,
                 None,
                 None,
+                None,
+                None,
+                None,
+                None,
+                None,
             )
 
     _XTBloomTorchFunction.__name__ = "XTBloomTorchFunction"
@@ -662,6 +774,7 @@ def _xtbloom_torch_impl(
     unpaired_electrons: object,
     spin_channels: object | None = None,
     *,
+    method: str = "GFN2-xTB",
     backend: str | int = "auto",
     device_id: int | None = None,
     cpu_threads: int = 1,
@@ -669,6 +782,10 @@ def _xtbloom_torch_impl(
     charge_tolerance: float = 1.0e-6,
     energy_tolerance: float = 1.0e-8,
     electronic_temperature: float = 300.0,
+    scc_mixer: str | int = "modified_broyden",
+    scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+    scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
+    determinism: str | int = "default",
 ) -> tuple[object, object]:
     """Execute one packed xtbloom inference (the traceable-unsafe core).
 
@@ -676,6 +793,7 @@ def _xtbloom_torch_impl(
     Dynamo must never trace the compiled-op dispatch below.
     """
     _torch()
+    model = _resolve_method(method)
     return _function().apply(
         positions,
         atomic_numbers,
@@ -683,6 +801,7 @@ def _xtbloom_torch_impl(
         molecular_charges,
         unpaired_electrons,
         spin_channels,
+        model,
         backend,
         device_id,
         int(cpu_threads),
@@ -690,6 +809,10 @@ def _xtbloom_torch_impl(
         float(charge_tolerance),
         float(energy_tolerance),
         float(electronic_temperature),
+        scc_mixer,
+        scc_mixer_history,
+        scc_mixer_damping,
+        determinism,
     )
 
 
@@ -720,6 +843,7 @@ def xtbloom_torch(
     unpaired_electrons: object,
     spin_channels: object | None = None,
     *,
+    method: str = "GFN2-xTB",
     backend: str | int = "auto",
     device_id: int | None = None,
     cpu_threads: int = 1,
@@ -727,8 +851,17 @@ def xtbloom_torch(
     charge_tolerance: float = 1.0e-6,
     energy_tolerance: float = 1.0e-8,
     electronic_temperature: float = 300.0,
+    scc_mixer: str | int = "modified_broyden",
+    scc_mixer_history: int = library.DEFAULT_SCC_MIXER_HISTORY,
+    scc_mixer_damping: float = library.DEFAULT_SCC_MIXER_DAMPING,
+    determinism: str | int = "default",
 ) -> tuple[object, object]:
     """Run xTBloom inference on PyTorch tensors with a ``dR``-only autograd op.
+
+    ``method`` accepts ``"GFN1-xTB"``/``"GFN1"`` and
+    ``"GFN2-xTB"``/``"GFN2"``. GFN2-xTB remains the default for backward
+    compatibility; both models use the same compiled stable-ABI data plane and
+    the same ``dE/dR = -F`` autograd contract.
 
     The inputs mirror the packed ragged-batch descriptors of
     :class:`xtbloom.ArrayBatch`; ``positions`` is the only differentiable
@@ -762,11 +895,22 @@ def xtbloom_torch(
     spin_channels : (nsystems,) int32, optional
         Orbital channels (1 restricted / 2 unrestricted); defaults to all
         restricted ``1``, exactly like :class:`xtbloom.ArrayBatch`.
+    method : str
+        GFN model name: ``"GFN1-xTB"``/``"GFN1"`` or
+        ``"GFN2-xTB"``/``"GFN2"``. Defaults to ``"GFN2-xTB"``.
     backend, device_id, cpu_threads
         Same context selection as :class:`xtbloom.ArrayBatch`.
     max_scc_iterations, charge_tolerance, energy_tolerance, electronic_temperature
         Same SCC options as :class:`xtbloom.ArrayBatch`.  ``electronic_temperature``
         is given in kelvin.
+    scc_mixer, scc_mixer_history, scc_mixer_damping
+        Low-level modified-Broyden policy. The default remains history 8 and
+        damping 0.4; history is limited to 1..64 because CUDA workspace grows
+        with both the history length and its square.
+    determinism
+        ``"default"`` or ``"reproducible"``. Reproducible mode requests stable
+        replay only within the same backend, provider, toolkit, hardware, and
+        process; it is not a cross-platform bitwise guarantee.
 
     Returns
     -------
@@ -782,7 +926,8 @@ def xtbloom_torch(
         autograd, if gradient flows through the ``forces`` output, or if
         higher-order differentiation is requested.
     XTBloomValueError
-        If ``positions`` is not a ``float64`` tensor of shape ``(natoms, 3)``.
+        If ``method`` is unknown or ``positions`` is not a ``float64`` tensor
+        of shape ``(natoms, 3)``.
     """
     global _XTBLOOM_TORCH_IMPL
     torch = _torch()
@@ -795,6 +940,7 @@ def xtbloom_torch(
         molecular_charges,
         unpaired_electrons,
         spin_channels,
+        method=method,
         backend=backend,
         device_id=device_id,
         cpu_threads=cpu_threads,
@@ -802,4 +948,8 @@ def xtbloom_torch(
         charge_tolerance=charge_tolerance,
         energy_tolerance=energy_tolerance,
         electronic_temperature=electronic_temperature,
+        scc_mixer=scc_mixer,
+        scc_mixer_history=scc_mixer_history,
+        scc_mixer_damping=scc_mixer_damping,
+        determinism=determinism,
     )

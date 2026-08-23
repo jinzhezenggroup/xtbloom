@@ -29,6 +29,8 @@ struct MullikenPlanData final {
   std::int64_t quadrupole_population_elements = 0;
   std::int64_t population_scratch_elements = 0;
   std::int64_t hamiltonian_scratch_elements = 0;
+  MullikenKernelTable kernels{&mulliken_population_chunk_baseline,
+                              &mulliken_hamiltonian_chunk_baseline, CpuIsa::kBaseline};
 
   std::vector<std::int64_t> atom_offsets;
   std::vector<std::int64_t> batch_shell_offsets;
@@ -271,146 +273,6 @@ const std::vector<std::int64_t> kEmptyInt64Vector;
 const std::vector<std::int32_t> kEmptyInt32Vector;
 const std::vector<double> kEmptyDoubleVector;
 
-/* One-shot chunked contraction state shared with the SCC driver's optional
- * batch==1 parallel executor. Chunks own disjoint output elements, so every
- * computed value is bit-identical to the serial path regardless of how the
- * executor assigns chunks. failure packs a serial-traversal position in the
- * high bits and the matching failure code in the low bits; peer chunks record
- * the memory-order-independent minimum so the caller reproduces the first
- * serially-encountered data-level failure text exactly as the serial path
- * would. */
-struct MullikenPopulationTask {
-  const MullikenPlanData* data = nullptr;
-  const MullikenIntegralView* integrals = nullptr;
-  const double* density = nullptr;
-  double* qsh_scratch = nullptr;
-  double* dipole_scratch = nullptr;
-  double* quadrupole_scratch = nullptr;
-  std::int64_t orbital_begin = 0;
-  std::int64_t shell_begin = 0;
-  std::int64_t atom_begin = 0;
-  std::int64_t atoms = 0;
-  std::int64_t shells = 0;
-  std::int64_t orbitals = 0;
-  std::int64_t matrix_base = 0;
-  std::int64_t density_base = 0;
-  std::int64_t qsh_base = 0;
-  std::int64_t dipole_base = 0;
-  std::int64_t quadrupole_base = 0;
-  std::int64_t chunk_count = 1;
-  std::int32_t nspin = 1;
-  std::atomic<std::uint64_t> failure{0};
-};
-
-/* Installs `candidate` (serial position, code) as the failure only when it is
- * the earliest in serial traversal seen so far; the CAS loop converges to the
- * global minimum across chunks and threads. */
-void mulliken_population_record_failure(MullikenPopulationTask& task,
-                                        std::uint64_t candidate) noexcept {
-  std::uint64_t current = task.failure.load(std::memory_order_relaxed);
-  while ((current == 0u || candidate < current) &&
-         !task.failure.compare_exchange_weak(current, candidate, std::memory_order_relaxed,
-                                             std::memory_order_relaxed)) {
-  }
-}
-
-void mulliken_population_fail(MullikenPopulationTask& task, int code,
-                              std::uint64_t position) noexcept {
-  mulliken_population_record_failure(task, (position << 16u) | static_cast<std::uint32_t>(code));
-}
-
-void mulliken_population_chunk(void* opaque, std::size_t chunk) noexcept {
-  MullikenPopulationTask& task = *static_cast<MullikenPopulationTask*>(opaque);
-  /* Every chunk must inspect its own range even after a peer reports failure.
-   * Otherwise a later serial range can win merely because it ran first. Each
-   * chunk still returns at its own first failure, which is sufficient for the
-   * global CAS minimum to reproduce serial traversal deterministically. */
-  const std::int64_t per_chunk = (task.atoms + task.chunk_count - 1) / task.chunk_count;
-  const std::int64_t local_atom_begin =
-      std::min<std::int64_t>(static_cast<std::int64_t>(chunk) * per_chunk, task.atoms);
-  const std::int64_t local_atom_end =
-      std::min<std::int64_t>(local_atom_begin + per_chunk, task.atoms);
-  /* Atoms are contiguous orbital ranges (constant orbital_to_atom), so each
-   * chunk's ket interval is the first orbital of its first atom through the
-   * last orbital of its last atom. Shell- and atom-keyed population
-   * accumulators are therefore disjoint across chunks. */
-  const std::int64_t* orbitals_begin = task.data->orbital_to_atom.data() + task.orbital_begin;
-  const std::int64_t* orbitals_end = orbitals_begin + task.orbitals;
-  const std::int64_t local_ket_begin =
-      std::lower_bound(orbitals_begin, orbitals_end, task.atom_begin + local_atom_begin) -
-      orbitals_begin;
-  const std::int64_t local_ket_end =
-      std::lower_bound(orbitals_begin, orbitals_end, task.atom_begin + local_atom_end) -
-      orbitals_begin;
-  const std::int64_t matrix_elements = task.data->matrix_elements;
-  for (std::int32_t spin = 0; spin < task.nspin; ++spin) {
-    const std::int64_t spin_matrix_base = task.density_base + spin * task.orbitals * task.orbitals;
-    for (std::int64_t local_ket = local_ket_begin; local_ket < local_ket_end; ++local_ket) {
-      const std::int64_t ket = task.orbital_begin + local_ket;
-      const std::int64_t local_shell =
-          task.data->orbital_to_shell[static_cast<std::size_t>(ket)] - task.shell_begin;
-      const std::int64_t local_atom =
-          task.data->orbital_to_atom[static_cast<std::size_t>(ket)] - task.atom_begin;
-      double& shell_charge = task.qsh_scratch[static_cast<std::size_t>(
-          task.qsh_base + spin * task.shells + local_shell)];
-      for (std::int64_t local_bra = 0; local_bra < task.orbitals; ++local_bra) {
-        const std::int64_t matrix_index = task.matrix_base + local_bra * task.orbitals + local_ket;
-        const std::int64_t density_index = spin_matrix_base + local_bra * task.orbitals + local_ket;
-        /* Serial traversal index: spin outer, ket middle, bra inner; the per
-         * element site sub-order follows the serial check sequence below. */
-        const std::uint64_t element_position =
-            static_cast<std::uint64_t>(
-                ((spin * task.orbitals + local_ket) * task.orbitals + local_bra)) *
-            11u;
-        const double density_value = task.density[static_cast<std::size_t>(density_index)];
-        const double overlap_value =
-            task.integrals->overlap[static_cast<std::size_t>(matrix_index)];
-        if (!std::isfinite(density_value) || !std::isfinite(overlap_value)) {
-          mulliken_population_fail(task, 1, element_position);
-          return;
-        }
-        if (!add_product(-density_value, overlap_value, shell_charge)) {
-          mulliken_population_fail(task, 4, element_position + 1u);
-          return;
-        }
-        for (std::int64_t component = 0; component < 3; ++component) {
-          double& value = task.dipole_scratch[static_cast<std::size_t>(
-              task.dipole_base + (spin * task.atoms + local_atom) * 3 + component)];
-          const double integral =
-              task.integrals
-                  ->dipole[static_cast<std::size_t>(component * matrix_elements + matrix_index)];
-          if (!std::isfinite(integral)) {
-            mulliken_population_fail(task, 2,
-                                     element_position + 2u + static_cast<std::uint64_t>(component));
-            return;
-          }
-          if (!add_product(-density_value, integral, value)) {
-            mulliken_population_fail(task, 5,
-                                     element_position + 2u + static_cast<std::uint64_t>(component));
-            return;
-          }
-        }
-        for (std::int64_t component = 0; component < 6; ++component) {
-          double& value = task.quadrupole_scratch[static_cast<std::size_t>(
-              task.quadrupole_base + (spin * task.atoms + local_atom) * 6 + component)];
-          const double integral = task.integrals->quadrupole[static_cast<std::size_t>(
-              component * matrix_elements + matrix_index)];
-          if (!std::isfinite(integral)) {
-            mulliken_population_fail(task, 3,
-                                     element_position + 5u + static_cast<std::uint64_t>(component));
-            return;
-          }
-          if (!add_product(-density_value, integral, value)) {
-            mulliken_population_fail(task, 6,
-                                     element_position + 5u + static_cast<std::uint64_t>(component));
-            return;
-          }
-        }
-      }
-    }
-  }
-}
-
 const char* mulliken_population_failure_message(int code) noexcept {
   switch (code) {
     case 1:
@@ -427,193 +289,6 @@ const char* mulliken_population_failure_message(int code) noexcept {
       return "Mulliken target quadrupole contraction exceeded floating-point range";
     default:
       return "Mulliken target population contraction failed";
-  }
-}
-
-/* One-shot chunked Hamiltonian assembly state for the SCC driver's optional
- * batch==1 parallel executor. Rows are split per chunk, and every matrix
- * element pair is written only by the row with the smaller index, so chunks
- * own disjoint output elements and results are bit-identical to serial.
- * failure packs a serial-traversal position and the matching failure code;
- * peer chunks record the memory-order-independent minimum so the caller
- * reproduces the serially-first data-level failure exactly. */
-struct MullikenHamiltonianTask {
-  const MullikenPlanData* data = nullptr;
-  const MullikenIntegralView* integrals = nullptr;
-  const double* vat_scratch = nullptr;
-  const double* vsh_scratch = nullptr;
-  const double* dipole_scratch = nullptr;
-  const double* quadrupole_scratch = nullptr;
-  double* hamiltonian_scratch = nullptr;
-  std::int64_t orbital_begin = 0;
-  std::int64_t shell_begin = 0;
-  std::int64_t atom_begin = 0;
-  std::int64_t orbitals = 0;
-  std::int64_t atoms = 0;
-  std::int64_t shells = 0;
-  std::int64_t matrix_base = 0;
-  std::int64_t hamiltonian_base = 0;
-  std::int64_t vat_base = 0;
-  std::int64_t vsh_base = 0;
-  std::int64_t dipole_base = 0;
-  std::int64_t quadrupole_base = 0;
-  std::int64_t chunk_count = 1;
-  std::int32_t nspin = 1;
-  std::atomic<std::uint64_t> failure{0};
-};
-
-void mulliken_hamiltonian_record_failure(MullikenHamiltonianTask& task,
-                                         std::uint64_t candidate) noexcept {
-  std::uint64_t current = task.failure.load(std::memory_order_relaxed);
-  while ((current == 0u || candidate < current) &&
-         !task.failure.compare_exchange_weak(current, candidate, std::memory_order_relaxed,
-                                             std::memory_order_relaxed)) {
-  }
-}
-
-void mulliken_hamiltonian_fail(MullikenHamiltonianTask& task, int code,
-                               std::uint64_t position) noexcept {
-  mulliken_hamiltonian_record_failure(task, (position << 16u) | static_cast<std::uint32_t>(code));
-}
-
-void mulliken_hamiltonian_chunk(void* opaque, std::size_t chunk) noexcept {
-  MullikenHamiltonianTask& task = *static_cast<MullikenHamiltonianTask*>(opaque);
-  /* As in the population contraction, all chunks must participate after a
-   * peer failure so the CAS minimum observes failures in earlier serial
-   * ranges regardless of scheduling order. */
-  const std::int64_t per_chunk = (task.orbitals + task.chunk_count - 1) / task.chunk_count;
-  const std::int64_t local_row_begin =
-      std::min<std::int64_t>(static_cast<std::int64_t>(chunk) * per_chunk, task.orbitals);
-  const std::int64_t local_row_end =
-      std::min<std::int64_t>(local_row_begin + per_chunk, task.orbitals);
-  const std::int64_t matrix_elements = task.data->matrix_elements;
-  for (std::int32_t spin = 0; spin < task.nspin; ++spin) {
-    const std::int64_t spin_matrix_base =
-        task.hamiltonian_base + spin * task.orbitals * task.orbitals;
-    for (std::int64_t local_row = local_row_begin; local_row < local_row_end; ++local_row) {
-      const std::int64_t row = task.orbital_begin + local_row;
-      const std::int64_t row_shell = task.data->orbital_to_shell[static_cast<std::size_t>(row)];
-      const std::int64_t row_atom = task.data->orbital_to_atom[static_cast<std::size_t>(row)];
-      const std::int64_t local_row_shell = row_shell - task.shell_begin;
-      const std::int64_t local_row_atom = row_atom - task.atom_begin;
-      const double row_vat = task.vat_scratch[static_cast<std::size_t>(
-          task.vat_base + spin * task.atoms + local_row_atom)];
-      const double row_vsh = task.vsh_scratch[static_cast<std::size_t>(
-          task.vsh_base + spin * task.shells + local_row_shell)];
-
-      for (std::int64_t local_column = local_row; local_column < task.orbitals; ++local_column) {
-        const std::int64_t column = task.orbital_begin + local_column;
-        const std::int64_t column_shell =
-            task.data->orbital_to_shell[static_cast<std::size_t>(column)];
-        const std::int64_t column_atom =
-            task.data->orbital_to_atom[static_cast<std::size_t>(column)];
-        const std::int64_t local_column_shell = column_shell - task.shell_begin;
-        const std::int64_t local_column_atom = column_atom - task.atom_begin;
-        const double column_vat = task.vat_scratch[static_cast<std::size_t>(
-            task.vat_base + spin * task.atoms + local_column_atom)];
-        const double column_vsh = task.vsh_scratch[static_cast<std::size_t>(
-            task.vsh_base + spin * task.shells + local_column_shell)];
-
-        const std::int64_t forward_matrix =
-            task.matrix_base + local_row * task.orbitals + local_column;
-        const std::int64_t reverse_matrix =
-            task.matrix_base + local_column * task.orbitals + local_row;
-        const std::int64_t forward_hamiltonian =
-            spin_matrix_base + local_row * task.orbitals + local_column;
-        const std::int64_t reverse_hamiltonian =
-            spin_matrix_base + local_column * task.orbitals + local_row;
-        double shift = 0.0;
-        const double overlap = task.integrals->overlap[static_cast<std::size_t>(forward_matrix)];
-        const double reverse_overlap =
-            task.integrals->overlap[static_cast<std::size_t>(reverse_matrix)];
-        const double half_overlap = -0.5 * overlap;
-        /* Serial traversal index: spin outer, row middle, column inner; the
-         * per element site sub-order follows the serial check sequence below. */
-        const std::uint64_t element_position =
-            static_cast<std::uint64_t>(
-                ((spin * task.orbitals + local_row) * task.orbitals + local_column)) *
-            12u;
-        if (!std::isfinite(overlap) || !std::isfinite(reverse_overlap)) {
-          mulliken_hamiltonian_fail(task, 1, element_position);
-          return;
-        }
-        if (!std::isfinite(half_overlap) || !add_product(half_overlap, row_vat, shift) ||
-            !add_product(half_overlap, row_vsh, shift) ||
-            !add_product(half_overlap, column_vat, shift) ||
-            !add_product(half_overlap, column_vsh, shift)) {
-          mulliken_hamiltonian_fail(task, 4, element_position + 1u);
-          return;
-        }
-
-        for (std::int64_t component = 0; component < 3; ++component) {
-          const double row_potential = task.dipole_scratch[static_cast<std::size_t>(
-              task.dipole_base + (spin * task.atoms + local_row_atom) * 3 + component)];
-          const double column_potential = task.dipole_scratch[static_cast<std::size_t>(
-              task.dipole_base + (spin * task.atoms + local_column_atom) * 3 + component)];
-          const double forward_integral =
-              -0.5 *
-              task.integrals
-                  ->dipole[static_cast<std::size_t>(component * matrix_elements + forward_matrix)];
-          const double reverse_integral =
-              -0.5 *
-              task.integrals
-                  ->dipole[static_cast<std::size_t>(component * matrix_elements + reverse_matrix)];
-          if (!std::isfinite(forward_integral) || !std::isfinite(reverse_integral)) {
-            mulliken_hamiltonian_fail(
-                task, 2, element_position + 2u + static_cast<std::uint64_t>(component));
-            return;
-          }
-          if (!std::isfinite(row_potential) || !std::isfinite(column_potential) ||
-              !add_product(forward_integral, column_potential, shift) ||
-              !add_product(reverse_integral, row_potential, shift)) {
-            mulliken_hamiltonian_fail(
-                task, 5, element_position + 2u + static_cast<std::uint64_t>(component));
-            return;
-          }
-        }
-
-        for (std::int64_t component = 0; component < 6; ++component) {
-          const double row_potential = task.quadrupole_scratch[static_cast<std::size_t>(
-              task.quadrupole_base + (spin * task.atoms + local_row_atom) * 6 + component)];
-          const double column_potential = task.quadrupole_scratch[static_cast<std::size_t>(
-              task.quadrupole_base + (spin * task.atoms + local_column_atom) * 6 + component)];
-          const double forward_integral =
-              -0.5 * task.integrals->quadrupole[static_cast<std::size_t>(
-                         component * matrix_elements + forward_matrix)];
-          const double reverse_integral =
-              -0.5 * task.integrals->quadrupole[static_cast<std::size_t>(
-                         component * matrix_elements + reverse_matrix)];
-          if (!std::isfinite(forward_integral) || !std::isfinite(reverse_integral)) {
-            mulliken_hamiltonian_fail(
-                task, 3, element_position + 5u + static_cast<std::uint64_t>(component));
-            return;
-          }
-          if (!std::isfinite(row_potential) || !std::isfinite(column_potential) ||
-              !add_product(forward_integral, column_potential, shift) ||
-              !add_product(reverse_integral, row_potential, shift)) {
-            mulliken_hamiltonian_fail(
-                task, 6, element_position + 5u + static_cast<std::uint64_t>(component));
-            return;
-          }
-        }
-        const double forward_value =
-            task.hamiltonian_scratch[static_cast<std::size_t>(forward_hamiltonian)] + shift;
-        if (!std::isfinite(forward_value)) {
-          mulliken_hamiltonian_fail(task, 7, element_position + 11u);
-          return;
-        }
-        task.hamiltonian_scratch[static_cast<std::size_t>(forward_hamiltonian)] = forward_value;
-        if (forward_hamiltonian != reverse_hamiltonian) {
-          const double reverse_value =
-              task.hamiltonian_scratch[static_cast<std::size_t>(reverse_hamiltonian)] + shift;
-          if (!std::isfinite(reverse_value)) {
-            mulliken_hamiltonian_fail(task, 7, element_position + 11u);
-            return;
-          }
-          task.hamiltonian_scratch[static_cast<std::size_t>(reverse_hamiltonian)] = reverse_value;
-        }
-      }
-    }
   }
 }
 
@@ -721,6 +396,10 @@ std::size_t MullikenPlan::resident_bytes() const noexcept {
          data_->quadrupole_population_offsets.capacity() * sizeof(std::int64_t);
 }
 
+CpuIsa MullikenPlan::cpu_isa() const noexcept {
+  return data_ == nullptr ? CpuIsa::kBaseline : data_->kernels.isa;
+}
+
 const std::vector<std::int64_t>& MullikenPlan::atom_offsets() const noexcept {
   return data_ == nullptr ? kEmptyInt64Vector : data_->atom_offsets;
 }
@@ -770,6 +449,18 @@ const MullikenPlanData* MullikenPlan::identity() const noexcept { return data_.g
 xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
                                     const WavefunctionLayout& wavefunction, MullikenPlan& plan,
                                     std::string& error) {
+  return make_mulliken_plan(basis, integrals, wavefunction, mulliken_baseline_kernels(), plan,
+                            error);
+}
+
+xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
+                                    const WavefunctionLayout& wavefunction,
+                                    const MullikenKernelTable& kernels, MullikenPlan& plan,
+                                    std::string& error) {
+  if (kernels.population == nullptr || kernels.hamiltonian == nullptr) {
+    error = "Mulliken CPU kernel table is incomplete";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
   if (basis.batch_size <= 0 || basis.total_atoms <= 0 || basis.total_shells <= 0 ||
       basis.total_orbitals <= 0 ||
       !count_fits_storage(basis.batch_size, sizeof(std::int64_t), true) ||
@@ -985,6 +676,7 @@ xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& 
 
   try {
     MullikenPlanData created;
+    created.kernels = kernels;
     created.batch_size = basis.batch_size;
     created.total_atoms = basis.total_atoms;
     created.total_shells = basis.total_shells;
@@ -1179,12 +871,16 @@ xtbloom_status_t evaluate_mulliken_population_system_cpu(
 
   const bool use_parallel = parallel != nullptr && scc_parallel_enabled(*parallel) && atoms >= 2;
   MullikenPopulationTask population_task;
-  population_task.data = &data;
-  population_task.integrals = &integrals;
+  population_task.orbital_to_shell = data.orbital_to_shell.data();
+  population_task.orbital_to_atom = data.orbital_to_atom.data();
+  population_task.overlap = integrals.overlap;
+  population_task.dipole_integrals = integrals.dipole;
+  population_task.quadrupole_integrals = integrals.quadrupole;
   population_task.density = density.density;
   population_task.qsh_scratch = qsh_scratch;
   population_task.dipole_scratch = dipole_scratch;
   population_task.quadrupole_scratch = quadrupole_scratch;
+  population_task.matrix_elements = data.matrix_elements;
   population_task.orbital_begin = orbital_begin;
   population_task.shell_begin = shell_begin;
   population_task.atom_begin = atom_begin;
@@ -1206,10 +902,10 @@ xtbloom_status_t evaluate_mulliken_population_system_cpu(
         std::min<std::int64_t>(atoms, 2 * static_cast<std::int64_t>(parallel->worker_count));
     parallel->dispatch_chunks(parallel->pool_context,
                               static_cast<std::size_t>(population_task.chunk_count),
-                              &mulliken_population_chunk, &population_task);
+                              data.kernels.population, &population_task);
   } else {
     population_task.chunk_count = 1;
-    mulliken_population_chunk(&population_task, 0u);
+    data.kernels.population(&population_task, 0u);
   }
   const std::uint64_t population_failure = population_task.failure.load(std::memory_order_relaxed);
   if (population_failure != 0u) {
@@ -2120,13 +1816,17 @@ xtbloom_status_t add_mulliken_hamiltonian_system_cpu(
 
   const bool use_parallel = parallel != nullptr && scc_parallel_enabled(*parallel) && orbitals >= 2;
   MullikenHamiltonianTask assembly_task;
-  assembly_task.data = &data;
-  assembly_task.integrals = &integrals;
+  assembly_task.orbital_to_shell = data.orbital_to_shell.data();
+  assembly_task.orbital_to_atom = data.orbital_to_atom.data();
+  assembly_task.overlap = integrals.overlap;
+  assembly_task.dipole_integrals = integrals.dipole;
+  assembly_task.quadrupole_integrals = integrals.quadrupole;
   assembly_task.vat_scratch = vat_scratch;
   assembly_task.vsh_scratch = vsh_scratch;
   assembly_task.dipole_scratch = dipole_scratch;
   assembly_task.quadrupole_scratch = quadrupole_scratch;
   assembly_task.hamiltonian_scratch = hamiltonian_scratch;
+  assembly_task.matrix_elements = data.matrix_elements;
   assembly_task.orbital_begin = orbital_begin;
   assembly_task.shell_begin = shell_begin;
   assembly_task.atom_begin = atom_begin;
@@ -2150,10 +1850,10 @@ xtbloom_status_t add_mulliken_hamiltonian_system_cpu(
         std::min<std::int64_t>(orbitals, 2 * static_cast<std::int64_t>(parallel->worker_count));
     parallel->dispatch_chunks(parallel->pool_context,
                               static_cast<std::size_t>(assembly_task.chunk_count),
-                              &mulliken_hamiltonian_chunk, &assembly_task);
+                              data.kernels.hamiltonian, &assembly_task);
   } else {
     assembly_task.chunk_count = 1;
-    mulliken_hamiltonian_chunk(&assembly_task, 0u);
+    data.kernels.hamiltonian(&assembly_task, 0u);
   }
   const std::uint64_t assembly_failure = assembly_task.failure.load(std::memory_order_relaxed);
   if (assembly_failure != 0u) {

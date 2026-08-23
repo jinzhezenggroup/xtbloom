@@ -1,6 +1,6 @@
 # User guide
 
-xTBloom is designed for applications that evaluate GFN2-xTB over many small
+xTBloom is designed for applications that evaluate GFN1/GFN2-xTB over many small
 and medium molecular systems. It provides reusable CPU and CUDA contexts,
 native ragged batches, analytic forces and charges, and peer-local failure
 handling through one stable C ABI.
@@ -105,6 +105,16 @@ Replace `89` with the compute capability required by the deployment. At run
 time, request `XTBLOOM_BACKEND_CUDA` or `backend="cuda"`; `AUTO` may select CPU
 when CUDA is unavailable.
 
+On supported x86-64 builds, one library contains both baseline and AVX2/FMA
+Mulliken kernels. A CPU context detects the host once and freezes the selected
+kernel table, so dispatch does not occur inside numerical loops. The
+experimental diagnostic override `XTBLOOM_CPU_ISA=auto|baseline|avx2` can force
+a path before creating a CPU context; an unavailable forced `avx2` request
+fails cleanly, and CUDA contexts ignore this CPU-only variable. Source builds
+can set `-DXTBLOOM_ENABLE_AVX2_DISPATCH=OFF` to produce a baseline-only library.
+Reproducible mode promises exact replay only while this context-selected ISA
+and the rest of the documented execution environment remain unchanged.
+
 CPU inference requires one dlopen-able monolithic LP64 LAPACKE+CBLAS runtime.
 If auto-discovery cannot find one, set
 `-DXTBLOOM_CPU_LINALG_LIBRARY=/absolute/path/to/provider`. Installed CMake
@@ -185,18 +195,33 @@ exception-oriented control flow.
 - [Browser demo](browser-demo.md)
 - [Skills for AI agents](agent-skills.md)
 - [Python API](python.md)
+- [Array API and DLPack](array-api.md)
+- [Direct Python geometry optimization](optimization.md)
+- [Vibrational analysis](vibrations.md)
+- [ASE molecular dynamics](ase-md.md)
 - [C and C++ API](c-api.md)
 - [QM/MM usage](qmmm.md)
 - [Performance evidence](performance.md)
 
 ## Scope and limitations
 
-Only GFN2-xTB is implemented. GFN1-xTB and ROCm have reserved ABI values but
-return unsupported or not-implemented statuses.
+GFN1-xTB and GFN2-xTB are implemented on CPU and CUDA. The high-level Python
+calculators, Array API/DLPack, PyTorch positions-only autograd, ASE, and dpdata
+expose both models. The single-threaded CPU/WebAssembly browser demo exposes
+both GFN1 and GFN2 and defaults to GFN2. ROCm remains reserved.
 
-xTBloom has no lattice input. Its periodic charge-response API consumes fields
-computed by another electrostatics program; it does not make the QM
-calculation periodic by itself. Native geometry optimization, molecular
-dynamics, solvation, vibrational analysis, and Hessians are not implemented.
-The browser and dpdata optimizers are higher-level adapters built on repeated
-xTBloom single-point calls.
+xTBloom's ABI-v4 batch descriptor reserves validated native 3D cell and
+periodic-axis input, but native periodic GFN1/GFN2 execution and the Python
+periodic adapters are not implemented yet. Valid `XYZ` requests therefore
+return `NOT_IMPLEMENTED` before output publication. The separate periodic
+charge-response API consumes fields computed by another electrostatics
+program; it does not make the QM calculation periodic by itself. Native
+drivers for geometry optimization and molecular dynamics, solvation,
+and native/analytic Hessians are not implemented. Python
+`Calculator.hessian()` and `BatchCalculator.hessian()` provide dense numerical
+QM-coordinate Hessians from batched analytic-force differences. ASE-driven
+molecular dynamics, the Hessian and Python [vibrational
+analysis](vibrations.md), and the browser/dpdata optimizers are higher-level
+adapters built on repeated xTBloom calculations.
+The direct Python `optimize()`/`optimize_batch()` helpers are also higher-level
+adapters built on repeated xTBloom calculations.

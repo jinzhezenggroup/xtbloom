@@ -11,6 +11,7 @@
 
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/integrals.hpp"
+#include "model/gfn2/mulliken_kernels.hpp"
 #include "model/gfn2/parallel_executor.hpp"
 #include "model/gfn2/wavefunction.hpp"
 #include "xtbloom/xtbloom.h"
@@ -51,6 +52,8 @@ class MullikenPlan {
   [[nodiscard]] std::int64_t population_scratch_elements() const noexcept;
   [[nodiscard]] std::int64_t hamiltonian_scratch_elements() const noexcept;
   [[nodiscard]] std::size_t resident_bytes() const noexcept;
+  /* Internal observability for tests and diagnostics; this is not a public ABI. */
+  [[nodiscard]] CpuIsa cpu_isa() const noexcept;
 
   [[nodiscard]] const std::vector<std::int64_t>& atom_offsets() const noexcept;
   [[nodiscard]] const std::vector<std::int64_t>& batch_shell_offsets() const noexcept;
@@ -77,6 +80,10 @@ class MullikenPlan {
   friend xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
                                              const WavefunctionLayout& wavefunction,
                                              MullikenPlan& plan, std::string& error);
+  friend xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
+                                             const WavefunctionLayout& wavefunction,
+                                             const MullikenKernelTable& kernels, MullikenPlan& plan,
+                                             std::string& error);
 };
 
 /*
@@ -168,6 +175,13 @@ struct MullikenWorkspace {
 
 xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
                                     const WavefunctionLayout& wavefunction, MullikenPlan& plan,
+                                    std::string& error);
+
+/* CPU runtime overload that freezes a context-selected leaf table into the
+ * immutable plan. Backend-neutral callers and tests keep the baseline overload. */
+xtbloom_status_t make_mulliken_plan(const BasisPlan& basis, const IntegralPlan& integrals,
+                                    const WavefunctionLayout& wavefunction,
+                                    const MullikenKernelTable& kernels, MullikenPlan& plan,
                                     std::string& error);
 
 /*

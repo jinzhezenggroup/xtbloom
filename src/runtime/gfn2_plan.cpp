@@ -11,7 +11,9 @@
 #include <vector>
 
 #include "runtime/backend.hpp"
+#include "runtime/gfn1_cpu_execution.hpp"
 #include "runtime/gfn2_cpu_execution.hpp"
+#include "runtime/model_registry.hpp"
 #include "runtime/request.hpp"
 #include "runtime/validation.hpp"
 #if defined(XTBLOOM_HAS_CUDA)
@@ -140,10 +142,12 @@ struct FixedTopology {
 };
 
 xtbloom_compute_options_t normalize_plan_policy(const xtbloom_compute_options_t& options) noexcept {
-  /* ABI-v1 callers own only the first 48 bytes. Copy the validated prefix
-   * field-by-field so plan creation never reads the optional v2 suffix. */
+  /* Short callers may own only the ABI-v1 or ABI-v2 prefix. Copy the
+   * validated policy field-by-field and read the ABI-v3 numerical suffix only
+   * when the complete suffix is present. A partial future suffix is ignored
+   * as a unit so no field access can cross the caller's allocation. */
   xtbloom_compute_options_t policy{};
-  policy.struct_size = XTBLOOM_COMPUTE_OPTIONS_V2_SIZE;
+  policy.struct_size = XTBLOOM_COMPUTE_OPTIONS_V3_SIZE;
   policy.api_version = XTBLOOM_API_VERSION;
   policy.model = options.model;
   policy.flags = options.flags;
@@ -154,16 +158,36 @@ xtbloom_compute_options_t normalize_plan_policy(const xtbloom_compute_options_t&
   policy.electronic_temperature = options.electronic_temperature;
   policy.scc_start_mode = XTBLOOM_SCC_START_FRESH;
   policy.reserved_v2 = 0u;
+  policy.scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  policy.scc_mixer_history = 8;
+  policy.scc_mixer_damping = 0.4;
+  policy.determinism = XTBLOOM_DETERMINISM_DEFAULT;
+  policy.reserved_v3 = 0u;
+  if (options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE) {
+    policy.scc_mixer = options.scc_mixer;
+    policy.scc_mixer_history = options.scc_mixer_history;
+    policy.scc_mixer_damping = options.scc_mixer_damping;
+    policy.determinism = options.determinism;
+  }
   return policy;
 }
 
 bool plan_policy_matches(const xtbloom_compute_options_t& policy,
                          const xtbloom_compute_options_t& options) noexcept {
+  const bool has_v3 = options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE;
+  const xtbloom_scc_mixer_t scc_mixer =
+      has_v3 ? options.scc_mixer : XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  const std::int32_t mixer_history = has_v3 ? options.scc_mixer_history : 8;
+  const double mixer_damping = has_v3 ? options.scc_mixer_damping : 0.4;
+  const xtbloom_determinism_t determinism =
+      has_v3 ? options.determinism : XTBLOOM_DETERMINISM_DEFAULT;
   return options.model == policy.model && options.flags == policy.flags &&
          options.max_scc_iterations == policy.max_scc_iterations &&
          options.charge_tolerance == policy.charge_tolerance &&
          options.energy_tolerance == policy.energy_tolerance &&
-         options.electronic_temperature == policy.electronic_temperature;
+         options.electronic_temperature == policy.electronic_temperature &&
+         scc_mixer == policy.scc_mixer && mixer_history == policy.scc_mixer_history &&
+         mixer_damping == policy.scc_mixer_damping && determinism == policy.determinism;
 }
 
 /* CPU plan identity compares host-readable topology bytes on every compute.
@@ -198,10 +222,12 @@ bool topology_host_resident(const xtbloom_batch_t& batch) noexcept {
 
 struct Gfn2Plan::Impl {
   xtbloom_backend_t backend = XTBLOOM_BACKEND_CPU;
+  ModelBackendRoute route = ModelBackendRoute::kUnavailable;
   Context* context = nullptr;
   xtbloom_compute_options_t policy{};
   FixedTopology topology;
   std::shared_ptr<Gfn2CpuExecutionCache> cpu_cache;
+  std::shared_ptr<Gfn1CpuExecutionCache> gfn1_cpu_cache;
 #if defined(XTBLOOM_HAS_CUDA)
   std::shared_ptr<Gfn2CudaExecutionCache> cuda_cache;
 #endif
@@ -225,10 +251,12 @@ void Gfn2Plan::destroy() noexcept {
    * borrowed lifetime binding. Callers must still destroy the plan first. */
   impl_->context = nullptr;
   impl_->cpu_cache.reset();
+  impl_->gfn1_cpu_cache.reset();
 #if defined(XTBLOOM_HAS_CUDA)
   impl_->cuda_cache.reset();
 #endif
   impl_->policy = {};
+  impl_->route = ModelBackendRoute::kUnavailable;
   impl_->topology = {};
   impl_->cpu_persistent_bytes = 0u;
   impl_->cuda_host_workspace_bytes = 0u;
@@ -256,13 +284,22 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
     error = std::move(validation.error);
     return validation.status;
   }
-  if (options.model == XTBLOOM_MODEL_GFN1_XTB) {
-    error = "GFN1-xTB is reserved by the ABI but is not implemented yet";
-    return XTBLOOM_STATUS_NOT_SUPPORTED;
+  ModelBackendRoute model_route = ModelBackendRoute::kUnavailable;
+  const xtbloom_status_t model_status =
+      validate_model_dispatch(options.model, context.backend, error, &model_route);
+  if (model_status != XTBLOOM_STATUS_SUCCESS) {
+    return model_status;
   }
-
+  if (model_route != ModelBackendRoute::kGfn1 && model_route != ModelBackendRoute::kGfn2) {
+    error = "a fixed-topology plan requires a registered model executor route";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
   impl_->backend = context.backend;
+  impl_->route = model_route;
   impl_->context = &context;
+  /* validate_plan_descriptor_structure above owns the complete public policy
+   * validation. Normalization below only replaces an absent/incomplete V3
+   * suffix with historical defaults; it cannot create an invalid policy. */
   impl_->policy = normalize_plan_policy(options);
   impl_->topology.batch_size = batch.batch_size;
   impl_->topology.total_atoms = batch.total_atoms;
@@ -278,17 +315,25 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
     impl_->topology.capture(batch);
-    impl_->cpu_cache = std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads);
     bool reused = false;
-    xtbloom_status_t status =
-        prepare_restricted_gfn2_cpu(*impl_->cpu_cache, batch, impl_->policy, reused, error);
+    xtbloom_status_t status = XTBLOOM_STATUS_INTERNAL_ERROR;
+    if (model_route == ModelBackendRoute::kGfn1) {
+      impl_->gfn1_cpu_cache = std::make_shared<Gfn1CpuExecutionCache>(context.cpu_threads);
+      status = prepare_gfn1_cpu(*impl_->gfn1_cpu_cache, batch, impl_->policy, reused, error);
+    } else {
+      impl_->cpu_cache =
+          std::make_shared<Gfn2CpuExecutionCache>(context.cpu_threads, context.cpu_isa);
+      status = prepare_restricted_gfn2_cpu(*impl_->cpu_cache, batch, impl_->policy, reused, error);
+    }
     if (status != XTBLOOM_STATUS_SUCCESS) {
-      impl_->context = nullptr;
+      destroy();
       return status;
     }
     impl_->cpu_persistent_bytes =
-        persistent_workspace_bytes_restricted_gfn2_cpu(*impl_->cpu_cache) +
-        impl_->topology.retained_host_bytes();
+        impl_->topology.retained_host_bytes() +
+        (model_route == ModelBackendRoute::kGfn1
+             ? persistent_workspace_bytes_gfn1_cpu(*impl_->gfn1_cpu_cache)
+             : persistent_workspace_bytes_restricted_gfn2_cpu(*impl_->cpu_cache));
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
   }
@@ -298,7 +343,11 @@ xtbloom_status_t Gfn2Plan::create(Context& context, const xtbloom_batch_t& batch
   {
     xtbloom_status_t status = impl_->cuda_cache->prepare_topology_only(batch, impl_->policy, error);
     if (status != XTBLOOM_STATUS_SUCCESS) {
-      impl_->context = nullptr;
+      /* A failed CUDA setup may already own handles, topology staging, or a
+       * native-cell D2H arena. Release the incomplete plan immediately so a
+       * caller that retries this C++ object cannot retain poisoned or hidden
+       * workspace from the failed construction. */
+      destroy();
       return status;
     }
     const Gfn2CudaExecutionIdentity identity = impl_->cuda_cache->identity();
@@ -407,11 +456,18 @@ xtbloom_status_t Gfn2Plan::compute(const xtbloom_batch_t& batch,
       error = "the batch topology does not match the fixed plan topology";
       return XTBLOOM_STATUS_INVALID_ARGUMENT;
     }
-    if (impl_->cpu_cache == nullptr) {
-      error = "plan does not own a CPU GFN2 execution cache";
-      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    if (impl_->route == ModelBackendRoute::kGfn1) {
+      if (impl_->gfn1_cpu_cache == nullptr) {
+        error = "plan does not own a CPU GFN1 execution cache";
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+      return execute_gfn1_cpu(*impl_->gfn1_cpu_cache, batch, options, result, error);
     }
-    return execute_restricted_gfn2_cpu(*impl_->cpu_cache, batch, options, result, error);
+    if (impl_->route == ModelBackendRoute::kGfn2 && impl_->cpu_cache != nullptr) {
+      return execute_restricted_gfn2_cpu(*impl_->cpu_cache, batch, options, result, error);
+    }
+    error = "plan does not own the selected CPU model execution cache";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
   }
 #if defined(XTBLOOM_HAS_CUDA)
   if (impl_->cuda_cache == nullptr) {
@@ -460,14 +516,6 @@ xtbloom_status_t Gfn2Plan::enqueue(const xtbloom_batch_t& batch,
     error = "the compute options do not match the fixed plan policy";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
-  if (options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V2_SIZE &&
-      options.scc_start_mode == XTBLOOM_SCC_START_WARM) {
-    /* WARM publication changes a persistent epoch. Keep V1 request semantics
-     * explicit until that epoch transition is stream ordered and reusable. */
-    error = "asynchronous CUDA plan enqueue does not support strict WARM SCC start yet";
-    return XTBLOOM_STATUS_NOT_SUPPORTED;
-  }
-
 #if defined(XTBLOOM_HAS_CUDA)
   if (impl_->cuda_cache == nullptr) {
     error = "plan does not own a CUDA GFN2 execution cache";

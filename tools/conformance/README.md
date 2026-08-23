@@ -1,8 +1,74 @@
-# GFN2-xTB conformance tools
+# GFN-xTB conformance tools
 
-The corpus is deliberately independent of the xTBloom implementation. Four
-closed-shell gas-phase cases use a pinned live tblite calculation as their
-primary oracle; the open-shell OH case and three QM/MM cases use pinned xTB
+## Independent GFN1 foundation corpus
+
+The separate corpus under `data/conformance/gfn1/` records independent
+reference-engine results for the public GFN1 implementation. The shared public
+C API and invariant runners accept this manifest explicitly on CPU and CUDA.
+
+Four closed-shell cases use the pinned tblite 0.7.0 GFN1 implementation.
+The canonical GFN1 parameter export is independently pinned to the tblite
+0.7.0 release commit `fa8a4416...`; the live oracle binaries were built from
+the reviewed descendant `e9abc395...`, which includes later occupation and
+convergence fixes. The manifest records the exact role and hash of each
+artifact so the parameter-source and oracle revisions are not conflated.
+A version-reported xTB 6.7.1 build at pinned revision `edcfbbe39d...` supplies
+the OH open-shell case, the exact GFN1 water-PCEM fixture with H/O hardnesses
+`0.470099`/`0.583349` Hartree, a `gamma=999` diagnostic, and the
+Br/Br/O/C/H/H halogen-bond fixture. The exact revision and binary hashes,
+rather than the later v6.7.1 tag commit, define this oracle. Every live command
+uses `--acc 0.0001`, one thread, cleared `XTB*` variables, and hashed
+executables, shared libraries, GFN1 parameters, source inputs, materialized
+PCEM files, and normalized outputs.
+
+Verify the committed foundation offline:
+
+```sh
+python3 tools/conformance/gfn1_conformance.py check
+```
+
+The offline check recomputes each retained tblite input's Git blob object ID
+directly from its bytes, so a well-formed but unrelated upstream SHA-1 cannot
+assert copied-source identity. QMMM documents are validated for exact units,
+element identities, array shapes, numeric types, and finite values before any
+xTB input is materialized. `compare` likewise verifies the case, method, pinned
+reference engine, source revision, and complete oracle provenance identity
+before applying numerical tolerances.
+
+Regenerate only into a separate build directory, then compare:
+
+```sh
+LD_LIBRARY_PATH=/path/to/oracle/lib \
+python3 tools/conformance/gfn1_conformance.py generate-tblite \
+  --executable /path/to/tblite \
+  --output-dir build/conformance/gfn1-tblite
+
+LD_LIBRARY_PATH=/path/to/oracle/lib \
+python3 tools/conformance/gfn1_conformance.py generate-xtb \
+  --executable /path/to/xtb \
+  --parameter-file /path/to/param_gfn1-xtb.txt \
+  --output-dir build/conformance/gfn1-xtb
+```
+
+Use `compare` with the relevant `--case` selections for each output directory.
+The finalizer is intentionally explicit and should be used only after reviewing
+fresh live results:
+
+```sh
+python3 tools/conformance/gfn1_conformance.py finalize-manifest \
+  --template data/conformance/gfn1/manifest.template.json \
+  --output data/conformance/gfn1/manifest.json
+```
+
+The primary thresholds remain property-specific absolute tolerances. They are
+public CPU/CUDA GFN1 acceptance gates; the committed goldens remain independent
+of xTBloom and are never regenerated from the implementation under test.
+
+## GFN2 production conformance corpus
+
+The corpus is deliberately independent of the xTBloom implementation. Eight
+closed-shell gas, atomic, and field cases use a pinned live tblite calculation
+as their primary oracle; the open-shell OH case and five QM/MM cases use pinned xTB
 6.7.1. Both command lines explicitly set `--acc 0.0001`: the looser CLI
 defaults can leave SCC charge and force residuals larger than xTBloom's primary
 `5e-7` acceptance threshold. Coordinates, energies, gradients, and forces use
@@ -23,7 +89,7 @@ python3 tools/conformance/xtbloom_conformance.py import-tblite-snapshot \
   --source-root /path/to/tblite
 ```
 
-Regenerate the four tblite-primary gas cases with a built executable from the
+Regenerate the tblite-primary cases with a built executable from the
 pinned revision. The generator verifies tblite 0.7.0, records the resolved
 `libtblite` hash, forces a deterministic single-threaded environment, and
 stores the reviewed accuracy in provenance. Output goes to a separate
@@ -77,18 +143,29 @@ and parameter-file hashes. Other environment variables remain inherited; that
 boundary is stated explicitly in each golden rather than implying a fully
 hermetic operating-system environment.
 
-The initial QM/MM set contains a minimal water plus one point charge and the
+The QM/MM set contains a minimal water plus one point charge, finite-hardness
+sites 0.25 bohr from and exactly coincident with the oxygen atom, and the
 official xTB water-tetramer PCEM regression represented as 6 QM atoms plus 6
-point charges.  The latter is stored with both element-derived H/O hardnesses
-and the `gamma=999` point-charge limit.  Regenerate only these cases with:
+point charges. The latter is stored with both element-derived H/O hardnesses
+and the `gamma=999` point-charge limit. The close/coincident cases use oxygen's
+pinned GFN2 hardness (`0.451896` Ha); screening keeps their energy and force
+outputs finite at zero separation. Regenerate these cases with:
 
 ```bash
 python3 tools/conformance/xtbloom_conformance.py generate-xtb \
   --executable /path/to/xtb --output-dir build/conformance/xtb-qmmm \
   --case water_one_pc_gamma999 \
+  --case water_one_pc_close_hardness \
+  --case water_one_pc_coincident_hardness \
   --case water_dimer_6pc_hardness \
   --case water_dimer_6pc_gamma999
 ```
+
+The element-range audit adds neutral Zn, I-, and neutral Rn atom rows. They
+isolate a transition-metal parameter path (Z=30), a heavy-halogen anion
+(Z=53), and the released GFN2 upper boundary (Z=86) without adding an
+unreviewed bonding model. Their primary energies and zero isolated-atom forces
+come from the same pinned live tblite 0.7.0 workflow.
 
 When a generated result and committed golden explicitly identify different
 reference engines, `compare` uses the manifest's separate cross-engine force
@@ -160,33 +237,42 @@ srun --gres=gpu:1 env \
 Actual JSON is written before comparison. The primary manifest tolerances are
 used unchanged. Energy and QM forces are gated when named by each case's
 xTBloom oracle-property set; QM/MM goldens also gate atomic charges and
-point-charge forces. `oh_radical` uses the standard
-shared-orbital (`spin_channels=1`) xTB semantics and gates energy, force, and
-atom-resolved charges on both backends. Spin-polarized (`spin_channels=2`)
-inference and analytic forces are exercised on CPU and CUDA separately until an
-independently generated spin-polarized golden is committed. Molecular dipoles
-are published for requested CPU calculations but are not yet part of the
-golden comparison; atomic dipoles and quadrupoles likewise remain diagnostic
-oracle state rather than public conformance outputs.
+point-charge forces. The GFN2 `oh_radical` case uses standard shared-orbital
+(`spin_channels=1`) xTB semantics and gates energy, force, and atom-resolved
+charges on CPU and CUDA. GFN2 spin-polarized (`spin_channels=2`) inference and
+analytic forces are exercised on CPU and CUDA separately until an independent
+spin-polarized golden is committed. The GFN1 corpus also retains shared-orbital
+OH. The `xtbloom.conformance.gfn1_spin2_public_{cpu,cuda*}` tests reuse the
+independent, hash-bound P10 fixture from `tests/gfn1_cpu_conformance.py` to gate
+singleton and heterogeneous-ragged public two-channel energy and forces on CPU
+and all three CUDA memory modes. Molecular dipoles are
+requested and recorded as `molecular_dipole_e_bohr` on both GFN2 backends, but
+are not yet part of the golden comparison because the committed corpus has no
+independent molecular-dipole oracle. Atomic dipoles and quadrupoles likewise
+remain diagnostic oracle state rather than public conformance outputs.
 
-Case-level `xtbloom_backends` metadata keeps interactions on only the released
-public backends. The `water_efield` pilot is CPU-only until #237 P3 implements
-CUDA interaction execution, so CUDA host/device/mixed batches continue to run
-the eight previously supported cases instead of failing the whole ragged call
-with `NOT_IMPLEMENTED`. Its pinned tblite 0.7.0 energy remains an independent
-oracle. The tblite analytic field gradient uses `+E` per atom instead of the
-energy derivative `+q_i E`; that force array remains in the canonical golden
-as diagnostic provenance but is excluded from xTBloom oracle comparison.
-`xtbloom_invariants.py` central differences of the reported public energy are
-the mandatory force evidence for this case.
+Case-level `xtbloom_backends` metadata can keep future interactions on only
+their released public backends. The `water_efield` pilot is released on CPU and
+CUDA, so its pinned independent tblite 0.7.0 energy gates every
+host/device/mixed CUDA run as well as CPU. Tblite's analytic field result uses a
+`+E`-per-atom force (equivalently a `-E` gradient contribution) instead of the
+energy derivative `+q_i E`; that force array remains in the canonical golden as
+diagnostic provenance but is excluded from xTBloom oracle comparison.
+`xtbloom_invariants.py` central differences of xTBloom's reported public energy
+are the mandatory force evidence for this case on both backends. Molecular
+dipoles have CPU/CUDA parity and translation/rotation covariance evidence, but
+the committed corpus has no independent public molecular-dipole oracle.
 
-`--memory-mode device` places every nonempty input and output descriptor in
-CUDA memory. `mixed` leaves topology offsets, atomic numbers, energies,
-charges, SCC iterations, and per-system status on the host; numerical geometry
-and point-charge inputs plus QM/point-charge forces and `scc_converged` use
-CUDA pointers. The runner dynamically loads libcudart, performs explicit
-host/device copies, frees every allocation on success or failure, and restores
-the entry CUDA device. CPU inference accepts only `--memory-mode host`.
+`--memory-mode device` places every nonempty input and output descriptor,
+including the interaction descriptor image, payload bytes, and dipole outlet,
+in CUDA memory. `mixed` leaves topology offsets, atomic numbers, interaction
+payload bytes, energies, charges, SCC iterations, and per-system status on the
+host; numerical geometry and point-charge inputs, interaction descriptors,
+QM/point-charge forces, dipoles, and `scc_converged` use CUDA pointers. This
+split proves that the two ABI-v3 interaction buffers are staged independently.
+The runner dynamically loads libcudart, performs explicit host/device copies,
+frees every allocation on success or failure, and restores the entry CUDA
+device. CPU inference accepts only `--memory-mode host`.
 
 ## Numerical tolerances and CPU/CUDA agreement
 
@@ -204,12 +290,14 @@ relative scale would grant unphysical slack. Behavior gates:
   `cross_engine_tolerances` block is used only when both compared documents
   explicitly identify distinct independent reference engines; xTBloom results
   always use the primary tolerances.
-- For cases released on both backends, CPU and CUDA must both satisfy the
-  primary energy, forces, and charges thresholds (5e-7 each in atomic units),
-  so a CPU/CUDA pair on identical inputs can deviate by at most twice that
-  value (1e-6) by the triangle inequality. The manifest records this as
-  `cpu_cuda_agreement`. CPU-only cases acquire the same parity gate when their
-  CUDA execution path is released.
+- For cases released on both backends, CPU and CUDA must both satisfy every
+  property named by that case's primary-oracle set, so a CPU/CUDA pair on
+  identical inputs can deviate by at most the sum of the two primary
+  tolerances. The manifest records the common 1e-6 bound as
+  `cpu_cuda_agreement`. The electric-field case is included in this two-backend
+  energy gate for host, device, and mixed CUDA descriptors. Its analytic force
+  is independently gated by public finite differences; molecular dipoles have
+  CPU/CUDA and covariance evidence but no independent committed oracle yet.
 - Within one backend, execution is deterministic for identical descriptors and
   launch configuration: fresh-SCC results are bit-identical across repeated
   calls (the batch-versus-sequential gates below fail at 1e-12), which makes
@@ -228,7 +316,11 @@ geometries, so the gate tolerances measure one backend's numerical
 reproducibility (measured CPU margins are recorded in the tool header) rather
 than cross-engine physics differences. A genuine symmetry break produces errors
 orders of magnitude above the gates (for example a translation break shifts
-every force component by its full value).
+every force component by its full value). The corpus field case is neutral, so
+the invariant runner derives a charged H3+ field probe in memory from the
+committed geometry. It executes that probe through the exported ABI on CPU host
+and CUDA host/device/mixed descriptors to cover the nonzero ``Q E`` and dipole
+origin-shift branches without claiming a new independent golden.
 
 ```bash
 python3 tools/conformance/xtbloom_invariants.py \
@@ -243,17 +335,22 @@ The gates cover:
 - **Batch versus sequential**: one heterogeneous ragged batch of every selected
   case must reproduce each case's sequential single-system solve; identical
   systems duplicated in one homogeneous ragged batch must reproduce the
-  sequential solve.
+  sequential solve, including molecular dipoles.
 - **Translation invariance**: energy, atomic charges, and analytic forces are
   invariant when the whole system (QM atoms and external point charges
-  together) is displaced; tested for two deterministic translations.
+  together) is displaced, except that a charged system in a uniform field has
+  the exact energy shift ``-Q E.delta``. The molecular dipole follows its
+  origin law ``mu' = mu + Q delta``. Corpus cases use two deterministic
+  translations; the derived public H3+ probe checks the charged branch on CPU
+  and every CUDA memory mode.
 - **Rotation covariance**: energy and atomic charges are invariant under a
   proper rotation, while QM and point-charge forces rotate with the structure;
-  uniform electric fields rotate with the structure as Cartesian vectors;
-  tested with a 37-degree axis rotation and an integer-exact 90-degree rotation
-  about z.
-- **Force conservation**: the net force on an isolated system vanishes
-  componentwise (QM plus point-charge forces for QM/MM cases).
+  molecular dipoles and uniform electric fields also rotate with the structure
+  as Cartesian vectors; tested with a 37-degree axis rotation and an
+  integer-exact 90-degree rotation about z.
+- **Force balance**: the componentwise net QM plus point-charge force equals
+  ``Q E`` when a uniform field is present and vanishes otherwise. The derived
+  public H3+ probe checks the nonzero branch on CPU and every CUDA memory mode.
 - **Charge conservation**: the summed atomic charges reproduce the declared
   molecular charge.
 - **Central finite differences**: every selected case on each released

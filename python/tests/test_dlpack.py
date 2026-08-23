@@ -11,16 +11,143 @@ deterministic fakes in :mod:`_dlpack_fakes`.
 from __future__ import annotations
 
 import ctypes
+import gc
+import weakref
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
 import xtbloom._dlpack as dlpack
-from _dlpack_fakes import FakeArray
+import xtbloom.interface as interface
+from _dlpack_fakes import DELETED, FakeArray
 from xtbloom import library
-from xtbloom.exceptions import XTBloomNotSupportedError, XTBloomValueError
+from xtbloom.exceptions import (
+    XTBloomNotSupportedError,
+    XTBloomRuntimeError,
+    XTBloomValueError,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 F64 = np.dtype(np.float64)
 I32 = np.dtype(np.int32)
+
+
+class _FakeCudaFunction:
+    """ctypes-like callable used to exercise device selection without CUDA."""
+
+    def __init__(self, callback: Callable[..., int]) -> None:
+        self.callback = callback
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *args: object) -> int:
+        return self.callback(*args)
+
+
+class _FakeCudaDriver:
+    """Record CUDA driver context-stack changes around DLPack export."""
+
+    def __init__(
+        self,
+        *,
+        init_status: int = 0,
+        device_status: int = 0,
+        retain_status: int = 0,
+        push_status: int = 0,
+        restore_status: int = 0,
+        release_status: int = 0,
+    ) -> None:
+        self.current_device = 1
+        self.init_status = init_status
+        self.device_status = device_status
+        self.retain_status = retain_status
+        self.push_status = push_status
+        self.restore_status = restore_status
+        self.release_status = release_status
+        self.push_calls: list[int] = []
+        self.pop_calls = 0
+        self.release_calls: list[int] = []
+        self._saved_device = self.current_device
+        self.cuInit = _FakeCudaFunction(lambda _flags: self.init_status)
+        self.cuDeviceGet = _FakeCudaFunction(self._device_get)
+        self.cuDevicePrimaryCtxRetain = _FakeCudaFunction(self._retain)
+        self.cuDevicePrimaryCtxRelease = _FakeCudaFunction(self._release)
+        self.cuCtxPushCurrent_v2 = _FakeCudaFunction(self._push)
+        self.cuCtxPopCurrent_v2 = _FakeCudaFunction(self._pop)
+
+    def _device_get(self, pointer: object, ordinal: object) -> int:
+        if self.device_status != 0:
+            return self.device_status
+        ctypes.cast(pointer, ctypes.POINTER(ctypes.c_int))[0] = int(ordinal)
+        return 0
+
+    def _retain(self, pointer: object, device: object) -> int:
+        if self.retain_status != 0:
+            return self.retain_status
+        value = int(device)
+        ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p))[0] = value + 100
+        return 0
+
+    def _release(self, device: object) -> int:
+        self.release_calls.append(int(device))
+        return self.release_status
+
+    def _push(self, context: object) -> int:
+        value = int(ctypes.cast(context, ctypes.c_void_p).value or 0)
+        self.push_calls.append(value)
+        if self.push_status != 0:
+            return self.push_status
+        self._saved_device = self.current_device
+        self.current_device = value - 100
+        return 0
+
+    def _pop(self, pointer: object) -> int:
+        self.pop_calls += 1
+        if self.restore_status != 0:
+            return self.restore_status
+        ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p))[0] = ctypes.c_void_p(
+            self.current_device + 100
+        )
+        self.current_device = self._saved_device
+        return 0
+
+
+class _DeviceCheckingFakeArray(FakeArray):
+    """Require the fake CUDA device to be current during capsule export."""
+
+    def __init__(
+        self,
+        data: np.ndarray,
+        runtime: _FakeCudaDriver,
+        *,
+        export_error: Exception | None = None,
+    ) -> None:
+        super().__init__(
+            data,
+            device=dlpack._DLPACK_DEVICE_CUDA,
+            device_id=0,
+        )
+        self.runtime = runtime
+        self.export_error = export_error
+        self.export_devices: list[int] = []
+
+    def __dlpack__(self, **kwargs: object) -> object:
+        self.export_devices.append(self.runtime.current_device)
+        if self.runtime.current_device != 0:
+            raise BufferError("producer device is not current")
+        if self.export_error is not None:
+            raise self.export_error
+        return super().__dlpack__(**kwargs)
+
+
+class _FakeContext:
+    """Minimal resolved context metadata for device-preflight unit tests."""
+
+    def __init__(self, backend: int, device_id: int) -> None:
+        self.backend = backend
+        self.device_id = device_id
 
 
 def _consume(
@@ -29,6 +156,7 @@ def _consume(
     dtype: np.dtype = F64,
     shape: tuple[int, ...] = (3,),
     stream: int | None = None,
+    expected_cuda_device: int | None = None,
     copy: bool = False,
     writable_required: bool = False,
     writable_hint: bool | None = None,
@@ -38,6 +166,7 @@ def _consume(
         expected_dtype=dtype,
         expected_shape=shape,
         stream=stream,
+        expected_cuda_device=expected_cuda_device,
         copy=copy,
         writable_required=writable_required,
         writable_hint=writable_hint,
@@ -141,14 +270,49 @@ def test_numpy_writable_required_accepts_writable() -> None:
 
 
 def test_fake_deleter_runs_exactly_once_on_release() -> None:
-    """Releasing a committed view invokes the producer deleter once."""
+    """Release invokes the deleter once and drops managed metadata storage."""
     fake = FakeArray(np.arange(3.0))
     view = _consume(fake, shape=(3,))
     assert view.pointer == int(fake._data.ctypes.data)
+    assert fake.active_export_count() == 1
     view.release()
     assert fake.deleted_count() == 1
+    assert fake.active_export_count() == 0
     view.release()  # idempotent
     assert fake.deleted_count() == 1
+
+
+def test_fake_multiple_exports_release_their_own_metadata() -> None:
+    """Concurrent managed tensors retain and release independent metadata."""
+    fake = FakeArray(np.arange(3.0))
+    first = _consume(fake, shape=(3,))
+    second = _consume(fake, shape=(3,))
+    assert fake.active_export_count() == 2
+    second.release()
+    assert fake.active_export_count() == 1
+    first.release()
+    assert fake.active_export_count() == 0
+    assert fake.deleted_count() == 2
+
+
+def test_fake_raw_capsule_outlives_producer_and_cleans_up() -> None:
+    """An unconsumed managed tensor owns its data and metadata without producer."""
+    fake = FakeArray(np.arange(3.0))
+    producer_id = fake._id
+    export_owners = fake._export_owners
+    producer_ref = weakref.ref(fake)
+    capsule = fake.__dlpack__()
+    assert len(export_owners) == 1
+
+    del fake
+    gc.collect()
+    assert producer_ref() is None
+    assert len(export_owners) == 1
+
+    del capsule
+    gc.collect()
+    assert len(export_owners) == 0
+    assert DELETED[producer_id] == 1
 
 
 def test_fake_producer_stays_alive_until_release() -> None:
@@ -170,7 +334,8 @@ def test_fake_legacy_capsule_is_consumed_as_readonly() -> None:
     with pytest.raises(BufferError, match="read-only"):
         _consume(fake, shape=(3,), writable_required=True)
     view.release()
-    assert fake.deleted_count() == 1
+    assert fake.deleted_count() == 2
+    assert fake.active_export_count() == 0
 
 
 def test_fake_legacy_writable_hint_allows_mutable_output() -> None:
@@ -191,7 +356,8 @@ def test_fake_versioned_readonly_flag() -> None:
     fake = FakeArray(np.arange(3.0), readonly=True)
     with pytest.raises(BufferError, match="read-only"):
         _consume(fake, shape=(3,), writable_required=True)
-    assert fake.deleted_count() == 0  # never committed
+    assert fake.deleted_count() == 1
+    assert fake.active_export_count() == 0
 
 
 def test_fake_unsupported_major_version_is_rejected() -> None:
@@ -199,7 +365,8 @@ def test_fake_unsupported_major_version_is_rejected() -> None:
     fake = FakeArray(np.arange(3.0), major_version=2)
     with pytest.raises(BufferError, match="major version"):
         _consume(fake, shape=(3,))
-    assert fake.deleted_count() == 0
+    assert fake.deleted_count() == 1
+    assert fake.active_export_count() == 0
 
 
 def test_fake_copy_false_rejects_copied_flag() -> None:
@@ -234,6 +401,223 @@ def test_fake_cuda_maps_to_cuda_device_memory() -> None:
     assert view.memory_space == library.MEMORY_CUDA_DEVICE
     assert view.device_type == 2
     view.release()
+
+
+def test_cuda_export_uses_producer_device_and_restores_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DLPack export temporarily selects the array device, then restores it."""
+    runtime = _FakeCudaDriver()
+    monkeypatch.setattr(library, "_load_cuda_driver", lambda: runtime)
+    fake = _DeviceCheckingFakeArray(np.arange(3.0), runtime)
+
+    view = _consume(fake, shape=(3,))
+
+    assert fake.export_devices == [0]
+    assert runtime.push_calls == [100]
+    assert runtime.pop_calls == 1
+    assert runtime.release_calls == [0]
+    assert runtime.current_device == 1
+    view.release()
+
+
+def test_cuda_export_restores_caller_after_producer_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A producer exception cannot strand the caller on the array device."""
+    runtime = _FakeCudaDriver()
+    monkeypatch.setattr(library, "_load_cuda_driver", lambda: runtime)
+    fake = _DeviceCheckingFakeArray(
+        np.arange(3.0), runtime, export_error=RuntimeError("boom")
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        _consume(fake, shape=(3,))
+
+    assert fake.export_devices == [0]
+    assert runtime.push_calls == [100]
+    assert runtime.pop_calls == 1
+    assert runtime.release_calls == [0]
+    assert runtime.current_device == 1
+
+
+def test_cuda_export_reports_device_restore_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed caller-device restoration is explicit instead of silent."""
+    runtime = _FakeCudaDriver(restore_status=7)
+    monkeypatch.setattr(library, "_load_cuda_driver", lambda: runtime)
+    fake = _DeviceCheckingFakeArray(np.arange(3.0), runtime)
+
+    with pytest.raises(XTBloomRuntimeError, match=r"restore.*CUDA context"):
+        _consume(fake, shape=(3,))
+
+    assert fake.export_devices == [0]
+    assert runtime.push_calls == [100]
+    assert runtime.pop_calls == 1
+    assert runtime.release_calls == []
+    assert runtime.current_device == 0
+
+
+def test_cuda_export_combines_producer_and_restore_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep both diagnostics when export and caller restoration both fail."""
+    runtime = _FakeCudaDriver(restore_status=7)
+    monkeypatch.setattr(library, "_load_cuda_driver", lambda: runtime)
+    fake = _DeviceCheckingFakeArray(
+        np.arange(3.0), runtime, export_error=RuntimeError("producer boom")
+    )
+
+    with pytest.raises(
+        XTBloomRuntimeError,
+        match=r"DLPack export failed \(producer boom\).*restore.*CUDA context",
+    ) as error:
+        _consume(fake, shape=(3,))
+
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert fake.export_devices == [0]
+    assert runtime.push_calls == [100]
+    assert runtime.pop_calls == 1
+    assert runtime.release_calls == []
+    assert runtime.current_device == 0
+
+
+@pytest.mark.parametrize(
+    ("runtime", "message", "release_calls"),
+    [
+        (_FakeCudaDriver(device_status=2), r"resolve CUDA device", []),
+        (_FakeCudaDriver(retain_status=3), r"retain CUDA device", []),
+        (_FakeCudaDriver(push_status=4), r"make CUDA device", [0]),
+        (
+            _FakeCudaDriver(push_status=4, release_status=5),
+            r"primary-context release status 5",
+            [0],
+        ),
+        (_FakeCudaDriver(release_status=6), r"restore.*CUDA context", [0]),
+    ],
+)
+def test_cuda_export_reports_driver_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime: _FakeCudaDriver,
+    message: str,
+    release_calls: list[int],
+) -> None:
+    """Every driver failure phase produces an explicit xTBloom diagnostic."""
+    monkeypatch.setattr(library, "_load_cuda_driver", lambda: runtime)
+    fake = _DeviceCheckingFakeArray(np.arange(3.0), runtime)
+
+    with pytest.raises(XTBloomRuntimeError, match=message):
+        _consume(fake, shape=(3,))
+
+    assert runtime.release_calls == release_calls
+
+
+@pytest.mark.parametrize("driver", [None, object(), _FakeCudaDriver(init_status=1)])
+def test_cuda_export_falls_back_to_producer_without_usable_driver(
+    monkeypatch: pytest.MonkeyPatch, driver: object | None
+) -> None:
+    """Missing driver support leaves the producer responsible for diagnostics."""
+    monkeypatch.setattr(library, "_load_cuda_driver", lambda: driver)
+    fake = FakeArray(
+        np.arange(3.0),
+        device=dlpack._DLPACK_DEVICE_CUDA,
+        force_error=RuntimeError("producer diagnostic"),
+    )
+
+    with pytest.raises(XTBloomValueError, match="producer diagnostic"):
+        _consume(fake, shape=(3,))
+
+
+@pytest.mark.parametrize("driver", [None, object()])
+def test_cuda_scope_without_usable_driver_is_noop(
+    monkeypatch: pytest.MonkeyPatch, driver: object | None
+) -> None:
+    """A missing driver or symbol table leaves the context scope untouched."""
+    monkeypatch.setattr(library, "_load_cuda_driver", lambda: driver)
+
+    with library._cuda_device_scope(0):
+        pass
+
+
+def test_cuda_driver_loader_caches_and_reports_missing_driver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The driver loader caches success and cleanly reports loader failure."""
+    previous = library._cuda_driver_handle
+    try:
+        library._cuda_driver_handle = None
+        loaded = object()
+        calls: list[str] = []
+
+        def load(name: str) -> object:
+            calls.append(name)
+            return loaded
+
+        monkeypatch.setattr(library.ctypes, "CDLL", load)
+        assert library._load_cuda_driver() is loaded
+        assert library._load_cuda_driver() is loaded
+        assert calls == ["libcuda.so.1"]
+
+        library._cuda_driver_handle = None
+
+        def missing(_name: str) -> object:
+            raise OSError("missing")
+
+        monkeypatch.setattr(library.ctypes, "CDLL", missing)
+        assert library._load_cuda_driver() is None
+    finally:
+        library._cuda_driver_handle = previous
+
+
+@pytest.mark.parametrize(
+    ("device_type", "backend", "device_id", "message"),
+    [
+        (dlpack._DLPACK_DEVICE_ROCM, library.BACKEND_CUDA, 0, "not supported"),
+        (dlpack._DLPACK_DEVICE_CUDA, library.BACKEND_CPU, 0, "CUDA backend"),
+        (dlpack._DLPACK_DEVICE_CUDA, library.BACKEND_CUDA, 1, "device 0.*device 1"),
+    ],
+)
+def test_array_device_preflight_rejects_invalid_requests(
+    device_type: int, backend: int, device_id: int, message: str
+) -> None:
+    """Metadata-only preflight rejects unsupported and foreign devices."""
+    array = FakeArray(np.arange(3.0), device=device_type, device_id=0)
+    context = _FakeContext(backend, device_id)
+
+    with pytest.raises(XTBloomNotSupportedError, match=message):
+        interface._validate_array_devices_before_export([array], context)  # type: ignore[arg-type]
+
+
+def test_array_device_preflight_accepts_host_array() -> None:
+    """Host arrays remain valid for any resolved backend."""
+    array = FakeArray(np.arange(3.0))
+    context = _FakeContext(library.BACKEND_CUDA, 0)
+
+    interface._validate_array_devices_before_export([array], context)  # type: ignore[arg-type]
+
+
+def test_foreign_cuda_device_is_rejected_before_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Never pass a context stream to a producer on a foreign CUDA device."""
+    runtime = _FakeCudaDriver()
+    monkeypatch.setattr(library, "_load_cuda_driver", lambda: runtime)
+    fake = _DeviceCheckingFakeArray(np.arange(3.0), runtime)
+
+    with pytest.raises(XTBloomNotSupportedError, match=r"device 0.*device 1"):
+        _consume(
+            fake,
+            shape=(3,),
+            stream=12345,
+            expected_cuda_device=1,
+        )
+
+    assert fake.export_devices == []
+    assert runtime.push_calls == []
+    assert runtime.pop_calls == 0
+    assert runtime.release_calls == []
+    assert runtime.current_device == 1
 
 
 def test_reported_device_must_match_capsule_device() -> None:
@@ -356,7 +740,8 @@ def test_fake_unaligned_byte_offset_is_rejected() -> None:
     fake = FakeArray(np.arange(8.0), byte_offset=4)
     with pytest.raises(BufferError, match="aligned"):
         _consume(fake, shape=(8,))
-    assert fake.deleted_count() == 0
+    assert fake.deleted_count() == 1
+    assert fake.active_export_count() == 0
 
 
 def test_naturally_aligned_int32_slice_is_accepted() -> None:

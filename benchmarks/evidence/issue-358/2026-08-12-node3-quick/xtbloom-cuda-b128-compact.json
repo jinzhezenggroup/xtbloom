@@ -1,0 +1,2859 @@
+{
+  "metadata": {
+    "schema_version": 2,
+    "runner": {
+      "script": {
+        "path": "${XTBLOOM_SOURCE_ROOT}/benchmarks/hessian.py",
+        "sha256": "ef8fddde47006dd5d80c77e39bf53a664f1b22206390a22a054905f85bad52d7"
+      },
+      "python": "3.11.14 (main, Feb 12 2026, 00:42:50) [Clang 21.1.4 ]",
+      "argv": [
+        "benchmarks/hessian.py",
+        "--engines",
+        "xtbloom-cuda",
+        "--batch-sizes",
+        "128",
+        "--library",
+        "build/issue-358-corrected-cuda/libxtbloom.so",
+        "--reference-json",
+        "/tmp/xtbloom-issue358-fast-2388c9e/xtb-reference.json",
+        "--xtb-source",
+        "${XTB_SOURCE_ROOT}",
+        "--dxtb-source",
+        "${DXTB_SOURCE_ROOT}",
+        "--nthreads",
+        "16",
+        "--displacement-chunk-size",
+        "128",
+        "--warmups",
+        "0",
+        "--repetitions",
+        "1",
+        "--coordinate-timeout-seconds",
+        "300",
+        "--fail-on-correctness",
+        "--output-json",
+        "/tmp/xtbloom-issue358-fast-2388c9e/xtbloom-cuda-b128.json",
+        "--compact-output-json",
+        "/tmp/xtbloom-issue358-fast-2388c9e/xtbloom-cuda-b128-compact.json",
+        "--output-csv",
+        "/tmp/xtbloom-issue358-fast-2388c9e/xtbloom-cuda-b128.csv"
+      ],
+      "xtbloom_library": "${XTBLOOM_SOURCE_ROOT}/build/issue-358-corrected-cuda/libxtbloom.so.0.1.1",
+      "xtbloom_native_identity": {
+        "path": "${XTBLOOM_SOURCE_ROOT}/build/issue-358-corrected-cuda/libxtbloom.so.0.1.1",
+        "sha256": "eebd3cafffc6585dc78e6f35e9852863294937a96fb91f2c26e2161b843d3b84",
+        "readelf_dynamic": "Dynamic section at offset 0xdfdd28 contains 31 entries:\n  Tag        Type                         Name/Value\n 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]\n 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]\n 0x000000000000000e (SONAME)             Library soname: [libxtbloom.so.0]\n 0x000000000000000c (INIT)               0x6000\n 0x000000000000000d (FINI)               0x1c3414\n 0x0000000000000019 (INIT_ARRAY)         0xdfe0c0\n 0x000000000000001b (INIT_ARRAYSZ)       472 (bytes)\n 0x000000000000001a (FINI_ARRAY)         0xdfe298\n 0x000000000000001c (FINI_ARRAYSZ)       8 (bytes)\n 0x000000006ffffef5 (GNU_HASH)           0x298\n 0x0000000000000005 (STRTAB)             0x1128\n 0x0000000000000006 (SYMTAB)             0x390\n 0x000000000000000a (STRSZ)              4159 (bytes)\n 0x000000000000000b (SYMENT)             24 (bytes)\n 0x0000000000000003 (PLTGOT)             0xdff000\n 0x0000000000000002 (PLTRELSZ)           2184 (bytes)\n 0x0000000000000014 (PLTREL)             RELA\n 0x0000000000000017 (JMPREL)             0x4f18\n 0x0000000000000007 (RELA)               0x24b8\n 0x0000000000000008 (RELASZ)             10848 (bytes)\n 0x0000000000000009 (RELAENT)            24 (bytes)\n 0x000000006ffffffc (VERDEF)             0x2290\n 0x000000006ffffffd (VERDEFNUM)          2\n 0x000000006ffffffe (VERNEED)            0x22c8\n 0x000000006fffffff (VERNEEDNUM)         5\n 0x000000006ffffff0 (VERSYM)             0x2168\n 0x000000006ffffff9 (RELACOUNT)          416\n 0x0000000000000000 (NULL)               0x0",
+        "ldd": "linux-vdso.so.1 (0x00007ffc82198000)\n\tlibstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007fe46a600000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fe46a919000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007fe46b896000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fe46a200000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fe46b8c8000)",
+        "unresolved_dependencies": [],
+        "resolved_dependencies": [
+          {
+            "soname": "/lib64/ld-linux-x86-64.so.2",
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "8d06f393f4a93bcf9b81145a259524d66a95522a646bf8d7e05b6ffdf2e63dcc"
+          },
+          {
+            "soname": "libc.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "e01b1ce7be2987f3b8560e26d0df2623f9dd5cec17be923ae28a785bc0d32d50"
+          },
+          {
+            "soname": "libgcc_s.so.1",
+            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "sha256": "fc9d43b2f6c20e53b009238f767c5b949d202389e20de9e202ea684b4ba3729a"
+          },
+          {
+            "soname": "libm.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "df621c68dbfed7e843434ef2faedb9f4d4b0543ad161e9a55eaf4d4ce2443176"
+          },
+          {
+            "soname": "libstdc++.so.6",
+            "path": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.30",
+            "sha256": "ff0825e113603c3866680d5d52216bc6d8eedf3a59f52a0aef67ff01994db128"
+          }
+        ]
+      },
+      "xtbloom_build": {
+        "build_system": "cmake",
+        "build_directory": "${XTBLOOM_SOURCE_ROOT}/build/issue-358-corrected-cuda",
+        "cmake_version": "cmake version 4.2.1\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+        "cache": {
+          "path": "${XTBLOOM_SOURCE_ROOT}/build/issue-358-corrected-cuda/CMakeCache.txt",
+          "sha256": "3adcdc110794a701db914931fad0df704bb10ee5a196c3ee588c93d53458b20f",
+          "is_file": true
+        },
+        "cache_entries": {
+          "BUILD_SHARED_LIBS": "ON",
+          "CMAKE_BUILD_TYPE": "Release",
+          "CMAKE_CXX_COMPILER": "/usr/bin/c++",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+          "CMAKE_EXE_LINKER_FLAGS": "",
+          "CMAKE_SHARED_LINKER_FLAGS": "",
+          "CMAKE_GENERATOR": "Ninja",
+          "CMAKE_HOME_DIRECTORY": "${XTBLOOM_SOURCE_ROOT}",
+          "XTBLOOM_ENABLE_CUDA": "ON",
+          "XTBLOOM_CPU_LINALG_LIBRARY": "/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so"
+        },
+        "source": {
+          "path": "${XTBLOOM_SOURCE_ROOT}",
+          "git": {
+            "path": "${XTBLOOM_SOURCE_ROOT}",
+            "revision": "2388c9e933188aa16f33c4916e6d58e2224f3d45",
+            "dirty": false
+          },
+          "inputs": [
+            {
+              "path": "${XTBLOOM_SOURCE_ROOT}/CMakeLists.txt",
+              "sha256": "1d054b08648eed60db72b795bbeadbb1268f9e936f6bfe60fb7664b87fc0bd9b",
+              "is_file": true
+            },
+            {
+              "path": "${XTBLOOM_SOURCE_ROOT}/cmake/xtbloom.map",
+              "sha256": "49da028e94a998108e2bc39fd47d8ef68c3e6bd7d17c55b0163aa044ae72295e",
+              "is_file": true
+            }
+          ]
+        },
+        "compiler": {
+          "path": "/usr/bin/x86_64-linux-gnu-g++-11",
+          "sha256": "2360901d864cf10bfd6296e261cb2c14053552a80377761ab07146ec9ec9a2c0",
+          "is_file": true,
+          "version": "x86_64-linux-gnu-g++-11 (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0\nCopyright (C) 2021 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+        },
+        "dependency_provider": {
+          "role": "LP64 LAPACKE+CBLAS runtime",
+          "path": "/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib/libscipy_openblas.so",
+          "sha256": "b2dfe24b9aa11cf1d1cec8edbca9423b50cfd186b486d59dd4efe45826261a98",
+          "is_file": true
+        }
+      },
+      "xtb_library": null,
+      "xtb_native_identity": null,
+      "xtb_source": {
+        "head": "b31754bf3c7cccf8c242c469b03ae675e04bd608",
+        "dirty": false
+      },
+      "dxtb_source": {
+        "head": "b529b5ddb75c0554274955082a189f9f88437cb2",
+        "dirty": false
+      },
+      "python_distributions": {
+        "dxtb": {
+          "name": "dxtb",
+          "version": "0.4.0",
+          "record_sha256": "9266e0f98b5f0e41f72a3c240bf843c965efc81932d0dcff1888a00c20288fd3",
+          "direct_url_sha256": "828c3db63c8aa5caba85de20fc237816ff847f1a9706dbe8a10bf07d66701ab8",
+          "direct_url_identity": {
+            "scheme": "file",
+            "local_source_path": "${DXTB_SOURCE_ROOT}",
+            "editable": false
+          },
+          "payload_verification": {
+            "status": "verified",
+            "record_entries": 291,
+            "verified_hashes": 290,
+            "payload_sha256": "8bbc9529410b226364a821e6e165de0273a7f449cad808d60590c8a3bbcafdf5",
+            "errors": []
+          }
+        },
+        "torch": {
+          "name": "torch",
+          "version": "2.13.0",
+          "record_sha256": "4a54d71068559ad34aae5c9d8dfff80823a6b1dcb9ea71facf38810b2e0317a2",
+          "direct_url_sha256": null,
+          "direct_url_identity": null,
+          "payload_verification": {
+            "status": "verified",
+            "record_entries": 12122,
+            "verified_hashes": 12121,
+            "payload_sha256": "bc9ddcbb9f3cd0cadf6b01a70b46b034d3b4a69ca590551a2c323553bfe45ebe",
+            "errors": []
+          }
+        },
+        "tad-libcint": {
+          "name": "tad_libcint",
+          "version": "0.3.0",
+          "record_sha256": "07e231d27b942cd3185a0427f6c5e8bfb9c0235be5d10cad57e9ecdf0a524ab5",
+          "direct_url_sha256": null,
+          "direct_url_identity": null,
+          "payload_verification": {
+            "status": "verified",
+            "record_entries": 43,
+            "verified_hashes": 42,
+            "payload_sha256": "49302444c940082a57aab0749077ab336dea1ffe05163ef9cf002d215fe5a81e",
+            "errors": []
+          }
+        }
+      }
+    },
+    "commit": {
+      "head": "2388c9e933188aa16f33c4916e6d58e2224f3d45",
+      "dirty": false
+    },
+    "evidence_eligibility": {
+      "allow_dirty_evidence": false,
+      "status": "eligible_clean_head"
+    },
+    "hardware": {
+      "hostname": "node3",
+      "cpu_model": "AMD EPYC 7K62 48-Core Processor",
+      "logical_cpu_count": 48,
+      "process_cpu_affinity": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "nvidia_smi": "GPU 0: NVIDIA GeForce RTX 5090 (UUID: GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8)",
+      "nvidia_smi_runtime": "0, GPU-8e9c9e1a-e183-258c-0b3a-03a5ddebb2f8, NVIDIA GeForce RTX 5090, 580.95.05, 32607 MiB, P8, 575.00 W, 225 MHz, 405 MHz",
+      "peak_process_rss_bytes": 1002995712
+    },
+    "threads": {
+      "nthreads": 16,
+      "cpu_threads": 16,
+      "OMP_NUM_THREADS": "16",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1"
+    },
+    "environment": {
+      "CUDA_VISIBLE_DEVICES": "0",
+      "LD_LIBRARY_PATH": "/group/software/cuda-12.9.1/targets/x86_64-linux/lib:${XTBLOOM_SOURCE_ROOT}/build/issue-358-corrected-cuda:/home/jzzeng/miniconda3/lib/python3.13/site-packages/scipy_openblas32/lib",
+      "MKL_INTERFACE_LAYER": null,
+      "MKL_THREADING_LAYER": null
+    },
+    "protocol": {
+      "workload": "distinct neutral-singlet C20H42 conformers generated from make_alkane(62)",
+      "hessian_batch_sizes": [
+        128
+      ],
+      "batch_semantics": "complete independent Hessians",
+      "workload_seed": 358,
+      "perturb_sigma_bohr": 0.02,
+      "fixed_nthreads_for_every_batch_size": 16,
+      "fixed_cpu_threads_for_every_batch_size": 16,
+      "max_serial_hessian_batch_size": 1,
+      "internal_displacement_chunk_size": 128,
+      "internal_displacement_chunk_policy": "same explicit size for every xTBloom Hessian batch",
+      "position_units": "bohr",
+      "hessian_units": "Hartree/bohr^2",
+      "step_bohr": 0.005,
+      "warmups": 0,
+      "repetitions": 1,
+      "timing_boundary": "complete public workload through all host-visible dense Hessians",
+      "scc_max_iterations": 500,
+      "scc_charge_tolerance": 0.0001,
+      "scc_energy_tolerance": 1e-06,
+      "hessian_atol_hartree_per_bohr2": 0.002,
+      "symmetry_atol_hartree_per_bohr2": 0.002,
+      "acoustic_atol_hartree_per_bohr2": 0.002,
+      "repeatability_atol_hartree_per_bohr2": 1e-08,
+      "coordinate_timeout_seconds": 300.0,
+      "reference": {
+        "designation": "independent_baseline",
+        "path": "/tmp/xtbloom-issue358-fast-2388c9e/xtb-reference.json",
+        "sha256": "d7854817a7fe93e14bcda032d5cb5e0b6dd10b175ada3622560ac269771d8cc1",
+        "engine": "xtb",
+        "hessian_batch_sizes": [
+          1
+        ]
+      }
+    },
+    "compact_projection": {
+      "raw_artifact_filename": "xtbloom-cuda-b128.json",
+      "raw_artifact_byte_count": 39153262,
+      "raw_artifact_sha256": "46e8806107a86e6d2ec509a40542c539c1dcfe2bb8b8c893df15c10957860d13",
+      "omitted_hessian_payload_count": 128,
+      "transformations": [
+        "replace each compressed dense Hessian with shape, dtype, byte count, and matrix SHA-256",
+        "sanitize one source-root path to stable token '${XTBLOOM_SOURCE_ROOT}'",
+        "sanitize one source-root path to stable token '${XTB_SOURCE_ROOT}'",
+        "sanitize one source-root path to stable token '${DXTB_SOURCE_ROOT}'"
+      ]
+    }
+  },
+  "workload": {
+    "name": "C20H42",
+    "natoms": 62,
+    "atomic_numbers_sha256": "1170a8db08143fba4eefc41292b79ea5288d5ba96abc714cea428f37f1ae726c",
+    "positions_bohr_sha256": "dfd11c4857e2d02e4250dcfd1534e4136de275289b64d6c4f792ddbfc7ba768d",
+    "batch_generation": {
+      "seed": 358,
+      "perturb_sigma_bohr": 0.02,
+      "slot_zero_is_base_geometry": true,
+      "later_slots_are_distinct_seeded_perturbations": true
+    },
+    "molecular_charge_e": 0.0,
+    "unpaired_electrons": 0
+  },
+  "rows": [
+    {
+      "engine": "xtbloom-cuda",
+      "natoms": 62,
+      "molecule": "C20H42",
+      "coordinate_count": 186,
+      "displacement_count_per_hessian": 372,
+      "hessian_batch_size": 128,
+      "total_displacement_systems": 47616,
+      "public_batch_semantics": "complete independent Hessians",
+      "nthreads": 16,
+      "requested_cpu_threads": 16,
+      "availability": "available",
+      "timing": {
+        "samples_ms": [
+          105840.64977999999
+        ],
+        "sample_count": 1,
+        "median_ms": 105840.64977999999,
+        "mean_ms": 105840.64977999999,
+        "p95_ms": 105840.64977999999,
+        "min_ms": 105840.64977999999,
+        "max_ms": 105840.64977999999,
+        "amortized_ms_per_hessian_at_median": 826.8800764062499,
+        "hessians_per_hour_at_median": 4353.71476798203
+      },
+      "correctness": {
+        "status": "pass",
+        "reasons": [],
+        "diagnostics": {
+          "hessian_count": 128,
+          "all_finite": true,
+          "retained_sample_count": 1,
+          "per_sample_finite": [
+            true
+          ],
+          "nonfinite_samples": [],
+          "max_abs_antisymmetry_hartree_per_bohr2": 4.319423021326152e-05,
+          "max_abs_acoustic_residual_hartree_per_bohr2": 8.319722355487613e-07,
+          "per_hessian": [
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5559097636621617,
+              "frobenius_norm_hartree_per_bohr2": 5.266220313923337,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.438156787309964e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.62685445512534e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.561682066614672e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6541587744739239,
+              "frobenius_norm_hartree_per_bohr2": 5.340777896600346,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.852184941271041e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.409561687486075e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.854480302826872e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6504513640486324,
+              "frobenius_norm_hartree_per_bohr2": 5.339557732875544,
+              "max_abs_antisymmetry_hartree_per_bohr2": 4.3107806730446896e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.8655524054197485e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.444191970074066e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.622618209733526,
+              "frobenius_norm_hartree_per_bohr2": 5.318803629355521,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.766843687085352e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.493522303723353e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.894618151427224e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6057500517775544,
+              "frobenius_norm_hartree_per_bohr2": 5.2283137703281755,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.45005543051402e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.228351168147128e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.498780166814711e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.594705363813127,
+              "frobenius_norm_hartree_per_bohr2": 5.273519217894517,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.2502376199273755e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.714179129867603e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.934554259181326e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6302150281799718,
+              "frobenius_norm_hartree_per_bohr2": 5.377379816914246,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.481517462122774e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.19306819768417e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.852432117871899e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6194418045900387,
+              "frobenius_norm_hartree_per_bohr2": 5.314214887169802,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.406821048633878e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.6343818499726694e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.636583440051581e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6085620861347397,
+              "frobenius_norm_hartree_per_bohr2": 5.311404468544842,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.081727206843965e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.499767308236869e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.767601595265461e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.596541217321374,
+              "frobenius_norm_hartree_per_bohr2": 5.185418678433629,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.4227061941606287e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.347805531741301e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.379039735910808e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6199882961202383,
+              "frobenius_norm_hartree_per_bohr2": 5.268424194647826,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.5113142283927914e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.4728110104585994e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.552145462330628e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6172354283276549,
+              "frobenius_norm_hartree_per_bohr2": 5.341321798236511,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.157618470528423e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.796163466380676e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.724840194178739e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6048956147506468,
+              "frobenius_norm_hartree_per_bohr2": 5.298176960565157,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.204649339449972e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.056266599330229e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 8.02667102561827e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6113593064427275,
+              "frobenius_norm_hartree_per_bohr2": 5.333512546992862,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.26973260098562e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.017514181915317e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.600727022216702e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.604428795833166,
+              "frobenius_norm_hartree_per_bohr2": 5.353785384665991,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.9488833565238792e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.912736883966318e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.656435776492998e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5895382055989861,
+              "frobenius_norm_hartree_per_bohr2": 5.293341209215383,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.8965062246699702e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.445643935786393e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.634402912071181e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6008644417683096,
+              "frobenius_norm_hartree_per_bohr2": 5.250703759894052,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.7031747731619546e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.4603210014315664e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.636248953168945e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6137777033081416,
+              "frobenius_norm_hartree_per_bohr2": 5.310105758691706,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.0050552657145957e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.6879167214797235e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.702382064378455e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5864420738957745,
+              "frobenius_norm_hartree_per_bohr2": 5.273188261399863,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.4526879980141247e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.218048215738236e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.858379695857565e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6083098086660716,
+              "frobenius_norm_hartree_per_bohr2": 5.285485513231306,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.9095503167320125e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.964673199798654e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.532432708678982e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6079000314238641,
+              "frobenius_norm_hartree_per_bohr2": 5.2771798359983135,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.8118996878490066e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.424827254074671e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.985065808013836e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6024976902475517,
+              "frobenius_norm_hartree_per_bohr2": 5.279085459249223,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.058256809052029e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.879430193227563e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.595640933999448e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6117109792684192,
+              "frobenius_norm_hartree_per_bohr2": 5.298349480707643,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.485476331183124e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.779510121011299e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.697305622889061e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5982098043122339,
+              "frobenius_norm_hartree_per_bohr2": 5.318781385845977,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.9173513401769e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.4262150328554526e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.716800461410322e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6043994467494557,
+              "frobenius_norm_hartree_per_bohr2": 5.301913019878267,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.7341979956130302e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.7753467846689546e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.88596413503484e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6323262444543165,
+              "frobenius_norm_hartree_per_bohr2": 5.325765757384509,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.109737395834422e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.706546346573305e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 8.292265252229924e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6085709577023284,
+              "frobenius_norm_hartree_per_bohr2": 5.27951050414596,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.763360494395517e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.278521981149197e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.823431648068535e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6086120686454227,
+              "frobenius_norm_hartree_per_bohr2": 5.287826308844052,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.8153202156877555e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.7954695769902855e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.963174105674042e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6145350276039139,
+              "frobenius_norm_hartree_per_bohr2": 5.295720831552693,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.601531098684774e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.259681579161679e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.803373670567382e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6085121245308949,
+              "frobenius_norm_hartree_per_bohr2": 5.30243076706963,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.209663904346627e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.1486592766991635e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.648975307583683e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6238786343757049,
+              "frobenius_norm_hartree_per_bohr2": 5.239757614380477,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.4186767352940564e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.801714581503802e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 8.017090331602361e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6187064417433835,
+              "frobenius_norm_hartree_per_bohr2": 5.277041825534743,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.6920740844982305e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.3201553445726404e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.713420515642611e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6208865091614494,
+              "frobenius_norm_hartree_per_bohr2": 5.337601278761195,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.2438486511798814e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.122879980807738e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.351764357288459e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6319895143031786,
+              "frobenius_norm_hartree_per_bohr2": 5.222372504016816,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.9902686711880122e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.842548667089886e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.860809789761447e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6459746058171736,
+              "frobenius_norm_hartree_per_bohr2": 5.2787393389792605,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.7984966280980572e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.699018951725975e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.478281065509407e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6165376374035221,
+              "frobenius_norm_hartree_per_bohr2": 5.281522103274121,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.611583460304656e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.960509863456309e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.956580536649938e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6026432912113677,
+              "frobenius_norm_hartree_per_bohr2": 5.265297521190239,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.51196222313399e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.13398221105399e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.925131139674413e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6208360634863728,
+              "frobenius_norm_hartree_per_bohr2": 5.251951095060109,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.6730942846553418e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.00908212078366e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.659542635707339e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5799069161503749,
+              "frobenius_norm_hartree_per_bohr2": 5.239939913668881,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.4970095867882236e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.574118861455645e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.815656792864445e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5888703775251138,
+              "frobenius_norm_hartree_per_bohr2": 5.24290923087804,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.750632619458182e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.511458039426543e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.802587511651637e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6024318943488041,
+              "frobenius_norm_hartree_per_bohr2": 5.264224538140094,
+              "max_abs_antisymmetry_hartree_per_bohr2": 4.319423021326152e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.7933879088191134e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.94555772509753e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5838411745684344,
+              "frobenius_norm_hartree_per_bohr2": 5.289489405903993,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.2470903222003855e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.163336342344337e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 8.190628409676659e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6041252494641816,
+              "frobenius_norm_hartree_per_bohr2": 5.2976602048526145,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.402262076290796e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.368727601899991e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.592432563763296e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5991043562460723,
+              "frobenius_norm_hartree_per_bohr2": 5.3302650518690715,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.654076560444253e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.814099202083867e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.8777103090788e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5830860655898032,
+              "frobenius_norm_hartree_per_bohr2": 5.314350870491147,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.3934328652330805e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.243028233792302e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.773352881379481e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6213866166878712,
+              "frobenius_norm_hartree_per_bohr2": 5.284082932940056,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.7006087338854456e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.1486592766991635e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.488534574662253e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5913927859357029,
+              "frobenius_norm_hartree_per_bohr2": 5.269340875264246,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.6026551786184626e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.076494780098528e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 8.057606297739994e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6101028840278908,
+              "frobenius_norm_hartree_per_bohr2": 5.317658335412571,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.9753826641831793e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.9460435747050724e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.72886629585301e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5872659104358264,
+              "frobenius_norm_hartree_per_bohr2": 5.257699478722823,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.3928024644820356e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.2187421051286265e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.803536327122274e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6361322956091289,
+              "frobenius_norm_hartree_per_bohr2": 5.30283890602096,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.187768923629264e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.6621374255882984e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.25091762188157e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5993702548336428,
+              "frobenius_norm_hartree_per_bohr2": 5.190463076468399,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.5523432260809997e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.478362125581725e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.582571124181703e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6186922479072322,
+              "frobenius_norm_hartree_per_bohr2": 5.2942171114923156,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.0375775342594835e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.140332604014475e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.607189214109411e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6070944511196118,
+              "frobenius_norm_hartree_per_bohr2": 5.305459368322436,
+              "max_abs_antisymmetry_hartree_per_bohr2": 4.293557014678484e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.040412531798211e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.696798705048025e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6166625320960281,
+              "frobenius_norm_hartree_per_bohr2": 5.32594067116925,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.9860225488231862e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.549138843401579e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.61238393209851e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.597694954758877,
+              "frobenius_norm_hartree_per_bohr2": 5.302272065683004,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.6226206578439104e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.707345624410664e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.509515234649378e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6028611133081474,
+              "frobenius_norm_hartree_per_bohr2": 5.2537305807037775,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.6739006701314025e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.019595850086489e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.54303251859767e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6296051412448593,
+              "frobenius_norm_hartree_per_bohr2": 5.30763164620206,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.6210796324477315e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.851674617611934e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.909692686380865e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.614732717361345,
+              "frobenius_norm_hartree_per_bohr2": 5.3650638150376455,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.273716023193373e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.4789506265251475e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 8.047909183517277e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6191426420311354,
+              "frobenius_norm_hartree_per_bohr2": 5.33976904228651,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.5973647954868895e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.262457136723242e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.658471946891954e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6052544800291677,
+              "frobenius_norm_hartree_per_bohr2": 5.295098426006982,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.5217894042760545e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.9307780081164765e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.575640859069921e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6002347098140781,
+              "frobenius_norm_hartree_per_bohr2": 5.309608491368589,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.657049239895848e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.5441762292218755e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.612407896262496e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6349866620837139,
+              "frobenius_norm_hartree_per_bohr2": 5.246576808864107,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.100487139562347e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.478151348687788e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.579362477638796e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6342011125323257,
+              "frobenius_norm_hartree_per_bohr2": 5.336296121549063,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.6447935199745984e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.129230373768223e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.683103850908424e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6086060728909284,
+              "frobenius_norm_hartree_per_bohr2": 5.320169302552425,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.700910487640762e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.188316360398403e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.852754608794754e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5861138092067631,
+              "frobenius_norm_hartree_per_bohr2": 5.257997234491152,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.7485899170009986e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.281086761816823e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.744925816233206e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6093337324413541,
+              "frobenius_norm_hartree_per_bohr2": 5.3101951947449955,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.9165284788690293e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.289413434501512e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.575861673547735e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6075741938041155,
+              "frobenius_norm_hartree_per_bohr2": 5.29319942138597,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.788303881036015e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.8960835385969403e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.307100272080369e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5843887225679861,
+              "frobenius_norm_hartree_per_bohr2": 5.271285146869344,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.188297054412814e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.235500838944972e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.796524335024202e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6487773855498118,
+              "frobenius_norm_hartree_per_bohr2": 5.317341923115327,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.9483946512254278e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.205452818264234e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.89323136629605e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6042736811675284,
+              "frobenius_norm_hartree_per_bohr2": 5.3233782630787285,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.5855674629537972e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.5719318048375044e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.430440138178618e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6108669712087191,
+              "frobenius_norm_hartree_per_bohr2": 5.34806492978895,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.597967585260541e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.687117443642364e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.340286349855063e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5910835946079724,
+              "frobenius_norm_hartree_per_bohr2": 5.233370744064055,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.060260931664338e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.96269692007445e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.561484443030508e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5913367858084051,
+              "frobenius_norm_hartree_per_bohr2": 5.253897148649606,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.0380097340187984e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.5075054799781356e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.677838431696671e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6178561769393549,
+              "frobenius_norm_hartree_per_bohr2": 5.355498400946883,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.7285809996779875e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.426908922245843e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.801352508440829e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5915337394981821,
+              "frobenius_norm_hartree_per_bohr2": 5.307894220540485,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.4482440072221e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.3021142204224816e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.951613258949664e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6141463359157808,
+              "frobenius_norm_hartree_per_bohr2": 5.31575859929798,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.398153355615996e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.98212582300539e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.462465263508022e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6064215413508258,
+              "frobenius_norm_hartree_per_bohr2": 5.269249403524922,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.708014097680845e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.297151606242778e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.675108468219172e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6335010961469166,
+              "frobenius_norm_hartree_per_bohr2": 5.300939834472196,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.6529114830808886e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.905587213168474e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.8059622232729e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5942224460082302,
+              "frobenius_norm_hartree_per_bohr2": 5.256285149059988,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.0390852740147523e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.873879078104437e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.703431859074072e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6186484116693685,
+              "frobenius_norm_hartree_per_bohr2": 5.21422862824583,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.8267822647864982e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.22002449546244e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.788392479834982e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6232102449150704,
+              "frobenius_norm_hartree_per_bohr2": 5.345251012209428,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.4646574296793844e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.721223412218478e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.889503335078984e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5851996576973958,
+              "frobenius_norm_hartree_per_bohr2": 5.273516986382326,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.4882575326734546e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.097899962753672e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 8.135787517016269e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6021705083974265,
+              "frobenius_norm_hartree_per_bohr2": 5.272179212943521,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.5207472467952963e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.2513549064769904e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.50675064331574e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6081294648701263,
+              "frobenius_norm_hartree_per_bohr2": 5.362718459864119,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.4255217373259086e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.0862092315639984e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.836604596217489e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.616511778392179,
+              "frobenius_norm_hartree_per_bohr2": 5.3067103434644025,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.0291741722310306e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.195044477408373e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.727289889070121e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6082933303603424,
+              "frobenius_norm_hartree_per_bohr2": 5.287748829738552,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.789605049292182e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.362377208939506e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.906751413599977e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6076419721042772,
+              "frobenius_norm_hartree_per_bohr2": 5.2777461657494165,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.799339176284832e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.168088179630104e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.789786327094816e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6288415182113325,
+              "frobenius_norm_hartree_per_bohr2": 5.318447408549175,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.7197075099127943e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.2485793489154275e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 8.319722355487613e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5963567790231168,
+              "frobenius_norm_hartree_per_bohr2": 5.258358955713013,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.8422647684656077e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.262457136723242e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.388546787723271e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6001152467460842,
+              "frobenius_norm_hartree_per_bohr2": 5.2714902003439335,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.6083390103570636e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.115352585960409e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.795402706123333e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6123962336591325,
+              "frobenius_norm_hartree_per_bohr2": 5.3229826712355095,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.847289263052666e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.295763827461997e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.75381752499138e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5966363911426475,
+              "frobenius_norm_hartree_per_bohr2": 5.3082175051085,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.6762995626247732e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.669664820435628e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.803339319156777e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6045615364262931,
+              "frobenius_norm_hartree_per_bohr2": 5.243323377045883,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.7904217704932677e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.886957588074893e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.742253458342674e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.616160245062022,
+              "frobenius_norm_hartree_per_bohr2": 5.263356791560623,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.9885907297577674e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.122291479864316e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.501456751324298e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5955396576803211,
+              "frobenius_norm_hartree_per_bohr2": 5.342537941162444,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.069324499760384e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.666300761930643e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.582370296771446e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.625997268000721,
+              "frobenius_norm_hartree_per_bohr2": 5.317836318384607,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.854556192850467e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.8933079810353775e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.568078327635508e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6078588193341212,
+              "frobenius_norm_hartree_per_bohr2": 5.348559450715497,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.89666651540621e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.10702591327572e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.83259917258583e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5934862275571247,
+              "frobenius_norm_hartree_per_bohr2": 5.281930527352186,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.8158266615285754e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.4942161931137434e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.919843725279208e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6002233831102995,
+              "frobenius_norm_hartree_per_bohr2": 5.307268365407036,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.821769729950297e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.696243394164412e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.527703220766568e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6125648686419645,
+              "frobenius_norm_hartree_per_bohr2": 5.294159654216846,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.569549682812644e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.339373470609644e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.532386619990561e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6106810813151138,
+              "frobenius_norm_hartree_per_bohr2": 5.300918458158558,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.4902998528197884e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.738465258531278e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.689160499424474e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6011463017024773,
+              "frobenius_norm_hartree_per_bohr2": 5.224422858301661,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.132406673778121e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.042388811522414e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.439229543493298e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6208118208735927,
+              "frobenius_norm_hartree_per_bohr2": 5.31592640931912,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.3644284454456266e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.6690763194922056e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.83121653691321e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6020060907529512,
+              "frobenius_norm_hartree_per_bohr2": 5.2883205664511035,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.53356508299607e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.2235993308613615e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.669889243722139e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6042485374772038,
+              "frobenius_norm_hartree_per_bohr2": 5.3498948274775815,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.142995268273774e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.242228955954943e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.592449760007725e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6146451611044906,
+              "frobenius_norm_hartree_per_bohr2": 5.3499456888311006,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.0334823306832348e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.5719318048375044e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.629095506445083e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5944981552292696,
+              "frobenius_norm_hartree_per_bohr2": 5.224373934415817,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.17355410415221e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.229150445984487e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.49995977322726e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6175819885182929,
+              "frobenius_norm_hartree_per_bohr2": 5.367196724586006,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.517905456762449e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.826694599557868e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.623070960027789e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6530016055240884,
+              "frobenius_norm_hartree_per_bohr2": 5.310977007144496,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.4914931623376546e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.238276396506535e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.589702526455966e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5835325252457185,
+              "frobenius_norm_hartree_per_bohr2": 5.21090828658438,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.6444754347654253e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.542788450441094e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.640628304494967e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.643592863128595,
+              "frobenius_norm_hartree_per_bohr2": 5.340698333777964,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.8002479248723233e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.746897319662935e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.713238217021967e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5978116637232906,
+              "frobenius_norm_hartree_per_bohr2": 5.281617591658458,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.3622693144098594e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.062616992290714e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.992449621019304e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6183544750915382,
+              "frobenius_norm_hartree_per_bohr2": 5.323361435419372,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.9659192375852683e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.0931481254679056e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.680968063805693e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6049099967236286,
+              "frobenius_norm_hartree_per_bohr2": 5.344998052544625,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.535023977712214e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.868117186087375e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.798097118594249e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6144863788959456,
+              "frobenius_norm_hartree_per_bohr2": 5.274682472857841,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.5828074360800812e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.181965967437918e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.777931583241582e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5990205015963899,
+              "frobenius_norm_hartree_per_bohr2": 5.301937054816085,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.8439455198435724e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.585809592645319e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.720662879018292e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6176000024669334,
+              "frobenius_norm_hartree_per_bohr2": 5.274846864769082,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.05061423138131e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.623279619726418e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 8.071895650774152e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5888841357435235,
+              "frobenius_norm_hartree_per_bohr2": 5.2361460437653005,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.7865474654165112e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 6.170064459354307e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.604453273191147e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5979659444392944,
+              "frobenius_norm_hartree_per_bohr2": 5.2821560320086975,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.108730674150628e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.879430193227563e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.450120644847402e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.597496898750087,
+              "frobenius_norm_hartree_per_bohr2": 5.223767735753489,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.982375128190995e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 7.427392034742297e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.24050311484703e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6161811669606798,
+              "frobenius_norm_hartree_per_bohr2": 5.298395481287989,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.9217550146398708e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.91481855213749e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.856388068994136e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6145547820912075,
+              "frobenius_norm_hartree_per_bohr2": 5.255071695440323,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.389603257319962e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.785061236134425e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.410200570934222e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6066878728585577,
+              "frobenius_norm_hartree_per_bohr2": 5.295515998230008,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.7195320422123146e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.034861416675085e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.813967581316028e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6210360215053605,
+              "frobenius_norm_hartree_per_bohr2": 5.299969393663593,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.5784938497318564e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.820344206597383e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.927842105570626e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.6132067233697747,
+              "frobenius_norm_hartree_per_bohr2": 5.2675112387405285,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.405004548955425e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.7434278727109813e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.755246468343913e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.5855243047878949,
+              "frobenius_norm_hartree_per_bohr2": 5.25603205453343,
+              "max_abs_antisymmetry_hartree_per_bohr2": 2.70329473940345e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.3048897779840445e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.911943067373528e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.607066443208891,
+              "frobenius_norm_hartree_per_bohr2": 5.24818238088337,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.1274207378917396e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 5.2208237732997986e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.549215587307478e-07
+            },
+            {
+              "finite": true,
+              "max_abs_element_hartree_per_bohr2": 0.62070251464727,
+              "frobenius_norm_hartree_per_bohr2": 5.2784986918810395,
+              "max_abs_antisymmetry_hartree_per_bohr2": 3.1675161241029315e-05,
+              "max_abs_acoustic_row_residual_hartree_per_bohr2": 4.835021272242557e-14,
+              "max_abs_acoustic_column_residual_hartree_per_bohr2": 7.302017281940465e-07
+            }
+          ]
+        },
+        "max_abs_repeatability_delta_hartree_per_bohr2": 0.0,
+        "per_hessian_repeatability_delta_hartree_per_bohr2": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "cross_engine": {
+          "reference_scope": "slot_zero",
+          "compared_hessian_indices": [
+            0
+          ],
+          "max_abs_delta_hartree_per_bohr2": 4.21831356386404e-05,
+          "max_rms_delta_hartree_per_bohr2": 2.976118137906317e-06,
+          "per_hessian": [
+            {
+              "max_abs_delta_hartree_per_bohr2": 4.21831356386404e-05,
+              "rms_delta_hartree_per_bohr2": 2.976118137906317e-06
+            }
+          ],
+          "status": "pass"
+        }
+      },
+      "engine_metadata": {
+        "raw_symmetrize": false,
+        "public_hessian_batch_size": 128,
+        "public_auto_batch_size_atom_limit": 7936,
+        "internal_displacement_chunk_size": 128,
+        "internal_displacement_chunk_policy": "same explicit chunk size for every complete-Hessian batch",
+        "nthreads": 16,
+        "fresh_temporary_context_per_hessian_batch": true
+      },
+      "isolated_command": [
+        "/tmp/xtbloom-issue358-py311/bin/python",
+        "${XTBLOOM_SOURCE_ROOT}/benchmarks/hessian.py",
+        "--engines",
+        "xtbloom-cuda",
+        "--batch-sizes",
+        "128",
+        "--device-id",
+        "0",
+        "--nthreads",
+        "16",
+        "--displacement-chunk-size",
+        "128",
+        "--max-serial-hessian-batch-size",
+        "1",
+        "--warmups",
+        "0",
+        "--repetitions",
+        "1",
+        "--step",
+        "0.005",
+        "--scc-max-iterations",
+        "500",
+        "--scc-charge-tolerance",
+        "0.0001",
+        "--scc-energy-tolerance",
+        "1e-06",
+        "--hessian-atol",
+        "0.002",
+        "--symmetry-atol",
+        "0.002",
+        "--acoustic-atol",
+        "0.002",
+        "--repeatability-atol",
+        "1e-08",
+        "--coordinate-timeout-seconds",
+        "300.0",
+        "--output-json",
+        "/tmp/xtbloom-hessian-coordinate-pvpog9nd/coordinate.json",
+        "--output-csv",
+        "/tmp/xtbloom-hessian-coordinate-pvpog9nd/coordinate.csv",
+        "--coordinate-child",
+        "--library",
+        "${XTBLOOM_SOURCE_ROOT}/build/issue-358-corrected-cuda/libxtbloom.so.0.1.1",
+        "--xtb-source",
+        "${XTB_SOURCE_ROOT}",
+        "--dxtb-source",
+        "${DXTB_SOURCE_ROOT}",
+        "--reference-json",
+        "/tmp/xtbloom-issue358-fast-2388c9e/xtb-reference.json"
+      ],
+      "final_hessian_identities": [
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "eca6d4c0a3fb9042b8fe49247755dd42e57760b6863037529a2b2d190055528f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "47267f278033ef1ab15b7fba1abccd5077d89e2d14f67fe4c7727fceaf79237f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "bbbc30023b82685cbf281d1dd42e0cc4c8460988a082b617e533452fbaa0ca07",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "197606cfdea36f65024f2ddedce5587e151e0f8c39044111f5c91ed766b7c70f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "d637c79d422f06ae7412db11d62ec00bc723c789a0c1c76c33d656cb278bcc8d",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "e25ca19d21e7397da7644cf5bd28710d519a9ee6426caa47618f45f5115c1132",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "2200beebe35c6a95e463673584f3bd47d5d7a6badee25403d8b5aa8f9516e4f5",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "d9c1129dc94090fd9ed8f540b1af079220dbd762c5f59071d6b3f86da9c9371f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "93ab66bf66afb6f151840840023a684cc6759428d34f7ceee9708c5c19852467",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "68868aeaef28c0b15f11ff4a37c4b6b94c33c1559e4258713b6621dd8b5d3997",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "ebeb0be9d4b2bc9cecba25875984ea8657f52535de4af717a772de4279b75523",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "a43b2e72f366b5d12abf3b58a92072bc41605e93714bf5444eb8a0be06e4b018",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "5876c422e04b19d34af502ce04bbec95f04126d2ff63e7457ca0b88c940215e5",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "a3014b7604a367ce665de01081a0de6d3587b7fb8b9b6a72ada3a062957c3e0d",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "28ad291193cbcff6959a4c4d5a17a83f5c590dba635fb0eae96df865e3988394",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "c60fc704cc70f4ed0b82da45ad9d199b92d0f9f8fa21d0d609ce085d45a5de8e",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "60668f94a07f5c1f9039bc68f7928f4658e6d99fdea5280173f922290ad1c1e8",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "06e4755bdb7983b6d226a808b88f030ba3537431f5ba813b49f5642973b55245",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "33b9d005a0319399dc39067fe5d3d22dbd8ad9f09025b1b3afba1b81d2062fbb",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "a844aee5a54995cd15453e1b1d8988c03332305ef6dd48229e270af14aa6f548",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "2eaf997b4b096f7c3f1c782a3da0aada4deddda99f3a82667005a339ab972687",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "5f8e946d55e688c8d008f358f354c9d214d9e95b01cd4da3acf947c556f2cde2",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "5ef2b8407cacd33b87c8137a415f12ffa9e949091e57c638275a9c3a01538aea",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "7754d51f1b0e7645801221121767a79ba3096d2f51a050f0c5050addc8c63270",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "5c020c39f3b3af1edfa40e0ac1fd47a900525fa13cdb74a7cae4f48f49f89577",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "13b94ab2584358b3f0c6163bb08e6c92b42a89f8b5c020192c5df06f0b603b96",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "9c9970526c307a9754d60744fc0cb624db5d06069dd0377312c0aa5b6f23ef04",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "5af17f45a441d79acbd29dc13ca000e82e247a174057105ab2fa15f896412dc8",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "cdfc87cf6b15e9f5603a765b6c84dae968e96995f5f8f88f4a698157c7d84432",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "540d16a290742e92ae84709b740fbadf46bd3bdde092f5a0d5dfd299990d1496",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "6b904282114c4dfe2059c94ac04316a32b76aa7e12963b5d14e13fc944dc1a9c",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "3f1a27b00341659117315f7ca40992be072ae0e11cc42b1922d9b039c7d280d4",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "169b79c9fa8e125d818209658ba11c2dfdcc5b142b3884d8274f7141cf6293bc",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "9edc9a2ce8c55082f1ef7fc36e46d50ac0489f342c44dada462a82115a61ebf4",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "6fbd31598c85727c908afac571765d6eae591e2ec3f105399c5fb92f65069c2a",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "68fc1cd85e5da620366113080a91f373c648f024cb3326e4f56ded0e25e2a91b",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "84d9d06c29768c9332e2d1d28e7664f4c53871e8a541b274a57e41a796055e21",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "48264acff6d41c7e5f280aed24d033b6ede23c97bdd8f90243a2fbcd40b80897",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "c4504cc166d44fb93c826bd10a6e4c58b406f9abf87f9d798b0d2dd6a864d1c9",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "06322eca1b6db4a35e5e1fca8581fc1df2f44e1dcd040d30f1b2d811225fb566",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "2fa63b34739bb827fe232e9b1574ce0f90906ab113012870b94aa23131551ae0",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "8df074c308dce42009498c0a13210f2f5b464163cf22e82eb4b0d4163406fd1a",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "a41a66b893f336b4815b77675f10801df2b1af7454d40e6a4eaa2f64e8a78bc9",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "b80f42af836e0d6156a5f4260d26e681469f5f3c58f8dcf857f3238a40563408",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "24bde6a73ac3ecf5ace1a171c6ee7e8b5aa8aac2177aababea9df07be858da54",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "2dfeba7679182e36f5b5525aa026bd6c489caf289d1b1d9b0a34528c0b0b9e8a",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "17dfe76a52cdb3e8105131e382c8b15d543db5ad4fece75e807a5bfa54759647",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "cedde1503a2279241c822a06ec6284bf9043316d9c3399bb1f2fb7ffd318b89b",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "37c57ec454fb0dcf52ad01e59414c66c63f1d07109ad7ea88fbba730b8b8326f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "ce87625afa81cc628d6def0b2b899a025dad668b0c17bbf2f26a4c035f881e32",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "604470cd292ebdf4cacab3bae98ad4dfec0bc75aa1a984cc35dcc16c4619267d",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "32805df00ade1278935dfc9db8e88ae27845dcec5a57b9a2959470cb95d0c2ce",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "bceccd7c7486816f99f2f9eb0dabe610ae5ac3abe048582af354fc81fec4e3c0",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "f9430e7c837aadf6fd1d80253f86cee1ca21a58aa505e1126eaf3cc5af875b1d",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "e5faf72028cb8135b57dcde1ed8d5b64b9b6774fb8b27954830b1d52d09114cc",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "9ff472998dac3ab175726306ecff163641e9fd5add879ef7c7cbdfc664bf021a",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "c251b422df43cec0dde36023502e83615d277423ad29e6947498374240f5d37e",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "5ffa9b8eaef2dcc5b90907bbb5465e7137e53c38b3376e07551a27dfca4b880c",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "ca0c138e2ed9087efb86e31a434aece4789cb818769cd96882119c2946bfb345",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "7792b44f932e6a3e33c952c7494f017240cc9e30f8d5274bceb98231f1abc71f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "5849a47a560a6d1628bc8c96613b66995a353f6be105a942aef808571fe8dc5f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "8f94d633e3798fb08a69b360f8638de14d098dd715abe6aeb311aef982df0c4c",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "228d7d2d144125fb1fd210261dbcf08c4c133405810be34ef3af130a8042984c",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "2bdcdb81e3ed629bf7573efff406420d207b67430acfcc7f579ac14ccb421148",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "d447382682f868dbd9fbc5d79d0e6692d891c7d18f2eaf8f09d49817fa477929",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "a90b501a51bb6b7c5f4c124bb3a4fe7c7616b9be7661ab9132aad11bb6e8a2fa",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "1b78402d47d6f5feb3bfa277f63b83e436825a8ce5710ac3de272799ddb5ee34",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "c3691b9aa0084a4ecd6fe3dfe0475b58c20bc2a91d4a577ce8466503fe15a470",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "2f312380ea0677961cb59d7092fa5d28d55dff32f55da9f183d108552b5d6cc7",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "ac23a06aa817448439917611340fde4e8045b9d1e4e375866d25bcbc459dbf12",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "6dbeebbfddb178da1d8b9e50a97e4b7633aef3d5ec8bc8fab424ac373ae52972",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "8c0b60d0e81b48a004c8601e754cee689260d01bf7c08583f80c314700905550",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "ad58ae7c2774edb2a311940c0431960546dd7fa1b2ac4dd6c036d886843a9d6a",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "ce331bb0dc11e7638db0b97f703a853e66d9cd7630872bcd803fa05540e937a5",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "b12ccdef033511915d94d7414be8ba7ac87067426ededd2c9580ab8fb066c293",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "33b734645454758bed6b00521c2fa448f112ed0fd961a8ec06874f05f9f73cce",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "2b73b79ad32c1bdfcee819657156d43054558a5b8b15951e091721863063b177",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "e95d279b970d2cb15fd49773e0571ffd933b2b53a09999a05c81ad75a5174a91",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "62148cc1d4a03fb0b719d36ca5056de27e26feb5955eb015a5e70a5ed6c0eb52",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "577204d6e03a0d7aa070af971df73592629cf25f2d7bcecaca43933344548393",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "fbf832f8b76ea1b78ddb83d2ac51cc68bdbc08eb3c5fc42dcf99ca105d38f9ba",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "1ad80c34272487ff99ccaee34c39f913df5b83bb0a09d019d2431247cf40da30",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "f2046c8d5a00bcb204d627739196d8009cf6c6448a6934e7c3292f483bcf708a",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "96db1780a54351f22c3980988f93758dc60a184f0e0ca6b05ae20d73d257476b",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "f95a7516a0024bd0b42ca2b8e00fd0fff8c5dda89e108a7098e3f5dbc47a9dea",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "a885a26a68f6562bcddbded1d87974f61ec2b7e2a1218a6de5cb4d573bdb9611",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "cb31a71516b00606b0eb81d32c989710708980be908fac1f0fd53749c8fb0fd9",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "ba2185af7642a0b5cde349bb580747c9bb7b78206355efec155245f461a665a9",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "8d66f1991ac1ff43178f130771b4f4feaf6ce08029b16dfd6bb6e1eee430fcdd",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "bdf7aa987d4d4fc8981a8d1ae8f5cfe6ed480280c331084c5b28d820d3185308",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "ce3c6a3acc614a32e5656fdda6ba25eb0a960d0aaf85f5c73ac19d6c6faa5e5d",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "d676167df4b44d8cca52ef318829b1513bbc47c5206418d05fc556621977738f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "b38f3ac5f7453bbf34111cbe5dc1ee37dc869d2f2e74def88ce51dcaa7e526f3",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "0c2729ef1dc675cfa0ff82c4315eb3b1f6f2f05530c91e40b3326eb354d7d6f0",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "f8deccc819afa2c0090a1c6283a1aa1da218390a81330513e1016fe5c30145a6",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "22e9a988ae48aa90fc0d59f79709a01b354c88e33b17ecf1dad8e15bdf1f441d",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "de9b03e4929e793538f34c645ed2b1d88f2ed54c4e6fb831e8b580b30633083b",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "c7e2df71385f7c16c1ce76a8a32d0f4aad98a2c00c67fe3f90e7529becc2ce8b",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "38b65f65461c4784b0ddc5ad236ec9711ebe461da6e6f373cacd0f0a5dcecedc",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "55dae6a3765d2bd095f5f9913e14655172e1035a4db2902e262ad0ddd9dcdc8f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "05419f1c04a4e63a7172f0e04ac2e4df37cc0c2a5d15d2ad0d8e974850b4fe55",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "d9feb01befb3f08770c4830bdbca88ec2dfd27863926d36c2a33fde947d9aa1c",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "c0e4d471b618a10e04122a8d0e44b967744422a8075f1a7308d2f54df36dc1a2",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "943ab7baa45ef6bf9fe89ed1ba0d329908fdaf2729b7eac7371e46888e938d22",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "1019b5ce686e1437a83ea5b985ff47bbd623b958bd4a1d6adab7542ed6dda388",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "f5fd30e0d0c61dd20ee5c0b4f6530ffbd4fe29be8ca5dc29438abef7d22e55bc",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "64c4f50d42f8788b4ea4ff6bfc5dba00d3827b3d3212020dc0087d3fa584bcf2",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "3e307766d332301a6670a1b5f4b854b3de92dd32651f34060c9315ce9183e01f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "76ffa6eb48c8ab6497134b179b9326dbe61fce0e044b961af69349b18b913367",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "8811f148054edacb28e5283ac2baa08238de316d9fed4ac118034295aa6a6e2b",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "c2e5c27e479fabc2d1f25bdae6a654a56f1df514c8c9ffc3c31ce63ca26790d5",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "2823a8cacdd34645984b733a79cb6d282a4eba757495659d23d3511b62351605",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "2e7e7d797ab8c8203221327a19269d79f2e29b4cc42045b749409305dc2e49ac",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "d151852de245bc3bb2b7c4b5659c3eddbface423fd536dc36e7ddd7aaf27fce7",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "30cbe3dfbab02dfabb2c982c219e37ccd795a9f9568329d02ab3a75ffc487cd1",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "0b02dcfa814ab09c3148c4c646b822333fc1f97319f38b00c022a229f6d23635",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "be945597088a32b05662b1e36e7cab27f45d5da05dd5b2c2f32dec7382e445f8",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "d19c81e9b32ad0f91bdac3c6bdff768ab200d1e1532db901700a7c634be01248",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "64f6eca0f5267b0b6fabda5682acc98cfadb359036117c147a73ff56a095d2d0",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "2d5a94405b538c296241e55a06b9437d5aeb481f8592ff5157574e1e73655673",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "21d3c7318fdde983ad3532a2e9570ffa274110f42ceeb43c0011bf316d4f0d43",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "d4bbcaf9b9f54c5ea3a35f6dbe2a9a2f470dbc645d03aaf6156027865baf5f3d",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "c06375d51e64fedfa5279612c8f4eab188d9ec029e62b7e1ddb801cf49ec66e5",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "295b6c1b12d3649a09e054af9361eaeaaafacc7bc9944caf6dd54ec90f0da05f",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "3be518db1252db33d9d27d1e0a3b132797143d34704bf9f31a163343049dda4c",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "37af1f6f56c0822e3a38537468d478fe01d782a1f60ebb7ab7d46ff585cec474",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "c9486e09f5f401968ed46b9dc659df855ee95a26a5747f8f54d14cbbd489d660",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        },
+        {
+          "shape": [
+            186,
+            186
+          ],
+          "dtype": "float64-le",
+          "byte_count": 276768,
+          "sha256": "9650c600eeba86d851acfe5a8c2bd12d6cc7c82ff60217379c3366b6abf17347",
+          "payload_retention": "omitted_reproducible_dense_matrix"
+        }
+      ]
+    }
+  ]
+}

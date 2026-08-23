@@ -48,6 +48,8 @@ public_api = importlib.import_module("xtbloom_public_api")
 SCHEMA_VERSION = 1
 ANGSTROM_TO_BOHR = 1.8897261254579021
 DEFAULT_NATOMS = (32, 62, 98, 122)
+TOPOLOGIES = ("alkane", "compact-carbon", "open-carbon")
+REPEATED_CALL_SEMANTICS = "same_geometry_repeated_compute"
 CONFORMANCE_MANIFEST = REPOSITORY_ROOT / "data" / "conformance" / "manifest.json"
 THREAD_ENVIRONMENT_NAMES = (
     "OMP_NUM_THREADS",
@@ -58,6 +60,7 @@ THREAD_ENVIRONMENT_NAMES = (
     "MKL_INTERFACE_LAYER",
     "MKL_THREADING_LAYER",
 )
+CPU_DISPATCH_ENVIRONMENT_NAMES = ("XTBLOOM_CPU_ISA",)
 
 
 def _manifest_tolerance_defaults() -> tuple[float, float, float, float, dict[str, Any]]:
@@ -138,6 +141,7 @@ class Molecule:
     name: str
     atomic_numbers: tuple[int, ...]
     positions_bohr: tuple[float, ...]
+    topology: str = "alkane"
 
     @property
     def natoms(self) -> int:
@@ -357,6 +361,7 @@ def _cmake_build_metadata(library: Path, cache: Path) -> dict[str, Any]:
     compiler_path = Path(compiler_text).resolve() if compiler_text else None
     provider_text = entries.get("XTBLOOM_CPU_LINALG_LIBRARY")
     provider_path = Path(provider_text).resolve() if provider_text else None
+    compile_commands = library.parent / "compile_commands.json"
     source_inputs = []
     for relative in ("CMakeLists.txt", "cmake/xtbloom.map"):
         candidate = source_path / relative
@@ -367,6 +372,7 @@ def _cmake_build_metadata(library: Path, cache: Path) -> dict[str, Any]:
         "build_directory": str(library.parent.resolve()),
         "cmake_version": run_text(("cmake", "--version")),
         "cache": _file_identity(cache),
+        "compile_commands": _file_identity(compile_commands),
         "cache_entries": selected,
         "source": {
             "path": str(source_path),
@@ -582,14 +588,75 @@ def exact_argv(arguments: Sequence[str]) -> list[str]:
     return [sys.executable, str(Path(__file__).resolve()), *arguments]
 
 
+def _requested_xtbloom_cpu_isa() -> str:
+    """Return the exact override, defaulting only when it is truly unset."""
+    requested = os.environ.get("XTBLOOM_CPU_ISA")
+    return "auto" if requested is None else requested
+
+
+def _resolved_xtbloom_cpu_isa(
+    library_path: Path,
+    backend: str,
+    cpu_threads: int,
+    device_id: int,
+) -> tuple[str | None, str]:
+    """Resolve the CPU ISA through the same public context-creation path.
+
+    Forced modes are confirmed by creating a context with the requested value.
+    For ``auto``, a short-lived forced-AVX2 context probes the exact loaded
+    library, CPU, and OS-state gate: success means auto selects AVX2/FMA, while
+    ``BACKEND_UNAVAILABLE`` means auto selects the baseline implementation.
+    The process environment is restored before benchmark contexts are created.
+    """
+    if backend != "cpu":
+        return None, "cpu_only_not_applicable"
+    requested = _requested_xtbloom_cpu_isa()
+    if requested not in ("auto", "baseline", "avx2"):
+        raise BenchmarkError(
+            "XTBLOOM_CPU_ISA must be exactly one of auto, baseline, or avx2"
+        )
+    library = public_api._configure_library(library_path)
+
+    def create_and_destroy_context() -> None:
+        context = public_api._make_context(library, backend, device_id, cpu_threads)
+        library.xtbloom_context_destroy(context)
+
+    if requested != "auto":
+        create_and_destroy_context()
+        return requested, "requested_context_creation"
+
+    previous = os.environ.get("XTBLOOM_CPU_ISA")
+    os.environ["XTBLOOM_CPU_ISA"] = "avx2"
+    try:
+        try:
+            create_and_destroy_context()
+        except public_api.BackendUnavailable:
+            return "baseline", "forced_avx2_context_probe"
+    finally:
+        if previous is None:
+            os.environ.pop("XTBLOOM_CPU_ISA", None)
+        else:
+            os.environ["XTBLOOM_CPU_ISA"] = previous
+    return "avx2", "forced_avx2_context_probe"
+
+
 def collect_run_identity(
     engine: str,
     library: Path,
     arguments: Sequence[str],
     reference_artifact: ReferenceArtifact | None,
+    backend: str,
+    cpu_threads: int,
+    device_id: int,
 ) -> dict[str, Any]:
     """Collect the immutable evidence repeated at top-level and per row."""
     resolved_library = library.resolve()
+    requested_cpu_isa = _requested_xtbloom_cpu_isa()
+    resolved_cpu_isa, resolution_method = (
+        _resolved_xtbloom_cpu_isa(resolved_library, backend, cpu_threads, device_id)
+        if engine == "xtbloom"
+        else (None, "non_xtbloom_engine")
+    )
     return {
         "argv": exact_argv(arguments),
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -613,6 +680,14 @@ def collect_run_identity(
         },
         "thread_environment": {
             name: os.environ.get(name) for name in THREAD_ENVIRONMENT_NAMES
+        },
+        "cpu_dispatch_environment": {
+            name: os.environ.get(name) for name in CPU_DISPATCH_ENVIRONMENT_NAMES
+        },
+        "cpu_dispatch": {
+            "requested": requested_cpu_isa,
+            "resolved": resolved_cpu_isa,
+            "resolution_method": resolution_method,
         },
         "fresh_reference_artifact": (
             {
@@ -812,13 +887,103 @@ def make_alkane(natoms: int) -> Molecule:
     positions = tuple(
         coordinate * ANGSTROM_TO_BOHR for _, point in atoms for coordinate in point
     )
-    return Molecule(f"C{carbons}H{2 * carbons + 2}", numbers, positions)
+    return Molecule(f"C{carbons}H{2 * carbons + 2}", numbers, positions, "alkane")
+
+
+def _positive_carbon_count(natoms: int) -> None:
+    """Reject invalid exact-size carbon workload requests before construction."""
+    if type(natoms) is not int or natoms <= 0:
+        raise BenchmarkError("carbon topology atom count must be a positive integer")
+
+
+def make_compact_carbon(natoms: int) -> Molecule:
+    """Build an exact-size carbon cluster whose complete diameter is below 25 bohr.
+
+    Points occupy a deterministic radial prefix of a cubic lattice with
+    2.5-bohr spacing. The supported profiling sweep through 256 atoms therefore
+    remains wholly inside the smallest D4 role cutoff while avoiding coincident
+    coordinates and implausibly short carbon separations.
+    """
+    _positive_carbon_count(natoms)
+    side = 1
+    while (2 * side + 1) ** 3 < natoms:
+        side += 1
+    lattice = [
+        (x, y, z)
+        for z in range(-side, side + 1)
+        for y in range(-side, side + 1)
+        for x in range(-side, side + 1)
+    ]
+    lattice.sort(key=lambda point: (sum(value * value for value in point), point))
+    points = [tuple(2.5 * value for value in point) for point in lattice[:natoms]]
+    center = tuple(
+        math.fsum(point[axis] for point in points) / natoms for axis in range(3)
+    )
+    positions = tuple(
+        point[axis] - center[axis] for point in points for axis in range(3)
+    )
+    return Molecule(
+        f"compact-carbon-{natoms}",
+        (6,) * natoms,
+        positions,
+        "compact-carbon",
+    )
+
+
+def make_open_carbon(natoms: int) -> Molecule:
+    """Build exact-size bonded carbon fragments with bounded cutoff connectivity.
+
+    A chain of C2 fragments (plus one C3 fragment for odd sizes) keeps every
+    nontrivial atom in a short carbon bond while fragment centers remain 12
+    bohr apart.  This avoids the nonphysical restricted-SCC workload created by
+    a chain of isolated neutral carbon atoms, while retaining only O(N)
+    neighbors inside the 25/30/50-bohr D4 cutoffs.
+    """
+    _positive_carbon_count(natoms)
+    fragment_sizes = [2] * (natoms // 2)
+    if natoms % 2:
+        if natoms == 1:
+            fragment_sizes = [1]
+        else:
+            fragment_sizes[0] = 3
+    midpoint = 0.5 * (len(fragment_sizes) - 1)
+    positions: list[float] = []
+    for fragment, size in enumerate(fragment_sizes):
+        center = 12.0 * (fragment - midpoint)
+        y = 0.75 if fragment % 2 else -0.75
+        z = 0.5 * ((fragment % 3) - 1)
+        offsets = (
+            (0.0,) if size == 1 else ((-1.25, 1.25) if size == 2 else (-2.5, 0.0, 2.5))
+        )
+        for offset in offsets:
+            positions.extend((center + offset, y, z))
+    return Molecule(
+        f"open-carbon-{natoms}",
+        (6,) * natoms,
+        tuple(positions),
+        "open-carbon",
+    )
+
+
+def make_molecule(topology: str, natoms: int) -> Molecule:
+    """Dispatch one validated topology tag without changing alkane defaults."""
+    constructors = {
+        "alkane": make_alkane,
+        "compact-carbon": make_compact_carbon,
+        "open-carbon": make_open_carbon,
+    }
+    try:
+        constructor = constructors[topology]
+    except KeyError as exc:
+        raise BenchmarkError(f"unsupported natoms topology: {topology}") from exc
+    return constructor(natoms)
 
 
 def workload_identity(cell: Cell) -> dict[str, Any]:
     """Describe every input that selects a row across benchmark artifacts."""
     molecule = cell.molecule
     return {
+        "topology": molecule.topology,
         "molecule": molecule.name,
         "natoms": molecule.natoms,
         "batch_size": cell.batch_size,
@@ -1405,12 +1570,14 @@ def execute_cell(
             "backend": cell.backend,
             "memory_mode": "host",
             "molecule": cell.molecule.name,
+            "topology": cell.molecule.topology,
             "natoms": cell.molecule.natoms,
             "batch_size": cell.batch_size,
             "property": cell.property_name,
             "start_mode": protocol.start_mode,
             "warmups": protocol.warmups,
             "repetitions": protocol.repetitions,
+            "repeated_call_semantics": REPEATED_CALL_SEMANTICS,
             "compute_options": runner.compute_options,
             "workload_identity": workload_identity(cell),
             "run_identity": run_identity,
@@ -1452,12 +1619,14 @@ def collect_rows(
                 "backend": cell.backend,
                 "memory_mode": "host",
                 "molecule": cell.molecule.name,
+                "topology": cell.molecule.topology,
                 "natoms": cell.molecule.natoms,
                 "batch_size": cell.batch_size,
                 "property": cell.property_name,
                 "start_mode": protocol.start_mode,
                 "warmups": protocol.warmups,
                 "repetitions": protocol.repetitions,
+                "repeated_call_semantics": REPEATED_CALL_SEMANTICS,
                 "workload_identity": workload_identity(cell),
                 "run_identity": run_identity,
             }
@@ -1497,7 +1666,7 @@ def _validated_reference_options(
         or options["flags"] != expected_flags
         or options["total_atoms"] != natoms * batch_size
         or type(options["cpu_threads"]) is not int
-        or options["cpu_threads"] <= 0
+        or options["cpu_threads"] < 0
         or type(options["device_id"]) is not int
         or options["device_id"] < 0
     ):
@@ -1676,32 +1845,46 @@ def load_reference_artifact(path: Path) -> ReferenceArtifact:
             or property_name not in ("energy", "force")
         ):
             raise BenchmarkError(f"reference row {index} has unsupported workload tags")
+        row_identity = row.get("workload_identity")
+        if not isinstance(row_identity, dict):
+            raise BenchmarkError(
+                f"reference row {index} workload identity is not an object"
+            )
+        topology = row_identity.get("topology", "alkane")
+        if not isinstance(topology, str) or topology not in TOPOLOGIES:
+            raise BenchmarkError(f"reference row {index} has invalid topology identity")
         expected_identity = workload_identity(
             Cell(
                 "xtbloom",
-                make_alkane(natoms),
+                make_molecule(topology, natoms),
                 batch_size,
                 backend,
                 property_name,
             )
         )
-        if row.get("workload_identity") != expected_identity:
+        # Schema-v1 artifacts written before topology selection existed are
+        # unambiguously alkane rows. New artifacts must retain the explicit tag.
+        legacy_identity = dict(expected_identity)
+        legacy_identity.pop("topology")
+        if row_identity not in (expected_identity, legacy_identity):
             raise BenchmarkError(
                 f"reference row {index} workload identity is incomplete or inconsistent"
             )
-        if any(
-            row.get(name) != expected_identity[name]
-            for name in (
-                "molecule",
-                "natoms",
-                "batch_size",
-                "backend",
-                "memory_mode",
-                "property",
-            )
-        ):
+        duplicate_fields = (
+            "molecule",
+            "natoms",
+            "batch_size",
+            "backend",
+            "memory_mode",
+            "property",
+        )
+        if any(row.get(name) != expected_identity[name] for name in duplicate_fields):
             raise BenchmarkError(
                 f"reference row {index} duplicates inconsistent workload fields"
+            )
+        if "topology" in row and row["topology"] != topology:
+            raise BenchmarkError(
+                f"reference row {index} duplicates inconsistent topology"
             )
         options = _validated_reference_options(
             row.get("compute_options"), property_name, natoms, batch_size
@@ -1967,6 +2150,11 @@ def build_document(
                 else "one persistent reference public-C-API logical batch; setup and "
                 "result inspection are outside the measured interval"
             ),
+            "repeated_call_semantics": REPEATED_CALL_SEMANTICS,
+            "repeated_call_note": (
+                "Measured calls reuse unchanged coordinates but execute the full "
+                "public compute path; this is not proof of pair-list no-refresh reuse."
+            ),
             "warm_seed": (
                 "exactly one untimed FRESH call on the same identity before WARM "
                 "warmups"
@@ -2224,6 +2412,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--start-mode", choices=("fresh", "warm"))
     parser.add_argument("--natoms", type=parse_csv_ints, default=DEFAULT_NATOMS)
+    parser.add_argument(
+        "--topology",
+        choices=TOPOLOGIES,
+        default="alkane",
+        help="deterministic atom-count workload class (default: alkane)",
+    )
     parser.add_argument("--batch-sizes", type=parse_csv_ints, default=(1,))
     parser.add_argument("--backend", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--property", choices=("energy", "force"), default="force")
@@ -2271,8 +2465,11 @@ def validate_arguments(args: argparse.Namespace) -> None:
         raise BenchmarkError(
             "xtbloom WARM and reference-engine runs require --energy-reference-json"
         )
-    if args.cpu_threads <= 0:
-        raise BenchmarkError("--cpu-threads must be positive")
+    if args.cpu_threads < 0 or (args.engine != "xtbloom" and args.cpu_threads == 0):
+        raise BenchmarkError(
+            "--cpu-threads must be nonnegative for xtbloom and positive for "
+            "reference engines"
+        )
     if args.device_id < 0:
         raise BenchmarkError("--device-id must be nonnegative")
     if args.warmups < 0:
@@ -2319,7 +2516,7 @@ def validate_arguments(args: argparse.Namespace) -> None:
             f"FRESH reference artifact is missing: {args.energy_reference_json}"
         )
     for natoms in args.natoms:
-        make_alkane(natoms)
+        make_molecule(args.topology, natoms)
     validate_output_paths(args.output_json, args.output_csv, args.allow_overwrite)
 
 
@@ -2336,7 +2533,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None
         )
         identity = collect_run_identity(
-            args.engine, library, arguments, reference_artifact
+            args.engine,
+            library,
+            arguments,
+            reference_artifact,
+            args.backend,
+            args.cpu_threads,
+            args.device_id,
         )
         apply_current_evidence_policy(identity, args.allow_dirty_evidence)
         protocol = Protocol(
@@ -2346,7 +2549,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.energy_atol,
             args.force_atol,
         )
-        molecules = [make_alkane(natoms) for natoms in args.natoms]
+        molecules = [make_molecule(args.topology, natoms) for natoms in args.natoms]
         cells = [
             Cell(args.engine, molecule, batch_size, args.backend, args.property)
             for molecule in molecules

@@ -4,30 +4,44 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  cdnRegionForTimeZone,
+  initializeBrowserCdnRouting,
+  loadRegionPreferredThreeDmol,
+  loadThreeDmol,
   prepareVersionedApplication,
+  probeSourceSpeed,
+  rankCdnSources,
+  startBrowserCdnAndApplication,
   startBrowserApplication,
+  THREE_DMOL_SOURCES,
   validateBootstrapManifest,
 } from "../bootstrap.js";
 
 import {
   BOHR_PER_ANGSTROM,
+  ELEMENT_SYMBOLS,
   aggregateResourceProgress,
   angstromToBohr,
   canStartUrlSmiles,
   clampProgressPercent,
   comparableContentLength,
   copyFloat64FromMemory,
+  createDebouncedPublisher,
+  createRevisionOwner,
+  createSmilesWorkerClient,
   delayWithSignal,
   fetchResourceBatch,
   downloadProgressPercent,
   initializeDownloadedEngineModule,
   initializeWorker,
   isRetryableLoadError,
+  parseXyzCoordinates,
   postToReadyWorker,
   readSmilesQuery,
   runWithRetries,
   validateEngineManifest,
   withTimeout,
+  xyzAtomsToText,
 } from "../app_helpers.js";
 
 class FakeWorker {
@@ -51,6 +65,28 @@ class FakeWorker {
   }
 }
 
+function createManualTimers() {
+  let sequence = 0;
+  const callbacks = new Map();
+  return {
+    setTimer(callback, delayMs) {
+      const id = ++sequence;
+      callbacks.set(id, { callback, delayMs });
+      return id;
+    },
+    clearTimer(id) { callbacks.delete(id); },
+    delayOf: (id) => callbacks.get(id)?.delayMs,
+    run(id) {
+      const entry = callbacks.get(id);
+      assert.equal(typeof entry?.callback, "function", `missing timer ${id}`);
+      callbacks.delete(id);
+      entry.callback();
+    },
+    ids: () => Array.from(callbacks.keys()),
+    get size() { return callbacks.size; },
+  };
+}
+
 function createBootstrapDocument() {
   const elements = new Map([
     "overlay",
@@ -70,6 +106,609 @@ function createBootstrapDocument() {
     element: (id) => elements.get(id),
   };
 }
+
+test("CDN regional defaults identify mainland time zones without using language", () => {
+  for (const timeZone of [
+    "Asia/Shanghai",
+    "Asia/Urumqi",
+    "Asia/Chongqing",
+    "Asia/Chungking",
+    "Asia/Harbin",
+    "Asia/Kashgar",
+    "PRC",
+  ]) {
+    assert.equal(cdnRegionForTimeZone(timeZone), "mainland-china", timeZone);
+  }
+  for (const timeZone of [
+    "UTC",
+    "Asia/Hong_Kong",
+    "Asia/Macau",
+    "Asia/Taipei",
+    "Asia/Singapore",
+    "Etc/GMT-8",
+    "",
+  ]) {
+    assert.equal(cdnRegionForTimeZone(timeZone), "global", timeZone);
+  }
+});
+
+test("CDN probes choose the measured fastest source and use region only for close ties", async () => {
+  const timings = new Map([
+    ["jsdelivr", 40],
+    ["jsdmirror", 100],
+    ["local", 70],
+  ]);
+  const fastest = await rankCdnSources(THREE_DMOL_SOURCES, {
+    region: "mainland-china",
+    probeImpl: async (source) => ({ id: source.id, elapsedMs: timings.get(source.id) }),
+  });
+  assert.deepEqual(fastest.map((entry) => entry.source.id), [
+    "jsdelivr",
+    "local",
+    "jsdmirror",
+  ]);
+
+  timings.set("jsdelivr", 100);
+  timings.set("jsdmirror", 110);
+  timings.set("local", 200);
+  const mainlandTie = await rankCdnSources(THREE_DMOL_SOURCES, {
+    region: "mainland-china",
+    probeImpl: async (source) => ({ id: source.id, elapsedMs: timings.get(source.id) }),
+  });
+  assert.deepEqual(mainlandTie.map((entry) => entry.source.id), [
+    "jsdmirror",
+    "jsdelivr",
+    "local",
+  ]);
+
+  const globalTie = await rankCdnSources(THREE_DMOL_SOURCES, {
+    region: "global",
+    probeImpl: async (source) => ({ id: source.id, elapsedMs: timings.get(source.id) }),
+  });
+  assert.deepEqual(globalTie.map((entry) => entry.source.id), [
+    "jsdelivr",
+    "jsdmirror",
+    "local",
+  ]);
+
+  timings.set("jsdelivr", 35);
+  timings.set("jsdmirror", 15);
+  timings.set("local", 10);
+  const chainedTie = await rankCdnSources(THREE_DMOL_SOURCES, {
+    region: "global",
+    probeImpl: async (source) => ({ id: source.id, elapsedMs: timings.get(source.id) }),
+  });
+  assert.deepEqual(chainedTie.map((entry) => entry.source.id), [
+    "jsdmirror",
+    "local",
+    "jsdelivr",
+  ]);
+});
+
+test("CDN ranking keeps failed probes behind measured sources in regional order", async () => {
+  const ranked = await rankCdnSources(THREE_DMOL_SOURCES, {
+    region: "mainland-china",
+    probeImpl: async (source) => {
+      if (source.id === "jsdelivr") return { id: source.id, elapsedMs: 30 };
+      if (source.id === "jsdmirror") throw new Error("mirror probe failed");
+      return { id: source.id, elapsedMs: Number.NaN };
+    },
+  });
+  assert.deepEqual(ranked.map((entry) => entry.source.id), [
+    "jsdelivr",
+    "jsdmirror",
+    "local",
+  ]);
+  assert.match(ranked[1].error.message, /mirror probe failed/);
+  assert.equal(ranked[2].measurement.elapsedMs, Number.NaN);
+});
+
+test("CDN probes read and cancel only the bounded prefix", async () => {
+  const chunks = [new Uint8Array(32768), new Uint8Array(32768)];
+  const requests = [];
+  let cancelled = false;
+  let reads = 0;
+  const result = await probeSourceSpeed(
+    { id: "local", url: "vendor/3Dmol-min.js" },
+    {
+      baseUrl: "https://site.test/demo/",
+      fetchImpl: async (url, options) => {
+        requests.push({ url, options });
+        return {
+          ok: true,
+          status: 206,
+          body: {
+            getReader: () => ({
+              read: async () => ({ done: false, value: chunks[reads++] }),
+              cancel: async () => { cancelled = true; },
+            }),
+          },
+        };
+      },
+      now: (() => {
+        const values = [100, 125];
+        return () => values.shift();
+      })(),
+    },
+  );
+  assert.equal(result.elapsedMs, 25);
+  assert.equal(reads, 2);
+  assert.equal(cancelled, true);
+  assert.equal(requests[0].url, "https://site.test/demo/vendor/3Dmol-min.js");
+  assert.equal(requests[0].options.cache, "no-store");
+  assert.equal(requests[0].options.headers.Range, "bytes=0-65535");
+  assert.equal(requests[0].options.signal.aborted, true);
+});
+
+test("CDN probes reject unavailable, failed, non-streaming, and empty responses", async () => {
+  const source = { id: "local", url: "vendor/3Dmol-min.js" };
+  const options = { baseUrl: "https://site.test/demo/", timeoutMs: 100 };
+
+  await assert.rejects(
+    probeSourceSpeed(source, { ...options, fetchImpl: null }),
+    /fetch is unavailable/,
+  );
+  await assert.rejects(
+    probeSourceSpeed(source, {
+      ...options,
+      fetchImpl: async () => ({ ok: false, status: 503 }),
+    }),
+    /HTTP 503/,
+  );
+  await assert.rejects(
+    probeSourceSpeed(source, {
+      ...options,
+      fetchImpl: async () => ({ ok: true, status: 200, body: null }),
+    }),
+    /streaming response is unavailable/,
+  );
+  await assert.rejects(
+    probeSourceSpeed(source, {
+      ...options,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 206,
+        body: {
+          getReader: () => ({
+            read: async () => ({ done: true, value: undefined }),
+            cancel: async () => {},
+          }),
+        },
+      }),
+    }),
+    /empty probe response/,
+  );
+
+  const controller = new AbortController();
+  const aborted = probeSourceSpeed(source, {
+    ...options,
+    signal: controller.signal,
+    fetchImpl: async (_url, request) => new Promise((resolve, reject) => {
+      request.signal.addEventListener("abort", () => reject(request.signal.reason), {
+        once: true,
+      });
+    }),
+  });
+  controller.abort();
+  await assert.rejects(aborted);
+});
+
+test("verified 3Dmol loading falls through ranked sources", async () => {
+  const attempted = [];
+  const globalImpl = {};
+  const result = await loadThreeDmol([
+    { source: { id: "jsdmirror", url: "https://mirror.test/3dmol.js" } },
+    { source: { id: "jsdelivr", url: "https://jsdelivr.test/3dmol.js" } },
+    { source: { id: "local", url: "vendor/3Dmol-min.js" } },
+  ], {
+    baseUrl: "https://site.test/",
+    globalImpl,
+    fetchBytesImpl: async (url) => {
+      attempted.push(url);
+      if (url.includes("mirror.test")) throw new Error("mirror unavailable");
+      return new Uint8Array([1, 2, 3]).buffer;
+    },
+    executeScriptImpl: async () => { globalImpl.$3Dmol = { version: "2.5.5" }; },
+  });
+  assert.equal(result.source, "jsdelivr");
+  assert.deepEqual(attempted, [
+    "https://mirror.test/3dmol.js",
+    "https://jsdelivr.test/3dmol.js",
+  ]);
+});
+
+test("verified 3Dmol loading rejects a complete source with the wrong size", async () => {
+  await assert.rejects(
+    loadThreeDmol([
+      { source: { id: "jsdelivr", url: "https://jsdelivr.test/3dmol.js" } },
+    ], {
+      baseUrl: "https://site.test/",
+      globalImpl: {},
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      }),
+      cryptoImpl: webcrypto,
+      executeScriptImpl: async () => {
+        assert.fail("unverified 3Dmol bytes must not execute");
+      },
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.match(error.errors[0].message, /expected 537792 bytes/);
+      return true;
+    },
+  );
+});
+
+test("verified 3Dmol loading rejects a complete source with the wrong digest", async () => {
+  await assert.rejects(
+    loadThreeDmol([
+      { source: { id: "jsdelivr", url: "https://jsdelivr.test/3dmol.js" } },
+    ], {
+      baseUrl: "https://site.test/",
+      globalImpl: {},
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new Uint8Array(537792).buffer,
+      }),
+      cryptoImpl: webcrypto,
+      executeScriptImpl: async () => {
+        assert.fail("digest-mismatched 3Dmol bytes must not execute");
+      },
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.match(error.errors[0].message, /SHA-256 mismatch/);
+      return true;
+    },
+  );
+});
+
+test("verified 3Dmol loading hashes and executes the pinned local bundle", async () => {
+  const fileBytes = await readFile(new URL(
+    "../node_modules/3dmol/build/3Dmol-min.js",
+    import.meta.url,
+  ));
+  const pinnedBytes = Uint8Array.from(fileBytes).buffer;
+  const globalImpl = {};
+  let requestSignal = null;
+  let appendedScript = null;
+  const documentImpl = {
+    createElement: (tagName) => {
+      assert.equal(tagName, "script");
+      return {};
+    },
+    head: {
+      appendChild(script) {
+        appendedScript = script;
+        globalImpl.$3Dmol = { version: "2.5.5" };
+        script.onload();
+      },
+    },
+  };
+  const result = await loadThreeDmol([
+    { source: { id: "local", url: "vendor/3Dmol-min.js" } },
+  ], {
+    baseUrl: "https://site.test/demo/",
+    documentImpl,
+    globalImpl,
+    fetchImpl: async (_url, options) => {
+      requestSignal = options.signal;
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => pinnedBytes,
+      };
+    },
+    cryptoImpl: webcrypto,
+  });
+  assert.equal(result.source, "local");
+  assert.equal(result.url, "https://site.test/demo/vendor/3Dmol-min.js");
+  assert.equal(appendedScript.async, true);
+  assert.match(appendedScript.src, /^blob:/);
+  assert.equal(requestSignal.aborted, true);
+});
+
+test("3Dmol loading preserves existing globals and reports script/global failures", async () => {
+  assert.deepEqual(await loadThreeDmol([], { globalImpl: { $3Dmol: {} } }), {
+    source: "existing",
+  });
+
+  await assert.rejects(
+    loadThreeDmol([
+      { source: { id: "local", url: "vendor/3Dmol-min.js" } },
+    ], {
+      baseUrl: "https://site.test/",
+      globalImpl: {},
+      fetchBytesImpl: async () => new Uint8Array([1]).buffer,
+      documentImpl: {
+        createElement: () => ({}),
+        head: { appendChild: (script) => script.onerror() },
+      },
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.match(error.errors[0].message, /script execution failed/);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    loadThreeDmol([
+      { source: { id: "jsdelivr", url: "https://cdn.test/3dmol.js" } },
+    ], {
+      globalImpl: {},
+      fetchBytesImpl: async () => new Uint8Array([1]).buffer,
+      executeScriptImpl: async () => {},
+    }),
+    (error) => {
+      assert.match(error.errors[0].message, /3Dmol global is unavailable/);
+      return true;
+    },
+  );
+});
+
+test("browser CDN routing publishes stable regional provider order for optional workers", async () => {
+  const globalImpl = {};
+  let attemptedOrder = null;
+  const routing = await initializeBrowserCdnRouting({
+    intlImpl: {
+      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "Asia/Shanghai" }) }),
+    },
+    globalImpl,
+    loadThreeDmolImpl: async (rankedSources) => {
+      attemptedOrder = rankedSources.map((entry) => entry.source.id);
+      return { source: "jsdmirror" };
+    },
+  });
+  assert.equal(routing.region, "mainland-china");
+  assert.deepEqual(routing.providers, ["jsdmirror", "jsdelivr"]);
+  assert.deepEqual(globalImpl.__XTBLOOM_CDN_PROVIDERS, ["jsdmirror", "jsdelivr"]);
+  assert.deepEqual(attemptedOrder, ["jsdmirror", "jsdelivr", "local"]);
+  assert.deepEqual(await globalImpl.__XTBLOOM_3DMOL_READY, {
+    ok: true,
+    source: "jsdmirror",
+  });
+});
+
+test("browser CDN routing starts the regional verified fetch without waiting for ranking", async () => {
+  const globalImpl = {};
+  let attemptedOrder = null;
+  let finishLoading;
+  const loading = new Promise((resolve) => { finishLoading = resolve; });
+  const routing = await Promise.race([
+    initializeBrowserCdnRouting({
+      intlImpl: {
+        DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "UTC" }) }),
+      },
+      globalImpl,
+      rankImpl: () => new Promise(() => {}),
+      loadThreeDmolImpl: (rankedSources) => {
+        attemptedOrder = rankedSources.map((entry) => entry.source.id);
+        return loading;
+      },
+    }),
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error("regional 3Dmol fetch waited for CDN ranking")),
+      100,
+    )),
+  ]);
+
+  assert.deepEqual(attemptedOrder, ["jsdelivr", "jsdmirror", "local"]);
+  assert.deepEqual(routing.providers, ["jsdelivr", "jsdmirror"]);
+  assert.equal(routing.ready, globalImpl.__XTBLOOM_3DMOL_READY);
+  finishLoading({ source: "jsdelivr" });
+  assert.deepEqual(await routing.ready, { ok: true, source: "jsdelivr" });
+});
+
+test("preferred 3Dmol success never waits for or starts fallback ranking", async () => {
+  const attempts = [];
+  let rankCalls = 0;
+  const result = await loadRegionPreferredThreeDmol(THREE_DMOL_SOURCES, {
+    region: "global",
+    globalImpl: {},
+    rankImpl: () => {
+      rankCalls += 1;
+      return new Promise(() => {});
+    },
+    attemptSourceImpl: async (source) => {
+      attempts.push(source.id);
+      return { source: source.id, url: source.url };
+    },
+  });
+  assert.equal(result.source, "jsdelivr");
+  assert.deepEqual(attempts, ["jsdelivr"]);
+  assert.equal(rankCalls, 0);
+});
+
+test("bounded fallback ranking cannot delay regional and local verified attempts", async () => {
+  const timers = createManualTimers();
+  const attempts = [];
+  let rankingSignal = null;
+  const resultPromise = loadRegionPreferredThreeDmol(THREE_DMOL_SOURCES, {
+    region: "global",
+    globalImpl: {},
+    fallbackRankingTimeoutMs: 400,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    rankImpl: (_sources, options) => {
+      rankingSignal = options.signal;
+      return new Promise(() => {});
+    },
+    attemptSourceImpl: async (source) => {
+      attempts.push(source.id);
+      if (source.id !== "local") throw new Error(`${source.id} unavailable`);
+      return { source: source.id, url: source.url };
+    },
+  });
+
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(attempts, ["jsdelivr"]);
+  assert.equal(timers.size, 1);
+  const [rankingTimer] = timers.ids();
+  assert.equal(timers.delayOf(rankingTimer), 400);
+  timers.run(rankingTimer);
+  const result = await resultPromise;
+  assert.equal(rankingSignal.aborted, true);
+  assert.deepEqual(attempts, ["jsdelivr", "jsdmirror", "local"]);
+  assert.equal(result.source, "local");
+});
+
+test("fallback ranking rejects replacements, removes duplicates, and retains every error", async () => {
+  const attempts = [];
+  await assert.rejects(
+    loadRegionPreferredThreeDmol(THREE_DMOL_SOURCES, {
+      region: "global",
+      globalImpl: {},
+      rankImpl: async () => [
+        { source: { id: "jsdelivr", url: THREE_DMOL_SOURCES[0].url } },
+        { source: { id: "jsdmirror", url: "https://attacker.test/replaced.js" } },
+        { source: THREE_DMOL_SOURCES[2] },
+        { source: THREE_DMOL_SOURCES[2] },
+      ],
+      attemptSourceImpl: async (source) => {
+        attempts.push(source.id);
+        throw new Error(`${source.id} unavailable`);
+      },
+    }),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true);
+      assert.equal(error.errors.length, 3);
+      assert.deepEqual(error.errors.map((inner) => inner.message), [
+        "jsdelivr unavailable",
+        "local unavailable",
+        "jsdmirror unavailable",
+      ]);
+      return true;
+    },
+  );
+  assert.deepEqual(attempts, ["jsdelivr", "local", "jsdmirror"]);
+});
+
+test("a failed script's partial global is cleared or stops fallback publication", async () => {
+  const recoverableGlobal = {};
+  const attempts = [];
+  const recovered = await loadRegionPreferredThreeDmol(THREE_DMOL_SOURCES, {
+    region: "global",
+    globalImpl: recoverableGlobal,
+    rankImpl: async (sources) => sources.map((source) => ({ source })),
+    attemptSourceImpl: async (source) => {
+      attempts.push(source.id);
+      if (source.id === "jsdelivr") {
+        recoverableGlobal.$3Dmol = { partial: true };
+        throw new Error("preferred script failed after partial publication");
+      }
+      assert.equal(recoverableGlobal.$3Dmol, undefined);
+      return { source: source.id, url: source.url };
+    },
+  });
+  assert.equal(recovered.source, "jsdmirror");
+  assert.deepEqual(attempts, ["jsdelivr", "jsdmirror"]);
+
+  const unrecoverableGlobal = {};
+  await assert.rejects(
+    loadRegionPreferredThreeDmol(THREE_DMOL_SOURCES, {
+      region: "global",
+      globalImpl: unrecoverableGlobal,
+      attemptSourceImpl: async () => {
+        Object.defineProperty(unrecoverableGlobal, "$3Dmol", {
+          configurable: false,
+          value: { partial: true },
+        });
+        throw new Error("non-configurable partial global");
+      },
+    }),
+    /left an unusable global/,
+  );
+});
+
+test("browser CDN routing defaults globally when time-zone lookup or loading fails", async () => {
+  const loadError = new Error("all 3Dmol sources failed");
+  const globalImpl = {};
+  const routing = await initializeBrowserCdnRouting({
+    intlImpl: {
+      DateTimeFormat: () => { throw new Error("time-zone database unavailable"); },
+    },
+    globalImpl,
+    rankImpl: async (sources) => sources.map((source) => ({ source })),
+    loadThreeDmolImpl: async () => { throw loadError; },
+  });
+  assert.equal(routing.region, "global");
+  assert.deepEqual(routing.providers, ["jsdelivr", "jsdmirror"]);
+  assert.deepEqual(await routing.ready, { ok: false, error: loadError });
+});
+
+test("browser application starts while CDN routing remains in flight", async () => {
+  let resolveRouting;
+  let applicationStarts = 0;
+  const globalImpl = {};
+  const routing = startBrowserCdnAndApplication({
+    globalImpl,
+    intlImpl: {
+      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "UTC" }) }),
+    },
+    initializeRouting: () => new Promise((resolve) => { resolveRouting = resolve; }),
+    startApplication: () => {
+      applicationStarts += 1;
+      assert.equal(globalImpl.__XTBLOOM_CDN_REGION, "global");
+      assert.deepEqual(globalImpl.__XTBLOOM_CDN_PROVIDERS, ["jsdelivr", "jsdmirror"]);
+    },
+  });
+  assert.equal(applicationStarts, 1);
+  assert.equal(globalImpl.__XTBLOOM_CDN_ROUTING, routing);
+  await Promise.resolve();
+  resolveRouting({ region: "global" });
+  assert.deepEqual(await routing, { region: "global" });
+});
+
+test("browser application startup observes unexpected promise rejection", async () => {
+  const startupError = new Error("application failed");
+  const logged = [];
+  const globalImpl = {
+    console: { error: (...values) => logged.push(values) },
+  };
+  startBrowserCdnAndApplication({
+    globalImpl,
+    initializeRouting: async () => ({ region: "global" }),
+    startApplication: () => Promise.reject(startupError),
+  });
+  assert.deepEqual(await globalImpl.__XTBLOOM_APPLICATION_START, {
+    ok: false,
+    error: startupError,
+  });
+  assert.deepEqual(logged, [["xTBloom application startup failed", startupError]]);
+});
+
+test("browser startup publishes global fallbacks after synchronous setup failures", async () => {
+  const routingError = new Error("routing setup failed");
+  const applicationError = new Error("application setup failed");
+  const logged = [];
+  const globalImpl = {
+    console: { error: (...values) => logged.push(values) },
+  };
+  const routing = startBrowserCdnAndApplication({
+    globalImpl,
+    intlImpl: {
+      DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "UTC" }) }),
+    },
+    initializeRouting: () => { throw routingError; },
+    startApplication: () => { throw applicationError; },
+  });
+  const fallback = await routing;
+  assert.equal(fallback.region, "global");
+  assert.deepEqual(fallback.providers, ["jsdelivr", "jsdmirror"]);
+  assert.deepEqual(fallback.rankedSources, []);
+  assert.deepEqual(await fallback.ready, { ok: false, error: routingError });
+  assert.deepEqual(await globalImpl.__XTBLOOM_APPLICATION_START, {
+    ok: false,
+    error: applicationError,
+  });
+  assert.deepEqual(logged, [["xTBloom application startup failed", applicationError]]);
+});
 
 test("angstrom controls are converted to optimizer bohr", () => {
   assert.equal(angstromToBohr(1), BOHR_PER_ANGSTROM);
@@ -168,10 +807,12 @@ test("engine manifests provide safe versioned paths and exact decoded sizes", ()
   }, ["worker", "data"]), /missing data/);
 });
 
-test("bootstrap prefetches and verifies one coherent versioned module graph", async () => {
+test("bootstrap verifies the core graph and leaves versioned SMILES assets lazy", async () => {
   const app = new TextEncoder().encode("export const app = true;\n");
   const c60 = new TextEncoder().encode("export const C60_XYZ = 'C 0 0 0';\n");
   const helpers = new TextEncoder().encode("export const helper = true;\n");
+  const smilesWorker = new TextEncoder().encode("export const worker = true;\n");
+  const smilesHelpers = new TextEncoder().encode("export const smiles = true;\n");
   const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const assets = [
     { id: "app", path: "app.js", bytes: app.byteLength, sha256: digest(app) },
@@ -181,6 +822,18 @@ test("bootstrap prefetches and verifies one coherent versioned module graph", as
       path: "app_helpers.js",
       bytes: helpers.byteLength,
       sha256: digest(helpers),
+    },
+    {
+      id: "smiles_worker",
+      path: "smiles_worker.js",
+      bytes: smilesWorker.byteLength,
+      sha256: digest(smilesWorker),
+    },
+    {
+      id: "smiles_helpers",
+      path: "smiles_helpers.js",
+      bytes: smilesHelpers.byteLength,
+      sha256: digest(smilesHelpers),
     },
   ];
   const manifest = {
@@ -204,6 +857,7 @@ test("bootstrap prefetches and verifies one coherent versioned module graph", as
       }
       if (href.includes("c60_case.js")) return new Response(c60, { status: 200 });
       if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
+      if (href.includes("smiles_")) throw new Error("optional SMILES assets must remain lazy");
       if (href.includes("app.js")) return new Response(app, { status: 200 });
       return new Response(null, { status: 404 });
     },
@@ -229,6 +883,8 @@ test("bootstrap manifest validation rejects unsafe partial metadata", () => {
       { id: "app", path: "app.js", bytes: 10, sha256: digest },
       { id: "c60", path: "c60_case.js", bytes: 15, sha256: digest },
       { id: "helpers", path: "app_helpers.js", bytes: 20, sha256: digest },
+      { id: "smiles_worker", path: "smiles_worker.js", bytes: 25, sha256: digest },
+      { id: "smiles_helpers", path: "smiles_helpers.js", bytes: 30, sha256: digest },
     ],
   };
   assert.throws(() => validateBootstrapManifest(null), /unsupported/);
@@ -261,6 +917,14 @@ test("bootstrap manifest validation rejects unsafe partial metadata", () => {
     ...valid,
     assets: [valid.assets[0], valid.assets[1]],
   }), /missing helpers/);
+  assert.throws(() => validateBootstrapManifest({
+    ...valid,
+    assets: valid.assets.filter((asset) => asset.id !== "smiles_worker"),
+  }), /missing smiles_worker/);
+  assert.throws(() => validateBootstrapManifest({
+    ...valid,
+    assets: valid.assets.filter((asset) => asset.id !== "smiles_helpers"),
+  }), /missing smiles_helpers/);
 });
 
 test("bootstrap UI exposes retry progress and clears stale recovery state", async () => {
@@ -314,6 +978,8 @@ test("application import timeout retries with a distinct guarded module URL", as
   const app = new TextEncoder().encode("export const app = true;\n");
   const c60 = new TextEncoder().encode("export const C60_XYZ = 'C 0 0 0';\n");
   const helpers = new TextEncoder().encode("export const helper = true;\n");
+  const smilesWorker = new TextEncoder().encode("export const worker = true;\n");
+  const smilesHelpers = new TextEncoder().encode("export const smiles = true;\n");
   const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const manifest = {
     schema_version: 1,
@@ -326,6 +992,18 @@ test("application import timeout retries with a distinct guarded module URL", as
         path: "app_helpers.js",
         bytes: helpers.byteLength,
         sha256: digest(helpers),
+      },
+      {
+        id: "smiles_worker",
+        path: "smiles_worker.js",
+        bytes: smilesWorker.byteLength,
+        sha256: digest(smilesWorker),
+      },
+      {
+        id: "smiles_helpers",
+        path: "smiles_helpers.js",
+        bytes: smilesHelpers.byteLength,
+        sha256: digest(smilesHelpers),
       },
     ],
   };
@@ -347,6 +1025,8 @@ test("application import timeout retries with a distinct guarded module URL", as
       }
       if (href.includes("c60_case.js")) return new Response(c60, { status: 200 });
       if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
+      if (href.includes("smiles_worker.js")) return new Response(smilesWorker, { status: 200 });
+      if (href.includes("smiles_helpers.js")) return new Response(smilesHelpers, { status: 200 });
       if (href.includes("app.js")) return new Response(app, { status: 200 });
       return new Response(null, { status: 404 });
     },
@@ -370,6 +1050,8 @@ test("aborting a hanging application import invalidates its execution token", as
   const app = new TextEncoder().encode("export const app = true;\n");
   const c60 = new TextEncoder().encode("export const C60_XYZ = 'C 0 0 0';\n");
   const helpers = new TextEncoder().encode("export const helper = true;\n");
+  const smilesWorker = new TextEncoder().encode("export const worker = true;\n");
+  const smilesHelpers = new TextEncoder().encode("export const smiles = true;\n");
   const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const manifest = {
     schema_version: 1,
@@ -382,6 +1064,18 @@ test("aborting a hanging application import invalidates its execution token", as
         path: "app_helpers.js",
         bytes: helpers.byteLength,
         sha256: digest(helpers),
+      },
+      {
+        id: "smiles_worker",
+        path: "smiles_worker.js",
+        bytes: smilesWorker.byteLength,
+        sha256: digest(smilesWorker),
+      },
+      {
+        id: "smiles_helpers",
+        path: "smiles_helpers.js",
+        bytes: smilesHelpers.byteLength,
+        sha256: digest(smilesHelpers),
       },
     ],
   };
@@ -403,6 +1097,8 @@ test("aborting a hanging application import invalidates its execution token", as
       }
       if (href.includes("c60_case.js")) return new Response(c60, { status: 200 });
       if (href.includes("app_helpers.js")) return new Response(helpers, { status: 200 });
+      if (href.includes("smiles_worker.js")) return new Response(smilesWorker, { status: 200 });
+      if (href.includes("smiles_helpers.js")) return new Response(smilesHelpers, { status: 200 });
       if (href.includes("app.js")) return new Response(app, { status: 200 });
       return new Response(null, { status: 404 });
     },
@@ -613,6 +1309,144 @@ test("URL SMILES starts once only when both workers are ready and idle", () => {
   }
 });
 
+test("SMILES generation timeout restarts the worker and permits a one-click retry", async () => {
+  const timers = createManualTimers();
+  const workers = [];
+  const states = [];
+  const client = createSmilesWorkerClient({
+    createWorker: () => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    },
+    onStateChange: (event) => states.push(event),
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    loadTimeoutMs: 60,
+    generationTimeoutMs: 120,
+  });
+
+  client.start();
+  assert.equal(workers.length, 1);
+  workers[0].emit({ type: "ready", version: "9.21.0" });
+  const first = client.request("complex");
+  assert.deepEqual(workers[0].messages[0].message, {
+    type: "generate",
+    id: 1,
+    smiles: "complex",
+  });
+  const generationTimer = timers.ids()[0];
+  assert.equal(timers.delayOf(generationTimer), 120);
+  timers.run(generationTimer);
+  await assert.rejects(first, (error) => error.code === "smiles_err_timeout");
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+  assert.equal(client.getState(), "loading");
+  assert.equal(states.at(-1).reason, "generation-timeout");
+  assert.deepEqual(states.at(-1).recoveryStatus, {
+    key: "smiles_err_timeout",
+    tone: "err",
+  });
+
+  /* A queued event from the terminated instance must not publish readiness for
+   * or otherwise alter the replacement Worker. */
+  workers[0].emit({ type: "ready", version: "stale" });
+  workers[0].onerror({ message: "stale failure" });
+  assert.equal(client.getState(), "loading");
+  assert.equal(workers[1].terminated, false);
+
+  workers[1].emit({ type: "ready", version: "9.21.0" });
+  assert.deepEqual(states.at(-1).recoveryStatus, {
+    key: "smiles_err_timeout",
+    tone: "err",
+  });
+  const retry = client.request("complex");
+  workers[1].emit({ type: "result", id: 2, ok: true, result: { atomCount: 77 } });
+  assert.deepEqual(await retry, { atomCount: 77 });
+  assert.equal(client.getState(), "ready");
+  client.dispose();
+});
+
+test("cancelling SMILES work terminates abandoned synchronous work", async () => {
+  const timers = createManualTimers();
+  const workers = [];
+  const client = createSmilesWorkerClient({
+    createWorker: () => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  client.start();
+  workers[0].emit({ type: "ready", version: "9.21.0" });
+  const abandoned = client.request("old-smiles");
+  const cancelled = client.cancel(new DOMException("superseded", "AbortError"));
+  assert.equal(cancelled, true);
+  await assert.rejects(abandoned, (error) => error.name === "AbortError");
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+
+  workers[0].emit({
+    type: "result",
+    id: 1,
+    ok: true,
+    result: { atomCount: 1 },
+  });
+  assert.equal(client.getState(), "loading");
+  workers[1].emit({ type: "ready", version: "9.21.0" });
+  assert.equal(client.getState(), "ready");
+  assert.equal(client.cancel(), false);
+
+  const replacement = client.request("new-smiles");
+  workers[1].emit({
+    type: "result",
+    id: 2,
+    ok: true,
+    result: { atomCount: 2 },
+  });
+  assert.deepEqual(await replacement, { atomCount: 2 });
+  assert.equal(timers.size, 0, "cancelled work must not leave a timer ahead of the retry");
+  client.dispose();
+});
+
+test("SMILES postMessage failure rejects locally and rebuilds the worker", async () => {
+  const timers = createManualTimers();
+  const workers = [];
+  const client = createSmilesWorkerClient({
+    createWorker: () => {
+      const worker = new FakeWorker();
+      workers.push(worker);
+      return worker;
+    },
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+
+  client.start();
+  workers[0].emit({ type: "ready", version: "9.21.0" });
+  const cause = new DOMException("clone failed", "DataCloneError");
+  workers[0].postMessage = () => { throw cause; };
+
+  await assert.rejects(client.request("CCO"), (error) => {
+    assert.equal(error.code, "smiles_err_library");
+    assert.equal(error.cause, cause);
+    return true;
+  });
+  assert.equal(workers[0].terminated, true);
+  assert.equal(workers.length, 2);
+  assert.equal(client.getState(), "loading");
+  assert.equal(timers.size, 1, "only the replacement load timer should remain");
+
+  workers[1].emit({ type: "ready", version: "9.21.0" });
+  const retry = client.request("CCO");
+  workers[1].emit({ type: "result", id: 2, ok: true, result: { atomCount: 9 } });
+  assert.deepEqual(await retry, { atomCount: 9 });
+  client.dispose();
+});
+
 test("worker initialization remains pending until ready", async () => {
   const worker = new FakeWorker();
   const wasmBinary = new Uint8Array([0, 1, 2]);
@@ -710,26 +1544,59 @@ test("deployed page describes the universal browser artifact as wasm32", async (
 });
 
 test("page bootstraps pinned SMILES loading and applies URL-optimized geometry", async () => {
-  const [appSource, indexSource] = await Promise.all([
+  const [appSource, indexSource, styleSource] = await Promise.all([
     readFile(new URL("../app.js", import.meta.url), "utf8"),
     readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../style.css", import.meta.url), "utf8"),
   ]);
   assert.match(appSource, /startSmilesWorker\(\);/);
+  const smilesStartup = appSource.slice(
+    appSource.indexOf("function startSmilesWorker()"),
+    appSource.indexOf("function requestSmilesGeometry"),
+  );
+  assert.doesNotMatch(smilesStartup, /__XTBLOOM_CDN_ROUTING/);
+  const engineLoadIndex = appSource.indexOf("const engineLoad = startEngineLoad();");
+  const smilesStartIndex = appSource.lastIndexOf("startSmilesWorker();");
+  assert.ok(engineLoadIndex >= 0, "engine load must start before the SMILES worker");
+  assert.ok(smilesStartIndex >= 0, "the eager SMILES Worker start must remain present");
+  assert.ok(engineLoadIndex < smilesStartIndex);
   assert.match(appSource, /readSmilesQuery\(window\.location\.href\)/);
   assert.match(appSource, /applyFinalGeometry:\s*true/);
-  assert.match(appSource, /\$\("xyz"\)\.value = d\.geometry/);
+  assert.match(appSource, /setCoordinateInput\(d\.geometry, \{ preserveOptimization: true \}\)/);
   assert.doesNotMatch(appSource, /smiles-alert/);
   assert.match(indexSource, /id="smiles"/);
   assert.match(indexSource, /id="smiles-generate"/);
   assert.doesNotMatch(indexSource, /id="smiles-alert"/);
+  assert.match(indexSource, /id="overlay"[^>]*role="status"/);
+  assert.match(indexSource, /class="spinner"[^>]*aria-hidden="true"/);
+  const overlayRule = styleSource.match(/\.overlay\s*\{([^}]*)\}/)?.[1] || "";
+  assert.doesNotMatch(overlayRule, /backdrop-filter/);
+  assert.match(overlayRule, /pointer-events:\s*none/);
+  for (const selector of [".panel-output", ".roadmap", ".footer"]) {
+    assert.match(
+      styleSource,
+      new RegExp(`${selector.replace(".", "\\.")}\\s*\\{[^}]*content-visibility:\\s*auto`, "s"),
+    );
+  }
 });
 
 test("engine bootstrap retries a coherent versioned generation without reloading the page", async () => {
-  const [appSource, bootstrapSource, helperSource, workerSource, manifestSource, indexSource] = await Promise.all([
+  const [
+    appSource,
+    bootstrapSource,
+    helperSource,
+    workerSource,
+    smilesHelperSource,
+    smilesWorkerSource,
+    manifestSource,
+    indexSource,
+  ] = await Promise.all([
     readFile(new URL("../app.js", import.meta.url), "utf8"),
     readFile(new URL("../bootstrap.js", import.meta.url), "utf8"),
     readFile(new URL("../app_helpers.js", import.meta.url), "utf8"),
     readFile(new URL("../worker.js", import.meta.url), "utf8"),
+    readFile(new URL("../smiles_helpers.js", import.meta.url), "utf8"),
+    readFile(new URL("../smiles_worker.js", import.meta.url), "utf8"),
     readFile(new URL("../write_engine_manifest.cmake", import.meta.url), "utf8"),
     readFile(new URL("../index.html", import.meta.url), "utf8"),
   ]);
@@ -738,18 +1605,23 @@ test("engine bootstrap retries a coherent versioned generation without reloading
     "c60_case.js",
     "worker.js",
     "app_helpers.js",
+    "smiles_worker.js",
+    "smiles_helpers.js",
     "xtbloom_web.js",
     "xtbloom_web.wasm",
-    "xtbloom_web.data",
+    "xtbloom_web.side.wasm",
   ]) {
     assert.match(manifestSource, new RegExp(asset.replaceAll(".", "\\.")));
   }
+  assert.doesNotMatch(manifestSource, /xtbloom_web\.data/);
   assert.match(appSource, /runWithRetries\(/);
   assert.match(appSource, /engineLoadGeneration/);
   assert.match(appSource, /engine-manifest\.json/);
   assert.match(appSource, /xtbloom_version/);
   assert.match(appSource, /c60CaseUrl\.searchParams\.set\("xtbloom_bootstrap"/);
   assert.match(appSource, /manifest\.version !== appContentVersion/);
+  assert.match(appSource, /smilesWorkerModuleUrl\.searchParams\.set\("xtbloom_version"/);
+  assert.match(appSource, /new URL\(smilesWorkerModuleUrl\.href\)/);
   assert.match(appSource, /Invalid engine manifest response/);
   assert.match(appSource, /currentLoadOrAbort\(generation, masterSignal, attemptController\.signal\)/);
   assert.match(appSource, /filter\(\(asset\) => engineIds\.has\(asset\.id\)\)/);
@@ -763,6 +1635,13 @@ test("engine bootstrap retries a coherent versioned generation without reloading
   assert.match(workerSource, /await import\(msg\.moduleUrl\)/);
   assert.match(workerSource, /initializeDownloadedEngineModule/);
   assert.doesNotMatch(workerSource, /from "\.\/xtbloom_web\.js"/);
+  assert.match(smilesHelperSource, /export async function loadOpenChemLibRuntime/);
+  assert.match(smilesWorkerSource, /await import\(smilesHelpersUrl\.href\)/);
+  assert.match(smilesWorkerSource, /contentVersion = workerModuleUrl\.searchParams\.get\("xtbloom_version"\)/);
+  assert.match(smilesWorkerSource, /\^\[0-9a-f\]\{64\}\$/);
+  assert.match(smilesWorkerSource, /requires a 64-character SHA-256 content version/);
+  assert.doesNotMatch(smilesWorkerSource, /xtbloom_bootstrap/);
+  assert.doesNotMatch(smilesWorkerSource, /from "\.\/smiles_helpers\.js"/);
   assert.match(indexSource, /<script type="module">/);
   assert.match(indexSource, /prefetchBootstrap/);
   assert.match(indexSource, /await import\(url\.href\)/);
@@ -815,4 +1694,242 @@ test("timeout covers a worker that never becomes ready", async () => {
     /TIME_OUT/,
   );
   assert.equal(worker.terminated, true);
+});
+
+test("element symbols cover the same period-1..103 table as the C adapter", () => {
+  assert.equal(ELEMENT_SYMBOLS.length, 104);
+  assert.equal(ELEMENT_SYMBOLS[0], "");
+  assert.equal(ELEMENT_SYMBOLS[6], "C");
+  assert.equal(ELEMENT_SYMBOLS[17], "Cl");
+  assert.equal(ELEMENT_SYMBOLS[103], "Lr");
+});
+
+const WATER_XYZ =
+  "O  0.00000000  0.00000000  0.00000000\n" +
+  "H  0.00000000  0.00000000  0.95720000\n" +
+  "H  0.00000000  0.75718000 -0.58552000";
+
+test("valid XYZ preview parsing keeps canonical symbols and coordinates", () => {
+  const parsed = parseXyzCoordinates(WATER_XYZ);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.atomCount, 3);
+  assert.deepEqual(parsed.atoms.map((atom) => atom.symbol), ["O", "H", "H"]);
+  assert.deepEqual(parsed.atoms.map((atom) => atom.z), [0, 0.9572, -0.58552]);
+  assert.equal(parsed.atoms[2].y, 0.75718);
+  assert.equal(parsed.atoms[2].z, -0.58552);
+
+  const text = xyzAtomsToText(parsed.atoms);
+  assert.match(text, /^O 0 0 0\nH 0 0 0\.9572\nH 0 0\.75718 -0\.58552$/);
+  assert.deepEqual(parseXyzCoordinates(text), parsed);
+});
+
+test("XYZ preview accepts atomic numbers and case-insensitive symbols like the engine", () => {
+  const numeric = parseXyzCoordinates("8 0 0 0\n1 0 0 0.9572");
+  assert.equal(numeric.ok, true);
+  assert.deepEqual(numeric.atoms.map((atom) => atom.symbol), ["O", "H"]);
+  const mixedCase = parseXyzCoordinates("o 0 0 0\ncl 0 0 1\nNA 0 0 2\nmg 0 0 3");
+  assert.equal(mixedCase.ok, true);
+  assert.deepEqual(mixedCase.atoms.map((atom) => atom.symbol), ["O", "Cl", "Na", "Mg"]);
+});
+
+test("XYZ preview accepts extra trailing tokens the engine parser ignores", () => {
+  const parsed = parseXyzCoordinates("O 0 0 0 trailing\nH 0 0 0.9 x");
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.atomCount, 2);
+});
+
+test("XYZ preview canonicalizes whitespace the C parser rejects raw", () => {
+  const parsed = parseXyzCoordinates("  O 0 0 0\n \t \n\tH 0 0 0.9");
+  assert.equal(parsed.ok, true);
+  assert.equal(xyzAtomsToText(parsed.atoms), "O 0 0 0\nH 0 0 0.9");
+});
+
+test("revision ownership supersedes stale callbacks without clearing newer busy work", () => {
+  const owner = createRevisionOwner();
+  const oldToken = owner.capture();
+  assert.equal(owner.claim(oldToken), true);
+  assert.equal(owner.claim(oldToken), false);
+  assert.equal(owner.isBusy(), true);
+
+  owner.advance(); /* Reset or an XYZ edit supersedes the old operation. */
+  const newToken = owner.capture();
+  assert.equal(owner.claim(newToken), true);
+  assert.equal(owner.isCurrent(oldToken), false);
+  assert.equal(owner.release(oldToken), false);
+  assert.equal(owner.isBusy(), true);
+  assert.equal(owner.release(newToken), true);
+  assert.equal(owner.isBusy(), false);
+});
+
+test("debounced publication ignores cancelled and superseded callbacks", () => {
+  const callbacks = new Map();
+  const delays = [];
+  let nextTimer = 0;
+  const published = [];
+  const publisher = createDebouncedPublisher((value) => published.push(value), {
+    delayMs: 400,
+    setTimer: (callback, delay) => {
+      const id = ++nextTimer;
+      callbacks.set(id, callback);
+      delays.push(delay);
+      return id;
+    },
+    /* Keep callbacks callable to model a timer already queued by the event loop. */
+    clearTimer: () => {},
+  });
+
+  publisher.schedule("old-valid");
+  const oldCallback = callbacks.get(1);
+  publisher.cancel(); /* Invalid input retains the old viewer content. */
+  oldCallback();
+  assert.deepEqual(published, []);
+
+  publisher.schedule("valid-a");
+  const supersededCallback = callbacks.get(2);
+  publisher.schedule("valid-b");
+  supersededCallback();
+  callbacks.get(3)();
+  assert.deepEqual(published, ["valid-b"]);
+  assert.deepEqual(delays, [400, 400, 400]);
+});
+
+test("XYZ preview rejects malformed lines, bad numbers, and incomplete rows", () => {
+  for (const bad of [
+    "O 0 0",
+    "O  0  0  0\nH  0  0", /* missing z */
+    "O a 0 0",
+    "O 0 0 x",
+    "O 1e999 0 0", /* overflows to Infinity */
+    "O nan 0 0",
+  ]) {
+    assert.equal(parseXyzCoordinates(bad).ok, false, `should reject: ${bad}`);
+    assert.equal(parseXyzCoordinates(bad).errorCode, "err_xyz_parse");
+  }
+});
+
+test("XYZ preview rejects unknown or out-of-range element symbols", () => {
+  for (const bad of ["Xx 0 0 0", "Hx 0 0 0", "104 0 0 0", "-1 0 0 0", "0 0 0 0"]) {
+    const parsed = parseXyzCoordinates(bad);
+    assert.equal(parsed.ok, false, `should reject: ${bad}`);
+    assert.equal(parsed.errorCode, "err_xyz_element");
+  }
+});
+
+test("XYZ preview enforces the 512-atom engine limit with the same boundary", () => {
+  const block = "C 0 0 0\n";
+  assert.equal(parseXyzCoordinates(block.repeat(512)).ok, true);
+  const tooMany = parseXyzCoordinates(block.repeat(513));
+  assert.equal(tooMany.ok, false);
+  assert.equal(tooMany.errorCode, "err_xyz_too_many");
+});
+
+test("XYZ preview treats whitespace-only input as absent structure", () => {
+  const parsed = parseXyzCoordinates("  \n\t\n");
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.errorCode, "no_xyz");
+});
+
+test("live preview is debounced and gates calculate on the current structure", async () => {
+  const [appSource, indexSource] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+  ]);
+  /* Debounced auto-preview: editing XYZ updates the 3D view without compute. */
+  assert.match(appSource, /PREVIEW_DEBOUNCE_MS = 400/);
+  assert.match(appSource, /\$\("xyz"\)\.addEventListener\("input", schedulePreviewUpdate\)/);
+  assert.match(
+    appSource,
+    /function schedulePreviewUpdate\(\) \{[\s\S]*?const parsed = refreshPreview\(\{ renderViewer: false \}\);[\s\S]*?if \(!parsed\.ok\)[\s\S]*?previewPublisher\.schedule/,
+  );
+  assert.match(appSource, /refreshPreview\(\)/);
+  assert.match(
+    appSource,
+    /parsed\.errorCode === "no_xyz" \? "empty" : "error"/,
+  );
+  /* Malformed input keeps the last valid preview. */
+  assert.match(appSource, /Malformed input never replaces the last valid preview/);
+  assert.match(appSource, /updateMoleculeViewer\(previewState\.canonicalXyz\)/);
+  assert.match(appSource, /if \(molViewer && !molUnavailable\) updateMoleculeViewer/);
+  /* Calculate/optimize are gated on a valid structure. */
+  assert.match(appSource, /!engineBusy && !smilesBusy && previewState\.status === "valid"/);
+  assert.match(appSource, /parseXyzCoordinates\(\$\("xyz"\)\.value\)/);
+  assert.equal(
+    (appSource.match(/const xyz = xyzAtomsToText\(parsed\.atoms\);/g) || []).length,
+    2,
+  );
+  assert.doesNotMatch(appSource, /const xyz = \$\("xyz"\)\.value/);
+  /* SMILES import renders immediately through the preview path. */
+  assert.match(appSource, /function applyGeneratedGeometry\(result\)/);
+  /* Reset clears SMILES and restores the documented water template. */
+  assert.match(appSource, /\$\("smiles"\)\.value = ""/);
+  assert.match(appSource, /clearSmilesStatus\(\)/);
+  assert.match(appSource, /setCoordinateInput\(PRESETS\.water\.xyz\)/);
+  assert.match(indexSource, /id="xyz-hint"/);
+});
+
+test("stale calculations and SMILES workflows cannot overwrite newer input or Reset", async () => {
+  const appSource = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  /* Both streamed optimization frames and the final result are revision-gated. */
+  assert.match(
+    appSource,
+    /\(step\) => \{\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) return;/,
+  );
+  assert.match(
+    appSource,
+    /const dt = performance\.now\(\) - t0;\s*if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) \{\s*throw supersededCoordinateError\(\);/,
+  );
+  /* Reset invalidates in-flight generation and a URL workflow waiting on either worker. */
+  assert.match(
+    appSource,
+    /function invalidateSmilesWork\(\) \{[\s\S]*?smilesWorkflow\.advance\(\);[\s\S]*?urlSmiles = null;[\s\S]*?urlSmilesStarted = true;[\s\S]*?smilesClient\.cancel/,
+  );
+  assert.match(
+    appSource,
+    /\$\("reset"\)\.addEventListener\("click", \(\) => \{[\s\S]*?invalidateSmilesWork\(\);[\s\S]*?setCoordinateInput\(PRESETS\.water\.xyz\)/,
+  );
+  assert.match(
+    appSource,
+    /const result = await requestSmilesGeometry\(smiles\);\s*requireCurrentSmilesWorkflow\(workflowRevision\);/,
+  );
+  assert.match(
+    appSource,
+    /if \(\$\("smiles"\)\.value\.trim\(\) !== smiles\) throw supersededSmilesError\(\);/,
+  );
+  assert.match(
+    appSource,
+    /\$\("smiles"\)\.addEventListener\("input", \(\) => \{[\s\S]*?invalidateSmilesWork\(\);[\s\S]*?syncEngineControls\(\);/,
+  );
+  /* URL optimization must share the SMILES workflow's publication token, not
+   * merely check it after runOptimize has already rendered final geometry. */
+  assert.match(
+    appSource,
+    /runOptimize\(\{[\s\S]*?canPublish: \(\) => smilesWorkflow\.isCurrent\(workflowRevision\)/,
+  );
+  assert.match(
+    appSource,
+    /if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) return;/,
+  );
+  assert.match(
+    appSource,
+    /if \(!coordinateRevisions\.isCurrent\(requestRevision\) \|\| !canPublish\(\)\) \{\s*throw supersededCoordinateError\(\);/,
+  );
+  assert.match(appSource, /if \(hasCurrentResult\("optimize"\)\) renderOptimize/);
+  assert.match(appSource, /if \(hasCurrentResult\("optimize"\) && d\.geometry\)/);
+  assert.match(
+    appSource,
+    /if \(!smilesWorkflow\.isCurrent\(workflowRevision\) \|\| error\?\.name === "AbortError"\) return;/,
+  );
+});
+
+test("UI copy describes the real-time preview and retains it on bad input", async () => {
+  const [appSource, indexSource] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+  ]);
+  assert.match(appSource, /有效坐标实时预览/);
+  assert.match(appSource, /Valid coordinates preview live as you type/);
+  assert.match(appSource, /err_xyz_element: "含无法识别的元素符号/);
+  assert.match(appSource, /err_xyz_element: "Unknown element symbol/);
+  /* The static HTML hint must match the zh dictionary text. */
+  assert.match(indexSource, /有效坐标实时预览/);
 });

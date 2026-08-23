@@ -9,8 +9,20 @@
 #include <cstdint>
 #include <memory>
 
+#include "backends/common/xtb_model.hpp"
 #include "backends/cuda/gfn2_plan_schema.cuh"
 #include "backends/cuda/gfn2_scc_iteration.cuh"
+#include "model/gfn1/basis.hpp"
+#include "model/gfn1/es2.hpp"
+#include "model/gfn1/es3.hpp"
+#include "model/gfn1/external_point_charges.hpp"
+#include "model/gfn1/h0.hpp"
+#include "model/gfn1/integrals.hpp"
+#include "model/gfn1/mulliken.hpp"
+#include "model/gfn1/scc_driver.hpp"
+#include "model/gfn1/scc_mixer.hpp"
+#include "model/gfn1/spin.hpp"
+#include "model/gfn1/wavefunction.hpp"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
 #include "model/gfn2/d4.hpp"
@@ -55,7 +67,9 @@ struct Gfn2SccSetupD4Source {
   Gfn2SccSetupHostArray<Gfn2D4DeviceElementData> elements{};
   Gfn2SccSetupHostArray<Gfn2D4DeviceReferenceData> references{};
   Gfn2SccSetupHostArray<double> reference_c6{};
-  Gfn2SccSetupHostArray<double> pair_data{};
+  /* Initial contents for the small setup-owned CN outlet. Runtime refreshes
+   * this storage from the committed pair-list transaction before consumers
+   * can observe it; no dense five-value D4 pair data crosses this boundary. */
   Gfn2SccSetupHostArray<double> coordination_numbers{};
 };
 
@@ -71,6 +85,48 @@ struct Gfn2SccSetupPeriodicSource {
   const gfn2::PeriodicEmbeddingPlan* plan = nullptr;
   Gfn2SccSetupHostArray<double> shifts{};
   Gfn2SccSetupHostArray<double> response_matrices{};
+};
+
+struct Gfn1SccSetupPointChargeSource {
+  const gfn1::ExternalPointChargePlan* plan = nullptr;
+  Gfn2SccSetupHostArray<double> positions{};
+  Gfn2SccSetupHostArray<double> charges{};
+  Gfn2SccSetupHostArray<double> hardnesses{};
+  Gfn2SccSetupHostArray<double> shell_potential_cache{};
+};
+
+/* Scalar GFN1 setup source. The CUDA SCC engine shares the GFN2 topology,
+ * eigensolver, publication, and request machinery, while these plans remain
+ * the sole authority for GFN1 numerical parameters and scalar SCC policy. */
+struct Gfn1SccSetupInputSources {
+  const gfn1::BasisPlan* basis = nullptr;
+  const gfn1::IntegralPlan* integrals = nullptr;
+  const gfn1::H0Plan* h0_plan = nullptr;
+  const gfn1::WavefunctionLayout* wavefunction = nullptr;
+  const gfn1::ES2Plan* es2 = nullptr;
+  const gfn1::ES3Plan* es3 = nullptr;
+  const gfn1::SpinPolarizationPlan* spin = nullptr;
+  const gfn1::MullikenPlan* mulliken = nullptr;
+  const gfn1::SccMixerPlan* mixer = nullptr;
+  const gfn1::SccDriverPlan* driver = nullptr;
+
+  std::uint64_t geometry_generation = 0u;
+  std::uint64_t warm_start_generation = 0u;
+  Gfn2SccSetupHostArray<std::uint64_t> warm_start_generations{};
+  Gfn2SccSetupHostArray<std::int32_t> atomic_numbers{};
+  Gfn2SccSetupHostArray<double> positions{};
+  Gfn2SccSetupHostArray<double> covalent_radii{};
+  Gfn2SccSetupHostArray<double> h0{};
+  Gfn2SccSetupHostArray<double> overlap{};
+  /* GFN1 has no multipole Hamiltonian operators. These views must be empty;
+   * setup reserves zero-filled compatibility storage for the shared assembler. */
+  Gfn2SccSetupHostArray<double> dipole_integrals{};
+  Gfn2SccSetupHostArray<double> quadrupole_integrals{};
+  Gfn2SccSetupGeometryCacheSource geometry_cache{};
+  Gfn2SccSetupES2CacheSource es2_cache{};
+  Gfn1SccSetupPointChargeSource point_charges{};
+  Gfn2SccSetupPeriodicSource periodic{};
+  Gfn2EigensolverOptions eigensolver_options{};
 };
 
 /*
@@ -189,6 +245,10 @@ class Gfn2SccSetupInputs {
 
   [[nodiscard]] static Gfn2SccSetupInputsDiagnostic create(
       const Gfn2SccSetupInputSources& sources, const Gfn2RaggedTopologyView& host_topology,
+      std::uint64_t plan_token, Gfn2SccSetupInputs& output) noexcept;
+
+  [[nodiscard]] static Gfn2SccSetupInputsDiagnostic create(
+      const Gfn1SccSetupInputSources& sources, const Gfn2RaggedTopologyView& host_topology,
       std::uint64_t plan_token, Gfn2SccSetupInputs& output) noexcept;
 
   [[nodiscard]] bool valid() const noexcept;

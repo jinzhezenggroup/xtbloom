@@ -50,6 +50,27 @@ def _case_data_dict(
     }
 
 
+def _gfn1_case_data_dict(case_id: str) -> dict[str, object]:
+    """Build a dpdata data dict from the independent GFN1 oracle manifest."""
+    case = _cases.gfn1_case_by_id(case_id)
+    numbers, positions, _, _, _ = _cases.gfn1_structure_inputs(case)
+    atom_names = _cases.numbers_to_symbols(sorted({int(z) for z in numbers}))
+    type_map = {
+        number: index for index, number in enumerate(sorted({int(z) for z in numbers}))
+    }
+    return {
+        "atom_names": atom_names,
+        "atom_numbs": [
+            int(sum(int(z) == number for z in numbers)) for number in type_map
+        ],
+        "atom_types": np.array([type_map[int(z)] for z in numbers], dtype=np.int64),
+        "orig": np.zeros(3),
+        "cells": np.eye(3)[None, ...],
+        "coords": np.asarray(positions)[None, ...] * _BOHR,
+        "nopbc": True,
+    }
+
+
 def _ensure_driver_registered() -> type:
     """Load and return the registered xTBloom dpdata driver class."""
     # The entry point is registered after a normal wheel install; for a source
@@ -67,6 +88,88 @@ def test_driver_registered() -> None:
     assert driver_class.__module__ == "xtbloom.dpdata"
 
 
+def test_driver_forwards_scc_policy_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep dpdata's generic keyword bridge aligned with BatchCalculator."""
+    from xtbloom.dpdata import XTBloomDriver
+
+    captured: dict[str, object] = {}
+
+    class FakeBatchCalculator:
+        """Record constructor settings without requiring a numerical runtime."""
+
+        def __init__(
+            self, structures: list[Structure], method: str, **kwargs: object
+        ) -> None:
+            captured["structures"] = structures
+            captured["method"] = method
+            captured.update(kwargs)
+
+        def compute(self, *, raise_on_failure: bool) -> SimpleNamespace:
+            assert raise_on_failure
+            structures = captured["structures"]
+            assert isinstance(structures, list)
+            return SimpleNamespace(
+                energies=np.zeros(len(structures), dtype=np.float64),
+                forces=np.concatenate(
+                    [np.zeros_like(structure.positions) for structure in structures]
+                ),
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("xtbloom.dpdata.BatchCalculator", FakeBatchCalculator)
+    XTBloomDriver(
+        scc_mixer="modified_broyden",
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    ).label(_case_data_dict("ketene"))
+    assert captured["scc_mixer"] == "modified_broyden"
+    assert captured["scc_mixer_history"] == 16
+    assert captured["scc_mixer_damping"] == 0.25
+    assert captured["determinism"] == "reproducible"
+
+
+def test_driver_forwards_gfn1_method_and_cpu_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep model identity explicit across the dpdata generic keyword bridge."""
+    from xtbloom.dpdata import XTBloomDriver
+
+    captured: dict[str, object] = {}
+
+    class FakeBatchCalculator:
+        def __init__(
+            self, structures: list[Structure], method: str, **kwargs: object
+        ) -> None:
+            captured["method"] = method
+            captured["backend"] = kwargs.get("backend")
+            captured["structures"] = structures
+
+        def compute(self, *, raise_on_failure: bool) -> SimpleNamespace:
+            assert raise_on_failure
+            structures = captured["structures"]
+            assert isinstance(structures, list)
+            return SimpleNamespace(
+                energies=np.zeros(len(structures), dtype=np.float64),
+                forces=np.concatenate(
+                    [np.zeros_like(structure.positions) for structure in structures]
+                ),
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("xtbloom.dpdata.BatchCalculator", FakeBatchCalculator)
+    XTBloomDriver(method="GFN1", backend="cpu").label(
+        _gfn1_case_data_dict("gfn1_ketene")
+    )
+    assert captured["method"] == "GFN1"
+    assert captured["backend"] == "cpu"
+    assert isinstance(captured["structures"], list)
+
+
 def test_label_energies_match_golden() -> None:
     """Match dpdata labels to golden energies and forces in dpdata units."""
     _ensure_driver_registered()
@@ -74,6 +177,26 @@ def test_label_energies_match_golden() -> None:
     labeled = system.predict(driver="xtbloom")
     golden = _cases.golden(_cases.case_by_id("ketene"))
     tolerance = _cases.tolerances()
+    assert labeled.data["energies"][0] == pytest.approx(
+        golden["energy_hartree"] * _HARTREE_TO_EV,
+        abs=tolerance["energy"]["atol"] * _HARTREE_TO_EV,
+    )
+    assert labeled.data["forces"][0] == pytest.approx(
+        np.asarray(golden["forces_hartree_per_bohr"]).reshape(-1, 3)
+        * _HARTREE_TO_EV
+        / _BOHR,
+        abs=tolerance["forces"]["atol"] * _HARTREE_TO_EV / _BOHR,
+    )
+
+
+def test_label_gfn1_auto_matches_independent_golden() -> None:
+    """Label dpdata frames with GFN1 through the shared AUTO backend policy."""
+    _ensure_driver_registered()
+    case = _cases.gfn1_case_by_id("gfn1_ketene")
+    system = dpdata.System(data=_gfn1_case_data_dict("gfn1_ketene"))
+    labeled = system.predict(driver="xtbloom", method="GFN1-xTB")
+    golden = _cases.gfn1_golden(case)
+    tolerance = _cases.gfn1_tolerances()
     assert labeled.data["energies"][0] == pytest.approx(
         golden["energy_hartree"] * _HARTREE_TO_EV,
         abs=tolerance["energy"]["atol"] * _HARTREE_TO_EV,
@@ -138,6 +261,65 @@ def test_driver_reads_per_frame_multiplicity_without_forcing_uhf_zero() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("charge", np.array([0.0, 0.0])),
+        ("charge", np.zeros((3, 1))),
+        ("uhf", np.array([0, 0, 0, 0], dtype=np.int32)),
+        ("multiplicity", np.array([[1, 1, 1]], dtype=np.int32)),
+    ],
+)
+def test_driver_rejects_malformed_per_frame_metadata(
+    key: str, value: np.ndarray
+) -> None:
+    """Reject present charge/spin metadata whose shape does not match the frames."""
+    from xtbloom.dpdata import XTBloomDriver
+    from xtbloom.exceptions import XTBloomValueError
+
+    data = _case_data_dict("ketene", nframes=3)
+    data[key] = value
+    with pytest.raises(XTBloomValueError, match=key):
+        XTBloomDriver().label(data)
+
+
+def test_driver_fixed_metadata_overrides_malformed_per_frame_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep explicit constructor values authoritative over ignored data metadata."""
+    from xtbloom.dpdata import XTBloomDriver
+
+    captured: dict[str, object] = {}
+
+    class FakeBatchCalculator:
+        def __init__(
+            self, structures: list[Structure], _method: str, **_kwargs: object
+        ) -> None:
+            captured["structures"] = structures
+
+        def compute(self, *, raise_on_failure: bool) -> SimpleNamespace:
+            assert raise_on_failure
+            structures = captured["structures"]
+            assert isinstance(structures, list)
+            return SimpleNamespace(
+                energies=np.zeros(len(structures), dtype=np.float64),
+                forces=np.concatenate(
+                    [np.zeros_like(structure.positions) for structure in structures]
+                ),
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("xtbloom.dpdata.BatchCalculator", FakeBatchCalculator)
+    data = _case_data_dict("ketene", nframes=3)
+    data["charge"] = np.array([99.0, 99.0])
+    XTBloomDriver(charge=1.0).label(data)
+    structures = captured["structures"]
+    assert isinstance(structures, list)
+    assert [structure.charge for structure in structures] == [1.0, 1.0, 1.0]
+
+
 def test_driver_raises_instead_of_publishing_failed_frame_nans() -> None:
     """Raise instead of publishing NaNs for a failed dpdata frame."""
     _ensure_driver_registered()
@@ -171,6 +353,30 @@ def test_driver_rejects_malformed_scalar_coordinates(coords: object) -> None:
     with pytest.raises(
         XTBloomValueError, match=r"coords must have shape \(nframes, natoms, 3\)"
     ):
+        XTBloomDriver().label(data)
+
+
+@pytest.mark.parametrize(
+    ("atom_types", "message"),
+    [
+        (np.array([0.5, 1.0, 1.0, 0.0, 2.0]), "exact integer"),
+        (np.array([True, False, False, True, False]), "exact integer"),
+        (np.array([-1, 1, 1, 0, 2], dtype=np.int64), "outside atom_names"),
+        (np.array([3, 1, 1, 0, 2], dtype=np.int64), "outside atom_names"),
+        (np.array([[0], [1], [1], [0], [2]], dtype=np.int64), "one-dimensional"),
+        (np.array([], dtype=np.int64), "nonempty one-dimensional"),
+    ],
+)
+def test_driver_rejects_malformed_atom_types(
+    atom_types: np.ndarray, message: str
+) -> None:
+    """Reject atom type metadata before it can change species by coercion/indexing."""
+    from xtbloom.dpdata import XTBloomDriver
+    from xtbloom.exceptions import XTBloomValueError
+
+    data = _case_data_dict("ketene")
+    data["atom_types"] = atom_types
+    with pytest.raises(XTBloomValueError, match=message):
         XTBloomDriver().label(data)
 
 
@@ -243,13 +449,14 @@ def test_minimizer_applies_bounded_first_trial(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Evaluate the bounded initial move instead of repeating the input geometry."""
+    import xtbloom._optimizer as optimizer_module
     import xtbloom.dpdata as dpdata_module
 
     calls = _patch_minimizer_calculator(
         monkeypatch, lambda call, _positions: (1.0 - 0.5 * call, 1.0)
     )
-    direction = Mock(wraps=dpdata_module.lbfgs_direction)
-    monkeypatch.setattr(dpdata_module, "lbfgs_direction", direction)
+    direction = Mock(wraps=optimizer_module.lbfgs_direction)
+    monkeypatch.setattr(optimizer_module, "lbfgs_direction", direction)
     labeled = dpdata_module.XTBloomMinimizer(max_steps=1).minimize(
         _case_data_dict("oh_radical")
     )
@@ -259,6 +466,23 @@ def test_minimizer_applies_bounded_first_trial(
     # A unit force gives alpha=0.1 and the fresh L-BFGS direction is +force.
     np.testing.assert_allclose(calls[1][0], calls[0][0] + 0.1)
     np.testing.assert_allclose(labeled["coords"][0] / _BOHR, calls[1][0])
+
+
+def test_minimizer_uses_per_atom_force_norm_for_fmax(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep a frame active when components pass fmax but the vector norm does not."""
+    from xtbloom.dpdata import XTBloomMinimizer
+
+    component = 0.004 / (_HARTREE_TO_EV / _BOHR)
+
+    def diagonal_force(call: int, _positions: np.ndarray) -> tuple[float, float]:
+        return (0.0, component) if call == 0 else (-1.0, 0.0)
+
+    calls = _patch_minimizer_calculator(monkeypatch, diagonal_force)
+    XTBloomMinimizer(fmax=0.005, max_steps=1).minimize(_case_data_dict("oh_radical"))
+
+    assert len(calls) == 2
 
 
 def test_minimizer_reports_accepted_state_at_step_limit(
@@ -320,7 +544,7 @@ def test_system_minimize_converges_and_lowers_energy() -> None:
     coords = np.asarray(labeled.data["coords"])
     assert labeled.get_nframes() == 1
     assert forces.shape == (1, 5, 3)
-    assert float(np.max(np.abs(forces))) <= 5e-3
+    assert float(np.max(np.linalg.norm(forces, axis=2))) <= 5e-3
     assert energies[0] <= initial.data["energies"][0]
     assert not np.allclose(coords[0], initial.data["coords"][0], atol=1e-3)
 
@@ -343,7 +567,7 @@ def test_minimize_relaxes_every_frame_in_one_batch() -> None:
     assert labeled.get_nframes() == 3
     assert forces.shape == (3, 5, 3)
     assert energies.shape == (3,)
-    assert float(np.max(np.abs(forces))) <= 5e-3
+    assert float(np.max(np.linalg.norm(forces, axis=2))) <= 5e-3
     # Each frame converged to a different (energy-lowered) geometry.
     assert len({float(e) for e in energies}) == 3
     assert not np.allclose(coords[0], coords[1])

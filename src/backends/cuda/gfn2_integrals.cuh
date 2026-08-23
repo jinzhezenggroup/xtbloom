@@ -8,10 +8,24 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/xtb_model.hpp"
+
 namespace xtbloom::detail::cuda {
 
 inline constexpr std::int64_t kGfn2IntegralDipoleComponents = 3;
 inline constexpr std::int64_t kGfn2IntegralQuadrupoleComponents = 6;
+/* Keep linear staging grids bounded independently of ragged batch size. */
+inline constexpr std::int64_t kGfn2IntegralLinearBlockBudget = 512;
+
+/* Host-visible shape for topology-fixed matrix staging and publication nodes. */
+struct Gfn2IntegralLinearLaunchShape {
+  std::uint32_t systems = 0u;
+  std::uint32_t tiles = 0u;
+};
+
+[[nodiscard]] bool make_gfn2_integral_linear_launch_shape(
+    std::int64_t batch_size, std::int64_t tiles_per_system,
+    Gfn2IntegralLinearLaunchShape& shape) noexcept;
 
 /* First asynchronous semantic or arithmetic failure in an integral sequence. */
 enum class Gfn2IntegralDeviceError : std::uint32_t {
@@ -37,7 +51,10 @@ enum class Gfn2IntegralDeviceError : std::uint32_t {
  * every array explicitly and supplies dense shell-pair offsets: system s owns
  * [shell_pair_offsets[s], shell_pair_offsets[s+1]), whose length is nshell^2.
  * maximum_system_shells is the exact maximum nshell over the batch and bounds
- * the allocation-free launch grid. All offsets are zero-based half-open.
+ * the allocation-free shell-pair launch grid. linear_tiles_per_system is
+ * selected once from the same host topology as density contraction and keeps
+ * direct and Graph matrix scans independent of runtime activity. All offsets
+ * are zero-based half-open.
  *
  * The basis is limited to the complete GFN2 s/p/d path (l <= 2). Primitive
  * coefficients already include the Cartesian normalization from BasisPlan.
@@ -51,6 +68,7 @@ struct Gfn2IntegralDeviceBatch {
   std::int64_t total_matrix_elements = 0;
   std::int64_t total_shell_pair_elements = 0;
   std::int64_t maximum_system_shells = 0;
+  std::int64_t linear_tiles_per_system = 0;
   double integral_cutoff = 0.0;
   std::uint64_t plan_token = 0;
 
@@ -79,6 +97,11 @@ struct Gfn2IntegralDeviceBatch {
   const std::uint8_t* angular_momenta = nullptr;
   const double* primitive_exponents = nullptr;
   const double* primitive_coefficients = nullptr;
+
+  /* The overlap primitive is shared by GFN1 and GFN2. Only GFN2 constructs
+   * dipole/quadrupole Hamiltonian operators, so the selected model controls
+   * whether those component planes are required, evaluated, and published. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 /* Device-resident immutable arrays uploaded from H0Plan accessors. */

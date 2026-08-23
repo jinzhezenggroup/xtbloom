@@ -22,9 +22,13 @@ constexpr std::uint32_t component_bit(Gfn2SccPotentialComponent component) noexc
   return static_cast<std::uint32_t>(component);
 }
 
-constexpr std::uint32_t kMandatoryComponents = component_bit(Gfn2SccPotentialComponent::kES2) |
-                                               component_bit(Gfn2SccPotentialComponent::kES3) |
-                                               component_bit(Gfn2SccPotentialComponent::kAES2);
+constexpr std::uint32_t kCommonMandatoryComponents =
+    component_bit(Gfn2SccPotentialComponent::kES2) | component_bit(Gfn2SccPotentialComponent::kES3);
+
+constexpr std::uint32_t mandatory_components(XtbModelFlavor model) noexcept {
+  return kCommonMandatoryComponents |
+         (model == XtbModelFlavor::kGfn2 ? component_bit(Gfn2SccPotentialComponent::kAES2) : 0u);
+}
 
 Diagnostic fail(Error error, Field field, std::int64_t index = -1, std::size_t required = 0u,
                 std::size_t provided = 0u, cudaError_t cuda_status = cudaSuccess) noexcept {
@@ -63,6 +67,7 @@ bool checked_add(std::int64_t first, std::int64_t second, std::int64_t& result) 
 }
 
 struct Shape {
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
   std::int64_t batch = 0;
   std::int64_t physical_atoms = 0;
   std::int64_t physical_shells = 0;
@@ -81,6 +86,7 @@ struct Shape {
   std::int64_t history = 0;
   std::int64_t history_elements = 0;
   std::int64_t omega_elements = 0;
+  std::int64_t atomic_multipole_components = 0;
   std::uint32_t components = 0u;
   std::uint64_t token = 0u;
   std::uint64_t layout_fingerprint = 0u;
@@ -96,8 +102,14 @@ bool derive_shape(const Gfn2SccIterationDevicePlan& plan, Shape& shape) noexcept
       plan.wavefunction_layout.plan_token != plan.plan_token ||
       plan.wavefunction_layout.layout_fingerprint == 0u ||
       plan.wavefunction_layout.batch_size != plan.topology.batch_size ||
-      plan.mixer_policy.history_size <= 0 ||
-      (plan.enabled_components & kMandatoryComponents) != kMandatoryComponents ||
+      plan.mixer_policy.history_size <= 0 || !valid_xtb_model_flavor(plan.model) ||
+      plan.mixer_policy.atomic_multipole_components !=
+          (plan.model == XtbModelFlavor::kGfn1 ? 0u : 9u) ||
+      (plan.enabled_components & mandatory_components(plan.model)) !=
+          mandatory_components(plan.model) ||
+      (plan.model == XtbModelFlavor::kGfn1 &&
+       (plan.enabled_components & (component_bit(Gfn2SccPotentialComponent::kAES2) |
+                                   component_bit(Gfn2SccPotentialComponent::kD4TwoBody))) != 0u) ||
       (plan.enabled_components & ~kGfn2SccPotentialAllComponents) != 0u) {
     return false;
   }
@@ -113,6 +125,7 @@ bool derive_shape(const Gfn2SccIterationDevicePlan& plan, Shape& shape) noexcept
                          plan.wavefunction_layout.total_spin_matrix_elements)) {
     return false;
   }
+  shape.model = plan.model;
   shape.batch = plan.topology.batch_size;
   shape.physical_atoms = plan.topology.total_atoms;
   shape.physical_shells = plan.topology.total_shells;
@@ -124,14 +137,19 @@ bool derive_shape(const Gfn2SccIterationDevicePlan& plan, Shape& shape) noexcept
   shape.spin_orbitals = plan.wavefunction_layout.total_spin_orbitals;
   shape.spin_matrices = plan.wavefunction_layout.total_spin_matrix_elements;
   shape.history = plan.mixer_policy.history_size;
+  shape.atomic_multipole_components = plan.mixer_policy.atomic_multipole_components;
   shape.components = plan.enabled_components;
   shape.token = plan.plan_token;
   shape.layout_fingerprint = plan.wavefunction_layout.layout_fingerprint;
-  return checked_multiply(shape.spin_atoms, 3, shape.spin_dipoles) &&
-         checked_multiply(shape.spin_atoms, 6, shape.spin_quadrupoles) &&
+  return checked_multiply(shape.model == XtbModelFlavor::kGfn2 ? shape.spin_atoms : 0, 3,
+                          shape.spin_dipoles) &&
+         checked_multiply(shape.model == XtbModelFlavor::kGfn2 ? shape.spin_atoms : 0, 6,
+                          shape.spin_quadrupoles) &&
          checked_multiply(shape.batch, 2, shape.two_batch) &&
          checked_multiply(shape.physical_orbitals, 2, shape.two_orbitals) &&
-         checked_multiply(shape.spin_atoms, 9, shape.mixer_vector) &&
+         checked_multiply(shape.spin_atoms,
+                          static_cast<std::int64_t>(plan.mixer_policy.atomic_multipole_components),
+                          shape.mixer_vector) &&
          checked_add(shape.spin_shells, shape.mixer_vector, shape.mixer_vector) &&
          checked_multiply(shape.mixer_vector, shape.history, shape.history_elements) &&
          checked_multiply(shape.batch, shape.history, shape.omega_elements);
@@ -159,6 +177,11 @@ bool empty(const Gfn2SccIterationHostArrayView<T>& view) noexcept {
 template <typename T>
 bool exact_host(const Gfn2SccIterationHostArrayView<T>& view, std::int64_t expected) noexcept {
   return expected > 0 && view.elements == expected && view.data != nullptr;
+}
+
+template <typename T>
+bool exact_or_empty(const Gfn2SccIterationHostArrayView<T>& view, std::int64_t expected) noexcept {
+  return expected == 0 ? empty(view) : exact_host(view, expected);
 }
 
 bool finite_array(const Gfn2SccIterationHostArrayView<double>& view) noexcept {
@@ -350,8 +373,8 @@ Diagnostic validate_common_host(const Shape& shape,
   const auto& population = host.wavefunction.population;
   if (!exact_host(population.shell_charges, shape.spin_shells) ||
       !exact_host(population.atomic_charges, shape.spin_atoms) ||
-      !exact_host(population.atomic_dipoles, shape.spin_dipoles) ||
-      !exact_host(population.atomic_quadrupoles, shape.spin_quadrupoles)) {
+      !exact_or_empty(population.atomic_dipoles, shape.spin_dipoles) ||
+      !exact_or_empty(population.atomic_quadrupoles, shape.spin_quadrupoles)) {
     return fail(Error::kInvalidExtent, Field::kPopulation);
   }
   if (!finite_array(population.shell_charges) || !finite_array(population.atomic_charges) ||
@@ -418,7 +441,8 @@ Diagnostic validate_warm_extents(const Shape& shape,
     return enabled(shape, component) ? exact_host(values, shape.batch) : empty(values);
   };
   if (!exact_host(energy.core, shape.batch) || !exact_host(energy.es2, shape.batch) ||
-      !exact_host(energy.es3, shape.batch) || !exact_host(energy.aes2, shape.batch) ||
+      !exact_host(energy.es3, shape.batch) ||
+      !optional(energy.aes2, Gfn2SccPotentialComponent::kAES2) ||
       !optional(energy.d4_two_body, Gfn2SccPotentialComponent::kD4TwoBody) ||
       !optional(energy.explicit_point_charge, Gfn2SccPotentialComponent::kExplicitPointCharge) ||
       !optional(energy.periodic_embedding, Gfn2SccPotentialComponent::kPeriodicEmbedding) ||
@@ -431,7 +455,7 @@ Diagnostic validate_warm_extents(const Shape& shape,
     return fail(Error::kInvalidExtent, Field::kEnergy);
   }
   if (!finite_array(energy.core) || !finite_array(energy.es2) || !finite_array(energy.es3) ||
-      !finite_array(energy.aes2) ||
+      (enabled(shape, Gfn2SccPotentialComponent::kAES2) && !finite_array(energy.aes2)) ||
       (enabled(shape, Gfn2SccPotentialComponent::kD4TwoBody) &&
        !finite_array(energy.d4_two_body)) ||
       (enabled(shape, Gfn2SccPotentialComponent::kExplicitPointCharge) &&
@@ -469,8 +493,8 @@ Diagnostic validate_warm_extents(const Shape& shape,
 
   const auto& scc = host.scc;
   if (!exact_host(scc.current_shell_charges, shape.spin_shells) ||
-      !exact_host(scc.current_atomic_dipoles, shape.spin_dipoles) ||
-      !exact_host(scc.current_atomic_quadrupoles, shape.spin_quadrupoles) ||
+      !exact_or_empty(scc.current_atomic_dipoles, shape.spin_dipoles) ||
+      !exact_or_empty(scc.current_atomic_quadrupoles, shape.spin_quadrupoles) ||
       !exact_host(scc.free_energies, shape.batch) ||
       !exact_host(scc.previous_free_energies, shape.batch) ||
       !exact_host(scc.free_energy_changes, shape.batch) ||
@@ -525,7 +549,7 @@ Diagnostic validate_warm_invariants(const Shape& shape,
     const std::int64_t shell_end = spin_shell_offset(host, system + 1);
     const std::int64_t atoms = atom_end - atom_begin;
     const std::int64_t shells = shell_end - shell_begin;
-    const std::int64_t vector_begin = shell_begin + 9 * atom_begin;
+    const std::int64_t vector_begin = shell_begin + shape.atomic_multipole_components * atom_begin;
     const double* const packed = mixer.current_inputs.data + vector_begin;
     for (std::int64_t shell = 0; shell < shells; ++shell) {
       const double current = scc.current_shell_charges.data[shell_begin + shell];
@@ -535,25 +559,27 @@ Diagnostic validate_warm_invariants(const Shape& shape,
         return fail(Error::kInvalidWarmState, Field::kMixer, system);
       }
     }
-    const std::int64_t dipole_base = shells;
-    const std::int64_t quadrupole_base = shells + 3 * atoms;
-    for (std::int64_t atom = 0; atom < atoms; ++atom) {
-      for (std::int64_t component = 0; component < 3; ++component) {
-        const std::int64_t global = 3 * (atom_begin + atom) + component;
-        const double current = scc.current_atomic_dipoles.data[global];
-        if (packed[dipole_base + 3 * atom + component] != current ||
-            (scc.converged.data[system] == 0u &&
-             wave.population.atomic_dipoles.data[global] != current)) {
-          return fail(Error::kInvalidWarmState, Field::kMixer, system);
+    if (shape.atomic_multipole_components != 0) {
+      const std::int64_t dipole_base = shells;
+      const std::int64_t quadrupole_base = shells + 3 * atoms;
+      for (std::int64_t atom = 0; atom < atoms; ++atom) {
+        for (std::int64_t component = 0; component < 3; ++component) {
+          const std::int64_t global = 3 * (atom_begin + atom) + component;
+          const double current = scc.current_atomic_dipoles.data[global];
+          if (packed[dipole_base + 3 * atom + component] != current ||
+              (scc.converged.data[system] == 0u &&
+               wave.population.atomic_dipoles.data[global] != current)) {
+            return fail(Error::kInvalidWarmState, Field::kMixer, system);
+          }
         }
-      }
-      for (std::int64_t component = 0; component < 6; ++component) {
-        const std::int64_t global = 6 * (atom_begin + atom) + component;
-        const double current = scc.current_atomic_quadrupoles.data[global];
-        if (packed[quadrupole_base + 6 * atom + component] != current ||
-            (scc.converged.data[system] == 0u &&
-             wave.population.atomic_quadrupoles.data[global] != current)) {
-          return fail(Error::kInvalidWarmState, Field::kMixer, system);
+        for (std::int64_t component = 0; component < 6; ++component) {
+          const std::int64_t global = 6 * (atom_begin + atom) + component;
+          const double current = scc.current_atomic_quadrupoles.data[global];
+          if (packed[quadrupole_base + 6 * atom + component] != current ||
+              (scc.converged.data[system] == 0u &&
+               wave.population.atomic_quadrupoles.data[global] != current)) {
+            return fail(Error::kInvalidWarmState, Field::kMixer, system);
+          }
         }
       }
     }
@@ -703,13 +729,16 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
                     diagnostic) ||
       !builder.copy(state.raw_population.qat, state.raw_population.qat_elements,
                     population.atomic_charges, shape.spin_atoms, Field::kPopulation, 1,
-                    diagnostic) ||
-      !builder.copy(state.raw_population.dipole, state.raw_population.dipole_elements,
-                    population.atomic_dipoles, shape.spin_dipoles, Field::kPopulation, 2,
-                    diagnostic) ||
-      !builder.copy(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
-                    population.atomic_quadrupoles, shape.spin_quadrupoles, Field::kPopulation, 3,
                     diagnostic)) {
+    return diagnostic;
+  }
+  if (shape.atomic_multipole_components != 0 &&
+      (!builder.copy(state.raw_population.dipole, state.raw_population.dipole_elements,
+                     population.atomic_dipoles, shape.spin_dipoles, Field::kPopulation, 2,
+                     diagnostic) ||
+       !builder.copy(state.raw_population.quadrupole, state.raw_population.quadrupole_elements,
+                     population.atomic_quadrupoles, shape.spin_quadrupoles, Field::kPopulation, 3,
+                     diagnostic))) {
     return diagnostic;
   }
 
@@ -826,7 +855,8 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
         !copy_energy(state.free_energy.core, state.free_energy.core_elements, energy.core, 0) ||
         !copy_energy(state.free_energy.es2, state.free_energy.es2_elements, energy.es2, 1) ||
         !copy_energy(state.free_energy.es3, state.free_energy.es3_elements, energy.es3, 2) ||
-        !copy_energy(state.free_energy.aes2, state.free_energy.aes2_elements, energy.aes2, 3) ||
+        (enabled(shape, Gfn2SccPotentialComponent::kAES2) &&
+         !copy_energy(state.free_energy.aes2, state.free_energy.aes2_elements, energy.aes2, 3)) ||
         (enabled(shape, Gfn2SccPotentialComponent::kD4TwoBody) &&
          !copy_energy(state.free_energy.d4_two_body, state.free_energy.d4_two_body_elements,
                       energy.d4_two_body, 4)) ||
@@ -871,7 +901,8 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
         !fill_energy(state.free_energy.core, state.free_energy.core_elements, nan, 0) ||
         !fill_energy(state.free_energy.es2, state.free_energy.es2_elements, nan, 1) ||
         !fill_energy(state.free_energy.es3, state.free_energy.es3_elements, nan, 2) ||
-        !fill_energy(state.free_energy.aes2, state.free_energy.aes2_elements, nan, 3) ||
+        (enabled(shape, Gfn2SccPotentialComponent::kAES2) &&
+         !fill_energy(state.free_energy.aes2, state.free_energy.aes2_elements, nan, 3)) ||
         !fill_energy(state.free_energy.d4_two_body, state.free_energy.d4_two_body_elements,
                      enabled(shape, Gfn2SccPotentialComponent::kD4TwoBody) ? nan : 0.0, 4) ||
         !fill_energy(state.free_energy.explicit_point_charge,
@@ -968,14 +999,18 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
         const std::int64_t shell_end = spin_shell_offset(host, system + 1);
         const std::int64_t atoms = atom_end - atom_begin;
         const std::int64_t shells = shell_end - shell_begin;
-        const std::int64_t vector_begin = shell_begin + 9 * atom_begin;
+        const std::int64_t vector_begin =
+            shell_begin + shape.atomic_multipole_components * atom_begin;
         std::memcpy(packed + vector_begin, population.shell_charges.data + shell_begin,
                     static_cast<std::size_t>(shells) * sizeof(double));
-        std::memcpy(packed + vector_begin + shells, population.atomic_dipoles.data + 3 * atom_begin,
-                    static_cast<std::size_t>(3 * atoms) * sizeof(double));
-        std::memcpy(packed + vector_begin + shells + 3 * atoms,
-                    population.atomic_quadrupoles.data + 6 * atom_begin,
-                    static_cast<std::size_t>(6 * atoms) * sizeof(double));
+        if (shape.atomic_multipole_components != 0) {
+          std::memcpy(packed + vector_begin + shells,
+                      population.atomic_dipoles.data + 3 * atom_begin,
+                      static_cast<std::size_t>(3 * atoms) * sizeof(double));
+          std::memcpy(packed + vector_begin + shells + 3 * atoms,
+                      population.atomic_quadrupoles.data + 6 * atom_begin,
+                      static_cast<std::size_t>(6 * atoms) * sizeof(double));
+        }
       }
     }
   }
@@ -984,12 +1019,6 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
   if (!builder.target(state.scc.current_inputs.shell_charges,
                       state.scc.current_inputs.shell_elements, shape.spin_shells, Field::kSccTrace,
                       0, diagnostic) ||
-      !builder.target(state.scc.current_inputs.atomic_dipoles,
-                      state.scc.current_inputs.dipole_elements, shape.spin_dipoles,
-                      Field::kSccTrace, 1, diagnostic) ||
-      !builder.target(state.scc.current_inputs.atomic_quadrupoles,
-                      state.scc.current_inputs.quadrupole_elements, shape.spin_quadrupoles,
-                      Field::kSccTrace, 2, diagnostic) ||
       !builder.target(state.scc.free_energies, state.scc.batch_elements, shape.batch,
                       Field::kSccTrace, 3, diagnostic) ||
       !builder.target(state.scc.previous_free_energies, state.scc.batch_elements, shape.batch,
@@ -1006,16 +1035,19 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
                       9, diagnostic)) {
     return diagnostic;
   }
+  if (shape.atomic_multipole_components != 0 &&
+      (!builder.target(state.scc.current_inputs.atomic_dipoles,
+                       state.scc.current_inputs.dipole_elements, shape.spin_dipoles,
+                       Field::kSccTrace, 1, diagnostic) ||
+       !builder.target(state.scc.current_inputs.atomic_quadrupoles,
+                       state.scc.current_inputs.quadrupole_elements, shape.spin_quadrupoles,
+                       Field::kSccTrace, 2, diagnostic))) {
+    return diagnostic;
+  }
   if (host.mode == Mode::kWarm) {
     if (!builder.copy(state.scc.current_inputs.shell_charges,
                       state.scc.current_inputs.shell_elements, scc.current_shell_charges,
                       shape.spin_shells, Field::kSccTrace, 0, diagnostic) ||
-        !builder.copy(state.scc.current_inputs.atomic_dipoles,
-                      state.scc.current_inputs.dipole_elements, scc.current_atomic_dipoles,
-                      shape.spin_dipoles, Field::kSccTrace, 1, diagnostic) ||
-        !builder.copy(state.scc.current_inputs.atomic_quadrupoles,
-                      state.scc.current_inputs.quadrupole_elements, scc.current_atomic_quadrupoles,
-                      shape.spin_quadrupoles, Field::kSccTrace, 2, diagnostic) ||
         !builder.copy(state.scc.free_energies, state.scc.batch_elements, scc.free_energies,
                       shape.batch, Field::kSccTrace, 3, diagnostic) ||
         !builder.copy(state.scc.previous_free_energies, state.scc.batch_elements,
@@ -1032,23 +1064,35 @@ Diagnostic project_state_image(const Shape& shape, const Gfn2SccIterationDeviceP
                       Field::kSccTrace, 9, diagnostic)) {
       return diagnostic;
     }
+    if (shape.atomic_multipole_components != 0 &&
+        (!builder.copy(state.scc.current_inputs.atomic_dipoles,
+                       state.scc.current_inputs.dipole_elements, scc.current_atomic_dipoles,
+                       shape.spin_dipoles, Field::kSccTrace, 1, diagnostic) ||
+         !builder.copy(state.scc.current_inputs.atomic_quadrupoles,
+                       state.scc.current_inputs.quadrupole_elements, scc.current_atomic_quadrupoles,
+                       shape.spin_quadrupoles, Field::kSccTrace, 2, diagnostic))) {
+      return diagnostic;
+    }
   } else {
     const double nan = std::numeric_limits<double>::quiet_NaN();
     if (!builder.copy(state.scc.current_inputs.shell_charges,
                       state.scc.current_inputs.shell_elements, population.shell_charges,
                       shape.spin_shells, Field::kSccTrace, 0, diagnostic) ||
-        !builder.copy(state.scc.current_inputs.atomic_dipoles,
-                      state.scc.current_inputs.dipole_elements, population.atomic_dipoles,
-                      shape.spin_dipoles, Field::kSccTrace, 1, diagnostic) ||
-        !builder.copy(state.scc.current_inputs.atomic_quadrupoles,
-                      state.scc.current_inputs.quadrupole_elements, population.atomic_quadrupoles,
-                      shape.spin_quadrupoles, Field::kSccTrace, 2, diagnostic) ||
         !builder.fill(state.scc.free_energies, state.scc.batch_elements, shape.batch, nan,
                       Field::kSccTrace, 3, diagnostic) ||
         !builder.fill(state.scc.previous_free_energies, state.scc.batch_elements, shape.batch, nan,
                       Field::kSccTrace, 4, diagnostic) ||
         !builder.fill(state.scc.free_energy_changes, state.scc.batch_elements, shape.batch, nan,
                       Field::kSccTrace, 5, diagnostic)) {
+      return diagnostic;
+    }
+    if (shape.atomic_multipole_components != 0 &&
+        (!builder.copy(state.scc.current_inputs.atomic_dipoles,
+                       state.scc.current_inputs.dipole_elements, population.atomic_dipoles,
+                       shape.spin_dipoles, Field::kSccTrace, 1, diagnostic) ||
+         !builder.copy(state.scc.current_inputs.atomic_quadrupoles,
+                       state.scc.current_inputs.quadrupole_elements, population.atomic_quadrupoles,
+                       shape.spin_quadrupoles, Field::kSccTrace, 2, diagnostic))) {
       return diagnostic;
     }
   }
@@ -1311,6 +1355,132 @@ Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::upload_asy
   candidate.arena_bytes = impl_->image_bytes;
   candidate.ready_on_stream = 1u;
   ready = candidate;
+  return {};
+}
+
+__global__ void restore_initial_state_if_admitted_kernel(const std::byte* source,
+                                                         std::byte* destination, std::size_t bytes,
+                                                         const std::uint32_t* request_error) {
+  if (*request_error != 0u) return;
+  const std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::size_t stride = static_cast<std::size_t>(gridDim.x) * blockDim.x;
+  constexpr std::size_t kWordBytes = sizeof(uint4);
+  const std::size_t word_count = bytes / kWordBytes;
+  const auto* source_words = reinterpret_cast<const uint4*>(source);
+  auto* destination_words = reinterpret_cast<uint4*>(destination);
+  for (std::size_t word = index; word < word_count; word += stride) {
+    destination_words[word] = source_words[word];
+  }
+  /* Arena images are 256-byte aligned today, but retaining a byte tail keeps
+   * the copy correct if a future compatible checkpoint has a shorter suffix. */
+  for (std::size_t byte = word_count * kWordBytes + index; byte < bytes; byte += stride) {
+    destination[byte] = source[byte];
+  }
+}
+
+Gfn2SccIterationInitializationDiagnostic Gfn2SccIterationInitializer::upload_if_admitted_async(
+    void* device_arena, std::size_t device_arena_bytes, Gfn2SccIterationInitializationReady& ready,
+    const std::uint32_t* request_error, cudaStream_t stream) const noexcept {
+  if (request_error == nullptr)
+    return upload_async(device_arena, device_arena_bytes, ready, stream);
+  ready = {};
+  if (impl_ == nullptr) return fail(Error::kInvalidPlan, Field::kPlan);
+  if (device_arena != impl_->device_arena || device_arena_bytes < impl_->image_bytes) {
+    return fail(Error::kInvalidArena, Field::kArena, -1, impl_->image_bytes, device_arena_bytes);
+  }
+
+  cudaPointerAttributes attributes{};
+  const cudaError_t attribute_status = cudaPointerGetAttributes(&attributes, device_arena);
+  if (attribute_status != cudaSuccess) {
+    (void)cudaGetLastError();
+    return fail(Error::kInvalidArenaMemory, Field::kArena, -1, impl_->image_bytes,
+                device_arena_bytes, attribute_status);
+  }
+  if (attributes.type != cudaMemoryTypeDevice && attributes.type != cudaMemoryTypeManaged) {
+    return fail(Error::kInvalidArenaMemory, Field::kArena, -1, impl_->image_bytes,
+                device_arena_bytes);
+  }
+  cudaPointerAttributes error_attributes{};
+  const cudaError_t error_attribute_status =
+      cudaPointerGetAttributes(&error_attributes, request_error);
+  if (error_attribute_status != cudaSuccess) {
+    (void)cudaGetLastError();
+    return fail(Error::kInvalidArenaMemory, Field::kArena, -1, sizeof(std::uint32_t),
+                sizeof(std::uint32_t), error_attribute_status);
+  }
+  if ((error_attributes.type != cudaMemoryTypeDevice &&
+       error_attributes.type != cudaMemoryTypeManaged) ||
+      reinterpret_cast<std::uintptr_t>(request_error) % alignof(std::uint32_t) != 0u) {
+    return fail(Error::kInvalidArenaMemory, Field::kAdmission, -1, sizeof(std::uint32_t),
+                sizeof(std::uint32_t));
+  }
+  int current_device = -1;
+  const cudaError_t device_status = cudaGetDevice(&current_device);
+  if (device_status != cudaSuccess) {
+    return fail(Error::kCudaError, Field::kAdmission, -1, sizeof(std::uint32_t),
+                sizeof(std::uint32_t), device_status);
+  }
+  if (error_attributes.device != current_device) {
+    return fail(Error::kInvalidArenaMemory, Field::kAdmission, -1, sizeof(std::uint32_t),
+                sizeof(std::uint32_t));
+  }
+  const std::uintptr_t request_begin = reinterpret_cast<std::uintptr_t>(request_error);
+  const std::uintptr_t request_end = request_begin + sizeof(std::uint32_t);
+  const auto overlaps_request = [&](const void* pointer, std::size_t bytes) noexcept {
+    const std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(pointer);
+    return bytes > std::numeric_limits<std::uintptr_t>::max() - begin ||
+           (request_begin < begin + bytes && begin < request_end);
+  };
+  if (request_end < request_begin || overlaps_request(device_arena, impl_->image_bytes) ||
+      overlaps_request(impl_->device_checkpoint, impl_->image_bytes)) {
+    return fail(Error::kInvalidArenaMemory, Field::kAdmission, -1, sizeof(std::uint32_t),
+                sizeof(std::uint32_t));
+  }
+
+  cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+  const cudaError_t capture_query_status = cudaStreamIsCapturing(stream, &capture_status);
+  if (capture_query_status != cudaSuccess) {
+    return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
+                capture_query_status);
+  }
+  const bool track_restore = capture_status == cudaStreamCaptureStatusNone;
+  if (track_restore && impl_->has_tracked_restore) {
+    const cudaError_t wait_status = cudaStreamWaitEvent(stream, impl_->restore_complete, 0u);
+    if (wait_status != cudaSuccess) {
+      return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
+                  wait_status);
+    }
+  }
+  constexpr int kThreads = 256;
+  constexpr std::size_t kWordBytes = sizeof(uint4);
+  const std::size_t work_items =
+      std::max<std::size_t>((impl_->image_bytes + kWordBytes - 1u) / kWordBytes, 1u);
+  const auto blocks = static_cast<unsigned int>(
+      std::min<std::size_t>((work_items + kThreads - 1u) / kThreads, 65535u));
+  restore_initial_state_if_admitted_kernel<<<blocks, kThreads, 0, stream>>>(
+      static_cast<const std::byte*>(impl_->device_checkpoint),
+      static_cast<std::byte*>(device_arena), impl_->image_bytes, request_error);
+  const cudaError_t status = cudaPeekAtLastError();
+  if (status != cudaSuccess) {
+    return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
+                status);
+  }
+  if (track_restore) {
+    const cudaError_t record_status = cudaEventRecord(impl_->restore_complete, stream);
+    if (record_status != cudaSuccess) {
+      (void)cudaStreamSynchronize(stream);
+      return fail(Error::kCudaError, Field::kArena, -1, impl_->image_bytes, device_arena_bytes,
+                  record_status);
+    }
+    impl_->has_tracked_restore = true;
+  }
+  ready.abi_version = kGfn2SccIterationInitializationAbiVersion;
+  ready.mode = impl_->mode;
+  ready.plan_token = impl_->plan_token;
+  ready.initialization_generation = impl_->initialization_generation;
+  ready.device_arena = device_arena;
+  ready.arena_bytes = impl_->image_bytes;
+  ready.ready_on_stream = 1u;
   return {};
 }
 

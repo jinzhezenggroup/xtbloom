@@ -46,6 +46,8 @@ MACHO_DEPENDENCIES_EXPECTED = {
 PE_DEPENDENCIES_EXPECTED = {
     "api-ms-win-crt-environment-l1-1-0.dll",
     "api-ms-win-crt-heap-l1-1-0.dll",
+    # MSVC routes standard floating-point math through this system UCRT API-set.
+    "api-ms-win-crt-math-l1-1-0.dll",
     "api-ms-win-crt-runtime-l1-1-0.dll",
     "api-ms-win-crt-stdio-l1-1-0.dll",
     "api-ms-win-crt-string-l1-1-0.dll",

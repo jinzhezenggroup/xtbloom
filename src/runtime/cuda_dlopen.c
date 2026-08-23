@@ -241,6 +241,15 @@ static cudaError_t xtbloom_cuda_graph_get_nodes(cudaGraph_t graph, cudaGraphNode
   return cudaErrorSharedObjectSymbolNotFound;
 }
 
+static cudaError_t xtbloom_cuda_graph_kernel_node_get_params(
+    cudaGraphNode_t node, struct cudaKernelNodeParams* parameters) {
+  (void)node;
+  if (parameters != NULL) {
+    memset(parameters, 0, sizeof(*parameters));
+  }
+  return cudaErrorSharedObjectSymbolNotFound;
+}
+
 static cudaError_t xtbloom_cuda_graph_memcpy_node_get_params(cudaGraphNode_t node,
                                                              struct cudaMemcpy3DParms* parameters) {
   (void)node;
@@ -1030,6 +1039,7 @@ XTBLOOM_CHECK_SIGNATURE(cudaGraphDestroy, xtbloom_cuda_graph_destroy);
 XTBLOOM_CHECK_SIGNATURE(cudaGraphExecDestroy, xtbloom_cuda_graph_exec_destroy);
 XTBLOOM_CHECK_SIGNATURE(cudaGraphGetNodes, xtbloom_cuda_graph_get_nodes);
 XTBLOOM_CHECK_SIGNATURE(cudaGraphInstantiate, xtbloom_cuda_graph_instantiate);
+XTBLOOM_CHECK_SIGNATURE(cudaGraphKernelNodeGetParams, xtbloom_cuda_graph_kernel_node_get_params);
 XTBLOOM_CHECK_SIGNATURE(cudaGraphLaunch, xtbloom_cuda_graph_launch);
 XTBLOOM_CHECK_SIGNATURE(cudaGraphMemcpyNodeGetParams, xtbloom_cuda_graph_memcpy_node_get_params);
 XTBLOOM_CHECK_SIGNATURE(cudaGraphNodeGetType, xtbloom_cuda_graph_node_get_type);
@@ -1178,6 +1188,7 @@ static void* xtbloom_fallback_for_symbol(const char* symbol) {
   XTBLOOM_SYMBOL("cudaGraphDestroy", xtbloom_cuda_graph_destroy)
   XTBLOOM_SYMBOL("cudaGraphExecDestroy", xtbloom_cuda_graph_exec_destroy)
   XTBLOOM_SYMBOL("cudaGraphGetNodes", xtbloom_cuda_graph_get_nodes)
+  XTBLOOM_SYMBOL("cudaGraphKernelNodeGetParams", xtbloom_cuda_graph_kernel_node_get_params)
   XTBLOOM_SYMBOL("cudaGraphMemcpyNodeGetParams", xtbloom_cuda_graph_memcpy_node_get_params)
   XTBLOOM_SYMBOL("cudaGraphInstantiate", xtbloom_cuda_graph_instantiate)
   XTBLOOM_SYMBOL("cudaGraphLaunch", xtbloom_cuda_graph_launch)

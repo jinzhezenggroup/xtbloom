@@ -135,6 +135,10 @@ EIGEN_RETAINED_FILES = tuple(
     record[1] for record in (*EIGEN_LICENSE_RECORDS, *EIGEN_EMBEDDED_NOTICE_RECORDS)
 )
 ARRAY_API_COMPAT_LICENSE = "LICENSES/array-api-compat-MIT.txt"
+CODSPEED_LICENSE = "LICENSES/codspeed-MIT.txt"
+CODSPEED_LICENSE_SHA256 = (
+    "8bdf389981158ed3e82ec001461023c14a91b802e964caaba3e1f5e82f3097fc"
+)
 OPENBLAS_LICENSE = "LICENSES/scipy-openblas32-0.3.34.0.0.txt"
 OPENBLAS_WINDOWS_LICENSE = "LICENSES/scipy-openblas32-tools-LICENSE_win32.txt"
 OPENBLAS_EXACT_PACKAGED_LICENSES = (
@@ -147,6 +151,7 @@ OPENBLAS_MANIFEST_CANONICAL_SHA256 = (
     "738b14d01a73ae38bce1cc36b47b7034e1932bc35a9a508e86c8dfc8deb02d1b"
 )
 PYODIDE_OPENBLAS_MANIFEST_PATH = "cmake/3rdparty/pyodide_openblas_manifest.json"
+GFN1_FIXTURE_MANIFEST_PATH = "tests/gfn1_fixture_manifest.json"
 PYODIDE_OPENBLAS_RECIPE_PATH = "cmake/3rdparty/pyodide-openblas/recipe"
 PYODIDE_OPENBLAS_MANIFEST_CANONICAL_SHA256 = (
     "b0418710cc44b9d59a1dc90ddc489c46036e4f12c4594356e9878861706dbe69"
@@ -161,12 +166,20 @@ PYODIDE_OPENBLAS_LICENSES = (
 OPEN_CHEMLIB_LICENSE = "LICENSES/openchemlib-BSD-3-Clause.txt"
 OPEN_CHEMLIB_MANIFEST = "web/openchemlib_manifest.json"
 OPEN_CHEMLIB_VERSION = "9.21.0"
-OPEN_CHEMLIB_MODULE_URL = (
-    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js"
+OPEN_CHEMLIB_MODULE_URLS = (
+    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/openchemlib.js",
+    "https://cdn.jsdmirror.com/npm/openchemlib@9.21.0/dist/openchemlib.js",
 )
-OPEN_CHEMLIB_RESOURCES_URL = (
-    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json"
+OPEN_CHEMLIB_RESOURCES_URLS = (
+    "https://cdn.jsdelivr.net/npm/openchemlib@9.21.0/dist/resources.json",
+    "https://cdn.jsdmirror.com/npm/openchemlib@9.21.0/dist/resources.json",
 )
+THREEDMOL_URLS = (
+    "https://cdn.jsdelivr.net/npm/3dmol@2.5.5/build/3Dmol-min.js",
+    "https://cdn.jsdmirror.com/npm/3dmol@2.5.5/build/3Dmol-min.js",
+)
+THREEDMOL_SHA256 = "f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016"
+THREEDMOL_SIZE_BYTES = 537792
 WEB_LICENSE_FILES = (
     "LICENSES/3Dmol.js-BSD-3-Clause.txt",
     OPEN_CHEMLIB_LICENSE,
@@ -193,6 +206,7 @@ SOURCE_FILES = (
     "LICENSES/MIT.txt",
     "LICENSES/BSD-3-Clause.txt",
     ARRAY_API_COMPAT_LICENSE,
+    CODSPEED_LICENSE,
     OPENBLAS_LICENSE,
     OPENBLAS_WINDOWS_LICENSE,
     *OPENBLAS_EXACT_PACKAGED_LICENSES,
@@ -200,6 +214,7 @@ SOURCE_FILES = (
     *WEB_SOURCE_FILES,
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
+    "data/parameters/gfn1_legacy_sto.hpp",
     "data/parameters/tblite_spin.hpp",
     "data/parameters/licenses/dftd4-COPYING",
     "data/parameters/licenses/dftd4-COPYING.LESSER",
@@ -208,6 +223,10 @@ SOURCE_FILES = (
     "data/parameters/sto_manifest.json",
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
+    "data/parameters/gfn1_manifest.json",
+    "data/parameters/gfn1_d3_manifest.json",
+    "data/parameters/gfn1_legacy_sto_manifest.json",
+    GFN1_FIXTURE_MANIFEST_PATH,
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
@@ -226,6 +245,7 @@ COMMON_ARCHIVE_SUFFIXES = (
     "LICENSES/MIT.txt",
     "LICENSES/BSD-3-Clause.txt",
     ARRAY_API_COMPAT_LICENSE,
+    CODSPEED_LICENSE,
     OPENBLAS_LICENSE,
     OPENBLAS_WINDOWS_LICENSE,
     *OPENBLAS_EXACT_PACKAGED_LICENSES,
@@ -234,6 +254,7 @@ COMMON_ARCHIVE_SUFFIXES = (
 SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/d4.NOTICE",
     "data/parameters/tblite_sto.hpp",
+    "data/parameters/gfn1_legacy_sto.hpp",
     "data/parameters/tblite_spin.hpp",
     "data/parameters/licenses/dftd4-COPYING",
     "data/parameters/licenses/dftd4-COPYING.LESSER",
@@ -242,6 +263,9 @@ SDIST_ARCHIVE_SUFFIXES = (
     "data/parameters/sto_manifest.json",
     "data/parameters/spin_manifest.json",
     "data/parameters/d4_manifest.json",
+    "data/parameters/gfn1_manifest.json",
+    "data/parameters/gfn1_d3_manifest.json",
+    "data/parameters/gfn1_legacy_sto_manifest.json",
     "data/parameters/mctc_manifest.json",
     IMPLIB_MANIFEST_PATH,
     TORCH_STABLE_MANIFEST_PATH,
@@ -258,6 +282,9 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/provenance/sto_manifest.json",
     "share/licenses/xtbloom/provenance/spin_manifest.json",
     "share/licenses/xtbloom/provenance/d4_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_legacy_sto_manifest.json",
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
@@ -266,6 +293,7 @@ WHEEL_ARCHIVE_SUFFIXES = (
     "share/licenses/xtbloom/third-party/MIT.txt",
     "share/licenses/xtbloom/third-party/BSD-3-Clause.txt",
     "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
+    "share/licenses/xtbloom/third-party/codspeed-MIT.txt",
     "share/licenses/xtbloom/third-party/scipy-openblas32-0.3.34.0.0.txt",
     "share/licenses/xtbloom/third-party/scipy-openblas32-tools-LICENSE_win32.txt",
     *(
@@ -321,6 +349,7 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/third-party/MIT.txt",
     "share/licenses/xtbloom/third-party/BSD-3-Clause.txt",
     "share/licenses/xtbloom/third-party/array-api-compat-MIT.txt",
+    "share/licenses/xtbloom/third-party/codspeed-MIT.txt",
     "share/licenses/xtbloom/third-party/scipy-openblas32-0.3.34.0.0.txt",
     "share/licenses/xtbloom/third-party/scipy-openblas32-tools-LICENSE_win32.txt",
     *(
@@ -335,6 +364,9 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/provenance/sto_manifest.json",
     "share/licenses/xtbloom/provenance/spin_manifest.json",
     "share/licenses/xtbloom/provenance/d4_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json",
+    "share/licenses/xtbloom/provenance/gfn1_legacy_sto_manifest.json",
     "share/licenses/xtbloom/provenance/mctc_manifest.json",
     "share/licenses/xtbloom/provenance/implib_manifest.json",
     "share/licenses/xtbloom/provenance/torch_stable_manifest.json",
@@ -346,6 +378,9 @@ INSTALL_FILES = (
     "share/licenses/xtbloom/third-party/d4/mctc-lib-LICENSE",
 )
 SPDX_FILES = {
+    "data/parameters/gfn1.hpp": "LGPL-3.0-or-later AND Apache-2.0",
+    "data/parameters/gfn1_d3.hpp": "LGPL-3.0-or-later",
+    "data/parameters/gfn1_legacy_sto.hpp": "LGPL-3.0-or-later",
     "data/parameters/gfn2.hpp": "LGPL-3.0-or-later",
     "data/parameters/d4.hpp": "LGPL-3.0-or-later",
     "data/parameters/tblite_sto.hpp": "LGPL-3.0-or-later",
@@ -355,10 +390,33 @@ SPDX_FILES = {
     "src/model/gfn2/coordination.cpp": "GPL-3.0-or-later",
     "src/model/gfn2/h0.cpp": "GPL-3.0-or-later",
 }
+PLAYWRIGHT_NOTICE_TOKENS = (
+    "`@playwright/test`, `playwright`, and `playwright-core`",
+    "009534220efd98c0361d8c4ee7e3db1ed510ab88a23e98b5081ef1c8fed64965",
+    "1982556a882b246ccb7c16337fab5e4e790292b69f835a2db1011dddc440ed98",
+    "954be1e183d0ddb9748fe0d2d08b0b66a9210c74dd75c397aeb70303b9f08a00",
+    "151.0.7922.34 revision 1234",
+    "WebKit 26.5 revision 2336",
+    "FFmpeg revision 1011",
+)
+CODSPEED_NOTICE_TOKENS = (
+    "b2d12d8e96704c82b449d8668818a754ede45c66",
+    "a2e0ab65df73e837666d12357280ca50ff6d6ac03ea5266703be518b68170edf",
+    "88472375d0a4572cf70a9f1fe3a4e0ab8da1b924",
+    "8b253c6a2d3a435bc404f8a74f86d3c4ed2a2402",
+    "5d8abb100020c7968220ab856c776670abfdc77bb0fac532c56f695af4f4a098",
+    "dda8318ddceecb99203ff64cf5697553040fe1eb4b617a6a585674f829c63e33",
+    "454becce1a232bba1c408ed8aad4a20afa78acfbaba072cef2bf1c0a636ebd71",
+)
 NOTICE_TOKENS = (
     "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
+    "6f0b06fbfa8653a23ca55c453772ce3af4420706",
+    "aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5",
     "6e1f59c3f39d919a2dbef0601d2576727c8b30e8",
     "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
+    "b529b5ddb75c0554274955082a189f9f88437cb2",
+    "663245d739be0123da61c917e55116b0c3db4c74",
+    "133f91efb94b47f05848e1f86832f40a1accc385",
     "edcfbbe39d411edc225e27315fbda3a204ddb023",
     "9ab8ca565e0f71d967587e0bca2015f7d689f19f",
     "6f4fc02ae058ef11848046af01a1a756f3229c29",
@@ -380,7 +438,14 @@ NOTICE_TOKENS = (
     "netcdfjs 3.0.0",
     "UPNG.js 2.1.0",
     "pako 2.2.0 and pako 1.0.11",
-    "475e2213ac02fbf2d4a8c4fc287b570fc476da2fda9de3f5a72a2554b5716e71",
+    "2d35a2618bb734b61c442fb775c0a7a669f800be63f6ac0d029b656598581de6",
+    *PLAYWRIGHT_NOTICE_TOKENS,
+    *CODSPEED_NOTICE_TOKENS,
+    "26a9e470a7b3c7822084b09fb7f13902c5f37b51",
+    "fsevents` 2.3.2",
+    "a7f5d00939b74e141a73131468c4ce48ee0f2197",
+    "e17ade950c193fe09adfc7915fe29ac26166c8782d00e7c3879e7e9de02c5428",
+    "Chromium/Chrome-for-Testing",
     "OpenChemLib 9.21.0",
     "36aec7791ac38e7fdc23a37ba07e19514eb1e5c9",
     "27d2b2fe2195ec0b159c3aa2cae3bc1464b41daf",
@@ -393,6 +458,37 @@ NOTICE_TOKENS = (
     "unsupported/",
     EXCEPTION_FILE,
 )
+
+GFN1_PROVENANCE_SHA256 = (
+    "422170e3d1beaa94be96488fc9303374a3b217e89e501823db894aa7fd17a9c5"
+)
+GFN1_D3_PROVENANCE_SHA256 = (
+    "9129cc27bdeafde0d6b4eb89197741a365eac6db233fc41da97367636506b65d"
+)
+GFN1_D3_MCTC_LICENSE_RECORD = {
+    "bytes": 11358,
+    "git_blob": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+    "path": "LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+}
+GFN1_D3_LGPL_LICENSE_RECORD = {
+    "bytes": 7652,
+    "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+}
+GFN1_D3_GENERATOR_RECORD = {
+    "path": "tools/parameters/generate_gfn1_d3.py",
+    "sha256": "61c3ab96caf6eb57d262c1e472503fde71784517fd2aad729b3d483f9ed16079",
+}
+GFN1_D3_OUTPUT_RECORDS = {
+    "gfn1_d3.hpp": {
+        "bytes": 743567,
+        "sha256": "4819db4a0c2e3d7f55cc26eb4fd742761da87c0b14ae92d89da62f6e7d6a4127",
+    },
+    "gfn1_d3.json": {
+        "bytes": 598154,
+        "sha256": "9ff932ea598f690c1fb599a67762060ba1907102d5ec132164f2a7e8886cd22e",
+    },
+}
 EXCEPTION_TOKENS = (
     "Copyright (C) 2026 Jinzhe Zeng",
     "section 7",
@@ -437,6 +533,15 @@ PYODIDE_OPENBLAS_BINARY_RE = re.compile(
     r"libxtbloom_openblas-[0-9a-f]{8}\.so)$"
 )
 WASM_V1_MAGIC = b"\0asm\x01\0\0\0"
+REQUIRED_GFN1_WEB_SOURCE_MAP = {
+    "provenance/parameters/gfn1_manifest.json": "data/parameters/gfn1_manifest.json",
+    "provenance/parameters/gfn1_d3_manifest.json": (
+        "data/parameters/gfn1_d3_manifest.json"
+    ),
+    "provenance/parameters/gfn1_legacy_sto_manifest.json": (
+        "data/parameters/gfn1_legacy_sto_manifest.json"
+    ),
+}
 WEB_SITE_SOURCE_MAP = {
     "LICENSE": "LICENSE",
     EXCEPTION_FILE: EXCEPTION_FILE,
@@ -456,6 +561,7 @@ WEB_SITE_SOURCE_MAP = {
         "data/parameters/licenses/mctc-lib-LICENSE"
     ),
     "provenance/parameters/manifest.json": "data/parameters/manifest.json",
+    **REQUIRED_GFN1_WEB_SOURCE_MAP,
     "provenance/parameters/sto_manifest.json": "data/parameters/sto_manifest.json",
     "provenance/parameters/spin_manifest.json": "data/parameters/spin_manifest.json",
     "provenance/parameters/d4_manifest.json": "data/parameters/d4_manifest.json",
@@ -478,7 +584,7 @@ WEB_SITE_RUNTIME_FILES = (
     "engine-manifest.json",
     "xtbloom_web.js",
     "xtbloom_web.wasm",
-    "xtbloom_web.data",
+    "xtbloom_web.side.wasm",
     "vendor/3Dmol-min.js",
 )
 WEB_VERSIONED_ASSETS = (
@@ -486,9 +592,11 @@ WEB_VERSIONED_ASSETS = (
     ("c60", "c60_case.js"),
     ("worker", "worker.js"),
     ("helpers", "app_helpers.js"),
+    ("smiles_worker", "smiles_worker.js"),
+    ("smiles_helpers", "smiles_helpers.js"),
     ("module", "xtbloom_web.js"),
     ("wasm", "xtbloom_web.wasm"),
-    ("data", "xtbloom_web.data"),
+    ("data", "xtbloom_web.side.wasm"),
 )
 
 
@@ -1566,9 +1674,597 @@ def _check_pyodide_openblas_provenance(root: Path) -> None:
         )
 
 
+def _compact_canonical_json_sha256(value: object) -> str:
+    """Hash provenance with the compact encoding used by the D3 generator."""
+    return hashlib.sha256(
+        (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def _pretty_canonical_json_sha256(value: object) -> str:
+    """Hash provenance with the pretty encoding used by the GFN1 generator."""
+    return hashlib.sha256(
+        (
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                indent=2,
+                sort_keys=True,
+                separators=(",", ": "),
+            )
+            + "\n"
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _check_gfn1_parameter_provenance(gfn1: dict[str, object]) -> None:
+    """Require every reviewed tblite/dxtb/mctc/exporter provenance field."""
+    try:
+        retained = {
+            key: gfn1[key]
+            for key in ("source", "inspection", "exporter", "cross_check", "mctc")
+        }
+    except KeyError as exc:
+        raise LicenseCheckError("GFN1 parameter manifest is incomplete") from exc
+    retained_digest = _pretty_canonical_json_sha256(retained)
+    if retained_digest != GFN1_PROVENANCE_SHA256:
+        raise LicenseCheckError("GFN1 parameter manifest has unreviewed provenance")
+    mctc = gfn1.get("mctc", {})
+    if not isinstance(mctc, dict) or mctc.get("legal_files") != [
+        GFN1_D3_MCTC_LICENSE_RECORD
+    ]:
+        raise LicenseCheckError(
+            "GFN1 parameter manifest has incomplete mctc legal provenance"
+        )
+
+
+def _check_gfn1_d3_provenance(
+    gfn1_d3: object, apache_license: bytes, lgpl_license: bytes
+) -> None:
+    """Require complete D3 source/conversion/legal provenance and local text."""
+    if not isinstance(gfn1_d3, dict):
+        raise LicenseCheckError("GFN1-D3 manifest root is not an object")
+    expected_fields = {
+        "schema_version",
+        "method",
+        "generator",
+        "source",
+        "unit_conversion",
+        "execution_contract",
+        "representation",
+        "outputs",
+    }
+    if set(gfn1_d3) != expected_fields:
+        raise LicenseCheckError("GFN1-D3 manifest has unexpected fields")
+    try:
+        retained = {
+            key: gfn1_d3[key]
+            for key in (
+                "schema_version",
+                "method",
+                "source",
+                "unit_conversion",
+                "execution_contract",
+                "representation",
+            )
+        }
+    except KeyError as exc:
+        raise LicenseCheckError("GFN1-D3 manifest is incomplete") from exc
+    if _compact_canonical_json_sha256(retained) != GFN1_D3_PROVENANCE_SHA256:
+        raise LicenseCheckError("GFN1-D3 manifest has unreviewed provenance")
+    generator = gfn1_d3.get("generator")
+    outputs = gfn1_d3.get("outputs")
+    if generator != GFN1_D3_GENERATOR_RECORD or outputs != GFN1_D3_OUTPUT_RECORDS:
+        raise LicenseCheckError(
+            "GFN1-D3 manifest has invalid generated-output metadata"
+        )
+    source = gfn1_d3.get("source", {})
+    expected_equations = {
+        "src/dftd3/model.f90": (
+            "41d3eb76915c05c515ce1802efc8ba8213c0cd42",
+            "b4b2cad1f772263c979ea2674b6d5d78f4eec19fa91a13afd3a789d0a7e866df",
+        ),
+        "src/dftd3/damping/rational.f90": (
+            "a8edb7c50b08fde56f234750a2155053a0102bfa",
+            "d3a9fca2c45ebc4c3b88a49d7688774904f78b7fbacd2716f3756dc5f55521e8",
+        ),
+        "src/dftd3/disp.f90": (
+            "413683f9a16b8621875bf1880af764f63e2ac02d",
+            "cf2e68d8afb1c33b1f458dd09360e512c7171686d8e371a29d02501e0458edde",
+        ),
+        "src/dftd3/cutoff.f90": (
+            "743774e355c6e99aac49c0288be8593b08237c9c",
+            "c98c15fa8f38e961bf920cff176daa649b48f685b28a4b5dd04860ca0c19fd29",
+        ),
+    }
+    if (
+        not isinstance(source, dict)
+        or {
+            entry.get("path"): (entry.get("git_blob"), entry.get("sha256"))
+            for entry in source.get("equation_sources", ())
+            if isinstance(entry, dict)
+        }
+        != expected_equations
+    ):
+        raise LicenseCheckError("GFN1-D3 manifest has incomplete equation provenance")
+    execution_contract = gfn1_d3.get("execution_contract", {})
+    expected_tblite_sources = {
+        "src/tblite/disp/d3.f90": (
+            "df1b9cfe8e45078c021c55359c758506efae7210",
+            "b4a8d386fd30723cc7bebf7ced4f5a08c1ed4bae58ca753e4e2dcdaf92a4029c",
+        ),
+        "src/tblite/xtb/calculator.f90": (
+            "31e1394455e0f1fc77f3dfc0dfd7cc14abd36e38",
+            "40a44bfe99b0d6aa11d6d9de18ae1f12cfbd32e73eaf344c88492de46927818d",
+        ),
+        "src/tblite/xtb/gfn1.f90": (
+            "dc96235fa5bd0ece28f9a7e3672716cfea3633b6",
+            "0df0d3eca4b69efa445733a2fda269220cb203fb325acf0f6f06c21c55feb630",
+        ),
+    }
+    if (
+        not isinstance(execution_contract, dict)
+        or execution_contract.get("repository") != "https://github.com/tblite/tblite"
+        or execution_contract.get("revision")
+        != "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
+        or execution_contract.get("tree") != "2cfe9e53c6413bd022e36346d62ba110c1c42f57"
+        or execution_contract.get("license") != "LGPL-3.0-or-later"
+        or execution_contract.get("two_body_cutoff_bohr") != 50.0
+        or execution_contract.get("smooth_cutoff_width_bohr") != 0.05
+        or {
+            entry.get("path"): (entry.get("git_blob"), entry.get("sha256"))
+            for entry in execution_contract.get("sources", ())
+            if isinstance(entry, dict)
+        }
+        != expected_tblite_sources
+        or execution_contract.get("legal_files")
+        != [
+            {
+                "path": "COPYING.LESSER",
+                "git_blob": "0a041280bd00a9d068f503b8ee7ce35214bd24a1",
+                "bytes": 7652,
+                "sha256": (
+                    "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+                ),
+            }
+        ]
+    ):
+        raise LicenseCheckError(
+            "GFN1-D3 manifest has incomplete tblite execution provenance"
+        )
+    unit_conversion = gfn1_d3.get("unit_conversion", {})
+    if not isinstance(unit_conversion, dict) or unit_conversion.get("legal_files") != [
+        GFN1_D3_MCTC_LICENSE_RECORD
+    ]:
+        raise LicenseCheckError("GFN1-D3 manifest has incomplete mctc legal provenance")
+    if (
+        len(apache_license) != GFN1_D3_MCTC_LICENSE_RECORD["bytes"]
+        or hashlib.sha256(apache_license).hexdigest()
+        != GFN1_D3_MCTC_LICENSE_RECORD["sha256"]
+    ):
+        raise LicenseCheckError("retained mctc Apache license differs from provenance")
+    if (
+        len(lgpl_license) != GFN1_D3_LGPL_LICENSE_RECORD["bytes"]
+        or hashlib.sha256(lgpl_license).hexdigest()
+        != GFN1_D3_LGPL_LICENSE_RECORD["sha256"]
+    ):
+        raise LicenseCheckError("retained GFN1-D3 LGPL license differs from provenance")
+
+
+def _check_gfn1_legacy_sto_provenance(
+    manifest: object, lgpl_license: bytes, consumer: bytes | None = None
+) -> None:
+    """Pin the xTB GFN1-only legacy 4s/4p expansion and legal record."""
+    if not isinstance(manifest, dict):
+        raise LicenseCheckError("GFN1 legacy STO manifest has unreviewed provenance")
+    if set(manifest) != {
+        "schema_version",
+        "model",
+        "source",
+        "consumer",
+        "extraction",
+    }:
+        raise LicenseCheckError("GFN1 legacy STO manifest has unexpected fields")
+    source = manifest.get("source", {})
+    expected_legal = [
+        {
+            "bytes": 7652,
+            "git_blob": "0a041280bd00a9d068f503b8ee7ce35214bd24a1",
+            "path": "COPYING.LESSER",
+            "sha256": (
+                "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+            ),
+        }
+    ]
+    expected_consumer = {
+        "bytes": 1051,
+        "path": "data/parameters/gfn1_legacy_sto.hpp",
+        "sha256": "bb47a8f47d62c38306bb811b8900a1c9b0ccf1be4ebaf7162bf0b9deb984a19f",
+    }
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("model") != "xTB 6.7.1 GFN1 legacy STO-6G 4s/4p expansion"
+        or not isinstance(source, dict)
+        or source.get("repository") != "https://github.com/grimme-lab/xtb"
+        or source.get("revision") != "edcfbbe39d411edc225e27315fbda3a204ddb023"
+        or source.get("tree") != "e34d886052b7274849146db2dcd435acc05c9e5e"
+        or source.get("path") != "src/slater.f90"
+        or source.get("git_blob") != "b0eb607848c607daee595477f7afa794939fce68"
+        or source.get("bytes") != 22467
+        or source.get("sha256")
+        != "4b8fd61397eb46129217d0fe588cf663e87b85428a1a0c634226d8f746a431c6"
+        or source.get("license") != "LGPL-3.0-or-later"
+        or source.get("line_ranges") != ["286-299", "324-337"]
+        or source.get("legal_files") != expected_legal
+        or manifest.get("consumer") != expected_consumer
+        or manifest.get("extraction", {}).get("scope")
+        != (
+            "GFN1-specific 4s/4p override only; common and GFN2 tblite Stewart "
+            "rows remain unchanged"
+        )
+    ):
+        raise LicenseCheckError("GFN1 legacy STO manifest has unreviewed provenance")
+    if (
+        len(lgpl_license) != expected_legal[0]["bytes"]
+        or hashlib.sha256(lgpl_license).hexdigest() != expected_legal[0]["sha256"]
+    ):
+        raise LicenseCheckError("retained GFN1 legacy STO LGPL license differs")
+    if consumer is not None and (
+        len(consumer) != expected_consumer["bytes"]
+        or hashlib.sha256(consumer).hexdigest() != expected_consumer["sha256"]
+    ):
+        raise LicenseCheckError("GFN1 legacy STO consumer differs from provenance")
+
+
+def _check_gfn1_fixture_provenance(root: Path) -> None:
+    """Pin repository-only copied GFN1 scientific fixture provenance."""
+    expected_extractions = {
+        "gfn1-d3-dxtb-tblite": {
+            "consumer": "tests/gfn1_d3_test.cpp",
+            "bytes": 2011,
+            "sha256": (
+                "a6ce50fa142997e092c7e2d447e36e28d1db64523eef1a8593a48e7a3fd6d05c"
+            ),
+            "sources": [
+                "dxtb:test/test_singlepoint/mols/LiH/coord",
+                "dxtb:test/test_singlepoint/mols/SiH4/coord",
+                "dxtb:test/test_classical/test_dispersion/samples.py",
+            ],
+            "contract": (
+                "The exact marker-delimited C++ fixture block contains the reviewed "
+                "LiH/SiH4 geometries, D3 energies, and analytic gradients."
+            ),
+        },
+        "gfn1-halogen-tblite-dxtb": {
+            "consumer": "tests/gfn1_halogen_test.cpp",
+            "bytes": 5479,
+            "sha256": (
+                "43d1775f98946f246a5791f886cae1a3023a711307fab8a7ef64f5446ec88bcb"
+            ),
+            "sources": [
+                "tblite:test/unit/test_halogen.f90",
+                "dxtb:test/test_classical/test_halogen/samples.py",
+            ],
+            "contract": (
+                "The exact marker-delimited C++ fixture block contains the reviewed "
+                "halogen geometries, energies, dxtb/tblite force cross-check, and "
+                "derivative test contract."
+            ),
+        },
+        "gfn1-spin2-p10-tblite": {
+            "consumer": "tests/gfn1_cpu_conformance.py",
+            "bytes": 2040,
+            "sha256": (
+                "d33b89e59a45ed01b9efb78d710c6a2390ac07f769f2c187626b579be7ee47db"
+            ),
+            "sources": ["tblite:test/unit/test_spin.f90"],
+            "contract": (
+                "The exact marker-delimited Python fixture contains tblite's "
+                "unrestricted RSE43 P10 geometry, GFN1 total energy, analytic "
+                "gradient, and spin state."
+            ),
+        },
+    }
+    expected = {
+        "dxtb": {
+            "repository": "https://github.com/grimme-lab/dxtb",
+            "license": "Apache-2.0",
+            "revision": "b529b5ddb75c0554274955082a189f9f88437cb2",
+            "tree": "502d629acb0a9b1f93e829ec6f467f0beeb129eb",
+            "files": {
+                "test/test_hamiltonian/test_gfn1.py": (
+                    "0bd768b42e5cecee4f014d9063832a1e864aa751",
+                    "306eca70943447fa6b0972ed9af5667128064d5a8b3bacac2a0fb47adf15da13",
+                ),
+                "test/test_overlap/overlap.npz": (
+                    "8fd0e1ad61a2961e9242dc9c799cf2e180f5a2e2",
+                    "f2be66d19693cc932f2fb8d1b5b4ad8a6fe47bea4e999b401bb77115d71aa292",
+                ),
+                "test/test_singlepoint/mols/H2/coord": (
+                    "1638f7ade742d9fe16156ec22c6cbad51b525546",
+                    "d4b2168eae99a8bb51a580693d9766506c17728a4ee42cdc093d9de88f540058",
+                ),
+                "test/test_singlepoint/mols/LiH/coord": (
+                    "9055b8d25df5151fccffd72c256e86e12142ab39",
+                    "66c5ff399efaf8da4e654b716f78a8ff5586db4d3ca3d63a4d3f6bef6351f5d8",
+                ),
+                "test/test_singlepoint/mols/SiH4/coord": (
+                    "b8a5c55e80426f8375185f36a76f7c0e473d7a59",
+                    "8919b32136339021a44525328c34befcc8b3efb1057a267fc74309889d970f22",
+                ),
+                "test/test_classical/test_dispersion/samples.py": (
+                    "dd1b5c10632636122fd2e47f2133e345f5274151",
+                    "429b028ecba85a077f795fa009757b1e5936c8c6ec9c7bd1c00c71db9392c66a",
+                ),
+                "test/test_classical/test_halogen/samples.py": (
+                    "34836e0fe2c51cd134115689a58e0657122d76b2",
+                    "fff9cc5981e5c05f15d75f8064ebb10c398aac2786a549aa116d7faf1eec0ffd",
+                ),
+            },
+        },
+        "mstore": {
+            "repository": "https://github.com/grimme-lab/mstore",
+            "license": "Apache-2.0",
+            "revision": "663245d739be0123da61c917e55116b0c3db4c74",
+            "tree": "d141de6b486140e3a236286d642610627d0136f2",
+            "files": {
+                "src/mstore/mb16_43.f90": (
+                    "ab4c27ce49fdd53003a1aff50e527354fafae64b",
+                    "4281f4e7f39c514ed449de49ee255b698b1a7d410f0625553e9b70c0893228a6",
+                )
+            },
+        },
+        "tblite": {
+            "repository": "https://github.com/tblite/tblite",
+            "license": "LGPL-3.0-or-later",
+            "revision": "133f91efb94b47f05848e1f86832f40a1accc385",
+            "tree": "008603bbf877b414f68208d3fe8393265f72b108",
+            "files": {
+                "src/tblite/coulomb/charge/effective.f90": (
+                    "67b91d63e13803e5bc297597e7312404bb1e576c",
+                    "1d66415c1046e3b83bde1434f6e1ea5697a95362332c70a8db08b2668a07214a",
+                ),
+                "test/unit/test_repulsion.f90": (
+                    "9cb9671606ccb3081ba798247791f088eb1ffa40",
+                    "a208f0847342ede9c68e5b54c5765ef421d844f9f94268334b7fcee15aa298a2",
+                ),
+                "test/unit/test_halogen.f90": (
+                    "ca976269459875725c93a31bac980c0532c88d94",
+                    "f078b628b9eafa9dec75609d15a956aa33ae084a74b5de685f8262bb4389100c",
+                ),
+            },
+        },
+        "tblite-gfn1-oracle": {
+            "repository": "https://github.com/tblite/tblite",
+            "license": "LGPL-3.0-or-later",
+            "revision": "fa8a4416e8fe093d0075bc10ac875494c2a449a9",
+            "tree": "2cfe9e53c6413bd022e36346d62ba110c1c42f57",
+            "files": {
+                "test/unit/test_spin.f90": (
+                    "c932c91b1d55d317658cca61f68b6f4daf80f61a",
+                    "25873c35437419e35a97f9aad42b49ada313e23e9647a07402bfb788f27175f3",
+                ),
+            },
+        },
+    }
+    reviewed_extraction = {
+        "dxtb": {
+            "test/test_hamiltonian/test_gfn1.py": (
+                "Literal H2 GFN1 Hamiltonian matrix from test_no_cn; dxtb "
+                "identifies tblite 0.3.0 as the numerical generator.",
+                ("tests/gfn1_h0_test.cpp",),
+            ),
+            "test/test_overlap/overlap.npz": (
+                "H2 float32 overlap matrix extracted by array key; raw extracted "
+                "array SHA-256 874375eb64c283f9c4061c56c40baf5b4f54dc936c44"
+                "bfedf0f7296aaca0a98e.",
+                ("tests/gfn1_integrals_test.cpp",),
+            ),
+            "test/test_singlepoint/mols/H2/coord": (
+                "H2 bohr geometry used by the H0 and overlap fixtures.",
+                ("tests/gfn1_h0_test.cpp", "tests/gfn1_integrals_test.cpp"),
+            ),
+            "test/test_singlepoint/mols/LiH/coord": (
+                "LiH bohr geometry used by the GFN1 D3 tblite energy/gradient fixture.",
+                ("tests/gfn1_d3_test.cpp",),
+            ),
+            "test/test_singlepoint/mols/SiH4/coord": (
+                "SiH4 bohr geometry used by the GFN1 D3 tblite "
+                "energy/gradient fixture.",
+                ("tests/gfn1_d3_test.cpp",),
+            ),
+            "test/test_classical/test_dispersion/samples.py": (
+                "Literal LiH and SiH4 GFN1 D3 atom-resolved energies and analytic "
+                "gradients identified by dxtb as tblite reference values.",
+                ("tests/gfn1_d3_test.cpp",),
+            ),
+            "test/test_classical/test_halogen/samples.py": (
+                "Literal Br2-NH3 analytic gradient identified by dxtb as the "
+                "tblite GFN1 halogen reference; geometry and energy are "
+                "independently pinned from tblite.",
+                ("tests/gfn1_halogen_test.cpp",),
+            ),
+        },
+        "mstore": {
+            "src/mstore/mb16_43.f90": (
+                "MB16-43 structure 01 atomic numbers and Cartesian coordinates, "
+                "transcribed from the first structure entry.",
+                (
+                    "tests/gfn1_coordination_test.cpp",
+                    "tests/gfn1_repulsion_test.cpp",
+                ),
+            ),
+        },
+        "tblite": {
+            "src/tblite/coulomb/charge/effective.f90": (
+                "GFN1 harmonic pair-averaging and effective Coulomb equations "
+                "independently expanded in the ES2 fixture; shell hardness "
+                "parameters come from the separately pinned canonical GFN1 tables.",
+                ("tests/gfn1_es_spin_test.cpp",),
+            ),
+            "test/unit/test_repulsion.f90": (
+                "Literal GFN1 effective-repulsion energy golden for mstore "
+                "MB16-43 structure 01.",
+                ("tests/gfn1_repulsion_test.cpp",),
+            ),
+            "test/unit/test_halogen.f90": (
+                "Literal Br2-NH3, Br2-OCH2, and FI-NCH geometries and GFN1 "
+                "halogen energies, plus the upstream derivative finite-difference "
+                "contract.",
+                ("tests/gfn1_halogen_test.cpp",),
+            ),
+        },
+        "tblite-gfn1-oracle": {
+            "test/unit/test_spin.f90": (
+                "Literal unrestricted RSE43 P10 geometry, one-unpaired-electron "
+                "state, GFN1 total energy, and analytic gradient from test_g_p10 "
+                "and rse43_p10.",
+                ("tests/gfn1_cpu_conformance.py",),
+            ),
+        },
+    }
+    manifest = json.loads(
+        (root / GFN1_FIXTURE_MANIFEST_PATH).read_text(encoding="utf-8")
+    )
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 1
+        or manifest.get("scope") != "repository-only GFN1 CPU scientific fixtures"
+        or not isinstance(manifest.get("distribution"), str)
+        or "excluded from native installs, PyPI sdists, and wheels"
+        not in manifest.get("distribution", "")
+    ):
+        raise LicenseCheckError("GFN1 fixture manifest has unreviewed scope")
+    extractions = manifest.get("extracted_fixtures")
+    if (
+        not isinstance(extractions, list)
+        or not all(isinstance(item, dict) for item in extractions)
+        or {item.get("id") for item in extractions} != set(expected_extractions)
+        or len(extractions) != len(expected_extractions)
+    ):
+        raise LicenseCheckError(
+            "GFN1 fixture manifest has incomplete extracted fixtures"
+        )
+    for item in extractions:
+        fixture_id = item["id"]
+        expected_fixture = expected_extractions[fixture_id]
+        if any(item.get(key) != value for key, value in expected_fixture.items()):
+            raise LicenseCheckError(
+                "GFN1 fixture manifest has unreviewed extracted fixtures"
+            )
+        consumer = root / expected_fixture["consumer"]
+        try:
+            # Git may materialize tracked C++ sources with CRLF on Windows.
+            # Normalize only line endings before applying the manifest's
+            # canonical-LF extraction digest; every scientific literal and
+            # marker byte remains covered by the retained hash.
+            payload = consumer.read_bytes().replace(b"\r\n", b"\n")
+            marker = "#" if consumer.suffix == ".py" else "//"
+            begin = f"{marker} XTBLOOM_GFN1_FIXTURE_BEGIN {fixture_id}\n".encode()
+            end = f"{marker} XTBLOOM_GFN1_FIXTURE_END {fixture_id}\n".encode()
+            if payload.count(begin) != 1 or payload.count(end) != 1:
+                raise ValueError
+            extracted = payload.split(begin, 1)[1].split(end, 1)[0]
+        except (OSError, ValueError) as exc:
+            raise LicenseCheckError(
+                "GFN1 extracted fixture markers are missing or ambiguous"
+            ) from exc
+        if (
+            len(extracted) != expected_fixture["bytes"]
+            or hashlib.sha256(extracted).hexdigest() != expected_fixture["sha256"]
+        ):
+            raise LicenseCheckError("GFN1 extracted fixture bytes differ")
+    sources = manifest.get("sources")
+    if (
+        not isinstance(sources, list)
+        or len(sources) != len(expected)
+        or not all(
+            isinstance(source, dict) and isinstance(source.get("project"), str)
+            for source in sources
+        )
+        or {source["project"] for source in sources} != set(expected)
+    ):
+        raise LicenseCheckError("GFN1 fixture manifest has incomplete sources")
+    for source in sources:
+        if not isinstance(source, dict) or source.get("project") not in expected:
+            raise LicenseCheckError("GFN1 fixture manifest has an unknown source")
+        reviewed = expected[source["project"]]
+        for key in ("repository", "license", "revision", "tree"):
+            if source.get(key) != reviewed[key]:
+                raise LicenseCheckError(
+                    "GFN1 fixture manifest has unreviewed provenance"
+                )
+        source_files = source.get("files")
+        if not isinstance(source_files, list) or not all(
+            isinstance(item, dict) and isinstance(item.get("path"), str)
+            for item in source_files
+        ):
+            raise LicenseCheckError("GFN1 fixture manifest has incomplete source files")
+        source_paths = [item.get("path") for item in source_files]
+        if len(source_paths) != len(set(source_paths)):
+            raise LicenseCheckError(
+                "GFN1 fixture manifest has duplicate source file paths"
+            )
+        observed_files = {
+            item.get("path"): (item.get("git_blob"), item.get("sha256"))
+            for item in source_files
+        }
+        if observed_files != reviewed["files"]:
+            raise LicenseCheckError("GFN1 fixture manifest has incomplete source files")
+        for item in source_files:
+            consumers = item.get("consumers")
+            reviewed_use, reviewed_consumers = reviewed_extraction[source["project"]][
+                item["path"]
+            ]
+            if (
+                item.get("use") != reviewed_use
+                or not isinstance(consumers, list)
+                or not all(isinstance(consumer, str) for consumer in consumers)
+                or tuple(consumers) != reviewed_consumers
+                or len(consumers) != len(set(consumers))
+            ):
+                raise LicenseCheckError(
+                    "GFN1 fixture manifest has incomplete extraction roles"
+                )
+            for consumer in consumers:
+                if not (root / consumer).is_file():
+                    raise LicenseCheckError(
+                        "GFN1 fixture manifest names a missing consumer"
+                    )
+
+
+def _require_notice_tokens(notice: str, tokens: tuple[str, ...]) -> None:
+    """Require every reviewed notice locator without accepting partial records."""
+    for token in tokens:
+        if token not in notice:
+            raise LicenseCheckError(f"THIRD_PARTY_NOTICES.md omits {token}")
+
+
+def _require_codspeed_license_bytes(payload: bytes, context: str) -> None:
+    """Require the exact shared MIT notice from the reviewed plugin and Action."""
+    if hashlib.sha256(payload).hexdigest() != CODSPEED_LICENSE_SHA256:
+        raise LicenseCheckError(f"{context} CodSpeed MIT license differs")
+
+
+def _require_gfn1_web_source_map() -> None:
+    """Keep every shipped GFN1 parameter provenance file byte-mapped to source."""
+    for site_relative, source_relative in REQUIRED_GFN1_WEB_SOURCE_MAP.items():
+        if WEB_SITE_SOURCE_MAP.get(site_relative) != source_relative:
+            raise LicenseCheckError(
+                "Web site source map omits or changes required GFN1 provenance "
+                f"{site_relative}"
+            )
+
+
 def check_source(root: Path) -> None:
     """Validate project metadata, provenance, and derived-file SPDX tags."""
     _require_files(root, SOURCE_FILES, "source tree")
+    _require_codspeed_license_bytes(
+        (root / CODSPEED_LICENSE).read_bytes(), "source tree"
+    )
     license_text = (root / "LICENSE").read_text(encoding="utf-8")
     if (
         "GNU GENERAL PUBLIC LICENSE" not in license_text
@@ -1600,9 +2296,8 @@ def check_source(root: Path) -> None:
         raise LicenseCheckError("CUDA device link must pass --cudadevrt=none")
 
     notice = (root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
-    for token in NOTICE_TOKENS:
-        if token not in notice:
-            raise LicenseCheckError(f"THIRD_PARTY_NOTICES.md omits {token}")
+    _require_notice_tokens(notice, NOTICE_TOKENS)
+    _require_gfn1_web_source_map()
 
     web_lock = json.loads((root / "web/package-lock.json").read_text(encoding="utf-8"))
     web_packages = web_lock.get("packages", {})
@@ -1610,6 +2305,14 @@ def check_source(root: Path) -> None:
         "node_modules/3dmol": (
             "2.5.5",
             "sha512-kqNHouGqq3YfW58174tdERvm0XYTmP0tavQKOqIw1ouc2OJ7epkXEFrtEkVXV0clBZT2Ze2xHRC/qxX0u0qCdw==",
+        ),
+        "node_modules/@playwright/test": (
+            "1.62.1",
+            "sha512-DTcUc8qii+cpHvtOwggMtBRMjKZHXYWdw8syRYu2vtzuq4Wxphqq4NfCs5Zt44L6mA8rfDfj+PHnxFc/FeK6mQ==",
+        ),
+        "node_modules/fsevents": (
+            "2.3.2",
+            "sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==",
         ),
         "node_modules/iobuffer": (
             "5.4.0",
@@ -1622,6 +2325,14 @@ def check_source(root: Path) -> None:
         "node_modules/pako": (
             "2.2.0",
             "sha512-zJq6RP/5q+TO2OpFV3FHzlPnFjmkb7Nc99a5SNjJE+uu/PkpChs+NIZSSzbBoD+6kjiISXjfYdwj1ZRQ81dz/w==",
+        ),
+        "node_modules/playwright": (
+            "1.62.1",
+            "sha512-0M+L3LAD8/nm554LOla9Ayx0j0tmFZ0FBcoQ7F1VuVHpM/XpiC8RcDzBQB8W5+hA8L22THxELzeF+2WcUzvcLg==",
+        ),
+        "node_modules/playwright-core": (
+            "1.62.1",
+            "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==",
         ),
         "node_modules/upng-js": (
             "2.1.0",
@@ -1672,7 +2383,7 @@ def check_source(root: Path) -> None:
     source = openchemlib.get("source", {})
     license_info = openchemlib.get("license", {})
     if (
-        openchemlib.get("schema_version") != 1
+        openchemlib.get("schema_version") != 2
         or dependency.get("npm_package") != "openchemlib"
         or dependency.get("version") != OPEN_CHEMLIB_VERSION
         or dependency.get("classification") != "runtime-provided browser dependency"
@@ -1692,32 +2403,68 @@ def check_source(root: Path) -> None:
         raise LicenseCheckError(
             "OpenChemLib license differs from pinned upstream bytes"
         )
+    runtime_selection = openchemlib.get("runtime_selection", {})
+    close_tie_default = runtime_selection.get("close_tie_default", {})
+    if (
+        "65536 bytes" not in runtime_selection.get("probe", "")
+        or close_tie_default.get("mainland_china") != ["jsdmirror", "jsdelivr"]
+        or close_tie_default.get("global") != ["jsdelivr", "jsdmirror"]
+        or close_tie_default.get("mainland_china_time_zones")
+        != [
+            "Asia/Shanghai",
+            "Asia/Urumqi",
+            "Asia/Chongqing",
+            "Asia/Chungking",
+            "Asia/Harbin",
+            "Asia/Kashgar",
+            "PRC",
+        ]
+        or "SHA-256-verified" not in runtime_selection.get("verification", "")
+    ):
+        raise LicenseCheckError("OpenChemLib manifest has unreviewed CDN routing")
 
     artifacts = {
-        artifact.get("url"): artifact
+        artifact.get("role"): artifact
         for artifact in openchemlib.get("cdn_artifacts", [])
         if isinstance(artifact, dict)
     }
     expected_artifacts = {
-        OPEN_CHEMLIB_MODULE_URL: (
+        "ES module runtime": (
+            dict(
+                zip(
+                    ("jsdelivr", "jsdmirror"),
+                    OPEN_CHEMLIB_MODULE_URLS,
+                    strict=True,
+                )
+            ),
             "5978967b12e938208e8d36222370f88fd615a2b5ec83f02e435caab26f3f4cb3",
             1097449,
         ),
-        OPEN_CHEMLIB_RESOURCES_URL: (
+        "conformer and MMFF resource registry": (
+            dict(
+                zip(
+                    ("jsdelivr", "jsdmirror"),
+                    OPEN_CHEMLIB_RESOURCES_URLS,
+                    strict=True,
+                )
+            ),
             "d2741130d5a5546aeebebc43eb3dac937881b04755fefe5925e4b228a56bee14",
             1351963,
         ),
     }
     if set(artifacts) != set(expected_artifacts):
         raise LicenseCheckError("OpenChemLib manifest has unreviewed CDN URLs")
-    for url, (digest, size) in expected_artifacts.items():
-        artifact = artifacts[url]
+    for role, (provider_urls, digest, size) in expected_artifacts.items():
+        artifact = artifacts[role]
         if (
-            artifact.get("sha256") != digest
+            artifact.get("provider_urls") != provider_urls
+            or artifact.get("sha256") != digest
             or artifact.get("size_bytes") != size
             or artifact.get("redistributed_by_xtbloom") is not False
         ):
-            raise LicenseCheckError(f"OpenChemLib manifest has unreviewed bytes: {url}")
+            raise LicenseCheckError(
+                f"OpenChemLib manifest has unreviewed bytes: {role}"
+            )
 
     resource_payload = openchemlib.get("resource_payload", {})
     groups = resource_payload.get("groups", [])
@@ -1740,21 +2487,33 @@ def check_source(root: Path) -> None:
 
     smiles_helpers = (root / "web/smiles_helpers.js").read_text(encoding="utf-8")
     smiles_worker = (root / "web/smiles_worker.js").read_text(encoding="utf-8")
+    bootstrap = (root / "web/bootstrap.js").read_text(encoding="utf-8")
     for token in (
         OPEN_CHEMLIB_VERSION,
-        OPEN_CHEMLIB_MODULE_URL,
-        OPEN_CHEMLIB_RESOURCES_URL,
+        *OPEN_CHEMLIB_MODULE_URLS,
+        *OPEN_CHEMLIB_RESOURCES_URLS,
     ):
         if token not in smiles_helpers:
             raise LicenseCheckError(
                 f"SMILES helper omits pinned OpenChemLib token: {token}"
             )
-    if "Resources.registerFromUrl(OPEN_CHEMLIB_RESOURCES_URL)" not in smiles_worker:
+    if (
+        "loadOpenChemLibRuntime" not in smiles_worker
+        or "OCL.Resources.register(resources)" not in smiles_helpers
+    ):
         raise LicenseCheckError(
-            "SMILES worker does not register the pinned resources URL"
+            "SMILES worker does not verify and register a pinned provider pair"
         )
     if re.search(r"openchemlib@(?:latest|[^\"'`]*\+esm)", smiles_helpers):
         raise LicenseCheckError("SMILES helper uses a floating/transformed CDN URL")
+    for token in (
+        *THREEDMOL_URLS,
+        THREEDMOL_SHA256,
+        str(THREEDMOL_SIZE_BYTES),
+        "vendor/3Dmol-min.js",
+    ):
+        if token not in bootstrap:
+            raise LicenseCheckError(f"3Dmol loader omits pinned source token: {token}")
 
     array_compat_license = (root / ARRAY_API_COMPAT_LICENSE).read_text(encoding="utf-8")
     for token in (
@@ -1785,25 +2544,99 @@ def check_source(root: Path) -> None:
     d4 = json.loads(
         (root / "data/parameters/d4_manifest.json").read_text(encoding="utf-8")
     )
+    gfn1 = json.loads(
+        (root / "data/parameters/gfn1_manifest.json").read_text(encoding="utf-8")
+    )
+    gfn1_d3 = json.loads(
+        (root / "data/parameters/gfn1_d3_manifest.json").read_text(encoding="utf-8")
+    )
+    gfn1_legacy_sto = json.loads(
+        (root / "data/parameters/gfn1_legacy_sto_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
     mctc = json.loads(
         (root / "data/parameters/mctc_manifest.json").read_text(encoding="utf-8")
     )
+
+    _check_gfn1_parameter_provenance(gfn1)
+    _check_gfn1_d3_provenance(
+        gfn1_d3,
+        (root / "LICENSES/Apache-2.0.txt").read_bytes(),
+        (root / "LICENSES/LGPL-3.0-or-later.txt").read_bytes(),
+    )
+    _check_gfn1_legacy_sto_provenance(
+        gfn1_legacy_sto,
+        (root / "LICENSES/LGPL-3.0-or-later.txt").read_bytes(),
+        (root / "data/parameters/gfn1_legacy_sto.hpp").read_bytes(),
+    )
+    _check_gfn1_fixture_provenance(root)
     if gfn2["source"]["license"]["spdx"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("GFN2 parameter manifest has the wrong SPDX license")
     if spin["source"]["license"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("spin manifest has the wrong SPDX license")
+    sto_validation = (
+        "tools/licensing/check_licenses.py hashes the complete consumer header "
+        "and verifies this manifest"
+    )
+    sto_consumer = {
+        "path": "data/parameters/tblite_sto.hpp",
+        "bytes": 8920,
+        "sha256": ("338e16ddbf4be2d115959f3c779c295c106a0426768c55e1b9f0b7a250481c26"),
+    }
     if (
         sto["source"]["license"] != "LGPL-3.0-or-later"
         or sto["source"]["revision"] != "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
         or sto["source"]["sha256"]
         != "8a3df2db076469b0e22c02af9dfadf9880932fc241b82d5802ebb268d002773c"
-        or sto["consumer"] != "data/parameters/tblite_sto.hpp"
+        or sto.get("schema_version") != 2
+        or sto.get("extraction", {}).get("validation") != sto_validation
+        or sto.get("consumer") != sto_consumer
+        or len((root / "data/parameters/tblite_sto.hpp").read_bytes())
+        != sto["consumer"]["bytes"]
+        or hashlib.sha256(
+            (root / "data/parameters/tblite_sto.hpp").read_bytes()
+        ).hexdigest()
+        != sto["consumer"]["sha256"]
     ):
         raise LicenseCheckError("STO manifest has incorrect LGPL provenance")
     if spin["consumer"] != "data/parameters/tblite_spin.hpp":
         raise LicenseCheckError("spin manifest must identify the LGPL data header")
     if d4["license"] != "LGPL-3.0-or-later":
         raise LicenseCheckError("D4 manifest has the wrong SPDX license")
+    if (
+        gfn1.get("source", {}).get("license", {}).get("spdx") != "LGPL-3.0-or-later"
+        or gfn1.get("source", {}).get("revision")
+        != "fa8a4416e8fe093d0075bc10ac875494c2a449a9"
+        or gfn1.get("cross_check", {}).get("repository")
+        != "https://github.com/grimme-lab/dxtb"
+        or gfn1.get("cross_check", {}).get("role")
+        != "non-authoritative semantic cross-check"
+        or gfn1.get("mctc", {}).get("license") != "Apache-2.0"
+        or gfn1.get("mctc", {}).get("revision")
+        != "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d"
+    ):
+        raise LicenseCheckError("GFN1 parameter manifest has incorrect provenance")
+    if (
+        gfn1_d3.get("source", {}).get("license") != "LGPL-3.0-or-later"
+        or gfn1_d3.get("source", {}).get("revision")
+        != "6f0b06fbfa8653a23ca55c453772ce3af4420706"
+        or gfn1_d3.get("unit_conversion", {}).get("license") != "Apache-2.0"
+        or gfn1_d3.get("unit_conversion", {}).get("revision")
+        != "aa89d4bf5c0076fbf169b59eeb9e30185db0e5a5"
+    ):
+        raise LicenseCheckError("GFN1-D3 manifest has incorrect provenance")
+    expected_gfn1_d3_sources = {
+        "src/dftd3/reference.f90": "08dc42be7e1269fa4d1c99d3bc53863521f0a04d",
+        "src/dftd3/data/r4r2.f90": "f5798fb8ecea4d54ad439d2cd61c0e374bfa4e76",
+        "src/dftd3/data/vdwrad.f90": "405002bcf6dc7a5ba745ea791a4c112d6176076b",
+    }
+    observed_gfn1_d3_sources = {
+        entry.get("path"): entry.get("git_blob")
+        for entry in gfn1_d3.get("source", {}).get("parsed_sources", ())
+    }
+    if observed_gfn1_d3_sources != expected_gfn1_d3_sources:
+        raise LicenseCheckError("GFN1-D3 manifest has incomplete source coverage")
     if (
         mctc["license"] != "Apache-2.0"
         or mctc["revision"] != "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d"
@@ -1818,9 +2651,41 @@ def check_source(root: Path) -> None:
             "b3cb9cefd702169d6be662eb438932525990a1ac",
             "fdbd599664a7f113633d96110531d810fdc8e54b6db26d4f584120d9c7cec314",
         ),
+        "src/mctc/data/paulingen.f90": (
+            "445c9d4a0bf643a045a6f9ce9240c032fecbc911",
+            "8ccd4c9688fbb733888e8a2622de0d8b67d6a348ed400b1a41686d6268f06d1b",
+        ),
+        "src/mctc/env.f90": (
+            "f4f2eb0a0ab661acd4f4f252609c60f3a75001ad",
+            "cb75b8a8344b708d8a4de5abe0ef726e7b3332bed78ab90c1b0915ad587cbe8e",
+        ),
+        "src/mctc/env/accuracy.f90": (
+            "52d195970efd2aa030f0d464c9b8b6e817ddc43c",
+            "17f5de4dc97a3240088540cf31627dc787dfb0628d691ec70cb2c0404dac21e8",
+        ),
         "src/mctc/io/constants.f90": (
             "2fd35c66ce80a47aa88d12952f0cce2886cd753f",
             "6ee2b599fc2d338f1a7e07b5b46e984e2612b4cfc58110d1203ecf19ebde2385",
+        ),
+        "src/mctc/io/codata2018.f90": (
+            "8db65943defc6cd3d9ce51751e1bdbe81173d132",
+            "47c4abbc7f9dddb3bba1c89563b45e792304bc56723f1c4b05fc978aa5d3704d",
+        ),
+        "src/mctc/io/convert.f90": (
+            "799d71c1f83cfa6522c4b9eb47df3f72e6a4b90f",
+            "b05d7b4821deb4abe448cf11d53df9b118747294b44f0d774f056bc3b28430b9",
+        ),
+        "src/mctc/ncoord.f90": (
+            "93e6ce2cd3a1a4463b22e858313d17f31deff9ec",
+            "93d705f1c018c646a8bc01385c5e8e918433fc76a670876b342f459a0002e723",
+        ),
+        "src/mctc/ncoord/exp.f90": (
+            "c41db6846cf2d694cac3e26634a0648ab4ded5e3",
+            "376eed0a25ad9c5c45a523294804e10fb02883bb7b26dfd2017c1b2f8c051b60",
+        ),
+        "src/mctc/ncoord/type.f90": (
+            "38eb682efa53b55070b39d8f68d09a8465f5d76f",
+            "b8b819f9ea1c0765632fdb4ea9046b0c79f2c1bb13d39555ac3059f498ba1bb5",
         ),
         "src/mctc/ncoord/dexp.f90": (
             "307e84898387fcddf77f54daecf24b6ce28a27b1",
@@ -1853,6 +2718,37 @@ def _file_starts_with(path: Path, prefix: bytes) -> bool:
 def check_install(prefix: Path) -> None:
     """Validate the legal payload installed by CMake."""
     _require_files(prefix, INSTALL_FILES, "install tree")
+    _require_codspeed_license_bytes(
+        (prefix / "share/licenses/xtbloom/third-party/codspeed-MIT.txt").read_bytes(),
+        "install tree",
+    )
+    try:
+        installed_gfn1_d3 = json.loads(
+            (
+                prefix / "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json"
+            ).read_text(encoding="utf-8")
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError("installed GFN1-D3 manifest is malformed") from exc
+    try:
+        installed_gfn1_legacy_sto = json.loads(
+            (
+                prefix
+                / "share/licenses/xtbloom/provenance/gfn1_legacy_sto_manifest.json"
+            ).read_text(encoding="utf-8")
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError(
+            "installed GFN1 legacy STO manifest is malformed"
+        ) from exc
+    installed_apache = (
+        prefix / "share/licenses/xtbloom/third-party/Apache-2.0.txt"
+    ).read_bytes()
+    installed_lgpl = (
+        prefix / "share/licenses/xtbloom/third-party/LGPL-3.0-or-later.txt"
+    ).read_bytes()
+    _check_gfn1_d3_provenance(installed_gfn1_d3, installed_apache, installed_lgpl)
+    _check_gfn1_legacy_sto_provenance(installed_gfn1_legacy_sto, installed_lgpl)
     bundled = _find_bundled_vendor_libraries(
         {
             path.relative_to(prefix).as_posix()
@@ -1948,7 +2844,7 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
     if (site / "libscipy_openblas.so").exists():
         raise LicenseCheckError(
             "web site contains the raw Eigen LAPACKE/CBLAS side module; "
-            "it must only be conveyed inside xtbloom_web.data"
+            "it must only be conveyed as xtbloom_web.side.wasm"
         )
     # Pages uploads the complete site directory, so accepting arbitrary extra
     # files would allow an obsolete JS/WASM variant or unreviewed payload to be
@@ -1979,6 +2875,17 @@ def check_web_site(site: Path, source_root: Path | None = None) -> None:
             raise LicenseCheckError(f"web site index does not expose {token}")
 
     if source_root is not None:
+        source_threedmol = source_root / "web/node_modules/3dmol/build/3Dmol-min.js"
+        if source_threedmol.is_file():
+            threedmol = (site / "vendor/3Dmol-min.js").read_bytes()
+            if (
+                len(threedmol) != THREEDMOL_SIZE_BYTES
+                or hashlib.sha256(threedmol).hexdigest() != THREEDMOL_SHA256
+                or threedmol != source_threedmol.read_bytes()
+            ):
+                raise LicenseCheckError(
+                    "web site has an unreviewed 3Dmol fallback bundle"
+                )
         for site_relative, source_relative in WEB_SITE_SOURCE_MAP.items():
             if (site / site_relative).read_bytes() != (
                 source_root / source_relative
@@ -2078,6 +2985,68 @@ def _find_archive_name(names: set[str], suffix: str) -> str:
             f"archive must contain exactly one {suffix}; found {len(matches)}"
         )
     return matches[0]
+
+
+def _check_archived_codspeed_license(path: Path, names: set[str], wheel: bool) -> None:
+    """Validate every retained CodSpeed MIT notice at distribution boundaries."""
+    suffixes = [CODSPEED_LICENSE]
+    if wheel:
+        suffixes.append("share/licenses/xtbloom/third-party/codspeed-MIT.txt")
+    for suffix in suffixes:
+        member = _find_archive_name(names, suffix)
+        payload = _read_archive_members(path, {member})[member]
+        _require_codspeed_license_bytes(payload, "archived")
+
+
+def _check_archived_gfn1_d3(path: Path, names: set[str], wheel: bool) -> None:
+    """Validate the exact D3 provenance retained in a distribution archive."""
+    manifest_suffix = (
+        "share/licenses/xtbloom/provenance/gfn1_d3_manifest.json"
+        if wheel
+        else "data/parameters/gfn1_d3_manifest.json"
+    )
+    # The wheel's PEP 639 license payload is mandatory even if the installed
+    # CMake license tree is later relocated by a repair tool.
+    apache_suffix = "LICENSES/Apache-2.0.txt"
+    lgpl_suffix = "LICENSES/LGPL-3.0-or-later.txt"
+    manifest_name = _find_archive_name(names, manifest_suffix)
+    apache_name = _find_archive_name(names, apache_suffix)
+    lgpl_name = _find_archive_name(names, lgpl_suffix)
+    payloads = _read_archive_members(path, {manifest_name, apache_name, lgpl_name})
+    try:
+        manifest = json.loads(payloads[manifest_name].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError("archived GFN1-D3 manifest is malformed") from exc
+    _check_gfn1_d3_provenance(manifest, payloads[apache_name], payloads[lgpl_name])
+
+
+def _check_archived_gfn1_legacy_sto(path: Path, names: set[str], wheel: bool) -> None:
+    """Validate the exact xTB GFN1 legacy-STO provenance in a distribution."""
+    manifest_suffix = (
+        "share/licenses/xtbloom/provenance/gfn1_legacy_sto_manifest.json"
+        if wheel
+        else "data/parameters/gfn1_legacy_sto_manifest.json"
+    )
+    lgpl_suffix = "LICENSES/LGPL-3.0-or-later.txt"
+    manifest_name = _find_archive_name(names, manifest_suffix)
+    lgpl_name = _find_archive_name(names, lgpl_suffix)
+    selected = {manifest_name, lgpl_name}
+    header_name: str | None = None
+    if not wheel:
+        header_name = _find_archive_name(names, "data/parameters/gfn1_legacy_sto.hpp")
+        selected.add(header_name)
+    payloads = _read_archive_members(path, selected)
+    try:
+        manifest = json.loads(payloads[manifest_name].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError(
+            "archived GFN1 legacy STO manifest is malformed"
+        ) from exc
+    _check_gfn1_legacy_sto_provenance(
+        manifest,
+        payloads[lgpl_name],
+        None if header_name is None else payloads[header_name],
+    )
 
 
 def _check_archived_implib(path: Path, names: set[str], wheel: bool) -> None:
@@ -2671,11 +3640,14 @@ def check_archive(path: Path, source_root: Path | None = None) -> None:
         raise LicenseCheckError(
             f"{path} is missing archived legal files: {', '.join(missing)}"
         )
+    _check_archived_codspeed_license(path, names, wheel=path.suffix == ".whl")
     bundled = _find_bundled_vendor_libraries(names)
     if bundled:
         raise LicenseCheckError(
             f"{path} bundles a CUDA/MKL provider library: {bundled[0]}"
         )
+    _check_archived_gfn1_d3(path, names, wheel=path.suffix == ".whl")
+    _check_archived_gfn1_legacy_sto(path, names, wheel=path.suffix == ".whl")
     _check_archived_implib(path, names, wheel=path.suffix == ".whl")
     if path.suffix != ".whl":
         if source_root is None:

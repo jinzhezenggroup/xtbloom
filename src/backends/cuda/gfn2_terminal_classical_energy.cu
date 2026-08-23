@@ -86,14 +86,20 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
       (plan.enabled_components & ~kGfn2TerminalClassicalEnergyAllComponents) != 0u || batch <= 0 ||
       batch > std::numeric_limits<int>::max() || plan.repulsion.total_atoms <= 0 ||
       plan.repulsion.total_atoms > std::numeric_limits<std::int64_t>::max() / 3 ||
-      plan.repulsion.atom_offsets == nullptr || plan.repulsion.atomic_numbers == nullptr ||
-      plan.repulsion.positions == nullptr || plan.geometry_epoch.value_elements != 1 ||
+      !valid_xtb_model_flavor(plan.repulsion.model) || plan.repulsion.atom_offsets == nullptr ||
+      plan.repulsion.atomic_numbers == nullptr || plan.repulsion.positions == nullptr ||
+      plan.geometry_epoch.value_elements != 1 ||
       plan.geometry_epoch.plan_token != plan.plan_token ||
       !aligned(plan.geometry_epoch.value, alignof(std::uint64_t)) ||
       plan.generation_elements != batch ||
       !aligned(plan.committed_generations, alignof(std::uint64_t)) ||
       activity.plan_token != plan.plan_token || activity.batch_elements != batch ||
       !aligned(activity.requested_mask, alignof(std::uint8_t)) ||
+      (activity.admission.error == nullptr
+           ? activity.admission.error_elements != 0 || activity.admission.plan_token != 0u
+           : activity.admission.error_elements != 1 ||
+                 activity.admission.plan_token != plan.plan_token ||
+                 !aligned(activity.admission.error, alignof(std::uint32_t))) ||
       results.plan_token != plan.plan_token || results.repulsion_elements != batch ||
       !aligned(results.repulsion, alignof(double)) || workspace.plan_token != plan.plan_token ||
       workspace.repulsion_elements != batch ||
@@ -107,6 +113,20 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
       !aligned(diagnostics.repulsion_device_error, alignof(std::uint32_t))) {
     return false;
   }
+  if (plan.repulsion.model == XtbModelFlavor::kGfn1) {
+    if (d4 || plan.repulsion.sqrt_alpha_elements != plan.repulsion.total_atoms ||
+        plan.repulsion.effective_charge_elements != plan.repulsion.total_atoms ||
+        !canonical_pointer(plan.repulsion.sqrt_alpha, plan.repulsion.sqrt_alpha_elements) ||
+        !canonical_pointer(plan.repulsion.effective_charge,
+                           plan.repulsion.effective_charge_elements)) {
+      return false;
+    }
+  } else if (!canonical_pointer(plan.repulsion.sqrt_alpha, 0) ||
+             !canonical_pointer(plan.repulsion.effective_charge, 0) ||
+             plan.repulsion.sqrt_alpha_elements != 0 ||
+             plan.repulsion.effective_charge_elements != 0) {
+    return false;
+  }
   if (d4) {
     if (plan.d4_batch.batch_size != batch ||
         plan.d4_batch.total_atoms != plan.repulsion.total_atoms ||
@@ -114,6 +134,8 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
         plan.d4_cache.plan_token != plan.plan_token ||
         plan.d4_batch.atom_offsets != plan.repulsion.atom_offsets ||
         plan.d4_batch.atomic_numbers != plan.repulsion.atomic_numbers ||
+        plan.d4_cache.positions != plan.repulsion.positions ||
+        plan.d4_cache.coordination_generations != plan.committed_generations ||
         results.d4_atm_elements != batch || !aligned(results.d4_atm, alignof(double)) ||
         workspace.d4_atm_elements != batch ||
         !aligned(workspace.d4_atm_candidate, alignof(double)) ||
@@ -131,7 +153,7 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
     return false;
   }
 
-  std::array<AddressRange, 6> reads{};
+  std::array<AddressRange, 9> reads{};
   std::array<AddressRange, 9> writes{};
   if (!make_range(plan.repulsion.atom_offsets, batch + 1, reads[0]) ||
       !make_range(plan.repulsion.atomic_numbers, plan.repulsion.total_atoms, reads[1]) ||
@@ -139,6 +161,10 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
       !make_range(plan.geometry_epoch.value, 1, reads[3]) ||
       !make_range(plan.committed_generations, batch, reads[4]) ||
       !make_range(activity.requested_mask, batch, reads[5]) ||
+      !make_range(activity.admission.error, activity.admission.error_elements, reads[6]) ||
+      !make_range(plan.repulsion.sqrt_alpha, plan.repulsion.sqrt_alpha_elements, reads[7]) ||
+      !make_range(plan.repulsion.effective_charge, plan.repulsion.effective_charge_elements,
+                  reads[8]) ||
       !make_range(results.repulsion, batch, writes[0]) ||
       !make_range(results.d4_atm, d4 ? batch : 0, writes[1]) ||
       !make_range(workspace.repulsion_candidate, batch, writes[2]) ||
@@ -159,6 +185,50 @@ bool valid_common(const Gfn2TerminalClassicalEnergyDevicePlan& plan,
   for (const AddressRange& write : writes) {
     if (overlaps(plan_error, write)) return false;
   }
+  if (d4) {
+    const cudaError_t d4_validation = validate_gfn2_d4_atm_pairlist_cuda(
+        plan.d4_batch, plan.d4_parameters, plan.geometry_epoch, plan.d4_cache,
+        workspace.d4_atm_candidate, workspace.d4, diagnostics.d4_device_error);
+    if (d4_validation != cudaSuccess) return false;
+
+    /* The D4 leaf validates its own output and workspace ranges.  The outer
+     * composer additionally protects repulsion/publication storage and its
+     * diagnostics from every D4 read, so a valid leaf cannot corrupt an
+     * earlier or later stage through a cross-component alias. */
+    const auto d4_read_is_disjoint = [&](const auto* pointer, std::int64_t elements) {
+      AddressRange read{};
+      if (!make_range(pointer, elements, read) || overlaps(plan_error, read)) return false;
+      for (const AddressRange& write : writes) {
+        if (overlaps(read, write)) return false;
+      }
+      return true;
+    };
+    const auto pair_list_reads_are_disjoint = [&](const Gfn2PairListConsumerView& view) {
+      return d4_read_is_disjoint(view.pair_offsets, view.pair_offset_count) &&
+             d4_read_is_disjoint(view.pairs, view.pair_count) &&
+             d4_read_is_disjoint(view.pair_counts, view.pair_count_elements) &&
+             d4_read_is_disjoint(view.neighbor_counts, view.neighbor_count_elements) &&
+             d4_read_is_disjoint(view.neighbor_offsets, view.neighbor_offset_count) &&
+             d4_read_is_disjoint(view.neighbors, view.neighbor_count) &&
+             d4_read_is_disjoint(view.committed_generations, view.committed_generation_count) &&
+             d4_read_is_disjoint(view.eligible_mask, view.eligible_mask_count) &&
+             d4_read_is_disjoint(view.active_mask, view.active_mask_count);
+    };
+    if (!d4_read_is_disjoint(plan.d4_batch.pair_offsets, batch + 1) ||
+        !d4_read_is_disjoint(plan.d4_parameters.elements, plan.d4_parameters.element_count) ||
+        !d4_read_is_disjoint(plan.d4_parameters.references, plan.d4_parameters.reference_count) ||
+        !d4_read_is_disjoint(plan.d4_parameters.reference_c6,
+                             plan.d4_parameters.reference_c6_elements) ||
+        !d4_read_is_disjoint(plan.d4_cache.coordination_numbers,
+                             plan.d4_cache.coordination_elements) ||
+        !d4_read_is_disjoint(plan.d4_cache.coordination_eligible_mask,
+                             plan.d4_cache.coordination_eligible_elements) ||
+        !pair_list_reads_are_disjoint(plan.d4_cache.coordination_pairs) ||
+        !pair_list_reads_are_disjoint(plan.d4_cache.two_body_pairs) ||
+        !pair_list_reads_are_disjoint(plan.d4_cache.atm_pairs)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -177,6 +247,7 @@ __global__ void capture_epoch_and_validate_activity_kernel(
     Gfn2TerminalClassicalEnergyDeviceWorkspace workspace,
     Gfn2TerminalClassicalEnergyDeviceDiagnostics diagnostics) {
   __shared__ unsigned long long epoch;
+  if (!gfn2_request_admitted(activity.admission)) return;
   if (threadIdx.x == 0) {
     epoch = atomicAdd(reinterpret_cast<unsigned long long*>(plan.geometry_epoch.value), 0ULL);
     *workspace.epoch_snapshot = static_cast<std::uint64_t>(epoch);
@@ -197,6 +268,7 @@ __global__ void publish_terminal_classical_energy_kernel(
     Gfn2TerminalClassicalEnergyDeviceWorkspace workspace,
     Gfn2TerminalClassicalEnergyDeviceDiagnostics diagnostics) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (!gfn2_request_admitted(activity.admission)) return;
   const bool d4 = (plan.enabled_components &
                    static_cast<std::uint32_t>(Gfn2TerminalClassicalEnergyComponent::kD4Atm)) != 0u;
 
@@ -298,9 +370,9 @@ cudaError_t evaluate_gfn2_terminal_classical_energy_cuda(
                                    diagnostics.repulsion_device_error, stream);
   if (status != cudaSuccess) return status;
   if (d4) {
-    status = evaluate_gfn2_d4_atm_cuda(plan.d4_batch, plan.d4_parameters, plan.d4_cache,
-                                       workspace.d4_atm_candidate, workspace.d4,
-                                       diagnostics.d4_device_error, stream);
+    status = evaluate_gfn2_d4_atm_pairlist_cuda(
+        plan.d4_batch, plan.d4_parameters, plan.geometry_epoch, plan.d4_cache,
+        workspace.d4_atm_candidate, workspace.d4, diagnostics.d4_device_error, stream);
     if (status != cudaSuccess) return status;
   }
 

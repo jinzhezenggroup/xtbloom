@@ -1,0 +1,35 @@
+{
+  "consumer": {
+    "bytes": 1051,
+    "path": "data/parameters/gfn1_legacy_sto.hpp",
+    "sha256": "bb47a8f47d62c38306bb811b8900a1c9b0ccf1be4ebaf7162bf0b9deb984a19f"
+  },
+  "extraction": {
+    "method": "literal transcription of the active legacy STO-6G 4s/4p exponent and contraction-coefficient rows; preserve source decimal values as IEEE binary64",
+    "scope": "GFN1-specific 4s/4p override only; common and GFN2 tblite Stewart rows remain unchanged"
+  },
+  "model": "xTB 6.7.1 GFN1 legacy STO-6G 4s/4p expansion",
+  "schema_version": 1,
+  "source": {
+    "bytes": 22467,
+    "git_blob": "b0eb607848c607daee595477f7afa794939fce68",
+    "license": "LGPL-3.0-or-later",
+    "legal_files": [
+      {
+        "bytes": 7652,
+        "git_blob": "0a041280bd00a9d068f503b8ee7ce35214bd24a1",
+        "path": "COPYING.LESSER",
+        "sha256": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118"
+      }
+    ],
+    "line_ranges": [
+      "286-299",
+      "324-337"
+    ],
+    "path": "src/slater.f90",
+    "repository": "https://github.com/grimme-lab/xtb",
+    "revision": "edcfbbe39d411edc225e27315fbda3a204ddb023",
+    "sha256": "4b8fd61397eb46129217d0fe588cf663e87b85428a1a0c634226d8f746a431c6",
+    "tree": "e34d886052b7274849146db2dcd435acc05c9e5e"
+  }
+}

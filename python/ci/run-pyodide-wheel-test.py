@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Exercise production GFN2 inference from an installed Pyodide wheel."""
+"""Exercise production GFN1/GFN2 inference from an installed Pyodide wheel."""
 
 from __future__ import annotations
 
@@ -110,7 +110,9 @@ def _load_invariants(source_root: Path) -> ModuleType:
 def _run_complete_invariants(source_root: Path) -> None:
     """Run the complete corpus-wide public invariance/FD/ragged gates."""
     import numpy as np
-    from xtbloom import BatchCalculator, PointCharge, Structure
+    from xtbloom import Context, PointCharge, Structure
+    from xtbloom import interface as xtbloom_interface
+    from xtbloom import library as xtbloom_library
 
     invariants = _load_invariants(source_root)
     manifest_path = source_root / "data" / "conformance" / "manifest.json"
@@ -140,34 +142,79 @@ def _run_complete_invariants(source_root: Path) -> None:
                 )
             )
 
-        with BatchCalculator(
-            structures,
-            backend="cpu",
-            **_strict_scc_options(),
-        ) as calculator:
-            batch = calculator.compute()
-        if batch.failed_indices.size:
-            raise RuntimeError(
-                "Pyodide invariant solve failed for systems "
-                f"{batch.failed_indices.tolist()}"
+        # The invariant contract requires molecular dipoles for field-free as
+        # well as field-attached systems. Request that ABI outlet explicitly:
+        # the high-level Structure API intentionally normalizes an all-zero
+        # field to no attachment and therefore cannot be used as a proxy for
+        # an output-only dipole request.
+        flags = (
+            xtbloom_library.COMPUTE_ENERGY
+            | xtbloom_library.COMPUTE_FORCES
+            | xtbloom_library.COMPUTE_ATOMIC_CHARGES
+            | xtbloom_library.COMPUTE_DIPOLE_MOMENTS
+        )
+        if any(structure.point_charges is not None for structure in structures):
+            flags |= xtbloom_library.COMPUTE_POINT_CHARGE_FORCES
+        strict = _strict_scc_options()
+        with Context("cpu") as context:
+            computed = xtbloom_interface._compute_batch(
+                context,
+                structures,
+                model=xtbloom_library.MODEL_GFN2_XTB,
+                max_scc_iterations=int(strict["max_scc_iterations"]),
+                charge_tolerance=float(strict["charge_tolerance"]),
+                energy_tolerance=float(strict["energy_tolerance"]),
+                electronic_temperature=300.0,
+                scc_mixer=xtbloom_library.SCC_MIXER_MODIFIED_BROYDEN,
+                scc_mixer_history=xtbloom_library.DEFAULT_SCC_MIXER_HISTORY,
+                scc_mixer_damping=xtbloom_library.DEFAULT_SCC_MIXER_DAMPING,
+                determinism=xtbloom_library.DETERMINISM_DEFAULT,
+                flags=flags,
             )
+        failed = np.flatnonzero(
+            (computed.per_system_status != xtbloom_library.STATUS_SUCCESS)
+            | (computed.scc_converged != 1)
+        )
+        if failed.size:
+            raise RuntimeError(
+                f"Pyodide invariant solve failed for systems {failed.tolist()}"
+            )
+        if computed.dipole_moments is None:
+            raise RuntimeError("Pyodide invariant solve omitted dipoles")
 
         results = []
         for index, geometry in enumerate(input_geometries):
-            item = batch[index]
+            atom_begin = int(computed.atom_offsets[index])
+            atom_end = int(computed.atom_offsets[index + 1])
+            point_begin = (
+                int(computed.point_offsets[index])
+                if computed.point_offsets is not None
+                else 0
+            )
+            point_end = (
+                int(computed.point_offsets[index + 1])
+                if computed.point_offsets is not None
+                else 0
+            )
             point_forces = (
                 []
-                if item.point_charge_forces is None
-                else np.asarray(item.point_charge_forces).reshape(-1).tolist()
+                if computed.point_charge_forces is None
+                else np.asarray(computed.point_charge_forces[point_begin:point_end])
+                .reshape(-1)
+                .tolist()
             )
             results.append(
                 invariants.InvariantResult(
                     case_id=geometry.case_id,
                     molecular_charge=geometry.molecular_charge,
-                    energy=item.energy,
-                    forces=np.asarray(item.forces).reshape(-1).tolist(),
-                    charges=np.asarray(item.charges).reshape(-1).tolist(),
+                    energy=float(computed.energies[index]),
+                    forces=np.asarray(computed.forces[atom_begin:atom_end])
+                    .reshape(-1)
+                    .tolist(),
+                    charges=np.asarray(computed.charges[atom_begin:atom_end]).tolist(),
                     point_forces=point_forces,
+                    dipoles=np.asarray(computed.dipole_moments[index]).tolist(),
+                    efield=None if geometry.efield is None else list(geometry.efield),
                 )
             )
         return results
@@ -399,14 +446,27 @@ def _run_load_order(source_root: Path, load_order: str, full: bool) -> None:
     ).singlepoint()
     np.testing.assert_allclose(repeated.energy, first.energy, rtol=0.0, atol=1.0e-12)
     np.testing.assert_allclose(repeated.forces, first.forces, rtol=0.0, atol=1.0e-12)
+    # The Pyodide package contains the same CPU model registry and generated
+    # parameter payload as native wheels. Exercise GFN1 explicitly so a wheel
+    # cannot pass solely through the default GFN2 selector.
+    gfn1 = Calculator(
+        "GFN1-xTB", water_numbers, water_positions, backend="cpu"
+    ).singlepoint()
+    if not gfn1.scc_converged or not np.isfinite(gfn1.energy):
+        raise RuntimeError(
+            "installed Pyodide wheel did not execute finite GFN1 inference"
+        )
+    if not np.isfinite(gfn1.forces).all():
+        raise RuntimeError("installed Pyodide wheel returned non-finite GFN1 forces")
     adapter, provider = _installed_private_paths()
     if Path(os.environ.get("XTBLOOM_PYODIDE_LAPACKE_SHIM", "")) != adapter:
         raise RuntimeError("native loader did not retain the exact adapter path")
     if Path(os.environ.get("XTBLOOM_PYODIDE_OPENBLAS", "")) != provider:
         raise RuntimeError("native loader did not retain the exact provider path")
     sys.stdout.write(
-        "Pyodide GFN2 wheel passed: "
+        "Pyodide GFN1/GFN2 wheel passed: "
         f"order={load_order}; full={full}; energy={reference_energy:.16g}; "
+        f"gfn1_energy={gfn1.energy:.16g}; "
         f"force_norm={np.linalg.norm(reference_forces):.16g}; "
         f"numpy={np.__version__}; scipy={importlib.metadata.version('scipy')}; "
         f"provider={provider.name}\n"

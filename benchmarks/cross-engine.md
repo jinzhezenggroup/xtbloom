@@ -44,6 +44,12 @@ This owner-authorized output-compatibility gate determines benchmark
 eligibility. It is not a tblite convergence default and does not replace
 xTBloom's primary scientific conformance thresholds.
 
+By default, the runner and reference must use the same clean revision. A
+CUDA-only refresh may explicitly pass `--allow-historical-reference` to reuse
+an older clean reference; the runner still requires identical workload seeds,
+properties, batch extents, perturbation, timing controls, SCC contract,
+correctness thresholds, and thread budget.
+
 ## Timing interpretation
 
 xTBloom submits a complete ragged batch through one public call. The xTB and
@@ -62,19 +68,48 @@ JSON retains every raw sample, final force vectors, convergence and correctness
 state, source/build/runtime identities, and binary hashes. CSV is the compact
 tabular view.
 
-`plot_natoms_cross_engine.py` rejects dirty or protocol-incompatible inputs and
-preserves failed or unavailable coordinates. It declares Matplotlib through
-PEP 723 metadata and has an adjacent locked resolution:
+The maintained public selection lives in
+`natoms_cross_engine_publication.json`. It may advance one engine/backend to a
+newer clean revision while retaining unchanged sources, but all selected rows
+must keep the same hardware, workload, start policies, convergence contract,
+correctness gates, and CPU budget. Each source CSV must match the
+`SHA256SUMS` ledger in its issue evidence bundle.
+The same ledger covers `publication-metadata.json`, which binds the selected
+CSV names to their clean revisions, runtime identities, hardware, protocol,
+panel policy, declared coordinates, and reference hashes before table or figure
+generation. Reference hashes must resolve to retained checksummed evidence or
+the repository's explicit oversized-artifact ledger.
+
+Generate and verify the reviewable current-results table with:
+
+```bash
+python3 benchmarks/build_natoms_cross_engine_table.py \
+  --manifest benchmarks/natoms_cross_engine_publication.json \
+  --output benchmarks/natoms_cross_engine_latest.csv
+
+python3 benchmarks/build_natoms_cross_engine_table.py \
+  --manifest benchmarks/natoms_cross_engine_publication.json \
+  --output benchmarks/natoms_cross_engine_latest.csv --check
+```
+
+`plot_natoms_cross_engine.py` reads the same manifest, preserves failed or
+unavailable coordinates, and writes the selected RTX 5090 identity inside the
+figure. It declares Matplotlib through PEP 723 metadata and has an adjacent
+locked resolution:
 
 ```bash
 uv run --script benchmarks/plot_natoms_cross_engine.py \
-  --artifact /path/to/result-1.json \
-  --artifact /path/to/result-2.json \
+  --publication-manifest benchmarks/natoms_cross_engine_publication.json \
   --output /path/to/natoms_cross_engine.svg
 ```
 
-The publication bundle, exact commands, raw numbers, hashes, unavailable rows,
-and limitations are archived in
+Repeated direct `--artifact` inputs remain supported for issue-local figures
+whose JSON artifacts share one clean run identity. They are not the source of
+the maintained mixed-revision public figure.
+
+The current xTBloom CUDA bundle is archived in
+[issue #467 evidence](evidence/issue-467/2026-08-20-node3/README.md). Unchanged
+CPU and third-party rows remain in the
 [issue #13 evidence](evidence/issue-13/2026-08-09-node3-pr231/README.md).
 
 ## Validation

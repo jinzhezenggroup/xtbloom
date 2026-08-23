@@ -35,15 +35,17 @@ cudaError_t validate_active_composition(
     const Gfn2ElectronicGradientDeviceDiagnostics& diagnostics) noexcept {
   const std::uint64_t token = integral_batch.plan_token;
   if (request.plan_token != token || hamiltonian_batch.plan_token != token ||
-      activity.plan_token != token || h0_input.plan_token != token ||
-      h0_output.plan_token != token || hamiltonian_input.plan_token != token ||
-      hamiltonian_output.plan_token != token || workspace.plan_token != token ||
-      diagnostics.plan_token != token ||
+      hamiltonian_batch.model != integral_batch.model || activity.plan_token != token ||
+      h0_input.plan_token != token || h0_output.plan_token != token ||
+      hamiltonian_input.plan_token != token || hamiltonian_output.plan_token != token ||
+      workspace.plan_token != token || diagnostics.plan_token != token ||
       integral_batch.batch_size != hamiltonian_batch.batch_size ||
       integral_batch.total_atoms != hamiltonian_batch.total_atoms ||
       integral_batch.total_shells != hamiltonian_batch.total_shells ||
       integral_batch.total_orbitals != hamiltonian_batch.total_orbitals ||
       integral_batch.total_matrix_elements != hamiltonian_batch.total_matrix_elements ||
+      integral_batch.linear_tiles_per_system <= 0 ||
+      integral_batch.linear_tiles_per_system > kGfn2IntegralLinearBlockBudget ||
       activity.batch_elements != integral_batch.batch_size ||
       workspace.batch_elements < integral_batch.batch_size ||
       diagnostics.batch_elements < integral_batch.batch_size ||

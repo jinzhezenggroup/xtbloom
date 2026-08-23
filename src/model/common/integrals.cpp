@@ -1,4 +1,6 @@
-#include "model/gfn2/integrals.hpp"
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include "model/common/integrals.hpp"
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <algorithm>
@@ -11,7 +13,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace xtbloom::detail::gfn2 {
+namespace xtbloom::detail::common {
 namespace {
 
 constexpr std::size_t kMaximumCartesianFunctions = 6;
@@ -688,10 +690,10 @@ xtbloom_status_t make_integral_plan(const BasisPlan& basis, IntegralPlan& plan, 
     error.clear();
     return XTBLOOM_STATUS_SUCCESS;
   } catch (const std::bad_alloc&) {
-    error = "failed to allocate the GFN2 integral plan";
+    error = "failed to allocate the integral plan";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;
   } catch (const std::length_error&) {
-    error = "GFN2 integral plan dimensions exceed host container limits";
+    error = "integral plan dimensions exceed host container limits";
     return XTBLOOM_STATUS_ALLOCATION_FAILED;
   }
 }
@@ -1143,4 +1145,4 @@ xtbloom_status_t add_overlap_gradient_cpu(const BasisPlan& basis, const Integral
   return XTBLOOM_STATUS_SUCCESS;
 }
 
-}  // namespace xtbloom::detail::gfn2
+}  // namespace xtbloom::detail::common

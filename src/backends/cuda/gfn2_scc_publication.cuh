@@ -76,6 +76,8 @@ struct Gfn2SccPublicationDevicePlan {
   double residual_rms_tolerance = 0.0;
   double energy_tolerance = 0.0;
   std::uint64_t plan_token = 0u;
+  /* GFN1 publishes scalar qsh/qat state only and has no AES2 trace. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
 };
 
 /* Complete restricted wavefunction and thermodynamic output transaction. */

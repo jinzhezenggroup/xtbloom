@@ -66,10 +66,13 @@ class FakeRunner:
 
 
 def make_reference_document(
-    natoms: int = 32, batch_size: int = 1, property_name: str = "force"
+    natoms: int = 32,
+    batch_size: int = 1,
+    property_name: str = "force",
+    topology: str = "alkane",
 ) -> dict[str, Any]:
     """Create one fully valid in-memory xtbloom FRESH reference artifact."""
-    molecule = natoms_scaling.make_alkane(natoms)
+    molecule = natoms_scaling.make_molecule(topology, natoms)
     cell = natoms_scaling.Cell("xtbloom", molecule, batch_size, "cpu", property_name)
     flags = natoms_scaling.public_api.XTBLOOM_COMPUTE_ENERGY
     if property_name == "force":
@@ -208,11 +211,116 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(arguments.start_mode, "fresh")
         self.assertEqual(arguments.natoms, (32, 62))
         self.assertEqual(arguments.batch_sizes, (1, 8))
+        self.assertEqual(arguments.topology, "alkane")
         self.assertEqual(arguments.force_atol, 5.0e-7)
         self.assertEqual(arguments.cross_engine_energy_atol, 5.0e-7)
         self.assertEqual(arguments.cross_engine_force_atol, 5.0e-6)
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             parser.parse_args(["--library", "libxtbloom.so"])
+
+    def test_exact_size_carbon_topologies_are_deterministic_and_distinct(self) -> None:
+        """Construct every requested exact N with carbon-only stable coordinates."""
+        for natoms in (16, 32, 48, 64, 96, 128, 256):
+            with self.subTest(natoms=natoms):
+                compact = natoms_scaling.make_compact_carbon(natoms)
+                opened = natoms_scaling.make_open_carbon(natoms)
+                self.assertEqual(compact.atomic_numbers, (6,) * natoms)
+                self.assertEqual(opened.atomic_numbers, (6,) * natoms)
+                self.assertEqual(compact, natoms_scaling.make_compact_carbon(natoms))
+                self.assertEqual(opened, natoms_scaling.make_open_carbon(natoms))
+                self.assertNotEqual(compact.positions_bohr, opened.positions_bohr)
+                compact_points = [
+                    compact.positions_bohr[3 * index : 3 * index + 3]
+                    for index in range(natoms)
+                ]
+                self.assertLessEqual(
+                    max(
+                        math.dist(left, right)
+                        for index, left in enumerate(compact_points)
+                        for right in compact_points[index + 1 :]
+                    ),
+                    25.0,
+                )
+                open_points = [
+                    opened.positions_bohr[3 * index : 3 * index + 3]
+                    for index in range(natoms)
+                ]
+                if natoms > 1:
+                    self.assertTrue(
+                        all(
+                            min(
+                                math.dist(point, other)
+                                for other_index, other in enumerate(open_points)
+                                if other_index != index
+                            )
+                            <= 2.5
+                            for index, point in enumerate(open_points)
+                        )
+                    )
+                self.assertLessEqual(
+                    max(
+                        sum(
+                            math.dist(point, other) <= 50.0
+                            for other_index, other in enumerate(open_points)
+                            if other_index != index
+                        )
+                        for index, point in enumerate(open_points)
+                    ),
+                    20,
+                )
+
+    def test_parser_accepts_exact_size_topology_selection(self) -> None:
+        """Keep alkane as default while exposing compact/open exact-N workloads."""
+        parser = natoms_scaling.build_parser()
+        for topology in ("compact-carbon", "open-carbon"):
+            args = parser.parse_args(
+                [
+                    "--library",
+                    "lib.so",
+                    "--output-json",
+                    "out.json",
+                    "--output-csv",
+                    "out.csv",
+                    "--start-mode",
+                    "fresh",
+                    "--topology",
+                    topology,
+                    "--natoms",
+                    "16,256",
+                ]
+            )
+            self.assertEqual(args.topology, topology)
+            self.assertEqual(args.natoms, (16, 256))
+
+    def test_workload_identity_hashes_and_labels_topology(self) -> None:
+        """Separate topology classes even when atom count and element set match."""
+        identities = []
+        for topology in ("compact-carbon", "open-carbon"):
+            molecule = natoms_scaling.make_molecule(topology, 16)
+            identities.append(
+                natoms_scaling.workload_identity(
+                    natoms_scaling.Cell("xtbloom", molecule, 1, "cuda", "force")
+                )
+            )
+        self.assertEqual(
+            identities[0]["atomic_numbers_sha256"],
+            identities[1]["atomic_numbers_sha256"],
+        )
+        self.assertNotEqual(
+            identities[0]["positions_bohr_sha256"],
+            identities[1]["positions_bohr_sha256"],
+        )
+        self.assertEqual(identities[0]["topology"], "compact-carbon")
+        self.assertEqual(identities[1]["topology"], "open-carbon")
+
+    def test_repeated_call_semantics_are_explicit_not_list_reuse(self) -> None:
+        """Describe unchanged-coordinate calls without claiming cache reuse."""
+        document = make_reference_document()
+        self.assertEqual(
+            document["protocol"]["repeated_call_semantics"],
+            "same_geometry_repeated_compute",
+        )
+        self.assertNotIn("list reuse", document["protocol"]["repeated_call_semantics"])
 
     def test_xtbloom_benchmark_pins_conformance_scc_and_retains_300k(self) -> None:
         """Pin SCC tolerances while retaining the initialized temperature."""
@@ -267,6 +375,24 @@ class NatomsScalingTest(unittest.TestCase):
 
             fresh = parser.parse_args(arguments("xtbloom", "fresh"))
             natoms_scaling.validate_arguments(fresh)
+            automatic = parser.parse_args(
+                [*arguments("xtbloom", "fresh"), "--cpu-threads", "0"]
+            )
+            natoms_scaling.validate_arguments(automatic)
+            with self.assertRaisesRegex(
+                natoms_scaling.BenchmarkError, "positive for reference engines"
+            ):
+                natoms_scaling.validate_arguments(
+                    parser.parse_args(
+                        [
+                            *arguments("tblite", None),
+                            "--cpu-threads",
+                            "0",
+                            "--energy-reference-json",
+                            str(reference),
+                        ]
+                    )
+                )
             for engine, mode in (
                 ("xtbloom", "warm"),
                 ("tblite", None),
@@ -469,6 +595,11 @@ class NatomsScalingTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            compile_commands = build / "compile_commands.json"
+            compile_commands_bytes = (
+                b'[{"file":"mulliken_kernels_avx2.cpp","command":"c++ -mavx2 -mfma"}]'
+            )
+            compile_commands.write_bytes(compile_commands_bytes)
             clean = {"path": str(source), "revision": "a" * 40, "dirty": False}
             with mock.patch.object(natoms_scaling, "git_state", return_value=clean):
                 metadata = natoms_scaling.build_metadata(library)
@@ -477,12 +608,120 @@ class NatomsScalingTest(unittest.TestCase):
         self.assertEqual(
             metadata["cache_entries"]["CMAKE_CXX_FLAGS_RELEASE"], "-O3 -DNDEBUG"
         )
+        self.assertEqual(
+            metadata["compile_commands"]["sha256"],
+            hashlib.sha256(compile_commands_bytes).hexdigest(),
+        )
         self.assertTrue(metadata["compiler"]["is_file"])
         self.assertEqual(
             metadata["dependency_provider"]["sha256"],
             hashlib.sha256(b"blas").hexdigest(),
         )
         self.assertEqual(metadata["source"]["git"], clean)
+
+    def test_run_identity_records_cpu_dispatch_override(self) -> None:
+        """Retain both requested and context-resolved CPU ISA identity."""
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / "libxtbloom.so"
+            library.write_bytes(b"xtbloom")
+            with (
+                mock.patch.dict(os.environ, {"XTBLOOM_CPU_ISA": "avx2"}),
+                mock.patch.object(
+                    natoms_scaling, "git_state", return_value={"dirty": False}
+                ),
+                mock.patch.object(
+                    natoms_scaling,
+                    "build_metadata",
+                    return_value={"build_system": "test"},
+                ),
+                mock.patch.object(
+                    natoms_scaling,
+                    "_resolved_xtbloom_cpu_isa",
+                    return_value=("avx2", "requested_context_creation"),
+                ),
+            ):
+                identity = natoms_scaling.collect_run_identity(
+                    "xtbloom", library, (), None, "cpu", 1, 0
+                )
+        self.assertEqual(
+            identity["cpu_dispatch_environment"], {"XTBLOOM_CPU_ISA": "avx2"}
+        )
+        self.assertEqual(
+            identity["cpu_dispatch"],
+            {
+                "requested": "avx2",
+                "resolved": "avx2",
+                "resolution_method": "requested_context_creation",
+            },
+        )
+
+    def test_auto_cpu_isa_resolution_uses_context_creation_probe(self) -> None:
+        """Resolve auto from the exact library and restore the requested mode."""
+        library = SimpleNamespace(xtbloom_context_destroy=mock.Mock())
+        observed_modes: list[str | None] = []
+
+        def make_context(*_args: object) -> object:
+            observed_modes.append(os.environ.get("XTBLOOM_CPU_ISA"))
+            return object()
+
+        with (
+            mock.patch.dict(os.environ, {"XTBLOOM_CPU_ISA": "auto"}),
+            mock.patch.object(
+                natoms_scaling.public_api,
+                "_configure_library",
+                return_value=library,
+            ),
+            mock.patch.object(
+                natoms_scaling.public_api,
+                "_make_context",
+                side_effect=make_context,
+            ),
+        ):
+            resolved = natoms_scaling._resolved_xtbloom_cpu_isa(
+                Path("libxtbloom.so"), "cpu", 0, 0
+            )
+            self.assertEqual(os.environ["XTBLOOM_CPU_ISA"], "auto")
+        self.assertEqual(resolved, ("avx2", "forced_avx2_context_probe"))
+        self.assertEqual(observed_modes, ["avx2"])
+        library.xtbloom_context_destroy.assert_called_once()
+
+    def test_empty_cpu_isa_override_is_not_treated_as_auto(self) -> None:
+        """Match the public runtime's rejection of an explicitly empty mode."""
+        with (
+            mock.patch.dict(os.environ, {"XTBLOOM_CPU_ISA": ""}),
+            mock.patch.object(
+                natoms_scaling.public_api, "_configure_library"
+            ) as configure,
+            self.assertRaisesRegex(natoms_scaling.BenchmarkError, "exactly one of"),
+        ):
+            natoms_scaling._resolved_xtbloom_cpu_isa(Path("libxtbloom.so"), "cpu", 0, 0)
+        configure.assert_not_called()
+
+    def test_auto_cpu_isa_falls_back_and_restores_unset_environment(self) -> None:
+        """Record baseline when forced AVX2 is unavailable without leaking state."""
+        library = SimpleNamespace(xtbloom_context_destroy=mock.Mock())
+        with (
+            mock.patch.dict(os.environ),
+            mock.patch.object(
+                natoms_scaling.public_api,
+                "_configure_library",
+                return_value=library,
+            ),
+            mock.patch.object(
+                natoms_scaling.public_api,
+                "_make_context",
+                side_effect=natoms_scaling.public_api.BackendUnavailable(
+                    "synthetic unavailable AVX2"
+                ),
+            ),
+        ):
+            os.environ.pop("XTBLOOM_CPU_ISA", None)
+            resolved = natoms_scaling._resolved_xtbloom_cpu_isa(
+                Path("libxtbloom.so"), "cpu", 0, 0
+            )
+            self.assertNotIn("XTBLOOM_CPU_ISA", os.environ)
+        self.assertEqual(resolved, ("baseline", "forced_avx2_context_probe"))
+        library.xtbloom_context_destroy.assert_not_called()
 
     def test_meson_metadata_records_build_options_compilers_and_dependencies(
         self,
@@ -870,6 +1109,39 @@ class NatomsScalingTest(unittest.TestCase):
             path.write_text('{"corrupted": true}', encoding="utf-8")
             self.assertEqual(artifact.sha256, hashlib.sha256(original).hexdigest())
             self.assertEqual(len(artifact.rows), 1)
+
+    def test_reference_artifact_reconstructs_nonalkane_topology(self) -> None:
+        """Use the recorded topology tag when validating exact-N FRESH rows."""
+        document = make_reference_document(natoms=16, topology="compact-carbon")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fresh.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            artifact = natoms_scaling.load_reference_artifact(path)
+            self.assertEqual(len(artifact.rows), 1)
+
+            document["rows"][0]["workload_identity"]["topology"] = "open-carbon"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(
+                natoms_scaling.BenchmarkError, "identity|inconsistent"
+            ):
+                natoms_scaling.load_reference_artifact(path)
+
+    def test_reference_artifact_accepts_automatic_cpu_threads_only(self) -> None:
+        """Accept zero as automatic threads while retaining negative rejection."""
+        document = make_reference_document()
+        options = document["rows"][0]["compute_options"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fresh.json"
+            options["cpu_threads"] = 0
+            path.write_text(json.dumps(document), encoding="utf-8")
+            artifact = natoms_scaling.load_reference_artifact(path)
+            row = next(iter(artifact.rows.values()))
+            self.assertEqual(row.compute_options["cpu_threads"], 0)
+
+            options["cpu_threads"] = -1
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaises(natoms_scaling.BenchmarkError):
+                natoms_scaling.load_reference_artifact(path)
 
     def test_reference_artifact_rejects_schema_identity_and_duplicate_rows(
         self,

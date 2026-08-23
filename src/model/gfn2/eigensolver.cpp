@@ -3,6 +3,10 @@
 
 #include "model/gfn2/occupation_binary64_policy.hpp"
 
+#if defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM) && defined(__linux__)
+#include "runtime/mkl_pthread_tss_bridge.h"
+#endif
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -96,7 +100,8 @@ struct CpuLinearAlgebraAccess {
                                       LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work,
                                       LapackDsyevdWork dsyevd_work, CblasDtrsm dtrsm,
                                       CblasDgemm dgemm,
-                                      BlasSetNumThreadsLocal set_num_threads_local) noexcept {
+                                      BlasSetNumThreadsLocal set_num_threads_local,
+                                      BlasThreadCleanup thread_cleanup = nullptr) noexcept {
     CpuLinearAlgebraBackend backend;
     backend.origin_ = origin;
     backend.dpotrf_work_ = dpotrf_work;
@@ -105,6 +110,7 @@ struct CpuLinearAlgebraAccess {
     backend.dtrsm_ = dtrsm;
     backend.dgemm_ = dgemm;
     backend.set_num_threads_local_ = set_num_threads_local;
+    backend.thread_cleanup_ = thread_cleanup;
     return backend;
   }
 
@@ -224,6 +230,43 @@ std::array<const WavefunctionFieldLayout*, kEigensolverFieldCount> eigensolver_l
 std::array<double*, kEigensolverFieldCount> eigensolver_view_fields(const WavefunctionView& view) {
   return {{view.coefficients, view.eigenvalues, view.occupations, view.density,
            view.energy_weighted_density}};
+}
+
+std::array<double*, kEigensolverFieldCount> eigensolver_view_fields(
+    const EigensolverWavefunctionView& view) {
+  return {{view.coefficients, view.eigenvalues, view.occupations, view.density,
+           view.energy_weighted_density}};
+}
+
+EigensolverWavefunctionLayout make_eigensolver_wavefunction_layout(
+    const WavefunctionLayout& layout) {
+  EigensolverWavefunctionLayout projection;
+  projection.batch_size = layout.batch_size;
+  projection.workspace_size_bytes = layout.workspace_size_bytes;
+  projection.orbital_offsets = layout.batch_orbital_offsets.data();
+  projection.orbital_offset_count = layout.batch_orbital_offsets.size();
+  projection.spin_channels = layout.spin_channels.data();
+  projection.spin_channel_count = layout.spin_channels.size();
+  projection.alpha_electron_counts = layout.alpha_electron_counts.data();
+  projection.beta_electron_counts = layout.beta_electron_counts.data();
+  projection.electron_count_count = layout.alpha_electron_counts.size();
+  const auto fields = eigensolver_layout_fields(layout);
+  for (std::size_t field = 0u; field < fields.size(); ++field) {
+    projection.fields[field] = {fields[field]->offset_bytes, fields[field]->element_count,
+                                fields[field]->system_offsets.data(),
+                                fields[field]->system_offsets.size()};
+  }
+  return projection;
+}
+
+EigensolverWavefunctionView make_eigensolver_wavefunction_view(const WavefunctionView& view) {
+  return {view.workspace_base,
+          view.workspace_size_bytes,
+          view.coefficients,
+          view.eigenvalues,
+          view.occupations,
+          view.density,
+          view.energy_weighted_density};
 }
 
 xtbloom_status_t validate_plan(const EigensolverPlan& plan, std::string& error) {
@@ -430,22 +473,30 @@ void close_dynamic_library(void* handle) {
   }
 }
 #elif defined(XTBLOOM_CONFIGURED_CPU_LINALG_SHIM) || defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS)
-void* open_host_isolated_sibling(const char* soname) {
-  /* A LOCAL handle still resolves relocations against already-global objects.
-   * A new link-map namespace is required to keep a host BLAS implementation
-   * from interposing on xTBloom's private LP64 provider cohort. */
+std::string host_isolated_sibling_path(const char* soname) {
   static const unsigned char kModuleAnchor = 0u;
   Dl_info module{};
   if (dladdr(&kModuleAnchor, &module) == 0 || module.dli_fname == nullptr) {
-    return nullptr;
+    return {};
   }
   std::string path(module.dli_fname);
   const std::size_t separator = path.find_last_of('/');
   if (separator == std::string::npos) {
-    return nullptr;
+    return {};
   }
   path.resize(separator + 1u);
   path += soname;
+  return path;
+}
+
+void* open_host_isolated_sibling(const char* soname) {
+  /* A LOCAL handle still resolves relocations against already-global objects.
+   * A new link-map namespace is required to keep a host BLAS implementation
+   * from interposing on xTBloom's private LP64 provider cohort. */
+  const std::string path = host_isolated_sibling_path(soname);
+  if (path.empty()) {
+    return nullptr;
+  }
 
   void* handle = dlmopen(LM_ID_NEWLM, path.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (handle == nullptr) {
@@ -458,6 +509,106 @@ void* open_host_isolated_sibling(const char* soname) {
   }
   return handle;
 }
+
+#ifdef XTBLOOM_CONFIGURED_CPU_LINALG_SHIM
+struct MklIsolatedProviderHandles {
+  void* provider = nullptr;
+  void* bridge = nullptr;
+  void* base_pthread = nullptr;
+  bool provider_ready = false;
+};
+
+void close_mkl_bootstrap_handles(MklIsolatedProviderHandles& handles) {
+  /* This cleanup is valid only before the provider enters the namespace. Once
+   * provider code can create a base-registry pthread key, its destructor may
+   * point back into the private namespace and every handle must remain loaded
+   * for process life, including on a later verification failure. */
+  if (handles.bridge != nullptr) {
+    static_cast<void>(dlclose(handles.bridge));
+    handles.bridge = nullptr;
+  }
+  if (handles.base_pthread != nullptr) {
+    static_cast<void>(dlclose(handles.base_pthread));
+    handles.base_pthread = nullptr;
+  }
+}
+
+bool load_base_pthread_tss_api(xtbloom_mkl_pthread_tss_api& api, void*& retained_handle) {
+  /* Resolve from a specific base-namespace DSO before creating the private
+   * namespace. On glibc <2.34 pthread lives in libpthread; on newer glibc the
+   * compatibility DSO forwards to libc. If libpthread is not loaded yet,
+   * loading it here adds one base implementation rather than a second private
+   * allocator. The successful handle is retained for the bridge lifetime. */
+  const char* const libraries[] = {"libpthread.so.0", "libc.so.6"};
+  for (const char* library : libraries) {
+    void* handle = dlopen(library, RTLD_NOW | RTLD_LOCAL | RTLD_NOLOAD);
+    if (handle == nullptr && std::strcmp(library, "libpthread.so.0") == 0) {
+      handle = dlopen(library, RTLD_NOW | RTLD_LOCAL);
+    }
+    if (handle == nullptr) {
+      continue;
+    }
+
+    xtbloom_mkl_pthread_tss_api candidate{};
+    if (load_symbol(handle, "pthread_key_create", candidate.key_create) &&
+        load_symbol(handle, "pthread_key_delete", candidate.key_delete) &&
+        load_symbol(handle, "pthread_getspecific", candidate.getspecific) &&
+        load_symbol(handle, "pthread_setspecific", candidate.setspecific)) {
+      api = candidate;
+      retained_handle = handle;
+      return true;
+    }
+    static_cast<void>(dlclose(handle));
+  }
+  return false;
+}
+
+MklIsolatedProviderHandles open_mkl_isolated_provider() {
+  MklIsolatedProviderHandles handles;
+  xtbloom_mkl_pthread_tss_api api{};
+  if (!load_base_pthread_tss_api(api, handles.base_pthread)) {
+    return handles;
+  }
+
+  const std::string bridge_path =
+      host_isolated_sibling_path("libxtbloom_mkl_pthread_tss_bridge.so");
+  const std::string provider_path = host_isolated_sibling_path("libxtbloom_mkl_lp64_shim.so");
+  if (bridge_path.empty() || provider_path.empty()) {
+    close_mkl_bootstrap_handles(handles);
+    return handles;
+  }
+
+  /* The first dlmopen admits only the dependency-free bridge. It cannot load
+   * or execute a private libc/libdl before the base function table is set. */
+  handles.bridge = dlmopen(LM_ID_NEWLM, bridge_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (handles.bridge == nullptr) {
+    close_mkl_bootstrap_handles(handles);
+    return handles;
+  }
+  Lmid_t namespace_id = LM_ID_BASE;
+  xtbloom_mkl_pthread_tss_bridge_initialize_fn initialize = nullptr;
+  if (dlinfo(handles.bridge, RTLD_DI_LMID, &namespace_id) != 0 || namespace_id == LM_ID_BASE ||
+      !load_symbol(handles.bridge, XTBLOOM_MKL_PTHREAD_TSS_BRIDGE_INITIALIZE_SYMBOL, initialize) ||
+      initialize(&api) != 0) {
+    close_mkl_bootstrap_handles(handles);
+    return handles;
+  }
+
+  /* The provider shim records the bridge as its first DT_NEEDED dependency.
+   * Loading it into the initialized namespace reuses that image, so public
+   * pthread TSS calls and glibc <=2.33 libdl's weak __pthread_* aliases bind
+   * before any private dependency relocation or constructor can execute. */
+  handles.provider = dlmopen(namespace_id, provider_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (handles.provider == nullptr) {
+    close_mkl_bootstrap_handles(handles);
+    return handles;
+  }
+  Lmid_t provider_namespace_id = LM_ID_BASE;
+  handles.provider_ready = dlinfo(handles.provider, RTLD_DI_LMID, &provider_namespace_id) == 0 &&
+                           provider_namespace_id == namespace_id;
+  return handles;
+}
+#endif
 #endif
 
 #if defined(XTBLOOM_CONFIGURED_WHEEL_OPENBLAS) && defined(_WIN32)
@@ -712,8 +863,9 @@ xtbloom_status_t validate_workspace(const EigensolverPlan& plan,
   return XTBLOOM_STATUS_SUCCESS;
 }
 
+template <typename Wavefunction>
 xtbloom_status_t validate_wavefunction(const EigensolverPlan& plan,
-                                       const WavefunctionView& wavefunction, std::string& error) {
+                                       const Wavefunction& wavefunction, std::string& error) {
   const EigensolverPlanData& data = *plan.identity();
   if (wavefunction.workspace_base == nullptr ||
       wavefunction.workspace_size_bytes < data.wavefunction_workspace_size_bytes ||
@@ -1122,7 +1274,7 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
                                        const double* system_hamiltonians, double temperature,
                                        const CpuLinearAlgebraBackend& backend,
                                        const EigensolverWorkspace& workspace,
-                                       const WavefunctionView& wavefunction,
+                                       const EigensolverWavefunctionView& wavefunction,
                                        const EigensolverThermodynamicsView& thermodynamics) {
   if (overlap_cache.geometry_generations[system] != geometry_generation ||
       overlap_cache.system_statuses[system] != XTBLOOM_STATUS_SUCCESS) {
@@ -1257,8 +1409,8 @@ NumericalResult solve_system_unchecked(const EigensolverPlanData& data, std::siz
   return NumericalResult::kSuccess;
 }
 
-WavefunctionView make_batch_staging_wavefunction(const EigensolverWorkspace& workspace) {
-  WavefunctionView staging;
+EigensolverWavefunctionView make_batch_staging_wavefunction(const EigensolverWorkspace& workspace) {
+  EigensolverWavefunctionView staging;
   staging.coefficients = workspace.batch_coefficients;
   staging.eigenvalues = workspace.batch_eigenvalues;
   staging.occupations = workspace.batch_occupations;
@@ -1277,7 +1429,7 @@ EigensolverThermodynamicsView make_batch_staging_thermodynamics(
 
 void commit_batch_solve_results(const EigensolverPlanData& data,
                                 const EigensolverWorkspace& workspace,
-                                const WavefunctionView& wavefunction,
+                                const EigensolverWavefunctionView& wavefunction,
                                 const EigensolverThermodynamicsView& thermodynamics) {
   const std::array<const double*, kEigensolverFieldCount> staged_fields{
       {workspace.batch_coefficients, workspace.batch_eigenvalues, workspace.batch_occupations,
@@ -1310,9 +1462,9 @@ void commit_batch_solve_results(const EigensolverPlanData& data,
 xtbloom_status_t validate_solve_bindings(
     const EigensolverPlan& plan, const EigensolverOverlapCache& overlap_cache,
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
-    const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
-    bool require_full_batch_staging, std::array<AddressRange, 5>& result_ranges,
-    std::string& error) {
+    const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics, bool require_full_batch_staging,
+    std::array<AddressRange, 5>& result_ranges, std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS ||
       (status = validate_backend(backend, error)) != XTBLOOM_STATUS_SUCCESS ||
@@ -1355,13 +1507,19 @@ bool CpuLinearAlgebraBackend::production_openblas_isolated() const noexcept {
   return origin_ == Origin::kOpenBlasIsolatedLp64;
 }
 
+void CpuLinearAlgebraBackend::release_thread_resources() const noexcept {
+  if (thread_cleanup_ != nullptr) {
+    thread_cleanup_();
+  }
+}
+
 xtbloom_status_t make_internal_test_lp64_backend(
     LapackDpotrfWork dpotrf_work, LapackDpoconWork dpocon_work, LapackDsyevdWork dsyevd_work,
     CblasDtrsm dtrsm, CblasDgemm dgemm, BlasSetNumThreadsLocal set_num_threads_local,
-    CpuLinearAlgebraBackend& backend, std::string& error) {
-  CpuLinearAlgebraBackend created =
-      CpuLinearAlgebraAccess::make(CpuLinearAlgebraBackend::Origin::kInternalTestLp64, dpotrf_work,
-                                   dpocon_work, dsyevd_work, dtrsm, dgemm, set_num_threads_local);
+    CpuLinearAlgebraBackend& backend, std::string& error, BlasThreadCleanup thread_cleanup) {
+  CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
+      CpuLinearAlgebraBackend::Origin::kInternalTestLp64, dpotrf_work, dpocon_work, dsyevd_work,
+      dtrsm, dgemm, set_num_threads_local, thread_cleanup);
   if (!created.ready() || !backend_self_test(created)) {
     error = "internal LP64 test backend failed its column-major preflight";
     return XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
@@ -1376,6 +1534,7 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
     CpuLinearAlgebraBackend backend;
     xtbloom_status_t status = XTBLOOM_STATUS_BACKEND_UNAVAILABLE;
     std::string message;
+    std::array<void*, 3> retained_loader_handles{};
   };
   static const LinalgRuntimeState runtime = [] {
     LinalgRuntimeState state;
@@ -1545,15 +1704,23 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
 #else
 
 #ifdef XTBLOOM_CONFIGURED_CPU_LINALG_SHIM
-    /* Preferred isolated MKL provider: a private shim built at CMake time with
-     * fixed DT_NEEDED dependencies on libmkl_intel_lp64, libmkl_sequential, and
-     * libmkl_core. RTLD_LOCAL alone does not prevent a global host libmkl_rt
-     * from interposing on those dependencies, so load the adjacent shim in a
-     * new glibc link-map namespace. We never load libmkl_rt, call
+    /* Preferred isolated MKL provider: initialize the dependency-free pthread
+     * TSS bridge alone in a new namespace, then add the private shim with fixed
+     * DT_NEEDED dependencies on libmkl_intel_lp64, libmkl_sequential, and
+     * libmkl_core. This orders TSS bridging before private libc/libdl/MKL while
+     * preserving #30 namespace isolation. We never load libmkl_rt, call
      * MKL_Set_Interface_Layer, or read MKL interface-layer state. */
     {
       dlerror();
-      void* handle = open_host_isolated_sibling("libxtbloom_mkl_lp64_shim.so");
+      MklIsolatedProviderHandles handles = open_mkl_isolated_provider();
+      void* handle = handles.provider_ready ? handles.provider : nullptr;
+      if (handles.provider != nullptr) {
+        /* Provider relocation or constructors may already have registered a
+         * base pthread key whose destructor lives in the private namespace.
+         * Retain all three handles before any further verification, even if
+         * symbol resolution or the backend self-test subsequently fails. */
+        state.retained_loader_handles = {handles.provider, handles.bridge, handles.base_pthread};
+      }
       if (handle != nullptr) {
         LapackDpotrfWork dpotrf_work = nullptr;
         LapackDpoconWork dpocon_work = nullptr;
@@ -1561,25 +1728,27 @@ xtbloom_status_t make_mkl_rt_lp64_backend(CpuLinearAlgebraBackend& backend, std:
         CblasDtrsm dtrsm = nullptr;
         CblasDgemm dgemm = nullptr;
         BlasSetNumThreadsLocal set_threads = nullptr;
+        BlasThreadCleanup thread_cleanup = nullptr;
         if (load_lapacke_cblas_symbols(handle, false, dpotrf_work, dpocon_work, dsyevd_work, dtrsm,
                                        dgemm) &&
-            load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads)) {
+            load_symbol(handle, "MKL_Set_Num_Threads_Local", set_threads) &&
+            load_symbol(handle, "MKL_Thread_Free_Buffers", thread_cleanup)) {
           CpuLinearAlgebraBackend created = CpuLinearAlgebraAccess::make(
               CpuLinearAlgebraBackend::Origin::kMklShimLp64, dpotrf_work, dpocon_work, dsyevd_work,
-              dtrsm, dgemm, set_threads);
+              dtrsm, dgemm, set_threads, thread_cleanup);
           if (backend_self_test(created)) {
-            /* Retain one process-lifetime loader reference so all dispatch
-             * pointers and the private namespace stay valid. */
+            /* Retain the provider, initialized bridge, and exact base pthread
+             * handle for process life so dispatch and TSS destructor pointers
+             * remain valid through worker/interpreter teardown. */
             state.backend = created;
             state.status = XTBLOOM_STATUS_SUCCESS;
             return state;
           }
         }
-        static_cast<void>(dlclose(handle));
       }
       state.message =
-          "host-isolated MKL provider shim is configured but did not verify "
-          "(libxtbloom_mkl_lp64_shim)";
+          "host-isolated MKL pthread bridge/provider shim is configured but did not verify "
+          "(libxtbloom_mkl_pthread_tss_bridge, libxtbloom_mkl_lp64_shim)";
       return state;
     }
 #endif
@@ -1755,39 +1924,92 @@ const EigensolverPlanData* EigensolverPlan::identity() const noexcept { return d
 
 xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, EigensolverPlan& plan,
                                        std::string& error, double minimum_overlap_rcond) {
-  WavefunctionWarmStartIdentity validated_layout;
-  xtbloom_status_t status =
-      make_wavefunction_warm_start_identity(layout, 1u, validated_layout, error);
-  if (status != XTBLOOM_STATUS_SUCCESS) {
-    return status;
-  }
+  /* The projection overload below performs the complete layout validation
+   * needed by eigensolution. Keeping this wrapper free of a GFN2 wavefunction
+   * symbol lets the shared eigensolver link into a GFN1-only internal target. */
+  return make_eigensolver_plan(make_eigensolver_wavefunction_layout(layout), plan, error,
+                               minimum_overlap_rcond);
+}
+
+xtbloom_status_t make_eigensolver_plan(const EigensolverWavefunctionLayout& layout,
+                                       EigensolverPlan& plan, std::string& error,
+                                       double minimum_overlap_rcond) {
   if (!std::isfinite(minimum_overlap_rcond) || minimum_overlap_rcond <= 0.0 ||
       minimum_overlap_rcond >= 1.0) {
     error = "minimum overlap reciprocal condition must be finite and in (0, 1)";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (layout.batch_size <= 0 || layout.workspace_size_bytes == 0u ||
+      layout.workspace_size_bytes % kWavefunctionWorkspaceAlignment != 0u ||
+      static_cast<std::uint64_t>(layout.batch_size) >
+          static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() - 1u)) {
+    error = "eigensolver wavefunction projection has invalid batch or workspace metadata";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t batch = static_cast<std::size_t>(layout.batch_size);
+  if (layout.orbital_offsets == nullptr || layout.orbital_offset_count != batch + 1u ||
+      layout.spin_channels == nullptr || layout.spin_channel_count != batch ||
+      layout.alpha_electron_counts == nullptr || layout.beta_electron_counts == nullptr ||
+      layout.electron_count_count != batch) {
+    error = "eigensolver wavefunction projection arrays have inconsistent extents";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (layout.orbital_offsets[0] != 0) {
+    error = "eigensolver orbital offsets must begin at zero";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  std::size_t previous_end = 0u;
+  for (const auto& field : layout.fields) {
+    if (field.element_count <= 0 || field.system_offsets == nullptr ||
+        field.system_offset_count != batch + 1u || field.system_offsets[0] != 0 ||
+        field.system_offsets[batch] != field.element_count ||
+        field.offset_bytes % kWavefunctionWorkspaceAlignment != 0u ||
+        static_cast<std::uint64_t>(field.element_count) >
+            static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) / sizeof(double)) {
+      error = "eigensolver wavefunction field projection is incomplete or unrepresentable";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    const std::size_t size_bytes = static_cast<std::size_t>(field.element_count) * sizeof(double);
+    if (field.offset_bytes < previous_end || field.offset_bytes > layout.workspace_size_bytes ||
+        size_bytes > layout.workspace_size_bytes - field.offset_bytes) {
+      error = "eigensolver wavefunction field projection is overlapping or out of bounds";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    for (std::size_t system = 0u; system < batch; ++system) {
+      if (field.system_offsets[system] < 0 ||
+          field.system_offsets[system] > field.system_offsets[system + 1u]) {
+        error = "eigensolver wavefunction field offsets must be monotone";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+    }
+    previous_end = field.offset_bytes + size_bytes;
   }
 
   try {
     EigensolverPlanData created;
     created.batch_size = layout.batch_size;
     created.minimum_overlap_rcond = minimum_overlap_rcond;
-    created.orbital_offsets = layout.batch_orbital_offsets;
-    created.spin_channels = layout.spin_channels;
-    created.alpha_electron_counts = layout.alpha_electron_counts;
-    created.beta_electron_counts = layout.beta_electron_counts;
+    created.orbital_offsets.assign(layout.orbital_offsets,
+                                   layout.orbital_offsets + layout.orbital_offset_count);
+    created.spin_channels.assign(layout.spin_channels,
+                                 layout.spin_channels + layout.spin_channel_count);
+    created.alpha_electron_counts.assign(
+        layout.alpha_electron_counts, layout.alpha_electron_counts + layout.electron_count_count);
+    created.beta_electron_counts.assign(layout.beta_electron_counts,
+                                        layout.beta_electron_counts + layout.electron_count_count);
     created.wavefunction_workspace_size_bytes = layout.workspace_size_bytes;
-    const auto fields = eigensolver_layout_fields(layout);
-    for (std::size_t field = 0u; field < fields.size(); ++field) {
-      created.wavefunction_fields[field].offset_bytes = fields[field]->offset_bytes;
-      created.wavefunction_fields[field].element_count = fields[field]->element_count;
-      created.wavefunction_fields[field].system_offsets = fields[field]->system_offsets;
+    for (std::size_t field = 0u; field < layout.fields.size(); ++field) {
+      created.wavefunction_fields[field].offset_bytes = layout.fields[field].offset_bytes;
+      created.wavefunction_fields[field].element_count = layout.fields[field].element_count;
+      created.wavefunction_fields[field].system_offsets.assign(
+          layout.fields[field].system_offsets,
+          layout.fields[field].system_offsets + layout.fields[field].system_offset_count);
     }
 
-    const std::size_t batch = static_cast<std::size_t>(layout.batch_size);
     created.matrix_offsets.resize(batch + 1u, 0);
     for (std::size_t system = 0u; system < batch; ++system) {
       const std::int64_t orbitals =
-          layout.batch_orbital_offsets[system + 1u] - layout.batch_orbital_offsets[system];
+          layout.orbital_offsets[system + 1u] - layout.orbital_offsets[system];
       if (orbitals <= 0 || orbitals > std::numeric_limits<LapackInt>::max() ||
           (layout.spin_channels[system] != 1 && layout.spin_channels[system] != 2) ||
           !std::isfinite(layout.alpha_electron_counts[system]) ||
@@ -1800,6 +2022,25 @@ xtbloom_status_t make_eigensolver_plan(const WavefunctionLayout& layout, Eigenso
               std::numeric_limits<std::int64_t>::max() - orbitals * orbitals) {
         error = "wavefunction dimensions or electron counts exceed LP64 eigensolver limits";
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      const std::int64_t matrix_elements = orbitals * orbitals;
+      if (matrix_elements >
+          std::numeric_limits<std::int64_t>::max() / layout.spin_channels[system]) {
+        error = "wavefunction spin-resolved matrix dimensions overflow the index range";
+        return XTBLOOM_STATUS_INVALID_ARGUMENT;
+      }
+      const std::int64_t spin_matrix_elements = matrix_elements * layout.spin_channels[system];
+      const std::int64_t spin_orbitals = orbitals * layout.spin_channels[system];
+      const std::array<std::int64_t, kEigensolverFieldCount> expected_counts{
+          {spin_matrix_elements, spin_orbitals, 2 * orbitals, spin_matrix_elements,
+           spin_matrix_elements}};
+      for (std::size_t field = 0u; field < layout.fields.size(); ++field) {
+        if (layout.fields[field].system_offsets[system + 1u] -
+                layout.fields[field].system_offsets[system] !=
+            expected_counts[field]) {
+          error = "eigensolver wavefunction fields do not match orbital and spin dimensions";
+          return XTBLOOM_STATUS_INVALID_ARGUMENT;
+        }
       }
       created.total_matrix_elements += orbitals * orbitals;
       created.matrix_offsets[system + 1u] = created.total_matrix_elements;
@@ -2077,6 +2318,20 @@ xtbloom_status_t bind_eigensolver_worker_workspace(const EigensolverPlan& plan, 
   return XTBLOOM_STATUS_SUCCESS;
 }
 
+xtbloom_status_t validate_eigensolver_overlap_cache_binding(const EigensolverPlan& plan,
+                                                            const EigensolverOverlapCache& cache,
+                                                            std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  return status == XTBLOOM_STATUS_SUCCESS ? validate_cache(plan, cache, error) : status;
+}
+
+xtbloom_status_t validate_eigensolver_worker_workspace_binding(
+    const EigensolverPlan& plan, const EigensolverWorkspace& workspace, std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  return status == XTBLOOM_STATUS_SUCCESS ? validate_worker_workspace(plan, workspace, error)
+                                          : status;
+}
+
 xtbloom_status_t factor_overlap_cpu(const EigensolverPlan& plan, const double* overlap,
                                     std::uint64_t geometry_generation,
                                     const CpuLinearAlgebraBackend& backend,
@@ -2224,6 +2479,17 @@ xtbloom_status_t solve_eigensystems_cpu(
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     std::string& error) {
+  return solve_eigensystems_cpu(
+      plan, overlap_cache, geometry_generation, hamiltonians, temperature, backend, workspace,
+      make_eigensolver_wavefunction_view(wavefunction), thermodynamics, error);
+}
+
+xtbloom_status_t solve_eigensystems_cpu(
+    const EigensolverPlan& plan, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics, std::string& error) {
   std::array<AddressRange, 5> result_ranges{};
   xtbloom_status_t status =
       validate_solve_bindings(plan, overlap_cache, backend, workspace, wavefunction, thermodynamics,
@@ -2293,7 +2559,8 @@ xtbloom_status_t solve_eigensystems_cpu(
     }
   }
 
-  const WavefunctionView staging_wavefunction = make_batch_staging_wavefunction(workspace);
+  const EigensolverWavefunctionView staging_wavefunction =
+      make_batch_staging_wavefunction(workspace);
   const EigensolverThermodynamicsView staging_thermodynamics =
       make_batch_staging_thermodynamics(data, workspace);
   ScopedSequentialBlas sequential_blas(backend);
@@ -2319,6 +2586,17 @@ xtbloom_status_t solve_eigensystem_cpu(
     const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
     const WavefunctionView& wavefunction, const EigensolverThermodynamicsView& thermodynamics,
     std::string& error) {
+  return solve_eigensystem_cpu(
+      plan, system, overlap_cache, geometry_generation, system_hamiltonians, temperature, backend,
+      workspace, make_eigensolver_wavefunction_view(wavefunction), thermodynamics, error);
+}
+
+xtbloom_status_t solve_eigensystem_cpu(
+    const EigensolverPlan& plan, std::int64_t system, const EigensolverOverlapCache& overlap_cache,
+    std::uint64_t geometry_generation, const double* system_hamiltonians, double temperature,
+    const CpuLinearAlgebraBackend& backend, const EigensolverWorkspace& workspace,
+    const EigensolverWavefunctionView& wavefunction,
+    const EigensolverThermodynamicsView& thermodynamics, std::string& error) {
   std::array<AddressRange, 5> result_ranges{};
   xtbloom_status_t status =
       validate_solve_bindings(plan, overlap_cache, backend, workspace, wavefunction, thermodynamics,

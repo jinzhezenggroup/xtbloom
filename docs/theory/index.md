@@ -1,11 +1,12 @@
 # Theory guide
 
 This guide explains the physical and numerical meaning of xTBloom's public
-results. The implementation follows GFN2-xTB conventions and is validated
-against pinned independent xTB and tblite evidence; xTBloom does not define a
-new parameterization or a new tight-binding method.
+results. The GFN1-xTB and GFN2-xTB implementations follow their distinct
+upstream conventions and pinned independent xTB/tblite evidence; xTBloom does
+not define a new parameterization or a new tight-binding method.
 
 - [GFN2-xTB, SCC, occupations, and forces](gfn2.md)
+- [GFN1-xTB model and publication contract](gfn1.md)
 - [Explicit point charges and periodic response](qmmm.md)
 
 All native calculations use binary64 atomic units. At finite electronic

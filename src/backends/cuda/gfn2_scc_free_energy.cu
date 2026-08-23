@@ -96,7 +96,7 @@ __global__ void compose_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
     return;
   }
 
-  double values[kGfn2SccFreeEnergyInputComponents];
+  double values[kGfn2SccFreeEnergyInputComponents + 1];
   bool finite = true;
   load_component(values, 0, true, input.core, system, Gfn2SccFreeEnergyDeviceError::kNonfiniteCore,
                  &finite, system_errors, device_error);
@@ -129,7 +129,10 @@ __global__ void compose_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
                  input.explicit_point_charge, system,
                  Gfn2SccFreeEnergyDeviceError::kNonfiniteExplicitPointCharge, &finite,
                  system_errors, device_error);
-  load_component(values, 8,
+  load_component(values, 8, input.electric_field != nullptr, input.electric_field, system,
+                 Gfn2SccFreeEnergyDeviceError::kNonfiniteElectricField, &finite, system_errors,
+                 device_error);
+  load_component(values, 9,
                  component_enabled(batch.enabled_components,
                                    Gfn2SccClassicalEnergyComponent::kPeriodicEmbedding),
                  input.periodic_embedding, system,
@@ -141,7 +144,7 @@ __global__ void compose_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
 
   double internal_energy = values[0];
 #pragma unroll
-  for (int component = 2; component < kGfn2SccFreeEnergyInputComponents; ++component) {
+  for (int component = 2; component < kGfn2SccFreeEnergyInputComponents + 1; ++component) {
     const double updated = internal_energy + values[component];
     if (!isfinite(updated)) {
       record_system_error(system_errors, system, device_error,
@@ -165,10 +168,14 @@ __global__ void compose_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
   workspace.diagnostic_scratch[4 * batch.batch_size + system] = values[5];
   workspace.diagnostic_scratch[5 * batch.batch_size + system] = values[6];
   workspace.diagnostic_scratch[6 * batch.batch_size + system] = values[7];
-  workspace.diagnostic_scratch[7 * batch.batch_size + system] = values[8];
+  /* Preserve every legacy public slot and append the field diagnostic. */
+  workspace.diagnostic_scratch[7 * batch.batch_size + system] = values[9];
   workspace.diagnostic_scratch[8 * batch.batch_size + system] = values[1];
   workspace.diagnostic_scratch[9 * batch.batch_size + system] = internal_energy;
   workspace.diagnostic_scratch[10 * batch.batch_size + system] = free_energy;
+  if (workspace.diagnostic_elements >= batch.batch_size * kGfn2SccFreeEnergyStorageComponents) {
+    workspace.diagnostic_scratch[11 * batch.batch_size + system] = values[8];
+  }
 }
 
 __global__ void publish_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
@@ -186,11 +193,17 @@ __global__ void publish_free_energy_kernel(Gfn2SccFreeEnergyDeviceBatch batch,
   diagnostics.core[system] = workspace.diagnostic_scratch[system];
   diagnostics.es2[system] = workspace.diagnostic_scratch[batch.batch_size + system];
   diagnostics.es3[system] = workspace.diagnostic_scratch[2 * batch.batch_size + system];
-  diagnostics.aes2[system] = workspace.diagnostic_scratch[3 * batch.batch_size + system];
+  if (batch.model == XtbModelFlavor::kGfn2) {
+    diagnostics.aes2[system] = workspace.diagnostic_scratch[3 * batch.batch_size + system];
+  }
   diagnostics.spin[system] = workspace.diagnostic_scratch[4 * batch.batch_size + system];
   diagnostics.d4_two_body[system] = workspace.diagnostic_scratch[5 * batch.batch_size + system];
   diagnostics.explicit_point_charge[system] =
       workspace.diagnostic_scratch[6 * batch.batch_size + system];
+  if (diagnostics.electric_field != nullptr) {
+    diagnostics.electric_field[system] =
+        workspace.diagnostic_scratch[11 * batch.batch_size + system];
+  }
   diagnostics.periodic_embedding[system] =
       workspace.diagnostic_scratch[7 * batch.batch_size + system];
   diagnostics.entropy[system] = workspace.diagnostic_scratch[8 * batch.batch_size + system];
@@ -255,19 +268,29 @@ bool valid_output(double* pointer, std::int64_t elements, std::int64_t batch_siz
   return elements == batch_size && is_aligned(pointer, alignof(double));
 }
 
+bool valid_optional_output(double* pointer, std::int64_t elements,
+                           std::int64_t batch_size) noexcept {
+  return (pointer == nullptr && elements == 0) || valid_output(pointer, elements, batch_size);
+}
+
 bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
                      const Gfn2SccFreeEnergyDeviceInput& input,
                      const Gfn2SccFreeEnergyDeviceActivity& activity,
                      const Gfn2SccFreeEnergyDeviceDiagnostics& diagnostics,
                      const Gfn2SccFreeEnergyDeviceWorkspace& workspace,
                      std::uint32_t* system_errors, std::uint32_t* device_error) noexcept {
-  if (batch.batch_size <= 0 ||
+  const bool gfn2 = batch.model == XtbModelFlavor::kGfn2;
+  const bool aes2_enabled =
+      component_enabled(batch.enabled_components, Gfn2SccClassicalEnergyComponent::kAES2);
+  const bool d4_enabled =
+      component_enabled(batch.enabled_components, Gfn2SccClassicalEnergyComponent::kD4TwoBody);
+  if (!valid_xtb_model_flavor(batch.model) || batch.batch_size <= 0 ||
       batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
       (batch.enabled_components & ~kGfn2SccClassicalAllComponents) != 0u ||
-      !std::isfinite(batch.electronic_temperature) || batch.electronic_temperature < 0.0 ||
-      batch.plan_token == 0u || input.plan_token != batch.plan_token ||
-      activity.plan_token != batch.plan_token || diagnostics.plan_token != batch.plan_token ||
-      workspace.plan_token != batch.plan_token ||
+      (!gfn2 && (aes2_enabled || d4_enabled)) || !std::isfinite(batch.electronic_temperature) ||
+      batch.electronic_temperature < 0.0 || batch.plan_token == 0u ||
+      input.plan_token != batch.plan_token || activity.plan_token != batch.plan_token ||
+      diagnostics.plan_token != batch.plan_token || workspace.plan_token != batch.plan_token ||
       !valid_input(input.core, input.core_elements, batch.batch_size, true) ||
       !valid_input(input.entropy, input.entropy_elements, batch.batch_size, true) ||
       !valid_input(
@@ -290,17 +313,22 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       !valid_input(input.periodic_embedding, input.periodic_embedding_elements, batch.batch_size,
                    component_enabled(batch.enabled_components,
                                      Gfn2SccClassicalEnergyComponent::kPeriodicEmbedding)) ||
+      !valid_input(input.electric_field, input.electric_field_elements, batch.batch_size,
+                   input.electric_field != nullptr) ||
       !((activity.active_mask == nullptr && activity.elements == 0) ||
         (activity.elements == batch.batch_size &&
          is_aligned(activity.active_mask, alignof(std::uint8_t)))) ||
       !valid_output(diagnostics.core, diagnostics.core_elements, batch.batch_size) ||
       !valid_output(diagnostics.es2, diagnostics.es2_elements, batch.batch_size) ||
       !valid_output(diagnostics.es3, diagnostics.es3_elements, batch.batch_size) ||
-      !valid_output(diagnostics.aes2, diagnostics.aes2_elements, batch.batch_size) ||
+      (gfn2 ? !valid_output(diagnostics.aes2, diagnostics.aes2_elements, batch.batch_size)
+            : diagnostics.aes2 != nullptr || diagnostics.aes2_elements != 0) ||
       !valid_output(diagnostics.spin, diagnostics.spin_elements, batch.batch_size) ||
       !valid_output(diagnostics.d4_two_body, diagnostics.d4_two_body_elements, batch.batch_size) ||
       !valid_output(diagnostics.explicit_point_charge, diagnostics.explicit_point_charge_elements,
                     batch.batch_size) ||
+      !valid_optional_output(diagnostics.electric_field, diagnostics.electric_field_elements,
+                             batch.batch_size) ||
       !valid_output(diagnostics.periodic_embedding, diagnostics.periodic_embedding_elements,
                     batch.batch_size) ||
       !valid_output(diagnostics.entropy, diagnostics.entropy_elements, batch.batch_size) ||
@@ -308,8 +336,12 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
                     batch.batch_size) ||
       !valid_output(diagnostics.free_energy, diagnostics.free_energy_elements, batch.batch_size) ||
       batch.batch_size >
-          std::numeric_limits<std::int64_t>::max() / kGfn2SccFreeEnergyDiagnosticComponents ||
-      workspace.diagnostic_elements < batch.batch_size * kGfn2SccFreeEnergyDiagnosticComponents ||
+          std::numeric_limits<std::int64_t>::max() / kGfn2SccFreeEnergyStorageComponents ||
+      workspace.diagnostic_elements <
+          batch.batch_size *
+              ((input.electric_field != nullptr || diagnostics.electric_field != nullptr)
+                   ? kGfn2SccFreeEnergyStorageComponents
+                   : kGfn2SccFreeEnergyDiagnosticComponents) ||
       workspace.sequence_elements < 1 ||
       !is_aligned(workspace.diagnostic_scratch, alignof(double)) ||
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
@@ -318,7 +350,7 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
     return false;
   }
 
-  const std::array<const double*, kGfn2SccFreeEnergyInputComponents> input_pointers{
+  const std::array<const double*, kGfn2SccFreeEnergyInputComponents + 1> input_pointers{
       input.core,
       input.entropy,
       input.es2,
@@ -327,8 +359,9 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       input.spin,
       input.d4_two_body,
       input.explicit_point_charge,
+      input.electric_field,
       input.periodic_embedding};
-  const std::array<std::int64_t, kGfn2SccFreeEnergyInputComponents> input_elements{
+  const std::array<std::int64_t, kGfn2SccFreeEnergyInputComponents + 1> input_elements{
       input.core_elements,
       input.entropy_elements,
       input.es2_elements,
@@ -337,8 +370,9 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       input.spin_elements,
       input.d4_two_body_elements,
       input.explicit_point_charge_elements,
+      input.electric_field_elements,
       input.periodic_embedding_elements};
-  std::array<AddressRange, kGfn2SccFreeEnergyInputComponents + 1> reads{};
+  std::array<AddressRange, kGfn2SccFreeEnergyInputComponents + 2> reads{};
   for (std::size_t component = 0; component < input_pointers.size(); ++component) {
     if (!make_range(input_pointers[component], input_elements[component], sizeof(double),
                     &reads[component])) {
@@ -350,7 +384,7 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
     return false;
   }
 
-  const std::array<double*, kGfn2SccFreeEnergyDiagnosticComponents> output_pointers{
+  const std::array<double*, kGfn2SccFreeEnergyStorageComponents> output_pointers{
       diagnostics.core,
       diagnostics.es2,
       diagnostics.es3,
@@ -361,24 +395,38 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       diagnostics.periodic_embedding,
       diagnostics.entropy,
       diagnostics.internal_energy,
-      diagnostics.free_energy};
-  std::array<AddressRange, kGfn2SccFreeEnergyDiagnosticComponents + 4> writes{};
+      diagnostics.free_energy,
+      diagnostics.electric_field};
+  const std::array<std::int64_t, kGfn2SccFreeEnergyStorageComponents> output_elements{
+      diagnostics.core_elements,
+      diagnostics.es2_elements,
+      diagnostics.es3_elements,
+      diagnostics.aes2_elements,
+      diagnostics.spin_elements,
+      diagnostics.d4_two_body_elements,
+      diagnostics.explicit_point_charge_elements,
+      diagnostics.periodic_embedding_elements,
+      diagnostics.entropy_elements,
+      diagnostics.internal_energy_elements,
+      diagnostics.free_energy_elements,
+      diagnostics.electric_field_elements};
+  std::array<AddressRange, kGfn2SccFreeEnergyStorageComponents + 4> writes{};
   for (std::size_t component = 0; component < output_pointers.size(); ++component) {
-    if (!make_range(output_pointers[component], batch.batch_size, sizeof(double),
+    if (!make_range(output_pointers[component], output_elements[component], sizeof(double),
                     &writes[component])) {
       return false;
     }
   }
   if (!make_range(workspace.diagnostic_scratch, workspace.diagnostic_elements,
                   sizeof(*workspace.diagnostic_scratch),
-                  &writes[kGfn2SccFreeEnergyDiagnosticComponents]) ||
+                  &writes[kGfn2SccFreeEnergyStorageComponents]) ||
       !make_range(workspace.sequence_active, workspace.sequence_elements,
                   sizeof(*workspace.sequence_active),
-                  &writes[kGfn2SccFreeEnergyDiagnosticComponents + 1]) ||
+                  &writes[kGfn2SccFreeEnergyStorageComponents + 1]) ||
       !make_range(system_errors, batch.batch_size, sizeof(*system_errors),
-                  &writes[kGfn2SccFreeEnergyDiagnosticComponents + 2]) ||
+                  &writes[kGfn2SccFreeEnergyStorageComponents + 2]) ||
       !make_range(device_error, 1, sizeof(*device_error),
-                  &writes[kGfn2SccFreeEnergyDiagnosticComponents + 3])) {
+                  &writes[kGfn2SccFreeEnergyStorageComponents + 3])) {
     return false;
   }
   for (std::size_t lhs = 0; lhs < writes.size(); ++lhs) {
@@ -392,7 +440,13 @@ bool validate_launch(const Gfn2SccFreeEnergyDeviceBatch& batch,
       const bool in_place_spin = lhs == 4u && read_index == 5u && ranges_equal(writes[lhs], read);
       const bool in_place_entropy =
           lhs == 8u && read_index == 1u && ranges_equal(writes[lhs], read);
-      if (ranges_overlap(writes[lhs], read) && !in_place_spin && !in_place_entropy) {
+      /* Field, spin, and entropy diagnostics are exact pass-through aliases.
+       * The reduction snapshots every input into unpublished scratch before
+       * the later publication kernel overwrites the identical source range. */
+      const bool in_place_electric_field =
+          lhs == 11u && read_index == 8u && ranges_equal(writes[lhs], read);
+      if (ranges_overlap(writes[lhs], read) && !in_place_spin && !in_place_entropy &&
+          !in_place_electric_field) {
         return false;
       }
     }

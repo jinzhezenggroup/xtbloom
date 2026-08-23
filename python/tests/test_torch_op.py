@@ -24,8 +24,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from _legacy_core import build_legacy_core
 from xtbloom import Calculator, xtbloom_torch
-from xtbloom.exceptions import XTBloomNotSupportedError, XTBloomValueError
+from xtbloom.exceptions import (
+    XTBloomNotSupportedError,
+    XTBloomRuntimeError,
+    XTBloomValueError,
+)
+from xtbloom.torch import _resolve_scc_policy
 
 _TORCH = importlib.util.find_spec("torch")
 
@@ -43,6 +49,7 @@ def test_torch_public_signature_hides_execution_details() -> None:
         "molecular_charges",
         "unpaired_electrons",
         "spin_channels",
+        "method",
         "backend",
         "device_id",
         "cpu_threads",
@@ -50,6 +57,10 @@ def test_torch_public_signature_hides_execution_details() -> None:
         "charge_tolerance",
         "energy_tolerance",
         "electronic_temperature",
+        "scc_mixer",
+        "scc_mixer_history",
+        "scc_mixer_damping",
+        "determinism",
     )
     assert not hasattr(torch_module, "_xtbloom_torch_async")
     for internal_name in (
@@ -59,6 +70,148 @@ def test_torch_public_signature_hides_execution_details() -> None:
         "xtbloom_torch_wait",
     ):
         assert not hasattr(xtbloom, internal_name)
+
+
+def test_torch_scc_policy_resolver_does_not_require_torch() -> None:
+    """Validate aliases and exact tags before importing the optional runtime."""
+    assert _resolve_scc_policy("modified_broyden", 16, 0.25, "reproducible") == (
+        1,
+        16,
+        0.25,
+        1,
+    )
+    assert _resolve_scc_policy(1, 8, 0.4, 0) == (1, 8, 0.4, 0)
+    with pytest.raises(XTBloomValueError, match="scc_mixer"):
+        _resolve_scc_policy("linear", 8, 0.4, "default")
+    with pytest.raises(XTBloomValueError, match="scc_mixer_history"):
+        _resolve_scc_policy("modified_broyden", 65, 0.4, "default")
+    with pytest.raises(XTBloomValueError, match="scc_mixer_damping"):
+        _resolve_scc_policy("modified_broyden", 8, float("nan"), "default")
+    with pytest.raises(XTBloomValueError, match="determinism"):
+        _resolve_scc_policy("modified_broyden", 8, 0.4, "portable")
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ((True, 8, 0.4, "default"), "scc_mixer"),
+        ((1.5, 8, 0.4, "default"), "scc_mixer"),
+        ((2, 8, 0.4, "default"), "scc_mixer"),
+        (("modified_broyden", 8, 0.4, 2), "determinism"),
+    ],
+)
+def test_torch_scc_policy_resolver_rejects_nonexact_or_unknown_tags(
+    args: tuple[object, object, object, object], message: str
+) -> None:
+    """Reject booleans, fractional values, and unknown numeric policy tags."""
+    with pytest.raises(XTBloomValueError, match=message):
+        _resolve_scc_policy(*args)  # type: ignore[arg-type]
+
+
+def test_torch_policy_resolver_fails_closed_on_legacy_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The high-level Torch path rejects nondefault V3 policy before dispatch."""
+    import xtbloom.library as library_module
+
+    monkeypatch.setattr(
+        library_module, "compute_options_v3_available", lambda _lib=None: False
+    )
+    assert _resolve_scc_policy("modified_broyden", 8, 0.4, "default") == (
+        1,
+        8,
+        0.4,
+        0,
+    )
+    with pytest.raises(XTBloomRuntimeError, match="ABI v3"):
+        _resolve_scc_policy("modified_broyden", 16, 0.25, "reproducible")
+
+
+def test_private_torch_op_fails_closed_with_legacy_core_override(
+    tmp_path: Path,
+) -> None:
+    """Direct dispatcher calls cannot bypass the native V3 capability gate."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    if not sys.platform.startswith("linux"):
+        pytest.skip("the legacy shared-library fixture currently targets ELF")
+    from xtbloom import torch as torch_module
+
+    extension = torch_module._torch_extension_path()
+    assert extension is not None, "compiled Torch extension is missing"
+    legacy = build_legacy_core(tmp_path)
+    script = r"""
+import sys
+import torch
+
+torch.ops.load_library(sys.argv[1])
+positions = torch.zeros((1, 3), dtype=torch.float64)
+atomic_numbers = torch.ones(1, dtype=torch.int32)
+atom_offsets = torch.tensor([0, 1], dtype=torch.int64)
+molecular_charges = torch.zeros(1, dtype=torch.float64)
+unpaired_electrons = torch.zeros(1, dtype=torch.int32)
+spin_channels = torch.ones(1, dtype=torch.int32)
+args = (
+    positions, atomic_numbers, atom_offsets, molecular_charges,
+    unpaired_electrons, spin_channels, atomic_numbers, atom_offsets,
+    molecular_charges, unpaired_electrons, spin_channels,
+    0, 0, 0, 0, 0,
+    torch.empty(1, dtype=torch.float64),
+    torch.empty((1, 3), dtype=torch.float64),
+    2, 1, -1, 1, 0, 50, 1.0e-6, 1.0e-8, 300.0,
+)
+torch.ops.xtbloom._xtbloom_torch_forward(*args, 1, 8, 0.4, 0)
+try:
+    torch.ops.xtbloom._xtbloom_torch_forward(*args, 1, 16, 0.25, 1)
+except RuntimeError as exc:
+    assert "ABI v3" in str(exc)
+else:
+    raise AssertionError("private Torch op silently accepted legacy-core V3 policy")
+"""
+    env = os.environ.copy()
+    env["XTBLOOM_LIBRARY"] = str(legacy)
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(extension)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"scc_mixer": "linear"}, "scc_mixer"),
+        ({"scc_mixer_history": 0}, "scc_mixer_history"),
+        ({"scc_mixer_history": 65}, "scc_mixer_history"),
+        ({"scc_mixer_damping": 0.0}, "scc_mixer_damping"),
+        ({"determinism": "portable"}, "determinism"),
+    ],
+)
+def test_torch_rejects_invalid_scc_policy(
+    kwargs: dict[str, object], message: str
+) -> None:
+    """Validate policy scalars before the compiled operator is loaded."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+
+    arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    with pytest.raises(XTBloomValueError, match=message):
+        xtbloom_torch(
+            arrays["positions"],
+            arrays["atomic_numbers"],
+            arrays["atom_offsets"],
+            arrays["molecular_charges"],
+            arrays["unpaired_electrons"],
+            arrays["spin_channels"],
+            backend="cpu",
+            **kwargs,
+        )
 
 
 def test_output_allocation_is_failure_safe() -> None:
@@ -117,10 +270,74 @@ def test_compiled_schema_marks_outputs_mutable() -> None:
     assert "Tensor atomic_numbers_owner" in schema
     assert "Tensor(a!) out_energies" in schema
     assert "Tensor(b!) out_forces" in schema
+    assert "int model" in schema
+    assert "int scc_mixer" in schema
+    assert "int scc_mixer_history" in schema
+    assert "float scc_mixer_damping" in schema
+    assert "int determinism" in schema
     assert "-> (Tensor(a!), Tensor(b!), int)" in schema
     assert str(torch.ops.xtbloom._xtbloom_torch_wait.default._schema).endswith(
         "(int submission_id) -> ()"
     )
+
+
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        ((2, 8, 0.4, 0), "scc_mixer"),
+        ((1, 65, 0.4, 0), "scc_mixer_history"),
+        ((1, 8, 0.0, 0), "scc_mixer_damping"),
+        ((1, 8, 0.4, 2), "determinism"),
+    ],
+)
+def test_private_torch_op_validates_policy_before_narrowing(
+    policy: tuple[int, int, float, int], message: str
+) -> None:
+    """Direct dispatcher calls cannot wrap int64 policy values into the C ABI."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+    from xtbloom import torch as torch_module
+
+    arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    positions = arrays["positions"]
+    atomic_numbers = arrays["atomic_numbers"]
+    atom_offsets = arrays["atom_offsets"]
+    molecular_charges = arrays["molecular_charges"]
+    unpaired_electrons = arrays["unpaired_electrons"]
+    spin_channels = arrays["spin_channels"]
+    with pytest.raises(RuntimeError, match=message):
+        torch_module._xtbloom_torch_op()(
+            positions,
+            atomic_numbers,
+            atom_offsets,
+            molecular_charges,
+            unpaired_electrons,
+            spin_channels,
+            atomic_numbers,
+            atom_offsets,
+            molecular_charges,
+            unpaired_electrons,
+            spin_channels,
+            0,
+            0,
+            0,
+            0,
+            0,
+            torch.empty(1, dtype=torch.float64),
+            torch.empty((3, 3), dtype=torch.float64),
+            2,
+            1,
+            -1,
+            1,
+            0,
+            250,
+            1.0e-6,
+            1.0e-8,
+            300.0,
+            *policy,
+        )
 
 
 class _DLPackOnly:
@@ -336,6 +553,43 @@ def test_backward_settles_its_private_forward_token(
     assert positions.grad is None
 
 
+def test_torch_forwards_normalized_scc_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pass frozen tag values to the native op after validating aliases."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+    import xtbloom.torch as torch_module
+
+    captured: dict[str, object] = {}
+
+    def fake_native_forward(**kwargs: object) -> tuple[object, object, int]:
+        captured.update(kwargs)
+        return kwargs["out_energies"], kwargs["out_forces"], 0
+
+    monkeypatch.setattr(torch_module, "_native_forward", fake_native_forward)
+    arrays = _packed([WATER_NUMBERS], [WATER_POSITIONS], torch)
+    xtbloom_torch(
+        arrays["positions"],
+        arrays["atomic_numbers"],
+        arrays["atom_offsets"],
+        arrays["molecular_charges"],
+        arrays["unpaired_electrons"],
+        arrays["spin_channels"],
+        backend="cpu",
+        scc_mixer="modified_broyden",
+        scc_mixer_history=16,
+        scc_mixer_damping=0.25,
+        determinism="reproducible",
+    )
+    assert captured["scc_mixer"] == 1
+    assert captured["scc_mixer_history"] == 16
+    assert captured["scc_mixer_damping"] == 0.25
+    assert captured["determinism"] == 1
+
+
 def test_energy_backward_does_not_scan_unused_force_grad(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -366,6 +620,18 @@ def test_energy_backward_does_not_scan_unused_force_grad(
     monkeypatch.setattr(torch.Tensor, "any", reject_any)
     energies.sum().backward()
     assert positions.grad is not None
+
+
+def test_backward_without_an_energy_gradient_is_a_noop() -> None:
+    """Return no input gradients when autograd supplies neither output gradient."""
+    reason = _skip_reason()
+    if reason:
+        pytest.skip(reason)
+    import torch
+    import xtbloom.torch as torch_module
+
+    with torch.no_grad():
+        assert torch_module._function().backward(object(), None, None) == (None,) * 18
 
 
 def test_numpy_auxiliary_arrays_dispatch_as_tensors() -> None:
@@ -480,7 +746,7 @@ try:
         0, 0, 0, 0, 0,
         torch.empty(1, dtype=torch.float64),
         torch.empty((1, 3), dtype=torch.float64),
-        1, -1, 0, 0, 50, 1.0e-6, 1.0e-8, 300.0,
+        2, 1, -1, 0, 0, 50, 1.0e-6, 1.0e-8, 300.0, 1, 8, 0.4, 0,
     )
 except RuntimeError as exc:
     if "cannot load libxtbloom" not in str(exc):

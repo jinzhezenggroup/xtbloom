@@ -1,4 +1,4 @@
-// Native ragged-batch SCC trace harness test (issues #49/#50).
+// Native ragged-batch SCC trace harness test (issues #49/#50/#51).
 //
 // Drives the same production CPU GFN2 SCC driver used by the sequential trace
 // capture through one heterogeneous ragged batch and verifies the structural
@@ -262,6 +262,70 @@ int test_failure_lane_is_isolated_from_peers() {
   return 0;
 }
 
+int test_mixed_restricted_unrestricted_batch_freezes_and_isolates_failure() {
+  std::string err;
+  std::vector<CaseSpec> specs;
+  if (!load(specs, {"h3_plus", "oh_radical", "nenacl", "oh_radical"}, err)) {
+    std::cerr << err << "\n";
+    return 1;
+  }
+  TraceBatch batch;
+  for (const CaseSpec& spec : specs) {
+    batch.add_case(spec);
+  }
+  if (xtbloom_status_t s = batch.build(err); s != XTBLOOM_STATUS_SUCCESS) {
+    std::cerr << "mixed-spin build failed: " << err << "\n";
+    return 1;
+  }
+  batch.poison_h0(3);
+
+  std::vector<std::vector<double>> frozen_restricted;
+  for (std::uint64_t step_count = 0u; step_count < kMaximumHarnessIterations; ++step_count) {
+    bool any_active = false;
+    for (std::int64_t system = 0; system < batch.system_count(); ++system) {
+      any_active = any_active || (batch.system_status(system) == XTBLOOM_STATUS_SUCCESS &&
+                                  !batch.system_converged(system));
+    }
+    if (!any_active) break;
+    if (xtbloom_status_t s = batch.step_once(err); s != XTBLOOM_STATUS_SUCCESS) {
+      std::cerr << "mixed-spin step failed: " << err << "\n";
+      return 1;
+    }
+    if (batch.system_converged(0) && frozen_restricted.empty()) {
+      frozen_restricted = batch.live_state(0);
+      CHECK(!batch.system_converged(1));
+      CHECK(batch.system_iterations(1) < 10u);
+    }
+  }
+
+  CHECK(batch.system_converged(0));
+  CHECK(batch.system_converged(1));
+  CHECK(batch.system_converged(2));
+  CHECK(batch.system_iterations(0) == 3u);
+  CHECK(batch.system_iterations(1) == 10u);
+  CHECK(batch.system_iterations(2) == 14u);
+  CHECK(batch.system_status(3) == XTBLOOM_STATUS_INTERNAL_ERROR);
+  CHECK(batch.system_iterations(3) == 0u);
+  CHECK(state_equal(frozen_restricted, batch.live_state(0)));
+
+  // Charge and magnetization occupy separate live-state channels only for the
+  // unrestricted lane, proving the mixed ragged offsets do not alias peers.
+  const auto restricted = batch.live_state(0);
+  const auto unrestricted = batch.live_state(1);
+  CHECK(restricted[0].size() == 3u);
+  CHECK(restricted[1].size() == 3u);
+  CHECK(unrestricted[0].size() == 6u);
+  CHECK(unrestricted[1].size() == 4u);
+  CHECK(unrestricted[2].size() == 12u);
+  CHECK(unrestricted[3].size() == 24u);
+  CHECK(!state_equal(restricted, unrestricted));
+  for (const auto& field : unrestricted) {
+    for (double value : field) CHECK(std::isfinite(value));
+  }
+  std::cout << "mixed restricted/unrestricted freeze and failure isolation: PASS\n";
+  return 0;
+}
+
 int test_eigensolver_failure_preserves_pre_solve_attempt() {
   std::string err;
   TraceBatch batch;
@@ -293,6 +357,39 @@ int test_eigensolver_failure_preserves_pre_solve_attempt() {
   return 0;
 }
 
+int test_unrestricted_eigensolver_failure_preserves_spin_resolved_pre_solve_attempt() {
+  std::string err;
+  TraceBatch batch;
+  batch.add_case(corpus_spec("oh_radical", err));
+  if (xtbloom_status_t s = batch.build(err); s != XTBLOOM_STATUS_SUCCESS) {
+    std::cerr << "unrestricted eigensolver failure build failed: " << err << "\n";
+    return 1;
+  }
+  batch.poison_eigensolver(0);
+  if (xtbloom_status_t s = batch.step_once(err); s != XTBLOOM_STATUS_SUCCESS) {
+    std::cerr << "unrestricted eigensolver failure step failed: " << err << "\n";
+    return 1;
+  }
+
+  CHECK(batch.system_status(0) == XTBLOOM_STATUS_EIGENSOLVER_FAILED);
+  CHECK(batch.system_iterations(0) == 1u);
+  CHECK(batch.iterations(0).empty());
+  std::ostringstream raw;
+  batch.emit(raw, 0);
+  const std::string payload = raw.str();
+  CHECK(payload.find("niterations 0 terminal 3 failed_attempt 1") != std::string::npos);
+  CHECK(payload.find("failed_attempt\n1\nassembled_hamiltonian\n") != std::string::npos);
+  CHECK(payload.find("\nsolver_hamiltonian\n") != std::string::npos);
+  CHECK(payload.find("\nmixed_qsh\n") != std::string::npos);
+  CHECK(payload.find("\neigenvalues\n") == std::string::npos);
+  CHECK(payload.find("\ndensity\n") == std::string::npos);
+  CHECK(payload.find("\nraw_qsh\n") == std::string::npos);
+  CHECK(payload.find("\nenergy\n") == std::string::npos);
+  CHECK(payload.find("\nconvergence\n") == std::string::npos);
+  std::cout << "unrestricted eigensolver failed-attempt payload preserved: PASS\n";
+  return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -302,6 +399,9 @@ int main() {
   if (test_failure_lane_is_isolated_from_peers() != 0) {
     return 1;
   }
+  if (test_mixed_restricted_unrestricted_batch_freezes_and_isolates_failure() != 0) {
+    return 1;
+  }
   if (test_case_spec_iteration_cap_is_honored() != 0) {
     return 1;
   }
@@ -309,6 +409,9 @@ int main() {
     return 1;
   }
   if (test_eigensolver_failure_preserves_pre_solve_attempt() != 0) {
+    return 1;
+  }
+  if (test_unrestricted_eigensolver_failure_preserves_spin_resolved_pre_solve_attempt() != 0) {
     return 1;
   }
   if (test_nonhomogeneous_batch_policy_is_rejected() != 0) {

@@ -70,14 +70,17 @@ def run(
     return completed
 
 
-def load_metadata() -> dict[str, object]:
+def load_metadata(path: Path = METADATA_PATH) -> dict[str, object]:
     """Load and minimally validate immutable patch metadata."""
     try:
-        metadata = json.loads(METADATA_PATH.read_text(encoding="utf-8"))
+        metadata = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise ObserverPatchError(f"cannot read {METADATA_PATH}: {error}") from error
+        raise ObserverPatchError(f"cannot read {path}: {error}") from error
 
-    if metadata.get("schema") != "xtbloom-tblite-scc-observer-patch-v1":
+    if metadata.get("schema") not in {
+        "xtbloom-tblite-scc-observer-patch-v1",
+        "xtbloom-tblite-scc-observer-patch-v2",
+    }:
         raise ObserverPatchError(
             "unsupported or missing observer patch metadata schema"
         )
@@ -155,7 +158,7 @@ def validate_bundle(metadata: dict[str, object]) -> str:
             f"{expected_paths!r}"
         )
 
-    required_tokens = (
+    required_tokens = [
         "type, public :: scf_observer",
         "procedure :: before_solve => no_op_before_solve",
         "procedure :: after_iteration => no_op_after_iteration",
@@ -168,12 +171,34 @@ def validate_bundle(metadata: dict[str, object]) -> str:
         "if (present(observer)) call observer%before_solve(iscf, wfn, pot)",
         "call observer%after_iteration(observer_iteration, wfn, eelec, elast, &",
         "call observer%finished(iscf, scf_observer_status_failed)",
-    )
+    ]
+    if metadata.get("schema") == "xtbloom-tblite-scc-observer-patch-v2":
+        required_tokens.extend(
+            [
+                "procedure :: solver_hamiltonian => no_op_solver_hamiltonian",
+                "call observer%solver_hamiltonian(iteration, hmat)",
+                "hmat(:, :, :) = 2*hmat",
+            ]
+        )
     missing = [token for token in required_tokens if token not in text]
     if missing:
         raise ObserverPatchError(f"patch is missing semantic anchors: {missing!r}")
     if "type, public, abstract :: scf_observer" in text or "deferred" in text:
         raise ObserverPatchError("the observer base must remain concrete and no-op")
+
+    if metadata.get("schema") == "xtbloom-tblite-scc-observer-patch-v2":
+        sources = metadata.get("oracle_sources")
+        expected_names = {"scc_trace_main_v2.f90", "scc_trace_recorder_v2.f90"}
+        if not isinstance(sources, dict) or set(sources) != expected_names:
+            raise ObserverPatchError("v2 metadata oracle source set is incomplete")
+        for filename, expected_digest in sources.items():
+            if not isinstance(expected_digest, str) or len(expected_digest) != 64:
+                raise ObserverPatchError(f"invalid oracle source digest for {filename}")
+            source = TOOL_DIR / filename
+            if not source.is_file() or sha256_file(source) != expected_digest:
+                raise ObserverPatchError(
+                    f"oracle source is missing or modified: {filename}"
+                )
     return actual_digest
 
 
@@ -268,6 +293,8 @@ def validate_applied_hooks(checkout: Path) -> None:
         encoding="utf-8"
     )
     observer = (checkout / "src/tblite/scf/observer.f90").read_text(encoding="utf-8")
+    diagonalizer_path = checkout / "src/tblite/scf/diag.f90"
+    diagonalizer = diagonalizer_path.read_text(encoding="utf-8")
 
     iterator_order = (
         iterator.index("call add_pot_to_h1"),
@@ -297,12 +324,29 @@ def validate_applied_hooks(checkout: Path) -> None:
         raise ObserverPatchError(
             "both callbacks must borrow wavefunction state read-only"
         )
-    if observer.count("class(scf_observer), intent(inout) :: self") != 3:
+    expected_mutable_callbacks = 4 if "solver_hamiltonian" in observer else 3
+    if (
+        observer.count("class(scf_observer), intent(inout) :: self")
+        != expected_mutable_callbacks
+    ):
         raise ObserverPatchError("observer state must be mutable only through self")
     if singlepoint.count("call observer%finished") != 4:
         raise ObserverPatchError(
             "all mixer and outer-loop terminal paths must report status"
         )
+    if "solver_hamiltonian" in observer:
+        solver_order = (
+            diagonalizer.index("hmat(:, :, :) = 2*hmat"),
+            diagonalizer.index(
+                "call observer%solver_hamiltonian", diagonalizer.index("case(2)")
+            ),
+            diagonalizer.index("call self%solve", diagonalizer.index("case(2)")),
+        )
+        if list(solver_order) != sorted(solver_order):
+            raise ObserverPatchError(
+                "solver_hamiltonian is not after unrestricted scaling and before "
+                "eigensolve"
+            )
 
 
 def probe_meson_project(lapack: str) -> str:
@@ -408,6 +452,12 @@ def parse_arguments() -> argparse.Namespace:
         help="local tblite Git checkout used read-only as the clone source",
     )
     parser.add_argument(
+        "--metadata",
+        type=Path,
+        default=METADATA_PATH,
+        help="observer patch metadata bundle to validate (defaults to v1)",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         help="leave the patched detached checkout here; the path must not exist",
@@ -446,7 +496,7 @@ def main() -> int:
     if arguments.output_dir is not None:
         validate_output_location(source_root, arguments.output_dir.resolve())
 
-    metadata = load_metadata()
+    metadata = load_metadata(arguments.metadata)
     digest = validate_bundle(metadata)
     upstream = metadata["upstream"]
     assert isinstance(upstream, dict)

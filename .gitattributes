@@ -1,5 +1,6 @@
 # Preserve the canonical tblite exporter byte stream, including its final blank line.
 data/parameters/gfn2.toml whitespace=-blank-at-eof
+data/parameters/gfn1.toml whitespace=-blank-at-eof
 
 # Preserve exact upstream scipy-openblas32 packaged-license bytes. The Windows
 # artifacts contain canonical CRLF or mixed line endings verified by SHA-256.
@@ -8,6 +9,20 @@ LICENSES/scipy-openblas32-0.3.34.0.0-macos.txt -text
 LICENSES/scipy-openblas32-0.3.34.0.0-windows-amd64.txt -text whitespace=cr-at-eol
 LICENSES/scipy-openblas32-0.3.34.0.0-windows-arm64.txt -text whitespace=cr-at-eol
 LICENSES/scipy-openblas32-tools-LICENSE_win32.txt -text
+# This exact upstream CodSpeed notice is SHA-256 checked at every package
+# boundary, so Windows checkouts must retain its canonical LF bytes.
+LICENSES/codspeed-MIT.txt -text
+
+# GFN1 and GFN1-D3 provenance bind the upstream mctc-lib Apache and tblite /
+# simple-dftd3 LGPL licenses by exact byte length and SHA-256. Preserve their
+# LF bytes in Windows worktrees so installed and wheel payloads remain canonical.
+LICENSES/Apache-2.0.txt -text
+LICENSES/LGPL-3.0-or-later.txt -text
+
+# The copied tblite STO table is licensed and checked against its exact
+# upstream SHA-256. Force LF checkouts so Windows wheels retain those bytes.
+data/parameters/tblite_sto.hpp text eol=lf
+data/parameters/gfn1_legacy_sto.hpp text eol=lf
 
 # These upstream license and vendored-source trees are checked byte-for-byte
 # against provenance manifests. Disable checkout newline conversion so a
@@ -23,5 +38,16 @@ LICENSES/eigen/** -whitespace
 cmake/3rdparty/implib/** -text
 cmake/3rdparty/torch-stable/include/** -text
 cmake/3rdparty/pyodide-openblas/** -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+
+# The unrestricted SCC oracle bundle is independently generated and pinned by
+# exact SHA-256 values.  Keep checkout newline conversion from changing the
+# committed patch, oracle sources, schema, manifest, golden, or input spec.
+tools/oracle/tblite_scc_trace/tblite-e9abc395-scc-observer-v2.patch -text
+tools/oracle/tblite_scc_trace/scc_trace_main_v2.f90 -text
+tools/oracle/tblite_scc_trace/scc_trace_recorder_v2.f90 -text
+tools/oracle/tblite_scc_trace/xtbloom-scc-trace-v2.schema.json -text
+data/conformance/scc-traces/manifest-v2.json -text
+data/conformance/scc-traces/oh_radical.json -text
+data/conformance/scc-traces/specs/oh_radical.spec -text
 
 .git_archival.txt export-subst

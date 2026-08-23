@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run committed GFN2 conformance cases through the public xtbloom C ABI.
+"""Run committed GFN1/GFN2 conformance cases through the public C ABI.
 
 The runner deliberately uses :mod:`ctypes`: it validates the installed/shared-
 library surface rather than linking to implementation details. Cases are
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
     from types import TracebackType
 
+import gfn1_conformance
 import xtbloom_conformance as conformance
 
 XTBLOOM_STATUS_SUCCESS = 0
@@ -34,6 +35,7 @@ XTBLOOM_BACKEND_CPU = 1
 XTBLOOM_BACKEND_CUDA = 2
 XTBLOOM_MEMORY_HOST = 0
 XTBLOOM_MEMORY_CUDA_DEVICE = 1
+XTBLOOM_MODEL_GFN1_XTB = 1
 XTBLOOM_MODEL_GFN2_XTB = 2
 XTBLOOM_SCC_START_FRESH = 1
 XTBLOOM_SCC_START_WARM = 2
@@ -41,6 +43,8 @@ XTBLOOM_COMPUTE_ENERGY = 1 << 0
 XTBLOOM_COMPUTE_FORCES = 1 << 1
 XTBLOOM_COMPUTE_ATOMIC_CHARGES = 1 << 2
 XTBLOOM_COMPUTE_POINT_CHARGE_FORCES = 1 << 3
+XTBLOOM_COMPUTE_DIPOLE_MOMENTS = 1 << 4
+XTBLOOM_RESULT_DIPOLE_MOMENTS = 1 << 4
 XTBLOOM_KELVIN_TO_HARTREE = 3.166808578545117e-6
 
 XTBLOOM_INTERACTION_ELECTRIC_FIELD = 0x0101
@@ -87,7 +91,7 @@ class Buffer(ctypes.Structure):
 
 
 class Batch(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_batch_t`` including its ABI-v2 suffix."""
+    """ctypes mirror of ``xtbloom_batch_t`` through its ABI-v4 suffix."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -112,6 +116,8 @@ class Batch(ctypes.Structure):
         ("total_interactions", ctypes.c_int64),
         ("interaction_descriptors", ConstBuffer),
         ("interaction_payload", ConstBuffer),
+        ("cell_matrices", ConstBuffer),
+        ("periodic_axes", ConstBuffer),
     ]
 
 
@@ -128,7 +134,7 @@ class Interaction(ctypes.Structure):
 
 
 class ComputeOptions(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_compute_options_t`` through ABI version 2."""
+    """ctypes mirror of ``xtbloom_compute_options_t`` through ABI version 3."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -142,11 +148,16 @@ class ComputeOptions(ctypes.Structure):
         ("electronic_temperature", ctypes.c_double),
         ("scc_start_mode", ctypes.c_int32),
         ("reserved_v2", ctypes.c_uint32),
+        ("scc_mixer", ctypes.c_int32),
+        ("scc_mixer_history", ctypes.c_int32),
+        ("scc_mixer_damping", ctypes.c_double),
+        ("determinism", ctypes.c_int32),
+        ("reserved_v3", ctypes.c_uint32),
     ]
 
 
 class BatchResult(ctypes.Structure):
-    """ctypes mirror of ``xtbloom_batch_result_t`` ABI version 1."""
+    """ctypes mirror of ``xtbloom_batch_result_t`` through ABI version 2."""
 
     _fields_ = [
         ("struct_size", ctypes.c_uint32),
@@ -160,6 +171,10 @@ class BatchResult(ctypes.Structure):
         ("scc_iterations", Buffer),
         ("scc_converged", Buffer),
         ("per_system_status", Buffer),
+        ("dipole_moments", Buffer),
+        ("quadrupole_moments", Buffer),
+        ("wiberg_orders", Buffer),
+        ("spin_populations", Buffer),
     ]
 
 
@@ -369,10 +384,15 @@ MIXED_DEVICE_ROLES = {
     "point_charge_positions",
     "point_charge_values",
     "point_charge_gammas",
+    # Split the independent interaction buffers across memory spaces. Host and
+    # device modes still place both together, while mixed mode proves that a
+    # device descriptor image may reference payload bytes staged from host.
+    "interaction_descriptors",
     # Exercise mixed output publication too: large Cartesian results and one
     # diagnostic use device pointers while scalar/state outputs remain host.
     "forces",
     "point_charge_forces",
+    "dipole_moments",
     "scc_converged",
 }
 
@@ -562,11 +582,24 @@ def supported_cases(
     cases = conformance.selected_cases(manifest, names)
     if backend is None:
         return cases
+    default_backends = ["cpu", "cuda"]
     return [
         case
         for case in cases
-        if backend in case.get("xtbloom_backends", ["cpu", "cuda"])
+        if backend in case.get("xtbloom_backends", default_backends)
     ]
+
+
+def model_tag(manifest: dict[str, Any]) -> int:
+    """Return the stable public tag for one validated corpus method."""
+    method = manifest.get("method")
+    if method == "GFN1-xTB":
+        return XTBLOOM_MODEL_GFN1_XTB
+    if method == "GFN2-xTB":
+        return XTBLOOM_MODEL_GFN2_XTB
+    raise conformance.ConformanceError(
+        f"unsupported public conformance method: {method!r}"
+    )
 
 
 def _flatten(matrix: Sequence[Sequence[float]]) -> list[float]:
@@ -627,6 +660,7 @@ def assemble_batch(
     point_charge_gammas: list[float] = []
     slices: list[CaseSlice] = []
     efields: list[list[float] | None] = []
+    is_gfn1 = model_tag(manifest) == XTBLOOM_MODEL_GFN1_XTB
     hardness = manifest["reference_engines"]["xtb"]["point_charge_hardness_hartree"]
 
     for case in cases:
@@ -644,7 +678,11 @@ def assemble_batch(
                 )
             efields.append([float(component) for component in efield])
         if case.get("input_schema") == "qmmm-v1":
-            document = conformance.load_qmmm_input(input_path, case, hardness)
+            document = (
+                gfn1_conformance.load_qmmm(input_path, case, hardness)
+                if is_gfn1
+                else conformance.load_qmmm_input(input_path, case, hardness)
+            )
             qm = document["qm"]
             points = document["external_point_charges"]
             atomic_numbers.extend(int(number) for number in qm["atomic_numbers"])
@@ -655,15 +693,30 @@ def assemble_batch(
                 float(value) for value in points["gammas_hartree"]
             )
         else:
-            document = conformance.load_turbomole_coord(input_path, case)
-            atomic_numbers.extend(document["atomic_numbers"])
-            positions.extend(_flatten(document["positions_bohr"]))
+            if is_gfn1:
+                symbols, coordinates = gfn1_conformance.load_coord(
+                    input_path, int(case["atom_count"])
+                )
+                symbol_numbers = {
+                    symbol: number
+                    for number, symbol in enumerate(gfn1_conformance.ELEMENT_SYMBOLS)
+                    if symbol
+                }
+                atomic_numbers.extend(symbol_numbers[symbol] for symbol in symbols)
+                positions.extend(_flatten(coordinates))
+            else:
+                document = conformance.load_turbomole_coord(input_path, case)
+                atomic_numbers.extend(document["atomic_numbers"])
+                positions.extend(_flatten(document["positions_bohr"]))
 
         atom_offsets.append(len(atomic_numbers))
         point_charge_offsets.append(len(point_charge_values))
         molecular_charges.append(float(case["molecular_charge"]))
         unpaired = int(case["unpaired_electrons"])
         unpaired_electrons.append(unpaired)
+        # A missing manifest field means the reference used one shared orbital
+        # channel, including xTB's restricted open-shell OH fixture. Dedicated
+        # two-channel evidence opts in explicitly with ``spin_channels: 2``.
         spin_channel_count = case.get("spin_channels", 1)
         if type(spin_channel_count) is not int or spin_channel_count not in (1, 2):
             raise conformance.ConformanceError(
@@ -870,11 +923,13 @@ def _compare_case(
 
 def pinned_compute_options(
     library: ctypes.CDLL,
+    model: int,
     request_forces: bool,
     request_charges: bool,
     request_point_forces: bool,
+    request_dipoles: bool = True,
 ) -> ComputeOptions:
-    """Build the strict single-shot GFN2 options shared by every conformance run.
+    """Build strict single-shot model options shared by every conformance run.
 
     Conformance cases must remain independent so reference comparisons never
     depend on execution order or an earlier checkpoint. The SCC solve is pinned
@@ -890,7 +945,7 @@ def pinned_compute_options(
         "xtbloom_compute_options_init",
     )
     options.scc_start_mode = XTBLOOM_SCC_START_FRESH
-    options.model = XTBLOOM_MODEL_GFN2_XTB
+    options.model = model
     options.flags = XTBLOOM_COMPUTE_ENERGY
     if request_forces:
         options.flags |= XTBLOOM_COMPUTE_FORCES
@@ -898,6 +953,8 @@ def pinned_compute_options(
         options.flags |= XTBLOOM_COMPUTE_ATOMIC_CHARGES
     if request_forces and request_point_forces:
         options.flags |= XTBLOOM_COMPUTE_POINT_CHARGE_FORCES
+    if request_dipoles:
+        options.flags |= XTBLOOM_COMPUTE_DIPOLE_MOMENTS
     options.max_scc_iterations = 500
     options.charge_tolerance = 1.0e-10
     options.energy_tolerance = 1.0e-12
@@ -913,6 +970,7 @@ class RawBatchOutputs:
     forces: Any | None
     charges: Any | None
     point_forces: Any | None
+    dipoles: Any | None
     iterations: Any
     converged: Any
     statuses: Any
@@ -940,12 +998,14 @@ def run_compute(
     request_forces = bool(options.flags & XTBLOOM_COMPUTE_FORCES)
     request_charges = bool(options.flags & XTBLOOM_COMPUTE_ATOMIC_CHARGES)
     request_point_forces = bool(options.flags & XTBLOOM_COMPUTE_POINT_CHARGE_FORCES)
+    request_dipoles = bool(options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS)
     energies = (ctypes.c_double * systems)()
     forces = (ctypes.c_double * (3 * atoms))() if request_forces else None
     charges = (ctypes.c_double * atoms)() if request_charges else None
     point_forces = (
         (ctypes.c_double * (3 * points))() if request_point_forces and points else None
     )
+    dipoles = (ctypes.c_double * (3 * systems))() if request_dipoles else None
     iterations = (ctypes.c_int32 * systems)()
     converged = (ctypes.c_uint8 * systems)()
     statuses = (ctypes.c_int32 * systems)()
@@ -975,6 +1035,8 @@ def run_compute(
                 result.point_charge_forces = memory.output(
                     point_forces, "point_charge_forces"
                 )
+            if dipoles is not None:
+                result.dipole_moments = memory.output(dipoles, "dipole_moments")
             result.scc_iterations = memory.output(iterations, "scc_iterations")
             result.scc_converged = memory.output(converged, "scc_converged")
             result.per_system_status = memory.output(statuses, "per_system_status")
@@ -1000,11 +1062,25 @@ def run_compute(
                 f"{_decode(library.xtbloom_status_string(statuses[index]))}, "
                 f"scc_converged={converged[index]}, iterations={iterations[index]}"
             )
+    if request_dipoles and not (result.flags & XTBLOOM_RESULT_DIPOLE_MOMENTS):
+        raise conformance.ConformanceError(
+            f"{backend}/{memory_mode} public inference did not publish the "
+            "requested dipole result flag"
+        )
+    if dipoles is not None:
+        for index, item in enumerate(storage.slices):
+            values = dipoles[3 * index : 3 * index + 3]
+            if any(not math.isfinite(float(value)) for value in values):
+                raise conformance.ConformanceError(
+                    f"{backend}/{memory_mode} public inference produced a "
+                    f"non-finite dipole for {item.case['id']}"
+                )
     return RawBatchOutputs(
         energies=energies,
         forces=forces,
         charges=charges,
         point_forces=point_forces,
+        dipoles=dipoles,
         iterations=iterations,
         converged=converged,
         statuses=statuses,
@@ -1031,18 +1107,21 @@ def run_backend(
     )
     options = pinned_compute_options(
         library,
+        model_tag(manifest),
         request_forces,
         request_charges,
         request_point_forces=bool(storage.point_charge_values),
+        request_dipoles=model_tag(manifest) == XTBLOOM_MODEL_GFN2_XTB,
     )
     outputs = run_compute(
         library, storage, options, backend, device_id, cpu_threads, memory_mode
     )
-    energies, forces, charges, point_forces = (
+    energies, forces, charges, point_forces, dipoles = (
         outputs.energies,
         outputs.forces,
         outputs.charges,
         outputs.point_forces,
+        outputs.dipoles,
     )
 
     artifact_name = backend if memory_mode == "host" else f"{backend}-{memory_mode}"
@@ -1067,6 +1146,10 @@ def run_backend(
             properties["point_charge_forces_hartree_per_bohr"] = [
                 float(value)
                 for value in point_forces[3 * item.point_begin : 3 * item.point_end]
+            ]
+        if dipoles is not None:
+            properties["molecular_dipole_e_bohr"] = [
+                float(value) for value in dipoles[3 * index : 3 * index + 3]
             ]
         document = {
             "backend": backend,
@@ -1163,7 +1246,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         }
         if not selected:
             print(  # noqa: T201 - CLI validation report
-                "no GFN2 conformance cases selected"
+                f"no {manifest.get('method', 'GFN-xTB')} conformance cases selected"
             )
             return 0
         if not any(cases_by_backend.values()):

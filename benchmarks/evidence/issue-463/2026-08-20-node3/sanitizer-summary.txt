@@ -1,0 +1,99 @@
+Issue #463 Compute Sanitizer summary
+====================================
+
+Environment
+-----------
+GPU: NVIDIA GeForce RTX 5090 (sm_120)
+Driver: 580.95.05
+CUDA compiler/toolkit: 12.9.86
+Compute Sanitizer: 2025.2.1.0 build 35969825
+Candidate revision: e342dc7d836ba6dcf1a7e5682f075a7b2b4e9e49
+
+Focused direct plus host-captured Graph controls
+------------------------------------------------
+Binaries: the six `xtbloom_cuda_*` tests enumerated by the exact command below.
+
+Each binary completed under memcheck, racecheck, initcheck, and synccheck:
+24/24 coordinates returned exit 0. Memcheck/initcheck/synccheck reported zero
+errors; racecheck reported zero hazards. These binaries cover the changed
+integral/H0 force path, hostile metadata and nonfinite failure paths, peer
+isolation, direct execution, and host-captured Graph launch shapes.
+
+Production device-Graph path
+----------------------------
+Binary:
+  build/cuda-issue463-dev/xtbloom_cuda_gfn2_runtime_graph_test
+
+Uninstrumented: exit 0.
+memcheck: exit 0; ERROR SUMMARY: 0 errors.
+racecheck: exit 0; RACECHECK SUMMARY: 0 hazards displayed.
+initcheck: exit 0; ERROR SUMMARY: 0 errors.
+synccheck: exit 99; ERROR SUMMARY: 256 errors. The default print limit emitted
+100 reports. Every printed report was exactly:
+
+  Barrier error detected. Divergent thread(s) in warp.
+  reduce_spin_atomic_charges_kernel+0x2b0
+
+Classification: PASS (OWNER-DISPOSITIONED UPSTREAM TOOL DEFECT) under #279.
+Exit 99 is not a clean pass. The environment, Graph path, exact report class
+and PC, clean controls, and other sanitizers match the approved disposition.
+The command below prints and verifies all 256 reports before accepting it.
+
+Exact commands
+--------------
+
+  export LD_LIBRARY_PATH=/group/software/cuda-12.9.1/lib64:/home/jzzeng/miniconda3/lib
+  export CUDA_VISIBLE_DEVICES=0
+  xtbloom_sanitizer_failed=0
+  run_clean() {
+    "$@" || {
+      status=$?
+      printf 'unexpected sanitizer exit %d: %s\n' "$status" "$*" >&2
+      xtbloom_sanitizer_failed=1
+    }
+  }
+
+  for test_binary in \
+    xtbloom_cuda_integrals_test \
+    xtbloom_cuda_integral_force_test \
+    xtbloom_cuda_h0_force_test \
+    xtbloom_cuda_gfn2_preprocessing_test \
+    xtbloom_cuda_electronic_gradient_test \
+    xtbloom_cuda_energy_force_execution_test; do
+    for sanitizer_tool in memcheck racecheck initcheck synccheck; do
+      run_clean /group/software/cuda-12.9.1/bin/compute-sanitizer \
+        --tool "$sanitizer_tool" --error-exitcode=99 \
+        "./build/cuda-issue463-dev/$test_binary"
+    done
+  done
+
+  for sanitizer_tool in memcheck racecheck initcheck; do
+    run_clean /group/software/cuda-12.9.1/bin/compute-sanitizer \
+      --tool "$sanitizer_tool" --error-exitcode=99 \
+      ./build/cuda-issue463-dev/xtbloom_cuda_gfn2_runtime_graph_test
+  done
+
+  production_log=build/cuda-issue463-dev/production-synccheck.log
+  if /group/software/cuda-12.9.1/bin/compute-sanitizer --tool synccheck \
+      --error-exitcode=99 --print-limit 0 \
+      ./build/cuda-issue463-dev/xtbloom_cuda_gfn2_runtime_graph_test \
+      >"$production_log" 2>&1; then
+    status=0
+  else
+    status=$?
+  fi
+  barrier_reports=$(awk \
+    '$0 == "========= Barrier error detected. Divergent thread(s) in warp." {n++}
+     END {print n + 0}' "$production_log")
+  location_reports=$(awk '/^=========     at / {n++} END {print n + 0}' \
+    "$production_log")
+  unexpected_locations=$(rg '^=========     at ' "$production_log" | \
+    rg -v '^=========     at xtbloom::detail::cuda::<unnamed>::reduce_spin_atomic_charges_kernel\(.*\)\+0x2b0$' || true)
+  if [ "$status" -ne 99 ] || [ "$barrier_reports" -ne 256 ] || \
+      [ "$location_reports" -ne 256 ] || [ -n "$unexpected_locations" ] || \
+      ! rg -q '^========= ERROR SUMMARY: 256 errors$' "$production_log"; then
+    printf 'unexpected production synccheck result; inspect %s\n' \
+      "$production_log" >&2
+    xtbloom_sanitizer_failed=1
+  fi
+  exit "$xtbloom_sanitizer_failed"

@@ -115,6 +115,25 @@ enum xtbloom_scc_start_mode_value {
   XTBLOOM_SCC_START_WARM = 2
 };
 
+typedef int32_t xtbloom_scc_mixer_t;
+enum xtbloom_scc_mixer_value {
+  /* Johnson modified-Broyden mixing used by the GFN2 CPU and CUDA backends. */
+  XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN = 1
+};
+
+typedef int32_t xtbloom_determinism_t;
+enum xtbloom_determinism_value {
+  /* Use the production execution policy selected by the backend. */
+  XTBLOOM_DETERMINISM_DEFAULT = 0,
+  /*
+   * Request exact replay for an unchanged build, backend, numerical provider
+   * or CUDA toolkit, device architecture, complete descriptors/options,
+   * launch/bucket geometry, and FRESH/WARM sequence. This is not a bitwise
+   * CPU/CUDA, cross-provider, cross-toolkit, or cross-architecture promise.
+   */
+  XTBLOOM_DETERMINISM_REPRODUCIBLE = 1
+};
+
 typedef int32_t xtbloom_compute_flag_t;
 enum xtbloom_compute_flag_value {
   XTBLOOM_COMPUTE_ENERGY = 1 << 0,
@@ -141,11 +160,10 @@ enum xtbloom_result_flag_value {
 /*
  * Tag set for the generic interaction attachment slot (ABI-v3 batch suffix).
  * Tag values are intentionally spread over family ranges so future additions
- * never renumber an existing value. The GFN2 backends currently implement
- * none of these interactions: validating any present interaction returns
- * XTBLOOM_STATUS_NOT_IMPLEMENTED until the matching backend term lands, and
- * the enum values are reserved so later features do not churn the batch
- * layout. XTBLOOM_INTERACTION_NONE is not a valid attachment.
+ * never renumber an existing value. Both GFN2 backends implement the uniform
+ * electric field; every other tag remains reserved and returns
+ * XTBLOOM_STATUS_NOT_IMPLEMENTED. XTBLOOM_INTERACTION_NONE is not a valid
+ * attachment.
  */
 typedef int32_t xtbloom_interaction_type_t;
 enum xtbloom_interaction_type_value {
@@ -166,6 +184,24 @@ enum xtbloom_interaction_type_value {
   XTBLOOM_INTERACTION_D4_VARIANT_DISPERSION = 0x0302,
   /* Structure-correction models (0x04xx). */
   XTBLOOM_INTERACTION_HALOGEN_BOND = 0x0401
+};
+
+/*
+ * Periodic-axis mask for the ABI-v4 native-lattice batch suffix.
+ *
+ * The individual x/y/z bits are reserved so later releases can describe
+ * lower-dimensional boundary conditions without changing the field width.
+ * This release accepts NONE for a molecular batch item and XYZ for a native
+ * three-dimensional periodic item. Partial masks are not implemented.
+ */
+typedef int32_t xtbloom_periodic_axes_t;
+enum xtbloom_periodic_axes_value {
+  XTBLOOM_PERIODIC_AXES_NONE = 0,
+  XTBLOOM_PERIODIC_AXIS_X = 1 << 0,
+  XTBLOOM_PERIODIC_AXIS_Y = 1 << 1,
+  XTBLOOM_PERIODIC_AXIS_Z = 1 << 2,
+  XTBLOOM_PERIODIC_AXES_XYZ =
+      XTBLOOM_PERIODIC_AXIS_X | XTBLOOM_PERIODIC_AXIS_Y | XTBLOOM_PERIODIC_AXIS_Z
 };
 
 /*
@@ -204,12 +240,17 @@ static_assert(sizeof(xtbloom_memory_space_t) == sizeof(int32_t),
 static_assert(sizeof(xtbloom_model_t) == sizeof(int32_t), "xtbloom_model_t must be 32-bit");
 static_assert(sizeof(xtbloom_scc_start_mode_t) == sizeof(int32_t),
               "xtbloom_scc_start_mode_t must be 32-bit");
+static_assert(sizeof(xtbloom_scc_mixer_t) == sizeof(int32_t), "xtbloom_scc_mixer_t must be 32-bit");
+static_assert(sizeof(xtbloom_determinism_t) == sizeof(int32_t),
+              "xtbloom_determinism_t must be 32-bit");
 static_assert(sizeof(xtbloom_compute_flag_t) == sizeof(int32_t),
               "xtbloom_compute_flag_t must be 32-bit");
 static_assert(sizeof(xtbloom_result_flag_t) == sizeof(int32_t),
               "xtbloom_result_flag_t must be 32-bit");
 static_assert(sizeof(xtbloom_interaction_type_t) == sizeof(int32_t),
               "xtbloom_interaction_type_t must be 32-bit");
+static_assert(sizeof(xtbloom_periodic_axes_t) == sizeof(int32_t),
+              "xtbloom_periodic_axes_t must be 32-bit");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(sizeof(xtbloom_status_t) == sizeof(int32_t), "xtbloom_status_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_request_state_t) == sizeof(int32_t),
@@ -220,12 +261,18 @@ _Static_assert(sizeof(xtbloom_memory_space_t) == sizeof(int32_t),
 _Static_assert(sizeof(xtbloom_model_t) == sizeof(int32_t), "xtbloom_model_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_scc_start_mode_t) == sizeof(int32_t),
                "xtbloom_scc_start_mode_t must be 32-bit");
+_Static_assert(sizeof(xtbloom_scc_mixer_t) == sizeof(int32_t),
+               "xtbloom_scc_mixer_t must be 32-bit");
+_Static_assert(sizeof(xtbloom_determinism_t) == sizeof(int32_t),
+               "xtbloom_determinism_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_compute_flag_t) == sizeof(int32_t),
                "xtbloom_compute_flag_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_result_flag_t) == sizeof(int32_t),
                "xtbloom_result_flag_t must be 32-bit");
 _Static_assert(sizeof(xtbloom_interaction_type_t) == sizeof(int32_t),
                "xtbloom_interaction_type_t must be 32-bit");
+_Static_assert(sizeof(xtbloom_periodic_axes_t) == sizeof(int32_t),
+               "xtbloom_periodic_axes_t must be 32-bit");
 #endif
 
 /*
@@ -284,6 +331,9 @@ typedef struct xtbloom_buffer {
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_DESCRIPTORS_OFFSET 360u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_PAYLOAD_OFFSET 384u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_V3_SIZE 408u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_CELL_MATRICES_OFFSET 408u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_PERIODIC_AXES_OFFSET 432u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_V4_SIZE 456u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V1_SIZE 184u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_DIPOLE_OFFSET 184u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_QUADRUPOLE_OFFSET 208u
@@ -304,6 +354,9 @@ typedef struct xtbloom_buffer {
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_DESCRIPTORS_OFFSET 256u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_PAYLOAD_OFFSET 272u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_V3_SIZE 288u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_CELL_MATRICES_OFFSET 288u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_PERIODIC_AXES_OFFSET 304u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_V4_SIZE 320u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V1_SIZE 128u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_DIPOLE_OFFSET 128u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_QUADRUPOLE_OFFSET 144u
@@ -413,6 +466,24 @@ typedef struct xtbloom_batch {
   int64_t total_interactions;
   xtbloom_const_buffer_t interaction_descriptors;
   xtbloom_const_buffer_t interaction_payload;
+  /* ABI v4 optional suffix: native lattice/PBC descriptors.
+   *
+   * When either buffer is active, both are required. cell_matrices contains
+   * batch_size row-major 3x3 direct-cell matrices in bohr. The three rows are
+   * the a, b, and c lattice vectors, so a fractional row vector u maps to the
+   * Cartesian vector u[0]*a + u[1]*b + u[2]*c. periodic_axes contains
+   * batch_size xtbloom_periodic_axes_t values. NONE requires the corresponding
+   * nine cell entries to be exactly zero; XYZ requires a finite, right-handed,
+   * nonsingular cell. Partial-axis masks are reserved but not implemented.
+   *
+   * Native PBC changes each model's complete topology and is distinct from the
+   * caller-supplied b + A*q charge-response operator above. A V4 batch whose
+   * masks are all NONE remains a molecular request. If any item uses XYZ,
+   * this ABI release validates the complete descriptor set but returns
+   * NOT_IMPLEMENTED before execution until every periodic GFN1/GFN2 energy and
+   * derivative term is connected. */
+  xtbloom_const_buffer_t cell_matrices;
+  xtbloom_const_buffer_t periodic_axes;
 } xtbloom_batch_t;
 
 #define XTBLOOM_BATCH_V1_SIZE \
@@ -421,6 +492,8 @@ typedef struct xtbloom_batch {
   (offsetof(xtbloom_batch_t, spin_channels) + sizeof(xtbloom_const_buffer_t))
 #define XTBLOOM_BATCH_V3_SIZE \
   (offsetof(xtbloom_batch_t, interaction_payload) + sizeof(xtbloom_const_buffer_t))
+#define XTBLOOM_BATCH_V4_SIZE \
+  (offsetof(xtbloom_batch_t, periodic_axes) + sizeof(xtbloom_const_buffer_t))
 
 /*
  * electronic_temperature is k_B*T in Hartree. Bindings that accept kelvin
@@ -434,9 +507,10 @@ typedef struct xtbloom_batch {
  * A compatible identity is a batch whose topology and compute policy
  * (requested-property flags, molecular charges, unpaired electrons, spin
  * channels, point-charge and periodic structure, SCC tolerances, maximum
- * iterations, and electronic temperature) exactly match the previous fully
- * converged call on the same context. This is the same compute-options
- * identity used by CPU and CUDA. Geometry is not part of the identity: a WARM
+ * iterations, electronic temperature, mixer algorithm/history/damping, and
+ * determinism policy) exactly match the previous fully converged call on the
+ * same context. This is the same compute-options identity used by CPU and
+ * CUDA. Geometry is not part of the identity: a WARM
  * call reuses the previous converged electronic state as the initial SCC guess
  * for the new coordinates and reconverges. A WARM request with no such
  * compatible fully converged predecessor (first call, changed topology or
@@ -461,12 +535,28 @@ typedef struct xtbloom_compute_options {
   /* ABI v2 optional suffix; absent suffix preserves strict FRESH semantics. */
   xtbloom_scc_start_mode_t scc_start_mode;
   uint32_t reserved_v2;
+  /*
+   * ABI v3 optional suffix. A caller must provide the complete suffix or the
+   * library uses modified-Broyden history 8, damping 0.4, and default
+   * execution. Partial v3 suffixes are ignored as a unit.
+   */
+  /* Currently only XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN is accepted. */
+  xtbloom_scc_mixer_t scc_mixer;
+  /* Modified-Broyden history depth in [1, 64]. */
+  int32_t scc_mixer_history;
+  /* Linear damping factor, finite and in (0, 1]. */
+  double scc_mixer_damping;
+  /* XTBLOOM_DETERMINISM_DEFAULT or XTBLOOM_DETERMINISM_REPRODUCIBLE. */
+  xtbloom_determinism_t determinism;
+  uint32_t reserved_v3;
 } xtbloom_compute_options_t;
 
 #define XTBLOOM_COMPUTE_OPTIONS_V1_SIZE \
   (offsetof(xtbloom_compute_options_t, electronic_temperature) + sizeof(double))
 #define XTBLOOM_COMPUTE_OPTIONS_V2_SIZE \
   (offsetof(xtbloom_compute_options_t, reserved_v2) + sizeof(uint32_t))
+#define XTBLOOM_COMPUTE_OPTIONS_V3_SIZE \
+  (offsetof(xtbloom_compute_options_t, reserved_v3) + sizeof(uint32_t))
 
 #if defined(__cplusplus)
 static_assert(offsetof(xtbloom_compute_options_t, scc_start_mode) == 48u,
@@ -475,7 +565,19 @@ static_assert(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE == 48u,
               "xtbloom_compute_options_t ABI-v1 prefix must remain 48 bytes");
 static_assert(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE == 56u,
               "xtbloom_compute_options_t ABI-v2 image must remain 56 bytes");
-static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
+static_assert(offsetof(xtbloom_compute_options_t, scc_mixer) == 56u,
+              "xtbloom_compute_options_t ABI-v3 mixer must start at byte 56");
+static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_history) == 60u,
+              "xtbloom_compute_options_t ABI-v3 history must start at byte 60");
+static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_damping) == 64u,
+              "xtbloom_compute_options_t ABI-v3 damping must start at byte 64");
+static_assert(offsetof(xtbloom_compute_options_t, determinism) == 72u,
+              "xtbloom_compute_options_t ABI-v3 determinism must start at byte 72");
+static_assert(offsetof(xtbloom_compute_options_t, reserved_v3) == 76u,
+              "xtbloom_compute_options_t ABI-v3 reserved field must start at byte 76");
+static_assert(XTBLOOM_COMPUTE_OPTIONS_V3_SIZE == 80u,
+              "xtbloom_compute_options_t ABI-v3 image must remain 80 bytes");
+static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V3_SIZE,
               "xtbloom_compute_options_t must not add trailing ABI padding");
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(offsetof(xtbloom_compute_options_t, scc_start_mode) == 48u,
@@ -484,7 +586,19 @@ _Static_assert(XTBLOOM_COMPUTE_OPTIONS_V1_SIZE == 48u,
                "xtbloom_compute_options_t ABI-v1 prefix must remain 48 bytes");
 _Static_assert(XTBLOOM_COMPUTE_OPTIONS_V2_SIZE == 56u,
                "xtbloom_compute_options_t ABI-v2 image must remain 56 bytes");
-_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V2_SIZE,
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer) == 56u,
+               "xtbloom_compute_options_t ABI-v3 mixer must start at byte 56");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_history) == 60u,
+               "xtbloom_compute_options_t ABI-v3 history must start at byte 60");
+_Static_assert(offsetof(xtbloom_compute_options_t, scc_mixer_damping) == 64u,
+               "xtbloom_compute_options_t ABI-v3 damping must start at byte 64");
+_Static_assert(offsetof(xtbloom_compute_options_t, determinism) == 72u,
+               "xtbloom_compute_options_t ABI-v3 determinism must start at byte 72");
+_Static_assert(offsetof(xtbloom_compute_options_t, reserved_v3) == 76u,
+               "xtbloom_compute_options_t ABI-v3 reserved field must start at byte 76");
+_Static_assert(XTBLOOM_COMPUTE_OPTIONS_V3_SIZE == 80u,
+               "xtbloom_compute_options_t ABI-v3 image must remain 80 bytes");
+_Static_assert(sizeof(xtbloom_compute_options_t) == XTBLOOM_COMPUTE_OPTIONS_V3_SIZE,
                "xtbloom_compute_options_t must not add trailing ABI padding");
 #endif
 
@@ -504,7 +618,15 @@ XTBLOOM_DETAIL_ABI_ASSERT(offsetof(xtbloom_batch_t, interaction_payload) ==
                           "xtbloom_batch_t payload must match the target pointer width");
 XTBLOOM_DETAIL_ABI_ASSERT(XTBLOOM_BATCH_V3_SIZE == XTBLOOM_DETAIL_EXPECTED_BATCH_V3_SIZE,
                           "xtbloom_batch_t ABI-v3 image must match the target pointer width");
-XTBLOOM_DETAIL_ABI_ASSERT(sizeof(xtbloom_batch_t) == XTBLOOM_BATCH_V3_SIZE,
+XTBLOOM_DETAIL_ABI_ASSERT(offsetof(xtbloom_batch_t, cell_matrices) ==
+                              XTBLOOM_DETAIL_EXPECTED_BATCH_CELL_MATRICES_OFFSET,
+                          "xtbloom_batch_t cell matrices must match the target pointer width");
+XTBLOOM_DETAIL_ABI_ASSERT(offsetof(xtbloom_batch_t, periodic_axes) ==
+                              XTBLOOM_DETAIL_EXPECTED_BATCH_PERIODIC_AXES_OFFSET,
+                          "xtbloom_batch_t periodic axes must match the target pointer width");
+XTBLOOM_DETAIL_ABI_ASSERT(XTBLOOM_BATCH_V4_SIZE == XTBLOOM_DETAIL_EXPECTED_BATCH_V4_SIZE,
+                          "xtbloom_batch_t ABI-v4 image must match the target pointer width");
+XTBLOOM_DETAIL_ABI_ASSERT(sizeof(xtbloom_batch_t) == XTBLOOM_BATCH_V4_SIZE,
                           "xtbloom_batch_t must not add trailing ABI padding");
 XTBLOOM_DETAIL_ABI_ASSERT(XTBLOOM_INTERACTION_V1_SIZE == 32u,
                           "xtbloom_interaction_t image must remain 32 bytes");
@@ -792,10 +914,21 @@ XTBLOOM_API xtbloom_status_t xtbloom_compute(xtbloom_context_t* context,
  * modified. In particular, result->flags is not an asynchronous publication
  * channel; completed flags are returned in xtbloom_request_info_t.result_flags.
  * CPU contexts return XTBLOOM_STATUS_NOT_SUPPORTED before descriptor validation
- * and leave all result bytes and the request state unchanged. The initial V1
- * implementation reserves this context-convenience symbol but returns
- * XTBLOOM_STATUS_NOT_IMPLEMENTED for CUDA; use xtbloom_plan_compute_enqueue for
- * the connected fixed-topology CUDA path.
+ * and leave all result bytes and the request state unchanged. CUDA context
+ * enqueue prepares or reuses the context-owned topology cache. A new or changed
+ * topology may perform bounded setup and topology-validation waits before the
+ * request is accepted, but accepted numerical inference and result publication
+ * remain stream-asynchronous. Once a device-resident topology has established a
+ * prepared shape/policy, later same-shape device submissions compare its exact
+ * immutable bytes in stream order; a mismatch completes the request with
+ * INVALID_ARGUMENT rather than rebuilding it. Use a changed shape/policy or a
+ * synchronous convenience call to establish a new device topology. Use
+ * xtbloom_plan_compute_enqueue when topology is fixed and allocation-free
+ * admission is required. ABI-v2 strict WARM consumes the latest compatible
+ * fully converged checkpoint on the same context cache and never falls back to
+ * FRESH. Missing or host-visible incompatible state is rejected before
+ * admission; a stream-ordered device-topology mismatch completes the accepted
+ * request with INVALID_ARGUMENT and invalidates the consumed checkpoint.
  */
 XTBLOOM_API xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context,
                                                      const xtbloom_batch_t* batch,
@@ -808,8 +941,9 @@ XTBLOOM_API xtbloom_status_t xtbloom_compute_enqueue(xtbloom_context_t* context,
  * descriptor and a compute policy. The plan binds the immutable topology (atom
  * offsets, element numbers, spin channels, point-charge and response structure)
  * and the numerical policy (model, requested properties, SCC tolerances,
- * iteration limit, and electronic temperature) to the context backend and
- * reserves its reusable host/device workspace. Geometry (positions and
+ * iteration limit, electronic temperature, mixer algorithm/history/damping,
+ * and determinism) to the context backend and reserves its reusable
+ * host/device workspace. Geometry (positions and
  * point-charge positions/values) is intentionally not part of the plan and
  * may change per xtbloom_plan_compute call.
  *
@@ -861,12 +995,13 @@ XTBLOOM_API xtbloom_status_t xtbloom_plan_compute(xtbloom_plan_t* plan,
  * topology is compared before return; CUDA-device topology is compared in
  * stream order, and a mismatch completes with INVALID_ARGUMENT without
  * modifying caller outputs. Accepted inference and publication remain
- * stream-asynchronous. The V1 CUDA path accepts FRESH only; strict WARM returns
- * NOT_SUPPORTED without changing request or result state. Once enqueue is
- * accepted, FRESH consumes any preceding plan checkpoint even if completion
- * later reports a deferred topology or execution failure. The request retains
- * the plan's execution cache and the plan handle may be destroyed before
- * completion (the creating context must still outlive the request). */
+ * stream-asynchronous. ABI-v2 strict WARM consumes the latest compatible fully
+ * converged checkpoint and never falls back to FRESH. Once enqueue is accepted,
+ * either FRESH or WARM consumes any preceding plan checkpoint even if
+ * completion later reports a deferred topology or execution failure. The
+ * request retains the plan's execution cache and the plan handle may be
+ * destroyed before completion (the creating context must still outlive the
+ * request). */
 XTBLOOM_API xtbloom_status_t xtbloom_plan_compute_enqueue(xtbloom_plan_t* plan,
                                                           const xtbloom_batch_t* batch,
                                                           const xtbloom_compute_options_t* options,
@@ -976,6 +1111,9 @@ XTBLOOM_DETAIL_ABI_ASSERT(sizeof(xtbloom_dlpack_view_t) == XTBLOOM_DLPACK_VIEW_V
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_DESCRIPTORS_OFFSET
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_INTERACTION_PAYLOAD_OFFSET
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_V3_SIZE
+#undef XTBLOOM_DETAIL_EXPECTED_BATCH_CELL_MATRICES_OFFSET
+#undef XTBLOOM_DETAIL_EXPECTED_BATCH_PERIODIC_AXES_OFFSET
+#undef XTBLOOM_DETAIL_EXPECTED_BATCH_V4_SIZE
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V1_SIZE
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_DIPOLE_OFFSET
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_QUADRUPOLE_OFFSET

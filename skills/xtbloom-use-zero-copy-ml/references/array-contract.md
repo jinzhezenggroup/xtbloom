@@ -4,6 +4,12 @@
 
 `xtbloom.ArrayBatch` is the reusable packed-array interface. `xtbloom.compute_arrays` is its one-shot convenience form. Both consume eager Array API/DLPack producers without importing their framework.
 
+`ArrayBatch` and `compute_arrays` accept `method="GFN1-xTB"`/`"GFN1"` and
+`method="GFN2-xTB"`/`"GFN2"`; GFN2-xTB is the backward-compatible default.
+Both models follow the same CPU/CUDA packed-buffer contract. The separate
+`xtbloom_torch` autograd operation accepts the same model spellings and default,
+with a deliberately narrower positions-only derivative contract.
+
 The Python array interfaces use:
 
 - positions in bohr;
@@ -104,7 +110,7 @@ JAX arrays are immutable and cannot be `out=` targets. Consume a DLPack result i
 
 If `per_system_status` and `scc_converged` are device-resident, `ArrayBatchResult.failed_indices` is unavailable because that helper requires host NumPy diagnostics. Keep those two outputs on host through `out=` when the helper is needed.
 
-For repeated fixed-shape inference, preallocated `out=` is the preferred steady-state route. It avoids xTBloom allocating a device result arena on each call. `result_memory="cuda"` is convenient when the caller does not want to manage result buffers, but it performs a result-arena allocation per call.
+For repeated fixed-shape inference, preallocated `out=` is the preferred steady-state route. It avoids xTBloom allocating a device result arena on each call. `result_memory="cuda"` is convenient when the caller does not want to manage output buffers, but it performs a result-arena allocation per call.
 
 ## Ownership and Lifetime
 
@@ -127,7 +133,9 @@ SCC or eigensolver failure is per-system data. Successful peers remain valid, wh
 
 ## PyTorch Autograd Boundary
 
-`xtbloom.xtbloom_torch` accepts the same required packed inputs and returns:
+`xtbloom.xtbloom_torch` accepts `method="GFN1-xTB"`/`"GFN1"` and
+`method="GFN2-xTB"`/`"GFN2"`, with GFN2-xTB as the backward-compatible default.
+It accepts the same required packed inputs and returns:
 
 - `energies`: `(nsystems,)`, `float64`, Hartree;
 - `forces`: `(natoms, 3)`, `float64`, Hartree/bohr.

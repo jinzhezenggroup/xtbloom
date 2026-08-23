@@ -1,16 +1,451 @@
 /* Minimal unversioned entry point for the browser demo.
  *
- * Keep this file dependency-free: it revalidates the content manifest, warms
- * and verifies the versioned application module graph, and only then imports
- * app.js. That prevents a deployment from linking a new app.js against stale
- * helpers or preset data before the normal retry UI has had a chance to start.
+ * Keep this file dependency-free: it starts the region-preferred pinned 3Dmol
+ * fetch alongside content-manifest revalidation, warms and verifies the
+ * versioned application module graph, and only then imports app.js. The
+ * optional SMILES graph participates in the same content version and begins in
+ * its own Worker, so OpenChemLib availability never gates ordinary XYZ startup.
  */
 
 const BOOTSTRAP_MAX_ATTEMPTS = 3;
 const BOOTSTRAP_ATTEMPT_TIMEOUT_MS = 60000;
+const CDN_PROBE_BYTES = 65536;
+const CDN_PROBE_TIMEOUT_MS = 2500;
+const CDN_FALLBACK_RANK_TIMEOUT_MS = 400;
+const THREE_DMOL_ATTEMPT_TIMEOUT_MS = 30000;
+const THREE_DMOL_BYTES = 537792;
+const THREE_DMOL_SHA256 =
+  "f7cc78921ae72e7623e89cdd111434f58c2efddd2ffda1cd212644b406fb8016";
+const MAINLAND_TIME_ZONES = new Set([
+  "Asia/Shanghai",
+  "Asia/Urumqi",
+  "Asia/Chongqing",
+  "Asia/Chungking",
+  "Asia/Harbin",
+  "Asia/Kashgar",
+  "PRC",
+]);
+export const THREE_DMOL_SOURCES = Object.freeze([
+  Object.freeze({
+    id: "jsdelivr",
+    url: "https://cdn.jsdelivr.net/npm/3dmol@2.5.5/build/3Dmol-min.js",
+  }),
+  Object.freeze({
+    id: "jsdmirror",
+    url: "https://cdn.jsdmirror.com/npm/3dmol@2.5.5/build/3Dmol-min.js",
+  }),
+  Object.freeze({ id: "local", url: "vendor/3Dmol-min.js" }),
+]);
 const bootstrapLoaderToken = new URL(import.meta.url).searchParams.get("xtbloom_bootstrap_loader");
 let bootstrapGeneration = 0;
 let bootstrapController = null;
+
+export function cdnRegionForTimeZone(timeZone) {
+  return MAINLAND_TIME_ZONES.has(String(timeZone || "")) ? "mainland-china" : "global";
+}
+
+function currentTimeZone(intlImpl = globalThis.Intl) {
+  try {
+    return intlImpl?.DateTimeFormat?.().resolvedOptions?.().timeZone || "";
+  } catch {
+    return "";
+  }
+}
+
+function regionalSourceIds(region) {
+  return region === "mainland-china"
+    ? ["jsdmirror", "jsdelivr", "local"]
+    : ["jsdelivr", "jsdmirror", "local"];
+}
+
+/* Probe only an initial byte window from the real pinned asset. Cancelling the
+ * body after that window avoids downloading every full candidate merely to
+ * choose one, while still measuring DNS, connection, TTFB, and early transfer. */
+export async function probeSourceSpeed(source, {
+  baseUrl = globalThis.document?.baseURI,
+  fetchImpl = globalThis.fetch,
+  now = () => globalThis.performance?.now?.() ?? Date.now(),
+  probeBytes = CDN_PROBE_BYTES,
+  timeoutMs = CDN_PROBE_TIMEOUT_MS,
+  signal,
+} = {}) {
+  if (typeof fetchImpl !== "function") throw new TypeError("fetch is unavailable");
+  const url = new URL(source.url, baseUrl).href;
+  const controller = new AbortController();
+  const abortProbe = () => controller.abort();
+  signal?.addEventListener("abort", abortProbe, { once: true });
+  if (signal?.aborted) abortProbe();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = now();
+  let reader = null;
+  try {
+    const response = await fetchImpl(url, {
+      cache: "no-store",
+      headers: { Range: `bytes=0-${probeBytes - 1}` },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+    reader = response.body?.getReader?.();
+    if (!reader) throw new Error(`${url}: streaming response is unavailable`);
+    let receivedBytes = 0;
+    while (receivedBytes < probeBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      receivedBytes += value?.byteLength || 0;
+    }
+    if (receivedBytes === 0) throw new Error(`${url}: empty probe response`);
+    return { id: source.id, url, elapsedMs: Math.max(0.001, now() - startedAt) };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abortProbe);
+    await reader?.cancel?.().catch(() => {});
+    controller.abort();
+  }
+}
+
+export async function rankCdnSources(sources, {
+  region = cdnRegionForTimeZone(currentTimeZone()),
+  probeImpl = probeSourceSpeed,
+  signal,
+} = {}) {
+  const fallbackIds = regionalSourceIds(region);
+  const fallbackRank = new Map(fallbackIds.map((id, index) => [id, index]));
+  const results = await Promise.all(sources.map(async (source) => {
+    try {
+      return { source, measurement: await probeImpl(source, { signal }) };
+    } catch (error) {
+      return { source, measurement: null, error };
+    }
+  }));
+  const measured = results
+    .filter((result) => Number.isFinite(result.measurement?.elapsedMs))
+    .sort((left, right) => left.measurement.elapsedMs - right.measurement.elapsedMs);
+  const failed = results
+    .filter((result) => !Number.isFinite(result.measurement?.elapsedMs))
+    .sort((left, right) =>
+      (fallbackRank.get(left.source.id) ?? 99) -
+      (fallbackRank.get(right.source.id) ?? 99));
+  const ranked = [];
+  while (measured.length > 0) {
+    const fastestTime = measured[0].measurement.elapsedMs;
+    const tieWindow = Math.max(20, fastestTime * 0.15);
+    let closeCount = 1;
+    while (
+      closeCount < measured.length &&
+      measured[closeCount].measurement.elapsedMs - fastestTime <= tieWindow
+    ) {
+      closeCount += 1;
+    }
+    const closeGroup = measured.splice(0, closeCount);
+    closeGroup.sort((left, right) =>
+      (fallbackRank.get(left.source.id) ?? 99) -
+      (fallbackRank.get(right.source.id) ?? 99));
+    ranked.push(...closeGroup);
+  }
+  return [...ranked, ...failed];
+}
+
+function regionallyOrderedSources(sources, region) {
+  const fallbackRank = new Map(regionalSourceIds(region).map((id, index) => [id, index]));
+  return sources
+    .map((source) => ({ source, measurement: null }))
+    .sort((left, right) =>
+      (fallbackRank.get(left.source.id) ?? 99) -
+      (fallbackRank.get(right.source.id) ?? 99));
+}
+
+function regionalProviderIds(sources, region) {
+  return regionallyOrderedSources(sources, region)
+    .map((ranked) => ranked.source.id)
+    .filter((id) => id === "jsdelivr" || id === "jsdmirror");
+}
+
+async function rankFallbackSources(sources, {
+  region,
+  rankImpl,
+  timeoutMs,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+}) {
+  /* Ranking is a failure-only optimization with one total budget, not a gate
+   * on the preferred full download. Normalize untrusted/injected results back
+   * to the exact canonical URLs and restore every omitted regional fallback. */
+  const regional = regionallyOrderedSources(sources, region);
+  if (sources.length < 2 || timeoutMs <= 0) return regional;
+  const controller = new AbortController();
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimer(() => {
+      controller.abort();
+      reject(new DOMException("CDN fallback ranking timed out", "TimeoutError"));
+    }, timeoutMs);
+  });
+  try {
+    const ranked = await Promise.race([
+      Promise.resolve().then(() => rankImpl(sources, {
+        region,
+        signal: controller.signal,
+      })),
+      timeout,
+    ]);
+    const canonicalById = new Map(regional.map((entry) => [entry.source.id, entry.source]));
+    const normalized = [];
+    const seen = new Set();
+    for (const entry of Array.isArray(ranked) ? ranked : []) {
+      const source = entry?.source || entry;
+      const canonical = canonicalById.get(source?.id);
+      if (!canonical || source.url !== canonical.url || seen.has(canonical.id)) continue;
+      normalized.push({ ...entry, source: canonical });
+      seen.add(canonical.id);
+    }
+    for (const entry of regional) {
+      if (!seen.has(entry.source.id)) normalized.push(entry);
+    }
+    return normalized;
+  } catch {
+    return regional;
+  } finally {
+    clearTimer(timer);
+    controller.abort();
+  }
+}
+
+async function fetchVerified3Dmol(url, {
+  fetchImpl,
+  cryptoImpl,
+  timeoutMs = THREE_DMOL_ATTEMPT_TIMEOUT_MS,
+}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(url, { cache: "default", signal: controller.signal });
+    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength !== THREE_DMOL_BYTES) {
+      throw new Error(`${url}: expected ${THREE_DMOL_BYTES} bytes, received ${bytes.byteLength}`);
+    }
+    if (await sha256Hex(bytes, cryptoImpl) !== THREE_DMOL_SHA256) {
+      throw new Error(`${url}: SHA-256 mismatch`);
+    }
+    return bytes;
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+async function executeClassicScript(bytes, {
+  documentImpl,
+  urlImpl = globalThis.URL,
+}) {
+  const blobUrl = urlImpl.createObjectURL(new Blob([bytes], { type: "text/javascript" }));
+  try {
+    await new Promise((resolve, reject) => {
+      const script = documentImpl.createElement("script");
+      script.async = true;
+      script.src = blobUrl;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error("3Dmol script execution failed"));
+      documentImpl.head.appendChild(script);
+    });
+  } finally {
+    urlImpl.revokeObjectURL(blobUrl);
+  }
+}
+
+async function attemptThreeDmolSource(source, {
+  baseUrl,
+  documentImpl,
+  fetchImpl,
+  cryptoImpl,
+  globalImpl,
+  fetchBytesImpl,
+  executeScriptImpl,
+}) {
+  const url = new URL(source.url, baseUrl).href;
+  const bytes = await fetchBytesImpl(url, { fetchImpl, cryptoImpl });
+  await executeScriptImpl(bytes, { documentImpl });
+  if (!globalImpl.$3Dmol) throw new Error(`${url}: 3Dmol global is unavailable`);
+  return { source: source.id, url };
+}
+
+function clearFailedThreeDmolGlobal(globalImpl) {
+  if (!globalImpl.$3Dmol) return true;
+  try {
+    delete globalImpl.$3Dmol;
+  } catch {
+    // A failed third-party script should not normally leave a non-configurable
+    // global. Refuse to treat that partial state as a later source's success.
+  }
+  return !globalImpl.$3Dmol;
+}
+
+export async function loadThreeDmol(rankedSources, {
+  baseUrl = globalThis.document?.baseURI,
+  documentImpl = globalThis.document,
+  fetchImpl = globalThis.fetch,
+  cryptoImpl = globalThis.crypto,
+  globalImpl = globalThis,
+  fetchBytesImpl = fetchVerified3Dmol,
+  executeScriptImpl = executeClassicScript,
+  attemptSourceImpl = attemptThreeDmolSource,
+} = {}) {
+  if (globalImpl.$3Dmol) return { source: "existing" };
+  const errors = [];
+  for (const ranked of rankedSources) {
+    const source = ranked.source || ranked;
+    try {
+      return await attemptSourceImpl(source, {
+        baseUrl,
+        documentImpl,
+        fetchImpl,
+        cryptoImpl,
+        globalImpl,
+        fetchBytesImpl,
+        executeScriptImpl,
+      });
+    } catch (error) {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+      if (!clearFailedThreeDmolGlobal(globalImpl)) break;
+    }
+  }
+  throw new AggregateError(errors, "3Dmol failed from every verified source");
+}
+
+export async function loadRegionPreferredThreeDmol(rankedSources, {
+  region = cdnRegionForTimeZone(currentTimeZone()),
+  rankImpl = rankCdnSources,
+  fallbackRankingTimeoutMs = CDN_FALLBACK_RANK_TIMEOUT_MS,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+  baseUrl = globalThis.document?.baseURI,
+  documentImpl = globalThis.document,
+  fetchImpl = globalThis.fetch,
+  cryptoImpl = globalThis.crypto,
+  globalImpl = globalThis,
+  fetchBytesImpl = fetchVerified3Dmol,
+  executeScriptImpl = executeClassicScript,
+  attemptSourceImpl = attemptThreeDmolSource,
+} = {}) {
+  /* The healthy path performs one verified full transfer and zero probes.
+   * Only a failed preferred source unlocks bounded ranking of the remaining
+   * candidates, each of which is then attempted at most once. */
+  if (globalImpl.$3Dmol) return { source: "existing" };
+  const [preferredEntry, ...fallbackEntries] = rankedSources;
+  const errors = [];
+  const attempt = async (entry) => {
+    const source = entry.source || entry;
+    try {
+      return await attemptSourceImpl(source, {
+        baseUrl,
+        documentImpl,
+        fetchImpl,
+        cryptoImpl,
+        globalImpl,
+        fetchBytesImpl,
+        executeScriptImpl,
+      });
+    } catch (error) {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+      if (!clearFailedThreeDmolGlobal(globalImpl)) {
+        throw new AggregateError(errors, "3Dmol failed and left an unusable global");
+      }
+      return null;
+    }
+  };
+
+  if (preferredEntry) {
+    const preferredResult = await attempt(preferredEntry);
+    if (preferredResult) return preferredResult;
+  }
+
+  const rankedFallbacks = await rankFallbackSources(
+    fallbackEntries.map((entry) => entry.source || entry),
+    {
+      region,
+      rankImpl,
+      timeoutMs: fallbackRankingTimeoutMs,
+      setTimer,
+      clearTimer,
+    },
+  );
+  for (const fallback of rankedFallbacks) {
+    const result = await attempt(fallback);
+    if (result) return result;
+  }
+  throw new AggregateError(errors, "3Dmol failed from every verified source");
+}
+
+export function initializeBrowserCdnRouting({
+  intlImpl = globalThis.Intl,
+  globalImpl = globalThis,
+  sources = THREE_DMOL_SOURCES,
+  rankImpl = rankCdnSources,
+  loadThreeDmolImpl = loadRegionPreferredThreeDmol,
+  fallbackRankingTimeoutMs = CDN_FALLBACK_RANK_TIMEOUT_MS,
+} = {}) {
+  const region = cdnRegionForTimeZone(currentTimeZone(intlImpl));
+  const rankedSources = regionallyOrderedSources(sources, region);
+  const providers = regionalProviderIds(sources, region);
+  globalImpl.__XTBLOOM_CDN_REGION = region;
+  globalImpl.__XTBLOOM_CDN_PROVIDERS = providers;
+  const ready = Promise.resolve()
+    .then(() => loadThreeDmolImpl(rankedSources, {
+      region,
+      rankImpl,
+      fallbackRankingTimeoutMs,
+      globalImpl,
+    }))
+    .then((result) => ({ ok: true, ...result }))
+    .catch((error) => ({ ok: false, error }));
+  globalImpl.__XTBLOOM_3DMOL_READY = ready;
+  return { region, providers, rankedSources, ready };
+}
+
+/* Publish regional defaults before starting either asynchronous graph. The
+ * optional SMILES Worker can therefore start eagerly even if 3Dmol fallback
+ * selection or the verified application graph is still in flight. */
+export function startBrowserCdnAndApplication({
+  globalImpl = globalThis,
+  intlImpl = globalThis.Intl,
+  initializeRouting = initializeBrowserCdnRouting,
+  startApplication = startBrowserApplication,
+} = {}) {
+  const initialRegion = cdnRegionForTimeZone(currentTimeZone(intlImpl));
+  globalImpl.__XTBLOOM_CDN_REGION = initialRegion;
+  globalImpl.__XTBLOOM_CDN_PROVIDERS = regionalProviderIds(
+    THREE_DMOL_SOURCES,
+    initialRegion,
+  );
+  let routingStart;
+  try {
+    routingStart = initializeRouting({ globalImpl, intlImpl });
+  } catch (error) {
+    routingStart = Promise.reject(error);
+  }
+  const routing = Promise.resolve(routingStart)
+    .catch((error) => {
+      const region = initialRegion;
+      const providers = regionalProviderIds(THREE_DMOL_SOURCES, region);
+      const ready = Promise.resolve({ ok: false, error });
+      globalImpl.__XTBLOOM_CDN_REGION = region;
+      globalImpl.__XTBLOOM_CDN_PROVIDERS = providers;
+      globalImpl.__XTBLOOM_3DMOL_READY = ready;
+      return { region, providers, rankedSources: [], ready };
+    });
+  globalImpl.__XTBLOOM_CDN_ROUTING = routing;
+  let applicationStart;
+  try {
+    applicationStart = Promise.resolve(startApplication());
+  } catch (error) {
+    applicationStart = Promise.reject(error);
+  }
+  globalImpl.__XTBLOOM_APPLICATION_START = applicationStart.catch((error) => {
+    globalImpl.console?.error?.("xTBloom application startup failed", error);
+    return { ok: false, error };
+  });
+  return routing;
+}
 
 function bootstrapError(message, extras = {}) {
   const error = new Error(message);
@@ -81,6 +516,8 @@ export function validateBootstrapManifest(manifest) {
     app: validateManifestAsset(byId.get("app"), "app"),
     c60: validateManifestAsset(byId.get("c60"), "c60"),
     helpers: validateManifestAsset(byId.get("helpers"), "helpers"),
+    smilesWorker: validateManifestAsset(byId.get("smiles_worker"), "smiles_worker"),
+    smilesHelpers: validateManifestAsset(byId.get("smiles_helpers"), "smiles_helpers"),
   };
 }
 
@@ -171,7 +608,12 @@ async function loadBootstrapAttempt({
     fetchVerifiedAsset(validated.c60, c60Url, { fetchImpl, cryptoImpl, signal, cache }),
     fetchVerifiedAsset(validated.helpers, helpersUrl, { fetchImpl, cryptoImpl, signal, cache }),
   ]);
-  return { manifest: rawManifest, appUrl, c60Url, helpersUrl };
+  return {
+    manifest: rawManifest,
+    appUrl,
+    c60Url,
+    helpersUrl,
+  };
 }
 
 function withAttemptTimeout(operation, timeoutMs, controller, onTimeout = () => {}) {
@@ -358,5 +800,15 @@ if (
   typeof document !== "undefined" &&
   (!bootstrapLoaderToken || globalThis.__XTBLOOM_BOOTSTRAP_LOADER_TOKEN === bootstrapLoaderToken)
 ) {
-  void startBrowserApplication();
+  void startBrowserCdnAndApplication({
+    startApplication: () => {
+      if (
+        !bootstrapLoaderToken ||
+        globalThis.__XTBLOOM_BOOTSTRAP_LOADER_TOKEN === bootstrapLoaderToken
+      ) {
+        return startBrowserApplication();
+      }
+      return undefined;
+    },
+  });
 }

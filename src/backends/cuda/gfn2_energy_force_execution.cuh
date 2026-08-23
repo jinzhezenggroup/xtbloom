@@ -9,6 +9,8 @@
 #include <type_traits>
 
 #include "backends/cuda/gfn2_classical_force.cuh"
+#include "backends/cuda/gfn2_device_admission.cuh"
+#include "backends/cuda/gfn2_electric_field.cuh"
 #include "backends/cuda/gfn2_electronic_gradient.cuh"
 #include "backends/cuda/gfn2_external_point_charges.cuh"
 #include "backends/cuda/gfn2_force_composition.cuh"
@@ -74,6 +76,7 @@ struct Gfn2EnergyForceExecutionDevicePlan {
 
 /* Converged SCC state plus all stationary post-SCC force inputs. */
 struct Gfn2EnergyForceExecutionDeviceInput {
+  Gfn2DeviceAdmission admission{};
   Gfn2TotalEnergyDeviceInput total_energy{};
   Gfn2TotalEnergyDeviceSccState scc_state{};
   Gfn2ForceDeviceActivity force_activity{};
@@ -84,6 +87,9 @@ struct Gfn2EnergyForceExecutionDeviceInput {
   const double* external_shell_charges = nullptr;
   std::int64_t external_shell_elements = 0;
   std::uint64_t plan_token = 0u;
+  Gfn2ElectricFieldDeviceInput electric_field{};
+  const double* raw_atomic_charges = nullptr;
+  std::int64_t raw_atomic_charge_elements = 0;
 };
 
 /* Only these buffers are externally published by the execution. */

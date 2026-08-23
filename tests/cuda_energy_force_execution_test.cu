@@ -1,6 +1,7 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -779,6 +780,7 @@ struct DeviceFixture {
   DeviceBuffer<std::uint32_t> external_device_error;
   DeviceBuffer<std::uint32_t> composition_system_errors;
   DeviceBuffer<std::uint32_t> composition_plan_error;
+  DeviceBuffer<std::uint32_t> admission_error;
 
   Gfn2EnergyForceExecutionDevicePlan plan{};
   Gfn2EnergyForceExecutionDeviceInput input{};
@@ -1038,6 +1040,7 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   ALLOCATE(external_device_error, 1u)
   ALLOCATE(composition_system_errors, batch)
   ALLOCATE(composition_plan_error, 1u)
+  ALLOCATE(admission_error, 1u)
 #undef ALLOCATE
   if (status != cudaSuccess) {
     return status;
@@ -1104,6 +1107,11 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   if (status != cudaSuccess) {
     return status;
   }
+  const std::uint32_t admitted = 0u;
+  status = d.admission_error.copy_from(&admitted, 1u, stream);
+  if (status != cudaSuccess) {
+    return status;
+  }
 
   const Gfn2IntegralDeviceBatch integral_batch{
       h.basis.batch_size,
@@ -1114,6 +1122,7 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
       h.integrals.total_matrix_elements,
       h.h0.shell_pair_offsets.back(),
       h.maximum_system_shells,
+      1,
       h.integrals.integral_cutoff,
       kPlanToken,
       static_cast<std::int64_t>(h.basis.atom_offsets.size()),
@@ -1169,7 +1178,9 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
       d.shell_orbital_offsets.get(),
       d.shell_to_atom.get(),
       d.orbital_to_shell.get(),
-      d.orbital_to_atom.get()};
+      d.orbital_to_atom.get(),
+      xtbloom::detail::XtbModelFlavor::kGfn2,
+      1};
 
   const Gfn2GeometryDeviceBatch geometry_batch{static_cast<std::int64_t>(batch),
                                                static_cast<std::int64_t>(atoms),
@@ -1433,6 +1444,7 @@ cudaError_t initialize_device(DeviceFixture& d, const HostCase& h, cudaStream_t 
   d.plan.force_composition_batch = composition_batch;
 
   d.input = {};
+  d.input.admission = {d.admission_error.get(), 1, kPlanToken};
   d.input.total_energy = {d.scc_free_energy.get(),
                           static_cast<std::int64_t>(batch),
                           d.repulsion_energy.get(),
@@ -1918,6 +1930,95 @@ int test_energy_only_ignores_force_bindings() {
     CHECK(near(energy[system], host.expected_energy[system]));
   }
   CHECK(std::all_of(qm.begin(), qm.end(), [](double value) { return value == kSentinel; }));
+  CUDA_CHECK(cudaStreamDestroy(stream));
+  return 0;
+}
+
+int test_execution_admission_rejection_and_validation() {
+  HostCase host;
+  std::string error;
+  CHECK(make_case(8u, host, error));
+  cudaStream_t stream = nullptr;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+  DeviceFixture device;
+  CUDA_CHECK(initialize_device(device, host, stream));
+
+  for (const std::uint32_t code : {kGfn2RequestErrorInvalid, kGfn2RequestErrorNotImplemented,
+                                   kGfn2RequestErrorWarmIncompatible}) {
+    CUDA_CHECK(seed_public_results(device, host, stream));
+    CUDA_CHECK(device.admission_error.copy_from(&code, 1u, stream));
+    CUDA_CHECK(launch_execution_device_epoch(device, host.batch_size, stream));
+    std::vector<double> energy(host.batch_size);
+    std::vector<double> qm(host.expected_qm_force.size());
+    std::vector<double> point(host.expected_point_force.size());
+    CUDA_CHECK(device.public_energy.copy_to(energy.data(), energy.size(), stream));
+    CUDA_CHECK(device.public_qm_force.copy_to(qm.data(), qm.size(), stream));
+    CUDA_CHECK(device.public_point_force.copy_to(point.data(), point.size(), stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(
+        std::all_of(energy.begin(), energy.end(), [](double value) { return value == kSentinel; }));
+    CHECK(std::all_of(qm.begin(), qm.end(), [](double value) { return value == kSentinel; }));
+    CHECK(std::all_of(point.begin(), point.end(), [](double value) { return value == kSentinel; }));
+  }
+
+  const std::uint32_t admitted = kGfn2RequestErrorNone;
+  CUDA_CHECK(device.admission_error.copy_from(&admitted, 1u, stream));
+  constexpr std::uint32_t kControlSentinel = 0x5a17c3e9u;
+  const std::vector<std::uint32_t> system_control(host.batch_size, kControlSentinel);
+  const auto reject_transactionally = [&](const Gfn2EnergyForceExecutionDevicePlan& plan,
+                                          const Gfn2EnergyForceExecutionDeviceInput& bad) {
+    CUDA_CHECK(seed_public_results(device, host, stream));
+    CUDA_CHECK(device.execution_system_errors.copy_from(system_control.data(),
+                                                        system_control.size(), stream));
+    CUDA_CHECK(device.execution_device_error.copy_from(&kControlSentinel, 1u, stream));
+    CUDA_CHECK(device.plan_failure.copy_from(&kControlSentinel, 1u, stream));
+    CHECK(execute_gfn2_energy_force_cuda(
+              plan, bad, device.results, device.intermediates, device.workspace, device.diagnostics,
+              geometry_consumer(device, host.batch_size), stream) == cudaErrorInvalidValue);
+
+    std::vector<double> energy(host.batch_size);
+    std::vector<double> qm(host.expected_qm_force.size());
+    std::vector<double> point(host.expected_point_force.size());
+    std::vector<std::uint32_t> system_errors(host.batch_size);
+    std::uint32_t execution_device_error = 0u;
+    std::uint32_t plan_failure = 0u;
+    CUDA_CHECK(device.public_energy.copy_to(energy.data(), energy.size(), stream));
+    CUDA_CHECK(device.public_qm_force.copy_to(qm.data(), qm.size(), stream));
+    CUDA_CHECK(device.public_point_force.copy_to(point.data(), point.size(), stream));
+    CUDA_CHECK(
+        device.execution_system_errors.copy_to(system_errors.data(), system_errors.size(), stream));
+    CUDA_CHECK(device.execution_device_error.copy_to(&execution_device_error, 1u, stream));
+    CUDA_CHECK(device.plan_failure.copy_to(&plan_failure, 1u, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    CHECK(
+        std::all_of(energy.begin(), energy.end(), [](double value) { return value == kSentinel; }));
+    CHECK(std::all_of(qm.begin(), qm.end(), [](double value) { return value == kSentinel; }));
+    CHECK(std::all_of(point.begin(), point.end(), [](double value) { return value == kSentinel; }));
+    CHECK(system_errors == system_control);
+    CHECK(execution_device_error == kControlSentinel);
+    CHECK(plan_failure == kControlSentinel);
+    return 0;
+  };
+
+  Gfn2EnergyForceExecutionDeviceInput bad = device.input;
+  bad.admission.error_elements = 2;
+  CHECK(reject_transactionally(device.plan, bad) == 0);
+  bad = device.input;
+  bad.admission.plan_token ^= 1u;
+  CHECK(reject_transactionally(device.plan, bad) == 0);
+  bad = device.input;
+  bad.admission.error = reinterpret_cast<const std::uint32_t*>(
+      reinterpret_cast<const std::byte*>(device.admission_error.get()) + 1u);
+  CHECK(reject_transactionally(device.plan, bad) == 0);
+  bad = device.input;
+  bad.admission.error = device.workspace.plan_failure;
+  CHECK(reject_transactionally(device.plan, bad) == 0);
+  for (const std::int64_t invalid_tiles :
+       std::array<std::int64_t, 2>{0, kGfn2IntegralLinearBlockBudget + 1}) {
+    Gfn2EnergyForceExecutionDevicePlan invalid_plan = device.plan;
+    invalid_plan.integral_batch.linear_tiles_per_system = invalid_tiles;
+    CHECK(reject_transactionally(invalid_plan, device.input) == 0);
+  }
   CUDA_CHECK(cudaStreamDestroy(stream));
   return 0;
 }
@@ -2427,6 +2528,9 @@ int main() {
     }
   }
   if (const int line = test_energy_only_ignores_force_bindings(); line != 0) {
+    return line;
+  }
+  if (const int line = test_execution_admission_rejection_and_validation(); line != 0) {
     return line;
   }
   if (const int line = test_sparse_binding_aliases_fail_before_enqueue(); line != 0) {

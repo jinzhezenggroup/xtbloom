@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 
+#include "cpu_dispatch/features.hpp"
 #include "xtbloom/xtbloom.h"
 
 namespace xtbloom::detail {
@@ -29,7 +30,7 @@ class Gfn2CpuExecutionCache {
    * execution path serial. The implementation owns persistent workers so a
    * steady-state compute call never creates or destroys threads.
    */
-  explicit Gfn2CpuExecutionCache(std::int32_t cpu_threads);
+  explicit Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa = CpuIsa::kBaseline);
   ~Gfn2CpuExecutionCache();
 
   Gfn2CpuExecutionCache(const Gfn2CpuExecutionCache&) = delete;
@@ -86,6 +87,19 @@ xtbloom_status_t prepare_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
  * cache's prepared systems.
  */
 std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache) noexcept;
+
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+/* Test-only observability for the standalone public-runtime teardown binary.
+ * These functions are not compiled into the production shared library. */
+using Gfn2CpuWorkerTssHook = void (*)(bool after_scc_iteration) noexcept;
+/* Invoke hook on a persistent background worker immediately before and after
+ * each production SCC iteration containing the generalized eigensolver. */
+void set_gfn2_cpu_worker_tss_hook(Gfn2CpuWorkerTssHook hook) noexcept;
+void reset_gfn2_cpu_worker_teardown_test_counters() noexcept;
+std::size_t gfn2_cpu_test_background_eigensolver_runs() noexcept;
+std::size_t gfn2_cpu_test_background_thread_cleanups() noexcept;
+bool gfn2_cpu_test_provider_requires_thread_cleanup() noexcept;
+#endif
 
 }  // namespace xtbloom::detail
 

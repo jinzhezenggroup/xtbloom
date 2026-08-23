@@ -56,13 +56,14 @@ __device__ bool system_is_valid(const std::uint32_t* system_errors, std::int64_t
 }
 
 __global__ void topology_preflight_kernel(Gfn2SccPotentialDeviceBatch batch,
+                                          std::int64_t dipole_total, std::int64_t quadrupole_total,
+                                          std::int64_t dipole_components,
+                                          std::int64_t quadrupole_components,
                                           std::uint32_t* sequence_active,
                                           std::uint32_t* device_error) {
   if (atomicAdd(sequence_active, 0u) != 1u) {
     return;
   }
-  const std::int64_t dipole_total = batch.total_atoms * kGfn2SccPotentialDipoleComponents;
-  const std::int64_t quadrupole_total = batch.total_atoms * kGfn2SccPotentialQuadrupoleComponents;
   if (threadIdx.x == 0 && (batch.atom_offsets[0] != 0 || batch.batch_shell_offsets[0] != 0 ||
                            batch.qsh_offsets[0] != 0 || batch.qat_offsets[0] != 0 ||
                            batch.dipole_offsets[0] != 0 || batch.quadrupole_offsets[0] != 0 ||
@@ -95,9 +96,8 @@ __global__ void topology_preflight_kernel(Gfn2SccPotentialDeviceBatch batch,
         quadrupole_begin > quadrupole_end || quadrupole_end > quadrupole_total ||
         qsh_end - qsh_begin != shell_end - shell_begin ||
         qat_end - qat_begin != atom_end - atom_begin ||
-        dipole_end - dipole_begin != (atom_end - atom_begin) * kGfn2SccPotentialDipoleComponents ||
-        quadrupole_end - quadrupole_begin !=
-            (atom_end - atom_begin) * kGfn2SccPotentialQuadrupoleComponents) {
+        dipole_end - dipole_begin != (atom_end - atom_begin) * dipole_components ||
+        quadrupole_end - quadrupole_begin != (atom_end - atom_begin) * quadrupole_components) {
       record_plan_error(device_error, sequence_active,
                         Gfn2SccPotentialDeviceError::kInvalidOffsets);
     }
@@ -142,10 +142,11 @@ __device__ bool canonical_member_is_active(const Gfn2SccIterationDeviceActivity&
 /* Active-aware plan validation follows the same gate order as the physics
  * primitives: sequence, any-active, then active topology.  Inactive offsets
  * are generation-local poison and cannot be used to validate their peers. */
-__global__ void canonical_topology_preflight_kernel(Gfn2SccPotentialDeviceBatch batch,
-                                                    Gfn2SccIterationDeviceActivity activity,
-                                                    Gfn2SccPotentialDeviceWorkspace workspace,
-                                                    std::uint32_t* device_error) {
+__global__ void canonical_topology_preflight_kernel(
+    Gfn2SccPotentialDeviceBatch batch, Gfn2SccIterationDeviceActivity activity,
+    Gfn2SccPotentialDeviceWorkspace workspace, std::int64_t dipole_total,
+    std::int64_t quadrupole_total, std::int64_t dipole_components,
+    std::int64_t quadrupole_components, std::uint32_t* device_error) {
   __shared__ int sequence_open;
   __shared__ int any_active;
   if (threadIdx.x == 0) {
@@ -169,8 +170,6 @@ __global__ void canonical_topology_preflight_kernel(Gfn2SccPotentialDeviceBatch 
     return;
   }
 
-  const std::int64_t dipole_total = batch.total_atoms * kGfn2SccPotentialDipoleComponents;
-  const std::int64_t quadrupole_total = batch.total_atoms * kGfn2SccPotentialQuadrupoleComponents;
   for (std::int64_t system = threadIdx.x; system < batch.batch_size; system += blockDim.x) {
     if (activity.active_mask[system] != 1u) {
       continue;
@@ -196,9 +195,8 @@ __global__ void canonical_topology_preflight_kernel(Gfn2SccPotentialDeviceBatch 
         quadrupole_begin <= quadrupole_end && quadrupole_end <= quadrupole_total &&
         qsh_end - qsh_begin == shell_end - shell_begin &&
         qat_end - qat_begin == atom_end - atom_begin &&
-        dipole_end - dipole_begin == (atom_end - atom_begin) * kGfn2SccPotentialDipoleComponents &&
-        quadrupole_end - quadrupole_begin ==
-            (atom_end - atom_begin) * kGfn2SccPotentialQuadrupoleComponents;
+        dipole_end - dipole_begin == (atom_end - atom_begin) * dipole_components &&
+        quadrupole_end - quadrupole_begin == (atom_end - atom_begin) * quadrupole_components;
     if (valid && system == 0) {
       valid = atom_begin == 0 && shell_begin == 0 && qsh_begin == 0 && qat_begin == 0 &&
               dipole_begin == 0 && quadrupole_begin == 0;
@@ -259,8 +257,12 @@ __global__ void spin_potential_topology_preflight_kernel(Gfn2SccPotentialDeviceB
   const std::int64_t spin_atom_end = layout.spin_atom_offsets[system + 1];
   const std::int64_t atoms = atom_end - atom_begin;
   const std::int64_t shells = shell_end - shell_begin;
-  const std::int64_t dipole_total = batch.total_atoms * kGfn2SccPotentialDipoleComponents;
-  const std::int64_t quadrupole_total = batch.total_atoms * kGfn2SccPotentialQuadrupoleComponents;
+  const std::int64_t dipole_components =
+      batch.model == XtbModelFlavor::kGfn1 ? 0 : kGfn2SccPotentialDipoleComponents;
+  const std::int64_t quadrupole_components =
+      batch.model == XtbModelFlavor::kGfn1 ? 0 : kGfn2SccPotentialQuadrupoleComponents;
+  const std::int64_t dipole_total = batch.total_atoms * dipole_components;
+  const std::int64_t quadrupole_total = batch.total_atoms * quadrupole_components;
   bool valid = atom_begin >= 0 && atom_begin <= atom_end && atom_end <= batch.total_atoms &&
                shell_begin >= 0 && shell_begin <= shell_end && shell_end <= batch.total_shells &&
                qsh_begin >= 0 && qsh_begin <= qsh_end && qsh_end <= batch.total_shells &&
@@ -269,8 +271,8 @@ __global__ void spin_potential_topology_preflight_kernel(Gfn2SccPotentialDeviceB
                quadrupole_begin >= 0 && quadrupole_begin <= quadrupole_end &&
                quadrupole_end <= quadrupole_total && qsh_end - qsh_begin == shells &&
                qat_end - qat_begin == atoms &&
-               dipole_end - dipole_begin == atoms * kGfn2SccPotentialDipoleComponents &&
-               quadrupole_end - quadrupole_begin == atoms * kGfn2SccPotentialQuadrupoleComponents &&
+               dipole_end - dipole_begin == atoms * dipole_components &&
+               quadrupole_end - quadrupole_begin == atoms * quadrupole_components &&
                (channels == 1 || channels == 2) && channel_begin >= 0 &&
                channel_begin <= channel_end && channel_end <= layout.total_spin_channels &&
                channel_end - channel_begin == channels && spin_shell_begin >= 0 &&
@@ -468,6 +470,7 @@ __global__ void reduce_spin_atomic_charges_kernel(Gfn2SccPotentialDeviceBatch ba
   const std::int64_t spin_atom_end = layout.spin_atom_offsets[system + 1];
   const std::int64_t physical_atoms = atom_end - atom_begin;
   const std::int64_t physical_shells = shell_end - shell_begin;
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
 
   for (std::int64_t shell = spin_shell_begin + threadIdx.x; shell < spin_shell_end;
        shell += blockDim.x) {
@@ -477,27 +480,30 @@ __global__ void reduce_spin_atomic_charges_kernel(Gfn2SccPotentialDeviceBatch ba
       atomicExch(&valid, 0);
     }
   }
-  for (std::int64_t element = spin_atom_begin * kGfn2SccPotentialDipoleComponents + threadIdx.x;
-       element < spin_atom_end * kGfn2SccPotentialDipoleComponents; element += blockDim.x) {
-    if (!isfinite(mixed.dipoles[element])) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2SccPotentialDeviceError::kNonfiniteMixedDipole);
-      atomicExch(&valid, 0);
+  if (multipoles_enabled) {
+    for (std::int64_t element = spin_atom_begin * kGfn2SccPotentialDipoleComponents + threadIdx.x;
+         element < spin_atom_end * kGfn2SccPotentialDipoleComponents; element += blockDim.x) {
+      if (!isfinite(mixed.dipoles[element])) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2SccPotentialDeviceError::kNonfiniteMixedDipole);
+        atomicExch(&valid, 0);
+      }
+    }
+    for (std::int64_t element =
+             spin_atom_begin * kGfn2SccPotentialQuadrupoleComponents + threadIdx.x;
+         element < spin_atom_end * kGfn2SccPotentialQuadrupoleComponents; element += blockDim.x) {
+      if (!isfinite(mixed.quadrupoles[element])) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2SccPotentialDeviceError::kNonfiniteMixedQuadrupole);
+        atomicExch(&valid, 0);
+      }
     }
   }
-  for (std::int64_t element = spin_atom_begin * kGfn2SccPotentialQuadrupoleComponents + threadIdx.x;
-       element < spin_atom_end * kGfn2SccPotentialQuadrupoleComponents; element += blockDim.x) {
-    if (!isfinite(mixed.quadrupoles[element])) {
-      record_system_error(system_errors, system, device_error,
-                          Gfn2SccPotentialDeviceError::kNonfiniteMixedQuadrupole);
-      atomicExch(&valid, 0);
-    }
-  }
+
   __syncthreads();
   if (valid == 0) {
     return;
   }
-
   for (std::int64_t spin_atom = spin_atom_begin + threadIdx.x; spin_atom < spin_atom_end;
        spin_atom += blockDim.x) {
     const std::int64_t local = spin_atom - spin_atom_begin;
@@ -552,17 +558,19 @@ __global__ void publish_spin_multipole_projection_kernel(
     const std::int64_t spin_atom = spin_atom_begin + atom - atom_begin;
     physical_topology.atomic_charges[atom] = workspace.atom_scratch[spin_atom];
   }
-  for (std::int64_t element = atom_begin * kGfn2SccPotentialDipoleComponents + threadIdx.x;
-       element < atom_end * kGfn2SccPotentialDipoleComponents; element += blockDim.x) {
-    const std::int64_t local = element - atom_begin * kGfn2SccPotentialDipoleComponents;
-    physical_topology.atomic_dipoles[element] =
-        mixed.dipoles[spin_atom_begin * kGfn2SccPotentialDipoleComponents + local];
-  }
-  for (std::int64_t element = atom_begin * kGfn2SccPotentialQuadrupoleComponents + threadIdx.x;
-       element < atom_end * kGfn2SccPotentialQuadrupoleComponents; element += blockDim.x) {
-    const std::int64_t local = element - atom_begin * kGfn2SccPotentialQuadrupoleComponents;
-    physical_topology.atomic_quadrupoles[element] =
-        mixed.quadrupoles[spin_atom_begin * kGfn2SccPotentialQuadrupoleComponents + local];
+  if (batch.model == XtbModelFlavor::kGfn2) {
+    for (std::int64_t element = atom_begin * kGfn2SccPotentialDipoleComponents + threadIdx.x;
+         element < atom_end * kGfn2SccPotentialDipoleComponents; element += blockDim.x) {
+      const std::int64_t local = element - atom_begin * kGfn2SccPotentialDipoleComponents;
+      physical_topology.atomic_dipoles[element] =
+          mixed.dipoles[spin_atom_begin * kGfn2SccPotentialDipoleComponents + local];
+    }
+    for (std::int64_t element = atom_begin * kGfn2SccPotentialQuadrupoleComponents + threadIdx.x;
+         element < atom_end * kGfn2SccPotentialQuadrupoleComponents; element += blockDim.x) {
+      const std::int64_t local = element - atom_begin * kGfn2SccPotentialQuadrupoleComponents;
+      physical_topology.atomic_quadrupoles[element] =
+          mixed.quadrupoles[spin_atom_begin * kGfn2SccPotentialQuadrupoleComponents + local];
+    }
   }
 }
 
@@ -791,6 +799,8 @@ __global__ void compose_potential_kernel(Gfn2SccPotentialDeviceBatch batch,
                                             Gfn2SccPotentialComponent::kExplicitPointCharge);
   const bool periodic_enabled = component_enabled(components.enabled_components,
                                                   Gfn2SccPotentialComponent::kPeriodicEmbedding);
+  const bool field_atomic_enabled = components.electric_field_atomic != nullptr;
+  const bool field_dipole_enabled = components.electric_field_dipole != nullptr;
   const std::int64_t atom_begin = batch.atom_offsets[system];
   const std::int64_t atom_end = batch.atom_offsets[system + 1];
   const std::int64_t shell_begin = batch.batch_shell_offsets[system];
@@ -832,24 +842,43 @@ __global__ void compose_potential_kernel(Gfn2SccPotentialDeviceBatch batch,
     const double d4 = load_component(components.d4_atomic, atom, d4_enabled,
                                      Gfn2SccPotentialDeviceError::kNonfiniteD4Potential, &valid,
                                      system_errors, system, device_error);
+    const double field =
+        load_component(components.electric_field_atomic, atom, field_atomic_enabled,
+                       Gfn2SccPotentialDeviceError::kNonfiniteElectricFieldPotential, &valid,
+                       system_errors, system, device_error);
     const double first = aes2_atomic + periodic;
-    const double total = first + d4;
-    if (!isfinite(first) || !isfinite(total)) {
+    const double second = first + d4;
+    const double total = second + field;
+    if (!isfinite(first) || !isfinite(second) || !isfinite(total)) {
       record_system_error(system_errors, system, device_error,
                           Gfn2SccPotentialDeviceError::kNonfiniteAtomicPotentialArithmetic);
       atomicExch(&valid, 0);
     } else {
       workspace.atom_scratch[qat_begin + local_atom] = total;
     }
-    for (std::int64_t component = 0; component < kGfn2SccPotentialDipoleComponents; ++component) {
-      workspace.dipole_scratch[dipole_begin + local_atom * kGfn2SccPotentialDipoleComponents +
-                               component] =
-          load_component(components.aes2_dipole,
-                         atom * kGfn2SccPotentialDipoleComponents + component, aes2_enabled,
-                         Gfn2SccPotentialDeviceError::kNonfiniteAES2Potential, &valid,
+    for (std::int64_t component = 0;
+         workspace.dipole_elements != 0 && component < kGfn2SccPotentialDipoleComponents;
+         ++component) {
+      const std::int64_t index = atom * kGfn2SccPotentialDipoleComponents + component;
+      const double aes2 = load_component(components.aes2_dipole, index, aes2_enabled,
+                                         Gfn2SccPotentialDeviceError::kNonfiniteAES2Potential,
+                                         &valid, system_errors, system, device_error);
+      const double field =
+          load_component(components.electric_field_dipole, index, field_dipole_enabled,
+                         Gfn2SccPotentialDeviceError::kNonfiniteElectricFieldPotential, &valid,
                          system_errors, system, device_error);
+      const double total = aes2 + field;
+      if (!isfinite(total)) {
+        record_system_error(system_errors, system, device_error,
+                            Gfn2SccPotentialDeviceError::kNonfiniteAtomicPotentialArithmetic);
+        atomicExch(&valid, 0);
+      } else {
+        workspace.dipole_scratch[dipole_begin + local_atom * kGfn2SccPotentialDipoleComponents +
+                                 component] = total;
+      }
     }
-    for (std::int64_t component = 0; component < kGfn2SccPotentialQuadrupoleComponents;
+    for (std::int64_t component = 0;
+         workspace.quadrupole_elements != 0 && component < kGfn2SccPotentialQuadrupoleComponents;
          ++component) {
       workspace.quadrupole_scratch[quadrupole_begin +
                                    local_atom * kGfn2SccPotentialQuadrupoleComponents + component] =
@@ -892,6 +921,9 @@ __global__ void compose_spin_potential_kernel(
                                             Gfn2SccPotentialComponent::kExplicitPointCharge);
   const bool periodic_enabled = component_enabled(components.enabled_components,
                                                   Gfn2SccPotentialComponent::kPeriodicEmbedding);
+  const bool field_atomic_enabled = components.electric_field_atomic != nullptr;
+  const bool field_dipole_enabled = components.electric_field_dipole != nullptr;
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
   const std::int64_t atom_begin = batch.atom_offsets[system];
   const std::int64_t atom_end = batch.atom_offsets[system + 1];
   const std::int64_t shell_begin = batch.batch_shell_offsets[system];
@@ -931,9 +963,14 @@ __global__ void compose_spin_potential_kernel(
     const double d4 = load_component(components.d4_atomic, atom, d4_enabled,
                                      Gfn2SccPotentialDeviceError::kNonfiniteD4Potential, &valid,
                                      system_errors, system, device_error);
+    const double field =
+        load_component(components.electric_field_atomic, atom, field_atomic_enabled,
+                       Gfn2SccPotentialDeviceError::kNonfiniteElectricFieldPotential, &valid,
+                       system_errors, system, device_error);
     const double atomic_first = aes2_atomic + periodic;
-    const double atomic_total = atomic_first + d4;
-    if (!isfinite(atomic_first) || !isfinite(atomic_total)) {
+    const double atomic_second = atomic_first + d4;
+    const double atomic_total = atomic_second + field;
+    if (!isfinite(atomic_first) || !isfinite(atomic_second) || !isfinite(atomic_total)) {
       record_system_error(system_errors, system, device_error,
                           Gfn2SccPotentialDeviceError::kNonfiniteAtomicPotentialArithmetic);
       atomicExch(&valid, 0);
@@ -972,43 +1009,65 @@ __global__ void compose_spin_potential_kernel(
     const double d4 = load_component(components.d4_atomic, atom, d4_enabled,
                                      Gfn2SccPotentialDeviceError::kNonfiniteD4Potential, &valid,
                                      system_errors, system, device_error);
+    const double field =
+        load_component(components.electric_field_atomic, atom, field_atomic_enabled,
+                       Gfn2SccPotentialDeviceError::kNonfiniteElectricFieldPotential, &valid,
+                       system_errors, system, device_error);
     const double first = aes2_atomic + periodic;
-    const double total = first + d4;
-    if (!isfinite(first) || !isfinite(total)) {
+    const double second = first + d4;
+    const double total = second + field;
+    if (!isfinite(first) || !isfinite(second) || !isfinite(total)) {
       record_system_error(system_errors, system, device_error,
                           Gfn2SccPotentialDeviceError::kNonfiniteAtomicPotentialArithmetic);
       atomicExch(&valid, 0);
     } else {
       workspace.atom_scratch[charge_atom] = total;
     }
-    for (std::int64_t component = 0; component < kGfn2SccPotentialDipoleComponents; ++component) {
-      workspace.dipole_scratch[charge_atom * kGfn2SccPotentialDipoleComponents + component] =
-          load_component(components.aes2_dipole,
-                         atom * kGfn2SccPotentialDipoleComponents + component, aes2_enabled,
-                         Gfn2SccPotentialDeviceError::kNonfiniteAES2Potential, &valid,
-                         system_errors, system, device_error);
-    }
-    for (std::int64_t component = 0; component < kGfn2SccPotentialQuadrupoleComponents;
-         ++component) {
-      workspace
-          .quadrupole_scratch[charge_atom * kGfn2SccPotentialQuadrupoleComponents + component] =
-          load_component(components.aes2_quadrupole,
-                         atom * kGfn2SccPotentialQuadrupoleComponents + component, aes2_enabled,
-                         Gfn2SccPotentialDeviceError::kNonfiniteAES2Potential, &valid,
-                         system_errors, system, device_error);
+    if (multipoles_enabled) {
+      for (std::int64_t component = 0; component < kGfn2SccPotentialDipoleComponents; ++component) {
+        const std::int64_t source = atom * kGfn2SccPotentialDipoleComponents + component;
+        const double aes2 = load_component(components.aes2_dipole, source, aes2_enabled,
+                                           Gfn2SccPotentialDeviceError::kNonfiniteAES2Potential,
+                                           &valid, system_errors, system, device_error);
+        const double field =
+            load_component(components.electric_field_dipole, source, field_dipole_enabled,
+                           Gfn2SccPotentialDeviceError::kNonfiniteElectricFieldPotential, &valid,
+                           system_errors, system, device_error);
+        const double total = aes2 + field;
+        if (!isfinite(total)) {
+          record_system_error(system_errors, system, device_error,
+                              Gfn2SccPotentialDeviceError::kNonfiniteAtomicPotentialArithmetic);
+          atomicExch(&valid, 0);
+        } else {
+          workspace.dipole_scratch[charge_atom * kGfn2SccPotentialDipoleComponents + component] =
+              total;
+        }
+      }
+      for (std::int64_t component = 0; component < kGfn2SccPotentialQuadrupoleComponents;
+           ++component) {
+        workspace
+            .quadrupole_scratch[charge_atom * kGfn2SccPotentialQuadrupoleComponents + component] =
+            load_component(components.aes2_quadrupole,
+                           atom * kGfn2SccPotentialQuadrupoleComponents + component, aes2_enabled,
+                           Gfn2SccPotentialDeviceError::kNonfiniteAES2Potential, &valid,
+                           system_errors, system, device_error);
+      }
     }
     if (channels == 2) {
       const std::int64_t magnetization_atom = spin_atom_begin + atoms + local_atom;
       workspace.atom_scratch[magnetization_atom] = 0.0;
-      for (std::int64_t component = 0; component < kGfn2SccPotentialDipoleComponents; ++component) {
-        workspace
-            .dipole_scratch[magnetization_atom * kGfn2SccPotentialDipoleComponents + component] =
-            0.0;
-      }
-      for (std::int64_t component = 0; component < kGfn2SccPotentialQuadrupoleComponents;
-           ++component) {
-        workspace.quadrupole_scratch[magnetization_atom * kGfn2SccPotentialQuadrupoleComponents +
-                                     component] = 0.0;
+      if (multipoles_enabled) {
+        for (std::int64_t component = 0; component < kGfn2SccPotentialDipoleComponents;
+             ++component) {
+          workspace
+              .dipole_scratch[magnetization_atom * kGfn2SccPotentialDipoleComponents + component] =
+              0.0;
+        }
+        for (std::int64_t component = 0; component < kGfn2SccPotentialQuadrupoleComponents;
+             ++component) {
+          workspace.quadrupole_scratch[magnetization_atom * kGfn2SccPotentialQuadrupoleComponents +
+                                       component] = 0.0;
+        }
       }
     }
   }
@@ -1041,13 +1100,17 @@ __global__ void publish_potential_kernel(Gfn2SccPotentialDeviceBatch batch, Acti
   for (std::int64_t element = atom_begin + threadIdx.x; element < atom_end; element += blockDim.x) {
     results.atomic[element] = workspace.atom_scratch[element];
   }
-  for (std::int64_t element = dipole_begin + threadIdx.x; element < dipole_end;
-       element += blockDim.x) {
-    results.dipole[element] = workspace.dipole_scratch[element];
+  if (results.dipole_elements != 0) {
+    for (std::int64_t element = dipole_begin + threadIdx.x; element < dipole_end;
+         element += blockDim.x) {
+      results.dipole[element] = workspace.dipole_scratch[element];
+    }
   }
-  for (std::int64_t element = quadrupole_begin + threadIdx.x; element < quadrupole_end;
-       element += blockDim.x) {
-    results.quadrupole[element] = workspace.quadrupole_scratch[element];
+  if (results.quadrupole_elements != 0) {
+    for (std::int64_t element = quadrupole_begin + threadIdx.x; element < quadrupole_end;
+         element += blockDim.x) {
+      results.quadrupole[element] = workspace.quadrupole_scratch[element];
+    }
   }
 }
 
@@ -1073,13 +1136,17 @@ __global__ void publish_spin_potential_kernel(Gfn2SccPotentialDeviceBatch batch,
   for (std::int64_t element = atom_begin + threadIdx.x; element < atom_end; element += blockDim.x) {
     results.atomic[element] = workspace.atom_scratch[element];
   }
-  for (std::int64_t element = atom_begin * kGfn2SccPotentialDipoleComponents + threadIdx.x;
-       element < atom_end * kGfn2SccPotentialDipoleComponents; element += blockDim.x) {
-    results.dipole[element] = workspace.dipole_scratch[element];
+  if (results.dipole_elements != 0) {
+    for (std::int64_t element = atom_begin * kGfn2SccPotentialDipoleComponents + threadIdx.x;
+         element < atom_end * kGfn2SccPotentialDipoleComponents; element += blockDim.x) {
+      results.dipole[element] = workspace.dipole_scratch[element];
+    }
   }
-  for (std::int64_t element = atom_begin * kGfn2SccPotentialQuadrupoleComponents + threadIdx.x;
-       element < atom_end * kGfn2SccPotentialQuadrupoleComponents; element += blockDim.x) {
-    results.quadrupole[element] = workspace.quadrupole_scratch[element];
+  if (results.quadrupole_elements != 0) {
+    for (std::int64_t element = atom_begin * kGfn2SccPotentialQuadrupoleComponents + threadIdx.x;
+         element < atom_end * kGfn2SccPotentialQuadrupoleComponents; element += blockDim.x) {
+      results.quadrupole[element] = workspace.quadrupole_scratch[element];
+    }
   }
 }
 
@@ -1133,14 +1200,26 @@ bool checked_multiply(std::int64_t value, std::int64_t factor, std::int64_t* res
 bool validate_common(const Gfn2SccPotentialDeviceBatch& batch,
                      const Gfn2SccPotentialDeviceActivity& activity,
                      const Gfn2SccPotentialDeviceWorkspace& workspace, std::uint32_t* system_errors,
-                     std::uint32_t* device_error) noexcept {
+                     std::uint32_t* device_error, std::int64_t expected_dipole_elements = -1,
+                     std::int64_t expected_quadrupole_elements = -1) noexcept {
   std::int64_t dipole_elements = 0;
   std::int64_t quadrupole_elements = 0;
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
+  if (!valid_xtb_model_flavor(batch.model) ||
+      !checked_multiply(multipoles_enabled ? batch.total_atoms : 0,
+                        kGfn2SccPotentialDipoleComponents, &dipole_elements) ||
+      !checked_multiply(multipoles_enabled ? batch.total_atoms : 0,
+                        kGfn2SccPotentialQuadrupoleComponents, &quadrupole_elements)) {
+    return false;
+  }
+  if (expected_dipole_elements >= 0) {
+    dipole_elements = expected_dipole_elements;
+  }
+  if (expected_quadrupole_elements >= 0) {
+    quadrupole_elements = expected_quadrupole_elements;
+  }
   return batch.batch_size > 0 && batch.batch_size <= std::numeric_limits<int>::max() &&
          batch.total_atoms >= 0 && batch.total_shells >= 0 && batch.plan_token != 0u &&
-         checked_multiply(batch.total_atoms, kGfn2SccPotentialDipoleComponents, &dipole_elements) &&
-         checked_multiply(batch.total_atoms, kGfn2SccPotentialQuadrupoleComponents,
-                          &quadrupole_elements) &&
          batch.atom_offset_count == batch.batch_size + 1 &&
          batch.batch_shell_offset_count == batch.batch_size + 1 &&
          batch.qsh_offset_count == batch.batch_size + 1 &&
@@ -1347,9 +1426,10 @@ bool validate_spin_reduction(const Gfn2SccPotentialDeviceBatch& batch,
   std::int64_t spin_quadrupoles = 0;
   std::int64_t physical_dipoles = 0;
   std::int64_t physical_quadrupoles = 0;
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
   if (batch.batch_size <= 0 || batch.batch_size > std::numeric_limits<int>::max() ||
       batch.total_atoms <= 0 || batch.total_shells <= 0 || batch.plan_token == 0u ||
-      batch.atom_offset_count != batch.batch_size + 1 ||
+      !valid_xtb_model_flavor(batch.model) || batch.atom_offset_count != batch.batch_size + 1 ||
       batch.batch_shell_offset_count != batch.batch_size + 1 ||
       batch.shell_to_atom_count != batch.total_shells ||
       !is_aligned(batch.atom_offsets, alignof(std::int64_t)) ||
@@ -1372,17 +1452,19 @@ bool validate_spin_reduction(const Gfn2SccPotentialDeviceBatch& batch,
       !is_aligned(layout.spin_shell_offsets, alignof(std::int64_t)) ||
       !is_aligned(layout.spin_atom_offsets, alignof(std::int64_t)) ||
       !validate_canonical_activity(batch, activity) ||
-      !checked_multiply(layout.total_spin_atoms, kGfn2SccPotentialDipoleComponents,
-                        &spin_dipoles) ||
-      !checked_multiply(layout.total_spin_atoms, kGfn2SccPotentialQuadrupoleComponents,
-                        &spin_quadrupoles) ||
-      !checked_multiply(batch.total_atoms, kGfn2SccPotentialDipoleComponents, &physical_dipoles) ||
-      !checked_multiply(batch.total_atoms, kGfn2SccPotentialQuadrupoleComponents,
-                        &physical_quadrupoles) ||
+      !checked_multiply(multipoles_enabled ? layout.total_spin_atoms : 0,
+                        kGfn2SccPotentialDipoleComponents, &spin_dipoles) ||
+      !checked_multiply(multipoles_enabled ? layout.total_spin_atoms : 0,
+                        kGfn2SccPotentialQuadrupoleComponents, &spin_quadrupoles) ||
+      !checked_multiply(multipoles_enabled ? batch.total_atoms : 0,
+                        kGfn2SccPotentialDipoleComponents, &physical_dipoles) ||
+      !checked_multiply(multipoles_enabled ? batch.total_atoms : 0,
+                        kGfn2SccPotentialQuadrupoleComponents, &physical_quadrupoles) ||
       mixed.plan_token != batch.plan_token || mixed.qsh_elements != layout.total_spin_shells ||
       mixed.dipole_elements != spin_dipoles || mixed.quadrupole_elements != spin_quadrupoles ||
-      !is_aligned(mixed.qsh, alignof(double)) || !is_aligned(mixed.dipoles, alignof(double)) ||
-      !is_aligned(mixed.quadrupoles, alignof(double)) ||
+      !is_aligned(mixed.qsh, alignof(double)) ||
+      (spin_dipoles != 0 && !is_aligned(mixed.dipoles, alignof(double))) ||
+      (spin_quadrupoles != 0 && !is_aligned(mixed.quadrupoles, alignof(double))) ||
       spin_topology.plan_token != batch.plan_token ||
       spin_topology.shell_elements != layout.total_spin_shells ||
       spin_topology.atom_elements != layout.total_spin_atoms ||
@@ -1398,8 +1480,9 @@ bool validate_spin_reduction(const Gfn2SccPotentialDeviceBatch& batch,
       physical_topology.quadrupole_elements != physical_quadrupoles ||
       !is_aligned(physical_topology.shell_charges, alignof(double)) ||
       !is_aligned(physical_topology.atomic_charges, alignof(double)) ||
-      !is_aligned(physical_topology.atomic_dipoles, alignof(double)) ||
-      !is_aligned(physical_topology.atomic_quadrupoles, alignof(double)) ||
+      (physical_dipoles != 0 && !is_aligned(physical_topology.atomic_dipoles, alignof(double))) ||
+      (physical_quadrupoles != 0 &&
+       !is_aligned(physical_topology.atomic_quadrupoles, alignof(double))) ||
       workspace.plan_token != batch.plan_token ||
       workspace.shell_elements != layout.total_spin_shells ||
       workspace.atom_elements != layout.total_spin_atoms ||
@@ -1461,11 +1544,32 @@ bool validate_compose(const Gfn2SccPotentialDeviceBatch& batch,
                       std::uint32_t* system_errors, std::uint32_t* device_error) noexcept {
   std::int64_t dipole_elements = 0;
   std::int64_t quadrupole_elements = 0;
+  std::int64_t field_dipole_elements = 0;
   const std::uint32_t mask = components.enabled_components;
-  if (!validate_common(batch, activity, workspace, system_errors, device_error) ||
-      !checked_multiply(batch.total_atoms, kGfn2SccPotentialDipoleComponents, &dipole_elements) ||
-      !checked_multiply(batch.total_atoms, kGfn2SccPotentialQuadrupoleComponents,
-                        &quadrupole_elements) ||
+  const bool aes2_enabled = component_enabled(mask, Gfn2SccPotentialComponent::kAES2);
+  const bool d4_enabled = component_enabled(mask, Gfn2SccPotentialComponent::kD4TwoBody);
+  const bool field_atomic_enabled =
+      components.electric_field_atomic != nullptr || components.electric_field_atomic_elements != 0;
+  const bool field_dipole_enabled =
+      components.electric_field_dipole != nullptr || components.electric_field_dipole_elements != 0;
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
+  if (!valid_xtb_model_flavor(batch.model) ||
+      !checked_multiply(multipoles_enabled ? batch.total_atoms : 0,
+                        kGfn2SccPotentialDipoleComponents, &dipole_elements) ||
+      !checked_multiply(multipoles_enabled ? batch.total_atoms : 0,
+                        kGfn2SccPotentialQuadrupoleComponents, &quadrupole_elements) ||
+      !checked_multiply(batch.total_atoms, kGfn2SccPotentialDipoleComponents,
+                        &field_dipole_elements)) {
+    return false;
+  }
+  /* Scalar GFN1 retains the field's atomic potential but has no atomic
+   * dipole/quadrupole channel. GFN2 attachments publish both field views. */
+  if (!validate_common(batch, activity, workspace, system_errors, device_error, dipole_elements,
+                       quadrupole_elements) ||
+      (batch.model == XtbModelFlavor::kGfn1 && (aes2_enabled || d4_enabled)) ||
+      (!multipoles_enabled && field_dipole_enabled) ||
+      (field_dipole_enabled && !field_atomic_enabled) ||
+      (multipoles_enabled && field_atomic_enabled != field_dipole_enabled) ||
       (mask & ~kGfn2SccPotentialAllComponents) != 0u || components.plan_token != batch.plan_token ||
       !valid_component(components.es2_shell, components.es2_shell_elements, batch.total_shells,
                        component_enabled(mask, Gfn2SccPotentialComponent::kES2)) ||
@@ -1475,17 +1579,20 @@ bool validate_compose(const Gfn2SccPotentialDeviceBatch& batch,
                        components.explicit_point_charge_shell_elements, batch.total_shells,
                        component_enabled(mask, Gfn2SccPotentialComponent::kExplicitPointCharge)) ||
       !valid_component(components.aes2_atomic, components.aes2_atomic_elements, batch.total_atoms,
-                       component_enabled(mask, Gfn2SccPotentialComponent::kAES2)) ||
+                       aes2_enabled) ||
       !valid_component(components.aes2_dipole, components.aes2_dipole_elements, dipole_elements,
-                       component_enabled(mask, Gfn2SccPotentialComponent::kAES2)) ||
+                       aes2_enabled) ||
       !valid_component(components.aes2_quadrupole, components.aes2_quadrupole_elements,
-                       quadrupole_elements,
-                       component_enabled(mask, Gfn2SccPotentialComponent::kAES2)) ||
+                       quadrupole_elements, aes2_enabled) ||
       !valid_component(components.d4_atomic, components.d4_atomic_elements, batch.total_atoms,
                        component_enabled(mask, Gfn2SccPotentialComponent::kD4TwoBody)) ||
       !valid_component(components.periodic_atomic, components.periodic_atomic_elements,
                        batch.total_atoms,
                        component_enabled(mask, Gfn2SccPotentialComponent::kPeriodicEmbedding)) ||
+      !valid_component(components.electric_field_atomic, components.electric_field_atomic_elements,
+                       batch.total_atoms, field_atomic_enabled) ||
+      !valid_component(components.electric_field_dipole, components.electric_field_dipole_elements,
+                       field_dipole_elements, field_dipole_enabled) ||
       results.plan_token != batch.plan_token || results.shell_elements != batch.total_shells ||
       results.atom_elements != batch.total_atoms || results.dipole_elements != dipole_elements ||
       results.quadrupole_elements != quadrupole_elements ||
@@ -1495,13 +1602,19 @@ bool validate_compose(const Gfn2SccPotentialDeviceBatch& batch,
       (quadrupole_elements != 0 && !is_aligned(results.quadrupole, alignof(double)))) {
     return false;
   }
-  std::array<AddressRange, 16> reads{};
+  std::array<AddressRange, 18> reads{};
   std::array<AddressRange, 11> writes{};
-  const std::array<const double*, 8> component_pointers{
-      components.es2_shell,   components.es3_shell,      components.explicit_point_charge_shell,
-      components.aes2_atomic, components.aes2_dipole,    components.aes2_quadrupole,
-      components.d4_atomic,   components.periodic_atomic};
-  const std::array<std::int64_t, 8> component_elements{
+  const std::array<const double*, 10> component_pointers{components.es2_shell,
+                                                         components.es3_shell,
+                                                         components.explicit_point_charge_shell,
+                                                         components.aes2_atomic,
+                                                         components.aes2_dipole,
+                                                         components.aes2_quadrupole,
+                                                         components.d4_atomic,
+                                                         components.periodic_atomic,
+                                                         components.electric_field_atomic,
+                                                         components.electric_field_dipole};
+  const std::array<std::int64_t, 10> component_elements{
       components.es2_shell_elements,
       components.es3_shell_elements,
       components.explicit_point_charge_shell_elements,
@@ -1509,7 +1622,9 @@ bool validate_compose(const Gfn2SccPotentialDeviceBatch& batch,
       components.aes2_dipole_elements,
       components.aes2_quadrupole_elements,
       components.d4_atomic_elements,
-      components.periodic_atomic_elements};
+      components.periodic_atomic_elements,
+      components.electric_field_atomic_elements,
+      components.electric_field_dipole_elements};
   if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(std::int64_t), &reads[0]) ||
       !make_range(batch.batch_shell_offsets, batch.batch_shell_offset_count, sizeof(std::int64_t),
                   &reads[1]) ||
@@ -1529,7 +1644,7 @@ bool validate_compose(const Gfn2SccPotentialDeviceBatch& batch,
     }
   }
   if (!make_range(batch.shell_to_atom, batch.shell_to_atom_count, sizeof(std::int64_t),
-                  &reads[15]) ||
+                  &reads[17]) ||
       !make_range(results.shell, results.shell_elements, sizeof(double), &writes[0]) ||
       !make_range(results.atomic, results.atom_elements, sizeof(double), &writes[1]) ||
       !make_range(results.dipole, results.dipole_elements, sizeof(double), &writes[2]) ||
@@ -1561,17 +1676,29 @@ bool validate_spin_compose(const Gfn2SccPotentialDeviceBatch& batch,
   std::int64_t maximum_spin_atoms = 0;
   std::int64_t dipole_elements = 0;
   std::int64_t quadrupole_elements = 0;
+  std::int64_t field_dipole_elements = 0;
   std::int64_t spin_dipole_elements = 0;
   std::int64_t spin_quadrupole_elements = 0;
   const std::uint32_t mask = components.enabled_components;
+  const bool aes2_enabled = component_enabled(mask, Gfn2SccPotentialComponent::kAES2);
+  const bool d4_enabled = component_enabled(mask, Gfn2SccPotentialComponent::kD4TwoBody);
+  const bool field_atomic_enabled =
+      components.electric_field_atomic != nullptr || components.electric_field_atomic_elements != 0;
+  const bool field_dipole_enabled =
+      components.electric_field_dipole != nullptr || components.electric_field_dipole_elements != 0;
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
   if (batch.batch_size <= 0 || batch.batch_size > std::numeric_limits<int>::max() ||
       batch.total_atoms < 0 || batch.total_shells < 0 || batch.plan_token == 0u ||
+      !valid_xtb_model_flavor(batch.model) ||
       !checked_multiply(batch.batch_size, 2, &maximum_spin_channels) ||
       !checked_multiply(batch.total_shells, 2, &maximum_spin_shells) ||
       !checked_multiply(batch.total_atoms, 2, &maximum_spin_atoms) ||
-      !checked_multiply(batch.total_atoms, kGfn2SccPotentialDipoleComponents, &dipole_elements) ||
-      !checked_multiply(batch.total_atoms, kGfn2SccPotentialQuadrupoleComponents,
-                        &quadrupole_elements) ||
+      !checked_multiply(multipoles_enabled ? batch.total_atoms : 0,
+                        kGfn2SccPotentialDipoleComponents, &dipole_elements) ||
+      !checked_multiply(multipoles_enabled ? batch.total_atoms : 0,
+                        kGfn2SccPotentialQuadrupoleComponents, &quadrupole_elements) ||
+      !checked_multiply(batch.total_atoms, kGfn2SccPotentialDipoleComponents,
+                        &field_dipole_elements) ||
       layout.memory_space != Gfn2PlanMemorySpace::kCudaDevice ||
       layout.plan_token != batch.plan_token || layout.batch_size != batch.batch_size ||
       layout.total_spin_channels < batch.batch_size ||
@@ -1606,11 +1733,15 @@ bool validate_spin_compose(const Gfn2SccPotentialDeviceBatch& batch,
        (activity.active_mask != nullptr && activity.elements == batch.batch_size)) == false ||
       (activity.active_mask != nullptr &&
        !is_aligned(activity.active_mask, alignof(std::uint8_t))) ||
-      !checked_multiply(layout.total_spin_atoms, kGfn2SccPotentialDipoleComponents,
-                        &spin_dipole_elements) ||
-      !checked_multiply(layout.total_spin_atoms, kGfn2SccPotentialQuadrupoleComponents,
-                        &spin_quadrupole_elements) ||
+      !checked_multiply(multipoles_enabled ? layout.total_spin_atoms : 0,
+                        kGfn2SccPotentialDipoleComponents, &spin_dipole_elements) ||
+      !checked_multiply(multipoles_enabled ? layout.total_spin_atoms : 0,
+                        kGfn2SccPotentialQuadrupoleComponents, &spin_quadrupole_elements) ||
       (mask & ~kGfn2SccPotentialAllComponents) != 0u || components.plan_token != batch.plan_token ||
+      (batch.model == XtbModelFlavor::kGfn1 && (aes2_enabled || d4_enabled)) ||
+      (!multipoles_enabled && field_dipole_enabled) ||
+      (field_dipole_enabled && !field_atomic_enabled) ||
+      (multipoles_enabled && field_atomic_enabled != field_dipole_enabled) ||
       !valid_component(components.es2_shell, components.es2_shell_elements, batch.total_shells,
                        component_enabled(mask, Gfn2SccPotentialComponent::kES2)) ||
       !valid_component(components.es3_shell, components.es3_shell_elements, batch.total_shells,
@@ -1630,6 +1761,10 @@ bool validate_spin_compose(const Gfn2SccPotentialDeviceBatch& batch,
       !valid_component(components.periodic_atomic, components.periodic_atomic_elements,
                        batch.total_atoms,
                        component_enabled(mask, Gfn2SccPotentialComponent::kPeriodicEmbedding)) ||
+      !valid_component(components.electric_field_atomic, components.electric_field_atomic_elements,
+                       batch.total_atoms, field_atomic_enabled) ||
+      !valid_component(components.electric_field_dipole, components.electric_field_dipole_elements,
+                       field_dipole_elements, field_dipole_enabled) ||
       spin.plan_token != batch.plan_token || spin.shell_elements != layout.total_spin_shells ||
       (spin.shell_elements != 0 && !is_aligned(spin.shell, alignof(double))) ||
       results.plan_token != batch.plan_token ||
@@ -1658,12 +1793,18 @@ bool validate_spin_compose(const Gfn2SccPotentialDeviceBatch& batch,
     return false;
   }
 
-  std::array<AddressRange, 32> ranges{};
-  const std::array<const double*, 8> component_pointers{
-      components.es2_shell,   components.es3_shell,      components.explicit_point_charge_shell,
-      components.aes2_atomic, components.aes2_dipole,    components.aes2_quadrupole,
-      components.d4_atomic,   components.periodic_atomic};
-  const std::array<std::int64_t, 8> component_elements{
+  std::array<AddressRange, 34> ranges{};
+  const std::array<const double*, 10> component_pointers{components.es2_shell,
+                                                         components.es3_shell,
+                                                         components.explicit_point_charge_shell,
+                                                         components.aes2_atomic,
+                                                         components.aes2_dipole,
+                                                         components.aes2_quadrupole,
+                                                         components.d4_atomic,
+                                                         components.periodic_atomic,
+                                                         components.electric_field_atomic,
+                                                         components.electric_field_dipole};
+  const std::array<std::int64_t, 10> component_elements{
       components.es2_shell_elements,
       components.es3_shell_elements,
       components.explicit_point_charge_shell_elements,
@@ -1671,7 +1812,9 @@ bool validate_spin_compose(const Gfn2SccPotentialDeviceBatch& batch,
       components.aes2_dipole_elements,
       components.aes2_quadrupole_elements,
       components.d4_atomic_elements,
-      components.periodic_atomic_elements};
+      components.periodic_atomic_elements,
+      components.electric_field_atomic_elements,
+      components.electric_field_dipole_elements};
   if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(std::int64_t), &ranges[0]) ||
       !make_range(batch.batch_shell_offsets, batch.batch_shell_offset_count, sizeof(std::int64_t),
                   &ranges[1]) ||
@@ -1700,20 +1843,20 @@ bool validate_spin_compose(const Gfn2SccPotentialDeviceBatch& batch,
       return false;
     }
   }
-  if (!make_range(spin.shell, spin.shell_elements, sizeof(double), &ranges[20]) ||
-      !make_range(results.shell, results.shell_elements, sizeof(double), &ranges[21]) ||
-      !make_range(results.atomic, results.atom_elements, sizeof(double), &ranges[22]) ||
-      !make_range(results.dipole, results.dipole_elements, sizeof(double), &ranges[23]) ||
-      !make_range(results.quadrupole, results.quadrupole_elements, sizeof(double), &ranges[24]) ||
-      !make_range(workspace.shell_scratch, workspace.shell_elements, sizeof(double), &ranges[25]) ||
-      !make_range(workspace.atom_scratch, workspace.atom_elements, sizeof(double), &ranges[26]) ||
+  if (!make_range(spin.shell, spin.shell_elements, sizeof(double), &ranges[22]) ||
+      !make_range(results.shell, results.shell_elements, sizeof(double), &ranges[23]) ||
+      !make_range(results.atomic, results.atom_elements, sizeof(double), &ranges[24]) ||
+      !make_range(results.dipole, results.dipole_elements, sizeof(double), &ranges[25]) ||
+      !make_range(results.quadrupole, results.quadrupole_elements, sizeof(double), &ranges[26]) ||
+      !make_range(workspace.shell_scratch, workspace.shell_elements, sizeof(double), &ranges[27]) ||
+      !make_range(workspace.atom_scratch, workspace.atom_elements, sizeof(double), &ranges[28]) ||
       !make_range(workspace.dipole_scratch, workspace.dipole_elements, sizeof(double),
-                  &ranges[27]) ||
+                  &ranges[29]) ||
       !make_range(workspace.quadrupole_scratch, workspace.quadrupole_elements, sizeof(double),
-                  &ranges[28]) ||
-      !make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &ranges[29]) ||
-      !make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &ranges[30]) ||
-      !make_range(device_error, 1, sizeof(std::uint32_t), &ranges[31])) {
+                  &ranges[30]) ||
+      !make_range(workspace.sequence_active, 1, sizeof(std::uint32_t), &ranges[31]) ||
+      !make_range(system_errors, batch.batch_size, sizeof(std::uint32_t), &ranges[32]) ||
+      !make_range(device_error, 1, sizeof(std::uint32_t), &ranges[33])) {
     return false;
   }
   /* The physical topology projections intentionally borrow the same
@@ -1721,13 +1864,13 @@ bool validate_spin_compose(const Gfn2SccPotentialDeviceBatch& batch,
    * qat_offsets aliases atom_offsets.  Read/read aliasing is therefore valid;
    * only writable outputs must remain mutually disjoint and isolated from all
    * read ranges. */
-  for (std::size_t lhs = 20u; lhs < ranges.size(); ++lhs) {
+  for (std::size_t lhs = 22u; lhs < ranges.size(); ++lhs) {
     for (std::size_t rhs = lhs + 1u; rhs < ranges.size(); ++rhs) {
       if (ranges_overlap(ranges[lhs], ranges[rhs])) {
         return false;
       }
     }
-    for (std::size_t rhs = 0u; rhs < 20u; ++rhs) {
+    for (std::size_t rhs = 0u; rhs < 22u; ++rhs) {
       if (ranges_overlap(ranges[lhs], ranges[rhs])) {
         return false;
       }
@@ -1780,8 +1923,13 @@ cudaError_t launch_preflight(const Gfn2SccPotentialDeviceBatch& batch,
   if (status != cudaSuccess) {
     return status;
   }
-  topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, workspace.sequence_active,
-                                                                device_error);
+  const std::int64_t dipole_components =
+      workspace.dipole_elements == 0 ? 0 : kGfn2SccPotentialDipoleComponents;
+  const std::int64_t quadrupole_components =
+      workspace.quadrupole_elements == 0 ? 0 : kGfn2SccPotentialQuadrupoleComponents;
+  topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, workspace.dipole_elements, workspace.quadrupole_elements, dipole_components,
+      quadrupole_components, workspace.sequence_active, device_error);
   return cudaGetLastError();
 }
 
@@ -1789,8 +1937,13 @@ cudaError_t launch_canonical_preflight(const Gfn2SccPotentialDeviceBatch& batch,
                                        const Gfn2SccIterationDeviceActivity& activity,
                                        const Gfn2SccPotentialDeviceWorkspace& workspace,
                                        std::uint32_t* device_error, cudaStream_t stream) noexcept {
-  canonical_topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(batch, activity,
-                                                                          workspace, device_error);
+  const std::int64_t dipole_components =
+      workspace.dipole_elements == 0 ? 0 : kGfn2SccPotentialDipoleComponents;
+  const std::int64_t quadrupole_components =
+      workspace.quadrupole_elements == 0 ? 0 : kGfn2SccPotentialQuadrupoleComponents;
+  canonical_topology_preflight_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+      batch, activity, workspace, workspace.dipole_elements, workspace.quadrupole_elements,
+      dipole_components, quadrupole_components, device_error);
   return cudaGetLastError();
 }
 

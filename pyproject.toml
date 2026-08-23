@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "xtbloom"
 dynamic = ["version"]
-description = "Batched CPU and GPU inference for GFN2-xTB through the public C ABI"
+description = "Batched GFN1/GFN2-xTB inference through the public C ABI"
 readme = { file = "python/README.md", content-type = "text/markdown" }
 license = "GPL-3.0-or-later"
 license-files = [
@@ -163,8 +163,10 @@ sdist.exclude = [
   "tests/**",
   "tools/conformance/**",
   "tools/check_benchmark_evidence_size.py",
+  "tools/cloudflare-pages/**",
   "tools/licensing/**",
   "tools/oracle/**",
+  "tools/scc_reuse/**",
   "web/**",
   ".clang-format",
   ".gitattributes",
@@ -252,11 +254,11 @@ skip = ["*-win32", "*-manylinux_i686", "*-musllinux*"]
 # xTBloom self-declares the host C API surface (src/runtime/nvidia_host_api.h)
 # and generates lazy-dlopen trampolines from the curated symbol lists with
 # pinned SONAMEs. The dlopen'd libraries are supplied at run time by the system
-# or the PyPI-distributed nvidia-* packages. Quay deletes an untagged previous
-# manifest when latest rotates, so retain the reviewed dated tag and also pin
-# its immutable digest instead of following latest.
-manylinux-x86_64-image = "quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda12_9:2026.06.30-1@sha256:c436610a82597bfff72a6e8aa0de0eaa5a717a00d93354a422fde02beddd15d3"
-manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_9:2026.06.30-1@sha256:c994f30615152ae4ec6287d67a15ab79d7bbda14debd5b38bc4d4d96b8d267fb"
+# or the PyPI-distributed nvidia-* packages. Pin the reviewed dated tag rather
+# than the Quay manifest digest: old digest objects can disappear even while
+# the dated tag remains usable, which makes digest pins an availability hazard.
+manylinux-x86_64-image = "quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda12_9:2026.06.30-1"
+manylinux-aarch64-image = "quay.io/manylinux_cuda/manylinux_2_28_aarch64_cuda12_9:2026.06.30-1"
 # Default test is an import smoke test (importing xTBloom needs no runtime); the
 # x86_64 Linux CI entry overrides it with the full conformance suite.
 test-command = "python -c 'import xtbloom; print(xtbloom.library.get_version())'"
@@ -352,6 +354,9 @@ banned-module-level-imports = ["torch"]
 # benchmarks/run.py appends a tools path to sys.path before importing
 # xtbloom_conformance/xtbloom_public_api; those imports cannot move to the top.
 "benchmarks/run.py" = ["E402"]
+# Test method names already state their focused contract; class/module
+# docstrings provide the surrounding scientific intent.
+"tests/parameters/test_gfn1*.py" = ["D102"]
 
 [tool.ty.src]
 # The ty-pre-commit hook checks the whole project with no positional paths, so

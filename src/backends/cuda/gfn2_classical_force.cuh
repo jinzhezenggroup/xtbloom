@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "backends/common/xtb_model.hpp"
+#include "backends/cuda/gfn1_classical_corrections.cuh"
 #include "backends/cuda/gfn2_aes2.cuh"
 #include "backends/cuda/gfn2_d4.cuh"
 #include "backends/cuda/gfn2_es2.cuh"
@@ -45,6 +47,7 @@ enum class Gfn2ClassicalForceDeviceError : std::uint32_t {
   kD4TwoBodyFailure = 8u,
   kD4ATMFailure = 9u,
   kNonfiniteForceArithmetic = 10u,
+  kGfn1CorrectionFailure = 11u,
 };
 
 /*
@@ -77,7 +80,15 @@ struct Gfn2ClassicalForceDevicePlan {
   Gfn2AES2DeviceCache aes2_cache{};
   Gfn2D4DeviceBatch d4_batch{};
   Gfn2D4DeviceParameters d4_parameters{};
-  Gfn2D4DeviceCache d4_cache{};
+  Gfn2D4PairListDeviceCache d4_pairlist_cache{};
+  /* Model extension fields are appended to preserve existing GFN2 aggregate
+   * initializer order in white-box consumers. */
+  XtbModelFlavor model = XtbModelFlavor::kGfn2;
+  const double* repulsion_sqrt_alpha = nullptr;
+  const double* repulsion_effective_charge = nullptr;
+  Gfn1ClassicalCorrectionDevicePlan gfn1_correction{};
+  std::int64_t repulsion_sqrt_alpha_elements = 0;
+  std::int64_t repulsion_effective_charge_elements = 0;
 };
 
 /* Converged raw SCC multipoles and their generation-bound geometry. */
@@ -141,6 +152,9 @@ struct Gfn2ClassicalForceDeviceWorkspace {
   Gfn2D4DeviceWorkspace d4_workspace{};
   Gfn2GeometryDeviceWorkspace geometry_workspace{};
   std::uint64_t plan_token = 0u;
+  /* Append model-specific storage after the established aggregate prefix so
+   * existing GFN2 white-box initializers keep their field order. */
+  Gfn1ClassicalCorrectionDeviceWorkspace gfn1_correction{};
 };
 
 static_assert(std::is_trivially_copyable_v<Gfn2ClassicalForceDevicePlan>);

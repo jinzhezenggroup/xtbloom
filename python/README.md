@@ -2,13 +2,15 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/xtbloom.svg)](https://pypi.org/project/xtbloom/)
 
-xTBloom provides batched GFN2-xTB energies, analytic forces, and atomic charges
+xTBloom provides batched GFN1/GFN2-xTB energies, analytic forces, and charges
 through a NumPy-friendly interface backed by the same stable C ABI used by
 native C and C++ applications.
 
-It supports restricted and unrestricted GFN2-xTB, native ragged batches,
-explicit point charges with force output, caller-supplied periodic charge
-response, CPU and CUDA backends, ASE, dpdata, and eager Array API/DLPack arrays.
+GFN1-xTB and GFN2-xTB support CPU and CUDA through `Calculator`,
+`BatchCalculator`, ASE, and dpdata. Both models support native ragged batches,
+explicit point charges with force output, and caller-supplied periodic charge
+response. The packed Array API/DLPack surface and PyTorch positions-only
+autograd also support both models.
 
 ## Installation
 
@@ -80,7 +82,7 @@ Hartree, forces in Hartree/bohr, and charges in elementary-charge units.
 
 ```python
 import numpy as np
-from xtbloom import Calculator
+from xtbloom import BatchCalculator, Calculator, Structure
 
 numbers = np.array([8, 1, 1])
 positions = np.array(
@@ -104,9 +106,41 @@ print(result["charges"])
 electronic temperature, the reported variational energy is the electronic
 Helmholtz free energy.
 
+`Calculator.hessian()` evaluates one dense numerical QM-coordinate energy
+Hessian as central differences of analytic forces. `BatchCalculator.hessian()`
+returns one matrix per structure and interleaves their displacement tasks in
+native ragged force calls under one fixed thread/device budget:
+
+```python
+with Calculator("GFN2-xTB", numbers, positions, backend="cuda") as calc:
+    hessian = calc.hessian(step=0.005, symmetrize=True)
+
+structures = [Structure(numbers, positions), Structure(numbers, positions * 1.01)]
+with BatchCalculator(structures, backend="cuda", cpu_threads=16) as calc:
+    hessians = calc.hessian(step=0.005, symmetrize=True)
+```
+
+Each result is a NumPy `float64` array with shape `(3 * natoms, 3 * natoms)` and
+units Hartree/bohr²; the batch method returns an input-ordered list for ragged
+atom counts. By default, the methods automatically chunk the displaced
+geometries; a positive `auto_batch_size` sets the same atom-count limit accepted
+by `BatchCalculator.compute()`, while `False` or `None` submits all
+displacements at once. The raw finite-difference matrices are returned by
+default so antisymmetric numerical error remains visible, while
+`symmetrize=True` applies `0.5 * (H + H.T)` to each matrix.
+
+Only QM coordinates are displaced. Point-charge coordinates and values,
+electric fields, and caller-supplied charge-response `b/A` operators remain
+fixed, so no QM–point-charge or point-charge–point-charge blocks are included
+and derivatives of `b/A` remain caller-owned. This explicit numerical method
+does not change the narrower PyTorch autograd contract described below.
+
 Set `backend="cpu"` or `backend="cuda"` to require one backend. The CUDA
 quickstart above deliberately uses `"cuda"` so an unavailable GPU fails clearly
 instead of running on CPU. `"auto"` prefers CUDA but falls back to CPU.
+The same AUTO policy applies to GFN1-xTB and GFN2-xTB. A build without CUDA may
+return `BACKEND_UNAVAILABLE` when creating an explicitly requested CUDA
+context; a nonnegative `device_id` can be used with AUTO or CUDA.
 Compatible calls can opt into electronic warm starts; the default is an
 independent fresh SCC solve.
 
@@ -147,10 +181,12 @@ conservative CUDA chunks while preserving input order.
 
 ## Advanced array and CUDA paths
 
-`ArrayBatch` accepts packed ragged descriptors from eager NumPy, CuPy, JAX, or
-PyTorch arrays through `__dlpack__` and `__dlpack_device__`. Host arrays map
-to host descriptors; CUDA arrays can remain device-resident. By default,
-results return as host NumPy arrays.
+`ArrayBatch` accepts `method="GFN1-xTB"`/`"GFN1"` and
+`method="GFN2-xTB"`/`"GFN2"`, with GFN2-xTB retained as the default. It accepts
+packed ragged descriptors from eager NumPy, CuPy, JAX, or PyTorch arrays through
+`__dlpack__` and `__dlpack_device__`. Host arrays map to host descriptors; CUDA
+arrays can remain device-resident. By default, results return as host NumPy
+arrays.
 
 Use an `out=` mapping for caller-owned NumPy, CuPy, or PyTorch output buffers,
 or `result_memory="cuda"` for one xTBloom-owned packed device arena exported as
@@ -158,22 +194,35 @@ DLPack producers. Exact dtype, shape, layout, lifetime, stream, and ownership
 rules are documented in the
 [Python API guide](https://github.com/jinzhezenggroup/xtbloom/blob/main/docs/user-guide/python.md#array-api-and-dlpack-input-arrays).
 
-`xtbloom_torch(positions, atomic_numbers, atom_offsets, molecular_charges,
-unpaired_electrons, ...)` runs xTBloom inference on PyTorch tensors (host or
-CUDA) and is the only autograd entry point in the Python API. It supports
-exactly the positions gradient `dE/dR = -F`; autograd on any other input, or a
-gradient flowing through the `forces` output (the Hessian), raises
-`XTBloomNotSupportedError`. Higher-order differentiation is likewise rejected
-explicitly rather than returning a partial or zero Hessian. The native data
-plane is a compiled extension written against the LibTorch Stable ABI
-(torch >= 2.10), so a single binary works across torch releases; its stable
-headers are vendored in `cmake/3rdparty/torch-stable` and it links a
-build-time-only stub, so building xTBloom never downloads or requires torch
-(torch is still required at runtime to call `xtbloom_torch`). PyTorch is
-imported only when the op is called. CPU execution is synchronous; CUDA follows
-`torch.cuda.current_stream()` and returns the ordinary `(energies, forces)`
-pair. See
-`docs/user-guide/python.md` for the full contract.
+`xtbloom_torch` accepts `method="GFN1-xTB"`/`"GFN1"` and
+`method="GFN2-xTB"`/`"GFN2"`, with GFN2-xTB retained as the default. For example:
+
+```python
+energies, forces = xtbloom_torch(
+    positions,
+    atomic_numbers,
+    atom_offsets,
+    molecular_charges,
+    unpaired_electrons,
+    method="GFN1-xTB",
+    backend="cuda",
+)
+```
+
+It runs xTBloom inference on PyTorch tensors (host or CUDA) and is the only
+autograd entry point in the Python API. It supports exactly the positions
+gradient `dE/dR = -F`; autograd on any other input, or a gradient flowing
+through the `forces` output (the Hessian), raises `XTBloomNotSupportedError`.
+Higher-order differentiation is likewise rejected explicitly rather than
+returning a partial or zero Hessian. The native data plane is a compiled
+extension written against the LibTorch Stable ABI (torch >= 2.10), so a single
+binary works across torch releases; its stable headers are vendored in
+`cmake/3rdparty/torch-stable` and it links a build-time-only stub, so building
+xTBloom never downloads or requires torch (torch is still required at runtime
+to call `xtbloom_torch`). PyTorch is imported only when the op is called. CPU
+execution is synchronous; CUDA follows `torch.cuda.current_stream()` and
+returns the ordinary `(energies, forces)` pair. See `docs/user-guide/python.md`
+for the full contract.
 
 ## Charge, spin, and embedding
 
@@ -220,11 +269,16 @@ geometry optimization in the C ABI.
 
 ## Scope
 
-GFN1-xTB, ROCm, lattice/PBC inputs, solvation, native geometry optimization,
-molecular dynamics, Hessians, and higher-order autograd are not implemented.
+GFN1 electric fields/dipoles, ROCm, lattice/PBC inputs, solvation, native
+geometry-optimization and molecular-dynamics drivers, native/analytic Hessians,
+and higher-order autograd are not implemented. Python provides numerical QM
+Cartesian Hessians and [vibrational analysis](../docs/user-guide/vibrations.md),
+while standard ASE integrators provide [molecular dynamics](../docs/user-guide/ase-md.md)
+over repeated xTBloom calculations.
 The high-level `Calculator` and `BatchCalculator` APIs use host NumPy arrays;
-direct device and mixed descriptors are exposed through `ArrayBatch` and the
-low-level C ABI.
+direct device and mixed descriptors are exposed through the model-aware
+`ArrayBatch` surface and the low-level C ABI. PyTorch autograd supports GFN1 and
+GFN2 with the positions-only `dE/dR = -F` contract.
 
 ## More documentation
 

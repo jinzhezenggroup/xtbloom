@@ -51,11 +51,19 @@
 namespace xtbloom::detail {
 namespace {
 
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+thread_local bool g_test_background_worker = false;
+std::atomic<Gfn2CpuWorkerTssHook> g_test_background_tss_hook{nullptr};
+std::atomic<std::size_t> g_test_background_eigensolver_runs{0u};
+std::atomic<std::size_t> g_test_background_thread_cleanups{0u};
+std::atomic<bool> g_test_provider_requires_thread_cleanup{false};
+#endif
+
 using namespace xtbloom::detail::gfn2;
 
 constexpr std::size_t kHostAlignment = 64u;
-constexpr std::int64_t kMixerHistory = 8;
-constexpr double kMixerDamping = 0.4;
+constexpr std::int32_t kDefaultMixerHistory = 8;
+constexpr double kDefaultMixerDamping = 0.4;
 constexpr std::size_t kMaximumAutomaticCpuThreads = 64u;
 
 /* ``std::aligned_alloc`` is not provided by MSVC; wrap the platform primitive
@@ -116,6 +124,7 @@ std::size_t resolve_cpu_threads(std::int32_t requested) noexcept {
 class CpuWorkerPool final {
  public:
   using Task = void (*)(void*, std::size_t) noexcept;
+  using ThreadCleanup = void (*)(void*) noexcept;
 
   explicit CpuWorkerPool(std::size_t concurrency)
       : concurrency_(std::max<std::size_t>(1u, concurrency)) {
@@ -161,6 +170,17 @@ class CpuWorkerPool final {
     }
     work_available_.notify_all();
 
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+    /* The dedicated teardown regression must not depend on OS scheduling.
+     * Wait until a persistent worker has claimed one public batch member
+     * before allowing the caller thread to participate. */
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      test_background_claimed_.wait(
+          lock, [this] { return test_background_claimed_generation_ == generation_; });
+    }
+#endif
+
     drain_tasks(task, context, task_count);
 
     std::unique_lock<std::mutex> lock(mutex_);
@@ -179,6 +199,16 @@ class CpuWorkerPool final {
     return workers_.capacity() * sizeof(std::thread);
   }
 
+  /* Configure provider cleanup after lazy backend initialization. The
+   * callback remains valid through stop_and_join because the backend member
+   * outlives the worker pool, and each worker copies it before releasing the
+   * pool mutex and cleaning its own provider TLS. */
+  void set_thread_cleanup(void* context, ThreadCleanup cleanup) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    thread_cleanup_context_ = context;
+    thread_cleanup_ = cleanup;
+  }
+
  private:
   void drain_tasks(Task task, void* context, std::size_t task_count) noexcept {
     for (;;) {
@@ -191,6 +221,9 @@ class CpuWorkerPool final {
   }
 
   void worker_loop() noexcept {
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+    g_test_background_worker = true;
+#endif
     std::uint64_t observed_generation = 0u;
     for (;;) {
       Task task = nullptr;
@@ -202,6 +235,12 @@ class CpuWorkerPool final {
           return stopping_ || generation_ != observed_generation;
         });
         if (stopping_) {
+          void* cleanup_context = thread_cleanup_context_;
+          ThreadCleanup cleanup = thread_cleanup_;
+          lock.unlock();
+          if (cleanup != nullptr) {
+            cleanup(cleanup_context);
+          }
           return;
         }
         observed_generation = generation_;
@@ -210,6 +249,17 @@ class CpuWorkerPool final {
         task_count = task_count_;
       }
 
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+      const std::size_t claimed_task = next_task_.fetch_add(1u, std::memory_order_relaxed);
+      if (claimed_task < task_count) {
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          test_background_claimed_generation_ = observed_generation;
+        }
+        test_background_claimed_.notify_one();
+        task(context, claimed_task);
+      }
+#endif
       drain_tasks(task, context, task_count);
 
       {
@@ -238,6 +288,9 @@ class CpuWorkerPool final {
   std::mutex mutex_;
   std::condition_variable work_available_;
   std::condition_variable work_complete_;
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+  std::condition_variable test_background_claimed_;
+#endif
   std::atomic<std::size_t> next_task_{0u};
   Task task_ = nullptr;
   void* task_context_ = nullptr;
@@ -245,6 +298,11 @@ class CpuWorkerPool final {
   std::size_t completed_workers_ = 0u;
   std::uint64_t generation_ = 0u;
   bool stopping_ = false;
+  void* thread_cleanup_context_ = nullptr;
+  ThreadCleanup thread_cleanup_ = nullptr;
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+  std::uint64_t test_background_claimed_generation_ = 0u;
+#endif
 };
 
 class AlignedBuffer {
@@ -520,6 +578,10 @@ struct SystemKey {
   double charge_tolerance = 0.0;
   double energy_tolerance = 0.0;
   double electronic_temperature = 0.0;
+  xtbloom_scc_mixer_t scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  std::int32_t scc_mixer_history = kDefaultMixerHistory;
+  double scc_mixer_damping = kDefaultMixerDamping;
+  xtbloom_determinism_t determinism = XTBLOOM_DETERMINISM_DEFAULT;
 
   friend bool operator==(const SystemKey& lhs, const SystemKey& rhs) {
     return lhs.atomic_numbers == rhs.atomic_numbers &&
@@ -532,14 +594,38 @@ struct SystemKey {
            lhs.maximum_iterations == rhs.maximum_iterations &&
            lhs.charge_tolerance == rhs.charge_tolerance &&
            lhs.energy_tolerance == rhs.energy_tolerance &&
-           lhs.electronic_temperature == rhs.electronic_temperature;
+           lhs.electronic_temperature == rhs.electronic_temperature &&
+           lhs.scc_mixer == rhs.scc_mixer && lhs.scc_mixer_history == rhs.scc_mixer_history &&
+           lhs.scc_mixer_damping == rhs.scc_mixer_damping && lhs.determinism == rhs.determinism;
   }
 };
+
+struct NormalizedExecutionPolicy {
+  xtbloom_scc_mixer_t scc_mixer = XTBLOOM_SCC_MIXER_MODIFIED_BROYDEN;
+  std::int32_t scc_mixer_history = kDefaultMixerHistory;
+  double scc_mixer_damping = kDefaultMixerDamping;
+  xtbloom_determinism_t determinism = XTBLOOM_DETERMINISM_DEFAULT;
+};
+
+NormalizedExecutionPolicy normalize_execution_policy(
+    const xtbloom_compute_options_t& options) noexcept {
+  NormalizedExecutionPolicy policy;
+  /* V1, V2, and incomplete V3 callers do not own the new suffix. Preserve
+   * the historical production policy without reading beyond struct_size. */
+  if (options.struct_size >= XTBLOOM_COMPUTE_OPTIONS_V3_SIZE) {
+    policy.scc_mixer = options.scc_mixer;
+    policy.scc_mixer_history = options.scc_mixer_history;
+    policy.scc_mixer_damping = options.scc_mixer_damping;
+    policy.determinism = options.determinism;
+  }
+  return policy;
+}
 
 void make_system_keys(const HostRequest& request, const xtbloom_compute_options_t& options,
                       std::vector<SystemKey>& keys) {
   keys.resize(static_cast<std::size_t>(request.batch_size));
   const bool periodic_enabled = request.shifts_enabled || request.response_enabled;
+  const NormalizedExecutionPolicy policy = normalize_execution_policy(options);
   for (std::int64_t system = 0; system < request.batch_size; ++system) {
     const std::size_t index = static_cast<std::size_t>(system);
     const std::int64_t atom_begin = request.atom_offsets[index];
@@ -561,6 +647,10 @@ void make_system_keys(const HostRequest& request, const xtbloom_compute_options_
     key.charge_tolerance = options.charge_tolerance;
     key.energy_tolerance = options.energy_tolerance;
     key.electronic_temperature = options.electronic_temperature;
+    key.scc_mixer = policy.scc_mixer;
+    key.scc_mixer_history = policy.scc_mixer_history;
+    key.scc_mixer_damping = policy.scc_mixer_damping;
+    key.determinism = policy.determinism;
   }
 }
 
@@ -576,7 +666,9 @@ bool same_prepared_layout(const SystemKey& lhs, const SystemKey& rhs) {
          lhs.maximum_iterations == rhs.maximum_iterations &&
          lhs.charge_tolerance == rhs.charge_tolerance &&
          lhs.energy_tolerance == rhs.energy_tolerance &&
-         lhs.electronic_temperature == rhs.electronic_temperature;
+         lhs.electronic_temperature == rhs.electronic_temperature &&
+         lhs.scc_mixer == rhs.scc_mixer && lhs.scc_mixer_history == rhs.scc_mixer_history &&
+         lhs.scc_mixer_damping == rhs.scc_mixer_damping && lhs.determinism == rhs.determinism;
 }
 
 struct SystemOutput {
@@ -605,7 +697,8 @@ struct SystemOutput {
 };
 
 struct SystemExecution {
-  explicit SystemExecution(SystemKey value) : key(std::move(value)) {}
+  explicit SystemExecution(SystemKey value, const MullikenKernelTable& kernels)
+      : key(std::move(value)), mulliken_kernels(kernels) {}
 
   SystemKey key;
   std::vector<std::int64_t> atom_offsets{0, 0};
@@ -623,6 +716,7 @@ struct SystemExecution {
   ES2Plan es2;
   ES3Plan es3;
   AES2Plan aes2;
+  MullikenKernelTable mulliken_kernels;
   MullikenPlan mulliken;
   EigensolverPlan eigensolver;
   SccMixerPlan mixer;
@@ -812,11 +906,12 @@ xtbloom_status_t SystemExecution::build(std::string& error) {
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_aes2_plan(basis, key.atomic_numbers.data(), aes2, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = make_mulliken_plan(basis, integrals, wavefunction_layout, mulliken, error);
+  status =
+      make_mulliken_plan(basis, integrals, wavefunction_layout, mulliken_kernels, mulliken, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_eigensolver_plan(wavefunction_layout, eigensolver, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
-  status = make_scc_mixer_plan(wavefunction_layout, kMixerHistory, kMixerDamping,
+  status = make_scc_mixer_plan(wavefunction_layout, key.scc_mixer_history, key.scc_mixer_damping,
                                key.charge_tolerance, key.charge_tolerance, mixer, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = make_spin_polarization_plan(basis, wavefunction_layout, spin, error);
@@ -1014,19 +1109,7 @@ std::size_t SystemExecution::resident_bytes() const noexcept {
                                     vector_bytes(point_offsets) + vector_bytes(molecular_charges) +
                                     vector_bytes(unpaired_electrons) + vector_bytes(spin_channels) +
                                     vector_bytes(periodic_status);
-  const std::size_t basis_plan_vectors =
-      vector_bytes(basis.atom_offsets) + vector_bytes(basis.batch_shell_offsets) +
-      vector_bytes(basis.batch_orbital_offsets) +
-      vector_bytes(basis.batch_cartesian_orbital_offsets) +
-      vector_bytes(basis.batch_primitive_offsets) + vector_bytes(basis.atom_shell_offsets) +
-      vector_bytes(basis.atom_orbital_offsets) +
-      vector_bytes(basis.atom_cartesian_orbital_offsets) +
-      vector_bytes(basis.atom_primitive_offsets) + vector_bytes(basis.shell_orbital_offsets) +
-      vector_bytes(basis.shell_cartesian_orbital_offsets) +
-      vector_bytes(basis.shell_primitive_offsets) + vector_bytes(basis.shell_to_atom) +
-      vector_bytes(basis.principal_quantum_numbers) + vector_bytes(basis.angular_momenta) +
-      vector_bytes(basis.slater_exponents) + vector_bytes(basis.primitive_exponents) +
-      vector_bytes(basis.primitive_coefficients);
+  const std::size_t basis_plan_vectors = common::basis_plan_resident_bytes(basis);
   const std::size_t direct_plan_vectors =
       basis_plan_vectors + vector_bytes(integrals.matrix_offsets) +
       vector_bytes(coordination.atom_offsets) + vector_bytes(coordination.covalent_radius) +
@@ -1243,12 +1326,28 @@ xtbloom_status_t SystemExecution::restore_warm_checkpoint(std::string& error) {
 
 xtbloom_status_t SystemExecution::run_scc(const CpuLinearAlgebraBackend& backend,
                                           std::string& error) {
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+  Gfn2CpuWorkerTssHook test_tss_hook = nullptr;
+  if (g_test_background_worker && backend.production()) {
+    test_tss_hook = g_test_background_tss_hook.load(std::memory_order_acquire);
+  }
+#endif
   while (driver_state.converged[0] == 0u &&
          driver_state.system_statuses[0] == XTBLOOM_STATUS_SUCCESS) {
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+    if (test_tss_hook != nullptr) {
+      test_tss_hook(false);
+    }
+#endif
     const xtbloom_status_t status = iterate_scc_driver_batch_cpu(
         driver, geometry, backend, overlap_cache, wavefunction, mixer_state, driver_state,
         driver_workspace, error,
         scc_parallel_enabled(parallel_executor) ? &parallel_executor : nullptr);
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+    if (test_tss_hook != nullptr) {
+      test_tss_hook(true);
+    }
+#endif
     if (status != XTBLOOM_STATUS_SUCCESS) {
       return status;
     }
@@ -1506,8 +1605,19 @@ xtbloom_status_t SystemExecution::infer(
 struct Gfn2CpuExecutionCache::Impl {
   enum class TaskFailure : std::uint8_t { kNone, kAllocation, kException, kUnknown };
 
-  explicit Impl(std::int32_t requested_threads)
-      : cpu_threads(resolve_cpu_threads(requested_threads)), workers(cpu_threads) {}
+  explicit Impl(std::int32_t requested_threads, CpuIsa cpu_isa)
+      : mulliken_kernels(mulliken_kernels_for_cpu_isa(cpu_isa)),
+        cpu_threads(resolve_cpu_threads(requested_threads)),
+        workers(cpu_threads) {}
+
+  ~Impl() {
+    /* backend_self_test and serial/batch participation may initialize MKL
+     * state on the context owner thread. Release that state while the
+     * provider namespace and worker pool are both still alive; each worker
+     * performs the matching cleanup in worker_loop immediately before its
+     * pthread exits. */
+    backend.release_thread_resources();
+  }
 
   std::mutex mutex;
   CpuLinearAlgebraBackend backend;
@@ -1536,6 +1646,7 @@ struct Gfn2CpuExecutionCache::Impl {
   std::vector<std::uint8_t> converged;
   std::vector<std::int32_t> system_statuses;
 
+  const MullikenKernelTable mulliken_kernels;
   const std::size_t cpu_threads;
   CpuWorkerPool workers;
 
@@ -1547,12 +1658,26 @@ struct Gfn2CpuExecutionCache::Impl {
     static_cast<CpuWorkerPool*>(pool_context)->parallel_for(chunk_count, body_context, body);
   }
 
+  static void release_backend_thread_resources(void* backend_context) noexcept {
+    static_cast<CpuLinearAlgebraBackend*>(backend_context)->release_thread_resources();
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+    g_test_background_thread_cleanups.fetch_add(1u, std::memory_order_relaxed);
+#endif
+  }
+
   xtbloom_status_t ensure_backend(std::string& error) {
     if (backend_initialized) {
       return XTBLOOM_STATUS_SUCCESS;
     }
     const xtbloom_status_t status = make_mkl_rt_lp64_backend(backend, error);
     if (status == XTBLOOM_STATUS_SUCCESS) {
+      if (backend.production_mkl_isolated()) {
+        workers.set_thread_cleanup(&backend, &release_backend_thread_resources);
+      }
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+      g_test_provider_requires_thread_cleanup.store(backend.production_mkl_isolated(),
+                                                    std::memory_order_relaxed);
+#endif
       backend_initialized = true;
     }
     return status;
@@ -1587,9 +1712,11 @@ struct Gfn2CpuExecutionCache::Impl {
      * per-system tasks and must not be re-entered from inside them. A pool that
      * ended up with a single worker (including cpu_threads=1 and truncated
      * thread creation) gets no executor, preserving the exact serial path. */
-    const bool intra_system_parallel = requested.size() == 1u && workers.concurrency() > 1u;
+    const bool intra_system_parallel =
+        requested.size() == 1u && workers.concurrency() > 1u &&
+        requested.front().determinism != XTBLOOM_DETERMINISM_REPRODUCIBLE;
     for (const SystemKey& key : requested) {
-      auto system = std::make_unique<SystemExecution>(key);
+      auto system = std::make_unique<SystemExecution>(key, mulliken_kernels);
       if (intra_system_parallel) {
         system->parallel_executor.pool_context = &workers;
         system->parallel_executor.worker_count = workers.concurrency();
@@ -1694,6 +1821,13 @@ struct Gfn2CpuExecutionCache::Impl {
           points == 0 ? nullptr : request.point_charges.data() + point_begin,
           points == 0 ? nullptr : request.point_hardnesses.data() + point_begin, shifts, response,
           job.options.flags, warm_start, output, system_error);
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+      /* Every valid SystemExecution::infer reaches the production generalized
+       * eigensolver before returning success or a data-level SCC terminal. */
+      if (g_test_background_worker && owner.backend.production()) {
+        g_test_background_eigensolver_runs.fetch_add(1u, std::memory_order_relaxed);
+      }
+#endif
     } catch (const std::bad_alloc&) {
       owner.inference_statuses[index] = XTBLOOM_STATUS_ALLOCATION_FAILED;
       owner.task_failures[index] = TaskFailure::kAllocation;
@@ -1714,8 +1848,8 @@ struct Gfn2CpuExecutionCache::Impl {
   }
 };
 
-Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads)
-    : impl_(std::make_unique<Impl>(cpu_threads)) {}
+Gfn2CpuExecutionCache::Gfn2CpuExecutionCache(std::int32_t cpu_threads, CpuIsa cpu_isa)
+    : impl_(std::make_unique<Impl>(cpu_threads, cpu_isa)) {}
 Gfn2CpuExecutionCache::~Gfn2CpuExecutionCache() = default;
 
 xtbloom_status_t execute_restricted_gfn2_cpu(Gfn2CpuExecutionCache& cache,
@@ -1957,5 +2091,29 @@ std::size_t persistent_workspace_bytes_restricted_gfn2_cpu(Gfn2CpuExecutionCache
            vector_bytes(request.field_attached_by_system);
   return total;
 }
+
+#if defined(XTBLOOM_CPU_WORKER_TEARDOWN_TESTING)
+void set_gfn2_cpu_worker_tss_hook(Gfn2CpuWorkerTssHook hook) noexcept {
+  g_test_background_tss_hook.store(hook, std::memory_order_release);
+}
+
+void reset_gfn2_cpu_worker_teardown_test_counters() noexcept {
+  g_test_background_eigensolver_runs.store(0u, std::memory_order_relaxed);
+  g_test_background_thread_cleanups.store(0u, std::memory_order_relaxed);
+  g_test_provider_requires_thread_cleanup.store(false, std::memory_order_relaxed);
+}
+
+std::size_t gfn2_cpu_test_background_eigensolver_runs() noexcept {
+  return g_test_background_eigensolver_runs.load(std::memory_order_relaxed);
+}
+
+std::size_t gfn2_cpu_test_background_thread_cleanups() noexcept {
+  return g_test_background_thread_cleanups.load(std::memory_order_relaxed);
+}
+
+bool gfn2_cpu_test_provider_requires_thread_cleanup() noexcept {
+  return g_test_provider_requires_thread_cleanup.load(std::memory_order_relaxed);
+}
+#endif
 
 }  // namespace xtbloom::detail
