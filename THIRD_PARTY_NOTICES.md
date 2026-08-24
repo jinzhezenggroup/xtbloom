@@ -144,15 +144,45 @@ Redistributed or derived material:
   energy, gradient, and virial outputs from tblite 0.7.0 revision
   `133f91efb94b47f05848e1f86832f40a1accc385`.
   `data/conformance/periodic/manifest.json` records the exact executable SHA-256
-  `dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3`,
+  `613ec6628c71fc974637cfed39426f3aff40f53106236af2e324cb0c582cf28c`,
   `libtblite` SHA-256
-  `5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725`,
-  reviewed source-module hashes, commands, inputs, and normalized outputs. The
-  charged tblite result is explicitly diagnostic because that revision omits
-  the uniform-background constant; the charged acceptance values are
-  xTBloom-authored analytic reconstructions. No tblite source or binary is
-  redistributed, and this repository-only corpus is excluded from installed
-  libraries and wheels.
+  `145b89e099b2a28d892fa999676b446ab1e6c9b8c8598ac2e707a08c2d7e6b93`,
+  reviewed source-module hashes, commands, inputs, and normalized outputs.
+  `data/conformance/periodic/tblite-build.json` (SHA-256
+  `f9a6a86a1ab6a11299e4dd2a30f2fd4ca2f714be5c76d2ec2b1ddd037641b782`)
+  additionally records source tree `008603bbf877b414f68208d3fe8393265f72b108`,
+  GNU Fortran 14.3.0, Meson options, 52 exact conda package artifacts, and the
+  complete non-system loader closure (SHA-256
+  `d416f056175300a67ca40d0aab8d317f2f97131a3626fcb173794c06342a0fbc`).
+  Its captured upstream test run is explicitly incomplete: 51 tests passed,
+  7 expected failures, 2 failures, 23 timeouts, and 9 interruptions. This is
+  build provenance, not a claim that the upstream suite passed. The
+  charged tblite result is explicitly diagnostic because that revision omits the
+  uniform-background constant. Charged acceptance uses the xTBloom-authored
+  multi-alpha analytic reconstruction in
+  `data/conformance/periodic/ewald-reconstruction.json` (SHA-256
+  `65022d49b7b0d552cdc97800a8ea1e17ed6a76cf40d4285292e7fce46f184126`).
+  No tblite source or binary is redistributed, and this repository-only corpus
+  is excluded from installed libraries and wheels.
+- The six periodic GFN2 term families under
+  `data/conformance/periodic/terms/` are independently generated numerical
+  outputs from a repository-authored GPL-3.0-or-later Fortran probe linked to
+  the same exact tblite build. The term manifest at
+  `data/conformance/periodic/terms/manifest.json` (SHA-256
+  `e8b6753b0f1fb278037b4f7c4516e16205dcaaebde12a6c14053d5d918d9dd02`)
+  pins the Python generator (SHA-256
+  `0f8dcfbf5f362c1f3955681465d4a89056c9425107fd06c68e41c7fedc3a4c28`),
+  probe source (SHA-256
+  `89b6500f08dd89b0b1d2f4f45d62bd46ce127ea4b07b8b75340c8355d21ff6dd`),
+  shared build attestation, Fortran modules, non-system runtime closure, raw
+  outputs, canonical fixtures, and source records from tblite revision
+  `133f91efb94b47f05848e1f86832f40a1accc385`, dftd4 revision
+  `6e1f59c3f39d919a2dbef0601d2576727c8b30e8`, mctc-lib revision
+  `e9de066d89f250d1cfb6de3a33f0c27c0e2f855d`, and linked-only multicharge
+  revision `6a5d63f9e9e29dcf13cc47cc27f33bf9015681bf`. No upstream source or
+  binary and no locally built probe executable is redistributed. The inputs,
+  raw output, normalized fixtures, tests, and probe tooling are repository-only
+  and excluded from PyPI sdists, native installs, and wheels.
 
 ## xTB GFN1 legacy STO expansion
 

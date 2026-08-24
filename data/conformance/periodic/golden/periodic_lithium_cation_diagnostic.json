@@ -1,5 +1,85 @@
 {
   "case_id": "periodic_lithium_cation_diagnostic",
+  "invariant_evidence": {
+    "reciprocal_identity_max_error": 8.881784197001252e-16,
+    "variants": {
+      "cell_basis": {
+        "definition": "unimodular direct basis U=[[1,1,0],[0,1,0],[0,0,1]]",
+        "input_sha256": "05f6755e1e2c3f7467025995b5f0a4b85a14ce6cc28ad7a5c11097b58b812c5c",
+        "properties": {
+          "energy_hartree": 0.061415591572551484,
+          "forces_hartree_per_bohr": [
+            -6.369290716658313e-22,
+            5.823351512373315e-22,
+            -6.236941818649829e-22
+          ],
+          "gradient_hartree_per_bohr": [
+            6.369290716658313e-22,
+            -5.823351512373315e-22,
+            6.236941818649829e-22
+          ],
+          "strain_derivatives_hartree": [
+            0.024126867216445535,
+            -0.0003219438968032349,
+            0.00015189170337196256,
+            -0.00032194389680323485,
+            0.02349828725197175,
+            -0.000538974019107478,
+            0.00015189170337196167,
+            -0.000538974019107478,
+            0.030784396050328733
+          ]
+        },
+        "raw_output_sha256": "c1d084df2891503220668bcfbc790fdc6b5da43d790cd4d787e1c3e05157cd32",
+        "source_output_sha256": "d2e6b3574b0b367d5b7f147b4369257e2a37e4ada9ac34648f9d9926bc3ddf28"
+      },
+      "translation": {
+        "definition": "all positions shifted by (0.37,-0.23,0.19) bohr",
+        "input_sha256": "72c36d084890eec5bac4dd68dab5c9ef9c687f0a3b7356ad3c326231c72172cb",
+        "properties": {
+          "energy_hartree": 0.06141559157255148,
+          "forces_hartree_per_bohr": [
+            -1.6543612251060553e-24,
+            -7.940933880509066e-23,
+            2.3822801641527197e-22
+          ],
+          "gradient_hartree_per_bohr": [
+            1.6543612251060553e-24,
+            7.940933880509066e-23,
+            -2.3822801641527197e-22
+          ],
+          "strain_derivatives_hartree": [
+            0.024126867216445528,
+            -0.00032194389680323,
+            0.00015189170337196232,
+            -0.0003219438968032297,
+            0.023498287251971707,
+            -0.0005389740191074796,
+            0.00015189170337196178,
+            -0.0005389740191074796,
+            0.030784396050328712
+          ]
+        },
+        "raw_output_sha256": "6ef08d9409d79a47e333a51dcac86dfdc5b8edde97f312d55e11fbabef19b92a",
+        "source_output_sha256": "2725706a425364f2dd8515d23bbd0a332f8903453dedd4bc8b5fc6bcee4d097f"
+      }
+    },
+    "wrapping": {
+      "definition": "u=r*H^-1; u_wrapped=u-floor(u); r_wrapped=u_wrapped*H",
+      "outside_positions_bohr": [
+        13.3,
+        2.9,
+        3.5
+      ],
+      "outside_positions_sha256": "e9fde3a7165f3dea2d6875ac22b5a82911863fd9f6cb833bf4a05a34ef67f750",
+      "wrapped_positions_bohr": [
+        2.3000000000000016,
+        2.9,
+        3.5
+      ],
+      "wrapped_positions_sha256": "2d0df6ceb3c8b72a7892972c18411141757cbb48a1e1405cca15ca594fa7c6df"
+    }
+  },
   "oracle_role": "diagnostic-unbackgrounded-charged",
   "properties": {
     "energy_hartree": 0.061415591572551484,
@@ -27,6 +107,8 @@
   },
   "provenance": {
     "accuracy": 0.0001,
+    "build_attestation_sha256": "f9a6a86a1ab6a11299e4dd2a30f2fd4ca2f714be5c76d2ec2b1ddd037641b782",
+    "build_id": "tblite-133f91ef-gfortran14-netlib-613ec662",
     "command_template": [
       "{executable}",
       "run",
@@ -53,22 +135,23 @@
         "OPENBLAS_NUM_THREADS": "1"
       }
     },
-    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "executable_sha256": "613ec6628c71fc974637cfed39426f3aff40f53106236af2e324cb0c582cf28c",
     "executable_version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled",
     "generation_mode": "live-cli",
     "input": "data/conformance/periodic/inputs/periodic_lithium_cation_diagnostic.tmol",
     "input_sha256": "fb80c7e7b7f6638e01f0dbafda5e7b59ccc6edd3c1dd2017d9aabea96cb6fbf6",
     "raw_output_sha256": "d887db4582b8ad04b4d9164c847a8254c7b6700cf8b787c18f3a76145d1326ea",
     "runtime": {
+      "closure_sha256": "d416f056175300a67ca40d0aab8d317f2f97131a3626fcb173794c06342a0fbc",
       "libtblite": {
         "discovery": "ldd",
         "filename": "libtblite.so.0.7.0",
-        "sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725",
+        "sha256": "145b89e099b2a28d892fa999676b446ab1e6c9b8c8598ac2e707a08c2d7e6b93",
         "status": "resolved"
       }
     },
     "source_revision": "133f91efb94b47f05848e1f86832f40a1accc385"
   },
-  "schema": "xtbloom-periodic-gfn2-golden-v1",
+  "schema": "xtbloom-periodic-gfn2-golden-v2",
   "source_output_sha256": "3b9906c4502c11eda77e30180611d32634a0ae9cdf479adcae22f65462d54fd7"
 }

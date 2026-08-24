@@ -1,50 +1,880 @@
 {
+  "cartesian_finite_difference": {
+    "coordinates": [
+      {
+        "atom": 0,
+        "axis": 0,
+        "central_forces_hartree_per_bohr": [
+          -0.059994639751703716,
+          -0.05999461551997598,
+          -0.05999461198946676
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350185242144119,
+              "input_sha256": "c516de9ff6409b2f063c07e34b466055d7d4b277507c37f43348697a9531e41a",
+              "raw_output_sha256": "3c7ea29bf0b8bcc8459bd05453836013ca7430e15242fe6113c3b4f88cdffb57",
+              "source_output_sha256": "5937470e1a991a6365a90c8984a2699709ab3167fa9e4a7959980a994a0f5e83"
+            },
+            "plus": {
+              "energy_hartree": -4.350161244288218,
+              "input_sha256": "3c45784b10ea4373ef9eb8df8221455959f5645b44613f8db2acf345a4802072",
+              "raw_output_sha256": "5e7b2b0f02a9ab4b6d5d702771593a9a8d13163eed0abb7b7e450ad499a775aa",
+              "source_output_sha256": "03a9f3c9f1c34389157c9cd1d1482ca2a74cd2a165562ab84ee5d72676f82774"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.35017926513898,
+              "input_sha256": "40fb730d87c22268e7f6ca0022c9254f79d9c71fc7a7544fab4bb31ac6686af5",
+              "raw_output_sha256": "6a0ed73beb27016cd146099b42d0b3606b14640a15486b5eaf0d2c315d696c72",
+              "source_output_sha256": "a648931df4efa90aa268a9baebd07b998ccebfcb86ddfc034c87a9fed416124a"
+            },
+            "plus": {
+              "energy_hartree": -4.350167266215876,
+              "input_sha256": "4cf2a6f692f91029365bb24a685a5197d46f0f4eb47ac9680bf53330106a0d50",
+              "raw_output_sha256": "9d1276c7a6f78f9bcc8fc948d5ba4171fedea6589c7f959db1507bf182d8b0fe",
+              "source_output_sha256": "16539a6317db49a200cc9c2b7857132845c9a1d5599fe5aebc39887265381ba0"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350176271023565,
+              "input_sha256": "1dcfbacb7a23abeec7af260405415990d2dd8318083030bf1afe112add5b6d27",
+              "raw_output_sha256": "8befbf80f17af165e5b065121c45347cba05bf6ee3cbd3f0ca96db03c1859508",
+              "source_output_sha256": "b8812f2a09e9dd56c2e3647c8a2dc371860f41ba53f72e0ae6d908cd87093699"
+            },
+            "plus": {
+              "energy_hartree": -4.350170271562366,
+              "input_sha256": "48dd86b310f7a7cc0492729baa16834f8db0130f131eb53e321585e536dc2bba",
+              "raw_output_sha256": "627180590d7272a134920bbb5fb8a6690145ca78d682314d8a12e86e0440daeb",
+              "source_output_sha256": "2078ef105f5801f6154210d6a217bd96831511739637b8d900701e807e154034"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": -0.059994610812630356
+      },
+      {
+        "atom": 0,
+        "axis": 1,
+        "central_forces_hartree_per_bohr": [
+          -0.1019887908748629,
+          -0.10198878984013504,
+          -0.10198878698020053
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350193645756364,
+              "input_sha256": "26573199fef7bff3f9538f9f34f16252559baa4a165c7c1c1fad3c2a292dc5c5",
+              "raw_output_sha256": "d35ffbb69f3c8a0b4855f7d652045576b7c2beba6fce59321fc0003e7b654078",
+              "source_output_sha256": "53768401fa6b47b08f05e51196021ab6683fa38f64cf70a8db5a554b6effacfd"
+            },
+            "plus": {
+              "energy_hartree": -4.350152850240014,
+              "input_sha256": "058671bb1c97af54c01ac7babaf47d58e26f89311be2ebffa603660bf03dff90",
+              "raw_output_sha256": "ab98481f1005f4c7ef11a807700c2394ce55b4915602752b53a8ebcc1927e849",
+              "source_output_sha256": "ce6349b74df0e5a2ece0d63697281843b34c4d832a9fbbc1dbcf9369e4d346fd"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350183465751915,
+              "input_sha256": "30f0601848cf306c80277e478cf3b1b43a7960b2cb0084af382c2dfb93cd539b",
+              "raw_output_sha256": "4e48cfda6a5bdc86f5597c30b2ff8d7120c8228618d27fa66c510ec69a565fc6",
+              "source_output_sha256": "761ff8a5eba4a1dda6f8b9b2369d810a781a1301a08c64d95ad93c037eb6167c"
+            },
+            "plus": {
+              "energy_hartree": -4.350163067993947,
+              "input_sha256": "87ef54cc8422215c45fcd6e66a2e5052062c16926c0820e6f4e43ff172244168",
+              "raw_output_sha256": "d632af8ca9015cef5dbf000ee3e67b5fa95b8a5bef938838097eaf2df500353e",
+              "source_output_sha256": "705a38f39e5559a4700f72ee29c20ba51d2df85f29ae6fc75ba395d448aab649"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350178371031192,
+              "input_sha256": "1a223fcdf96b8a03d6b83f88b671c119db2b22f090e64f0d0a5f23e2c2531747",
+              "raw_output_sha256": "8bba14b10517bc07b81d0b86557dd2993824cc841ad50f428f451f08b6975ad4",
+              "source_output_sha256": "d32304ad0dca29a458793749c051c14bd59a500543d40fe63fa2694574add590"
+            },
+            "plus": {
+              "energy_hartree": -4.350168172152494,
+              "input_sha256": "843a9d69584287a18903bc73411052760987772e3417e74894f6d5d020b127af",
+              "raw_output_sha256": "f59b069e8f5dd13237888ee8276fbbce7b0da8bc7df5b6f1e5bedadd078366bf",
+              "source_output_sha256": "c5bed5ebea744caaa7c0e69586646a5a50ade4c35ace2538bc36e389262d0dd3"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": -0.10198878602688903
+      },
+      {
+        "atom": 0,
+        "axis": 2,
+        "central_forces_hartree_per_bohr": [
+          -0.18794435325597547,
+          -0.1879443608476805,
+          -0.18794436470237486
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350210856453802,
+              "input_sha256": "743cd06c3df322d1c8289a84ed3faeb837cef203b2065223bc794f83aa343399",
+              "raw_output_sha256": "b1a5886e2a1c351b8bf8979d1443a14359bd0737827ef80942c5d7da23648014",
+              "source_output_sha256": "54514cee76ae47dbc02ed9f340a7b4f6c5d45ba17ab6d13db868da41dbfd631d"
+            },
+            "plus": {
+              "energy_hartree": -4.350135678712499,
+              "input_sha256": "d1edf0c2f01b8da9e920055bf0f3b898734430d1a062b51a4b1d907c82aee277",
+              "raw_output_sha256": "ffd93d1ef61012fe680a33e0a59550e4d245a1e465363a0c1b2341f2219a8686",
+              "source_output_sha256": "3818c88cf133a857f3a5e5fa1e4c40426f089efd1ce9a89152962a1b4091106f"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350192066205256,
+              "input_sha256": "be81edff34ad4ed5cccae0d03414ffc5dd3586a6133f8341dadce934e0ae258d",
+              "raw_output_sha256": "2bca7815441fb4c1c28e71440c7b4bad8d5febeafd321d6ea49568add9754207",
+              "source_output_sha256": "da2d90ef7c4e6255b5166957118ac1779c3d91b8c4717e872de721efb436cd32"
+            },
+            "plus": {
+              "energy_hartree": -4.350154477333087,
+              "input_sha256": "7f4983b69f1010edb970d05f781ae785b46608f7c1e77c5edc25bc6145b218c9",
+              "raw_output_sha256": "08f2745da623704617b0181ea0e1948800acc5a3ff634d899f1e574fdac9a018",
+              "source_output_sha256": "8bbd540253cb101d46c66f3b3f6c85a2836d73d550b4dd13e9d60148ccd7bad0"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350182670033915,
+              "input_sha256": "de7822af10eb1f35d8a0e94bf9ebea2b827e7fad74df3c1a49c30ba4c0cb9b8d",
+              "raw_output_sha256": "d045f9c7f19d713c444ab7d94d80f2eaf12902dd79573dbccd637bf2304c3876",
+              "source_output_sha256": "7ac4ec9d23b16cf94298c50936007184afb0121e5233eef1cf4b9cd8e024057f"
+            },
+            "plus": {
+              "energy_hartree": -4.3501638755974446,
+              "input_sha256": "c013edf0bf094150a4d312caaebbc561448505dbe0123d67e5aba7ac8dc8835c",
+              "raw_output_sha256": "93b7eb3471fec7819f6de7c51305d2b546396d044ece39b8674a58e2a5397348",
+              "source_output_sha256": "0885bde9f352fa890e7df0b38271b81c17ff7e3fc8f94a2afc9330e2908b4103"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": -0.18794436598727296
+      },
+      {
+        "atom": 1,
+        "axis": 0,
+        "central_forces_hartree_per_bohr": [
+          0.24770694403875027,
+          0.2477069240391927,
+          0.2477069190387482
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350123707168349,
+              "input_sha256": "b1805fb7d4accb5efc0ea23888659e0b85fe29b7a7d72017f147c0063303361f",
+              "raw_output_sha256": "85406b09ae12990595791dabad37604bbe2c45ac6f23d13518b7f23b788e3b70",
+              "source_output_sha256": "e240ae78125ab43572a3ccac4850094b2cd89a6d15695bdb7c2088a8e18a7f53"
+            },
+            "plus": {
+              "energy_hartree": -4.350222789945964,
+              "input_sha256": "14848b0f7a4e8aa218fbb31c89693bd99103ccaec497c9bca3579ae1a71c135a",
+              "raw_output_sha256": "24795d5aab9c8393788c16992b33b0e0a83fdf323048687a31066a9c28fce4f0",
+              "source_output_sha256": "b7cccac0aaebe6441c08cc99cf54052d1d996101750914f5b6eae76eb8033594"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.3501484963204335,
+              "input_sha256": "f26ccaea969d40151fcddb3f3c9764d359134c36b958ad2f1da2537723d914bd",
+              "raw_output_sha256": "d14a47e464a7aaa0dd4f68fe6c10bc0a2654b130d622a376cc6c90466d4ac101",
+              "source_output_sha256": "dd51d11fa8fd3e22131f7acc5c87d0ef30278071e7fc9035bdfb618ba3f8822e"
+            },
+            "plus": {
+              "energy_hartree": -4.350198037705241,
+              "input_sha256": "7f04b8d2e71824fa98d2d8c306f23a47e531673c1399a65e2351ac5e826280a5",
+              "raw_output_sha256": "7f132ecf2fe678307067eb92ba94a49f81152ac303252acba1b21207cd69db6b",
+              "source_output_sha256": "efab73698b8ab17cb7a1fe0ef20aa632b9e1d77f1860f440738c6afb28acc66a"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.35016088628081,
+              "input_sha256": "44fa4063d496e5a7bebe208c35dfe78d0f9918d58d739e298647ee36af98e962",
+              "raw_output_sha256": "57a8d07919782ffe7bad8103f2baa89622d16df08ae4074ce740745d4e0fc175",
+              "source_output_sha256": "885e67d1ad215b14f6605c3963e8ec40538b324075832a7cf1ff20d4520c919a"
+            },
+            "plus": {
+              "energy_hartree": -4.350185656972714,
+              "input_sha256": "26e7a37bf336eb4c9e3782413eedf260c1ad36740eb15abbce0d8dd06e2ee3e1",
+              "raw_output_sha256": "e8787cf966c34736b305b8f754a63ef6601fbfff755b20d01c043c21c71f9507",
+              "source_output_sha256": "898f547a70fadfbbcf8c4e16bc1034fd95861a434ead0f735dd9794a16034385"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": 0.24770691737193337
+      },
+      {
+        "atom": 1,
+        "axis": 1,
+        "central_forces_hartree_per_bohr": [
+          0.03470631771973487,
+          0.03470631934288093,
+          0.03470631969371141
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350166332861582,
+              "input_sha256": "c1b3fb0a25be8224d3319de70daaf710d4c622a269f1cc39f34529531500fa88",
+              "raw_output_sha256": "18ae08e42a4a1a61989c068bec8b859467c3ebcdc2040d30c2a715ab32752296",
+              "source_output_sha256": "00eba6d95b22c1e5cabcfbc0e600eb5afbbd337eb6a0c81df6b6a7c079d56500"
+            },
+            "plus": {
+              "energy_hartree": -4.3501802153886695,
+              "input_sha256": "d5cbd01eabaf2c3952eef3626bad15c63ac0dacd29e3dd048f1688c6b19ffa68",
+              "raw_output_sha256": "74481bb66102c99ac4a6d7a353fd0713c734eacee426c7b27a62b50da81a905e",
+              "source_output_sha256": "18318e24a9e52f9849bda3320ffe6fdc26d8619a6cfe7f34047a4862f2d4c761"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.3501698027729,
+              "input_sha256": "4142df3674038a51a8ba82b14e6d2498ee29eaf8a4e712f0d7e477548889fe54",
+              "raw_output_sha256": "ce27dd7b27bbd0e10c7273a2a082123bc32ad70ec32831b46f30dac766979462",
+              "source_output_sha256": "baaf60ae4312456c6c85b3395c0acc0d9f9388c4e56743c7ed47b7285d99f74a"
+            },
+            "plus": {
+              "energy_hartree": -4.3501767440367685,
+              "input_sha256": "7c456b3086d40332488264da02945c1bb8af9005e31fab2e7f608e4397c9008d",
+              "raw_output_sha256": "418652e663422d8a282300ca7cdb849314ad29c667b9c633c7275898185ca996",
+              "source_output_sha256": "6c6877d34a0132a1f498904e8d6a7e70776a44e83fa5af65e469e6dfbc38f7b3"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.3501715379087775,
+              "input_sha256": "d84e493dab201dfdc1c537d4a482c5a902bee7b05bfc575596b327bd30e16923",
+              "raw_output_sha256": "1d631e426a13684d47f982feaf7567657ca7e2a48565512b097dc1525bdc5a1e",
+              "source_output_sha256": "ed017f1e03d1fdab99d6f7083fd87f314d7091c3a19f5d2e49630aee2ad45022"
+            },
+            "plus": {
+              "energy_hartree": -4.350175008540747,
+              "input_sha256": "9557c0310c44053fa9ac4c4a0239811f014d454cb03de19a640c8c1466490695",
+              "raw_output_sha256": "0c4fb3ed7482f6feafd33581d38c152039f9c082cd26e06e305b05cd2e7d9ad8",
+              "source_output_sha256": "410063642acc0e410eb695203e684eb87fad3b7e8df900906cb22bc17428e353"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": 0.0347063198106549
+      },
+      {
+        "atom": 1,
+        "axis": 2,
+        "central_forces_hartree_per_bohr": [
+          0.05841301936815313,
+          0.05841302224585121,
+          0.05841302296971662
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350161590752808,
+              "input_sha256": "7672b8e66ccb99f624100fcbd4c6c627c0000f01493de9edb611951f71dbfc9b",
+              "raw_output_sha256": "c4b1edeeef1eeadd983e956c59ad5d9028400c4570ef321923327d0b1b64e8b1",
+              "source_output_sha256": "e8aa7aba931690ec49ced419818ad7916cc3356ef820e4183743916d0365c2ee"
+            },
+            "plus": {
+              "energy_hartree": -4.350184955960556,
+              "input_sha256": "eb81a34d8b4ccfac1aa293d9977f205e0ad6e776a7b33f3606370a1dfb4901ba",
+              "raw_output_sha256": "caad85c6339a65e18277ef3ccd4f3e4b30df0abacc6b6988291e10c73803342b",
+              "source_output_sha256": "a4125fa082321f8da40e71985b41f6485c3e4763fd931d3a2c6d88082fe821b6"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.3501674319104975,
+              "input_sha256": "d08e3865381f20c2ef6342198dcc3d80bbfd5f826699e9c6f0e61549510e8b5b",
+              "raw_output_sha256": "192537b8734df73e90926e6b6aacbd4dfe4b56feae0b08f06cc236cf836cdf9f",
+              "source_output_sha256": "e255a3a9d056acc6069cdcc4e1d12d06dd58e229cb263e8638d9cbda2a106bb4"
+            },
+            "plus": {
+              "energy_hartree": -4.350179114514947,
+              "input_sha256": "564d0dcceccd75d58104610c9e491ca93282b0ecdf80877127171d9afb509a15",
+              "raw_output_sha256": "e2929b8296dcdc0ce835b9cadaef08e8540ad1a99580abcef4fb4d3460a19756",
+              "source_output_sha256": "c1d39d39889b2b3b0f57c39fd57508376349cadbfae98cafbe1fa09381b3acb7"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350170352525584,
+              "input_sha256": "dfd6d506681bcda4c81181891350bc598a5aaa195b48efcd7e0c674392741227",
+              "raw_output_sha256": "da926c46395b428a35b5d47e608087818f7f5a468ad7841df0c46f909b5fdb06",
+              "source_output_sha256": "beca5f621c6467dbdbbf3fdce65a0f64636b052ca3c7a9aa574d320086890ef0"
+            },
+            "plus": {
+              "energy_hartree": -4.350176193827881,
+              "input_sha256": "82ea308e4eb9e574c450fd9f5940b7d602f79f0d4500e9cd4f11c5076aba664b",
+              "raw_output_sha256": "1707472f33f6fe2f7a377d0ebe3f32d12e13ab6d1cb217d2c3ba440b147e6f7c",
+              "source_output_sha256": "29cef17d8ba594a590a4768ac9ead129098f99c817548d22b575b38f5ee1e21d"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": 0.05841302321100509
+      },
+      {
+        "atom": 2,
+        "axis": 0,
+        "central_forces_hartree_per_bohr": [
+          -0.129003209794476,
+          -0.12900321210373988,
+          -0.12900321015862914
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.35019906768089,
+              "input_sha256": "df5f1821762e91b492d10084e4e20f040dd5dd0c4983d8bccb20feb9dbecbe74",
+              "raw_output_sha256": "fb28630217aebb930292282c2dc37ae83b0936fd06a94496d02e90185ecc5983",
+              "source_output_sha256": "bf150efb8ec9283eda08e76c34d8e2b896bdb7f66f1600dd332e365a3395f537"
+            },
+            "plus": {
+              "energy_hartree": -4.350147466396972,
+              "input_sha256": "5cff02a0fe8984b0f328b150449003e5f26b6467b2d3b35f65583cf62d466ddf",
+              "raw_output_sha256": "2be27c232c7f3df8ac042a30aca9f56ce743697d611c899fa57e6b17d2e1c55c",
+              "source_output_sha256": "4f742edab4fe5a13b45d6584d1f9c8b53cad6d2c1d3d5be5ecbc9054702bfbff"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350186171954327,
+              "input_sha256": "9a03e4be3a0ac7fc370656250b3bcf4240bb81cf047c91b0f297efffec25fc03",
+              "raw_output_sha256": "bc54d8069c805e81343e4bfcdd0846d78d52c88b5f5694a8d47749e55c826468",
+              "source_output_sha256": "14944c607ac114742a02844d0cf105248a7ac7c64b671700a992227fc594a035"
+            },
+            "plus": {
+              "energy_hartree": -4.350160371311906,
+              "input_sha256": "a4fa4f6fbc138dd17239b2c9a53ee5d7757b78460f72f0f0752728e25cd30e1c",
+              "raw_output_sha256": "a8cd437608c38296e6ddc9e5b52030633ec43e650dbc3dba78b057ec70b906ff",
+              "source_output_sha256": "3dbeec392f5d9141b3e62a70595f34c4577b262ead07d80e300124b9b7e651e6"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.3501797229423955,
+              "input_sha256": "b127ae1a919b7b2fe0936dd833eb9485b7f921fed31af9dbc4ffde6284787e8b",
+              "raw_output_sha256": "978624e14bde9fb04bf6ce6de40d135b27b6193fc1c54a6fc3a5f687f58a1214",
+              "source_output_sha256": "c195fe44585e330d6d22fe268d954f3342f5928772dd01720d18c6a7deb5a82c"
+            },
+            "plus": {
+              "energy_hartree": -4.35016682262138,
+              "input_sha256": "4898c0cc40b40783c279c8bdb50ed6470e3a83ecb254386021bab2c3136733d5",
+              "raw_output_sha256": "06121af7890a8b31abac4e56ea26de9205b5d02379e88b010c0840278014c546",
+              "source_output_sha256": "f9b711ee19255c254e5623bff9d0657d15927a30ad829d8c315ca43618429df8"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": -0.1290032095102589
+      },
+      {
+        "atom": 2,
+        "axis": 1,
+        "central_forces_hartree_per_bohr": [
+          0.1948263878825962,
+          0.19482637957590754,
+          0.19482637497958422
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350134291112487,
+              "input_sha256": "72a0ec7822e40d906e2edbfddb90ae8ce0ea0db5657ce17bbc0425b31f6e03ae",
+              "raw_output_sha256": "bd13b4ad89b1aea4724b2294948b8ddf34220d96e273e635caaa7e0044eec55c",
+              "source_output_sha256": "48f12ccf7c10004eeb57b102ab24be4a99758605196ddb6bba2230fe768a7a56"
+            },
+            "plus": {
+              "energy_hartree": -4.35021222166764,
+              "input_sha256": "89bbb88f5625651ae81fcf954e173fef3f7db531810fc1849b72516e2c5a23a4",
+              "raw_output_sha256": "384f5c8adb3a1f630b9d516e1414cb316668eb239d431cb049eae73a42cb1a5c",
+              "source_output_sha256": "9612ea0cd30f84f2a4337829a9dff5405460128431ca0f36872eb5a7ec53e3d9"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350153786332943,
+              "input_sha256": "f710bac4aa9ea1d57239d93beeecaf0398f8967c8c626852e1b61be3c7339580",
+              "raw_output_sha256": "85ee9e3267be37ad72a13c833fc7bd38d17f79032651273ee3b69377fee2777a",
+              "source_output_sha256": "ef2527666e2906c7af6e39ea94b867a13a80c5de4d9925cbef6ed706fbcb9d8a"
+            },
+            "plus": {
+              "energy_hartree": -4.3501927516088585,
+              "input_sha256": "a0e066ca9bd8f73530d2aa199cfa824df341a6318049aacd254cafb14c888271",
+              "raw_output_sha256": "d3adc62c51d088d86df27d3f397fdc25588e7597abd0a7c2b4c05c8687662005",
+              "source_output_sha256": "ee805ae0f71e29aae8543cfe7e61c24e70e387e63751179e44578bb1d530020a"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350163530797586,
+              "input_sha256": "1838e6c678571e2a5ef4ac4fbd6192cd50cbb539b0c9af494d8fb331a3705723",
+              "raw_output_sha256": "5372584c1855ce0c4fadb6f91196f25353253951738ab3a5bbdd6f41bb523461",
+              "source_output_sha256": "ed6db7bf963522d9da2e2122b384833fc5670700b919690a83b77f79a8e870b3"
+            },
+            "plus": {
+              "energy_hartree": -4.350183013435084,
+              "input_sha256": "b2c75ffc0c0cee67000741fae1b3c1dda375725e4dbd102d0fcd7c703ba09fc5",
+              "raw_output_sha256": "5f72f0c198fb07e4e183a483f9e5815330ba46a5fb1d08b2926af17f79f51f51",
+              "source_output_sha256": "2b96d6e50c94f0ce401a4407261277b8ea79d67de31fb402ba12387340ca7d79"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": 0.19482637344747644
+      },
+      {
+        "atom": 2,
+        "axis": 2,
+        "central_forces_hartree_per_bohr": [
+          0.05429518504573849,
+          0.05429518888711016,
+          0.054295191782571806
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350162414335917,
+              "input_sha256": "bfecd5b8f83075772e9625eac700be8ffad6f12120370df4ff5d8196ee2c4834",
+              "raw_output_sha256": "b1e66d40b67ecd04c74190039e9e2c66ab30e26d706532d0cab9449c8728661b",
+              "source_output_sha256": "40c82f3caf1717a931b2af389aff01fe9469d630e13c4df683e1ab07c23e1872"
+            },
+            "plus": {
+              "energy_hartree": -4.350184132409935,
+              "input_sha256": "9cd30d100a9327083abe25639ff18e106c65e6527c95dc01793fa992fd542524",
+              "raw_output_sha256": "ab406c8846a39968c5276eb2a45239f0ea9169f08dbc35187a6a41780cae730a",
+              "source_output_sha256": "2edd82b5dc91fd107afe7442ef13fa5c1d24452ca687eec3cc93c68be74e0257"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.3501678436977285,
+              "input_sha256": "644749a43f37c128006086af87a0456f56bb0c1e2f0c190f0f940d860c0f388a",
+              "raw_output_sha256": "2f3ee058e6cb74f412a23dfb118af7c8f843d717970ab9b4758e707a4fc7d693",
+              "source_output_sha256": "869a7d26c10095ca71f3ada4a0b34e2e46ea08e2a259525232e508bbe72dd063"
+            },
+            "plus": {
+              "energy_hartree": -4.350178702735506,
+              "input_sha256": "aca18a6208b204ed2679d747e9e69897468b5e024ede8eadb611cc39805a76b5",
+              "raw_output_sha256": "97ec62ccc56d4223c45e6217a482bace93f4a756eb0cbb1cf0dd4f176138ad34",
+              "source_output_sha256": "d7e1c30a548659defc4c647b76030271f5c65f3c8e1f8db719870bc0bbbab2ce"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350170558417948,
+              "input_sha256": "185ae6824dfed533779798f121d9e7a09d3ca0739f673c3cf875e6924d319986",
+              "raw_output_sha256": "18664829f53bf4d7f0b92cfd22f05a4195776b9616d5c818b04a956fb6808b69",
+              "source_output_sha256": "33e4046de85e3276b85e87db8cfb9bede8e02b4e8887722b4453e64b17d2d9f5"
+            },
+            "plus": {
+              "energy_hartree": -4.350175987937126,
+              "input_sha256": "e302e4de99a0f268571404accf501b088cf22e16e72306fa6b24dda3a7437d9b",
+              "raw_output_sha256": "86e8d3ef34fb65643a93b99bab3205c8773827ba4f4fafe584f3e161d7dd5f6a",
+              "source_output_sha256": "87e2f9bf3a712a17a59d57a6ed05e21b8c65b205a1dd051014f50c0954766c28"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": 0.054295192747725686
+      },
+      {
+        "atom": 3,
+        "axis": 0,
+        "central_forces_hartree_per_bohr": [
+          -0.058709094741260515,
+          -0.058709096455444865,
+          -0.05870909689065229
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350185013024469,
+              "input_sha256": "ae65047cfbb8b340e78dfe54cd0825d4460305c9f45f89c43679488ab578422c",
+              "raw_output_sha256": "194bc3571af7aca2e7bdc4f26fbf647b6d4629849d788f4a1259471ec1804350",
+              "source_output_sha256": "a70baf76c5165ac7d33d56a0a2aa56bd97deca8aa391705a60d7ae10ae9bfab0"
+            },
+            "plus": {
+              "energy_hartree": -4.350161529386573,
+              "input_sha256": "9a01a4ea97867dd73f950eb5bd471dd1c5084d89f2b11d5656c27efe443981dd",
+              "raw_output_sha256": "527ca98d1c3230f7544a45e314b80661a3bd529fe19d2496a14989c5dc318376",
+              "source_output_sha256": "7281e1530483c710bf98352ed59d796b53e37b9c4f8c160a3b717a347d93147e"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350179143584578,
+              "input_sha256": "0e9b86eb897fa08681bb26112f3422ec71eb420e1d029dc1316e13eb4499cee7",
+              "raw_output_sha256": "b7daba52b2189aba12277f572a6d0341dae35e1a52d108cf6ee6560852371010",
+              "source_output_sha256": "9d4e744e95af769ef0263ceb85150405bce18ddb047818cd29689ceb7046dd8d"
+            },
+            "plus": {
+              "energy_hartree": -4.350167401765287,
+              "input_sha256": "a1cef297811972feb9287681817616f080485f5ae355052a7ba497e1ec06b03d",
+              "raw_output_sha256": "6b36e99d5e20c5c53cd6267c02600549d84af7749483149eccdd7c963f46eaa0",
+              "source_output_sha256": "22dbf80a272373ec518cea94c0cd4a62080d89bc730a49b39a2333c982ebca56"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350176208497129,
+              "input_sha256": "f607a9ddbb9cf360441cce9dd443ec72e3a0a9f39ff4ce0fd2a83f254abb0f75",
+              "raw_output_sha256": "da3f20992dba9a5b9535e5a0eaae7b1b2acbfc21fc7324cdb07245e5e9171153",
+              "source_output_sha256": "6c13e861d28acd70791278ecbef693947c4a5ab85476b6db2ad9f2c4ea3afdc1"
+            },
+            "plus": {
+              "energy_hartree": -4.35017033758744,
+              "input_sha256": "9d8c90ac5e012eb8e40d21e46d79132cc22cbb1a77cf6b0c1a2f6022366e8241",
+              "raw_output_sha256": "d528af06149293f131ceb6bceb986beeb78f3b055fb3550095152f58f502439e",
+              "source_output_sha256": "3da28e536cfacec5f9cef4f42cb716be2f3da77722b3172d8aff92569e6e7ad6"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": -0.058709097035721435
+      },
+      {
+        "atom": 3,
+        "axis": 1,
+        "central_forces_hartree_per_bohr": [
+          -0.12754391464975257,
+          -0.1275439090431263,
+          -0.12754390764868617
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350198770111282,
+              "input_sha256": "fbb73335110ac1ad267151d9030757c9edc7d0ed313b6296394456aa5a083b17",
+              "raw_output_sha256": "10a88fafb2e31e9ce100df531fa392d30e74b360d59528955223164cd6138e7a",
+              "source_output_sha256": "ec49388aab4c51d72a89adc01cbf99e42033b1cc65fe801a0f0cc4a2508d8374"
+            },
+            "plus": {
+              "energy_hartree": -4.350147752545422,
+              "input_sha256": "3b22dda4652ba089eee5b53f65645c66c446606c4c1e2e1006152b2602d0cf73",
+              "raw_output_sha256": "c619d13556d2df1373c236f391a4a377ac18dda991af3d14692224c66c5f7612",
+              "source_output_sha256": "e0a39608f2d24d432fec2fb64462dfd4c8c04e335b3ec82c61c7c8287a1ec9fc"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350186024596545,
+              "input_sha256": "09b9547ade09c4ff94b697dd25588c88a50075b05e6a246e8e4c5c693145e2ce",
+              "raw_output_sha256": "8507d9014eda99663a294ad8ea400f9701d70fe4d48e968e048a35be882e3541",
+              "source_output_sha256": "ebdf8f3c0f96e11e449d8ffd5e2e5d899e5989fcec3b12e6bf0cf9422874ed32"
+            },
+            "plus": {
+              "energy_hartree": -4.3501605158147365,
+              "input_sha256": "afe87707a2ea3ed48217090bf8244488be345fcdc8d93db7ecb48054729ac54a",
+              "raw_output_sha256": "73c5887c8bb7756375dd519aad9553cd6406cae4b28a74703864ff700ea0e974",
+              "source_output_sha256": "695ca84a5fe4258f61d9dc0b708a50a59ed0def1df305da56c652db4f0821bca"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350179649620342,
+              "input_sha256": "1a7bf44dd47e918e1afc01d536496227ffc52c218e9cf3ad64c6e1acb71dd65d",
+              "raw_output_sha256": "85a70460265c5ff00f988b14554199b0fc3f7c097d792937572ff4807033ffa2",
+              "source_output_sha256": "2cb8263e8a0131638f5ffcd7e474f10446b941052c406307c5cb2bd92b549870"
+            },
+            "plus": {
+              "energy_hartree": -4.350166895229577,
+              "input_sha256": "cb6013762c78b9e961f532b7faf97ade27f8a8a95d49defc29319f9d8382ac2c",
+              "raw_output_sha256": "cf5e6f1fb3cb674951ccf7f7553ee8982d34ba4dfa652aa27e1a7dbf448a73d7",
+              "source_output_sha256": "1b2ed8e6cb981a4165e20fe9b462e3ee478d91cec88b87bff0bed98b22ebed05"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": -0.1275439071838728
+      },
+      {
+        "atom": 3,
+        "axis": 2,
+        "central_forces_hartree_per_bohr": [
+          0.07523614964588532,
+          0.07523614993676375,
+          0.07523615005666784
+        ],
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350158221152475,
+              "input_sha256": "fb0068f1b8307c207980a399c7069625abe6964ad72fb51654202105461d2e6e",
+              "raw_output_sha256": "894be368aee795f2e3fd4297b6f259f179c6456c5b2e61684415ca79089da0bf",
+              "source_output_sha256": "54858573d0b5ca48c6586ae119f94f71a33a286565cec869458bf4318bd60ca2"
+            },
+            "plus": {
+              "energy_hartree": -4.350188315612334,
+              "input_sha256": "f071f42fd8a8c19396f651ba3c5168799c5485cdeded3b204bed45681a81e426",
+              "raw_output_sha256": "ab0483f1ffdcdab88ee272a35feb9afd4532c95c94a4e83437d55f72026ea84a",
+              "source_output_sha256": "a8185bd59619d7c88e44f3a32cb2d463f1d4f48ddedfd47e3190d0efeb568c8b"
+            },
+            "step_bohr": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350165748354157,
+              "input_sha256": "b35ee8d0a56388f78cf3be93a6140b3224ad69cec7e8c13fb043654ca15b5c99",
+              "raw_output_sha256": "909e3f431713b93ac4a77a139d55859d55fa3b3897216cc5167792d8367044e7",
+              "source_output_sha256": "d1d510380c85c70383d9d2fb153fbc848cccffae2e1b6fa8bd56feb073aceea5"
+            },
+            "plus": {
+              "energy_hartree": -4.350180795584144,
+              "input_sha256": "e1283327239005086e01400e48a40ccb231b33a1cc48e6d48cfe630d311f3046",
+              "raw_output_sha256": "ba8588ede73a6278a0c711d85c1373d559cd10cd47bcdb6b27d9fec1b3a0fe8c",
+              "source_output_sha256": "b6b5717ff3c2c70fa0c83f5ab367ae0731bf376756e0e0a3b99fd4bd916d45ce"
+            },
+            "step_bohr": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350169511058336,
+              "input_sha256": "498f6ba9c31306c487cb6cfea8e73188704b2afd7d8b82dc3e8cd12e4d8b1967",
+              "raw_output_sha256": "7ffdfbb7e5b85ff9a0b83776a1eee69f52199d85b02a8203fb643a9ad97988a1",
+              "source_output_sha256": "49815a36badd94cf2fd43548dbe727d077f04a9016efa70f7db720b82b56c2c5"
+            },
+            "plus": {
+              "energy_hartree": -4.350177034673342,
+              "input_sha256": "62ae26333c61ca8431bcf6f4b09dbd3b583b8c11d763478fa7df1866cc8e8b10",
+              "raw_output_sha256": "ee8fad7156491e9f60fc5168453c3f93bfe38e22bbf9964adf2324de5b6bb47d",
+              "source_output_sha256": "c3a34de1051240966017ec01c3d554759522867d1ae8e1dfe473c1b3fe5ace57"
+            },
+            "step_bohr": 5e-05
+          }
+        ],
+        "richardson_force_hartree_per_bohr": 0.07523615009663587
+      }
+    ],
+    "definition": "F_Ak=-(E(R_Ak+h)-E(R_Ak-h))/(2h)",
+    "steps_bohr": [
+      0.0002,
+      0.0001,
+      5e-05
+    ]
+  },
   "case_id": "periodic_ammonia_skew",
+  "invariant_evidence": {
+    "reciprocal_identity_max_error": 8.881784197001252e-16,
+    "variants": {
+      "cell_basis": {
+        "definition": "unimodular direct basis U=[[1,1,0],[0,1,0],[0,0,1]]",
+        "input_sha256": "07117d63b845c2f961b62ce917a90aced8a163528991dd418eb4daaafc2c5fbe",
+        "properties": {
+          "energy_hartree": -4.350173273140281,
+          "forces_hartree_per_bohr": [
+            -0.059994609999218115,
+            -0.10198878640427242,
+            -0.18794436096694225,
+            0.24770691766304986,
+            0.03470631881465238,
+            0.05841302341902207,
+            -0.12900321121040018,
+            0.19482637406230935,
+            0.054295187736442596,
+            -0.05870909645343158,
+            -0.12754390647268926,
+            0.0752361498114775
+          ],
+          "gradient_hartree_per_bohr": [
+            0.059994609999218115,
+            0.10198878640427242,
+            0.18794436096694225,
+            -0.24770691766304986,
+            -0.03470631881465238,
+            -0.05841302341902207,
+            0.12900321121040018,
+            -0.19482637406230935,
+            -0.054295187736442596,
+            0.05870909645343158,
+            0.12754390647268926,
+            -0.0752361498114775
+          ],
+          "strain_derivatives_hartree": [
+            -0.5156375886497996,
+            0.03874884363532005,
+            -0.002541022909177199,
+            0.03874884363532006,
+            -0.42757941876165195,
+            0.012991200947008568,
+            -0.002541022909177185,
+            0.0129912009470086,
+            -0.12338138225940627
+          ]
+        },
+        "raw_output_sha256": "bdb29c17e5e9b16bee7b095b42bd2a31e73390b1bcbf0fd625516c11ed174bd5",
+        "source_output_sha256": "5c76d9e4424b1b4b7b075d7997e9341800c38127e9c2bb3e08883b6968b34695"
+      },
+      "translation": {
+        "definition": "all positions shifted by (0.37,-0.23,0.19) bohr",
+        "input_sha256": "c39028ef14b022987c4737e619a50a1b8afce1ab631ed4c172979aa334ac2003",
+        "properties": {
+          "energy_hartree": -4.350173273164739,
+          "forces_hartree_per_bohr": [
+            -0.059994610057410726,
+            -0.1019887868623998,
+            -0.18794436078548962,
+            0.24770691735801004,
+            0.034706319872734266,
+            0.05841302320573612,
+            -0.12900321025129333,
+            0.1948263741747574,
+            0.05429518753161253,
+            -0.05870909704930592,
+            -0.12754390718509184,
+            0.07523615004814088
+          ],
+          "gradient_hartree_per_bohr": [
+            0.059994610057410726,
+            0.1019887868623998,
+            0.18794436078548962,
+            -0.24770691735801004,
+            -0.034706319872734266,
+            -0.05841302320573612,
+            0.12900321025129333,
+            -0.1948263741747574,
+            -0.05429518753161253,
+            0.05870909704930592,
+            0.12754390718509184,
+            -0.07523615004814088
+          ],
+          "strain_derivatives_hartree": [
+            -0.5156375877267446,
+            0.038748842018075706,
+            -0.002541022640477124,
+            0.038748842018075734,
+            -0.4275794196631717,
+            0.012991201446126812,
+            -0.0025410226404771175,
+            0.012991201446126808,
+            -0.12338138237138499
+          ]
+        },
+        "raw_output_sha256": "561bfd8d9abdb675f964c525e436c7b531d42a857d6997059e16c7070f2acc03",
+        "source_output_sha256": "ad863a8c7adcba31e453a420907366203e870995408e05f4800a76d55fdad3f3"
+      }
+    },
+    "wrapping": {
+      "definition": "u=r*H^-1; u_wrapped=u-floor(u); r_wrapped=u_wrapped*H",
+      "outside_positions_bohr": [
+        15.5,
+        3.4,
+        3.7,
+        2.92,
+        -9.48,
+        4.18,
+        1.37,
+        6.01,
+        18.369999999999997,
+        -8.150000000000002,
+        15.209999999999999,
+        4.65
+      ],
+      "outside_positions_sha256": "96685cf2bccd43bf88e9d35367165676881ce9b9bbb9440eb7c70ffad0f59907",
+      "wrapped_positions_bohr": [
+        3.1000000000000005,
+        3.4,
+        3.7000000000000006,
+        4.62,
+        3.619999999999999,
+        4.18,
+        2.2700000000000005,
+        4.71,
+        4.169999999999999,
+        2.5499999999999985,
+        2.11,
+        4.65
+      ],
+      "wrapped_positions_sha256": "768f8f6a3396669bc04b17d510b1dff58612a5023648c4ed91cf9de51e469861"
+    }
+  },
   "oracle_role": "primary-neutral-full-model",
   "properties": {
-    "energy_hartree": -4.35017327316474,
+    "energy_hartree": -4.350173273164736,
     "forces_hartree_per_bohr": [
-      -0.0599946100574108,
-      -0.10198878686239943,
-      -0.18794436078549068,
-      0.2477069173580103,
-      0.034706319872734356,
-      0.05841302320573649,
-      -0.12900321025129333,
-      0.19482637417475737,
-      0.054295187531612804,
-      -0.058709097049306096,
-      -0.12754390718509223,
-      0.07523615004814148
+      -0.05999461005741072,
+      -0.10198878686239946,
+      -0.1879443607854897,
+      0.24770691735801012,
+      0.03470631987273438,
+      0.05841302320573623,
+      -0.12900321025129335,
+      0.19482637417475726,
+      0.05429518753161244,
+      -0.05870909704930608,
+      -0.12754390718509212,
+      0.07523615004814102
     ],
     "gradient_hartree_per_bohr": [
-      0.0599946100574108,
-      0.10198878686239943,
-      0.18794436078549068,
-      -0.2477069173580103,
-      -0.034706319872734356,
-      -0.05841302320573649,
-      0.12900321025129333,
-      -0.19482637417475737,
-      -0.054295187531612804,
-      0.058709097049306096,
-      0.12754390718509223,
-      -0.07523615004814148
+      0.05999461005741072,
+      0.10198878686239946,
+      0.1879443607854897,
+      -0.24770691735801012,
+      -0.03470631987273438,
+      -0.05841302320573623,
+      0.12900321025129335,
+      -0.19482637417475726,
+      -0.05429518753161244,
+      0.05870909704930608,
+      0.12754390718509212,
+      -0.07523615004814102
     ],
     "strain_derivatives_hartree": [
       -0.5156375877267448,
-      0.03874884201807543,
-      -0.0025410226404771227,
-      0.03874884201807543,
-      -0.4275794196631726,
-      0.012991201446127153,
-      -0.0025410226404771093,
-      0.012991201446127181,
-      -0.12338138237138584
+      0.03874884201807542,
+      -0.0025410226404771695,
+      0.038748842018075415,
+      -0.42757941966317203,
+      0.012991201446127082,
+      -0.0025410226404771565,
+      0.01299120144612711,
+      -0.12338138237138509
     ]
   },
   "provenance": {
     "accuracy": 0.0001,
+    "build_attestation_sha256": "f9a6a86a1ab6a11299e4dd2a30f2fd4ca2f714be5c76d2ec2b1ddd037641b782",
+    "build_id": "tblite-133f91ef-gfortran14-netlib-613ec662",
     "command_template": [
       "{executable}",
       "run",
@@ -71,98 +901,381 @@
         "OPENBLAS_NUM_THREADS": "1"
       }
     },
-    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "executable_sha256": "613ec6628c71fc974637cfed39426f3aff40f53106236af2e324cb0c582cf28c",
     "executable_version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled",
     "generation_mode": "live-cli",
     "input": "data/conformance/periodic/inputs/periodic_ammonia_skew.tmol",
     "input_sha256": "460d291faf92209fc7a423a3df3f3d4cb0a0a87492f3017150b0255fbe7c4037",
-    "raw_output_sha256": "6c381c7371c44e72e4e5e0a0ecc33eb5ef6946d52707168fa8307128c619f2b8",
+    "raw_output_sha256": "111456b17832cbcd5865398e88f1048f54ea26e4dfd3e56bb246f4a9bcb322a9",
     "runtime": {
+      "closure_sha256": "d416f056175300a67ca40d0aab8d317f2f97131a3626fcb173794c06342a0fbc",
       "libtblite": {
         "discovery": "ldd",
         "filename": "libtblite.so.0.7.0",
-        "sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725",
+        "sha256": "145b89e099b2a28d892fa999676b446ab1e6c9b8c8598ac2e707a08c2d7e6b93",
         "status": "resolved"
       }
     },
     "source_revision": "133f91efb94b47f05848e1f86832f40a1accc385"
   },
-  "schema": "xtbloom-periodic-gfn2-golden-v1",
-  "source_output_sha256": "96f04e0984f377d3b2ccd2694362100b0a201ef90768854b94347328c244a29c",
+  "schema": "xtbloom-periodic-gfn2-golden-v2",
+  "source_output_sha256": "cfce0e545d5514bb96163473704a03594a8bff9d24a299ae23fb0e5e713cb2a0",
   "strain_finite_difference": {
     "affine_convention": "r'=(I+epsilon)r; H'=H(I+epsilon)^T",
     "modes": {
       "xx": {
         "central_differences_hartree": [
-          -0.5156376763704174,
-          -0.5156376114845429,
-          -0.5156375930592816
+          -0.5156376763770787,
+          -0.5156376114934247,
+          -0.5156375930770452
         ],
         "component": [
           0,
           0
         ],
-        "richardson_hartree": -0.5156375869175278
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350070080216829,
+              "input_sha256": "7f85338b88eab5f2b41fa6aa498bca454b60d921f2a3ac2c4c626ea8ee6e80e8",
+              "raw_output_sha256": "c4d1c342d9585f64f3c8a50bfe24c00b7524f0dea7067a44d51aa8a5dfead2c8",
+              "source_output_sha256": "a9ac0ff1f788cd7ff8ab1b036a07937b9d62bfc78f205bb75d3fb01c46255de9"
+            },
+            "plus": {
+              "energy_hartree": -4.35027633528738,
+              "input_sha256": "c810138f8c0a3d83bc71a3a2204e8870681b3fb72c352a345dc7521f2deb7a5c",
+              "raw_output_sha256": "96de22d19ddf8ddff48090bc5b58fb7420bcefb42bbd319034e0cec7f62e46fe",
+              "source_output_sha256": "459105b215852ce0d57e96726a31053d07963d75e34572f6380beb197c65583f"
+            },
+            "step": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350121693050454,
+              "input_sha256": "e9aac1eef40ffc167557f4c7e338fc32caedbc19be0c8c8b15684cebb164b116",
+              "raw_output_sha256": "eb82d880334567f54eab55027e2e0f0b6b79d3b2835fffb18e5a898f677b1fee",
+              "source_output_sha256": "3c6c567000db21a4b9af01223930f9785c9b24e996cf3af711215561c422b2b5"
+            },
+            "plus": {
+              "energy_hartree": -4.350224820572753,
+              "input_sha256": "700816fdaaf8b67682ea7673fc14071efa723090d4ef4e5ab5639bdbfa792047",
+              "raw_output_sha256": "c0629dd5e6f2813c93eb1e0185f4fb056079c343c50561985c13e0ad97302678",
+              "source_output_sha256": "e20f8133c555d700764e24cd50ebfe6b72ee490b9c83e2f8ee9d3157441d11f5"
+            },
+            "step": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.3501474871968915,
+              "input_sha256": "d9b692561a221ea3f5cd606b54c6460b6bb431d8bc2df20c1febfe7170e9a4d9",
+              "raw_output_sha256": "6044fbb67fb03202e03b0f0a8cff3c46df7be5567ec2ae90932d6f81fcd31f20",
+              "source_output_sha256": "33096eeeddaa83aae3901cb3f3886593ca4d973d23d7b27e7a1d61978339cc1f"
+            },
+            "plus": {
+              "energy_hartree": -4.350199050956199,
+              "input_sha256": "e0e97fe97a6c8e693e6123adfe3ca16dfad4cb9f222fb532604f4059a257000f",
+              "raw_output_sha256": "d119936a01169cf5cf77f03cedd7d0d1952670e37559932c896a6341da89c7fa",
+              "source_output_sha256": "494b9829cd930e225dc3b4050c3717a75b1e164ab0d81ccdcdc2e8998b8c2967"
+            },
+            "step": 5e-05
+          }
+        ],
+        "richardson_hartree": -0.515637586938252
       },
       "xy": {
         "central_differences_hartree": [
-          0.03874885513122095,
-          0.038748846749037114,
-          0.038748847108749374
+          0.038748855133441396,
+          0.03874884676235979,
+          0.038748847090985805
         ],
         "component": [
           0,
           1
         ],
-        "richardson_hartree": 0.03874884722865346
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350181009001835,
+              "input_sha256": "6061086a030de4e5472ccb7986e5b35bc5d25ce8d2c19d83d510047b9085ae1d",
+              "raw_output_sha256": "5f1849c1615aa93a194937db9c4562d8322c910ae7e28d17b6614fe55e87a628",
+              "source_output_sha256": "e3fa924d2a3b8ca0807dfa79d8ec27f2c6c3d7d08ab875c4d8a39154f9db8081"
+            },
+            "plus": {
+              "energy_hartree": -4.3501655094597815,
+              "input_sha256": "b1a99ae8ab1a9731d44fedfb58ac2adac2271e3405061cc4867d66160ab29af0",
+              "raw_output_sha256": "2d0b900ba73c1ba928e3ac3b12549d39563d0e52b75c28d00e21375729887d54",
+              "source_output_sha256": "e5c7075deea397296545ba3751839ce95722f2780de6012001d78957604a13db"
+            },
+            "step": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350177144565621,
+              "input_sha256": "ba018c6d7d34587f31e3a43dac1134393491c5454bb7b25d172e149595787c08",
+              "raw_output_sha256": "ab49f5d9b7f2d11163543024a454b1910f7b11a295878650558ade513853b3f6",
+              "source_output_sha256": "af8014fd480e2e755a2253fb4348cfebe3b822024e5ff0108628169602cc46d0"
+            },
+            "plus": {
+              "energy_hartree": -4.350169394796269,
+              "input_sha256": "200f18b52480603d37591fd84f1102210d138144d1049b5dfeb6c39585a660cb",
+              "raw_output_sha256": "67757174864c0555fa22da751c7c37303691757982576b158b405707151e5eaa",
+              "source_output_sha256": "57d80abd7a099c30304dcb13dfa502dfe1677a64ff9360defb833914323a0e8b"
+            },
+            "step": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.3501752097359665,
+              "input_sha256": "d690b8bde40099e9c5066027265d59041e6568104d416cae4c92ef469a95ad76",
+              "raw_output_sha256": "52628008041d299e036b6dc8b48d089a0d3563b22092daf8aeae63999b91db0c",
+              "source_output_sha256": "3194699f311b663ad9c1a86b24354d063bedc9e87de8d1b40db22d3deb476c42"
+            },
+            "plus": {
+              "energy_hartree": -4.350171334851257,
+              "input_sha256": "a915f1a8b8e9607378aaadfb2465a9dcc87758c01fa9941df8a8c81148c4fb65",
+              "raw_output_sha256": "a38125cec0e1c7453def95e9d25a6e07e17f0b6f5e952c7f07d29a3c4e0e4e40",
+              "source_output_sha256": "571eaf5b2696b0f2de0a759940a7475dffab26c498efda11e5793b907e509846"
+            },
+            "step": 5e-05
+          }
+        ],
+        "richardson_hartree": 0.03874884720052781
       },
       "xz": {
         "central_differences_hartree": [
-          -0.0025410251414115237,
-          -0.0025410212911580743,
-          -0.0025410183646101814
+          -0.0025410251280888474,
+          -0.0025410213000398585,
+          -0.0025410184179008866
         ],
         "component": [
           0,
           2
         ],
-        "richardson_hartree": -0.002541017389094217
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350172756973936,
+              "input_sha256": "5286382e2cebc054d972f2187f371186b2791d058f53af4ddfddb6b737077c7c",
+              "raw_output_sha256": "c6c0af1b6b2c86aca31f40bcefea05ad4294df3d067556167c43ad5ffb63882b",
+              "source_output_sha256": "0fa39acd66aa6bd056faa9a9c8b2614e5f82d9461ee0435a8864011de689bb7c"
+            },
+            "plus": {
+              "energy_hartree": -4.350173773383987,
+              "input_sha256": "50fd82160f61ec36d93f38a22cb46a035e25af3fb48373f437b0736359929036",
+              "raw_output_sha256": "e55d0ff9cc5858ad1f11a1485fc2b7a84e3b5179d918fbad9bbd78f10b0072d3",
+              "source_output_sha256": "b823ad097a0f2a7bf510896cd4df0217f14e357bbc1dcefb47ab13a72871cbd2"
+            },
+            "step": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350173017065998,
+              "input_sha256": "67c116533eb3d5e7771d1ff7c0a883fb8b782fc2078786e1526f586a2e869b87",
+              "raw_output_sha256": "36bb9ebfb45d541571b58711dc20177dcae8b0d1c2dafa455dfa86dafe8dec80",
+              "source_output_sha256": "55455667e0f725ee7fb3e75cf195cac1dcb008091a67894c6ff2ff2b3ca6c066"
+            },
+            "plus": {
+              "energy_hartree": -4.350173525270258,
+              "input_sha256": "2d58a14f3c5e99a0e44375949adc945b23cb8bda6b8ba6baf5538b97cfc2eda0",
+              "raw_output_sha256": "69bd18a15a842b538b45f7a3dd12da6179c0fd92899a054d1f48c731593459b3",
+              "source_output_sha256": "01a65b2e40acc2fdd411b7ac66c1ee795618eb998f3a3688eb503d190a60414e"
+            },
+            "step": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350173145614495,
+              "input_sha256": "010e92740c8a56039215b33f5697437853e394058521cf9acdd6bdd9b51896cc",
+              "raw_output_sha256": "0a75d33127c2e997b5c0d8206235eb8641a338d59bf5b22beb4b0cebdda785ae",
+              "source_output_sha256": "c00e4f84f94466212eb00316cfd76d5a60c59059a9022b51c42dfd2ab46b152e"
+            },
+            "plus": {
+              "energy_hartree": -4.350173399716337,
+              "input_sha256": "6339f1a07e8eacd02604f25dd4fa7caef15b3053d933b8ec7b500768ac1cacc2",
+              "raw_output_sha256": "d53d0d91fe18ecbf3a89c927e0569285b271d11986b3a88104c94f1a1b807501",
+              "source_output_sha256": "f940d81348f8e577e275b48223704eeff805f820fe3f38d85e092e129dbc381b"
+            },
+            "step": 5e-05
+          }
+        ],
+        "richardson_hartree": -0.002541017457187896
       },
       "yy": {
         "central_differences_hartree": [
-          -0.4275794770358665,
-          -0.427579438802006,
-          -0.42757942853910436
+          -0.4275794770403074,
+          -0.4275794387931242,
+          -0.4275794285213408
         ],
         "component": [
           1,
           1
         ],
-        "richardson_hartree": -0.4275794251181371
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350087704980748,
+              "input_sha256": "831026d704a0d88c52c2ae2fdbf8f78f79ad2fad4219e5c417e1862ac4e37d36",
+              "raw_output_sha256": "0b145e0aa65fe1b3da99048092e5a1fcf236d0555069551aadd1589a48d75998",
+              "source_output_sha256": "49e705100f1738aa1cb0a86abf44647633c0334742aeff329371f3ddb81ea962"
+            },
+            "plus": {
+              "energy_hartree": -4.350258736771564,
+              "input_sha256": "0ba00ab290dd4685fc28e88d112649d6bd879d1237e959d0f8b9132f2ea591af",
+              "raw_output_sha256": "9e41c29cdfa68a15c46ee324e6d6576c951a3434ac71502c832dc725081bea3b",
+              "source_output_sha256": "4c9de66f052aaf56543fb41b26ad5de6d713650f7f4486019c6e973b46900a06"
+            },
+            "step": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350130502147705,
+              "input_sha256": "46f68c5b1225d0c28a0beb1c835313c2a02cdc6d1e077bd340ebfec61ed8d52f",
+              "raw_output_sha256": "c55419fd2c4e7821b17be983448a5a3456542bf4b5cde44f609ebabd81106828",
+              "source_output_sha256": "71727747f7fed3a9c2e8a173dd7b7ed5ef38b08c5afade3a4aea5495e8781d8f"
+            },
+            "plus": {
+              "energy_hartree": -4.350216018035463,
+              "input_sha256": "e74223aea3f7e7a05b6b818f41d5c7ffc6b567b3136b4e353138aaf85ce8cd3a",
+              "raw_output_sha256": "e55938fe730fd097f88def959a3116b6def3a3a26dc5387d9b5b14a5ff4015b5",
+              "source_output_sha256": "69f5c2873978ae956bd4df3a3c6a2b3424ae0b76e3aef52c039aff87e907fa22"
+            },
+            "step": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350151890924821,
+              "input_sha256": "1d25d587fbde72169e5ccfbcbda1b1f35f6c279df2e7b6a8b4a6abf3a12105e5",
+              "raw_output_sha256": "8f4856dadb86571c862408e46349c0715b4048a9cca65285c1bfbeb0eb8dc4bb",
+              "source_output_sha256": "fae9f9fb7442abc9302d7cac6fc02e039b13af88bc7af7aac28e28addbe8974c"
+            },
+            "plus": {
+              "energy_hartree": -4.3501946488676735,
+              "input_sha256": "0bd51ccd9a0d6d393b2046b6d952c5ae3a98ad7e1b219886ac4cedc35cc0e5ba",
+              "raw_output_sha256": "5e3988b05685450204eb6d9396f673ac63463df675bd74d921f6d603d4381710",
+              "source_output_sha256": "b4a0e8d688d728854449c1036cc29d9a1be7454a4feb216ae7a760a8da6a41d6"
+            },
+            "step": 5e-05
+          }
+        ],
+        "richardson_hartree": -0.427579425097413
       },
       "yz": {
         "central_differences_hartree": [
-          0.012991214046742527,
-          0.012991202620327158,
-          0.012991197886336181
+          0.012991214042301635,
+          0.012991202638090726,
+          0.012991197815281907
         ],
         "component": [
           1,
           2
         ],
-        "richardson_hartree": 0.01299119630833919
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350175858364269,
+              "input_sha256": "30d9d0cd588517416f59b5fe93349c24ff3fdaa7bd353ccb6c25399c3c4196bb",
+              "raw_output_sha256": "2b2135c73f5861c3e38a8fbad8640793240624918ccab2f4dc33e880c293a8a3",
+              "source_output_sha256": "ceeab8d97b574c0b863eaf2b94f1216eb994eb2872d5252bc781ed1252b97ee4"
+            },
+            "plus": {
+              "energy_hartree": -4.350170661878652,
+              "input_sha256": "06f00534cee05d01d62f0b94c7698d11288f50d4a41b0b2992b8a1fdd779d976",
+              "raw_output_sha256": "5827e3fd3a17b65075887671d6bd5eb9a9c6b590701ab1e756c0f2d3590144fe",
+              "source_output_sha256": "057a55d6636278ab1d0461cd76e0b178be952cc08765a75eba9745aceb4135ff"
+            },
+            "step": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.3501745690239675,
+              "input_sha256": "e66908f3d68555b39c7b3f48ef517446f71753ef78d2e9ac72708fac4e05950e",
+              "raw_output_sha256": "6764494028ba71560c9955992e21e5191c0b9d136b26628f7bd4bd841e003794",
+              "source_output_sha256": "4f8d38e7bca23813263f091a8ac76758bce3cc2b6d1fd5e94e4918a4ed776e75"
+            },
+            "plus": {
+              "energy_hartree": -4.35017197078344,
+              "input_sha256": "f744376293e9bd7f6b3ee14f6bce34921787e6a8e611c8b3d88c28fd92b3a545",
+              "raw_output_sha256": "0473b7ee6945342588cc33490daf3b190783557cc6834dfe7b1d6548f1949b74",
+              "source_output_sha256": "635f0c383c528c2c3a04e7af8d5ec7d8e8de023d2ad0e557ef1cd5f7a7c20035"
+            },
+            "step": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.3501739219091995,
+              "input_sha256": "8ea0ce0dcce04584aadb4d900b9f9c4e2d7d14a4cda5729fa8e2b127866b349d",
+              "raw_output_sha256": "71ef19a29b96ebeb0e9211e244a31e16031256cfccbccfe38ad054a71786ed43",
+              "source_output_sha256": "5e3d94411599fb7596a5728755c49ea3c651d5067babea7f6267d8ffb4fca62c"
+            },
+            "plus": {
+              "energy_hartree": -4.350172622789418,
+              "input_sha256": "7897af20c24b3c86b7cbfb9ffe9a463df5a82d9a4bf3b5f2de0d8512ca7efefb",
+              "raw_output_sha256": "667c173f6492335c2fe918fc131b925147d665f1018b6a781c19636b50b063b4",
+              "source_output_sha256": "740ce8f3e72621fd5cba551538b099ce8d0fee2819a225bde03a94b92cb4ffb8"
+            },
+            "step": 5e-05
+          }
+        ],
+        "richardson_hartree": 0.012991196207678968
       },
       "zz": {
         "central_differences_hartree": [
-          -0.12338143634993415,
-          -0.12338139816936433,
-          -0.12338139025125372
+          -0.12338143636103638,
+          -0.12338139814715987,
+          -0.12338139022460837
         ],
         "component": [
           2,
           2
         ],
-        "richardson_hartree": -0.12338138761188351
+        "evaluations": [
+          {
+            "minus": {
+              "energy_hartree": -4.350148592213024,
+              "input_sha256": "d0cb149d5b2a13926f746290e445606af06aead06a947101a63e7a1eeedb8b23",
+              "raw_output_sha256": "d9703fc3d422f48b30b26c97140247c224f0c9969a1251132e22ce976d6e9db4",
+              "source_output_sha256": "f09cc339416f00fbfd486efdff71e8310c89bfda5db91951283a01d9eca94291"
+            },
+            "plus": {
+              "energy_hartree": -4.350197944787569,
+              "input_sha256": "d8e38915d1f6f3f6efe4626f46ad2665e446fb6ed8d3fd576f78c72aa382d24b",
+              "raw_output_sha256": "819f3bb6ec3d35e0fa24825dad19afb9888a3ff46554566bbe6fe9d3013926dc",
+              "source_output_sha256": "ad6ab04d558ee02d4128b51b8122ebb6f6e2fd5d977e5bf8f9af97bc20baf3dc"
+            },
+            "step": 0.0002
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350160933858738,
+              "input_sha256": "c9d732552051763cce1a5d9d0c8435cbafac4f1943cffbb9f97d4baf808d8a77",
+              "raw_output_sha256": "9cfcd186f2eb71c40149871cb28a61b0591ecb91d7d09b5ee823638412837897",
+              "source_output_sha256": "58945d46eaa462b95f607a14a73ff5fae7e434a294b2e1c350d85ba307207efc"
+            },
+            "plus": {
+              "energy_hartree": -4.350185610138367,
+              "input_sha256": "4abd705e1f0bbd01ddbbb07d3be7551cf9079f2f35dbc6386b3218ee4fec1f93",
+              "raw_output_sha256": "c9fdbf237d76b649f59cedf1c3c7c61f56839b85f5cadb4b8d707af8bcc27323",
+              "source_output_sha256": "d5ed05f8b4879d1a2644c13f86c4d167a3a8cc81a4ae25dc79ccceae9862ed5d"
+            },
+            "step": 0.0001
+          },
+          {
+            "minus": {
+              "energy_hartree": -4.350167103803517,
+              "input_sha256": "f9bac2288ae4b2e0c3ead4a89c25d11dd1dd87a39953e387bbe46d2c974b1171",
+              "raw_output_sha256": "a8d68335185b3d5056dfdd3069836f00336a871893991d470495768729149407",
+              "source_output_sha256": "764055f0ec40efc0551862a107b6f9ff0d639d0d38333d50017081ef1cdd1533"
+            },
+            "plus": {
+              "energy_hartree": -4.350179441942539,
+              "input_sha256": "f209fd027872227563d4a690301831dfa235493e86b285a2aa0eff6cd5e26e37",
+              "raw_output_sha256": "b2cd62fbdf743f54209653615ce082888245c636e7691fbd2008ef6bf34f288f",
+              "source_output_sha256": "b7364a3e8375c338c31d4c287efe4dc80f8061f35835fb60c756f518e2f46bac"
+            },
+            "step": 5e-05
+          }
+        ],
+        "richardson_hartree": -0.12338138758375787
       }
     },
     "steps": [

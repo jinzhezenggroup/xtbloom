@@ -1,38 +1,138 @@
 {
   "case_id": "periodic_oh_unrestricted",
+  "invariant_evidence": {
+    "reciprocal_identity_max_error": 8.881784197001252e-16,
+    "variants": {
+      "cell_basis": {
+        "definition": "unimodular direct basis U=[[1,1,0],[0,1,0],[0,0,1]]",
+        "input_sha256": "2ebbe71281c9bd19c917f66459b88a5e233241d29b576b58bc98b5680b765a48",
+        "properties": {
+          "energy_hartree": -4.429117339233664,
+          "forces_hartree_per_bohr": [
+            -0.002117622417294792,
+            -0.0002417935851771421,
+            0.0002630440013161256,
+            0.002117622417294792,
+            0.0002417935851771421,
+            -0.00026304400131612384
+          ],
+          "gradient_hartree_per_bohr": [
+            0.002117622417294792,
+            0.0002417935851771421,
+            -0.0002630440013161256,
+            -0.002117622417294792,
+            -0.0002417935851771421,
+            0.00026304400131612384
+          ],
+          "strain_derivatives_hartree": [
+            -0.001310065916944676,
+            -0.0005847180707287662,
+            0.0006543026094700439,
+            -0.0005847180707287662,
+            -0.0001346262788546771,
+            6.981495487138481e-05,
+            0.0006543026094700405,
+            6.981495487138437e-05,
+            -0.00010871394941286236
+          ]
+        },
+        "raw_output_sha256": "dd0b4652a04128a2df129fc2db506685469bd91cd69144e3a37393a8a0746b81",
+        "source_output_sha256": "d55f01497431513aeda26352d8922b402dac0c07808745916d2fd3dea6ab3bfa"
+      },
+      "translation": {
+        "definition": "all positions shifted by (0.37,-0.23,0.19) bohr",
+        "input_sha256": "0c5a9d912ab31766cba87f7c98fcdd35f01cdb796a29f1f32850a02ea68086d5",
+        "properties": {
+          "energy_hartree": -4.42911733904695,
+          "forces_hartree_per_bohr": [
+            -0.002117622378922974,
+            -0.00024179460487259145,
+            0.00026304409054675904,
+            0.002117622378922974,
+            0.00024179460487259145,
+            -0.00026304409054675904
+          ],
+          "gradient_hartree_per_bohr": [
+            0.002117622378922974,
+            0.00024179460487259145,
+            -0.00026304409054675904,
+            -0.002117622378922974,
+            -0.00024179460487259145,
+            0.00026304409054675904
+          ],
+          "strain_derivatives_hartree": [
+            -0.0013100654237414014,
+            -0.0005847181881160094,
+            0.0006543027011627594,
+            -0.0005847181881160094,
+            -0.00013462672133580787,
+            6.981507311780702e-05,
+            0.0006543027011627629,
+            6.981507311780616e-05,
+            -0.00010871411393932715
+          ]
+        },
+        "raw_output_sha256": "259d109620c6df76553882f9cc56865129420e3f1b3605d9fec8109d6c720a95",
+        "source_output_sha256": "744f6cf9a7a3d82b6591cfd020f889842883317fdc45ad69fb8bd4fe337e5685"
+      }
+    },
+    "wrapping": {
+      "definition": "u=r*H^-1; u_wrapped=u-floor(u); r_wrapped=u_wrapped*H",
+      "outside_positions_bohr": [
+        16.3,
+        3.1,
+        3.4,
+        3.68,
+        -10.77,
+        3.12
+      ],
+      "outside_positions_sha256": "fc5b8b3f5e436cfd00a220dac5ecaf49ff4b4cad36a364542bc260e853859466",
+      "wrapped_positions_bohr": [
+        2.800000000000003,
+        3.1,
+        3.4000000000000004,
+        4.580000000000001,
+        3.329999999999999,
+        3.12
+      ],
+      "wrapped_positions_sha256": "4984e0bc157d9eacea8a0054c7d7e642642565666149a9e31dc5d7ff1720b335"
+    }
+  },
   "oracle_role": "primary-neutral-full-model",
   "properties": {
-    "energy_hartree": -4.429117339046964,
+    "energy_hartree": -4.42911733904695,
     "forces_hartree_per_bohr": [
-      -0.002117622378922547,
-      -0.0002417946048725589,
-      0.00026304409054661733,
-      0.002117622378922547,
-      0.0002417946048725589,
-      -0.00026304409054661907
+      -0.002117622378922974,
+      -0.00024179460487259145,
+      0.00026304409054675904,
+      0.002117622378922974,
+      0.00024179460487259145,
+      -0.00026304409054675904
     ],
     "gradient_hartree_per_bohr": [
-      0.002117622378922547,
-      0.0002417946048725589,
-      -0.00026304409054661733,
-      -0.002117622378922547,
-      -0.0002417946048725589,
-      0.00026304409054661907
+      0.002117622378922974,
+      0.00024179460487259145,
+      -0.00026304409054675904,
+      -0.002117622378922974,
+      -0.00024179460487259145,
+      0.00026304409054675904
     ],
     "strain_derivatives_hartree": [
-      -0.0013100654237405743,
-      -0.0005847181881159443,
-      0.0006543027011625799,
-      -0.0005847181881159443,
-      -0.0001346267213358214,
-      6.98150731177833e-05,
-      0.0006543027011625799,
-      6.981507311778286e-05,
-      -0.0001087141139392735
+      -0.0013100654237414014,
+      -0.0005847181881160094,
+      0.0006543027011627594,
+      -0.0005847181881160094,
+      -0.00013462672133580787,
+      6.981507311780702e-05,
+      0.0006543027011627629,
+      6.981507311780616e-05,
+      -0.00010871411393932715
     ]
   },
   "provenance": {
     "accuracy": 0.0001,
+    "build_attestation_sha256": "f9a6a86a1ab6a11299e4dd2a30f2fd4ca2f714be5c76d2ec2b1ddd037641b782",
+    "build_id": "tblite-133f91ef-gfortran14-netlib-613ec662",
     "command_template": [
       "{executable}",
       "run",
@@ -59,22 +159,23 @@
         "OPENBLAS_NUM_THREADS": "1"
       }
     },
-    "executable_sha256": "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
+    "executable_sha256": "613ec6628c71fc974637cfed39426f3aff40f53106236af2e324cb0c582cf28c",
     "executable_version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled",
     "generation_mode": "live-cli",
     "input": "data/conformance/periodic/inputs/periodic_oh_unrestricted.tmol",
     "input_sha256": "e1ce9fcf89d91bca44d1cbc28553dbdfd4f31671a33cf7d3e466ebdc55190c82",
-    "raw_output_sha256": "feec351935dae2477b29597be2887e5d980491d69439b891d4824cb9c41767c3",
+    "raw_output_sha256": "259d109620c6df76553882f9cc56865129420e3f1b3605d9fec8109d6c720a95",
     "runtime": {
+      "closure_sha256": "d416f056175300a67ca40d0aab8d317f2f97131a3626fcb173794c06342a0fbc",
       "libtblite": {
         "discovery": "ldd",
         "filename": "libtblite.so.0.7.0",
-        "sha256": "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725",
+        "sha256": "145b89e099b2a28d892fa999676b446ab1e6c9b8c8598ac2e707a08c2d7e6b93",
         "status": "resolved"
       }
     },
     "source_revision": "133f91efb94b47f05848e1f86832f40a1accc385"
   },
-  "schema": "xtbloom-periodic-gfn2-golden-v1",
-  "source_output_sha256": "23e8215aba786143aaf7932dd4a6a7f99c23548799fe7340d28d262c6fa677a7"
+  "schema": "xtbloom-periodic-gfn2-golden-v2",
+  "source_output_sha256": "744f6cf9a7a3d82b6591cfd020f889842883317fdc45ad69fb8bd4fe337e5685"
 }

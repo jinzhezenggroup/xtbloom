@@ -418,8 +418,18 @@ NOTICE_TOKENS = (
     "663245d739be0123da61c917e55116b0c3db4c74",
     "133f91efb94b47f05848e1f86832f40a1accc385",
     "data/conformance/periodic/manifest.json",
-    "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3",
-    "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725",
+    "data/conformance/periodic/tblite-build.json",
+    "data/conformance/periodic/ewald-reconstruction.json",
+    "data/conformance/periodic/terms/manifest.json",
+    "613ec6628c71fc974637cfed39426f3aff40f53106236af2e324cb0c582cf28c",
+    "145b89e099b2a28d892fa999676b446ab1e6c9b8c8598ac2e707a08c2d7e6b93",
+    "f9a6a86a1ab6a11299e4dd2a30f2fd4ca2f714be5c76d2ec2b1ddd037641b782",
+    "d416f056175300a67ca40d0aab8d317f2f97131a3626fcb173794c06342a0fbc",
+    "65022d49b7b0d552cdc97800a8ea1e17ed6a76cf40d4285292e7fce46f184126",
+    "e8b6753b0f1fb278037b4f7c4516e16205dcaaebde12a6c14053d5d918d9dd02",
+    "0f8dcfbf5f362c1f3955681465d4a89056c9425107fd06c68e41c7fedc3a4c28",
+    "89b6500f08dd89b0b1d2f4f45d62bd46ce127ea4b07b8b75340c8355d21ff6dd",
+    "6a5d63f9e9e29dcf13cc47cc27f33bf9015681bf",
     "charged tblite result is explicitly diagnostic",
     "edcfbbe39d411edc225e27315fbda3a204ddb023",
     "9ab8ca565e0f71d967587e0bca2015f7d689f19f",
@@ -2247,6 +2257,52 @@ def _require_notice_tokens(notice: str, tokens: tuple[str, ...]) -> None:
             raise LicenseCheckError(f"THIRD_PARTY_NOTICES.md omits {token}")
 
 
+def _periodic_corpus_file(root: Path, relative: str, directory: str) -> Path:
+    """Resolve one corpus file without permitting traversal or symlink escape."""
+    boundary = (root / directory).resolve()
+    candidate = (root / relative).resolve()
+    try:
+        candidate.relative_to(boundary)
+    except ValueError as exc:
+        raise LicenseCheckError(
+            "periodic GFN2 corpus path escapes its reviewed boundary"
+        ) from exc
+    if not candidate.is_file():
+        raise LicenseCheckError("periodic GFN2 corpus names a missing file")
+    return candidate
+
+
+def _contains_machine_local_runtime_path(value: object) -> bool:
+    """Detect structured or embedded POSIX/Windows paths in runtime metadata."""
+    if isinstance(value, dict):
+        return any(
+            key.casefold() == "path" or _contains_machine_local_runtime_path(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_machine_local_runtime_path(item) for item in value)
+    if not isinstance(value, str):
+        return False
+    return (
+        value.startswith(("/", "\\\\"))
+        or re.match(r"^[A-Za-z]:[\\\\/]", value) is not None
+    )
+
+
+def _contains_absolute_local_path(value: object) -> bool:
+    """Detect absolute POSIX, UNC, or drive paths while allowing relative paths."""
+    if isinstance(value, dict):
+        return any(_contains_absolute_local_path(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_absolute_local_path(item) for item in value)
+    if not isinstance(value, str):
+        return False
+    return (
+        value.startswith(("/", "\\\\"))
+        or re.match(r"^[A-Za-z]:[\\\\/]", value) is not None
+    )
+
+
 def _check_periodic_oracle_provenance(root: Path) -> None:
     """Audit the source/data boundary of the repository-only periodic corpus."""
     manifest_path = root / "data/conformance/periodic/manifest.json"
@@ -2254,18 +2310,33 @@ def _check_periodic_oracle_provenance(root: Path) -> None:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise LicenseCheckError("periodic GFN2 manifest is malformed") from exc
+    if not isinstance(manifest, dict):
+        raise LicenseCheckError("periodic GFN2 manifest is malformed")
     reference = manifest.get("reference_engine")
     legal = manifest.get("legal")
+    runtime_artifacts = (
+        reference.get("runtime_artifacts") if isinstance(reference, dict) else None
+    )
+    build_identity = (
+        reference.get("build_attestation") if isinstance(reference, dict) else None
+    )
     if (
-        manifest.get("schema") != "xtbloom-periodic-gfn2-conformance-v1"
+        manifest.get("schema") != "xtbloom-periodic-gfn2-conformance-v2"
         or not isinstance(reference, dict)
         or reference.get("repository") != "https://github.com/tblite/tblite"
         or reference.get("revision") != "133f91efb94b47f05848e1f86832f40a1accc385"
         or reference.get("license") != "LGPL-3.0-or-later"
         or reference.get("executable_sha256")
-        != "dc786f2fb4578bf5e5ed3d89e0acd62534624bb9648aac3fb5f06237012457c3"
-        or reference.get("runtime_artifacts", {}).get("libtblite_sha256")
-        != "5f46cbe0364f5a7d0f381713df03861b06d5d84b0fa63c57be029aab94361725"
+        != "613ec6628c71fc974637cfed39426f3aff40f53106236af2e324cb0c582cf28c"
+        or not isinstance(runtime_artifacts, dict)
+        or runtime_artifacts.get("libtblite_sha256")
+        != "145b89e099b2a28d892fa999676b446ab1e6c9b8c8598ac2e707a08c2d7e6b93"
+        or not isinstance(build_identity, dict)
+        or build_identity.get("build_id")
+        != "tblite-133f91ef-gfortran14-netlib-613ec662"
+        or build_identity.get("path") != "data/conformance/periodic/tblite-build.json"
+        or build_identity.get("sha256")
+        != "f9a6a86a1ab6a11299e4dd2a30f2fd4ca2f714be5c76d2ec2b1ddd037641b782"
     ):
         raise LicenseCheckError("periodic GFN2 oracle provenance is unreviewed")
     if (
@@ -2276,6 +2347,100 @@ def _check_periodic_oracle_provenance(root: Path) -> None:
         or "LICENSES/LGPL-3.0-or-later.txt" not in str(legal.get("license", ""))
     ):
         raise LicenseCheckError("periodic GFN2 legal boundary is incomplete")
+
+    build_path = _periodic_corpus_file(
+        root, build_identity["path"], "data/conformance/periodic"
+    )
+    try:
+        build = json.loads(build_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError("periodic GFN2 build attestation is malformed") from exc
+    if _contains_machine_local_runtime_path(build):
+        raise LicenseCheckError(
+            "periodic GFN2 build attestation retains a machine-local path"
+        )
+    if hashlib.sha256(build_path.read_bytes()).hexdigest() != build_identity["sha256"]:
+        raise LicenseCheckError("periodic GFN2 build attestation hash differs")
+    build_source = build.get("source") if isinstance(build, dict) else None
+    build_artifacts = build.get("artifacts") if isinstance(build, dict) else None
+    executable_artifact = (
+        build_artifacts.get("executable") if isinstance(build_artifacts, dict) else None
+    )
+    libtblite_artifact = (
+        build_artifacts.get("libtblite") if isinstance(build_artifacts, dict) else None
+    )
+    build_runtime = build.get("runtime") if isinstance(build, dict) else None
+    runtime_libraries = (
+        build_runtime.get("non_system_libraries")
+        if isinstance(build_runtime, dict)
+        else None
+    )
+    runtime_digest = (
+        hashlib.sha256(
+            json.dumps(
+                runtime_libraries,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        if isinstance(runtime_libraries, list)
+        else None
+    )
+    if (
+        not isinstance(build, dict)
+        or build.get("schema") != "xtbloom-tblite-build-attestation-v1"
+        or build.get("build_id") != build_identity["build_id"]
+        or not isinstance(build_source, dict)
+        or build_source.get("repository") != reference["repository"]
+        or build_source.get("revision") != reference["revision"]
+        or not isinstance(build_artifacts, dict)
+        or not isinstance(executable_artifact, dict)
+        or executable_artifact.get("sha256") != reference["executable_sha256"]
+        or not isinstance(libtblite_artifact, dict)
+        or libtblite_artifact.get("sha256") != runtime_artifacts["libtblite_sha256"]
+        or not isinstance(build_runtime, dict)
+        or build_runtime.get("discovery") != "ldd"
+        or build_runtime.get("sha256")
+        != "d416f056175300a67ca40d0aab8d317f2f97131a3626fcb173794c06342a0fbc"
+        or runtime_digest != build_runtime.get("sha256")
+        or build.get("redistribution")
+        != {
+            "binary_payload": "not-redistributed",
+            "repository_payload": "attestation-and-normalized-numerical-results-only",
+        }
+    ):
+        raise LicenseCheckError("periodic GFN2 build provenance is unreviewed")
+
+    ewald_identity = manifest.get("ewald_reconstruction")
+    if (
+        not isinstance(ewald_identity, dict)
+        or ewald_identity.get("path")
+        != "data/conformance/periodic/ewald-reconstruction.json"
+        or ewald_identity.get("sha256")
+        != "65022d49b7b0d552cdc97800a8ea1e17ed6a76cf40d4285292e7fce46f184126"
+    ):
+        raise LicenseCheckError("periodic GFN2 Ewald provenance is unreviewed")
+    ewald_path = _periodic_corpus_file(
+        root, ewald_identity["path"], "data/conformance/periodic"
+    )
+    try:
+        ewald = json.loads(ewald_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError(
+            "periodic GFN2 Ewald reconstruction is malformed"
+        ) from exc
+    if _contains_machine_local_runtime_path(ewald):
+        raise LicenseCheckError(
+            "periodic GFN2 Ewald reconstruction retains a machine-local path"
+        )
+    if hashlib.sha256(ewald_path.read_bytes()).hexdigest() != ewald_identity["sha256"]:
+        raise LicenseCheckError("periodic GFN2 Ewald reconstruction hash differs")
+    if (
+        not isinstance(ewald, dict)
+        or ewald.get("schema") != "xtbloom-periodic-ewald-reconstruction-v1"
+    ):
+        raise LicenseCheckError("periodic GFN2 Ewald reconstruction is unreviewed")
 
     cases = manifest.get("cases")
     if not isinstance(cases, list) or len(cases) != 5:
@@ -2291,20 +2456,246 @@ def _check_periodic_oracle_provenance(root: Path) -> None:
             raise LicenseCheckError("periodic GFN2 corpus case is malformed")
         input_name = case.get("input")
         golden_name = case.get("golden")
-        if (
-            not isinstance(input_name, str)
-            or not input_name.startswith("data/conformance/periodic/inputs/")
-            or not isinstance(golden_name, str)
-            or not golden_name.startswith("data/conformance/periodic/golden/")
-        ):
+        if not isinstance(input_name, str) or not isinstance(golden_name, str):
             raise LicenseCheckError(
                 "periodic GFN2 corpus path escapes its reviewed boundary"
             )
-        golden = (root / golden_name).read_text(encoding="utf-8")
-        if '"path":' in golden or "/home/" in golden:
+        input_path = _periodic_corpus_file(
+            root, input_name, "data/conformance/periodic/inputs"
+        )
+        golden_path = _periodic_corpus_file(
+            root, golden_name, "data/conformance/periodic/golden"
+        )
+        if hashlib.sha256(input_path.read_bytes()).hexdigest() != case.get(
+            "input_sha256"
+        ):
+            raise LicenseCheckError("periodic GFN2 corpus input hash differs")
+        try:
+            golden = json.loads(golden_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise LicenseCheckError("periodic GFN2 golden is malformed") from exc
+        provenance = golden.get("provenance") if isinstance(golden, dict) else None
+        runtime = provenance.get("runtime") if isinstance(provenance, dict) else None
+        if (
+            not isinstance(golden, dict)
+            or golden.get("schema") != "xtbloom-periodic-gfn2-golden-v2"
+            or not isinstance(runtime, dict)
+            or provenance.get("build_attestation_sha256") != build_identity["sha256"]
+            or runtime.get("closure_sha256") != build_runtime["sha256"]
+        ):
+            raise LicenseCheckError("periodic GFN2 golden provenance is unreviewed")
+        if _contains_machine_local_runtime_path(provenance):
             raise LicenseCheckError("periodic GFN2 golden retains a machine-local path")
+        if hashlib.sha256(golden_path.read_bytes()).hexdigest() != case.get(
+            "golden_sha256"
+        ):
+            raise LicenseCheckError("periodic GFN2 corpus golden hash differs")
     if not (root / "LICENSES/LGPL-3.0-or-later.txt").is_file():
         raise LicenseCheckError("periodic GFN2 oracle license text is missing")
+
+
+def _check_periodic_term_provenance(root: Path) -> None:
+    """Audit the repository-only numerical fixtures for periodic GFN2 terms."""
+    manifest_path = _periodic_corpus_file(
+        root,
+        "data/conformance/periodic/terms/manifest.json",
+        "data/conformance/periodic/terms",
+    )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LicenseCheckError("periodic GFN2 term manifest is malformed") from exc
+    if not isinstance(manifest, dict):
+        raise LicenseCheckError("periodic GFN2 term manifest is malformed")
+    if _contains_absolute_local_path(manifest):
+        raise LicenseCheckError(
+            "periodic GFN2 term provenance retains a machine-local path"
+        )
+
+    generator = manifest.get("generator")
+    probe = manifest.get("probe")
+    build_identity = probe.get("build_attestation") if isinstance(probe, dict) else None
+    runtime = probe.get("runtime") if isinstance(probe, dict) else None
+    libraries = (
+        runtime.get("non_system_libraries") if isinstance(runtime, dict) else None
+    )
+    runtime_digest = (
+        hashlib.sha256(
+            json.dumps(
+                libraries,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        if isinstance(libraries, list)
+        else None
+    )
+    expected_build = {
+        "build_id": "tblite-133f91ef-gfortran14-netlib-613ec662",
+        "path": "data/conformance/periodic/tblite-build.json",
+        "sha256": "f9a6a86a1ab6a11299e4dd2a30f2fd4ca2f714be5c76d2ec2b1ddd037641b782",
+    }
+    if (
+        manifest.get("schema") != "xtbloom-periodic-gfn2-term-manifest-v1"
+        or not isinstance(generator, dict)
+        or generator.get("path")
+        != "tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py"
+        or generator.get("sha256")
+        != "0f8dcfbf5f362c1f3955681465d4a89056c9425107fd06c68e41c7fedc3a4c28"
+        or not isinstance(probe, dict)
+        or probe.get("source") != "tools/oracle/periodic_gfn2_terms/probe.f90"
+        or probe.get("source_sha256")
+        != "89b6500f08dd89b0b1d2f4f45d62bd46ce127ea4b07b8b75340c8355d21ff6dd"
+        or probe.get("build_script")
+        != "tools/oracle/periodic_gfn2_terms/build_probe.sh"
+        or probe.get("build_script_sha256")
+        != "4e8c92f36e336131034db5da5da822bb36f9ece2773c3b1a5e8c3ed37b4c6407"
+        or build_identity != expected_build
+        or not isinstance(libraries, list)
+        or not libraries
+        or not isinstance(runtime, dict)
+        or runtime.get("discovery") != "ldd"
+        or runtime.get("sha256")
+        != "d416f056175300a67ca40d0aab8d317f2f97131a3626fcb173794c06342a0fbc"
+        or runtime_digest != runtime.get("sha256")
+    ):
+        raise LicenseCheckError("periodic GFN2 term provenance is unreviewed")
+
+    for relative, digest, boundary in (
+        (
+            generator["path"],
+            generator["sha256"],
+            "tools/oracle/periodic_gfn2_terms",
+        ),
+        (probe["source"], probe["source_sha256"], "tools/oracle/periodic_gfn2_terms"),
+        (
+            probe["build_script"],
+            probe["build_script_sha256"],
+            "tools/oracle/periodic_gfn2_terms",
+        ),
+    ):
+        path = _periodic_corpus_file(root, relative, boundary)
+        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise LicenseCheckError("periodic GFN2 term tool hash differs")
+
+    sources = manifest.get("sources")
+    expected_sources = {
+        "tblite": (
+            "https://github.com/tblite/tblite",
+            "133f91efb94b47f05848e1f86832f40a1accc385",
+            "LGPL-3.0-or-later",
+        ),
+        "dftd4": (
+            "https://github.com/dftd4/dftd4",
+            "6e1f59c3f39d919a2dbef0601d2576727c8b30e8",
+            "LGPL-3.0-or-later",
+        ),
+        "mctc-lib": (
+            "https://github.com/grimme-lab/mctc-lib",
+            "e9de066d89f250d1cfb6de3a33f0c27c0e2f855d",
+            "Apache-2.0",
+        ),
+        "multicharge": (
+            "https://github.com/grimme-lab/multicharge",
+            "6a5d63f9e9e29dcf13cc47cc27f33bf9015681bf",
+            "LGPL-3.0-or-later",
+        ),
+    }
+    if not isinstance(sources, dict) or set(sources) != set(expected_sources):
+        raise LicenseCheckError("periodic GFN2 term source set is unreviewed")
+    for name, (repository, revision, license_id) in expected_sources.items():
+        record = sources.get(name)
+        if (
+            not isinstance(record, dict)
+            or record.get("repository") != repository
+            or record.get("revision") != revision
+            or record.get("license") != license_id
+        ):
+            raise LicenseCheckError("periodic GFN2 term source identity is unreviewed")
+
+    legal = manifest.get("legal")
+    if (
+        not isinstance(legal, dict)
+        or legal.get("probe_license") != "GPL-3.0-or-later"
+        or legal.get("oracle_license") != "LGPL-3.0-or-later"
+        or "independently generated numerical output"
+        not in str(legal.get("source_data_boundary", ""))
+    ):
+        raise LicenseCheckError("periodic GFN2 term legal boundary is incomplete")
+
+    input_record = manifest.get("input")
+    if not isinstance(input_record, dict) or not isinstance(
+        input_record.get("path"), str
+    ):
+        raise LicenseCheckError("periodic GFN2 term input record is malformed")
+    input_path = _periodic_corpus_file(
+        root, input_record["path"], "data/conformance/periodic/terms/inputs"
+    )
+    if hashlib.sha256(input_path.read_bytes()).hexdigest() != input_record.get(
+        "sha256"
+    ):
+        raise LicenseCheckError("periodic GFN2 term input hash differs")
+
+    fixtures = manifest.get("fixtures")
+    expected_modes = {
+        "cn",
+        "repulsion",
+        "d4",
+        "integrals-h0",
+        "charge-ewald",
+        "multipoles",
+    }
+    if not isinstance(fixtures, list) or len(fixtures) != len(expected_modes):
+        raise LicenseCheckError("periodic GFN2 term fixture set is incomplete")
+    seen_modes = set()
+    for fixture in fixtures:
+        if not isinstance(fixture, dict) or not isinstance(fixture.get("mode"), str):
+            raise LicenseCheckError("periodic GFN2 term fixture is malformed")
+        mode = fixture["mode"]
+        if mode in seen_modes:
+            raise LicenseCheckError("periodic GFN2 term fixture is duplicated")
+        seen_modes.add(mode)
+        for field, hash_field, boundary in (
+            ("raw", "raw_sha256", "data/conformance/periodic/terms/raw"),
+            ("golden", "golden_sha256", "data/conformance/periodic/terms/golden"),
+        ):
+            relative = fixture.get(field)
+            if not isinstance(relative, str):
+                raise LicenseCheckError("periodic GFN2 term fixture path is malformed")
+            path = _periodic_corpus_file(root, relative, boundary)
+            if hashlib.sha256(path.read_bytes()).hexdigest() != fixture.get(hash_field):
+                raise LicenseCheckError("periodic GFN2 term fixture hash differs")
+        try:
+            golden = json.loads(
+                _periodic_corpus_file(
+                    root,
+                    fixture["golden"],
+                    "data/conformance/periodic/terms/golden",
+                ).read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise LicenseCheckError("periodic GFN2 term golden is malformed") from exc
+        if (
+            not isinstance(golden, dict)
+            or golden.get("schema") != "xtbloom-periodic-gfn2-term-fixture-v1"
+            or golden.get("mode") != mode
+        ):
+            raise LicenseCheckError("periodic GFN2 term golden identity is unreviewed")
+    if seen_modes != expected_modes:
+        raise LicenseCheckError("periodic GFN2 term fixture set is incomplete")
+
+    if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != (
+        "e8b6753b0f1fb278037b4f7c4516e16205dcaaebde12a6c14053d5d918d9dd02"
+    ):
+        raise LicenseCheckError("periodic GFN2 term manifest hash differs")
+    for license_path in (
+        "LICENSE",
+        "LICENSES/LGPL-3.0-or-later.txt",
+        "LICENSES/Apache-2.0.txt",
+    ):
+        if not (root / license_path).is_file():
+            raise LicenseCheckError("periodic GFN2 term license text is missing")
 
 
 def _require_codspeed_license_bytes(payload: bytes, context: str) -> None:
@@ -2362,6 +2753,7 @@ def check_source(root: Path) -> None:
     notice = (root / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     _require_notice_tokens(notice, NOTICE_TOKENS)
     _check_periodic_oracle_provenance(root)
+    _check_periodic_term_provenance(root)
     _require_gfn1_web_source_map()
 
     web_lock = json.loads((root / "web/package-lock.json").read_text(encoding="utf-8"))
