@@ -158,7 +158,7 @@ class PeriodicGfn2OracleTests(unittest.TestCase):
             mock.patch.object(periodic.shutil, "which", return_value=None),
             self.assertRaisesRegex(periodic.PeriodicOracleError, "Linux-like.*ldd"),
         ):
-            periodic.discover_libtblite(Path("/tmp/tblite"), {}, "0" * 64)
+            periodic.discover_libtblite(Path("/missing/tblite"), {}, "0" * 64)
 
     def test_strain_richardson_value_is_recomputed(self) -> None:
         """Reject stored Richardson values that are inconsistent with raw steps."""

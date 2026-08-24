@@ -40,6 +40,13 @@ class PeriodicGfn2TermFixtureTests(unittest.TestCase):
         """Keep issue #472's six term families explicit and complete."""
         self.assertEqual(set(self.documents), set(terms.MODES))
 
+    def test_upstream_source_digest_format_is_enforced(self) -> None:
+        """Reject a source manifest whose copied SHA-256 has the wrong width."""
+        changed = copy.deepcopy(terms.SOURCE_RECORDS)
+        changed["tblite"]["files"]["src/tblite/disp/d4.f90"]["sha256"] += "b"
+        with self.assertRaisesRegex(terms.FixtureError, "malformed SHA-256"):
+            terms.check_source_record_digests(changed)
+
     def test_raw_outputs_are_lossless_golden_sources(self) -> None:
         """Require every normalized array to come directly from pinned raw output."""
         for fixture in self.manifest["fixtures"]:

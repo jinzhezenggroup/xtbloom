@@ -169,9 +169,9 @@ Redistributed or derived material:
   outputs from a repository-authored GPL-3.0-or-later Fortran probe linked to
   the same exact tblite build. The term manifest at
   `data/conformance/periodic/terms/manifest.json` (SHA-256
-  `e8b6753b0f1fb278037b4f7c4516e16205dcaaebde12a6c14053d5d918d9dd02`)
+  `be646b0655cc5eb5cb1978eb36f6ac83cca6aebab45415466360f8d96bb7ab71`)
   pins the Python generator (SHA-256
-  `0f8dcfbf5f362c1f3955681465d4a89056c9425107fd06c68e41c7fedc3a4c28`),
+  `5459513ce86dc5680531d63b436219fd38a415b7362ebd3718f1fa6f3b336ebd`),
   probe source (SHA-256
   `89b6500f08dd89b0b1d2f4f45d62bd46ce127ea4b07b8b75340c8355d21ff6dd`),
   shared build attestation, Fortran modules, non-system runtime closure, raw

@@ -426,8 +426,8 @@ NOTICE_TOKENS = (
     "f9a6a86a1ab6a11299e4dd2a30f2fd4ca2f714be5c76d2ec2b1ddd037641b782",
     "d416f056175300a67ca40d0aab8d317f2f97131a3626fcb173794c06342a0fbc",
     "65022d49b7b0d552cdc97800a8ea1e17ed6a76cf40d4285292e7fce46f184126",
-    "e8b6753b0f1fb278037b4f7c4516e16205dcaaebde12a6c14053d5d918d9dd02",
-    "0f8dcfbf5f362c1f3955681465d4a89056c9425107fd06c68e41c7fedc3a4c28",
+    "be646b0655cc5eb5cb1978eb36f6ac83cca6aebab45415466360f8d96bb7ab71",
+    "5459513ce86dc5680531d63b436219fd38a415b7362ebd3718f1fa6f3b336ebd",
     "89b6500f08dd89b0b1d2f4f45d62bd46ce127ea4b07b8b75340c8355d21ff6dd",
     "6a5d63f9e9e29dcf13cc47cc27f33bf9015681bf",
     "charged tblite result is explicitly diagnostic",
@@ -2276,8 +2276,7 @@ def _contains_machine_local_runtime_path(value: object) -> bool:
     """Detect structured or embedded POSIX/Windows paths in runtime metadata."""
     if isinstance(value, dict):
         return any(
-            key.casefold() == "path" or _contains_machine_local_runtime_path(item)
-            for key, item in value.items()
+            _contains_machine_local_runtime_path(item) for item in value.values()
         )
     if isinstance(value, list):
         return any(_contains_machine_local_runtime_path(item) for item in value)
@@ -2542,7 +2541,7 @@ def _check_periodic_term_provenance(root: Path) -> None:
         or generator.get("path")
         != "tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py"
         or generator.get("sha256")
-        != "0f8dcfbf5f362c1f3955681465d4a89056c9425107fd06c68e41c7fedc3a4c28"
+        != "5459513ce86dc5680531d63b436219fd38a415b7362ebd3718f1fa6f3b336ebd"
         or not isinstance(probe, dict)
         or probe.get("source") != "tools/oracle/periodic_gfn2_terms/probe.f90"
         or probe.get("source_sha256")
@@ -2686,7 +2685,7 @@ def _check_periodic_term_provenance(root: Path) -> None:
         raise LicenseCheckError("periodic GFN2 term fixture set is incomplete")
 
     if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != (
-        "e8b6753b0f1fb278037b4f7c4516e16205dcaaebde12a6c14053d5d918d9dd02"
+        "be646b0655cc5eb5cb1978eb36f6ac83cca6aebab45415466360f8d96bb7ab71"
     ):
         raise LicenseCheckError("periodic GFN2 term manifest hash differs")
     for license_path in (

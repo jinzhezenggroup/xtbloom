@@ -130,6 +130,14 @@ class PeriodicOracleProvenanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(CHECKER.LicenseCheckError, "machine-local"):
                     CHECKER._check_periodic_oracle_provenance(root)
 
+    def test_relative_runtime_path_is_allowed(self) -> None:
+        """Allow portable runtime metadata whose field name happens to be path."""
+        self.assertFalse(
+            CHECKER._contains_machine_local_runtime_path(
+                {"libtblite": {"path": "libtblite.so.0.7.0"}}
+            )
+        )
+
     def test_non_object_runtime_artifacts_is_rejected(self) -> None:
         """Reject malformed runtime provenance through the licensing contract."""
         with tempfile.TemporaryDirectory() as directory:

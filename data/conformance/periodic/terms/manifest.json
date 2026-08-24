@@ -65,7 +65,7 @@
   ],
   "generator": {
     "path": "tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py",
-    "sha256": "0f8dcfbf5f362c1f3955681465d4a89056c9425107fd06c68e41c7fedc3a4c28"
+    "sha256": "5459513ce86dc5680531d63b436219fd38a415b7362ebd3718f1fa6f3b336ebd"
   },
   "input": {
     "id": "water_skew",
@@ -272,7 +272,7 @@
         },
         "src/tblite/disp/d4.f90": {
           "git_blob": "55b110037de26e260b3c761c352248268081b90f",
-          "sha256": "3eb1577c7504da68da0bb7f8345ea9945996f45939dcb26744c9d4d034ede0d8b"
+          "sha256": "3eb1577c7504da68da0bb7f8345ea9945996f45939dcb26744c9d4d034ede0d8"
         },
         "src/tblite/integral/native/integrals.f90": {
           "git_blob": "37a0c95d13c39aaf42c28c75bd264ae5efbaf7a3",

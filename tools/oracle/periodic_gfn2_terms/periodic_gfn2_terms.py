@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -65,7 +66,7 @@ SOURCE_RECORDS = {
             "src/tblite/disp/d4.f90": {
                 "git_blob": "55b110037de26e260b3c761c352248268081b90f",
                 "sha256": (
-                    "3eb1577c7504da68da0bb7f8345ea9945996f45939dcb26744c9d4d034ede0d8b"
+                    "3eb1577c7504da68da0bb7f8345ea9945996f45939dcb26744c9d4d034ede0d8"
                 ),
             },
             "src/tblite/integral/native/integrals.f90": {
@@ -256,6 +257,29 @@ def compact_json_sha256(document: object) -> str:
         document, allow_nan=False, separators=(",", ":"), sort_keys=True
     ).encode()
     return sha256_bytes(encoded)
+
+
+def check_source_record_digests(records: object) -> None:
+    """Reject malformed upstream SHA-256 values even when manifests agree."""
+    if not isinstance(records, dict):
+        raise FixtureError("upstream source records are malformed")
+    for project, project_record in records.items():
+        files = (
+            project_record.get("files") if isinstance(project_record, dict) else None
+        )
+        if not isinstance(files, dict):
+            continue
+        for source_path, source_record in files.items():
+            digest = (
+                source_record.get("sha256") if isinstance(source_record, dict) else None
+            )
+            if (
+                not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            ):
+                raise FixtureError(
+                    f"{project} source {source_path} has a malformed SHA-256"
+                )
 
 
 def product(values: list[int]) -> int:
@@ -1078,6 +1102,7 @@ def check(root: Path | None = None) -> None:
         raise FixtureError("probe non-system runtime closure is invalid")
     if manifest.get("sources") != SOURCE_RECORDS:
         raise FixtureError("upstream source identity mismatch")
+    check_source_record_digests(manifest["sources"])
     for key, hash_key in (
         ("source", "source_sha256"),
         ("build_script", "build_script_sha256"),
