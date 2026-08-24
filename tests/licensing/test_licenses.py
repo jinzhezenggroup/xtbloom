@@ -460,6 +460,10 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
             "data/conformance/scc-traces/manifest-v2.json -text",
             "data/conformance/scc-traces/oh_radical.json -text",
             "data/conformance/scc-traces/specs/oh_radical.spec -text",
+            "data/conformance/periodic/** -text",
+            "tools/oracle/periodic_gfn2_terms/build_probe.sh -text",
+            "tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py -text",
+            "tools/oracle/periodic_gfn2_terms/probe.f90 -text",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, attributes.splitlines())
