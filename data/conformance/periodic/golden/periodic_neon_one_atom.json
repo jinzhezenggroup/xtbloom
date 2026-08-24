@@ -1,0 +1,157 @@
+{
+  "case_id": "periodic_neon_one_atom",
+  "invariant_evidence": {
+    "reciprocal_identity_max_error": 8.881784197001252e-16,
+    "variants": {
+      "cell_basis": {
+        "definition": "unimodular direct basis U=[[1,1,0],[0,1,0],[0,0,1]]",
+        "input_sha256": "853dc301a80f218c3a276b943ca6910c11fba5d2f303aeca4aab3101c92de2a9",
+        "properties": {
+          "energy_hartree": -5.9322303526806826,
+          "forces_hartree_per_bohr": [
+            -1.9750552711837428e-25,
+            5.3960610272013915e-25,
+            -1.3126645462877636e-25
+          ],
+          "gradient_hartree_per_bohr": [
+            1.9750552711837428e-25,
+            -5.3960610272013915e-25,
+            1.3126645462877636e-25
+          ],
+          "strain_derivatives_hartree": [
+            4.054620314246718e-05,
+            8.888646613046807e-07,
+            -4.1403298762723476e-09,
+            8.888646613046806e-07,
+            3.188668431508538e-05,
+            1.5035902239933948e-07,
+            -4.140329876272447e-09,
+            1.5035902239933922e-07,
+            2.358436658216954e-05
+          ]
+        },
+        "raw_output_sha256": "e5c792c887c59faa0afd2382f6e10fab3c8db01437dfa22d59ea767633d3538c",
+        "source_output_sha256": "0794843ae0a7fa23b0be31f6d2c5ed435d0218e2e9be9f4c08632e262ba85701"
+      },
+      "translation": {
+        "definition": "all positions shifted by (0.37,-0.23,0.19) bohr",
+        "input_sha256": "bfe084a037c30c7a95028bd3551d57254250b12bf730af282b521a81f7233313",
+        "properties": {
+          "energy_hartree": -5.932230352680681,
+          "forces_hartree_per_bohr": [
+            9.350210537403609e-26,
+            3.0958688453217564e-25,
+            -8.077935669463161e-28
+          ],
+          "gradient_hartree_per_bohr": [
+            -9.350210537403609e-26,
+            -3.0958688453217564e-25,
+            8.077935669463161e-28
+          ],
+          "strain_derivatives_hartree": [
+            4.054620314246702e-05,
+            8.888646613046837e-07,
+            -4.140329876262897e-09,
+            8.888646613046837e-07,
+            3.188668431508532e-05,
+            1.5035902239933146e-07,
+            -4.14032987626279e-09,
+            1.5035902239933154e-07,
+            2.3584366582169466e-05
+          ]
+        },
+        "raw_output_sha256": "c3439b792ed3ca4b5764012548c6706a1db7095b3c9ccfa8407d0d5c87fc4172",
+        "source_output_sha256": "d27fe6665ccb2bfd14868c4d0b04701ddd6e77632527a62ee2803f95c8326aa6"
+      }
+    },
+    "wrapping": {
+      "definition": "u=r*H^-1; u_wrapped=u-floor(u); r_wrapped=u_wrapped*H",
+      "outside_positions_bohr": [
+        12.0,
+        2.1,
+        3.7
+      ],
+      "outside_positions_sha256": "162da41122021bd8cfb85dd7e5f83e63930060b482810b7d36e36f4a92654e36",
+      "wrapped_positions_bohr": [
+        1.2999999999999978,
+        2.1,
+        3.6999999999999997
+      ],
+      "wrapped_positions_sha256": "7f8cc0c50c93211d92d5aa2404f1bf640156ea4887f6352349d0dae5b0d5d5fe"
+    }
+  },
+  "oracle_role": "primary-neutral-full-model",
+  "properties": {
+    "energy_hartree": -5.932230352680681,
+    "forces_hartree_per_bohr": [
+      1.1612032524853294e-25,
+      4.66298836519761e-25,
+      1.308625578453032e-25
+    ],
+    "gradient_hartree_per_bohr": [
+      -1.1612032524853294e-25,
+      -4.66298836519761e-25,
+      -1.308625578453032e-25
+    ],
+    "strain_derivatives_hartree": [
+      4.0546203142467015e-05,
+      8.888646613046769e-07,
+      -4.140329876272069e-09,
+      8.888646613046769e-07,
+      3.188668431508529e-05,
+      1.5035902239934372e-07,
+      -4.1403298762722905e-09,
+      1.5035902239934382e-07,
+      2.3584366582169452e-05
+    ]
+  },
+  "provenance": {
+    "accuracy": 0.0001,
+    "build_attestation_sha256": "f9a6a86a1ab6a11299e4dd2a30f2fd4ca2f714be5c76d2ec2b1ddd037641b782",
+    "build_id": "tblite-133f91ef-gfortran14-netlib-613ec662",
+    "command_template": [
+      "{executable}",
+      "run",
+      "--method",
+      "gfn2",
+      "--acc",
+      "0.0001",
+      "--no-restart",
+      "--grad",
+      "{gradient}",
+      "--json",
+      "{json}",
+      "[--charge {charge}]",
+      "[--spin {unpaired_electrons}]",
+      "{input}"
+    ],
+    "engine": "tblite",
+    "environment": {
+      "inherited_environment_boundary": "All non-XTB variables except the recorded thread controls are inherited; runtime identity is pinned independently.",
+      "removed_variables": [],
+      "set": {
+        "MKL_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "OPENBLAS_NUM_THREADS": "1"
+      }
+    },
+    "executable_sha256": "613ec6628c71fc974637cfed39426f3aff40f53106236af2e324cb0c582cf28c",
+    "executable_version": "tblite version 0.7.0\nddX support: disabled\nHDF5 support: disabled\nTREXIO support: disabled",
+    "generation_mode": "live-cli",
+    "input": "data/conformance/periodic/inputs/periodic_neon_one_atom.tmol",
+    "input_sha256": "02ba264c9b78afa932610c0f19bc1bf6504aa2c8f103514310c41669c5c97fd3",
+    "raw_output_sha256": "6c9fbefb8e84e92713c9826518dd2ffaa36a545cdb85d84260005b48c03ef229",
+    "runtime": {
+      "closure_sha256": "d416f056175300a67ca40d0aab8d317f2f97131a3626fcb173794c06342a0fbc",
+      "libtblite": {
+        "discovery": "ldd",
+        "filename": "libtblite.so.0.7.0",
+        "sha256": "145b89e099b2a28d892fa999676b446ab1e6c9b8c8598ac2e707a08c2d7e6b93",
+        "status": "resolved"
+      }
+    },
+    "source_revision": "133f91efb94b47f05848e1f86832f40a1accc385"
+  },
+  "schema": "xtbloom-periodic-gfn2-golden-v2",
+  "source_output_sha256": "d02612bd7a5ff7a9d3a77a8d585e58535e06d83c597ffaaf24f20971f8e1e1f0"
+}

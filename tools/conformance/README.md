@@ -64,6 +64,97 @@ The primary thresholds remain property-specific absolute tolerances. They are
 public CPU/CUDA GFN1 acceptance gates; the committed goldens remain independent
 of xTBloom and are never regenerated from the implementation under test.
 
+## Native three-dimensional periodic GFN2 corpus
+
+The separate corpus under `data/conformance/periodic/` freezes the native-PBC
+contract before execution is released. Four xTBloom-authored neutral cells
+cover orthogonal, skew, one-atom, and unrestricted full-model calculations.
+Their energy, Cartesian gradient, and strain derivative come from tblite 0.7.0
+at revision `133f91efb94b47f05848e1f86832f40a1accc385`. Water and ammonia
+additionally retain three-step central differences for every Cartesian
+atom/axis and all six upper-triangular affine strain modes. Every retained
+displacement includes its energy plus materialized-input, raw-output, and
+normalized-output hashes. The runner converts tblite's Fortran-column-major
+virial output to the public row-major order explicitly.
+
+Each full-model result also retains live translation and determinant-`+1`
+unimodular cell-basis variants, while the offline checker recomputes reciprocal
+identity, zero net force, strain symmetry, and the half-open wrapping contract.
+Wrapping is deliberately a mathematical contract rather than a claimed live
+tblite invariant: the reviewed CLI did not preserve the full-model energy for
+every individually lattice-shifted atom in the skew-cell probe.
+
+The charged Li+ tblite result is retained only as a diagnostic boundary. The
+reviewed tblite monopole matrix omits the uniform-background constant, so it is
+not a charged-cell acceptance oracle. Two independent analytic cases instead
+reconstruct the required background energy, potential, and isotropic strain.
+A separate skew-cell document reconstructs the complete real, reciprocal,
+self, and background sum for one charge at four fixed splitting parameters.
+It gates alpha invariance, enlarged-box convergence, omitted-background drift,
+cell-basis invariance, potential, and zero force. This distinction is enforced
+by the offline checker.
+
+The v2 manifest also freezes tblite's exact monopole/multipole alpha and cutoff
+algorithm for orthogonal and skew cells. The exact-source build attestation at
+`data/conformance/periodic/tblite-build.json` records source tree, GNU Fortran
+14.3.0, Meson options, 52 exact conda packages, executable/library identities,
+and the complete non-system `ldd` closure. Its captured upstream test run was
+incomplete: 51 passed, 7 expected failures, 2 failures, 23 timeouts, and 9
+interruptions. The attestation therefore proves the reviewed build inputs and
+runtime identity; it does not claim that the upstream suite passed.
+
+Verify committed inputs, goldens, source/runtime hashes, finite differences,
+invariants, alpha/cutoff decisions, build attestation, and charged Ewald
+reconstruction without an oracle installation:
+
+```sh
+python3 tools/conformance/periodic_gfn2.py check
+```
+
+Regenerate only into a separate build directory with the exact pinned tblite
+executable and a loader path that resolves its reviewed runtime:
+
+```sh
+LD_LIBRARY_PATH=/path/to/oracle/lib \
+python3 tools/conformance/periodic_gfn2.py generate \
+  --executable /path/to/tblite \
+  --output-dir build/conformance/periodic-tblite
+
+python3 tools/conformance/periodic_gfn2.py compare \
+  --actual-dir build/conformance/periodic-tblite
+```
+
+The repository-only term corpus under
+`data/conformance/periodic/terms/` independently freezes the six pre-SCC
+families consumed by the implementation issues: GFN2 and D4 coordination,
+repulsion, fixed-charge D4 pair/ATM dispersion, periodic integrals and H0,
+shell-resolved charge Ewald, and separated q/d/Q multipole electrostatics.
+It retains raw probe output, logical array shapes, canonical JSON, Cartesian
+and affine-strain finite differences, q/d/Q potential derivatives, matrix
+recompositions, and the same exact tblite build identity as the full-model
+corpus. Verify it offline with:
+
+```sh
+python3 tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py check
+python3 -m unittest discover -s tests/oracle \
+  -p test_periodic_gfn2_terms.py -v
+```
+
+An installed exact oracle can rebuild the standalone GPL probe and regenerate
+the corpus into a temporary directory for a byte-for-byte comparison. The
+locally built probe executable is never distributed or hash-pinned because the
+Fortran driver embeds machine paths:
+
+```sh
+bash tools/oracle/periodic_gfn2_terms/build_probe.sh
+python3 tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py compare \
+  --probe build/periodic-gfn2-terms/probe
+```
+
+The affine convention, Ewald/background equations, cutoffs, signs, and
+unsupported combinations are defined in
+[`docs/theory/periodic-gfn2.md`](../../docs/theory/periodic-gfn2.md).
+
 ## GFN2 production conformance corpus
 
 The corpus is deliberately independent of the xTBloom implementation. Eight

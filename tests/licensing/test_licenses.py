@@ -38,6 +38,181 @@ VERSION_INSPECTOR = importlib.util.module_from_spec(VERSION_SPEC)
 VERSION_SPEC.loader.exec_module(VERSION_INSPECTOR)
 
 
+class PeriodicOracleProvenanceTests(unittest.TestCase):
+    """Keep generated periodic evidence separate from copied upstream bytes."""
+
+    @staticmethod
+    def _copy_reviewed_tree(root: Path) -> None:
+        """Copy the corpus and its required license into an isolated root."""
+        source = REPOSITORY / "data/conformance/periodic"
+        shutil.copytree(source, root / "data/conformance/periodic")
+        (root / "LICENSES").mkdir()
+        shutil.copy2(
+            REPOSITORY / "LICENSES/LGPL-3.0-or-later.txt",
+            root / "LICENSES/LGPL-3.0-or-later.txt",
+        )
+        shutil.copy2(
+            REPOSITORY / "LICENSES/Apache-2.0.txt",
+            root / "LICENSES/Apache-2.0.txt",
+        )
+        shutil.copy2(REPOSITORY / "LICENSE", root / "LICENSE")
+        tool_source = REPOSITORY / "tools/oracle/periodic_gfn2_terms"
+        shutil.copytree(tool_source, root / "tools/oracle/periodic_gfn2_terms")
+
+    def test_reviewed_periodic_corpus_passes(self) -> None:
+        """Accept the pinned tblite identity and authored input boundary."""
+        CHECKER._check_periodic_oracle_provenance(REPOSITORY)
+
+    def test_reviewed_periodic_term_corpus_passes(self) -> None:
+        """Accept the pinned six-family term corpus and probe boundary."""
+        CHECKER._check_periodic_term_provenance(REPOSITORY)
+
+    def test_term_fixture_paths_cannot_escape_their_directories(self) -> None:
+        """Reject a raw or golden path that traverses outside the term corpus."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy_reviewed_tree(root)
+            manifest_path = root / "data/conformance/periodic/terms/manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["fixtures"][0]["raw"] = (
+                "data/conformance/periodic/terms/raw/../../../../LICENSE"
+            )
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(
+                CHECKER.LicenseCheckError, "escapes its reviewed boundary"
+            ):
+                CHECKER._check_periodic_term_provenance(root)
+
+    def test_term_runtime_machine_path_is_rejected(self) -> None:
+        """Keep the standalone probe attestation independent of one host."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy_reviewed_tree(root)
+            manifest_path = root / "data/conformance/periodic/terms/manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["probe"]["runtime"]["non_system_libraries"][0]["path"] = (
+                r"C:\\oracle\\libtblite.dll"
+            )
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "machine-local"):
+                CHECKER._check_periodic_term_provenance(root)
+
+    def test_term_source_license_drift_is_rejected(self) -> None:
+        """Preserve each upstream project's actual SPDX identity."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy_reviewed_tree(root)
+            manifest_path = root / "data/conformance/periodic/terms/manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sources"]["mctc-lib"]["license"] = "MIT"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "source identity"):
+                CHECKER._check_periodic_term_provenance(root)
+
+    def test_machine_local_runtime_path_is_rejected(self) -> None:
+        """Keep generated evidence portable across oracle installations."""
+        for runtime_path in (
+            "/home/user/libtblite.so",
+            r"C:\Users\user\libtblite.dll",
+        ):
+            with (
+                self.subTest(runtime_path=runtime_path),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                self._copy_reviewed_tree(root)
+                golden = next(
+                    (root / "data/conformance/periodic/golden").glob("*.json")
+                )
+                document = json.loads(golden.read_text(encoding="utf-8"))
+                document["provenance"]["runtime"]["libtblite"]["path"] = runtime_path
+                golden.write_text(json.dumps(document), encoding="utf-8")
+                with self.assertRaisesRegex(CHECKER.LicenseCheckError, "machine-local"):
+                    CHECKER._check_periodic_oracle_provenance(root)
+
+    def test_relative_runtime_path_is_allowed(self) -> None:
+        """Allow portable runtime metadata whose field name happens to be path."""
+        self.assertFalse(
+            CHECKER._contains_machine_local_runtime_path(
+                {"libtblite": {"path": "libtblite.so.0.7.0"}}
+            )
+        )
+
+    def test_non_object_runtime_artifacts_is_rejected(self) -> None:
+        """Reject malformed runtime provenance through the licensing contract."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy_reviewed_tree(root)
+            manifest_path = root / "data/conformance/periodic/manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["reference_engine"]["runtime_artifacts"] = []
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "unreviewed"):
+                CHECKER._check_periodic_oracle_provenance(root)
+
+    def test_build_attestation_machine_local_path_is_rejected(self) -> None:
+        """Keep compiler/build provenance portable across local installations."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy_reviewed_tree(root)
+            attestation_path = root / "data/conformance/periodic/tblite-build.json"
+            attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+            attestation["build"]["compiler"]["path"] = "/tmp/gfortran"
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "machine-local"):
+                CHECKER._check_periodic_oracle_provenance(root)
+
+    def test_ewald_reconstruction_machine_local_path_is_rejected(self) -> None:
+        """Keep analytic evidence independent of one generator work directory."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy_reviewed_tree(root)
+            reconstruction_path = (
+                root / "data/conformance/periodic/ewald-reconstruction.json"
+            )
+            reconstruction = json.loads(reconstruction_path.read_text(encoding="utf-8"))
+            reconstruction["generator_path"] = r"C:\oracle\ewald.exe"
+            reconstruction_path.write_text(json.dumps(reconstruction), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "machine-local"):
+                CHECKER._check_periodic_oracle_provenance(root)
+
+    def test_build_runtime_closure_corruption_is_rejected(self) -> None:
+        """Reject any byte drift in the exact non-system runtime closure."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._copy_reviewed_tree(root)
+            attestation_path = root / "data/conformance/periodic/tblite-build.json"
+            attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+            attestation["runtime"]["non_system_libraries"][0]["sha256"] = "0" * 64
+            attestation_path.write_text(json.dumps(attestation), encoding="utf-8")
+            with self.assertRaisesRegex(CHECKER.LicenseCheckError, "hash differs"):
+                CHECKER._check_periodic_oracle_provenance(root)
+
+    def test_case_paths_cannot_traverse_outside_corpus_directories(self) -> None:
+        """Reject lexical prefixes that resolve outside the reviewed corpus."""
+        for field, directory in (
+            ("input", "inputs"),
+            ("golden", "golden"),
+        ):
+            with (
+                self.subTest(field=field),
+                tempfile.TemporaryDirectory() as directory_name,
+            ):
+                root = Path(directory_name)
+                self._copy_reviewed_tree(root)
+                manifest_path = root / "data/conformance/periodic/manifest.json"
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest["cases"][0][field] = (
+                    f"data/conformance/periodic/{directory}/../../../../"
+                    "LICENSES/LGPL-3.0-or-later.txt"
+                )
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    CHECKER.LicenseCheckError, "escapes its reviewed boundary"
+                ):
+                    CHECKER._check_periodic_oracle_provenance(root)
+
+
 class SourceDistributionBoundaryTests(unittest.TestCase):
     """Keep PyPI sdists limited to wheel-build and provenance inputs."""
 
@@ -145,8 +320,10 @@ class SourceDistributionBoundaryTests(unittest.TestCase):
             "python/ci/resolve-pyodide-openblas.py",
             "python/ci/run-pyodide-wheel-test.py",
             "tests/runtime_test.cpp",
+            "data/conformance/periodic/terms/manifest.json",
             "tools/check_benchmark_evidence_size.py",
             "tools/eigen_vendor.py",
+            "tools/oracle/periodic_gfn2_terms/probe.f90",
             "uv.lock",
             "web/app.js",
         ):
@@ -291,6 +468,10 @@ class CanonicalByteCheckoutPolicyTests(unittest.TestCase):
             "data/conformance/scc-traces/manifest-v2.json -text",
             "data/conformance/scc-traces/oh_radical.json -text",
             "data/conformance/scc-traces/specs/oh_radical.spec -text",
+            "data/conformance/periodic/** -text",
+            "tools/oracle/periodic_gfn2_terms/build_probe.sh -text",
+            "tools/oracle/periodic_gfn2_terms/periodic_gfn2_terms.py -text",
+            "tools/oracle/periodic_gfn2_terms/probe.f90 -text",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, attributes.splitlines())
