@@ -7,6 +7,17 @@ xTBloom supports two external electrostatic inputs that can be used together:
 
 Both enter the SCC problem. They are not post-processing corrections.
 
+## Real-world application
+
+[LAMMPS-DPRc](https://github.com/jinzhezenggroup/lammps-dprc) is a
+real-world application of this interface. It uses xTBloom as the batched
+GFN2-xTB QM engine for QM/MM umbrella-sampling workloads and can optionally
+apply a DPA4c
+[DPRc](https://docs.deepmodeling.com/projects/deepmd/en/stable/model/dprc.html)
+correction. LAMMPS-DPRc owns the LAMMPS-specific plugins, multi-window
+batching, periodic electrostatics, and end-to-end workflow; xTBloom remains
+the scientific engine behind its stable public C ABI.
+
 ## Explicit point charges
 
 For each point charge provide a position, charge value, and positive screening
