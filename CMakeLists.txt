@@ -940,6 +940,22 @@ set_target_properties(xtbloom_gfn2_mulliken_baseline_objects PROPERTIES
   VISIBILITY_INLINES_HIDDEN YES
 )
 
+add_library(xtbloom_integrals_baseline_objects OBJECT
+  src/model/common/integrals_kernels_baseline.cpp
+)
+target_compile_features(xtbloom_integrals_baseline_objects PUBLIC cxx_std_17)
+target_include_directories(xtbloom_integrals_baseline_objects PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+set_target_properties(xtbloom_integrals_baseline_objects PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  INTERPROCEDURAL_OPTIMIZATION OFF
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+
 # A single shared library carries the baseline kernels on every architecture.
 # Add the AVX2/FMA object only for a single x86-64 target whose compiler accepts
 # both flags; universal Apple builds, ARM, and WebAssembly remain baseline-only.
@@ -1004,6 +1020,7 @@ if(XTBLOOM_ENABLE_AVX2_DISPATCH AND XTBLOOM_SINGLE_X86_64_TARGET)
       target_compile_options(xtbloom_cpu_dispatch_objects PRIVATE /GL-)
       target_compile_options(xtbloom_gfn2_mulliken_baseline_objects PRIVATE
         /GL-)
+      target_compile_options(xtbloom_integrals_baseline_objects PRIVATE /GL-)
     endif()
   elseif(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
     check_cxx_compiler_flag("-mavx2" XTBLOOM_CXX_HAS_MAVX2)
@@ -1018,6 +1035,8 @@ if(XTBLOOM_ENABLE_AVX2_DISPATCH AND XTBLOOM_SINGLE_X86_64_TARGET)
         -march=x86-64 -mtune=generic -mno-avx -mno-avx2 -mno-fma -fno-lto)
       target_compile_options(xtbloom_gfn2_mulliken_baseline_objects PRIVATE
         -march=x86-64 -mtune=generic -mno-avx -mno-avx2 -mno-fma -fno-lto)
+      target_compile_options(xtbloom_integrals_baseline_objects PRIVATE
+        -march=x86-64 -mtune=generic -mno-avx -mno-avx2 -mno-fma -fno-lto)
     endif()
   endif()
 endif()
@@ -1029,6 +1048,12 @@ set(XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS
 set(XTBLOOM_GFN2_DISPATCH_OBJECTS
   $<TARGET_OBJECTS:xtbloom_cpu_dispatch_objects>
   $<TARGET_OBJECTS:xtbloom_gfn2_mulliken_baseline_objects>
+)
+set(XTBLOOM_COMMON_DISPATCH_OBJECT_TARGETS
+  xtbloom_integrals_baseline_objects
+)
+set(XTBLOOM_COMMON_DISPATCH_OBJECTS
+  $<TARGET_OBJECTS:xtbloom_integrals_baseline_objects>
 )
 if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
   add_library(xtbloom_gfn2_mulliken_avx2_objects OBJECT
@@ -1051,15 +1076,39 @@ if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
     POSITION_INDEPENDENT_CODE ON
     VISIBILITY_INLINES_HIDDEN YES
   )
+  add_library(xtbloom_integrals_avx2_objects OBJECT
+    src/model/common/integrals_kernels_avx2.cpp
+  )
+  target_compile_features(xtbloom_integrals_avx2_objects PUBLIC cxx_std_17)
+  target_include_directories(xtbloom_integrals_avx2_objects PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+  target_compile_options(xtbloom_integrals_avx2_objects PRIVATE
+    ${XTBLOOM_AVX2_FMA_COMPILE_OPTIONS})
+  if(MSVC)
+    target_compile_options(xtbloom_integrals_avx2_objects PRIVATE /GL-)
+  endif()
+  set_target_properties(xtbloom_integrals_avx2_objects PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    INTERPROCEDURAL_OPTIMIZATION OFF
+    POSITION_INDEPENDENT_CODE ON
+    VISIBILITY_INLINES_HIDDEN YES
+  )
   target_compile_definitions(xtbloom_cpu_dispatch_objects PRIVATE
     XTBLOOM_HAS_AVX2_FMA_KERNELS=1)
   list(APPEND XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS
     xtbloom_gfn2_mulliken_avx2_objects)
   list(APPEND XTBLOOM_GFN2_DISPATCH_OBJECTS
     $<TARGET_OBJECTS:xtbloom_gfn2_mulliken_avx2_objects>)
-  message(STATUS "xtbloom CPU ISA dispatch: baseline + AVX2/FMA Mulliken kernels")
+  list(APPEND XTBLOOM_COMMON_DISPATCH_OBJECT_TARGETS
+    xtbloom_integrals_avx2_objects)
+  list(APPEND XTBLOOM_COMMON_DISPATCH_OBJECTS
+    $<TARGET_OBJECTS:xtbloom_integrals_avx2_objects>)
+  message(STATUS "xtbloom CPU ISA dispatch: baseline + AVX2/FMA Mulliken and integral kernels")
 else()
-  message(STATUS "xtbloom CPU ISA dispatch: baseline Mulliken kernels only")
+  message(STATUS "xtbloom CPU ISA dispatch: baseline Mulliken and integral kernels only")
 endif()
 
 add_library(xtbloom_model_common_cpu_objects OBJECT
@@ -1087,6 +1136,10 @@ set_target_properties(xtbloom_model_common_cpu_objects PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   VISIBILITY_INLINES_HIDDEN YES
 )
+if(XTBLOOM_BUILD_AVX2_FMA_KERNELS)
+  target_compile_definitions(xtbloom_model_common_cpu_objects PRIVATE
+    XTBLOOM_HAS_AVX2_FMA_KERNELS=1)
+endif()
 if(CMAKE_DL_LIBS)
   target_link_libraries(xtbloom_model_common_cpu_objects PUBLIC ${CMAKE_DL_LIBS})
 endif()
@@ -1208,9 +1261,11 @@ set_target_properties(xtbloom_gfn1_cpu_objects PROPERTIES
 # receives only its own terms plus the small shared-model target.
 add_library(xtbloom_gfn2_cpu INTERFACE)
 target_link_libraries(xtbloom_gfn2_cpu INTERFACE
+  ${XTBLOOM_COMMON_DISPATCH_OBJECT_TARGETS}
   ${XTBLOOM_GFN2_DISPATCH_OBJECT_TARGETS}
   xtbloom_model_common_cpu_objects
   xtbloom_gfn2_cpu_objects
+  ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
   ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
   $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
@@ -1218,8 +1273,10 @@ target_link_libraries(xtbloom_gfn2_cpu INTERFACE
 
 add_library(xtbloom_gfn1_cpu INTERFACE)
 target_link_libraries(xtbloom_gfn1_cpu INTERFACE
+  ${XTBLOOM_COMMON_DISPATCH_OBJECT_TARGETS}
   xtbloom_model_common_cpu_objects
   xtbloom_gfn1_cpu_objects
+  ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
   $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
 )
@@ -1234,6 +1291,7 @@ add_library(xtbloom
   src/runtime/request.cpp
   src/runtime/result_owner.cpp
   src/runtime/validation.cpp
+  ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
   ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
   $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>
@@ -2070,6 +2128,7 @@ if(XTBLOOM_BUILD_TESTS)
       src/runtime/request.cpp
       src/runtime/result_owner.cpp
       src/runtime/validation.cpp
+      ${XTBLOOM_COMMON_DISPATCH_OBJECTS}
       ${XTBLOOM_GFN2_DISPATCH_OBJECTS}
       $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
       $<TARGET_OBJECTS:xtbloom_gfn1_cpu_objects>

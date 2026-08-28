@@ -3,6 +3,7 @@
 #include <string>
 
 #include "cpu_dispatch/features.hpp"
+#include "model/common/integrals.hpp"
 #include "model/gfn2/mulliken_kernels.hpp"
 
 #define CHECK(condition)                                                                   \
@@ -21,6 +22,9 @@ using xtbloom::detail::CpuFeatureSnapshot;
 using xtbloom::detail::CpuIsa;
 using xtbloom::detail::detect_cpu_features;
 using xtbloom::detail::resolve_cpu_isa_request;
+using xtbloom::detail::common::integral_avx2_fma_kernels;
+using xtbloom::detail::common::integral_baseline_kernels;
+using xtbloom::detail::common::integral_kernels_for_cpu_isa;
 using xtbloom::detail::gfn2::mulliken_avx2_fma_kernels;
 using xtbloom::detail::gfn2::mulliken_baseline_kernels;
 using xtbloom::detail::gfn2::mulliken_kernels_for_cpu_isa;
@@ -86,11 +90,16 @@ int test_every_capability_gate() {
 
 int test_kernel_identity_and_real_host_selection() {
   const auto& baseline = mulliken_baseline_kernels();
+  const auto& integral_baseline = integral_baseline_kernels();
   const CpuFeatureSnapshot actual = detect_cpu_features();
   CHECK(baseline.population != nullptr);
   CHECK(baseline.hamiltonian != nullptr);
   CHECK(baseline.isa == CpuIsa::kBaseline);
   CHECK(mulliken_kernels_for_cpu_isa(CpuIsa::kBaseline).population == baseline.population);
+  CHECK(integral_baseline.multipole_gradient_shell_pair != nullptr);
+  CHECK(integral_baseline.isa == CpuIsa::kBaseline);
+  CHECK(integral_kernels_for_cpu_isa(CpuIsa::kBaseline).multipole_gradient_shell_pair ==
+        integral_baseline.multipole_gradient_shell_pair);
 
   /* Never enter an AVX2-compiled translation unit on an incapable host merely
    * to inspect its table. The resolver tests the unavailable path using
@@ -103,6 +112,13 @@ int test_kernel_identity_and_real_host_selection() {
     CHECK(avx2.population != baseline.population);
     CHECK(avx2.hamiltonian != baseline.hamiltonian);
     CHECK(mulliken_kernels_for_cpu_isa(CpuIsa::kAvx2Fma).population == avx2.population);
+    const auto& integral_avx2 = integral_avx2_fma_kernels();
+    CHECK(integral_avx2.multipole_gradient_shell_pair != nullptr);
+    CHECK(integral_avx2.isa == CpuIsa::kAvx2Fma);
+    CHECK(integral_avx2.multipole_gradient_shell_pair !=
+          integral_baseline.multipole_gradient_shell_pair);
+    CHECK(integral_kernels_for_cpu_isa(CpuIsa::kAvx2Fma).multipole_gradient_shell_pair ==
+          integral_avx2.multipole_gradient_shell_pair);
   }
 
   CpuIsa selected = CpuIsa::kBaseline;
@@ -114,6 +130,7 @@ int test_kernel_identity_and_real_host_selection() {
                               : CpuIsa::kBaseline;
   CHECK(selected == expected);
   CHECK(mulliken_kernels_for_cpu_isa(selected).isa == expected);
+  CHECK(integral_kernels_for_cpu_isa(selected).isa == expected);
   return 0;
 }
 
