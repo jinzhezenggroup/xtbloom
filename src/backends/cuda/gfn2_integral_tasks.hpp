@@ -80,8 +80,7 @@ struct Gfn2IntegralHostTaskDomains {
 
 namespace integral_tasks_detail {
 
-inline bool checked_add(std::uint64_t first, std::uint64_t second,
-                        std::uint64_t& result) noexcept {
+inline bool checked_add(std::uint64_t first, std::uint64_t second, std::uint64_t& result) noexcept {
   if (second > std::numeric_limits<std::uint64_t>::max() - first) return false;
   result = first + second;
   return true;
@@ -117,16 +116,14 @@ inline bool add_primitive_work(std::int64_t first, std::int64_t second,
 inline Gfn2IntegralPrimitiveSignatureAccounting& primitive_signature(
     std::vector<Gfn2IntegralPrimitiveSignatureAccounting>& signatures, std::uint8_t bra_l,
     std::uint8_t ket_l, std::int64_t bra_primitives, std::int64_t ket_primitives) {
-  const auto existing = std::find_if(
-      signatures.begin(), signatures.end(), [&](const auto& signature) {
-        return signature.bra_angular_momentum == bra_l &&
-               signature.ket_angular_momentum == ket_l &&
+  const auto existing =
+      std::find_if(signatures.begin(), signatures.end(), [&](const auto& signature) {
+        return signature.bra_angular_momentum == bra_l && signature.ket_angular_momentum == ket_l &&
                signature.bra_primitives == bra_primitives &&
                signature.ket_primitives == ket_primitives;
       });
   if (existing != signatures.end()) return *existing;
-  signatures.push_back(
-      {bra_l, ket_l, bra_primitives, ket_primitives, 0, 0, 0, 0u, 0u, 0u});
+  signatures.push_back({bra_l, ket_l, bra_primitives, ket_primitives, 0, 0, 0, 0u, 0u, 0u});
   return signatures.back();
 }
 
@@ -181,12 +178,10 @@ inline xtbloom_status_t make_gfn2_integral_task_domains(
 
   std::int64_t capacity_per_system = 0;
   if (!checked_multiply(maximum_shells, maximum_shells, capacity_per_system) ||
-      !checked_multiply(capacity_per_system, basis.batch_size,
-                        created.accounting.capacity_slots) ||
+      !checked_multiply(capacity_per_system, basis.batch_size, created.accounting.capacity_slots) ||
       shell_pair_offsets.back() < 0 ||
       shell_pair_offsets.back() > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
-      basis.total_shells >
-          static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
+      basis.total_shells > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
     error = "CUDA integral task setup exceeds the supported launch domain";
     return XTBLOOM_STATUS_INVALID_ARGUMENT;
   }
@@ -247,16 +242,15 @@ inline xtbloom_status_t make_gfn2_integral_task_domains(
           return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
         const std::size_t klass = shell_class(bra_l, ket_l);
-        auto& signature = primitive_signature(created.accounting.primitive_signatures, bra_l,
-                                              ket_l, bra_primitives, ket_primitives);
+        auto& signature = primitive_signature(created.accounting.primitive_signatures, bra_l, ket_l,
+                                              bra_primitives, ket_primitives);
 
         (bra_l == 0u && ket_l == 0u ? created.h0_ss : created.h0_generic).push_back(task);
         ++created.accounting.h0_shell_classes[klass];
         ++signature.h0_tasks;
         if (!add_primitive_work(bra_primitives, ket_primitives,
                                 created.accounting.h0_primitive_work) ||
-            !add_primitive_work(bra_primitives, ket_primitives,
-                                signature.h0_primitive_work)) {
+            !add_primitive_work(bra_primitives, ket_primitives, signature.h0_primitive_work)) {
           error = "CUDA integral H0 primitive-work accounting overflowed";
           return XTBLOOM_STATUS_INVALID_ARGUMENT;
         }
@@ -280,8 +274,7 @@ inline xtbloom_status_t make_gfn2_integral_task_domains(
           ++signature.force_tasks;
           if (!add_primitive_work(bra_primitives, ket_primitives,
                                   created.accounting.force_primitive_work) ||
-              !add_primitive_work(bra_primitives, ket_primitives,
-                                  signature.force_primitive_work)) {
+              !add_primitive_work(bra_primitives, ket_primitives, signature.force_primitive_work)) {
             error = "CUDA integral-force primitive-work accounting overflowed";
             return XTBLOOM_STATUS_INVALID_ARGUMENT;
           }
