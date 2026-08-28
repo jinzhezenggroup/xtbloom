@@ -13,6 +13,10 @@
 #include <stdexcept>
 #include <utility>
 
+#if defined(XTBLOOM_INTEGRALS_BASELINE_VARIANT) || defined(XTBLOOM_INTEGRALS_AVX2_FMA_VARIANT)
+#define XTBLOOM_INTEGRALS_KERNEL_VARIANT 1
+#endif
+
 namespace xtbloom::detail::common {
 namespace {
 
@@ -488,11 +492,16 @@ void add_multipole_shift_pullback(
       axz * (dx + x * overlap) + ayz * (dy + y * overlap) + azz * (2.0 * dz + 2.0 * z * overlap);
 }
 
+template <int BraAngularMomentum = -1, int KetAngularMomentum = -1>
 void compute_shell_pair(const BasisPlan& basis, std::size_t bra_shell, std::size_t ket_shell,
                         const double vector[3], double integral_cutoff, bool with_gradient,
                         bool with_multipoles, IntegralWorkspace& workspace) {
-  const std::uint8_t bra_l = basis.angular_momenta[bra_shell];
-  const std::uint8_t ket_l = basis.angular_momenta[ket_shell];
+  static_assert(BraAngularMomentum >= -1 && BraAngularMomentum <= 2);
+  static_assert(KetAngularMomentum >= -1 && KetAngularMomentum <= 2);
+  const std::uint8_t bra_l = BraAngularMomentum < 0 ? basis.angular_momenta[bra_shell]
+                                                    : static_cast<std::uint8_t>(BraAngularMomentum);
+  const std::uint8_t ket_l = KetAngularMomentum < 0 ? basis.angular_momenta[ket_shell]
+                                                    : static_cast<std::uint8_t>(KetAngularMomentum);
   const std::size_t bra_cartesian_count = cartesian_count(bra_l);
   const std::size_t ket_cartesian_count = cartesian_count(ket_l);
   const std::size_t cartesian_block_size = bra_cartesian_count * ket_cartesian_count;
@@ -656,6 +665,112 @@ void compute_shell_pair(const BasisPlan& basis, std::size_t bra_shell, std::size
 
 }  // namespace
 
+#if defined(_MSC_VER)
+#define XTBLOOM_INTEGRALS_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define XTBLOOM_INTEGRALS_NOINLINE __attribute__((noinline))
+#else
+#define XTBLOOM_INTEGRALS_NOINLINE
+#endif
+
+#if defined(XTBLOOM_INTEGRALS_BASELINE_VARIANT)
+
+XTBLOOM_INTEGRALS_NOINLINE void multipole_gradient_shell_pair_baseline(
+    const BasisPlan& basis, std::size_t bra_shell, std::size_t ket_shell, const double* vector,
+    double integral_cutoff, void* workspace) noexcept {
+  compute_shell_pair<>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                       *static_cast<IntegralWorkspace*>(workspace));
+}
+
+const IntegralKernelTable& integral_baseline_kernels() noexcept {
+  static constexpr IntegralKernelTable kernels{&multipole_gradient_shell_pair_baseline,
+                                               CpuIsa::kBaseline};
+  return kernels;
+}
+
+#elif defined(XTBLOOM_INTEGRALS_AVX2_FMA_VARIANT)
+
+XTBLOOM_INTEGRALS_NOINLINE void multipole_gradient_shell_pair_avx2_fma(
+    const BasisPlan& basis, std::size_t bra_shell, std::size_t ket_shell, const double* vector,
+    double integral_cutoff, void* workspace) noexcept {
+  auto& scratch = *static_cast<IntegralWorkspace*>(workspace);
+  /* The public basis validator restricts angular momentum to s/p/d. Keeping
+   * all nine ordered cases explicit lets the compiler eliminate component
+   * decoding and loop bounds without duplicating any recurrence formula. */
+  switch (3u * basis.angular_momenta[bra_shell] + basis.angular_momenta[ket_shell]) {
+    case 0u:
+      compute_shell_pair<0, 0>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                               scratch);
+      return;
+    case 1u:
+      compute_shell_pair<0, 1>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                               scratch);
+      return;
+    case 2u:
+      compute_shell_pair<0, 2>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                               scratch);
+      return;
+    case 3u:
+      compute_shell_pair<1, 0>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                               scratch);
+      return;
+    case 4u:
+      compute_shell_pair<1, 1>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                               scratch);
+      return;
+    case 5u:
+      compute_shell_pair<1, 2>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                               scratch);
+      return;
+    case 6u:
+      compute_shell_pair<2, 0>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                               scratch);
+      return;
+    case 7u:
+      compute_shell_pair<2, 1>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                               scratch);
+      return;
+    case 8u:
+      compute_shell_pair<2, 2>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                               scratch);
+      return;
+    default:
+      compute_shell_pair<>(basis, bra_shell, ket_shell, vector, integral_cutoff, true, true,
+                           scratch);
+  }
+}
+
+const IntegralKernelTable& integral_avx2_fma_kernels() noexcept {
+  static constexpr IntegralKernelTable kernels{&multipole_gradient_shell_pair_avx2_fma,
+                                               CpuIsa::kAvx2Fma};
+  return kernels;
+}
+
+#else
+
+#if !defined(XTBLOOM_HAS_AVX2_FMA_KERNELS)
+const IntegralKernelTable& integral_avx2_fma_kernels() noexcept {
+  return integral_baseline_kernels();
+}
+#endif
+
+const IntegralKernelTable& integral_kernels_for_cpu_isa(CpuIsa isa) noexcept {
+#if defined(XTBLOOM_HAS_AVX2_FMA_KERNELS)
+  if (isa == CpuIsa::kAvx2Fma) {
+    return integral_avx2_fma_kernels();
+  }
+#else
+  (void)isa;
+#endif
+  return integral_baseline_kernels();
+}
+
+#endif
+
+#undef XTBLOOM_INTEGRALS_NOINLINE
+
+#if !defined(XTBLOOM_INTEGRALS_KERNEL_VARIANT)
+
 xtbloom_status_t make_integral_plan(const BasisPlan& basis, IntegralPlan& plan, std::string& error,
                                     double integral_cutoff) {
   xtbloom_status_t status = validate_basis(basis, error);
@@ -741,8 +856,8 @@ xtbloom_status_t evaluate_overlap_cpu(const BasisPlan& basis, const IntegralPlan
             }
             const std::size_t ket_shell_index = static_cast<std::size_t>(ket_shell);
             const std::size_t bra_shell_index = static_cast<std::size_t>(bra_shell);
-            compute_shell_pair(basis, bra_shell_index, ket_shell_index, vector,
-                               plan.integral_cutoff, false, false, scratch);
+            compute_shell_pair<>(basis, bra_shell_index, ket_shell_index, vector,
+                                 plan.integral_cutoff, false, false, scratch);
 
             const std::size_t bra_spherical_count =
                 spherical_count(basis.angular_momenta[bra_shell_index]);
@@ -824,8 +939,8 @@ xtbloom_status_t evaluate_multipole_cpu(const BasisPlan& basis, const IntegralPl
             }
             const std::size_t ket_shell_index = static_cast<std::size_t>(ket_shell);
             const std::size_t bra_shell_index = static_cast<std::size_t>(bra_shell);
-            compute_shell_pair(basis, bra_shell_index, ket_shell_index, vector,
-                               plan.integral_cutoff, false, true, scratch);
+            compute_shell_pair<>(basis, bra_shell_index, ket_shell_index, vector,
+                                 plan.integral_cutoff, false, true, scratch);
 
             const std::size_t bra_count = spherical_count(basis.angular_momenta[bra_shell_index]);
             const std::size_t ket_count = spherical_count(basis.angular_momenta[ket_shell_index]);
@@ -914,7 +1029,7 @@ xtbloom_status_t add_multipole_gradient_cpu(const BasisPlan& basis, const Integr
                                             const double* positions, const double* dE_ddipole,
                                             const double* dE_dquadrupole, double* gradients,
                                             void* workspace, std::size_t workspace_size,
-                                            std::string& error) {
+                                            std::string& error, CpuIsa cpu_isa) {
   xtbloom_status_t status =
       validate_evaluation(basis, plan, positions, workspace, workspace_size, error);
   if (status != XTBLOOM_STATUS_SUCCESS) {
@@ -945,6 +1060,7 @@ xtbloom_status_t add_multipole_gradient_cpu(const BasisPlan& basis, const Integr
   }
 
   auto& scratch = *static_cast<IntegralWorkspace*>(workspace);
+  const IntegralKernelTable& kernels = integral_kernels_for_cpu_isa(cpu_isa);
   for (std::int64_t batch = 0; batch < basis.batch_size; ++batch) {
     const std::size_t batch_index = static_cast<std::size_t>(batch);
     const std::int64_t atom_begin = basis.atom_offsets[batch_index];
@@ -972,8 +1088,8 @@ xtbloom_status_t add_multipole_gradient_cpu(const BasisPlan& basis, const Integr
           for (std::int64_t bra_shell = bra_shell_begin; bra_shell < bra_shell_end; ++bra_shell) {
             const std::size_t ket_shell_index = static_cast<std::size_t>(ket_shell);
             const std::size_t bra_shell_index = static_cast<std::size_t>(bra_shell);
-            compute_shell_pair(basis, bra_shell_index, ket_shell_index, vector,
-                               plan.integral_cutoff, true, true, scratch);
+            kernels.multipole_gradient_shell_pair(basis, bra_shell_index, ket_shell_index, vector,
+                                                  plan.integral_cutoff, &scratch);
 
             const std::size_t bra_count = spherical_count(basis.angular_momenta[bra_shell_index]);
             const std::size_t ket_count = spherical_count(basis.angular_momenta[ket_shell_index]);
@@ -1105,8 +1221,8 @@ xtbloom_status_t add_overlap_gradient_cpu(const BasisPlan& basis, const Integral
           for (std::int64_t bra_shell = bra_shell_begin; bra_shell < bra_shell_end; ++bra_shell) {
             const std::size_t ket_shell_index = static_cast<std::size_t>(ket_shell);
             const std::size_t bra_shell_index = static_cast<std::size_t>(bra_shell);
-            compute_shell_pair(basis, bra_shell_index, ket_shell_index, vector,
-                               plan.integral_cutoff, true, false, scratch);
+            compute_shell_pair<>(basis, bra_shell_index, ket_shell_index, vector,
+                                 plan.integral_cutoff, true, false, scratch);
 
             const std::size_t bra_spherical_count =
                 spherical_count(basis.angular_momenta[bra_shell_index]);
@@ -1145,4 +1261,8 @@ xtbloom_status_t add_overlap_gradient_cpu(const BasisPlan& basis, const Integral
   return XTBLOOM_STATUS_SUCCESS;
 }
 
+#endif  // !defined(XTBLOOM_INTEGRALS_KERNEL_VARIANT)
+
 }  // namespace xtbloom::detail::common
+
+#undef XTBLOOM_INTEGRALS_KERNEL_VARIANT

@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "cpu_dispatch/features.hpp"
 #include "model/common/basis.hpp"
 #include "xtbloom/xtbloom.h"
 
@@ -25,6 +26,25 @@ struct IntegralPlan {
 /* tblite's default dimensionless Gaussian-product cutoff at accuracy 1.0. */
 inline constexpr double kDefaultIntegralCutoff = 25.0;
 
+/*
+ * Context-selected implementation of the multipole-gradient shell-pair
+ * arithmetic. The opaque workspace points to the evaluator's preallocated
+ * integral scratch buffer; keeping its private layout out of this header gives
+ * each ISA variant a narrow, allocation-free boundary without expanding the
+ * model interface.
+ */
+using MultipoleGradientShellPairKernel = void (*)(const BasisPlan&, std::size_t, std::size_t,
+                                                  const double*, double, void*) noexcept;
+
+struct IntegralKernelTable {
+  MultipoleGradientShellPairKernel multipole_gradient_shell_pair = nullptr;
+  CpuIsa isa = CpuIsa::kBaseline;
+};
+
+[[nodiscard]] const IntegralKernelTable& integral_baseline_kernels() noexcept;
+[[nodiscard]] const IntegralKernelTable& integral_avx2_fma_kernels() noexcept;
+[[nodiscard]] const IntegralKernelTable& integral_kernels_for_cpu_isa(CpuIsa isa) noexcept;
+
 xtbloom_status_t make_integral_plan(const BasisPlan& basis, IntegralPlan& plan, std::string& error,
                                     double integral_cutoff = kDefaultIntegralCutoff);
 
@@ -41,7 +61,7 @@ xtbloom_status_t add_multipole_gradient_cpu(const BasisPlan& basis, const Integr
                                             const double* positions, const double* dE_ddipole,
                                             const double* dE_dquadrupole, double* gradients,
                                             void* workspace, std::size_t workspace_size,
-                                            std::string& error);
+                                            std::string& error, CpuIsa cpu_isa = CpuIsa::kBaseline);
 
 xtbloom_status_t add_overlap_gradient_cpu(const BasisPlan& basis, const IntegralPlan& plan,
                                           const double* positions, const double* dE_doverlap,

@@ -530,10 +530,10 @@ xtbloom_status_t evaluate_restricted_gfn2_energy_forces_cpu(
                                       workspace.integral_workspace_size, error);
   }
   if (status == XTBLOOM_STATUS_SUCCESS) {
-    status = add_multipole_gradient_cpu(basis, integrals, input.positions, workspace.dipole_adjoint,
-                                        workspace.quadrupole_adjoint, workspace.component_gradient,
-                                        workspace.integral_workspace,
-                                        workspace.integral_workspace_size, error);
+    status = add_multipole_gradient_cpu(
+        basis, integrals, input.positions, workspace.dipole_adjoint, workspace.quadrupole_adjoint,
+        workspace.component_gradient, workspace.integral_workspace,
+        workspace.integral_workspace_size, error, mulliken.cpu_isa());
   }
   if (status == XTBLOOM_STATUS_SUCCESS) {
     status =
