@@ -14,6 +14,7 @@ namespace xtbloom::detail::cuda {
 namespace {
 
 constexpr int kThreadsPerBlock = 64;
+constexpr int kCompactH0ThreadsPerBlock = 16;
 constexpr std::int64_t kMaximumInt64 = 9223372036854775807LL;
 constexpr double kSqrtThree = 1.732050807568877293527446341505872367;
 constexpr double kSqrtPiCubed = 5.5683279968317061;
@@ -257,6 +258,33 @@ __device__ void multipole_power(int component, int* x, int* y, int* z) {
   *z = powers[component][2];
 }
 
+/* Compact task contents are plan-owned, but guard their indices so a damaged
+ * immutable arena fails closed instead of becoming an unchecked device read. */
+__device__ bool resolve_shell_pair_task(const Gfn2IntegralDeviceBatch& batch,
+                                        const Gfn2IntegralShellPairTask* tasks,
+                                        std::int64_t global_pair, std::int64_t maximum_pair_blocks,
+                                        std::uint32_t* system_errors, std::uint32_t* device_error,
+                                        std::int64_t& system, std::int64_t& local_pair,
+                                        std::int64_t& task_bra_shell,
+                                        std::int64_t& task_ket_shell) {
+  system = tasks == nullptr ? global_pair / maximum_pair_blocks
+                            : static_cast<std::int64_t>(tasks[global_pair].system);
+  local_pair = tasks == nullptr ? global_pair - system * maximum_pair_blocks
+                                : static_cast<std::int64_t>(tasks[global_pair].local_pair);
+  task_bra_shell = tasks == nullptr ? -1 : static_cast<std::int64_t>(tasks[global_pair].bra_shell);
+  task_ket_shell = tasks == nullptr ? -1 : static_cast<std::int64_t>(tasks[global_pair].ket_shell);
+  if (system >= 0 && system < batch.batch_size) {
+    return true;
+  }
+  if (threadIdx.x == 0) {
+    for (std::int64_t member = 0; member < batch.batch_size; ++member) {
+      record_system_error(system_errors, member, device_error,
+                          Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    }
+  }
+  return false;
+}
+
 /* tblite real-spherical rows in [-l,...,+l] and CCA Cartesian columns. */
 __device__ double spherical_coefficient(std::uint8_t angular_momentum, int spherical,
                                         int cartesian) {
@@ -323,10 +351,17 @@ __global__ void integral_shell_pair_kernel(Gfn2IntegralDeviceBatch batch, const 
                                            Gfn2IntegralDeviceWorkspace workspace,
                                            std::uint32_t* system_errors,
                                            std::uint32_t* device_error,
+                                           const Gfn2IntegralShellPairTask* tasks,
                                            std::int64_t maximum_pair_blocks) {
   const std::int64_t global_pair = static_cast<std::int64_t>(blockIdx.x);
-  const std::int64_t system = global_pair / maximum_pair_blocks;
-  const std::int64_t local_pair = global_pair - system * maximum_pair_blocks;
+  std::int64_t system = 0;
+  std::int64_t local_pair = 0;
+  std::int64_t task_bra_shell = -1;
+  std::int64_t task_ket_shell = -1;
+  if (!resolve_shell_pair_task(batch, tasks, global_pair, maximum_pair_blocks, system_errors,
+                               device_error, system, local_pair, task_bra_shell, task_ket_shell)) {
+    return;
+  }
   if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
     return;
   }
@@ -334,11 +369,22 @@ __global__ void integral_shell_pair_kernel(Gfn2IntegralDeviceBatch batch, const 
   const std::int64_t shell_begin = batch.batch_shell_offsets[system];
   const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
   const std::int64_t shells = shell_end - shell_begin;
-  if (local_pair >= shells * shells) {
+  const bool compact_task_valid =
+      tasks == nullptr ||
+      (task_bra_shell >= shell_begin && task_bra_shell < shell_end &&
+       task_ket_shell >= shell_begin && task_ket_shell < shell_end &&
+       local_pair == (task_bra_shell - shell_begin) * shells + task_ket_shell - shell_begin);
+  if (local_pair >= shells * shells || !compact_task_valid) {
+    if (tasks != nullptr && threadIdx.x == 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    }
     return;
   }
-  const std::int64_t bra_shell = shell_begin + local_pair / shells;
-  const std::int64_t ket_shell = shell_begin + local_pair % shells;
+  const std::int64_t bra_shell =
+      tasks == nullptr ? shell_begin + local_pair / shells : task_bra_shell;
+  const std::int64_t ket_shell =
+      tasks == nullptr ? shell_begin + local_pair % shells : task_ket_shell;
   const std::int64_t bra_atom = batch.shell_to_atom[bra_shell];
   const std::int64_t ket_atom = batch.shell_to_atom[ket_shell];
   if (bra_atom > ket_atom || (bra_atom == ket_atom && bra_shell > ket_shell)) {
@@ -560,6 +606,180 @@ __global__ void integral_shell_pair_kernel(Gfn2IntegralDeviceBatch batch, const 
   }
 }
 
+__device__ void make_ss_moments(const double vector[3], double bra_alpha, double inverse_sum,
+                                double moments[3][4]) {
+  const double inverse_twice_sum = 0.5 * inverse_sum;
+  for (int coordinate = 0; coordinate < 3; ++coordinate) {
+    const double product_minus_i = -vector[coordinate] * bra_alpha * inverse_sum;
+    moments[coordinate][0] = 1.0;
+    for (int power = 1; power <= 3; ++power) {
+      moments[coordinate][power] = product_minus_i * moments[coordinate][power - 1];
+      if (power > 1) {
+        moments[coordinate][power] +=
+            static_cast<double>(power - 1) * inverse_twice_sum * moments[coordinate][power - 2];
+      }
+    }
+  }
+}
+
+/* The generic shell-pair kernel assigns a complete 64-thread CTA to an ss
+ * pair even though only one Cartesian/spherical lane carries work. Packing
+ * independent immutable ss tasks removes that structural underfill without
+ * changing the primitive contraction order within any task. */
+__global__ void integral_ss_task_kernel(Gfn2IntegralDeviceBatch batch, const double* positions,
+                                        Gfn2IntegralDeviceWorkspace workspace,
+                                        std::uint32_t* system_errors, std::uint32_t* device_error,
+                                        const Gfn2IntegralShellPairTask* tasks,
+                                        std::int64_t task_count) {
+  const std::int64_t task_index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (task_index >= task_count || !sequence_is_active(workspace)) return;
+  const Gfn2IntegralShellPairTask task = tasks[task_index];
+  const std::int64_t system = static_cast<std::int64_t>(task.system);
+  if (system < 0 || system >= batch.batch_size) {
+    for (std::int64_t member = 0; member < batch.batch_size; ++member) {
+      record_system_error(system_errors, member, device_error,
+                          Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    }
+    return;
+  }
+  if (!system_is_valid(system_errors, system)) return;
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t shells = shell_end - shell_begin;
+  const std::int64_t local_pair = static_cast<std::int64_t>(task.local_pair);
+  const std::int64_t bra_shell = static_cast<std::int64_t>(task.bra_shell);
+  const std::int64_t ket_shell = static_cast<std::int64_t>(task.ket_shell);
+  if (local_pair >= shells * shells || bra_shell < shell_begin || bra_shell >= shell_end ||
+      ket_shell < shell_begin || ket_shell >= shell_end ||
+      local_pair != (bra_shell - shell_begin) * shells + ket_shell - shell_begin) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    return;
+  }
+  const std::int64_t bra_atom = batch.shell_to_atom[bra_shell];
+  const std::int64_t ket_atom = batch.shell_to_atom[ket_shell];
+  if (batch.angular_momenta[bra_shell] != 0u || batch.angular_momenta[ket_shell] != 0u ||
+      bra_atom > ket_atom || (bra_atom == ket_atom && bra_shell > ket_shell)) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    return;
+  }
+  const double vector[3] = {positions[ket_atom * 3] - positions[bra_atom * 3],
+                            positions[ket_atom * 3 + 1] - positions[bra_atom * 3 + 1],
+                            positions[ket_atom * 3 + 2] - positions[bra_atom * 3 + 2]};
+  const double distance_squared =
+      vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
+  if (!isfinite(vector[0]) || !isfinite(vector[1]) || !isfinite(vector[2]) ||
+      !isfinite(distance_squared)) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kCoordinateDifferenceOverflow);
+    return;
+  }
+
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
+  double overlap_value = 0.0;
+  double raw_multipoles[kMultipoleComponents] = {};
+  const std::int64_t bra_primitive_begin = batch.shell_primitive_offsets[bra_shell];
+  const std::int64_t bra_primitive_end = batch.shell_primitive_offsets[bra_shell + 1];
+  const std::int64_t ket_primitive_begin = batch.shell_primitive_offsets[ket_shell];
+  const std::int64_t ket_primitive_end = batch.shell_primitive_offsets[ket_shell + 1];
+  for (std::int64_t ket_primitive = ket_primitive_begin; ket_primitive < ket_primitive_end;
+       ++ket_primitive) {
+    const double ket_alpha = batch.primitive_exponents[ket_primitive];
+    for (std::int64_t bra_primitive = bra_primitive_begin; bra_primitive < bra_primitive_end;
+         ++bra_primitive) {
+      const double bra_alpha = batch.primitive_exponents[bra_primitive];
+      const double alpha_sum = ket_alpha + bra_alpha;
+      const double inverse_sum = 1.0 / alpha_sum;
+      const double product_exponent = ket_alpha * bra_alpha * distance_squared * inverse_sum;
+      if (product_exponent > batch.integral_cutoff) continue;
+      const double sqrt_inverse_sum = sqrt(inverse_sum);
+      const double primitive_prefactor = exp(-product_exponent) * kSqrtPiCubed * sqrt_inverse_sum *
+                                         sqrt_inverse_sum * sqrt_inverse_sum *
+                                         batch.primitive_coefficients[ket_primitive] *
+                                         batch.primitive_coefficients[bra_primitive];
+      overlap_value += primitive_prefactor;
+      if (!multipoles_enabled) continue;
+      double moments[3][4];
+      make_ss_moments(vector, bra_alpha, inverse_sum, moments);
+      for (int component = 0; component < kMultipoleComponents; ++component) {
+        int power[3];
+        multipole_power(component, &power[0], &power[1], &power[2]);
+        raw_multipoles[component] += primitive_prefactor * moments[0][power[0]] *
+                                     moments[1][power[1]] * moments[2][power[2]];
+      }
+    }
+  }
+  bool finite = isfinite(overlap_value);
+  for (int component = 0; multipoles_enabled && component < kMultipoleComponents; ++component) {
+    finite = finite && isfinite(raw_multipoles[component]);
+  }
+  if (!finite) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kNonfiniteIntegralArithmetic);
+    return;
+  }
+
+  const std::int64_t orbital_begin = batch.batch_orbital_offsets[system];
+  const std::int64_t orbital_count = batch.batch_orbital_offsets[system + 1] - orbital_begin;
+  const std::int64_t matrix_begin = batch.matrix_offsets[system];
+  const std::int64_t bra_orbital = batch.shell_orbital_offsets[bra_shell] - orbital_begin;
+  const std::int64_t ket_orbital = batch.shell_orbital_offsets[ket_shell] - orbital_begin;
+  const std::int64_t forward = matrix_begin + bra_orbital * orbital_count + ket_orbital;
+  const std::int64_t reverse = matrix_begin + ket_orbital * orbital_count + bra_orbital;
+  workspace.overlap_scratch[forward] = overlap_value;
+  workspace.overlap_scratch[reverse] = overlap_value;
+  if (!multipoles_enabled) return;
+  const double dipole[3] = {raw_multipoles[0], raw_multipoles[1], raw_multipoles[2]};
+  const double trace = 0.5 * (raw_multipoles[3] + raw_multipoles[5] + raw_multipoles[8]);
+  const double quadrupole[6] = {1.5 * raw_multipoles[3] - trace, 1.5 * raw_multipoles[4],
+                                1.5 * raw_multipoles[5] - trace, 1.5 * raw_multipoles[6],
+                                1.5 * raw_multipoles[7],         1.5 * raw_multipoles[8] - trace};
+  for (int component = 0; component < 3; ++component) {
+    workspace.dipole_scratch[component * batch.total_matrix_elements + forward] = dipole[component];
+  }
+  for (int component = 0; component < 6; ++component) {
+    workspace.quadrupole_scratch[component * batch.total_matrix_elements + forward] =
+        quadrupole[component];
+  }
+  if (bra_shell == ket_shell) {
+    for (int component = 0; component < 3; ++component) {
+      workspace.dipole_scratch[component * batch.total_matrix_elements + reverse] =
+          dipole[component];
+    }
+    for (int component = 0; component < 6; ++component) {
+      workspace.quadrupole_scratch[component * batch.total_matrix_elements + reverse] =
+          quadrupole[component];
+    }
+    return;
+  }
+  double shifted_dipole[3];
+  for (int component = 0; component < 3; ++component) {
+    shifted_dipole[component] = dipole[component] + vector[component] * overlap_value;
+    workspace.dipole_scratch[component * batch.total_matrix_elements + reverse] =
+        shifted_dipole[component];
+  }
+  const double shift[6] = {
+      2.0 * vector[0] * dipole[0] + vector[0] * vector[0] * overlap_value,
+      vector[0] * dipole[1] + vector[1] * dipole[0] + vector[0] * vector[1] * overlap_value,
+      2.0 * vector[1] * dipole[1] + vector[1] * vector[1] * overlap_value,
+      vector[0] * dipole[2] + vector[2] * dipole[0] + vector[0] * vector[2] * overlap_value,
+      vector[1] * dipole[2] + vector[2] * dipole[1] + vector[1] * vector[2] * overlap_value,
+      2.0 * vector[2] * dipole[2] + vector[2] * vector[2] * overlap_value};
+  const double shift_trace = 0.5 * (shift[0] + shift[2] + shift[5]);
+  for (int component = 0; component < 6; ++component) {
+    const bool diagonal = component == 0 || component == 2 || component == 5;
+    const double shifted =
+        quadrupole[component] + 1.5 * shift[component] - (diagonal ? shift_trace : 0.0);
+    if (!isfinite(shifted)) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kNonfiniteIntegralArithmetic);
+      return;
+    }
+    workspace.quadrupole_scratch[component * batch.total_matrix_elements + reverse] = shifted;
+  }
+}
+
 __global__ void publish_integrals_kernel(Gfn2IntegralDeviceBatch batch, const double* overlap_in,
                                          const double* dipole_in, const double* quadrupole_in,
                                          double* overlap, double* dipole, double* quadrupole,
@@ -653,21 +873,40 @@ __global__ void h0_shell_pair_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0Device
                                      const double* positions, const double* coordination_numbers,
                                      const double* overlap, Gfn2IntegralDeviceWorkspace workspace,
                                      std::uint32_t* system_errors, std::uint32_t* device_error,
+                                     const Gfn2IntegralShellPairTask* tasks,
                                      std::int64_t maximum_pair_blocks) {
   const std::int64_t global_pair = static_cast<std::int64_t>(blockIdx.x);
-  const std::int64_t system = global_pair / maximum_pair_blocks;
-  const std::int64_t local_pair = global_pair - system * maximum_pair_blocks;
+  std::int64_t system = 0;
+  std::int64_t local_pair = 0;
+  std::int64_t task_first_shell = -1;
+  std::int64_t task_second_shell = -1;
+  if (!resolve_shell_pair_task(batch, tasks, global_pair, maximum_pair_blocks, system_errors,
+                               device_error, system, local_pair, task_first_shell,
+                               task_second_shell)) {
+    return;
+  }
   if (!sequence_is_active(workspace) || !system_is_valid(system_errors, system)) {
     return;
   }
   const std::int64_t shell_begin = batch.batch_shell_offsets[system];
   const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
   const std::int64_t shells = shell_end - shell_begin;
-  if (local_pair >= shells * shells) {
+  const bool compact_task_valid =
+      tasks == nullptr ||
+      (task_first_shell >= shell_begin && task_first_shell < shell_end &&
+       task_second_shell >= shell_begin && task_second_shell < shell_end &&
+       local_pair == (task_first_shell - shell_begin) * shells + task_second_shell - shell_begin);
+  if (local_pair >= shells * shells || !compact_task_valid) {
+    if (tasks != nullptr && threadIdx.x == 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    }
     return;
   }
-  const std::int64_t first_shell = shell_begin + local_pair / shells;
-  const std::int64_t second_shell = shell_begin + local_pair % shells;
+  const std::int64_t first_shell =
+      tasks == nullptr ? shell_begin + local_pair / shells : task_first_shell;
+  const std::int64_t second_shell =
+      tasks == nullptr ? shell_begin + local_pair % shells : task_second_shell;
   const std::int64_t first_atom = batch.shell_to_atom[first_shell];
   const std::int64_t second_atom = batch.shell_to_atom[second_shell];
   const double first_level =
@@ -719,6 +958,79 @@ __global__ void h0_shell_pair_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0Device
       workspace.h0_scratch[matrix] = value;
     }
   }
+}
+
+__global__ void h0_ss_task_kernel(Gfn2IntegralDeviceBatch batch, Gfn2H0DevicePlan plan,
+                                  const double* positions, const double* coordination_numbers,
+                                  const double* overlap, Gfn2IntegralDeviceWorkspace workspace,
+                                  std::uint32_t* system_errors, std::uint32_t* device_error,
+                                  const Gfn2IntegralShellPairTask* tasks, std::int64_t task_count) {
+  const std::int64_t task_index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (task_index >= task_count || !sequence_is_active(workspace)) return;
+  const Gfn2IntegralShellPairTask task = tasks[task_index];
+  const std::int64_t system = static_cast<std::int64_t>(task.system);
+  if (system < 0 || system >= batch.batch_size) {
+    for (std::int64_t member = 0; member < batch.batch_size; ++member) {
+      record_system_error(system_errors, member, device_error,
+                          Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    }
+    return;
+  }
+  if (!system_is_valid(system_errors, system)) return;
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t shells = shell_end - shell_begin;
+  const std::int64_t local_pair = static_cast<std::int64_t>(task.local_pair);
+  const std::int64_t first_shell = static_cast<std::int64_t>(task.bra_shell);
+  const std::int64_t second_shell = static_cast<std::int64_t>(task.ket_shell);
+  if (local_pair >= shells * shells || first_shell < shell_begin || first_shell >= shell_end ||
+      second_shell < shell_begin || second_shell >= shell_end ||
+      local_pair != (first_shell - shell_begin) * shells + second_shell - shell_begin) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    return;
+  }
+  if (batch.angular_momenta[first_shell] != 0u || batch.angular_momenta[second_shell] != 0u) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    return;
+  }
+  const std::int64_t first_atom = batch.shell_to_atom[first_shell];
+  const std::int64_t second_atom = batch.shell_to_atom[second_shell];
+  const double first_level =
+      plan.shell_levels[first_shell] -
+      plan.shell_coordination_scale[first_shell] * coordination_numbers[first_atom];
+  const double second_level =
+      plan.shell_levels[second_shell] -
+      plan.shell_coordination_scale[second_shell] * coordination_numbers[second_atom];
+  double spatial_scale = 1.0;
+  if (first_atom != second_atom) {
+    const double dx = positions[first_atom * 3] - positions[second_atom * 3];
+    const double dy = positions[first_atom * 3 + 1] - positions[second_atom * 3 + 1];
+    const double dz = positions[first_atom * 3 + 2] - positions[second_atom * 3 + 2];
+    const double distance = sqrt(dx * dx + dy * dy + dz * dz);
+    const double reduced_distance =
+        sqrt(distance / (plan.atomic_radii[first_atom] + plan.atomic_radii[second_atom]));
+    const double polynomial = (1.0 + plan.shell_polynomial[first_shell] * reduced_distance) *
+                              (1.0 + plan.shell_polynomial[second_shell] * reduced_distance);
+    const std::int64_t pair = batch.shell_pair_offsets[system] + local_pair;
+    spatial_scale = plan.shell_pair_scale[pair] * polynomial;
+  }
+  const double factor = 0.5 * (first_level + second_level) * spatial_scale;
+  const std::int64_t orbital_begin = batch.batch_orbital_offsets[system];
+  const std::int64_t orbitals = batch.batch_orbital_offsets[system + 1] - orbital_begin;
+  const std::int64_t matrix_begin = batch.matrix_offsets[system];
+  const std::int64_t first_ao = batch.shell_orbital_offsets[first_shell];
+  const std::int64_t second_ao = batch.shell_orbital_offsets[second_shell];
+  const std::int64_t matrix =
+      matrix_begin + (first_ao - orbital_begin) * orbitals + second_ao - orbital_begin;
+  const double value = overlap[matrix] * factor;
+  if (!isfinite(factor) || !isfinite(value)) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kNonfiniteH0Arithmetic);
+    return;
+  }
+  workspace.h0_scratch[matrix] = value;
 }
 
 __global__ void publish_h0_kernel(Gfn2IntegralDeviceBatch batch,
@@ -811,6 +1123,17 @@ cudaError_t validate_common(const Gfn2IntegralDeviceBatch& batch,
       batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
       batch.total_atoms == kMaximumInt64 || batch.total_shells == kMaximumInt64 ||
       batch.total_atoms > kMaximumInt64 / 3 || !valid_xtb_model_flavor(batch.model) ||
+      batch.use_compact_tasks > 1u || batch.reserved != 0u ||
+      batch.forward_generic_task_count < 0 || batch.forward_ss_task_count < 0 ||
+      batch.h0_generic_task_count < 0 || batch.h0_ss_task_count < 0 ||
+      batch.force_generic_task_count < 0 || batch.force_ss_task_count < 0 ||
+      batch.forward_generic_task_count >
+          static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      batch.forward_ss_task_count > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      batch.h0_generic_task_count > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      batch.h0_ss_task_count > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      batch.force_generic_task_count > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      batch.force_ss_task_count > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
       (batch.model == XtbModelFlavor::kGfn2 &&
        batch.total_matrix_elements > kMaximumInt64 / kGfn2IntegralQuadrupoleComponents) ||
       batch.atom_offset_count != batch.batch_size + 1 ||
@@ -836,6 +1159,12 @@ cudaError_t validate_common(const Gfn2IntegralDeviceBatch& batch,
       !is_aligned(batch.shell_to_atom, alignof(std::int64_t)) || batch.angular_momenta == nullptr ||
       !is_aligned(batch.primitive_exponents, alignof(double)) ||
       !is_aligned(batch.primitive_coefficients, alignof(double)) ||
+      !required_pointer(batch.forward_generic_tasks, batch.forward_generic_task_count) ||
+      !required_pointer(batch.forward_ss_tasks, batch.forward_ss_task_count) ||
+      !required_pointer(batch.h0_generic_tasks, batch.h0_generic_task_count) ||
+      !required_pointer(batch.h0_ss_tasks, batch.h0_ss_task_count) ||
+      !required_pointer(batch.force_generic_tasks, batch.force_generic_task_count) ||
+      !required_pointer(batch.force_ss_tasks, batch.force_ss_task_count) ||
       workspace.sequence_elements < 1 ||
       !is_aligned(workspace.sequence_active, alignof(std::uint32_t)) ||
       !is_aligned(system_errors, alignof(std::uint32_t)) ||
@@ -843,6 +1172,30 @@ cudaError_t validate_common(const Gfn2IntegralDeviceBatch& batch,
     return batch.batch_size > static_cast<std::int64_t>(std::numeric_limits<int>::max())
                ? cudaErrorInvalidConfiguration
                : cudaErrorInvalidValue;
+  }
+  const bool tasks_absent =
+      batch.forward_generic_task_count == 0 && batch.forward_ss_task_count == 0 &&
+      batch.h0_generic_task_count == 0 && batch.h0_ss_task_count == 0 &&
+      batch.force_generic_task_count == 0 && batch.force_ss_task_count == 0 &&
+      batch.forward_generic_tasks == nullptr && batch.forward_ss_tasks == nullptr &&
+      batch.h0_generic_tasks == nullptr && batch.h0_ss_tasks == nullptr &&
+      batch.force_generic_tasks == nullptr && batch.force_ss_tasks == nullptr;
+  const bool tasks_present =
+      batch.forward_generic_task_count + batch.forward_ss_task_count > 0 &&
+      batch.h0_generic_task_count + batch.h0_ss_task_count > 0 &&
+      required_pointer(batch.forward_generic_tasks, batch.forward_generic_task_count) &&
+      required_pointer(batch.forward_ss_tasks, batch.forward_ss_task_count) &&
+      required_pointer(batch.h0_generic_tasks, batch.h0_generic_task_count) &&
+      required_pointer(batch.h0_ss_tasks, batch.h0_ss_task_count) &&
+      required_pointer(batch.force_generic_tasks, batch.force_generic_task_count) &&
+      required_pointer(batch.force_ss_tasks, batch.force_ss_task_count);
+  if ((!tasks_absent && !tasks_present) || (batch.use_compact_tasks != 0u && !tasks_present)) {
+    return cudaErrorInvalidValue;
+  }
+  if (batch.use_compact_tasks != 0u) {
+    *maximum_pair_blocks = 0;
+    *grid_blocks = 0u;
+    return cudaSuccess;
   }
   if (batch.maximum_system_shells > kMaximumInt64 / batch.maximum_system_shells) {
     return cudaErrorInvalidConfiguration;
@@ -929,7 +1282,9 @@ cudaError_t evaluate_gfn2_integrals_cuda(const Gfn2IntegralDeviceBatch& batch,
     return cudaErrorInvalidValue;
   }
 
-  std::array<MemoryRange, 13> reads;
+  const bool compact = batch.use_compact_tasks != 0u;
+  if (compact) grid_blocks = static_cast<unsigned int>(batch.forward_generic_task_count);
+  std::array<MemoryRange, 15> reads;
   std::array<MemoryRange, 9> writes;
   if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(*batch.atom_offsets),
                   &reads[0]) ||
@@ -956,6 +1311,10 @@ cudaError_t evaluate_gfn2_integrals_cuda(const Gfn2IntegralDeviceBatch& batch,
       !make_range(batch.primitive_coefficients, batch.primitive_coefficient_count,
                   sizeof(*batch.primitive_coefficients), &reads[11]) ||
       !make_range(positions, batch.total_atoms * 3, sizeof(*positions), &reads[12]) ||
+      !make_range(batch.forward_generic_tasks, compact ? batch.forward_generic_task_count : 0,
+                  sizeof(*batch.forward_generic_tasks), &reads[13]) ||
+      !make_range(batch.forward_ss_tasks, compact ? batch.forward_ss_task_count : 0,
+                  sizeof(*batch.forward_ss_tasks), &reads[14]) ||
       !make_range(overlap, batch.total_matrix_elements, sizeof(*overlap), &writes[0]) ||
       !make_range(dipole, dipole_elements, sizeof(*dipole), &writes[1]) ||
       !make_range(quadrupole, quadrupole_elements, sizeof(*quadrupole), &writes[2]) ||
@@ -983,11 +1342,23 @@ cudaError_t evaluate_gfn2_integrals_cuda(const Gfn2IntegralDeviceBatch& batch,
   if (status != cudaSuccess) {
     return status;
   }
-  integral_shell_pair_kernel<<<grid_blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, positions, workspace, system_errors, device_error, maximum_pair_blocks);
-  status = check_launch();
-  if (status != cudaSuccess) {
-    return status;
+  if (compact && batch.forward_ss_task_count > 0) {
+    const auto ss_grid = static_cast<unsigned int>(
+        (batch.forward_ss_task_count + kThreadsPerBlock - 1) / kThreadsPerBlock);
+    integral_ss_task_kernel<<<ss_grid, kThreadsPerBlock, 0, stream>>>(
+        batch, positions, workspace, system_errors, device_error, batch.forward_ss_tasks,
+        batch.forward_ss_task_count);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+  }
+  if (!compact || grid_blocks != 0u) {
+    integral_shell_pair_kernel<<<grid_blocks, kThreadsPerBlock, 0, stream>>>(
+        batch, positions, workspace, system_errors, device_error,
+        compact ? batch.forward_generic_tasks : nullptr, maximum_pair_blocks);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
   }
   Gfn2IntegralLinearLaunchShape linear_shape{};
   if (!make_gfn2_integral_linear_launch_shape(batch.batch_size, batch.linear_tiles_per_system,
@@ -1032,7 +1403,9 @@ cudaError_t evaluate_gfn2_h0_cuda(const Gfn2IntegralDeviceBatch& batch,
     return status == cudaSuccess ? cudaErrorInvalidValue : status;
   }
 
-  std::array<MemoryRange, 20> reads;
+  const bool compact = batch.use_compact_tasks != 0u;
+  if (compact) grid_blocks = static_cast<unsigned int>(batch.h0_generic_task_count);
+  std::array<MemoryRange, 22> reads;
   std::array<MemoryRange, 5> writes;
   if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(*batch.atom_offsets),
                   &reads[0]) ||
@@ -1070,6 +1443,10 @@ cudaError_t evaluate_gfn2_h0_cuda(const Gfn2IntegralDeviceBatch& batch,
       !make_range(coordination_numbers, batch.total_atoms, sizeof(*coordination_numbers),
                   &reads[18]) ||
       !make_range(overlap, batch.total_matrix_elements, sizeof(*overlap), &reads[19]) ||
+      !make_range(batch.h0_generic_tasks, compact ? batch.h0_generic_task_count : 0,
+                  sizeof(*batch.h0_generic_tasks), &reads[20]) ||
+      !make_range(batch.h0_ss_tasks, compact ? batch.h0_ss_task_count : 0,
+                  sizeof(*batch.h0_ss_tasks), &reads[21]) ||
       !make_range(hamiltonian, batch.total_matrix_elements, sizeof(*hamiltonian), &writes[0]) ||
       !make_range(workspace.h0_scratch, batch.total_matrix_elements, sizeof(*workspace.h0_scratch),
                   &writes[1]) ||
@@ -1103,12 +1480,24 @@ cudaError_t evaluate_gfn2_h0_cuda(const Gfn2IntegralDeviceBatch& batch,
   if (status != cudaSuccess) {
     return status;
   }
-  h0_shell_pair_kernel<<<grid_blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, plan, positions, coordination_numbers, overlap, workspace, system_errors, device_error,
-      maximum_pair_blocks);
-  status = check_launch();
-  if (status != cudaSuccess) {
-    return status;
+  if (compact && batch.h0_ss_task_count > 0) {
+    const auto ss_grid = static_cast<unsigned int>((batch.h0_ss_task_count + kThreadsPerBlock - 1) /
+                                                   kThreadsPerBlock);
+    h0_ss_task_kernel<<<ss_grid, kThreadsPerBlock, 0, stream>>>(
+        batch, plan, positions, coordination_numbers, overlap, workspace, system_errors,
+        device_error, batch.h0_ss_tasks, batch.h0_ss_task_count);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+  }
+  if (!compact || grid_blocks != 0u) {
+    const int h0_threads = compact ? kCompactH0ThreadsPerBlock : kThreadsPerBlock;
+    h0_shell_pair_kernel<<<grid_blocks, h0_threads, 0, stream>>>(
+        batch, plan, positions, coordination_numbers, overlap, workspace, system_errors,
+        device_error, compact ? batch.h0_generic_tasks : nullptr, maximum_pair_blocks);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
   }
   publish_h0_kernel<<<linear_grid, kThreadsPerBlock, 0, stream>>>(batch, workspace, hamiltonian,
                                                                   system_errors);
@@ -1391,13 +1780,232 @@ __device__ void multipole_shift_pullback_device(const double vector[3], double o
       axz * (dx + x * overlap) + ayz * (dy + y * overlap) + azz * (2.0 * dz + 2.0 * z * overlap);
 }
 
+__device__ void add_multipole_shift_coefficient_pullback(const double vector[3],
+                                                         const double reverse_dipole_adjoint[3],
+                                                         const double reverse_quadrupole_adjoint[6],
+                                                         double* overlap_adjoint,
+                                                         double dipole_adjoint[3]) {
+  for (int coordinate = 0; coordinate < 3; ++coordinate) {
+    *overlap_adjoint += reverse_dipole_adjoint[coordinate] * vector[coordinate];
+    dipole_adjoint[coordinate] += reverse_dipole_adjoint[coordinate];
+  }
+  const double diagonal_sum =
+      reverse_quadrupole_adjoint[0] + reverse_quadrupole_adjoint[2] + reverse_quadrupole_adjoint[5];
+  const double raw[6] = {1.5 * reverse_quadrupole_adjoint[0] - 0.5 * diagonal_sum,
+                         1.5 * reverse_quadrupole_adjoint[1],
+                         1.5 * reverse_quadrupole_adjoint[2] - 0.5 * diagonal_sum,
+                         1.5 * reverse_quadrupole_adjoint[3],
+                         1.5 * reverse_quadrupole_adjoint[4],
+                         1.5 * reverse_quadrupole_adjoint[5] - 0.5 * diagonal_sum};
+  const double x = vector[0];
+  const double y = vector[1];
+  const double z = vector[2];
+  *overlap_adjoint += raw[0] * x * x + raw[1] * x * y + raw[2] * y * y + raw[3] * x * z +
+                      raw[4] * y * z + raw[5] * z * z;
+  dipole_adjoint[0] += 2.0 * raw[0] * x + raw[1] * y + raw[3] * z;
+  dipole_adjoint[1] += raw[1] * x + 2.0 * raw[2] * y + raw[4] * z;
+  dipole_adjoint[2] += raw[3] * x + raw[4] * y + 2.0 * raw[5] * z;
+}
+
+__device__ double ss_moment_derivative(const double moments[4], int exponent, double ket_alpha) {
+  double derivative = 2.0 * ket_alpha * moments[exponent + 1];
+  if (exponent > 0) derivative -= static_cast<double>(exponent) * moments[exponent - 1];
+  return derivative;
+}
+
+__global__ void integral_force_ss_task_kernel(
+    Gfn2IntegralDeviceBatch batch, Gfn2ForceDeviceActivity activity,
+    Gfn2IntegralForceDeviceInput input, Gfn2IntegralForceDeviceWorkspace workspace,
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    const Gfn2IntegralShellPairTask* tasks, std::int64_t task_count) {
+  const std::int64_t task_index = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (task_index >= task_count || !force_sequence_is_active(workspace)) return;
+  const Gfn2IntegralShellPairTask task = tasks[task_index];
+  const std::int64_t system = static_cast<std::int64_t>(task.system);
+  if (system < 0 || system >= batch.batch_size) {
+    for (std::int64_t member = 0; member < batch.batch_size; ++member) {
+      record_system_error(system_errors, member, device_error,
+                          Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    }
+    return;
+  }
+  if (!force_member_is_active(activity, system, system_errors, device_error)) return;
+  const std::int64_t shell_begin = batch.batch_shell_offsets[system];
+  const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
+  const std::int64_t shells = shell_end - shell_begin;
+  const std::int64_t local_pair = static_cast<std::int64_t>(task.local_pair);
+  const std::int64_t bra_shell = static_cast<std::int64_t>(task.bra_shell);
+  const std::int64_t ket_shell = static_cast<std::int64_t>(task.ket_shell);
+  if (local_pair >= shells * shells || bra_shell < shell_begin || bra_shell >= shell_end ||
+      ket_shell < shell_begin || ket_shell >= shell_end ||
+      local_pair != (bra_shell - shell_begin) * shells + ket_shell - shell_begin) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    return;
+  }
+  const std::int64_t bra_atom = batch.shell_to_atom[bra_shell];
+  const std::int64_t ket_atom = batch.shell_to_atom[ket_shell];
+  if (batch.angular_momenta[bra_shell] != 0u || batch.angular_momenta[ket_shell] != 0u ||
+      bra_atom >= ket_atom) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    return;
+  }
+  const double vector[3] = {input.positions[ket_atom * 3] - input.positions[bra_atom * 3],
+                            input.positions[ket_atom * 3 + 1] - input.positions[bra_atom * 3 + 1],
+                            input.positions[ket_atom * 3 + 2] - input.positions[bra_atom * 3 + 2]};
+  const double distance_squared =
+      vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
+  if (!isfinite(vector[0]) || !isfinite(vector[1]) || !isfinite(vector[2]) ||
+      !isfinite(distance_squared)) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kCoordinateDifferenceOverflow);
+    return;
+  }
+
+  const std::int64_t orbital_begin = batch.batch_orbital_offsets[system];
+  const std::int64_t orbital_count = batch.batch_orbital_offsets[system + 1] - orbital_begin;
+  const std::int64_t matrix_begin = batch.matrix_offsets[system];
+  const std::int64_t bra_orbital = batch.shell_orbital_offsets[bra_shell] - orbital_begin;
+  const std::int64_t ket_orbital = batch.shell_orbital_offsets[ket_shell] - orbital_begin;
+  const std::int64_t forward = matrix_begin + bra_orbital * orbital_count + ket_orbital;
+  const std::int64_t reverse = matrix_begin + ket_orbital * orbital_count + bra_orbital;
+  const std::int64_t matrix_elements = batch.total_matrix_elements;
+  double overlap_adjoint = input.overlap_adjoint[forward] + input.overlap_adjoint[reverse];
+  double dipole_adjoint[3] = {};
+  double reverse_dipole_adjoint[3] = {};
+  double quadrupole_adjoint[6] = {};
+  double reverse_quadrupole_adjoint[6] = {};
+  const bool multipoles_enabled = batch.model == XtbModelFlavor::kGfn2;
+  if (multipoles_enabled) {
+    for (int component = 0; component < 3; ++component) {
+      dipole_adjoint[component] = input.dipole_adjoint[component * matrix_elements + forward];
+      reverse_dipole_adjoint[component] =
+          input.dipole_adjoint[component * matrix_elements + reverse];
+    }
+    for (int component = 0; component < 6; ++component) {
+      const double forward_adjoint =
+          input.quadrupole_adjoint[component * matrix_elements + forward];
+      const double reverse_adjoint =
+          input.quadrupole_adjoint[component * matrix_elements + reverse];
+      quadrupole_adjoint[component] = forward_adjoint + reverse_adjoint;
+      reverse_quadrupole_adjoint[component] = reverse_adjoint;
+    }
+    add_multipole_shift_coefficient_pullback(vector, reverse_dipole_adjoint,
+                                             reverse_quadrupole_adjoint, &overlap_adjoint,
+                                             dipole_adjoint);
+  }
+  double raw_multipole_adjoint[kMultipoleComponents] = {dipole_adjoint[0], dipole_adjoint[1],
+                                                        dipole_adjoint[2]};
+  if (multipoles_enabled) {
+    const double diagonal_sum =
+        quadrupole_adjoint[0] + quadrupole_adjoint[2] + quadrupole_adjoint[5];
+    raw_multipole_adjoint[3] = 1.5 * quadrupole_adjoint[0] - 0.5 * diagonal_sum;
+    raw_multipole_adjoint[4] = 1.5 * quadrupole_adjoint[1];
+    raw_multipole_adjoint[5] = 1.5 * quadrupole_adjoint[2] - 0.5 * diagonal_sum;
+    raw_multipole_adjoint[6] = 1.5 * quadrupole_adjoint[3];
+    raw_multipole_adjoint[7] = 1.5 * quadrupole_adjoint[4];
+    raw_multipole_adjoint[8] = 1.5 * quadrupole_adjoint[5] - 0.5 * diagonal_sum;
+  }
+
+  double overlap = 0.0;
+  double dipole[3] = {};
+  double derivative[3] = {};
+  bool finite = true;
+  const std::int64_t bra_primitive_begin = batch.shell_primitive_offsets[bra_shell];
+  const std::int64_t bra_primitive_end = batch.shell_primitive_offsets[bra_shell + 1];
+  const std::int64_t ket_primitive_begin = batch.shell_primitive_offsets[ket_shell];
+  const std::int64_t ket_primitive_end = batch.shell_primitive_offsets[ket_shell + 1];
+  for (std::int64_t ket_primitive = ket_primitive_begin; ket_primitive < ket_primitive_end;
+       ++ket_primitive) {
+    const double ket_alpha = batch.primitive_exponents[ket_primitive];
+    for (std::int64_t bra_primitive = bra_primitive_begin; bra_primitive < bra_primitive_end;
+         ++bra_primitive) {
+      const double bra_alpha = batch.primitive_exponents[bra_primitive];
+      const double alpha_sum = ket_alpha + bra_alpha;
+      const double inverse_sum = 1.0 / alpha_sum;
+      const double product_exponent = ket_alpha * bra_alpha * distance_squared * inverse_sum;
+      if (product_exponent > batch.integral_cutoff) continue;
+      const double sqrt_inverse_sum = sqrt(inverse_sum);
+      const double primitive_prefactor = exp(-product_exponent) * kSqrtPiCubed * sqrt_inverse_sum *
+                                         sqrt_inverse_sum * sqrt_inverse_sum *
+                                         batch.primitive_coefficients[ket_primitive] *
+                                         batch.primitive_coefficients[bra_primitive];
+      double moments[3][4];
+      make_ss_moments(vector, bra_alpha, inverse_sum, moments);
+      overlap += primitive_prefactor;
+      for (int coordinate = 0; coordinate < 3; ++coordinate) {
+        const double gradient =
+            primitive_prefactor * ss_moment_derivative(moments[coordinate], 0, ket_alpha);
+        derivative[coordinate] += overlap_adjoint * gradient;
+        finite = finite && isfinite(gradient);
+      }
+      for (int component = 0; multipoles_enabled && component < kMultipoleComponents; ++component) {
+        int power[3];
+        multipole_power(component, &power[0], &power[1], &power[2]);
+        const double value = primitive_prefactor * moments[0][power[0]] * moments[1][power[1]] *
+                             moments[2][power[2]];
+        if (component < 3) dipole[component] += value;
+        finite = finite && isfinite(value);
+        for (int coordinate = 0; coordinate < 3; ++coordinate) {
+          const double gradient =
+              primitive_prefactor *
+              ss_moment_derivative(moments[coordinate], power[coordinate], ket_alpha) *
+              moments[(coordinate + 1) % 3][power[(coordinate + 1) % 3]] *
+              moments[(coordinate + 2) % 3][power[(coordinate + 2) % 3]];
+          derivative[coordinate] += raw_multipole_adjoint[component] * gradient;
+          finite = finite && isfinite(gradient);
+        }
+      }
+      finite = finite && isfinite(primitive_prefactor);
+    }
+  }
+  finite = finite && isfinite(overlap);
+  double vector_adjoint[3] = {};
+  if (multipoles_enabled) {
+    double ignored_overlap_adjoint = 0.0;
+    double ignored_dipole_adjoint[3] = {};
+    multipole_shift_pullback_device(vector, overlap, dipole, reverse_dipole_adjoint,
+                                    reverse_quadrupole_adjoint, &ignored_overlap_adjoint,
+                                    ignored_dipole_adjoint, vector_adjoint);
+  }
+  for (int coordinate = 0; coordinate < 3; ++coordinate) {
+    derivative[coordinate] += vector_adjoint[coordinate];
+    finite = finite && isfinite(dipole[coordinate]) && isfinite(derivative[coordinate]);
+  }
+  if (!finite) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kNonfiniteGradientArithmetic);
+    return;
+  }
+  bool atomic_finite = true;
+  for (int coordinate = 0; coordinate < 3; ++coordinate) {
+    atomic_finite = force_add_atomic(workspace.gradient_scratch + ket_atom * 3 + coordinate,
+                                     derivative[coordinate]) &&
+                    force_add_atomic(workspace.gradient_scratch + bra_atom * 3 + coordinate,
+                                     -derivative[coordinate]) &&
+                    atomic_finite;
+  }
+  if (!atomic_finite) {
+    record_system_error(system_errors, system, device_error,
+                        Gfn2IntegralDeviceError::kNonfiniteGradientArithmetic);
+  }
+}
+
 __global__ void integral_force_shell_pair_kernel(
     Gfn2IntegralDeviceBatch batch, Gfn2ForceDeviceActivity activity,
     Gfn2IntegralForceDeviceInput input, Gfn2IntegralForceDeviceWorkspace workspace,
-    std::uint32_t* system_errors, std::uint32_t* device_error, std::int64_t maximum_pair_blocks) {
+    std::uint32_t* system_errors, std::uint32_t* device_error,
+    const Gfn2IntegralShellPairTask* tasks, std::int64_t maximum_pair_blocks) {
   const std::int64_t global_pair = static_cast<std::int64_t>(blockIdx.x);
-  const std::int64_t system = global_pair / maximum_pair_blocks;
-  const std::int64_t local_pair = global_pair - system * maximum_pair_blocks;
+  std::int64_t system = 0;
+  std::int64_t local_pair = 0;
+  std::int64_t task_bra_shell = -1;
+  std::int64_t task_ket_shell = -1;
+  if (!resolve_shell_pair_task(batch, tasks, global_pair, maximum_pair_blocks, system_errors,
+                               device_error, system, local_pair, task_bra_shell, task_ket_shell)) {
+    return;
+  }
   if (!force_sequence_is_active(workspace) ||
       !force_member_is_active(activity, system, system_errors, device_error)) {
     return;
@@ -1405,11 +2013,22 @@ __global__ void integral_force_shell_pair_kernel(
   const std::int64_t shell_begin = batch.batch_shell_offsets[system];
   const std::int64_t shell_end = batch.batch_shell_offsets[system + 1];
   const std::int64_t shells = shell_end - shell_begin;
-  if (local_pair >= shells * shells) {
+  const bool compact_task_valid =
+      tasks == nullptr ||
+      (task_bra_shell >= shell_begin && task_bra_shell < shell_end &&
+       task_ket_shell >= shell_begin && task_ket_shell < shell_end &&
+       local_pair == (task_bra_shell - shell_begin) * shells + task_ket_shell - shell_begin);
+  if (local_pair >= shells * shells || !compact_task_valid) {
+    if (tasks != nullptr && threadIdx.x == 0) {
+      record_system_error(system_errors, system, device_error,
+                          Gfn2IntegralDeviceError::kInvalidShellMetadata);
+    }
     return;
   }
-  const std::int64_t bra_shell = shell_begin + local_pair / shells;
-  const std::int64_t ket_shell = shell_begin + local_pair % shells;
+  const std::int64_t bra_shell =
+      tasks == nullptr ? shell_begin + local_pair / shells : task_bra_shell;
+  const std::int64_t ket_shell =
+      tasks == nullptr ? shell_begin + local_pair % shells : task_ket_shell;
   const std::int64_t bra_atom = batch.shell_to_atom[bra_shell];
   const std::int64_t ket_atom = batch.shell_to_atom[ket_shell];
   if (bra_atom >= ket_atom) {
@@ -1754,7 +2373,9 @@ cudaError_t validate_integral_force_descriptors(
       !required_pointer(workspace.gradient_scratch, coordinates)) {
     return status == cudaSuccess ? cudaErrorInvalidValue : status;
   }
-  std::array<MemoryRange, 18> reads;
+  const bool compact = batch.use_compact_tasks != 0u;
+  if (compact) *grid_blocks = static_cast<unsigned int>(batch.force_generic_task_count);
+  std::array<MemoryRange, 20> reads;
   std::array<MemoryRange, 5> writes;
   if (!make_range(batch.atom_offsets, batch.atom_offset_count, sizeof(*batch.atom_offsets),
                   &reads[0]) ||
@@ -1790,6 +2411,10 @@ cudaError_t validate_integral_force_descriptors(
       !make_range(input.dipole_adjoint, dipoles, sizeof(*input.dipole_adjoint), &reads[16]) ||
       !make_range(input.quadrupole_adjoint, quadrupoles, sizeof(*input.quadrupole_adjoint),
                   &reads[17]) ||
+      !make_range(batch.force_generic_tasks, compact ? batch.force_generic_task_count : 0,
+                  sizeof(*batch.force_generic_tasks), &reads[18]) ||
+      !make_range(batch.force_ss_tasks, compact ? batch.force_ss_task_count : 0,
+                  sizeof(*batch.force_ss_tasks), &reads[19]) ||
       !make_range(output.gradients, coordinates, sizeof(*output.gradients), &writes[0]) ||
       !make_range(workspace.gradient_scratch, coordinates, sizeof(*workspace.gradient_scratch),
                   &writes[1]) ||
@@ -1848,11 +2473,23 @@ cudaError_t add_gfn2_integral_gradient_cuda(
   if (status != cudaSuccess) {
     return status;
   }
-  integral_force_shell_pair_kernel<<<grid_blocks, kThreadsPerBlock, 0, stream>>>(
-      batch, activity, input, workspace, system_errors, device_error, maximum_pair_blocks);
-  status = check_launch();
-  if (status != cudaSuccess) {
-    return status;
+  if (batch.use_compact_tasks != 0u && batch.force_ss_task_count > 0) {
+    const auto ss_grid = static_cast<unsigned int>(
+        (batch.force_ss_task_count + kThreadsPerBlock - 1) / kThreadsPerBlock);
+    integral_force_ss_task_kernel<<<ss_grid, kThreadsPerBlock, 0, stream>>>(
+        batch, activity, input, workspace, system_errors, device_error, batch.force_ss_tasks,
+        batch.force_ss_task_count);
+    status = check_launch();
+    if (status != cudaSuccess) return status;
+  }
+  if (grid_blocks != 0u) {
+    integral_force_shell_pair_kernel<<<grid_blocks, kThreadsPerBlock, 0, stream>>>(
+        batch, activity, input, workspace, system_errors, device_error,
+        batch.use_compact_tasks != 0u ? batch.force_generic_tasks : nullptr, maximum_pair_blocks);
+    status = check_launch();
+    if (status != cudaSuccess) {
+      return status;
+    }
   }
   publish_integral_force_kernel<<<linear_grid, kThreadsPerBlock, 0, stream>>>(
       batch, activity, output, workspace, system_errors);

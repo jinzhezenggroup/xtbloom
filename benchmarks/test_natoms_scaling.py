@@ -655,6 +655,37 @@ class NatomsScalingTest(unittest.TestCase):
             },
         )
 
+    def test_run_identity_records_cuda_shell_pair_schedule(self) -> None:
+        """Retain the same-binary shell-pair schedule used by CUDA evidence."""
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / "libxtbloom.so"
+            library.write_bytes(b"xtbloom")
+            with (
+                mock.patch.dict(
+                    os.environ, {"XTBLOOM_CUDA_SHELL_PAIR_SCHEDULE": "legacy"}
+                ),
+                mock.patch.object(
+                    natoms_scaling, "git_state", return_value={"dirty": False}
+                ),
+                mock.patch.object(
+                    natoms_scaling,
+                    "build_metadata",
+                    return_value={"build_system": "test"},
+                ),
+                mock.patch.object(
+                    natoms_scaling,
+                    "_resolved_xtbloom_cpu_isa",
+                    return_value=(None, "cuda_backend"),
+                ),
+            ):
+                identity = natoms_scaling.collect_run_identity(
+                    "xtbloom", library, (), None, "cuda", 1, 0
+                )
+        self.assertEqual(
+            identity["cuda_schedule_environment"],
+            {"XTBLOOM_CUDA_SHELL_PAIR_SCHEDULE": "legacy"},
+        )
+
     def test_auto_cpu_isa_resolution_uses_context_creation_probe(self) -> None:
         """Resolve auto from the exact library and restore the requested mode."""
         library = SimpleNamespace(xtbloom_context_destroy=mock.Mock())

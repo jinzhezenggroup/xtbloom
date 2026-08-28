@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -25,6 +26,7 @@
 #include "backends/cuda/gfn2_external_point_charges.cuh"
 #include "backends/cuda/gfn2_geometry.cuh"
 #include "backends/cuda/gfn2_inference_publication.cuh"
+#include "backends/cuda/gfn2_integral_tasks.hpp"
 #include "backends/cuda/gfn2_preprocessing.cuh"
 #include "backends/cuda/gfn2_public_result_bridge.cuh"
 #include "backends/cuda/gfn2_scc_iteration_arena.cuh"
@@ -97,6 +99,25 @@ std::atomic<std::uint32_t> g_admission_alias_test_hook{
  * inclusive 25/30-bohr predicates and never infer physical membership solely
  * from list presence. */
 constexpr double kD4PairlistBuilderCutoffBohr = 50.0;
+
+xtbloom_status_t configured_integral_task_schedule(const Gfn2IntegralTaskAccounting& accounting,
+                                                   bool& compact, std::string& error) {
+  const char* configured = std::getenv("XTBLOOM_CUDA_SHELL_PAIR_SCHEDULE");
+  if (configured == nullptr) {
+    compact = prefer_gfn2_compact_integral_tasks(accounting);
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  if (std::strcmp(configured, "compact") == 0) {
+    compact = true;
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  if (std::strcmp(configured, "legacy") == 0) {
+    compact = false;
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+  error = "XTBLOOM_CUDA_SHELL_PAIR_SCHEDULE must be exactly compact or legacy";
+  return XTBLOOM_STATUS_INVALID_ARGUMENT;
+}
 
 #if defined(XTBLOOM_CUDA_TEST_HOOKS)
 std::atomic<std::uint32_t> g_execution_test_fault{
@@ -2340,6 +2361,7 @@ struct HostPlans {
   CoordinationPlan coordination;
   RepulsionPlan repulsion;
   H0Plan h0;
+  Gfn2IntegralHostTaskDomains integral_task_domains;
   WavefunctionLayout wavefunction_layout;
   ES2Plan es2;
   ES3Plan es3;
@@ -2382,6 +2404,7 @@ struct HostPlans {
   bool d4_enabled = false;
   bool periodic_enabled = false;
   bool gfn1_enabled = false;
+  bool compact_integral_tasks = true;
 
   std::vector<double> positions;
   std::vector<double> point_positions;
@@ -2439,11 +2462,16 @@ struct HostPlans {
         vector_bytes(h0.matrix_offsets) + vector_bytes(h0.shell_pair_offsets) +
         vector_bytes(h0.atomic_radii) + vector_bytes(h0.shell_levels) +
         vector_bytes(h0.shell_coordination_scale) + vector_bytes(h0.shell_polynomial) +
-        vector_bytes(h0.shell_pair_scale) + vector_bytes(es3.batch_shell_offsets) +
-        vector_bytes(es3.shell_gamma3) + vector_bytes(external.atom_offsets) +
-        vector_bytes(external.batch_shell_offsets) + vector_bytes(external.point_charge_offsets) +
-        vector_bytes(external.shell_to_atom) + vector_bytes(external.shell_hardness) +
-        vector_bytes(wavefunction_layout.atom_offsets) +
+        vector_bytes(h0.shell_pair_scale) + vector_bytes(integral_task_domains.forward_generic) +
+        vector_bytes(integral_task_domains.forward_ss) +
+        vector_bytes(integral_task_domains.h0_generic) + vector_bytes(integral_task_domains.h0_ss) +
+        vector_bytes(integral_task_domains.force_generic) +
+        vector_bytes(integral_task_domains.force_ss) +
+        vector_bytes(integral_task_domains.accounting.primitive_signatures) +
+        vector_bytes(es3.batch_shell_offsets) + vector_bytes(es3.shell_gamma3) +
+        vector_bytes(external.atom_offsets) + vector_bytes(external.batch_shell_offsets) +
+        vector_bytes(external.point_charge_offsets) + vector_bytes(external.shell_to_atom) +
+        vector_bytes(external.shell_hardness) + vector_bytes(wavefunction_layout.atom_offsets) +
         vector_bytes(wavefunction_layout.batch_shell_offsets) +
         vector_bytes(wavefunction_layout.batch_orbital_offsets) +
         vector_bytes(wavefunction_layout.atomic_numbers) +
@@ -2606,6 +2634,12 @@ struct HostPlans {
                                  repulsion, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = make_h0_plan(basis, integrals, key.atomic_numbers.data(), h0, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status =
+        make_gfn2_integral_task_domains(basis, h0.shell_pair_offsets, integral_task_domains, error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+    status = configured_integral_task_schedule(integral_task_domains.accounting,
+                                               compact_integral_tasks, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
     status = make_wavefunction_layout(basis, key.atomic_numbers.data(),
                                       key.molecular_charges.data(), key.unpaired_electrons.data(),
@@ -2948,6 +2982,12 @@ xtbloom_status_t HostPlans::build_gfn1(TopologyKey&& new_key, std::vector<double
   h0.shell_coordination_scale = gfn1_h0.shell_coordination_scale;
   h0.shell_polynomial = gfn1_h0.shell_polynomial;
   h0.shell_pair_scale = gfn1_h0.shell_pair_scale;
+  status =
+      make_gfn2_integral_task_domains(basis, h0.shell_pair_offsets, integral_task_domains, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = configured_integral_task_schedule(integral_task_domains.accounting,
+                                             compact_integral_tasks, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
   status = gfn1::make_wavefunction_layout(
       basis, key.atomic_numbers.data(), key.molecular_charges.data(), key.unpaired_electrons.data(),
@@ -3518,6 +3558,10 @@ struct Gfn2CudaExecutionCache::Impl {
     CudaEvent numerical_host_upload_complete;
     CudaEvent numerical_host_release_complete;
     NumericalHostUploadCompletion numerical_host_upload_completion;
+    /* Canonical shell-pair tasks are uploaded once and shared by numerical
+     * refresh and force graphs; neither mutable arena duplicates them. */
+    DeviceArena integral_task_arena;
+    Gfn2IntegralDeviceTaskDomains integral_tasks{};
     DeviceArena force_immutable_arena;
     DeviceArena force_execution_arena;
     DeviceArena numerical_refresh_arena;
@@ -4067,6 +4111,98 @@ struct Gfn2CudaExecutionCache::Impl {
     blas = candidate_blas;
     handles_created = true;
     return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  xtbloom_status_t build_integral_task_domains(Prepared& candidate, std::string& error) {
+    const auto& host = candidate.host.integral_task_domains;
+    struct Offsets {
+      std::size_t forward_generic = 0u;
+      std::size_t forward_ss = 0u;
+      std::size_t h0_generic = 0u;
+      std::size_t h0_ss = 0u;
+      std::size_t force_generic = 0u;
+      std::size_t force_ss = 0u;
+    } offset;
+    ArenaLayout layout;
+    offset.forward_generic = layout.append<Gfn2IntegralShellPairTask>(
+        static_cast<std::int64_t>(host.forward_generic.size()));
+    offset.forward_ss =
+        layout.append<Gfn2IntegralShellPairTask>(static_cast<std::int64_t>(host.forward_ss.size()));
+    offset.h0_generic =
+        layout.append<Gfn2IntegralShellPairTask>(static_cast<std::int64_t>(host.h0_generic.size()));
+    offset.h0_ss =
+        layout.append<Gfn2IntegralShellPairTask>(static_cast<std::int64_t>(host.h0_ss.size()));
+    offset.force_generic = layout.append<Gfn2IntegralShellPairTask>(
+        static_cast<std::int64_t>(host.force_generic.size()));
+    offset.force_ss =
+        layout.append<Gfn2IntegralShellPairTask>(static_cast<std::int64_t>(host.force_ss.size()));
+    if (!layout.valid()) {
+      error = "CUDA integral task arena layout overflows size_t";
+      return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    }
+    cudaError_t cuda_status = candidate.integral_task_arena.allocate(layout.bytes());
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA integral task arena allocation", cuda_status);
+      return XTBLOOM_STATUS_ALLOCATION_FAILED;
+    }
+    void* const arena = candidate.integral_task_arena.get();
+    const auto upload = [&](std::size_t destination_offset, const auto& values) {
+      if (values.empty()) return cudaSuccess;
+      using Value = typename std::decay_t<decltype(values)>::value_type;
+      return cudaMemcpyAsync(arena_pointer<Value>(arena, destination_offset), values.data(),
+                             values.size() * sizeof(Value), cudaMemcpyHostToDevice, stream);
+    };
+    /* Any successful upload below can remain in flight if a later enqueue
+     * fails. Mark the candidate before the first enqueue so its destructor
+     * synchronizes the owner stream before releasing the shared arena. */
+    candidate.submitted = true;
+    cuda_status = upload(offset.forward_generic, host.forward_generic);
+    if (cuda_status == cudaSuccess) cuda_status = upload(offset.forward_ss, host.forward_ss);
+    if (cuda_status == cudaSuccess) cuda_status = upload(offset.h0_generic, host.h0_generic);
+    if (cuda_status == cudaSuccess) cuda_status = upload(offset.h0_ss, host.h0_ss);
+    if (cuda_status == cudaSuccess) cuda_status = upload(offset.force_generic, host.force_generic);
+    if (cuda_status == cudaSuccess) cuda_status = upload(offset.force_ss, host.force_ss);
+    if (cuda_status != cudaSuccess) {
+      error = cuda_error_message("CUDA integral task upload", cuda_status);
+      return XTBLOOM_STATUS_INTERNAL_ERROR;
+    }
+    candidate.integral_tasks = {
+        static_cast<std::int64_t>(host.forward_generic.size()),
+        static_cast<std::int64_t>(host.forward_ss.size()),
+        static_cast<std::int64_t>(host.h0_generic.size()),
+        static_cast<std::int64_t>(host.h0_ss.size()),
+        static_cast<std::int64_t>(host.force_generic.size()),
+        static_cast<std::int64_t>(host.force_ss.size()),
+        arena_pointer_if<Gfn2IntegralShellPairTask>(
+            arena, offset.forward_generic, static_cast<std::int64_t>(host.forward_generic.size())),
+        arena_pointer_if<Gfn2IntegralShellPairTask>(
+            arena, offset.forward_ss, static_cast<std::int64_t>(host.forward_ss.size())),
+        arena_pointer_if<Gfn2IntegralShellPairTask>(
+            arena, offset.h0_generic, static_cast<std::int64_t>(host.h0_generic.size())),
+        arena_pointer_if<Gfn2IntegralShellPairTask>(arena, offset.h0_ss,
+                                                    static_cast<std::int64_t>(host.h0_ss.size())),
+        arena_pointer_if<Gfn2IntegralShellPairTask>(
+            arena, offset.force_generic, static_cast<std::int64_t>(host.force_generic.size())),
+        arena_pointer_if<Gfn2IntegralShellPairTask>(
+            arena, offset.force_ss, static_cast<std::int64_t>(host.force_ss.size()))};
+    return XTBLOOM_STATUS_SUCCESS;
+  }
+
+  static void bind_integral_task_domains(const Prepared& candidate,
+                                         Gfn2IntegralDeviceBatch& batch) noexcept {
+    batch.use_compact_tasks = candidate.host.compact_integral_tasks ? 1u : 0u;
+    batch.forward_generic_task_count = candidate.integral_tasks.forward_generic_task_count;
+    batch.forward_ss_task_count = candidate.integral_tasks.forward_ss_task_count;
+    batch.h0_generic_task_count = candidate.integral_tasks.h0_generic_task_count;
+    batch.h0_ss_task_count = candidate.integral_tasks.h0_ss_task_count;
+    batch.force_generic_task_count = candidate.integral_tasks.force_generic_task_count;
+    batch.force_ss_task_count = candidate.integral_tasks.force_ss_task_count;
+    batch.forward_generic_tasks = candidate.integral_tasks.forward_generic_tasks;
+    batch.forward_ss_tasks = candidate.integral_tasks.forward_ss_tasks;
+    batch.h0_generic_tasks = candidate.integral_tasks.h0_generic_tasks;
+    batch.h0_ss_tasks = candidate.integral_tasks.h0_ss_tasks;
+    batch.force_generic_tasks = candidate.integral_tasks.force_generic_tasks;
+    batch.force_ss_tasks = candidate.integral_tasks.force_ss_tasks;
   }
 
   xtbloom_status_t build_numerical_refresh_binding(Prepared& candidate, std::string& error) {
@@ -4660,6 +4796,7 @@ struct Gfn2CudaExecutionCache::Impl {
         arena_pointer<double>(arena, offset.primitive_coefficients)};
     binding.plan.integrals.model =
         candidate.host.gfn1_enabled ? XtbModelFlavor::kGfn1 : XtbModelFlavor::kGfn2;
+    bind_integral_task_domains(candidate, binding.plan.integrals);
     binding.plan.h0 = {atoms,
                        shells,
                        shells,
@@ -5828,6 +5965,7 @@ struct Gfn2CudaExecutionCache::Impl {
           arena_pointer<double>(immutable_arena, immutable.primitive_coefficients)};
       binding.plan.integral_batch.model =
           gfn1_enabled ? XtbModelFlavor::kGfn1 : XtbModelFlavor::kGfn2;
+      bind_integral_task_domains(candidate, binding.plan.integral_batch);
       binding.plan.h0_plan = {
           atoms,
           shells,
@@ -7292,6 +7430,9 @@ struct Gfn2CudaExecutionCache::Impl {
         std::move(key), std::move(positions), std::move(point_positions), std::move(point_values),
         std::move(point_gammas), std::move(periodic_shifts), std::move(periodic_response), token,
         error);
+    if (status != XTBLOOM_STATUS_SUCCESS) return status;
+
+    status = build_integral_task_domains(*candidate, error);
     if (status != XTBLOOM_STATUS_SUCCESS) return status;
 
     auto topology_diagnostic =
@@ -10018,6 +10159,7 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.iteration_arena = opaque_address(current.iteration_arena.get());
     identity.eigensolver_setup_arena = opaque_address(current.eigensolver_setup_arena.get());
     identity.provider_host_workspace = opaque_address(current.provider_host_workspace.get());
+    identity.integral_task_arena = opaque_address(current.integral_task_arena.get());
     identity.force_immutable_arena = opaque_address(current.force_immutable_arena.get());
     identity.force_execution_arena = opaque_address(current.force_execution_arena.get());
     identity.numerical_refresh_arena = opaque_address(current.numerical_refresh_arena.get());
@@ -10105,6 +10247,7 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.iteration_arena_bytes = current.iteration_arena.bytes();
     identity.eigensolver_setup_arena_bytes = current.eigensolver_setup_arena.bytes();
     identity.provider_host_workspace_bytes = current.provider_host_workspace.bytes();
+    identity.integral_task_arena_bytes = current.integral_task_arena.bytes();
     identity.force_immutable_arena_bytes = current.force_immutable_arena.bytes();
     identity.force_execution_arena_bytes = current.force_execution_arena.bytes();
     identity.numerical_refresh_arena_bytes = current.numerical_refresh_arena.bytes();
@@ -10155,9 +10298,9 @@ struct Gfn2CudaExecutionCache::Impl {
     identity.retained_device_workspace_bytes =
         identity.topology_arena_bytes + identity.input_arena_bytes +
         identity.iteration_arena_bytes + identity.eigensolver_setup_arena_bytes +
-        identity.force_immutable_arena_bytes + identity.force_execution_arena_bytes +
-        identity.numerical_refresh_arena_bytes + identity.inference_arena_bytes +
-        identity.public_result_device_arena_bytes +
+        identity.integral_task_arena_bytes + identity.force_immutable_arena_bytes +
+        identity.force_execution_arena_bytes + identity.numerical_refresh_arena_bytes +
+        identity.inference_arena_bytes + identity.public_result_device_arena_bytes +
         identity.interaction_device_staging_arena_bytes + identity.topology_staging_device_bytes +
         identity.initializer_device_checkpoint_bytes + identity.scc_loop_device_control_bytes;
     return identity;
