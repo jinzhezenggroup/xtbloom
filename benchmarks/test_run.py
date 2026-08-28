@@ -27,6 +27,38 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(summary["median_ms"], 2.0)
         self.assertEqual(summary["systems_per_second_at_median"], 4000.0)
 
+    def test_environment_metadata_records_cuda_shell_pair_schedule(self) -> None:
+        """Retain the same-binary shell-pair schedule used by CUDA evidence."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            library = root / "libxtbloom.so"
+            library.write_bytes(b"xtbloom")
+            args = SimpleNamespace(
+                cuda_root=root / "cuda",
+                tblite_executable=None,
+                xtb_executable=None,
+                dxtb_executable=None,
+                xtb_library=None,
+                tblite_library=None,
+                dxtb_source=None,
+                dxtb_backends=("cpu", "cuda"),
+                dxtb_cpu_threads=1,
+                library=library,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"XTBLOOM_CUDA_SHELL_PAIR_SCHEDULE": "compact"}
+                ),
+                mock.patch.object(run, "discover_reference", return_value={}),
+                mock.patch.object(run, "git_state", return_value={"dirty": False}),
+                mock.patch.object(run, "run_text", return_value=None),
+            ):
+                metadata = run.environment_metadata(args)
+        self.assertEqual(
+            metadata["environment"]["XTBLOOM_CUDA_SHELL_PAIR_SCHEDULE"],
+            "compact",
+        )
+
     def test_reference_thread_budget_keeps_blas_single_threaded(self) -> None:
         """Do not multiply the declared CPU budget through nested BLAS workers."""
         for module, loader_name in (
