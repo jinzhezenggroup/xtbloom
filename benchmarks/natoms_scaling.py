@@ -61,6 +61,7 @@ THREAD_ENVIRONMENT_NAMES = (
     "MKL_THREADING_LAYER",
 )
 CPU_DISPATCH_ENVIRONMENT_NAMES = ("XTBLOOM_CPU_ISA",)
+CUDA_SCHEDULE_ENVIRONMENT_NAMES = ("XTBLOOM_CUDA_SHELL_PAIR_SCHEDULE",)
 
 
 def _manifest_tolerance_defaults() -> tuple[float, float, float, float, dict[str, Any]]:
@@ -683,6 +684,9 @@ def collect_run_identity(
         },
         "cpu_dispatch_environment": {
             name: os.environ.get(name) for name in CPU_DISPATCH_ENVIRONMENT_NAMES
+        },
+        "cuda_schedule_environment": {
+            name: os.environ.get(name) for name in CUDA_SCHEDULE_ENVIRONMENT_NAMES
         },
         "cpu_dispatch": {
             "requested": requested_cpu_isa,

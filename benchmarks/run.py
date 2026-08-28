@@ -1214,6 +1214,7 @@ def environment_metadata(args: argparse.Namespace) -> dict[str, Any]:
             for name in (
                 "CUDA_VISIBLE_DEVICES",
                 "LD_LIBRARY_PATH",
+                "XTBLOOM_CUDA_SHELL_PAIR_SCHEDULE",
                 "MKL_INTERFACE_LAYER",
                 "MKL_THREADING_LAYER",
                 "OMP_NUM_THREADS",

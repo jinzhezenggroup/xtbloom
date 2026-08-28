@@ -314,6 +314,12 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
   std::int64_t aes2_pair_elements = 0;
   std::int64_t shell_grid_per_system = 0;
   std::int64_t shell_grid_blocks = 0;
+  const bool legacy_shell_grid_valid =
+      integrals.use_compact_tasks != 0u ||
+      (checked_multiply(integrals.maximum_system_shells, integrals.maximum_system_shells,
+                        shell_grid_per_system) &&
+       checked_multiply(shell_grid_per_system, batch, shell_grid_blocks) &&
+       shell_grid_blocks <= static_cast<std::int64_t>(std::numeric_limits<int>::max()));
   if (batch <= 0 || atoms <= 0 || pairs < 0 || shells <= 0 || matrices <= 0 ||
       shell_matrices <= 0 || integrals.total_orbitals <= 0 || integrals.total_primitives <= 0 ||
       integrals.total_shell_pair_elements <= 0 || integrals.maximum_system_shells <= 0 ||
@@ -324,11 +330,21 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       shells == std::numeric_limits<std::int64_t>::max() ||
       batch > static_cast<std::int64_t>(std::numeric_limits<unsigned int>::max()) ||
       batch > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
-      !checked_multiply(integrals.maximum_system_shells, integrals.maximum_system_shells,
-                        shell_grid_per_system) ||
-      !checked_multiply(shell_grid_per_system, batch, shell_grid_blocks) ||
-      shell_grid_blocks > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
-      !checked_multiply(atoms, 3, coordinates) ||
+      integrals.use_compact_tasks > 1u || integrals.reserved != 0u ||
+      integrals.forward_generic_task_count < 0 || integrals.forward_ss_task_count < 0 ||
+      integrals.h0_generic_task_count < 0 || integrals.h0_ss_task_count < 0 ||
+      integrals.force_generic_task_count < 0 || integrals.force_ss_task_count < 0 ||
+      integrals.forward_generic_task_count >
+          static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      integrals.forward_ss_task_count >
+          static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      integrals.h0_generic_task_count >
+          static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      integrals.h0_ss_task_count > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      integrals.force_generic_task_count >
+          static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      integrals.force_ss_task_count > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+      !legacy_shell_grid_valid || !checked_multiply(atoms, 3, coordinates) ||
       !checked_multiply(pairs, kGfn2GeometryPairDataElements, geometry_pair_elements) ||
       !valid_xtb_model_flavor(geometry.model) || integrals.model != geometry.model ||
       es2.model != geometry.model ||
@@ -370,6 +386,29 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
     return binding_failure(BindingError::kInvalidExtent, BindingField::kPlan);
   }
 
+  const bool task_domains_absent =
+      integrals.forward_generic_task_count == 0 && integrals.forward_ss_task_count == 0 &&
+      integrals.h0_generic_task_count == 0 && integrals.h0_ss_task_count == 0 &&
+      integrals.force_generic_task_count == 0 && integrals.force_ss_task_count == 0 &&
+      integrals.forward_generic_tasks == nullptr && integrals.forward_ss_tasks == nullptr &&
+      integrals.h0_generic_tasks == nullptr && integrals.h0_ss_tasks == nullptr &&
+      integrals.force_generic_tasks == nullptr && integrals.force_ss_tasks == nullptr;
+  const std::int64_t forward_tasks =
+      integrals.forward_generic_task_count + integrals.forward_ss_task_count;
+  const std::int64_t h0_tasks = integrals.h0_generic_task_count + integrals.h0_ss_task_count;
+  const bool task_domains_present =
+      forward_tasks > 0 && h0_tasks > 0 &&
+      canonical_pointer(integrals.forward_generic_tasks, integrals.forward_generic_task_count) &&
+      canonical_pointer(integrals.forward_ss_tasks, integrals.forward_ss_task_count) &&
+      canonical_pointer(integrals.h0_generic_tasks, integrals.h0_generic_task_count) &&
+      canonical_pointer(integrals.h0_ss_tasks, integrals.h0_ss_task_count) &&
+      canonical_pointer(integrals.force_generic_tasks, integrals.force_generic_task_count) &&
+      canonical_pointer(integrals.force_ss_tasks, integrals.force_ss_task_count);
+  if ((!task_domains_absent && !task_domains_present) ||
+      (integrals.use_compact_tasks != 0u && !task_domains_present)) {
+    return binding_failure(BindingError::kInvalidExtent, BindingField::kPlan);
+  }
+
   const bool canonical_topology = geometry.atom_offsets == integrals.atom_offsets &&
                                   geometry.atom_offsets == es2.atom_offsets &&
                                   (!aes2_enabled || geometry.atom_offsets == aes2.atom_offsets) &&
@@ -396,6 +435,12 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       canonical_pointer(integrals.angular_momenta, shells) &&
       canonical_pointer(integrals.primitive_exponents, integrals.total_primitives) &&
       canonical_pointer(integrals.primitive_coefficients, integrals.total_primitives) &&
+      canonical_pointer(integrals.forward_generic_tasks, integrals.forward_generic_task_count) &&
+      canonical_pointer(integrals.forward_ss_tasks, integrals.forward_ss_task_count) &&
+      canonical_pointer(integrals.h0_generic_tasks, integrals.h0_generic_task_count) &&
+      canonical_pointer(integrals.h0_ss_tasks, integrals.h0_ss_task_count) &&
+      canonical_pointer(integrals.force_generic_tasks, integrals.force_generic_task_count) &&
+      canonical_pointer(integrals.force_ss_tasks, integrals.force_ss_task_count) &&
       canonical_pointer(h0.atomic_radii, atoms) && canonical_pointer(h0.shell_levels, shells) &&
       canonical_pointer(h0.shell_coordination_scale, shells) &&
       canonical_pointer(h0.shell_polynomial, shells) &&
@@ -641,7 +686,7 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
     }
   }
 
-  RangeList<41> reads;
+  RangeList<47> reads;
   RangeList<80> writes;
   const bool ranges_valid =
       reads.add(geometry.atom_offsets, batch + 1) && reads.add(geometry.pair_offsets, batch + 1) &&
@@ -656,6 +701,12 @@ BindingDiagnostic validate_structure(const Gfn2PreprocessingDeviceBinding& bindi
       reads.add(integrals.shell_to_atom, shells) && reads.add(integrals.angular_momenta, shells) &&
       reads.add(integrals.primitive_exponents, integrals.total_primitives) &&
       reads.add(integrals.primitive_coefficients, integrals.total_primitives) &&
+      reads.add(integrals.forward_generic_tasks, integrals.forward_generic_task_count) &&
+      reads.add(integrals.forward_ss_tasks, integrals.forward_ss_task_count) &&
+      reads.add(integrals.h0_generic_tasks, integrals.h0_generic_task_count) &&
+      reads.add(integrals.h0_ss_tasks, integrals.h0_ss_task_count) &&
+      reads.add(integrals.force_generic_tasks, integrals.force_generic_task_count) &&
+      reads.add(integrals.force_ss_tasks, integrals.force_ss_task_count) &&
       reads.add(h0.atomic_radii, atoms) && reads.add(h0.shell_levels, shells) &&
       reads.add(h0.shell_coordination_scale, shells) && reads.add(h0.shell_polynomial, shells) &&
       reads.add(h0.shell_pair_scale, integrals.total_shell_pair_elements) &&

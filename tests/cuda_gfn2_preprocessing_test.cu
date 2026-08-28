@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "backends/cuda/gfn2_integral_tasks.hpp"
 #include "backends/cuda/gfn2_preprocessing.cuh"
 #include "model/gfn2/aes2.hpp"
 #include "model/gfn2/basis.hpp"
@@ -137,6 +138,7 @@ struct HostCase {
   BasisPlan basis;
   IntegralPlan integrals;
   H0Plan h0_plan;
+  Gfn2IntegralHostTaskDomains integral_tasks;
   ES2Plan es2_plan;
   AES2Plan aes2_plan;
 
@@ -177,6 +179,10 @@ struct HostCase {
       maximum_system_shells = std::max(maximum_system_shells, shells);
       shell_pair_offsets[static_cast<std::size_t>(system + 1)] =
           shell_pair_offsets[static_cast<std::size_t>(system)] + shells * shells;
+    }
+    if (make_gfn2_integral_task_domains(basis, shell_pair_offsets, integral_tasks, error) !=
+        XTBLOOM_STATUS_SUCCESS) {
+      return false;
     }
     return shell_pair_offsets == h0_plan.shell_pair_offsets &&
            pair_offsets == aes2_plan.pair_offsets();
@@ -268,6 +274,8 @@ struct DeviceFixture {
       matrix_offsets, shell_pair_offsets, atom_shell_offsets, shell_orbital_offsets,
       shell_primitive_offsets, shell_to_atom, es2_matrix_offsets;
   DeviceBuffer<std::uint8_t> angular_momenta, requested, published;
+  DeviceBuffer<Gfn2IntegralShellPairTask> forward_generic_tasks, forward_ss_tasks, h0_generic_tasks,
+      h0_ss_tasks, force_generic_tasks, force_ss_tasks;
   DeviceBuffer<double> covalent_radii, primitive_exponents, primitive_coefficients, atomic_radii,
       shell_levels, shell_coordination_scale, shell_polynomial, shell_pair_scale, es2_hardness,
       aes2_dipole_kernel, aes2_quadrupole_kernel, aes2_radius, aes2_valence, positions;
@@ -323,6 +331,12 @@ struct DeviceFixture {
     UPLOAD(angular_momenta, host.basis.angular_momenta);
     UPLOAD(primitive_exponents, host.basis.primitive_exponents);
     UPLOAD(primitive_coefficients, host.basis.primitive_coefficients);
+    UPLOAD(forward_generic_tasks, host.integral_tasks.forward_generic);
+    UPLOAD(forward_ss_tasks, host.integral_tasks.forward_ss);
+    UPLOAD(h0_generic_tasks, host.integral_tasks.h0_generic);
+    UPLOAD(h0_ss_tasks, host.integral_tasks.h0_ss);
+    UPLOAD(force_generic_tasks, host.integral_tasks.force_generic);
+    UPLOAD(force_ss_tasks, host.integral_tasks.force_ss);
     UPLOAD(covalent_radii, host.coordination_plan.covalent_radius);
     UPLOAD(atomic_radii, host.h0_plan.atomic_radii);
     UPLOAD(shell_levels, host.h0_plan.shell_levels);
@@ -459,6 +473,25 @@ struct DeviceFixture {
                               angular_momenta.get(),
                               primitive_exponents.get(),
                               primitive_coefficients.get()};
+    Gfn2IntegralDeviceBatch& integral_batch = binding.plan.integrals;
+    integral_batch.use_compact_tasks = 1u;
+    integral_batch.forward_generic_task_count =
+        static_cast<std::int64_t>(host.integral_tasks.forward_generic.size());
+    integral_batch.forward_ss_task_count =
+        static_cast<std::int64_t>(host.integral_tasks.forward_ss.size());
+    integral_batch.h0_generic_task_count =
+        static_cast<std::int64_t>(host.integral_tasks.h0_generic.size());
+    integral_batch.h0_ss_task_count = static_cast<std::int64_t>(host.integral_tasks.h0_ss.size());
+    integral_batch.force_generic_task_count =
+        static_cast<std::int64_t>(host.integral_tasks.force_generic.size());
+    integral_batch.force_ss_task_count =
+        static_cast<std::int64_t>(host.integral_tasks.force_ss.size());
+    integral_batch.forward_generic_tasks = forward_generic_tasks.get();
+    integral_batch.forward_ss_tasks = forward_ss_tasks.get();
+    integral_batch.h0_generic_tasks = h0_generic_tasks.get();
+    integral_batch.h0_ss_tasks = h0_ss_tasks.get();
+    integral_batch.force_generic_tasks = force_generic_tasks.get();
+    integral_batch.force_ss_tasks = force_ss_tasks.get();
     binding.plan.h0 = {atoms,
                        host.basis.total_shells,
                        host.basis.total_shells,
@@ -1108,6 +1141,15 @@ int test_plan_failure_and_seal_fail_closed() {
   Gfn2PreprocessingDeviceBinding shell_overflow = device.binding;
   shell_overflow.plan.integrals.total_shells = std::numeric_limits<std::int64_t>::max();
   CHECK(seal_gfn2_preprocessing_binding_cuda(shell_overflow).error ==
+        Gfn2PreprocessingBindingError::kInvalidExtent);
+  Gfn2PreprocessingDeviceBinding compact_large_legacy_grid = device.binding;
+  compact_large_legacy_grid.binding_seal = 0u;
+  compact_large_legacy_grid.plan.integrals.maximum_system_shells =
+      std::numeric_limits<std::int64_t>::max();
+  CHECK(seal_gfn2_preprocessing_binding_cuda(compact_large_legacy_grid).success());
+  Gfn2PreprocessingDeviceBinding legacy_large_grid = compact_large_legacy_grid;
+  legacy_large_grid.plan.integrals.use_compact_tasks = 0u;
+  CHECK(seal_gfn2_preprocessing_binding_cuda(legacy_large_grid).error ==
         Gfn2PreprocessingBindingError::kInvalidExtent);
   for (const std::int64_t invalid_tiles :
        std::array<std::int64_t, 2>{0, kGfn2IntegralLinearBlockBudget + 1}) {

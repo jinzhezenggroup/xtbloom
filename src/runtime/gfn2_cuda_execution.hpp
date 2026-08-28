@@ -95,6 +95,7 @@ struct Gfn2CudaExecutionIdentity {
   std::uintptr_t eigensolver_setup_arena = 0u;
   std::uintptr_t provider_host_workspace = 0u;
   std::uintptr_t native_lattice_host_staging = 0u;
+  std::uintptr_t integral_task_arena = 0u;
   std::uintptr_t force_immutable_arena = 0u;
   std::uintptr_t force_execution_arena = 0u;
   std::uintptr_t numerical_refresh_arena = 0u;
@@ -164,6 +165,7 @@ struct Gfn2CudaExecutionIdentity {
   std::size_t iteration_arena_bytes = 0u;
   std::size_t eigensolver_setup_arena_bytes = 0u;
   std::size_t provider_host_workspace_bytes = 0u;
+  std::size_t integral_task_arena_bytes = 0u;
   std::size_t force_immutable_arena_bytes = 0u;
   std::size_t force_execution_arena_bytes = 0u;
   std::size_t numerical_refresh_arena_bytes = 0u;

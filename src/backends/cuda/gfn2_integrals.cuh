@@ -17,6 +17,38 @@ inline constexpr std::int64_t kGfn2IntegralQuadrupoleComponents = 6;
 /* Keep linear staging grids bounded independently of ragged batch size. */
 inline constexpr std::int64_t kGfn2IntegralLinearBlockBudget = 512;
 
+/* Compact task identity within one fixed topology. The precomputed shell
+ * endpoints remove repeated row-major division in the generic kernels, while
+ * local_pair preserves the dense H0 scale index and canonical ordering. */
+struct Gfn2IntegralShellPairTask {
+  std::uint32_t system = 0u;
+  std::uint32_t local_pair = 0u;
+  std::uint32_t bra_shell = 0u;
+  std::uint32_t ket_shell = 0u;
+};
+
+static_assert(std::is_trivially_copyable_v<Gfn2IntegralShellPairTask>);
+static_assert(std::is_standard_layout_v<Gfn2IntegralShellPairTask>);
+static_assert(sizeof(Gfn2IntegralShellPairTask) == 16u);
+
+struct Gfn2IntegralDeviceTaskDomains {
+  std::int64_t forward_generic_task_count = 0;
+  std::int64_t forward_ss_task_count = 0;
+  std::int64_t h0_generic_task_count = 0;
+  std::int64_t h0_ss_task_count = 0;
+  std::int64_t force_generic_task_count = 0;
+  std::int64_t force_ss_task_count = 0;
+  const Gfn2IntegralShellPairTask* forward_generic_tasks = nullptr;
+  const Gfn2IntegralShellPairTask* forward_ss_tasks = nullptr;
+  const Gfn2IntegralShellPairTask* h0_generic_tasks = nullptr;
+  const Gfn2IntegralShellPairTask* h0_ss_tasks = nullptr;
+  const Gfn2IntegralShellPairTask* force_generic_tasks = nullptr;
+  const Gfn2IntegralShellPairTask* force_ss_tasks = nullptr;
+};
+
+static_assert(std::is_trivially_copyable_v<Gfn2IntegralDeviceTaskDomains>);
+static_assert(std::is_standard_layout_v<Gfn2IntegralDeviceTaskDomains>);
+
 /* Host-visible shape for topology-fixed matrix staging and publication nodes. */
 struct Gfn2IntegralLinearLaunchShape {
   std::uint32_t systems = 0u;
@@ -102,6 +134,23 @@ struct Gfn2IntegralDeviceBatch {
    * dipole/quadrupole Hamiltonian operators, so the selected model controls
    * whether those component planes are required, evaluated, and published. */
   XtbModelFlavor model = XtbModelFlavor::kGfn2;
+
+  /* Plan-owned canonical domains. The legacy square-grid path remains a
+   * same-binary diagnostic fallback when use_compact_tasks is zero. */
+  std::uint32_t use_compact_tasks = 0u;
+  std::uint32_t reserved = 0u;
+  std::int64_t forward_generic_task_count = 0;
+  std::int64_t forward_ss_task_count = 0;
+  std::int64_t h0_generic_task_count = 0;
+  std::int64_t h0_ss_task_count = 0;
+  std::int64_t force_generic_task_count = 0;
+  std::int64_t force_ss_task_count = 0;
+  const Gfn2IntegralShellPairTask* forward_generic_tasks = nullptr;
+  const Gfn2IntegralShellPairTask* forward_ss_tasks = nullptr;
+  const Gfn2IntegralShellPairTask* h0_generic_tasks = nullptr;
+  const Gfn2IntegralShellPairTask* h0_ss_tasks = nullptr;
+  const Gfn2IntegralShellPairTask* force_generic_tasks = nullptr;
+  const Gfn2IntegralShellPairTask* force_ss_tasks = nullptr;
 };
 
 /* Device-resident immutable arrays uploaded from H0Plan accessors. */
