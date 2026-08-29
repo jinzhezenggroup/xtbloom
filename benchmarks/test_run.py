@@ -170,6 +170,62 @@ class HarnessTest(unittest.TestCase):
             )
         self.assertEqual(assemble.call_args.args[2], sequence)
 
+    def test_xtbloom_raw_results_preserve_peer_statuses_and_optional_charges(
+        self,
+    ) -> None:
+        """Expose dataset diagnostics without weakening strict matrix results."""
+        adapter = object.__new__(run.XTBloomAdapter)
+        adapter.systems = 2
+        adapter.energies = (ctypes.c_double * 2)(-1.0, float("nan"))
+        adapter.iterations = (ctypes.c_int32 * 2)(12, 500)
+        adapter.converged = (ctypes.c_uint8 * 2)(1, 0)
+        adapter.statuses = (ctypes.c_int32 * 2)(0, 7)
+        adapter.forces = (ctypes.c_double * 6)(*range(6))
+        adapter.charges = (ctypes.c_double * 2)(0.1, float("nan"))
+        adapter.point_forces = None
+        adapter.synchronize = mock.Mock()
+        adapter.memory = SimpleNamespace(download_outputs=mock.Mock())
+
+        raw = adapter.raw_results()
+
+        self.assertEqual(raw["per_system_status"], [0, 7])
+        self.assertEqual(raw["scc_converged"], [1, 0])
+        self.assertEqual(raw["atomic_charges_e"][0], 0.1)
+        with self.assertRaisesRegex(run.BenchmarkError, "system 1"):
+            adapter.results()
+
+    def test_xtbloom_from_storage_validates_before_loading_resources(self) -> None:
+        """Reject invalid SCC limits before opening the library or a context."""
+        storage = SimpleNamespace(slices=[SimpleNamespace()])
+        cell = run.Cell("xtbloom", "cpu", "host", "dataset", "force", 1)
+        with (
+            mock.patch.object(run.public_api, "_configure_library") as configure,
+            self.assertRaisesRegex(run.BenchmarkError, "max SCC iterations"),
+        ):
+            run.XTBloomAdapter.from_storage(
+                Path("lib.so"),
+                storage,
+                cell,
+                0,
+                1,
+                max_scc_iterations=0,
+            )
+        configure.assert_not_called()
+
+        with (
+            mock.patch.object(run.public_api, "_configure_library") as configure,
+            self.assertRaisesRegex(run.BenchmarkError, "electronic temperature"),
+        ):
+            run.XTBloomAdapter.from_storage(
+                Path("lib.so"),
+                storage,
+                cell,
+                0,
+                1,
+                electronic_temperature_hartree=float("nan"),
+            )
+        configure.assert_not_called()
+
     def test_public_timing_semantics_label_is_exact(self) -> None:
         """Use the agreed repeated-compute term and avoid a list-cache claim."""
         self.assertEqual(run.REPEATED_CALL_SEMANTICS, "same_geometry_repeated_compute")
