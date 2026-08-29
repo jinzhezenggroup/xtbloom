@@ -195,7 +195,8 @@ std::size_t PeriodicShortRangePlan::workspace_size_bytes() const noexcept {
   return data_ ? data_->workspace_size_bytes : 0u;
 }
 
-bool PeriodicShortRangePlan::overlaps_storage(const void* data, std::size_t size_bytes) const noexcept {
+bool PeriodicShortRangePlan::overlaps_storage(const void* data,
+                                              std::size_t size_bytes) const noexcept {
   if (size_bytes == 0u) return false;
   AddressRange active;
   AddressRange descriptor;
@@ -222,9 +223,10 @@ const PeriodicShortRangePlanData* PeriodicShortRangePlan::identity() const noexc
   return data_.get();
 }
 
-xtbloom_status_t make_periodic_short_range_plan(
-    std::int64_t batch_size, std::int64_t total_atoms, const std::int64_t* atom_offsets,
-    const double* cell_matrices, PeriodicShortRangePlan& plan, std::string& error) {
+xtbloom_status_t make_periodic_short_range_plan(std::int64_t batch_size, std::int64_t total_atoms,
+                                                const std::int64_t* atom_offsets,
+                                                const double* cell_matrices,
+                                                PeriodicShortRangePlan& plan, std::string& error) {
   if (batch_size <= 0 || total_atoms <= 0 || !valid_count(batch_size) ||
       !valid_count(total_atoms) || atom_offsets == nullptr || cell_matrices == nullptr ||
       static_cast<std::uint64_t>(batch_size) >=
@@ -254,9 +256,9 @@ xtbloom_status_t make_periodic_short_range_plan(
         return XTBLOOM_STATUS_INVALID_ARGUMENT;
       }
       std::string local_error;
-      xtbloom_status_t status = make_lattice_3d(
-          cell_matrices + static_cast<std::size_t>(system) * 9u,
-          created->lattices[static_cast<std::size_t>(system)], local_error);
+      xtbloom_status_t status =
+          make_lattice_3d(cell_matrices + static_cast<std::size_t>(system) * 9u,
+                          created->lattices[static_cast<std::size_t>(system)], local_error);
       if (status != XTBLOOM_STATUS_SUCCESS) {
         error = "periodic short-range cell " + std::to_string(system) + ": " + local_error;
         return status;
@@ -267,8 +269,8 @@ xtbloom_status_t make_periodic_short_range_plan(
                                            kCutoffs[kind], LatticeOriginPolicy::kInclude, local,
                                            local_error);
         if (status != XTBLOOM_STATUS_SUCCESS) {
-          error = "periodic short-range translation set " + std::to_string(kind) +
-                  " for system " + std::to_string(system) + ": " + local_error;
+          error = "periodic short-range translation set " + std::to_string(kind) + " for system " +
+                  std::to_string(system) + ": " + local_error;
           return status;
         }
         auto& values = created->translations[kind];
@@ -317,8 +319,7 @@ xtbloom_status_t make_periodic_short_range_plan(
 }
 
 xtbloom_status_t bind_periodic_short_range_workspace(const PeriodicShortRangePlan& plan,
-                                                     void* workspace,
-                                                     std::size_t workspace_size,
+                                                     void* workspace, std::size_t workspace_size,
                                                      PeriodicShortRangeWorkspace& view,
                                                      std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
@@ -330,7 +331,8 @@ xtbloom_status_t bind_periodic_short_range_workspace(const PeriodicShortRangePla
       reinterpret_cast<std::uintptr_t>(workspace) % kPeriodicShortRangeWorkspaceAlignment != 0u ||
       workspace_size < plan.workspace_size_bytes() ||
       !make_range(workspace, plan.workspace_size_bytes(), workspace_range) ||
-      !make_range(&view, sizeof(view), view_range) || !make_range(&error, sizeof(error), error_range) ||
+      !make_range(&view, sizeof(view), view_range) ||
+      !make_range(&error, sizeof(error), error_range) ||
       ranges_overlap(workspace_range, view_range) || ranges_overlap(workspace_range, error_range) ||
       ranges_overlap(view_range, error_range) ||
       plan.overlaps_storage(workspace, plan.workspace_size_bytes())) {
@@ -370,9 +372,9 @@ xtbloom_status_t validate_periodic_short_range_workspace(
 }
 
 xtbloom_status_t update_periodic_short_range_geometry_cpu(
-    const PeriodicShortRangePlan& plan, const double* positions,
-    std::uint64_t geometry_generation, const PeriodicShortRangeWorkspace& workspace,
-    PeriodicShortRangeGeometry& geometry, std::string& error) {
+    const PeriodicShortRangePlan& plan, const double* positions, std::uint64_t geometry_generation,
+    const PeriodicShortRangeWorkspace& workspace, PeriodicShortRangeGeometry& geometry,
+    std::string& error) {
   xtbloom_status_t status = validate_plan(plan, error);
   if (status != XTBLOOM_STATUS_SUCCESS) return status;
   status = validate_workspace_layout(plan, workspace, error);
@@ -402,9 +404,9 @@ xtbloom_status_t update_periodic_short_range_geometry_cpu(
     const std::int64_t end = plan.atom_offsets()[static_cast<std::size_t>(system + 1)];
     for (std::int64_t atom = begin; atom < end; ++atom) {
       std::string local_error;
-      status = wrap_cartesian(
-          plan.lattice(system), positions + static_cast<std::size_t>(atom) * 3u,
-          workspace.wrapped_positions + static_cast<std::size_t>(atom) * 3u, local_error);
+      status = wrap_cartesian(plan.lattice(system), positions + static_cast<std::size_t>(atom) * 3u,
+                              workspace.wrapped_positions + static_cast<std::size_t>(atom) * 3u,
+                              local_error);
       if (status != XTBLOOM_STATUS_SUCCESS) {
         error = "periodic short-range wrapping changed after validation: " + local_error;
         return XTBLOOM_STATUS_INTERNAL_ERROR;
