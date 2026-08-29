@@ -13,15 +13,15 @@ The public figure measures GFN2-xTB energy plus analytic-force latency for
 distinct conformers of one alkane family.
 
 CUDA curves use an NVIDIA GeForce RTX 5090 (driver 580.95.05). The xTBloom
-CUDA rows were refreshed on 2026-08-20; CPU and third-party rows retain their
-unchanged 2026-08-09 measurements.
+CPU rows were refreshed on 2026-08-29, CUDA rows on 2026-08-20, and
+third-party rows retain their unchanged 2026-08-09 measurements.
 
 On an AMD EPYC 7K62 with the same 16-thread CPU budget:
 
 | Workload | xTBloom CPU | xTB | tblite | Measured xTBloom speedup |
 | --- | ---: | ---: | ---: | ---: |
-| 128 systems, 62 atoms, warm/persistent state | 182 ms | 1555 ms | 1384 ms | 8.6x / 7.6x |
-| 512 systems, 62 atoms, cold state | 1.28 s | 11.47 s | 13.70 s | 8.9x / 10.7x |
+| 128 systems, 62 atoms, warm/persistent state | 167 ms | 1555 ms | 1384 ms | 9.3x / 8.3x |
+| 512 systems, 62 atoms, cold state | 1.16 s | 11.47 s | 13.70 s | 9.9x / 11.8x |
 
 The result reflects xTBloom's intended ragged-batch execution path: xTBloom
 submits the complete batch, while the compared xTB and tblite public adapters
@@ -39,8 +39,9 @@ samples per coordinate, and the stated hardware.
 
 - [Methodology](../../benchmarks/cross-engine.md)
 - [Latest machine-readable table](../../benchmarks/natoms_cross_engine_latest.csv)
+- [Refreshed xTBloom CPU evidence](../../benchmarks/evidence/issue-498/2026-08-29-node3/README.md)
 - [RTX 5090 xTBloom CUDA evidence](../../benchmarks/evidence/issue-467/2026-08-20-node3/README.md)
-- [Historical CPU and third-party evidence](../../benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
+- [Historical third-party evidence](../../benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
 
 ## Warm-state CPU evidence
 
