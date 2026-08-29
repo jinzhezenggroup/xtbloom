@@ -116,16 +116,17 @@ complete runnable example and the descriptor ownership rules.
 ![Cross-engine GFN2-xTB scaling benchmark](docs/assets/natoms_cross_engine.svg)
 
 CUDA curves were measured on an NVIDIA GeForce RTX 5090 (driver 580.95.05).
-The xTBloom CUDA series was refreshed on 2026-08-20; CPU and third-party
-series remain pinned to their unchanged 2026-08-09 evidence.
+The xTBloom CPU series was refreshed on 2026-08-29, the xTBloom CUDA series
+on 2026-08-20, and third-party series remain pinned to their unchanged
+2026-08-09 evidence.
 
 On the recorded AMD EPYC 7K62 system with the same 16-thread CPU budget:
 
 - for a warm-state batch of 128 distinct 62-atom alkane conformers, xTBloom CPU
-  completed the energy-plus-forces call 8.6x faster than the compared xTB
-  public-API loop and 7.6x faster than the tblite loop;
-- for a cold-state batch of 512 at 62 atoms, the measured speedups were 8.9x
-  and 10.7x.
+  completed the energy-plus-forces call 9.3x faster than the compared xTB
+  public-API loop and 8.3x faster than the tblite loop;
+- for a cold-state batch of 512 at 62 atoms, the measured speedups were 9.9x
+  and 11.8x.
 
 These are correctness-qualified medians of three timed samples per coordinate
 for one workload, hardware setup, and timing protocol—not a general ranking of
@@ -134,8 +135,9 @@ the panels use the start policies stated in the evidence. Read the
 [user-facing performance summary](docs/user-guide/performance.md), the
 [benchmark methodology](benchmarks/cross-engine.md), and the
 [latest machine-readable table](benchmarks/natoms_cross_engine_latest.csv).
-The [RTX 5090 CUDA refresh](benchmarks/evidence/issue-467/2026-08-20-node3/README.md)
-and [historical CPU/third-party evidence](benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
+The [CPU refresh](benchmarks/evidence/issue-498/2026-08-29-node3/README.md),
+[RTX 5090 CUDA refresh](benchmarks/evidence/issue-467/2026-08-20-node3/README.md),
+and [historical third-party evidence](benchmarks/evidence/issue-13/2026-08-09-node3-pr231/README.md)
 retain the commands, identities, hashes, and limitations needed before reusing
 the numbers.
 

@@ -1301,43 +1301,65 @@ class NatomsCrossEngineTest(unittest.TestCase):
             with self.assertRaisesRegex(plotters.PlotError, "incompatible run"):
                 plotters.load_rows(paths)
 
-    def test_checked_in_manifest_selects_only_issue_467_cuda(self) -> None:
-        """The public manifest advances CUDA without changing other sources."""
+    def test_checked_in_manifest_selects_current_xtbloom_refreshes(self) -> None:
+        """The public manifest selects the reviewed CPU and CUDA bundles."""
         manifest_path = Path(__file__).with_name("natoms_cross_engine_publication.json")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         sources = {source["engine"]: source for source in manifest["sources"]}
 
+        cpu = sources["xtbloom-cpu"]
+        cpu_evidence_root = "benchmarks/evidence/issue-498/2026-08-29-node3"
+        self.assertEqual(cpu["measured_date"], "2026-08-29")
+        self.assertEqual(
+            cpu["source_revision"],
+            "ab3a3bc6132c2ff31e9723463924a24e355ad5d5",
+        )
+        self.assertEqual(cpu["evidence_bundle"], f"{cpu_evidence_root}/README.md")
+        self.assertEqual(
+            cpu["metadata"], f"{cpu_evidence_root}/publication-metadata.json"
+        )
+        self.assertEqual(
+            {artifact["panel"]: artifact["csv"] for artifact in cpu["artifacts"]},
+            {
+                "cold": f"{cpu_evidence_root}/xtbloom-cpu-cold.csv",
+                "b128": f"{cpu_evidence_root}/xtbloom-cpu-b128.csv",
+                "b512": f"{cpu_evidence_root}/xtbloom-cpu-b512.csv",
+            },
+        )
+
         cuda = sources["xtbloom-cuda"]
-        evidence_root = "benchmarks/evidence/issue-467/2026-08-20-node3"
+        cuda_evidence_root = "benchmarks/evidence/issue-467/2026-08-20-node3"
         self.assertEqual(cuda["measured_date"], "2026-08-20")
         self.assertEqual(
             cuda["source_revision"],
             "e0a3b0d60a75fbc3efe2fc243a75cafee10f3b68",
         )
-        self.assertEqual(cuda["evidence_bundle"], f"{evidence_root}/README.md")
-        self.assertEqual(cuda["metadata"], f"{evidence_root}/publication-metadata.json")
+        self.assertEqual(cuda["evidence_bundle"], f"{cuda_evidence_root}/README.md")
+        self.assertEqual(
+            cuda["metadata"], f"{cuda_evidence_root}/publication-metadata.json"
+        )
         self.assertEqual(
             {artifact["panel"]: artifact["csv"] for artifact in cuda["artifacts"]},
             {
-                "cold": f"{evidence_root}/xtbloom-cuda-cold.csv",
-                "b128": f"{evidence_root}/xtbloom-cuda-b128.csv",
-                "b512": f"{evidence_root}/xtbloom-cuda-b512.csv",
+                "cold": f"{cuda_evidence_root}/xtbloom-cuda-cold.csv",
+                "b128": f"{cuda_evidence_root}/xtbloom-cuda-b128.csv",
+                "b512": f"{cuda_evidence_root}/xtbloom-cuda-b512.csv",
             },
         )
 
-        # This snapshot intentionally binds every non-CUDA source field. A future
-        # CPU or third-party refresh must update it in the same reviewed change.
-        non_cuda_sources = [
+        # Bind every third-party source field so an xTBloom-only refresh cannot
+        # silently relabel or replace unchanged comparison rows.
+        third_party_sources = [
             source
             for source in manifest["sources"]
-            if source["engine"] != "xtbloom-cuda"
+            if source["engine"] not in {"xtbloom-cpu", "xtbloom-cuda"}
         ]
         canonical_sources = json.dumps(
-            non_cuda_sources, sort_keys=True, separators=(",", ":")
+            third_party_sources, sort_keys=True, separators=(",", ":")
         ).encode()
         self.assertEqual(
             hashlib.sha256(canonical_sources).hexdigest(),
-            "9fb7afc9b0443ab0d361173d502ffd44f8e56a986c676b89c0651eb3d7b3cd5a",
+            "0fc0db0bb91ef3c84c97cc3dd4bf855cafdd69157a63e478f8385aaa4610dfd5",
         )
 
     def test_publication_manifest_tracks_independent_engine_revisions(self) -> None:
