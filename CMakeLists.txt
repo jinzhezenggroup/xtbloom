@@ -1200,6 +1200,7 @@ add_library(xtbloom_gfn2_cpu_objects OBJECT
   src/model/gfn2/lattice.cpp
   src/model/gfn2/mulliken.cpp
   src/model/gfn2/mulliken_kernels.cpp
+  src/model/gfn2/periodic_topology.cpp
   src/model/gfn2/repulsion.cpp
   src/model/gfn2/scc_driver.cpp
   src/model/gfn2/scc_mixer.cpp
@@ -3787,6 +3788,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_lattice_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_lattice_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.lattice COMMAND xtbloom_lattice_test)
+
+  add_executable(xtbloom_periodic_short_range_test tests/periodic_short_range_test.cpp)
+  target_link_libraries(xtbloom_periodic_short_range_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_periodic_short_range_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.periodic_short_range COMMAND xtbloom_periodic_short_range_test)
 
   add_executable(xtbloom_gfn1_coordination_test tests/gfn1_coordination_test.cpp)
   target_link_libraries(xtbloom_gfn1_coordination_test PRIVATE xtbloom_gfn1_cpu)

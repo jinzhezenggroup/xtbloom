@@ -56,9 +56,21 @@ of the ket atom. The complete released energy includes periodic images in:
 - complete atomic charge--dipole, dipole--dipole, and charge--quadrupole
   anisotropic electrostatics, including damping and self terms.
 
-The physical sharp cutoffs are 25 bohr for GFN2 coordination and repulsion,
-30 bohr for D4 coordination, 50 bohr for D4 two-body dispersion, and 25 bohr
-for D4 ATM. Gaussian primitive pairs use the existing dimensionless
+The physical cutoffs are 25 bohr for GFN2 coordination and repulsion, 30 bohr
+for D4 coordination, 50 bohr for D4 two-body dispersion, and 25 bohr for D4
+ATM. GFN2 coordination, repulsion, and D4 coordination use sharp cutoffs. To
+match the pinned tblite GFN2 configuration, D4 two-body and ATM distances use
+a quintic switch over the final `w = 0.05` bohr of their cutoffs. For
+`x = (r_cut-r)/w`, the switch inside that interval is
+
+```math
+s(r)=x^3(10-15x+6x^2), \qquad
+\frac{ds}{dr}=-\frac{30x^2(1-x)^2}{w}.
+```
+
+It is one for `r <= r_cut-w` and zero for `r >= r_cut`. The ATM switch is the
+product of the three pair switches, including the complete product-rule
+derivative. Gaussian primitive pairs use the existing dimensionless
 product-exponent threshold of 25. Image enumeration is complete for the
 corresponding cutoff; a sparse-list builder cutoff is not a physical change.
 
