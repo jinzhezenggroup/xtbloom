@@ -1200,6 +1200,7 @@ add_library(xtbloom_gfn2_cpu_objects OBJECT
   src/model/gfn2/lattice.cpp
   src/model/gfn2/mulliken.cpp
   src/model/gfn2/mulliken_kernels.cpp
+  src/model/gfn2/periodic_integrals.cpp
   src/model/gfn2/periodic_topology.cpp
   src/model/gfn2/repulsion.cpp
   src/model/gfn2/scc_driver.cpp
@@ -3793,6 +3794,14 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_periodic_short_range_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_periodic_short_range_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.periodic_short_range COMMAND xtbloom_periodic_short_range_test)
+
+  add_executable(xtbloom_periodic_integrals_test tests/periodic_integrals_test.cpp)
+  target_link_libraries(xtbloom_periodic_integrals_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_periodic_integrals_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.periodic_integrals COMMAND xtbloom_periodic_integrals_test)
+  set_tests_properties(xtbloom.gfn2.periodic_integrals PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
 
   add_executable(xtbloom_gfn1_coordination_test tests/gfn1_coordination_test.cpp)
   target_link_libraries(xtbloom_gfn1_coordination_test PRIVATE xtbloom_gfn1_cpu)

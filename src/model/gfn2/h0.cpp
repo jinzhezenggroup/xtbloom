@@ -245,6 +245,11 @@ xtbloom_status_t validate_evaluation_inputs(const BasisPlan& basis, const Integr
 
 }  // namespace
 
+xtbloom_status_t validate_h0_plan(const BasisPlan& basis, const IntegralPlan& integrals,
+                                  const H0Plan& plan, std::string& error) {
+  return validate_plan(basis, integrals, plan, error);
+}
+
 xtbloom_status_t make_h0_plan(const BasisPlan& basis, const IntegralPlan& integrals,
                               const std::int32_t* atomic_numbers, H0Plan& plan,
                               std::string& error) {
