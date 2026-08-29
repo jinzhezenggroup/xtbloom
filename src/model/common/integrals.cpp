@@ -20,32 +20,17 @@
 namespace xtbloom::detail::common {
 namespace {
 
-constexpr std::size_t kMaximumCartesianFunctions = 6;
-constexpr std::size_t kMaximumSphericalFunctions = 5;
+constexpr std::size_t kMaximumCartesianFunctions = kIntegralMaximumCartesianFunctions;
+constexpr std::size_t kMaximumSphericalFunctions = kIntegralMaximumSphericalFunctions;
 constexpr std::size_t kMaximumCartesianBlock =
     kMaximumCartesianFunctions * kMaximumCartesianFunctions;
 constexpr std::size_t kMaximumSphericalBlock =
     kMaximumSphericalFunctions * kMaximumSphericalFunctions;
-constexpr std::size_t kDipoleComponents = 3;
-constexpr std::size_t kQuadrupoleComponents = 6;
-constexpr std::size_t kMultipoleComponents = kDipoleComponents + kQuadrupoleComponents;
+constexpr std::size_t kDipoleComponents = kIntegralDipoleComponents;
+constexpr std::size_t kQuadrupoleComponents = kIntegralQuadrupoleComponents;
+constexpr std::size_t kMultipoleComponents = kIntegralMultipoleComponents;
 constexpr double kSqrtThree = 1.732050807568877293527446341505872367;
 constexpr double kSqrtPiCubed = 5.5683279968317061;
-
-struct alignas(double) IntegralWorkspace {
-  std::array<double, kMaximumCartesianBlock> cartesian;
-  std::array<double, 3 * kMaximumCartesianBlock> cartesian_gradient;
-  std::array<double, kMaximumSphericalBlock> spherical;
-  std::array<double, 3 * kMaximumSphericalBlock> spherical_gradient;
-  /* Components are [x,y,z,xx,xy,yy,xz,yz,zz], each as one shell block. */
-  std::array<double, kMultipoleComponents * kMaximumCartesianBlock> cartesian_multipole;
-  std::array<double, kMultipoleComponents * kMaximumSphericalBlock> spherical_multipole;
-  /* Derivative layout is [coordinate][component][shell-block element]. */
-  std::array<double, 3 * kMultipoleComponents * kMaximumCartesianBlock>
-      cartesian_multipole_gradient;
-  std::array<double, 3 * kMultipoleComponents * kMaximumSphericalBlock>
-      spherical_multipole_gradient;
-};
 
 struct CartesianExponent {
   std::uint8_t x;
@@ -664,6 +649,22 @@ void compute_shell_pair(const BasisPlan& basis, std::size_t bra_shell, std::size
 }
 
 }  // namespace
+
+#if !defined(XTBLOOM_INTEGRALS_KERNEL_VARIANT)
+
+xtbloom_status_t validate_integral_plan(const BasisPlan& basis, const IntegralPlan& plan,
+                                        std::string& error) {
+  return validate_plan(basis, plan, error);
+}
+
+void compute_shell_pair_cpu(const BasisPlan& basis, std::size_t bra_shell, std::size_t ket_shell,
+                            const double vector[3], double integral_cutoff, bool with_gradient,
+                            bool with_multipoles, IntegralWorkspace& workspace) {
+  compute_shell_pair<>(basis, bra_shell, ket_shell, vector, integral_cutoff, with_gradient,
+                       with_multipoles, workspace);
+}
+
+#endif
 
 #if defined(_MSC_VER)
 #define XTBLOOM_INTEGRALS_NOINLINE __declspec(noinline)

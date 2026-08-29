@@ -71,8 +71,10 @@ s(r)=x^3(10-15x+6x^2), \qquad
 It is one for `r <= r_cut-w` and zero for `r >= r_cut`. The ATM switch is the
 product of the three pair switches, including the complete product-rule
 derivative. Gaussian primitive pairs use the existing dimensionless
-product-exponent threshold of 25. Image enumeration is complete for the
-corresponding cutoff; a sparse-list builder cutoff is not a physical change.
+product-exponent threshold of 25. The one-electron real-space image radius is
+`min(sqrt(2*threshold/minimum_primitive_exponent), 40 bohr)`, matching the
+pinned tblite implementation. Image enumeration is complete for that radius;
+a sparse-list builder cutoff is not a physical change.
 
 ## Ewald convention
 
