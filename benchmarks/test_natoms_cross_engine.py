@@ -1347,19 +1347,19 @@ class NatomsCrossEngineTest(unittest.TestCase):
             },
         )
 
-        # Bind every third-party source field so an xTBloom-only refresh cannot
-        # silently relabel or replace unchanged comparison rows.
-        third_party_sources = [
+        # Bind every non-CPU source field so a CPU-only refresh cannot silently
+        # relabel or replace the CUDA or third-party comparison rows.
+        non_cpu_sources = [
             source
             for source in manifest["sources"]
-            if source["engine"] not in {"xtbloom-cpu", "xtbloom-cuda"}
+            if source["engine"] != "xtbloom-cpu"
         ]
         canonical_sources = json.dumps(
-            third_party_sources, sort_keys=True, separators=(",", ":")
+            non_cpu_sources, sort_keys=True, separators=(",", ":")
         ).encode()
         self.assertEqual(
             hashlib.sha256(canonical_sources).hexdigest(),
-            "0fc0db0bb91ef3c84c97cc3dd4bf855cafdd69157a63e478f8385aaa4610dfd5",
+            "63350f585dca8be325c7f41f544646dd7de10b82406d5dcc12029c0a38aea15c",
         )
 
     def test_publication_manifest_tracks_independent_engine_revisions(self) -> None:
@@ -1618,6 +1618,43 @@ class NatomsCrossEngineTest(unittest.TestCase):
                 ),
             ):
                 publication.load_publication(manifest_path)
+            metadata_path.write_text(original_metadata, encoding="utf-8")
+            write_checksums()
+
+            legacy_path = "benchmarks/evidence/issue-1/run/missing-reference.json"
+            legacy_source_commit = "2" * 40
+            legacy_bytes = 123
+            (
+                root / "benchmarks" / "evidence" / "legacy-large-artifacts.tsv"
+            ).write_text(
+                "sha256\tbytes\tsource_commit\tpath\n"
+                f"{reference_digest}\t{legacy_bytes}\t{legacy_source_commit}\t"
+                f"{legacy_path}\n",
+                encoding="utf-8",
+            )
+            legacy_metadata = json.loads(original_metadata)
+            legacy_metadata["reference_bindings"][reference_digest] = {
+                "kind": "legacy-artifact",
+                "path": legacy_path,
+                "bytes": legacy_bytes,
+                "source_commit": legacy_source_commit,
+            }
+            metadata_path.write_text(json.dumps(legacy_metadata), encoding="utf-8")
+            write_checksums()
+            with mock.patch.object(publication, "REPOSITORY_ROOT", root):
+                publication.load_publication(manifest_path)
+
+            legacy_metadata["reference_bindings"][reference_digest]["bytes"] = 124
+            metadata_path.write_text(json.dumps(legacy_metadata), encoding="utf-8")
+            write_checksums()
+            with (
+                mock.patch.object(publication, "REPOSITORY_ROOT", root),
+                self.assertRaisesRegex(
+                    publication.PublicationError, "does not match the size ledger"
+                ),
+            ):
+                publication.load_publication(manifest_path)
+
             metadata_path.write_text(original_metadata, encoding="utf-8")
             write_checksums()
 

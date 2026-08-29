@@ -56,8 +56,10 @@
       "path": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/ref-tblite-b128.json"
     },
     "1201442fa630ce40bcd93f3d788c1348bce61f4b140215a6aa6001e3efd17af4": {
-      "kind": "retained-artifact",
-      "path": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/ref-tblite-b512.json"
+      "kind": "legacy-artifact",
+      "path": "benchmarks/evidence/issue-13/2026-08-09-node3-pr231/ref-tblite-b512.json",
+      "bytes": 3915436,
+      "source_commit": "cbdf755f27ab02b548783bce3573ecb4385ed167"
     }
   },
   "sources": [
