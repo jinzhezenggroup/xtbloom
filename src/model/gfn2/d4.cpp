@@ -15,6 +15,7 @@
 
 #include "data/parameters/d4.hpp"
 #include "data/parameters/gfn2.hpp"
+#include "model/gfn2/periodic_topology.hpp"
 
 namespace xtbloom::detail::gfn2 {
 
@@ -49,6 +50,7 @@ using parameters::d4::D4ReferenceData;
 constexpr double kCoordinationCutoff = 30.0;
 constexpr double kTwoBodyCutoff = 50.0;
 constexpr double kAtmCutoff = 25.0;
+constexpr double kD4CutoffSwitchWidth = 0.05;
 constexpr double kMinimumDistanceSquared = 1.0e-12;
 constexpr double kCoordinationSteepness = 7.5;
 constexpr double kEnK4 = 4.10451;
@@ -64,7 +66,8 @@ static_assert(parameters::d4::kElementCount == parameters::gfn2::kElementCount,
 static_assert(parameters::gfn2::kGlobal.dispersion_self_consistent,
               "GFN2 parameter data must select self-consistent D4");
 static_assert(!parameters::gfn2::kGlobal.dispersion_smooth,
-              "the implemented GFN2 D4 cache assumes sharp cutoffs");
+              "the molecular GFN2 D4 cache assumes sharp pair-list cutoffs; periodic D4 uses an "
+              "explicit smooth outer switch");
 
 bool checked_add_size(std::size_t first, std::size_t second, std::size_t& result) {
   if (first > std::numeric_limits<std::size_t>::max() - second) {
@@ -256,6 +259,94 @@ bool valid_call_storage(const D4Plan& plan, const D4Workspace& workspace,
   }
   for (const AddressRange& control : controls) {
     if (ranges_overlap(workspace_range, control)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool make_double_range(const void* pointer, std::size_t elements, AddressRange& range) {
+  std::size_t bytes = 0u;
+  return aligned(pointer, alignof(double)) &&
+         checked_multiply_size(elements, sizeof(double), bytes) &&
+         make_range(pointer, bytes, range);
+}
+
+bool make_periodic_d4_control_ranges(const D4Plan& plan,
+                                     const PeriodicShortRangePlan& periodic_plan,
+                                     const PeriodicShortRangeGeometry& geometry,
+                                     const PeriodicShortRangeWorkspace& workspace,
+                                     std::string& error, std::array<AddressRange, 5>& controls) {
+  return make_range(&plan, sizeof(plan), controls[0]) &&
+         make_range(&periodic_plan, sizeof(periodic_plan), controls[1]) &&
+         make_range(&geometry, sizeof(geometry), controls[2]) &&
+         make_range(&workspace, sizeof(workspace), controls[3]) &&
+         make_range(&error, sizeof(error), controls[4]);
+}
+
+bool make_periodic_d4_control_ranges(const D4Plan& plan,
+                                     const PeriodicShortRangePlan& periodic_plan,
+                                     const PeriodicShortRangeGeometry& geometry,
+                                     const D4Workspace& d4_workspace,
+                                     const PeriodicShortRangeWorkspace& workspace,
+                                     std::string& error, std::array<AddressRange, 6>& controls) {
+  return make_range(&plan, sizeof(plan), controls[0]) &&
+         make_range(&periodic_plan, sizeof(periodic_plan), controls[1]) &&
+         make_range(&geometry, sizeof(geometry), controls[2]) &&
+         make_range(&d4_workspace, sizeof(d4_workspace), controls[3]) &&
+         make_range(&workspace, sizeof(workspace), controls[4]) &&
+         make_range(&error, sizeof(error), controls[5]);
+}
+
+/*
+ * Periodic D4 has two independently bound scratch arenas. All caller-owned
+ * numerical buffers must be disjoint from both arenas and from immutable plan
+ * storage before either evaluator clears scratch. The periodic geometry cache
+ * intentionally points into the periodic arena, so it is represented by that
+ * arena rather than treated as a third independent buffer.
+ */
+template <std::size_t N, std::size_t M>
+bool valid_periodic_d4_call_storage(const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+                                    const D4Workspace* d4_workspace,
+                                    const PeriodicShortRangeWorkspace& workspace,
+                                    const std::array<AddressRange, N>& numerical,
+                                    const std::array<AddressRange, M>& controls) {
+  AddressRange periodic_workspace_range;
+  if (!make_range(workspace.workspace_base, workspace.workspace_size_bytes,
+                  periodic_workspace_range) ||
+      plan.overlaps_storage(workspace.workspace_base, workspace.workspace_size_bytes) ||
+      periodic_plan.overlaps_storage(workspace.workspace_base, workspace.workspace_size_bytes) ||
+      !pairwise_disjoint(numerical) || !pairwise_disjoint(controls)) {
+    return false;
+  }
+
+  AddressRange d4_workspace_range;
+  const bool has_d4_workspace = d4_workspace != nullptr;
+  if (has_d4_workspace &&
+      (!make_range(d4_workspace->workspace_base, d4_workspace->workspace_size_bytes,
+                   d4_workspace_range) ||
+       plan.overlaps_storage(d4_workspace->workspace_base, d4_workspace->workspace_size_bytes) ||
+       periodic_plan.overlaps_storage(d4_workspace->workspace_base,
+                                      d4_workspace->workspace_size_bytes) ||
+       ranges_overlap(periodic_workspace_range, d4_workspace_range))) {
+    return false;
+  }
+
+  for (const AddressRange& range : numerical) {
+    const std::size_t bytes = static_cast<std::size_t>(range.end - range.begin);
+    if (ranges_overlap(range, periodic_workspace_range) ||
+        (has_d4_workspace && ranges_overlap(range, d4_workspace_range)) ||
+        plan.overlaps_storage(reinterpret_cast<const void*>(range.begin), bytes) ||
+        periodic_plan.overlaps_storage(reinterpret_cast<const void*>(range.begin), bytes)) {
+      return false;
+    }
+    for (const AddressRange& control : controls) {
+      if (ranges_overlap(range, control)) return false;
+    }
+  }
+  for (const AddressRange& control : controls) {
+    if (ranges_overlap(control, periodic_workspace_range) ||
+        (has_d4_workspace && ranges_overlap(control, d4_workspace_range))) {
       return false;
     }
   }
@@ -1356,6 +1447,894 @@ xtbloom_status_t add_d4_atm_gradient_cpu(const D4Plan& plan, const D4GeometryCac
   }
   for (std::size_t coordinate = 0; coordinate < gradient_count; ++coordinate) {
     gradients[coordinate] += workspace.gradient_scratch[coordinate];
+  }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+namespace {
+
+/*
+ * The molecular D4 cache stores one lower-triangular pair per system.  A
+ * periodic image does not have a cache slot of its own, so these immutable
+ * pair values are recovered from the same plan tables for ordinary pairs and
+ * reconstructed from one element for self images.
+ */
+struct PeriodicD4PairParameters {
+  double coordination_radius = 0.0;
+  double electronegativity_factor = 0.0;
+  double rrij = 0.0;
+  double damping_radius = 0.0;
+};
+
+PeriodicD4PairParameters periodic_pair_parameters(const D4PlanData& data, std::int64_t system,
+                                                  std::int64_t first, std::int64_t second) {
+  if (first != second) {
+    const std::size_t packed =
+        pair_index(data, system, std::min(first, second), std::max(first, second));
+    return {data.pair_coordination_radii[packed], data.pair_en_factors[packed],
+            data.pair_rrij[packed], data.pair_damping_radii[packed]};
+  }
+  const D4ElementData& element_data = element(data, first);
+  const double rrij = 3.0 * element_data.r4r2 * element_data.r4r2;
+  return {2.0 * element_data.covalent_radius, kEnK4 * std::exp(-std::pow(kEnK5, 2.0) / kEnK6), rrij,
+          parameters::gfn2::kGlobal.dispersion_a1 * std::sqrt(rrij) +
+              parameters::gfn2::kGlobal.dispersion_a2};
+}
+
+struct PeriodicD4CutoffSwitch {
+  double value = 1.0;
+  double distance_derivative = 0.0;
+};
+
+/*
+ * Apply the reviewed 0.05-bohr outer switch used only by the periodic D4
+ * image path. distance_derivative is ds/dr, not ds/d(r^2); the latter is
+ * formed by periodic_d4_damping below before it reaches Cartesian/strain
+ * contractions. Keeping this switch separate from the molecular sharp cache
+ * prevents its derivative from being silently dropped when the two paths are
+ * refactored.
+ */
+PeriodicD4CutoffSwitch periodic_d4_cutoff_switch(double distance, double cutoff) {
+  const double inner = cutoff - kD4CutoffSwitchWidth;
+  if (distance <= inner) return {};
+  if (distance >= cutoff) return {0.0, 0.0};
+  const double x = (cutoff - distance) / kD4CutoffSwitchWidth;
+  const double x_squared = x * x;
+  const double one_minus_x = 1.0 - x;
+  return {x_squared * x * (10.0 + x * (-15.0 + 6.0 * x)),
+          -30.0 * x_squared * one_minus_x * one_minus_x / kD4CutoffSwitchWidth};
+}
+
+/*
+ * Return the periodic D4 damping factor after the outer cutoff switch and its
+ * derivative with respect to distance squared, multiplied by two. The
+ * molecular cache stores the corresponding sharp-cutoff value, so callers of
+ * this helper must retain both terms when forming Cartesian and affine-cell
+ * derivatives.
+ */
+void periodic_d4_damping(const PeriodicD4PairParameters& parameters, double distance_squared,
+                         double cutoff, double& damping, double& derivative) {
+  const double r2_squared = distance_squared * distance_squared;
+  const double r2_cubed = r2_squared * distance_squared;
+  const double r0_squared = parameters.damping_radius * parameters.damping_radius;
+  const double r0_fourth = r0_squared * r0_squared;
+  const double r0_sixth = r0_fourth * r0_squared;
+  const double t6 = 1.0 / (r2_cubed + r0_sixth);
+  const double t8 = 1.0 / (r2_squared * r2_squared + r0_fourth * r0_fourth);
+  const double base_damping = parameters::gfn2::kGlobal.dispersion_s6 * t6 +
+                              parameters::gfn2::kGlobal.dispersion_s8 * parameters.rrij * t8;
+  /* This is 2*d(damping)/d(distance_squared), matching D4 pair_data[4]. */
+  const double base_derivative =
+      parameters::gfn2::kGlobal.dispersion_s6 * (-6.0 * r2_squared * t6 * t6) +
+      parameters::gfn2::kGlobal.dispersion_s8 * parameters.rrij * (-8.0 * r2_cubed * t8 * t8);
+  const double distance = std::sqrt(distance_squared);
+  const PeriodicD4CutoffSwitch cutoff_switch = periodic_d4_cutoff_switch(distance, cutoff);
+  damping = cutoff_switch.value * base_damping;
+  derivative = cutoff_switch.value * base_derivative +
+               cutoff_switch.distance_derivative * base_damping / distance;
+}
+
+bool finite_nonnegative_values(const double* values, std::size_t count) {
+  if (values == nullptr) return false;
+  for (std::size_t index = 0; index < count; ++index) {
+    if (!std::isfinite(values[index]) || values[index] < 0.0) return false;
+  }
+  return true;
+}
+
+xtbloom_status_t validate_periodic_d4_context(const D4Plan& plan,
+                                              const PeriodicShortRangePlan& periodic_plan,
+                                              const PeriodicShortRangeGeometry& geometry,
+                                              const D4Workspace& d4_workspace,
+                                              const PeriodicShortRangeWorkspace& workspace,
+                                              std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = validate_workspace(plan, d4_workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (!periodic_plan.sealed() || periodic_plan.batch_size() != plan.batch_size() ||
+      periodic_plan.total_atoms() != plan.total_atoms() ||
+      periodic_plan.atom_offsets() != plan.atom_offsets()) {
+    error = "periodic D4 topology does not match the D4 plan";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  status = validate_periodic_short_range_workspace(periodic_plan, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (geometry.plan_identity != periodic_plan.identity() || geometry.geometry_generation == 0u ||
+      geometry.wrapped_positions == nullptr ||
+      geometry.wrapped_position_elements != plan.total_atoms() * 3 ||
+      workspace.plan_identity != periodic_plan.identity() || workspace.workspace_base == nullptr ||
+      workspace.wrapped_positions == nullptr || workspace.secondary_atom_scratch == nullptr ||
+      workspace.atom_scratch == nullptr || workspace.gradient_scratch == nullptr ||
+      workspace.strain_scratch == nullptr || workspace.batch_scratch == nullptr ||
+      workspace.wrapped_positions != geometry.wrapped_positions ||
+      workspace.wrapped_position_elements != plan.total_atoms() * 3 ||
+      workspace.atom_elements != plan.total_atoms() ||
+      workspace.gradient_elements != plan.total_atoms() * 3 ||
+      workspace.strain_elements != plan.batch_size() * 9 ||
+      workspace.batch_elements != plan.batch_size()) {
+    error = "periodic D4 geometry or workspace is incomplete";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+template <typename Operation>
+xtbloom_status_t for_each_periodic_d4_pair(const D4Plan& plan,
+                                           const PeriodicShortRangePlan& periodic_plan,
+                                           const PeriodicShortRangeGeometry& geometry,
+                                           PeriodicTranslationCutoff translation_cutoff,
+                                           double cutoff, Operation&& operation,
+                                           std::string& error) {
+  const D4PlanData& data = *plan.identity();
+  const double cutoff_squared = cutoff * cutoff;
+  for (std::int64_t system = 0; system < data.batch_size; ++system) {
+    const std::int64_t begin = data.atom_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t end = data.atom_offsets[static_cast<std::size_t>(system + 1)];
+    const LatticeTranslationView translations =
+        periodic_plan.translations(system, translation_cutoff);
+    if (translations.data == nullptr || translations.size <= 0) {
+      error = "periodic D4 translation topology is empty";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    for (std::int64_t first = begin; first < end; ++first) {
+      const std::array<double, 3> center{
+          geometry.wrapped_positions[static_cast<std::size_t>(first) * 3u],
+          geometry.wrapped_positions[static_cast<std::size_t>(first) * 3u + 1u],
+          geometry.wrapped_positions[static_cast<std::size_t>(first) * 3u + 2u],
+      };
+      for (std::int64_t second = begin; second <= first; ++second) {
+        const std::array<double, 3> image{
+            geometry.wrapped_positions[static_cast<std::size_t>(second) * 3u],
+            geometry.wrapped_positions[static_cast<std::size_t>(second) * 3u + 1u],
+            geometry.wrapped_positions[static_cast<std::size_t>(second) * 3u + 2u],
+        };
+        const PeriodicD4PairParameters parameters =
+            periodic_pair_parameters(data, system, first, second);
+        for (std::int64_t translation_index = 0; translation_index < translations.size;
+             ++translation_index) {
+          const LatticeTranslation& translation = translations.data[translation_index];
+          /* A central atom does not interact with its zero-translation image. */
+          if (first == second && periodic_topology_detail::is_origin(translation)) continue;
+          std::array<double, 3> displacement{};
+          double distance_squared = 0.0;
+          if (periodic_topology_detail::image_geometry(center, image, translation, cutoff,
+                                                       cutoff_squared, displacement,
+                                                       distance_squared) ==
+              periodic_topology_detail::ImageGeometryStatus::kOutsideCutoff) {
+            continue;
+          }
+          if (distance_squared < kMinimumDistanceSquared) {
+            error = "periodic D4 is undefined for coincident or near-coincident images";
+            return XTBLOOM_STATUS_INVALID_ARGUMENT;
+          }
+          operation(system, first, second, parameters, displacement, distance_squared);
+        }
+      }
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+/* Apply (d CN_D4 / d R)^T dE/dCN and its affine cell adjoint. */
+xtbloom_status_t add_periodic_d4_coordination_vjp_impl(const D4Plan& plan,
+                                                       const PeriodicShortRangePlan& periodic_plan,
+                                                       const PeriodicShortRangeGeometry& geometry,
+                                                       const double* dE_dcn,
+                                                       const PeriodicShortRangeWorkspace& workspace,
+                                                       std::string& error) {
+  constexpr double inverse_sqrt_pi = 0.5641895835477562869480794515607726;
+  return for_each_periodic_d4_pair(
+      plan, periodic_plan, geometry, PeriodicTranslationCutoff::kD4Coordination30,
+      kCoordinationCutoff,
+      [&](std::int64_t system, std::int64_t first, std::int64_t second,
+          const PeriodicD4PairParameters& parameters, const std::array<double, 3>& displacement,
+          double distance_squared) {
+        const double distance = std::sqrt(distance_squared);
+        const double exponent = kCoordinationSteepness *
+                                (distance - parameters.coordination_radius) /
+                                parameters.coordination_radius;
+        const double derivative = -parameters.electronegativity_factor * kCoordinationSteepness *
+                                  std::exp(-exponent * exponent) * inverse_sqrt_pi /
+                                  parameters.coordination_radius;
+        const double adjoint = dE_dcn[first] + (first == second ? 0.0 : dE_dcn[second]);
+        const double scale = -adjoint * derivative / distance;
+        std::array<double, 3> first_gradient{};
+        for (std::size_t axis = 0; axis < 3u; ++axis) {
+          first_gradient[axis] = scale * displacement[axis];
+          if (first != second) {
+            workspace.gradient_scratch[static_cast<std::size_t>(first) * 3u + axis] +=
+                first_gradient[axis];
+            workspace.gradient_scratch[static_cast<std::size_t>(second) * 3u + axis] -=
+                first_gradient[axis];
+          }
+        }
+        double* strain = workspace.strain_scratch + static_cast<std::size_t>(system) * 9u;
+        for (std::size_t row = 0; row < 3u; ++row) {
+          for (std::size_t column = 0; column < 3u; ++column) {
+            strain[row * 3u + column] += first_gradient[row] * (-displacement[column]);
+          }
+        }
+      },
+      error);
+}
+
+struct PeriodicAtmTerm {
+  std::int64_t system = 0;
+  std::int64_t first = 0;
+  std::int64_t second = 0;
+  std::int64_t third = 0;
+  std::array<double, 3> vij{};
+  std::array<double, 3> vik{};
+  std::array<double, 3> vjk{};
+  double r2ij = 0.0;
+  double r2ik = 0.0;
+  double r2jk = 0.0;
+  PeriodicD4PairParameters pij{};
+  PeriodicD4PairParameters pik{};
+  PeriodicD4PairParameters pjk{};
+  PairCoefficient cij{};
+  PairCoefficient cik{};
+  PairCoefficient cjk{};
+  double triple_scale = 0.0;
+};
+
+double periodic_atm_triple_scale(std::int64_t first, std::int64_t second, std::int64_t third) {
+  /*
+   * The lower-triangular central-atom labels represent each unordered triple
+   * once. These factors correct only permutation multiplicity (three distinct,
+   * two equal, or three equal labels); lattice translations remain fully
+   * enumerated and receive no Wigner--Seitz weight.
+   */
+  if (first == second) return first == third ? 1.0 / 6.0 : 0.5;
+  return first != third && second != third ? 1.0 : 0.5;
+}
+
+bool finite_periodic_distance(const std::array<double, 3>& vector, double cutoff_squared,
+                              double& distance_squared) {
+  for (double component : vector) {
+    if (!std::isfinite(component)) return false;
+  }
+  distance_squared = vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
+  return std::isfinite(distance_squared) && distance_squared <= cutoff_squared;
+}
+
+template <typename Operation>
+xtbloom_status_t for_each_periodic_d4_atm(const D4Plan& plan,
+                                          const PeriodicShortRangePlan& periodic_plan,
+                                          const PeriodicShortRangeGeometry& geometry,
+                                          const D4Workspace& d4_workspace, Operation&& operation,
+                                          std::string& error) {
+  constexpr double cutoff = kAtmCutoff;
+  constexpr double cutoff_squared = cutoff * cutoff;
+  const D4PlanData& data = *plan.identity();
+  for (std::int64_t system = 0; system < data.batch_size; ++system) {
+    const std::int64_t begin = data.atom_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t end = data.atom_offsets[static_cast<std::size_t>(system + 1)];
+    const LatticeTranslationView translations =
+        periodic_plan.translations(system, PeriodicTranslationCutoff::kShortRange25);
+    if (translations.data == nullptr || translations.size <= 0) {
+      error = "periodic D4 ATM translation topology is empty";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    for (std::int64_t first = begin; first < end; ++first) {
+      const std::array<double, 3> center{
+          geometry.wrapped_positions[static_cast<std::size_t>(first) * 3u],
+          geometry.wrapped_positions[static_cast<std::size_t>(first) * 3u + 1u],
+          geometry.wrapped_positions[static_cast<std::size_t>(first) * 3u + 2u],
+      };
+      for (std::int64_t second = begin; second <= first; ++second) {
+        const std::array<double, 3> second_position{
+            geometry.wrapped_positions[static_cast<std::size_t>(second) * 3u],
+            geometry.wrapped_positions[static_cast<std::size_t>(second) * 3u + 1u],
+            geometry.wrapped_positions[static_cast<std::size_t>(second) * 3u + 2u],
+        };
+        const PeriodicD4PairParameters pij = periodic_pair_parameters(data, system, first, second);
+        const PairCoefficient cij = pair_coefficient(data, first, second, d4_workspace, true);
+        for (std::int64_t third = begin; third <= second; ++third) {
+          const std::array<double, 3> third_position{
+              geometry.wrapped_positions[static_cast<std::size_t>(third) * 3u],
+              geometry.wrapped_positions[static_cast<std::size_t>(third) * 3u + 1u],
+              geometry.wrapped_positions[static_cast<std::size_t>(third) * 3u + 2u],
+          };
+          const PeriodicD4PairParameters pik = periodic_pair_parameters(data, system, first, third);
+          const PeriodicD4PairParameters pjk =
+              periodic_pair_parameters(data, system, second, third);
+          const PairCoefficient cik = pair_coefficient(data, first, third, d4_workspace, true);
+          const PairCoefficient cjk = pair_coefficient(data, second, third, d4_workspace, true);
+          const double triple = periodic_atm_triple_scale(first, second, third);
+          for (std::int64_t first_translation_index = 0;
+               first_translation_index < translations.size; ++first_translation_index) {
+            const LatticeTranslation& first_translation =
+                translations.data[first_translation_index];
+            /* Repeated central labels exclude only the zero self translation. */
+            if (first == second && periodic_topology_detail::is_origin(first_translation)) continue;
+            std::array<double, 3> vij{};
+            double r2ij = 0.0;
+            if (periodic_topology_detail::image_geometry(center, second_position, first_translation,
+                                                         cutoff, cutoff_squared, vij, r2ij) ==
+                periodic_topology_detail::ImageGeometryStatus::kOutsideCutoff) {
+              continue;
+            }
+            if (r2ij < kMinimumDistanceSquared) {
+              error = "periodic D4 ATM has a coincident or near-coincident ij image";
+              return XTBLOOM_STATUS_INVALID_ARGUMENT;
+            }
+            for (std::int64_t second_translation_index = 0;
+                 second_translation_index < translations.size; ++second_translation_index) {
+              const LatticeTranslation& second_translation =
+                  translations.data[second_translation_index];
+              /* The second repeated leg has the same origin exclusion. */
+              if (first == third && periodic_topology_detail::is_origin(second_translation))
+                continue;
+              std::array<double, 3> vik{};
+              double r2ik = 0.0;
+              if (periodic_topology_detail::image_geometry(
+                      center, third_position, second_translation, cutoff, cutoff_squared, vik,
+                      r2ik) == periodic_topology_detail::ImageGeometryStatus::kOutsideCutoff) {
+                continue;
+              }
+              if (r2ik < kMinimumDistanceSquared) {
+                error = "periodic D4 ATM has a coincident or near-coincident ik image";
+                return XTBLOOM_STATUS_INVALID_ARGUMENT;
+              }
+              std::array<double, 3> vjk{};
+              for (std::size_t axis = 0; axis < 3u; ++axis) vjk[axis] = vik[axis] - vij[axis];
+              double r2jk = 0.0;
+              if (!finite_periodic_distance(vjk, cutoff_squared, r2jk)) continue;
+              if (r2jk < kMinimumDistanceSquared) {
+                if (second == third && first_translation.index == second_translation.index) {
+                  continue;
+                }
+                error = "periodic D4 ATM has a coincident or near-coincident jk image";
+                return XTBLOOM_STATUS_INVALID_ARGUMENT;
+              }
+              const PeriodicAtmTerm term{system, first, second, third, vij, vik, vjk, r2ij,  r2ik,
+                                         r2jk,   pij,   pik,    pjk,   cij, cik, cjk, triple};
+              const xtbloom_status_t status = operation(term, error);
+              if (status != XTBLOOM_STATUS_SUCCESS) return status;
+            }
+          }
+        }
+      }
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+}  // namespace
+
+xtbloom_status_t evaluate_periodic_d4_coordination_cpu(const D4Plan& plan,
+                                                       const PeriodicShortRangePlan& periodic_plan,
+                                                       const PeriodicShortRangeGeometry& geometry,
+                                                       double* coordination_numbers,
+                                                       const PeriodicShortRangeWorkspace& workspace,
+                                                       std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (!periodic_plan.sealed() || periodic_plan.batch_size() != plan.batch_size() ||
+      periodic_plan.total_atoms() != plan.total_atoms() ||
+      periodic_plan.atom_offsets() != plan.atom_offsets() ||
+      geometry.plan_identity != periodic_plan.identity() || geometry.geometry_generation == 0u ||
+      geometry.wrapped_positions == nullptr ||
+      geometry.wrapped_position_elements != plan.total_atoms() * 3 ||
+      workspace.plan_identity != periodic_plan.identity() || workspace.atom_scratch == nullptr ||
+      workspace.wrapped_positions != geometry.wrapped_positions ||
+      workspace.atom_elements != plan.total_atoms()) {
+    error = "periodic D4 coordination geometry or workspace is incomplete";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  status = validate_periodic_short_range_workspace(periodic_plan, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (coordination_numbers == nullptr) {
+    error = "periodic D4 coordination output must not be NULL";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms());
+  std::array<AddressRange, 1> numerical{};
+  std::array<AddressRange, 5> controls{};
+  if (!make_double_range(coordination_numbers, atom_count, numerical[0]) ||
+      !make_periodic_d4_control_ranges(plan, periodic_plan, geometry, workspace, error, controls) ||
+      !valid_periodic_d4_call_storage(plan, periodic_plan, nullptr, workspace, numerical,
+                                      controls)) {
+    error =
+        "periodic D4 coordination buffers overlap numerical, plan, workspace, or descriptor "
+        "storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  std::fill_n(workspace.atom_scratch, atom_count, 0.0);
+  status = for_each_periodic_d4_pair(
+      plan, periodic_plan, geometry, PeriodicTranslationCutoff::kD4Coordination30,
+      kCoordinationCutoff,
+      [&](std::int64_t, std::int64_t first, std::int64_t second,
+          const PeriodicD4PairParameters& parameters, const std::array<double, 3>&,
+          double distance_squared) {
+        const double distance = std::sqrt(distance_squared);
+        const double exponent = kCoordinationSteepness *
+                                (distance - parameters.coordination_radius) /
+                                parameters.coordination_radius;
+        const double count =
+            0.5 * parameters.electronegativity_factor * (1.0 + std::erf(-exponent));
+        workspace.atom_scratch[first] += count;
+        if (first != second) workspace.atom_scratch[second] += count;
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (!finite_nonnegative_values(workspace.atom_scratch, atom_count)) {
+    error = "periodic D4 coordination evaluation overflowed";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  std::copy_n(workspace.atom_scratch, atom_count, coordination_numbers);
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t add_periodic_d4_coordination_gradient_cpu(
+    const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* dE_dcn, double* gradients,
+    double* strain_derivatives, const PeriodicShortRangeWorkspace& workspace, std::string& error) {
+  if (!plan.sealed()) {
+    error = "periodic D4 coordination plan is not sealed";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (!periodic_plan.sealed() || periodic_plan.batch_size() != plan.batch_size() ||
+      periodic_plan.total_atoms() != plan.total_atoms() ||
+      periodic_plan.atom_offsets() != plan.atom_offsets() ||
+      geometry.plan_identity != periodic_plan.identity() || geometry.geometry_generation == 0u ||
+      geometry.wrapped_positions == nullptr ||
+      geometry.wrapped_position_elements != plan.total_atoms() * 3 ||
+      workspace.plan_identity != periodic_plan.identity() || workspace.atom_scratch == nullptr ||
+      workspace.gradient_scratch == nullptr || workspace.strain_scratch == nullptr ||
+      workspace.wrapped_positions != geometry.wrapped_positions ||
+      workspace.atom_elements != plan.total_atoms() ||
+      workspace.gradient_elements != plan.total_atoms() * 3 ||
+      workspace.strain_elements != plan.batch_size() * 9) {
+    error = "periodic D4 coordination geometry or workspace is incomplete";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  xtbloom_status_t status =
+      validate_periodic_short_range_workspace(periodic_plan, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms());
+  const std::size_t gradient_count = atom_count * 3u;
+  const std::size_t strain_count = static_cast<std::size_t>(plan.batch_size()) * 9u;
+  std::array<AddressRange, 3> numerical{};
+  std::array<AddressRange, 5> controls{};
+  if (!make_double_range(dE_dcn, atom_count, numerical[0]) ||
+      !make_double_range(gradients, gradient_count, numerical[1]) ||
+      !make_double_range(strain_derivatives, strain_count, numerical[2]) ||
+      !make_periodic_d4_control_ranges(plan, periodic_plan, geometry, workspace, error, controls) ||
+      !valid_periodic_d4_call_storage(plan, periodic_plan, nullptr, workspace, numerical,
+                                      controls)) {
+    error =
+        "periodic D4 coordination buffers overlap numerical, plan, workspace, or descriptor "
+        "storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (!finite_values(dE_dcn, atom_count) || !finite_values(gradients, gradient_count) ||
+      !finite_values(strain_derivatives, strain_count)) {
+    error = "periodic D4 coordination derivatives and outputs must be finite";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  std::fill_n(workspace.gradient_scratch, gradient_count, 0.0);
+  std::fill_n(workspace.strain_scratch, strain_count, 0.0);
+  status = add_periodic_d4_coordination_vjp_impl(plan, periodic_plan, geometry, dE_dcn, workspace,
+                                                 error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (!finite_values(workspace.gradient_scratch, gradient_count) ||
+      !finite_values(workspace.strain_scratch, strain_count)) {
+    error = "periodic D4 coordination derivative overflowed";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  for (std::size_t index = 0; index < gradient_count; ++index) {
+    gradients[index] += workspace.gradient_scratch[index];
+  }
+  for (std::size_t index = 0; index < strain_count; ++index) {
+    strain_derivatives[index] += workspace.strain_scratch[index];
+  }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t evaluate_periodic_d4_two_body_cpu(
+    const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* coordination_numbers,
+    const double* atomic_charges, double* per_atom_energies, double* atomic_potentials,
+    const D4Workspace& d4_workspace, const PeriodicShortRangeWorkspace& workspace,
+    std::string& error) {
+  xtbloom_status_t status =
+      validate_periodic_d4_context(plan, periodic_plan, geometry, d4_workspace, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms());
+  std::array<AddressRange, 4> numerical{};
+  std::array<AddressRange, 6> controls{};
+  if (!make_double_range(coordination_numbers, atom_count, numerical[0]) ||
+      !make_double_range(atomic_charges, atom_count, numerical[1]) ||
+      !make_double_range(per_atom_energies, atom_count, numerical[2]) ||
+      !make_double_range(atomic_potentials, atom_count, numerical[3]) ||
+      !make_periodic_d4_control_ranges(plan, periodic_plan, geometry, d4_workspace, workspace,
+                                       error, controls) ||
+      !valid_periodic_d4_call_storage(plan, periodic_plan, &d4_workspace, workspace, numerical,
+                                      controls)) {
+    error =
+        "periodic D4 two-body buffers overlap numerical, plan, workspace, or descriptor storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (per_atom_energies == nullptr || atomic_potentials == nullptr ||
+      !finite_nonnegative_values(coordination_numbers, atom_count) ||
+      !finite_values(atomic_charges, atom_count)) {
+    error = "periodic D4 two-body inputs and outputs are invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  status = prepare_weights(*plan.identity(), coordination_numbers, atomic_charges, true,
+                           d4_workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  std::fill_n(workspace.atom_scratch, atom_count, 0.0);
+  std::fill_n(workspace.secondary_atom_scratch, atom_count, 0.0);
+  status = for_each_periodic_d4_pair(
+      plan, periodic_plan, geometry, PeriodicTranslationCutoff::kD4TwoBody50, kTwoBodyCutoff,
+      [&](std::int64_t, std::int64_t first, std::int64_t second,
+          const PeriodicD4PairParameters& parameters, const std::array<double, 3>&,
+          double distance_squared) {
+        double damping = 0.0;
+        double derivative = 0.0;
+        periodic_d4_damping(parameters, distance_squared, kTwoBodyCutoff, damping, derivative);
+        (void)derivative;
+        const PairCoefficient coefficient =
+            pair_coefficient(*plan.identity(), first, second, d4_workspace, true);
+        const double pair_energy = -coefficient.c6 * damping;
+        workspace.atom_scratch[first] += 0.5 * pair_energy;
+        if (first != second) workspace.atom_scratch[second] += 0.5 * pair_energy;
+        const double accounting = first == second ? 0.5 : 1.0;
+        workspace.secondary_atom_scratch[first] -= accounting * coefficient.first_charge * damping;
+        if (first != second) {
+          workspace.secondary_atom_scratch[second] -= coefficient.second_charge * damping;
+        } else {
+          workspace.secondary_atom_scratch[first] -=
+              accounting * coefficient.second_charge * damping;
+        }
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (!finite_values(workspace.atom_scratch, atom_count) ||
+      !finite_values(workspace.secondary_atom_scratch, atom_count)) {
+    error = "periodic D4 two-body evaluation overflowed";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  std::copy_n(workspace.atom_scratch, atom_count, per_atom_energies);
+  std::copy_n(workspace.secondary_atom_scratch, atom_count, atomic_potentials);
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t add_periodic_d4_two_body_gradient_cpu(
+    const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* coordination_numbers,
+    const double* atomic_charges, double* gradients, double* strain_derivatives,
+    const D4Workspace& d4_workspace, const PeriodicShortRangeWorkspace& workspace,
+    std::string& error) {
+  xtbloom_status_t status =
+      validate_periodic_d4_context(plan, periodic_plan, geometry, d4_workspace, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms());
+  const std::size_t gradient_count = atom_count * 3u;
+  const std::size_t strain_count = static_cast<std::size_t>(plan.batch_size()) * 9u;
+  std::array<AddressRange, 4> numerical{};
+  std::array<AddressRange, 6> controls{};
+  if (!make_double_range(coordination_numbers, atom_count, numerical[0]) ||
+      !make_double_range(atomic_charges, atom_count, numerical[1]) ||
+      !make_double_range(gradients, gradient_count, numerical[2]) ||
+      !make_double_range(strain_derivatives, strain_count, numerical[3]) ||
+      !make_periodic_d4_control_ranges(plan, periodic_plan, geometry, d4_workspace, workspace,
+                                       error, controls) ||
+      !valid_periodic_d4_call_storage(plan, periodic_plan, &d4_workspace, workspace, numerical,
+                                      controls)) {
+    error =
+        "periodic D4 two-body buffers overlap numerical, plan, workspace, or descriptor storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (!finite_nonnegative_values(coordination_numbers, atom_count) ||
+      !finite_values(atomic_charges, atom_count) || !finite_values(gradients, gradient_count) ||
+      !finite_values(strain_derivatives, strain_count)) {
+    error = "periodic D4 two-body derivative inputs and outputs are invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  status = prepare_weights(*plan.identity(), coordination_numbers, atomic_charges, true,
+                           d4_workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  std::fill_n(workspace.gradient_scratch, gradient_count, 0.0);
+  std::fill_n(workspace.strain_scratch, strain_count, 0.0);
+  std::fill_n(workspace.secondary_atom_scratch, atom_count, 0.0);
+  status = for_each_periodic_d4_pair(
+      plan, periodic_plan, geometry, PeriodicTranslationCutoff::kD4TwoBody50, kTwoBodyCutoff,
+      [&](std::int64_t system, std::int64_t first, std::int64_t second,
+          const PeriodicD4PairParameters& parameters, const std::array<double, 3>& displacement,
+          double distance_squared) {
+        double damping = 0.0;
+        double derivative = 0.0;
+        periodic_d4_damping(parameters, distance_squared, kTwoBodyCutoff, damping, derivative);
+        const PairCoefficient coefficient =
+            pair_coefficient(*plan.identity(), first, second, d4_workspace, true);
+        const std::array<double, 3> pair_vector{-displacement[0], -displacement[1],
+                                                -displacement[2]};
+        const double radial_scale = -coefficient.c6 * derivative;
+        std::array<double, 3> first_gradient{};
+        for (std::size_t axis = 0; axis < 3u; ++axis) {
+          first_gradient[axis] = radial_scale * pair_vector[axis];
+          if (first != second) {
+            workspace.gradient_scratch[static_cast<std::size_t>(first) * 3u + axis] +=
+                first_gradient[axis];
+            workspace.gradient_scratch[static_cast<std::size_t>(second) * 3u + axis] -=
+                first_gradient[axis];
+          }
+        }
+        const double accounting = first == second ? 0.5 : 1.0;
+        double* strain = workspace.strain_scratch + static_cast<std::size_t>(system) * 9u;
+        for (std::size_t row = 0; row < 3u; ++row) {
+          for (std::size_t column = 0; column < 3u; ++column) {
+            strain[row * 3u + column] += accounting * first_gradient[row] * pair_vector[column];
+          }
+        }
+        if (first == second) {
+          workspace.secondary_atom_scratch[first] -=
+              accounting * (coefficient.first_cn + coefficient.second_cn) * damping;
+        } else {
+          workspace.secondary_atom_scratch[first] -= coefficient.first_cn * damping;
+          workspace.secondary_atom_scratch[second] -= coefficient.second_cn * damping;
+        }
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = add_periodic_d4_coordination_vjp_impl(
+      plan, periodic_plan, geometry, workspace.secondary_atom_scratch, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (!finite_values(workspace.gradient_scratch, gradient_count) ||
+      !finite_values(workspace.strain_scratch, strain_count)) {
+    error = "periodic D4 two-body derivative overflowed";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  for (std::size_t index = 0; index < gradient_count; ++index) {
+    gradients[index] += workspace.gradient_scratch[index];
+  }
+  for (std::size_t index = 0; index < strain_count; ++index) {
+    strain_derivatives[index] += workspace.strain_scratch[index];
+  }
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t evaluate_periodic_d4_atm_cpu(
+    const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* coordination_numbers,
+    double* per_atom_energies, const D4Workspace& d4_workspace,
+    const PeriodicShortRangeWorkspace& workspace, std::string& error) {
+  xtbloom_status_t status =
+      validate_periodic_d4_context(plan, periodic_plan, geometry, d4_workspace, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms());
+  std::array<AddressRange, 2> numerical{};
+  std::array<AddressRange, 6> controls{};
+  if (!make_double_range(coordination_numbers, atom_count, numerical[0]) ||
+      !make_double_range(per_atom_energies, atom_count, numerical[1]) ||
+      !make_periodic_d4_control_ranges(plan, periodic_plan, geometry, d4_workspace, workspace,
+                                       error, controls) ||
+      !valid_periodic_d4_call_storage(plan, periodic_plan, &d4_workspace, workspace, numerical,
+                                      controls)) {
+    error = "periodic D4 ATM buffers overlap numerical, plan, workspace, or descriptor storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (per_atom_energies == nullptr ||
+      !finite_nonnegative_values(coordination_numbers, atom_count)) {
+    error = "periodic D4 ATM coordination input or output is invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  std::fill_n(d4_workspace.atom_scratch, atom_count, 0.0);
+  status = prepare_weights(*plan.identity(), coordination_numbers, d4_workspace.atom_scratch, true,
+                           d4_workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  std::fill_n(workspace.atom_scratch, atom_count, 0.0);
+  status = for_each_periodic_d4_atm(
+      plan, periodic_plan, geometry, d4_workspace,
+      [&](const PeriodicAtmTerm& term, std::string&) {
+        if (!(term.cij.c6 > 0.0) || !(term.cik.c6 > 0.0) || !(term.cjk.c6 > 0.0)) {
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+        const double r2_product = term.r2ij * term.r2ik * term.r2jk;
+        const double r1_product = std::sqrt(r2_product);
+        const double r3_product = r2_product * r1_product;
+        const double r5_product = r3_product * r2_product;
+        const double damping =
+            1.0 / (1.0 + 6.0 * std::pow((term.pij.damping_radius * term.pik.damping_radius *
+                                         term.pjk.damping_radius) /
+                                            r1_product,
+                                        kAtmExponent / 3.0));
+        const double angle = 0.375 * (term.r2ij + term.r2jk - term.r2ik) *
+                                 (term.r2ij - term.r2jk + term.r2ik) *
+                                 (-term.r2ij + term.r2jk + term.r2ik) / r5_product +
+                             1.0 / r3_product;
+        const double c9 = -parameters::gfn2::kGlobal.dispersion_s9 *
+                          std::sqrt(term.cij.c6 * term.cik.c6 * term.cjk.c6);
+        const double switch_product =
+            periodic_d4_cutoff_switch(std::sqrt(term.r2ij), kAtmCutoff).value *
+            periodic_d4_cutoff_switch(std::sqrt(term.r2ik), kAtmCutoff).value *
+            periodic_d4_cutoff_switch(std::sqrt(term.r2jk), kAtmCutoff).value;
+        const double dE = angle * damping * c9 * term.triple_scale * switch_product;
+        const double per_atom = dE / 3.0;
+        workspace.atom_scratch[term.first] -= per_atom;
+        workspace.atom_scratch[term.second] -= per_atom;
+        workspace.atom_scratch[term.third] -= per_atom;
+        return XTBLOOM_STATUS_SUCCESS;
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) {
+    if (error.empty()) error = "periodic D4 ATM evaluation failed";
+    return status;
+  }
+  if (!finite_values(workspace.atom_scratch, atom_count)) {
+    error = "periodic D4 ATM evaluation overflowed";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  std::copy_n(workspace.atom_scratch, atom_count, per_atom_energies);
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t add_periodic_d4_atm_gradient_cpu(
+    const D4Plan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* coordination_numbers,
+    double* gradients, double* strain_derivatives, const D4Workspace& d4_workspace,
+    const PeriodicShortRangeWorkspace& workspace, std::string& error) {
+  xtbloom_status_t status =
+      validate_periodic_d4_context(plan, periodic_plan, geometry, d4_workspace, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms());
+  const std::size_t gradient_count = atom_count * 3u;
+  const std::size_t strain_count = static_cast<std::size_t>(plan.batch_size()) * 9u;
+  std::array<AddressRange, 3> numerical{};
+  std::array<AddressRange, 6> controls{};
+  if (!make_double_range(coordination_numbers, atom_count, numerical[0]) ||
+      !make_double_range(gradients, gradient_count, numerical[1]) ||
+      !make_double_range(strain_derivatives, strain_count, numerical[2]) ||
+      !make_periodic_d4_control_ranges(plan, periodic_plan, geometry, d4_workspace, workspace,
+                                       error, controls) ||
+      !valid_periodic_d4_call_storage(plan, periodic_plan, &d4_workspace, workspace, numerical,
+                                      controls)) {
+    error = "periodic D4 ATM buffers overlap numerical, plan, workspace, or descriptor storage";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  if (!finite_nonnegative_values(coordination_numbers, atom_count) ||
+      !finite_values(gradients, gradient_count) ||
+      !finite_values(strain_derivatives, strain_count)) {
+    error = "periodic D4 ATM derivative inputs and outputs are invalid";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  std::fill_n(d4_workspace.atom_scratch, atom_count, 0.0);
+  status = prepare_weights(*plan.identity(), coordination_numbers, d4_workspace.atom_scratch, true,
+                           d4_workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  std::fill_n(workspace.gradient_scratch, gradient_count, 0.0);
+  std::fill_n(workspace.strain_scratch, strain_count, 0.0);
+  std::fill_n(workspace.secondary_atom_scratch, atom_count, 0.0);
+  status = for_each_periodic_d4_atm(
+      plan, periodic_plan, geometry, d4_workspace,
+      [&](const PeriodicAtmTerm& term, std::string& local_error) {
+        if (!(term.cij.c6 > 0.0) || !(term.cik.c6 > 0.0) || !(term.cjk.c6 > 0.0)) {
+          local_error = "periodic D4 ATM encountered a nonpositive C6 coefficient";
+          return XTBLOOM_STATUS_INTERNAL_ERROR;
+        }
+        const double r2_product = term.r2ij * term.r2ik * term.r2jk;
+        const double r1_product = std::sqrt(r2_product);
+        const double r3_product = r2_product * r1_product;
+        const double r5_product = r3_product * r2_product;
+        const double ratio =
+            (term.pij.damping_radius * term.pik.damping_radius * term.pjk.damping_radius) /
+            r1_product;
+        const double ratio_power = std::pow(ratio, kAtmExponent / 3.0);
+        const double damping = 1.0 / (1.0 + 6.0 * ratio_power);
+        const double angle = 0.375 * (term.r2ij + term.r2jk - term.r2ik) *
+                                 (term.r2ij - term.r2jk + term.r2ik) *
+                                 (-term.r2ij + term.r2jk + term.r2ik) / r5_product +
+                             1.0 / r3_product;
+        const double c9 = -parameters::gfn2::kGlobal.dispersion_s9 *
+                          std::sqrt(term.cij.c6 * term.cik.c6 * term.cjk.c6);
+        const double rr = angle * damping;
+        const double damping_derivative = -2.0 * kAtmExponent * ratio_power * damping * damping;
+        const PeriodicD4CutoffSwitch switch_ij =
+            periodic_d4_cutoff_switch(std::sqrt(term.r2ij), kAtmCutoff);
+        const PeriodicD4CutoffSwitch switch_ik =
+            periodic_d4_cutoff_switch(std::sqrt(term.r2ik), kAtmCutoff);
+        const PeriodicD4CutoffSwitch switch_jk =
+            periodic_d4_cutoff_switch(std::sqrt(term.r2jk), kAtmCutoff);
+        const double switch_product = switch_ij.value * switch_ik.value * switch_jk.value;
+        const double d_e0 = rr * c9;
+        const auto distance_gradient = [&](double target, double other_first, double other_second,
+                                           double switch_derivative, double other_switches,
+                                           const std::array<double, 3>& vector,
+                                           std::array<double, 3>& output) {
+          const double angle_derivative =
+              -0.375 *
+              (target * target * target + target * target * (other_first + other_second) +
+               target * (3.0 * other_first * other_first + 2.0 * other_first * other_second +
+                         3.0 * other_second * other_second) -
+               5.0 * (other_first - other_second) * (other_first - other_second) *
+                   (other_first + other_second)) /
+              r5_product;
+          const double scale = switch_product * c9 *
+                                   (-angle_derivative * damping + angle * damping_derivative) /
+                                   target -
+                               d_e0 * switch_derivative * other_switches / std::sqrt(target);
+          for (std::size_t axis = 0; axis < 3u; ++axis) output[axis] = scale * vector[axis];
+        };
+        std::array<double, 3> dgij{};
+        std::array<double, 3> dgik{};
+        std::array<double, 3> dgjk{};
+        distance_gradient(term.r2ij, term.r2jk, term.r2ik, switch_ij.distance_derivative,
+                          switch_ik.value * switch_jk.value, term.vij, dgij);
+        distance_gradient(term.r2ik, term.r2jk, term.r2ij, switch_ik.distance_derivative,
+                          switch_ij.value * switch_jk.value, term.vik, dgik);
+        distance_gradient(term.r2jk, term.r2ik, term.r2ij, switch_jk.distance_derivative,
+                          switch_ij.value * switch_ik.value, term.vjk, dgjk);
+        for (std::size_t axis = 0; axis < 3u; ++axis) {
+          workspace.gradient_scratch[static_cast<std::size_t>(term.first) * 3u + axis] -=
+              term.triple_scale * (dgij[axis] + dgik[axis]);
+          workspace.gradient_scratch[static_cast<std::size_t>(term.second) * 3u + axis] +=
+              term.triple_scale * (dgij[axis] - dgjk[axis]);
+          workspace.gradient_scratch[static_cast<std::size_t>(term.third) * 3u + axis] +=
+              term.triple_scale * (dgik[axis] + dgjk[axis]);
+        }
+        double* strain = workspace.strain_scratch + static_cast<std::size_t>(term.system) * 9u;
+        for (std::size_t row = 0; row < 3u; ++row) {
+          for (std::size_t column = 0; column < 3u; ++column) {
+            strain[row * 3u + column] +=
+                term.triple_scale * (dgij[row] * term.vij[column] + dgik[row] * term.vik[column] +
+                                     dgjk[row] * term.vjk[column]);
+          }
+        }
+        const double d_e = rr * c9 * term.triple_scale * switch_product;
+        workspace.secondary_atom_scratch[term.first] -=
+            0.5 * d_e * (term.cij.first_cn / term.cij.c6 + term.cik.first_cn / term.cik.c6);
+        workspace.secondary_atom_scratch[term.second] -=
+            0.5 * d_e * (term.cij.second_cn / term.cij.c6 + term.cjk.first_cn / term.cjk.c6);
+        workspace.secondary_atom_scratch[term.third] -=
+            0.5 * d_e * (term.cik.second_cn / term.cik.c6 + term.cjk.second_cn / term.cjk.c6);
+        return XTBLOOM_STATUS_SUCCESS;
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  status = add_periodic_d4_coordination_vjp_impl(
+      plan, periodic_plan, geometry, workspace.secondary_atom_scratch, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (!finite_values(workspace.gradient_scratch, gradient_count) ||
+      !finite_values(workspace.strain_scratch, strain_count)) {
+    error = "periodic D4 ATM derivative overflowed";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  for (std::size_t index = 0; index < gradient_count; ++index) {
+    gradients[index] += workspace.gradient_scratch[index];
+  }
+  for (std::size_t index = 0; index < strain_count; ++index) {
+    strain_derivatives[index] += workspace.strain_scratch[index];
   }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;

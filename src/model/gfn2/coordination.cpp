@@ -3,6 +3,7 @@
 
 #include "model/gfn2/coordination.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -11,6 +12,7 @@
 #include <utility>
 
 #include "data/parameters/gfn2.hpp"
+#include "model/gfn2/periodic_topology.hpp"
 
 namespace xtbloom::detail::gfn2 {
 namespace {
@@ -317,6 +319,197 @@ xtbloom_status_t add_coordination_gradient_cpu(const CoordinationPlan& plan,
     }
   }
 
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+namespace {
+
+bool finite_array(const double* values, std::size_t count) {
+  if (values == nullptr) return false;
+  for (std::size_t index = 0; index < count; ++index) {
+    if (!std::isfinite(values[index])) return false;
+  }
+  return true;
+}
+
+xtbloom_status_t validate_periodic_coordination_context(
+    const CoordinationPlan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const PeriodicShortRangeWorkspace& workspace,
+    std::string& error) {
+  xtbloom_status_t status = validate_plan(plan, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (!periodic_plan.sealed() || periodic_plan.batch_size() != plan.batch_size ||
+      periodic_plan.total_atoms() != plan.total_atoms ||
+      periodic_plan.atom_offsets() != plan.atom_offsets) {
+    error = "periodic coordination topology does not match the coordination plan";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  status = validate_periodic_short_range_workspace(periodic_plan, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (geometry.plan_identity != periodic_plan.identity() || geometry.geometry_generation == 0u ||
+      geometry.wrapped_positions == nullptr ||
+      geometry.wrapped_position_elements != plan.total_atoms * 3 ||
+      workspace.plan_identity != periodic_plan.identity() ||
+      workspace.wrapped_positions != geometry.wrapped_positions ||
+      workspace.atom_elements != plan.total_atoms ||
+      workspace.gradient_elements != plan.total_atoms * 3 ||
+      workspace.strain_elements != plan.batch_size * 9) {
+    error = "periodic coordination geometry or workspace is incomplete";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+template <typename PairOperation>
+xtbloom_status_t for_each_periodic_coordination_pair(const CoordinationPlan& plan,
+                                                     const PeriodicShortRangePlan& periodic_plan,
+                                                     const PeriodicShortRangeGeometry& geometry,
+                                                     PairOperation&& operation,
+                                                     std::string& error) {
+  constexpr double cutoff_squared = kPeriodicShortRangeCutoffBohr * kPeriodicShortRangeCutoffBohr;
+  for (std::int64_t system = 0; system < plan.batch_size; ++system) {
+    const std::int64_t begin = plan.atom_offsets[static_cast<std::size_t>(system)];
+    const std::int64_t end = plan.atom_offsets[static_cast<std::size_t>(system + 1)];
+    const LatticeTranslationView translations =
+        periodic_plan.translations(system, PeriodicTranslationCutoff::kShortRange25);
+    if (translations.data == nullptr || translations.size <= 0) {
+      error = "periodic coordination translation topology is empty";
+      return XTBLOOM_STATUS_INVALID_ARGUMENT;
+    }
+    for (std::int64_t first = begin; first < end; ++first) {
+      const std::array<double, 3> center{
+          geometry.wrapped_positions[static_cast<std::size_t>(first) * 3u],
+          geometry.wrapped_positions[static_cast<std::size_t>(first) * 3u + 1u],
+          geometry.wrapped_positions[static_cast<std::size_t>(first) * 3u + 2u],
+      };
+      for (std::int64_t second = begin; second <= first; ++second) {
+        const std::array<double, 3> image{
+            geometry.wrapped_positions[static_cast<std::size_t>(second) * 3u],
+            geometry.wrapped_positions[static_cast<std::size_t>(second) * 3u + 1u],
+            geometry.wrapped_positions[static_cast<std::size_t>(second) * 3u + 2u],
+        };
+        for (std::int64_t translation_index = 0; translation_index < translations.size;
+             ++translation_index) {
+          const LatticeTranslation& translation = translations.data[translation_index];
+          if (first == second && periodic_topology_detail::is_origin(translation)) continue;
+          std::array<double, 3> displacement{};
+          double distance_squared = 0.0;
+          if (periodic_topology_detail::image_geometry(
+                  center, image, translation, kPeriodicShortRangeCutoffBohr, cutoff_squared,
+                  displacement, distance_squared) ==
+              periodic_topology_detail::ImageGeometryStatus::kOutsideCutoff) {
+            continue;
+          }
+          if (distance_squared < kMinimumDistanceSquared) {
+            error = "periodic coordination is undefined for coincident or near-coincident images";
+            return XTBLOOM_STATUS_INVALID_ARGUMENT;
+          }
+          operation(system, first, second, displacement, distance_squared);
+        }
+      }
+    }
+  }
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+}  // namespace
+
+xtbloom_status_t evaluate_periodic_coordination_cpu(const CoordinationPlan& plan,
+                                                    const PeriodicShortRangePlan& periodic_plan,
+                                                    const PeriodicShortRangeGeometry& geometry,
+                                                    double* coordination_numbers,
+                                                    const PeriodicShortRangeWorkspace& workspace,
+                                                    std::string& error) {
+  xtbloom_status_t status =
+      validate_periodic_coordination_context(plan, periodic_plan, geometry, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (coordination_numbers == nullptr) {
+    error = "periodic coordination output must not be NULL";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms);
+  std::fill_n(workspace.atom_scratch, atom_count, 0.0);
+  status = for_each_periodic_coordination_pair(
+      plan, periodic_plan, geometry,
+      [&](std::int64_t, std::int64_t first, std::int64_t second, const std::array<double, 3>&,
+          double distance_squared) {
+        const double radius = plan.covalent_radius[static_cast<std::size_t>(first)] +
+                              plan.covalent_radius[static_cast<std::size_t>(second)];
+        const double count = double_exponential_count(std::sqrt(distance_squared), radius).value;
+        workspace.atom_scratch[first] += count;
+        if (first != second) workspace.atom_scratch[second] += count;
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (!finite_array(workspace.atom_scratch, atom_count)) {
+    error = "periodic coordination evaluation overflowed";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  std::copy_n(workspace.atom_scratch, atom_count, coordination_numbers);
+  error.clear();
+  return XTBLOOM_STATUS_SUCCESS;
+}
+
+xtbloom_status_t add_periodic_coordination_gradient_cpu(
+    const CoordinationPlan& plan, const PeriodicShortRangePlan& periodic_plan,
+    const PeriodicShortRangeGeometry& geometry, const double* dE_dcn, double* gradients,
+    double* strain_derivatives, const PeriodicShortRangeWorkspace& workspace, std::string& error) {
+  xtbloom_status_t status =
+      validate_periodic_coordination_context(plan, periodic_plan, geometry, workspace, error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  const std::size_t atom_count = static_cast<std::size_t>(plan.total_atoms);
+  const std::size_t gradient_count = atom_count * 3u;
+  const std::size_t strain_count = static_cast<std::size_t>(plan.batch_size) * 9u;
+  if (!finite_array(dE_dcn, atom_count) || !finite_array(gradients, gradient_count) ||
+      !finite_array(strain_derivatives, strain_count)) {
+    error = "periodic coordination derivatives and outputs must be finite";
+    return XTBLOOM_STATUS_INVALID_ARGUMENT;
+  }
+
+  std::fill_n(workspace.gradient_scratch, gradient_count, 0.0);
+  std::fill_n(workspace.strain_scratch, strain_count, 0.0);
+  status = for_each_periodic_coordination_pair(
+      plan, periodic_plan, geometry,
+      [&](std::int64_t system, std::int64_t first, std::int64_t second,
+          const std::array<double, 3>& displacement, double distance_squared) {
+        const double distance = std::sqrt(distance_squared);
+        const double radius = plan.covalent_radius[static_cast<std::size_t>(first)] +
+                              plan.covalent_radius[static_cast<std::size_t>(second)];
+        const double derivative = double_exponential_count(distance, radius).derivative;
+        const double adjoint = dE_dcn[first] + (first == second ? 0.0 : dE_dcn[second]);
+        const double scale = -adjoint * derivative / distance;
+        std::array<double, 3> first_gradient{};
+        for (std::size_t axis = 0; axis < 3u; ++axis) {
+          first_gradient[axis] = scale * displacement[axis];
+          if (first != second) {
+            workspace.gradient_scratch[static_cast<std::size_t>(first) * 3u + axis] +=
+                first_gradient[axis];
+            workspace.gradient_scratch[static_cast<std::size_t>(second) * 3u + axis] -=
+                first_gradient[axis];
+          }
+        }
+        double* strain = workspace.strain_scratch + static_cast<std::size_t>(system) * 9u;
+        for (std::size_t row = 0; row < 3u; ++row) {
+          for (std::size_t column = 0; column < 3u; ++column) {
+            strain[row * 3u + column] += first_gradient[row] * (-displacement[column]);
+          }
+        }
+      },
+      error);
+  if (status != XTBLOOM_STATUS_SUCCESS) return status;
+  if (!finite_array(workspace.gradient_scratch, gradient_count) ||
+      !finite_array(workspace.strain_scratch, strain_count)) {
+    error = "periodic coordination derivative overflowed";
+    return XTBLOOM_STATUS_INTERNAL_ERROR;
+  }
+  for (std::size_t coordinate = 0; coordinate < gradient_count; ++coordinate) {
+    gradients[coordinate] += workspace.gradient_scratch[coordinate];
+  }
+  for (std::size_t component = 0; component < strain_count; ++component) {
+    strain_derivatives[component] += workspace.strain_scratch[component];
+  }
   error.clear();
   return XTBLOOM_STATUS_SUCCESS;
 }
