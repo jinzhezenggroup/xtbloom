@@ -66,6 +66,10 @@ bool finite_array(const double* data, std::size_t count) {
   return true;
 }
 
+bool aligned_double(const void* data) {
+  return data != nullptr && reinterpret_cast<std::uintptr_t>(data) % alignof(double) == 0u;
+}
+
 double norm(const std::array<double, 3>& value) {
   return std::sqrt(value[0] * value[0] + value[1] * value[1] + value[2] * value[2]);
 }
@@ -612,9 +616,10 @@ xtbloom_status_t evaluate_periodic_ewald_cpu(const PeriodicEwaldPlan& plan,
   if (!plan.sealed() || !topology.sealed() ||
       plan.data_->topology_identity != topology.identity() ||
       plan.batch_size() != topology.batch_size() || plan.total_atoms() != topology.total_atoms() ||
-      plan.atom_offsets() != topology.atom_offsets() || positions == nullptr ||
-      shell_charges == nullptr || coulomb_matrix == nullptr || shell_potentials == nullptr ||
-      energies == nullptr || gradients == nullptr || strain_derivatives == nullptr ||
+      plan.atom_offsets() != topology.atom_offsets() || !aligned_double(positions) ||
+      !aligned_double(shell_charges) || !aligned_double(coulomb_matrix) ||
+      !aligned_double(shell_potentials) || !aligned_double(energies) ||
+      !aligned_double(gradients) || !aligned_double(strain_derivatives) ||
       !finite_array(positions, static_cast<std::size_t>(plan.total_atoms()) * 3u) ||
       !finite_array(shell_charges, static_cast<std::size_t>(plan.total_shells()))) {
     error = "periodic Ewald inputs are malformed or nonfinite";
