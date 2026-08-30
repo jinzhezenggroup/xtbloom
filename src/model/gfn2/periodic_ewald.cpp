@@ -774,15 +774,44 @@ xtbloom_status_t evaluate_periodic_ewald_cpu(const PeriodicEwaldPlan& plan,
         }
       }
 
+      /*
+       * The shell matrix intentionally retains tblite's neutral-cell
+       * convention: its entries contain the pair, self, and Klopman--Ohno
+       * terms, while the uniform background is a batch-level contribution.
+       * Keeping the background out of the matrix preserves the frozen
+       * neutral matrix oracle and avoids making a zero-total-charge result
+       * depend on an otherwise unobservable constant shift.
+       */
+      const double total_charge = [&]() {
+        double result = 0.0;
+        for (std::size_t shell = shell_begin; shell < shell_end; ++shell)
+          result += shell_charges[shell];
+        return result;
+      }();
+      const double alpha_squared = alpha * alpha;
+      const double background_factor = -kPi / (alpha_squared * lattice.volume);
+      if (!std::isfinite(total_charge) || !(alpha_squared > 0.0) ||
+          !std::isfinite(background_factor)) {
+        error = "periodic Ewald background contribution is invalid";
+        return XTBLOOM_STATUS_INTERNAL_ERROR;
+      }
+
       for (std::size_t row = 0; row < molecule_shells; ++row) {
         double potential = 0.0;
         for (std::size_t column = 0; column < molecule_shells; ++column) {
           potential += staged_matrix[matrix_index(*plan.data_, system, row, column)] *
                        shell_charges[shell_begin + column];
         }
-        staged_potential[shell_begin + row] = potential;
+        /* phi_background = -pi Q/(alpha^2 V). */
+        staged_potential[shell_begin + row] = potential + background_factor * total_charge;
         staged_energy[system] += 0.5 * shell_charges[shell_begin + row] * potential;
       }
+      /* E_background = -pi Q^2/(2 alpha^2 V). */
+      staged_energy[system] += 0.5 * background_factor * total_charge * total_charge;
+      /* dE_background/d epsilon_ab is isotropic at fixed alpha. */
+      const double background_strain = -0.5 * background_factor * total_charge * total_charge;
+      for (const std::size_t diagonal : {std::size_t{0}, std::size_t{4}, std::size_t{8}})
+        staged_strain[system * 9u + diagonal] += background_strain;
     }
     if (!finite_array(staged_matrix.data(), staged_matrix.size()) ||
         !finite_array(staged_potential.data(), staged_potential.size()) ||
