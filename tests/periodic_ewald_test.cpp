@@ -95,6 +95,42 @@ int test_water_fixture() {
   }
   for (std::size_t axis = 0; axis < 3u; ++axis)
     CHECK(near(gradient[axis] + gradient[3u + axis] + gradient[6u + axis], 0.0, 5.0e-11));
+
+  /* The explicit background is a batch-level term, not part of the neutral
+   * matrix oracle.  Check its potential and energy shifts independently. */
+  constexpr std::array<double, 4> charged_shells{-0.02, -0.08, 0.1, 0.1};
+  std::vector<double> charged_matrix(16, 0.0);
+  std::vector<double> charged_potential(4, 0.0);
+  std::vector<double> charged_energy(1, 0.0);
+  std::vector<double> charged_gradient(9, 0.0);
+  std::vector<double> charged_strain(9, 0.0);
+  CHECK(evaluate_periodic_ewald_cpu(ewald, topology, positions.data(), charged_shells.data(),
+                                    charged_matrix.data(), charged_potential.data(),
+                                    charged_energy.data(), charged_gradient.data(),
+                                    charged_strain.data(), error) == XTBLOOM_STATUS_SUCCESS);
+  const double total_charge = 0.1;
+  const double background_factor =
+      -3.14159265358979323846 / (ewald.alpha(0) * ewald.alpha(0) * topology.lattice(0).volume);
+  double charged_matrix_energy = 0.0;
+  for (std::size_t row = 0; row < charged_shells.size(); ++row) {
+    for (std::size_t column = 0; column < charged_shells.size(); ++column) {
+      charged_matrix_energy += 0.5 * charged_shells[row] *
+                               charged_matrix[row * charged_shells.size() + column] *
+                               charged_shells[column];
+    }
+    CHECK(near(
+        charged_potential[row],
+        [&]() {
+          double value = background_factor * total_charge;
+          for (std::size_t column = 0; column < charged_shells.size(); ++column)
+            value += charged_matrix[row * charged_shells.size() + column] * charged_shells[column];
+          return value;
+        }(),
+        5.0e-12));
+  }
+  CHECK(near(charged_energy[0],
+             charged_matrix_energy + 0.5 * background_factor * total_charge * total_charge,
+             5.0e-12));
   return 0;
 }
 
