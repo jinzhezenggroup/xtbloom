@@ -1211,6 +1211,65 @@ bool test_interaction_abi_v3() {
     CHECK(checked.error.find("dipole_moments is smaller") != std::string::npos);
   }
 
+  /* Strain derivatives are an additive ABI-v3 result outlet.  The structural
+   * validator requires the suffix and the CPU availability gate requires an
+   * all-native XYZ batch; molecular or mixed batches must not publish a
+   * meaningless cell derivative. */
+  {
+    Fixture molecular;
+    molecular.options.flags |= XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
+    std::vector<double> molecular_strain_output(18, 0.0);
+    molecular.result.strain_derivatives = output_buffer(molecular_strain_output);
+    checked = validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &molecular.batch,
+                                           &molecular.options, &molecular.result);
+    CHECK(checked.status == XTBLOOM_STATUS_NOT_SUPPORTED);
+    CHECK(checked.error.find("native XYZ periodic descriptors") != std::string::npos);
+
+    Fixture periodic;
+    periodic.enable_lattice({XTBLOOM_PERIODIC_AXES_XYZ, XTBLOOM_PERIODIC_AXES_XYZ});
+    std::copy(periodic.cell_matrices.begin() + 9, periodic.cell_matrices.end(),
+              periodic.cell_matrices.begin());
+    periodic.batch.cell_matrices = input_buffer(periodic.cell_matrices);
+    periodic.options.flags |= XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
+    std::vector<double> strain_output(18, 0.0);
+    periodic.result.strain_derivatives = output_buffer(strain_output);
+    checked = validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &periodic.batch, &periodic.options,
+                                           &periodic.result);
+    CHECK(checked.ok());
+
+    /* CUDA native-periodic GFN2 currently uses the stream-safe CPU reference
+     * bridge for the released strain outlet.  The common availability gate
+     * must therefore admit a complete all-XYZ batch while preserving the
+     * molecular/mixed refusal semantics below. */
+    periodic.options.flags |= XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
+    checked = validate_compute_descriptors(XTBLOOM_BACKEND_CUDA, &periodic.batch, &periodic.options,
+                                           &periodic.result);
+    CHECK(checked.ok());
+
+    Fixture mixed_periodic;
+    mixed_periodic.enable_lattice();
+    mixed_periodic.options.flags |= XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
+    std::vector<double> mixed_strain_output(18, 0.0);
+    mixed_periodic.result.strain_derivatives = output_buffer(mixed_strain_output);
+    checked = validate_compute_descriptors(XTBLOOM_BACKEND_CUDA, &mixed_periodic.batch,
+                                           &mixed_periodic.options, &mixed_periodic.result);
+    CHECK(checked.status == XTBLOOM_STATUS_NOT_SUPPORTED);
+    CHECK(checked.error.find("every batch item") != std::string::npos);
+
+    Fixture missing_suffix;
+    missing_suffix.enable_lattice({XTBLOOM_PERIODIC_AXES_XYZ, XTBLOOM_PERIODIC_AXES_XYZ});
+    missing_suffix.options.flags |= XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
+    alignas(xtbloom_batch_result_t) std::array<unsigned char, XTBLOOM_BATCH_RESULT_V2_SIZE>
+        short_storage{};
+    std::memcpy(short_storage.data(), &missing_suffix.result, short_storage.size());
+    auto* short_result = reinterpret_cast<xtbloom_batch_result_t*>(short_storage.data());
+    short_result->struct_size = XTBLOOM_BATCH_RESULT_V2_SIZE;
+    checked = validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &missing_suffix.batch,
+                                           &missing_suffix.options, short_result);
+    CHECK(checked.status == XTBLOOM_STATUS_INVALID_ARGUMENT);
+    CHECK(checked.error.find("ABI-v3") != std::string::npos);
+  }
+
   /* A reserved result outlet with no released shape contract is refused. */
   {
     Fixture quadrupole;
@@ -1291,7 +1350,10 @@ bool test_lattice_abi_v4() {
                                                             &molecular.options)
             .ok());
 
-  /* A valid released 3D request is fully validated, then refused atomically. */
+  /* A valid released 3D GFN2 request is fully validated by the CPU path. The
+   * execution layer still gates derivative publication until periodic force
+   * adjoints are connected, but descriptor validation must not reject the
+   * native-cell contract itself. */
   Fixture periodic;
   periodic.enable_lattice();
   const std::vector<double> energies_before = periodic.energies;
@@ -1301,12 +1363,10 @@ bool test_lattice_abi_v4() {
   const std::vector<std::int32_t> statuses_before = periodic.per_system_status;
   checked = validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &periodic.batch, &periodic.options,
                                          &periodic.result);
-  CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
+  CHECK(checked.ok());
   checked = xtbloom::detail::validate_plan_descriptor_structure(XTBLOOM_BACKEND_CPU,
                                                                 &periodic.batch, &periodic.options);
-  CHECK(checked.status == XTBLOOM_STATUS_NOT_IMPLEMENTED);
-  CHECK(checked.error.find("periodic GFN2 execution is not implemented") != std::string::npos);
-  CHECK(checked.error.find("periodic GFN2 execution") != std::string::npos);
+  CHECK(checked.ok());
   CHECK(periodic.result.flags == 0u);
   CHECK(periodic.energies == energies_before);
   CHECK(periodic.forces == forces_before);
@@ -1324,6 +1384,18 @@ bool test_lattice_abi_v4() {
   device.batch.periodic_axes = {reinterpret_cast<const void*>(std::uintptr_t{0x80000u}),
                                 device.periodic_axes.size() * sizeof(std::int32_t),
                                 XTBLOOM_MEMORY_CUDA_DEVICE, 0};
+  checked = validate_compute_descriptors(XTBLOOM_BACKEND_CUDA, &device.batch, &device.options,
+                                         &device.result);
+  CHECK(checked.ok());
+  CHECK((checked.pending_offset_checks & kCellMatricesNeedStaging) != 0u);
+  CHECK((checked.pending_offset_checks & kPeriodicAxesNeedStaging) != 0u);
+
+  /* Device-resident all-XYZ content is opaque to common validation, but a
+   * requested native GFN2 strain outlet must still survive the structural
+   * gate and defer its all-XYZ decision to CUDA stream-ordered staging. */
+  device.options.flags |= XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
+  std::vector<double> device_strain_output(18, 0.0);
+  device.result.strain_derivatives = output_buffer(device_strain_output);
   checked = validate_compute_descriptors(XTBLOOM_BACKEND_CUDA, &device.batch, &device.options,
                                          &device.result);
   CHECK(checked.ok());
@@ -1403,11 +1475,62 @@ bool test_lattice_abi_v4() {
 
   /* The staged-host helpers are independently callable by the CUDA bridge. */
   CHECK(validate_host_lattice_semantics(periodic.batch).ok());
+  CHECK(validate_host_lattice_execution_availability(periodic.batch, XTBLOOM_MODEL_GFN2_XTB).ok());
   CHECK(
-      validate_host_lattice_execution_availability(periodic.batch, XTBLOOM_MODEL_GFN2_XTB).status ==
+      validate_host_lattice_execution_availability(periodic.batch, XTBLOOM_MODEL_GFN1_XTB).status ==
       XTBLOOM_STATUS_NOT_IMPLEMENTED);
   CHECK(validate_host_lattice_semantics(molecular.batch).ok());
   CHECK(validate_host_lattice_execution_availability(molecular.batch, XTBLOOM_MODEL_GFN2_XTB).ok());
+
+  /* Native PBC and the caller-owned embedding/interaction inputs have no
+   * reviewed composition yet.  Reject each combination before execution, but
+   * retain ordinary molecular V4 behavior when every axis is NONE. */
+  const std::vector<InvalidCase> unsupported_combinations = {
+      {"native PBC with explicit point charges",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.enable_point_charges();
+       },
+       "native periodic PBC cannot be combined with explicit point charges",
+       XTBLOOM_STATUS_NOT_SUPPORTED},
+      {"native PBC with atomic potential shifts",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.potential_shifts.assign(3u, 0.0);
+         f.batch.atomic_potential_shifts = input_buffer(f.potential_shifts);
+       },
+       "native periodic PBC cannot be combined with atomic_potential_shifts",
+       XTBLOOM_STATUS_NOT_SUPPORTED},
+      {"native PBC with charge response",
+       [](Fixture& f) {
+         f.enable_lattice();
+         f.enable_response();
+       },
+       "native periodic PBC cannot be combined with charge_response_matrix",
+       XTBLOOM_STATUS_NOT_SUPPORTED},
+      {"native PBC with interaction attachment",
+       [](Fixture& f) {
+         f.enable_lattice();
+         xtbloom_interaction_t entry{};
+         entry.type = XTBLOOM_INTERACTION_ELECTRIC_FIELD;
+         entry.system_index = 1;
+         entry.payload_size = 32u;
+         f.enable_interaction(entry, efield_block(0.0, 0.0, 0.1));
+       },
+       "native periodic PBC cannot be combined with interaction attachments",
+       XTBLOOM_STATUS_NOT_SUPPORTED},
+  };
+  for (const InvalidCase& test : unsupported_combinations) {
+    CHECK(expect_invalid(test));
+  }
+  Fixture molecular_with_point_charges;
+  molecular_with_point_charges.enable_lattice(
+      {XTBLOOM_PERIODIC_AXES_NONE, XTBLOOM_PERIODIC_AXES_NONE});
+  molecular_with_point_charges.enable_point_charges();
+  CHECK(validate_compute_descriptors(XTBLOOM_BACKEND_CPU, &molecular_with_point_charges.batch,
+                                     &molecular_with_point_charges.options,
+                                     &molecular_with_point_charges.result)
+            .ok());
 
   /* Public validation and the reusable lattice builder share one scale-aware
    * predicate even for strongly anisotropic but linearly independent cells. */

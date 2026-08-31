@@ -482,15 +482,21 @@ The caller owns coordinate derivatives of `b` and `A`. See the
 Install `xtbloom[ase]`, `xtbloom[dpdata]`, or both with
 `pip install "xtbloom[ase,dpdata]"`, then use `xtbloom.ase.XTBloom` as an ASE
 calculator or `driver="xtbloom"` with dpdata. These integrations convert native
-atomic units to eV and Angstrom conventions. dpdata periodic systems are
-rejected because the adapters do not yet expose the ABI-v4 lattice descriptor
-and native periodic GFN1/GFN2 execution is not implemented. The ASE calculator
-enables warm start by default (`warm_start=True`), so an ASE dynamics run
-automatically seeds each step's SCC from the previous converged state and
-falls back to a fresh solve whenever the request's identity changes; pass
-`warm_start=False` for independent fresh-SCC steps. Bitwise replay additionally
-requires `determinism="reproducible"` and an unchanged build, backend, provider,
-device, options, geometry, and SCC sequence. See the
+atomic units to eV and Angstrom conventions. Full three-dimensional periodic
+GFN2 is available through the CPU backend: pass a finite right-handed `cell`
+in bohr and `pbc=True` to `Structure`/`Calculator`, or use an ASE `Atoms`
+object with a 3D cell and `pbc=True`. Partial periodicity is rejected. CUDA
+GFN2 periodic requests currently use the validated CPU periodic evaluator via a
+host bridge; CUDA-native Ewald/multipole execution remains outstanding. dpdata periodic
+frames are packed from `cells` (Angstrom) and `nopbc=False`; all frames must
+use a representable full XYZ cell. Request `compute_strain=True` on the
+high-level calculator when the nine row-major `dE/dε` values are needed. The
+ASE calculator enables warm start by default (`warm_start=True`), so an ASE
+dynamics run automatically seeds each step's SCC from the previous converged
+state and falls back to a fresh solve whenever the request's identity changes;
+pass `warm_start=False` for independent fresh-SCC steps. Bitwise replay
+additionally requires `determinism="reproducible"` and an unchanged build,
+backend, provider, device, options, geometry, and SCC sequence. See the
 [ASE molecular-dynamics guide](ase-md.md) for a runnable velocity-Verlet
 trajectory and the scope boundaries for native drivers and periodic systems.
 

@@ -20,10 +20,14 @@ the CUDA backend can consume device pointers directly and stage host pointers wh
 The ABI-v4 batch suffix reserves native 3D cell input as row-major direct
 lattice vectors in bohr plus a fixed-width periodic-axis mask. V1/V2/V3 callers
 remain molecular, and a V4 image whose masks are all `NONE` is also molecular.
-`XYZ` cells are validated for finite, right-handed, nonsingular geometry, but
-then refused with `NOT_IMPLEMENTED` before execution because complete periodic
-GFN1/GFN2 topology, electrostatics, forces, and cell derivatives, plus GFN2
-multipoles, are not yet connected. This native-cell suffix is separate from the caller-owned
+`XYZ` cells are validated for finite, right-handed, nonsingular geometry. CPU
+GFN2 executes the complete released periodic path, including Cartesian forces;
+when the ABI-v3 result suffix requests it, it also publishes nine row-major
+`dE/d(strain)` values per system in Hartree. CUDA GFN2 native-cell requests use
+the validated CPU periodic evaluator through a worker bridge for both
+synchronous and asynchronous public calls; CUDA-native Ewald/multipole kernels
+and device parity evidence remain outstanding. GFN1 native-cell execution is
+still refused. This native-cell suffix is separate from the caller-owned
 `b + A*q` response operator described below.
 
 Point-charge embedding uses a caller-provided per-site screening gamma so the softened short-range

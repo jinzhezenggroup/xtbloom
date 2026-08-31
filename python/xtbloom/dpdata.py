@@ -31,7 +31,7 @@ import numpy as np
 from dpdata.driver import Driver, Minimizer
 
 from ._optimizer import _LBFGSState, _validated_controls
-from .exceptions import XTBloomNotSupportedError, XTBloomRuntimeError, XTBloomValueError
+from .exceptions import XTBloomRuntimeError, XTBloomValueError
 from .interface import BatchCalculator, Structure, symbols_to_numbers
 
 if TYPE_CHECKING:
@@ -98,6 +98,8 @@ def _structures_from_data(
         [symbol_map[atom_names[index]] for index in atom_types], dtype=np.int64
     )
     positions_bohr = coords / BOHR_TO_ANGSTROM
+    periodic = _periodic_frames(data, nframes)
+    cells_bohr = _periodic_cells(data, nframes, periodic)
 
     structures = []
     for frame in range(nframes):
@@ -114,6 +116,14 @@ def _structures_from_data(
             )
             if uhf_value is None and multiplicity_value is None:
                 uhf_value = 0
+        cell = None
+        if periodic[frame]:
+            # _periodic_cells returns a validated array for every periodic
+            # frame; keep the check local so static analyzers retain the
+            # runtime invariant across the NumPy boolean index.
+            if cells_bohr is None:
+                raise XTBloomValueError("periodic cells are missing")
+            cell = cells_bohr[frame]
         structures.append(
             Structure(
                 numbers,
@@ -125,6 +135,8 @@ def _structures_from_data(
                 uhf=cast("int | None", uhf_value),
                 multiplicity=cast("int | None", multiplicity_value),
                 spin_channels=spin_channels,
+                cell=cell,
+                pbc=bool(periodic[frame]),
             )
         )
     return structures
@@ -132,7 +144,7 @@ def _structures_from_data(
 
 @Driver.register("xtbloom")
 class XTBloomDriver(Driver):
-    """Label molecular frames with GFN1/GFN2-xTB using the xTBloom library.
+    """Label molecular or full-XYZ-periodic frames with GFN1/GFN2-xTB.
 
     Parameters
     ----------
@@ -188,7 +200,6 @@ class XTBloomDriver(Driver):
         dict
             Copy of ``data`` with ``energies`` (eV) and ``forces`` (eV/Angstrom).
         """
-        _reject_periodic(data)
         structures = _structures_from_data(
             data,
             charge=self.charge,
@@ -262,6 +273,10 @@ class XTBloomMinimizer(Minimizer):
     Examples
     --------
     >>> system.minimize("xtbloom", driver=XTBloomDriver(backend="cuda"), fmax=1e-2)
+
+    A full-XYZ periodic frame is accepted when dpdata provides ``nopbc=False``
+    and a finite 3x3 ``cells`` matrix. Geometry optimization updates only
+    coordinates; the direct cell remains fixed throughout minimization.
     """
 
     def __init__(
@@ -302,7 +317,6 @@ class XTBloomMinimizer(Minimizer):
             at the minimum step size. The caller never receives silently bogus
             or rejected labels.
         """
-        _reject_periodic(data)
         driver = self._driver
         structures = _structures_from_data(
             data,
@@ -467,14 +481,61 @@ class XTBloomMinimizer(Minimizer):
         return labeled
 
 
-def _reject_periodic(data: dict) -> None:
-    """Raise until the ABI-v4 lattice foundation has a periodic adapter."""
-    if not bool(np.asarray(data.get("nopbc", True)).all()):
-        raise XTBloomNotSupportedError(
-            "the xTBloom Python driver does not support periodic systems yet "
-            "(the ABI-v4 lattice descriptor exists, but native periodic "
-            "execution and the dpdata adapter are not implemented)"
+def _periodic_frames(data: dict, nframes: int) -> np.ndarray:
+    """Return one full-periodic flag per frame from dpdata's ``nopbc`` field."""
+    if "nopbc" not in data:
+        return np.zeros(nframes, dtype=bool)
+    raw = np.asarray(data["nopbc"])
+    if raw.ndim == 0:
+        values = np.full(nframes, _strict_bool(raw.item(), "nopbc"), dtype=bool)
+    else:
+        if raw.shape != (nframes,):
+            raise XTBloomValueError(
+                "nopbc must be a scalar or a one-dimensional array with one "
+                "value per frame"
+            )
+        values = np.asarray([_strict_bool(value, "nopbc") for value in raw], dtype=bool)
+    # dpdata's flag is named ``nopbc``: false means native full XYZ periodicity.
+    return ~values
+
+
+def _strict_bool(value: object, name: str) -> bool:
+    """Accept only booleans or exact integer 0/1 metadata values."""
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)) and int(value) in (0, 1):
+        return bool(value)
+    raise XTBloomValueError(f"{name} must contain boolean or exact 0/1 values")
+
+
+def _periodic_cells(
+    data: dict, nframes: int, periodic: np.ndarray
+) -> np.ndarray | None:
+    """Validate and convert dpdata ``cells`` from Angstrom to bohr.
+
+    Cells are required only for periodic frames.  Nonperiodic frames may retain
+    arbitrary upstream cell metadata because it is intentionally not part of
+    their native topology.
+    """
+    if not np.any(periodic):
+        return None
+    if "cells" not in data:
+        raise XTBloomValueError(
+            "periodic dpdata frames require a cells array with shape (nframes, 3, 3)"
         )
+    try:
+        cells = np.asarray(data["cells"], dtype=np.float64)
+    except (TypeError, ValueError, OverflowError):
+        raise XTBloomValueError(
+            "cells must have shape (nframes, 3, 3) and finite values"
+        ) from None
+    if cells.shape != (nframes, 3, 3):
+        raise XTBloomValueError(
+            f"cells must have shape ({nframes}, 3, 3), got {cells.shape}"
+        )
+    if not np.isfinite(cells[periodic]).all():
+        raise XTBloomValueError("periodic cells must be finite")
+    return np.ascontiguousarray(cells / BOHR_TO_ANGSTROM, dtype=np.float64)
 
 
 def _frame_value(

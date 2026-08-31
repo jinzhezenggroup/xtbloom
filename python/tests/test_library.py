@@ -324,11 +324,12 @@ def test_abi_struct_sizes() -> None:
     assert library.ComputeOptions.scc_mixer_damping.offset == 64
     assert library.ComputeOptions.determinism.offset == 72
     assert library.ComputeOptions.reserved_v3.offset == 76
-    assert ctypes.sizeof(library.BatchResult) == 280
+    assert ctypes.sizeof(library.BatchResult) == 304
     assert library.BatchResult.dipole_moments.offset == 184
     assert library.BatchResult.quadrupole_moments.offset == 208
     assert library.BatchResult.wiberg_orders.offset == 232
     assert library.BatchResult.spin_populations.offset == 256
+    assert library.BatchResult.strain_derivatives.offset == 280
     assert ctypes.sizeof(library.Interaction) == 32
     assert library.Interaction.type.offset == 0
     assert library.Interaction.flags.offset == 4
@@ -337,6 +338,7 @@ def test_abi_struct_sizes() -> None:
     assert library.Interaction.payload_size.offset == 24
     assert library.RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES == 1
     assert library.RESULT_DIPOLE_MOMENTS == 1 << 4
+    assert library.RESULT_STRAIN_DERIVATIVES == 1 << 5
     assert ctypes.sizeof(library.ResultOwnerOptions) == 32
     assert library.ResultOwnerOptions.memory_space.offset == 8
     assert library.ResultOwnerOptions.size_bytes.offset == 16

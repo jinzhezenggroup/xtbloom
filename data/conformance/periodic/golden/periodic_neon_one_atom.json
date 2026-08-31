@@ -123,6 +123,7 @@
       "{json}",
       "[--charge {charge}]",
       "[--spin {unpaired_electrons}]",
+      "[--spin-polarized if spin_channels=2]",
       "{input}"
     ],
     "engine": "tblite",

@@ -88,6 +88,33 @@ def test_batch_matches_goldens_all_molecular_cases() -> None:
     assert result[-1].forces == pytest.approx(result[len(result) - 1].forces, abs=0.0)
 
 
+def test_batch_mixes_periodic_and_molecular_cpu_structures() -> None:
+    """Pack one native XYZ cell beside a molecular peer in a ragged batch."""
+    periodic = Structure(
+        np.array([1, 1], dtype=np.int32),
+        np.array([[-0.7, 0.0, 0.0], [0.7, 0.0, 0.0]]),
+        cell=np.diag([8.0, 8.0, 8.0]),
+        pbc=True,
+    )
+    molecular = Structure(
+        np.array([2], dtype=np.int32),
+        np.array([[0.0, 0.0, 0.0]]),
+    )
+    calculator = BatchCalculator([periodic, molecular], backend="cpu")
+    result = calculator.compute()
+
+    assert result.energies.shape == (2,)
+    assert np.isfinite(result.energies).all()
+    assert np.isfinite(result.forces).all()
+    assert result.strain_derivatives is None
+
+    # A strain request is a native-cell outlet and therefore rejects a
+    # molecular peer before execution, even though ordinary mixed batches are
+    # valid.
+    with pytest.raises(XTBloomRuntimeError, match="every batch item"):
+        calculator.compute(compute_strain=True)
+
+
 def test_batch_preserves_healthy_peer_when_another_fails() -> None:
     """Preserve a successful peer when another system does not converge."""
     # h3+ converges in four iterations while NeNaCl does not.  The high-level

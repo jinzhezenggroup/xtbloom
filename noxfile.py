@@ -29,6 +29,7 @@ CPU_REQUIRED_TESTS = {
     "xtbloom.conformance.gfn1_invariants_cpu",
     "xtbloom.conformance.gfn1_public_cpu",
     "xtbloom.conformance.gfn1_spin2_public_cpu",
+    "xtbloom.conformance.periodic_public_cpu",
     "xtbloom.conformance.public_cpu",
     "xtbloom.cpu.public_inference",
     "xtbloom.gfn2.eigensolver",

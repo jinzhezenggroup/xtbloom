@@ -50,6 +50,7 @@ struct DescriptorExtentState {
   std::size_t response_f64_bytes = 0;
   std::size_t interaction_descriptor_bytes = 0;
   std::size_t dipole_f64_bytes = 0;
+  std::size_t strain_f64_bytes = 0;
   std::size_t cell_matrix_bytes = 0;
   bool response_enabled = false;
   bool interactions_enabled = false;
@@ -141,6 +142,10 @@ bool has_lattice_suffix(const xtbloom_batch_t& batch) {
 
 bool has_result_v2_suffix(const xtbloom_batch_result_t& result) {
   return result.struct_size >= XTBLOOM_BATCH_RESULT_V2_SIZE;
+}
+
+bool has_result_v3_suffix(const xtbloom_batch_result_t& result) {
+  return result.struct_size >= XTBLOOM_BATCH_RESULT_V3_SIZE;
 }
 
 /* Do not read beyond an ABI-v2 caller's allocation. */
@@ -404,7 +409,8 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
 
   constexpr std::uint32_t kKnownComputeFlags =
       XTBLOOM_COMPUTE_ENERGY | XTBLOOM_COMPUTE_FORCES | XTBLOOM_COMPUTE_ATOMIC_CHARGES |
-      XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS;
+      XTBLOOM_COMPUTE_POINT_CHARGE_FORCES | XTBLOOM_COMPUTE_DIPOLE_MOMENTS |
+      XTBLOOM_COMPUTE_STRAIN_DERIVATIVES;
   if (find_model_descriptor(options->model) == nullptr) {
     return invalid("compute options contain an unknown model value");
   }
@@ -468,6 +474,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   };
   const xtbloom_buffer_t empty_buffer{};
   const bool result_v2 = result != nullptr && has_result_v2_suffix(*result);
+  const bool result_v3 = result != nullptr && has_result_v3_suffix(*result);
   /* Keep the size condition outside each member expression. Passing a suffix
    * field to a helper by reference would evaluate the out-of-prefix lvalue
    * before the helper could check struct_size. */
@@ -476,6 +483,12 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
       result_v2 ? view(result->quadrupole_moments) : view(empty_buffer);
   const BufferView wiberg_output = result_v2 ? view(result->wiberg_orders) : view(empty_buffer);
   const BufferView spin_output = result_v2 ? view(result->spin_populations) : view(empty_buffer);
+  const BufferView strain_output =
+      result_v3 ? view(result->strain_derivatives) : view(empty_buffer);
+  if (result != nullptr && (options->flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u &&
+      !result_v3) {
+    return invalid("strain_derivatives requires the ABI-v3 batch-result suffix");
+  }
   const NamedBuffer all_buffers[] = {
       {"atom_offsets", view(batch->atom_offsets)},
       {"atomic_numbers", view(batch->atomic_numbers)},
@@ -506,6 +519,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
       {"quadrupole_moments", quadrupole_output},
       {"wiberg_orders", wiberg_output},
       {"spin_populations", spin_output},
+      {"strain_derivatives", strain_output},
   };
   for (const NamedBuffer& named : all_buffers) {
     DescriptorValidationResult checked =
@@ -577,6 +591,10 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   std::size_t dipole_f64_bytes = 0;
   if (!checked_multiply(batch_f64_bytes, 3u, dipole_f64_bytes)) {
     return invalid("the dipole-moment extent overflows the addressable byte size");
+  }
+  std::size_t strain_f64_bytes = 0;
+  if (!checked_multiply(batch_f64_bytes, 9u, strain_f64_bytes)) {
+    return invalid("the strain-derivative extent overflows the addressable byte size");
   }
 
   const RequiredInput required_inputs[] = {
@@ -717,6 +735,8 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
         {"per_system_status", view(result->per_system_status), batch_i32_bytes, true},
         {"dipole_moments", dipole_output, dipole_f64_bytes,
          (options->flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0},
+        {"strain_derivatives", strain_output, strain_f64_bytes,
+         (options->flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0},
     };
     for (const RequiredOutput& output : outputs) {
       if (!output.requested) {
@@ -741,6 +761,7 @@ DescriptorValidationResult validate_compute_descriptor_prefix(
   extents.response_f64_bytes = response_f64_bytes;
   extents.interaction_descriptor_bytes = interaction_descriptor_bytes;
   extents.dipole_f64_bytes = dipole_f64_bytes;
+  extents.strain_f64_bytes = strain_f64_bytes;
   extents.cell_matrix_bytes = cell_matrix_bytes;
   extents.response_enabled = response_enabled;
   extents.interactions_enabled = has_interaction_suffix(*batch) && batch->total_interactions != 0;
@@ -870,6 +891,15 @@ DescriptorValidationResult validate_compute_descriptor_aliases(
       DescriptorValidationResult checked =
           add_active_range(ranges, range_count, "dipole_moments", view(result->dipole_moments),
                            extents.dipole_f64_bytes, true);
+      if (!checked.ok()) {
+        return checked;
+      }
+    }
+    if (has_result_v3_suffix(*result) &&
+        (options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0) {
+      DescriptorValidationResult checked =
+          add_active_range(ranges, range_count, "strain_derivatives",
+                           view(result->strain_derivatives), extents.strain_f64_bytes, true);
       if (!checked.ok()) {
         return checked;
       }
@@ -1064,6 +1094,68 @@ DescriptorValidationResult validate_host_lattice_semantics_impl(const xtbloom_ba
   return validation;
 }
 
+/*
+ * Native periodic GFN2 and the caller-owned embedding/interaction inputs are
+ * separate contracts.  Until independent evidence covers their composition,
+ * reject the combination before model setup.  This helper intentionally
+ * reports "unknown" (success) when periodic_axes is not host-resident: CUDA
+ * must first prove/stage that pointer and run the equivalent gate on its own
+ * stream.  Callers that reach this helper after host semantic validation have
+ * already proved the buffer extent and pointer range.
+ */
+DescriptorValidationResult validate_native_lattice_combinations_if_known(
+    const xtbloom_batch_t& batch) {
+  const BufferView cells = cell_matrix_view(batch);
+  const BufferView axes = periodic_axes_view(batch);
+  if (!active(cells) && !active(axes)) {
+    return {};
+  }
+  if (axes.memory_space != XTBLOOM_MEMORY_HOST || axes.data == nullptr) {
+    return {};
+  }
+
+  std::size_t axes_bytes = 0u;
+  if (!count_bytes(batch.batch_size, 1u, sizeof(std::int32_t), axes_bytes) ||
+      axes.size_bytes < axes_bytes) {
+    /* The structural layer owns the precise undersized-buffer diagnostic. */
+    return {};
+  }
+
+  bool native_periodic = false;
+  for (std::int64_t system = 0; system < batch.batch_size; ++system) {
+    std::int32_t mask = 0;
+    std::memcpy(&mask,
+                static_cast<const unsigned char*>(axes.data) +
+                    static_cast<std::size_t>(system) * sizeof(mask),
+                sizeof(mask));
+    if (mask == XTBLOOM_PERIODIC_AXES_XYZ) {
+      native_periodic = true;
+      break;
+    }
+  }
+  if (!native_periodic) {
+    return {};
+  }
+
+  if (batch.total_point_charges != 0) {
+    return unsupported("native periodic PBC cannot be combined with explicit point charges");
+  }
+  if (active(view(batch.atomic_potential_shifts))) {
+    return unsupported("native periodic PBC cannot be combined with atomic_potential_shifts");
+  }
+  const bool response_enabled = batch.total_charge_response_elements != 0 ||
+                                active(view(batch.charge_response_offsets)) ||
+                                active(view(batch.charge_response_matrix));
+  if (response_enabled) {
+    return unsupported(
+        "native periodic PBC cannot be combined with charge_response_matrix or b+Aq");
+  }
+  if (has_interaction_suffix(batch) && batch.total_interactions != 0) {
+    return unsupported("native periodic PBC cannot be combined with interaction attachments");
+  }
+  return {};
+}
+
 DescriptorValidationResult validate_host_lattice_execution_availability_impl(
     const xtbloom_batch_t& batch, xtbloom_model_t model) {
   if (!active(cell_matrix_view(batch)) && !active(periodic_axes_view(batch))) {
@@ -1079,12 +1171,17 @@ DescriptorValidationResult validate_host_lattice_execution_availability_impl(
                 static_cast<const unsigned char*>(axes.data) +
                     static_cast<std::size_t>(system) * sizeof(mask),
                 sizeof(mask));
-    if (mask == XTBLOOM_PERIODIC_AXES_XYZ) {
+    if (mask == XTBLOOM_PERIODIC_AXES_XYZ && model == XTBLOOM_MODEL_GFN1_XTB) {
       return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
               std::string("native lattice/PBC descriptors are valid but periodic ") +
                   (model == XTBLOOM_MODEL_GFN1_XTB ? "GFN1-xTB" : "GFN2") +
                   " execution is not implemented yet"};
     }
+  }
+  const DescriptorValidationResult combination =
+      validate_native_lattice_combinations_if_known(batch);
+  if (!combination.ok()) {
+    return combination;
   }
   return {};
 }
@@ -1426,6 +1523,10 @@ DescriptorValidationResult validate_compute_execution_availability(
     xtbloom_backend_t backend, const xtbloom_batch_t& batch,
     const xtbloom_compute_options_t& options) {
   if (options.model == XTBLOOM_MODEL_GFN1_XTB) {
+    if ((options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u) {
+      return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+              "native-periodic strain derivatives are not implemented for GFN1-xTB"};
+    }
     if ((options.flags & XTBLOOM_COMPUTE_DIPOLE_MOMENTS) != 0u) {
       return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
               "GFN1-xTB molecular dipole publication is not implemented"};
@@ -1435,6 +1536,81 @@ DescriptorValidationResult validate_compute_execution_availability(
               "GFN1-xTB interaction attachments are not implemented"};
     }
     return {};
+  }
+  if (backend == XTBLOOM_BACKEND_CPU && options.model == XTBLOOM_MODEL_GFN2_XTB) {
+    /* CPU structure validation has already completed the host semantic pass,
+     * so give unsupported native-PBC compositions a precise diagnostic before
+     * the generic reserved-interaction gate below. */
+    const DescriptorValidationResult combination =
+        validate_native_lattice_combinations_if_known(batch);
+    if (!combination.ok()) {
+      return combination;
+    }
+    if ((options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u) {
+      const BufferView axes = periodic_axes_view(batch);
+      if (!active(axes)) {
+        return {XTBLOOM_STATUS_NOT_SUPPORTED, kNoOffsetValidationPending,
+                "strain derivatives require native XYZ periodic descriptors"};
+      }
+      if (axes.memory_space != XTBLOOM_MEMORY_HOST) {
+        return {XTBLOOM_STATUS_INTERNAL_ERROR, kNoOffsetValidationPending,
+                "CPU strain validation requires host-resident periodic_axes storage"};
+      }
+      for (std::int64_t system = 0; system < batch.batch_size; ++system) {
+        std::int32_t mask = 0;
+        std::memcpy(&mask,
+                    static_cast<const unsigned char*>(axes.data) +
+                        static_cast<std::size_t>(system) * sizeof(mask),
+                    sizeof(mask));
+        if (mask != XTBLOOM_PERIODIC_AXES_XYZ) {
+          return {XTBLOOM_STATUS_NOT_SUPPORTED, kNoOffsetValidationPending,
+                  "strain derivatives require every batch item to use native XYZ periodicity"};
+        }
+      }
+    }
+  }
+  if (backend == XTBLOOM_BACKEND_CUDA &&
+      (options.flags & XTBLOOM_COMPUTE_STRAIN_DERIVATIVES) != 0u) {
+    /* The CUDA native-periodic bridge stages a complete XYZ lattice request
+     * and delegates the scientific derivative to the validated CPU periodic
+     * evaluator.  Keep molecular, mixed, and partial-axis requests on the
+     * historical refusal path: they have no released CUDA strain contract.
+     * Device-resident axis masks remain opaque here and are checked after
+     * stream-ordered staging by the CUDA runtime. */
+    if (options.model != XTBLOOM_MODEL_GFN2_XTB) {
+      return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+              "native-periodic strain derivatives are not implemented for this CUDA model"};
+    }
+    const BufferView cells = cell_matrix_view(batch);
+    const BufferView axes = periodic_axes_view(batch);
+    if (!active(cells) || !active(axes)) {
+      return {XTBLOOM_STATUS_NOT_IMPLEMENTED, kNoOffsetValidationPending,
+              "native-periodic strain derivatives require native XYZ periodic descriptors"};
+    }
+    if (axes.memory_space == XTBLOOM_MEMORY_HOST && axes.data != nullptr) {
+      bool any_periodic = false;
+      bool all_xyz = true;
+      for (std::int64_t system = 0; system < batch.batch_size; ++system) {
+        std::int32_t mask = 0;
+        std::memcpy(&mask,
+                    static_cast<const unsigned char*>(axes.data) +
+                        static_cast<std::size_t>(system) * sizeof(mask),
+                    sizeof(mask));
+        any_periodic = any_periodic || mask == XTBLOOM_PERIODIC_AXES_XYZ;
+        all_xyz = all_xyz && mask == XTBLOOM_PERIODIC_AXES_XYZ;
+      }
+      if (!all_xyz) {
+        return {any_periodic ? XTBLOOM_STATUS_NOT_SUPPORTED : XTBLOOM_STATUS_NOT_IMPLEMENTED,
+                kNoOffsetValidationPending,
+                any_periodic ? "native-periodic strain derivatives require every batch item to use "
+                               "native XYZ periodicity"
+                             : "native-periodic strain derivatives require native XYZ periodic "
+                               "descriptors"};
+      }
+    }
+    /* For CUDA-device masks, the runtime performs the same all-XYZ check after
+     * staging.  Returning success here preserves the no-host-dereference
+     * validation contract. */
   }
   DescriptorValidationResult output_availability =
       validate_output_execution_availability(options, backend);

@@ -1202,6 +1202,7 @@ add_library(xtbloom_gfn2_cpu_objects OBJECT
   src/model/gfn2/mulliken_kernels.cpp
   src/model/gfn2/periodic_ewald.cpp
   src/model/gfn2/periodic_integrals.cpp
+  src/model/gfn2/periodic_multipole.cpp
   src/model/gfn2/periodic_topology.cpp
   src/model/gfn2/repulsion.cpp
   src/model/gfn2/scc_driver.cpp
@@ -1273,6 +1274,31 @@ target_link_libraries(xtbloom_gfn2_cpu INTERFACE
   $<TARGET_OBJECTS:xtbloom_model_common_cpu_objects>
   $<TARGET_OBJECTS:xtbloom_gfn2_cpu_objects>
 )
+
+# CUDA's native-periodic correctness bridge reuses the already validated host
+# GFN2 executor while the device Ewald/multipole kernels are still being
+# integrated.  White-box CUDA executables link the backend object files
+# directly, so the bridge's hidden CPU symbols cannot be resolved from the
+# shared xtbloom library.  Keep a private archive for those consumers instead
+# of exporting a second public implementation or compiling the same source
+# into the CUDA backend object target (which would duplicate symbols in the
+# final shared library).
+add_library(xtbloom_gfn2_cpu_runtime STATIC
+  src/runtime/gfn2_cpu_execution.cpp
+)
+target_compile_features(xtbloom_gfn2_cpu_runtime PUBLIC cxx_std_17)
+target_include_directories(xtbloom_gfn2_cpu_runtime PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${XTBLOOM_GENERATED_INCLUDE_DIR}
+)
+set_target_properties(xtbloom_gfn2_cpu_runtime PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  POSITION_INDEPENDENT_CODE ON
+  VISIBILITY_INLINES_HIDDEN YES
+)
+target_link_libraries(xtbloom_gfn2_cpu_runtime PUBLIC xtbloom_gfn2_cpu)
 
 add_library(xtbloom_gfn1_cpu INTERFACE)
 target_link_libraries(xtbloom_gfn1_cpu INTERFACE
@@ -1719,6 +1745,7 @@ if(XTBLOOM_HAS_CUDA)
     src/backends/cuda/gfn2_parameters.cu
     src/backends/cuda/gfn2_plan_schema.cu
     src/backends/cuda/gfn2_periodic_embedding.cu
+    src/backends/cuda/periodic_topology.cu
     src/backends/cuda/gfn2_post_scc_potential.cu
     src/backends/cuda/gfn2_repulsion.cu
     src/backends/cuda/gfn2_scc.cu
@@ -1761,6 +1788,10 @@ if(XTBLOOM_HAS_CUDA)
     # backend objects directly rather than resolving hidden symbols through
     # libxtbloom.
     xtbloom_gfn1_cpu
+    # Native XYZ periodic GFN2 currently uses the CPU periodic evaluator as a
+    # correctness bridge. The private archive supplies its hidden executor
+    # symbols to white-box CUDA binaries that consume this object target.
+    xtbloom_gfn2_cpu_runtime
   )
   # The CUDA runtime/math/driver shared libraries are deliberately NOT linked.
   # The priority-101 bootstrap pre-resolves the complete shim cohort before
@@ -3177,6 +3208,30 @@ if(XTBLOOM_BUILD_TESTS)
       COMMAND xtbloom_cuda_periodic_embedding_test
     )
 
+    add_executable(xtbloom_cuda_periodic_topology_test
+      tests/cuda_periodic_topology_test.cu
+    )
+    target_link_libraries(xtbloom_cuda_periodic_topology_test PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+    )
+    target_include_directories(xtbloom_cuda_periodic_topology_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_periodic_topology_test
+      PRIVATE XTBLOOM_HAS_CUDA=1
+    )
+    set_target_properties(xtbloom_cuda_periodic_topology_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.periodic_topology
+      COMMAND xtbloom_cuda_periodic_topology_test
+    )
+
     add_executable(xtbloom_cuda_scc_test tests/cuda_scc_test.cu)
     target_link_libraries(xtbloom_cuda_scc_test PRIVATE
       xtbloom::xtbloom
@@ -3808,6 +3863,11 @@ if(XTBLOOM_BUILD_TESTS)
   target_link_libraries(xtbloom_periodic_ewald_test PRIVATE xtbloom_gfn2_cpu)
   target_compile_features(xtbloom_periodic_ewald_test PRIVATE cxx_std_17)
   add_test(NAME xtbloom.gfn2.periodic_ewald COMMAND xtbloom_periodic_ewald_test)
+
+  add_executable(xtbloom_periodic_multipole_test tests/periodic_multipole_test.cpp)
+  target_link_libraries(xtbloom_periodic_multipole_test PRIVATE xtbloom_gfn2_cpu)
+  target_compile_features(xtbloom_periodic_multipole_test PRIVATE cxx_std_17)
+  add_test(NAME xtbloom.gfn2.periodic_multipole COMMAND xtbloom_periodic_multipole_test)
   set_tests_properties(xtbloom.gfn2.periodic_ewald PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
@@ -4545,6 +4605,20 @@ if(XTBLOOM_BUILD_TESTS)
       ENVIRONMENT_MODIFICATION
         "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
       LABELS "conformance;public-api"
+    )
+    add_test(
+      NAME xtbloom.conformance.periodic_public_cpu
+      COMMAND ${Python3_EXECUTABLE} tools/conformance/xtbloom_public_api.py
+              --manifest ${CMAKE_CURRENT_SOURCE_DIR}/data/conformance/periodic/manifest.json
+              --library $<TARGET_FILE:xtbloom> --backend cpu --memory-mode host
+              --actual-dir ${CMAKE_CURRENT_BINARY_DIR}/conformance/periodic-public-api
+    )
+    set_tests_properties(xtbloom.conformance.periodic_public_cpu PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      ENVIRONMENT "MKL_INTERFACE_LAYER=LP64;MKL_THREADING_LAYER=SEQUENTIAL"
+      ENVIRONMENT_MODIFICATION
+        "${XTBLOOM_RUNTIME_LIBRARY_PATH_VARIABLE}=path_list_prepend:${XTBLOOM_CPU_LINALG_DIRECTORY}"
+      LABELS "conformance;public-api;periodic"
     )
     add_test(
       NAME xtbloom.conformance.gfn1_public_cpu

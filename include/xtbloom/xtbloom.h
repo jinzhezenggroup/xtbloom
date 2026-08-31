@@ -141,7 +141,14 @@ enum xtbloom_compute_flag_value {
   XTBLOOM_COMPUTE_ATOMIC_CHARGES = 1 << 2,
   XTBLOOM_COMPUTE_POINT_CHARGE_FORCES = 1 << 3,
   /* Reports per-system dipole moments through batch_result.dipole_moments. */
-  XTBLOOM_COMPUTE_DIPOLE_MOMENTS = 1 << 4
+  XTBLOOM_COMPUTE_DIPOLE_MOMENTS = 1 << 4,
+  /* Reports per-system native-periodic dE/d(strain) through
+   * batch_result.strain_derivatives. The nine row-major entries form the
+   * symmetric derivative with respect to infinitesimal affine strain of the
+   * direct-cell rows, in Hartree; each off-diagonal shear value is published
+   * in both transposed positions. This output is released for CPU GFN2 XYZ
+   * requests; CUDA and molecular requests reject it explicitly. */
+  XTBLOOM_COMPUTE_STRAIN_DERIVATIVES = 1 << 5,
   /* Bits 16-31 are reserved for future outputs and must be zero on input. */
 };
 
@@ -153,7 +160,9 @@ enum xtbloom_result_flag_value {
    */
   XTBLOOM_RESULT_FORCES_EXCLUDE_EXTERNAL_OPERATOR_DERIVATIVES = 1 << 0,
   /* Set when the requested per-system dipole moments were published. */
-  XTBLOOM_RESULT_DIPOLE_MOMENTS = 1 << 4
+  XTBLOOM_RESULT_DIPOLE_MOMENTS = 1 << 4,
+  /* Set when native-periodic per-system strain derivatives were published. */
+  XTBLOOM_RESULT_STRAIN_DERIVATIVES = 1 << 5,
   /* Bits 16-31 are reserved; xtbloom-produced result flags are zero there. */
 };
 
@@ -340,6 +349,8 @@ typedef struct xtbloom_buffer {
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_WIBERG_OFFSET 232u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_SPIN_OFFSET 256u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V2_SIZE 280u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_STRAIN_OFFSET 280u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V3_SIZE 304u
 #define XTBLOOM_DETAIL_EXPECTED_DLPACK_SHAPE_OFFSET 40u
 #define XTBLOOM_DETAIL_EXPECTED_DLPACK_VIEW_V1_SIZE 48u
 #elif UINTPTR_MAX == UINT32_MAX
@@ -363,6 +374,8 @@ typedef struct xtbloom_buffer {
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_WIBERG_OFFSET 160u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_SPIN_OFFSET 176u
 #define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V2_SIZE 192u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_STRAIN_OFFSET 192u
+#define XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V3_SIZE 208u
 #define XTBLOOM_DETAIL_EXPECTED_DLPACK_SHAPE_OFFSET 36u
 #define XTBLOOM_DETAIL_EXPECTED_DLPACK_VIEW_V1_SIZE 40u
 #endif
@@ -478,10 +491,10 @@ typedef struct xtbloom_batch {
    *
    * Native PBC changes each model's complete topology and is distinct from the
    * caller-supplied b + A*q charge-response operator above. A V4 batch whose
-   * masks are all NONE remains a molecular request. If any item uses XYZ,
-   * this ABI release validates the complete descriptor set but returns
-   * NOT_IMPLEMENTED before execution until every periodic GFN1/GFN2 energy and
-   * derivative term is connected. */
+   * masks are all NONE remains a molecular request. GFN2 CPU accepts complete
+   * XYZ energy/force/charge requests and the additive strain-derivative result
+   * suffix. GFN1 and CUDA native XYZ execution remain explicitly refused until
+   * their periodic physics is connected. */
   xtbloom_const_buffer_t cell_matrices;
   xtbloom_const_buffer_t periodic_axes;
 } xtbloom_batch_t;
@@ -684,12 +697,22 @@ typedef struct xtbloom_batch_result {
   xtbloom_buffer_t quadrupole_moments;
   xtbloom_buffer_t wiberg_orders;
   xtbloom_buffer_t spin_populations;
+  /* ABI v3 optional suffix. strain_derivatives contains batch_size * 9
+   * row-major doubles in Hartree. The matrix is symmetric by the public
+   * infinitesimal-strain convention, with duplicated off-diagonal entries.
+   * It is valid only when
+   * XTBLOOM_COMPUTE_STRAIN_DERIVATIVES is requested for an all-native XYZ
+   * CPU GFN2 batch. Older result images remain valid and never expose this
+   * member. */
+  xtbloom_buffer_t strain_derivatives;
 } xtbloom_batch_result_t;
 
 #define XTBLOOM_BATCH_RESULT_V1_SIZE \
   (offsetof(xtbloom_batch_result_t, per_system_status) + sizeof(xtbloom_buffer_t))
 #define XTBLOOM_BATCH_RESULT_V2_SIZE \
   (offsetof(xtbloom_batch_result_t, spin_populations) + sizeof(xtbloom_buffer_t))
+#define XTBLOOM_BATCH_RESULT_V3_SIZE \
+  (offsetof(xtbloom_batch_result_t, strain_derivatives) + sizeof(xtbloom_buffer_t))
 
 #if defined(XTBLOOM_DETAIL_ABI_ASSERT) && defined(XTBLOOM_DETAIL_EXPECTED_BUFFER_SIZE)
 XTBLOOM_DETAIL_ABI_ASSERT(
@@ -713,7 +736,14 @@ XTBLOOM_DETAIL_ABI_ASSERT(offsetof(xtbloom_batch_result_t, spin_populations) ==
 XTBLOOM_DETAIL_ABI_ASSERT(
     XTBLOOM_BATCH_RESULT_V2_SIZE == XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V2_SIZE,
     "xtbloom_batch_result_t ABI-v2 image must match the target pointer width");
-XTBLOOM_DETAIL_ABI_ASSERT(sizeof(xtbloom_batch_result_t) == XTBLOOM_BATCH_RESULT_V2_SIZE,
+XTBLOOM_DETAIL_ABI_ASSERT(
+    offsetof(xtbloom_batch_result_t, strain_derivatives) ==
+        XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_STRAIN_OFFSET,
+    "xtbloom_batch_result_t strain outlet must match the target pointer width");
+XTBLOOM_DETAIL_ABI_ASSERT(
+    XTBLOOM_BATCH_RESULT_V3_SIZE == XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V3_SIZE,
+    "xtbloom_batch_result_t ABI-v3 image must match the target pointer width");
+XTBLOOM_DETAIL_ABI_ASSERT(sizeof(xtbloom_batch_result_t) == XTBLOOM_BATCH_RESULT_V3_SIZE,
                           "xtbloom_batch_result_t must not add trailing ABI padding");
 #endif
 
@@ -1120,6 +1150,8 @@ XTBLOOM_DETAIL_ABI_ASSERT(sizeof(xtbloom_dlpack_view_t) == XTBLOOM_DLPACK_VIEW_V
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_WIBERG_OFFSET
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_SPIN_OFFSET
 #undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V2_SIZE
+#undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_STRAIN_OFFSET
+#undef XTBLOOM_DETAIL_EXPECTED_BATCH_RESULT_V3_SIZE
 #undef XTBLOOM_DETAIL_EXPECTED_DLPACK_SHAPE_OFFSET
 #undef XTBLOOM_DETAIL_EXPECTED_DLPACK_VIEW_V1_SIZE
 

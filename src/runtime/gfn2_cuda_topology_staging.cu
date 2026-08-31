@@ -12,6 +12,7 @@
 #include <string>
 #include <utility>
 
+#include "model/gfn2/lattice.hpp"
 #include "runtime/cuda_descriptor_validation.hpp"
 #include "runtime/gfn2_cuda_topology_staging.hpp"
 
@@ -100,6 +101,8 @@ struct PackedLayout {
   std::size_t spin_channels = 0u;
   std::size_t point_offsets = 0u;
   std::size_t response_offsets = 0u;
+  std::size_t cell_matrices = 0u;
+  std::size_t periodic_axes = 0u;
   std::size_t bytes = 0u;
 
   [[nodiscard]] bool same_shape(const PackedLayout& other) const noexcept {
@@ -121,6 +124,8 @@ bool make_layout(const xtbloom_batch_t& batch, PackedLayout& layout) noexcept {
       !to_size(batch.total_point_charges, point_count) || batch_count == SIZE_MAX) {
     return false;
   }
+  std::size_t lattice_elements = 0u;
+  if (!checked_multiply(batch_count, 9u, lattice_elements)) return false;
   const std::size_t offset_count = batch_count + 1u;
   std::size_t cursor = 0u;
   PackedLayout created{};
@@ -133,7 +138,12 @@ bool make_layout(const xtbloom_batch_t& batch, PackedLayout& layout) noexcept {
       !append_array<std::int32_t>(batch_count, cursor, created.unpaired_electrons) ||
       !append_array<std::int32_t>(batch_count, cursor, created.spin_channels) ||
       !append_array<std::int64_t>(offset_count, cursor, created.point_offsets) ||
-      !append_array<std::int64_t>(offset_count, cursor, created.response_offsets)) {
+      !append_array<std::int64_t>(offset_count, cursor, created.response_offsets) ||
+      /* Keep a canonical lattice image in every backing, including V1/V2/V3
+       * callers that have no native-PBC suffix.  This makes the device key
+       * shape independent of whether the optional suffix was present. */
+      !append_array<double>(lattice_elements, cursor, created.cell_matrices) ||
+      !append_array<std::int32_t>(batch_count, cursor, created.periodic_axes)) {
     return false;
   }
   created.bytes = cursor;
@@ -159,6 +169,8 @@ struct DeviceKeyView {
   std::int32_t* spin_channels = nullptr;
   std::int64_t* point_offsets = nullptr;
   std::int64_t* response_offsets = nullptr;
+  double* cell_matrices = nullptr;
+  std::int32_t* periodic_axes = nullptr;
 };
 
 DeviceKeyView device_view(void* base, const PackedLayout& layout) noexcept {
@@ -168,7 +180,9 @@ DeviceKeyView device_view(void* base, const PackedLayout& layout) noexcept {
           packed_pointer<std::int32_t>(base, layout.unpaired_electrons),
           packed_pointer<std::int32_t>(base, layout.spin_channels),
           packed_pointer<std::int64_t>(base, layout.point_offsets),
-          packed_pointer<std::int64_t>(base, layout.response_offsets)};
+          packed_pointer<std::int64_t>(base, layout.response_offsets),
+          packed_pointer<double>(base, layout.cell_matrices),
+          packed_pointer<std::int32_t>(base, layout.periodic_axes)};
 }
 
 Gfn2CudaTopologyDeviceKeyIdentity key_identity(void* base, const PackedLayout& layout) noexcept {
@@ -182,7 +196,9 @@ Gfn2CudaTopologyDeviceKeyIdentity key_identity(void* base, const PackedLayout& l
           reinterpret_cast<std::uintptr_t>(view.unpaired_electrons),
           reinterpret_cast<std::uintptr_t>(view.spin_channels),
           reinterpret_cast<std::uintptr_t>(view.point_offsets),
-          reinterpret_cast<std::uintptr_t>(view.response_offsets)};
+          reinterpret_cast<std::uintptr_t>(view.response_offsets),
+          reinterpret_cast<std::uintptr_t>(view.cell_matrices),
+          reinterpret_cast<std::uintptr_t>(view.periodic_axes)};
 }
 
 /* The device writes exactly this small record for the ordinary fixed-topology path. */
@@ -191,7 +207,8 @@ struct DeviceReport {
   std::uint32_t field = 0u;
   std::int64_t index = -1;
   std::uint8_t matches_committed = 0u;
-  std::uint8_t reserved[7]{};
+  std::uint8_t native_lattice_enabled = 0u;
+  std::uint8_t reserved[6]{};
   std::int64_t normalized_response_elements = 0;
 };
 
@@ -199,6 +216,7 @@ enum class DeviceError : std::uint32_t {
   kSuccess = 0u,
   kInvalidMetadata = 1u,
   kCountOverflow = 2u,
+  kNotSupported = 3u,
 };
 
 __device__ void set_device_failure(DeviceReport* report, DeviceError error, Field field,
@@ -230,8 +248,8 @@ __global__ void validate_and_compare_topology_kernel(
     DeviceKeyView candidate, DeviceKeyView committed, std::int64_t batch_size,
     std::int64_t total_atoms, std::int64_t total_point_charges,
     std::int64_t declared_response_elements, bool point_offsets_supplied,
-    bool response_offsets_supplied, bool spin_channels_supplied, bool compare_committed,
-    DeviceReport* report) {
+    bool response_offsets_supplied, bool spin_channels_supplied, bool lattice_supplied,
+    bool compare_committed, DeviceReport* report) {
   if (blockIdx.x != 0 || threadIdx.x != 0) return;
   *report = {};
   report->index = -1;
@@ -342,6 +360,45 @@ __global__ void validate_and_compare_topology_kernel(
     }
   }
 
+  /* Native PBC has its own canonical key.  Validate it on the same stream as
+   * the remaining topology leaves so device and mixed descriptors never need
+   * a host dereference.  Signed zero is normalized before a bitwise key
+   * comparison; absent V4 suffixes are already zeroed by cudaMemsetAsync. */
+  if (lattice_supplied) {
+    bool native_enabled = false;
+    for (std::int64_t system = 0; system < batch_size; ++system) {
+      const std::int32_t mask = candidate.periodic_axes[system];
+      double* const cell = candidate.cell_matrices + system * 9;
+      if (mask == XTBLOOM_PERIODIC_AXES_NONE) {
+        for (int element = 0; element < 9; ++element) {
+          if (cell[element] != 0.0) {
+            set_device_failure(report, DeviceError::kInvalidMetadata, Field::kCellMatrices, system);
+            return;
+          }
+          cell[element] = 0.0;
+        }
+        continue;
+      }
+      if ((mask & ~XTBLOOM_PERIODIC_AXES_XYZ) != 0) {
+        set_device_failure(report, DeviceError::kInvalidMetadata, Field::kPeriodicAxes, system);
+        return;
+      }
+      if (mask != XTBLOOM_PERIODIC_AXES_XYZ) {
+        set_device_failure(report, DeviceError::kNotSupported, Field::kPeriodicAxes, system);
+        return;
+      }
+      if (!gfn2::valid_lattice_cell_3d_binary64(cell)) {
+        set_device_failure(report, DeviceError::kInvalidMetadata, Field::kCellMatrices, system);
+        return;
+      }
+      for (int element = 0; element < 9; ++element) {
+        if (cell[element] == 0.0) cell[element] = 0.0;
+      }
+      native_enabled = true;
+    }
+    report->native_lattice_enabled = native_enabled ? 1u : 0u;
+  }
+
   bool equal = compare_committed;
   if (equal) {
     equal = bitwise_equal(candidate.atom_offsets, committed.atom_offsets, batch_size + 1) &&
@@ -350,7 +407,9 @@ __global__ void validate_and_compare_topology_kernel(
             bitwise_equal(candidate.unpaired_electrons, committed.unpaired_electrons, batch_size) &&
             bitwise_equal(candidate.spin_channels, committed.spin_channels, batch_size) &&
             bitwise_equal(candidate.point_offsets, committed.point_offsets, batch_size + 1) &&
-            bitwise_equal(candidate.response_offsets, committed.response_offsets, batch_size + 1);
+            bitwise_equal(candidate.response_offsets, committed.response_offsets, batch_size + 1) &&
+            bitwise_equal(candidate.cell_matrices, committed.cell_matrices, batch_size * 9) &&
+            bitwise_equal(candidate.periodic_axes, committed.periodic_axes, batch_size);
   }
   report->matches_committed = equal ? 1u : 0u;
 }
@@ -412,6 +471,10 @@ std::size_t field_bytes(const PackedLayout& layout, Field field) noexcept {
     case Field::kUnpairedElectrons:
     case Field::kSpinChannels:
       return batch * sizeof(std::int32_t);
+    case Field::kCellMatrices:
+      return batch * 9u * sizeof(double);
+    case Field::kPeriodicAxes:
+      return batch * sizeof(std::int32_t);
     default:
       return 0u;
   }
@@ -433,6 +496,10 @@ std::size_t field_offset(const PackedLayout& layout, Field field) noexcept {
       return layout.point_offsets;
     case Field::kChargeResponseOffsets:
       return layout.response_offsets;
+    case Field::kCellMatrices:
+      return layout.cell_matrices;
+    case Field::kPeriodicAxes:
+      return layout.periodic_axes;
     default:
       return 0u;
   }
@@ -454,6 +521,10 @@ const char* field_name(Field field) noexcept {
       return "point_charge_offsets";
     case Field::kChargeResponseOffsets:
       return "charge_response_offsets";
+    case Field::kCellMatrices:
+      return "cell_matrices";
+    case Field::kPeriodicAxes:
+      return "periodic_axes";
     default:
       return "topology metadata";
   }
@@ -475,6 +546,10 @@ const xtbloom_const_buffer_t& field_buffer(const xtbloom_batch_t& batch, Field f
       return batch.point_charge_offsets;
     case Field::kChargeResponseOffsets:
       return batch.charge_response_offsets;
+    case Field::kCellMatrices:
+      return batch.cell_matrices;
+    case Field::kPeriodicAxes:
+      return batch.periodic_axes;
     default:
       return batch.atom_offsets;
   }
@@ -488,6 +563,8 @@ std::size_t field_alignment(Field field) noexcept {
       return alignof(std::int64_t);
     case Field::kMolecularCharges:
       return alignof(double);
+    case Field::kCellMatrices:
+      return alignof(double);
     default:
       return alignof(std::int32_t);
   }
@@ -496,6 +573,9 @@ std::size_t field_alignment(Field field) noexcept {
 Diagnostic diagnostic_from_device_report(const DeviceReport& report) noexcept {
   if (report.error == static_cast<std::uint32_t>(DeviceError::kSuccess)) return {};
   const Field field = static_cast<Field>(report.field);
+  if (report.error == static_cast<std::uint32_t>(DeviceError::kNotSupported)) {
+    return failure(XTBLOOM_STATUS_NOT_SUPPORTED, Error::kNotSupported, field, report.index);
+  }
   if (report.error == static_cast<std::uint32_t>(DeviceError::kCountOverflow)) {
     return failure(XTBLOOM_STATUS_INVALID_ARGUMENT, Error::kCountOverflow, field, report.index);
   }
@@ -507,6 +587,12 @@ void set_semantic_error(const Diagnostic& diagnostic, std::string& error) {
     error = "the dense charge-response topology overflows int64_t";
   } else if (diagnostic.field == Field::kSpinChannels) {
     error = "spin_channels values must be one or two";
+  } else if (diagnostic.error == Error::kNotSupported) {
+    error = "one- and two-dimensional native periodic axes are reserved but not supported";
+  } else if (diagnostic.field == Field::kPeriodicAxes) {
+    error = "periodic_axes contains unknown or invalid mask bits";
+  } else if (diagnostic.field == Field::kCellMatrices) {
+    error = "cell_matrices contains an invalid native periodic cell";
   } else {
     error = std::string(field_name(diagnostic.field)) + " contains invalid topology metadata";
   }
@@ -523,6 +609,7 @@ bool copy_snapshot(const Backing& backing, const DeviceReport& report, bool peri
   created.total_point_charges = layout.total_point_charges;
   created.total_charge_response_elements = report.normalized_response_elements;
   created.periodic_enabled = periodic_enabled;
+  created.native_lattice_enabled = report.native_lattice_enabled != 0u;
   created.atom_offsets.assign(
       packed_pointer<const std::int64_t>(backing.pinned, layout.atom_offsets),
       packed_pointer<const std::int64_t>(backing.pinned, layout.atom_offsets) + batch + 1u);
@@ -544,6 +631,12 @@ bool copy_snapshot(const Backing& backing, const DeviceReport& report, bool peri
   created.charge_response_offsets.assign(
       packed_pointer<const std::int64_t>(backing.pinned, layout.response_offsets),
       packed_pointer<const std::int64_t>(backing.pinned, layout.response_offsets) + batch + 1u);
+  created.cell_matrices.assign(
+      packed_pointer<const double>(backing.pinned, layout.cell_matrices),
+      packed_pointer<const double>(backing.pinned, layout.cell_matrices) + batch * 9u);
+  created.periodic_axes.assign(
+      packed_pointer<const std::int32_t>(backing.pinned, layout.periodic_axes),
+      packed_pointer<const std::int32_t>(backing.pinned, layout.periodic_axes) + batch);
   snapshot = std::move(created);
   return true;
 }
@@ -684,6 +777,10 @@ Gfn2CudaTopologyStagingDiagnostic Gfn2CudaTopologyStaging::stage_and_validate(
       batch.total_charge_response_elements != 0 || batch.charge_response_offsets.data != nullptr ||
       batch.charge_response_offsets.size_bytes != 0u ||
       batch.charge_response_matrix.data != nullptr || batch.charge_response_matrix.size_bytes != 0u;
+  const bool lattice_supplied =
+      batch.struct_size >= XTBLOOM_BATCH_V4_SIZE &&
+      (batch.cell_matrices.data != nullptr || batch.cell_matrices.size_bytes != 0u ||
+       batch.periodic_axes.data != nullptr || batch.periodic_axes.size_bytes != 0u);
   const bool periodic_enabled = batch.atomic_potential_shifts.data != nullptr ||
                                 batch.atomic_potential_shifts.size_bytes != 0u || response_supplied;
   /* The ABI-v2 suffix is optional. Avoid reading it for an ABI-v1 caller and
@@ -696,15 +793,19 @@ Gfn2CudaTopologyStagingDiagnostic Gfn2CudaTopologyStaging::stage_and_validate(
     Field field = Field::kNone;
     CudaValidatedConstBuffer buffer{};
   };
-  Input inputs[] = {{Field::kAtomOffsets, {}},          {Field::kAtomicNumbers, {}},
-                    {Field::kMolecularCharges, {}},     {Field::kUnpairedElectrons, {}},
-                    {Field::kSpinChannels, {}},         {Field::kPointChargeOffsets, {}},
-                    {Field::kChargeResponseOffsets, {}}};
-  for (std::size_t index = 0u; index < 7u; ++index) {
+  Input inputs[] = {{Field::kAtomOffsets, {}},           {Field::kAtomicNumbers, {}},
+                    {Field::kMolecularCharges, {}},      {Field::kUnpairedElectrons, {}},
+                    {Field::kSpinChannels, {}},          {Field::kPointChargeOffsets, {}},
+                    {Field::kChargeResponseOffsets, {}}, {Field::kCellMatrices, {}},
+                    {Field::kPeriodicAxes, {}}};
+  for (std::size_t index = 0u; index < 9u; ++index) {
     Input& input = inputs[index];
     if (input.field == Field::kSpinChannels && !spin_channels_supplied) continue;
     if (input.field == Field::kPointChargeOffsets && !point_supplied) continue;
     if (input.field == Field::kChargeResponseOffsets && !response_supplied) continue;
+    if ((input.field == Field::kCellMatrices || input.field == Field::kPeriodicAxes) &&
+        !lattice_supplied)
+      continue;
     status = validate_cuda_const_buffer(
         impl_->device_id, field_name(input.field), field_buffer(batch, input.field),
         field_bytes(layout, input.field), field_alignment(input.field),
@@ -741,6 +842,9 @@ Gfn2CudaTopologyStagingDiagnostic Gfn2CudaTopologyStaging::stage_and_validate(
     if (input.field == Field::kSpinChannels && !spin_channels_supplied) continue;
     if (input.field == Field::kPointChargeOffsets && !point_supplied) continue;
     if (input.field == Field::kChargeResponseOffsets && !response_supplied) continue;
+    if ((input.field == Field::kCellMatrices || input.field == Field::kPeriodicAxes) &&
+        !lattice_supplied)
+      continue;
     const std::size_t bytes = field_bytes(layout, input.field);
     const std::size_t offset = field_offset(layout, input.field);
     void* destination = static_cast<unsigned char*>(workspace->staging) + offset;
@@ -769,7 +873,7 @@ Gfn2CudaTopologyStagingDiagnostic Gfn2CudaTopologyStaging::stage_and_validate(
   validate_and_compare_topology_kernel<<<1, 1, 0, impl_->stream>>>(
       candidate, committed, layout.batch_size, layout.total_atoms, layout.total_point_charges,
       batch.total_charge_response_elements, point_supplied, response_supplied,
-      spin_channels_supplied, same_layout, impl_->device_report);
+      spin_channels_supplied, lattice_supplied, same_layout, impl_->device_report);
   cuda_status = cudaGetLastError();
   if (cuda_status == cudaSuccess) {
     cuda_status = cudaMemcpyAsync(impl_->pinned_report, impl_->device_report, sizeof(DeviceReport),
@@ -796,7 +900,9 @@ Gfn2CudaTopologyStagingDiagnostic Gfn2CudaTopologyStaging::stage_and_validate(
 
   const bool metadata_match = same_layout && impl_->pinned_report->matches_committed != 0u &&
                               impl_->committed_snapshot &&
-                              impl_->committed_snapshot->periodic_enabled == periodic_enabled;
+                              impl_->committed_snapshot->periodic_enabled == periodic_enabled &&
+                              impl_->committed_snapshot->native_lattice_enabled ==
+                                  (impl_->pinned_report->native_lattice_enabled != 0u);
   if (metadata_match) {
     const xtbloom_status_t restore_status = guard.restore(error);
     if (restore_status != XTBLOOM_STATUS_SUCCESS) {
@@ -1004,7 +1110,8 @@ Gfn2CudaTopologyStagingWorkspaceBytes Gfn2CudaTopologyStaging::workspace_bytes()
                              bytes(snapshot->atomic_numbers) + bytes(snapshot->molecular_charges) +
                              bytes(snapshot->unpaired_electrons) + bytes(snapshot->spin_channels) +
                              bytes(snapshot->point_charge_offsets) +
-                             bytes(snapshot->charge_response_offsets);
+                             bytes(snapshot->charge_response_offsets) +
+                             bytes(snapshot->cell_matrices) + bytes(snapshot->periodic_axes);
       };
   add_backing(impl_->active);
   add_backing(impl_->pending);
