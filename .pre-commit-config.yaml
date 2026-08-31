@@ -23,7 +23,7 @@ repos:
       - id: check-symlinks
       - id: check-toml
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.2 # v0.16.0
+    rev: v0.16.5 # v0.16.0
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -34,7 +34,7 @@ repos:
         types_or: [python, pyi, jupyter]
         exclude: ^cmake/3rdparty/implib/implib-gen\.py$
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.69 # v0.0.69
+    rev: v0.0.76 # v0.0.69
     hooks:
       - id: ty
         # --isolated stops uv from rewriting the pinned uv.lock or the local
@@ -43,7 +43,7 @@ repos:
         # needed for `uv check` to resolve it.
         args: [--isolated]
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v22.1.8 # v22.1.8
+    rev: v23.1.0 # v22.1.8
     hooks:
       - id: clang-format
         types_or: [c++, c, cuda]
