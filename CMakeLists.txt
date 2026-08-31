@@ -1740,6 +1740,7 @@ if(XTBLOOM_HAS_CUDA)
     src/backends/cuda/gfn2_inference_publication.cu
     src/backends/cuda/gfn2_integrals.cu
     src/backends/cuda/gfn2_mulliken.cu
+    src/backends/cuda/gfn2_native_periodic_short_range.cu
     src/backends/cuda/gfn2_occupations.cu
     src/backends/cuda/gfn2_pairlist.cu
     src/backends/cuda/gfn2_parameters.cu
@@ -3230,6 +3231,30 @@ if(XTBLOOM_BUILD_TESTS)
     )
     add_test(NAME xtbloom.cuda.periodic_topology
       COMMAND xtbloom_cuda_periodic_topology_test
+    )
+
+    add_executable(xtbloom_cuda_native_periodic_short_range_test
+      tests/cuda_native_periodic_short_range_test.cu
+    )
+    target_link_libraries(xtbloom_cuda_native_periodic_short_range_test PRIVATE
+      xtbloom::xtbloom
+      xtbloom_cuda_backend
+      xtbloom_gfn2_cpu
+    )
+    target_include_directories(xtbloom_cuda_native_periodic_short_range_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(xtbloom_cuda_native_periodic_short_range_test
+      PRIVATE XTBLOOM_HAS_CUDA=1
+    )
+    set_target_properties(xtbloom_cuda_native_periodic_short_range_test PROPERTIES
+      CUDA_STANDARD 17
+      CUDA_STANDARD_REQUIRED YES
+      CUDA_SEPARABLE_COMPILATION ON
+    )
+    add_test(NAME xtbloom.cuda.native_periodic_short_range
+      COMMAND xtbloom_cuda_native_periodic_short_range_test
     )
 
     add_executable(xtbloom_cuda_scc_test tests/cuda_scc_test.cu)
