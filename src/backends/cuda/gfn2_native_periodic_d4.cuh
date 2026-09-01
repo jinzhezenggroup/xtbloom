@@ -91,9 +91,10 @@ static_assert(std::is_standard_layout_v<Gfn2NativePeriodicD4DeviceBatch>);
 static_assert(std::is_trivially_copyable_v<Gfn2NativePeriodicD4DeviceWorkspace>);
 static_assert(std::is_standard_layout_v<Gfn2NativePeriodicD4DeviceWorkspace>);
 
-cudaError_t reset_gfn2_native_periodic_d4_errors_cuda(
-    std::int64_t batch_size, std::uint32_t* system_errors, std::uint32_t* device_error,
-    cudaStream_t stream = nullptr) noexcept;
+cudaError_t reset_gfn2_native_periodic_d4_errors_cuda(std::int64_t batch_size,
+                                                      std::uint32_t* system_errors,
+                                                      std::uint32_t* device_error,
+                                                      cudaStream_t stream = nullptr) noexcept;
 
 /* Build the image-aware D4 coordination numbers using the 30-bohr role. */
 cudaError_t evaluate_gfn2_native_periodic_d4_coordination_cuda(

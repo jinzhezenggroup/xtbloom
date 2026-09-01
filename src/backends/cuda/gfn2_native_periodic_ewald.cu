@@ -682,8 +682,7 @@ __global__ void native_periodic_ewald_kernel(Gfn2NativePeriodicEwaldDeviceBatch 
   if (energies != nullptr) energies[system] = energy[system];
   if (gradients != nullptr) {
     for (std::int64_t atom = atom_begin; atom < atom_end; ++atom)
-      for (int axis = 0; axis < 3; ++axis)
-        gradients[atom * 3 + axis] = gradient[atom * 3 + axis];
+      for (int axis = 0; axis < 3; ++axis) gradients[atom * 3 + axis] = gradient[atom * 3 + axis];
   }
   if (strain != nullptr) {
     for (int index = 0; index < 9; ++index) strain[system * 9 + index] = system_strain[index];

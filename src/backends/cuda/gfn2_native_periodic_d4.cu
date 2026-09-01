@@ -130,8 +130,7 @@ __device__ bool prepare_system(const Gfn2NativePeriodicD4DeviceBatch& batch,
     }
     if (active == 0u) return false;
   }
-  if (atomicAdd(system_errors + system, 0u) !=
-      static_cast<std::uint32_t>(DeviceError::kSuccess)) {
+  if (atomicAdd(system_errors + system, 0u) != static_cast<std::uint32_t>(DeviceError::kSuccess)) {
     return false;
   }
 
@@ -159,10 +158,9 @@ __device__ bool prepare_system(const Gfn2NativePeriodicD4DeviceBatch& batch,
         static_cast<std::int64_t>(element.reference_offset) + element.reference_count >
             batch.parameters.reference_count ||
         !(element.covalent_radius > 0.0) || !isfinite(element.covalent_radius) ||
-        !isfinite(element.electronegativity) || !(element.r4r2 > 0.0) ||
-        !isfinite(element.r4r2) || !(element.effective_charge > 0.0) ||
-        !isfinite(element.effective_charge) || !(element.hardness > 0.0) ||
-        !isfinite(element.hardness)) {
+        !isfinite(element.electronegativity) || !(element.r4r2 > 0.0) || !isfinite(element.r4r2) ||
+        !(element.effective_charge > 0.0) || !isfinite(element.effective_charge) ||
+        !(element.hardness > 0.0) || !isfinite(element.hardness)) {
       record_device_error(device_error, DeviceError::kInvalidParameterData);
       record_system_error(system_errors, system, DeviceError::kInvalidParameterData);
       return false;
@@ -174,9 +172,8 @@ __device__ bool prepare_system(const Gfn2NativePeriodicD4DeviceBatch& batch,
       record_system_error(system_errors, system, DeviceError::kNonfinitePosition);
       return false;
     }
-    if (require_coordination &&
-        (!(batch.coordination_numbers[atom] >= 0.0) ||
-         !isfinite(batch.coordination_numbers[atom]))) {
+    if (require_coordination && (!(batch.coordination_numbers[atom] >= 0.0) ||
+                                 !isfinite(batch.coordination_numbers[atom]))) {
       record_system_error(system_errors, system, DeviceError::kNonfiniteCoordination);
       return false;
     }
@@ -203,14 +200,12 @@ __device__ bool pair_parameters(const Gfn2NativePeriodicD4DeviceBatch& batch, st
       batch.parameters.elements[batch.atomic_numbers[second] - 1];
   output.coordination_radius = first_element.covalent_radius + second_element.covalent_radius;
   const double en_delta = fabs(first_element.electronegativity - second_element.electronegativity);
-  output.electronegativity_factor =
-      kEnK4 * exp(-((en_delta + kEnK5) * (en_delta + kEnK5)) / kEnK6);
+  output.electronegativity_factor = kEnK4 * exp(-((en_delta + kEnK5) * (en_delta + kEnK5)) / kEnK6);
   output.rrij = 3.0 * first_element.r4r2 * second_element.r4r2;
   output.damping_radius = kDispersionA1 * sqrt(output.rrij) + kDispersionA2;
   return output.coordination_radius > 0.0 && isfinite(output.coordination_radius) &&
-         isfinite(output.electronegativity_factor) && output.rrij > 0.0 &&
-         isfinite(output.rrij) && output.damping_radius > 0.0 &&
-         isfinite(output.damping_radius);
+         isfinite(output.electronegativity_factor) && output.rrij > 0.0 && isfinite(output.rrij) &&
+         output.damping_radius > 0.0 && isfinite(output.damping_radius);
 }
 
 __device__ bool image_geometry(const double* center, const double* image,
@@ -220,15 +215,13 @@ __device__ bool image_geometry(const double* center, const double* image,
     vector[component] = image[component] + translation.cartesian[component] - center[component];
     if (!isfinite(vector[component]) || fabs(vector[component]) > cutoff) return false;
   }
-  distance_squared = fma(vector[0], vector[0],
-                         fma(vector[1], vector[1], vector[2] * vector[2]));
+  distance_squared = fma(vector[0], vector[0], fma(vector[1], vector[1], vector[2] * vector[2]));
   return isfinite(distance_squared) && distance_squared <= cutoff * cutoff;
 }
 
 __device__ double coordination_count(const PairParameters& parameters, double distance_squared) {
   const double distance = sqrt(distance_squared);
-  const double exponent = kCoordinationSteepness *
-                          (distance - parameters.coordination_radius) /
+  const double exponent = kCoordinationSteepness * (distance - parameters.coordination_radius) /
                           parameters.coordination_radius;
   return 0.5 * parameters.electronegativity_factor * (1.0 + erf(-exponent));
 }
@@ -249,8 +242,8 @@ __device__ CutoffSwitch cutoff_switch(double distance, double cutoff) {
           -30.0 * x_squared * one_minus_x * one_minus_x / kCutoffSwitchWidth};
 }
 
-__device__ void d4_damping(const PairParameters& parameters, double distance_squared,
-                           double cutoff, double& damping, double& derivative) {
+__device__ void d4_damping(const PairParameters& parameters, double distance_squared, double cutoff,
+                           double& damping, double& derivative) {
   const double r2_squared = distance_squared * distance_squared;
   const double r2_cubed = r2_squared * distance_squared;
   const double radius_squared = parameters.damping_radius * parameters.damping_radius;
@@ -260,8 +253,7 @@ __device__ void d4_damping(const PairParameters& parameters, double distance_squ
   const double t8 = 1.0 / (r2_squared * r2_squared + radius_fourth * radius_fourth);
   const double base = kDispersionS6 * t6 + kDispersionS8 * parameters.rrij * t8;
   const double base_derivative = kDispersionS6 * (-6.0 * r2_squared * t6 * t6) +
-                                 kDispersionS8 * parameters.rrij *
-                                     (-8.0 * r2_cubed * t8 * t8);
+                                 kDispersionS8 * parameters.rrij * (-8.0 * r2_cubed * t8 * t8);
   const double distance = sqrt(distance_squared);
   const CutoffSwitch outer = cutoff_switch(distance, cutoff);
   damping = outer.value * base;
@@ -281,8 +273,8 @@ __device__ double charge_scale_derivative(double a, double c, double qref, doubl
 
 __device__ bool prepare_weights(const Gfn2NativePeriodicD4DeviceBatch& batch,
                                 const Gfn2NativePeriodicD4DeviceWorkspace& workspace,
-                                std::int64_t system, bool use_charges,
-                                std::uint32_t* system_errors, std::uint32_t* device_error) {
+                                std::int64_t system, bool use_charges, std::uint32_t* system_errors,
+                                std::uint32_t* device_error) {
   const std::int64_t begin = batch.topology.atom_offsets[system];
   const std::int64_t end = batch.topology.atom_offsets[system + 1];
   for (std::int64_t atom = begin; atom < end; ++atom) {
@@ -334,25 +326,22 @@ __device__ bool prepare_weights(const Gfn2NativePeriodicD4DeviceBatch& batch,
       }
       double cn_weight = numerator * inverse_normalization;
       if (!isfinite(cn_weight) || inverse_normalization == 0.0) {
-        cn_weight = fabs(maximum_reference_cn - reference.coordination_number) < 1.0e-12
-                        ? 1.0
-                        : 0.0;
+        cn_weight =
+            fabs(maximum_reference_cn - reference.coordination_number) < 1.0e-12 ? 1.0 : 0.0;
       }
-      double cn_derivative = inverse_normalization *
-                             (numerator_derivative -
-                              numerator * normalization_derivative * inverse_normalization);
+      double cn_derivative =
+          inverse_normalization *
+          (numerator_derivative - numerator * normalization_derivative * inverse_normalization);
       if (!isfinite(cn_derivative) || inverse_normalization == 0.0) cn_derivative = 0.0;
       const double qref = reference.charge + element.effective_charge;
-      const double scaling =
-          charge_scale(kChargeScalingHeight, charge_steepness, qref, qmod);
+      const double scaling = charge_scale(kChargeScalingHeight, charge_steepness, qref, qmod);
       const double charge_derivative =
-          use_charges ? cn_weight * charge_scale_derivative(kChargeScalingHeight,
-                                                              charge_steepness, qref, qmod)
+          use_charges ? cn_weight * charge_scale_derivative(kChargeScalingHeight, charge_steepness,
+                                                            qref, qmod)
                       : 0.0;
       const double weight = cn_weight * scaling;
       const double cn_scaled_derivative = cn_derivative * scaling;
-      if (!isfinite(weight) || !isfinite(cn_scaled_derivative) ||
-          !isfinite(charge_derivative)) {
+      if (!isfinite(weight) || !isfinite(cn_scaled_derivative) || !isfinite(charge_derivative)) {
         record_system_error(system_errors, system, DeviceError::kNonfiniteArithmetic);
         return false;
       }
@@ -386,13 +375,14 @@ __device__ PairCoefficient pair_coefficient(const Gfn2NativePeriodicD4DeviceBatc
     const double first_value = workspace.weights[first_offset + first_ref];
     for (std::int64_t second_ref = 0; second_ref < second_element.reference_count; ++second_ref) {
       const std::int64_t global_second = second_element.reference_offset + second_ref;
-      const double reference_c6 = batch.parameters.reference_c6[
-          global_first * batch.parameters.reference_count + global_second];
+      const double reference_c6 =
+          batch.parameters
+              .reference_c6[global_first * batch.parameters.reference_count + global_second];
       const double second_value = workspace.weights[second_offset + second_ref];
       result.c6 += first_value * second_value * reference_c6;
       if (derivatives) {
-        result.first_cn += workspace.weight_cn_derivatives[first_offset + first_ref] *
-                           second_value * reference_c6;
+        result.first_cn +=
+            workspace.weight_cn_derivatives[first_offset + first_ref] * second_value * reference_c6;
         result.second_cn += first_value *
                             workspace.weight_cn_derivatives[second_offset + second_ref] *
                             reference_c6;
@@ -408,11 +398,10 @@ __device__ PairCoefficient pair_coefficient(const Gfn2NativePeriodicD4DeviceBatc
 }
 
 __device__ bool finite_pair_coefficient(const PairCoefficient& coefficient, bool derivatives) {
-  return isfinite(coefficient.c6) && (!derivatives ||
-                                      (isfinite(coefficient.first_cn) &&
-                                       isfinite(coefficient.second_cn) &&
-                                       isfinite(coefficient.first_charge) &&
-                                       isfinite(coefficient.second_charge)));
+  return isfinite(coefficient.c6) &&
+         (!derivatives ||
+          (isfinite(coefficient.first_cn) && isfinite(coefficient.second_cn) &&
+           isfinite(coefficient.first_charge) && isfinite(coefficient.second_charge)));
 }
 
 __device__ double triple_scale(std::int64_t first, std::int64_t second, std::int64_t third) {
@@ -421,10 +410,9 @@ __device__ double triple_scale(std::int64_t first, std::int64_t second, std::int
 }
 
 __device__ bool pair_image(const Gfn2NativePeriodicD4DeviceBatch& batch,
-                           const Gfn2NativePeriodicD4DeviceWorkspace& workspace,
-                           std::int64_t first, std::int64_t second,
-                           const Gfn2CudaPeriodicTranslation& translation, double cutoff,
-                           double vector[3], double& distance_squared) {
+                           const Gfn2NativePeriodicD4DeviceWorkspace& workspace, std::int64_t first,
+                           std::int64_t second, const Gfn2CudaPeriodicTranslation& translation,
+                           double cutoff, double vector[3], double& distance_squared) {
   const double* center = workspace.wrapped_positions + first * 3;
   const double* image = workspace.wrapped_positions + second * 3;
   return image_geometry(center, image, translation, cutoff, vector, distance_squared);
@@ -443,10 +431,11 @@ __device__ bool finish_system(std::int64_t system, std::uint32_t* system_errors,
          atomicAdd(system_errors + system, 0u) == static_cast<std::uint32_t>(DeviceError::kSuccess);
 }
 
-
-__global__ void native_d4_coordination_kernel(
-    Gfn2NativePeriodicD4DeviceBatch batch, Gfn2NativePeriodicD4DeviceWorkspace workspace,
-    double* coordination_numbers, std::uint32_t* system_errors, std::uint32_t* device_error) {
+__global__ void native_d4_coordination_kernel(Gfn2NativePeriodicD4DeviceBatch batch,
+                                              Gfn2NativePeriodicD4DeviceWorkspace workspace,
+                                              double* coordination_numbers,
+                                              std::uint32_t* system_errors,
+                                              std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || system >= batch.topology.batch_size ||
       !prepare_system(batch, workspace, system, system_errors, device_error, false, false)) {
@@ -501,10 +490,11 @@ __global__ void native_d4_coordination_kernel(
   }
 }
 
-__global__ void native_d4_two_body_kernel(
-    Gfn2NativePeriodicD4DeviceBatch batch, Gfn2NativePeriodicD4DeviceWorkspace workspace,
-    double* per_atom_energies, double* atomic_potentials, std::uint32_t* system_errors,
-    std::uint32_t* device_error) {
+__global__ void native_d4_two_body_kernel(Gfn2NativePeriodicD4DeviceBatch batch,
+                                          Gfn2NativePeriodicD4DeviceWorkspace workspace,
+                                          double* per_atom_energies, double* atomic_potentials,
+                                          std::uint32_t* system_errors,
+                                          std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || system >= batch.topology.batch_size ||
       !prepare_system(batch, workspace, system, system_errors, device_error, true, true)) {
@@ -544,8 +534,7 @@ __global__ void native_d4_two_body_kernel(
         double damping = 0.0;
         double derivative = 0.0;
         d4_damping(parameters, distance_squared, kTwoBodyCutoff, damping, derivative);
-        const PairCoefficient coefficient =
-            pair_coefficient(batch, workspace, first, second, true);
+        const PairCoefficient coefficient = pair_coefficient(batch, workspace, first, second, true);
         if (!finite_pair_coefficient(coefficient, true) || !isfinite(damping) ||
             !isfinite(derivative) || damping < 0.0) {
           record_system_error(system_errors, system, DeviceError::kNonfiniteArithmetic);
@@ -614,9 +603,9 @@ __device__ bool atm_term_values(const Gfn2NativePeriodicD4DeviceBatch& batch,
                                 std::int64_t first, std::int64_t second, std::int64_t third,
                                 const double vij[3], const double vik[3], const double vjk[3],
                                 double r2ij, double r2ik, double r2jk, double scale,
-                                bool derivatives, double& energy, double dgij[3],
-                                double dgik[3], double dgjk[3], double& first_adjoint,
-                                double& second_adjoint, double& third_adjoint) {
+                                bool derivatives, double& energy, double dgij[3], double dgik[3],
+                                double dgjk[3], double& first_adjoint, double& second_adjoint,
+                                double& third_adjoint) {
   PairParameters pij{};
   PairParameters pik{};
   PairParameters pjk{};
@@ -636,13 +625,11 @@ __device__ bool atm_term_values(const Gfn2NativePeriodicD4DeviceBatch& batch,
   const double r1_product = sqrt(r2_product);
   const double r3_product = r2_product * r1_product;
   const double r5_product = r3_product * r2_product;
-  const double ratio = (pij.damping_radius * pik.damping_radius * pjk.damping_radius) /
-                       r1_product;
+  const double ratio = (pij.damping_radius * pik.damping_radius * pjk.damping_radius) / r1_product;
   const double ratio_power = pow(ratio, kAtmExponent / 3.0);
   const double damping = 1.0 / (1.0 + 6.0 * ratio_power);
   const double angle =
-      0.375 * (r2ij + r2jk - r2ik) * (r2ij - r2jk + r2ik) *
-          (-r2ij + r2jk + r2ik) / r5_product +
+      0.375 * (r2ij + r2jk - r2ik) * (r2ij - r2jk + r2ik) * (-r2ij + r2jk + r2ik) / r5_product +
       1.0 / r3_product;
   const double c9 = -kDispersionS9 * sqrt(cij.c6 * cik.c6 * cjk.c6);
   const CutoffSwitch switch_ij = cutoff_switch(sqrt(r2ij), kAtmCutoff);
@@ -669,21 +656,19 @@ __device__ bool atm_term_values(const Gfn2NativePeriodicD4DeviceBatch& batch,
    * evaluated.  Omitting switch_product here would leave a discontinuous
    * coordinate derivative in the final 0.05-bohr cutoff shell. */
   const double switched_energy = rr * c9 * scale * switch_product;
-  first_adjoint = -0.5 * switched_energy *
-                  (cij.first_cn / cij.c6 + cik.first_cn / cik.c6);
-  second_adjoint = -0.5 * switched_energy *
-                   (cij.second_cn / cij.c6 + cjk.first_cn / cjk.c6);
-  third_adjoint = -0.5 * switched_energy *
-                  (cik.second_cn / cik.c6 + cjk.second_cn / cjk.c6);
-  return isfinite(dgij[0]) && isfinite(dgij[1]) && isfinite(dgij[2]) &&
-         isfinite(dgik[0]) && isfinite(dgik[1]) && isfinite(dgik[2]) &&
-         isfinite(dgjk[0]) && isfinite(dgjk[1]) && isfinite(dgjk[2]) &&
-         isfinite(first_adjoint) && isfinite(second_adjoint) && isfinite(third_adjoint);
+  first_adjoint = -0.5 * switched_energy * (cij.first_cn / cij.c6 + cik.first_cn / cik.c6);
+  second_adjoint = -0.5 * switched_energy * (cij.second_cn / cij.c6 + cjk.first_cn / cjk.c6);
+  third_adjoint = -0.5 * switched_energy * (cik.second_cn / cik.c6 + cjk.second_cn / cjk.c6);
+  return isfinite(dgij[0]) && isfinite(dgij[1]) && isfinite(dgij[2]) && isfinite(dgik[0]) &&
+         isfinite(dgik[1]) && isfinite(dgik[2]) && isfinite(dgjk[0]) && isfinite(dgjk[1]) &&
+         isfinite(dgjk[2]) && isfinite(first_adjoint) && isfinite(second_adjoint) &&
+         isfinite(third_adjoint);
 }
 
-__global__ void native_d4_atm_kernel(
-    Gfn2NativePeriodicD4DeviceBatch batch, Gfn2NativePeriodicD4DeviceWorkspace workspace,
-    double* per_atom_energies, std::uint32_t* system_errors, std::uint32_t* device_error) {
+__global__ void native_d4_atm_kernel(Gfn2NativePeriodicD4DeviceBatch batch,
+                                     Gfn2NativePeriodicD4DeviceWorkspace workspace,
+                                     double* per_atom_energies, std::uint32_t* system_errors,
+                                     std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || system >= batch.topology.batch_size ||
       !prepare_system(batch, workspace, system, system_errors, device_error, true, false)) {
@@ -723,8 +708,8 @@ __global__ void native_d4_atm_kernel(
           if (first == second && origin(translation_ij)) continue;
           double vij[3]{};
           double r2ij = 0.0;
-          if (!atm_pair_geometry(batch, workspace, first, second, translation_ij, kAtmCutoff,
-                                 vij, r2ij)) {
+          if (!atm_pair_geometry(batch, workspace, first, second, translation_ij, kAtmCutoff, vij,
+                                 r2ij)) {
             continue;
           }
           if (r2ij < kMinimumDistanceSquared) {
@@ -737,8 +722,8 @@ __global__ void native_d4_atm_kernel(
             if (first == third && origin(translation_ik)) continue;
             double vik[3]{};
             double r2ik = 0.0;
-            if (!atm_pair_geometry(batch, workspace, first, third, translation_ik, kAtmCutoff,
-                                   vik, r2ik)) {
+            if (!atm_pair_geometry(batch, workspace, first, third, translation_ik, kAtmCutoff, vik,
+                                   r2ik)) {
               continue;
             }
             if (r2ik < kMinimumDistanceSquared) {
@@ -751,8 +736,7 @@ __global__ void native_d4_atm_kernel(
             r2jk = fma(vjk[0], vjk[0], fma(vjk[1], vjk[1], vjk[2] * vjk[2]));
             if (!isfinite(r2jk) || r2jk > kAtmCutoff * kAtmCutoff) continue;
             if (r2jk < kMinimumDistanceSquared) {
-              if (second == third &&
-                  translation_ij.index[0] == translation_ik.index[0] &&
+              if (second == third && translation_ij.index[0] == translation_ik.index[0] &&
                   translation_ij.index[1] == translation_ik.index[1] &&
                   translation_ij.index[2] == translation_ik.index[2]) {
                 continue;
@@ -763,9 +747,9 @@ __global__ void native_d4_atm_kernel(
             double energy = 0.0;
             double dgij[3]{}, dgik[3]{}, dgjk[3]{};
             double first_adjoint = 0.0, second_adjoint = 0.0, third_adjoint = 0.0;
-            if (!atm_term_values(batch, workspace, first, second, third, vij, vik, vjk, r2ij,
-                                 r2ik, r2jk, scale, false, energy, dgij, dgik, dgjk,
-                                 first_adjoint, second_adjoint, third_adjoint)) {
+            if (!atm_term_values(batch, workspace, first, second, third, vij, vik, vjk, r2ij, r2ik,
+                                 r2jk, scale, false, energy, dgij, dgik, dgjk, first_adjoint,
+                                 second_adjoint, third_adjoint)) {
               record_system_error(system_errors, system, DeviceError::kNonfiniteArithmetic);
               return;
             }
@@ -792,10 +776,11 @@ __global__ void native_d4_atm_kernel(
  * The scratch tuple is complete before either caller-owned accumulator is
  * touched, preserving peer-local publication when a later image or ATM term
  * turns out to be invalid. */
-__global__ void native_d4_gradient_kernel(
-    Gfn2NativePeriodicD4DeviceBatch batch, Gfn2NativePeriodicD4DeviceWorkspace workspace,
-    double* gradients, double* strain_derivatives, std::uint32_t* system_errors,
-    std::uint32_t* device_error) {
+__global__ void native_d4_gradient_kernel(Gfn2NativePeriodicD4DeviceBatch batch,
+                                          Gfn2NativePeriodicD4DeviceWorkspace workspace,
+                                          double* gradients, double* strain_derivatives,
+                                          std::uint32_t* system_errors,
+                                          std::uint32_t* device_error) {
   const std::int64_t system = static_cast<std::int64_t>(blockIdx.x);
   if (threadIdx.x != 0 || system >= batch.topology.batch_size ||
       !prepare_system(batch, workspace, system, system_errors, device_error, true, true)) {
@@ -886,8 +871,8 @@ __global__ void native_d4_gradient_kernel(
           if (first == second && origin(translation_ij)) continue;
           double vij[3]{};
           double r2ij = 0.0;
-          if (!atm_pair_geometry(batch, workspace, first, second, translation_ij, kAtmCutoff,
-                                 vij, r2ij)) {
+          if (!atm_pair_geometry(batch, workspace, first, second, translation_ij, kAtmCutoff, vij,
+                                 r2ij)) {
             continue;
           }
           if (r2ij < kMinimumDistanceSquared) {
@@ -900,8 +885,8 @@ __global__ void native_d4_gradient_kernel(
             if (first == third && origin(translation_ik)) continue;
             double vik[3]{};
             double r2ik = 0.0;
-            if (!atm_pair_geometry(batch, workspace, first, third, translation_ik, kAtmCutoff,
-                                   vik, r2ik)) {
+            if (!atm_pair_geometry(batch, workspace, first, third, translation_ik, kAtmCutoff, vik,
+                                   r2ik)) {
               continue;
             }
             if (r2ik < kMinimumDistanceSquared) {
@@ -924,9 +909,9 @@ __global__ void native_d4_gradient_kernel(
             double energy = 0.0;
             double dgij[3]{}, dgik[3]{}, dgjk[3]{};
             double first_adjoint = 0.0, second_adjoint = 0.0, third_adjoint = 0.0;
-            if (!atm_term_values(batch, workspace, first, second, third, vij, vik, vjk, r2ij,
-                                 r2ik, r2jk, scale, true, energy, dgij, dgik, dgjk,
-                                 first_adjoint, second_adjoint, third_adjoint)) {
+            if (!atm_term_values(batch, workspace, first, second, third, vij, vik, vjk, r2ij, r2ik,
+                                 r2jk, scale, true, energy, dgij, dgik, dgjk, first_adjoint,
+                                 second_adjoint, third_adjoint)) {
               record_system_error(system_errors, system, DeviceError::kNonfiniteArithmetic);
               return;
             }
@@ -938,8 +923,8 @@ __global__ void native_d4_gradient_kernel(
             for (int row = 0; row < 3; ++row) {
               for (int column = 0; column < 3; ++column) {
                 system_strain[row * 3 + column] +=
-                    scale * (dgij[row] * vij[column] + dgik[row] * vik[column] +
-                             dgjk[row] * vjk[column]);
+                    scale *
+                    (dgij[row] * vij[column] + dgik[row] * vik[column] + dgjk[row] * vjk[column]);
               }
             }
             workspace.coordination_adjoint[first] += first_adjoint;
@@ -1010,8 +995,8 @@ __global__ void native_d4_gradient_kernel(
   }
   if (!finish_system(system, system_errors, device_error)) return;
   for (std::int64_t atom = atom_begin; atom < atom_end; ++atom) {
-    for (int axis = 0; axis < 3; ++axis) gradients[atom * 3 + axis] +=
-        workspace.gradient[atom * 3 + axis];
+    for (int axis = 0; axis < 3; ++axis)
+      gradients[atom * 3 + axis] += workspace.gradient[atom * 3 + axis];
   }
   for (int component = 0; component < 9; ++component) {
     strain_derivatives[system * 9 + component] += system_strain[component];
@@ -1039,18 +1024,19 @@ bool valid_d4_common(const Gfn2NativePeriodicD4DeviceBatch& batch,
       batch.atomic_numbers == nullptr || batch.atomic_number_elements != topology.total_atoms ||
       batch.positions == nullptr || batch.coordination_numbers == nullptr ||
       batch.atomic_charges == nullptr ||
-      batch.position_elements != (checked_multiply(topology.total_atoms, 3, &coordinates)
-                                      ? coordinates
-                                      : -1) ||
+      batch.position_elements !=
+          (checked_multiply(topology.total_atoms, 3, &coordinates) ? coordinates : -1) ||
       batch.coordination_number_elements != topology.total_atoms ||
       batch.atomic_charge_elements != topology.total_atoms ||
       !checked_multiply(topology.total_atoms, kGfn2D4MaximumReferences, &weights) ||
-      !checked_multiply(topology.batch_size, 9, &strain) || workspace.plan_token != topology.plan_token ||
-      workspace.wrapped_positions == nullptr || workspace.wrapped_position_elements != coordinates ||
-      workspace.weights == nullptr || workspace.weight_cn_derivatives == nullptr ||
+      !checked_multiply(topology.batch_size, 9, &strain) ||
+      workspace.plan_token != topology.plan_token || workspace.wrapped_positions == nullptr ||
+      workspace.wrapped_position_elements != coordinates || workspace.weights == nullptr ||
+      workspace.weight_cn_derivatives == nullptr ||
       workspace.weight_charge_derivatives == nullptr || workspace.weight_elements != weights ||
-      workspace.coordination == nullptr || workspace.coordination_elements != topology.total_atoms ||
-      workspace.atom_energy == nullptr || workspace.atom_energy_elements != topology.total_atoms ||
+      workspace.coordination == nullptr ||
+      workspace.coordination_elements != topology.total_atoms || workspace.atom_energy == nullptr ||
+      workspace.atom_energy_elements != topology.total_atoms ||
       workspace.atom_potential == nullptr ||
       workspace.atom_potential_elements != topology.total_atoms || workspace.gradient == nullptr ||
       workspace.gradient_elements != coordinates || workspace.strain == nullptr ||
@@ -1071,7 +1057,6 @@ bool valid_d4_common(const Gfn2NativePeriodicD4DeviceBatch& batch,
   }
   return true;
 }
-
 
 bool valid_d4_ranges(const Gfn2NativePeriodicD4DeviceBatch& batch,
                      const Gfn2NativePeriodicD4DeviceWorkspace& workspace,
@@ -1096,7 +1081,8 @@ bool valid_d4_ranges(const Gfn2NativePeriodicD4DeviceBatch& batch,
       !add(topology.periodic_axes, topology.periodic_axes_elements) ||
       !add(topology.translation_offsets, topology.translation_offset_count) ||
       !add(topology.translations, topology.total_translations) ||
-      !add(batch.atomic_numbers, batch.atomic_number_elements) || !add(batch.positions, coordinates) ||
+      !add(batch.atomic_numbers, batch.atomic_number_elements) ||
+      !add(batch.positions, coordinates) ||
       !add(batch.coordination_numbers, batch.coordination_number_elements) ||
       !add(batch.atomic_charges, batch.atomic_charge_elements) ||
       !add(batch.parameters.elements, batch.parameters.element_count) ||
@@ -1142,11 +1128,9 @@ bool valid_d4_ranges(const Gfn2NativePeriodicD4DeviceBatch& batch,
 
   const auto exact_same_range = [&](std::size_t first, std::size_t second) {
     return !ranges[first].empty && !ranges[second].empty &&
-           ranges[first].begin == ranges[second].begin &&
-           ranges[first].end == ranges[second].end;
+           ranges[first].begin == ranges[second].begin && ranges[first].end == ranges[second].end;
   };
-  const auto output_alias_is_own_scratch = [&](std::size_t output,
-                                               std::size_t scratch) {
+  const auto output_alias_is_own_scratch = [&](std::size_t output, std::size_t scratch) {
     if (!exact_same_range(output, scratch)) return false;
     if (output == kSecondOutput) {
       /* Two-body atom potentials and gradients' strain have distinct extents;
@@ -1192,9 +1176,9 @@ bool valid_d4_ranges(const Gfn2NativePeriodicD4DeviceBatch& batch,
       const bool second_is_output = second == kFirstOutput || second == kSecondOutput;
       const std::size_t output = first_is_output ? first : second;
       const std::size_t scratch = first_is_output ? second : first;
-      const bool permitted_alias =
-          (first_is_output || second_is_output) && scratch >= kWorkspaceBegin &&
-          scratch < kWorkspaceEnd && output_alias_is_own_scratch(output, scratch);
+      const bool permitted_alias = (first_is_output || second_is_output) &&
+                                   scratch >= kWorkspaceBegin && scratch < kWorkspaceEnd &&
+                                   output_alias_is_own_scratch(output, scratch);
       if (!permitted_alias) return false;
     }
   }
@@ -1203,9 +1187,10 @@ bool valid_d4_ranges(const Gfn2NativePeriodicD4DeviceBatch& batch,
 
 }  // namespace
 
-cudaError_t reset_gfn2_native_periodic_d4_errors_cuda(
-    std::int64_t batch_size, std::uint32_t* system_errors, std::uint32_t* device_error,
-    cudaStream_t stream) noexcept {
+cudaError_t reset_gfn2_native_periodic_d4_errors_cuda(std::int64_t batch_size,
+                                                      std::uint32_t* system_errors,
+                                                      std::uint32_t* device_error,
+                                                      cudaStream_t stream) noexcept {
   if (batch_size <= 0 || system_errors == nullptr || device_error == nullptr ||
       static_cast<std::uint64_t>(batch_size) >
           static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max() /
@@ -1223,10 +1208,9 @@ cudaError_t evaluate_gfn2_native_periodic_d4_coordination_cuda(
     const Gfn2NativePeriodicD4DeviceWorkspace& workspace, double* coordination_numbers,
     std::uint32_t* system_errors, std::uint32_t* device_error, cudaStream_t stream) noexcept {
   const bool common_valid = valid_d4_common(batch, workspace, system_errors, device_error);
-  const bool ranges_valid =
-      common_valid &&
-      valid_d4_ranges(batch, workspace, coordination_numbers, batch.topology.total_atoms, nullptr,
-                      0, system_errors, device_error, true);
+  const bool ranges_valid = common_valid && valid_d4_ranges(batch, workspace, coordination_numbers,
+                                                            batch.topology.total_atoms, nullptr, 0,
+                                                            system_errors, device_error, true);
   if (!ranges_valid) {
     return cudaErrorInvalidValue;
   }
@@ -1266,7 +1250,8 @@ cudaError_t evaluate_gfn2_native_periodic_d4_atm_cuda(
     return cudaErrorInvalidValue;
   }
   native_d4_atm_kernel<<<static_cast<unsigned int>(batch.topology.batch_size), kThreadsPerBlock, 0,
-                         stream>>>(batch, workspace, per_atom_energies, system_errors, device_error);
+                         stream>>>(batch, workspace, per_atom_energies, system_errors,
+                                   device_error);
   return cudaGetLastError();
 }
 

@@ -2,13 +2,13 @@
 // xtbloom's CUDA/MKL additional permission is in CUDA_MKL_LINKING_EXCEPTION.
 
 #include <cuda_runtime_api.h>
+#include <stdio.h>
 
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <stdio.h>
 
 #include "backends/cuda/gfn2_native_periodic_multipole.cuh"
 #include "backends/cuda/gfn2_parameters.cuh"
@@ -788,7 +788,7 @@ __global__ void native_periodic_multipole_kernel(
     const double* position = batch.positions + 3 * atom;
     if (!finite_values(position, 3) ||
         !wrap_periodic_position(batch.topology, system, position,
-                                 workspace.wrapped_positions + 3 * atom)) {
+                                workspace.wrapped_positions + 3 * atom)) {
       record_system_error(system_errors, system, DeviceError::kNonfinitePosition);
       return;
     }
@@ -1041,7 +1041,8 @@ __global__ void native_periodic_multipole_kernel(
       for (int component = 0; component < 3; ++component)
         gradients[3 * atom + component] = workspace.gradients[3 * atom + component];
     }
-    if (coordination_adjoint != nullptr) coordination_adjoint[atom] = workspace.coordination_adjoint[atom];
+    if (coordination_adjoint != nullptr)
+      coordination_adjoint[atom] = workspace.coordination_adjoint[atom];
   }
   if (energies != nullptr) energies[system] = workspace.energies[system];
   if (strain != nullptr) {
