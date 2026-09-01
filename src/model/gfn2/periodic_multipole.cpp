@@ -47,7 +47,9 @@ constexpr double kPi = 3.141592653589793238462643383279502884;
 constexpr double kSqrtPi = 1.7724538509055160272981674833411451828;
 constexpr double kWignerToleranceSquared = 0.3;
 constexpr double kWignerThreshold = 1.4901161193847656e-8;
-constexpr double kAlphaTolerance = std::sqrt(std::numeric_limits<double>::epsilon());
+// sqrt(2^-52) is exactly 2^-26; keep this literal constexpr so Emscripten's
+// C++17 math headers do not need to provide a constexpr std::sqrt overload.
+constexpr double kAlphaTolerance = 1.490116119384765625e-8;
 constexpr double kMultipoleCutoff = 100.0;
 constexpr double kMultipoleReciprocalConvergence = 100.0 * kAlphaTolerance;
 constexpr double kDampingExponent3 = 3.0;

@@ -42,7 +42,9 @@ constexpr double kSqrtPi = 1.7724538509055160272981674833411451828;
 constexpr double kWignerToleranceSquared = 0.3;
 constexpr double kWignerThreshold = 1.4901161193847656e-8;
 constexpr double kBinary64Epsilon = std::numeric_limits<double>::epsilon();
-constexpr double kAlphaTolerance = std::sqrt(kBinary64Epsilon);
+// sqrt(2^-52) is exactly 2^-26; keep this literal constexpr so Emscripten's
+// C++17 math headers do not need to provide a constexpr std::sqrt overload.
+constexpr double kAlphaTolerance = 1.490116119384765625e-8;
 
 struct WscImage {
   std::array<double, 3> vector{};
